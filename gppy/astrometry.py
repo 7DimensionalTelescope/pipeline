@@ -339,12 +339,12 @@ class Astrometry:
                 )  # soft_link changes to a wcs-updated fits file
                 os.system(f"mv {output} {inim}")  # overwrite (inefficient)
         else:
-            from .utils import read_header, update_padded_header
+            from .utils import read_scamp_header, update_padded_header
 
             # update img in processed directly
             for solved_head, target_fits in zip(solved_heads, inims):
                 # update_scamp_head(target_fits, head_file)
-                solved_head = read_header(solved_head)
+                solved_head = read_scamp_header(solved_head)
                 update_padded_header(target_fits, solved_head)
 
         self.logger.info("Header WCS Updated.")
@@ -382,7 +382,7 @@ class Astrometry:
 
 # ad-hoc
 def astrometry_single(file, ahead=None):
-    from .utils import read_header, update_padded_header
+    from .utils import read_scamp_header, update_padded_header
 
     solved_file = external.solve_field(file)
 
@@ -392,7 +392,7 @@ def astrometry_single(file, ahead=None):
 
     solved_head = external.scamp(outcat, ahead=ahead)
 
-    update_padded_header(file, read_header(solved_head))
+    update_padded_header(file, read_scamp_header(solved_head))
 
     outcat = external.sextractor(solved_file, prefix="main")
 

@@ -40,6 +40,32 @@ class Calibration:
         # Setup queue
         self.queue = self._setup_queue(queue)
 
+    def run(self, use_eclaire=True):
+
+        self.logger.info("-" * 80)
+        self.logger.info(f"Start calibration for {self.config.name}")
+
+        self._load_mbdf()
+
+        mbias_file = self.config.preprocess.mbias_file
+        mdark_file = self.config.preprocess.mdark_file
+        mflat_file = self.config.preprocess.mflat_file
+
+        try:
+            if use_eclaire:
+                self._calibrate_image_eclaire(mbias_file, mdark_file, mflat_file)
+            else:
+                self._calibrate_image_cupy(mbias_file, mdark_file, mflat_file)
+
+            self.config.flag.preprocess = True
+            self.logger.info(f"Preprocessing Done for {self.config.name}")
+            MemoryMonitor.cleanup_memory()
+            self.logger.debug(MemoryMonitor.log_memory_usage)
+
+        except Exception as e:
+            self.logger.error(f"Error during preprocessing: {str(e)}")
+            raise
+
     def _setup_logger(self, config):
         if hasattr(config, "logger") and config.logger is not None:
             return config.logger
@@ -80,32 +106,6 @@ class Calibration:
 
         image_list = glob.glob(f"{dir_path}/*.fits")
         return cls.from_list(image_list)
-
-    def run(self, use_eclaire=True):
-
-        self.logger.info("-" * 80)
-        self.logger.info(f"Start calibration for {self.config.name}")
-
-        self._load_mbdf()
-
-        mbias_file = self.config.preprocess.mbias_file
-        mdark_file = self.config.preprocess.mdark_file
-        mflat_file = self.config.preprocess.mflat_file
-
-        try:
-            if use_eclaire:
-                self._calibrate_image_eclaire(mbias_file, mdark_file, mflat_file)
-            else:
-                self._calibrate_image_cupy(mbias_file, mdark_file, mflat_file)
-
-            self.config.flag.calibration = True
-            self.logger.info(f"Calibration Done for {self.config.name}")
-            MemoryMonitor.cleanup_memory()
-            self.logger.debug(MemoryMonitor.log_memory_usage)
-
-        except Exception as e:
-            self.logger.error(f"Error during calibration: {str(e)}")
-            raise
 
     def _load_mbdf(self):
         selection = self.config.preprocess.masterframe

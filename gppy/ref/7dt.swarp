@@ -100,7 +100,7 @@ COMBINE_BUFSIZE        8192            # RAM dedicated to co-addition(MB)
  
 #------------------------------ Miscellaneous ---------------------------------
  
-DELETE_TMPFILES        Y               # Delete temporary resampled FITS files
+DELETE_TMPFILES        N               # Delete temporary resampled FITS files
                                        # (Y/N)?
 COPY_KEYWORDS          IMAGETYP,XBINNING,YBINNING,GAIN,EGAIN,XPIXSZ,YPIXSZ,INSTRUME,SET-TEMP,CCD-TEMP,TELESCOP,FOCALLEN,FOCRATIO,RA,DEC,PIERSIDE,SITEELEV,SITELAT,SITELONG,FWHEEL,FILTER,OBJECT,OBJCTRA,OBJCTDEC,OBJCTROT,FOCNAME,FOCPOS,FOCUSPOS,FOCUSSZ,ROWORDER,_QUINOX,SWCREATE          # List of FITS keywords to propagate
                                        # from the input to the output headers

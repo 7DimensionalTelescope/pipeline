@@ -4,7 +4,8 @@ from typing import Optional, List, Dict
 import itertools
 from pathlib import Path
 import re
-from .utils import read_header
+
+from astropy.io import fits
 
 
 class CalibrationData:
@@ -235,7 +236,7 @@ class ObservationData:
         Returns:
             tuple: Target name and filter, or None if parsing fails
         """
-        header = read_header(self.file_path)
+        header = fits.getheader(self.file_path)
         for attr, key in zip(["exposure", "gain", "filter", "date", "obj", "unit", "n_binning"], \
                              ["EXPOSURE", "GAIN", "FILTER", "DATE-LOC", "OBJECT", "TELESCOP", "XBINNING"]):  # fmt:skip
             if key == "DATE-LOC":

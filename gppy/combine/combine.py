@@ -1,167 +1,164 @@
 # %%
-# ============================================================
-# 	Library
-# ------------------------------------------------------------
-from ccdproc import ImageFileCollection
 
-# ------------------------------------------------------------
-import os, sys
-from pathlib import Path
-import matplotlib.pyplot as plt
-import numpy as np
+import os
 import time
-
-# time.sleep(60*60*2)
-
-# ------------------------------------------------------------
+from pathlib import Path
+import numpy as np
 from astropy.io import fits
 from astropy.time import Time
+from ccdproc import ImageFileCollection
+from typing import Any, List, Dict, Tuple, Optional, Union
 
-# ------------------------------------------------------------
-# from preprocess import calib
-
-# from util import tool
-
-# ------------------------------------------------------------
-import warnings
-
+# import warnings
 # warnings.filterwarnings("ignore")
-# ------------------------------------------------------------
-# Plot preset
-# ------------------------------------------------------------
-import matplotlib.pyplot as plt
-import matplotlib as mpl
 
-mpl.rcParams["axes.titlesize"] = 14
-mpl.rcParams["axes.labelsize"] = 20
-plt.rcParams["savefig.dpi"] = 500
-plt.rc("font", family="serif")
-
-
-# ------------------------------------------------------------
-# testflag = True
-testflag = False
-# ------------------------------------------------------------
 from ..const import REF_DIR
 from ..config import Configuration
 from .utils import extract_date_and_time, calc_mean_dateloc, inputlist_parser, unpack
 
+ZP_KEY = "ZP_AUTO"
 
-class SwarpCom:
-    def __init__(self, imagelist_file=None) -> None:
-        # ------------------------------------------------------------
-        # 	Path
-        # ------------------------------------------------------------
+IC_KEYS = [
+    "EGAIN",
+    "TELESCOP",
+    "EGAIN",
+    "FILTER",
+    "OBJECT",
+    "OBJCTRA",
+    "OBJCTDEC",
+    "JD",
+    "MJD",
+    "SKYVAL",
+    "EXPTIME",
+    ZP_KEY,
+]
 
-        if imagelist_file is None:
-            imagelist_file = input(
-                f"Text File Containing Images to Stack (/data/data.txt):"
-            )
+# self.keys = [
+#     "imagetyp",
+#     "telescop",
+#     "object",
+#     "filter",
+#     "exptime",
+#     "ul5_1",
+#     "seeing",
+#     "elong",
+#     "ellip",
+# ]
 
-        # not used?
-        # self.path_calib = '/large_data/processed'
+KEYS_TO_ADD = [
+    "IMAGETYP",
+    # "EXPOSURE",
+    # "EXPTIME",
+    "DATE-LOC",
+    # "DATE-OBS",
+    "XBINNING",
+    "YBINNING",
+    "EGAIN",
+    "XPIXSZ",
+    "YPIXSZ",
+    "INSTRUME",
+    "SET-TEMP",
+    "CCD-TEMP",
+    "TELESCOP",
+    "FOCALLEN",
+    "FOCRATIO",
+    "RA",
+    "DEC",
+    "CENTALT",
+    "CENTAZ",
+    "AIRMASS",
+    "PIERSIDE",
+    "SITEELEV",
+    "SITELAT",
+    "SITELONG",
+    "FWHEEL",
+    "FILTER",
+    "OBJECT",
+    "OBJCTRA",
+    "OBJCTDEC",
+    "OBJCTROT",
+    "FOCNAME",
+    "FOCPOS",
+    "FOCUSPOS",
+    "FOCUSSZ",
+    "ROWORDER",
+    "_QUINOX",
+    "SWCREATE",
+]
 
-        # ------------------------------------------------------------
-        # 	Setting
-        # ------------------------------------------------------------
 
-        # Unused?
-        # self.keys = [
-        #     "imagetyp",
-        #     "telescop",
-        #     "object",
-        #     "filter",
-        #     "exptime",
-        #     "ul5_1",
-        #     "seeing",
-        #     "elong",
-        #     "ellip",
-        # ]
+class Combine:
+    def __init__(self, config=None, logger=None) -> None:
 
-        # ------------------------------------------------------------
-        # 	Keywords
-        # ------------------------------------------------------------
-        # 	Gain
-        # gain_default = 0.779809474945068
-        # 	ZeroPoint Key
-        self.zpkey = f"ZP_AUTO"
+        # Load Configuration
+        if isinstance(config, str):  # In case of File Path
+            self.config = Configuration(config_source=config).config
+        elif hasattr(config, "config"):
+            self.config = config.config  # for easy access to config
+        else:
+            self.config = config
 
-        # 	Universal Facility Name
-        self.obs = "7DT"
+        # Setup log
+        self.logger = logger or self._setup_logger(config)
 
-        self.ic_keys = [
-            "EGAIN",
-            "TELESCOP",
-            "EGAIN",
-            "FILTER",
-            "OBJECT",
-            "OBJCTRA",
-            "OBJCTDEC",
-            "JD",
-            "MJD",
-            "SKYVAL",
-            "EXPTIME",
-            self.zpkey,
+        self._files = [
+            os.path.join(config.path.path_processed, f)
+            for f in config.file.processed_files
         ]
 
-        self.keywords_to_add = [
-            "IMAGETYP",
-            # "EXPOSURE",
-            # "EXPTIME",
-            "DATE-LOC",
-            # "DATE-OBS",
-            "XBINNING",
-            "YBINNING",
-            # "GAIN",
-            "EGAIN",
-            "XPIXSZ",
-            "YPIXSZ",
-            "INSTRUME",
-            "SET-TEMP",
-            "CCD-TEMP",
-            "TELESCOP",
-            "FOCALLEN",
-            "FOCRATIO",
-            "RA",
-            "DEC",
-            "CENTALT",
-            "CENTAZ",
-            "AIRMASS",
-            "PIERSIDE",
-            "SITEELEV",
-            "SITELAT",
-            "SITELONG",
-            "FWHEEL",
-            "FILTER",
-            "OBJECT",
-            "OBJCTRA",
-            "OBJCTDEC",
-            "OBJCTROT",
-            "FOCNAME",
-            "FOCPOS",
-            "FOCUSPOS",
-            "FOCUSSZ",
-            "ROWORDER",
-            # "COMMENT",
-            "_QUINOX",
-            "SWCREATE",
-        ]
+        self.zpkey = ZP_KEY
+        self.ic_keys = IC_KEYS
+        self.keywords_to_add = KEYS_TO_ADD
 
-        self._files = inputlist_parser(imagelist_file)
+        self.define_paths(working_dir=self.config.path.path_processed)
 
-        if testflag:
-            self._files = self._files[:3]
+        self.set_metadata()
+
+        # Output combined image file name
+        parts = os.path.basename(self._files[-1]).split("_")
+        parts[-1] = f"{self.total_exptime:.0f}.com.fits"
+        self.config.file.combined_file = "_".join(parts)
+
+    @classmethod
+    def from_list(cls, input_images):
+        """use soft link if files are from different directories"""
+
+        image_list = []
+        for image in input_images:
+            path = Path(image)
+            if not path.is_file():
+                print("The file does not exist.")
+                return None
+            image_list.append(path.parts[-1])
+
+        working_dir = str(path.parent.absolute())
+
+        config = Configuration.base_config(working_dir)
+        config.path.path_processed = working_dir
+        config.file.processed_files = image_list
+
+        return cls(config=config)
+
+    @classmethod
+    def from_file(cls, imagelist_file):
+        # self._files = inputlist_parser(imagelist_file)
+        pass
+
+    def _setup_logger(self, config: Any) -> Any:
+        """Initialize logger instance."""
+        if hasattr(config, "logger") and config.logger is not None:
+            return config.logger
+
+        from ..logger import PrintLogger
+
+        return PrintLogger()
 
     def run(self):
-        # Setting Keywords
-        # - the code should run without it but it allows more control
-        # self.update_keys()
+        # Update header keywords if necessary
+        # self.update_keywords()
 
-        # also you can do
-        # self.zpkey = 'ZP'
-
-        # sets miscellaneous variables
-        ic = self.set_imcollection()
+        # replace hot pixels
+        self.apply_bpmask()
 
         # background subtraction
         self.bkgsub()
@@ -172,13 +169,33 @@ class SwarpCom:
         # swarp imcombine
         self.swarp_imcom()
 
-    def update_keys(self, new_keys):
-        self.ic_keys = new_keys
-
     def update_keywords(self, new_keywords):
         self.keywords_to_add = new_keywords
 
-    def set_imcollection(self):
+    def define_paths(self, working_dir=None):
+        # ------------------------------------------------------------
+        #   Define Paths
+        # ------------------------------------------------------------
+        path_save = working_dir or "./out"
+        # path_save = f"/lyman/data1/Commission/{self.obj}/{self.filte}"
+        self.path_save = path_save
+
+        # 	Image List for SWarp
+        self.path_imagelist = os.path.join(path_save, "images_to_stack.txt")
+
+        # 	Background Subtracted
+        self.path_bkgsub = f"{path_save}/bkgsub"
+        os.makedirs(self.path_bkgsub, exist_ok=True)
+
+        # 	Scaled
+        self.path_scaled = f"{path_save}/scaled"
+        os.makedirs(self.path_scaled, exist_ok=True)
+
+        # 	Resampled (temp. files from SWarp)
+        self.path_resamp = f"{path_save}/resamp"
+        os.makedirs(self.path_resamp, exist_ok=True)
+
+    def set_metadata(self):
         # ------------------------------------------------------------
         # 	Setting Metadata
         # ------------------------------------------------------------
@@ -187,9 +204,8 @@ class SwarpCom:
         # 	Get Image Collection (takes some time)
         ic = ImageFileCollection(filenames=self._files, keywords=self.ic_keys)
 
-        summary_table = ic.summary
         filtered_table = ic.summary[~ic.summary[self.zpkey].mask]
-        print(len(summary_table), len(filtered_table))
+        print(len(ic.summary), len(filtered_table))
 
         #   Former def
         # self.files = ic.files
@@ -241,56 +257,10 @@ class SwarpCom:
                 print("...")
                 break
 
-        # ------------------------------------------------------------
-        #   Define Paths
-        # ------------------------------------------------------------
-        if testflag:
-            path_save = Path("./out")
-            if not path_save.exists():
-                path_save.mkdir()
-            self.path_save = path_save
+        # return ic
 
-            path_imagelist = path_save / "images_to_stack.txt"
-            self.path_imagelist = path_imagelist
-
-            path_bkgsub = path_save / "bkgsub"
-            if not path_bkgsub.exists():
-                path_bkgsub.mkdir()
-            self.path_bkgsub = path_bkgsub
-
-            path_scaled = path_save / "scaled"
-            if not path_scaled.exists():
-                path_scaled.mkdir()
-            self.path_scaled = path_scaled
-
-            path_resamp = path_save / "resamp"
-            if not path_resamp.exists():
-                path_resamp.mkdir()
-            self.path_resamp = path_resamp
-
-        else:
-            path_save = f"/large_data/Commission/{self.obj}/{self.filte}"
-            self.path_save = path_save
-            # 	Image List for SWarp
-            path_imagelist = f"{path_save}/images_to_stack.txt"
-            self.path_imagelist = path_imagelist
-            # 	Background Subtracted
-            path_bkgsub = f"{path_save}/bkgsub"
-            if not os.path.exists(path_bkgsub):
-                os.makedirs(path_bkgsub)
-            self.path_bkgsub = path_bkgsub
-            # 	Scaled
-            path_scaled = f"{path_save}/scaled"
-            if not os.path.exists(path_scaled):
-                os.makedirs(path_scaled)
-            self.path_scaled = path_scaled
-            # 	Resampled (temp. files from SWarp)
-            path_resamp = f"{path_save}/resamp"
-            if not os.path.exists(path_resamp):
-                os.makedirs(path_resamp)
-            self.path_resamp = path_resamp
-
-        return ic
+    def apply_bpmask(self):
+        pass
 
     def bkgsub(self):
         # ------------------------------------------------------------
@@ -344,9 +314,7 @@ class SwarpCom:
         print(f"--> Done ({_delt:.1f}sec)")
 
     def swarp_imcom(self):
-        # ------------------------------------------------------------
-        # 	Images to Combine for SWarp
-        # ------------------------------------------------------------
+        # Write target images to a text file
         with open(self.path_imagelist, "w") as f:
             for inim in self.zpscaled_images:
                 f.write(f"{inim}\n")
@@ -362,8 +330,11 @@ class SwarpCom:
         # az_stacked = np.mean(azlist)
 
         center = f"{self.objra},{self.objdec}"
-        datestr, timestr = extract_date_and_time(dateobs_stacked)
-        comim = f"{self.path_save}/calib_{self.obs}_{self.obj}_{datestr}_{timestr}_{self.filte}_{exptime_stacked:g}.com.fits"
+        # datestr, timestr = extract_date_and_time(dateobs_stacked)
+        # comim = f"{self.path_save}/calib_{self.config.unit}_{self.obj}_{datestr}_{timestr}_{self.filte}_{exptime_stacked:g}.com.fits"
+        comim = os.path.join(
+            self.config.path.path_processed, self.config.file.combined_file
+        )
         weightim = comim.replace("com", "weight")
 
         # ------------------------------------------------------------
@@ -403,14 +374,14 @@ class SwarpCom:
         # 	Get Genenral Header from Base Image
         with fits.open(self.baseim) as hdulist:
             header = hdulist[0].header
-            chdr = {key: header.get(key, None) for key in self.keywords_to_add}
+            new_header = {key: header.get(key, None) for key in self.keywords_to_add}
 
         # 	Put General Header Infomation on the Combined Image
         with fits.open(comim) as hdulist:
-            data = hdulist[0].data
+            # data = hdulist[0].data
             header = hdulist[0].header
-            for key in list(chdr.keys()):
-                header[key] = chdr[key]
+            for key in new_header.keys():
+                header[key] = new_header[key]
 
         # 	Additional Header Information
         keywords_to_update = {
@@ -463,49 +434,15 @@ class SwarpCom:
         print(f"Time to stack {self.n_stack} images: {delt_stack:.3f} sec")
 
 
-class Combine:
-    def __init__(self):
-        pass
-
-    @classmethod
-    def from_list(cls, images):
-        image_list = []
-
-        with open(datadir / "inputlist.txt", "w") as f:
-            f.write("file\n")
-            for filename in filelist:
-                f.write(filename + "\n")
-
-        for image in images:
-            path = Path(image)
-            if not path.is_file():
-                print("The file does not exist.")
-                return None
-            image_list.append(path.parts[-1])
-        working_dir = str(path.parent.absolute())
-        config = Configuration.base_config(working_dir)
-        config.file.processed_files = image_list
-        return cls(config=config)
-
-    @classmethod
-    def from_file(cls, image):
-        return cls.from_list([image])
-
-
 #   Example
-def process_image_list(image_list_file):
-    SwarpCom(image_list_file).run()
-
-
 if __name__ == "__main__":
-    # 이미지 리스트 파일들의 경로를 리스트로 저장
     image_lists = [
-        #   Broad
+        #   Broad bands
         "/large_data/Commission/NGC0253/g/select_median.txt",
         "/large_data/Commission/NGC0253/r/select_median.txt",
         "/large_data/Commission/NGC0253/i/select_median.txt",
         "/large_data/Commission/NGC0253/z/select_median.txt",
-        #   Medium
+        #   Medium bands
         "/large_data/Commission/NGC0253/m400/select_median.txt",
         "/large_data/Commission/NGC0253/m425/select_median.txt",
         "/large_data/Commission/NGC0253/m450/select_median.txt",
@@ -528,6 +465,5 @@ if __name__ == "__main__":
         "/large_data/Commission/NGC0253/m875/select_median.txt",
     ]
 
-    # 각 이미지 리스트 파일에 대해 SwarpCom 클래스를 실행
     for image_list in image_lists:
-        process_image_list(image_list)
+        Combine(image_list).run()

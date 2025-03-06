@@ -1,4 +1,5 @@
 import os, sys
+import numpy as np
 from astropy.time import Time
 from astropy.table import Table
 from datetime import datetime

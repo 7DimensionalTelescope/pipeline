@@ -353,9 +353,9 @@ def remove_padding(header):
     return header[: i + 1]
 
 
-def read_header(file):
+def read_scamp_header(file):
     """
-    Read and clean a FITS header file, normalizing unicode and correcting WCS types.
+    Read a SCAMP output HEAD file, normalizing unicode and correcting WCS types.
 
     Args:
         file (str): Path to the header file
@@ -367,27 +367,22 @@ def read_header(file):
         - Removes non-ASCII characters
         - Converts WCS projection type from TAN to TPV
     """
+    import unicodedata
 
-    try:
-        import unicodedata
+    with open(file, "r", encoding="utf-8") as f:
+        content = f.read()
 
-        with open(file, "r", encoding="utf-8") as f:
-            content = f.read()
+    # Clean non-ASCII characters
+    cleaned_string = (
+        unicodedata.normalize("NFKD", content).encode("ascii", "ignore").decode("ascii")
+    )
 
-        # Clean non-ASCII characters
-        cleaned_string = (
-            unicodedata.normalize("NFKD", content).encode("ascii", "ignore").decode("ascii")
-        )
+    # Correct CTYPE (TAN --> TPV)
+    hdr = fits.Header.fromstring(cleaned_string, sep="\n")
+    hdr["CTYPE1"] = ("RA---TPV", "WCS projection type for this axis")
+    hdr["CTYPE2"] = ("DEC--TPV", "WCS projection type for this axis")
+    return hdr
 
-        # Correct CTYPE (TAN --> TPV)
-        hdr = fits.Header.fromstring(cleaned_string, sep="\n")
-        hdr["CTYPE1"] = ("RA---TPV", "WCS projection type for this axis")
-        hdr["CTYPE2"] = ("DEC--TPV", "WCS projection type for this axis")
-        return hdr
-    except:
-        with fits.open(file, mode="readonly") as hdul:
-            hdr = hdul[0].header
-        return hdr
 
 def update_padded_header(target_fits, header_new):
     """

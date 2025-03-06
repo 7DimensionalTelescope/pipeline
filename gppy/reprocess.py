@@ -3,7 +3,7 @@ import time
 from pathlib import Path
 
 from .services.queue import QueueManager, Priority
-from .services.monitor import CalibrationData, ObservationData
+from .data import CalibrationData, ObservationDataSet
 from .run import run_scidata_reduction, run_masterframe_generator
 
 def reprocess_folder(folder, overwrite=False):
@@ -78,7 +78,7 @@ def reprocess_folder(folder, overwrite=False):
         try:
             # Initialize data handlers for the folder
             calib_data = CalibrationData(data_folder)
-            obs_data = ObservationData(data_folder)
+            obs_data = ObservationDataSet(data_folder)
             
             # Find and process all FITS files in the folder
             fits_files = list(data_folder.glob('**/*.fits'))
@@ -94,42 +94,27 @@ def reprocess_folder(folder, overwrite=False):
             # Process calibration data if exists
             if calib_data.has_calib_files() and not calib_data.processed:
 
-                obs_params = {
-                    "date": calib_data.date,
-                    "unit": calib_data.unit,
-                    "n_binning": calib_data.n_binning,
-                    "gain": calib_data.gain,
-                }
-
                 queue.add_task(
                     run_masterframe_generator,
-                    args=(obs_params,),
+                    args=(calib_data.obs_params,),
                     kwargs={"queue": False},
                     priority=Priority.LOW,
                     gpu=True,
-                    task_name=f"{obs_params['date']}_{obs_params['n_binning']}x{obs_params['n_binning']}_gain{obs_params['gain']}_{obs_params['unit']}_masterframe",
+                    task_name=f"{calib_data.name}",
                 )
             
             # Process observation data
             for obs in obs_data.get_unprocessed():
-                obs_data.mark_as_processed(obs)
-                obj, filte = obs
+                obs_data.mark_as_processed(obs.identifier)
 
-                obs_params = {
-                    "date": obs_data.date,
-                    "unit": obs_data.unit,
-                    "gain": obs_data.gain,
-                    "obj": obj,
-                    "filter": filte,
-                    "n_binning": obs_data.n_binning,
-                }
+                priority = Priority.HIGH if obs.too else Priority.MEDIUM
 
                 queue.add_task(
                     run_scidata_reduction,
-                    args=(obs_params,),
+                    args=(obs.obs_params,),
                     kwargs={"queue": False},
-                    priority=Priority.LOW,
-                    task_name=f"{obs_params['date']}_{obs_params['n_binning']}x{obs_params['n_binning']}_gain{obs_params['gain']}_{obs_params['obj']}_{obs_params['unit']}_{obs_params['filter']}",
+                    priority=priority,
+                    task_name=obs.name,
                 )
 
                 time.sleep(0.1)

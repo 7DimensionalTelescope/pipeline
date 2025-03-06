@@ -56,7 +56,7 @@ class Logger:
         self._slack_channel = slack_channel
         self._thread_ts = None  # Store the first message timestamp
         self.logger = self._setup_logger()
-        
+
         # Redirect stdout and stderr to the logger
         sys.stdout = StdoutToLogger(self.logger)
         sys.stderr = StderrToLogger(self.logger)
@@ -65,7 +65,7 @@ class Logger:
         """
         Create and configure a log handler for different output streams.
 
-        This method supports creating handlers for console (stdout/stderr) 
+        This method supports creating handlers for console (stdout/stderr)
         and file-based logging with configurable levels and formats.
 
         Args:
@@ -99,7 +99,7 @@ class Logger:
         handler.setFormatter(logging.Formatter(self._log_format))
         return handler
 
-    def _setup_logger(self, overwrite:bool=True) -> logging.Logger:
+    def _setup_logger(self, overwrite: bool = True) -> logging.Logger:
         """
         Configure and set up the logger with multiple handlers.
 
@@ -137,7 +137,10 @@ class Logger:
         if self._log_file:
             # Main log file with specified level
             file_handler = self._create_handler(
-                "file", log_file=self._log_file, level=log_level, mode="w" if overwrite else "a"
+                "file",
+                log_file=self._log_file,
+                level=log_level,
+                mode="w" if overwrite else "a",
             )
             logger.addHandler(file_handler)
 
@@ -149,7 +152,7 @@ class Logger:
             logger.addHandler(debug_handler)
 
         return logger
-        
+
     def log(self, level: Union[int, str], msg: str, **kwargs) -> None:
         """
         Log a message with a custom log level.
@@ -223,8 +226,8 @@ class Logger:
         """
         Send a message to a Slack channel with thread support.
 
-        Sends log messages to a specified Slack channel, maintaining 
-        a single thread for related messages. Handles potential 
+        Sends log messages to a specified Slack channel, maintaining
+        a single thread for related messages. Handles potential
         communication errors gracefully.
 
         Args:
@@ -261,7 +264,9 @@ class Logger:
         except Exception as e:
             self.logger.error(f"Slack notification failed: {e}", file=sys.__stderr__)
 
-    def _send_slack_with_retry(self, payload: Dict[str, Any], max_retries: int = 3, initial_delay: float = 1.0) -> Optional[Dict]:
+    def _send_slack_with_retry(
+        self, payload: Dict[str, Any], max_retries: int = 3, initial_delay: float = 1.0
+    ) -> Optional[Dict]:
         """
         Send a Slack message with retry logic for rate limiting.
 
@@ -286,12 +291,12 @@ class Logger:
                     },
                     json=payload,
                 )
-                
+
                 response_data = response.json()
-                
+
                 if response_data.get("ok"):
                     return response_data
-                
+
                 if response_data.get("error") == "ratelimited":
                     # Get retry_after from headers or use exponential backoff
                     retry_after = float(response.headers.get("Retry-After", delay))
@@ -299,7 +304,7 @@ class Logger:
                     delay *= 2  # Exponential backoff
                     attempt += 1
                     continue
-                
+
                 # Other errors
                 self.logger.error(
                     f"Slack API Error: {response_data.get('error')}",
@@ -343,7 +348,7 @@ class Logger:
         """
         self._pipeline_name = name
 
-    def set_output_file(self, log_file: str, overwrite: bool=True) -> None:
+    def set_output_file(self, log_file: str, overwrite: bool = True) -> None:
         """
         Change the log output file and reinitialize logger.
 
@@ -363,17 +368,19 @@ class Logger:
         self._log_format = fmt
         self.logger = self._setup_logger()
 
+
 class StdoutToLogger:
     """
     A file-like object that redirects stdout writes to a logger.
 
-    This class enables capturing and logging of stdout output, 
-    ensuring that error messages are properly tracked and 
+    This class enables capturing and logging of stdout output,
+    ensuring that error messages are properly tracked and
     can be sent to multiple output streams.
 
     Attributes:
         logger (logging.Logger): Logger instance to redirect stdout
     """
+
     def __init__(self, logger):
         """
         Initialize StdoutToLogger with a logger.
@@ -392,7 +399,7 @@ class StdoutToLogger:
         """
         for line in buf.rstrip().splitlines():
             self.logger.debug(line)
-        
+
         # Also write to the actual stdout for console output
         sys.__stdout__.write(buf)
 
@@ -402,17 +409,19 @@ class StdoutToLogger:
         """
         sys.__stdout__.flush()
 
+
 class StderrToLogger:
     """
     A file-like object that redirects stderr writes to a logger.
 
-    This class enables capturing and logging of stderr output, 
-    ensuring that error messages are properly tracked and 
+    This class enables capturing and logging of stderr output,
+    ensuring that error messages are properly tracked and
     can be sent to multiple output streams.
 
     Attributes:
         logger (logging.Logger): Logger instance to redirect stderr
     """
+
     def __init__(self, logger):
         """
         Initialize StderrToLogger with a logger.
@@ -431,7 +440,7 @@ class StderrToLogger:
         """
         for line in buf.rstrip().splitlines():
             self.logger.error(line)
-        
+
         # Also write to the actual stderr for console output
         sys.__stderr__.write(buf)
 
@@ -441,3 +450,105 @@ class StderrToLogger:
         """
         sys.__stderr__.flush()
 
+
+class PrintLogger:
+    """
+    A simple logger that prints messages to the console instead of writing to a file.
+
+    Supports:
+    - Different log levels (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+    - Custom formatting for log messages
+    - Redirecting `stdout` and `stderr` to console logging
+    """
+
+    def __init__(
+        self,
+        name: str = "Console Logger",
+        level: str = "INFO",
+        log_format: str = "[%(levelname)s] %(asctime)s - %(message)s",
+    ):
+        self._name = name
+        self._log_format = log_format
+        self._level = level.upper()
+
+        # Redirect stdout and stderr to logger
+        sys.stdout = StdoutToPrintLogger(self)
+        sys.stderr = StderrToPrintLogger(self)
+
+    def _format_message(self, level: str, msg: str) -> str:
+        """
+        Formats the log message with a timestamp.
+
+        Args:
+            level (str): The log level (e.g., INFO, ERROR)
+            msg (str): The actual log message
+
+        Returns:
+            str: The formatted log string
+        """
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        return f"[{level}] {timestamp} - {msg}"
+
+    def log(self, level: Union[int, str], msg: str) -> None:
+        """
+        Prints a log message with the specified level.
+
+        Args:
+            level (Union[int, str]): Log level (INFO, DEBUG, etc.)
+            msg (str): The message to log
+        """
+        # print(self._format_message(level.upper(), msg))  # recursive call
+        formatted_message = self._format_message(level.upper(), msg)
+        sys.__stdout__.write(formatted_message + "\n")
+
+    def debug(self, msg: str) -> None:
+        """Logs a DEBUG message."""
+        self.log("DEBUG", msg)
+
+    def info(self, msg: str) -> None:
+        """Logs an INFO message."""
+        self.log("INFO", msg)
+
+    def warning(self, msg: str) -> None:
+        """Logs a WARNING message."""
+        self.log("WARNING", msg)
+
+    def error(self, msg: str) -> None:
+        """Logs an ERROR message."""
+        self.log("ERROR", msg)
+
+    def critical(self, msg: str) -> None:
+        """Logs a CRITICAL message."""
+        self.log("CRITICAL", msg)
+
+
+class StdoutToPrintLogger:
+    """Redirects `stdout` to the print-based logger."""
+
+    def __init__(self, logger: PrintLogger):
+        self.logger = logger
+
+    def write(self, buf):
+        """Writes messages to the logger as INFO logs."""
+        for line in buf.rstrip().splitlines():
+            self.logger.info(line)
+
+    def flush(self):
+        """Flushes the output (for compatibility)."""
+        sys.__stdout__.flush()
+
+
+class StderrToPrintLogger:
+    """Redirects `stderr` to the print-based logger."""
+
+    def __init__(self, logger: PrintLogger):
+        self.logger = logger
+
+    def write(self, buf):
+        """Writes messages to the logger as ERROR logs."""
+        for line in buf.rstrip().splitlines():
+            self.logger.error(line)
+
+    def flush(self):
+        """Flushes the output (for compatibility)."""
+        sys.__stderr__.flush()

@@ -44,6 +44,8 @@ file:
   raw_files: 
   processed_files: 
   combined_file:
+  bpmask_files:
+  error_files:
 
 preprocess:
   masterframe: default # closest, custom
@@ -57,7 +59,7 @@ preprocess:
 
 astrometry:
   # To be modified by config
-  ahead_file: "/data/pipeline_reform/dhhyun_lab/scamptest/ahead/calib_7DT11_T07304_20250115_050155_g_60.ahead"
+  ahead_file: "/data/pipeline_reform/dhhyun_lab/scamptest/ahead/calib_7DT11_T07304_20250115_050155_g_60_nocrval.ahead"
 
 photometry:
   match_radius: 1.0
@@ -80,6 +82,7 @@ photometry:
 
   combine:
     zp_key: 'ZP_AUTO'
+    # images_to_combine:
   
 
 logging:
@@ -92,10 +95,10 @@ logging:
 
 flag:
   configuration: false
-  calibration: false
+  preprocess: false
   astrometry: false
   single_photometry: false
-  combine_image: false
+  combine: false
   # combined_astrometry: false
   combined_photometry: false
   subtraction: false
