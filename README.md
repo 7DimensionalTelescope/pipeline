@@ -15,7 +15,7 @@ Development of gpPy began in 2018 by Gregory Peak. The first stable release was 
 
 ## Development Team
 - **Original Developer**: Gregory Peak
-- **Current Maintainers**: 
+- **Current Maintainers/Developers**: 
   - Donghwan Hyun
   - WonHyeong Lee
 - **Core Contributors**:
