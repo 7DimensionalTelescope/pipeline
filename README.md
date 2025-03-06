@@ -1,5 +1,14 @@
 # gppy: Automated Pipeline for Astronomical Image Processing
 
+## Table of Contents
+- [Overview](#overview)
+- [Installation](#install)
+- [Usage](#usage)
+- [History and Development](#history-and-development)
+- [Development Team](#development-team)
+- [Version History](#version-history)
+- [Contact](#contact)
+
 ## Overview
 gppy is a comprehensive pipeline designed for processing optical and near-infrared (NIR) astronomical images from IMSNG/GECKO and 7DT facilities. The package implements a multi-threaded approach utilizing GPU and CPU multiprocessing to efficiently handle various stages of astronomical data processing, including:
 
@@ -9,6 +18,15 @@ gppy is a comprehensive pipeline designed for processing optical and near-infrar
 - Photometric calibration
 - Image subtraction
 - Automated transient detection
+
+## Install
+We recommend using `conda` for installation:
+
+```bash
+conda env create -f environment.yml
+```
+
+This command will create a new environment named `pipeline` with all required packages listed in `environment.yml`. Activate this environment by running `conda activate pipeline`. Additionally, you will need to install external packages from [astromatic.net](https://www.astromatic.net/software/): `MissFITs`, `SCAMP`, `SWarp`, `SExtractor`, etc.
 
 ## History and Development
 Development of gpPy began in 2018 by Gregory Peak. The first stable release was published on September 1, 2023. The package underwent significant renovation in February 2025 to integrate with the 7DT pipeline system.
@@ -28,4 +46,4 @@ Development of gpPy began in 2018 by Gregory Peak. The first stable release was 
 - 2025.02: Major renovation for 7DT pipeline integration
 
 ## Contact
-For any inquiries or feedback, please contact the 7DT pipeline team.
+or any inquiries or feedback, please contact the 7DT pipeline team via email at [XXX@gmail.com](mailto:XXX@gmail.com) or open an issue on our [GitHub repository](https://github.com/7DimensionalTelescope/pipeline).
