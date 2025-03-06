@@ -19,7 +19,7 @@ gppy is a comprehensive pipeline designed for processing optical and near-infrar
 - Image subtraction
 - Automated transient detection
 
-## Install
+## Installation
 We recommend using `conda` for installation:
 
 ```bash
