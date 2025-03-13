@@ -36,7 +36,7 @@ class MasterFrameGenerator:
 
         # Setup queue
         self.queue = self._setup_queue(queue)
-        
+
         self.logger.debug(f"Masterframe output folder: {self.path_fdz}")
 
     def initialize(self, obs_params):
@@ -45,8 +45,10 @@ class MasterFrameGenerator:
         n_binning = obs_params["n_binning"]
         gain = obs_params["gain"]
 
-        self.process_name = f"{date}_{n_binning}x{n_binning}_gain{gain}_{unit}_masterframe"
-        
+        self.process_name = (
+            f"{date}_{n_binning}x{n_binning}_gain{gain}_{unit}_masterframe"
+        )
+
         self.path_raw = find_raw_path(unit, date, n_binning, gain)
         self.path_fdz = os.path.join(
             MASTER_FRAME_DIR, define_output_dir(date, n_binning, gain), unit
@@ -61,6 +63,7 @@ class MasterFrameGenerator:
 
     def _setup_logger(self):
         from ..logger import Logger
+
         logger = Logger(name="7DT masterframe logger")
         log_file = os.path.join(self.path_fdz, self.process_name + ".log")
         logger.set_output_file(log_file)
@@ -483,7 +486,10 @@ class MasterFrameGenerator:
                 "No raw BIAS files found for the date. Searching for the closest past master BIAS."
             )
             search_template = os.path.splitext(self.mbias_link)[0] + ".fits"
-            mbias_file = search_with_date_offsets(search_template, future=False)
+            mbias_file = search_with_date_offsets(search_template, future=True)
+            if not mbias_file:
+                self.logger.error("No master BIAS found to choose from.")
+                return
         write_link(self.mbias_link, mbias_file)
 
     # --------------- DARK ---------------
@@ -507,7 +513,10 @@ class MasterFrameGenerator:
             )
             for exptime, mdark_link in self.mdark_link.items():
                 search_template = os.path.splitext(mdark_link)[0] + ".fits"
-                mdark_file = search_with_date_offsets(search_template, future=False)
+                mdark_file = search_with_date_offsets(search_template, future=True)
+                if not mdark_file:
+                    self.logger.error("No master DARK found to choose from.")
+                    return
                 write_link(mdark_link, mdark_file)
 
     # --------------- FLAT ---------------
@@ -531,7 +540,10 @@ class MasterFrameGenerator:
             for filt, mflat_link in self.mflat_link.items():
                 search_template = os.path.splitext(mflat_link)[0] + ".fits"
                 # master_frame/2001-02-23_1x1_gain2750/7DT11/flat_20250102_m625_C3.fits
-                mflat_file = search_with_date_offsets(search_template, future=False)
+                mflat_file = search_with_date_offsets(search_template, future=True)
+                if not mflat_file:
+                    self.logger.error("No master FLAT found to choose from.")
+                    return
                 write_link(mflat_link, mflat_file)
 
 

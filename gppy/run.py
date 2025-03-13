@@ -33,9 +33,9 @@ def run_masterframe_generator(obs_params, queue=False):
             - gain: Detector gain setting
         queue (bool, optional): Whether to use queue-based processing. Defaults to False.
     """
-    master = MasterFrameGenerator(obs_params, queue=queue)
-    master.run()
-    del master
+    mfg = MasterFrameGenerator(obs_params, queue=queue)
+    mfg.run()
+    del mfg
 
 
 def run_scidata_reduction(
@@ -67,7 +67,7 @@ def run_scidata_reduction(
     """
     logger = Logger(name="7DT pipeline logger", slack_channel="pipeline_report")
     try:
-        config = Configuration(obs_params, logger=logger, overwrite=False, **kwargs)
+        config = Configuration(obs_params, logger=logger, **kwargs)
         if not (config.config.flag.preprocess) and "preprocess" in processes:
             calib = Calibration(config, queue=queue)
             calib.run()
@@ -80,10 +80,10 @@ def run_scidata_reduction(
             phot = Photometry(config, queue=queue)
             phot.run()
             del phot
-        if not (config.config.flag.combine) and "combine" in processes:
-            com = Combine(config, queue=queue)
-            com.run()
-            del com
+        # if not (config.config.flag.combine) and "combine" in processes:
+        #     com = Combine(config, queue=queue)
+        #     com.run()
+        #     del com
     except Exception as e:
         logger.error(f"Error during abrupt stop: {e}")
 

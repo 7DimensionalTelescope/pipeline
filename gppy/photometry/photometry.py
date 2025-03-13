@@ -217,6 +217,10 @@ class PhotometrySingle:
         total_image: int = 1,
     ) -> None:
         """Initialize PhotometrySingle instance."""
+
+        if hasattr(config, "config"):
+            config = config.config
+            
         self.config = config
         self.logger = logger or self._setup_logger(config)
         self.ref_catalog = ref_catalog
@@ -279,12 +283,8 @@ class PhotometrySingle:
 
         self.load_ref_catalog()
         self.calculate_seeing()
-        self.run_sextractor()
-        self.zp_src_table = self.match_ref_catalog(
-            snr_cut=20,
-            low_mag_cut=self.phot_conf.ref_mag_lower,
-            high_mag_cut=self.phot_conf.ref_mag_upper,
-        )
+        self.run_main_sextractor()
+        self.zp_src_table = self.match_ref_catalog()
         dicts = self.calculate_zp()
         self.update_header(*dicts)
         self.write_photcat()
@@ -324,127 +324,6 @@ class PhotometrySingle:
 
         self.ref_src_table = ref_src_table
 
-    def calculate_seeing(
-        self, low_mag_cut: float = 11.75, high_mag_cut: float = 18.0
-    ) -> None:
-        """
-        Calculate seeing conditions from stellar sources.
-
-        Uses source extraction to identify stars and calculate median FWHM,
-        ellipticity, and elongation values.
-
-        Args:
-            low_mag_cut: Lower magnitude limit for star selection
-            high_mag_cut: Upper magnitude limit for star selection
-        """
-        precat = self.file_prefix + ".prep.cat"
-
-        if True:  # Always run sextractor for prep
-            self._run_sextractor(precat, prefix="prep")
-        else:
-            self.obs_src_table = Table.read(precat, format="ascii.sextractor")
-
-        self.post_match_table = self.match_ref_catalog(
-            snr_cut=False, low_mag_cut=low_mag_cut
-        )
-
-        self.header.seeing = np.median(self.post_match_table["FWHM_WORLD"] * 3600)
-        self.header.peeing = self.header.seeing / self.image_info.pixscale
-        self.header.ellipticity = round(
-            np.median(self.post_match_table["ELLIPTICITY"]), 3
-        )
-        self.header.elongation = round(
-            np.median(self.post_match_table["ELONGATION"]), 3
-        )
-
-        self.logger.debug(f"{len(self.post_match_table)} Star-like Sources Found")
-        self.logger.debug(f"SEEING     : {self.header.seeing:.3f} arcsec")
-        self.logger.debug(f"ELONGATION : {self.header.elongation:.3f}")
-        self.logger.debug(f"ELLIPTICITY: {self.header.ellipticity:.3f}")
-
-    def run_sextractor(self) -> None:
-        """
-        Run source extraction on the image.
-
-        Configures and executes SExtractor with appropriate parameters
-        based on seeing conditions and image characteristics.
-        Updates header with sky background statistics.
-        """
-        self.logger.info(f"Start Source Extractor for {self.name}")
-
-        self.logger.debug("Setting Aperture for Photometry.")
-        sex_args = phot_utils.get_sex_args(
-            self.image,
-            self.phot_conf,
-            self.image_info.gain,
-            self.header.peeing,
-            self.image_info.pixscale,
-        )
-        _, outcome = self._run_sextractor(
-            self.file_prefix + ".cat",
-            prefix="main",
-            sex_args=sex_args,
-            return_output=True,
-        )
-        outcome = [s for s in outcome.split("\n") if "RMS" in s][0]
-        self.header.skymed = float(outcome.split("Background:")[1].split("RMS:")[0])
-        self.header.skysig = float(outcome.split("RMS:")[1].split("/")[0])
-
-    def _run_sextractor(
-        self,
-        output: str,
-        prefix: str = "prep",
-        sex_args: Optional[Dict] = None,
-        **kwargs,
-    ) -> Any:
-        """
-        Execute SExtractor on the image.
-
-        Args:
-            output: Path for output catalog
-            prefix: Prefix for temporary files
-            sex_args: Additional arguments for SExtractor
-            **kwargs: Additional keyword arguments for SExtractor
-
-        Returns:
-            SExtractor execution outcome
-        """
-        self.logger.info(f"Run SExtractor ({prefix}) for {self.name}")
-        outcome = external.sextractor(
-            self.image,
-            outcat=output,
-            prefix=prefix,
-            log_file=self.file_prefix + "_sextractor.log",
-            logger=self.logger,
-            sex_args=sex_args,
-            **kwargs,
-        )
-
-        self.obs_src_table = Table.read(output, format="ascii.sextractor")
-        return outcome
-
-    def match_ref_catalog(
-        self,
-        snr_cut: Union[float, bool] = False,
-        low_mag_cut: Union[float, bool] = False,
-        high_mag_cut: Union[float, bool] = False,
-    ) -> Table:
-        """
-        Match detected sources with reference catalog.
-
-        Applies proper motion corrections and performs spatial matching.
-        Filters matches based on separation, signal-to-noise, and magnitude limits.
-
-        Args:
-            snr_cut: Signal-to-noise ratio cut for filtering
-            low_mag_cut: Lower magnitude limit
-            high_mag_cut: Upper magnitude limit
-
-        Returns:
-            Table of matched sources meeting all criteria
-        """
-        self.logger.debug("Matching sources with reference catalog.")
-
         coord_ref = SkyCoord(
             ra=self.ref_src_table["ra"] * u.deg,
             dec=self.ref_src_table["dec"] * u.deg,
@@ -469,12 +348,146 @@ class PhotometrySingle:
         obs_time = Time(self.image_info.dateobs, format="isot", scale="utc")
         coord_ref = coord_ref.apply_space_motion(new_obstime=obs_time)
 
+        self._coord_ref = coord_ref
+
+    def calculate_seeing(
+        self, low_mag_cut: float = 11.75, high_mag_cut: float = False, run_prep_sextractor: bool = True
+    ) -> None:
+        """
+        Calculate seeing conditions from stellar sources.
+
+        Uses source extraction to identify stars and calculate median FWHM,
+        ellipticity, and elongation values.
+
+        Args:
+            low_mag_cut: Lower magnitude limit for star selection
+        """
+        
+        if run_prep_sextractor:  # Always run sextractor for prep
+            self._run_sextractor(prefix="prep")
+        else:
+            self.obs_src_table = Table.read(self.file_prefix + ".prep.cat", format="ascii.sextractor")
+
+        self.post_match_table = self.match_ref_catalog(
+            snr_cut=False, low_mag_cut=low_mag_cut, high_mag_cut=high_mag_cut
+        )
+
+        self.header.seeing = np.median(self.post_match_table["FWHM_WORLD"] * 3600)
+        self.header.peeing = self.header.seeing / self.image_info.pixscale
+        self.header.ellipticity = round(
+            np.median(self.post_match_table["ELLIPTICITY"]), 3
+        )
+        self.header.elongation = round(
+            np.median(self.post_match_table["ELONGATION"]), 3
+        )
+
+        self.logger.debug(f"{len(self.post_match_table)} Star-like Sources Found")
+        self.logger.debug(f"SEEING     : {self.header.seeing:.3f} arcsec")
+        self.logger.debug(f"ELONGATION : {self.header.elongation:.3f}")
+        self.logger.debug(f"ELLIPTICITY: {self.header.ellipticity:.3f}")
+
+    def run_main_sextractor(self) -> None:
+        """
+        Run source extraction on the image.
+
+        Configures and executes SExtractor with appropriate parameters
+        based on seeing conditions and image characteristics.
+        Updates header with sky background statistics.
+        """
+        self.logger.info(f"Start Source Extractor for {self.name}")
+
+        self.logger.debug("Setting Aperture for Photometry.")
+        sex_args = phot_utils.get_sex_args(
+            self.image,
+            self.phot_conf,
+            self.image_info.gain,
+            self.header.peeing,
+            self.image_info.pixscale,
+        )
+        _, outcome = self._run_sextractor(
+            prefix="main",
+            sex_args=sex_args,
+            return_output=True,
+        )
+        
+        outcome = [s for s in outcome.split("\n") if "RMS" in s][0]
+        self.header.skymed = float(outcome.split("Background:")[1].split("RMS:")[0])
+        self.header.skysig = float(outcome.split("RMS:")[1].split("/")[0])
+
+    def _run_sextractor(
+        self,
+        prefix: str = "prep",
+        sex_args: Optional[Dict] = None,
+        output: str = None,
+        **kwargs,
+    ) -> Any:
+        """
+        Execute SExtractor on the image.
+
+        Args:
+            output: Path for output catalog
+            prefix: Prefix for temporary files
+            sex_args: Additional arguments for SExtractor
+            **kwargs: Additional keyword arguments for SExtractor
+
+        Returns:
+            SExtractor execution outcome
+        """
+        self.logger.info(f"Run SExtractor ({prefix}) for {self.name}")
+
+        if output is None:
+            if prefix == "prep":
+                output = self.file_prefix + ".prep.cat"
+            elif prefix == "main":
+                output = self.file_prefix + ".cat"
+                
+        outcome = external.sextractor(
+            self.image,
+            outcat=output,
+            prefix=prefix,
+            log_file=self.file_prefix + "_sextractor.log",
+            logger=self.logger,
+            sex_args=sex_args,
+            **kwargs,
+        )
+
+        self.obs_src_table = Table.read(output, format="ascii.sextractor")
+        return outcome
+
+    def match_ref_catalog(
+        self,
+        snr_cut: Union[float, bool] = 20,
+        low_mag_cut: Union[float, bool] = None,
+        high_mag_cut: Union[float, bool] = None,
+    ) -> Table:
+        """
+        Match detected sources with reference catalog.
+
+        Applies proper motion corrections and performs spatial matching.
+        Filters matches based on separation, signal-to-noise, and magnitude limits.
+
+        Args:
+            snr_cut: Signal-to-noise ratio cut for filtering
+            low_mag_cut: Lower magnitude limit
+            high_mag_cut: Upper magnitude limit
+
+        Returns:
+            Table of matched sources meeting all criteria
+        """
+        self.logger.debug("Matching sources with reference catalog.")
+
+        if low_mag_cut is None:
+            low_mag_cut=self.phot_conf.ref_mag_lower
+
+        if high_mag_cut is None:
+            high_mag_cut=self.phot_conf.ref_mag_upper
+
         coord_obs = SkyCoord(
             self.obs_src_table["ALPHA_J2000"],
             self.obs_src_table["DELTA_J2000"],
             unit="deg",
         )
-        index_match, sep, _ = coord_obs.match_to_catalog_sky(coord_ref)
+        index_match, sep, _ = coord_obs.match_to_catalog_sky(self._coord_ref)
 
         _post_match_table = hstack(
             [self.obs_src_table, self.ref_src_table[index_match]]
@@ -493,11 +506,7 @@ class PhotometrySingle:
             self.phot_conf.photfraction * self.image_info.naxis2 / 2,
         )
 
-        suffixes = [
-            key.replace("FLUXERR_", "")
-            for key in post_match_table.keys()
-            if "FLUXERR" in key
-        ]
+        suffixes = [key.replace("FLUXERR_", "") for key in post_match_table.keys() if "FLUXERR_" in key]
 
         for suffix in suffixes:
             post_match_table[f"SNR_{suffix}"] = (
@@ -543,9 +552,20 @@ class PhotometrySingle:
             )
             self.obs_src_table[key] = masked_valuearr
 
-        self.logger.info(
-            f"""Matched Sources: {len(post_match_table)} (r={self.phot_conf.match_radius:.3f}")"""
-        )
+        
+        if len(post_match_table) == 0:
+            self.logger.error(
+                "There is no mathced source. It will cause a problem in the next step."
+            )
+            header = fits.getheader(self.image)
+            if "CTYPE1" not in header.keys():
+                self.logger.error("Check Astrometry solution: no WCS information")
+
+            raise
+        else:
+            self.logger.info(
+                f"""Matched Sources: {len(post_match_table)} (r={self.phot_conf.match_radius:.3f}")"""
+            )
 
         return post_match_table
 

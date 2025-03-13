@@ -16,7 +16,7 @@ settings:
 
 obs:
   # OBS Info should be updated from header
-  pixscale: 0.505  # arcsec/pix. Used for initial solve, not in header
+  pixscale:  # arcsec/pix
   n_binning: 
   gain: 
   unit: 

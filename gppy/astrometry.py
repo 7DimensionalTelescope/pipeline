@@ -4,11 +4,11 @@ from typing import Any, List, Tuple, Union
 from pathlib import Path
 import glob
 import time
+
 from .services.queue import QueueManager, Priority
 from . import external
 from .services.memory import MemoryMonitor
 from .config import Configuration
-from .data import ObservationData
 
 
 class Astrometry:
@@ -196,6 +196,21 @@ class Astrometry:
         self.logger.info(f"Start solve-field")
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
+        solved_flag_files = [os.path.splitext(input)[0] + ".solved" for input in inputs]
+        filtered_data = [
+            (inp, out)
+            for inp, out, solved_flag_file in zip(inputs, outputs, solved_flag_files)
+            if not os.path.exists(solved_flag_file)
+        ]
+
+        if not filtered_data:
+            self.logger.info(
+                "All input images are already solved. Exiting solve-field."
+            )
+            return
+
+        inputs, outputs = zip(*filtered_data)
+
         if self.queue:
             self._submit_task(
                 external.solve_field,
@@ -275,9 +290,11 @@ class Astrometry:
         presex_cats = [os.path.splitext(s)[0] + f".{prefix}.cat" for s in files]
 
         # use local astrefcat if tile obs
-        obj = ObservationData(files[0]).obj
-        if re.match(r"T\d{5}", obj):
-            astrefcat = os.path.join(self.config.path.path_astrefcat, f"{obj}.fits")
+        match = re.search(r"T\d{5}", self.config.name)
+        if match:
+            astrefcat = os.path.join(
+                self.config.path.path_astrefcat, f"{match.group()}.fits"
+            )
             self.config.path.path_astrefcat = astrefcat
 
         # scamp
@@ -327,6 +344,7 @@ class Astrometry:
         self.logger.info(
             f"Updating header {'with missfits' if use_missfits else 'manually'}"
         )
+
         solved_heads = [os.path.splitext(s)[0] + f".{prefix}.head" for s in files]
 
         # header update
@@ -344,9 +362,12 @@ class Astrometry:
             # update img in processed directly
             for solved_head, target_fits in zip(solved_heads, inims):
                 # update_scamp_head(target_fits, head_file)
-                solved_head = read_scamp_header(solved_head)
-                update_padded_header(target_fits, solved_head)
-
+                if os.path.exists(solved_head):
+                    solved_head = read_scamp_header(solved_head)
+                    update_padded_header(target_fits, solved_head)
+                else:
+                    self.logger.error(f"Check SCAMP output. Possibly due to restricted access to the online VizieR catalog.")
+                    raise FileNotFoundError(f"A header file does not exist: {solved_head}")
         self.logger.info("Header WCS Updated.")
 
     def _submit_task(self, func: callable, items: List[Any], **kwargs: Any) -> None:

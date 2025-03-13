@@ -112,7 +112,7 @@ def reprocess_folder(folder, overwrite=False):
                 queue.add_task(
                     run_scidata_reduction,
                     args=(obs.obs_params,),
-                    kwargs={"queue": False},
+                    kwargs={"queue": False, "overwrite": overwrite},
                     priority=priority,
                     task_name=obs.name,
                 )

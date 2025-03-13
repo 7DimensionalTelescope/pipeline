@@ -10,6 +10,9 @@ from .utils import (
     find_raw_path,
     define_output_dir,
     get_camera,
+    parse_exptime,
+    clean_up_folder,
+    swap_ext,
 )
 from .const import FACTORY_DIR, PROCESSED_DIR, MASTER_FRAME_DIR, REF_DIR
 
@@ -35,7 +38,7 @@ class Configuration:
         obs_params=None,
         config_source=None,
         logger=None,
-        overwrite=True,
+        overwrite=False,
         return_base=False,
         verbose=True,
         **kwargs,
@@ -65,6 +68,10 @@ class Configuration:
             else:
                 self.initialize(obs_params)
 
+            if overwrite:
+                clean_up_folder(self.config.path.path_processed)
+                clean_up_folder(self.config.path.path_factory)
+
             self.logger = self._setup_logger(logger, verbose=verbose)
             self.write_config()
             self.config.flag.configuration = True
@@ -87,6 +94,10 @@ class Configuration:
             config.path.path_factory = os.path.join(working_dir, "factory")
             config.name = "user-input"
             return config
+
+    @classmethod
+    def from_obs(cls, obs, **kwargs):
+        return cls(obs.obs_params, **kwargs)
 
     def _setup_logger(self, logger=None, overwrite=True, verbose=True):
         if logger is None:
@@ -146,6 +157,7 @@ class Configuration:
         self.config.obs.filter = obs_params["filter"]
         self.config.obs.n_binning = obs_params["n_binning"]
         self.config.obs.gain = obs_params["gain"]
+        self.config.obs.pixscale = 0.505 * obs_params["n_binning"]  # For initial solve
         self.config.name = f"{obs_params['date']}_{obs_params['n_binning']}x{obs_params['n_binning']}_gain{obs_params['gain']}_{obs_params['obj']}_{obs_params['unit']}_{obs_params['filter']}"
         self.config.info.creation_datetime = datetime.now().isoformat()
 
@@ -295,9 +307,9 @@ class Configuration:
             json.dump(metadata, f, indent=4)
 
     def _define_files(self):
-        s = f"{self.config.path.path_raw}/*{self.config.obs.object}_{self.config.obs.filter}_{self.config.obs.n_binning}*.head"  # obsdata/7DT11/*T00001*.fits
+        s = f"{self.config.path.path_raw}/*{self.config.obs.object}_{self.config.obs.filter}_{self.config.obs.n_binning}*.fits"  # obsdata/7DT11/*T00001*.fits
 
-        tmp_files = glob.glob(s)
+        fits_files = glob.glob(s)
 
         # Extract header metadata
         header_mapping = {
@@ -311,10 +323,17 @@ class Configuration:
             setattr(self.config.obs, config_key, [])
 
         raw_files = []
-        for file in tmp_files:
-            header_in_dict = header_to_dict(file)
+        for fits_file in fits_files:
+            header_file = swap_ext(fits_file, ".head")
+            if os.path.exists(header_file):
+                header_in_dict = header_to_dict(header_file)
+            else:
+                from astropy.io import fits
+
+                header_in_dict = dict(fits.getheader(fits_file))
+
             if header_in_dict["GAIN"] == self.config.obs.gain:
-                raw_files.append(file.replace(".head", ".fits"))
+                raw_files.append(fits_file)
                 for config_key, header_key in header_mapping.items():
                     getattr(self.config.obs, config_key).append(
                         header_in_dict[header_key]
@@ -332,13 +351,16 @@ class Configuration:
         ]
 
         # make combined filename
-        explist = [
-            int(os.path.basename(s).split(".")[0].split("_")[-1][:-1])
-            for s in self.config.file.processed_files
-        ]
-        self.config.file.combined_file = self.config.file.processed_files[-1].replace(
-            "100s", f"{sum(explist)}s"
-        )
+        if self.config.file.processed_files:
+            explist = [
+                # int(os.path.basename(s).split(".")[0].split("_")[-1][:-1])
+                parse_exptime(os.path.basename(s))
+                for s in self.config.file.processed_files
+            ]
+            template = self.config.file.processed_files[-1]
+            self.config.file.combined_file = template.replace(
+                str(parse_exptime(template)), f"{int(sum(explist))}"
+            )
 
         # Identify Camera from image size
         self.config.obs.camera = get_camera(self.raw_header_sample)
