@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from numba import njit
 from astropy.table import Table, hstack, vstack, unique
@@ -274,11 +275,13 @@ def get_sex_args(
     if "com" in image and os.path.exists(weightim):
         sex_config["WEIGHT_TYPE"] = "MAP_WEIGHT"
         sex_config["WEIGHT_IMAGE"] = weightim
+    
     # 	Check Image
-    if phot_conf.check == True:
+    head = image.replace(".fits", "")
+    if phot_conf.check:
         sex_config["CHECKIMAGE_TYPE"] = "SEGMENTATION,APERTURES,BACKGROUND,-BACKGROUND"
         sex_config["CHECKIMAGE_NAME"] = (
-            f"{self.head}.seg.fits,{self.head}.aper.fits,{self.head}.bkg.fits,{self.head}.sub.fits"
+            f"{head}.seg.fits,{head}.aper.fits,{head}.bkg.fits,{head}.sub.fits"
         )
     else:
         pass

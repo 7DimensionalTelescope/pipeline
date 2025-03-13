@@ -1,11 +1,9 @@
-from datetime import datetime, timedelta
-from typing import Optional, List, Dict
+from datetime import datetime
+from typing import List, Dict
 
-import itertools
 from pathlib import Path
 import re
-
-from astropy.io import fits
+import glob
 
 
 class CalibrationData:
@@ -34,7 +32,10 @@ class CalibrationData:
 
     def __init__(self, folder_path: str or Path):
         if isinstance(folder_path, str):
-            folder_path = Path(folder_path).parent
+            if ".fits" in folder_path:
+                folder_path = Path(folder_path).parent
+            else:
+                folder_path = Path(folder_path)
 
         self.folder_path = folder_path
 
@@ -47,6 +48,23 @@ class CalibrationData:
         self._processed = False
 
         self.fits_files: List[Path] = []
+
+    def add_fits_files(self):
+        """
+        Add FITS files to the calibration dataset.
+
+        Parses the filename to determine calibration type and extracts metadata.
+
+        Returns:
+            bool: Whether any files were successfully added to the dataset
+        """
+        added_files = False
+        fits_paths = glob.glob(str(self.folder_path) + "/*.fits")
+        for fits_path in fits_paths:
+            if self.add_fits_file(Path(fits_path)):
+                added_files = True
+
+        return added_files
 
     @property
     def processed(self):
@@ -172,179 +190,7 @@ class CalibrationData:
         return f"{self.date}_{self.n_binning}x{self.n_binning}_gain{self.gain}_{self.unit}_masterframe"
 
     def generate_masterframe(self):
-        from .preprocess import MasterFrameGenerator
+        from ..preprocess import MasterFrameGenerator
 
         master = MasterFrameGenerator(self.obs_params)
         master.run()
-
-
-class ObservationData:
-
-    _id_counter = itertools.count(1)
-
-    """
-    Represents and manages astronomical observation data files.
-
-    Provides specialized handling for observation data, including:
-    - Tracking observation targets
-    - Managing processed target states
-    - Supporting multiple targets and filters
-
-    Attributes:
-        target (Optional[str]): Current observation target
-        _processed (set): Set of processed target information
-
-    Methods:
-        add_fits_file(): Add a FITS file to the observation dataset
-        get_unprocessed(): Retrieve unprocessed targets
-        mark_as_processed(): Mark specific targets as processed
-
-    Example:
-        Tracks observation targets, filters, and processing state
-        for complex astronomical observation datasets.
-    """
-
-    def __init__(self, file_path: str or Path):
-        self.target: Optional[str] = None
-
-        self._id = next(self._id_counter)
-        if isinstance(file_path, str):
-            file_path = Path(file_path)
-
-        self.file_path = file_path
-
-        if "calib" in file_path.name:
-            self._file_type = "processed"
-
-        else:
-            self._file_type = "raw"
-
-        self._parse_info_from_header()
-        self.too = False
-
-    @property
-    def id(self):
-        return self._id
-
-    def _parse_info_from_header(self) -> None:
-        """
-        Extract target information from a FITS filename.
-
-        Args:
-            file_path (Path): Path to the FITS file
-
-        Returns:
-            tuple: Target name and filter, or None if parsing fails
-        """
-        header = fits.getheader(self.file_path)
-        for attr, key in zip(["exposure", "gain", "filter", "date", "obj", "unit", "n_binning"], \
-                             ["EXPOSURE", "GAIN", "FILTER", "DATE-LOC", "OBJECT", "TELESCOP", "XBINNING"]):  # fmt:skip
-            if key == "DATE-LOC":
-                header_date = datetime.fromisoformat(header[key])
-                adjusted_date = header_date - timedelta(hours=12)
-                final_date = adjusted_date.date()
-                setattr(self, attr, final_date.isoformat())
-            else:
-                setattr(self, attr, header[key])
-
-    @property
-    def identifier(self):
-        return (self.obj, self.filter)
-
-    @property
-    def obs_params(self):
-        return {
-            "date": self.date,
-            "unit": self.unit,
-            "gain": self.gain,
-            "obj": self.obj,
-            "filter": self.filter,
-            "n_binning": self.n_binning,
-        }
-
-    @property
-    def name(self):
-        return f"{self.date}_{self.n_binning}x{self.n_binning}_gain{self.gain}_{self.obj}_{self.unit}_{self.filter}"
-
-    def run_calibaration(self, save_path=None, verbose=True):
-        from .config import Configuration
-        from .preprocess import Calibration
-
-        self.config = Configuration(self.obs_params, overwrite=True, verbose=verbose)
-        if save_path:
-            self.config.config.path.path_processed = save_path
-        calib = Calibration(self.config)
-        calib.run()
-
-    def run_astrometry(self):
-        from .astrometry import Astrometry
-
-        if hasattr(self, "config"):
-            astro = Astrometry(self.config)
-        else:
-            astro = Astrometry.from_file(self.file_path)
-        astro.run()
-
-    def run_photometry(self):
-        from .photometry import Photometry
-
-        if hasattr(self, "config"):
-            phot = Photometry(self.config)
-        else:
-            phot = Photometry.from_file(self.file_path)
-        phot.run()
-
-
-class ObservationDataSet(ObservationData):
-
-    def __init__(self, folder_path: str or Path):
-        self._processed = set()
-        self.obs_list = []
-
-    def add_fits_file(self, fits_path: Path) -> bool:
-        """
-        Add a FITS file to the observation dataset.
-
-        Parses the filename to extract target and observation metadata.
-
-        Args:
-            fits_path (Path): Path to the FITS file
-
-        Returns:
-            bool: Whether the file was successfully added to the dataset
-        """
-        if all(ctype not in fits_path.name for ctype in ["BIAS", "DARK", "FLAT"]):
-            obs = ObservationData(fits_path)
-            self.obs_list.append(obs)
-            return True
-        return False
-
-    @property
-    def processed(self):
-        """
-        Get the set of processed targets.
-
-        Returns:
-            set: Set of processed target information
-        """
-        return self._processed
-
-    def get_unprocessed(self) -> set:
-        """
-        Retrieve targets that have not yet been processed.
-
-        Returns:
-            set: Set of unprocessed target information
-        """
-        for obs in self.obs_list:
-            if obs.identifier not in self._processed:
-                yield obs
-
-    def mark_as_processed(self, obs_identifier):
-        """
-        Mark a specific target as processed.
-
-        Args:
-            obs_identifier (Tuple[str, str]): Identifier of the observation to mark as processed
-        """
-        self._processed.add(obs_identifier)

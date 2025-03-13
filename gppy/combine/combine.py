@@ -88,7 +88,7 @@ KEYS_TO_ADD = [
 
 
 class Combine:
-    def __init__(self, config=None, logger=None) -> None:
+    def __init__(self, config=None, logger=None, queue=None) -> None:
 
         # Load Configuration
         if isinstance(config, str):  # In case of File Path
@@ -102,8 +102,8 @@ class Combine:
         self.logger = logger or self._setup_logger(config)
 
         self._files = [
-            os.path.join(config.path.path_processed, f)
-            for f in config.file.processed_files
+            os.path.join(self.config.path.path_processed, f)
+            for f in self.config.file.processed_files
         ]
 
         self.zpkey = ZP_KEY
@@ -149,9 +149,11 @@ class Combine:
         if hasattr(config, "logger") and config.logger is not None:
             return config.logger
 
-        from ..logger import PrintLogger
+        # from ..logger import PrintLogger
+        # return PrintLogger()
+        from ..logger import Logger
 
-        return PrintLogger()
+        return Logger(name="7DT pipeline logger", slack_channel="pipeline_report")
 
     def run(self):
         # Update header keywords if necessary
@@ -236,9 +238,9 @@ class Combine:
         print(f"EGAIN(s): {egains} (N={len(egains)})")
         self.obj = unpack(objs, "object")
         self.filte = unpack(filters, "filter", ex="m650")
-        # self.gain_default = unpack(egains, "egain", ex="0.256190478801727")
+        self.gain_default = unpack(egains, "egain", ex="0.256190478801727")
         #   Hard coding for the UDS field
-        self.gain_default = 0.78
+        # self.gain_default = 0.78
 
         # ------------------------------------------------------------
         # 	Base Image for Image Alignment
@@ -260,6 +262,7 @@ class Combine:
         # return ic
 
     def apply_bpmask(self):
+        bpmask_files = self.config.file.bpmask_files
         pass
 
     def bkgsub(self):

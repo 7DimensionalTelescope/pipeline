@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
+
 def write_link(fpath, content):
     """path to the link, and the path link is pointing"""
     with open(fpath, "w") as file:
@@ -24,23 +25,25 @@ def load_data_gpu(fpath, ext=None):
         gc.collect()  # Force garbage collection
         cp.get_default_memory_pool().free_all_blocks()
 
+
 class FileCreationHandler(FileSystemEventHandler):
     def __init__(self, target_file):
         self.target_file = os.path.basename(target_file)
         self.created = False
-    
+
     def on_created(self, event):
         if not event.is_directory and event.src_path.endswith(self.target_file):
             self.created = True
 
+
 def wait_for_masterframe(file_path, timeout=1800):
     """
     Wait for a file to be created using watchdog with timeout.
-    
+
     Args:
         file_path (str): Path to the file to watch for
         timeout (int): Maximum time to wait in seconds (default: 1800 seconds / 30 minutes)
-    
+
     Returns:
         bool: True if file was created, False if timeout occurred
     """
@@ -48,12 +51,12 @@ def wait_for_masterframe(file_path, timeout=1800):
     if os.path.exists(file_path):
         return True
 
-    directory = os.path.dirname(file_path) or '.'
+    directory = os.path.dirname(file_path) or "."
     handler = FileCreationHandler(file_path)
     observer = Observer()
     observer.schedule(handler, directory, recursive=False)
     observer.start()
-    
+
     try:
         start_time = time.time()
         while not handler.created:
@@ -64,6 +67,7 @@ def wait_for_masterframe(file_path, timeout=1800):
     finally:
         observer.stop()
         observer.join()
+
 
 def read_link(link, timeout=1800):
     """
@@ -86,17 +90,18 @@ def read_link(link, timeout=1800):
             raise FileNotFoundError(
                 f"File '{link}' was not created within {timeout} seconds."
             )
-        
+
         # Small delay to ensure file is fully written
         time.sleep(0.1)
-        
+
         # Read and return the file content
         with open(link, "r") as f:
             return f.read().strip()
-            
+
     except KeyboardInterrupt:
         print("KeyboardInterrupt while watching for a link. Exiting...")
         raise  # Re-raise the exception to terminate the following processes
+
 
 def link_to_file(link):
     """Reformat link filename, not reading it"""
@@ -107,6 +112,7 @@ def link_to_file(link):
         return os.path.splitext(link)[0] + ".fits"
     else:
         raise ValueError("Not a link")
+
 
 def search_with_date_offsets(template, max_offset=300, future=False):
     """

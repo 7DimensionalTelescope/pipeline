@@ -1,8 +1,57 @@
 import os
 import re
 import glob
-from datetime import datetime
+import shutil
+from datetime import datetime, timedelta
 from astropy.io import fits
+from .const import FACTORY_DIR
+
+
+def clean_up_factory():
+    clean_up_folder(FACTORY_DIR)
+
+
+def clean_up_folder(path):
+    for item in os.listdir(path):
+        item_path = os.path.join(path, item)
+        try:
+            if os.path.isfile(item_path) or os.path.islink(item_path):
+                os.unlink(item_path)  # Remove file or symlink
+            elif os.path.isdir(item_path):
+                shutil.rmtree(item_path)  # Remove directory and its contents
+        except Exception as e:
+            print(f"Failed to delete {item_path}: {e}")
+
+
+def parse_key_params_from_header(filename) -> None:
+    """
+    Extract target information from a FITS filename.
+
+    Args:
+        file_path (Path): Path to the FITS file
+
+    Returns:
+        tuple: Target name and filter, or None if parsing fails
+    """
+    info = {}
+    header = fits.getheader(filename)
+    for attr, key in zip(["exposure", "gain", "filter", "date", "obj", "unit", "n_binning"], \
+                            ["EXPOSURE", "GAIN", "FILTER", "DATE-LOC", "OBJECT", "TELESCOP", "XBINNING"]):  # fmt:skip
+        if key == "DATE-LOC":
+            header_date = datetime.fromisoformat(header[key])
+            adjusted_date = header_date - timedelta(hours=12)
+            final_date = adjusted_date.date()
+            info[attr] = final_date.isoformat()
+        else:
+            info[attr] = header[key]
+
+    file_type = (
+        "mfw_image"
+        if any("BIAS" in filename, "DARK" in filename, "FLAT" in filename)
+        else "sci_image"
+    )
+
+    return info, file_type
 
 
 def to_datetime_string(datetime_str, date_only=False):
@@ -198,13 +247,16 @@ def parse_exptime(filename, return_type="float"):
         float or int: Exposure time extracted from the filename
 
     Example:
-        >>> parse_exptime('image_100.0s_data.fits')
+        >>> parse_exptime('calib_7DT11_T00139_20250102_014643_m425_100s.fits')
         100.0
-        >>> parse_exptime('image_100.0s_data.fits', return_type=int)
+        >>> parse_exptime(calib_7DT11_T00139_20250102_014643_m425_100s.fits', return_type=int)
         100
     """
-    exptime = float(re.search(r"_(\d+\.\d+)s_", filename).group(1))
-    return int(exptime) if return_type == int else exptime
+    match = re.search(r"_(\d+\.?\d*)s", filename)
+    if match:
+        exptime = float(match.group(1))
+        return int(exptime) if return_type == int else exptime
+    return None  # Return None if no match is found
 
 
 def define_output_dir(date, n_binning, gain, obj=None, unit=None, filt=None):
@@ -426,6 +478,22 @@ def update_padded_header(target_fits, header_new):
                 header.insert(i + j, card)
             else:
                 header.append(card, end=True)
+
+
+def swap_ext(file_path: str, new_ext: str) -> str:
+    """
+    Swap the file extension of a given file path.
+
+    Args:
+        file_path (str): The original file path.
+        new_ext (str): The new extension (with or without a leading dot).
+
+    Returns:
+        str: The file path with the swapped extension.
+    """
+    base, _ = os.path.splitext(file_path)
+    new_ext = new_ext if new_ext.startswith(".") else f".{new_ext}"
+    return base + new_ext
 
 
 class Parse7DS:

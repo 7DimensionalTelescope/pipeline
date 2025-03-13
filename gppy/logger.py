@@ -58,8 +58,8 @@ class Logger:
         self.logger = self._setup_logger()
 
         # Redirect stdout and stderr to the logger
-        sys.stdout = StdoutToLogger(self.logger)
-        sys.stderr = StderrToLogger(self.logger)
+        sys.stdout = StdoutToLogger(self)
+        sys.stderr = StderrToLogger(self)
 
     def _create_handler(self, handler_type, log_file=None, level=None, mode="a"):
         """
@@ -167,6 +167,7 @@ class Logger:
         if isinstance(level, str):
             level = getattr(logging, level.upper())
         self.logger.log(level, msg, **kwargs)
+        sys.__stdout__.write(msg + "\n")
 
     def debug(self, msg: str, **kwargs) -> None:
         """
@@ -208,7 +209,8 @@ class Logger:
             msg (str): Error message to log
             **kwargs: Additional keyword arguments for logging
         """
-        self.logger.error(msg, **kwargs)
+        # self.logger.error(msg, **kwargs)
+        self.logger.error(msg, exc_info=True, **kwargs)
         self.send_slack(msg, "ERROR")
 
     def critical(self, msg: str, **kwargs) -> None:
@@ -219,7 +221,8 @@ class Logger:
             msg (str): Critical message to log
             **kwargs: Additional keyword arguments for logging
         """
-        self.logger.critical(msg, **kwargs)
+        # self.logger.critical(msg, **kwargs)
+        self.logger.critical(msg, exc_info=True, **kwargs)
         self.send_slack(msg, "CRITICAL")
 
     def send_slack(self, msg: str, level: str) -> None:
@@ -398,10 +401,7 @@ class StdoutToLogger:
             buf (str): Buffer containing stdout output
         """
         for line in buf.rstrip().splitlines():
-            self.logger.debug(line)
-
-        # Also write to the actual stdout for console output
-        sys.__stdout__.write(buf)
+            self.logger.info(line)
 
     def flush(self):
         """
@@ -440,9 +440,6 @@ class StderrToLogger:
         """
         for line in buf.rstrip().splitlines():
             self.logger.error(line)
-
-        # Also write to the actual stderr for console output
-        sys.__stderr__.write(buf)
 
     def flush(self):
         """
