@@ -44,7 +44,6 @@ file:
   raw_files: 
   processed_files: 
   combined_file:
-  bpmask_files:
   error_files:
 
 preprocess:
@@ -56,6 +55,7 @@ preprocess:
   mbias_file: # master_frame/2001-02-23_1x1_gain2750/7DT11/bias_20250102_C3.fits
   mdark_file: # master_frame/2001-02-23_1x1_gain2750/7DT11/dark_20250102_100s_C3.fits
   mflat_file: # master_frame/2001-02-23_1x1_gain2750/7DT11/flat_20250102_m625_C3.fits
+  bpmask_file:
 
 astrometry:
   # To be modified by config
@@ -80,9 +80,9 @@ photometry:
     BACK_FILTERSIZE: 3
     BACKPHOTO_TYPE: LOCAL
 
-  combine:
-    zp_key: 'ZP_AUTO'
-    # images_to_combine:
+combine:
+  zp_key: 'ZP_AUTO'
+  # images_to_combine:
   
 
 logging:

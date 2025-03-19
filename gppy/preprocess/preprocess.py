@@ -13,7 +13,7 @@ from ..services.queue import QueueManager
 from ..config import Configuration
 
 
-class Calibration:
+class Preprocess:
     def __init__(
         self,
         config: Union[str, Any] = None,
@@ -43,7 +43,7 @@ class Calibration:
     def run(self, use_eclaire=True):
 
         self.logger.info("-" * 80)
-        self.logger.info(f"Start calibration for {self.config.name}")
+        self.logger.info(f"Start preprocessing for {self.config.name}")
 
         self._load_mbdf()
 
@@ -113,15 +113,15 @@ class Calibration:
         if selection == "default":  # use links under self.config.preprocess
             mbias_file = prep_utils.read_link(self.config.preprocess.mbias_link)
             self.config.preprocess.mbias_file = mbias_file
-            self.logger.debug("Completed reading master BIAS link; 'selection' is 'default'")  # fmt:skip
+            self.logger.debug("Completed reading master BIAS link; 'masterframe' is 'default'")  # fmt:skip
 
             mdark_file = prep_utils.read_link(self.config.preprocess.mdark_link)
             self.config.preprocess.mdark_file = mdark_file
-            self.logger.debug("Completed reading master DARK link; 'selection' is 'default'")  # fmt:skip
+            self.logger.debug("Completed reading master DARK link; 'masterframe' is 'default'")  # fmt:skip
 
             mflat_file = prep_utils.read_link(self.config.preprocess.mflat_link)
             self.config.preprocess.mflat_file = mflat_file
-            self.logger.debug("Completed reading master FLAT link; 'selection' is 'default'")  # fmt:skip
+            self.logger.debug("Completed reading master FLAT link; 'masterframe' is 'default'")  # fmt:skip
 
         elif selection == "closest":  # search closest master frames again
             from .utils import link_to_file, search_with_date_offsets
@@ -154,25 +154,29 @@ class Calibration:
         elif selection == "custom":
             # use self.config.preprocess.m????_file
             if self.config.preprocess.mbias_file is None:
-                self.logger.error("No 'mbias_file' given although 'selection' is 'custom'")  # fmt:skip
-                raise ValueError("mbias_file must be specified when selection is 'custom'.")  # fmt:skip
+                self.logger.error("No 'mbias_file' given although 'masterframe' is 'custom'")  # fmt:skip
+                raise ValueError("mbias_file must be specified when masterframe is 'custom'.")  # fmt:skip
 
             if self.config.preprocess.mdark_file is None:
-                self.logger.error("No 'mdark_file' given although 'selection' is 'custom'")  # fmt:skip
-                raise ValueError("mdark_file must be specified when selection is 'custom'.")  # fmt:skip
+                self.logger.error("No 'mdark_file' given although 'masterframe' is 'custom'")  # fmt:skip
+                raise ValueError("mdark_file must be specified when masterframe is 'custom'.")  # fmt:skip
 
             if self.config.preprocess.mflat_file is None:
-                self.logger.error("No 'mflat_file' given although 'selection' is 'custom'")  # fmt:skip
-                raise ValueError("mflat_file must be specified when selection is 'custom'.")  # fmt:skip
+                self.logger.error("No 'mflat_file' given although 'masterframe' is 'custom'")  # fmt:skip
+                raise ValueError("mflat_file must be specified when masterframe is 'custom'.")  # fmt:skip
 
-        # return mbias_file, mdark_file, mflat_file
+        # full paths to sigma maps
+        self.config.preprocess.biassig_file = self.config.preprocess.mbias_file.replace("bias", "biassig")  # fmt:skip
+        self.config.preprocess.darksig_file = self.config.preprocess.mdark_file.replace("dark", "darksig")  # fmt:skip
+        self.config.preprocess.flatsig_file = self.config.preprocess.mflat_file.replace("flat", "flatsig")  # fmt:skip
+        self.config.preprocess.bpmask_file = self.config.preprocess.darksig_file.replace("darksig", "bpmask")  # fmt:skip
 
     def _calibrate_image_eclaire(self, mbias_file, mdark_file, mflat_file):
         raw_files = self.config.file.raw_files
         processed_files = self.config.file.processed_files
 
         self.logger.debug(f"Calibrating {len(raw_files)} SCI frames: {self.config.obs.filter}, {self.config.obs.exposure}s")  # fmt:skip
-        self.logger.debug(f"Current memory usage: {MemoryMonitor.log_memory_usage}")
+        #self.logger.debug(f"Current memory usage: {MemoryMonitor.log_memory_usage}")
         # batch processing
         BATCH_SIZE = 10
         for i in range(0, len(raw_files), BATCH_SIZE):

@@ -42,7 +42,6 @@ class ObservationData:
 
         self._id = next(self._id_counter)
 
-
         if isinstance(file_path, str):
             file_path = Path(file_path)
 
@@ -62,22 +61,22 @@ class ObservationData:
     def from_pattern(cls, pattern: str):
         """
         Create an ObservationData instance from a file pattern.
-        
+
         Args:
             pattern: A string pattern like 'path_to_fits_folder/*.fits'
-            
+
         Returns:
             ObservationData: An instance with all matching files
-            
+
         Raises:
             ValueError: If multiple files match the pattern
         """
         matching_files = glob.glob(pattern)
         file_set = set()
-        
+
         if not matching_files:
             raise ValueError(f"No files match pattern: {pattern}")
-        
+
         if len(matching_files) > 1:
             for file in matching_files:
                 file_set.add(parse_key_params_from_header(file)[0])
@@ -90,7 +89,7 @@ class ObservationData:
                 raise ValueError(error_message)
             else:
                 return cls(matching_files[0])
-        
+
         # If we reach here, there's exactly one matching file
         return cls(matching_files[0])
 
@@ -148,12 +147,12 @@ class ObservationData:
 
     def run_calibaration(self, save_path=None, verbose=True):
         from ..config import Configuration
-        from ..preprocess import Calibration
+        from ..preprocess import Preprocess
 
         self.config = Configuration(self.obs_params, overwrite=True, verbose=verbose)
         if save_path:
             self.config.config.path.path_processed = save_path
-        calib = Calibration(self.config)
+        calib = Preprocess(self.config)
         calib.run()
 
     def run_astrometry(self):
@@ -177,11 +176,11 @@ class ObservationData:
 
 class ObservationDataSet(ObservationData):
 
-    def __init__(self, folder_path: str or Path):
+    def __init__(self):
         self._processed = set()
         self.obs_list = []
 
-    def add_fits_file(self, fits_path: Path) -> bool:
+    def add_fits_file(self, fits_path: Path or str) -> bool:
         """
         Add a FITS file to the observation dataset.
 
@@ -193,6 +192,9 @@ class ObservationDataSet(ObservationData):
         Returns:
             bool: Whether the file was successfully added to the dataset
         """
+        if isinstance(fits_path, str):
+            fits_path = Path(fits_path)
+            
         pattern = (
             r"(\w+)_(\d{8})_(\d{6})_([^_]+)_([^_]+)_(\d+x\d+)_(\d+\.\d+)s_\d+\.fits"
         )

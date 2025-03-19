@@ -11,3 +11,8 @@ MASTER_FRAME_DIR = os.environ["MASTER_FRAME_DIR"]
 
 FACTORY_DIR = os.environ["FACTORY_DIR"]
 SLACK_TOKEN = os.environ["SLACK_TOKEN"]
+
+available_7dt_units = [f"7DT0{unit}" if unit < 10 else f"7DT{unit}" for unit in range(1, 20)]
+
+class PipelineError(Exception):
+    pass
