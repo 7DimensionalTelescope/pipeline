@@ -98,7 +98,7 @@ class Monitor(FileSystemEventHandler):
             # Initialize both calibration and observation data handlers
             self.folder_data[folder_path] = {
                 'calib': CalibrationData(file_path.parent),
-                'obs': ObservationDataSet(file_path.parent)
+                'obs': ObservationDataSet()
             }
         
         data_handlers = self.folder_data[folder_path]

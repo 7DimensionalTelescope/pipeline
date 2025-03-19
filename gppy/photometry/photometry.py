@@ -24,6 +24,7 @@ from ..config import Configuration
 from ..services.memory import MemoryMonitor
 from ..services.queue import QueueManager, Priority
 from .. import external
+from ..const import PipelineError
 
 from dataclasses import dataclass
 
@@ -560,9 +561,8 @@ class PhotometrySingle:
             header = fits.getheader(self.image)
             if "CTYPE1" not in header.keys():
                 self.logger.error("Check Astrometry solution: no WCS information")
-
-            raise
-        else:
+                raise PipelineError("Check Astrometry solution: no WCS information")
+        else:   
             self.logger.info(
                 f"""Matched Sources: {len(post_match_table)} (r={self.phot_conf.match_radius:.3f}")"""
             )

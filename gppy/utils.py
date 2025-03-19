@@ -4,7 +4,7 @@ import glob
 import shutil
 from datetime import datetime, timedelta
 from astropy.io import fits
-from .const import FACTORY_DIR
+from .const import FACTORY_DIR, RAWDATA_DIR
 
 
 def clean_up_factory():
@@ -23,7 +23,7 @@ def clean_up_folder(path):
             print(f"Failed to delete {item_path}: {e}")
 
 
-def parse_key_params_from_header(filename) -> None:
+def parse_key_params_from_header(filename: str or Path) -> None:
     """
     Extract target information from a FITS filename.
 
@@ -33,6 +33,7 @@ def parse_key_params_from_header(filename) -> None:
     Returns:
         tuple: Target name and filter, or None if parsing fails
     """
+    filename = str(filename)  # in case filename is pathlib Path
     info = {}
     header = fits.getheader(filename)
     for attr, key in zip(["exposure", "gain", "filter", "date", "obj", "unit", "n_binning"], \
@@ -46,8 +47,8 @@ def parse_key_params_from_header(filename) -> None:
             info[attr] = header[key]
 
     file_type = (
-        "mfw_image"
-        if any("BIAS" in filename, "DARK" in filename, "FLAT" in filename)
+        "master_image"
+        if any(s in filename for s in ["BIAS", "DARK", "FLAT"])
         else "sci_image"
     )
 
@@ -544,3 +545,17 @@ class Parse7DS:
         self.time = self.parts[4]
         self.filter = self.parts[5]
         self.exptime = self.parts[6]
+
+
+def check_obs_file(params):
+    for key, v in params.items():
+        if v is None:
+            params[key] = "*"
+            
+    path = RAWDATA_DIR+f'/{params["unit"]}/{params["date"]}_gain{params["gain"]}/'
+    filename = f'{params["unit"]}_*_{params["obj"]}_{params["filter"]}_{params["n_binning"]}x{params["n_binning"]}*.fits'
+    files = glob.glob(path+filename)
+    if len(files) == 0:
+        return False
+    else:
+        return files

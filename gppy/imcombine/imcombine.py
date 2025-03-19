@@ -1,5 +1,3 @@
-# %%
-
 import os
 import time
 from pathlib import Path
@@ -9,85 +7,23 @@ from astropy.time import Time
 from ccdproc import ImageFileCollection
 from typing import Any, List, Dict, Tuple, Optional, Union
 
+import warnings
+
+# for ccdproc imagefilecollection
+warnings.filterwarnings(
+    "ignore", category=UserWarning, message=".*multiple entries for.*"
+)
+
 # import warnings
 # warnings.filterwarnings("ignore")
 
 from ..const import REF_DIR
 from ..config import Configuration
 from .utils import extract_date_and_time, calc_mean_dateloc, inputlist_parser, unpack
-
-ZP_KEY = "ZP_AUTO"
-
-IC_KEYS = [
-    "EGAIN",
-    "TELESCOP",
-    "EGAIN",
-    "FILTER",
-    "OBJECT",
-    "OBJCTRA",
-    "OBJCTDEC",
-    "JD",
-    "MJD",
-    "SKYVAL",
-    "EXPTIME",
-    ZP_KEY,
-]
-
-# self.keys = [
-#     "imagetyp",
-#     "telescop",
-#     "object",
-#     "filter",
-#     "exptime",
-#     "ul5_1",
-#     "seeing",
-#     "elong",
-#     "ellip",
-# ]
-
-KEYS_TO_ADD = [
-    "IMAGETYP",
-    # "EXPOSURE",
-    # "EXPTIME",
-    "DATE-LOC",
-    # "DATE-OBS",
-    "XBINNING",
-    "YBINNING",
-    "EGAIN",
-    "XPIXSZ",
-    "YPIXSZ",
-    "INSTRUME",
-    "SET-TEMP",
-    "CCD-TEMP",
-    "TELESCOP",
-    "FOCALLEN",
-    "FOCRATIO",
-    "RA",
-    "DEC",
-    "CENTALT",
-    "CENTAZ",
-    "AIRMASS",
-    "PIERSIDE",
-    "SITEELEV",
-    "SITELAT",
-    "SITELONG",
-    "FWHEEL",
-    "FILTER",
-    "OBJECT",
-    "OBJCTRA",
-    "OBJCTDEC",
-    "OBJCTROT",
-    "FOCNAME",
-    "FOCPOS",
-    "FOCUSPOS",
-    "FOCUSSZ",
-    "ROWORDER",
-    "_QUINOX",
-    "SWCREATE",
-]
+from .const import ZP_KEY, IC_KEYS, KEYS_TO_ADD
 
 
-class Combine:
+class ImCombine:
     def __init__(
         self, config=None, logger=None, queue=None, return_errormap=False
     ) -> None:
@@ -101,14 +37,17 @@ class Combine:
             self.config = config
 
         # Setup log
-        self.logger = logger or self._setup_logger(config)
+        # self.logger = logger or self._setup_logger(config)
+        from ..logger import PrintLogger
+
+        self.logger = PrintLogger()
 
         self._files = [
             os.path.join(self.config.path.path_processed, f)
             for f in self.config.file.processed_files
         ]
 
-        self.zpkey = ZP_KEY
+        self.zpkey = self.config.combine.zp_key or ZP_KEY
         self.ic_keys = IC_KEYS
         self.keywords_to_add = KEYS_TO_ADD
 
@@ -121,6 +60,8 @@ class Combine:
         parts[-1] = f"{self.total_exptime:.0f}.com.fits"
         self.config.file.combined_file = "_".join(parts)
 
+        self._return_errormap = return_errormap
+
     @classmethod
     def from_list(cls, input_images):
         """use soft link if files are from different directories"""
@@ -131,7 +72,7 @@ class Combine:
             if not path.is_file():
                 print("The file does not exist.")
                 return None
-            image_list.append(path.parts[-1])
+            image_list.append(path.parts[-1])  # str
 
         working_dir = str(path.parent.absolute())
 
@@ -143,8 +84,12 @@ class Combine:
 
     @classmethod
     def from_file(cls, imagelist_file):
-        # self._files = inputlist_parser(imagelist_file)
-        pass
+        input_images = inputlist_parser(imagelist_file)
+        cls.from_list(input_images)
+
+    @property
+    def return_errormap(self):
+        return self._return_errormap
 
     def _setup_logger(self, config: Any) -> Any:
         """Initialize logger instance."""
@@ -161,14 +106,18 @@ class Combine:
         # Update header keywords if necessary
         # self.update_keywords()
 
-        # replace hot pixels
-        self.apply_bpmask()
-
         # background subtraction
         self.bkgsub()
 
+        if self.return_errormap:
+            self.calculate_errormap()
+
         # zero point scaling
         self.zpscale()
+
+        # replace hot pixels
+        self.apply_bpmask()
+        # and update errormap
 
         # swarp imcombine
         self.swarp_imcom()
@@ -185,7 +134,13 @@ class Combine:
         self.path_save = path_save
 
         # 	Image List for SWarp
-        self.path_imagelist = os.path.join(path_save, "images_to_stack.txt")
+        try:
+            self.path_imagelist = os.path.join(
+                self.config.path.path_factory, "images_to_stack.txt"
+            )
+        except:
+            self.logger.info("config.path.path_factory not defined. Using CWD")
+            self.path_imagelist = os.path.join(path_save, "images_to_stack.txt")
 
         # 	Background Subtracted
         self.path_bkgsub = f"{path_save}/bkgsub"
@@ -262,10 +217,6 @@ class Combine:
                 break
 
         # return ic
-
-    def apply_bpmask(self):
-        bpmask_files = self.config.file.bpmask_files
-        pass
 
     def bkgsub(self):
         # ------------------------------------------------------------
@@ -381,7 +332,7 @@ class Combine:
             header = hdulist[0].header
             new_header = {key: header.get(key, None) for key in self.keywords_to_add}
 
-        # 	Put General Header Infomation on the Combined Image
+        # 	Put General Header Infomation into the Combined Image
         with fits.open(comim) as hdulist:
             # data = hdulist[0].data
             header = hdulist[0].header
@@ -420,23 +371,30 @@ class Combine:
 
         # 	Header Update
         with fits.open(comim, mode="update") as hdul:
-            # 헤더 정보 가져오기
             header = hdul[0].header
 
-            # 여러 헤더 항목 업데이트
             for key, (value, comment) in keywords_to_update.items():
                 header[key] = (value, comment)
 
             # 	Stacked Single images
-            # for nn, inim in enumerate(files):
-            # 	header[f"IMG{nn:0>5}"] = (os.path.basename(inim), "")
+            for nn, inim in enumerate(self.files):
+                header[f"IMG{nn:0>5}"] = (os.path.basename(inim), "")
 
-            # 변경 사항 저장
             hdul.flush()
 
         delt_stack = time.time() - t0_stack
 
         print(f"Time to stack {self.n_stack} images: {delt_stack:.3f} sec")
+
+    def apply_bpmask(self):
+        # bpmask_files = self.config.preprocess.bpmask_file
+        pass
+
+    def calculate_errormap(self):
+        self.config.preprocess.biassig_file
+        self.config.preprocess.darksig_file
+        self.config.preprocess.flatsig_file
+        pass
 
 
 #   Example

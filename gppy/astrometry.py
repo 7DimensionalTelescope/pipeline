@@ -366,8 +366,8 @@ class Astrometry:
                     solved_head = read_scamp_header(solved_head)
                     update_padded_header(target_fits, solved_head)
                 else:
-                    self.logger.error(f"Check SCAMP output. Possibly due to restricted access to the online VizieR catalog.")
-                    raise FileNotFoundError(f"A header file does not exist: {solved_head}")
+                    self.logger.error(f"Check SCAMP output. Possibly due to restricted access to the online VizieR catalog or disk space.") # fmt: skip
+                    raise FileNotFoundError(f"A header file does not exist: {solved_head}") # fmt: skip
         self.logger.info("Header WCS Updated.")
 
     def _submit_task(self, func: callable, items: List[Any], **kwargs: Any) -> None:

@@ -5,7 +5,7 @@ from .astrometry import Astrometry
 from .photometry.photometry import Photometry
 from .imcombine.imcombine import ImCombine
 
-from .preprocess import Calibration, MasterFrameGenerator
+from .preprocess import Preprocess, MasterFrameGenerator
 from .const import RAWDATA_DIR
 import time
 
@@ -65,14 +65,13 @@ def run_scidata_reduction(
         queue (bool, optional): Whether to use queue-based processing. Defaults to False.
         **kwargs: Additional configuration parameters
     """
-    
     logger = Logger(name="7DT pipeline logger", slack_channel="pipeline_report")
     try:
         config = Configuration(obs_params, logger=logger, **kwargs)
         if not (config.config.flag.preprocess) and "preprocess" in processes:
-            calib = Calibration(config, queue=queue)
-            calib.run()
-            del calib
+            preproc = Preprocess(config, queue=queue)
+            preproc.run()
+            del preproc
         if not (config.config.flag.astrometry) and "astrometry" in processes:
             astrm = Astrometry(config, queue=queue)
             astrm.run()
@@ -82,14 +81,18 @@ def run_scidata_reduction(
             phot.run()
             del phot
         if not (config.config.flag.combine) and "combine" in processes:
-            com = Combine(config, queue=queue)
+            com = ImCombine(config, queue=queue)
             com.run()
             del com
     except Exception as e:
         logger.error(f"Error during abrupt stop: {e}")
 
 
-def run_pipeline(data, queue: QueueManager):
+def run_pipeline(
+    data,
+    queue: QueueManager,
+    processes=["preprocess", "astrometry", "photometry"],  # , "combine"],
+):
     """
     Central pipeline processing function for different types of astronomical data.
 
@@ -127,7 +130,7 @@ def run_pipeline(data, queue: QueueManager):
             queue.add_task(
                 run_scidata_reduction,
                 args=(obs.obs_params,),
-                kwargs={"queue": False},
+                kwargs={"queue": False, "processes": processes},
                 priority=priority,
                 task_name=obs.name,
             )

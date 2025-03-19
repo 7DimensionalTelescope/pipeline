@@ -80,27 +80,6 @@ def monitor_memory_usage(interval: float = 1.0, logger: Optional = None, verbose
         t.join()
 
 class MemoryState(Enum):
-    """
-    Represents different memory usage states with associated actions and thresholds.
-
-    Provides a hierarchical classification of memory states, each with:
-    - A descriptive state name
-    - Recommended action
-    - Memory usage threshold
-    - Severity order
-
-    States (in increasing severity):
-    - HEALTHY: Normal operation, no intervention needed
-    - WARNING: Light cleanup recommended
-    - CRITICAL: Aggressive memory recovery required
-    - EMERGENCY: Immediate process stoppage
-
-    Attributes:
-        state (str): Descriptive state name
-        action (str): Recommended action for the state
-        threshold (float): Memory usage percentage threshold
-        order (int): Severity order for comparison
-    """
     HEALTHY = ("healthy", "continue", None, 0)
     WARNING = ("warning", "cleanup", 70.0, 1)
     CRITICAL = ("critical", "pause", 85.0, 2)
@@ -111,7 +90,6 @@ class MemoryState(Enum):
         self.action = action
         self.threshold = threshold
         self.order = order
-
 
 class MemoryMonitor:
     """
@@ -287,8 +265,8 @@ class MemoryMonitor:
             self._handle_emergency(trigger_source, gpu_context, stop_callback)
             self.logger.critical(f"Emergency memory threshold exceeded on {trigger_source}. All processes stopped.")
 
-    @staticmethod
     def _handle_warning(
+        self,
         trigger_source: str,
         gpu_context
     ) -> None:
@@ -313,8 +291,9 @@ class MemoryMonitor:
             # CPU cleanup
             gc.collect()
 
-    @staticmethod
+
     def _handle_critical(
+        self,
         trigger_source: str,
         gpu_context,
     ) -> None:
@@ -337,23 +316,23 @@ class MemoryMonitor:
                     cp.get_default_memory_pool().free_all_blocks()
                     cp.get_default_pinned_memory_pool().free_all_blocks()
             
-            cleanup_memory()
+            utils.cleanup_memory()
             
             if self.should_recover():
                 self.logger.info(
                     f"Memory recovered - CPU: {self.current_memory_percent:.2f}%, "
-                    f"GPUs: {[f'{p:.2f}%' for p in self.gpu_percent]}"
+                    f"GPUs: {[f'{p:.2f}%' for p in self.current_gpu_memory_percent]}"
                 )
                 break
                 
             self.logger.warning(
                 f"Waiting for memory to recover - CPU: {self.current_memory_percent:.2f}%, "
-                f"GPUs: {[f'{p:.2f}%' for p in self.gpu_percent]}"
+                f"GPUs: {[f'{p:.2f}%' for p in self.current_gpu_memory_percent]}"
             )
             time.sleep(5)
 
-    @staticmethod
     def _handle_emergency(
+        self,
         trigger_source: str,
         gpu_context,
         stop_callback
@@ -378,7 +357,7 @@ class MemoryMonitor:
                     cp.get_default_memory_pool().free_all_blocks()
                     cp.get_default_pinned_memory_pool().free_all_blocks()
         
-        cleanup_memory()
+        utils.cleanup_memory()
         stop_callback()
 
     @utils.classmethodproperty

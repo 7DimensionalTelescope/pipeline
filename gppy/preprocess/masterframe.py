@@ -11,6 +11,7 @@ from ..utils import (
     define_output_dir,
     get_camera,
     parse_exptime,
+    swap_ext,
 )
 
 from ..const import MASTER_FRAME_DIR
@@ -278,9 +279,15 @@ class MasterFrameGenerator:
 
     def _get_sample_header(self):
         """get any .head file in self.path_raw"""
-        s = os.path.join(self.path_raw, f"*.head")
-        header_file = sorted(glob.glob(s))[0]
-        return header_to_dict(header_file)
+        s = os.path.join(self.path_raw, f"*.fits")
+        fits_file = sorted(glob.glob(s))[0]
+        header_file = swap_ext(fits_file, ".head")
+        if os.path.exists(header_file):
+            return header_to_dict(header_file)
+        else:
+            from astropy.io import fits
+
+            return dict(fits.getheader(fits_file))
 
     def _get_flatdark(self, filt):
         """If no raw DARK for the date, searches 100s mdark of previous dates"""
@@ -352,7 +359,7 @@ class MasterFrameGenerator:
             # save bias sigma map (~read noise)
             fits.writeto(
                 self.biassig_output,
-                data=cp.asnumpy(cp.std(bfc.data, axis=0)) * n / (n - 1),
+                data=cp.asnumpy(cp.std(bfc.data, axis=0)) * np.sqrt(n / (n - 1)),
                 header=header,
                 overwrite=True,
             )
@@ -367,7 +374,7 @@ class MasterFrameGenerator:
             # save dark sigma map
             fits.writeto(
                 self.darksig_output[exptime],
-                data=cp.asnumpy(cp.std(bfc.data, axis=0)) * n / (n - 1),
+                data=cp.asnumpy(cp.std(bfc.data, axis=0)) * np.sqrt(n / (n - 1)),
                 header=header,
                 overwrite=True,
             )
@@ -394,7 +401,7 @@ class MasterFrameGenerator:
             # save flat sigma map
             fits.writeto(
                 self.flatsig_output[filt],
-                data=cp.asnumpy(cp.std(bfc.data, axis=0)) * n / (n - 1),
+                data=cp.asnumpy(cp.std(bfc.data, axis=0)) * np.sqrt(n / (n - 1)),
                 header=header,
                 overwrite=True,
             )
@@ -448,12 +455,29 @@ class MasterFrameGenerator:
         mean, median, std = sigma_clipped_stats_cupy(data, sigma=3, maxiters=5)
 
         hot_mask = cp.abs(data - median) > n_sigma * std  # 1 for bad, 0 for okay
-        hot_mask = cp.asnumpy(hot_mask).astype(int)  # gpu to cpu
+        hot_mask = cp.asnumpy(hot_mask).astype("int16")  # gpu to cpu
 
         # Save the file
         newhdu = fits.PrimaryHDU(hot_mask)
         if header:
-            newhdu.header = header
+            # for card in header.cards:
+            #     # skip certain keywords
+            #     if card.keyword in ("BITPIX", "NAXIS", "NAXIS1", "NAXIS2"):
+            #         continue
+            #     newhdu.header.append(card)
+            for key in [
+                "INSTRUME",
+                "GAIN",
+                "EXPTIME",
+                "EXPOSURE",
+                "JD",
+                "MJD",
+                "DATE-OBS",
+                "DATE-LOC",
+                "XBINNING",
+                "YBINNING",
+            ]:
+                newhdu.header[key] = header[key]
             # newhdu.header.add_comment("Above header is from the first dark frame")
             newhdu.header["COMMENT"] = "Header inherited first dark frame"
         newhdu.header["NHOTPIX"] = (np.sum(hot_mask), "Number of hot pixels.")

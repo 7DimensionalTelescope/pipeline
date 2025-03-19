@@ -4,6 +4,7 @@ import re
 import glob
 import json
 from datetime import datetime
+from astropy.table import Table
 from .utils import (
     header_to_dict,
     to_datetime_string,
@@ -267,18 +268,13 @@ class Configuration:
         )
 
         path_processed = os.path.join(self._output_prefix, rel_path)
-
         path_factory = os.path.join(FACTORY_DIR, rel_path)
         path_fdz = os.path.join(MASTER_FRAME_DIR, fdz_rel_path)
-        metadata_path = os.path.join(self._output_prefix, _tmp_name, "metadata.json")
-        if not (os.path.exists(metadata_path)):
-            os.makedirs(os.path.join(self._output_prefix, _tmp_name), exist_ok=True)
-            metadata = {"create_time": datetime.now().isoformat(), "observations": []}
-            with open(metadata_path, "w") as f:
-                json.dump(metadata, f, indent=4)
+
         os.makedirs(path_processed, exist_ok=True)
         os.makedirs(path_fdz, exist_ok=True)
         os.makedirs(path_factory, exist_ok=True)
+
         self.config.path.path_processed = path_processed
         self.config.path.path_factory = path_factory
         self.config.path.path_fdz = path_fdz
@@ -289,24 +285,40 @@ class Configuration:
             self.config.obs.gain,
         )
         self.config.path.path_sex = os.path.join(REF_DIR, "srcExt")
-        self._add_metadata(metadata_path)
+        self._add_metadata(_tmp_name)
 
-    def _add_metadata(self, metadata_path):
-        with open(metadata_path, "r") as f:
-            metadata = json.load(f)
-            
-            metadata["observations"].append(
-                [
-                    self.config.obs.object,
-                    self.config.obs.unit,
-                    self.config.obs.filter,
-                    self.config.obs.n_binning,
-                    self.config.obs.gain,
-                ]
-            )
-            metadata["last_update_time"] = datetime.now().isoformat()
-            json.dump(metadata, f, indent=4)
+    def _add_metadata(self, name):
 
+        metadata_path = os.path.join(self._output_prefix, name, "metadata.ecsv")
+
+        # Initialize or load the observation table
+        if not os.path.exists(metadata_path):
+            with open(metadata_path, "w") as f:
+                f.write("# %ECSV 1.0\n")
+                f.write("# ---\n")
+                f.write("# datatype:\n")
+                f.write("# - {name: object, datatype: string}\n")
+                f.write("# - {name: unit, datatype: string}\n")
+                f.write("# - {name: filter, datatype: string}\n")
+                f.write("# - {name: n_binning, datatype: int}\n")
+                f.write("# - {name: gain, datatype: float}\n")
+                f.write("# meta: !!omap\n")
+                f.write("# - {created: " + datetime.now().isoformat() + "}\n")
+                f.write("# schema: astropy-2.0\n")
+                f.write("object,unit,filter,n_binning,gain\n")
+        
+        observation_data = [
+            str(self.config.obs.object),
+            str(self.config.obs.unit),
+            str(self.config.obs.filter),
+            str(self.config.obs.n_binning),
+            str(self.config.obs.gain)
+        ]
+        new_line = f"{','.join(observation_data)}\n"
+
+        with open(metadata_path, "a") as f:
+            f.write(new_line)
+    
     def _define_files(self):
         s = f"{self.config.path.path_raw}/*{self.config.obs.object}_{self.config.obs.filter}_{self.config.obs.n_binning}*.fits"  # obsdata/7DT11/*T00001*.fits
 
@@ -350,18 +362,6 @@ class Configuration:
             )
             for datetime, exp in zip(self.config.obs.datetime, self.config.obs.exposure)
         ]
-
-        # make combined filename
-        if self.config.file.processed_files:
-            explist = [
-                # int(os.path.basename(s).split(".")[0].split("_")[-1][:-1])
-                parse_exptime(os.path.basename(s))
-                for s in self.config.file.processed_files
-            ]
-            template = self.config.file.processed_files[-1]
-            self.config.file.combined_file = template.replace(
-                str(parse_exptime(template)), f"{int(sum(explist))}"
-            )
 
         # Identify Camera from image size
         self.config.obs.camera = get_camera(self.raw_header_sample)

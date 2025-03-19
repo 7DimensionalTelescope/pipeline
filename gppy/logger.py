@@ -451,6 +451,7 @@ class StderrToLogger:
 class PrintLogger:
     """
     A simple logger that prints messages to the console instead of writing to a file.
+    Useful for debugging.
 
     Supports:
     - Different log levels (DEBUG, INFO, WARNING, ERROR, CRITICAL)

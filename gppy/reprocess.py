@@ -1,12 +1,15 @@
 import re
 import time
 from pathlib import Path
+import copy
 
 from .services.queue import QueueManager, Priority
 from .data import CalibrationData, ObservationDataSet
 from .run import run_scidata_reduction, run_masterframe_generator
+from .const import available_7dt_units
+from .utils import check_obs_file
 
-def reprocess_folder(folder, overwrite=False):
+def reprocess_folder(folder, overwrite=False, sync_units=False, queue=None, processes = ["preprocess", "astrometry", "photometry", "combine"], **kwargs):
     """
     Reprocess all FITS files in a given folder and its subfolders.
 
@@ -25,7 +28,7 @@ def reprocess_folder(folder, overwrite=False):
 
     Args:
         folder (str): Path to the folder containing data to be reprocessed
-        overwrite (bool, optional): Flag to enable overwriting of existing 
+        overwrite (bool, optional): Flag to enable overwriting of existing
             processed files. Defaults to False.
 
     Raises:
@@ -42,95 +45,100 @@ def reprocess_folder(folder, overwrite=False):
         - Uses QueueManager for parallel processing
         - Skips folders without FITS files
     """
-    queue = QueueManager(max_workers=20)
-    
+    if queue is None:
+        queue = QueueManager(max_workers=20)
+
     # Convert folder to Path object
     folder_path = Path(folder)
-    
+
     # Check if folder exists
     if not folder_path.exists() or not folder_path.is_dir():
         print(f"Error: {folder} is not a valid directory")
         return
-    
+
     # Track errors during processing
-    processing_errors = []
-    
-    # Find all potential data folders 
+    # processing_errors = []
+
+    # Find all potential data folders
     data_folders = []
-    
+
     # Check if the input folder itself matches the data folder pattern
-    if re.match(r'\d{4}-\d{2}-\d{2}(_ToO)?(_\dx\d)?_gain\d+', folder_path.name):
+    if re.match(r"\d{4}-\d{2}-\d{2}(_ToO)?(_\dx\d)?_gain\d+", folder_path.name):
         data_folders.append(folder_path)
-    
+
     # If not, search subfolders
-    data_folders.extend([
-        f for f in folder_path.iterdir() 
-        if f.is_dir() and re.match(r'\d{4}-\d{2}-\d{2}(_ToO)?(_\dx\d)?_gain\d+', f.name)
-    ])
-    
+    data_folders.extend(
+        [
+            f
+            for f in folder_path.iterdir()
+            if f.is_dir()
+            and re.match(r"\d{4}-\d{2}-\d{2}(_ToO)?(_\dx\d)?_gain\d+", f.name)
+        ]
+    )
+
     # If no folders found, print a warning
     if not data_folders:
         print(f"No valid data folders found in {folder_path}")
         return
-    
+
     # Process each data folder
     for data_folder in data_folders:
-        try:
-            # Initialize data handlers for the folder
-            calib_data = CalibrationData(data_folder)
-            obs_data = ObservationDataSet(data_folder)
-            
-            # Find and process all FITS files in the folder
-            fits_files = list(data_folder.glob('**/*.fits'))
-            
-            if not fits_files:
-                print(f"No FITS files found in {data_folder}")
-                continue
-            
-            for fits_file in fits_files:
-                calib_data.add_fits_file(fits_file)
-                obs_data.add_fits_file(fits_file)
-            
-            # Process calibration data if exists
-            if calib_data.has_calib_files() and not calib_data.processed:
+        # try:
+        # Initialize data handlers for the folder
+        calib_data = CalibrationData(data_folder)
+        obs_dataset = ObservationDataSet()
 
-                queue.add_task(
-                    run_masterframe_generator,
-                    args=(calib_data.obs_params,),
-                    kwargs={"queue": False},
-                    priority=Priority.LOW,
-                    gpu=True,
-                    task_name=f"{calib_data.name}",
-                )
+        # Find and process all FITS files in the folder
+        fits_files = list(data_folder.glob("*.fits"))
+
+        if not fits_files:
+            print(f"No FITS files found in {data_folder}")
+            continue
+
+        for fits_file in fits_files:
+            calib_data.add_fits_file(fits_file)
+            obs_dataset.add_fits_file(fits_file)
+
+        # Process calibration data if exists
+        if calib_data.has_calib_files() and not calib_data.processed:
+
+            queue.add_task(
+                run_masterframe_generator,
+                args=(calib_data.obs_params,),
+                kwargs={"queue": False},
+                priority=Priority.LOW,
+                gpu=True,
+                task_name=f"{calib_data.name}",
+            )
+
+        # Process observation data
+        for obs in obs_dataset.get_unprocessed():
+            obs_dataset.mark_as_processed(obs.identifier)
+
+            priority = Priority.HIGH if obs.too else Priority.MEDIUM
             
-            # Process observation data
-            for obs in obs_data.get_unprocessed():
-                obs_data.mark_as_processed(obs.identifier)
+            queue.add_task(
+                run_scidata_reduction,
+                args=(obs.obs_params,),
+                kwargs= {"queue": False, "overwrite": overwrite, "processes": processes},
+                priority=priority,
+                task_name=obs.name,
+            )
 
-                priority = Priority.HIGH if obs.too else Priority.MEDIUM
+            time.sleep(0.1)
 
-                queue.add_task(
-                    run_scidata_reduction,
-                    args=(obs.obs_params,),
-                    kwargs={"queue": False, "overwrite": overwrite},
-                    priority=priority,
-                    task_name=obs.name,
-                )
+        if sync_units:
+            original_unit = copy.copy(obs.unit)
+            for unit in available_7dt_units:
+                if unit != original_unit:
+                    obs.unit = unit
+                    obs.filter = None
+                    files = check_obs_file(obs.obs_params)
+                    if files:
+                        reprocess_folder(Path(files[0]).parent, overwrite=overwrite, queue=queue, processes=processes, sync_units=False)
 
-                time.sleep(0.1)
-        except Exception as e:
-            error_msg = f"Error processing folder {data_folder}: {str(e)}"
-            processing_errors.append(error_msg)
-            print(error_msg)
-    
     # Wait for queue to complete processing
     queue.wait_until_task_complete("all")
 
-    # Raise an exception if any errors occurred during processing
-    if processing_errors:
-        raise RuntimeError("\n".join(processing_errors))
-
     # Print summary of processing
     print(f"Finished processing files in {folder}")
-
-
