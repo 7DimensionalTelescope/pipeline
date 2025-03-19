@@ -3,7 +3,7 @@ __package__ = "gppy"
 from .config import Configuration
 from .astrometry import Astrometry
 from .photometry.photometry import Photometry
-from .combine.combine import Combine
+from .imcombine.imcombine import ImCombine
 
 from .preprocess import Calibration, MasterFrameGenerator
 from .const import RAWDATA_DIR
@@ -65,6 +65,7 @@ def run_scidata_reduction(
         queue (bool, optional): Whether to use queue-based processing. Defaults to False.
         **kwargs: Additional configuration parameters
     """
+    
     logger = Logger(name="7DT pipeline logger", slack_channel="pipeline_report")
     try:
         config = Configuration(obs_params, logger=logger, **kwargs)
@@ -80,10 +81,10 @@ def run_scidata_reduction(
             phot = Photometry(config, queue=queue)
             phot.run()
             del phot
-        # if not (config.config.flag.combine) and "combine" in processes:
-        #     com = Combine(config, queue=queue)
-        #     com.run()
-        #     del com
+        if not (config.config.flag.combine) and "combine" in processes:
+            com = Combine(config, queue=queue)
+            com.run()
+            del com
     except Exception as e:
         logger.error(f"Error during abrupt stop: {e}")
 
