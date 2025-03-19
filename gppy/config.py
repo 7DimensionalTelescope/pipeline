@@ -294,6 +294,7 @@ class Configuration:
     def _add_metadata(self, metadata_path):
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
+            
             metadata["observations"].append(
                 [
                     self.config.obs.object,
@@ -303,7 +304,7 @@ class Configuration:
                     self.config.obs.gain,
                 ]
             )
-        with open(metadata_path, "w") as f:
+            metadata["last_update_time"] = datetime.now().isoformat()
             json.dump(metadata, f, indent=4)
 
     def _define_files(self):

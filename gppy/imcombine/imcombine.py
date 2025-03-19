@@ -88,7 +88,9 @@ KEYS_TO_ADD = [
 
 
 class Combine:
-    def __init__(self, config=None, logger=None, queue=None) -> None:
+    def __init__(
+        self, config=None, logger=None, queue=None, return_errormap=False
+    ) -> None:
 
         # Load Configuration
         if isinstance(config, str):  # In case of File Path
@@ -469,4 +471,4 @@ if __name__ == "__main__":
     ]
 
     for image_list in image_lists:
-        Combine(image_list).run()
+        ImCombine(image_list).run()
