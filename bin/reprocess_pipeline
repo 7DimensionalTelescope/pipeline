@@ -1,0 +1,57 @@
+#!/usr/bin/env python
+from gppy.reprocess import reprocess_folder
+import argparse
+import os
+import sys
+import signal
+
+# Set up signal handler for SIGINT (Ctrl+C)
+def signal_handler(sig, frame):
+    print("\nTerminate process")
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Reprocess data in a folder')
+    parser.add_argument('-folder', type=str, help='Folder to reprocess')
+    parser.add_argument('-process', type=str, nargs='+', help='List of processes', choices=['preprocess', 'astrometry', 'photometry', 'combine'], default=['preprocess', 'astrometry', 'photometry', 'combine'])
+    parser.add_argument('-overwrite', type=bool, help='Overwrite existing processed files')
+    parser.add_argument('-sync', type=bool, help='Reprocess for other units if exists')
+    args = parser.parse_args()
+    
+    try:
+        if args.folder is None:
+            while True:
+                folder = input("input folder: ")
+                if os.path.exists(folder):
+                    break
+                else:
+                    print("The input folder does not exist.")
+        else:
+            folder = args.folder
+            
+        user_input = input(f"List of processes [default: {', '.join(['preprocess', 'astrometry', 'photometry', 'combine'])}]: ")
+        processes = user_input.split(',') if user_input else ['preprocess', 'astrometry', 'photometry', 'combine']
+        
+        for proc in processes:
+            if proc not in ['preprocess', 'astrometry', 'photometry', 'combine']:
+                print(f"Invalid process: {proc}")
+                sys.exit(1)
+
+        if args.sync is None:
+            user_input = input("Reprocess for other units if exists [default: False]: ")
+            sync_units = user_input.lower() in ["true", "1", "yes", "y"] if user_input else False
+        else:
+            sync_units = args.sync
+
+        if args.overwrite is None:
+            user_input = input("overwrite [default: False]: ")
+            overwrite = user_input.lower() in ["true", "1", "yes", "y"] if user_input else False
+        else:
+            overwrite = args.overwrite
+
+        reprocess_folder(folder, overwrite=overwrite, processes = processes, sync_units=sync_units)
+    except Exception as e:
+        print(f"\nError: {e}")
+        sys.exit(1)

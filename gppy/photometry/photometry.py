@@ -7,6 +7,7 @@ import itertools
 import time
 from pathlib import Path
 import glob
+from dataclasses import dataclass
 
 # astropy
 from astropy.io import fits
@@ -25,11 +26,9 @@ from ..services.memory import MemoryMonitor
 from ..services.queue import QueueManager, Priority
 from .. import external
 from ..const import PipelineError
+from ..base import BaseSetup
 
-from dataclasses import dataclass
-
-
-class Photometry:
+class Photometry(BaseSetup):
     """
     A class to perform photometric analysis on astronomical images.
 
@@ -63,15 +62,8 @@ class Photometry:
             ref_catalog: Name of reference catalog to use
         """
         # Load Configuration
-        if isinstance(config, str):
-            self.config = Configuration(config_source=config).config
-        elif hasattr(config, "config"):
-            self.config = config.config
-        else:
-            self.config = config
+        super().__init__(config, logger, queue)
 
-        self.logger = logger or self._setup_logger(config)
-        self.queue = self._setup_queue(queue)
         self.ref_catalog = ref_catalog or self.config.photometry.refcatname
         self.images = images or self.config.file.processed_files
 
@@ -99,35 +91,6 @@ class Photometry:
         config = Configuration.base_config(working_dir)
         config.file.processed_files = image_list
         return cls(config=config)
-
-    @classmethod
-    def from_file(cls, image: str) -> Optional["Photometry"]:
-        """Create Photometry instance from single image file."""
-        return cls.from_list([image])
-
-    @classmethod
-    def from_dir(cls, dir_path: str) -> "Photometry":
-        """Create Photometry instance from directory of FITS files."""
-        image_list = glob.glob(f"{dir_path}/*.fits")
-        return cls.from_list(image_list)
-
-    def _setup_logger(self, config: Any) -> Any:
-        """Initialize logger instance."""
-        if hasattr(config, "logger") and config.logger is not None:
-            return config.logger
-
-        from ..logger import Logger
-
-        return Logger(name="7DT pipeline logger", slack_channel="pipeline_report")
-
-    def _setup_queue(self, queue: Union[bool, QueueManager]) -> Optional[QueueManager]:
-        """Initialize queue manager for parallel processing."""
-        if isinstance(queue, QueueManager):
-            queue.logger = self.logger
-            return queue
-        elif queue:
-            return QueueManager(logger=self.logger)
-        return None
 
     def run(self) -> None:
         """

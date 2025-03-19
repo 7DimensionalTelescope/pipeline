@@ -12,8 +12,9 @@ from ..services.memory import MemoryMonitor
 from ..services.queue import QueueManager
 from ..config import Configuration
 
+from ..base import BaseSetup
 
-class Preprocess:
+class Preprocess(BaseSetup):
     def __init__(
         self,
         config: Union[str, Any] = None,
@@ -27,18 +28,7 @@ class Preprocess:
             logger: Custom logger instance (optional)
             queue: QueueManager instance or boolean to enable parallel processing
         """
-        # Load Configuration
-        if isinstance(config, str):  # In case of File Path
-            self.config = Configuration(config_source=config).config
-        else:
-            # for easy access to config
-            self.config = config.config
-
-        # Setup log
-        self.logger = logger or self._setup_logger(config)
-
-        # Setup queue
-        self.queue = self._setup_queue(queue)
+        super().__init__(config, logger, queue)
 
     def run(self, use_eclaire=True):
 
@@ -66,22 +56,6 @@ class Preprocess:
             self.logger.error(f"Error during preprocessing: {str(e)}")
             raise
 
-    def _setup_logger(self, config):
-        if hasattr(config, "logger") and config.logger is not None:
-            return config.logger
-
-        from ..logger import Logger
-
-        return Logger(name="7DT pipeline logger", slack_channel="pipeline_report")
-
-    def _setup_queue(self, queue):
-        if isinstance(queue, QueueManager):
-            queue.logger = self.logger
-            return queue
-        elif queue:
-            return QueueManager(logger=self.logger)
-        return None
-
     @classmethod
     def from_list(cls, images):
         image_list = []
@@ -95,17 +69,6 @@ class Preprocess:
         config = Configuration.base_config(working_dir)
         config.file.processed_files = image_list
         return cls(config=config)
-
-    @classmethod
-    def from_file(cls, image):
-        return cls.from_list([image])
-
-    @classmethod
-    def from_dir(cls, dir_path):
-        import glob
-
-        image_list = glob.glob(f"{dir_path}/*.fits")
-        return cls.from_list(image_list)
 
     def _load_mbdf(self):
         selection = self.config.preprocess.masterframe

@@ -9,9 +9,9 @@ from .services.queue import QueueManager, Priority
 from . import external
 from .services.memory import MemoryMonitor
 from .config import Configuration
+from .base import BaseSetup
 
-
-class Astrometry:
+class Astrometry(BaseSetup):
     """A class to handle astrometric solutions for astronomical images.
 
     This class manages the complete astrometric pipeline including plate solving,
@@ -41,19 +41,7 @@ class Astrometry:
             logger: Custom logger instance (optional)
             queue: QueueManager instance or boolean to enable parallel processing
         """
-        # Load Configuration
-        if isinstance(config, str):  # In case of File Path
-            self.config = Configuration(config_source=config).config
-        elif hasattr(config, "config"):
-            self.config = config.config  # for easy access to config
-        else:
-            self.config = config
-
-        # Setup log
-        self.logger = logger or self._setup_logger(config)
-
-        # Setup queue
-        self.queue = self._setup_queue(queue)
+        super().__init__(config, logger, queue)
 
         os.makedirs(self.config.path.path_factory, exist_ok=True)
 
@@ -70,31 +58,6 @@ class Astrometry:
         config = Configuration.base_config(working_dir)
         config.file.processed_files = image_list
         return cls(config=config)
-
-    @classmethod
-    def from_file(cls, image):
-        return cls.from_list([image])
-
-    @classmethod
-    def from_dir(cls, dir_path):
-        image_list = glob.glob(f"{dir_path}/*.fits")
-        return cls.from_list(image_list)
-
-    def _setup_logger(self, config):
-        if hasattr(config, "logger") and config.logger is not None:
-            return config.logger
-
-        from .logger import Logger
-
-        return Logger(name="7DT pipeline logger", slack_channel="pipeline_report")
-
-    def _setup_queue(self, queue):
-        if isinstance(queue, QueueManager):
-            queue.logger = self.logger
-            return queue
-        elif queue:
-            return QueueManager(logger=self.logger)
-        return None
 
     def run(
         self,
