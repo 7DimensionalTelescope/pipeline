@@ -21,45 +21,15 @@ from ..const import REF_DIR
 from ..config import Configuration
 from .utils import extract_date_and_time, calc_mean_dateloc, inputlist_parser, unpack
 from .const import ZP_KEY, IC_KEYS, KEYS_TO_ADD
+from ..base import BaseSetup
 
 
-class ImCombine:
+class ImCombine(BaseSetup):
     def __init__(
         self, config=None, logger=None, queue=None, return_errormap=False
     ) -> None:
 
-        # Load Configuration
-        if isinstance(config, str):  # In case of File Path
-            self.config = Configuration(config_source=config).config
-        elif hasattr(config, "config"):
-            self.config = config.config  # for easy access to config
-        else:
-            self.config = config
-
-        # Setup log
-        # self.logger = logger or self._setup_logger(config)
-        from ..logger import PrintLogger
-
-        self.logger = PrintLogger()
-
-        self._files = [
-            os.path.join(self.config.path.path_processed, f)
-            for f in self.config.file.processed_files
-        ]
-
-        self.zpkey = self.config.combine.zp_key or ZP_KEY
-        self.ic_keys = IC_KEYS
-        self.keywords_to_add = KEYS_TO_ADD
-
-        self.define_paths(working_dir=self.config.path.path_processed)
-
-        self.set_metadata()
-
-        # Output combined image file name
-        parts = os.path.basename(self._files[-1]).split("_")
-        parts[-1] = f"{self.total_exptime:.0f}.com.fits"
-        self.config.file.combined_file = "_".join(parts)
-
+        super().__init__(config, logger, queue)
         self._return_errormap = return_errormap
 
     @classmethod
@@ -90,21 +60,10 @@ class ImCombine:
     @property
     def return_errormap(self):
         return self._return_errormap
-
-    def _setup_logger(self, config: Any) -> Any:
-        """Initialize logger instance."""
-        if hasattr(config, "logger") and config.logger is not None:
-            return config.logger
-
-        # from ..logger import PrintLogger
-        # return PrintLogger()
-        from ..logger import Logger
-
-        return Logger(name="7DT pipeline logger", slack_channel="pipeline_report")
-
     def run(self):
         # Update header keywords if necessary
         # self.update_keywords()
+        self.initialize()
 
         # background subtraction
         self.bkgsub()
@@ -124,6 +83,25 @@ class ImCombine:
 
     def update_keywords(self, new_keywords):
         self.keywords_to_add = new_keywords
+    
+    def initialize(self):
+        self._files = [
+            os.path.join(self.config.path.path_processed, f)
+            for f in self.config.file.processed_files
+        ]
+
+        self.zpkey = self.config.combine.zp_key or ZP_KEY
+        self.ic_keys = IC_KEYS
+        self.keywords_to_add = KEYS_TO_ADD
+
+        self.define_paths(working_dir=self.config.path.path_processed)
+
+        self.set_metadata()
+
+        # Output combined image file name
+        parts = os.path.basename(self._files[-1]).split("_")
+        parts[-1] = f"{self.total_exptime:.0f}.com.fits"
+        self.config.file.combined_file = "_".join(parts)
 
     def define_paths(self, working_dir=None):
         # ------------------------------------------------------------
