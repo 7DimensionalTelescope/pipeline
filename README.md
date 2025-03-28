@@ -10,7 +10,7 @@
 - [Contact](#contact)
 
 ## Overview
-gppy is a comprehensive pipeline designed for processing optical and near-infrared (NIR) astronomical images from IMSNG/GECKO and 7DT facilities. The package implements a multi-threaded approach utilizing GPU and CPU multiprocessing to efficiently handle various stages of astronomical data processing, including:
+gppy is a comprehensive pipeline designed for processing optical astronomical images from 7 dimensional telescope (7DT), originally developed for IMSNG/GECKO (). The package implements a multi-threaded approach utilizing GPU and CPU multiprocessing to efficiently handle various stages of astronomical data processing, including:
 
 - Data reduction
 - Astrometric calibration
