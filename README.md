@@ -1,4 +1,4 @@
-# gppy: Automated Pipeline for Astronomical Image Processing
+# gppy: Automated Pipeline for 7 Dimensional Telescope Image Processing
 
 ## Table of Contents
 - [Overview](#overview)
