@@ -14,8 +14,8 @@ gppy is a comprehensive pipeline designed for processing optical and near-infrar
 
 - Data reduction
 - Astrometric calibration
-- Image stacking
 - Photometric calibration
+- Image stacking
 - Image subtraction
 - Automated transient detection
 
