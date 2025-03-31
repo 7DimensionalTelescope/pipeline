@@ -19,6 +19,8 @@ import cupy as cp
 from .utils import *
 from ..services.queue import QueueManager, Priority
 from ..services.memory import MemoryMonitor
+from .plotting import *
+
 
 
 class MasterFrameGenerator:
@@ -27,7 +29,9 @@ class MasterFrameGenerator:
     unit, n_binning and gain have all identical cameras.
     """
 
-    def __init__(self, obs_params, queue=False, logger=None):
+    def __init__(self, obs_params, queue=False, logger=None, overwrite=False, **kwargs):
+
+        self.overwrite = overwrite
 
         # Initialize variables
         self.initialize(obs_params)
@@ -62,6 +66,9 @@ class MasterFrameGenerator:
 
         self._inventory_manifest()
 
+        if self.overwrite:
+            os.system(f"rm -rf {self.path_fdz}/*")
+
     def _setup_logger(self):
         from ..logger import Logger
 
@@ -79,7 +86,7 @@ class MasterFrameGenerator:
             return QueueManager(logger=self.logger)
         return None
 
-    def run(self):
+    def run(self, make_plots=True):
 
         self.logger.debug(
             f"Start generating master calibration frames: {MemoryMonitor.log_memory_usage}"
@@ -112,6 +119,8 @@ class MasterFrameGenerator:
             self.generate_mdark()
             self.generate_mflat()
 
+        if make_plots:
+            self.make_plots()
         self.logger.info(f"MasterFrameGenerator {self.process_name} completed")
         MemoryMonitor.cleanup_memory()
 
@@ -331,7 +340,7 @@ class MasterFrameGenerator:
             raise ValueError(f"Invalid dtype: {dtype}")
 
         # Mind that there are bias, dark, flat sigma maps
-        if os.path.exists(output):
+        if os.path.exists(output) and not (self.overwrite):
             self.logger.debug(f"Master {dtype} already exists: {output}")
             return output
 
@@ -355,6 +364,7 @@ class MasterFrameGenerator:
             header = write_IMCMB_to_header(header, data_list)
             # rdnoise = self.calculate_rdnoise()
             # header['RDNOISE'] = rdnoise
+            header["NFRAMES"] = n
 
             # save bias sigma map (~read noise)
             fits.writeto(
@@ -368,6 +378,7 @@ class MasterFrameGenerator:
         elif dtype == "dark":
             mbias_used = read_link(self.mbias_link)
             header = write_IMCMB_to_header(header, [mbias_used] + data_list)
+            header["NFRAMES"] = n
             with load_data_gpu(mbias_used) as mbias:
                 bfc.data -= mbias
 
@@ -390,6 +401,8 @@ class MasterFrameGenerator:
                 header,
                 [mbias_used, mdark_used] + self.flat_input[filt],
             )
+            header["NFRAMES"] = n
+
             with load_data_gpu(mbias_used) as mbias:
                 bfc.data -= mbias
             with load_data_gpu(mdark_used) as mdark:
@@ -421,6 +434,8 @@ class MasterFrameGenerator:
             self.generate_bpmask(
                 combined_data, self.bpmask_output[exptime], header=header
             )
+
+        header = add_image_id(header)
 
         fits.writeto(
             output,
@@ -455,7 +470,7 @@ class MasterFrameGenerator:
         mean, median, std = sigma_clipped_stats_cupy(data, sigma=3, maxiters=5)
 
         hot_mask = cp.abs(data - median) > n_sigma * std  # 1 for bad, 0 for okay
-        hot_mask = cp.asnumpy(hot_mask).astype("int16")  # gpu to cpu
+        hot_mask = cp.asnumpy(hot_mask).astype("int8")  # gpu to cpu
 
         # Save the file
         newhdu = fits.PrimaryHDU(hot_mask)
@@ -570,46 +585,11 @@ class MasterFrameGenerator:
                     return
                 write_link(mflat_link, mflat_file)
 
-
-def sigma_clipped_stats_cupy(cp_data, sigma=3, maxiters=5):
-    """
-    Approximate sigma-clipping using CuPy.
-    Computes mean, median, and std after iteratively removing outliers
-    beyond 'sigma' standard deviations from the median.
-
-    Parameters
-    ----------
-    cp_data : cupy.ndarray
-        Flattened CuPy array of image pixel values.
-    sigma : float
-        Clipping threshold in terms of standard deviations.
-    maxiters : int
-        Maximum number of clipping iterations.
-
-    Returns
-    -------
-    mean_val : float
-        Mean of the clipped data (as a GPU float).
-    median_val : float
-        Median of the clipped data (as a GPU float).
-    std_val : float
-        Standard deviation of the clipped data (as a GPU float).
-    """
-    # Flatten to 1D for global clipping
-    cp_data = cp_data.ravel()
-
-    for _ in range(maxiters):
-        median_val = cp.median(cp_data)
-        std_val = cp.std(cp_data)
-        # Keep only pixels within +/- sigma * std of the median
-        mask = cp.abs(cp_data - median_val) < (sigma * std_val)
-        cp_data = cp_data[mask]
-
-    # Final statistics on the clipped data
-    mean_val = cp.mean(cp_data)
-    median_val = cp.median(cp_data)
-    std_val = cp.std(cp_data)
-
-    # Convert results back to Python floats on the CPU
-    # return float(mean_val), float(median_val), float(std_val)
-    return mean_val, median_val, std_val
+    def make_plots(self):
+        self.logger.info("Start to generate plots for master calibration frames")
+        plot_bias(self.mbias_output, savefig=True)
+        plot_dark(self.mdark_output, savefig=True)
+        mask = plot_bpmask(self.bpmask_output, savefig=True)
+        plot_flat(self.mflat_output, mask, savefig=True)
+        
+        self.logger.info("Plots have been generated")

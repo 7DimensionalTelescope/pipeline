@@ -11,6 +11,7 @@ from .services.memory import MemoryMonitor
 from .config import Configuration
 from .base import BaseSetup
 
+
 class Astrometry(BaseSetup):
     """A class to handle astrometric solutions for astronomical images.
 
@@ -42,8 +43,6 @@ class Astrometry(BaseSetup):
             queue: QueueManager instance or boolean to enable parallel processing
         """
         super().__init__(config, logger, queue)
-
-        os.makedirs(self.config.path.path_factory, exist_ok=True)
 
     @classmethod
     def from_list(cls, images):
@@ -134,9 +133,11 @@ class Astrometry(BaseSetup):
                 - soft_links: List of symbolic link paths in factory directory
                 - inims: List of original input image paths
         """
+        self.path_astrometry = os.path.join(self.config.path.path_factory, "astrometry")
+        os.makedirs(self.path_astrometry, exist_ok=True)
         fnames = self.config.file.processed_files
         inims = [os.path.join(self.config.path.path_processed, s) for s in fnames]
-        soft_links = [os.path.join(self.config.path.path_factory, s) for s in fnames]
+        soft_links = [os.path.join(self.path_astrometry, s) for s in fnames]
 
         for inim, soft_link in zip(inims, soft_links):
             if not os.path.exists(soft_link):
@@ -178,7 +179,7 @@ class Astrometry(BaseSetup):
             self._submit_task(
                 external.solve_field,
                 zip(inputs, outputs),
-                dump_dir=self.config.path.path_factory,
+                dump_dir=self.path_astrometry,
                 pixscale=self.config.obs.pixscale,
             )
         else:
@@ -186,7 +187,7 @@ class Astrometry(BaseSetup):
                 external.solve_field(
                     slink,
                     outim=sfile,
-                    dump_dir=self.config.path.path_factory,
+                    dump_dir=self.path_astrometry,
                     pixscale=self.config.obs.pixscale,
                 )
                 self.logger.info(f"Completed solve-field for {self.config.name} [{i+1}/{len(inputs)}]")  # fmt:skip
@@ -263,9 +264,7 @@ class Astrometry(BaseSetup):
         # scamp
         if joint:
             # write target files into a text file
-            cat_to_scamp = os.path.join(
-                self.config.path.path_factory, "scamp_input.cat"
-            )
+            cat_to_scamp = os.path.join(self.path_astrometry, "scamp_input.cat")
             with open(cat_to_scamp, "w") as f:
                 for precat in presex_cats:
                     f.write(f"{precat}\n")
@@ -365,19 +364,19 @@ class Astrometry(BaseSetup):
 
 
 # ad-hoc
-def astrometry_single(file, ahead=None):
-    from .utils import read_scamp_header, update_padded_header
+# def astrometry_single(file, ahead=None):
+#     from .utils import read_scamp_header, update_padded_header
 
-    solved_file = external.solve_field(file)
+#     solved_file = external.solve_field(file)
 
-    outcat = external.sextractor(
-        solved_file, prefix="prep", sex_args=["-catalog_type", "fits_ldac"]
-    )
+#     outcat = external.sextractor(
+#         solved_file, prefix="prep", sex_args=["-catalog_type", "fits_ldac"]
+#     )
 
-    solved_head = external.scamp(outcat, ahead=ahead)
+#     solved_head = external.scamp(outcat, ahead=ahead)
 
-    update_padded_header(file, read_scamp_header(solved_head))
+#     update_padded_header(file, read_scamp_header(solved_head))
 
-    outcat = external.sextractor(solved_file, prefix="main")
+#     outcat = external.sextractor(solved_file, prefix="main")
 
-    return outcat
+#     return outcat

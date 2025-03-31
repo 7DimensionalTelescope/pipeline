@@ -1,5 +1,5 @@
 
-from .config import Configuration
+from .config import Configuration, ConfigurationInstance
 from .services.queue import QueueManager
 from .logger import Logger
 from typing import Any, Union
@@ -20,20 +20,26 @@ class BaseSetup(ABC):
             logger: Custom logger instance (optional)
             queue: QueueManager instance or boolean to enable parallel processing
         """
-        # Load Configuration
-        if isinstance(config, str):  # In case of File Path
-            self.config = Configuration(config_source=config).config
-        elif hasattr(config, "config"):
-            self.config = config.config  # for easy access to config
-        else:
-            self.config = config
+
+        # Setup Configuration
+        self.config = self._setup_config(config)
 
         # Setup log
         self.logger = self._setup_logger(logger, config)
 
         # Setup queue
         self.queue = self._setup_queue(queue)
-    
+
+    def _setup_config(self, config):
+        if isinstance(config, Configuration):
+            return config.config
+        elif isinstance(config, str):
+            return Configuration(config_source=config).config
+        elif isinstance(config, ConfigurationInstance):
+            return config
+        else:
+            raise ValueError("Invalid configuration object")
+            
     def _setup_logger(self, logger, config):
         if isinstance(logger, Logger):
             return logger

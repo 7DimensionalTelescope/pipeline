@@ -6,6 +6,50 @@ from astropy.io import fits
 from contextlib import contextmanager
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+import uuid
+
+def sigma_clipped_stats_cupy(cp_data, sigma=3, maxiters=5):
+    """
+    Approximate sigma-clipping using CuPy.
+    Computes mean, median, and std after iteratively removing outliers
+    beyond 'sigma' standard deviations from the median.
+
+    Parameters
+    ----------
+    cp_data : cupy.ndarray
+        Flattened CuPy array of image pixel values.
+    sigma : float
+        Clipping threshold in terms of standard deviations.
+    maxiters : int
+        Maximum number of clipping iterations.
+
+    Returns
+    -------
+    mean_val : float
+        Mean of the clipped data (as a GPU float).
+    median_val : float
+        Median of the clipped data (as a GPU float).
+    std_val : float
+        Standard deviation of the clipped data (as a GPU float).
+    """
+    # Flatten to 1D for global clipping
+    cp_data = cp_data.ravel()
+
+    for _ in range(maxiters):
+        median_val = cp.median(cp_data)
+        std_val = cp.std(cp_data)
+        # Keep only pixels within +/- sigma * std of the median
+        mask = cp.abs(cp_data - median_val) < (sigma * std_val)
+        cp_data = cp_data[mask]
+
+    # Final statistics on the clipped data
+    mean_val = cp.mean(cp_data)
+    median_val = cp.median(cp_data)
+    std_val = cp.std(cp_data)
+
+    # Convert results back to Python floats on the CPU
+    # return float(mean_val), float(median_val), float(std_val)
+    return mean_val, median_val, std_val
 
 
 def write_link(fpath, content):
@@ -176,6 +220,8 @@ def write_IMCMB_to_header(header, inputlist, full_path=False):
     """this function was copied from the package eclaire"""
     if inputlist is not None:
         llist = len(inputlist)
+
+        # define the key format
         if llist <= 999:
             key = "IMCMB{:03d}"
         else:
@@ -183,10 +229,18 @@ def write_IMCMB_to_header(header, inputlist, full_path=False):
             comment = "IMCMB keys are written in hexadecimal."
             # header.append("COMMENT", comment)  # original eclaire line
             header.add_comment(comment)
+
+        # write the keys
         for i, f in enumerate(inputlist, 1):
             header[key.format(i)] = f if full_path else os.path.basename(f)
     return header
 
+
+def add_image_id(header, key="IMAGEID"):
+    """Add a unique image ID to the header."""
+    header[key] = uuid.uuid4().hex
+    header.comments[key] = 'Unique ID of the image'
+    return header
 
 # def calculate_average_date_obs(date_obs_list):
 #     import numpy as np

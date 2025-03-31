@@ -593,7 +593,7 @@ class QueueManager:
                 self.logger.debug(f"Error during pool termination: {e}")
 
         except Exception as e:
-            self.logger.error(f"Error during abrupt stop: {e}")
+            self.logger.error(f"Error during abrupt stop in Queue: {e}")
         finally:
             # Always reset the stop flag
             self._abrupt_stop_requested.clear()

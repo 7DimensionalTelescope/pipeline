@@ -3,7 +3,7 @@ __package__ = "gppy"
 from .config import Configuration
 from .astrometry import Astrometry
 from .photometry.photometry import Photometry
-from .imcombine.imcombine import ImCombine
+from .imstack.imstack import ImStack
 
 from .preprocess import Preprocess, MasterFrameGenerator
 from .const import RAWDATA_DIR
@@ -18,7 +18,7 @@ from .services.queue import QueueManager, Priority
 from .logger import Logger
 
 
-def run_masterframe_generator(obs_params, queue=False):
+def run_masterframe_generator(obs_params, queue=False, **kwargs):
     """
     Generate master calibration frames for a specific observation set.
 
@@ -33,7 +33,7 @@ def run_masterframe_generator(obs_params, queue=False):
             - gain: Detector gain setting
         queue (bool, optional): Whether to use queue-based processing. Defaults to False.
     """
-    mfg = MasterFrameGenerator(obs_params, queue=queue)
+    mfg = MasterFrameGenerator(obs_params, queue=queue, **kwargs)
     mfg.run()
     del mfg
 
@@ -66,26 +66,34 @@ def run_scidata_reduction(
         **kwargs: Additional configuration parameters
     """
     logger = Logger(name="7DT pipeline logger", slack_channel="pipeline_report")
-    try:
-        config = Configuration(obs_params, logger=logger, **kwargs)
-        if not (config.config.flag.preprocess) and "preprocess" in processes:
-            preproc = Preprocess(config, queue=queue)
-            preproc.run()
-            del preproc
-        if not (config.config.flag.astrometry) and "astrometry" in processes:
-            astrm = Astrometry(config, queue=queue)
-            astrm.run()
-            del astrm
-        if not (config.config.flag.single_photometry) and "photometry" in processes:
-            phot = Photometry(config, queue=queue)
-            phot.run()
-            del phot
-        if not (config.config.flag.combine) and "combine" in processes:
-            com = ImCombine(config, queue=queue)
-            com.run()
-            del com
-    except Exception as e:
-        logger.error(f"Error during abrupt stop: {e}")
+
+    # try:
+    config = Configuration(obs_params, logger=logger, **kwargs)
+
+    if not (config.config.flag.preprocess) and "preprocess" in processes:
+        preproc = Preprocess(config, queue=queue)
+        preproc.run()
+        del preproc
+    else:
+        logger.info("Skipping preprocessing")
+    if not (config.config.flag.astrometry) and "astrometry" in processes:
+        astrm = Astrometry(config, queue=queue)
+        astrm.run()
+        del astrm
+    else:
+        logger.info("Skipping astrometry")
+    if not (config.config.flag.single_photometry) and "photometry" in processes:
+        phot = Photometry(config, queue=queue)
+        phot.run()
+        del phot
+    else:
+        logger.info("Skipping photometry")
+    if not (config.config.flag.combine) and "combine" in processes:
+        stk = ImStack(config, queue=queue)
+        stk.run()
+        del stk
+    # except Exception as e:
+    #     logger.error(f"Error during abrupt stop: {e}")
 
 
 def run_pipeline(

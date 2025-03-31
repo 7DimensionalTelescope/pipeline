@@ -401,7 +401,10 @@ class StdoutToLogger:
             buf (str): Buffer containing stdout output
         """
         for line in buf.rstrip().splitlines():
-            self.logger.info(line)
+            # self.logger.info(line)
+
+            # Directly write to original stderr to prevent recursion
+            sys.__stderr__.write(line + "\n")
 
     def flush(self):
         """

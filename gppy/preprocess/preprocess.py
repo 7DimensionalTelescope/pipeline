@@ -13,6 +13,9 @@ from ..services.queue import QueueManager
 from ..config import Configuration
 
 from ..base import BaseSetup
+from .plotting import save_fits_as_png
+
+import uuid
 
 class Preprocess(BaseSetup):
     def __init__(
@@ -134,7 +137,7 @@ class Preprocess(BaseSetup):
         self.config.preprocess.flatsig_file = self.config.preprocess.mflat_file.replace("flat", "flatsig")  # fmt:skip
         self.config.preprocess.bpmask_file = self.config.preprocess.darksig_file.replace("darksig", "bpmask")  # fmt:skip
 
-    def _calibrate_image_eclaire(self, mbias_file, mdark_file, mflat_file):
+    def _calibrate_image_eclaire(self, mbias_file, mdark_file, mflat_file, make_plots=True):
         raw_files = self.config.file.raw_files
         processed_files = self.config.file.processed_files
 
@@ -172,6 +175,8 @@ class Preprocess(BaseSetup):
                     header=header,
                     overwrite=True,
                 )
+                if make_plots:
+                    self.make_plots(raw_files[i + idx], output_path)
             self.logger.debug(
                 f"Current memory usage after {i}-th batch: {MemoryMonitor.log_memory_usage}"
             )
@@ -186,3 +191,12 @@ class Preprocess(BaseSetup):
 
     def _calibrate_image_cupy(self, mbias_file, mdark_file, mflat_file):
         pass
+    
+    def make_plots(self, raw_file, output_file):
+        path = Path(output_file)
+        os.makedirs(path.parent / "images", exist_ok=True)
+        image_name = os.path.basename(output_file).replace(".fits", "")
+        raw_image_name = image_name.replace("calib_", "raw_")
+        save_fits_as_png(raw_file, path.parent / "images" / f"{raw_image_name}.png")
+        save_fits_as_png(output_file, path.parent / "images" / f"{image_name}.png")
+        

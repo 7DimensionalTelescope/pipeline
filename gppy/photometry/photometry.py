@@ -28,6 +28,7 @@ from .. import external
 from ..const import PipelineError
 from ..base import BaseSetup
 
+
 class Photometry(BaseSetup):
     """
     A class to perform photometric analysis on astronomical images.
@@ -184,7 +185,7 @@ class PhotometrySingle:
 
         if hasattr(config, "config"):
             config = config.config
-            
+
         self.config = config
         self.logger = logger or self._setup_logger(config)
         self.ref_catalog = ref_catalog
@@ -315,7 +316,10 @@ class PhotometrySingle:
         self._coord_ref = coord_ref
 
     def calculate_seeing(
-        self, low_mag_cut: float = 11.75, high_mag_cut: float = False, run_prep_sextractor: bool = True
+        self,
+        low_mag_cut: float = 11.75,
+        high_mag_cut: float = False,
+        run_prep_sextractor: bool = True,
     ) -> None:
         """
         Calculate seeing conditions from stellar sources.
@@ -326,11 +330,13 @@ class PhotometrySingle:
         Args:
             low_mag_cut: Lower magnitude limit for star selection
         """
-        
+
         if run_prep_sextractor:  # Always run sextractor for prep
             self._run_sextractor(prefix="prep")
         else:
-            self.obs_src_table = Table.read(self.file_prefix + ".prep.cat", format="ascii.sextractor")
+            self.obs_src_table = Table.read(
+                self.file_prefix + ".prep.cat", format="ascii.sextractor"
+            )
 
         self.post_match_table = self.match_ref_catalog(
             snr_cut=False, low_mag_cut=low_mag_cut, high_mag_cut=high_mag_cut
@@ -373,7 +379,7 @@ class PhotometrySingle:
             sex_args=sex_args,
             return_output=True,
         )
-        
+
         outcome = [s for s in outcome.split("\n") if "RMS" in s][0]
         self.header.skymed = float(outcome.split("Background:")[1].split("RMS:")[0])
         self.header.skysig = float(outcome.split("RMS:")[1].split("/")[0])
@@ -404,7 +410,7 @@ class PhotometrySingle:
                 output = self.file_prefix + ".prep.cat"
             elif prefix == "main":
                 output = self.file_prefix + ".cat"
-                
+
         outcome = external.sextractor(
             self.image,
             outcat=output,
@@ -441,10 +447,10 @@ class PhotometrySingle:
         self.logger.debug("Matching sources with reference catalog.")
 
         if low_mag_cut is None:
-            low_mag_cut=self.phot_conf.ref_mag_lower
+            low_mag_cut = self.phot_conf.ref_mag_lower
 
         if high_mag_cut is None:
-            high_mag_cut=self.phot_conf.ref_mag_upper
+            high_mag_cut = self.phot_conf.ref_mag_upper
 
         coord_obs = SkyCoord(
             self.obs_src_table["ALPHA_J2000"],
@@ -470,7 +476,11 @@ class PhotometrySingle:
             self.phot_conf.photfraction * self.image_info.naxis2 / 2,
         )
 
-        suffixes = [key.replace("FLUXERR_", "") for key in post_match_table.keys() if "FLUXERR_" in key]
+        suffixes = [
+            key.replace("FLUXERR_", "")
+            for key in post_match_table.keys()
+            if "FLUXERR_" in key
+        ]
 
         for suffix in suffixes:
             post_match_table[f"SNR_{suffix}"] = (
@@ -516,7 +526,6 @@ class PhotometrySingle:
             )
             self.obs_src_table[key] = masked_valuearr
 
-        
         if len(post_match_table) == 0:
             self.logger.error(
                 "There is no mathced source. It will cause a problem in the next step."
@@ -525,7 +534,7 @@ class PhotometrySingle:
             if "CTYPE1" not in header.keys():
                 self.logger.error("Check Astrometry solution: no WCS information")
                 raise PipelineError("Check Astrometry solution: no WCS information")
-        else:   
+        else:
             self.logger.info(
                 f"""Matched Sources: {len(post_match_table)} (r={self.phot_conf.match_radius:.3f}")"""
             )
@@ -643,7 +652,7 @@ class PhotometrySingle:
         Returns
         -------
         None
-            Saves plot as PNG file in the processed/phot_image directory
+            Saves plot as PNG file in the processed/images directory
         """
         ref_mag = src_table[self.image_info.ref_mag_key]
         obs_mag = src_table[mag_key]
@@ -707,7 +716,7 @@ class PhotometrySingle:
         plt.legend(loc="upper center", ncol=3)
         plt.tight_layout()
 
-        im_path = os.path.join(self.config.path.path_processed, "phot_image")
+        im_path = os.path.join(self.config.path.path_processed, "images")
 
         if not os.path.exists(im_path):
             os.makedirs(im_path)
@@ -787,7 +796,7 @@ class ImageHeader:
         """Generates a dictionary of header information for FITS."""
         return {
             "AUTHOR": (self.author, "PHOTOMETRY AUTHOR"),
-            "PHOTIME": (self.photime, "PHTOMETRY TIME [KR]"),
+            "PHOTIME": (self.photime, "PHOTOMETRY TIME [KST]"),
             "JD": (self.jd, "Julian Date of the observation"),
             "MJD": (self.mjd, "Modified Julian Date of the observation"),
             "SEEING": (round(self.seeing, 3), "SEEING [arcsec]"),
