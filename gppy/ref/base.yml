@@ -43,8 +43,8 @@ path:
 file: 
   raw_files: 
   processed_files: 
-  combined_file:
-  error_files:
+  # stacked_file:
+  # weight_file:
 
 preprocess:
   masterframe: default # closest, custom
@@ -80,9 +80,12 @@ photometry:
     BACK_FILTERSIZE: 3
     BACKPHOTO_TYPE: LOCAL
 
-combine:
+imstack:
   zp_key: 'ZP_AUTO'
   # images_to_combine:
+  bkgsub_mode: 'Dynamic'
+  weight_map: True
+  joint_wcs: False
   
 
 logging:

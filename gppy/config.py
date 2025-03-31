@@ -15,7 +15,14 @@ from .utils import (
     clean_up_folder,
     swap_ext,
 )
-from .const import FACTORY_DIR, PROCESSED_DIR, MASTER_FRAME_DIR, REF_DIR
+from .const import (
+    FACTORY_DIR,
+    PROCESSED_DIR,
+    MASTER_FRAME_DIR,
+    REF_DIR,
+    STACKED_DIR,
+    DAILY_STACKED_DIR,
+)
 
 
 class Configuration:
@@ -56,43 +63,44 @@ class Configuration:
             # Default config source if not provided
             if config_source is None:
                 config_source = os.path.join(REF_DIR, "base.yml")
+            self._initialized = False
         else:
             config_source = self._find_config_file(obs_params, **kwargs)
             self.config_file = config_source
 
         self._load_config(config_source, **kwargs)
-        self._initialized = False
 
-        if not return_base:
-            if obs_params is None:
-                self._initialized = True
-            else:
-                self.initialize(obs_params)
+        if return_base:
+            return self
+        if not self._initialized:
+            self.initialize(obs_params)
 
-            if overwrite:
-                clean_up_folder(self.config.path.path_processed)
-                clean_up_folder(self.config.path.path_factory)
+        if overwrite:
+            clean_up_folder(self.config.path.path_processed)
+            clean_up_folder(self.config.path.path_factory)
 
-            self.logger = self._setup_logger(logger, verbose=verbose)
-            self.write_config()
-            self.config.flag.configuration = True
-            self.logger.info(f"Configuration initialized")
-            self.logger.debug(f"Configuration file: {self.config_file}")
+        self.logger = self._setup_logger(logger, verbose=verbose)
+        self.write_config()
+
+        self.config.flag.configuration = True
+        self.logger.info(f"Configuration initialized")
+        self.logger.debug(f"Configuration file: {self.config_file}")
 
     def __repr__(self):
         return self.config.__repr__()
 
     @classmethod
-    def base_config(cls, working_dir=None):
+    def base_config(cls, working_dir=None, **kwargs):
         """Return the base (base.yml) configuration instance."""
-        config = cls(return_base=True).config
+        config = cls(return_base=True, **kwargs).config
         if working_dir is None:
             config.name = "user-input"
             return config
         else:
             config.path.path_processed = working_dir
-            os.makedirs(os.path.join(working_dir, "factory"), exist_ok=True)
-            config.path.path_factory = os.path.join(working_dir, "factory")
+            factory_dir = os.path.join(working_dir, "factory")
+            os.makedirs(factory_dir, exist_ok=True)
+            config.path.path_factory = factory_dir
             config.name = "user-input"
             return config
 
@@ -119,6 +127,7 @@ class Configuration:
 
     def _load_config(self, config_source, **kwargs):
         # Load configuration from file or dict
+        self._loaded = False
         input_dict = (
             self.read_config(config_source)
             if isinstance(config_source, str)
@@ -132,6 +141,7 @@ class Configuration:
         self._output_prefix = kwargs.pop("path_processed", PROCESSED_DIR)
         self._update_with_kwargs(kwargs)
         self._make_instance(self._config_in_dict)
+        self._loaded = True
 
     def _find_config_file(self, obs_params, **kwargs):
         """Find the configuration file in the processed directory."""
@@ -147,8 +157,11 @@ class Configuration:
         base_dir = os.path.join(base_dir, tmp_path)
         config_files = glob.glob(f"{base_dir}/*.yml")
         if len(config_files) == 0:
+            self._initialized = False
             return os.path.join(REF_DIR, "base.yml")
-        return config_files[0]
+        else:
+            self._initialized = True
+            return config_files[0]
 
     def initialize(self, obs_params):
         # Set core observation details
@@ -158,7 +171,9 @@ class Configuration:
         self.config.obs.filter = obs_params["filter"]
         self.config.obs.n_binning = obs_params["n_binning"]
         self.config.obs.gain = obs_params["gain"]
-        self.config.obs.pixscale = 0.505 * obs_params["n_binning"]  # For initial solve
+        self.config.obs.pixscale = 0.505 * float(
+            obs_params["n_binning"]
+        )  # For initial solve
         self.config.name = f"{obs_params['date']}_{obs_params['n_binning']}x{obs_params['n_binning']}_gain{obs_params['gain']}_{obs_params['obj']}_{obs_params['unit']}_{obs_params['filter']}"
         self.config.info.creation_datetime = datetime.now().isoformat()
 
@@ -169,18 +184,11 @@ class Configuration:
 
     @property
     def is_initialized(self):
-        """
-        Check if the configuration has been fully initialized.
-
-        A configuration is considered initialized when all required
-        observation parameters have been set and processed. This method
-        provides a quick way to verify the configuration's readiness
-        for further data processing.
-
-        Returns:
-            bool: True if configuration is initialized, False otherwise
-        """
         return self._initialized
+
+    @property
+    def is_loaded(self):
+        return self._loaded
 
     @property
     def output_name(self):
@@ -252,30 +260,36 @@ class Configuration:
 
     def _define_paths(self):
         """Create and set output directory paths for processed data."""
-        _tmp_name = define_output_dir(
+        _date_dir = define_output_dir(
             self.config.obs.date, self.config.obs.n_binning, self.config.obs.gain
         )
 
         rel_path = os.path.join(
-            _tmp_name,
+            _date_dir,
             self.config.obs.object,
             self.config.obs.unit,
             self.config.obs.filter,
         )
         fdz_rel_path = os.path.join(
-            _tmp_name,
+            _date_dir,
             self.config.obs.unit,
         )
 
         path_processed = os.path.join(self._output_prefix, rel_path)
         path_factory = os.path.join(FACTORY_DIR, rel_path)
         path_fdz = os.path.join(MASTER_FRAME_DIR, fdz_rel_path)
+        path_stacked_prefix = (
+            STACKED_DIR if self.config.name == "user-input" else DAILY_STACKED_DIR
+        )
+        path_stacked = os.path.join(path_stacked_prefix, rel_path)
 
         os.makedirs(path_processed, exist_ok=True)
         os.makedirs(path_fdz, exist_ok=True)
         os.makedirs(path_factory, exist_ok=True)
+        os.makedirs(path_stacked, exist_ok=True)
 
         self.config.path.path_processed = path_processed
+        self.config.path.path_stacked = path_stacked
         self.config.path.path_factory = path_factory
         self.config.path.path_fdz = path_fdz
         self.config.path.path_raw = find_raw_path(
@@ -285,13 +299,11 @@ class Configuration:
             self.config.obs.gain,
         )
         self.config.path.path_sex = os.path.join(REF_DIR, "srcExt")
-        self._add_metadata(_tmp_name)
+        self._add_metadata(_date_dir)
 
     def _add_metadata(self, name):
 
         metadata_path = os.path.join(self._output_prefix, name, "metadata.ecsv")
-
-        # Initialize or load the observation table
         if not os.path.exists(metadata_path):
             with open(metadata_path, "w") as f:
                 f.write("# %ECSV 1.0\n")
@@ -300,25 +312,24 @@ class Configuration:
                 f.write("# - {name: object, datatype: string}\n")
                 f.write("# - {name: unit, datatype: string}\n")
                 f.write("# - {name: filter, datatype: string}\n")
-                f.write("# - {name: n_binning, datatype: int}\n")
-                f.write("# - {name: gain, datatype: float}\n")
+                f.write("# - {name: n_binning, datatype: int64}\n")
+                f.write("# - {name: gain, datatype: int64}\n")
                 f.write("# meta: !!omap\n")
                 f.write("# - {created: " + datetime.now().isoformat() + "}\n")
                 f.write("# schema: astropy-2.0\n")
-                f.write("object,unit,filter,n_binning,gain\n")
-        
+                f.write("object unit filter n_binning gain\n")
+
         observation_data = [
             str(self.config.obs.object),
             str(self.config.obs.unit),
             str(self.config.obs.filter),
             str(self.config.obs.n_binning),
-            str(self.config.obs.gain)
+            str(self.config.obs.gain),
         ]
-        new_line = f"{','.join(observation_data)}\n"
-
+        new_line = f"{' '.join(observation_data)}\n"
         with open(metadata_path, "a") as f:
             f.write(new_line)
-    
+
     def _define_files(self):
         s = f"{self.config.path.path_raw}/*{self.config.obs.object}_{self.config.obs.filter}_{self.config.obs.n_binning}*.fits"  # obsdata/7DT11/*T00001*.fits
 
@@ -449,6 +460,7 @@ class ConfigurationInstance:
             if (
                 hasattr(self._parent_config, "is_initialized")
                 and self._parent_config.is_initialized
+                and self._parent_config.is_loaded
             ):
                 self._parent_config.write_config()
 

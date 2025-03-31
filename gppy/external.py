@@ -193,7 +193,7 @@ def sextractor(
     outcat: str = None,
     prefix="prep",
     log_file: str = None,
-    sex_args: list = None,
+    sex_args: list = [],
     config=None,  # supply config.config
     logger=None,
     return_output=False,
@@ -241,8 +241,7 @@ def sextractor(
     ]  # fmt: skip
 
     # add additional arguments when given
-    if sex_args:
-        sexcom = sexcom + sex_args
+    sexcom.extend(sex_args)
 
     chatter(f"Sextractor output catalog: {outcat}")
     chatter(f"Sextractor Log: {log_file}")
@@ -288,3 +287,11 @@ def sextractor(
         return outcat, sexout
     else:
         return outcat
+
+
+def swarp(input, dump_dir=None, no_combine=False):
+    """input is a list of filenames"""
+    if not input:
+        raise ValueError("Input list is empty")
+    input = [os.path.abspath(f) for f in input]
+    working_dir = dump_dir or os.path.join(os.path.dirname(input[0]), "tmp_solvefield")

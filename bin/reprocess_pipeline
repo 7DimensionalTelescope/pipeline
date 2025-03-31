@@ -32,12 +32,14 @@ if __name__ == "__main__":
             folder = args.folder
             
         user_input = input(f"List of processes [default: {', '.join(['preprocess', 'astrometry', 'photometry', 'combine'])}]: ")
-        processes = user_input.split(',') if user_input else ['preprocess', 'astrometry', 'photometry', 'combine']
-        
+        tmp_pro = user_input.split(',') if user_input else ['preprocess', 'astrometry', 'photometry', 'combine']
+        processes = [proc.replace(" ", "") for proc in tmp_pro]
         for proc in processes:
             if proc not in ['preprocess', 'astrometry', 'photometry', 'combine']:
                 print(f"Invalid process: {proc}")
                 sys.exit(1)
+        
+        print(f"Selected processes: {', '.join(processes)}")
 
         if args.sync is None:
             user_input = input("Reprocess for other units if exists [default: False]: ")
