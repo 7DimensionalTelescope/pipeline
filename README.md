@@ -1,4 +1,4 @@
-# gppy: Automated Pipeline for Astronomical Image Processing
+# gppy: Automated Pipeline for 7 Dimensional Telescope Image Processing
 
 ## Table of Contents
 - [Overview](#overview)
@@ -10,12 +10,12 @@
 - [Contact](#contact)
 
 ## Overview
-gppy is a comprehensive pipeline designed for processing optical and near-infrared (NIR) astronomical images from IMSNG/GECKO and 7DT facilities. The package implements a multi-threaded approach utilizing GPU and CPU multiprocessing to efficiently handle various stages of astronomical data processing, including:
+gppy is a comprehensive pipeline designed for processing optical astronomical images from 7 dimensional telescope (7DT), originally developed for IMSNG/GECKO ([GitHub](https://github.com/SilverRon/gppy)). The package implements a multi-threaded approach utilizing GPU and CPU multiprocessing to efficiently handle various stages of astronomical data processing, including:
 
 - Data reduction
 - Astrometric calibration
-- Image stacking
 - Photometric calibration
+- Image stacking
 - Image subtraction
 - Automated transient detection
 
@@ -46,4 +46,4 @@ Development of gpPy began in 2018 by Gregory Peak. The first stable release was 
 - 2025.02: Major renovation for 7DT pipeline integration
 
 ## Contact
-or any inquiries or feedback, please contact the 7DT pipeline team via email at [XXX@gmail.com](mailto:XXX@gmail.com) or open an issue on our [GitHub repository](https://github.com/7DimensionalTelescope/pipeline).
+If you have any inquiries or feedback, please contact the 7DT pipeline team via email at [7dt.pipeline@gmail.com](mailto:7dt.pipeline@gmail.com) or open an issue on our [GitHub repository](https://github.com/7DimensionalTelescope/pipeline).
