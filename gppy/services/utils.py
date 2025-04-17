@@ -1,7 +1,6 @@
 import gc
 import cupy as cp
 
-
 class classmethodproperty:
     """
     A custom decorator that combines class method and property behaviors.
@@ -75,7 +74,12 @@ def cleanup_memory() -> None:
         >>> # Before starting a memory-intensive task
         >>> cleanup_memory()
     """
+    
+    try:
+        cp.get_default_memory_pool().free_all_blocks()  # Free GPU memory pool
+        cp.get_default_pinned_memory_pool().free_all_blocks()  # Free pinned memory
+    except:
+        pass
+
     gc.collect()  # Initial garbage collection
-    cp.get_default_memory_pool().free_all_blocks()  # Free GPU memory pool
-    cp.get_default_pinned_memory_pool().free_all_blocks()  # Free pinned memory
-    gc.collect()  # Ensure all GPU memory is freed
+    

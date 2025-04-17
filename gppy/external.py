@@ -61,7 +61,8 @@ def solve_field(
     # soft link inside working_dir
     fname = os.path.basename(inim)
     soft_link = os.path.join(working_dir, fname)
-    if not os.path.exists(soft_link):
+
+    if not (os.path.exists(soft_link)):
         os.symlink(inim, soft_link)
 
     # outname = os.path.join(working_dir, f"{Path(inim).stem}_solved.fits")
@@ -124,7 +125,7 @@ def solve_field(
     return outname
 
 
-def scamp(input, ahead=None, local_astref=None, get_command=False):
+def scamp(input, ahead=None, path_ref_scamp=None, local_astref=None, get_command=False):
     """
     Input is a fits-ldac catalog or a text file.
     Supply a text file of filenames to run multiple files jointly.
@@ -132,7 +133,6 @@ def scamp(input, ahead=None, local_astref=None, get_command=False):
     scampconfig = os.path.join(REF_DIR, "7dt.scamp")
     # "/data/pipeline_reform/dhhyun_lab/scamptest/7dt.scamp"
 
-    path_ref_scamp = os.path.join(FACTORY_DIR, "ref_scamp")
     # "/data/pipeline_reform/dhhyun_lab/scamptest"
     log_file = os.path.splitext(input)[0] + "_scamp.log"
 
@@ -146,7 +146,9 @@ def scamp(input, ahead=None, local_astref=None, get_command=False):
     if local_astref:
         scampcom = f"{scampcom} -ASTREF_CATALOG FILE -ASTREFCAT_NAME {local_astref}"
 
+    # download gaia edr3 refcat
     else:
+        path_ref_scamp = path_ref_scamp or os.path.join(FACTORY_DIR, "ref_scamp")
         scampcom = f"{scampcom} -REFOUT_CATPATH {path_ref_scamp}"
 
     if ahead:
@@ -241,7 +243,7 @@ def sextractor(
     ]  # fmt: skip
 
     # add additional arguments when given
-    sexcom.extend(sex_args)
+    sexcom.extend(sex_args or [])
 
     chatter(f"Sextractor output catalog: {outcat}")
     chatter(f"Sextractor Log: {log_file}")
@@ -289,9 +291,93 @@ def sextractor(
         return outcat
 
 
-def swarp(input, dump_dir=None, no_combine=False):
+def swarp(
+    input,
+    output=None,
+    center=None,
+    dump_dir=None,
+    resample_dir=None,
+    log_file=None,
+    combine=True,
+    weight_map=False,
+    logger=None,
+    swarp_args=None,
+):
     """input is a list of filenames"""
-    if not input:
-        raise ValueError("Input list is empty")
-    input = [os.path.abspath(f) for f in input]
-    working_dir = dump_dir or os.path.join(os.path.dirname(input[0]), "tmp_solvefield")
+    # if not input:
+    #     raise ValueError("Input list is empty")
+    # input = [os.path.abspath(f) for f in input]
+    # working_dir = dump_dir or os.path.join(os.path.dirname(input[0]), "tmp_solvefield")
+
+    from .utils import swap_ext
+
+    def chatter(message):
+        if logger:
+            logger.debug(message)
+        else:
+            print(message)
+
+    if input is list:
+        input = ",".join(input)
+    elif isinstance(input, str):  # assume file input
+        input = f"@{input}"
+    else:
+        raise ValueError("Input must be a list or a string")
+
+    if not center:
+        raise ValueError("Deprojection center undefined")
+
+    dump_dir = dump_dir or os.path.join(os.path.dirname(input), "tmp_swarp")
+    log_file = log_file or os.path.join(dump_dir, "swarp.log")
+    resample_dir = resample_dir or os.path.join(dump_dir, "resamp")
+    os.makedirs(resample_dir, exist_ok=True)
+    comim = output or os.path.join(dump_dir, "coadd.fits")
+    weightim = swap_ext(comim, "weight.fits")
+
+    # 	SWarp
+    # swarpcom = f"swarp -c {path_config}/7dt.swarp @{path_imagelist} -IMAGEOUT_NAME {comim} -CENTER_TYPE MANUAL -CENTER {center} -SUBTRACT_BACK N -RESAMPLE_DIR {path_resamp} -GAIN_KEYWORD EGAIN -GAIN_DEFAULT {gain_default} -FSCALE_KEYWORD FAKE -WEIGHTOUT_NAME {weightim}"
+    swarpcom = [
+        "swarp", input,
+        "-c", os.path.join(REF_DIR, '7dt.swarp'),
+        "-IMAGEOUT_NAME", f"{comim}",
+        "-WEIGHTOUT_NAME", f"{weightim}",
+        "-CENTER_TYPE", "MANUAL",
+        "-CENTER", f"{center} ",
+        "-SUBTRACT_BACK", "N",
+        "-RESAMPLE_DIR", f"{resample_dir}",
+        # f"-GAIN_KEYWORD EGAIN -GAIN_DEFAULT {self.gain_default} "
+        # f"-FSCALE_KEYWORD FAKE"
+    ]  # fmt: skip
+
+    if not weight_map:
+        swarpcom.extend(["-WEIGHT_TYPE", "NONE"])
+
+    if not combine:
+        swarpcom.extend(["-COMBINE", "N"])
+
+    swarpcom.extend(swarp_args or [])
+
+    swarpcom = " ".join(swarpcom)
+    chatter(f"SWarp Command: {swarpcom}")
+    chatter(f"SWarp Log: {log_file}")
+    os.system(f"{swarpcom} > {log_file} 2>&1")
+    # os.system(swarpcom)
+
+    return swarpcom
+
+
+def hotpants(inim):
+
+    com = (
+        f"hotpants -c t -n i "
+        f"-iu {iu} -il {il} -tu {tu} -tl {tl} "
+        f"-inim {inim} -tmplim {refim} -outim {hdim} -oci {hcim} "
+        f"-imi {inmask_image} -tmi {refmask_image} "
+        f"-v 0 "
+        f"-nrx {nrx} -nry {nry} "
+        f"-ssf {ssf}"
+    )
+    print(com)
+    os.system(com)
+
+    pass

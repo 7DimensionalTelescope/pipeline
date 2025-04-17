@@ -22,7 +22,6 @@ from ..services.memory import MemoryMonitor
 from .plotting import *
 
 
-
 class MasterFrameGenerator:
     """
     Assumes BIAS, DARK, FLAT, SCI frames taken on the same date with the smae
@@ -92,6 +91,8 @@ class MasterFrameGenerator:
             f"Start generating master calibration frames: {MemoryMonitor.log_memory_usage}"
         )
 
+        self._log_inventory()
+
         if self.queue:
             task_id = self.queue.add_task(
                 self.generate_mbias,
@@ -120,7 +121,10 @@ class MasterFrameGenerator:
             self.generate_mflat()
 
         if make_plots:
-            self.make_plots()
+            try:
+                self.make_plots()
+            except Exception as e:
+                self.logger.error(f"Failed to generate plots: {e}")
         self.logger.info(f"MasterFrameGenerator {self.process_name} completed")
         MemoryMonitor.cleanup_memory()
 
@@ -180,6 +184,26 @@ class MasterFrameGenerator:
                 self.path_fdz, f"flat_{self.date_fdz}_{filt}_{self.camera}.link"
             )
             self._mflat_link[filt] = mdark_link
+
+    def _log_inventory(self):
+        self.logger.debug(f"MasterFrameGenerator Inventory")
+        self.logger.debug(f"Bias input: {self.bias_input}")
+        self.logger.debug(f"Dark input: {self.dark_input}")
+        self.logger.debug(f"Flat input: {self.flat_input}")
+        self.logger.debug(f"Sci input: {self.sci_input}")
+
+        self.logger.debug(f"Bias output: {self.mbias_output}")
+        self.logger.debug(f"Biassig output: {self.biassig_output}")
+        self.logger.debug(f"Dark output: {self.mdark_output}")
+        self.logger.debug(f"Darksig output: {self.darksig_output}")
+        self.logger.debug(f"Flat output: {self.mflat_output}")
+        self.logger.debug(f"Flatsig output: {self.flatsig_output}")
+        self.logger.debug(f"Bad pixel mask output: {self.bpmask_output}")
+
+        self.logger.debug(f"Bias link: {self.mbias_link}")
+        self.logger.debug(f"Dark link: {self.mdark_link}")
+        self.logger.debug(f"Flat link: {self.mflat_link}")
+        self.logger.debug(f"Bad pixel mask link: {self.bpmask_output}")
 
     @property
     def sci_input(self):
@@ -369,7 +393,7 @@ class MasterFrameGenerator:
             # save bias sigma map (~read noise)
             fits.writeto(
                 self.biassig_output,
-                data=cp.asnumpy(cp.std(bfc.data, axis=0)) * np.sqrt(n / (n - 1)),
+                data=cp.asnumpy(cp.std(bfc.data, axis=0, ddof=1)),
                 header=header,
                 overwrite=True,
             )
@@ -385,7 +409,7 @@ class MasterFrameGenerator:
             # save dark sigma map
             fits.writeto(
                 self.darksig_output[exptime],
-                data=cp.asnumpy(cp.std(bfc.data, axis=0)) * np.sqrt(n / (n - 1)),
+                data=cp.asnumpy(cp.std(bfc.data, axis=0, ddof=1)),
                 header=header,
                 overwrite=True,
             )
@@ -414,7 +438,7 @@ class MasterFrameGenerator:
             # save flat sigma map
             fits.writeto(
                 self.flatsig_output[filt],
-                data=cp.asnumpy(cp.std(bfc.data, axis=0)) * np.sqrt(n / (n - 1)),
+                data=cp.asnumpy(cp.std(bfc.data, axis=0, ddof=1)),
                 header=header,
                 overwrite=True,
             )
@@ -436,6 +460,7 @@ class MasterFrameGenerator:
             )
 
         header = add_image_id(header)
+        header = record_statistics(combined_data, header)
 
         fits.writeto(
             output,
@@ -470,10 +495,17 @@ class MasterFrameGenerator:
         mean, median, std = sigma_clipped_stats_cupy(data, sigma=3, maxiters=5)
 
         hot_mask = cp.abs(data - median) > n_sigma * std  # 1 for bad, 0 for okay
-        hot_mask = cp.asnumpy(hot_mask).astype("int8")  # gpu to cpu
+        hot_mask = cp.asnumpy(hot_mask).astype("uint8")
 
-        # Save the file
-        newhdu = fits.PrimaryHDU(hot_mask)
+        # # Save the file
+        # newhdu = fits.PrimaryHDU(hot_mask)
+
+        # Use CompImageHDU for less disk consumption
+        newhdu = fits.CompImageHDU(data=hot_mask)
+
+        # Create a primary HDU as placeholder
+        primary_hdu = fits.PrimaryHDU()
+
         if header:
             # for card in header.cards:
             #     # skip certain keywords
@@ -494,14 +526,16 @@ class MasterFrameGenerator:
             ]:
                 newhdu.header[key] = header[key]
             # newhdu.header.add_comment("Above header is from the first dark frame")
-            newhdu.header["COMMENT"] = "Header inherited first dark frame"
+            newhdu.header["COMMENT"] = "Header inherited from first dark frame"
         newhdu.header["NHOTPIX"] = (np.sum(hot_mask), "Number of hot pixels.")
         # newhdu.header['NDARKIMG'] = (len(bias_sub_dark_names), 'Number of bias subtracted dark images used in sigma-clipped mean combine.')
         # newhdu.header['EXPTIME'] = dark_hdr['EXPTIME']
         # newhdu.header['COMMENT'] = 'Stable hot pixel mask image. Algorithm produced by J.H.Bae on 20250117.'
         newhdu.header["SIGMAC"] = (n_sigma, "HP threshold in clipped sigma")
+        newhdu.header["BADPIX"] = (1, "Pixel Value for Bad pixels")
 
-        newhdul = fits.HDUList([newhdu])
+        # newhdul = fits.HDUList([newhdu])
+        newhdul = fits.HDUList([primary_hdu, newhdu])
         newhdul.writeto(output, overwrite=True)
 
         # if self.queue:
@@ -587,9 +621,21 @@ class MasterFrameGenerator:
 
     def make_plots(self):
         self.logger.info("Start to generate plots for master calibration frames")
-        plot_bias(self.mbias_output, savefig=True)
-        plot_dark(self.mdark_output, savefig=True)
-        mask = plot_bpmask(self.bpmask_output, savefig=True)
-        plot_flat(self.mflat_output, mask, savefig=True)
-        
+        try:
+            plot_bias(self.mbias_link, savefig=True)
+            mask = plot_bpmask(self.bpmask_output, savefig=True)
+            for _, value in self.bpmask_output.items():
+                if os.path.exists(value):
+                    sample_header = fits.getheader(value, ext=1)
+                    break
+            if "BADPIX" in sample_header.keys():
+                badpix = sample_header["BADPIX"]
+            
+            mask = mask != badpix
+            fmask = mask.ravel()
+            plot_dark(self.mdark_link, fmask, savefig=True)
+            plot_flat(self.mflat_link, fmask, savefig=True)
+        except Exception as e:
+            self.logger.error(f"Failed to generate plots: {e}")
+
         self.logger.info("Plots have been generated")

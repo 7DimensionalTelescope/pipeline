@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-from gppy.run import run_scidata_reduction
+from gppy.run import run_scidata_reduction, 
 import argparse
 import os
 import sys

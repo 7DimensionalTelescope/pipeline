@@ -1,8 +1,6 @@
 import os, sys
 import numpy as np
-from astropy.time import Time
 from astropy.table import Table
-from datetime import datetime
 
 
 def extract_date_and_time(date_obs_str, round_seconds=False):
@@ -16,6 +14,8 @@ def extract_date_and_time(date_obs_str, round_seconds=False):
     Returns:
     str, str: Extracted date and time strings in 'YYYYMMDD' and 'HHMMSS' formats
     """
+    from astropy.time import Time
+
     # Convert the DATE-OBS string to an Astropy Time object
     time_obj = Time(date_obs_str)
 
@@ -30,6 +30,7 @@ def extract_date_and_time(date_obs_str, round_seconds=False):
 
 
 def calc_mean_dateloc(dateloclist):
+    from datetime import datetime
 
     # 문자열을 datetime 객체로 변환
     datetime_objects = [datetime.fromisoformat(t) for t in dateloclist]
@@ -70,3 +71,10 @@ def unpack(packed, type, ex=None):
         unpacked = packed[0]
     return unpacked
     # return float(unpacked)
+
+
+def move_file(src, dst):
+    """For lazy import"""
+    import shutil
+
+    shutil.move(src, dst)

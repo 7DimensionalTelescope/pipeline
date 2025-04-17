@@ -16,7 +16,7 @@ settings:
 
 obs:
   # OBS Info should be updated from header
-  pixscale:  # arcsec/pix
+  pixscale:  # 0.505 arcsec/pix
   n_binning: 
   gain: 
   unit: 
@@ -36,9 +36,9 @@ path:
   path_fdz:
   path_calib_field: /lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile
   path_refcat: /lyman/data1/factory/ref_cat
-  path_sex: /data/pipeline_reform/gppy-gpu/gppy/ref
+  # path_sex: /data/pipeline_reform/gppy-gpu/gppy/ref
   path_astrefcat: "/lyman/data1/factory/catalog/gaia_dr3_7DT"
-  # path_log:  # same as path_processed
+  path_ref_scamp: "/lyman/data1/factory/ref_scamp"
 
 file: 
   raw_files: 
@@ -71,6 +71,7 @@ photometry:
   ref_mag_err_upper: 0.05
   flagcut: 0
   check: False
+  satur_margin: 0.95  # factor multiplied to the preprocessed hardware saturation level
   sex_vars:
     DETECT_MINAREA: 5
     DETECT_THRESH: 3.0
@@ -83,10 +84,16 @@ photometry:
 imstack:
   zp_key: 'ZP_AUTO'
   # images_to_combine:
-  bkgsub_mode: 'Dynamic'
-  weight_map: True
+  bkgsub_type: 'Dynamic'
+  weight_map: true
   joint_wcs: False
-  
+  interp_type: 'median'
+  convolve: 'Gaussian'
+  propagate_mask: False
+
+imsubt:
+  input_mask:
+  template_mask:
 
 logging:
   level: INFO

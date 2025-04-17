@@ -60,6 +60,7 @@ class Logger:
         # Redirect stdout and stderr to the logger
         sys.stdout = StdoutToLogger(self)
         sys.stderr = StderrToLogger(self)
+        sys.excepthook = self._handle_exception
 
     def _create_handler(self, handler_type, log_file=None, level=None, mode="a"):
         """
@@ -98,6 +99,15 @@ class Logger:
         handler.setLevel(level or getattr(logging, self._level))
         handler.setFormatter(logging.Formatter(self._log_format))
         return handler
+
+    def _handle_exception(self, exc_type, exc_value, exc_traceback):
+        if issubclass(exc_type, KeyboardInterrupt):
+            # Let KeyboardInterrupt through
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+        self.logger.critical(
+            "Unhandled exception", exc_info=(exc_type, exc_value, exc_traceback)
+        )
 
     def _setup_logger(self, overwrite: bool = True) -> logging.Logger:
         """

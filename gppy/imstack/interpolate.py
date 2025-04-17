@@ -22,7 +22,7 @@ def interpolate_masked_pixels_cpu(image, mask, window=1):
 
         valid_values = patch[patch_mask == 0]
         if valid_values.size > 0:
-            result[r, c] = np.mean(valid_values)
+            result[r, c] = np.median(valid_values)
 
     return result
 
@@ -51,12 +51,12 @@ def interpolate_masked_pixels_gpu(image, mask, window=1):
 
         valid_values = patch[patch_mask == 0]
         if valid_values.size > 0:
-            result[r, c] = cp.mean(valid_values)
+            result[r, c] = cp.median(valid_values)
 
     return result
 
 
-def interpolate_masked_pixels_gpu_batched(image, mask, window=1):
+def interpolate_masked_pixels_gpu_vectorized(image, mask, window=1):
     """avoids python loop and faster"""
     import cupy as cp
 
@@ -106,7 +106,90 @@ def interpolate_masked_pixels_gpu_batched(image, mask, window=1):
     return result
 
 
-def interpolate_masked_pixels_gpu_batched_weight(image, mask, window=1, weight=None):
+# def interpolate_masked_pixels_gpu_vectorized_weight(image, mask, weight=None, window=1):
+#     """All inputs have to be cupy arrays."""
+#     import cupy as cp
+
+#     H, W = image.shape
+#     assert image.shape == mask.shape
+#     if weight is not None:
+#         assert weight.shape == image.shape
+
+#     result = image.copy()
+#     ys, xs = cp.where(mask == 1)
+#     N = ys.shape[0]
+#     if N == 0:
+#         return result
+
+#     # Create patch offsets
+#     dy, dx = cp.meshgrid(
+#         cp.arange(-window, window + 1), cp.arange(-window, window + 1), indexing="ij"
+#     )
+#     dy = dy.ravel()  # shape (K,)
+#     dx = dx.ravel()  # shape (K,)
+#     # K = dy.size
+
+#     # Absolute patch indices
+#     patch_ys = ys[:, None] + dy[None, :]  # shape (N, K)
+#     patch_xs = xs[:, None] + dx[None, :]  # shape (N, K)
+
+#     # Mask out-of-bound locations
+#     in_bounds = (patch_ys >= 0) & (patch_ys < H) & (patch_xs >= 0) & (patch_xs < W)
+
+#     # Clip for safe indexing
+#     patch_ys_safe = cp.clip(patch_ys, 0, H - 1)
+#     patch_xs_safe = cp.clip(patch_xs, 0, W - 1)
+#     flat_indices = patch_ys_safe * W + patch_xs_safe
+
+#     # Fetch data
+#     flat_image = image.ravel()
+#     flat_mask = mask.ravel()
+#     patch_vals = flat_image[flat_indices]
+#     patch_mask = flat_mask[flat_indices]
+
+#     # Mark valid values: unmasked AND in-bounds
+#     valid = (patch_mask == 0) & in_bounds
+
+#     if weight is not None:
+#         flat_weight = weight.ravel()
+#         patch_weights = flat_weight[flat_indices]
+
+#         patch_weights = cp.where(valid, patch_weights, 0)
+#         patch_vals = cp.where(valid, patch_vals, 0)
+
+#         weighted_sum = cp.sum(patch_weights * patch_vals, axis=1)
+#         weight_total = cp.sum(patch_weights, axis=1)
+#         interp_vals = cp.where(weight_total > 0, weighted_sum / weight_total, 0)
+#     else:
+#         patch_vals = cp.where(valid, patch_vals, cp.nan)
+#         interp_vals = cp.nanmedian(patch_vals, axis=1)
+
+#     # Fill in interpolated values
+#     result[ys, xs] = interp_vals
+#     return result
+
+
+def interpolate_masked_pixels_gpu_vectorized_weight(
+    image,
+    mask,
+    weight=None,
+    window=1,
+    method="median",
+    badpix=1,
+):
+    """Interpolate masked pixels in image (and optional weight map) using a mean filter.
+
+    Args:
+        image (cp.ndarray): 2D input image.
+        mask (cp.ndarray): Binary mask (1 = masked, 0 = valid) when badpix=1.
+        weight (cp.ndarray, optional): Pixel weight map. If None, unweighted mean is used. It must be 1/VARIANCE.
+        window (int): Radius of square window.
+        method (str): Interpolation method. Options are "inverse_variance" or "median".
+
+    Returns:
+        interpolated_image (cp.ndarray): Image with interpolated masked pixels.
+        interpolated_weight (cp.ndarray): Weight map with interpolated weights.
+    """
     import cupy as cp
 
     H, W = image.shape
@@ -115,22 +198,22 @@ def interpolate_masked_pixels_gpu_batched_weight(image, mask, window=1, weight=N
         assert weight.shape == image.shape
 
     result = image.copy()
-    ys, xs = cp.where(mask == 1)
+    weight_result = weight.copy() if weight is not None else None  # cp.ones_like(image)
+
+    ys, xs = cp.where(mask == badpix)
     N = ys.shape[0]
     if N == 0:
-        return result
+        return result, weight_result
 
     # Create patch offsets
     dy, dx = cp.meshgrid(
         cp.arange(-window, window + 1), cp.arange(-window, window + 1), indexing="ij"
     )
-    dy = dy.ravel()  # shape (K,)
-    dx = dx.ravel()  # shape (K,)
-    K = dy.size
+    dy = dy.ravel()
+    dx = dx.ravel()
 
-    # Absolute patch indices
-    patch_ys = ys[:, None] + dy[None, :]  # shape (N, K)
-    patch_xs = xs[:, None] + dx[None, :]  # shape (N, K)
+    patch_ys = ys[:, None] + dy[None, :]
+    patch_xs = xs[:, None] + dx[None, :]
 
     # Mask out-of-bound locations
     in_bounds = (patch_ys >= 0) & (patch_ys < H) & (patch_xs >= 0) & (patch_xs < W)
@@ -140,29 +223,59 @@ def interpolate_masked_pixels_gpu_batched_weight(image, mask, window=1, weight=N
     patch_xs_safe = cp.clip(patch_xs, 0, W - 1)
     flat_indices = patch_ys_safe * W + patch_xs_safe
 
-    # Fetch data
     flat_image = image.ravel()
     flat_mask = mask.ravel()
     patch_vals = flat_image[flat_indices]
     patch_mask = flat_mask[flat_indices]
 
-    # Mark valid values: unmasked AND in-bounds
-    valid = (patch_mask == 0) & in_bounds
+    valid = (patch_mask == 1 - badpix) & in_bounds
 
     if weight is not None:
         flat_weight = weight.ravel()
         patch_weights = flat_weight[flat_indices]
 
         patch_weights = cp.where(valid, patch_weights, 0)
-        patch_vals = cp.where(valid, patch_vals, 0)
+        patch_vals = cp.where(valid, patch_vals, cp.nan)
 
-        weighted_sum = cp.sum(patch_weights * patch_vals, axis=1)
-        weight_total = cp.sum(patch_weights, axis=1)
-        interp_vals = cp.where(weight_total > 0, weighted_sum / weight_total, 0)
+        if method == "inverse_variance":
+            weighted_sum = cp.sum(patch_weights * patch_vals, axis=1)
+            weight_total = cp.sum(patch_weights, axis=1)
+
+            # if weight_total == 0, val is 0
+            interp_vals = cp.where(weight_total > 0, weighted_sum / weight_total, 0)
+            interp_weights = weight_total  # assuming weight = 1/var
+
+        elif method == "median":
+            # Compute median and MAD
+            interp_vals = cp.nanmedian(patch_vals, axis=1)
+
+            # Handle NaNs safely by using cp.isclose (for float stability)
+            mask = cp.isclose(patch_vals, interp_vals[:, None], equal_nan=True)
+
+            # For multiple matches per row, take first match
+            def first_match_per_row(data, mask):
+                idx = cp.argmax(mask, axis=1)  # index of first True in each row
+                row_idx = cp.arange(mask.shape[0])
+                return data[row_idx, idx]
+
+            interp_weights = first_match_per_row(patch_weights, mask)
+
+        # Fill interpolated values and weights
+        result[ys, xs] = interp_vals
+        weight_result[ys, xs] = interp_weights
+
+        return result, weight_result
+
     else:
         patch_vals = cp.where(valid, patch_vals, cp.nan)
-        interp_vals = cp.nanmean(patch_vals, axis=1)
+        interp_vals = cp.nanmedian(patch_vals, axis=1)
 
-    # Fill in interpolated values
-    result[ys, xs] = interp_vals
-    return result
+        result[ys, xs] = interp_vals
+        return result
+
+
+def add_bpx_method(header, method):
+    header["INTERP"] = (method.upper(), "Method for bad pixel interpolation")
+    # swarp can't propage HIERARCH keywords
+    # header["BPX_INTERP"] = (method.upper(), "Method for bad pixel interpolation")
+    return header

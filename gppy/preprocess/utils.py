@@ -8,7 +8,8 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import uuid
 
-def sigma_clipped_stats_cupy(cp_data, sigma=3, maxiters=5):
+
+def sigma_clipped_stats_cupy(cp_data, sigma=3, maxiters=5, minmax=False):
     """
     Approximate sigma-clipping using CuPy.
     Computes mean, median, and std after iteratively removing outliers
@@ -49,6 +50,8 @@ def sigma_clipped_stats_cupy(cp_data, sigma=3, maxiters=5):
 
     # Convert results back to Python floats on the CPU
     # return float(mean_val), float(median_val), float(std_val)
+    if minmax:
+        return mean_val, median_val, std_val, cp_data.min(), cp_data.max()
     return mean_val, median_val, std_val
 
 
@@ -215,6 +218,61 @@ def search_with_date_offsets(template, max_offset=300, future=False):
         if os.path.exists(modified_path):
             return modified_path
 
+    # If no file is found, return None
+    return None
+
+
+def record_statistics(data, header, cropsize=500):
+    mean, median, std, min, max = sigma_clipped_stats_cupy(
+        data, sigma=3, maxiters=5, minmax=True
+    )  # gpu vars
+    header["CLIPMEAN"] = (float(mean), "3-sig clipped mean of the pixel values")
+    header["CLIPMED"] = (float(median), "3-sig clipped median of the pixel values")
+    header["CLIPSTD"] = (float(std), "3-sig clipped standard deviation of the pixels")
+    header["CLIPMIN"] = (float(min), "3-sig clipped minimum of the pixel values")
+    header["CLIPMAX"] = (float(max), "3-sig clipped maximum of the pixel values")
+
+    height, width = data.shape
+    start_row = (height - cropsize) // 2
+    start_col = (width - cropsize) // 2
+
+    # Slice the central 500x500 area
+    cropped_data = data[
+        start_row : start_row + cropsize, start_col : start_col + cropsize
+    ]
+    mean, median, std = sigma_clipped_stats_cupy(cropped_data, sigma=3, maxiters=5)
+    header["CENCLPMN"] = (float(mean), f"3-sig clipped mean of center {cropsize}x{cropsize}")  # fmt: skip
+    header["CENCLPMD"] = (float(median), f"3-sig clipped median of center {cropsize}x{cropsize}")  # fmt: skip
+    header["CENCLPSD"] = (float(std), f"3-sig clipped std of center {cropsize}x{cropsize}")  # fmt: skip
+
+    # header["CENCMIN"] = float(min)
+    # header["CENCMAX"] = float(max)
+
+    return header
+
+
+def get_saturation_level(header, mbias_file, mdark_file, mflat_file):
+    bitpix = header["BITPIX"]
+    if bitpix > 0:
+        # 	Positive BITPIX value indicates unsigned integer
+        # 	Assuming the maximum value is 2**bitpix - 1
+        maxval = 2**bitpix - 1
+    else:
+        raise ValueError("BITPIX value is not positive.")
+
+    try:
+        z = fits.getheader(mbias_file)["CLIPMED"]
+        d = fits.getheader(mdark_file)["CLIPMED"]
+        f = fits.getheader(mflat_file)["CENCLPMD"]
+        satur_level = (maxval - z - d) / f
+
+    except KeyError as e:
+        print(f"Master frame header lacks a required key: {e}")
+        print("Using default saturation level.")
+        satur_level = maxval * 0.9
+
+    return satur_level
+
 
 def write_IMCMB_to_header(header, inputlist, full_path=False):
     """this function was copied from the package eclaire"""
@@ -239,8 +297,9 @@ def write_IMCMB_to_header(header, inputlist, full_path=False):
 def add_image_id(header, key="IMAGEID"):
     """Add a unique image ID to the header."""
     header[key] = uuid.uuid4().hex
-    header.comments[key] = 'Unique ID of the image'
+    header.comments[key] = "Unique ID of the image"
     return header
+
 
 # def calculate_average_date_obs(date_obs_list):
 #     import numpy as np

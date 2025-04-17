@@ -1,3 +1,4 @@
+from multiprocessing import Queue
 import re
 import time
 from pathlib import Path
@@ -5,11 +6,19 @@ import copy
 
 from .services.queue import QueueManager, Priority
 from .data import CalibrationData, ObservationDataSet
-from .run import run_scidata_reduction, run_masterframe_generator
+from .run import run_scidata_reduction_with_tree, run_masterframe_generator
 from .const import available_7dt_units
 from .utils import check_obs_file
 
-def reprocess_folder(folder, overwrite=False, sync_units=False, queue=None, processes = ["preprocess", "astrometry", "photometry", "combine"], **kwargs):
+
+def reprocess_folder(
+    folder,
+    overwrite=False,
+    sync_units=False,
+    queue=None,
+    processes=["preprocess", "astrometry", "photometry", "combine", "subtract"],
+    **kwargs,
+):
     """
     Reprocess all FITS files in a given folder and its subfolders.
 
@@ -46,7 +55,7 @@ def reprocess_folder(folder, overwrite=False, sync_units=False, queue=None, proc
         - Skips folders without FITS files
     """
     if queue is None:
-        queue = QueueManager(max_workers=20)
+        queue = QueueManager(max_workers=60, gpu_workers=10)
 
     # Convert folder to Path object
     folder_path = Path(folder)
@@ -105,7 +114,7 @@ def reprocess_folder(folder, overwrite=False, sync_units=False, queue=None, proc
             queue.add_task(
                 run_masterframe_generator,
                 args=(calib_data.obs_params,),
-                kwargs={"queue": False},
+                kwargs={"queue": False, "overwrite": overwrite},
                 priority=Priority.LOW,
                 gpu=True,
                 task_name=f"{calib_data.name}",
@@ -116,14 +125,10 @@ def reprocess_folder(folder, overwrite=False, sync_units=False, queue=None, proc
             obs_dataset.mark_as_processed(obs.identifier)
 
             priority = Priority.HIGH if obs.too else Priority.MEDIUM
-            
-            queue.add_task(
-                run_scidata_reduction,
-                args=(obs.obs_params,),
-                kwargs= {"queue": False, "overwrite": overwrite, "processes": processes},
-                priority=priority,
-                task_name=obs.name,
-            )
+
+            tree = run_scidata_reduction_with_tree(obs.obs_params)
+            if tree is not None:
+                queue.add_tree(tree)
 
             time.sleep(0.1)
 
@@ -135,10 +140,19 @@ def reprocess_folder(folder, overwrite=False, sync_units=False, queue=None, proc
                     obs.filter = None
                     files = check_obs_file(obs.obs_params)
                     if files:
-                        reprocess_folder(Path(files[0]).parent, overwrite=overwrite, queue=queue, processes=processes, sync_units=False)
+                        reprocess_folder(
+                            Path(files[0]).parent,
+                            overwrite=overwrite,
+                            queue=queue,
+                            processes=processes,
+                            sync_units=False,
+                        )
 
     # Wait for queue to complete processing
     queue.wait_until_task_complete("all")
-
+    
+    print(queue.trees)
     # Print summary of processing
     print(f"Finished processing files in {folder}")
+
+    return queue

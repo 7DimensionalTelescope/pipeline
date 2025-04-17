@@ -10,7 +10,6 @@ from .const import FACTORY_DIR, RAWDATA_DIR
 def clean_up_factory():
     clean_up_folder(FACTORY_DIR)
 
-
 def clean_up_folder(path):
     for item in os.listdir(path):
         item_path = os.path.join(path, item)
@@ -551,11 +550,24 @@ def check_obs_file(params):
     for key, v in params.items():
         if v is None:
             params[key] = "*"
-            
-    path = RAWDATA_DIR+f'/{params["unit"]}/{params["date"]}_gain{params["gain"]}/'
+
+    path = RAWDATA_DIR + f'/{params["unit"]}/{params["date"]}_gain{params["gain"]}/'
     filename = f'{params["unit"]}_*_{params["obj"]}_{params["filter"]}_{params["n_binning"]}x{params["n_binning"]}*.fits'
-    files = glob.glob(path+filename)
+    files = glob.glob(path + filename)
     if len(files) == 0:
         return False
     else:
         return files
+
+
+def force_symlink(src, dst):
+    """
+    Remove the existing symlink `dst` if it exists, then create a new symlink.
+    """
+    try:
+        if os.path.islink(dst) or os.path.exists(dst):
+            os.remove(dst)
+    except FileNotFoundError:
+        pass
+
+    os.symlink(src, dst)

@@ -1,4 +1,5 @@
 from enum import Enum
+from tkinter.constants import FALSE
 from typing import Optional, Dict, List, Tuple
 import time
 import gc
@@ -129,7 +130,6 @@ class MemoryMonitor:
         self.logger = logger
         self._memory_state = MemoryState.HEALTHY
 
-
     def __repr__(self):
         """
         Provide a concise string representation of the MemoryMonitor.
@@ -206,16 +206,21 @@ class MemoryMonitor:
             states.append((MemoryState.HEALTHY, "CPU"))
             
         # Check each GPU state
+        gpu_state = []
         for i, gpu_percent in enumerate(self.current_gpu_memory_percent):
             if gpu_percent >= MemoryState.EMERGENCY.threshold:
-                states.append((MemoryState.EMERGENCY, f"GPU{i}"))
+                gpu_state.append((MemoryState.EMERGENCY, f"GPU{i}"))
             elif gpu_percent >= MemoryState.CRITICAL.threshold:
-                states.append((MemoryState.CRITICAL, f"GPU{i}"))
+                gpu_state.append((MemoryState.CRITICAL, f"GPU{i}"))
             elif gpu_percent >= MemoryState.WARNING.threshold:
-                states.append((MemoryState.WARNING, f"GPU{i}"))
+                gpu_state.append((MemoryState.WARNING, f"GPU{i}"))
             else:
-                states.append((MemoryState.HEALTHY, f"GPU{i}"))
-        
+                gpu_state.append((MemoryState.HEALTHY, f"GPU{i}"))
+
+        # Use the healthiest state
+        sorted_gpu_states = sorted(gpu_state, key=lambda x: x[0].order, reverse=False)
+        states.append(sorted_gpu_states[0])
+
         # Return the most severe state and its source
         sorted_states = sorted(states, key=lambda x: x[0].order, reverse=True)
         self._memory_state, trigger = sorted_states[0]
@@ -236,7 +241,7 @@ class MemoryMonitor:
             bool: Whether memory usage is below recovery threshold
         """
         return (self.current_memory_percent <= recovery_threshold and 
-                all(gpu_percent <= recovery_threshold for gpu_percent in self.current_gpu_memory_percent))
+                any(gpu_percent <= recovery_threshold for gpu_percent in self.current_gpu_memory_percent))
 
     def handle_state(
         self,
@@ -386,19 +391,23 @@ class MemoryMonitor:
             Dict: Memory usage details for each GPU device
         """
         gpu_stats = {}
+
         if cp.cuda.runtime.getDeviceCount() > 0:
             for device in range(cp.cuda.runtime.getDeviceCount()):
-                with cp.cuda.Device(device):
-                    mem_info = cp.cuda.runtime.memGetInfo()
-                    total = mem_info[1] / 1024 / 1024 # in MB
-                    free = mem_info[0] / 1024 / 1024  # in MB
-                    used = total - free
-                    gpu_stats[f'device_{device}'] = {
-                        'total': total,
-                        'used': used,
-                        'free': free,
-                        'percent': (used / total) * 100
-                    }
+                try:
+                    with cp.cuda.Device(device):
+                        mem_info = cp.cuda.runtime.memGetInfo()
+                        total = mem_info[1] / 1024 / 1024 # in MB
+                        free = mem_info[0] / 1024 / 1024  # in MB
+                        used = total - free
+                        gpu_stats[f'device_{device}'] = {
+                            'total': total,
+                            'used': used,
+                            'free': free,
+                            'percent': (used / total) * 100
+                        }
+                except:
+                    continue
         return gpu_stats
 
     @utils.classmethodproperty
