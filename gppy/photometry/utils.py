@@ -58,6 +58,23 @@ def compute_median_mad(values: np.ndarray) -> tuple:
 
 
 @njit
+def compute_median_rms(values: np.ndarray) -> tuple:
+    """
+    Compute median and Root Mean Square Error (RMS).
+
+    Args:
+        values: Input array
+
+    Returns:
+        Tuple of (median, RMS)
+    """
+    median = np.median(values)
+    rms = np.sqrt(np.sum((values - median) ** 2) / (len(values) - 1))
+    # rms /= np.sqrt(len(values))
+    return median, rms
+
+
+@njit
 def limitmag(N: np.ndarray, zp: float, aper: float, skysigma: float) -> np.ndarray:
     """
     Calculate limiting magnitude.
@@ -94,8 +111,9 @@ def zp_correction(
         Tuple of (corrected_mag, corrected_err, flux, flux_err, SNR)
     """
     mag = mag + zp
-    mag_err = mag_err + zperr
-    flux = 10 ** ((23.9 - mag) / 2.5)
+    # Provide zp error separately. Don't add zperr
+    # mag_err = np.sqrt(mag_err**2 + zperr**2)
+    flux = 10 ** ((23.9 - mag) / 2.5)  # uJy
     flux_err = 0.4 * np.log(10) * flux * mag_err
     snr = flux / flux_err
     return mag, mag_err, flux, flux_err, snr
@@ -238,7 +256,12 @@ def get_aperture_dict(peeing: float, pixscale: float) -> dict:
 
 
 def get_sex_args(
-    image: str, phot_conf: Any, gain: float, peeing: float, pixscale: float
+    image: str,
+    phot_conf: Any,
+    gain: float,
+    peeing: float,
+    pixscale: float,
+    satur_level: float = 65000.0,
 ) -> list:
     """
     Generate SExtractor configuration arguments.
@@ -262,7 +285,7 @@ def get_sex_args(
 
     sex_config = {}
     sex_config["PHOT_APERTURES"] = PHOT_APERTURES
-    sex_config["SATUR_LEVEL"] = "65000.0"
+    sex_config["SATUR_LEVEL"] = str(satur_level)
     sex_config["GAIN"] = str(gain)
     sex_config["PIXEL_SCALE"] = str(pixscale)
     sex_config["SEEING_FWHM"] = "2.0"
@@ -275,7 +298,7 @@ def get_sex_args(
     if "com" in image and os.path.exists(weightim):
         sex_config["WEIGHT_TYPE"] = "MAP_WEIGHT"
         sex_config["WEIGHT_IMAGE"] = weightim
-    
+
     # 	Check Image
     head = image.replace(".fits", "")
     if phot_conf.check:

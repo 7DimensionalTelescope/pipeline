@@ -27,7 +27,7 @@ IC_KEYS = [
 #     "ellip",
 # ]
 
-KEYS_TO_ADD = [
+CORE_KEYS = [
     "IMAGETYP",
     # "EXPOSURE",
     # "EXPTIME",
@@ -64,6 +64,6 @@ KEYS_TO_ADD = [
     "FOCUSPOS",
     "FOCUSSZ",
     "ROWORDER",
-    "_QUINOX",
+    # "_QUINOX",
     "SWCREATE",
 ]

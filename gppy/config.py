@@ -59,7 +59,10 @@ class Configuration:
             config_source (str|dict, optional): Custom configuration source
             **kwargs: Additional configuration parameter overrides
         """
-        if overwrite:
+        if return_base:
+            config_source = config_source or os.path.join(REF_DIR, "base.yml")
+            # self._initialized = True
+        elif overwrite:
             # Default config source if not provided
             if config_source is None:
                 config_source = os.path.join(REF_DIR, "base.yml")
@@ -71,13 +74,15 @@ class Configuration:
         self._load_config(config_source, **kwargs)
 
         if return_base:
-            return self
+            return  # self  # init must return None
+
         if not self._initialized:
             self.initialize(obs_params)
 
         if overwrite:
             clean_up_folder(self.config.path.path_processed)
             clean_up_folder(self.config.path.path_factory)
+            clean_up_folder(self.config.path.path_stacked)
 
         self.logger = self._setup_logger(logger, verbose=verbose)
         self.write_config()
@@ -90,23 +95,64 @@ class Configuration:
         return self.config.__repr__()
 
     @classmethod
-    def base_config(cls, working_dir=None, **kwargs):
+    def base_config(cls, config_file=None, working_dir=None, **kwargs):
         """Return the base (base.yml) configuration instance."""
-        config = cls(return_base=True, **kwargs).config
-        if working_dir is None:
-            config.name = "user-input"
-            return config
-        else:
+        # config = cls(return_base=True, **kwargs).config  # never overwrite here
+        instance = cls(return_base=True, **kwargs)
+        config = instance.config  # configuration instance from the new object
+        config.name = "user-input"
+
+        if working_dir is not None:
             config.path.path_processed = working_dir
             factory_dir = os.path.join(working_dir, "factory")
             os.makedirs(factory_dir, exist_ok=True)
             config.path.path_factory = factory_dir
-            config.name = "user-input"
-            return config
+
+        if config_file:
+            # working_dir is ignored if config_file is absolute path
+            config_file = (
+                os.path.join(working_dir, config_file) if working_dir else config_file
+            )
+            if os.path.exists(config_file):
+                with open(config_file, "r") as f:
+                    new_config = yaml.load(f, Loader=yaml.FullLoader)
+
+                instance._config_in_dict = Configuration._merge_dicts(
+                    instance._config_in_dict, new_config
+                )
+                instance._make_instance(instance._config_in_dict)
+            else:
+                raise FileNotFoundError("Provided Configuration file does not exist")
+
+        return config
 
     @classmethod
     def from_obs(cls, obs, **kwargs):
         return cls(obs.obs_params, **kwargs)
+
+    @staticmethod
+    def _merge_dicts(base: dict, updates: dict) -> dict:
+        """
+        Recursively merge the updates dictionary into the base dictionary.
+
+        For each key in the updates dictionary:
+        - If the key exists in base and both values are dictionaries,
+          then merge these dictionaries recursively.
+        - Otherwise, set or override the value in base with the one from updates.
+
+        Args:
+            base (dict): The original base configuration dictionary.
+            updates (dict): The new configuration dictionary with updated values.
+
+        Returns:
+            dict: The merged dictionary containing updates from the new configuration.
+        """
+        for key, value in updates.items():
+            if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+                base[key] = Configuration._merge_dicts(base[key], value)
+            else:
+                base[key] = value
+        return base
 
     def _setup_logger(self, logger=None, overwrite=True, verbose=True):
         if logger is None:
@@ -164,6 +210,7 @@ class Configuration:
             return config_files[0]
 
     def initialize(self, obs_params):
+        """Fill in obs info, name, paths."""
         # Set core observation details
         self.config.obs.unit = obs_params["unit"]
         self.config.obs.date = obs_params["date"]
@@ -248,15 +295,18 @@ class Configuration:
 
     def _update_with_kwargs(self, kwargs):
         """Merge additional configuration parameters."""
-        for key, value in kwargs.items():
-            key = key.lower()
-            if key in self._config_in_dict:
-                self._config_in_dict[key] = value
-            else:
-                for section_dict in self._config_in_dict.values():
-                    if isinstance(section_dict, dict) and key in section_dict:
-                        section_dict[key] = value
-                        break
+        # for key, value in kwargs.items():
+        #     key = key.lower()
+        #     if key in self._config_in_dict:
+        #         self._config_in_dict[key] = value
+        #     else:
+        #         for section_dict in self._config_in_dict.values():
+        #             if isinstance(section_dict, dict) and key in section_dict:
+        #                 section_dict[key] = value
+        #                 break
+
+        lower_kwargs = {key.lower(): value for key, value in kwargs.items()}
+        self._config_in_dict = Configuration._merge_dicts(self._config_in_dict, lower_kwargs)  # fmt:skip
 
     def _define_paths(self):
         """Create and set output directory paths for processed data."""
@@ -286,7 +336,7 @@ class Configuration:
         os.makedirs(path_processed, exist_ok=True)
         os.makedirs(path_fdz, exist_ok=True)
         os.makedirs(path_factory, exist_ok=True)
-        os.makedirs(path_stacked, exist_ok=True)
+        # os.makedirs(path_stacked, exist_ok=True)  # make dir in imstack
 
         self.config.path.path_processed = path_processed
         self.config.path.path_stacked = path_stacked
@@ -333,7 +383,7 @@ class Configuration:
     def _define_files(self):
         s = f"{self.config.path.path_raw}/*{self.config.obs.object}_{self.config.obs.filter}_{self.config.obs.n_binning}*.fits"  # obsdata/7DT11/*T00001*.fits
 
-        fits_files = glob.glob(s)
+        fits_files = sorted(glob.glob(s))
 
         # Extract header metadata
         header_mapping = {
@@ -366,10 +416,11 @@ class Configuration:
 
         self.config.file.raw_files = raw_files
         self.config.file.processed_files = [
-            (
+            os.path.join(
+                self.config.path.path_processed,
                 f"calib_{self.config.obs.unit}_{self.config.obs.object}_"
                 f"{to_datetime_string(datetime)}_"
-                f"{self.config.obs.filter}_{int(exp)}s.fits"
+                f"{self.config.obs.filter}_{int(exp)}s.fits",
             )
             for datetime, exp in zip(self.config.obs.datetime, self.config.obs.exposure)
         ]

@@ -31,11 +31,11 @@ if __name__ == "__main__":
         else:
             folder = args.folder
             
-        user_input = input(f"List of processes [default: {', '.join(['preprocess', 'astrometry', 'photometry', 'combine'])}]: ")
-        tmp_pro = user_input.split(',') if user_input else ['preprocess', 'astrometry', 'photometry', 'combine']
+        user_input = input(f"List of processes [default: {', '.join(['preprocess', 'astrometry', 'photometry', 'combine', 'subtract'])}]: ")
+        tmp_pro = user_input.split(',') if user_input else ['preprocess', 'astrometry', 'photometry', 'combine', 'subtract']
         processes = [proc.replace(" ", "") for proc in tmp_pro]
         for proc in processes:
-            if proc not in ['preprocess', 'astrometry', 'photometry', 'combine']:
+            if proc not in ['preprocess', 'astrometry', 'photometry', 'combine', 'subtract']:
                 print(f"Invalid process: {proc}")
                 sys.exit(1)
         

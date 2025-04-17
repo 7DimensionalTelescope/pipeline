@@ -11,10 +11,9 @@ import os
 
 from typing import Callable, Any, Optional, List, Dict, Union
 from datetime import datetime
-from gppy.logger import Logger
+from ..logger import Logger
+from .task import TaskTree, Task, Priority
 
-from dataclasses import dataclass, field
-from enum import Enum
 from contextlib import contextmanager
 
 import itertools
@@ -22,89 +21,6 @@ import itertools
 from .memory import MemoryState, MemoryMonitor
 
 signal.signal(signal.SIGINT, signal.SIG_IGN)
-
-class Priority(Enum):
-    """
-    Task priority levels for workload management.
-
-    Provides a hierarchical priority system to manage task execution:
-    - LOW: Background or non-critical tasks
-    - MEDIUM: Standard processing tasks
-    - HIGH: Time-sensitive or critical tasks
-
-    Allows fine-grained control over task scheduling and resource allocation.
-    """
-
-    LOW = 0
-    MEDIUM = 1
-    HIGH = 2
-
-
-@dataclass(order=True)
-class Task:
-    """
-    Represents a single task in the processing queue.
-
-    Encapsulates all necessary information for task tracking, including:
-    - Unique identification
-    - Execution details
-    - Priority
-    - Resource requirements
-    - Execution status
-    - Performance metrics
-
-    Attributes:
-        id (str): Unique task identifier
-        task_name (str): Descriptive name of the task
-        func (Callable): Function to be executed
-        args (tuple): Positional arguments for the function
-        kwargs (dict): Keyword arguments for the function
-        priority (Priority): Task priority level
-        starttime (datetime): Task creation timestamp
-        endtime (datetime, optional): Task completion timestamp
-        gpu (bool): Whether the task requires GPU processing
-        device (int): Specific GPU device for processing
-        status (str): Current task status (pending, processing, completed, failed)
-        result (Any): Task execution result
-        error (Exception, optional): Error encountered during task execution
-    """
-
-    # Add a sort_index field for comparison
-    sort_index: float = field(init=False, repr=False)
-
-    # Original fields
-    id: str = field(compare=False)
-    task_name: str = field(compare=False)
-    func: Callable = field(compare=False)
-    args: tuple = field(compare=False)
-    kwargs: dict = field(compare=False)
-    priority: Priority = field(compare=False)
-    starttime: datetime = field(compare=False)
-    endtime: Optional[datetime] = field(default=None, compare=False)
-    gpu: bool = field(default=False, compare=False)
-    device: int = field(default=0, compare=False)
-    status: str = field(default="pending", compare=False)
-    result: Any = field(default=None, compare=False)
-    error: Optional[Exception] = field(default=None, compare=False)
-    
-    def __post_init__(self):
-        """
-        Generate a sorting index for priority-based task ordering.
-
-        The sort index combines:
-        - Priority level (scaled to millions)
-        - Microsecond-level timestamp
-
-        This ensures that:
-        - Higher priority tasks are processed first
-        - Tasks within the same priority are ordered by submission time
-        """
-        # Create a sort index based on priority and timestamp
-        # Priority values (0,1,2) become (1000000, 2000000, 3000000)
-        # Then add the decimal part from the timestamp
-        timestamp_part = time.time() % 1  # Get just the decimal part
-        self.sort_index = (self.priority.value + 1) * 1000000 + timestamp_part
-
 
 class AbruptStopException(Exception):
     """Custom exception to signal abrupt stop processing."""
@@ -152,6 +68,7 @@ class QueueManager:
     def __init__(
         self,
         max_workers: Optional[int] = None,
+        gpu_workers: int = 4,
         logger: Optional[Logger] = None,
         **kwargs,
     ):
@@ -176,10 +93,16 @@ class QueueManager:
         
         # Create GPU process queue
         self.gpu_task = Queue()
-        self.gpu_thread = threading.Thread(target=self._gpu_worker, daemon=True)
-        
+        # Create multiple GPU worker threads
+        self.gpu_threads = []
+        self.gpu_workers = gpu_workers
+        for i in range(self.gpu_workers):
+            gpu_thread = threading.Thread(target=self._gpu_worker, daemon=True, name=f"gpu_worker_{i}")
+            self.gpu_threads.append(gpu_thread)
+
         # Results and error handling
         self.tasks: List[Task] = []
+        self.trees: List[TaskTree] = []
         self.results: List[Any] = []
         self.errors: List[Dict] = []
         self.lock = threading.Lock()
@@ -228,7 +151,10 @@ class QueueManager:
         )
 
         self.cpu_thread.start()
-        self.gpu_thread.start()
+        for thread in self.gpu_threads:
+            thread.start()
+            self.logger.debug(f"Started GPU worker thread {thread.name}")
+        
         
         self.logger.debug("QueueManager Initialization complete")
 
@@ -293,18 +219,16 @@ class QueueManager:
 
         # Create the task
         task = Task(
-            id=task_id,
-            task_name=task_name or func.__name__,
             func=func,
             args=args,
             kwargs=kwargs,
+            id=task_id,
+            task_name=task_name or func.__name__,
             priority=priority,
             starttime=datetime.now(),
             endtime=None,
             gpu=gpu,
-            device=(
-                (device or 0) if gpu else "cpu"
-            ),  # Default to device 0 if not specified
+            device=device,  
         )
 
         # Add task to the task list
@@ -312,9 +236,9 @@ class QueueManager:
 
         # Put the task in the appropriate queue
         if gpu:
-            self.gpu_task.put(task)
+            self.gpu_task.put((task, None))
         else:
-            self.cpu_task.put(task)
+            self.cpu_task.put((task, None))
 
         self.logger.info(
             f"Added {'GPU' if gpu else 'CPU'} task {task.task_name} (id: {task_id}) with priority {priority}"
@@ -324,50 +248,81 @@ class QueueManager:
         self.log_memory_stats(f"Task {task.task_name}(id: {task.id}) submitted")
         return task_id
 
+    def add_tree(self, tree: TaskTree):
+        """Add a TaskTree to the forest."""
+        self.trees.append(tree)
+        self.logger.info(f"Added tree {tree.id} with {len(tree.tasks)} branches")
+        first_task = tree.tasks[0]
+        self.tasks.append(first_task)
+        
+        if first_task.gpu:
+            self.gpu_task.put((first_task, tree))
+        else:
+            self.cpu_task.put((first_task, tree))
+        self.logger.info(
+            f"Added {'GPU' if first_task.gpu else 'CPU'} task {first_task.task_name} (id: {first_task.id}) with priority {first_task.priority}"
+        )
+        self.log_memory_stats(f"Tree {tree.id} submitted")
+        time.sleep(0.1)
+
+    def _move_to_next_task(self, tree: TaskTree, cls: Any=None) -> None:
+        """Queue the next task of a tree for processing."""
+
+        tree.advance()
+
+        if tree.is_complete():
+            return
+
+        task = tree.get_next_task()
+        
+        if task is None:
+            return
+
+        if cls is not None:
+            if type(cls).__name__ == type(task.cls).__name__:
+                task.cls = cls
+        
+        self.tasks.append(task)
+
+        if task.gpu:
+            self.gpu_task.put((task, tree))
+        else:
+            self.cpu_task.put((task, tree))
+
+        self.logger.info(
+            f"Added {'GPU' if task.gpu else 'CPU'} task {task.task_name} (id: {task.id}) with priority {task.priority}"
+        )
+        self.log_memory_stats(f"Task {task.task_name}(id: {task.id}) submitted")
+        time.sleep(0.1)
+        
     ######### Task processing #########
     def _cpu_worker(self):
         """Distribute tasks based on priority and available resources."""
-        active_tasks = []
         while True:
             try:
                 self._check_abrupt_stop()
                 self.manage_memory_state()
                 
-                # Get the highest priority task from the queue
-                active_tasks = [t for t in active_tasks if not t[0].ready()]
-
                 while (self.current_memory_state != MemoryState.EMERGENCY) and (not self.cpu_task.empty()):
 
-                    task = self.cpu_task.get()
+                    task, tree = self.cpu_task.get()
 
                     try:
-
-                        def make_callback(task_id):
-                            return lambda result: self._task_callback(task_id, result)
-
-                        # Submit task to appropriate pool
-                        
-                        # if type(task.args) != tuple:
-                        #     task.args = (task.args,)
-
                         async_result = self.cpu_pool.apply_async(
-                            task.func,
-                            args=task.args,
-                            kwds=task.kwargs,
-                            callback=make_callback(task.id)
+                            task.execute,
+                            callback=self._task_callback,
                         )
-
                         task.status = "processing"
-                        active_tasks.append((async_result, task))
-                        
+                        task = async_result.get()
                     except Exception as e:
                         self.logger.error(f"Error processing task {task.id}: {e}")
                         task.status = "failed"
                         task.error = e
                         self.errors.append(e)
-
                     finally:
                         self.cpu_task.task_done()
+                        if isinstance(tree, TaskTree) and task.status == "completed":
+                            self._move_to_next_task(tree, task.cls)
                         self.logger.debug(self.log_detailed_memory_report())
                 
             except AbruptStopException:
@@ -378,11 +333,40 @@ class QueueManager:
 
             time.sleep(0.1)
 
+    def _task_callback(self, task: Task):
+        """Callback function for task completion."""
+        try:
+            with self.lock:
+                for submitted_task in self.tasks:
+                    if submitted_task.id == task.id:
+                        # Update task status and result atomically
+                        submitted_task.status = "completed"
+                        submitted_task.result = task.result
+                        submitted_task.endtime = datetime.now()
+                        submitted_task.error = None
+                        self.logger.info(f"{'GPU' if task.gpu else 'CPU'} task {task.task_name} (id: {task.id}) completed")
+                        break
+                else:
+                    # If no matching task is found, log a warning
+                    self.logger.warning(
+                        f"No matching task found for task_id: {task.id}"
+                    )
+
+                # Append result to results list
+                self.results.append(task.result)
+
+        except Exception as e:
+            # Log and track any errors during task callback
+            error_info = {"task_id": task.id, "error": e, "timestamp": datetime.now()}
+            self.logger.error(f"Error in task callback for task {task.id}: {e}")
+            self.errors.append(error_info)
+
     @contextmanager
     def gpu_context(self, device: int = None):
         """Context manager for safe GPU operations."""
         if device is None:
             device = self._choose_gpu_device()
+            self.logger.info(f"Using GPU device {device}")
         try:
             with cp.cuda.Device(device):
                 yield
@@ -390,73 +374,55 @@ class QueueManager:
             self.logger.error(f"GPU operation failed on device {device}: {e}")
             raise
 
+    def _choose_gpu_device(self):
+        """Choose a GPU device to use."""
+        import numpy as np
+        return np.argmin(self.memory_monitor.current_gpu_memory_percent)
+        
+    
     def _gpu_worker(self):
-        """Worker thread for processing GPU tasks."""
 
+        """Worker thread for processing GPU tasks."""
         while True:
             try:
                 self._check_abrupt_stop()
                 self.manage_memory_state()
-                # Get the task from the queue
-                if self.current_memory_state != MemoryState.EMERGENCY:
-                    task = self.gpu_task.get()
-                    try:
-                        # Execute the task
-                        task.status = "processing"
-                        with self.gpu_context(task.device):
-                            result = task.func(*task.args, **task.kwargs)
 
-                        self._task_callback(task.id, result)
+                if self.current_memory_state != MemoryState.EMERGENCY:
+                    task, tree = self.gpu_task.get()
+                    try:
+                        task.status = "processing"
+                        task.starttime = datetime.now()
+
+                        with self.gpu_context(task.device):
+                            updated_task = task.execute()
+
+                        self._task_callback(updated_task)
+
+                        task.status = "completed"
+                        task.endtime = datetime.now()
 
                     except Exception as e:
-                        # Update task with error details
                         task.endtime = datetime.now()
                         task.status = "failed"
                         task.result = None
                         task.error = e
 
-                        # Log the error
-                        self.logger.error(f"GPU task {task.id} failed: {e}")
+                        self.logger.error(f"GPU task {task.id} failed in worker: {e}")
 
                     finally:
                         self.gpu_task.task_done()
+                        if isinstance(tree, TaskTree):
+                            self._move_to_next_task(tree, updated_task.cls)
                         self.logger.debug(self.log_detailed_memory_report())
 
             except AbruptStopException:
-                self.logger.info("GPU worker stopped by abrupt stop.")
+                self.logger.info(f"GPU worker stopped by abrupt stop.")
                 break
             except Exception as e:
                 self.logger.error(f"Error in GPU worker: {e}")
 
             time.sleep(0.1)
-
-    def _task_callback(self, task_id: str, result: Any):
-        """Callback function for task completion."""
-        try:
-            with self.lock:
-                for task in self.tasks:
-                    if task.id == task_id:
-                        # Update task status and result atomically
-                        task.status = "completed"
-                        task.result = result
-                        task.endtime = datetime.now()
-                        task.error = None
-                        
-                        break
-                else:
-                    # If no matching task is found, log a warning
-                    self.logger.warning(
-                        f"No matching task found for task_id: {task_id}"
-                    )
-
-                # Append result to results list
-                self.results.append(result)
-
-        except Exception as e:
-            # Log and track any errors during task callback
-            error_info = {"task_id": task_id, "error": e, "timestamp": datetime.now()}
-            self.logger.error(f"Error in task callback for task {task_id}: {e}")
-            self.errors.append(error_info)
 
     def wait_until_task_complete(
         self, task_id: Union[str, List[str]], timeout: Optional[float] = None
@@ -476,30 +442,36 @@ class QueueManager:
         # Special case for "all" keyword
         if task_id == "all":
             task_id = [task.id for task in self.tasks]
-
+            tree_id = [tree.id for tree in self.trees]
+        
         # Convert single task_id to a list for consistent handling
         if isinstance(task_id, str):
             task_id = [task_id]
 
         # If no tasks to wait for, return immediately
-        if not task_id:
+        if not task_id and not tree_id:
             return True
 
-        while task_id:
+        while task_id or tree_id:
             # Check if timeout has occurred
             if timeout is not None and time.time() - start_time > timeout:
                 return False
 
             # Find tasks that are not yet completed
-            remaining_tasks = [
-                tid for tid in task_id 
+            remaining_tasks =[
+                tid for tid in task_id
                 if next((task for task in self.tasks if task.id == tid and task.status != "completed"), None) is not None
             ]
 
+            remaining_trees = [
+                tid for tid in tree_id 
+                if next((tree for tree in self.trees if tree.id == tid and tree.status != "completed"), None) is not None
+            ]
+            
             # If all tasks are completed, exit
-            if not remaining_tasks:
+            if not remaining_tasks and not remaining_trees:
                 return True
-
+                
             # Small sleep to prevent tight loop
             if task_id == "all":
                 time.sleep(10)

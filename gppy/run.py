@@ -5,6 +5,8 @@ from .astrometry import Astrometry
 from .photometry.photometry import Photometry
 from .imstack.imstack import ImStack
 
+# from .subtract.subtract import ImSubtract
+
 from .preprocess import Preprocess, MasterFrameGenerator
 from .const import RAWDATA_DIR
 import time
@@ -16,6 +18,7 @@ from .data import ObservationDataSet, CalibrationData
 from .services.queue import QueueManager, Priority
 
 from .logger import Logger
+from .services.task import Task, TaskTree
 
 
 def run_masterframe_generator(obs_params, queue=False, **kwargs):
@@ -41,7 +44,7 @@ def run_masterframe_generator(obs_params, queue=False, **kwargs):
 def run_scidata_reduction(
     obs_params,
     queue=False,
-    processes=["preprocess", "astrometry", "photometry", "combine"],
+    processes=["preprocess", "astrometry", "photometry", "combine", "subtract"],
     **kwargs,
 ):
     """
@@ -65,9 +68,9 @@ def run_scidata_reduction(
         queue (bool, optional): Whether to use queue-based processing. Defaults to False.
         **kwargs: Additional configuration parameters
     """
+
     logger = Logger(name="7DT pipeline logger", slack_channel="pipeline_report")
 
-    # try:
     config = Configuration(obs_params, logger=logger, **kwargs)
 
     if not (config.config.flag.preprocess) and "preprocess" in processes:
@@ -87,19 +90,74 @@ def run_scidata_reduction(
         phot.run()
         del phot
     else:
-        logger.info("Skipping photometry")
+        logger.info("Skipping single photometry")
     if not (config.config.flag.combine) and "combine" in processes:
         stk = ImStack(config, queue=queue)
         stk.run()
         del stk
+    else:
+        logger.info("Skipping imstack")
+    if not (config.config.flag.combined_photometry) and "photometry" in processes:
+        phot = Photometry(config, queue=queue)
+        phot.run()
+        del phot
+    else:
+        logger.info("Skipping combined photometry")
+    # if not (config.config.flag.subtraction) and "subtract" in processes:
+    #     subt = ImSubtract(config, queue=queue)
+    #     subt.run()
+    #     del subt
+    # else:
+    #     logger.info("Skipping transient search")
+
     # except Exception as e:
     #     logger.error(f"Error during abrupt stop: {e}")
+
+
+def run_scidata_reduction_with_tree(
+    obs_params,
+    processes=["preprocess", "astrometry", "photometry", "combine", "subtract"],
+    **kwargs,
+):
+    """
+    Perform comprehensive scientific data reduction pipeline sequentially.
+    """
+    config = Configuration(obs_params, **kwargs)
+
+    tasks = []
+    if not (config.config.flag.preprocess) and "preprocess" in processes:
+        prep = Preprocess(config)
+        for task in prep.sequential_task:
+            tasks.append(Task(getattr(prep, task[1]), gpu=task[2], cls=prep))
+    if not (config.config.flag.astrometry) and "astrometry" in processes:
+        astr = Astrometry(config)
+        for task in astr.sequential_task:
+            tasks.append(Task(getattr(astr, task[1]), gpu=task[2], cls=astr))
+    if not (config.config.flag.single_photometry) and "photometry" in processes:
+        phot = Photometry(config)
+        for task in phot.sequential_task:
+            tasks.append(Task(getattr(phot, task[1]), gpu=task[2], cls=phot))
+    if not (config.config.flag.combine) and "combine" in processes:
+        stk = ImStack(config)
+        for task in stk.sequential_task:
+            tasks.append(Task(getattr(stk, task[1]), gpu=task[2], cls=stk))
+    if not (config.config.flag.combined_photometry) and "photometry" in processes:
+        phot = Photometry(config)
+        for task in phot.sequential_task:
+            tasks.append(Task(getattr(phot, task[1]), gpu=task[2], cls=phot))
+
+    if len(tasks) != 0:
+        tree = TaskTree(tasks)
+        return tree
+    else:
+        return None
 
 
 def run_pipeline(
     data,
     queue: QueueManager,
     processes=["preprocess", "astrometry", "photometry"],  # , "combine"],
+    overwrite=False,
 ):
     """
     Central pipeline processing function for different types of astronomical data.
@@ -124,7 +182,7 @@ def run_pipeline(
             queue.add_task(
                 run_masterframe_generator,
                 args=(data.obs_params,),
-                kwargs={"queue": False},
+                kwargs={"queue": False, "overwrite": overwrite},
                 gpu=True,
                 task_name=data.name,
             )
@@ -135,16 +193,11 @@ def run_pipeline(
 
             priority = Priority.HIGH if obs.too else Priority.MEDIUM
 
-            queue.add_task(
-                run_scidata_reduction,
-                args=(obs.obs_params,),
-                kwargs={"queue": False, "processes": processes},
-                priority=priority,
-                task_name=obs.name,
-            )
+            tree = run_scidata_reduction_with_tree(obs.obs_params)
+            if tree is not None:
+                queue.add_tree(tree)
 
             time.sleep(0.1)
-
 
 def start_monitoring():
     """

@@ -12,10 +12,8 @@ FACTORY_DIR = os.environ["FACTORY_DIR"]
 MASTER_FRAME_DIR = os.environ["MASTER_FRAME_DIR"]
 
 PROCESSED_DIR = os.environ["PROCESSED_DIR"]
-# DAILY_STACKED_DIR = os.environ["DAILY_STACKED_DIR"]
-# STACKED_DIR = os.environ["STACKED_DIR"]
-DAILY_STACKED_DIR = "/data/pipeline_reform/daily_stacked_test"
-STACKED_DIR = "/data/pipeline_reform/stacked_test"
+DAILY_STACKED_DIR = os.environ["DAILY_STACKED_DIR"]
+STACKED_DIR = os.environ["STACKED_DIR"]
 
 SLACK_TOKEN = os.environ["SLACK_TOKEN"]
 

@@ -9,13 +9,12 @@ from . import utils as prep_utils
 from ..utils import add_padding
 
 from ..services.memory import MemoryMonitor
-from ..services.queue import QueueManager
+from ..services.queue import QueueManager, Priority
 from ..config import Configuration
 
 from ..base import BaseSetup
 from .plotting import save_fits_as_png
 
-import uuid
 
 class Preprocess(BaseSetup):
     def __init__(
@@ -33,31 +32,12 @@ class Preprocess(BaseSetup):
         """
         super().__init__(config, logger, queue)
 
-    def run(self, use_eclaire=True):
-
-        self.logger.info("-" * 80)
-        self.logger.info(f"Start preprocessing for {self.config.name}")
-
-        self._load_mbdf()
-
-        mbias_file = self.config.preprocess.mbias_file
-        mdark_file = self.config.preprocess.mdark_file
-        mflat_file = self.config.preprocess.mflat_file
-
-        try:
-            if use_eclaire:
-                self._calibrate_image_eclaire(mbias_file, mdark_file, mflat_file)
-            else:
-                self._calibrate_image_cupy(mbias_file, mdark_file, mflat_file)
-
-            self.config.flag.preprocess = True
-            self.logger.info(f"Preprocessing Done for {self.config.name}")
-            MemoryMonitor.cleanup_memory()
-            self.logger.debug(MemoryMonitor.log_memory_usage)
-
-        except Exception as e:
-            self.logger.error(f"Error during preprocessing: {str(e)}")
-            raise
+    @property
+    def sequential_task(self):
+        return [
+            (1, "load_mbdf", False),
+            (2, "calibrate", True),
+        ]
 
     @classmethod
     def from_list(cls, images):
@@ -73,7 +53,51 @@ class Preprocess(BaseSetup):
         config.file.processed_files = image_list
         return cls(config=config)
 
-    def _load_mbdf(self):
+    def run(self, use_eclaire=True):
+
+        self.logger.info("-" * 80)
+        self.logger.info(f"Start preprocessing for {self.config.name}")
+
+        self.load_mbdf()
+
+        self.calibrate(use_eclaire=use_eclaire)
+        
+        self.config.flag.preprocess = True
+        self.logger.info(f"Preprocessing Done for {self.config.name}")
+        MemoryMonitor.cleanup_memory()
+        self.logger.debug(MemoryMonitor.log_memory_usage)
+
+
+    def calibrate(self, use_eclaire=True):
+        self.logger.info(f"Calibrating image with {'Eclaire' if use_eclaire else 'Cupy'}")
+        if self.queue:
+            if use_eclaire:
+                self.queue.add_task(
+                    self._calibrate_image_eclaire,
+                    priority=Priority.MEDIUM,
+                    task_name=f"{self.config.name} - Calibration",
+                    gpu=True,
+                )
+            else:
+                self.queue.add_task(
+                    self._calibrate_image_cupy,
+                    priority=Priority.MEDIUM,
+                    task_name=f"{self.config.name} - Calibration",
+                    gpu=True,
+                )
+        else:
+            try:
+                if use_eclaire:
+                    self._calibrate_image_eclaire()
+                else:
+                    self._calibrate_image_cupy()
+            except Exception as e:
+                self.logger.error(f"Error during preprocessing: {str(e)}")
+                raise
+        self.logger.info("Calibration Done")
+        
+
+    def load_mbdf(self):
         selection = self.config.preprocess.masterframe
 
         if selection == "default":  # use links under self.config.preprocess
@@ -104,7 +128,7 @@ class Preprocess(BaseSetup):
                 link_to_file(self.config.preprocess.mflat_link), future=True
             )
 
-            # if found is the same as link: abort processing
+            # if the found is the same as link: abort processing
             if (
                 self.config.preprocess.mbias_file
                 == prep_utils.read_link(self.config.preprocess.mbias_link)
@@ -114,9 +138,7 @@ class Preprocess(BaseSetup):
                 == prep_utils.read_link(self.config.preprocess.mflat_link)
             ):
                 self.logger.info("All newly found master frames are the same as existing links")  # fmt: skip
-                raise ValueError(
-                    "No new closest master calibration frames. Aborting..."
-                )
+                raise ValueError("No new closest master calibration frames. Aborting...")  # fmt: skip
         elif selection == "custom":
             # use self.config.preprocess.m????_file
             if self.config.preprocess.mbias_file is None:
@@ -137,12 +159,15 @@ class Preprocess(BaseSetup):
         self.config.preprocess.flatsig_file = self.config.preprocess.mflat_file.replace("flat", "flatsig")  # fmt:skip
         self.config.preprocess.bpmask_file = self.config.preprocess.darksig_file.replace("darksig", "bpmask")  # fmt:skip
 
-    def _calibrate_image_eclaire(self, mbias_file, mdark_file, mflat_file, make_plots=True):
+    def _calibrate_image_eclaire(self, make_plots=True):
+        mbias_file = self.config.preprocess.mbias_file
+        mdark_file = self.config.preprocess.mdark_file
+        mflat_file = self.config.preprocess.mflat_file
         raw_files = self.config.file.raw_files
         processed_files = self.config.file.processed_files
 
         self.logger.debug(f"Calibrating {len(raw_files)} SCI frames: {self.config.obs.filter}, {self.config.obs.exposure}s")  # fmt:skip
-        #self.logger.debug(f"Current memory usage: {MemoryMonitor.log_memory_usage}")
+        # self.logger.debug(f"Current memory usage: {MemoryMonitor.log_memory_usage}")
         # batch processing
         BATCH_SIZE = 10
         for i in range(0, len(raw_files), BATCH_SIZE):
@@ -160,12 +185,15 @@ class Preprocess(BaseSetup):
             # Save each slice of the cube as a separate 2D file
             for idx in range(len(batch_raw)):
                 header = fits.getheader(raw_files[i + idx])
+                header["SATURATE"] = prep_utils.get_saturation_level(
+                    header, mbias_file, mdark_file, mflat_file
+                )
                 header = prep_utils.write_IMCMB_to_header(
                     header,
                     [mbias_file, mdark_file, mflat_file, raw_files[i + idx]],
                 )
                 n_head_blocks = self.config.settings.header_pad
-                header = add_padding(header, n_head_blocks, copy_header=False)
+                add_padding(header, n_head_blocks, copy_header=False)
 
                 path = self.config.path.path_processed
                 output_path = os.path.join(path, processed_batch[idx])
@@ -189,9 +217,12 @@ class Preprocess(BaseSetup):
             f"Current memory usage after cleanup: {MemoryMonitor.log_memory_usage}"
         )
 
-    def _calibrate_image_cupy(self, mbias_file, mdark_file, mflat_file):
+    def _calibrate_image_cupy(self):
+        mbias_file = self.config.preprocess.mbias_file
+        mdark_file = self.config.preprocess.mdark_file
+        mflat_file = self.config.preprocess.mflat_file
         pass
-    
+
     def make_plots(self, raw_file, output_file):
         path = Path(output_file)
         os.makedirs(path.parent / "images", exist_ok=True)
@@ -199,4 +230,3 @@ class Preprocess(BaseSetup):
         raw_image_name = image_name.replace("calib_", "raw_")
         save_fits_as_png(raw_file, path.parent / "images" / f"{raw_image_name}.png")
         save_fits_as_png(output_file, path.parent / "images" / f"{image_name}.png")
-        

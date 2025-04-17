@@ -43,6 +43,7 @@ class Astrometry(BaseSetup):
             queue: QueueManager instance or boolean to enable parallel processing
         """
         super().__init__(config, logger, queue)
+        self.logger.debug(f"Astronomy Queue is '{queue}' for {self.config.name}")
 
     @classmethod
     def from_list(cls, images):
@@ -57,6 +58,12 @@ class Astrometry(BaseSetup):
         config = Configuration.base_config(working_dir)
         config.file.processed_files = image_list
         return cls(config=config)
+
+    @property
+    def sequential_task(self):
+        return [
+            (1, "run", False),
+        ]
 
     def run(
         self,
@@ -99,6 +106,8 @@ class Astrometry(BaseSetup):
             if "scamp" in processes:
                 self.run_scamp(solved_files, joint=joint_scamp, prefix=prefix)
 
+            # add polygon info to header - field rotation
+
             if "header_update" in processes:
                 self.update_header(
                     solved_files,
@@ -120,8 +129,6 @@ class Astrometry(BaseSetup):
             self.logger.error(f"Error during astrometry processing: {str(e)}")
             raise
 
-        # polygon - field rotation
-
     def define_paths(self) -> Tuple[List[str], List[str], List[str]]:
         """Initialize the astrometry processing environment.
 
@@ -135,9 +142,10 @@ class Astrometry(BaseSetup):
         """
         self.path_astrometry = os.path.join(self.config.path.path_factory, "astrometry")
         os.makedirs(self.path_astrometry, exist_ok=True)
-        fnames = self.config.file.processed_files
-        inims = [os.path.join(self.config.path.path_processed, s) for s in fnames]
-        soft_links = [os.path.join(self.path_astrometry, s) for s in fnames]
+        inims = self.config.file.processed_files
+        soft_links = [
+            os.path.join(self.path_astrometry, os.path.basename(s)) for s in inims
+        ]
 
         for inim, soft_link in zip(inims, soft_links):
             if not os.path.exists(soft_link):
@@ -253,6 +261,9 @@ class Astrometry(BaseSetup):
 
         presex_cats = [os.path.splitext(s)[0] + f".{prefix}.cat" for s in files]
 
+        # path for scamp refcat download
+        path_ref_scamp = self.config.path.path_ref_scamp
+
         # use local astrefcat if tile obs
         match = re.search(r"T\d{5}", self.config.name)
         if match:
@@ -261,7 +272,7 @@ class Astrometry(BaseSetup):
             )
             self.config.path.path_astrefcat = astrefcat
 
-        # scamp
+        # joint scamp
         if joint:
             # write target files into a text file
             cat_to_scamp = os.path.join(self.path_astrometry, "scamp_input.cat")
@@ -270,14 +281,25 @@ class Astrometry(BaseSetup):
                     f.write(f"{precat}\n")
 
             # @ is astromatic syntax.
-            external.scamp(cat_to_scamp, local_astref=astrefcat)
+            external.scamp(
+                cat_to_scamp, path_ref_scamp=path_ref_scamp, local_astref=astrefcat
+            )
 
+        # individual, parallel
         elif self.queue:
-            self._submit_task(external.scamp, presex_cats, local_astref=astrefcat)
+            self._submit_task(
+                external.scamp,
+                presex_cats,
+                path_ref_scamp=path_ref_scamp,
+                local_astref=astrefcat,
+            )
 
+        # individual, sequential
         else:
             for precat in presex_cats:
-                external.scamp(precat, local_astref=astrefcat)
+                external.scamp(
+                    precat, path_ref_scamp=path_ref_scamp, local_astref=astrefcat
+                )
                 self.logger.info(f"Completed scamp for {precat}]")  # fmt:skip
                 self.logger.debug(f"{precat}")  # fmt:skip
 
@@ -303,9 +325,9 @@ class Astrometry(BaseSetup):
             links: Paths to symbolic links (need for use_missfits)
             use_missfits: Whether to use missfits for updates
         """
-        self.logger.info(
-            f"Updating header {'with missfits' if use_missfits else 'manually'}"
-        )
+        # self.logger.info(
+        #     f"Updating WCS {'with missfits' if use_missfits else 'manually'}"
+        # )
 
         solved_heads = [os.path.splitext(s)[0] + f".{prefix}.head" for s in files]
 

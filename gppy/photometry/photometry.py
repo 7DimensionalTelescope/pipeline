@@ -66,9 +66,20 @@ class Photometry(BaseSetup):
         super().__init__(config, logger, queue)
 
         self.ref_catalog = ref_catalog or self.config.photometry.refcatname
-        self.images = images or self.config.file.processed_files
 
-        os.makedirs(self.config.path.path_factory, exist_ok=True)
+        self.run_single_photometry = (
+            True
+            if not self.config.flag.single_photometry
+            and not self.config.flag.combined_photometry
+            else False
+        )
+
+        if self.run_single_photometry:
+            self.images = images or self.config.file.processed_files
+            self.logger.debug("Running single photometry")
+        else:
+            self.images = images or [self.config.file.stacked_file]
+            self.logger.debug("Running combined photometry")
 
     @classmethod
     def from_list(cls, images: List[str]) -> Optional["Photometry"]:
@@ -93,6 +104,12 @@ class Photometry(BaseSetup):
         config.file.processed_files = image_list
         return cls(config=config)
 
+    @property
+    def sequential_task(self):
+        return [
+            (1, "run", False),
+        ]
+
     def run(self) -> None:
         """
         Run photometry on all configured images.
@@ -108,7 +125,11 @@ class Photometry(BaseSetup):
         else:
             self._run_sequential()
 
-        self.config.flag.single_photometry = True
+        if self.run_single_photometry:
+            self.config.flag.single_photometry = True
+        else:
+            self.config.flag.combined_photometry = True
+
         MemoryMonitor.cleanup_memory()
 
         self.logger.info(f"Photometry Done for {self.config.name}")
@@ -118,7 +139,9 @@ class Photometry(BaseSetup):
         """Process images in parallel using queue system."""
         task_ids = []
         for i, image in enumerate(self.images):
-            process_name = f"{self.config.name}"
+            process_name = (
+                f"{self.config.name} - single photometry - {i+1} of {len(self.images)}"
+            )
             phot_single = PhotometrySingle(
                 image,
                 self.config,
@@ -141,7 +164,7 @@ class Photometry(BaseSetup):
             PhotometrySingle(
                 image,
                 self.config,
-                self.logger,
+                logger=self.logger,
                 ref_catalog=self.ref_catalog,
                 total_image=len(self.images),
             ).run()
@@ -189,17 +212,21 @@ class PhotometrySingle:
         self.config = config
         self.logger = logger or self._setup_logger(config)
         self.ref_catalog = ref_catalog
-        self.image = os.path.join(self.config.path.path_processed, image)
+        # self.image = os.path.join(self.config.path.path_processed, image)
+        self.image = image
         self.image_info = ImageInfo.parse_image_info(
             self.image, pixscale=self.config.obs.pixscale
         )
         self.phot_conf = self.config.photometry
         self.name = name or self.config.name
-        self.header = ImageHeader()
+        self.phot_header = PhotometryHeader()
         if total_image == 1:
             self._id = next(self._id_counter)
         else:
             self._id = str(next(self._id_counter)) + "/" + str(total_image)
+
+        self.path_tmp = os.path.join(self.config.path.path_factory, "phot")
+        os.makedirs(self.path_tmp, exist_ok=True)
 
     def _setup_logger(self, config: Any) -> Any:
         """Initialize logger instance."""
@@ -223,10 +250,10 @@ class PhotometrySingle:
         return cls(image, config, name="user-input")
 
     @property
-    def file_prefix(self) -> str:
+    def tmp_file_prefix(self) -> str:
         """Get file prefix for output files."""
         _tmp = os.path.splitext(self.image)[0]
-        return os.path.join(self.config.path.path_factory, os.path.basename(_tmp))
+        return os.path.join(self.path_tmp, os.path.basename(_tmp))
 
     def run(self) -> None:
         """
@@ -244,7 +271,7 @@ class PhotometrySingle:
         Times the complete process and performs memory cleanup after completion.
         """
         start_time = time.time()
-        self.logger.info(f"Start Single Photometry for {self.name} [{self._id}]")
+        self.logger.info(f"Start Photometry for the image {self.name} [{self._id}]")
 
         self.load_ref_catalog()
         self.calculate_seeing()
@@ -335,26 +362,26 @@ class PhotometrySingle:
             self._run_sextractor(prefix="prep")
         else:
             self.obs_src_table = Table.read(
-                self.file_prefix + ".prep.cat", format="ascii.sextractor"
+                self.tmp_file_prefix + ".prep.cat", format="ascii.sextractor"
             )
 
         self.post_match_table = self.match_ref_catalog(
             snr_cut=False, low_mag_cut=low_mag_cut, high_mag_cut=high_mag_cut
         )
 
-        self.header.seeing = np.median(self.post_match_table["FWHM_WORLD"] * 3600)
-        self.header.peeing = self.header.seeing / self.image_info.pixscale
-        self.header.ellipticity = round(
+        self.phot_header.seeing = np.median(self.post_match_table["FWHM_WORLD"] * 3600)
+        self.phot_header.peeing = self.phot_header.seeing / self.image_info.pixscale
+        self.phot_header.ellipticity = round(
             np.median(self.post_match_table["ELLIPTICITY"]), 3
         )
-        self.header.elongation = round(
+        self.phot_header.elongation = round(
             np.median(self.post_match_table["ELONGATION"]), 3
         )
 
         self.logger.debug(f"{len(self.post_match_table)} Star-like Sources Found")
-        self.logger.debug(f"SEEING     : {self.header.seeing:.3f} arcsec")
-        self.logger.debug(f"ELONGATION : {self.header.elongation:.3f}")
-        self.logger.debug(f"ELLIPTICITY: {self.header.ellipticity:.3f}")
+        self.logger.debug(f"SEEING     : {self.phot_header.seeing:.3f} arcsec")
+        self.logger.debug(f"ELONGATION : {self.phot_header.elongation:.3f}")
+        self.logger.debug(f"ELLIPTICITY: {self.phot_header.ellipticity:.3f}")
 
     def run_main_sextractor(self) -> None:
         """
@@ -366,14 +393,24 @@ class PhotometrySingle:
         """
         self.logger.info(f"Start Source Extractor for {self.name}")
 
-        self.logger.debug("Setting Aperture for Photometry.")
+        satur_level = self.image_info.satur_level * self.config.photometry.satur_margin
+        self.logger.debug(f"Saturation Level with Margin {self.config.photometry.satur_margin}: {satur_level}") # fmt: skip
+
+        self.logger.debug("Setting Apertures for Photometry.")
         sex_args = phot_utils.get_sex_args(
             self.image,
             self.phot_conf,
-            self.image_info.gain,
-            self.header.peeing,
-            self.image_info.pixscale,
+            gain=self.image_info.gain,
+            peeing=self.phot_header.peeing,
+            pixscale=self.image_info.pixscale,
+            satur_level=satur_level,
         )
+
+        # If hot pixels are present, do not convolve the image
+        if not self.image_info.bpx_interp:
+            self.logger.debug("Hot pixels present. Skip SEx conv.")
+            sex_args.extend(["-FILTER", "N"])
+
         _, outcome = self._run_sextractor(
             prefix="main",
             sex_args=sex_args,
@@ -381,8 +418,10 @@ class PhotometrySingle:
         )
 
         outcome = [s for s in outcome.split("\n") if "RMS" in s][0]
-        self.header.skymed = float(outcome.split("Background:")[1].split("RMS:")[0])
-        self.header.skysig = float(outcome.split("RMS:")[1].split("/")[0])
+        self.phot_header.skymed = float(
+            outcome.split("Background:")[1].split("RMS:")[0]
+        )
+        self.phot_header.skysig = float(outcome.split("RMS:")[1].split("/")[0])
 
     def _run_sextractor(
         self,
@@ -407,15 +446,15 @@ class PhotometrySingle:
 
         if output is None:
             if prefix == "prep":
-                output = self.file_prefix + ".prep.cat"
+                output = self.tmp_file_prefix + ".prep.cat"
             elif prefix == "main":
-                output = self.file_prefix + ".cat"
+                output = self.tmp_file_prefix + ".cat"
 
         outcome = external.sextractor(
             self.image,
             outcat=output,
             prefix=prefix,
-            log_file=self.file_prefix + "_sextractor.log",
+            log_file=self.tmp_file_prefix + "_sextractor.log",
             logger=self.logger,
             sex_args=sex_args,
             **kwargs,
@@ -527,13 +566,12 @@ class PhotometrySingle:
             self.obs_src_table[key] = masked_valuearr
 
         if len(post_match_table) == 0:
-            self.logger.error(
-                "There is no mathced source. It will cause a problem in the next step."
+            self.logger.critical(
+                "There is no matched source. It will cause a problem in the next step."
             )
-            header = fits.getheader(self.image)
-            if "CTYPE1" not in header.keys():
-                self.logger.error("Check Astrometry solution: no WCS information")
-                raise PipelineError("Check Astrometry solution: no WCS information")
+            # if "CTYPE1" not in self.header.keys():
+            #     self.logger.error("Check Astrometry solution: no WCS information")
+            #     raise PipelineError("Check Astrometry solution: no WCS information")
         else:
             self.logger.info(
                 f"""Matched Sources: {len(post_match_table)} (r={self.phot_conf.match_radius:.3f}")"""
@@ -562,7 +600,7 @@ class PhotometrySingle:
         self.logger.info("Calculating zero points.")
 
         aperture = phot_utils.get_aperture_dict(
-            self.header.peeing, self.image_info.pixscale
+            self.phot_header.peeing, self.image_info.pixscale
         )
 
         zp_dict = {}
@@ -570,14 +608,15 @@ class PhotometrySingle:
         for mag_key in aperture.keys():
             magerr_key = mag_key.replace("MAG", "MAGERR")
 
-            zp_arr = zp_src_table[self.image_info.ref_mag_key] - zp_src_table[mag_key]
-            zperr_arr = phot_utils.rss(
-                zp_src_table[magerr_key], np.zeros_like(len(zp_src_table))
-            )
+            zps = zp_src_table[self.image_info.ref_mag_key] - zp_src_table[mag_key]
+            # zperrs = phot_utils.rss(
+            #     zp_src_table[magerr_key], zp_src_table(refmagerrkey)
+            # )  # gaia synphot err currently unavailable
+            zperrs = zp_src_table[magerr_key]
 
-            mask = sigma_clip(zp_arr, sigma=2.0).mask
+            mask = sigma_clip(zps, sigma=2.0).mask
 
-            zp, zperr = phot_utils.compute_median_mad(np.array(zp_arr[~mask].value))
+            zp, zperr = phot_utils.compute_median_mad(np.array(zps[~mask].value))
 
             keys = phot_utils.keyset(mag_key, self.image_info.filter)
             values = phot_utils.zp_correction(
@@ -590,9 +629,7 @@ class PhotometrySingle:
             if mag_key == "MAG_AUTO":
                 ul_3sig, ul_5sig = 0.0, 0.0
             else:
-                ul_3sig, ul_5sig = phot_utils.limitmag(
-                    np.array([3, 5]), zp, aperture[mag_key][0], self.header.skysig
-                )
+                ul_3sig, ul_5sig = phot_utils.limitmag(np.array([3, 5]), zp, aperture[mag_key][0], self.phot_header.skysig)  # fmt:skip
 
             suffix = mag_key.replace("MAG_", "")
             aper_dict[suffix] = round(aperture[mag_key][0], 3), aperture[mag_key][1]
@@ -616,7 +653,7 @@ class PhotometrySingle:
                 }
             )
 
-            self.plot_zp(mag_key, zp_src_table, zp_arr, zperr_arr, zp, zperr, mask)
+            self.plot_zp(mag_key, zp_src_table, zps, zperrs, zp, zperr, mask)
 
         return (zp_dict, aper_dict)
 
@@ -744,7 +781,7 @@ class PhotometrySingle:
         """
         self.logger.debug(f"Updating Header for {self.name}")
         header_to_add = {}
-        header_to_add.update(self.header.dict)
+        header_to_add.update(self.phot_header.dict)
         header_to_add.update(aper_dict)
         header_to_add.update(zp_dict)
         update_padded_header(self.image, header_to_add)
@@ -767,7 +804,7 @@ class PhotometrySingle:
 
 
 @dataclass
-class ImageHeader:
+class PhotometryHeader:
     """Stores image header information related to photometry."""
 
     author: str = "Gregory S.H. Paek"
@@ -832,6 +869,8 @@ class ImageInfo:
     ycent: float  # Y coordinate of image center
     n_binning: int  # Binning factor
     pixscale: float  # Pixel scale [arcsec/pix]
+    satur_level: float = 2**16 - 1  # Saturation level
+    bpx_interp: bool = False  # whether bad pixels have been interpolated
 
     def __repr__(self) -> str:
         """Returns a string representation of the ImageInfo."""
@@ -853,10 +892,13 @@ class ImageInfo:
     @classmethod
     def parse_image_info(cls, image_path: str, pixscale: float = 0.505) -> "ImageInfo":
         """Parses image information from a FITS header."""
+
         hdr = fits.getheader(image_path)
         w = WCS(image_path)
 
-        xcent, ycent = hdr["NAXIS1"] / 2.0, hdr["NAXIS2"] / 2.0
+        # Center coord for reference catalog query
+        xcent = (hdr["NAXIS1"] + 1) / 2.0
+        ycent = (hdr["NAXIS2"] + 1) / 2.0
         racent, decent = w.all_pix2world(xcent, ycent, 1)
         racent = float(racent)
         decent = float(decent)
@@ -865,11 +907,19 @@ class ImageInfo:
         jd = float(time_obj.jd)
         mjd = float(time_obj.mjd)
 
+        if "INTERP" not in hdr.keys():  # if badpix uninterpolated
+            interped = False
+        else:
+            interped = True
+
+        if "CTYPE1" not in hdr.keys():
+            raise PipelineError("Check Astrometry solution: no WCS information for Photometry")  # fmt: skip
+
         return cls(
             obj=hdr["OBJECT"],
             filter=hdr["FILTER"],
             dateobs=hdr["DATE-OBS"],
-            gain=float(hdr["EGAIN"]),
+            gain=float(hdr["EGAIN"]),  # effective gain for combined images
             naxis1=int(hdr["NAXIS1"]),
             naxis2=int(hdr["NAXIS2"]),
             ref_mag_key=f"mag_{hdr['FILTER']}",
@@ -882,4 +932,6 @@ class ImageInfo:
             ycent=ycent,
             n_binning=hdr["XBINNING"],
             pixscale=hdr["XBINNING"] * pixscale,
+            satur_level=hdr["SATURATE"],
+            bpx_interp=interped,
         )
