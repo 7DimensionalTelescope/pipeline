@@ -1,7 +1,7 @@
 name: 
 
 info:
-  version: '2.0'  # legacy gppy is 1.0, gppy-gpu before refactoring is 1.1?
+  version: '2.0'  # legacy gppy-gpu is 1.0
   project: 7DT/7DS
   creation_datetime:
   last_update_datetime:
