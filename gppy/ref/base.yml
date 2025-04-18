@@ -16,7 +16,7 @@ settings:
 
 obs:
   # OBS Info should be updated from header
-  pixscale:  # 0.505 arcsec/pix
+  pixscale: 0.505  # arcsec/pix
   n_binning: 
   gain: 
   unit: 
@@ -39,6 +39,7 @@ path:
   # path_sex: /data/pipeline_reform/gppy-gpu/gppy/ref
   path_astrefcat: "/lyman/data1/factory/catalog/gaia_dr3_7DT"
   path_ref_scamp: "/lyman/data1/factory/ref_scamp"
+  path_refim: "/lyman/data1/factory/ref_frame"
 
 file: 
   raw_files: 
@@ -92,6 +93,7 @@ imstack:
   propagate_mask: False
 
 imsubt:
+  refim_file:
   input_mask:
   template_mask:
 

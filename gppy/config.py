@@ -218,7 +218,7 @@ class Configuration:
         self.config.obs.filter = obs_params["filter"]
         self.config.obs.n_binning = obs_params["n_binning"]
         self.config.obs.gain = obs_params["gain"]
-        self.config.obs.pixscale = 0.505 * float(
+        self.config.obs.pixscale = self.config.obs.pixscale * float(
             obs_params["n_binning"]
         )  # For initial solve
         self.config.name = f"{obs_params['date']}_{obs_params['n_binning']}x{obs_params['n_binning']}_gain{obs_params['gain']}_{obs_params['obj']}_{obs_params['unit']}_{obs_params['filter']}"

@@ -11,6 +11,9 @@ def clean_up_factory():
     clean_up_folder(FACTORY_DIR)
 
 def clean_up_folder(path):
+    if not os.path.exists(path):
+        os.makedirs(path)
+        return
     for item in os.listdir(path):
         item_path = os.path.join(path, item)
         try:
