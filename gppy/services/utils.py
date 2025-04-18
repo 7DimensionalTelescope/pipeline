@@ -76,8 +76,10 @@ def cleanup_memory() -> None:
     """
     
     try:
-        cp.get_default_memory_pool().free_all_blocks()  # Free GPU memory pool
-        cp.get_default_pinned_memory_pool().free_all_blocks()  # Free pinned memory
+        for device_id in range(cp.cuda.runtime.getDeviceCount()):
+            with cp.cuda.Device(device_id):
+                cp.get_default_memory_pool().free_all_blocks()
+                cp.get_default_pinned_memory_pool().free_all_blocks()
     except:
         pass
 
