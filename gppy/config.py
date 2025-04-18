@@ -83,8 +83,6 @@ class Configuration:
             clean_up_folder(self.config.path.path_processed)
             clean_up_folder(self.config.path.path_factory)
             clean_up_folder(self.config.path.path_stacked)
-            for key in self.config.flag.keys():
-                self.config.flag[key] = False
 
         self.logger = self._setup_logger(logger, verbose=verbose)
         self.write_config()
