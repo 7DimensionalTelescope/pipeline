@@ -61,15 +61,16 @@ class Preprocess(BaseSetup):
         self.load_mbdf()
 
         self.calibrate(use_eclaire=use_eclaire)
-        
+
         self.config.flag.preprocess = True
         self.logger.info(f"Preprocessing Done for {self.config.name}")
         MemoryMonitor.cleanup_memory()
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
-
     def calibrate(self, use_eclaire=True):
-        self.logger.info(f"Calibrating image with {'Eclaire' if use_eclaire else 'Cupy'}")
+        self.logger.info(
+            f"Calibrating image with {'Eclaire' if use_eclaire else 'Cupy'}"
+        )
         if self.queue:
             if use_eclaire:
                 self.queue.add_task(
@@ -95,7 +96,6 @@ class Preprocess(BaseSetup):
                 self.logger.error(f"Error during preprocessing: {str(e)}")
                 raise
         self.logger.info("Calibration Done")
-        
 
     def load_mbdf(self):
         selection = self.config.preprocess.masterframe
@@ -169,7 +169,7 @@ class Preprocess(BaseSetup):
         self.logger.debug(f"Calibrating {len(raw_files)} SCI frames: {self.config.obs.filter}, {self.config.obs.exposure}s")  # fmt:skip
         # self.logger.debug(f"Current memory usage: {MemoryMonitor.log_memory_usage}")
         # batch processing
-        BATCH_SIZE = 10
+        BATCH_SIZE = 30  # 10
         for i in range(0, len(raw_files), BATCH_SIZE):
             batch_raw = raw_files[i : min(i + BATCH_SIZE, len(raw_files))]
             processed_batch = processed_files[i : min(i + BATCH_SIZE, len(raw_files))]

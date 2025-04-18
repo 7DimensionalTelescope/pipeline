@@ -116,6 +116,7 @@ def run_scidata_reduction(
 
 def run_scidata_reduction_with_tree(
     obs_params,
+    priority=Priority.MEDIUM,
     processes=["preprocess", "astrometry", "photometry", "combine", "subtract"],
     **kwargs,
 ):
@@ -128,23 +129,23 @@ def run_scidata_reduction_with_tree(
     if not (config.config.flag.preprocess) and "preprocess" in processes:
         prep = Preprocess(config)
         for task in prep.sequential_task:
-            tasks.append(Task(getattr(prep, task[1]), gpu=task[2], cls=prep))
+            tasks.append(Task(getattr(prep, task[1]), priority=priority, gpu=task[2], cls=prep))
     if not (config.config.flag.astrometry) and "astrometry" in processes:
         astr = Astrometry(config)
         for task in astr.sequential_task:
-            tasks.append(Task(getattr(astr, task[1]), gpu=task[2], cls=astr))
+            tasks.append(Task(getattr(astr, task[1]), priority=priority, gpu=task[2], cls=astr))
     if not (config.config.flag.single_photometry) and "photometry" in processes:
         phot = Photometry(config)
         for task in phot.sequential_task:
-            tasks.append(Task(getattr(phot, task[1]), gpu=task[2], cls=phot))
+            tasks.append(Task(getattr(phot, task[1]), priority=priority,  gpu=task[2], cls=phot))
     if not (config.config.flag.combine) and "combine" in processes:
         stk = ImStack(config)
         for task in stk.sequential_task:
-            tasks.append(Task(getattr(stk, task[1]), gpu=task[2], cls=stk))
+            tasks.append(Task(getattr(stk, task[1]), priority=priority, gpu=task[2], cls=stk))
     if not (config.config.flag.combined_photometry) and "photometry" in processes:
         phot = Photometry(config)
         for task in phot.sequential_task:
-            tasks.append(Task(getattr(phot, task[1]), gpu=task[2], cls=phot))
+            tasks.append(Task(getattr(phot, task[1]), priority=priority, gpu=task[2], cls=phot))
 
     if len(tasks) != 0:
         tree = TaskTree(tasks)
@@ -185,6 +186,7 @@ def run_pipeline(
                 kwargs={"queue": False, "overwrite": overwrite},
                 gpu=True,
                 task_name=data.name,
+                priority=Priority.HIGH,
             )
             time.sleep(0.1)
     elif isinstance(data, ObservationDataSet):
@@ -193,7 +195,7 @@ def run_pipeline(
 
             priority = Priority.HIGH if obs.too else Priority.MEDIUM
 
-            tree = run_scidata_reduction_with_tree(obs.obs_params)
+            tree = run_scidata_reduction_with_tree(obs.obs_params, priority=priority)
             if tree is not None:
                 queue.add_tree(tree)
 
