@@ -366,9 +366,45 @@ def swarp(
     return swarpcom
 
 
-def hotpants(inim):
+def hotpants(
+    inim,
+    refim,
+    il=None,
+    iu=None,
+    tl=None,
+    tu=None,
+    nrx=None,
+    nry=None,
+):
+    """
+    il, iu: input image lower/upper limits
+    tl, tu: template image lower/upper limits
+    nrx, nry: number of image regions in x/y dimension.
+    ssf: substamp file
+    """
+    from .utils import swap_ext
 
-    com = (
+    n_sigma = 5
+    header = fits.getheader(inim)
+
+    # input Image
+    il = il or header["SKYVAL"] - n_sigma * header["SKYSIG"]
+    iu = iu or 60000
+
+    # Template
+    # tl, tu = refskyval - n_sigma * refskysig, 60000
+    # tl, tu = refskyval - n_sigma * refskysig, 60000000
+    tl, tu = -60000000, 60000000
+    # tl, tu = -20000, 5100000
+
+    # x, y = 10200, 6800 for 7DT C3 images
+    nrx = nrx or 3
+    nry = nry or 2
+    # nrx, nry = 1, 1
+    # nrx, nry = 6, 4
+    ssf = swap_ext(inim, "ssf.txt")
+
+    hotpantscom = (
         f"hotpants -c t -n i "
         f"-iu {iu} -il {il} -tu {tu} -tl {tl} "
         f"-inim {inim} -tmplim {refim} -outim {hdim} -oci {hcim} "
@@ -377,7 +413,7 @@ def hotpants(inim):
         f"-nrx {nrx} -nry {nry} "
         f"-ssf {ssf}"
     )
-    print(com)
-    os.system(com)
+    print(hotpantscom)
+    os.system(hotpantscom)
 
-    pass
+    return hotpantscom

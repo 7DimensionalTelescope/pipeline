@@ -26,7 +26,8 @@ class ImSubtract(BaseSetup):
 
     def run(self):
 
-        if not self.find_reference_image():  # if not found, do not run
+        self.find_reference_image()
+        if not self.ref_imgs:  # if not found, do not run
             self.logger.info(
                 f"Reference image not found for {self.name}; Skipping transient search."
             )
@@ -47,8 +48,8 @@ class ImSubtract(BaseSetup):
         ref_imgs_7dt = glob(f"{refim_dir}/ref_7DT_{obj}_*_*_{filte}_*.fits")
         ref_imgs = ref_imgs_7dt + ref_imgs_ps1
         ref_imgs = [ref for ref in ref_imgs if "mask" not in ref]
-
-        return True if len(ref_imgs) > 0 else False
+        self.ref_imgs = ref_imgs
+        # return True if len(ref_imgs) > 0 else False
 
     def run_hotpants(self):
         external.hotpants()
