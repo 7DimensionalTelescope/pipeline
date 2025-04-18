@@ -446,7 +446,12 @@ class QueueManager:
         
         # Convert single task_id to a list for consistent handling
         if isinstance(task_id, str):
-            task_id = [task_id]
+            if "task" in task_id:
+                task_id = [task_id]
+                tree_id = []
+            elif "tree" in task_id:
+                task_id = []
+                tree_id = [task_id]
 
         # If no tasks to wait for, return immediately
         if not task_id and not tree_id:
