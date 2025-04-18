@@ -1,6 +1,6 @@
 import os
 import sys
-import glob
+from glob import glob
 from astropy.io import fits
 from astropy.table import Table
 from astropy.coordinates import SkyCoord
@@ -26,11 +26,33 @@ class ImSubtract(BaseSetup):
 
     def run(self):
 
+        if not self.find_reference_image():  # if not found, do not run
+            self.logger.info(
+                f"Reference image not found for {self.name}; Skipping transient search."
+            )
+            return
+
         self.define_parameters()
 
         self.create_masks()
 
         self.run_hotpants()
+
+    def find_reference_image(self):
+        obj = self.config.obs.object
+        filte = self.config.obs.filter
+        refim_dir = os.path.join(self.config.path.path_refim, filte)
+
+        ref_imgs_ps1 = glob(f"{refim_dir}/ref_PS1_{obj}_*_*_{filte}_0.fits")
+        ref_imgs_7dt = glob(f"{refim_dir}/ref_7DT_{obj}_*_*_{filte}_*.fits")
+        ref_imgs = ref_imgs_7dt + ref_imgs_ps1
+        ref_imgs = [ref for ref in ref_imgs if "mask" not in ref]
+
+        return True if len(ref_imgs) > 0 else False
+
+    def run_hotpants(self):
+        external.hotpants()
+        return
 
     def legacy_gppy(self):
         # ============================================================
