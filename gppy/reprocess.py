@@ -126,7 +126,7 @@ def reprocess_folder(
 
             priority = Priority.HIGH if obs.too else Priority.MEDIUM
 
-            tree = run_scidata_reduction_with_tree(obs.obs_params)
+            tree = run_scidata_reduction_with_tree(obs.obs_params, overwrite=overwrite, processes=processes, priority=priority)
             if tree is not None:
                 queue.add_tree(tree)
 
