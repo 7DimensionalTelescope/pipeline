@@ -3,6 +3,7 @@ from enum import Enum
 from datetime import datetime
 import time
 import itertools
+from .utils import cleanup_memory
 
 class Priority(Enum):
     """
@@ -32,7 +33,7 @@ class Task:
         starttime: Optional[datetime] = None,
         endtime: Optional[datetime] = None,
         gpu: Optional[bool] = False,
-        device: Optional[int] = 0,
+        device: Optional[int] = None,
         task_name: Optional[str] = None,
         status: str = "pending",
         result: Any = None,
@@ -117,6 +118,7 @@ class TaskTree:
     def advance(self) -> None:
         """Move to the next task after current one completes."""
         self.tasks.pop(0)
+        cleanup_memory()
         if len(self.tasks) == 0:
             self.status = "completed"
     
