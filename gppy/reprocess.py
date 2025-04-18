@@ -115,7 +115,7 @@ def reprocess_folder(
                 run_masterframe_generator,
                 args=(calib_data.obs_params,),
                 kwargs={"queue": False, "overwrite": overwrite},
-                priority=Priority.LOW,
+                priority=Priority.HIGH,
                 gpu=True,
                 task_name=f"{calib_data.name}",
             )
