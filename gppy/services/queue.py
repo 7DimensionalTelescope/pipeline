@@ -407,20 +407,20 @@ class QueueManager:
                 while (self.current_memory_state["GPU"] != MemoryState.EMERGENCY) and (not self.gpu_tasks[device].empty()):
                     task, tree = self.gpu_tasks[device].get()
                     try:
-                        async_result = self.gpu_pools[device].apply_async(
-                            task.execute,
-                            callback=self._task_callback,
-                        )
-                        task.status = "processing"
-                        task = async_result.get()
+                        # async_result = self.gpu_pools[device].apply_async(
+                        #     task.execute,
+                        #     callback=self._task_callback,
+                        # )
                         # task.status = "processing"
-                        # task.starttime = datetime.now()
-                        # with self.gpu_context(device):
-                        #     updated_task = task.execute()
-                        # self._task_callback(updated_task)
-                        # task.status = "completed"
-                        # task.endtime = datetime.now()
-                        # cp.get_default_memory_pool().free_all_blocks()
+                        # task = async_result.get()
+                        task.status = "processing"
+                        task.starttime = datetime.now()
+                        with self.gpu_context(device):
+                            updated_task = task.execute()
+                        self._task_callback(updated_task)
+                        task.status = "completed"
+                        task.endtime = datetime.now()
+                        cp.get_default_memory_pool().free_all_blocks()
                     except Exception as e:
                         task.endtime = datetime.now()
                         task.status = "failed"
@@ -428,11 +428,11 @@ class QueueManager:
                         self.logger.error(f"GPU task {task.id} failed on device {device}: {e}")
                     finally:
                         self.gpu_tasks[device].task_done()
-                        if isinstance(tree, TaskTree) and task.status == "completed":
-                            self._move_to_next_task(tree, task.cls)
-                        self.logger.debug(self.log_detailed_memory_report())
                         # if isinstance(tree, TaskTree) and task.status == "completed":
-                        #     self._move_to_next_task(tree, updated_task.cls)
+                        #     self._move_to_next_task(tree, task.cls)
+                        # self.logger.debug(self.log_detailed_memory_report())
+                        if isinstance(tree, TaskTree) and task.status == "completed":
+                            self._move_to_next_task(tree, updated_task.cls)
                         self.log_memory_stats(f"GPU task {task.id} completed on device {device}")
             except AbruptStopException:
                 self.logger.info(f"GPU worker process for device {device} stopped.")
