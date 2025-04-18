@@ -101,7 +101,7 @@ class TaskTree:
         self.id = id or f"tree_{next(self._id_counter)}"
         self.tasks = tasks
         self.status = "pending"
-        self.current_task_index = 0
+        
         self.results = {}
     
     def add_task(self, task: Task) -> None:
@@ -110,14 +110,14 @@ class TaskTree:
     
     def get_next_task(self) -> Optional[Task]:
         """Get the next task to be processed."""
-        if self.current_task_index >= len(self.tasks):
+        if len(self.tasks) == 0:
             return None
-        return self.tasks[self.current_task_index]
+        return self.tasks[0]
     
     def advance(self) -> None:
         """Move to the next task after current one completes."""
-        self.current_task_index += 1
-        if self.current_task_index >= len(self.tasks):
+        self.tasks.pop(0)
+        if len(self.tasks) == 0:
             self.status = "completed"
     
     def is_complete(self) -> bool:
@@ -133,5 +133,5 @@ class TaskTree:
         return self.results
         
     def __repr__(self):
-        base = f"TaskTree(id={self.id}, status={self.status}, current_task_index={self.current_task_index}\n"
+        base = f"TaskTree(id={self.id}, status={self.status}\n"
         return base + "\n".join([str(task) for task in self.tasks])
