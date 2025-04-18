@@ -429,7 +429,10 @@ class QueueManager:
                     finally:
                         self.gpu_tasks[device].task_done()
                         if isinstance(tree, TaskTree) and task.status == "completed":
-                            self._move_to_next_task(tree, updated_task.cls)
+                            self._move_to_next_task(tree, task.cls)
+                        self.logger.debug(self.log_detailed_memory_report())
+                        # if isinstance(tree, TaskTree) and task.status == "completed":
+                        #     self._move_to_next_task(tree, updated_task.cls)
                         self.log_memory_stats(f"GPU task {task.id} completed on device {device}")
             except AbruptStopException:
                 self.logger.info(f"GPU worker process for device {device} stopped.")
