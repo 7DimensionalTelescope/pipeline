@@ -104,7 +104,6 @@ class QueueManager:
             for device in self.gpu_devices
         ]
 
-            
         # Results and error handling
         self.tasks: List[Task] = []
         self.trees: List[TaskTree] = []
@@ -115,7 +114,7 @@ class QueueManager:
         # Memory tracking
         self.memory_history: List[Dict] = []
         self._memory_history_size = kwargs.pop("memory_history_size", 100)
-        self.current_memory_state = MemoryState.HEALTHY
+        self.current_memory_state = {"CPU": MemoryState.HEALTHY, "GPU": MemoryState.HEALTHY}
 
         # Memory tracking
         self.initial_memory = self.memory_monitor.current_memory["used"]
@@ -313,7 +312,7 @@ class QueueManager:
                 self._check_abrupt_stop()
                 self.manage_memory_state()
                 
-                while (self.current_memory_state != MemoryState.EMERGENCY) and (not self.cpu_task.empty()):
+                while (self.current_memory_state["CPU"] != MemoryState.EMERGENCY) and (not self.cpu_task.empty()):
 
                     task, tree = self.cpu_task.get()
 
@@ -387,16 +386,14 @@ class QueueManager:
     def _choose_gpu_device(self):
         """Choose a GPU device to use."""
         import numpy as np
-        if self._gpu_device == 1:
-            self._gpu_device = 0
-        else:
-            self._gpu_device = 1
 
         gpu_memory = self.memory_monitor.current_gpu_memory_percent
         if gpu_memory[self._gpu_device] > 90:
             self._gpu_device += 1
-        
-        return self._gpu_device%2
+        self._gpu_device += 1
+        self._gpu_device = self._gpu_device%2
+        self.logger.info(f"Selected GPU device {self._gpu_device}")
+        return self._gpu_device
     
     def _gpu_worker(self, device: int):
         cp.cuda.Device(device).use()
@@ -405,7 +402,7 @@ class QueueManager:
                 self._check_abrupt_stop()
                 self.manage_memory_state()
                 
-                while (self.current_memory_state != MemoryState.EMERGENCY) and (not self.gpu_tasks[device].empty()):
+                while (self.current_memory_state["GPU"] != MemoryState.EMERGENCY) and (not self.gpu_tasks[device].empty()):
                     task, tree = self.gpu_tasks[device].get()
                     try:
                         task.status = "processing"
@@ -585,19 +582,34 @@ class QueueManager:
     def manage_memory_state(self) -> None:
         """Manage memory state considering both CPU and GPU memory."""
 
-        new_state, trigger_source = self.memory_monitor.get_unified_state()
+        new_state = self.memory_monitor.get_unified_state()
 
-        if new_state != self.current_memory_state:
+        if new_state["CPU"] != self.current_memory_state["CPU"]:
             self.logger.info(
-                f"Memory state changed from {self.current_memory_state.state} to "
-                f"{new_state.state} (triggered by {trigger_source})"
+                f"Memory state changed from {self.current_memory_state["CPU"].state} to "
+                f"{new_state["CPU"].state} (triggered by CPU)"
             )
             self.logger.warning(f"{self.memory_monitor.log_memory_usage}")
-            self.current_memory_state = new_state
+            self.current_memory_state["CPU"] = new_state["CPU"]
 
-            if self.current_memory_state != MemoryState.HEALTHY:
+            if self.current_memory_state["CPU"] != MemoryState.HEALTHY:
                 self.memory_monitor.handle_state(
-                    trigger_source=trigger_source,
+                    trigger_source="CPU",
+                    gpu_context=self.gpu_context,
+                    stop_callback=self.stop_processing,
+                )
+
+        if new_state["GPU"] != self.current_memory_state["GPU"]:
+            self.logger.info(
+                f"Memory state changed from {self.current_memory_state["GPU"].state} to "
+                f"{new_state["GPU"].state} (triggered by GPU)"
+            )
+            self.logger.warning(f"{self.memory_monitor.log_memory_usage}")
+            self.current_memory_state["GPU"] = new_state["GPU"]
+
+            if self.current_memory_state["GPU"] != MemoryState.HEALTHY:
+                self.memory_monitor.handle_state(
+                    trigger_source="GPU",
                     gpu_context=self.gpu_context,
                     stop_callback=self.stop_processing,
                 )
