@@ -586,8 +586,8 @@ class QueueManager:
 
         if new_state["CPU"] != self.current_memory_state["CPU"]:
             self.logger.info(
-                f"Memory state changed from {self.current_memory_state["CPU"].state} to "
-                f"{new_state["CPU"].state} (triggered by CPU)"
+                f"Memory state changed from {self.current_memory_state['CPU'].state} to "
+                f"{new_state['CPU'].state} (triggered by CPU)"
             )
             self.logger.warning(f"{self.memory_monitor.log_memory_usage}")
             self.current_memory_state["CPU"] = new_state["CPU"]
@@ -601,8 +601,8 @@ class QueueManager:
 
         if new_state["GPU"] != self.current_memory_state["GPU"]:
             self.logger.info(
-                f"Memory state changed from {self.current_memory_state["GPU"].state} to "
-                f"{new_state["GPU"].state} (triggered by GPU)"
+                f"Memory state changed from {self.current_memory_state['GPU'].state} to "
+                f"{new_state['GPU'].state} (triggered by GPU)"
             )
             self.logger.warning(f"{self.memory_monitor.log_memory_usage}")
             self.current_memory_state["GPU"] = new_state["GPU"]
