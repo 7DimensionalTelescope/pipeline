@@ -83,8 +83,7 @@ class QueueManager:
 
         self.logger.debug(f"Initialize QueueManager.")
 
-        self.memory_monitor = MemoryMonitor(logger=self.logger)
-        mp.set_start_method("spawn")
+        self.memory_monitor = MemoryMonitor(logger=self.logger) 
 
         # Default CPU allocation
         total_cpu = max_workers or mp.cpu_count() - 1
