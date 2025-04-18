@@ -116,14 +116,15 @@ def run_scidata_reduction(
 
 def run_scidata_reduction_with_tree(
     obs_params,
-    priority=Priority.MEDIUM,
     processes=["preprocess", "astrometry", "photometry", "combine", "subtract"],
+    overwrite=False,
+    priority=Priority.MEDIUM,
     **kwargs,
 ):
     """
     Perform comprehensive scientific data reduction pipeline sequentially.
     """
-    config = Configuration(obs_params, **kwargs)
+    config = Configuration(obs_params, overwrite=overwrite, **kwargs)
 
     tasks = []
     if not (config.config.flag.preprocess) and "preprocess" in processes:

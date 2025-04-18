@@ -115,7 +115,7 @@ def reprocess_folder(
                 run_masterframe_generator,
                 args=(calib_data.obs_params,),
                 kwargs={"queue": False, "overwrite": overwrite},
-                priority=Priority.LOW,
+                priority=Priority.HIGH,
                 gpu=True,
                 task_name=f"{calib_data.name}",
             )
@@ -126,7 +126,7 @@ def reprocess_folder(
 
             priority = Priority.HIGH if obs.too else Priority.MEDIUM
 
-            tree = run_scidata_reduction_with_tree(obs.obs_params)
+            tree = run_scidata_reduction_with_tree(obs.obs_params, overwrite=overwrite, processes=processes, priority=priority)
             if tree is not None:
                 queue.add_tree(tree)
 

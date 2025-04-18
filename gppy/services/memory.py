@@ -3,6 +3,8 @@ from tkinter.constants import FALSE
 from typing import Optional, Dict, List, Tuple
 import time
 import gc
+
+from astropy.utils import state
 import cupy as cp
 import psutil  
 from . import utils
@@ -128,7 +130,7 @@ class MemoryMonitor:
 
     def __init__(self, logger):
         self.logger = logger
-        self._memory_state = MemoryState.HEALTHY
+        self._memory_state = {"CPU": MemoryState.HEALTHY, "GPU": MemoryState.HEALTHY}
 
     def __repr__(self):
         """
@@ -193,38 +195,36 @@ class MemoryMonitor:
         - Check each GPU's memory state
         - Return the most severe state
         """
-        states = []
+        states = {"CPU": MemoryState.HEALTHY, "GPU": MemoryState.HEALTHY}
         
         # Check CPU state
         if self.current_memory_percent >= MemoryState.EMERGENCY.threshold:
-            states.append((MemoryState.EMERGENCY, "CPU"))
+            states["CPU"] = MemoryState.EMERGENCY
         elif self.current_memory_percent >= MemoryState.CRITICAL.threshold:
-            states.append((MemoryState.CRITICAL, "CPU"))
+            states["CPU"] = MemoryState.CRITICAL
         elif self.current_memory_percent >= MemoryState.WARNING.threshold:
-            states.append((MemoryState.WARNING, "CPU"))
+            states["CPU"] = MemoryState.WARNING
         else:
-            states.append((MemoryState.HEALTHY, "CPU"))
+            states["CPU"] = MemoryState.HEALTHY
             
         # Check each GPU state
         gpu_state = []
         for i, gpu_percent in enumerate(self.current_gpu_memory_percent):
             if gpu_percent >= MemoryState.EMERGENCY.threshold:
-                gpu_state.append((MemoryState.EMERGENCY, f"GPU{i}"))
+                gpu_state.append(MemoryState.EMERGENCY)
             elif gpu_percent >= MemoryState.CRITICAL.threshold:
-                gpu_state.append((MemoryState.CRITICAL, f"GPU{i}"))
+                gpu_state.append(MemoryState.CRITICAL)
             elif gpu_percent >= MemoryState.WARNING.threshold:
-                gpu_state.append((MemoryState.WARNING, f"GPU{i}"))
+                gpu_state.append(MemoryState.WARNING)
             else:
-                gpu_state.append((MemoryState.HEALTHY, f"GPU{i}"))
+                gpu_state.append(MemoryState.HEALTHY)
 
         # Use the healthiest state
-        sorted_gpu_states = sorted(gpu_state, key=lambda x: x[0].order, reverse=False)
-        states.append(sorted_gpu_states[0])
+        sorted_gpu_states = sorted(gpu_state, key=lambda x: x.order, reverse=False)
+        states["GPU"] = sorted_gpu_states[0]
 
-        # Return the most severe state and its source
-        sorted_states = sorted(states, key=lambda x: x[0].order, reverse=True)
-        self._memory_state, trigger = sorted_states[0]
-        return sorted_states[0]
+        self._memory_state = states
+        return states
         
     def should_recover(
         self, 
@@ -262,11 +262,11 @@ class MemoryMonitor:
             gpu_context: Context manager for GPU operations
             stop_callback: Function to stop all processing
         """
-        if self.memory_state == MemoryState.WARNING:
+        if self.memory_state[trigger_source] == MemoryState.WARNING:
             self._handle_warning(trigger_source, gpu_context)
-        elif self.memory_state == MemoryState.CRITICAL:
+        elif self.memory_state[trigger_source] == MemoryState.CRITICAL:
             self._handle_critical(trigger_source, gpu_context)
-        elif self.memory_state == MemoryState.EMERGENCY:
+        elif self.memory_state[trigger_source] == MemoryState.EMERGENCY:
             self._handle_emergency(trigger_source, gpu_context, stop_callback)
             self.logger.critical(f"Emergency memory threshold exceeded on {trigger_source}. All processes stopped.")
 
