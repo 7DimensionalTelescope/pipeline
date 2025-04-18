@@ -4,6 +4,8 @@ from datetime import datetime
 import time
 import itertools
 from .utils import cleanup_memory
+import cupy as cp
+from contextlib import contextmanager
 
 class Priority(Enum):
     """
@@ -25,7 +27,7 @@ class Task:
 
     def __init__(
         self,
-        func: Callable,
+        func: Optional[Callable]=None,
         args: Optional[tuple] = (),
         kwargs: Optional[dict] = {},
         priority: Optional[Priority] = Priority.MEDIUM,
@@ -63,10 +65,10 @@ class Task:
         return self.sort_index < other.sort_index
         
     @property
-    def func(self) -> Callable:
+    def func(self):
         return self._get_function()
 
-    def _get_function(self) -> Callable:
+    def _get_function(self):
         if self.cls is None:
             return self._func
         return getattr(self.cls, self._func.__name__)
@@ -75,7 +77,11 @@ class Task:
         try:
             self.status = "processing"
             self.starttime = datetime.now()
-            self.result = self.func(*self.args, **self.kwargs)
+            if self.gpu:
+                with self.gpu_context():
+                    self.result = self.func(*self.args, **self.kwargs)
+            else:
+                self.result = self.func(*self.args, **self.kwargs)
         except Exception as e:
             self.status = "failed"
             self.result = None
@@ -85,6 +91,23 @@ class Task:
             self.endtime = datetime.now()
         return self
 
+    @contextmanager
+    def gpu_context(self):
+        try:
+            with cp.cuda.Device(self.device):
+                yield
+        except Exception as e:
+            print(f"GPU operation failed on device {device}: {e}")
+            raise
+
+    def cleanup(self):
+        """Cleanup resources after task execution."""
+        self._func = None
+        self.args = None
+        self.kwargs = None
+        self.cls = None
+        cleanup_memory()
+        
     def __repr__(self):
         if self.cls is None:
             return f"Task(id={self.id}, task_name={self.task_name}, status={self.status})"
