@@ -71,7 +71,7 @@ class QueueManager:
     def __init__(
         self,
         max_workers: Optional[int] = None,
-        max_gpu_workers: int = 8,
+        max_gpu_workers: int = 4,
         logger: Optional[Logger] = None,
         **kwargs,
     ):
@@ -98,6 +98,7 @@ class QueueManager:
         
         # Create multiple GPU worker threads
         self.gpu_devices = range(cp.cuda.runtime.getDeviceCount())
+        self.gpu_pools = [Pool(processes=max_gpu_workers) for _ in range(len(self.gpu_devices))]
         self.gpu_tasks = {device: PriorityQueue() for device in self.gpu_devices}
         self.gpu_threads = [
             threading.Thread(target=self._gpu_worker, args=(device,), daemon=True)
@@ -348,11 +349,12 @@ class QueueManager:
             with self.lock:
                 for submitted_task in self.tasks:
                     if submitted_task.id == task.id:
-                        # Update task status and result atomically
+                        submitted_task.cleanup()
                         submitted_task.status = "completed"
                         submitted_task.result = task.result
                         submitted_task.endtime = datetime.now()
                         submitted_task.error = None
+                        
                         self.logger.info(f"{'GPU' if task.gpu else 'CPU'} task {task.task_name} (id: {task.id}) completed")
                         break
                 else:
@@ -405,14 +407,20 @@ class QueueManager:
                 while (self.current_memory_state["GPU"] != MemoryState.EMERGENCY) and (not self.gpu_tasks[device].empty()):
                     task, tree = self.gpu_tasks[device].get()
                     try:
+                        async_result = self.gpu_pools[device].apply_async(
+                            task.execute,
+                            callback=self._task_callback,
+                        )
                         task.status = "processing"
-                        task.starttime = datetime.now()
-                        with self.gpu_context(device):
-                            updated_task = task.execute()
-                        self._task_callback(updated_task)
-                        task.status = "completed"
-                        task.endtime = datetime.now()
-                        cp.get_default_memory_pool().free_all_blocks()
+                        task = async_result.get()
+                        # task.status = "processing"
+                        # task.starttime = datetime.now()
+                        # with self.gpu_context(device):
+                        #     updated_task = task.execute()
+                        # self._task_callback(updated_task)
+                        # task.status = "completed"
+                        # task.endtime = datetime.now()
+                        # cp.get_default_memory_pool().free_all_blocks()
                     except Exception as e:
                         task.endtime = datetime.now()
                         task.status = "failed"
@@ -518,6 +526,11 @@ class QueueManager:
                 self.cpu_task.get()
                 self.cpu_task.task_done()
 
+            for gpu_pool in self.gpu_pools:
+                gpu_pool.close()
+                gpu_pool.terminate()
+                gpu_pool.join()
+
             for gpu_task in self.gpu_tasks:
                 while not gpu_task.empty():
                     gpu_task.get()
@@ -558,6 +571,11 @@ class QueueManager:
                     gpu_task.task_done()
             self.cpu_pool.terminate()
             self.cpu_pool.join()
+            for gpu_pool in self.gpu_pools:
+                gpu_pool.close()
+                gpu_pool.terminate()
+                gpu_pool.join()
+                
             
         except Exception as e:
             self.logger.error(f"Error during abrupt stop: {e}")
