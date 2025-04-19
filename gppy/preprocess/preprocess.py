@@ -210,69 +210,69 @@ class Preprocess(BaseSetup):
                 self.make_plots(raw_file, output_path)
         del self._temp_data
             
-    def _calibrate_image_eclaire(self, make_plots=True):
-        mbias_file = self.config.preprocess.mbias_file
-        mdark_file = self.config.preprocess.mdark_file
-        mflat_file = self.config.preprocess.mflat_file
-        raw_files = self.config.file.raw_files
-        processed_files = self.config.file.processed_files
+    # def _calibrate_image_eclaire(self, make_plots=True):
+    #     mbias_file = self.config.preprocess.mbias_file
+    #     mdark_file = self.config.preprocess.mdark_file
+    #     mflat_file = self.config.preprocess.mflat_file
+    #     raw_files = self.config.file.raw_files
+    #     processed_files = self.config.file.processed_files
 
-        self.logger.debug(f"Calibrating {len(raw_files)} SCI frames: {self.config.obs.filter}, {self.config.obs.exposure}s")  # fmt:skip
-        # self.logger.debug(f"Current memory usage: {MemoryMonitor.log_memory_usage}")
-        # batch processing
-        BATCH_SIZE = 30  # 10
-        for i in range(0, len(raw_files), BATCH_SIZE):
-            batch_raw = raw_files[i : min(i + BATCH_SIZE, len(raw_files))]
-            processed_batch = processed_files[i : min(i + BATCH_SIZE, len(raw_files))]
+    #     self.logger.debug(f"Calibrating {len(raw_files)} SCI frames: {self.config.obs.filter}, {self.config.obs.exposure}s")  # fmt:skip
+    #     # self.logger.debug(f"Current memory usage: {MemoryMonitor.log_memory_usage}")
+    #     # batch processing
+    #     BATCH_SIZE = 30  # 10
+    #     for i in range(0, len(raw_files), BATCH_SIZE):
+    #         batch_raw = raw_files[i : min(i + BATCH_SIZE, len(raw_files))]
+    #         processed_batch = processed_files[i : min(i + BATCH_SIZE, len(raw_files))]
 
-            ofc = ec.FitsContainer(batch_raw)
+    #         ofc = ec.FitsContainer(batch_raw)
 
-            # 	Reduction
-            with prep_utils.load_data_gpu(mbias_file) as mbias, \
-                 prep_utils.load_data_gpu(mdark_file) as mdark, \
-                 prep_utils.load_data_gpu(mflat_file) as mflat:  # fmt:skip
-                ofc.data = ec.reduction(ofc.data, mbias, mdark, mflat)
+    #         # 	Reduction
+    #         with prep_utils.load_data_gpu(mbias_file) as mbias, \
+    #              prep_utils.load_data_gpu(mdark_file) as mdark, \
+    #              prep_utils.load_data_gpu(mflat_file) as mflat:  # fmt:skip
+    #             ofc.data = ec.reduction(ofc.data, mbias, mdark, mflat)
 
-            # Save each slice of the cube as a separate 2D file
-            for idx in range(len(batch_raw)):
-                header = fits.getheader(raw_files[i + idx])
-                header["SATURATE"] = prep_utils.get_saturation_level(
-                    header, mbias_file, mdark_file, mflat_file
-                )
-                header = prep_utils.write_IMCMB_to_header(
-                    header,
-                    [mbias_file, mdark_file, mflat_file, raw_files[i + idx]],
-                )
-                n_head_blocks = self.config.settings.header_pad
-                add_padding(header, n_head_blocks, copy_header=False)
+    #         # Save each slice of the cube as a separate 2D file
+    #         for idx in range(len(batch_raw)):
+    #             header = fits.getheader(raw_files[i + idx])
+    #             header["SATURATE"] = prep_utils.get_saturation_level(
+    #                 header, mbias_file, mdark_file, mflat_file
+    #             )
+    #             header = prep_utils.write_IMCMB_to_header(
+    #                 header,
+    #                 [mbias_file, mdark_file, mflat_file, raw_files[i + idx]],
+    #             )
+    #             n_head_blocks = self.config.settings.header_pad
+    #             add_padding(header, n_head_blocks, copy_header=False)
 
-                path = self.config.path.path_processed
-                output_path = os.path.join(path, processed_batch[idx])
-                fits.writeto(
-                    output_path,
-                    data=cp.asnumpy(ofc.data[idx]),
-                    header=header,
-                    overwrite=True,
-                )
-                if make_plots:
-                    self.make_plots(raw_files[i + idx], output_path)
-            self.logger.debug(
-                f"Current memory usage after {i}-th batch: {MemoryMonitor.log_memory_usage}"
-            )
+    #             path = self.config.path.path_processed
+    #             output_path = os.path.join(path, processed_batch[idx])
+    #             fits.writeto(
+    #                 output_path,
+    #                 data=cp.asnumpy(ofc.data[idx]),
+    #                 header=header,
+    #                 overwrite=True,
+    #             )
+    #             if make_plots:
+    #                 self.make_plots(raw_files[i + idx], output_path)
+    #         self.logger.debug(
+    #             f"Current memory usage after {i}-th batch: {MemoryMonitor.log_memory_usage}"
+    #         )
 
-        self.logger.debug(
-            f"Current memory usage before cleanup: {MemoryMonitor.log_memory_usage}"
-        )
-        MemoryMonitor.cleanup_memory()
-        self.logger.debug(
-            f"Current memory usage after cleanup: {MemoryMonitor.log_memory_usage}"
-        )
+    #     self.logger.debug(
+    #         f"Current memory usage before cleanup: {MemoryMonitor.log_memory_usage}"
+    #     )
+    #     MemoryMonitor.cleanup_memory()
+    #     self.logger.debug(
+    #         f"Current memory usage after cleanup: {MemoryMonitor.log_memory_usage}"
+    #     )
 
-    def _calibrate_image_cupy(self):
-        mbias_file = self.config.preprocess.mbias_file
-        mdark_file = self.config.preprocess.mdark_file
-        mflat_file = self.config.preprocess.mflat_file
-        pass
+    # def _calibrate_image_cupy(self):
+    #     mbias_file = self.config.preprocess.mbias_file
+    #     mdark_file = self.config.preprocess.mdark_file
+    #     mflat_file = self.config.preprocess.mflat_file
+    #     pass
 
     def make_plots(self, raw_file, output_file):
         path = Path(output_file)
