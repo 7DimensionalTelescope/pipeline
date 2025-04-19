@@ -36,7 +36,8 @@ class Preprocess(BaseSetup):
     def sequential_task(self):
         return [
             (1, "load_mbdf", False),
-            (2, "calibrate", True),
+            (2, "data_reduction", True),
+            (3, "save_processed_files", False)
         ]
 
     @classmethod
@@ -89,7 +90,9 @@ class Preprocess(BaseSetup):
         else:
             try:
                 if use_eclaire:
-                    self._calibrate_image_eclaire()
+                    self.data_reduction()
+                    self.save_processed_files()
+                    #self._calibrate_image_eclaire()
                 else:
                     self._calibrate_image_cupy()
             except Exception as e:
@@ -159,6 +162,54 @@ class Preprocess(BaseSetup):
         self.config.preprocess.flatsig_file = self.config.preprocess.mflat_file.replace("flat", "flatsig")  # fmt:skip
         self.config.preprocess.bpmask_file = self.config.preprocess.darksig_file.replace("darksig", "bpmask")  # fmt:skip
 
+        self.files = {
+            "bias": self.config.preprocess.mbias_file,
+            "dark": self.config.preprocess.mdark_file,
+            "flat": self.config.preprocess.mflat_file,
+            "raw":  self.config.file.raw_files,
+            "processed": self.config.file.processed_files,
+        }
+
+    def data_reduction(self, with_eclaire=True):
+        
+        if with_eclaire:
+            ofc = ec.FitsContainer(self.files["raw"])
+            with prep_utils.load_data_gpu(self.files["bias"]) as mbias, \
+                prep_utils.load_data_gpu(self.files["dark"]) as mdark, \
+                prep_utils.load_data_gpu(self.files["flat"]) as mflat:  # fmt:skip
+                ofc.data = ec.reduction(ofc.data, mbias, mdark, mflat)
+            self._temp_data = ofc.data.get()
+
+    def save_processed_files(self, make_plots=True):
+        self.files = {
+            "bias": self.config.preprocess.mbias_file,
+            "dark": self.config.preprocess.mdark_file,
+            "flat": self.config.preprocess.mflat_file,
+            "raw":  self.config.file.raw_files,
+            "processed": self.config.file.processed_files,
+        }
+        for idx, (raw_file, out_file) in enumerate(zip(self.files["raw"], self.files["processed"])):
+            header = fits.getheader(raw_file)
+            header["SATURATE"] = prep_utils.get_saturation_level(
+                header, self.files["bias"], self.files["dark"], self.files["flat"]
+            )
+            header = prep_utils.write_IMCMB_to_header(
+                header,
+                [self.files["bias"], self.files["dark"], self.files["flat"], raw_file]
+            )
+            n_head_blocks = self.config.settings.header_pad
+            add_padding(header, n_head_blocks, copy_header=False)
+            output_path = os.path.join(self.config.path.path_processed, out_file)
+            fits.writeto(
+                output_path,
+                data=cp.asnumpy(self._temp_data[idx]),
+                header=header,
+                overwrite=True,
+            )
+            if make_plots:
+                self.make_plots(raw_file, output_path)
+        del self._temp_data
+            
     def _calibrate_image_eclaire(self, make_plots=True):
         mbias_file = self.config.preprocess.mbias_file
         mdark_file = self.config.preprocess.mdark_file
