@@ -146,7 +146,7 @@ class Astrometry(BaseSetup):
         soft_links = [
             os.path.join(self.path_astrometry, os.path.basename(s)) for s in inims
         ]
-
+        
         for inim, soft_link in zip(inims, soft_links):
             if not os.path.exists(soft_link):
                 os.symlink(inim, soft_link)

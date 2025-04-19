@@ -86,6 +86,7 @@ class Task:
             self.status = "failed"
             self.result = None
             self.error = e
+            print(f"Task {self.id} failed with error: {e}")
         finally:
             self.status = "completed"
             self.endtime = datetime.now()
