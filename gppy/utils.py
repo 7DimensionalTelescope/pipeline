@@ -10,6 +10,7 @@ from .const import FACTORY_DIR, RAWDATA_DIR
 def clean_up_factory():
     clean_up_folder(FACTORY_DIR)
 
+
 def clean_up_folder(path):
     if not os.path.exists(path):
         os.makedirs(path)
@@ -497,6 +498,17 @@ def swap_ext(file_path: str, new_ext: str) -> str:
     base, _ = os.path.splitext(file_path)
     new_ext = new_ext if new_ext.startswith(".") else f".{new_ext}"
     return base + new_ext
+
+
+def get_derived_product_path(image, subdir="catalogs", ext="ecsv"):
+    """
+    Without kwargs, returns catalog path
+    """
+    input_file_base = os.path.basename(image)
+    output_file = os.path.join(
+        os.path.dirname(image), subdir, swap_ext(input_file_base, ext)
+    )
+    return output_file
 
 
 class Parse7DS:

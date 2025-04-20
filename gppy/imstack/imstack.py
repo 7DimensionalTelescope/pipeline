@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import shutil
 from pathlib import Path
 import numpy as np
 from astropy.io import fits
@@ -643,14 +644,14 @@ class ImStack(BaseSetup):
 
         # move files to the final directory
         if type == "sci":
-            move_file(output_file, self.config.file.stacked_file)
+            shutil.move(output_file, self.config.file.stacked_file)
         elif type == "wht":
-            move_file(
+            shutil.move(
                 swap_ext(output_file, "weight.fits"),
                 swap_ext(self.config.file.stacked_file, "weight.fits"),
             )
         elif type == "bpm":
-            move_file(
+            shutil.move(
                 swap_ext(output_file, "weight.fits"),
                 swap_ext(self.config.file.stacked_file, "bpmask.fits"),
             )
