@@ -28,9 +28,18 @@ class MasterFrameGenerator:
     unit, n_binning and gain have all identical cameras.
     """
 
-    def __init__(self, obs_params, queue=False, logger=None, overwrite=False, **kwargs):
+    def __init__(
+        self,
+        obs_params,
+        queue=False,
+        logger=None,
+        overwrite=False,
+        min_frames=5,
+        **kwargs,
+    ):
 
         self.overwrite = overwrite
+        self.min_frames = min_frames
 
         # Initialize variables
         self.initialize(obs_params)
@@ -90,6 +99,8 @@ class MasterFrameGenerator:
         self.logger.debug(
             f"Start generating master calibration frames: {MemoryMonitor.log_memory_usage}"
         )
+
+        self.logger.debug(f"queue is {self.queue}")
 
         self._log_inventory()
 
@@ -365,8 +376,15 @@ class MasterFrameGenerator:
 
         # Mind that there are bias, dark, flat sigma maps
         if os.path.exists(output) and not (self.overwrite):
-            self.logger.debug(f"Master {dtype} already exists: {output}")
+            self.logger.info(f"Master {dtype} already exists: {output}")
             return output
+
+        n = len(data_list)
+        if self.min_frames and n < self.min_frames:
+            self.logger.warning(
+                f"Not enough {dtype.upper()} frames to generate masterframe: {n}. Skipping..."
+            )
+            return None
 
         self.logger.info(f"Start to generate masterframe {dtype.upper()}")
         self.logger.debug(f"{len(data_list)} {dtype.upper()} files found.")
@@ -382,7 +400,6 @@ class MasterFrameGenerator:
             self.queue.log_memory_stats(f"After loading {dtype} data")
 
         header = fits.getheader(data_list[0])
-        n = len(data_list)
 
         if dtype == "bias":
             header = write_IMCMB_to_header(header, data_list)
@@ -566,31 +583,69 @@ class MasterFrameGenerator:
         write_link(self.mbias_link, mbias_file)
 
     # --------------- DARK ---------------
+
     def generate_mdark(self, **kwargs):
         """
         Generates mdarks if there are raw DARK files.
         Make mdark link files for SCI frame and FLATs for the date & unit.
         """
 
-        if len(self.dark_input) > 0:  # if raw darks exist
-            # for multiple exptimes
-            for exptime, mdark_link in self.mdark_link.items():  # exp is int
-                mdark_file = self._combine_and_save_eclaire(
-                    dtype="dark", exptime=exptime, **kwargs
-                )
-                write_link(mdark_link, mdark_file)
-        else:
-            # links to what they're used for, not what exists
-            self.logger.info(
-                "No raw DARK files found for the date. Searching for the closest past master DARK."
+        generated_mdark = {}
+
+        # make master dark for existing exptimes
+        for exptime in self.dark_input:
+            self.logger.info(f"Generating master dark for exptime: {exptime}")
+            mdark_file = self._combine_and_save_eclaire(
+                dtype="dark", exptime=exptime, **kwargs
             )
-            for exptime, mdark_link in self.mdark_link.items():
-                search_template = os.path.splitext(mdark_link)[0] + ".fits"
+            if mdark_file:
+                generated_mdark[exptime] = mdark_file
+
+        # make dark links for all sci exptimes
+        for exptime, mdark_link in self.mdark_link.items():
+            if exptime in generated_mdark:
+                mdark_file = generated_mdark[exptime]
+            else:
+                self.logger.info(
+                    f"No master dark for exptime {exptime}."
+                    f"Fetching from the closest data."
+                )
+                search_template = swap_ext(mdark_link, ".fits")
                 mdark_file = search_with_date_offsets(search_template, future=True)
                 if not mdark_file:
-                    self.logger.error("No master DARK found to choose from.")
-                    return
-                write_link(mdark_link, mdark_file)
+                    self.logger.error(
+                        f"Failed to generate mdark link for exptime {exptime}. "
+                        f"No fallback master dark found."
+                    )
+                    continue
+
+            write_link(mdark_link, mdark_file)
+
+    # def generate_mdark(self, **kwargs):
+    #     """
+    #     Generates mdarks if there are raw DARK files.
+    #     Make mdark link files for SCI frame and FLATs for the date & unit.
+    #     """
+
+    #     if len(self.dark_input) > 0:  # if raw darks exist
+    #         # for multiple exptimes
+    #         for exptime, mdark_link in self.mdark_link.items():  # exp is int
+    #             mdark_file = self._combine_and_save_eclaire(
+    #                 dtype="dark", exptime=exptime, **kwargs
+    #             )
+    #             write_link(mdark_link, mdark_file)
+    #     else:
+    #         # links to what they're used for, not what exists
+    #         self.logger.info(
+    #             "No raw DARK files found for the date. Searching for the closest past master DARK."
+    #         )
+    #         for exptime, mdark_link in self.mdark_link.items():
+    #             search_template = os.path.splitext(mdark_link)[0] + ".fits"
+    #             mdark_file = search_with_date_offsets(search_template, future=True)
+    #             if not mdark_file:
+    #                 self.logger.error("No master DARK found to choose from.")
+    #                 return
+    #             write_link(mdark_link, mdark_file)
 
     # --------------- FLAT ---------------
     def generate_mflat(self, **kwargs):
@@ -599,25 +654,34 @@ class MasterFrameGenerator:
         Make mflat link files for SCI frame for the date & unit.
         """
 
-        if len(self.flat_input) > 0:  # if raw flats exist
-            # for multiple filters
-            for filt, mflat_link in self.mflat_link.items():
-                mflat_file = self._combine_and_save_eclaire(
-                    dtype="flat", filt=filt, **kwargs
-                )
-                write_link(mflat_link, mflat_file)
-        else:
-            self.logger.info(
-                "No raw FLAT files found for the date. Searching for the closest past master FLAT."
+        # make master flat for existing filters
+        generated_mflat = {}
+        for filt in self.flat_input:
+            mflat_file = self._combine_and_save_eclaire(
+                dtype="flat", filt=filt, **kwargs
             )
-            for filt, mflat_link in self.mflat_link.items():
-                search_template = os.path.splitext(mflat_link)[0] + ".fits"
+            if mflat_file:
+                generated_mflat[filt] = mflat_file
+
+        for filt, mflat_link in self.mflat_link.items():
+            if filt in generated_mflat:
+                mflat_file = generated_mflat[filt]
+            else:
+                self.logger.info(
+                    f"No master flat for filter {filt}."
+                    f"Fetching from the closest data."
+                )
+                search_template = swap_ext(mflat_link, ".fits")
                 # master_frame/2001-02-23_1x1_gain2750/7DT11/flat_20250102_m625_C3.fits
                 mflat_file = search_with_date_offsets(search_template, future=True)
                 if not mflat_file:
-                    self.logger.error("No master FLAT found to choose from.")
-                    return
-                write_link(mflat_link, mflat_file)
+                    self.logger.error(
+                        f"Failed to generate mflat link for filter {filt}. "
+                        f"No fallback master flat found."
+                    )
+                    continue
+
+            write_link(mflat_link, mflat_file)
 
     def make_plots(self):
         self.logger.info("Start to generate plots for master calibration frames")
@@ -630,7 +694,7 @@ class MasterFrameGenerator:
                     break
             if "BADPIX" in sample_header.keys():
                 badpix = sample_header["BADPIX"]
-            
+
             mask = mask != badpix
             fmask = mask.ravel()
             plot_dark(self.mdark_link, fmask, savefig=True)
