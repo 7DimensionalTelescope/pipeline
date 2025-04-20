@@ -54,7 +54,7 @@ class ImStack(BaseSetup):
 
         working_dir = str(path.parent.absolute())
 
-        config = Configuration.base_config(working_dir)
+        config = Configuration.base_config(working_dir=working_dir)
         config.path.path_processed = working_dir
         config.file.processed_files = image_list
 

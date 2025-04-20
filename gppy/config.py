@@ -95,7 +95,7 @@ class Configuration:
         return self.config.__repr__()
 
     @classmethod
-    def base_config(cls, config_file=None, working_dir=None, **kwargs):
+    def base_config(cls, working_dir=None, config_file=None, **kwargs):
         """Return the base (base.yml) configuration instance."""
         # config = cls(return_base=True, **kwargs).config  # never overwrite here
         instance = cls(return_base=True, **kwargs)
