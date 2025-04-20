@@ -20,7 +20,7 @@ from astropy.stats import sigma_clip
 
 # gppy modules
 from . import utils as phot_utils
-from ..utils import update_padded_header
+from ..utils import update_padded_header, get_derived_product_path
 from ..config import Configuration
 from ..services.memory import MemoryMonitor
 from ..services.queue import QueueManager, Priority
@@ -797,9 +797,13 @@ class PhotometrySingle:
         metadata = self.image_info.metadata
         metadata["obs"] = self.config.obs.unit
         self.obs_src_table.meta = metadata
-        self.obs_src_table.write(
-            self.image.replace(".fits", ".phot.cat"), format="ascii.tab", overwrite=True
-        )
+
+        output_file = get_derived_product_path(self.image)
+        catalog_dir = os.path.dirname(output_file)
+        if not os.path.exists(catalog_dir):
+            os.makedirs(catalog_dir)
+        self.obs_src_table.write(output_file, format="ascii.ecsv", overwrite=True)
+        # alternative format with no metadata: "ascii.tab"
         self.logger.info(f"Header updated for {self.name}")
 
 
@@ -882,11 +886,11 @@ class ImageInfo:
     def metadata(self) -> Dict[str, Any]:
         """Returns a dictionary of metadata."""
         return {
-            "object": self.obj,
-            "filter": self.filter,
-            "date-obs": self.dateobs,
-            "jd": self.jd,
-            "mjd": self.mjd,
+            "OBJECT": self.obj,
+            "FILTER": self.filter,
+            "DATE-OBS": self.dateobs,
+            "JD": self.jd,
+            "MJD": self.mjd,
         }
 
     @classmethod
