@@ -72,7 +72,7 @@ photometry:
   ref_mag_err_upper: 0.05
   flagcut: 0
   check: False
-  satur_margin: 0.95  # factor multiplied to the preprocessed hardware saturation level
+  satur_margin: 0.99  # factor multiplied to the preprocessed hardware saturation level
   sex_vars:
     DETECT_MINAREA: 5
     DETECT_THRESH: 3.0
