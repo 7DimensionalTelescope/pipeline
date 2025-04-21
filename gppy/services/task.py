@@ -58,15 +58,20 @@ class Task:
         self.status = status
         self.result = result
         self.error = error
-        timestamp_part = time.time() % 1  # Get just the decimal part
-        self.sort_index = (self.priority.value + 1) * 1000000 + timestamp_part
     
     def __lt__(self, other):
         return self.sort_index < other.sort_index
-        
+    
     @property
     def func(self):
         return self._get_function()
+    
+    @property
+    def sort_index(self):
+        return (self.priority.value + 1) * 1000000 + self.time_priority
+    
+    def set_time_priority(self):
+        self.time_priority = int(time.time() * 1000)  # milliseconds since epoch
 
     def _get_function(self):
         if self.cls is None:
@@ -106,7 +111,6 @@ class Task:
         self._func = None
         self.args = None
         self.kwargs = None
-        self.cls = None
         cleanup_memory()
         
     def __repr__(self):
@@ -159,5 +163,5 @@ class TaskTree:
         return self.results
         
     def __repr__(self):
-        base = f"TaskTree(id={self.id}, status={self.status}\n"
-        return base + "\n".join([str(task) for task in self.tasks])
+        base = f"TaskTree(id={self.id}, status={self.status}, tasks={len(self.tasks)})"
+        

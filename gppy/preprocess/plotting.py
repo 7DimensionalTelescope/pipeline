@@ -65,17 +65,6 @@ def plot_bias(file, savefig=False):
     data = fits.getdata(orig_file)
     header = fits.getheader(orig_file)
     fdata = data.ravel()
-    lower_cut = np.percentile(fdata, 0.5, method="nearest")
-    upper_cut = np.percentile(fdata, 99.5, method="nearest")
-    selected = fdata[(fdata > lower_cut) & (fdata < upper_cut)]
-
-    mu, sigma = norm.fit(selected)
-
-    fdata = data.ravel()
-
-    # Generate fitted curve
-    x = np.linspace(fdata.min(), fdata.max(), 200)
-    pdf = norm.pdf(x, mu, sigma)
 
     plt.hist(
         fdata,
@@ -86,24 +75,20 @@ def plot_bias(file, savefig=False):
         log=True,
         histtype="step",
     )
-    plt.axvspan(
-        lower_cut, upper_cut, color="gray", alpha=0.3, label="99% Data", zorder=-1
-    )
 
-    for i, key in enumerate(["CLIPMEAN", "CLIPMED", "CLIPSTD", "CLIPMIN", "CLIPMAX"]):
+
+    for i, key in enumerate(["CLIPMEAN", "CLIPMED", "CLIPSTD"]):
         plt.axvline(header[key], linestyle="--", color=f"C{i+1}", label=key)
 
-    plt.plot(
-        x, pdf, "r-", lw=2, label=f"Gaussian Fit\n$\mu={mu:.2f}, \sigma={sigma:.2f}$"
-    )
-
+    plt.axvspan(0, header["CLIPMIN"], color="gray", alpha=0.5, label="within CLIPMIN and CLIPMAX")
+    plt.axvspan(header["CLIPMAX"], 1e5, color="gray", alpha=0.5)
     plt.yscale("log")
     plt.xlabel("ADU")
     plt.ylabel("Density")
     plt.title("Master Bias")
 
-    plt.xlim(350, 650)
-    plt.ylim(1e-7, 10)
+    plt.xlim(400, 600)
+    plt.ylim(1e-6, 10)
     plt.legend()
     plt.tight_layout()
 
@@ -131,38 +116,24 @@ def plot_dark(file_dict, fmask=None, savefig=False, badpix=0):
         data = fits.getdata(orig_file)
         header = fits.getheader(orig_file)
         fdata = data.ravel()
-        fdata_selected = fdata[fmask] if fmask is not None else fdata
-        fdata = fdata[fdata < np.percentile(fdata, 99.9)]
-
-        mu, sigma = norm.fit(fdata_selected)
-        mask_min, mask_max = fdata_selected.min(), fdata_selected.max()
-        x = np.linspace(mask_min, mask_max, 200)
-        pdf = norm.pdf(x, mu, sigma)
-
+        fdata = fdata[fmask] if fmask is not None else fdata
+        
         plt.hist(
             fdata,
-            bins=100,
+            bins=30,
             density=True,
             alpha=0.6,
-            label="99.9% Data",
+            label="Masked Data",
             histtype="step",
         )
-        plt.axvspan(
-            -200, mask_min, color="gray", alpha=0.3, label="Hot-pixels", zorder=-1
-        )
-        plt.axvspan(mask_max, 200, color="gray", alpha=0.3, zorder=-1)
-        plt.plot(
-            x,
-            pdf,
-            "r-",
-            lw=2,
-            label=f"Gaussian Fit\n$\mu={mu:.2f}, \sigma={sigma:.2f}$",
-        )
         
-        for i, key in enumerate(["CLIPMEAN", "CLIPMED", "CLIPSTD", "CLIPMIN", "CLIPMAX"]):
+        for i, key in enumerate(["CLIPMEAN", "CLIPMED", "CLIPSTD"]):
             plt.axvline(header[key], linestyle="--", color=f"C{i+1}", label=key)
 
-        plt.xlim(-200, 200)
+        plt.axvspan(-100, header["CLIPMIN"], color="gray", alpha=0.5, label="within CLIPMIN and CLIPMAX")
+        plt.axvspan(header["CLIPMAX"], 1000, color="gray", alpha=0.5)
+        
+        plt.xlim(-50, 50)
         plt.yscale("log")
         plt.xlabel("ADU")
         plt.ylabel("Density")
@@ -171,7 +142,6 @@ def plot_dark(file_dict, fmask=None, savefig=False, badpix=0):
         plt.ylim(1e-6, 10)
         plt.legend()
         plt.tight_layout()
-
         if savefig:
             path = Path(file)
             os.makedirs(path.parent / "images", exist_ok=True)
@@ -236,29 +206,28 @@ def plot_flat(file_dict, fmask=None, badpix=1, savefig=False):
         header = fits.getheader(orig_file)
 
         fdata = data.ravel()
+        fdata = fdata[fmask] if fmask is not None else fdata
+
         plt.hist(
             fdata,
-            bins=np.arange(0.1, 3, step=0.05),
+            bins=100,
             color="C0",
             histtype="step",
-            label="Data",
+            label="Masked Data",
         )
-        if fmask is not None:
-            plt.hist(
-                fdata[fmask],
-                bins=np.arange(0.1, 3, step=0.05),
-                color="C0",
-                alpha=0.5,
-                histtype="stepfilled",
-                label=f"Hot-pixel-removed",
-            )
-        for i, key in enumerate(["CLIPMEAN", "CLIPMED", "CLIPSTD", "CLIPMIN", "CLIPMAX"]):
+
+        for i, key in enumerate(["CLIPMEAN", "CLIPMED"]):
             plt.axvline(header[key], linestyle="--", color=f"C{i+1}", label=key)
+        
+        plt.axvspan(0, header["CLIPMIN"], color="gray", alpha=0.5, label="within CLIPMIN and CLIPMAX")
+        plt.axvspan(header["CLIPMAX"], 3, color="gray", alpha=0.5)
+            
         plt.yscale("log")
         plt.xlabel("Normalized ADU")
         plt.ylabel("N")
         plt.title(f"Master Flat (filter: {filt})")
-
+        plt.ylim(1e5,)
+        plt.xlim(0, 1.5)
         plt.legend()
         plt.tight_layout()
 

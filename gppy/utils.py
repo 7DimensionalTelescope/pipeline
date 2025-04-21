@@ -500,7 +500,7 @@ def swap_ext(file_path: str, new_ext: str) -> str:
     return base + new_ext
 
 
-def get_derived_product_path(image, subdir="catalogs", ext="ecsv"):
+def get_derived_product_path(image, subdir="catalogs", ext=".cat.fits"):
     """
     Without kwargs, returns catalog path
     """

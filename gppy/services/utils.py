@@ -85,3 +85,12 @@ def cleanup_memory() -> None:
 
     gc.collect()  # Initial garbage collection
     
+
+
+def cpu_callback_wrapper(task, tree, callback):
+    def wrapper(result):
+        # Update task with result from the async operation
+        task.result = result
+        # Call your existing callback logic
+        callback(task, tree)
+    return wrapper
