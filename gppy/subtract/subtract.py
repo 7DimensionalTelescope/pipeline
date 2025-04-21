@@ -63,7 +63,12 @@ class ImSubtract(BaseSetup):
         self.ref_image_file = self.reference_images[0]
         self.ref_source_table_file = swap_ext(self.ref_image_file, "phot.cat")
 
-        self.subt_image_file = swap_ext(self.sci_image_file, "subt.fits")
+        self.subt_image_file = get_derived_product_path(
+            self.sci_image_file, "transient", "subt.fits"
+        )
+        transient_dir = os.path.dirname(self.subt_image_file)
+        if not os.path.exists(transient_dir):
+            os.makedirs(transient_dir)
 
     def create_substamps(self):
         sci_source_table = Table.read(self.sci_source_table_file)

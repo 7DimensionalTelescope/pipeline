@@ -328,8 +328,10 @@ class QueueManager:
                     try:
                         try:
                             task, tree = self.cpu_high_priority_queue.get(timeout=0.2)
+                            high_priority = True
                         except:
                             task, tree = self.cpu_queue.get(timeout=0.2)
+                            high_priority = False
                             
                         # Execute the task
                         try:
@@ -345,8 +347,18 @@ class QueueManager:
                             task.error = e
                             self.errors.append(e)
                         finally:
+                            if high_priority:
+                                self.cpu_high_priority_queue.task_done()
+                            else:
+                                self.cpu_queue.task_done()
                             if isinstance(tree, TaskTree) and task.status == "completed":
                                 self._move_to_next_task(tree, task.cls)
+                            if task.status == "completed":
+                                self.logger.info(f"CPU task {task.id} completed")
+                            elif task.status == "failed":
+                                self.logger.error(f"CPU task {task.id} failed with error: {task.error}")
+                            else:
+                                self.logger.warning(f"CPU task {task.id} status unknown: {task.status}")
                             self.logger.debug(self.log_detailed_memory_report())
                     except queue.Empty:
                         continue
@@ -396,8 +408,10 @@ class QueueManager:
                             
                         try:
                             task, tree = self.gpu_high_priority_queue[device].get(timeout=0.2)
+                            high_priority = True
                         except:
                             task, tree = self.gpu_queue[device].get(timeout=0.2)
+                            high_priority = False
                             
                         try:
                             task.status = "processing"
@@ -414,14 +428,18 @@ class QueueManager:
                             task.error = e
                             self.logger.error(f"GPU task {task.id} failed on device {device}: {e}")
                         finally:
-                            self.gpu_queue[device].task_done()
-                            # if isinstance(tree, TaskTree) and task.status == "completed":
-                            #     self._move_to_next_task(tree, task.cls)
-                            # self.logger.debug(self.log_detailed_memory_report())
+                            if high_priority:
+                                self.gpu_high_priority_queue[device].task_done()
+                            else:
+                                self.gpu_queue[device].task_done()
                             if isinstance(tree, TaskTree) and task.status == "completed":
                                 self._move_to_next_task(tree, updated_task.cls)
-                            
-                            self.log_memory_stats(f"GPU task {task.id} completed on device {device}")
+                            if task.status == "completed":
+                                self.logger.info(f"GPU task {task.id} completed on device {device}")
+                            elif task.status == "failed":
+                                self.logger.error(f"GPU task {task.id} failed with error: {task.error}")
+                            else:
+                                self.logger.warning(f"GPU task {task.id} status unknown: {task.status}")
                     except queue.Empty:
                         continue
             except AbruptStopException:
