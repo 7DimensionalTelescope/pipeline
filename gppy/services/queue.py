@@ -96,7 +96,9 @@ class QueueManager:
         
         # Create multiple GPU worker threads
         self.gpu_devices = range(cp.cuda.runtime.getDeviceCount())
+        
         self.gpu_queue = {device: queue.Queue() for device in self.gpu_devices}
+        self.gpu_high_priority_queue = {device: queue.Queue() for device in self.gpu_devices}
 
         # Results and error handling
         self.tasks: List[Task] = []
@@ -303,7 +305,10 @@ class QueueManager:
         if task.gpu:
             if task.device is None:
                 task.device = self._choose_gpu_device()
-            self.gpu_queue[task.device].put((task, tree))
+            if task.priority == Priority.HIGH:
+                self.gpu_high_priority_queue[task.device].put((task, tree))
+            else:
+                self.gpu_queue[task.device].put((task, tree))
         else:
             if task.priority == Priority.HIGH:
                 self.cpu_high_priority_queue.put((task, tree))
@@ -329,8 +334,11 @@ class QueueManager:
                         # Execute the task
                         try:
                             task.status = "processing"
+                            task.starttime = datetime.now()
                             task.execute()
                             self._task_callback(task, tree)
+                            task.status = "completed"
+                            task.endtime = datetime.now()
                         except Exception as e:
                             self.logger.error(f"Error processing task {task.id}: {e}")
                             task.status = "failed"
@@ -350,36 +358,6 @@ class QueueManager:
                 self.logger.error(f"Error in CPU worker: {e}")
 
             time.sleep(0.1)
-
-    def _task_callback(self, task: Task, tree: TaskTree = None):
-        """Callback function for task completion."""
-        try:
-            with self.lock:
-                for submitted_task in self.tasks:
-                    if submitted_task.id == task.id:
-                        submitted_task.status = "completed"
-                        submitted_task.result = task.result
-                        submitted_task.endtime = datetime.now()
-                        submitted_task.error = None
-                        if tree is None:
-                            submitted_task.cleanup()
-                            task.cleanup()
-                        self.logger.info(f"{'GPU' if task.gpu else 'CPU'} task {task.task_name} (id: {task.id}) completed")
-                        return submitted_task
-                else:
-                    # If no matching task is found, log a warning
-                    self.logger.warning(
-                        f"No matching task found for task_id: {task.id}"
-                    )
-
-                # Append result to results list
-                self.results.append(task.result)
-
-        except Exception as e:
-            # Log and track any errors during task callback
-            error_info = {"task_id": task.id, "error": e, "timestamp": datetime.now()}
-            self.logger.error(f"Error in task callback for task {task.id}: {e}")
-            self.errors.append(error_info)
 
     @contextmanager
     def gpu_context(self, device: int = None):
@@ -413,37 +391,76 @@ class QueueManager:
                 self._check_abrupt_stop()
                 self.manage_memory_state()
                 
-                while (self.current_memory_state["GPU"] != MemoryState.EMERGENCY) and (not self.gpu_queue[device].empty()):
-                    task, tree = self.gpu_queue[device].get()
+                while (self.current_memory_state["GPU"] != MemoryState.EMERGENCY):
                     try:
-                        task.status = "processing"
-                        task.starttime = datetime.now()
-                        with self.gpu_context(device):
-                            updated_task = task.execute()
-                        self._task_callback(updated_task, tree)
-                        task.status = "completed"
-                        task.endtime = datetime.now()
-                        cp.get_default_memory_pool().free_all_blocks()
-                    except Exception as e:
-                        task.endtime = datetime.now()
-                        task.status = "failed"
-                        task.error = e
-                        self.logger.error(f"GPU task {task.id} failed on device {device}: {e}")
-                    finally:
-                        self.gpu_queue[device].task_done()
-                        # if isinstance(tree, TaskTree) and task.status == "completed":
-                        #     self._move_to_next_task(tree, task.cls)
-                        # self.logger.debug(self.log_detailed_memory_report())
-                        if isinstance(tree, TaskTree) and task.status == "completed":
-                            self._move_to_next_task(tree, updated_task.cls)
-                        
-                        self.log_memory_stats(f"GPU task {task.id} completed on device {device}")
+                            
+                        try:
+                            task, tree = self.gpu_high_priority_queue[device].get(timeout=0.2)
+                        except:
+                            task, tree = self.gpu_queue[device].get(timeout=0.2)
+                            
+                        try:
+                            task.status = "processing"
+                            task.starttime = datetime.now()
+                            with self.gpu_context(device):
+                                updated_task = task.execute()
+                            self._task_callback(updated_task, tree)
+                            task.status = "completed"
+                            task.endtime = datetime.now()
+                            cp.get_default_memory_pool().free_all_blocks()
+                        except Exception as e:
+                            task.endtime = datetime.now()
+                            task.status = "failed"
+                            task.error = e
+                            self.logger.error(f"GPU task {task.id} failed on device {device}: {e}")
+                        finally:
+                            self.gpu_queue[device].task_done()
+                            # if isinstance(tree, TaskTree) and task.status == "completed":
+                            #     self._move_to_next_task(tree, task.cls)
+                            # self.logger.debug(self.log_detailed_memory_report())
+                            if isinstance(tree, TaskTree) and task.status == "completed":
+                                self._move_to_next_task(tree, updated_task.cls)
+                            
+                            self.log_memory_stats(f"GPU task {task.id} completed on device {device}")
+                    except queue.Empty:
+                        continue
             except AbruptStopException:
                 self.logger.info(f"GPU worker process for device {device} stopped.")
                 break
             except Exception as e:
                 self.logger.error(f"Error in GPU worker process for device {device}: {e}")
             time.sleep(0.1)
+
+    def _task_callback(self, task: Task, tree: TaskTree = None):
+        """Callback function for task completion."""
+        try:
+            with self.lock:
+                for submitted_task in self.tasks:
+                    if submitted_task.id == task.id:
+                        submitted_task.status = "completed"
+                        submitted_task.result = task.result
+                        submitted_task.endtime = datetime.now()
+                        submitted_task.error = None
+                        if tree is None:
+                            submitted_task.cleanup()
+                            task.cleanup()
+                        self.logger.info(f"{'GPU' if task.gpu else 'CPU'} task {task.task_name} (id: {task.id}) completed")
+                        return submitted_task
+                else:
+                    # If no matching task is found, log a warning
+                    self.logger.warning(
+                        f"No matching task found for task_id: {task.id}"
+                    )
+
+                # Append result to results list
+                self.results.append(task.result)
+
+        except Exception as e:
+            # Log and track any errors during task callback
+            error_info = {"task_id": task.id, "error": e, "timestamp": datetime.now()}
+            self.logger.error(f"Error in task callback for task {task.id}: {e}")
+            self.errors.append(error_info)
+
 
     def wait_until_task_complete(
         self, task_id: Union[str, List[str]], timeout: Optional[float] = None
