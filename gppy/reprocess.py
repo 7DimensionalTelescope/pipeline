@@ -110,6 +110,7 @@ def reprocess_folder(
 
         # Process calibration data if exists
         if calib_data.has_calib_files() and not calib_data.processed:
+            calib_data.mark_as_processed()
             
             tree = run_masterframe_generator_with_tree(
                 calib_data.obs_params,
