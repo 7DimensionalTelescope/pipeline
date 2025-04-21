@@ -6,7 +6,7 @@ import copy
 
 from .services.queue import QueueManager, Priority
 from .data import CalibrationData, ObservationDataSet
-from .run import run_scidata_reduction_with_tree, run_masterframe_generator
+from .run import run_scidata_reduction_with_tree, run_masterframe_generator_with_tree
 from .const import available_7dt_units
 from .utils import check_obs_file
 
@@ -110,15 +110,16 @@ def reprocess_folder(
 
         # Process calibration data if exists
         if calib_data.has_calib_files() and not calib_data.processed:
-
-            queue.add_task(
-                run_masterframe_generator,
-                args=(calib_data.obs_params,),
-                kwargs={"queue": False, "overwrite": overwrite},
+            
+            tree = run_masterframe_generator_with_tree(
+                calib_data.obs_params,
+                overwrite=overwrite,
                 priority=Priority.HIGH,
-                gpu=True,
-                task_name=f"{calib_data.name}",
             )
+            if tree is not None:
+                queue.add_tree(tree)
+
+            time.sleep(0.1)
 
         # Process observation data
         for obs in obs_dataset.get_unprocessed():

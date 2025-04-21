@@ -41,6 +41,28 @@ def run_masterframe_generator(obs_params, queue=False, **kwargs):
     del mfg
 
 
+def run_masterframe_generator_with_tree(obs_params, **kwargs):
+    """
+    Generate master calibration frames for a specific observation set.
+
+    Master frames are combined calibration images (like dark, flat, bias) that
+    help in reducing systematic errors in scientific observations.
+
+    Args:
+        obs_params (dict): Observation parameters including:
+            - date: Observation date
+            - unit: Observation unit/instrument
+            - n_binning: Pixel binning factor
+            - gain: Detector gain setting
+        queue (bool, optional): Whether to use queue-based processing. Defaults to False.
+    """
+    mfg = MasterFrameGenerator(obs_params, **kwargs)
+    tasks = []
+    for task in mfg.sequential_task:
+        tasks.append(Task(getattr(mfg, task[1]), priority=task[0], gpu=task[2], cls=mfg))
+    return TaskTree(tasks)
+    
+
 def run_scidata_reduction(
     obs_params,
     queue=False,

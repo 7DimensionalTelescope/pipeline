@@ -52,6 +52,17 @@ class MasterFrameGenerator:
 
         self.logger.debug(f"Masterframe output folder: {self.path_fdz}")
 
+
+    @property
+    def sequential_task(self):
+        return [
+            (1, "_log_inventory", False),
+            (2, "generate_mbias", True),
+            (3, "generate_mdark", True),
+            (4, "generate_mflat", True),
+            (5, "make_plots", False),
+        ]
+
     def initialize(self, obs_params):
         unit = obs_params["unit"]
         date = obs_params["date"]
