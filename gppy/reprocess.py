@@ -153,7 +153,6 @@ def reprocess_folder(
     # Wait for queue to complete processing
     queue.wait_until_task_complete("all")
     
-    print(queue.trees)
     # Print summary of processing
     print(f"Finished processing files in {folder}")
 

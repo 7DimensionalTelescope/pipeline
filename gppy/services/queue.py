@@ -75,6 +75,7 @@ class QueueManager:
         max_workers: Optional[int] = None,
         max_gpu_workers: int = 4,
         logger: Optional[Logger] = None,
+        print_debug: bool = False,
         **kwargs,
     ):
         # Initialize logging
@@ -88,7 +89,7 @@ class QueueManager:
         self.memory_monitor = MemoryMonitor(logger=self.logger)
 
         # Default CPU allocation
-        self.total_cpu_worker = max_workers or mp.cpu_count() - 1
+        self.total_cpu_worker = max_workers or mp.cpu_count() - 5
 
         # Single priority queue for CPU tasks
         self.cpu_queue = queue.Queue()
@@ -150,10 +151,12 @@ class QueueManager:
             }
         )
 
-        self._start_queue()
+        self._start_thread()
+        self.print_debug = print_debug
         self.logger.debug("QueueManager Initialization complete")
+        
 
-    def _start_queue(self):
+    def _start_thread(self):
         self.cpu_threads = []
         for _ in range(self.total_cpu_worker):
             t = threading.Thread(target=self._cpu_worker, daemon=True)
@@ -354,12 +357,13 @@ class QueueManager:
                             if isinstance(tree, TaskTree) and task.status == "completed":
                                 self._move_to_next_task(tree, task.cls)
                             if task.status == "completed":
-                                self.logger.info(f"CPU task {task.id} completed")
+                                self.logger.info(f"CPU task {task.task_name}({task.id}) completed")
                             elif task.status == "failed":
-                                self.logger.error(f"CPU task {task.id} failed with error: {task.error}")
+                                self.logger.error(f"CPU task {task.task_name}({task.id}) failed with error: {task.error}")
                             else:
-                                self.logger.warning(f"CPU task {task.id} status unknown: {task.status}")
+                                self.logger.warning(f"CPU task {task.task_name}({task.id}) status unknown: {task.status}")
                             self.logger.debug(self.log_detailed_memory_report())
+                            if self.print_process: self.print_the_number_of_processes()
                     except queue.Empty:
                         continue
                     
@@ -435,11 +439,13 @@ class QueueManager:
                             if isinstance(tree, TaskTree) and task.status == "completed":
                                 self._move_to_next_task(tree, updated_task.cls)
                             if task.status == "completed":
-                                self.logger.info(f"GPU task {task.id} completed on device {device}")
+                                self.logger.info(f"GPU task {task.task_name}({task.id}) completed on device {device}")
                             elif task.status == "failed":
-                                self.logger.error(f"GPU task {task.id} failed with error: {task.error}")
+                                self.logger.error(f"GPU task {task.task_name}({task.id}) failed with error: {task.error}")
                             else:
-                                self.logger.warning(f"GPU task {task.id} status unknown: {task.status}")
+                                self.logger.warning(f"GPU task {task.task_name}({task.id}) status unknown: {task.status}")
+                            self.logger.debug(self.log_detailed_memory_report())
+                            if self.print_debug: self.print_the_number_of_processes()
                     except queue.Empty:
                         continue
             except AbruptStopException:
@@ -478,6 +484,25 @@ class QueueManager:
             error_info = {"task_id": task.id, "error": e, "timestamp": datetime.now()}
             self.logger.error(f"Error in task callback for task {task.id}: {e}")
             self.errors.append(error_info)
+
+    def print_the_number_of_processes(self):
+        """Print the number of processes in each queue."""
+        self.logger.info(
+            f"CPU Queue: {self.cpu_queue.qsize()} tasks, "
+            f"High Priority CPU Queue: {self.cpu_high_priority_queue.qsize()} tasks"
+        )
+
+        for device in self.gpu_devices:
+            self.logger.info(
+                f"GPU device {device}: {self.gpu_queue[device].qsize()} tasks, "
+                f"High Priority GPU Queue: {self.gpu_high_priority_queue[device].qsize()} tasks"
+            )
+        
+
+        n_processing = len([t for t in self.tasks if t.status == 'processing'])
+        n_completed = len([t for t in self.tasks if t.status == 'completed'])
+        n_failed = len([t for t in self.tasks if t.status == 'failed'])
+        self.logger.info(f"Processing: {n_processing}, Completed: {n_completed}, Failed: {n_failed}")
 
 
     def wait_until_task_complete(
