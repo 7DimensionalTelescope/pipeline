@@ -76,11 +76,16 @@ def plot_bias(file, savefig=False):
         histtype="step",
     )
 
-
     for i, key in enumerate(["CLIPMEAN", "CLIPMED", "CLIPSTD"]):
         plt.axvline(header[key], linestyle="--", color=f"C{i+1}", label=key)
 
-    plt.axvspan(0, header["CLIPMIN"], color="gray", alpha=0.5, label="within CLIPMIN and CLIPMAX")
+    plt.axvspan(
+        0,
+        header["CLIPMIN"],
+        color="gray",
+        alpha=0.5,
+        label="within CLIPMIN and CLIPMAX",
+    )
     plt.axvspan(header["CLIPMAX"], 1e5, color="gray", alpha=0.5)
     plt.yscale("log")
     plt.xlabel("ADU")
@@ -94,10 +99,10 @@ def plot_bias(file, savefig=False):
 
     if savefig:
         path = Path(file)
-        os.makedirs(path.parent / "images", exist_ok=True)
-        plt.savefig(path.parent / "images" / "master_bias_flatten.png")
+        os.makedirs(path.parent / "figures", exist_ok=True)
+        plt.savefig(path.parent / "figures" / "master_bias_flatten.png")
         plt.clf()
-        save_fits_as_png(data, path.parent / "images" / "master_bias.png")
+        save_fits_as_png(data, path.parent / "figures" / "master_bias.png")
     else:
         plt.show(block=False)
 
@@ -117,7 +122,7 @@ def plot_dark(file_dict, fmask=None, savefig=False, badpix=0):
         header = fits.getheader(orig_file)
         fdata = data.ravel()
         fdata = fdata[fmask] if fmask is not None else fdata
-        
+
         plt.hist(
             fdata,
             bins=30,
@@ -126,13 +131,19 @@ def plot_dark(file_dict, fmask=None, savefig=False, badpix=0):
             label="Masked Data",
             histtype="step",
         )
-        
+
         for i, key in enumerate(["CLIPMEAN", "CLIPMED", "CLIPSTD"]):
             plt.axvline(header[key], linestyle="--", color=f"C{i+1}", label=key)
 
-        plt.axvspan(-100, header["CLIPMIN"], color="gray", alpha=0.5, label="within CLIPMIN and CLIPMAX")
+        plt.axvspan(
+            -100,
+            header["CLIPMIN"],
+            color="gray",
+            alpha=0.5,
+            label="within CLIPMIN and CLIPMAX",
+        )
         plt.axvspan(header["CLIPMAX"], 1000, color="gray", alpha=0.5)
-        
+
         plt.xlim(-50, 50)
         plt.yscale("log")
         plt.xlabel("ADU")
@@ -144,11 +155,13 @@ def plot_dark(file_dict, fmask=None, savefig=False, badpix=0):
         plt.tight_layout()
         if savefig:
             path = Path(file)
-            os.makedirs(path.parent / "images", exist_ok=True)
-            plt.savefig(path.parent / "images" / f"master_dark_flatten_{exposure}s.png")
+            os.makedirs(path.parent / "figures", exist_ok=True)
+            plt.savefig(
+                path.parent / "figures" / f"master_dark_flatten_{exposure}s.png"
+            )
             plt.clf()
             save_fits_as_png(
-                data, path.parent / "images" / f"master_dark_{exposure}s.png"
+                data, path.parent / "figures" / f"master_dark_{exposure}s.png"
             )
         else:
             plt.show(block=False)
@@ -183,8 +196,8 @@ def plot_dark_tail(fdata, exposure, file, savefig=False):
 
     if savefig:
         path = Path(file)
-        os.makedirs(path.parent / "images", exist_ok=True)
-        plt.savefig(path.parent / "images" / f"master_dark_tail_{exposure}s.png")
+        os.makedirs(path.parent / "figures", exist_ok=True)
+        plt.savefig(path.parent / "figures" / f"master_dark_tail_{exposure}s.png")
         plt.clf()
     else:
         plt.show(black=False)
@@ -201,7 +214,7 @@ def plot_flat(file_dict, fmask=None, badpix=1, savefig=False):
             continue
         if ".link" in file:
             orig_file = read_link(file)
-        
+
         data = fits.getdata(orig_file)
         header = fits.getheader(orig_file)
 
@@ -218,25 +231,33 @@ def plot_flat(file_dict, fmask=None, badpix=1, savefig=False):
 
         for i, key in enumerate(["CLIPMEAN", "CLIPMED"]):
             plt.axvline(header[key], linestyle="--", color=f"C{i+1}", label=key)
-        
-        plt.axvspan(0, header["CLIPMIN"], color="gray", alpha=0.5, label="within CLIPMIN and CLIPMAX")
+
+        plt.axvspan(
+            0,
+            header["CLIPMIN"],
+            color="gray",
+            alpha=0.5,
+            label="within CLIPMIN and CLIPMAX",
+        )
         plt.axvspan(header["CLIPMAX"], 3, color="gray", alpha=0.5)
-            
+
         plt.yscale("log")
         plt.xlabel("Normalized ADU")
         plt.ylabel("N")
         plt.title(f"Master Flat (filter: {filt})")
-        plt.ylim(1e5,)
+        plt.ylim(
+            1e5,
+        )
         plt.xlim(0, 1.5)
         plt.legend()
         plt.tight_layout()
 
         if savefig:
             path = Path(file)
-            os.makedirs(path.parent / "images", exist_ok=True)
-            plt.savefig(path.parent / "images" / f"master_flat_flatten_{filt}.png")
+            os.makedirs(path.parent / "figures", exist_ok=True)
+            plt.savefig(path.parent / "figures" / f"master_flat_flatten_{filt}.png")
             plt.clf()
-            save_fits_as_png(data, path.parent / "images" / f"master_flat_{filt}.png")
+            save_fits_as_png(data, path.parent / "figures" / f"master_flat_{filt}.png")
         else:
             plt.show()
 
@@ -265,8 +286,8 @@ def plot_bpmask(file_dict, ext=1, badpix=1, savefig=False):
 
         if savefig:
             path = Path(file)
-            os.makedirs(path.parent / "images", exist_ok=True)
-            plt.savefig(path.parent / "images" / f"master_dark_bpmask_{exposure}s.png")
+            os.makedirs(path.parent / "figures", exist_ok=True)
+            plt.savefig(path.parent / "figures" / f"master_dark_bpmask_{exposure}s.png")
             plt.clf()
         else:
             plt.show(block=False)

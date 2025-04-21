@@ -363,7 +363,7 @@ class QueueManager:
                             else:
                                 self.logger.warning(f"CPU task {task.task_name}({task.id}) status unknown: {task.status}")
                             self.logger.debug(self.log_detailed_memory_report())
-                            if self.print_process: self.print_the_number_of_processes()
+                            if self.print_debug: self.print_the_number_of_processes()
                     except queue.Empty:
                         continue
                     
