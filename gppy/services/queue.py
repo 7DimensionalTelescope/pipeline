@@ -1,7 +1,8 @@
 from multiprocessing.pool import Pool
-from multiprocessing import Process
 import multiprocessing as mp
-from queue import Queue, PriorityQueue
+
+import queue
+
 import threading
 
 import cupy as cp
@@ -21,6 +22,7 @@ import itertools
 
 from .memory import MemoryState, MemoryMonitor
 
+from .utils import cpu_callback_wrapper
 
 signal.signal(signal.SIGINT, signal.SIG_IGN)
 
@@ -86,24 +88,15 @@ class QueueManager:
         self.memory_monitor = MemoryMonitor(logger=self.logger)
 
         # Default CPU allocation
-        total_cpu = max_workers or mp.cpu_count() - 1
-        self.cpu_pool = Pool(processes=total_cpu)
+        self.total_cpu_worker = max_workers or mp.cpu_count() - 1
 
         # Single priority queue for CPU tasks
-        self.cpu_task = PriorityQueue()
-        # Create CPU worker thread
-        self.cpu_thread = threading.Thread(target=self._cpu_worker, daemon=True)
-        
-        # Create GPU process queue
+        self.cpu_queue = queue.Queue()
+        self.cpu_high_priority_queue = queue.Queue()
         
         # Create multiple GPU worker threads
         self.gpu_devices = range(cp.cuda.runtime.getDeviceCount())
-        self.gpu_pools = [Pool(processes=max_gpu_workers) for _ in range(len(self.gpu_devices))]
-        self.gpu_tasks = {device: PriorityQueue() for device in self.gpu_devices}
-        self.gpu_threads = [
-            threading.Thread(target=self._gpu_worker, args=(device,), daemon=True)
-            for device in self.gpu_devices
-        ]
+        self.gpu_queue = {device: queue.Queue() for device in self.gpu_devices}
 
         # Results and error handling
         self.tasks: List[Task] = []
@@ -155,11 +148,21 @@ class QueueManager:
             }
         )
 
-        self.cpu_thread.start()
-        for gpu_thread in self.gpu_threads:
-            gpu_thread.start()
-        
+        self._start_queue()
         self.logger.debug("QueueManager Initialization complete")
+
+    def _start_queue(self):
+        self.cpu_threads = []
+        for _ in range(self.total_cpu_worker):
+            t = threading.Thread(target=self._cpu_worker, daemon=True)
+            t.start()
+            self.cpu_threads.append(t)
+
+        self.gpu_threads = []
+        for device in self.gpu_devices:
+            t = threading.Thread(target=self._gpu_worker, args=(device,), daemon=True)
+            t.start()
+            self.gpu_threads.append(t)
 
     def __exit__(self, exc_type, exc_val, _):
         """Context manager exit."""
@@ -234,17 +237,12 @@ class QueueManager:
             device=device,  
         )
 
+        task.set_time_priority()
         # Add task to the task list
         self.tasks.append(task)
 
         # Put the task in the appropriate queue
-        if gpu:
-            if device is None:
-                device = self._choose_gpu_device()
-                task.device = device
-            self.gpu_tasks[device].put((task, None))
-        else:
-            self.cpu_task.put((task, None))
+        self.add_to_queue(task, None)
 
         self.logger.info(
             f"Added {'GPU' if gpu else 'CPU'} task {task.task_name} (id: {task_id}) with priority {priority}"
@@ -259,14 +257,12 @@ class QueueManager:
         self.trees.append(tree)
         self.logger.info(f"Added tree {tree.id} with {len(tree.tasks)} branches")
         first_task = tree.tasks[0]
+        first_task.set_time_priority()
+        
         self.tasks.append(first_task)
         
-        if first_task.gpu:
-            if first_task.device is None:
-                first_task.device = self._choose_gpu_device()
-            self.gpu_tasks[first_task.device].put((first_task, tree))
-        else:
-            self.cpu_task.put((first_task, tree))
+        self.add_to_queue(first_task, tree)
+
         self.logger.info(
             f"Added {'GPU' if first_task.gpu else 'CPU'} task {first_task.task_name} (id: {first_task.id}) with priority {first_task.priority}"
         )
@@ -290,14 +286,11 @@ class QueueManager:
             if type(cls).__name__ == type(task.cls).__name__:
                 task.cls = cls
         
+        task.set_time_priority()
+
         self.tasks.append(task)
 
-        if task.gpu:
-            if task.device is None:
-                task.device = self._choose_gpu_device()
-            self.gpu_tasks[task.device].put((task, tree))
-        else:
-            self.cpu_task.put((task, tree))
+        self.add_to_queue(task, tree)
 
         self.logger.info(
             f"Added {'GPU' if task.gpu else 'CPU'} task {task.task_name} (id: {task.id}) with priority {task.priority}"
@@ -305,6 +298,18 @@ class QueueManager:
         self.log_memory_stats(f"Task {task.task_name}(id: {task.id}) submitted")
         time.sleep(0.1)
         
+    def add_to_queue(self, task, tree=None):
+        """Add a task to the appropriate queue."""
+        if task.gpu:
+            if task.device is None:
+                task.device = self._choose_gpu_device()
+            self.gpu_queue[task.device].put((task, tree))
+        else:
+            if task.priority == Priority.HIGH:
+                self.cpu_high_priority_queue.put((task, tree))
+            else:
+                self.cpu_queue.put((task, tree))
+
     ######### Task processing #########
     def _cpu_worker(self):
         """Distribute tasks based on priority and available resources."""
@@ -313,28 +318,31 @@ class QueueManager:
                 self._check_abrupt_stop()
                 self.manage_memory_state()
                 
-                while (self.current_memory_state["CPU"] != MemoryState.EMERGENCY) and (not self.cpu_task.empty()):
-
-                    task, tree = self.cpu_task.get()
-
+                while (self.current_memory_state["CPU"] != MemoryState.EMERGENCY):
+                    
                     try:
-                        async_result = self.cpu_pool.apply_async(
-                            task.execute,
-                            callback=self._task_callback(task, tree),
-                        )
-                        task.status = "processing"
-                        task = async_result.get()
-                    except Exception as e:
-                        self.logger.error(f"Error processing task {task.id}: {e}")
-                        task.status = "failed"
-                        task.error = e
-                        self.errors.append(e)
-                    finally:
-                        self.cpu_task.task_done()
-                        if isinstance(tree, TaskTree) and task.status == "completed":
-                            self._move_to_next_task(tree, task.cls)
-                        self.logger.debug(self.log_detailed_memory_report())
-                
+                        try:
+                            task, tree = self.cpu_high_priority_queue.get(timeout=0.2)
+                        except:
+                            task, tree = self.cpu_queue.get(timeout=0.2)
+                            
+                        # Execute the task
+                        try:
+                            task.status = "processing"
+                            task.execute()
+                            self._task_callback(task, tree)
+                        except Exception as e:
+                            self.logger.error(f"Error processing task {task.id}: {e}")
+                            task.status = "failed"
+                            task.error = e
+                            self.errors.append(e)
+                        finally:
+                            if isinstance(tree, TaskTree) and task.status == "completed":
+                                self._move_to_next_task(tree, task.cls)
+                            self.logger.debug(self.log_detailed_memory_report())
+                    except queue.Empty:
+                        continue
+                    
             except AbruptStopException:
                 self.logger.info("CPU worker stopped by abrupt stop.")
                 break
@@ -357,7 +365,7 @@ class QueueManager:
                             submitted_task.cleanup()
                             task.cleanup()
                         self.logger.info(f"{'GPU' if task.gpu else 'CPU'} task {task.task_name} (id: {task.id}) completed")
-                        break
+                        return submitted_task
                 else:
                     # If no matching task is found, log a warning
                     self.logger.warning(
@@ -405,15 +413,9 @@ class QueueManager:
                 self._check_abrupt_stop()
                 self.manage_memory_state()
                 
-                while (self.current_memory_state["GPU"] != MemoryState.EMERGENCY) and (not self.gpu_tasks[device].empty()):
-                    task, tree = self.gpu_tasks[device].get()
+                while (self.current_memory_state["GPU"] != MemoryState.EMERGENCY) and (not self.gpu_queue[device].empty()):
+                    task, tree = self.gpu_queue[device].get()
                     try:
-                        # async_result = self.gpu_pools[device].apply_async(
-                        #     task.execute,
-                        #     callback=self._task_callback,
-                        # )
-                        # task.status = "processing"
-                        # task = async_result.get()
                         task.status = "processing"
                         task.starttime = datetime.now()
                         with self.gpu_context(device):
@@ -428,7 +430,7 @@ class QueueManager:
                         task.error = e
                         self.logger.error(f"GPU task {task.id} failed on device {device}: {e}")
                     finally:
-                        self.gpu_tasks[device].task_done()
+                        self.gpu_queue[device].task_done()
                         # if isinstance(tree, TaskTree) and task.status == "completed":
                         #     self._move_to_next_task(tree, task.cls)
                         # self.logger.debug(self.log_detailed_memory_report())
@@ -523,23 +525,19 @@ class QueueManager:
             Exception: If an error occurs during the shutdown process
         """
         try:
-            # Stop all CPU and GPU task processing
-            self.cpu_pool.close()
-            self.cpu_pool.terminate()
-            self.cpu_pool.join()
-            while not self.cpu_task.empty():
-                self.cpu_task.get()
-                self.cpu_task.task_done()
+            while not self.cpu_queue.empty():
+                self.cpu_queue.get()
+                self.cpu_queue.task_done()
 
-            for gpu_pool in self.gpu_pools:
-                gpu_pool.close()
-                gpu_pool.terminate()
-                gpu_pool.join()
+            while not self.cpu_high_priority_queue.empty():
+                self.cpu_high_priority_queue.get()
+                self.cpu_high_priority_queue.task_done()
 
-            for gpu_task in self.gpu_tasks:
-                while not gpu_task.empty():
-                    gpu_task.get()
-                    gpu_task.task_done()
+
+            for gpu_queue in self.gpu_queue:
+                while not gpu_queue.empty():
+                    gpu_queue.get()
+                    gpu_queue.task_done()
 
             # Log shutdown details
             self.logger.info("Task processing stopped")
@@ -576,12 +574,7 @@ class QueueManager:
                     gpu_task.task_done()
             self.cpu_pool.terminate()
             self.cpu_pool.join()
-            for gpu_pool in self.gpu_pools:
-                gpu_pool.close()
-                gpu_pool.terminate()
-                gpu_pool.join()
-                
-            
+
         except Exception as e:
             self.logger.error(f"Error during abrupt stop: {e}")
         finally:

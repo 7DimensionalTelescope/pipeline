@@ -279,7 +279,7 @@ class PhotometrySingle:
         self.zp_src_table = self.match_ref_catalog()
         dicts = self.calculate_zp()
         self.update_header(*dicts)
-        self.write_photcat()
+        self.write_catalog()
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
         MemoryMonitor.cleanup_memory()
@@ -785,8 +785,9 @@ class PhotometrySingle:
         header_to_add.update(aper_dict)
         header_to_add.update(zp_dict)
         update_padded_header(self.image, header_to_add)
+        self.logger.info(f"Header updated for {self.name}")
 
-    def write_photcat(self) -> None:
+    def write_catalog(self) -> None:
         """
         Write photometry catalog to disk.
 
@@ -794,17 +795,26 @@ class PhotometrySingle:
         The catalog includes all detected sources with their measured properties
         and calculated photometric values.
         """
+
+        # format = "ascii.tab"  # no metadata:
+        # format = "ascii.ecsv"
+        format = "fits"
+
         metadata = self.image_info.metadata
         metadata["obs"] = self.config.obs.unit
         self.obs_src_table.meta = metadata
+        self.obs_src_table.meta.meta["comments"] = [
+            "Zero point based on Gaia DR3",
+            "Zero point uncertainty is not included in FLUX and MAG errors",
+        ]
 
         output_file = get_derived_product_path(self.image)
         catalog_dir = os.path.dirname(output_file)
         if not os.path.exists(catalog_dir):
             os.makedirs(catalog_dir)
-        self.obs_src_table.write(output_file, format="ascii.ecsv", overwrite=True)
-        # alternative format with no metadata: "ascii.tab"
-        self.logger.info(f"Header updated for {self.name}")
+
+        self.obs_src_table.write(output_file, format=format, overwrite=True)
+        self.logger.info(f"Catalog written: {output_file}")
 
 
 @dataclass

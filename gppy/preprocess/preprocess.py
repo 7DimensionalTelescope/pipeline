@@ -69,9 +69,6 @@ class Preprocess(BaseSetup):
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
     def calibrate(self, use_eclaire=True):
-        self.logger.info(
-            f"Calibrating image with {'Eclaire' if use_eclaire else 'Cupy'}"
-        )
         if self.queue:
             if use_eclaire:
                 self.queue.add_task(
@@ -89,12 +86,15 @@ class Preprocess(BaseSetup):
                 )
         else:
             try:
-                if use_eclaire:
-                    self.data_reduction()
-                    self.save_processed_files()
-                    #self._calibrate_image_eclaire()
-                else:
-                    self._calibrate_image_cupy()
+                self.logger.info(
+                    f"Calibrating image with {'Eclaire' if use_eclaire else 'Cupy'}"
+                )
+                self.data_reduction(use_eclaire=use_eclaire)
+                
+                self.logger.info(
+                    f"Saving processed files to {self.config.path.path_processed}"
+                )
+                self.save_processed_files()
             except Exception as e:
                 self.logger.error(f"Error during preprocessing: {str(e)}")
                 raise

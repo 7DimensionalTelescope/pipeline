@@ -10,6 +10,9 @@ from ..const import REF_DIR
 from ..config import Configuration
 from .. import external
 from ..base import BaseSetup
+from ..utils import get_derived_product_path, swap_ext
+
+from .utils import create_ds9_region_file, select_sources, create_common_table
 
 
 class ImSubtract(BaseSetup):
@@ -27,13 +30,15 @@ class ImSubtract(BaseSetup):
     def run(self):
 
         self.find_reference_image()
-        if not self.ref_imgs:  # if not found, do not run
+        if not self.reference_images:  # if not found, do not run
             self.logger.info(
-                f"Reference image not found for {self.name}; Skipping transient search."
+                f"No reference image found for {self.name}; Skipping transient search."
             )
             return
 
-        self.define_parameters()
+        self.define_paths()
+
+        self.create_substamps()
 
         self.create_masks()
 
@@ -48,8 +53,73 @@ class ImSubtract(BaseSetup):
         ref_imgs_7dt = glob(f"{refim_dir}/ref_7DT_{obj}_*_*_{filte}_*.fits")
         ref_imgs = ref_imgs_7dt + ref_imgs_ps1
         ref_imgs = [ref for ref in ref_imgs if "mask" not in ref]
-        self.ref_imgs = ref_imgs
+        self.reference_images = ref_imgs
         # return True if len(ref_imgs) > 0 else False
+
+    def define_paths(self):
+        self.sci_image_file = self.config.file.stacked_file
+        self.sci_source_table_file = get_derived_product_path(self.sci_image_file)
+
+        self.ref_image_file = self.reference_images[0]
+        self.ref_source_table_file = swap_ext(self.ref_image_file, "phot.cat")
+
+        self.subt_image_file = swap_ext(self.sci_image_file, "subt.fits")
+
+    def create_substamps(self):
+        sci_source_table = Table.read(self.sci_source_table_file)
+        ref_source_table = Table.read(self.ref_source_table_file)
+
+        # Select substamp sources
+        selected_sci_table = select_sources(sci_source_table)
+        self.logger.info(
+            f"{len(selected_sci_table)} selected for substamp from"
+            f"{len(sci_source_table)} science catalog sources"
+        )
+
+        # Match two catalogs
+        matched_source_table = create_common_table(selected_sci_table, ref_source_table)
+        self.logger.info(
+            f"{len(matched_source_table)} sources matched"
+            f"out of {len(selected_sci_table)}, {len(ref_source_table)}"
+        )
+
+        substamp_file = swap_ext(self.sci_image_file, "ssf.txt")
+
+        # Write substamp file
+        f = open(substamp_file, "w")
+        for x, y in zip(
+            matched_source_table["X_IMAGE"], matched_source_table["Y_IMAGE"]
+        ):
+            f.write(f"{x} {y}\n")
+        f.close()
+
+    def create_masks(self):
+        # Create mask for science image
+
+        weight_file = swap_ext(self.sci_image_file, "weight.fits")
+
+        sci_mask = self._create_mask(
+            weight_file if os.path.exists(weight_file) else self.sci_image_file
+        )
+        ref_mask = self._create_mask(self.ref_image_file)
+
+        self.sci_mask_file = self._save_mask(sci_mask, self.sci_image_file)
+        self.ref_mask_file = self._save_mask(ref_mask, self.ref_image_file)
+
+        # Create common mask
+        common_mask = sci_mask | ref_mask
+
+        self.common_mask_file = self._save_mask(common_mask, self.subt_image_file)
+
+    def _create_mask(self, data):
+        return (data == 0).astype("uint8")
+
+    def _save_mask(self, mask, image_file):
+        filename = os.path.join(
+            self.config.path.path_factory, swap_ext(image_file, "mask.fits")
+        )
+        fits.writeto(filename, data=mask, overwrite=True)
+        return filename
 
     def run_hotpants(self):
         external.hotpants()
@@ -59,31 +129,6 @@ class ImSubtract(BaseSetup):
         # ============================================================
         # 	Function
         # ------------------------------------------------------------
-        def create_ds9_region_file(
-            ra_array, dec_array, radius, filename="ds9_regions.reg"
-        ):
-            """
-            RA, Dec 배열과 반경을 입력으로 받아 DS9 region 파일을 생성하는 함수.
-
-            Parameters:
-            - ra_array: RA 좌표 배열
-            - dec_array: Dec 좌표 배열
-            - radius: 원의 반경 (단위: arcsec)
-            - filename: 생성될 DS9 region 파일의 이름
-            """
-            # Region 파일 시작 부분에 필요한 헤더
-            header = 'global color=green dashlist=8 3 width=1 font="helvetica 10 normal roman" select=1 highlite=1 dash=0 fixed=0 edit=1 move=1 delete=1 include=1 source=1\nfk5'
-
-            # 파일 쓰기 시작
-            with open(filename, "w") as file:
-                file.write(header + "\n")
-
-                # 각 좌표에 대한 원 형태의 region 추가
-                for ra, dec in zip(ra_array, dec_array):
-                    region_line = f'circle({ra},{dec},{radius}")\n'
-                    file.write(region_line)
-
-            print(f"DS9 region file '{filename}' has been created.")
 
         # ============================================================
         # %%
