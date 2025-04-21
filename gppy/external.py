@@ -369,6 +369,8 @@ def swarp(
 def hotpants(
     inim,
     refim,
+    inmask,
+    refmask,
     il=None,
     iu=None,
     tl=None,
@@ -408,7 +410,7 @@ def hotpants(
         f"hotpants -c t -n i "
         f"-iu {iu} -il {il} -tu {tu} -tl {tl} "
         f"-inim {inim} -tmplim {refim} -outim {hdim} -oci {hcim} "
-        f"-imi {inmask_image} -tmi {refmask_image} "
+        f"-imi {inmask} -tmi {refmask} "
         f"-v 0 "
         f"-nrx {nrx} -nry {nry} "
         f"-ssf {ssf}"

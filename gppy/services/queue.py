@@ -594,7 +594,7 @@ class QueueManager:
                 self.cpu_high_priority_queue.task_done()
 
 
-            for gpu_queue in self.gpu_queue:
+            for _, gpu_queue in self.gpu_queue.items():
                 while not gpu_queue.empty():
                     gpu_queue.get()
                     gpu_queue.task_done()

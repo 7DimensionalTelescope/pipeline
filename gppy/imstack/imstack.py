@@ -40,6 +40,7 @@ class ImStack(BaseSetup):
 
         super().__init__(config, logger, queue)
         self.overwrite = overwrite
+        self._flag_name = "combine"
 
     @classmethod
     def from_list(cls, input_images):
@@ -77,6 +78,7 @@ class ImStack(BaseSetup):
             (6, "joint_registration", False),
             (7, "convolve", False),
             (8, "stack_with_swarp", False),
+            (9, "flagging", False),
         ]
 
     def run(self):

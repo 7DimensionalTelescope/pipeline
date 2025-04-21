@@ -43,6 +43,7 @@ class Astrometry(BaseSetup):
             queue: QueueManager instance or boolean to enable parallel processing
         """
         super().__init__(config, logger, queue)
+        self._flag_name = "astronomy"
         self.logger.debug(f"Astronomy Queue is '{queue}' for {self.config.name}")
 
     @classmethod
@@ -63,6 +64,7 @@ class Astrometry(BaseSetup):
     def sequential_task(self):
         return [
             (1, "run", False),
+            (2, "flagging", False)
         ]
 
     def run(

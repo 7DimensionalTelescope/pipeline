@@ -70,3 +70,7 @@ class BaseSetup(ABC):
     def from_dir(cls, dir_path):
         image_list = glob.glob(f"{dir_path}/*.fits")
         return cls.from_list(image_list)
+    
+    def flagging(self):
+        setattr(self.config.flag, self._flag_name, True)
+    

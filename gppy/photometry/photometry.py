@@ -77,9 +77,11 @@ class Photometry(BaseSetup):
         if self.run_single_photometry:
             self.images = images or self.config.file.processed_files
             self.logger.debug("Running single photometry")
+            self._flag_name = "single_photometry"
         else:
             self.images = images or [self.config.file.stacked_file]
             self.logger.debug("Running combined photometry")
+            self._flag_name = "combined_photometry"
 
     @classmethod
     def from_list(cls, images: List[str]) -> Optional["Photometry"]:
@@ -108,6 +110,7 @@ class Photometry(BaseSetup):
     def sequential_task(self):
         return [
             (1, "run", False),
+            (2, "flagging", False)
         ]
 
     def run(self) -> None:

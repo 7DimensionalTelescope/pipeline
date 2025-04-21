@@ -127,7 +127,7 @@ class ImSubtract(BaseSetup):
         return filename
 
     def run_hotpants(self):
-        external.hotpants()
+        external.hotpants(self.sci_mask_file, self.ref_mask_file)
         return
 
     def legacy_gppy(self):

@@ -31,13 +31,15 @@ class Preprocess(BaseSetup):
             queue: QueueManager instance or boolean to enable parallel processing
         """
         super().__init__(config, logger, queue)
+        self._flag_name = "preprocess"
 
     @property
     def sequential_task(self):
         return [
             (1, "load_mbdf", False),
             (2, "data_reduction", True),
-            (3, "save_processed_files", False)
+            (3, "save_processed_files", False),
+            (4, "flagging", False)
         ]
 
     @classmethod
