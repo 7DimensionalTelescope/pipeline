@@ -41,7 +41,7 @@ def run_masterframe_generator(obs_params, queue=False, **kwargs):
     del mfg
 
 
-def run_masterframe_generator_with_tree(obs_params, **kwargs):
+def run_masterframe_generator_with_tree(obs_params, priority=Priority.HIGH, **kwargs):
     """
     Generate master calibration frames for a specific observation set.
 
@@ -59,7 +59,7 @@ def run_masterframe_generator_with_tree(obs_params, **kwargs):
     mfg = MasterFrameGenerator(obs_params, **kwargs)
     tasks = []
     for task in mfg.sequential_task:
-        tasks.append(Task(getattr(mfg, task[1]), priority=task[0], gpu=task[2], cls=mfg))
+        tasks.append(Task(getattr(mfg, task[1]), priority=priority, gpu=task[2], cls=mfg))
     return TaskTree(tasks)
     
 
@@ -203,14 +203,10 @@ def run_pipeline(
         if not data.processed:
             data.mark_as_processed()
 
-            queue.add_task(
-                run_masterframe_generator,
-                args=(data.obs_params,),
-                kwargs={"queue": False, "overwrite": overwrite},
-                gpu=True,
-                task_name=data.name,
-                priority=Priority.HIGH,
-            )
+            tree = run_masterframe_generator_with_tree(obs.obs_params, priority=Priority.HIGH)
+            if tree is not None:
+                queue.add_tree(tree)
+            
             time.sleep(0.1)
     elif isinstance(data, ObservationDataSet):
         for obs in data.get_unprocessed():
