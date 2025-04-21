@@ -48,7 +48,8 @@ class Task:
         self.kwargs = kwargs or {}
 
         self.id = id or f"task_{next(self._id_counter)}"
-        self.task_name = task_name or func.__name__
+
+        self.task_name = task_name or self._get_task_name()
         
         self.priority = priority
         self.starttime = starttime or datetime.now()
@@ -72,6 +73,12 @@ class Task:
     
     def set_time_priority(self):
         self.time_priority = int(time.time() * 1000)  # milliseconds since epoch
+    
+    def _get_task_name(self):
+        if self.cls is None:
+            return self._func.__name__
+        else:
+            return f"{type(self.cls).__name__}.{self._func.__name__}"
 
     def _get_function(self):
         if self.cls is None:
