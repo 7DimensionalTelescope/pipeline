@@ -20,7 +20,7 @@ from astropy.stats import sigma_clip
 
 # gppy modules
 from . import utils as phot_utils
-from ..utils import update_padded_header, get_derived_product_path
+from ..utils import update_padded_header, get_derived_product_path, add_suffix
 from ..config import Configuration
 from ..services.memory import MemoryMonitor
 from ..services.queue import QueueManager, Priority
@@ -747,7 +747,6 @@ class PhotometrySingle:
         The catalog includes all detected sources with their measured properties
         and calculated photometric values.
         """
-        format = "fits"
 
         metadata = self.image_info.metadata
         metadata["obs"] = self.config.obs.unit
@@ -757,7 +756,7 @@ class PhotometrySingle:
         #     "Zero point uncertainty is not included in FLUX and MAG errors",
         # ]  # this interferes with table description
 
-        self.obs_src_table.write(self.output_catalog_file, format=format, overwrite=True)  # "ascii.tab" "ascii.ecsv"
+        self.obs_src_table.write(self.output_catalog_file, format="fits", overwrite=True)  # "ascii.tab" "ascii.ecsv"
         self.logger.info(f"Catalog written: {self.output_catalog_file}")
 
 
