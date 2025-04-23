@@ -22,9 +22,7 @@ def rss(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 @njit
-def is_within_ellipse(
-    x: np.ndarray, y: np.ndarray, center_x: float, center_y: float, a: float, b: float
-) -> np.ndarray:
+def is_within_ellipse(x: np.ndarray, y: np.ndarray, center_x: float, center_y: float, a: float, b: float) -> np.ndarray:
     """
     Check if points lie within an ellipse.
 
@@ -42,18 +40,28 @@ def is_within_ellipse(
 
 
 @njit
-def compute_median_mad(values: np.ndarray) -> tuple:
+def compute_median_nmad(values: np.ndarray, normalize: bool = True) -> tuple:
     """
-    Compute median and Median Absolute Deviation (MAD).
+    Computes the median and Median Absolute Deviation (MAD) of a given array.
+
+    The MAD is a robust measure of the variability of a univariate sample of quantitative data.
+    If `normalize` is set to True, the MAD is scaled by a constant (1.4826) to make it
+    consistent with the standard deviation under the assumption of normality.
 
     Args:
-        values: Input array
+        values (np.ndarray): Input array of numerical values.
+        normalize (bool, optional): If True, normalize the MAD to be consistent with the
+            standard deviation under a normal distribution. Defaults to True.
 
     Returns:
-        Tuple of (median, MAD)
+        tuple: A tuple containing:
+            - median (float): The median of the input array.
+            - mad (float): The (optionally normalized) Median Absolute Deviation.
     """
     median = np.median(values)
     mad = np.median(np.abs(values - median))
+    if normalize:
+        return median, 1.4826 * mad
     return median, mad
 
 
@@ -75,7 +83,7 @@ def compute_median_rms(values: np.ndarray) -> tuple:
 
 
 @njit
-def limitmag(N: np.ndarray, zp: float, aper: float, skysigma: float) -> np.ndarray:
+def limitmag(n_sigma: np.ndarray, zp: float, aper: float, skysigma: float) -> np.ndarray:
     """
     Calculate limiting magnitude.
 
@@ -88,16 +96,14 @@ def limitmag(N: np.ndarray, zp: float, aper: float, skysigma: float) -> np.ndarr
     Returns:
         Array of limiting magnitudes
     """
-    R = aper / 2.0  # Convert to radius
-    braket = N * skysigma * np.sqrt(np.pi * R**2)
+    R = aper / 2.0
+    braket = n_sigma * skysigma * np.sqrt(np.pi * R**2)
     upperlimit = zp - 2.5 * np.log10(braket)
     return np.round(upperlimit, 3)
 
 
 @njit
-def zp_correction(
-    mag: np.ndarray, mag_err: np.ndarray, zp: float, zperr: float
-) -> tuple:
+def zp_correction(mag: np.ndarray, mag_err: np.ndarray, zp: float, zperr: float) -> tuple:
     """
     Apply zero point correction to magnitudes.
 
@@ -303,9 +309,7 @@ def get_sex_args(
     head = image.replace(".fits", "")
     if phot_conf.check:
         sex_config["CHECKIMAGE_TYPE"] = "SEGMENTATION,APERTURES,BACKGROUND,-BACKGROUND"
-        sex_config["CHECKIMAGE_NAME"] = (
-            f"{head}.seg.fits,{head}.aper.fits,{head}.bkg.fits,{head}.sub.fits"
-        )
+        sex_config["CHECKIMAGE_NAME"] = f"{head}.seg.fits,{head}.aper.fits,{head}.bkg.fits,{head}.sub.fits"
     else:
         pass
 

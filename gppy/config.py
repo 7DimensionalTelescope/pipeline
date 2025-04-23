@@ -110,16 +110,12 @@ class Configuration:
 
         if config_file:
             # working_dir is ignored if config_file is absolute path
-            config_file = (
-                os.path.join(working_dir, config_file) if working_dir else config_file
-            )
+            config_file = os.path.join(working_dir, config_file) if working_dir else config_file
             if os.path.exists(config_file):
                 with open(config_file, "r") as f:
                     new_config = yaml.load(f, Loader=yaml.FullLoader)
 
-                instance._config_in_dict = Configuration._merge_dicts(
-                    instance._config_in_dict, new_config
-                )
+                instance._config_in_dict = Configuration._merge_dicts(instance._config_in_dict, new_config)
                 instance._make_instance(instance._config_in_dict)
             else:
                 raise FileNotFoundError("Provided Configuration file does not exist")
@@ -174,11 +170,7 @@ class Configuration:
     def _load_config(self, config_source, **kwargs):
         # Load configuration from file or dict
         self._loaded = False
-        input_dict = (
-            self.read_config(config_source)
-            if isinstance(config_source, str)
-            else config_source
-        )
+        input_dict = self.read_config(config_source) if isinstance(config_source, str) else config_source
 
         self._config_in_dict = input_dict
 
@@ -218,9 +210,7 @@ class Configuration:
         self.config.obs.filter = obs_params["filter"]
         self.config.obs.n_binning = obs_params["n_binning"]
         self.config.obs.gain = obs_params["gain"]
-        self.config.obs.pixscale = self.config.obs.pixscale * float(
-            obs_params["n_binning"]
-        )  # For initial solve
+        self.config.obs.pixscale = self.config.obs.pixscale * float(obs_params["n_binning"])  # For initial solve
         self.config.name = f"{obs_params['date']}_{obs_params['n_binning']}x{obs_params['n_binning']}_gain{obs_params['gain']}_{obs_params['obj']}_{obs_params['unit']}_{obs_params['filter']}"
         self.config.info.creation_datetime = datetime.now().isoformat()
 
@@ -310,9 +300,7 @@ class Configuration:
 
     def _define_paths(self):
         """Create and set output directory paths for processed data."""
-        _date_dir = define_output_dir(
-            self.config.obs.date, self.config.obs.n_binning, self.config.obs.gain
-        )
+        _date_dir = define_output_dir(self.config.obs.date, self.config.obs.n_binning, self.config.obs.gain)
 
         rel_path = os.path.join(
             _date_dir,
@@ -328,9 +316,7 @@ class Configuration:
         path_processed = os.path.join(self._output_prefix, rel_path)
         path_factory = os.path.join(FACTORY_DIR, rel_path)
         path_fdz = os.path.join(MASTER_FRAME_DIR, fdz_rel_path)
-        path_stacked_prefix = (
-            STACKED_DIR if self.config.name == "user-input" else DAILY_STACKED_DIR
-        )
+        path_stacked_prefix = STACKED_DIR if self.config.name == "user-input" else DAILY_STACKED_DIR
         path_stacked = os.path.join(path_stacked_prefix, rel_path)
 
         os.makedirs(path_processed, exist_ok=True)
@@ -409,9 +395,7 @@ class Configuration:
             if header_in_dict["GAIN"] == self.config.obs.gain:
                 raw_files.append(fits_file)
                 for config_key, header_key in header_mapping.items():
-                    getattr(self.config.obs, config_key).append(
-                        header_in_dict[header_key]
-                    )
+                    getattr(self.config.obs, config_key).append(header_in_dict[header_key])
             self.raw_header_sample = header_in_dict
 
         self.config.file.raw_files = raw_files
@@ -446,15 +430,13 @@ class Configuration:
 
     def _define_settings(self):
         # use local astrometric reference catalog for tile observations
-        self.config.settings.local_astref = bool(
-            re.fullmatch(r"T\d{5}", self.config.obs.object)
-        )
+        self.config.settings.local_astref = bool(re.fullmatch(r"T\d{5}", self.config.obs.object))
 
         # skip single frame combine for Deep mode
         obsmode = self.raw_header_sample["OBSMODE"]
-        self.config.settings.obsmode = obsmode
-        if not self.config.settings.combine:
-            self.config.settings.combine = False if obsmode == "Deep" else True
+        self.config.obs.obsmode = obsmode
+
+        self.config.settings.daily_stack = False if obsmode.lower() == "deep" else True
 
     def read_config(self, config_file):
         """Read configuration from YAML file."""
@@ -474,9 +456,7 @@ class Configuration:
         if not self.is_initialized:
             return
 
-        self._config_in_dict["info"][
-            "last_update_datetime"
-        ] = datetime.now().isoformat()
+        self._config_in_dict["info"]["last_update_datetime"] = datetime.now().isoformat()
 
         filename = f"{self.output_name}.yml"
 
