@@ -70,6 +70,7 @@ def calculate_background_sigma(bkg_file, G):
 
 
 def calculate_weight(config):
+    """deprecated"""
     if config.settings.gpu_enabled:
         import cupy as xp
     else:
