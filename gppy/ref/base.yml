@@ -102,7 +102,7 @@ imsubt:
 logging:
   level: INFO
   file: 
-  format: '[%(levelname)s] %(asctime)s - %(message)s'
+  format: '[%(levelname)s] %(asctime)s - %(name)s - %(message)s'
   handlers:
     - console
     - file

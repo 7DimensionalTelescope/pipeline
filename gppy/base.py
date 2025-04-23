@@ -43,10 +43,10 @@ class BaseSetup(ABC):
     def _setup_logger(self, logger, config):
         if isinstance(logger, Logger):
             return logger
-        elif hasattr(config, "logger") and config.logger is not None:
+        elif hasattr(config, "logger") and isinstance(config.logger, Logger):
             return config.logger
         else:
-            return Logger(name="7DT pipeline logger", slack_channel="pipeline_report")
+            return Logger(name=config.config.name, slack_channel="pipeline_report")
 
     def _setup_queue(self, queue):
         if isinstance(queue, QueueManager):
