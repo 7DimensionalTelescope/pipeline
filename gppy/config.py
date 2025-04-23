@@ -154,7 +154,7 @@ class Configuration:
         if logger is None:
             from .logger import Logger
 
-            logger = Logger(name="7DT pipeline logger", slack_channel="pipeline_report")
+            logger = Logger(name=self.config.name, slack_channel="pipeline_report")
 
         filename = f"{self.output_name}.log"
         log_file = os.path.join(self.config.path.path_processed, filename)

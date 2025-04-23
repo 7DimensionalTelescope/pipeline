@@ -45,7 +45,7 @@ class Logger:
         pipeline_name: Optional[str] = None,
         log_file: Optional[str] = None,
         level: str = "INFO",
-        log_format: str = "[%(levelname)s] %(asctime)s - %(message)s",
+        log_format: str = "[%(levelname)s] %(asctime)s - %(name)s - %(message)s",
         slack_channel: str = "pipeline_report",
     ):
         self._name = name
@@ -61,6 +61,16 @@ class Logger:
         sys.stdout = StdoutToLogger(self)
         sys.stderr = StderrToLogger(self)
         sys.excepthook = self._handle_exception
+
+    @property
+    def name(self) -> str:
+        """
+        Get the name of the logger instance.
+
+        Returns:
+            str: The name of the logger.
+        """
+        return self._name
 
     def _create_handler(self, handler_type, log_file=None, level=None, mode="a"):
         """
@@ -97,7 +107,7 @@ class Logger:
             handler = logging.FileHandler(log_file, mode=mode)
 
         handler.setLevel(level or getattr(logging, self._level))
-        handler.setFormatter(logging.Formatter(self._log_format))
+        handler.setFormatter(logging.Formatter(self._log_format, datefmt='%Y-%m-%d %H:%M:%S'))
         return handler
 
     def _handle_exception(self, exc_type, exc_value, exc_traceback):
@@ -130,7 +140,8 @@ class Logger:
             raise AttributeError(f"Invalid log level: {self._level}")
 
         # Create logger instance
-        logger = logging.getLogger(self._name)
+        logger = logging.getLogger(self.name)
+        print("here2", self.name, logger.name)
         logger.setLevel(logging.DEBUG)  # Set to DEBUG to catch all messages
 
         # Remove existing handlers

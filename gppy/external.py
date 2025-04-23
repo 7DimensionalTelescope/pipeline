@@ -4,9 +4,7 @@ from astropy.io import fits
 from .const import FACTORY_DIR, REF_DIR
 
 
-def solve_field(
-    inim, outim=None, dump_dir=None, get_command=False, pixscale=0.505, radius=1.0
-):
+def solve_field(inim, outim=None, dump_dir=None, get_command=False, pixscale=0.505, radius=1.0):
     """
     Runs Astrometry.net's `solve-field` to compute the World Coordinate System (WCS) for an input FITS image.
 
@@ -198,7 +196,7 @@ def sextractor(
     sex_args: list = [],
     config=None,  # supply config.config
     logger=None,
-    return_output=False,
+    return_sex_output=False,
 ):
     """
     e.g., override default by supplying sex_args like ["-PIXEL_SCALE", f"{pixscale}"]
@@ -285,7 +283,7 @@ def sextractor(
 
     chatter(f"Sextractor completed")
 
-    if return_output:
+    if return_sex_output:
         return outcat, sexout
     else:
         return outcat

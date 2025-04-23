@@ -264,7 +264,7 @@ def get_aperture_dict(peeing: float, pixscale: float) -> dict:
 def get_sex_args(
     image: str,
     phot_conf: Any,
-    gain: float,
+    egain: float,
     peeing: float,
     pixscale: float,
     satur_level: float = 65000.0,
@@ -292,7 +292,7 @@ def get_sex_args(
     sex_config = {}
     sex_config["PHOT_APERTURES"] = PHOT_APERTURES
     sex_config["SATUR_LEVEL"] = str(satur_level)
-    sex_config["GAIN"] = str(gain)
+    sex_config["GAIN"] = str(egain)
     sex_config["PIXEL_SCALE"] = str(pixscale)
     sex_config["SEEING_FWHM"] = "2.0"
 

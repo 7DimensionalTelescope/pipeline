@@ -82,7 +82,7 @@ class QueueManager:
         if logger:
             self.logger = logger
         else:
-            self.logger = Logger()
+            self.logger = Logger(name="QueueManager")
 
         self.logger.debug(f"Initialize QueueManager.")
 

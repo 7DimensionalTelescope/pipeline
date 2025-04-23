@@ -249,7 +249,7 @@ class PhotometrySingle:
         return os.path.join(self.path_tmp, os.path.basename(_tmp))
 
     @property
-    def is_refcat_loaded(self) -> bool:
+    def is_ref_loaded(self) -> bool:
         """Check if reference catalog is loaded."""
         return hasattr(self, "ref_src_table") and self.ref_src_table is not None
 
@@ -271,7 +271,7 @@ class PhotometrySingle:
         start_time = time.time()
         self.logger.info(f"Start Photometry for the image {self.name} [{self._id}]")
 
-        self.load_ref_catalog()
+        self.define_paths()
         self.calculate_seeing()
         self.photometry_with_sextractor()
         self.zp_src_table = self.match_ref_catalog()
@@ -284,7 +284,16 @@ class PhotometrySingle:
         end_time = time.time()
         self.logger.info(f"Photometry Done for {self.name} [{self._id}] in {end_time - start_time:.2f} seconds")
 
-    def load_ref_catalog(self) -> None:
+    def define_paths(self) -> None:
+        # no subdir
+        # self.output_file = get_derived_product_path(self.image)
+        # catalog_dir = os.path.dirname(self.output_file)
+        # if not os.path.exists(catalog_dir):
+        #     os.makedirs(catalog_dir)
+
+        self.output_catalog_file = add_suffix(self.image, "_cat.fits")
+
+    def _load_ref_catalog(self) -> None:
         """
         Load reference catalog for photometric calibration.
 
@@ -310,21 +319,13 @@ class PhotometrySingle:
         else:
             ref_src_table = Table.read(ref_cat)
 
-        self.ref_src_table = ref_src_table
-
         coord_ref = SkyCoord(
-            ra=self.ref_src_table["ra"] * u.deg,
-            dec=self.ref_src_table["dec"] * u.deg,
-            pm_ra_cosdec=(
-                self.ref_src_table["pmra"] * u.mas / u.yr if not np.isnan(self.ref_src_table["pmra"]).any() else None
-            ),
-            pm_dec=(
-                self.ref_src_table["pmdec"] * u.mas / u.yr if not np.isnan(self.ref_src_table["pmdec"]).any() else None
-            ),
+            ra=ref_src_table["ra"] * u.deg,
+            dec=ref_src_table["dec"] * u.deg,
+            pm_ra_cosdec=(ref_src_table["pmra"] * u.mas / u.yr if not np.isnan(ref_src_table["pmra"]).any() else None),
+            pm_dec=(ref_src_table["pmdec"] * u.mas / u.yr if not np.isnan(ref_src_table["pmdec"]).any() else None),
             distance=(
-                (1 / (self.ref_src_table["parallax"] * u.mas))
-                if not np.isnan(self.ref_src_table["parallax"]).any()
-                else None
+                (1 / (ref_src_table["parallax"] * u.mas)) if not np.isnan(ref_src_table["parallax"]).any() else None
             ),
             obstime=Time(2016.0, format="jyear"),
         )
@@ -332,6 +333,7 @@ class PhotometrySingle:
         obs_time = Time(self.image_info.dateobs, format="isot", scale="utc")
         coord_ref = coord_ref.apply_space_motion(new_obstime=obs_time)
 
+        self.ref_src_table = ref_src_table
         self._coord_ref = coord_ref
 
     def calculate_seeing(
@@ -341,7 +343,7 @@ class PhotometrySingle:
         run_prep_sextractor: bool = True,
     ) -> None:
         """
-        Calculate seeing conditions from stellar sources.
+        Calculate seeing conditions from stellar sources in the image.
 
         Uses source extraction to identify stars and calculate median FWHM,
         ellipticity, and elongation values.
@@ -379,13 +381,13 @@ class PhotometrySingle:
         self.logger.info(f"Start Source Extractor for {self.name}")
 
         satur_level = self.image_info.satur_level * self.config.photometry.satur_margin
-        self.logger.debug(f"Saturation Level with Margin {self.config.photometry.satur_margin}: {satur_level}")
+        self.logger.debug(f"Saturation Level with Margin {1 - self.config.photometry.satur_margin}: {satur_level}")
 
         self.logger.debug("Setting Apertures for Photometry.")
         sex_args = phot_utils.get_sex_args(
             self.image,
             self.phot_conf,
-            gain=self.image_info.gain,
+            egain=self.image_info.egain,
             peeing=self.phot_header.peeing,
             pixscale=self.image_info.pixscale,
             satur_level=satur_level,
@@ -399,7 +401,7 @@ class PhotometrySingle:
         _, outcome = self._run_sextractor(
             prefix="main",
             sex_args=sex_args,
-            return_output=True,
+            return_sex_output=True,
         )
 
         outcome = [s for s in outcome.split("\n") if "RMS" in s][0]
@@ -466,13 +468,14 @@ class PhotometrySingle:
         Returns:
             Table of matched sources meeting all criteria
         """
+
+        if not self.is_ref_loaded:
+            self._load_ref_catalog()
+
         self.logger.debug("Matching sources with reference catalog.")
 
-        if low_mag_cut is None:
-            low_mag_cut = self.phot_conf.ref_mag_lower
-
-        if high_mag_cut is None:
-            high_mag_cut = self.phot_conf.ref_mag_upper
+        low_mag_cut = low_mag_cut or self.phot_conf.ref_mag_lower
+        high_mag_cut = high_mag_cut or self.phot_conf.ref_mag_upper
 
         coord_obs = SkyCoord(
             self.obs_src_table["ALPHA_J2000"],
@@ -523,12 +526,7 @@ class PhotometrySingle:
         if snr_cut:
             post_match_table = phot_utils.filter_table(post_match_table, "SNR_AUTO", snr_cut, method="lower")
 
-        for key in [
-            "source_id",
-            "bp_rp",
-            "phot_g_mean_mag",
-            f"mag_{self.image_info.filter}",
-        ]:
+        for key in ["source_id", "bp_rp", "phot_g_mean_mag", f"mag_{self.image_info.filter}"]:
             valuearr = self.ref_src_table[key][index_match].data
             masked_valuearr = MaskedColumn(valuearr, mask=(sep.arcsec > self.phot_conf.match_radius))
             self.obs_src_table[key] = masked_valuearr
@@ -539,7 +537,7 @@ class PhotometrySingle:
             #     self.logger.error("Check Astrometry solution: no WCS information")
             #     raise PipelineError("Check Astrometry solution: no WCS information")
         else:
-            self.logger.info(f"""Matched Sources: {len(post_match_table)} (r={self.phot_conf.match_radius:.3f}")""")
+            self.logger.info(f"Matched Sources: {len(post_match_table)} (r = {self.phot_conf.match_radius:.3f} arcsec)")
 
         return post_match_table
 
@@ -749,26 +747,18 @@ class PhotometrySingle:
         The catalog includes all detected sources with their measured properties
         and calculated photometric values.
         """
-
-        # format = "ascii.tab"  # no metadata:
-        # format = "ascii.ecsv"
         format = "fits"
 
         metadata = self.image_info.metadata
         metadata["obs"] = self.config.obs.unit
         self.obs_src_table.meta = metadata
-        self.obs_src_table.meta.meta["comments"] = [
-            "Zero point based on Gaia DR3",
-            "Zero point uncertainty is not included in FLUX and MAG errors",
-        ]
+        # self.obs_src_table.meta["comments"] = [
+        #     "Zero point based on Gaia DR3",
+        #     "Zero point uncertainty is not included in FLUX and MAG errors",
+        # ]  # this interferes with table description
 
-        output_file = get_derived_product_path(self.image)
-        catalog_dir = os.path.dirname(output_file)
-        if not os.path.exists(catalog_dir):
-            os.makedirs(catalog_dir)
-
-        self.obs_src_table.write(output_file, format=format, overwrite=True)
-        self.logger.info(f"Catalog written: {output_file}")
+        self.obs_src_table.write(self.output_catalog_file, format=format, overwrite=True)  # "ascii.tab" "ascii.ecsv"
+        self.logger.info(f"Catalog written: {self.output_catalog_file}")
 
 
 @dataclass
@@ -822,7 +812,7 @@ class ImageInfo:
     obj: str  # Object name
     filter: str  # Filter used
     dateobs: str  # Observation date/time
-    gain: float  # Gain value
+    egain: float  # gain in e-/ADU, not camera gain
     naxis1: int  # Image width
     naxis2: int  # Image height
     ref_mag_key: str  # Reference magnitude key
@@ -883,7 +873,7 @@ class ImageInfo:
             obj=hdr["OBJECT"],
             filter=hdr["FILTER"],
             dateobs=hdr["DATE-OBS"],
-            gain=float(hdr["EGAIN"]),  # effective gain for combined images
+            egain=float(hdr["EGAIN"]),  # effective gain for combined images
             naxis1=int(hdr["NAXIS1"]),
             naxis2=int(hdr["NAXIS2"]),
             ref_mag_key=f"mag_{hdr['FILTER']}",

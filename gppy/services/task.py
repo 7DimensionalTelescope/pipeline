@@ -40,7 +40,7 @@ class Task:
         status: str = "pending",
         result: Any = None,
         error: Optional[Exception] = None,
-        cls: Optional[Any] = None
+        cls: Optional[Any] = None,
     ):
         self._func = func
         self.cls = cls

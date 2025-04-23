@@ -222,28 +222,32 @@ class ImStack(BaseSetup):
         is a conservative choice for saturation levels across images.
         """
         self.n_stack = len(self.files)
+
         header_list = [fits.getheader(f) for f in self.files]
 
+        self.total_exptime = np.sum([hdr["EXPTIME"] for hdr in header_list])  # sec
         self.zpvalues = [hdr[self.zpkey] for hdr in header_list]
         self.skyvalues = [hdr["SKYVAL"] for hdr in header_list]
         self.mjd_stacked = np.mean([hdr["MJD"] for hdr in header_list])
         self.satur_level = np.min([hdr["SATURATE"] * hdr["FLXSCALE"] for hdr in header_list])
-
-        # 	Total Exposure Time [sec]
-        self.total_exptime = np.sum([hdr["EXPTIME"] for hdr in header_list])
+        self.coadd_egain = np.mean([hdr["EGAIN"] / hdr["FLXSCALE"] for hdr in header_list])
 
         objs = list(set([hdr["OBJECT"] for hdr in header_list]))
         filters = list(set([hdr["FILTER"] for hdr in header_list]))
         egains = list(set([hdr["EGAIN"] for hdr in header_list]))
+        camera_gains = list(set([hdr["GAIN"] for hdr in header_list]))
         self.obj = objs[0]
+        self.camera_gain = camera_gains[0]
+
         if len(objs) != 1:
-            self.logger.warning("Multiple OBJECTs found. Using the first one.")
+            self.logger.warning("Multiple OBJECT found. Using the first one.")
         self.filte = filters[0]
         if len(filters) != 1:
-            self.logger.warning("Multiple FILTERs found. Using the first one.")
-        self.gain_default = float(egains[0])
+            self.logger.warning("Multiple FILTER found. Using the first one.")
         if len(egains) != 1:
-            self.logger.warning("Multiple EGAINs found. Using the first one.")
+            self.logger.warning("Multiple EGAIN found. Using the first one.")
+        if len(camera_gains) != 1:
+            self.logger.warning("Multiple GAIN found. Using the first one.")
 
         #   Hard coding for the UDS field
         # self.gain_default = 0.78
@@ -681,7 +685,7 @@ class ImStack(BaseSetup):
         mjd_stacked = self.mjd_stacked
         jd_stacked = Time(mjd_stacked, format="mjd").jd
         dateobs_stacked = Time(mjd_stacked, format="mjd").isot
-        gain = (2 / 3) * self.n_stack * self.gain_default
+        # gain = (2 / 3) * self.n_stack * self.egain
         # airmass_stacked = np.mean(airmasslist)
         # dateloc_stacked = calc_mean_dateloc(dateloclist)
         # alt_stacked = np.mean(altlist)
@@ -713,8 +717,9 @@ class ImStack(BaseSetup):
             "MJD": (mjd_stacked, "Modified Julian Date at start of observations for combined image"),
             "JD": (jd_stacked, "Julian Date at start of observations for combined image"),
             "SKYVAL": (0, "SKY MEDIAN VALUE (Subtracted)"),
-            # "EGAIN": (gain, "Effective EGAIN for combined image (e-/ADU)"),
-            # "SATURATE": (self.satur_level, "Conservative saturation level for combined image"),  # let swarp handle this
+            "EGAIN": (self.coadd_egain, "Effective EGAIN for combined image (e-/ADU)"),  # swarp calculates it as GAIN, but irreproducible.
+            "GAIN": (self.camera_gain, "Gain from the camera configuration"),
+            "SATURATE": (self.satur_level, "Conservative saturation level for combined image"),  # let swarp handle this
         }  # fmt: skip
 
         # 	Update Header
