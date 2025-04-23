@@ -68,10 +68,7 @@ class Photometry(BaseSetup):
         self.ref_catalog = ref_catalog or self.config.photometry.refcatname
 
         self.run_single_photometry = (
-            True
-            if not self.config.flag.single_photometry
-            and not self.config.flag.combined_photometry
-            else False
+            True if not self.config.flag.single_photometry and not self.config.flag.combined_photometry else False
         )
 
         if self.run_single_photometry:
@@ -108,10 +105,7 @@ class Photometry(BaseSetup):
 
     @property
     def sequential_task(self):
-        return [
-            (1, "run", False),
-            (2, "flagging", False)
-        ]
+        return [(1, "run", False), (2, "flagging", False)]
 
     def run(self) -> None:
         """
@@ -142,9 +136,7 @@ class Photometry(BaseSetup):
         """Process images in parallel using queue system."""
         task_ids = []
         for i, image in enumerate(self.images):
-            process_name = (
-                f"{self.config.name} - single photometry - {i+1} of {len(self.images)}"
-            )
+            process_name = f"{self.config.name} - single photometry - {i+1} of {len(self.images)}"
             phot_single = PhotometrySingle(
                 image,
                 self.config,
@@ -217,9 +209,7 @@ class PhotometrySingle:
         self.ref_catalog = ref_catalog
         # self.image = os.path.join(self.config.path.path_processed, image)
         self.image = image
-        self.image_info = ImageInfo.parse_image_info(
-            self.image, pixscale=self.config.obs.pixscale
-        )
+        self.image_info = ImageInfo.parse_image_info(self.image, pixscale=self.config.obs.pixscale)
         self.phot_conf = self.config.photometry
         self.name = name or self.config.name
         self.phot_header = PhotometryHeader()
@@ -258,6 +248,11 @@ class PhotometrySingle:
         _tmp = os.path.splitext(self.image)[0]
         return os.path.join(self.path_tmp, os.path.basename(_tmp))
 
+    @property
+    def is_refcat_loaded(self) -> bool:
+        """Check if reference catalog is loaded."""
+        return hasattr(self, "ref_src_table") and self.ref_src_table is not None
+
     def run(self) -> None:
         """
         Execute complete photometry pipeline for single image.
@@ -278,7 +273,7 @@ class PhotometrySingle:
 
         self.load_ref_catalog()
         self.calculate_seeing()
-        self.run_main_sextractor()
+        self.photometry_with_sextractor()
         self.zp_src_table = self.match_ref_catalog()
         dicts = self.calculate_zp()
         self.update_header(*dicts)
@@ -287,9 +282,7 @@ class PhotometrySingle:
         self.logger.debug(MemoryMonitor.log_memory_usage)
         MemoryMonitor.cleanup_memory()
         end_time = time.time()
-        self.logger.info(
-            f"Photometry Done for {self.name} [{self._id}] in {end_time - start_time:.2f} seconds"
-        )
+        self.logger.info(f"Photometry Done for {self.name} [{self._id}] in {end_time - start_time:.2f} seconds")
 
     def load_ref_catalog(self) -> None:
         """
@@ -297,7 +290,9 @@ class PhotometrySingle:
 
         Handles both standard and corrected GaiaXP catalogs.
         Creates new catalog if it doesn't exist by parsing Gaia data.
+
         Sets self.ref_src_table with loaded catalog data.
+        Sets self._coord_ref
         """
         if self.ref_catalog == "GaiaXP_cor":
             ref_cat = f"{self.config.path.path_refcat}/cor_gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
@@ -306,9 +301,7 @@ class PhotometrySingle:
 
         if not os.path.exists(ref_cat) and "gaia" in self.ref_catalog:
             ref_src_table = phot_utils.parse_gaia_catalogs(
-                target_coord=SkyCoord(
-                    self.image_info.racent, self.image_info.decent, unit="deg"
-                ),
+                target_coord=SkyCoord(self.image_info.racent, self.image_info.decent, unit="deg"),
                 path_calibration_field=self.config.path.path_calib_field,
                 matching_radius=self.phot_conf.match_radius * 1.5,
                 path_save=ref_cat,
@@ -323,14 +316,10 @@ class PhotometrySingle:
             ra=self.ref_src_table["ra"] * u.deg,
             dec=self.ref_src_table["dec"] * u.deg,
             pm_ra_cosdec=(
-                self.ref_src_table["pmra"] * u.mas / u.yr
-                if not np.isnan(self.ref_src_table["pmra"]).any()
-                else None
+                self.ref_src_table["pmra"] * u.mas / u.yr if not np.isnan(self.ref_src_table["pmra"]).any() else None
             ),
             pm_dec=(
-                self.ref_src_table["pmdec"] * u.mas / u.yr
-                if not np.isnan(self.ref_src_table["pmdec"]).any()
-                else None
+                self.ref_src_table["pmdec"] * u.mas / u.yr if not np.isnan(self.ref_src_table["pmdec"]).any() else None
             ),
             distance=(
                 (1 / (self.ref_src_table["parallax"] * u.mas))
@@ -364,9 +353,7 @@ class PhotometrySingle:
         if run_prep_sextractor:  # Always run sextractor for prep
             self._run_sextractor(prefix="prep")
         else:
-            self.obs_src_table = Table.read(
-                self.tmp_file_prefix + ".prep.cat", format="ascii.sextractor"
-            )
+            self.obs_src_table = Table.read(self.tmp_file_prefix + ".prep.cat", format="ascii.sextractor")
 
         self.post_match_table = self.match_ref_catalog(
             snr_cut=False, low_mag_cut=low_mag_cut, high_mag_cut=high_mag_cut
@@ -374,30 +361,25 @@ class PhotometrySingle:
 
         self.phot_header.seeing = np.median(self.post_match_table["FWHM_WORLD"] * 3600)
         self.phot_header.peeing = self.phot_header.seeing / self.image_info.pixscale
-        self.phot_header.ellipticity = round(
-            np.median(self.post_match_table["ELLIPTICITY"]), 3
-        )
-        self.phot_header.elongation = round(
-            np.median(self.post_match_table["ELONGATION"]), 3
-        )
+        self.phot_header.ellipticity = round(np.median(self.post_match_table["ELLIPTICITY"]), 3)
+        self.phot_header.elongation = round(np.median(self.post_match_table["ELONGATION"]), 3)
 
         self.logger.debug(f"{len(self.post_match_table)} Star-like Sources Found")
         self.logger.debug(f"SEEING     : {self.phot_header.seeing:.3f} arcsec")
         self.logger.debug(f"ELONGATION : {self.phot_header.elongation:.3f}")
         self.logger.debug(f"ELLIPTICITY: {self.phot_header.ellipticity:.3f}")
 
-    def run_main_sextractor(self) -> None:
+    def photometry_with_sextractor(self) -> None:
         """
         Run source extraction on the image.
 
         Configures and executes SExtractor with appropriate parameters
         based on seeing conditions and image characteristics.
-        Updates header with sky background statistics.
         """
         self.logger.info(f"Start Source Extractor for {self.name}")
 
         satur_level = self.image_info.satur_level * self.config.photometry.satur_margin
-        self.logger.debug(f"Saturation Level with Margin {self.config.photometry.satur_margin}: {satur_level}") # fmt: skip
+        self.logger.debug(f"Saturation Level with Margin {self.config.photometry.satur_margin}: {satur_level}")
 
         self.logger.debug("Setting Apertures for Photometry.")
         sex_args = phot_utils.get_sex_args(
@@ -421,9 +403,7 @@ class PhotometrySingle:
         )
 
         outcome = [s for s in outcome.split("\n") if "RMS" in s][0]
-        self.phot_header.skymed = float(
-            outcome.split("Background:")[1].split("RMS:")[0]
-        )
+        self.phot_header.skymed = float(outcome.split("Background:")[1].split("RMS:")[0])
         self.phot_header.skysig = float(outcome.split("RMS:")[1].split("/")[0])
 
     def _run_sextractor(
@@ -501,14 +481,10 @@ class PhotometrySingle:
         )
         index_match, sep, _ = coord_obs.match_to_catalog_sky(self._coord_ref)
 
-        _post_match_table = hstack(
-            [self.obs_src_table, self.ref_src_table[index_match]]
-        )
+        _post_match_table = hstack([self.obs_src_table, self.ref_src_table[index_match]])
         _post_match_table["sep"] = sep.arcsec
 
-        post_match_table = _post_match_table[
-            _post_match_table["sep"] < self.phot_conf.match_radius
-        ]
+        post_match_table = _post_match_table[_post_match_table["sep"] < self.phot_conf.match_radius]
         post_match_table["within_ellipse"] = phot_utils.is_within_ellipse(
             post_match_table["X_IMAGE"],
             post_match_table["Y_IMAGE"],
@@ -518,22 +494,15 @@ class PhotometrySingle:
             self.phot_conf.photfraction * self.image_info.naxis2 / 2,
         )
 
-        suffixes = [
-            key.replace("FLUXERR_", "")
-            for key in post_match_table.keys()
-            if "FLUXERR_" in key
-        ]
+        suffixes = [key.replace("FLUXERR_", "") for key in post_match_table.keys() if "FLUXERR_" in key]
 
         for suffix in suffixes:
             post_match_table[f"SNR_{suffix}"] = (
-                post_match_table[f"FLUX_{suffix}"]
-                / post_match_table[f"FLUXERR_{suffix}"]
+                post_match_table[f"FLUX_{suffix}"] / post_match_table[f"FLUXERR_{suffix}"]
             )
 
         post_match_table = phot_utils.filter_table(post_match_table, "FLAGS", 0)
-        post_match_table = phot_utils.filter_table(
-            post_match_table, "within_ellipse", True
-        )
+        post_match_table = phot_utils.filter_table(post_match_table, "within_ellipse", True)
 
         if low_mag_cut:
             post_match_table = phot_utils.filter_table(
@@ -552,9 +521,7 @@ class PhotometrySingle:
             )
 
         if snr_cut:
-            post_match_table = phot_utils.filter_table(
-                post_match_table, "SNR_AUTO", snr_cut, method="lower"
-            )
+            post_match_table = phot_utils.filter_table(post_match_table, "SNR_AUTO", snr_cut, method="lower")
 
         for key in [
             "source_id",
@@ -563,22 +530,16 @@ class PhotometrySingle:
             f"mag_{self.image_info.filter}",
         ]:
             valuearr = self.ref_src_table[key][index_match].data
-            masked_valuearr = MaskedColumn(
-                valuearr, mask=(sep.arcsec > self.phot_conf.match_radius)
-            )
+            masked_valuearr = MaskedColumn(valuearr, mask=(sep.arcsec > self.phot_conf.match_radius))
             self.obs_src_table[key] = masked_valuearr
 
         if len(post_match_table) == 0:
-            self.logger.critical(
-                "There is no matched source. It will cause a problem in the next step."
-            )
+            self.logger.critical("There is no matched source. It will cause a problem in the next step.")
             # if "CTYPE1" not in self.header.keys():
             #     self.logger.error("Check Astrometry solution: no WCS information")
             #     raise PipelineError("Check Astrometry solution: no WCS information")
         else:
-            self.logger.info(
-                f"""Matched Sources: {len(post_match_table)} (r={self.phot_conf.match_radius:.3f}")"""
-            )
+            self.logger.info(f"""Matched Sources: {len(post_match_table)} (r={self.phot_conf.match_radius:.3f}")""")
 
         return post_match_table
 
@@ -597,14 +558,10 @@ class PhotometrySingle:
         """
 
         zp_src_table = self.zp_src_table
-        self.logger.info(
-            f"{len(zp_src_table)} sources to calibration ZP in {self.name}"
-        )
+        self.logger.info(f"{len(zp_src_table)} sources to calibration ZP in {self.name}")
         self.logger.info("Calculating zero points.")
 
-        aperture = phot_utils.get_aperture_dict(
-            self.phot_header.peeing, self.image_info.pixscale
-        )
+        aperture = phot_utils.get_aperture_dict(self.phot_header.peeing, self.image_info.pixscale)
 
         zp_dict = {}
         aper_dict = {}
@@ -619,12 +576,10 @@ class PhotometrySingle:
 
             mask = sigma_clip(zps, sigma=2.0).mask
 
-            zp, zperr = phot_utils.compute_median_mad(np.array(zps[~mask].value))
+            zp, zperr = phot_utils.compute_median_nmad(np.array(zps[~mask].value), normalize=True)
 
             keys = phot_utils.keyset(mag_key, self.image_info.filter)
-            values = phot_utils.zp_correction(
-                self.obs_src_table[mag_key], self.obs_src_table[magerr_key], zp, zperr
-            )
+            values = phot_utils.zp_correction(self.obs_src_table[mag_key], self.obs_src_table[magerr_key], zp, zperr)
             for key, val in zip(keys, values):
                 self.obs_src_table[key] = val
                 self.obs_src_table[key].format = ".3f"
@@ -726,12 +681,8 @@ class PhotometrySingle:
             label=f"{len(ref_mag[mask])}",
         )
 
-        plt.axhline(
-            y=zp, ls="-", lw=1, c="grey", zorder=1, label=f"ZP: {zp:.3f}+/-{zperr:.3f}"
-        )
-        plt.axhspan(
-            ymin=zp - zperr, ymax=zp + zperr, color="silver", alpha=0.5, zorder=0
-        )
+        plt.axhline(y=zp, ls="-", lw=1, c="grey", zorder=1, label=f"ZP: {zp:.3f}+/-{zperr:.3f}")
+        plt.axhspan(ymin=zp - zperr, ymax=zp + zperr, color="silver", alpha=0.5, zorder=0)
         plt.axvspan(
             xmin=0,
             xmax=self.phot_conf.ref_mag_lower,
@@ -841,9 +792,7 @@ class PhotometryHeader:
 
     def __repr__(self) -> str:
         """Returns a string representation of the ImageHeader."""
-        return ",\n".join(
-            f"  {k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_")
-        )
+        return ",\n".join(f"  {k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
 
     @property
     def dict(self) -> Dict[str, Tuple[Any, str]]:
@@ -891,9 +840,7 @@ class ImageInfo:
 
     def __repr__(self) -> str:
         """Returns a string representation of the ImageInfo."""
-        return ",\n".join(
-            f"  {k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_")
-        )
+        return ",\n".join(f"  {k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
 
     @property
     def metadata(self) -> Dict[str, Any]:

@@ -368,9 +368,12 @@ def swarp(
 
 def hotpants(
     inim,
-    refim,
+    tmplim,
     inmask,
     refmask,
+    outim=None,
+    out_conv_im=None,
+    ssf=None,
     il=None,
     iu=None,
     tl=None,
@@ -396,26 +399,30 @@ def hotpants(
     # Template
     # tl, tu = refskyval - n_sigma * refskysig, 60000
     # tl, tu = refskyval - n_sigma * refskysig, 60000000
-    tl, tu = -60000000, 60000000
     # tl, tu = -20000, 5100000
+    tl = tl or -60000000
+    tu = tu or 60000000
 
     # x, y = 10200, 6800 for 7DT C3 images
     nrx = nrx or 3
     nry = nry or 2
     # nrx, nry = 1, 1
     # nrx, nry = 6, 4
-    ssf = swap_ext(inim, "ssf.txt")
+
+    outim = outim or swap_ext(inim, "subt.fits")
+    out_conv_im = out_conv_im or swap_ext(inim, "conv.fits")
+    ssf = ssf or swap_ext(inim, "ssf.txt")
 
     hotpantscom = (
         f"hotpants -c t -n i "
         f"-iu {iu} -il {il} -tu {tu} -tl {tl} "
-        f"-inim {inim} -tmplim {refim} -outim {hdim} -oci {hcim} "
+        f"-inim {inim} -tmplim {tmplim} -outim {outim} -oci {out_conv_im} "
         f"-imi {inmask} -tmi {refmask} "
         f"-v 0 "
         f"-nrx {nrx} -nry {nry} "
         f"-ssf {ssf}"
     )
-    print(hotpantscom)
     os.system(hotpantscom)
+    # print(hotpantscom)
 
     return hotpantscom

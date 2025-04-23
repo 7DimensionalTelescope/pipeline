@@ -10,9 +10,9 @@ from ..const import REF_DIR
 from ..config import Configuration
 from .. import external
 from ..base import BaseSetup
-from ..utils import get_derived_product_path, swap_ext
+from ..utils import get_derived_product_path, swap_ext, create_common_table
 
-from .utils import create_ds9_region_file, select_sources, create_common_table
+from .utils import create_ds9_region_file, select_sources
 
 
 class ImSubtract(BaseSetup):
@@ -44,6 +44,8 @@ class ImSubtract(BaseSetup):
 
         self.run_hotpants()
 
+        self.mask_unsubtracted()
+
     def find_reference_image(self):
         obj = self.config.obs.object
         filte = self.config.obs.filter
@@ -70,7 +72,12 @@ class ImSubtract(BaseSetup):
         if not os.path.exists(transient_dir):
             os.makedirs(transient_dir)
 
-    def create_substamps(self):
+        self.path_tmp = os.path.join(
+            self.config.path.path_factory,
+            "subt",
+        )
+
+    def create_substamps(self, ds9_region=True):
         sci_source_table = Table.read(self.sci_source_table_file)
         ref_source_table = Table.read(self.ref_source_table_file)
 
@@ -88,15 +95,23 @@ class ImSubtract(BaseSetup):
             f"out of {len(selected_sci_table)}, {len(ref_source_table)}"
         )
 
-        substamp_file = swap_ext(self.sci_image_file, "ssf.txt")
+        self.substamp_file = swap_ext(self.sci_image_file, "ssf.txt")
 
         # Write substamp file
-        f = open(substamp_file, "w")
+        f = open(self.substamp_file, "w")
         for x, y in zip(
             matched_source_table["X_IMAGE"], matched_source_table["Y_IMAGE"]
         ):
             f.write(f"{x} {y}\n")
         f.close()
+
+        # Create DS9 region file for substamp sources
+        if ds9_region:
+            create_ds9_region_file(
+                matched_source_table["ALPHA_J2000"],
+                matched_source_table["DELTA_J2000"],
+                filename=swap_ext(self.sci_image_file, "ssf.reg"),
+            )
 
     def create_masks(self):
         # Create mask for science image
@@ -112,209 +127,45 @@ class ImSubtract(BaseSetup):
         self.ref_mask_file = self._save_mask(ref_mask, self.ref_image_file)
 
         # Create common mask
-        common_mask = sci_mask | ref_mask
+        common_mask = sci_mask | ref_mask  # leave 0, mask 1
 
         self.common_mask_file = self._save_mask(common_mask, self.subt_image_file)
+        self.common_mask = common_mask
 
     def _create_mask(self, data):
         return (data == 0).astype("uint8")
 
     def _save_mask(self, mask, image_file):
-        filename = os.path.join(
-            self.config.path.path_factory, swap_ext(image_file, "mask.fits")
-        )
+        filename = os.path.join(self.path_tmp, swap_ext(image_file, "mask.fits"))
         fits.writeto(filename, data=mask, overwrite=True)
         return filename
 
     def run_hotpants(self):
-        external.hotpants(self.sci_mask_file, self.ref_mask_file)
-        return
-
-    def legacy_gppy(self):
-        # ============================================================
-        # 	Function
-        # ------------------------------------------------------------
-
-        # ============================================================
-        # %%
-        # 	Input
-        # ------------------------------------------------------------
-        # 	Input
-        # ------------------------------------------------------------
-        # inim = input(f"Science Image:")
-        # refim = input(f"Reference Image:")
-        # inmask_image = input(f"Science Mask Image:")
-        # refmask_image = input(f"Reference Mask Image:")
-        # ------------------------------------------------------------
-        # 	argument
-        # ------------------------------------------------------------
-        inim = sys.argv[1]
-        refim = sys.argv[2]
-        inmask_image = sys.argv[3]
-        refmask_image = sys.argv[4]
-        allmask_image = sys.argv[5]
-        # ------------------------------------------------------------
-        # 	Test Images
-        # ------------------------------------------------------------
-        # inim = "/large_data/processed_1x1_gain2750/T09614/7DT03/r/calib_7DT03_T09614_20240423_020757_r_360.com.fits"
-        # refim = "/large_data/factory/ref_frame/r/ref_PS1_T09614_00000000_000000_r_0.fits"
-        # inmask_image = "/large_data/processed_1x1_gain2750/T09614/7DT03/r/calib_7DT03_T09614_20240423_020757_r_360.com.mask.fits"
-        # refmask_image = "/large_data/factory/ref_frame/r/ref_PS1_T09614_00000000_000000_r_0.mask.fits"
-        #
-        path_sci = os.path.dirname(inim)
-        # ============================================================
-        # 	Setting
-        # ------------------------------------------------------------
-        # 	For SSF selection
-        aperture_suffix = "AUTO"
-        snr_lower = 10
-        classstar_lower = 0.2
-        flags_upper = 0
-        sep_upper = 1.0
-        region_radius = 10
-        # 	For Hotpants
-        n_sigma = 5
-        ##	Template
-        # tl, tu = refskyval - n_sigma * refskysig, 60000
-        # tl, tu = refskyval - n_sigma * refskysig, 60000000
-        tl, tu = -60000000, 60000000
-        # tl, tu = -20000, 5100000
-        ##	Region Split (y, x = 6800, 10200)
-        nrx, nry = 3, 2
-        # nrx, nry = 1, 1
-        # nrx, nry = 6, 4
-        # ============================================================
-        # %%
-        # 	Data
-        # ------------------------------------------------------------
-        # 	Science
-        # ------------------------------------------------------------
-        inhdr = fits.getheader(inim)
-        inobj = inhdr["OBJECT"]
-        infilter = inhdr["FILTER"]
-        ingain = inhdr["EGAIN"]
-        inellip = inhdr["ELLIP"]
-        inskyval = inhdr["SKYVAL"]
-        inskysig = inhdr["SKYSIG"]
-        incat = inim.replace("fits", "phot.cat")
-        intbl = Table.read(incat, format="ascii")
-        # ------------------------------------------------------------
-        # 	Select substamp sources
-        # ------------------------------------------------------------
-        #
-        indx_input_select = np.where(
-            (intbl[f"SNR_{aperture_suffix}_{infilter}"] > snr_lower)
-            & (intbl[f"CLASS_STAR"] > classstar_lower)
-            & (intbl["FLAGS"] <= flags_upper)
+        out_conv_im = os.path.join(
+            self.path_tmp,
+            swap_ext(os.path.basename(self.ref_image_file), "conv.fits"),
         )
-        selected_intbl = intbl[indx_input_select]
-        c_in = SkyCoord(
-            selected_intbl["ALPHA_J2000"], selected_intbl["DELTA_J2000"], unit="deg"
-        )
-        print(
-            f"{len(selected_intbl)} selected from {len(intbl)} ({len(selected_intbl)/len(intbl):.1%})"
-        )
-        # ------------------------------------------------------------
-        # %%
-        # 	Reference
-        # ------------------------------------------------------------
-        # refim = f'{path_ref}/ref_PS1_T09614_00000000_000000_r_0.fits'
-        refhdr = fits.getheader(refim)
-        # reffilter = refhdr['FILTER']
-        # refgain = refhdr['EGAIN']
-        refcat = refim.replace("fits", "phot.cat")
-        reftbl = Table.read(refcat, format="ascii")
-        refskyval = np.median(reftbl["BACKGROUND"])
-        refskysig = np.std(reftbl["BACKGROUND"])
-        c_ref = SkyCoord(reftbl["ALPHA_J2000"], reftbl["DELTA_J2000"], unit="deg")
-        # ------------------------------------------------------------
-
-        # %%
-        # 	Select substamp sources
-        # ------------------------------------------------------------
-        reftbl[f"SNR_{aperture_suffix}"] = (
-            reftbl[f"FLUX_{aperture_suffix}"] / reftbl[f"FLUXERR_{aperture_suffix}"]
+        external.hotpants(
+            self.sci_image_file,
+            self.ref_image_file,
+            self.sci_mask_file,
+            self.ref_mask_file,
+            ssf=self.substamp_file,
+            out_conv_im=out_conv_im,
         )
 
-        indx_ref_select = np.where(
-            (reftbl[f"SNR_{aperture_suffix}"] > snr_lower)
-            & (reftbl[f"CLASS_STAR"] > classstar_lower)
-            & (reftbl["FLAGS"] <= flags_upper)
-        )
-        selected_reftbl = reftbl[indx_ref_select]
-        c_ref = SkyCoord(
-            selected_reftbl["ALPHA_J2000"], selected_reftbl["DELTA_J2000"], unit="deg"
-        )
-        print(
-            f"{len(selected_reftbl)} selected from {len(reftbl)} ({len(selected_reftbl)/len(reftbl):.1%})"
+    def mask_unsubtracted(self):
+        # Apply final mask on both SUBT & CONV images
+        mask = fits.getdata(self.common_mask_file)
+
+        # Subt
+        subt_data, subt_header = fits.getdata(self.subt_image_file, header=True)
+        new_hddata = subt_data * (~mask + 2)
+        fits.writeto(
+            self.subt_image_file, new_hddata, header=subt_header, overwrite=True
         )
 
-        # %%
-        # 	Matching
-        # indx_match, sep_match, _ = c_ref.match_to_catalog_sky(c_in)
-        indx_match, sep_match, _ = c_in.match_to_catalog_sky(c_ref)
-        matched_table = selected_intbl[sep_match.arcsec < sep_upper]
-        print(f"{len(matched_table)} sources matched")
-        ssf = f"{path_sci}/{os.path.basename(inim).replace('fits', 'ssf.txt')}"
-        f = open(ssf, "w")
-        for x, y in zip(matched_table["X_IMAGE"], matched_table["Y_IMAGE"]):
-            f.write(f"{x} {y}\n")
-        f.close()
-
-        # %%
-        # 	Output
-        # hdim = f"{os.path.dirname(inim)}/hd{os.path.basename(inim)}"
-        # hcim = f"{os.path.dirname(inim)}/hc{os.path.basename(inim)}"
-        path_data = os.path.dirname(inim)
-        hdim = inim.replace("fits", "subt.fits")
-        _hcim = f"{os.path.basename(refim).replace('fits', 'conv.fits')}"
-        dateobs = os.path.basename(inim).split("_")[3]
-        timeobs = os.path.basename(inim).split("_")[4]
-        part_hcim = _hcim.split("_")
-        part_hcim[3] = dateobs
-        part_hcim[4] = timeobs
-        hcim = f"{path_data}/{'_'.join(part_hcim)}"
-
-        print(f"Output Image   : {hdim}")
-        print(f"Convolved Image: {hcim}")
-
-        # %%
-        il, iu = inskyval - n_sigma * inskysig, 60000
-        # il, iu = 0, 6000000
-        # 	Run
-        com = (
-            f"hotpants -c t -n i "
-            f"-iu {iu} -il {il} -tu {tu} -tl {tl} "
-            f"-inim {inim} -tmplim {refim} -outim {hdim} -oci {hcim} "
-            f"-imi {inmask_image} -tmi {refmask_image} "
-            f"-v 0 "
-            f"-nrx {nrx} -nry {nry} "
-            f"-ssf {ssf}"
-        )
-        print(com)
-        os.system(com)
-
-        # %%
-        ds9region_file = (
-            f"{path_sci}/{os.path.basename(inim).replace('fits', 'ssf.reg')}"
-        )
-        create_ds9_region_file(
-            ra_array=matched_table["ALPHA_J2000"],
-            dec_array=matched_table["DELTA_J2000"],
-            radius=region_radius,
-            filename=f"{ds9region_file}",
-        )
-
-        # ds9com = f"ds9 -tile column -frame lock wcs {inim} -region load {ds9region_file} {hcim} -region load {ds9region_file} {hdim} -region load {ds9region_file} &"
-        # print(ds9com)
-        # %%
-        print(f"Apply Final Mask on both SUBT & CONV images")
-        mask = fits.getdata(allmask_image)
-        # 	Subt
-        hddata, hdhdr = fits.getdata(hdim, header=True)
-        new_hddata = hddata * (~mask + 2)
-        fits.writeto(hdim, new_hddata, header=hdhdr, overwrite=True)
-        # 	Conv
-        hcdata, hchdr = fits.getdata(hcim, header=True)
-        new_hcdata = hcdata * (~mask + 2)
-        fits.writeto(hcim, new_hcdata, header=hchdr, overwrite=True)
+        # # Conv
+        # hcdata, hchdr = fits.getdata(self.ref_image_file, header=True)
+        # new_hcdata = hcdata * (~mask + 2)
+        # fits.writeto(out_conv_im, new_hcdata, header=hchdr, overwrite=True)

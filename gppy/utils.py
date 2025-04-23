@@ -511,6 +511,21 @@ def get_derived_product_path(image, subdir="catalogs", ext=".cat.fits"):
     return output_file
 
 
+def add_suffix(filename, suffix):
+    """
+    Add a suffix to the filename before the extension.
+
+    Args:
+        filename (str): The original filename.
+        suffix (str): The suffix to add.
+
+    Returns:
+        str: The modified filename with the suffix added.
+    """
+    base, ext = os.path.splitext(filename)
+    return f"{base}_{suffix}{ext}"
+
+
 class Parse7DS:
     """
     Parser for 7DT fits files
@@ -586,3 +601,40 @@ def force_symlink(src, dst):
         pass
 
     os.symlink(src, dst)
+
+
+def create_common_table(
+    sci_tbl,
+    ref_tbl,
+    x0="ALPHA_J2000",
+    y0="DELTA_J2000",
+    x1=None,
+    y1=None,
+    radius=1,
+):
+    """
+    Equatorial (RA, Dec) coordinates only.
+    """
+    from astropy.coordinates import SkyCoord
+
+    if x1 is None:
+        x1 = x0
+    if y1 is None:
+        y1 = y0
+
+    coord_sci = SkyCoord(sci_tbl[x0], sci_tbl[y0], unit="deg", copy=False)
+    coord_ref = SkyCoord(ref_tbl[x1], ref_tbl[y1], unit="deg", copy=False)
+
+    if len(coord_sci) < len(coord_ref):
+        coord0 = coord_sci  # this is not a deep copy. memory efficient
+        coord1 = coord_ref
+        table0 = sci_tbl
+    else:
+        coord0 = coord_ref
+        coord1 = coord_sci
+        table0 = ref_tbl
+
+    idx, sep2d, dist3d = coord0.match_to_catalog_sky(coord1)  # dist3d meaningless
+
+    matched_table = table0[sep2d.arcsec < radius]
+    return matched_table
