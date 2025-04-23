@@ -7,6 +7,7 @@ info:
   last_update_datetime:
 
 settings:
+  ToO: False
   obsmode:  # Deep Spec Color Search Single
   header_pad: 5  # assuming final header is 5 * 2880 bytes long. 6 to include polygon info
   local_astref: 
@@ -83,6 +84,7 @@ photometry:
     BACKPHOTO_TYPE: LOCAL
 
 imstack:
+  gpu: True
   zp_key: 'ZP_AUTO'
   # images_to_combine:
   bkgsub_type: 'Dynamic'
