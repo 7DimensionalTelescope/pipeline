@@ -95,6 +95,7 @@ imstack:
   joint_wcs: False
   interp_type: 'median'
   convolve: 'Gaussian'
+  target_seeing:  # auto if it's empty or smaller than max seeing
   propagate_mask: False
 
 imsubt:

@@ -6,7 +6,6 @@ from pathlib import Path
 import numpy as np
 from astropy.io import fits
 from astropy.time import Time
-from ccdproc import ImageFileCollection
 from typing import Any, List, Dict, Tuple, Optional, Union
 
 import warnings
@@ -25,7 +24,7 @@ from ..config import Configuration
 from .. import external
 from ..services.setup import BaseSetup
 from ..utils import swap_ext, define_output_dir
-from .utils import move_file #inputlist_parser, move_file
+from .utils import move_file  # inputlist_parser, move_file
 from .const import ZP_KEY, IC_KEYS, CORE_KEYS
 
 
@@ -504,9 +503,18 @@ class ImStack(BaseSetup):
         # self.logger.debug(f"--> Done ({_delt:.1f}sec)")
 
     def joint_registration(self):
+        """
+        It can address cross-filter registration when given just the image paths.
+        Just give the new joint WCS to all images and let individual ImStack
+        handle the rest of the process.
+        """
         pass
 
     def convolve(self):
+        """
+        This is ad-hoc. Change it to convolve after resampling and take
+        advantage of uniform pixel scale.
+        """
         method = self.config.imstack.convolve.lower()
         if method == "gaussian":
             from astropy.convolution import Gaussian2DKernel
@@ -524,9 +532,15 @@ class ImStack(BaseSetup):
 
             # Get peeings for convolution
             peeings = [fits.getheader(inim)["PEEING"] for inim in self.images_to_stack]
-            max_peeing = np.max(peeings)
+            # max_peeing = np.max(peeings)
+            max_peeing = (
+                self.config.imstack.target_seeing / self.config.obs.pixscale
+                if hasattr(self.config.imstack, "target_seeing")
+                and isinstance(self.config.imstack.target_seeing, (int, float))
+                else np.max(peeings)
+            )
             delta_peeings = [np.sqrt(max_peeing**2 - peeing**2) for peeing in peeings]
-            self.logger.debug(f"{peeings}")
+            self.logger.debug(f"PEEINGs: {peeings}")
 
             # convolve
             for i in range(len(self.images_to_stack)):
@@ -582,7 +596,7 @@ class ImStack(BaseSetup):
             self.logger.info("Completed Gaussian convolution to match seeing")
 
         else:
-            self.logger.info("Skipping Seeing Match Convolution")
+            self.logger.info("Undefined Convolution Method. Skipping Seeing Match")
 
     def stack_with_swarp(self):
         self.logger.info("Initiating Stacking Images")
