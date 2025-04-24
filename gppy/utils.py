@@ -49,11 +49,7 @@ def parse_key_params_from_header(filename: str or Path) -> None:
         else:
             info[attr] = header[key]
 
-    file_type = (
-        "master_image"
-        if any(s in filename for s in ["BIAS", "DARK", "FLAT"])
-        else "sci_image"
-    )
+    file_type = "master_image" if any(s in filename for s in ["BIAS", "DARK", "FLAT"]) else "sci_image"
 
     return info, file_type
 
@@ -145,9 +141,7 @@ def header_to_dict(file_path):
                 else:
                     try:
                         if "." in value:
-                            value = float(
-                                value
-                            )  # Convert to float if it contains a decimal
+                            value = float(value)  # Convert to float if it contains a decimal
                         else:
                             value = int(value)  # Convert to integer otherwise
                     except ValueError:
@@ -229,9 +223,7 @@ def find_raw_path(unit, date, n_binning, gain):
     if len(raw_data_folder) > 1:
         raw_data_folder = glob.glob(f"{RAWDATA_DIR}/{unit}/{date}*_gain{gain}*")
         if len(raw_data_folder) > 1:
-            raw_data_folder = glob.glob(
-                f"{RAWDATA_DIR}/{unit}/{date}_{n_binning}x{n_binning}_gain{gain}*"
-            )
+            raw_data_folder = glob.glob(f"{RAWDATA_DIR}/{unit}/{date}_{n_binning}x{n_binning}_gain{gain}*")
 
     elif len(raw_data_folder) == 0:
         raise ValueError("No data folder found")
@@ -429,9 +421,7 @@ def read_scamp_header(file):
         content = f.read()
 
     # Clean non-ASCII characters
-    cleaned_string = (
-        unicodedata.normalize("NFKD", content).encode("ascii", "ignore").decode("ascii")
-    )
+    cleaned_string = unicodedata.normalize("NFKD", content).encode("ascii", "ignore").decode("ascii")
 
     # Correct CTYPE (TAN --> TPV)
     hdr = fits.Header.fromstring(cleaned_string, sep="\n")
@@ -469,8 +459,7 @@ def update_padded_header(target_fits, header_new):
             cardpack = header_new.cards
         elif isinstance(header_new, dict):  # (key, value) or (key, (value, comment))
             cardpack = [
-                (key, *value) if isinstance(value, tuple) else (key, value)
-                for key, value in header_new.items()
+                (key, *value) if isinstance(value, tuple) else (key, value) for key, value in header_new.items()
             ]
         else:
             raise ValueError("Unsupported Header format for updating padded Header")
@@ -505,9 +494,7 @@ def get_derived_product_path(image, subdir="catalogs", ext=".cat.fits"):
     Without kwargs, returns catalog path
     """
     input_file_base = os.path.basename(image)
-    output_file = os.path.join(
-        os.path.dirname(image), subdir, swap_ext(input_file_base, ext)
-    )
+    output_file = os.path.join(os.path.dirname(image), subdir, swap_ext(input_file_base, ext))
     return output_file
 
 
@@ -582,7 +569,9 @@ def check_obs_file(params):
             params[key] = "*"
 
     path = RAWDATA_DIR + f'/{params["unit"]}/{params["date"]}_gain{params["gain"]}/'
-    filename = f'{params["unit"]}_*_{params["obj"]}_{params["filter"]}_{params["n_binning"]}x{params["n_binning"]}*.fits'
+    filename = (
+        f'{params["unit"]}_*_{params["obj"]}_{params["filter"]}_{params["n_binning"]}x{params["n_binning"]}*.fits'
+    )
     files = glob.glob(path + filename)
     if len(files) == 0:
         return False
@@ -638,3 +627,16 @@ def create_common_table(
 
     matched_table = table0[sep2d.arcsec < radius]
     return matched_table
+
+
+def parse_list_file(imagelist_file):
+    if os.path.exists(imagelist_file):
+        print(f"{imagelist_file} found!")
+    else:
+        print(f"Not Found {imagelist_file}!")
+    from astropy.table import Table
+
+    input_table = Table.read(imagelist_file, format="ascii")
+    # input_table = Table.read(imagelist_file_to_stack, format="ascii.commented_header")
+    files = [f for f in input_table["file"].data]
+    return files

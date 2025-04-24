@@ -5,7 +5,7 @@ from pathlib import Path
 import copy
 
 from .services.queue import QueueManager, Priority
-from .data import CalibrationData, ObservationDataSet
+from .base import CalibrationData, ObservationDataSet
 from .run import run_scidata_reduction_with_tree, run_masterframe_generator_with_tree
 from .const import available_7dt_units
 from .utils import check_obs_file

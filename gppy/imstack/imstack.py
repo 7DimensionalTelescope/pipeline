@@ -23,9 +23,9 @@ warnings.filterwarnings("ignore")
 from ..const import REF_DIR
 from ..config import Configuration
 from .. import external
-from ..base import BaseSetup
+from ..services.setup import BaseSetup
 from ..utils import swap_ext, define_output_dir
-from .utils import inputlist_parser, move_file
+from .utils import move_file #inputlist_parser, move_file
 from .const import ZP_KEY, IC_KEYS, CORE_KEYS
 
 
@@ -62,11 +62,6 @@ class ImStack(BaseSetup):
 
         return cls(config=config)
 
-    @classmethod
-    def from_file(cls, imagelist_file):
-        input_images = inputlist_parser(imagelist_file)
-        cls.from_list(input_images)
-
     @property
     def sequential_task(self):
         return [
@@ -76,7 +71,7 @@ class ImStack(BaseSetup):
             (4, "calculate_weight_map", True),
             (5, "apply_bpmask", True),
             (6, "joint_registration", False),
-            (7, "convolve", False),
+            (7, "convolve", True),
             (8, "stack_with_swarp", False),
             (9, "flagging", False),
         ]
@@ -768,4 +763,4 @@ if __name__ == "__main__":
     ]
 
     for image_list in image_lists:
-        ImStack.from_file(image_list).run()
+        ImStack.from_text_file(image_list).run()

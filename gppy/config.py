@@ -152,7 +152,7 @@ class Configuration:
 
     def _setup_logger(self, logger=None, overwrite=True, verbose=True):
         if logger is None:
-            from .logger import Logger
+            from .services.logger import Logger
 
             logger = Logger(name=self.config.name, slack_channel="pipeline_report")
 

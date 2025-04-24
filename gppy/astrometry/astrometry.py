@@ -4,12 +4,10 @@ from typing import Any, List, Tuple, Union
 from pathlib import Path
 import glob
 import time
-
-from .services.queue import QueueManager, Priority
-from . import external
-from .services.memory import MemoryMonitor
-from .config import Configuration
-from .base import BaseSetup
+from .. import external
+from ..services.memory import MemoryMonitor
+from ..config import Configuration
+from ..services.setup import BaseSetup
 
 
 class Astrometry(BaseSetup):
@@ -33,7 +31,7 @@ class Astrometry(BaseSetup):
         self,
         config: Union[str, Any] = None,
         logger: Any = None,
-        queue: Union[bool, QueueManager] = False,
+        queue: Union[bool, Any] = False,
     ) -> None:
         """Initialize the astrometry module.
 
@@ -367,6 +365,7 @@ class Astrometry(BaseSetup):
             items: Items to process
             **kwargs: Additional arguments for the function
         """
+        from ..services.queue import Priority
 
         task_ids = []
 

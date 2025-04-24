@@ -3,7 +3,7 @@ import requests
 import sys
 import time
 from typing import Optional, Union, Dict, Any
-from . import const
+from .. import const
 
 
 class Logger:

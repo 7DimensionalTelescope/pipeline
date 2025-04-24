@@ -26,7 +26,7 @@ from ..services.memory import MemoryMonitor
 from ..services.queue import QueueManager, Priority
 from .. import external
 from ..const import PipelineError
-from ..base import BaseSetup
+from ..services.setup import BaseSetup
 
 
 class Photometry(BaseSetup):
@@ -226,7 +226,7 @@ class PhotometrySingle:
         if hasattr(config, "logger") and config.logger is not None:
             return config.logger
 
-        from ..logger import Logger
+        from ..services.logger import Logger
 
         return Logger(name="7DT pipeline logger", slack_channel="pipeline_report")
 

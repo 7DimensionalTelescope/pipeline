@@ -64,6 +64,9 @@ astrometry:
   ahead_file: "/data/pipeline_reform/dhhyun_lab/scamptest/ahead/calib_7DT11_T07304_20250115_050155_g_60_nocrval.ahead"
 
 photometry:
+  # path:  # if user-input
+  #   - file1
+  #   - file2
   match_radius: 1.0
   photfraction: 0.75
   refcatname: GaiaXP
