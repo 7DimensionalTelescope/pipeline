@@ -1,11 +1,11 @@
 import os
 import fnmatch
-from .const import RAWDATA_DIR
+from .const import RAWDATA_DIR, PROCESSED_DIR
 from tqdm import tqdm
 
-def query_observations(include_keywords, exclude_keywords=None, copy_file=False, calibration=True, save_path="./"):
+def query_observations(include_keywords, datatype="processed", exclude_keywords=None, copy_file=False, calibration=True, save_path="./"):
     """
-    Recursively searches for .fits files in RAWDATA_DIR.
+    Recursively searches for .fits files in RAWDATA_DIR or PROCESSED_DATA.
     
     Files are returned if they:
     - contain at least one of the include_keywords (if provided), and
@@ -24,7 +24,12 @@ def query_observations(include_keywords, exclude_keywords=None, copy_file=False,
 
     matching_files = []
 
-    for dirpath, _, filenames in os.walk(RAWDATA_DIR):
+    if datatype == "processed":
+        DATA_DIR = PROCESSED_DIR
+    elif datatype == "raw":
+        DATA_DIR = RAWDATA_DIR
+
+    for dirpath, _, filenames in os.walk(DATA_DIR):
         for filename in fnmatch.filter(filenames, "*.fits"):
             full_path = os.path.join(dirpath, filename)
             full_path_lower = full_path.lower()
@@ -39,13 +44,5 @@ def query_observations(include_keywords, exclude_keywords=None, copy_file=False,
 
             matching_files.append(full_path)
     
-    if copy_file:
-        if calibration:
-            from .data import ObservationData
-            for full_path in tqdm(matching_files):
-                ObservationData(full_path).run_calibaration(save_path=save_path, verbose=False)
-        else:
-            matching_files = [os.path.copy(full_path) for full_path in matching_files]
-
     return matching_files
 

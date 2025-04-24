@@ -89,7 +89,7 @@ class MasterFrameGenerator:
             os.system(f"rm -rf {self.path_fdz}/*")
 
     def _setup_logger(self):
-        from ..logger import Logger
+        from ..services.logger import Logger
 
         logger = Logger(name="7DT masterframe logger")
         log_file = os.path.join(self.path_fdz, self.process_name + ".log")

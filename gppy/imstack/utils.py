@@ -49,24 +49,10 @@ def calc_mean_dateloc(dateloclist):
     return mean_isot_time
 
 
-def inputlist_parser(imagelist_file):
-    if os.path.exists(imagelist_file):
-        print(f"{imagelist_file} found!")
-    else:
-        print(f"Not Found {imagelist_file}!")
-        sys.exit()
-    input_table = Table.read(imagelist_file, format="ascii")
-    # input_table = Table.read(imagelist_file_to_stack, format="ascii.commented_header")
-    _files = [f for f in input_table["file"].data]
-    return _files
-
-
 def unpack(packed, type, ex=None):
     if len(packed) != 1:
         print(f"There are more than one ({len(packed)}) {type}s")
-        unpacked = input(
-            f"Type {type.upper()} name (e.g. {packed if ex is None else ex}):"
-        )
+        unpacked = input(f"Type {type.upper()} name (e.g. {packed if ex is None else ex}):")
     else:
         unpacked = packed[0]
     return unpacked

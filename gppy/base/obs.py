@@ -11,6 +11,7 @@ import glob
 
 from ..utils import parse_key_params_from_header
 
+
 class ObservationData:
 
     _id_counter = itertools.count(1)
@@ -145,33 +146,33 @@ class ObservationData:
     def name(self):
         return f"{self.date}_{self.n_binning}x{self.n_binning}_gain{self.gain}_{self.obj}_{self.unit}_{self.filter}"
 
-    def run_calibaration(self, save_path=None, verbose=True):
-        from ..config import Configuration
-        from ..preprocess import Preprocess
+    # def run_calibaration(self, save_path=None, verbose=True):
+    #     from ..config import Configuration
+    #     from ..preprocess import Preprocess
 
-        self.config = Configuration(self.obs_params, overwrite=True, verbose=verbose)
-        if save_path:
-            self.config.config.path.path_processed = save_path
-        calib = Preprocess(self.config)
-        calib.run()
+    #     self.config = Configuration(self.obs_params, overwrite=True, verbose=verbose)
+    #     if save_path:
+    #         self.config.config.path.path_processed = save_path
+    #     calib = Preprocess(self.config)
+    #     calib.run()
 
-    def run_astrometry(self):
-        from ..astrometry import Astrometry
+    # def run_astrometry(self):
+    #     from ..astrometry import Astrometry
 
-        if hasattr(self, "config"):
-            astro = Astrometry(self.config)
-        else:
-            astro = Astrometry.from_file(self.file_path)
-        astro.run()
+    #     if hasattr(self, "config"):
+    #         astro = Astrometry(self.config)
+    #     else:
+    #         astro = Astrometry.from_text_file(self.file_path)
+    #     astro.run()
 
-    def run_photometry(self):
-        from ..photometry import Photometry
+    # def run_photometry(self):
+    #     from ..photometry import Photometry
 
-        if hasattr(self, "config"):
-            phot = Photometry(self.config)
-        else:
-            phot = Photometry.from_file(self.file_path)
-        phot.run()
+    #     if hasattr(self, "config"):
+    #         phot = Photometry(self.config)
+    #     else:
+    #         phot = Photometry.from_text_file(self.file_path)
+    #     phot.run()
 
 
 class ObservationDataSet(ObservationData):
@@ -194,10 +195,8 @@ class ObservationDataSet(ObservationData):
         """
         if isinstance(fits_path, str):
             fits_path = Path(fits_path)
-            
-        pattern = (
-            r"(\w+)_(\d{8})_(\d{6})_([^_]+)_([^_]+)_(\d+x\d+)_(\d+\.\d+)s_\d+\.fits"
-        )
+
+        pattern = r"(\w+)_(\d{8})_(\d{6})_([^_]+)_([^_]+)_(\d+x\d+)_(\d+\.\d+)s_\d+\.fits"
         match = re.match(pattern, fits_path.name)
 
         if match:

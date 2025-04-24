@@ -13,7 +13,7 @@ import os
 
 from typing import Callable, Any, Optional, List, Dict, Union
 from datetime import datetime
-from ..logger import Logger
+from .logger import Logger
 from .task import TaskTree, Task, Priority
 
 from contextlib import contextmanager

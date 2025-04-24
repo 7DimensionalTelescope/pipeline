@@ -7,7 +7,7 @@ import gc
 from astropy.utils import state
 import cupy as cp
 import psutil
-from . import utils
+from ..base import decorator
 import threading
 from contextlib import contextmanager
 from datetime import datetime
@@ -428,7 +428,7 @@ class MemoryMonitor:
         utils.cleanup_memory()
         stop_callback()
 
-    @utils.classmethodproperty
+    @decorator.classmethodproperty
     def current_memory(cls):
         """
         Get current CPU memory usage statistics.
@@ -445,7 +445,7 @@ class MemoryMonitor:
             "percent": (used / total) * 100,
         }
 
-    @utils.classmethodproperty
+    @decorator.classmethodproperty
     def current_gpu_memory(cls) -> Dict:
         """
         Get GPU memory statistics for all available devices.
@@ -473,7 +473,7 @@ class MemoryMonitor:
                     continue
         return gpu_stats
 
-    @utils.classmethodproperty
+    @decorator.classmethodproperty
     def current_memory_percent(cls):
         """
         Get current CPU memory usage percentage.
@@ -483,7 +483,7 @@ class MemoryMonitor:
         """
         return cls.current_memory["percent"]
 
-    @utils.classmethodproperty
+    @decorator.classmethodproperty
     def current_gpu_memory_percent(cls):
         """
         Get current GPU memory usage percentages.
@@ -496,7 +496,7 @@ class MemoryMonitor:
         ]
         return gpu_percentages
 
-    @utils.classmethodproperty
+    @decorator.classmethodproperty
     def log_memory_usage(cls):
         """
         Generate a comprehensive memory usage log string.

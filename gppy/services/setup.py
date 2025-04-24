@@ -1,17 +1,16 @@
-
-from .config import Configuration, ConfigurationInstance
-from .services.queue import QueueManager
-from .logger import Logger
 from typing import Any, Union
 from abc import ABC, abstractmethod
 import glob
+from ..config import Configuration, ConfigurationInstance
+from .logger import Logger
+from .queue import QueueManager
 
 class BaseSetup(ABC):
     def __init__(
         self,
         config: Union[str, Any] = None,
         logger: Any = None,
-        queue: Union[bool, QueueManager] = False,
+        queue: Union[bool, Any] = False,
     ) -> None:
         """Initialize the astrometry module.
 
@@ -31,6 +30,7 @@ class BaseSetup(ABC):
         self.queue = self._setup_queue(queue)
 
     def _setup_config(self, config):
+        
         if isinstance(config, Configuration):
             return config.config
         elif isinstance(config, str):
@@ -39,8 +39,9 @@ class BaseSetup(ABC):
             return config
         else:
             raise ValueError("Invalid configuration object")
-            
+
     def _setup_logger(self, logger, config):
+        
         if isinstance(logger, Logger):
             return logger
         elif hasattr(config, "logger") and isinstance(config.logger, Logger):
@@ -49,6 +50,7 @@ class BaseSetup(ABC):
             return Logger(name=config.config.name, slack_channel="pipeline_report")
 
     def _setup_queue(self, queue):
+       
         if isinstance(queue, QueueManager):
             queue.logger = self.logger
             return queue
@@ -60,17 +62,21 @@ class BaseSetup(ABC):
     @classmethod
     @abstractmethod
     def from_list(self):
-        pass 
+        pass
 
     @classmethod
-    def from_file(cls, image):
+    def from_text_file(cls, image):
         return cls.from_list([image])
 
     @classmethod
     def from_dir(cls, dir_path):
         image_list = glob.glob(f"{dir_path}/*.fits")
         return cls.from_list(image_list)
-    
+
+    @classmethod
+    def from_text_file(cls, imagelist_file):
+        input_images = inputlist_parser(imagelist_file)
+        cls.from_list(input_images)
+
     def flagging(self):
         setattr(self.config.flag, self._flag_name, True)
-    

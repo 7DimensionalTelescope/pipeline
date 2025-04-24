@@ -12,7 +12,7 @@ from ..services.memory import MemoryMonitor
 from ..services.queue import QueueManager, Priority
 from ..config import Configuration
 
-from ..base import BaseSetup
+from ..services.setup import BaseSetup
 from .plotting import save_fits_as_png
 
 

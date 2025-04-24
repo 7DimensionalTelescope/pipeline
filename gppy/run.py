@@ -1,7 +1,7 @@
 __package__ = "gppy"
 
 from .config import Configuration
-from .astrometry import Astrometry
+from .astrometry.astrometry import Astrometry
 from .photometry.photometry import Photometry
 from .imstack.imstack import ImStack
 
@@ -14,10 +14,10 @@ import time
 from watchdog.observers import Observer
 
 from .services.monitor import Monitor
-from .data import ObservationDataSet, CalibrationData
+from .base import ObservationDataSet, CalibrationData
 from .services.queue import QueueManager, Priority
 
-from .logger import Logger
+from .services.logger import Logger
 from .services.task import Task, TaskTree
 
 
@@ -61,7 +61,7 @@ def run_masterframe_generator_with_tree(obs_params, priority=Priority.HIGH, **kw
     for task in mfg.sequential_task:
         tasks.append(Task(getattr(mfg, task[1]), priority=priority, gpu=task[2], cls=mfg))
     return TaskTree(tasks)
-    
+
 
 def run_scidata_reduction(
     obs_params,
@@ -160,7 +160,7 @@ def run_scidata_reduction_with_tree(
     if not (config.config.flag.single_photometry) and "photometry" in processes:
         phot = Photometry(config)
         for task in phot.sequential_task:
-            tasks.append(Task(getattr(phot, task[1]), priority=priority,  gpu=task[2], cls=phot))
+            tasks.append(Task(getattr(phot, task[1]), priority=priority, gpu=task[2], cls=phot))
     if not (config.config.flag.combine) and "combine" in processes:
         stk = ImStack(config)
         for task in stk.sequential_task:
@@ -206,7 +206,7 @@ def run_pipeline(
             tree = run_masterframe_generator_with_tree(obs.obs_params, priority=Priority.HIGH)
             if tree is not None:
                 queue.add_tree(tree)
-            
+
             time.sleep(0.1)
     elif isinstance(data, ObservationDataSet):
         for obs in data.get_unprocessed():
@@ -219,6 +219,7 @@ def run_pipeline(
                 queue.add_tree(tree)
 
             time.sleep(0.1)
+
 
 def start_monitoring():
     """
@@ -235,7 +236,7 @@ def start_monitoring():
 
     Monitoring can be stopped by pressing Ctrl+C.
     """
-    
+
     queue = QueueManager(max_workers=20)
 
     monitor = Monitor(RAWDATA_DIR)

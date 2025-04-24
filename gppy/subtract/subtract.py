@@ -9,7 +9,7 @@ import numpy as np
 from ..const import REF_DIR
 from ..config import Configuration
 from .. import external
-from ..base import BaseSetup
+from ..services.setup import BaseSetup
 from ..utils import get_derived_product_path, swap_ext, create_common_table
 
 from .utils import create_ds9_region_file, select_sources
