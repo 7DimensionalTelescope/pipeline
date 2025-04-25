@@ -1,9 +1,11 @@
+from typing import Iterable, Tuple, Sequence, Any
 import numpy as np
 from astropy.coordinates import SkyCoord, Distance
 from astropy.time import Time
 from astropy.table import Table, hstack, MaskedColumn
 import astropy.units as u
 from astropy.units import Quantity
+import operator
 
 
 def match_two_catalogs(
@@ -172,3 +174,73 @@ def match_two_catalogs(
         merged = hstack([m0, m1], join_type="exact")
         merged["separation"] = sep2d[matched].arcsec
         return merged
+
+
+Condition = Tuple[str, Any, str]  # (column, value, method)
+
+_OPS = {
+    # greater-than
+    "lower": operator.gt,  ">":  operator.gt,
+    # greater-or-equal
+    ">=":   operator.ge,
+    # less-than
+    "upper": operator.lt,  "<":  operator.lt,
+    # less-or-equal
+    "<=":   operator.le,
+    # equal
+    "equal": operator.eq,  "==": operator.eq,  "=": operator.eq,
+}  # fmt: skip
+
+
+def build_condition_mask(table, conditions: Iterable[Condition]) -> np.ndarray:
+    """
+    Return a boolean mask that is True only for rows satisfying *all* conditions.
+
+    Parameters
+    ----------
+    table : Table | DataFrame | structured ndarray
+        Object supporting ``table[col]`` column access.
+    conditions : iterable of (key, method, value)
+        method can be any alias listed in _METHOD_MAP (case-insensitive).
+
+    Returns
+    -------
+    numpy.ndarray[bool]  shape (len(table),)
+    """
+
+    # later incorporate numexpr
+
+    conditions = _parse_conditions(conditions)
+    mask = np.ones(len(table), dtype=bool)
+
+    for key, method, value in conditions:
+        m = method.strip().lower()
+        if m not in _OPS:
+            raise ValueError(f"Unknown method '{method}'. Allowed: {', '.join(_OPS)}")
+        mask &= _OPS[m](table[key], value)
+
+    return mask
+
+
+def _parse_conditions(conditions: Sequence[Any]) -> Iterable[Condition]:
+    """
+    Turn *raw* into an iterable of (key, op, value) tuples.
+
+    *raw* may be:
+      • already an iterable of 3-tuples
+      • a flat 1-D list/array whose length is a multiple of 3
+    """
+    # Check it looks like [(k, op, v), …]
+    if conditions and isinstance(conditions[0], (tuple, list)) and len(conditions[0]) == 3:
+        return conditions  # type: ignore[arg-type]
+
+    # If not, try the “flat” form
+    if len(conditions) % 3 != 0:
+        raise ValueError("Flat conditions must have length divisible by 3 " "(key, op, value repeated).")
+    it = iter(conditions)
+    return list(zip(it, it, it))
+
+
+def filter_table(table: Table, conditions: Iterable[Condition]) -> Table:
+    mask = build_condition_mask(table, conditions)
+    return table[mask]

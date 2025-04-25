@@ -1,6 +1,7 @@
 import numpy as np
 from astropy.table import Table
 from astropy.coordinates import SkyCoord
+from ..tools.table import filter_table
 
 
 def create_ds9_region_file(ra_array, dec_array, radius=10, filename="ds9_regions.reg"):
@@ -73,9 +74,21 @@ def select_sources(
     else:
         snr_key = [s for s in table.columns if "SNR" in s and aperture_suffix in s][0]
 
-    selected_indices = np.where(
-        (table[snr_key] > snr_min)
-        & (table[f"CLASS_STAR"] > class_star_min)
-        & (table["FLAGS"] <= flags_max)
-    )
-    return table[selected_indices]
+    # selected_indices = np.where(
+    #     (table[snr_key] > snr_min)
+    #     & (table[f"CLASS_STAR"] > class_star_min)
+    #     & (table["FLAGS"] <= flags_max)
+    # )
+    # return table[selected_indices]
+
+    # conditions = [
+    #     (snr_key, ">", snr_min),
+    #     ("CLASS_STAR", ">", class_star_min),
+    #     ("FLAGS", "<=", flags_max),
+    # ]
+    conditions = [
+        snr_key, ">", snr_min,
+        "CLASS_STAR", ">", class_star_min,
+        "FLAGS", "<=", flags_max,
+    ]  # fmt: skip
+    return filter_table(table, conditions)
