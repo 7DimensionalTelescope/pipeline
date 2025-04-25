@@ -10,7 +10,8 @@ from ..const import REF_DIR
 from ..config import Configuration
 from .. import external
 from ..services.setup import BaseSetup
-from ..utils import get_derived_product_path, swap_ext, create_common_table
+from ..utils import get_derived_product_path, swap_ext
+from ..tools.table import match_two_catalogs
 
 from .utils import create_ds9_region_file, select_sources
 
@@ -31,9 +32,7 @@ class ImSubtract(BaseSetup):
 
         self.find_reference_image()
         if not self.reference_images:  # if not found, do not run
-            self.logger.info(
-                f"No reference image found for {self.name}; Skipping transient search."
-            )
+            self.logger.info(f"No reference image found for {self.name}; Skipping transient search.")
             return
 
         self.define_paths()
@@ -65,9 +64,7 @@ class ImSubtract(BaseSetup):
         self.ref_image_file = self.reference_images[0]
         self.ref_source_table_file = swap_ext(self.ref_image_file, "phot.cat")
 
-        self.subt_image_file = get_derived_product_path(
-            self.sci_image_file, "transient", "subt.fits"
-        )
+        self.subt_image_file = get_derived_product_path(self.sci_image_file, "transient", "subt.fits")
         transient_dir = os.path.dirname(self.subt_image_file)
         if not os.path.exists(transient_dir):
             os.makedirs(transient_dir)
@@ -84,24 +81,20 @@ class ImSubtract(BaseSetup):
         # Select substamp sources
         selected_sci_table = select_sources(sci_source_table)
         self.logger.info(
-            f"{len(selected_sci_table)} selected for substamp from"
-            f"{len(sci_source_table)} science catalog sources"
+            f"{len(selected_sci_table)} selected for substamp from" f"{len(sci_source_table)} science catalog sources"
         )
 
         # Match two catalogs
-        matched_source_table = create_common_table(selected_sci_table, ref_source_table)
+        matched_source_table = match_two_catalogs(selected_sci_table, ref_source_table)
         self.logger.info(
-            f"{len(matched_source_table)} sources matched"
-            f"out of {len(selected_sci_table)}, {len(ref_source_table)}"
+            f"{len(matched_source_table)} sources matched" f"out of {len(selected_sci_table)}, {len(ref_source_table)}"
         )
 
         self.substamp_file = swap_ext(self.sci_image_file, "ssf.txt")
 
         # Write substamp file
         f = open(self.substamp_file, "w")
-        for x, y in zip(
-            matched_source_table["X_IMAGE"], matched_source_table["Y_IMAGE"]
-        ):
+        for x, y in zip(matched_source_table["X_IMAGE"], matched_source_table["Y_IMAGE"]):
             f.write(f"{x} {y}\n")
         f.close()
 
@@ -118,9 +111,7 @@ class ImSubtract(BaseSetup):
 
         weight_file = swap_ext(self.sci_image_file, "weight.fits")
 
-        sci_mask = self._create_mask(
-            weight_file if os.path.exists(weight_file) else self.sci_image_file
-        )
+        sci_mask = self._create_mask(weight_file if os.path.exists(weight_file) else self.sci_image_file)
         ref_mask = self._create_mask(self.ref_image_file)
 
         self.sci_mask_file = self._save_mask(sci_mask, self.sci_image_file)
@@ -161,9 +152,7 @@ class ImSubtract(BaseSetup):
         # Subt
         subt_data, subt_header = fits.getdata(self.subt_image_file, header=True)
         new_hddata = subt_data * (~mask + 2)
-        fits.writeto(
-            self.subt_image_file, new_hddata, header=subt_header, overwrite=True
-        )
+        fits.writeto(self.subt_image_file, new_hddata, header=subt_header, overwrite=True)
 
         # # Conv
         # hcdata, hchdr = fits.getdata(self.ref_image_file, header=True)
