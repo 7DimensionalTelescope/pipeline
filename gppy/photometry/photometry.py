@@ -27,6 +27,7 @@ from ..services.queue import QueueManager, Priority
 from .. import external
 from ..const import PipelineError
 from ..services.setup import BaseSetup
+from ..tools.table import match_two_catalogs
 
 
 class Photometry(BaseSetup):
@@ -274,7 +275,7 @@ class PhotometrySingle:
         self.define_paths()
         self.calculate_seeing()
         self.photometry_with_sextractor()
-        self.zp_src_table = self.match_ref_catalog()
+        self.zp_src_table = self.get_reference_matched_catalog()
         dicts = self.calculate_zp()
         self.update_header(*dicts)
         self.write_catalog()
@@ -308,14 +309,16 @@ class PhotometrySingle:
         elif self.ref_catalog == "GaiaXP":
             ref_cat = f"{self.config.path.path_refcat}/gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
 
-        if not os.path.exists(ref_cat) and "gaia" in self.ref_catalog:
-            ref_src_table = phot_utils.parse_gaia_catalogs(
+        # generate the missing ref_cat and save on disk
+        if not os.path.exists(ref_cat):  # and "gaia" in self.ref_catalog:
+            ref_src_table = phot_utils.aggregate_gaia_catalogs(
                 target_coord=SkyCoord(self.image_info.racent, self.image_info.decent, unit="deg"),
                 path_calibration_field=self.config.path.path_calib_field,
                 matching_radius=self.phot_conf.match_radius * 1.5,
                 path_save=ref_cat,
             )
             ref_src_table.write(ref_cat, overwrite=True)
+
         else:
             ref_src_table = Table.read(ref_cat)
 
@@ -335,6 +338,93 @@ class PhotometrySingle:
 
         self.ref_src_table = ref_src_table
         self._coord_ref = coord_ref
+
+    def get_reference_matched_catalog(
+        self,
+        snr_cut: Union[float, bool] = 20,
+        low_mag_cut: Union[float, bool] = None,
+        high_mag_cut: Union[float, bool] = None,
+    ) -> Table:
+        """
+        Match detected sources with reference catalog.
+
+        Applies proper motion corrections and performs spatial matching.
+        Filters matches based on separation, signal-to-noise, and magnitude limits.
+
+        Args:
+            snr_cut: Signal-to-noise ratio cut for filtering
+            low_mag_cut: Lower magnitude limit
+            high_mag_cut: Upper magnitude limit
+
+        Returns:
+            Table of matched sources meeting all criteria
+        """
+
+        if not self.is_ref_loaded:
+            self._load_ref_catalog()
+
+        self.logger.debug("Matching sources with reference catalog.")
+
+        low_mag_cut = low_mag_cut or self.phot_conf.ref_mag_lower
+        high_mag_cut = high_mag_cut or self.phot_conf.ref_mag_upper
+
+        coord_obs = SkyCoord(
+            self.obs_src_table["ALPHA_J2000"],
+            self.obs_src_table["DELTA_J2000"],
+            unit="deg",
+        )
+        index_match, sep, _ = coord_obs.match_to_catalog_sky(self._coord_ref)
+
+        _post_match_table = hstack([self.obs_src_table, self.ref_src_table[index_match]])
+        _post_match_table["sep"] = sep.arcsec
+
+        post_match_table = _post_match_table[_post_match_table["sep"] < self.phot_conf.match_radius]
+        post_match_table["within_ellipse"] = phot_utils.is_within_ellipse(
+            post_match_table["X_IMAGE"],
+            post_match_table["Y_IMAGE"],
+            self.image_info.xcent,
+            self.image_info.ycent,
+            self.phot_conf.photfraction * self.image_info.naxis1 / 2,
+            self.phot_conf.photfraction * self.image_info.naxis2 / 2,
+        )
+
+        suffixes = [key.replace("FLUXERR_", "") for key in post_match_table.keys() if "FLUXERR_" in key]
+
+        for suffix in suffixes:
+            post_match_table[f"SNR_{suffix}"] = (
+                post_match_table[f"FLUX_{suffix}"] / post_match_table[f"FLUXERR_{suffix}"]
+            )
+
+        post_match_table = phot_utils.filter_table(post_match_table, "FLAGS", 0)
+        post_match_table = phot_utils.filter_table(post_match_table, "within_ellipse", True)
+
+        if low_mag_cut:
+            post_match_table = phot_utils.filter_table(
+                post_match_table, self.image_info.ref_mag_key, low_mag_cut, method="lower"
+            )
+
+        if high_mag_cut:
+            post_match_table = phot_utils.filter_table(
+                post_match_table, self.image_info.ref_mag_key, high_mag_cut, method="upper"
+            )
+
+        if snr_cut:
+            post_match_table = phot_utils.filter_table(post_match_table, "SNR_AUTO", snr_cut, method="lower")
+
+        for key in ["source_id", "bp_rp", "phot_g_mean_mag", f"mag_{self.image_info.filter}"]:
+            valuearr = self.ref_src_table[key][index_match].data
+            masked_valuearr = MaskedColumn(valuearr, mask=(sep.arcsec > self.phot_conf.match_radius))
+            self.obs_src_table[key] = masked_valuearr
+
+        if len(post_match_table) == 0:
+            self.logger.critical("There is no matched source. It will cause a problem in the next step.")
+            # if "CTYPE1" not in self.header.keys():
+            #     self.logger.error("Check Astrometry solution: no WCS information")
+            #     raise PipelineError("Check Astrometry solution: no WCS information")
+        else:
+            self.logger.info(f"Matched Sources: {len(post_match_table)} (r = {self.phot_conf.match_radius:.3f} arcsec)")
+
+        return post_match_table
 
     def calculate_seeing(
         self,
@@ -357,7 +447,7 @@ class PhotometrySingle:
         else:
             self.obs_src_table = Table.read(self.tmp_file_prefix + ".prep.cat", format="ascii.sextractor")
 
-        self.post_match_table = self.match_ref_catalog(
+        self.post_match_table = self.get_reference_matched_catalog(
             snr_cut=False, low_mag_cut=low_mag_cut, high_mag_cut=high_mag_cut
         )
 
@@ -447,99 +537,6 @@ class PhotometrySingle:
 
         self.obs_src_table = Table.read(output, format="ascii.sextractor")
         return outcome
-
-    def match_ref_catalog(
-        self,
-        snr_cut: Union[float, bool] = 20,
-        low_mag_cut: Union[float, bool] = None,
-        high_mag_cut: Union[float, bool] = None,
-    ) -> Table:
-        """
-        Match detected sources with reference catalog.
-
-        Applies proper motion corrections and performs spatial matching.
-        Filters matches based on separation, signal-to-noise, and magnitude limits.
-
-        Args:
-            snr_cut: Signal-to-noise ratio cut for filtering
-            low_mag_cut: Lower magnitude limit
-            high_mag_cut: Upper magnitude limit
-
-        Returns:
-            Table of matched sources meeting all criteria
-        """
-
-        if not self.is_ref_loaded:
-            self._load_ref_catalog()
-
-        self.logger.debug("Matching sources with reference catalog.")
-
-        low_mag_cut = low_mag_cut or self.phot_conf.ref_mag_lower
-        high_mag_cut = high_mag_cut or self.phot_conf.ref_mag_upper
-
-        coord_obs = SkyCoord(
-            self.obs_src_table["ALPHA_J2000"],
-            self.obs_src_table["DELTA_J2000"],
-            unit="deg",
-        )
-        index_match, sep, _ = coord_obs.match_to_catalog_sky(self._coord_ref)
-
-        _post_match_table = hstack([self.obs_src_table, self.ref_src_table[index_match]])
-        _post_match_table["sep"] = sep.arcsec
-
-        post_match_table = _post_match_table[_post_match_table["sep"] < self.phot_conf.match_radius]
-        post_match_table["within_ellipse"] = phot_utils.is_within_ellipse(
-            post_match_table["X_IMAGE"],
-            post_match_table["Y_IMAGE"],
-            self.image_info.xcent,
-            self.image_info.ycent,
-            self.phot_conf.photfraction * self.image_info.naxis1 / 2,
-            self.phot_conf.photfraction * self.image_info.naxis2 / 2,
-        )
-
-        suffixes = [key.replace("FLUXERR_", "") for key in post_match_table.keys() if "FLUXERR_" in key]
-
-        for suffix in suffixes:
-            post_match_table[f"SNR_{suffix}"] = (
-                post_match_table[f"FLUX_{suffix}"] / post_match_table[f"FLUXERR_{suffix}"]
-            )
-
-        post_match_table = phot_utils.filter_table(post_match_table, "FLAGS", 0)
-        post_match_table = phot_utils.filter_table(post_match_table, "within_ellipse", True)
-
-        if low_mag_cut:
-            post_match_table = phot_utils.filter_table(
-                post_match_table,
-                self.image_info.ref_mag_key,
-                low_mag_cut,
-                method="lower",
-            )
-
-        if high_mag_cut:
-            post_match_table = phot_utils.filter_table(
-                post_match_table,
-                self.image_info.ref_mag_key,
-                high_mag_cut,
-                method="upper",
-            )
-
-        if snr_cut:
-            post_match_table = phot_utils.filter_table(post_match_table, "SNR_AUTO", snr_cut, method="lower")
-
-        for key in ["source_id", "bp_rp", "phot_g_mean_mag", f"mag_{self.image_info.filter}"]:
-            valuearr = self.ref_src_table[key][index_match].data
-            masked_valuearr = MaskedColumn(valuearr, mask=(sep.arcsec > self.phot_conf.match_radius))
-            self.obs_src_table[key] = masked_valuearr
-
-        if len(post_match_table) == 0:
-            self.logger.critical("There is no matched source. It will cause a problem in the next step.")
-            # if "CTYPE1" not in self.header.keys():
-            #     self.logger.error("Check Astrometry solution: no WCS information")
-            #     raise PipelineError("Check Astrometry solution: no WCS information")
-        else:
-            self.logger.info(f"Matched Sources: {len(post_match_table)} (r = {self.phot_conf.match_radius:.3f} arcsec)")
-
-        return post_match_table
 
     def calculate_zp(self) -> Tuple[Dict, Dict]:
         """

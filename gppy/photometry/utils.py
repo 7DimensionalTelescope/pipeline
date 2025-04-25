@@ -125,9 +125,9 @@ def zp_correction(mag: np.ndarray, mag_err: np.ndarray, zp: float, zperr: float)
     return mag, mag_err, flux, flux_err, snr
 
 
-def parse_gaia_catalogs(target_coord, path_calibration_field, matching_radius=1.0):
+def aggregate_gaia_catalogs(target_coord, path_calibration_field, matching_radius=1.0):
     """
-    Merge Gaia DR3 catalog sources near the specified coordinates.
+    Return a merged Gaia DR3 source catalog near the specified coordinates.
 
     Parameters:
         target_coord (astropy.coordinates.SkyCoord): Target coordinates
