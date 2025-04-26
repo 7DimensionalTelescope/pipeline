@@ -25,6 +25,50 @@ def clean_up_folder(path):
         except Exception as e:
             print(f"Failed to delete {item_path}: {e}")
 
+def check_params(img):
+    try:
+        params = parse_key_params_from_filename(img)[0]
+    except:
+        try:
+            params = parse_key_params_from_header(img)[0]
+        except:
+            raise ValueError("No parameters found in the image file names or headers.")
+    if not params:
+        raise ValueError("No parameters found in the image file names or headers.")
+    return params
+
+def parse_key_params_from_filename(img):
+    if isinstance(img, str):
+        path = Path(img)
+    elif isinstance(img, Path):
+        path = img
+    else:
+        raise TypeError("Input must be a string or Path.")
+    
+    pattern = r"^(7DT\d{2})_(\d{8}_\d{6})_([a-zA-Z0-9]+)_([a-zA-Z0-9]+)_(\dx\d)_(\d+\.?\d*)s_([0-9]+)"
+    match = re.match(pattern, path.stem)
+        
+    if match:
+        units, date_string, target, filt, n_binning, exposure, _ = match.groups()
+        date = subtract_half_day(date_string)
+    else:
+        pattern = r"([a-zA-Z0-9]+)_([a-zA-Z0-9]+)_(7DT\d{2})_(\d+\.?\d*)s_(\d{8}_\d{6})"
+        match = re.match(pattern, path.stem)
+        if match:
+            target, filt, units, exposure, date_string = match.groups()
+            date = subtract_half_day(date_string)
+
+    info = {
+        "date": date,
+        "filter": filt,
+        "obj": target,
+        "unit": units,
+        "exposure": exposure
+    }
+
+    file_type = "master_image" if any(s in str(path.stem) for s in ["BIAS", "DARK", "FLAT"]) else "sci_image"
+
+    return info, file_type
 
 def parse_key_params_from_header(filename: str or Path) -> None:
     """

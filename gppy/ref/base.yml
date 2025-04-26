@@ -30,18 +30,6 @@ obs:
   dec:
   exposure:
   
-path:
-  path_factory: #/data/pipeline_reform/factory_test
-  path_raw: 
-  path_processed: 
-  path_fdz:
-  path_calib_field: /lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile
-  path_refcat: /lyman/data1/factory/ref_cat
-  # path_sex: /data/pipeline_reform/gppy-gpu/gppy/ref
-  path_astrefcat: "/lyman/data1/factory/catalog/gaia_dr3_7DT"
-  path_ref_scamp: "/lyman/data1/factory/ref_scamp"
-  path_refim: "/lyman/data1/factory/ref_frame"
-
 file: 
   raw_files: 
   processed_files: 
