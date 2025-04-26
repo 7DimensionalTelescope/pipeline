@@ -10,15 +10,16 @@ from .. import const
 
 image_unique_keys = ["date", "filter", "obj", "unit", "exposure"]
 
-class PathHandler:
 
+class PathHandler:
     def __init__(self, input):
-        
+
         if isinstance(input, str):
             if input.endswith(".fits"):
                 self._input_file = [Path(input)]
             elif input.endswith(".yml"):
                 from ..config import Configuration
+
                 self._input_file = Configuration(input).config.files.raw_files
                 self._input_file = [Path(file) for file in files]
             else:
@@ -35,10 +36,10 @@ class PathHandler:
                 raise ValueError("Input object must be Configuration")
         else:
             raise TypeError("Input must be a string, Path, or list of strings/Paths.")
-        
-        if not(self.is_present(self._input_file)):
+
+        if not (self.is_present(self._input_file)):
             raise FileNotFoundError(f"Path does not exist: {self._input_file}")
-        
+
         self.define_common_path()
 
     def __getattr__(self, name):
@@ -67,25 +68,23 @@ class PathHandler:
 
     def __repr__(self):
         return "\n".join(f"{k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
-    
+
     def is_present(self, path):
         paths = np.atleast_1d(path)
         return all([p.exists() for p in paths])
-        
+
     def define_common_path(self):
         if const.RAWDATA_DIR in str(self._input_file[0]):
             params = check_params(self._input_file[0])
             self.data_type = "raw"
-            self.raw_image= [str(file.absolute()) for file in self._input_file]
+            self.raw_image = [str(file.absolute()) for file in self._input_file]
             _tmp_relpath = os.path.join(params["date"], params["obj"], params["filter"], params["unit"])
             self.output_dir = os.path.join(const.PROCESSED_DIR, _tmp_relpath)
             self.factory_dir = os.path.join(const.FACTORY_DIR, _tmp_relpath)
             self.masterframe_dir = os.path.join(const.FACTORY_DIR, _tmp_relpath)
-            self.file_prefix = [
-                switch_name_order(file.stem) for file in self._input_file
-            ]
+            self.file_prefix = [switch_name_order(file.stem) for file in self._input_file]
             self.processed_image = [
-                os.path.join(self.output_dir, "images", file_prefix+".fits") for file_prefix in self.file_prefix
+                os.path.join(self.output_dir, "images", file_prefix + ".fits") for file_prefix in self.file_prefix
             ]
         elif const.PROCESSED_DIR in str(self._input_file[0]):
             self.data_type = "processed"
@@ -100,22 +99,22 @@ class PathHandler:
             self.file_prefix = [file.stem for file in self._input_file]
             self.output_dir = self._input_file[0].parent.parent
             self.factory_dir = self._input_file[0].parent.parent / "factory"
-        
+
         self.image_dir = os.path.join(self.output_dir, "images")
         self.figure_dir = os.path.join(self.output_dir, "figures")
         self.daily_stacked_dir = os.path.join(self.output_dir, "stacked")
         self.subtracted_dir = os.path.join(self.output_dir, "subtracted")
         self.ref_sex_dir = Path(os.path.join(const.REF_DIR, "srcExt"))
-  
-        self.calib_tile_dir = Path("/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile")
-        self.ref_cat_dir = Path("/lyman/data1/factory/ref_cat")
-        self.astrometry_ref_cat_dir = Path("/lyman/data1/factory/catalog/gaia_dr3_7DT")
-        self.ref_scamp_dir = Path("/lyman/data1/factory/ref_scamp")
-        self.refim_dir = Path("/lyman/data1/factory/ref_frame")
+
+        self.photometry_ref_ris_dir = Path("/lyman/data1/factory/ref_cat")  # divided by RIS tiles
+        self.photometry_ref_gaia_dir = Path("/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile")
+        self.astrometry_ref_ris_dir = Path("/lyman/data1/factory/catalog/gaia_dr3_7DT")
+        self.astrometry_ref_query_dir = Path("/lyman/data1/factory/ref_scamp")
+        self.subtraction_ref_image_dir = Path("/lyman/data1/factory/ref_frame")
 
     def path_preprocess(self):
         pass
-    
+
     def path_astromety(self):
         pass
 
@@ -124,6 +123,10 @@ class PathHandler:
 
     def path_stacking(self):
         pass
+
+    def path_subtraction(self):
+        pass
+
 
 def switch_name_order(name):
     parts = name.split("_")
