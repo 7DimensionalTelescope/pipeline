@@ -1,22 +1,38 @@
-from pathlib import Path
-from .. import const
 import numpy as np
-from ..utils import parse_key_params_from_header#, parse_key_params_from_filename
 import re
 import os
+
+from datetime import datetime, timedelta
+from pathlib import Path
+
+from ..utils import check_params
+from .. import const
+
 image_unique_keys = ["date", "filter", "obj", "unit", "exposure"]
 
 class PathHandler:
 
-    base_path = Path("/lyman/data2/")
-
     def __init__(self, input):
+        
         if isinstance(input, str):
-            self._input_file = [Path(input)]
+            if input.endswith(".fits"):
+                self._input_file = [Path(input)]
+            elif input.endswith(".yml"):
+                from ..config import Configuration
+                self._input_file = Configuration(input).config.files.raw_files
+                self._input_file = [Path(file) for file in files]
+            else:
+                raise ValueError("Input must be a .fits file or a .yml file.")
         elif isinstance(input, Path):
             self._input_file = [input]
         elif isinstance(input, list):
             self._input_file = [Path(img) for img in input]
+        elif hasattr(input, __class__):
+            if hasattr(input, "config"):
+                files = input.config.files.raw_files
+                self._input_file = [Path(file) for file in files]
+            else:
+                raise ValueError("Input object must be Configuration")
         else:
             raise TypeError("Input must be a string, Path, or list of strings/Paths.")
         
@@ -91,9 +107,15 @@ class PathHandler:
         self.subtracted_dir = os.path.join(self.output_dir, "subtracted")
         self.ref_sex_dir = Path(os.path.join(const.REF_DIR, "srcExt"))
   
+        self.calib_tile_dir = Path("/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile")
+        self.ref_cat_dir = Path("/lyman/data1/factory/ref_cat")
+        self.astrometry_ref_cat_dir = Path("/lyman/data1/factory/catalog/gaia_dr3_7DT")
+        self.ref_scamp_dir = Path("/lyman/data1/factory/ref_scamp")
+        self.refim_dir = Path("/lyman/data1/factory/ref_frame")
+
     def path_preprocess(self):
         pass
-
+    
     def path_astromety(self):
         pass
 
@@ -104,66 +126,9 @@ class PathHandler:
         pass
 
 def switch_name_order(name):
-    """
-    Switch the order of the name based on the given order.
-
-    Args:
-        name (str): The name to be switched.
-        order (list): The order to switch the name.
-
-    Returns:
-        str: The switched name.
-    """
     parts = name.split("_")
     return "_".join(parts[3:5] + parts[0:1] + parts[6:7] + parts[1:3])
 
-
-def check_params(img):
-    try:
-        params = parse_key_params_from_filename(img)[0]
-    except:
-        try:
-            params = parse_key_params_from_header(img)[0]
-        except:
-            raise ValueError("No parameters found in the image file names or headers.")
-    if not params:
-        raise ValueError("No parameters found in the image file names or headers.")
-    return params
-
-def parse_key_params_from_filename(img):
-    if isinstance(img, str):
-        path = Path(img)
-    elif isinstance(img, Path):
-        path = img
-    else:
-        raise TypeError("Input must be a string or Path.")
-    
-    pattern = r"^(7DT\d{2})_(\d{8}_\d{6})_([a-zA-Z0-9]+)_([a-zA-Z0-9]+)_(\dx\d)_(\d+\.?\d*)s_([0-9]+)"
-    match = re.match(pattern, path.stem)
-        
-    if match:
-        units, date_string, target, filt, n_binning, exposure, _ = match.groups()
-        date = subtract_half_day(date_string)
-    else:
-        pattern = r"([a-zA-Z0-9]+)_([a-zA-Z0-9]+)_(7DT\d{2})_(\d+\.?\d*)s_(\d{8}_\d{6})"
-        match = re.match(pattern, path.stem)
-        if match:
-            target, filt, units, exposure, date_string = match.groups()
-            date = subtract_half_day(date_string)
-
-    info = {
-        "date": date,
-        "filter": filt,
-        "obj": target,
-        "unit": units,
-        "exposure": exposure
-    }
-
-    file_type = "master_image" if any(s in str(path.stem) for s in ["BIAS", "DARK", "FLAT"]) else "sci_image"
-
-    return info, file_type
-
-from datetime import datetime, timedelta
 
 def subtract_half_day(timestr: str) -> str:
     dt = datetime.strptime(timestr, "%Y%m%d_%H%M%S")
