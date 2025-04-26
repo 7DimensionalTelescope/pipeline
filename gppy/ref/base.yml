@@ -64,7 +64,7 @@ photometry:
   ref_mag_err_upper: 0.05
   flagcut: 0
   check: False
-  satur_margin: 0.99  # factor multiplied to the preprocessed hardware saturation level
+  satur_margin: 0.99  # factor multiplied to the propagated hardware upper limit
   sex_vars:
     DETECT_MINAREA: 5
     DETECT_THRESH: 3.0
@@ -85,7 +85,7 @@ imstack:
   convolve: 'Gaussian'
   propagate_mask: False
 
-imsubt:
+imsubtract:
   refim_file:
   input_mask:
   template_mask:
