@@ -4,7 +4,6 @@ import re
 import glob
 import json
 from datetime import datetime
-from astropy.table import Table
 from .utils import (
     header_to_dict,
     to_datetime_string,
@@ -23,6 +22,7 @@ from .const import (
     STACKED_DIR,
     DAILY_STACKED_DIR,
 )
+from .base.path import PathHandler
 
 
 class Configuration:
@@ -80,9 +80,9 @@ class Configuration:
             self.initialize(obs_params)
 
         if overwrite:
-            clean_up_folder(self.config.path.path_processed)
-            clean_up_folder(self.config.path.path_factory)
-            clean_up_folder(self.config.path.path_stacked)
+            clean_up_folder(self.path.output_dir)
+            clean_up_folder(self.path.factory_dir)
+            # clean_up_folder(self.path.daily_stacked_dir)
 
         self.logger = self._setup_logger(logger, verbose=verbose)
         self.write_config()
@@ -101,6 +101,8 @@ class Configuration:
         instance = cls(return_base=True, **kwargs)
         config = instance.config  # configuration instance from the new object
         config.name = "user-input"
+
+        instance.path = PathHandler(instance)  # _data_type becomes user-input
 
         if working_dir is not None:
             config.path.path_processed = working_dir
@@ -156,12 +158,12 @@ class Configuration:
 
             logger = Logger(name=self.config.name, slack_channel="pipeline_report")
 
-        filename = f"{self.output_name}.log"
-        log_file = os.path.join(self.config.path.path_processed, filename)
+        filename = f"{self.output_stem}.log"
+        log_file = os.path.join(self.path.output_dir, filename)
         self.config.logging.file = log_file
         logger.set_output_file(log_file, overwrite=overwrite)
         logger.set_format(self.config.logging.format)
-        logger.set_pipeline_name(self.output_name)
+        logger.set_pipeline_name(self.output_stem)
         if not (verbose):
             logger.set_level("WARNING")
 
@@ -176,7 +178,7 @@ class Configuration:
 
         self.config = ConfigurationInstance(self)
 
-        self._output_prefix = kwargs.pop("path_processed", PROCESSED_DIR)
+        self._processed_dir = kwargs.pop("processed_dir", PROCESSED_DIR)
         self._update_with_kwargs(kwargs)
         self._make_instance(self._config_in_dict)
         self._loaded = True
@@ -215,7 +217,7 @@ class Configuration:
         self.config.info.creation_datetime = datetime.now().isoformat()
 
         self._define_paths()
-        self._define_files()
+        self._read_header_info()
         self._define_settings()
         self._initialized = True
 
@@ -228,24 +230,7 @@ class Configuration:
         return self._loaded
 
     @property
-    def output_name(self):
-        """
-        Generate a standardized output filename for calibrated data.
-
-        The filename follows a specific naming convention that includes:
-        - Prefix 'calib_'
-        - Observation unit identifier
-        - Object name
-        - Observation datetime (formatted as YYYYMMDD_HHMMSS)
-        - Optional additional parameters (if applicable)
-
-        Returns:
-            str: Formatted filename for the calibrated data product
-                 Example: calib_7DT11_T00139_20250102_014643_m425_100.0.fits
-
-        Raises:
-            AttributeError: If the configuration is not fully initialized
-        """
+    def output_stem(self):
         return (
             f"calib_{self.config.obs.unit}_{self.config.obs.object}_"
             f"{to_datetime_string(self.config.obs.datetime[0])}_"
@@ -300,46 +285,89 @@ class Configuration:
 
     def _define_paths(self):
         """Create and set output directory paths for processed data."""
-        _date_dir = define_output_dir(self.config.obs.date, self.config.obs.n_binning, self.config.obs.gain)
+        # # _date_dir = define_output_dir(self.config.obs.date, self.config.obs.n_binning, self.config.obs.gain)
+        # _date_dir = self.config.obs.date
 
-        rel_path = os.path.join(
-            _date_dir,
-            self.config.obs.object,
-            self.config.obs.unit,
-            self.config.obs.filter,
-        )
-        fdz_rel_path = os.path.join(
-            _date_dir,
-            self.config.obs.unit,
-        )
+        # processed_rel_path = os.path.join(
+        #     _date_dir,
+        #     self.config.obs.object,
+        #     self.config.obs.unit,
+        #     self.config.obs.filter,
+        # )
+        # fdz_rel_path = os.path.join(
+        #     _date_dir,
+        #     self.config.obs.unit,
+        # )
 
-        path_processed = os.path.join(self._output_prefix, rel_path)
-        path_factory = os.path.join(FACTORY_DIR, rel_path)
-        path_fdz = os.path.join(MASTER_FRAME_DIR, fdz_rel_path)
-        path_stacked_prefix = STACKED_DIR if self.config.name == "user-input" else DAILY_STACKED_DIR
-        path_stacked = os.path.join(path_stacked_prefix, rel_path)
+        # path_processed = os.path.join(self._processed_dir, processed_rel_path)
+        # path_factory = os.path.join(FACTORY_DIR, processed_rel_path)
+        # path_fdz = os.path.join(MASTER_FRAME_DIR, fdz_rel_path)
+        # path_stacked_prefix = STACKED_DIR if self.config.name == "user-input" else DAILY_STACKED_DIR
+        # path_stacked = os.path.join(path_stacked_prefix, processed_rel_path)
 
-        os.makedirs(path_processed, exist_ok=True)
-        os.makedirs(path_fdz, exist_ok=True)
-        os.makedirs(path_factory, exist_ok=True)
-        # os.makedirs(path_stacked, exist_ok=True)  # make dir in imstack
+        # os.makedirs(path_processed, exist_ok=True)
+        # os.makedirs(path_fdz, exist_ok=True)
+        # os.makedirs(path_factory, exist_ok=True)
+        # # os.makedirs(path_stacked, exist_ok=True)  # make dir in imstack
 
-        self.config.path.path_processed = path_processed
-        self.config.path.path_stacked = path_stacked
-        self.config.path.path_factory = path_factory
-        self.config.path.path_fdz = path_fdz
-        self.config.path.path_raw = find_raw_path(
+        # self.config.path.path_processed = path_processed
+        # self.config.path.path_stacked = path_stacked
+        # self.config.path.path_factory = path_factory
+        # self.config.path.path_fdz = path_fdz
+        # self.config.path.path_raw = find_raw_path(
+        #     self.config.obs.unit,
+        #     self.config.obs.date,
+        #     self.config.obs.n_binning,
+        #     self.config.obs.gain,
+        # )
+        # self.config.path.path_sex = os.path.join(REF_DIR, "srcExt")
+        # self._add_metadata(_date_dir)
+
+        path_raw = find_raw_path(
             self.config.obs.unit,
             self.config.obs.date,
             self.config.obs.n_binning,
             self.config.obs.gain,
         )
-        self.config.path.path_sex = os.path.join(REF_DIR, "srcExt")
-        self._add_metadata(_date_dir)
 
-    def _add_metadata(self, name):
+        template = f"{path_raw}/*{self.config.obs.object}_{self.config.obs.filter}_{self.config.obs.n_binning}*.fits"
+        fits_files = sorted(glob.glob(template))
 
-        metadata_path = os.path.join(self._output_prefix, name, "metadata.ecsv")
+        raw_files = []
+        raw_headers = []
+        for fits_file in fits_files:
+            header_in_dict = self._load_dict_header(fits_file)
+            if header_in_dict["GAIN"] == self.config.obs.gain:
+                raw_files.append(fits_file)
+                raw_headers.append(header_in_dict)
+
+        self.raw_header_sample = raw_headers[0]
+        self.raw_headers = raw_headers
+
+        self.config.file.raw_files = raw_files
+
+        self.path = PathHandler(self)  # needs self.config.file.raw_files
+        self.config.file.processed_files = self.path.processed_images
+
+        self._add_metadata(self.config.obs.date)
+
+    @staticmethod
+    def _load_dict_header(fits_file):
+        """use .head file if available"""
+        header_file = swap_ext(fits_file, ".head")
+
+        if os.path.exists(header_file):
+            header_in_dict = header_to_dict(header_file)
+        else:
+            from astropy.io import fits
+
+            header_in_dict = dict(fits.getheader(fits_file))
+        return header_in_dict
+
+    def _add_metadata(self, name):  # for webpage only
+
+        # metadata_path = os.path.join(self._processed_dir, name, "metadata.ecsv")
+        metadata_path = os.path.join(self.path.metadata_dir, "metadata.ecsv")
         if not os.path.exists(metadata_path):
             with open(metadata_path, "w") as f:
                 f.write("# %ECSV 1.0\n")
@@ -366,10 +394,7 @@ class Configuration:
         with open(metadata_path, "a") as f:
             f.write(new_line)
 
-    def _define_files(self):
-        s = f"{self.config.path.path_raw}/*{self.config.obs.object}_{self.config.obs.filter}_{self.config.obs.n_binning}*.fits"  # obsdata/7DT11/*T00001*.fits
-
-        fits_files = sorted(glob.glob(s))
+    def _read_header_info(self):
 
         # Extract header metadata
         header_mapping = {
@@ -382,38 +407,15 @@ class Configuration:
         for config_key, header_key in header_mapping.items():
             setattr(self.config.obs, config_key, [])
 
-        raw_files = []
-        for fits_file in fits_files:
-            header_file = swap_ext(fits_file, ".head")
-            if os.path.exists(header_file):
-                header_in_dict = header_to_dict(header_file)
-            else:
-                from astropy.io import fits
-
-                header_in_dict = dict(fits.getheader(fits_file))
-
-            if header_in_dict["GAIN"] == self.config.obs.gain:
-                raw_files.append(fits_file)
-                for config_key, header_key in header_mapping.items():
-                    getattr(self.config.obs, config_key).append(header_in_dict[header_key])
-            self.raw_header_sample = header_in_dict
-
-        self.config.file.raw_files = raw_files
-        self.config.file.processed_files = [
-            os.path.join(
-                self.config.path.path_processed,
-                f"calib_{self.config.obs.unit}_{self.config.obs.object}_"
-                f"{to_datetime_string(datetime)}_"
-                f"{self.config.obs.filter}_{int(exp)}s.fits",
-            )
-            for datetime, exp in zip(self.config.obs.datetime, self.config.obs.exposure)
-        ]
+        for header_in_dict in self.raw_headers:
+            for config_key, header_key in header_mapping.items():
+                getattr(self.config.obs, config_key).append(header_in_dict[header_key])
 
         # Identify Camera from image size
         self.config.obs.camera = get_camera(self.raw_header_sample)
 
         # Define pointer fpaths to master frames
-        path_fdz = self.config.path.path_fdz  # master_frame/date_bin_gain/unit
+        path_fdz = self.path.masterframe_dir  # master_frame/date_bin_gain/unit
         date_utc = to_datetime_string(self.config.obs.datetime[0], date_only=True)
         # legacy gppy used tool.calculate_average_date_obs('DATE-OBS')
         self.config.preprocess.mbias_link = os.path.join(
@@ -458,9 +460,9 @@ class Configuration:
 
         self._config_in_dict["info"]["last_update_datetime"] = datetime.now().isoformat()
 
-        filename = f"{self.output_name}.yml"
+        filename = f"{self.output_stem}.yml"
 
-        config_file = os.path.join(self.config.path.path_processed, filename)
+        config_file = os.path.join(self.path.output_dir, filename)
         self.config_file = config_file
 
         with open(config_file, "w") as f:

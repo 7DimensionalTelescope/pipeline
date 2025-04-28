@@ -52,7 +52,6 @@ class MasterFrameGenerator:
 
         self.logger.debug(f"Masterframe output folder: {self.path_fdz}")
 
-
     @property
     def sequential_task(self):
         return [
@@ -69,14 +68,10 @@ class MasterFrameGenerator:
         n_binning = obs_params["n_binning"]
         gain = obs_params["gain"]
 
-        self.process_name = (
-            f"{date}_{n_binning}x{n_binning}_gain{gain}_{unit}_masterframe"
-        )
+        self.process_name = f"{date}_{n_binning}x{n_binning}_gain{gain}_{unit}_masterframe"
 
         self.path_raw = find_raw_path(unit, date, n_binning, gain)
-        self.path_fdz = os.path.join(
-            MASTER_FRAME_DIR, define_output_dir(date, n_binning, gain), unit
-        )
+        self.path_fdz = os.path.join(MASTER_FRAME_DIR, define_output_dir(date, n_binning, gain), unit)
         os.makedirs(self.path_fdz, exist_ok=True)
 
         header = self._get_sample_header()
@@ -107,9 +102,7 @@ class MasterFrameGenerator:
 
     def run(self, make_plots=True):
 
-        self.logger.debug(
-            f"Start generating master calibration frames: {MemoryMonitor.log_memory_usage}"
-        )
+        self.logger.debug(f"Start generating master calibration frames: {MemoryMonitor.log_memory_usage}")
 
         self.logger.debug(f"queue is {self.queue}")
 
@@ -180,31 +173,23 @@ class MasterFrameGenerator:
         # These are DIFFERENT from bias_input and so on!
         # Extract exposures of science frames for current date and unit
         sci_exptimes = {
-            int(float(parsed[6][:-1]))
-            for parsed in (os.path.basename(s).split("_") for s in self._sci_input)
+            int(float(parsed[6][:-1])) for parsed in (os.path.basename(s).split("_") for s in self._sci_input)
         }
 
         # Extract filts of science frames for current date and unit
-        sci_filters = {
-            parsed[4]
-            for parsed in (os.path.basename(s).split("_") for s in self._sci_input)
-        }
+        sci_filters = {parsed[4] for parsed in (os.path.basename(s).split("_") for s in self._sci_input)}
 
         # Define paths to links
         # CAVEAT: Links should be made for SCI Frames, not calib outputs
 
         self._mdark_link = {}
         for exptime in sci_exptimes:
-            mdark_link = os.path.join(
-                self.path_fdz, f"dark_{self.date_fdz}_{exptime}s_{self.camera}.link"
-            )
+            mdark_link = os.path.join(self.path_fdz, f"dark_{self.date_fdz}_{exptime}s_{self.camera}.link")
             self._mdark_link[exptime] = mdark_link
 
         self._mflat_link = {}
         for filt in sci_filters:
-            mdark_link = os.path.join(
-                self.path_fdz, f"flat_{self.date_fdz}_{filt}_{self.camera}.link"
-            )
+            mdark_link = os.path.join(self.path_fdz, f"flat_{self.date_fdz}_{filt}_{self.camera}.link")
             self._mflat_link[filt] = mdark_link
 
     def _log_inventory(self):
@@ -259,18 +244,14 @@ class MasterFrameGenerator:
     @property
     def biassig_output(self):
         # master_frame/2001-02-23_1x1_gain2750/7DT11/biassig_20250102_C3.fits
-        return os.path.join(
-            self.path_fdz, f"biassig_{self.date_fdz}_{self.camera}.fits"
-        )
+        return os.path.join(self.path_fdz, f"biassig_{self.date_fdz}_{self.camera}.fits")
 
     @property
     def mdark_output(self):
         # master_frame/2001-02-23_1x1_gain2750/7DT11/dark_20250102_100s_C3.fits
         mdarks_out_dict = {}
         for exptime in self.dark_input.keys():  # exptime is int
-            fpath = os.path.join(
-                self.path_fdz, f"dark_{self.date_fdz}_{exptime}s_{self.camera}.fits"
-            )
+            fpath = os.path.join(self.path_fdz, f"dark_{self.date_fdz}_{exptime}s_{self.camera}.fits")
             mdarks_out_dict[exptime] = fpath
         return mdarks_out_dict
 
@@ -301,9 +282,7 @@ class MasterFrameGenerator:
         # master_frame/2001-02-23_1x1_gain2750/7DT11/flat_20250102_m625_C3.fits
         mflats_out_dict = {}
         for filt in self.flat_input.keys():
-            mflats_out_dict[filt] = os.path.join(
-                self.path_fdz, f"flat_{self.date_fdz}_{filt}_{self.camera}.fits"
-            )
+            mflats_out_dict[filt] = os.path.join(self.path_fdz, f"flat_{self.date_fdz}_{filt}_{self.camera}.fits")
         return mflats_out_dict
 
     @property
@@ -312,9 +291,7 @@ class MasterFrameGenerator:
         # master_frame/2001-02-23_1x1_gain2750/7DT11/flatsig_20250102_m625_C3.fits
         mflats_out_dict = {}
         for filt in self.flat_input.keys():
-            mflats_out_dict[filt] = os.path.join(
-                self.path_fdz, f"flatsig_{self.date_fdz}_{filt}_{self.camera}.fits"
-            )
+            mflats_out_dict[filt] = os.path.join(self.path_fdz, f"flatsig_{self.date_fdz}_{filt}_{self.camera}.fits")
         return mflats_out_dict
 
     @property
@@ -351,20 +328,13 @@ class MasterFrameGenerator:
         if len(self.mdark_output) > 0:
             mdarks_used = self.mdark_output
             darkexptimes = [float(i) for i in self.mdark_link.keys()]
-            closest_dark_exp = darkexptimes[
-                np.argmin(np.abs(darkexptimes - flat_exp_repr))
-            ]
+            closest_dark_exp = darkexptimes[np.argmin(np.abs(darkexptimes - flat_exp_repr))]
             mdark_used = mdarks_used[closest_dark_exp]
             dark_scaler = flat_exp_repr / closest_dark_exp
         else:
-            self.logger.warn(
-                f"No master dark frame for the date. "
-                f"Searching previous dates for 100s mdark."
-            )
+            self.logger.warn(f"No master dark frame for the date. " f"Searching previous dates for 100s mdark.")
             # master_frame/2001-02-23_1x1_gain2750/7DT11/dark_20250102_100s_C3.fits
-            search_template = os.path.join(
-                self.path_fdz, f"dark_{self.date_fdz}_100s_{self.camera}.fits"
-            )
+            search_template = os.path.join(self.path_fdz, f"dark_{self.date_fdz}_100s_{self.camera}.fits")
             mdark_used = search_with_date_offsets(search_template, future=False)
             dark_scaler = flat_exp_repr / 100
         return mdark_used, dark_scaler
@@ -392,9 +362,7 @@ class MasterFrameGenerator:
 
         n = len(data_list)
         if self.min_frames and n < self.min_frames:
-            self.logger.warning(
-                f"Not enough {dtype.upper()} frames to generate masterframe: {n}. Skipping..."
-            )
+            self.logger.warning(f"Not enough {dtype.upper()} frames to generate masterframe: {n}. Skipping...")
             return None
 
         self.logger.info(f"Start to generate masterframe {dtype.upper()}")
@@ -483,9 +451,7 @@ class MasterFrameGenerator:
             self.queue.log_memory_stats(f"After combining {dtype} data")
 
         if dtype == "dark":
-            self.generate_bpmask(
-                combined_data, self.bpmask_output[exptime], header=header
-            )
+            self.generate_bpmask(combined_data, self.bpmask_output[exptime], header=header)
 
         header = add_image_id(header)
         header = record_statistics(combined_data, header)
@@ -583,9 +549,7 @@ class MasterFrameGenerator:
         else:
             # 2001-02-23_1x1_gain2750/7DT11/bias_20250102_C3.fits
             # 2001-02-23_1x1_gain2750/7DT11/bias_20250102_C3.link
-            self.logger.info(
-                "No raw BIAS files found for the date. Searching for the closest past master BIAS."
-            )
+            self.logger.info("No raw BIAS files found for the date. Searching for the closest past master BIAS.")
             search_template = os.path.splitext(self.mbias_link)[0] + ".fits"
             mbias_file = search_with_date_offsets(search_template, future=True)
             if not mbias_file:
@@ -606,9 +570,7 @@ class MasterFrameGenerator:
         # make master dark for existing exptimes
         for exptime in self.dark_input:
             self.logger.info(f"Generating master dark for exptime: {exptime}")
-            mdark_file = self._combine_and_save_eclaire(
-                dtype="dark", exptime=exptime, **kwargs
-            )
+            mdark_file = self._combine_and_save_eclaire(dtype="dark", exptime=exptime, **kwargs)
             if mdark_file:
                 generated_mdark[exptime] = mdark_file
 
@@ -617,16 +579,12 @@ class MasterFrameGenerator:
             if exptime in generated_mdark:
                 mdark_file = generated_mdark[exptime]
             else:
-                self.logger.info(
-                    f"No master dark for exptime {exptime}."
-                    f"Fetching from the closest data."
-                )
+                self.logger.info(f"No master dark for exptime {exptime}." f"Fetching from the closest data.")
                 search_template = swap_ext(mdark_link, ".fits")
                 mdark_file = search_with_date_offsets(search_template, future=True)
                 if not mdark_file:
                     self.logger.error(
-                        f"Failed to generate mdark link for exptime {exptime}. "
-                        f"No fallback master dark found."
+                        f"Failed to generate mdark link for exptime {exptime}. " f"No fallback master dark found."
                     )
                     continue
 
@@ -668,9 +626,7 @@ class MasterFrameGenerator:
         # make master flat for existing filters
         generated_mflat = {}
         for filt in self.flat_input:
-            mflat_file = self._combine_and_save_eclaire(
-                dtype="flat", filt=filt, **kwargs
-            )
+            mflat_file = self._combine_and_save_eclaire(dtype="flat", filt=filt, **kwargs)
             if mflat_file:
                 generated_mflat[filt] = mflat_file
 
@@ -678,17 +634,13 @@ class MasterFrameGenerator:
             if filt in generated_mflat:
                 mflat_file = generated_mflat[filt]
             else:
-                self.logger.info(
-                    f"No master flat for filter {filt}."
-                    f"Fetching from the closest data."
-                )
+                self.logger.info(f"No master flat for filter {filt}." f"Fetching from the closest data.")
                 search_template = swap_ext(mflat_link, ".fits")
                 # master_frame/2001-02-23_1x1_gain2750/7DT11/flat_20250102_m625_C3.fits
                 mflat_file = search_with_date_offsets(search_template, future=True)
                 if not mflat_file:
                     self.logger.error(
-                        f"Failed to generate mflat link for filter {filt}. "
-                        f"No fallback master flat found."
+                        f"Failed to generate mflat link for filter {filt}. " f"No fallback master flat found."
                     )
                     continue
 

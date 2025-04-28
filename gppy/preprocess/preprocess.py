@@ -39,7 +39,7 @@ class Preprocess(BaseSetup):
             (1, "load_mbdf", False),
             (2, "data_reduction", True),
             (3, "save_processed_files", False),
-            (4, "flagging", False)
+            (4, "flagging", False),
         ]
 
     @classmethod
@@ -88,14 +88,10 @@ class Preprocess(BaseSetup):
                 )
         else:
             try:
-                self.logger.info(
-                    f"Calibrating image with {'Eclaire' if use_eclaire else 'Cupy'}"
-                )
+                self.logger.info(f"Calibrating image with {'Eclaire' if use_eclaire else 'Cupy'}")
                 self.data_reduction(use_eclaire=use_eclaire)
-                
-                self.logger.info(
-                    f"Saving processed files to {self.config.path.path_processed}"
-                )
+
+                self.logger.info(f"Saving processed files to {self.config.path.path_processed}")
                 self.save_processed_files()
             except Exception as e:
                 self.logger.error(f"Error during preprocessing: {str(e)}")
@@ -135,12 +131,9 @@ class Preprocess(BaseSetup):
 
             # if the found is the same as link: abort processing
             if (
-                self.config.preprocess.mbias_file
-                == prep_utils.read_link(self.config.preprocess.mbias_link)
-                and self.config.preprocess.mdark_file
-                == prep_utils.read_link(self.config.preprocess.mdark_link)
-                and self.config.preprocess.mflat_file
-                == prep_utils.read_link(self.config.preprocess.mflat_link)
+                self.config.preprocess.mbias_file == prep_utils.read_link(self.config.preprocess.mbias_link)
+                and self.config.preprocess.mdark_file == prep_utils.read_link(self.config.preprocess.mdark_link)
+                and self.config.preprocess.mflat_file == prep_utils.read_link(self.config.preprocess.mflat_link)
             ):
                 self.logger.info("All newly found master frames are the same as existing links")  # fmt: skip
                 raise ValueError("No new closest master calibration frames. Aborting...")  # fmt: skip
@@ -168,12 +161,12 @@ class Preprocess(BaseSetup):
             "bias": self.config.preprocess.mbias_file,
             "dark": self.config.preprocess.mdark_file,
             "flat": self.config.preprocess.mflat_file,
-            "raw":  self.config.file.raw_files,
+            "raw": self.config.file.raw_files,
             "processed": self.config.file.processed_files,
         }
 
     def data_reduction(self, with_eclaire=True):
-        
+
         if with_eclaire:
             ofc = ec.FitsContainer(self.files["raw"])
             with prep_utils.load_data_gpu(self.files["bias"]) as mbias, \
@@ -181,13 +174,14 @@ class Preprocess(BaseSetup):
                 prep_utils.load_data_gpu(self.files["flat"]) as mflat:  # fmt:skip
                 ofc.data = ec.reduction(ofc.data, mbias, mdark, mflat)
             self._temp_data = ofc.data.get()
+            del ofc
 
     def save_processed_files(self, make_plots=True):
         self.files = {
             "bias": self.config.preprocess.mbias_file,
             "dark": self.config.preprocess.mdark_file,
             "flat": self.config.preprocess.mflat_file,
-            "raw":  self.config.file.raw_files,
+            "raw": self.config.file.raw_files,
             "processed": self.config.file.processed_files,
         }
         for idx, (raw_file, out_file) in enumerate(zip(self.files["raw"], self.files["processed"])):
@@ -196,8 +190,7 @@ class Preprocess(BaseSetup):
                 header, self.files["bias"], self.files["dark"], self.files["flat"]
             )
             header = prep_utils.write_IMCMB_to_header(
-                header,
-                [self.files["bias"], self.files["dark"], self.files["flat"], raw_file]
+                header, [self.files["bias"], self.files["dark"], self.files["flat"], raw_file]
             )
             n_head_blocks = self.config.settings.header_pad
             add_padding(header, n_head_blocks, copy_header=False)
@@ -211,7 +204,7 @@ class Preprocess(BaseSetup):
             if make_plots:
                 self.make_plots(raw_file, output_path)
         del self._temp_data
-            
+
     # def _calibrate_image_eclaire(self, make_plots=True):
     #     mbias_file = self.config.preprocess.mbias_file
     #     mdark_file = self.config.preprocess.mdark_file
