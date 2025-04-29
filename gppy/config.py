@@ -14,10 +14,7 @@ from .utils import (
     clean_up_folder,
     swap_ext,
 )
-from .const import (
-    PROCESSED_DIR,
-    HEADER_KEY_MAP,
-)
+from .const import HEADER_KEY_MAP, IMAGE_IDENTIFIERS
 from .base.path import PathHandler
 
 
@@ -149,12 +146,11 @@ class Configuration:
 
             logger = Logger(name=self.config.name, slack_channel="pipeline_report")
 
-        filename = f"{self.output_stem}.log"
-        log_file = os.path.join(self.path.output_dir, filename)
+        log_file = self.path.output_log
         self.config.logging.file = log_file
         logger.set_output_file(log_file, overwrite=overwrite)
         logger.set_format(self.config.logging.format)
-        logger.set_pipeline_name(self.output_stem)
+        logger.set_pipeline_name(self.path.output_name)
         if not (verbose):
             logger.set_level("WARNING")
 
@@ -174,10 +170,10 @@ class Configuration:
         self._make_instance(self._config_in_dict)
         self._loaded = True
 
-    def _find_config_file(self, obs_params, **kwargs):
+    def _find_config_file(self, **kwargs):
         """Find the configuration file in the processed directory."""
 
-        base_dir = self.path.output_dir
+        # base_dir = self.path.output_dir
         # config_files = glob.glob(f"{base_dir}/*.yml")
         # if len(config_files) == 0:
         output_config_file = self.path.output_yml
@@ -187,13 +183,6 @@ class Configuration:
         else:
             self._initialized = True
             return output_config_file  # s[0]
-
-    @staticmethod
-    def _legacy_name_support(obs_params):
-        if "nightdate" not in obs_params and "date" in obs_params:
-            obs_params["nightdate"] = obs_params["date"]
-        if "object" not in obs_params and "obj" in obs_params:
-            obs_params["object"] = obs_params["obj"]
 
     def initialize(self, obs_params):
         """Fill in obs info, name, paths."""
@@ -211,10 +200,17 @@ class Configuration:
         self.config.name = f"{obs_params['nightdate']}_{obs_params['n_binning']}x{obs_params['n_binning']}_gain{obs_params['gain']}_{obs_params['obj']}_{obs_params['unit']}_{obs_params['filter']}"
         self.config.info.creation_datetime = datetime.now().isoformat()
 
-        self._define_paths()
-        self._read_header_info()
+        self._glob_raw_images()
+        self._ensure_image_coherency()
         self._define_settings()
         self._initialized = True
+
+    @staticmethod
+    def _legacy_name_support(obs_params):
+        if "nightdate" not in obs_params and "date" in obs_params:
+            obs_params["nightdate"] = obs_params["date"]
+        if "object" not in obs_params and "obj" in obs_params:
+            obs_params["object"] = obs_params["obj"]
 
     @property
     def is_initialized(self):
@@ -223,14 +219,6 @@ class Configuration:
     @property
     def is_loaded(self):
         return self._loaded
-
-    @property
-    def output_stem(self):
-        return (
-            f"calib_{self.config.obs.unit}_{self.config.obs.obj}_"
-            f"{to_datetime_string(self.config.obs.obstime[0])}_"
-            f"{self.config.obs.filter}_{self.config.obs.exposure[0]}"
-        )
 
     @property
     def config_in_dict(self):
@@ -278,7 +266,7 @@ class Configuration:
         lower_kwargs = {key.lower(): value for key, value in kwargs.items()}
         self._config_in_dict = Configuration._merge_dicts(self._config_in_dict, lower_kwargs)  # fmt:skip
 
-    def _define_paths(self):
+    def _glob_raw_images(self):
         """Create and set output directory paths for processed data."""
         # # _date_dir = define_output_dir(self.config.obs.date, self.config.obs.n_binning, self.config.obs.gain)
         # _date_dir = self.config.obs.date
@@ -318,6 +306,7 @@ class Configuration:
         # self.config.path.path_sex = os.path.join(REF_DIR, "srcExt")
         # self._add_metadata(_date_dir)
 
+        # obsdata is ill-defined
         path_raw = find_raw_path(
             self.config.obs.unit,
             self.config.obs.nightdate,
@@ -375,9 +364,9 @@ class Configuration:
                 f.write("# %ECSV 1.0\n")
                 f.write("# ---\n")
                 f.write("# datatype:\n")
-                f.write("# - {name: object, datatype: string}\n")
-                f.write("# - {name: unit, datatype: string}\n")
+                f.write("# - {name: obj, datatype: string}\n")
                 f.write("# - {name: filter, datatype: string}\n")
+                f.write("# - {name: unit, datatype: string}\n")
                 f.write("# - {name: n_binning, datatype: int64}\n")
                 f.write("# - {name: gain, datatype: int64}\n")
                 f.write("# meta: !!omap\n")
@@ -396,12 +385,15 @@ class Configuration:
         with open(metadata_path, "a") as f:
             f.write(new_line)
 
-    def _read_header_info(self):
-        obs_config_keys = ["ra", "dec", "obstime", "exposure"]
+    def _ensure_image_coherency(self):
+        # obs_config_keys = ["ra", "dec", "obstime", "exposure"]
+        obs_config_keys = IMAGE_IDENTIFIERS
 
+        # initialize empty lists
         for config_key in obs_config_keys:
             setattr(self.config.obs, config_key, [])
 
+        # check all image headers
         for header_in_dict in self.raw_headers:
             for config_key in obs_config_keys:
                 header_key = HEADER_KEY_MAP[config_key]
@@ -463,9 +455,7 @@ class Configuration:
 
         self._config_in_dict["info"]["last_update_datetime"] = datetime.now().isoformat()
 
-        filename = f"{self.output_stem}.yml"
-
-        config_file = os.path.join(self.path.output_dir, filename)
+        config_file = self.path.output_yml
         self.config_file = config_file
 
         with open(config_file, "w") as f:
