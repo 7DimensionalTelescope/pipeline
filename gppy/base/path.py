@@ -9,48 +9,62 @@ from ..utils import check_params, get_camera, define_output_dir, Path7DS
 from .. import const
 
 
-def raw_dir_from_processed(str):
-
-    return
-
-
-image_unique_keys = ["date", "filter", "obj", "unit", "exposure"]
+image_unique_keys = const.IMAGE_IDENTIFIERS
 
 
 class PathHandler:
     def __init__(self, input):
-        self._data_type = None  # propagate user-input in config.name
-        if isinstance(input, str):
-            if input.endswith(".fits"):
-                self._input_files = [Path(input)]
-            elif input.endswith(".yml"):
-                from ..config import Configuration
 
-                self._input_files = Configuration(input).config.file.raw_files
-                self._input_files = [Path(file) for file in files]
-            else:
-                raise ValueError("Input must be a .fits file or a .yml file.")
-        elif isinstance(input, Path):
-            self._input_files = [input]
-        elif isinstance(input, list):
-            self._input_files = [Path(img) for img in input]
+        # input is obs_param
+        if isinstance(input, dict):
+            self._input_file = None
+            self._data_type = None
+            self.obs_params = input
+
+        # input is config
         elif hasattr(input, "config"):
-            files = input.config.file.raw_files
-            self._input_files = [Path(file) for file in files]
-            self._data_type = input.config.name
-            # else:
-            #     raise ValueError("Input object must be Configuration")
+            self._input_file = [Path(file) for file in input.config.file.raw_files]
+            self._data_type = input.config.name  # propagate user-input
+            self.obs_params = input.config_in_dict["obs"]
+
+        # input is a fits file
+        elif isinstance(input, str) or isinstance(input, Path):
+            self._input_file = [Path(input)]
+            self._data_type = None
+            self.obs_params = check_params(self._input_file)
+
+        # input is a fits file list
+        elif isinstance(input, list):
+            self._input_file = [Path(img) for img in input]
+            self._data_type = None
+            self.obs_params = None
+            self.obs_params = check_params(self._input_file[0])
+
         else:
-            raise TypeError("Input must be a string, Path, or list of strings/Paths.")
+            raise TypeError(f"Input must be a path (str | Path), a list of paths, obs_params (dict), or Configuration.")
 
-        if not (self.is_present(self._input_files)):
-            raise FileNotFoundError(f"Path does not exist: {self._input_files}")
-
+        self._file_indep_initialized = False
+        self._file_dep_initialized = False
         self.select_output_dir()
-        self.define_common_path()
-        self.define_specific_path()
+
+        if not self._file_indep_initialized:
+            self.define_file_independent_common_paths()
+        if not self._file_dep_initialized and self._input_file:
+            self.define_file_dependent_common_paths()
+        if self._file_indep_initialized and self._file_dep_initialized:
+            self.define_specific_paths()
+
+    def __getattribute__(self, name):
+        """Make sure accessed dirs exist"""
+        value = super().__getattribute__(name)
+
+        if isinstance(value, (str, Path)):
+            os.makedirs(str(value), exist_ok=True)
+        return value
 
     def __getattr__(self, name):
+        """This runs when name is not in __dict__"""
+        # not really useful
         if name.endswith("_to_string"):
             tmp_name = name.replace("_to_string", "")
             if getattr(self, tmp_name) is not None:
@@ -69,24 +83,8 @@ class PathHandler:
                     return getattr(self, temp_name)
                 else:
                     return getattr(self, tmp_name)
-        elif name in self.__dict__:
-            var = getattr(self, name)
-            # Create the directory if nonexisting
-            if isinstance(var, str) or isinstance(var, Path):
-                os.makedirs(str(var), exist_ok=True)
-            return getattr(self, name)
         else:
             raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
-
-    def __getattribute__(self, name):
-        """Make sure accessed dirs exist"""
-        # delegate to super first
-        value = super().__getattribute__(name)
-
-        # custom extras
-        if isinstance(value, (str, Path)):
-            os.makedirs(str(value), exist_ok=True)
-        return value
 
     def __repr__(self):
         return "\n".join(f"{k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
@@ -97,40 +95,43 @@ class PathHandler:
 
     def select_output_dir(self):
         # date_utc = Path7DS(self._input_files[0]).date  # utc date. e.g., "20250101"
-        date_folder = check_params(self._input_files[0])["date"]
+        date_folder = check_params(self._input_file[0])["nightdate"]
         if date_folder < "20260101":
             self.output_parent_dir = const.PROCESSED_DIR
         else:
             raise ValueError("Predefined date cap reached: consider moving to another disk.")
 
-    def define_common_path(self):
+    def define_file_independent_common_paths(self):
 
-        if const.RAWDATA_DIR in str(self._input_files[0]):
-            params = check_params(self._input_files[0])
+        if const.RAWDATA_DIR in str(self._input_file[0]):
             self.data_type = self._data_type or "raw"
-            self.raw_images = [str(file.absolute()) for file in self._input_files]
-            _relative_path = os.path.join(params["date"], params["obj"], params["filter"], params["unit"])
+            self.raw_images = [str(file.absolute()) for file in self._input_file]
+            _relative_path = os.path.join(
+                self.obs_params["nightdate"], self.obs_params["obj"], self.obs_params["filter"], self.obs_params["unit"]
+            )
             self.output_dir = os.path.join(self.output_parent_dir, _relative_path)
-            self.masterframe_dir = os.path.join(const.MASTER_FRAME_DIR, params["date"], params["unit"])
+            self.masterframe_dir = os.path.join(
+                const.MASTER_FRAME_DIR, self.obs_params["nightdate"], self.obs_params["unit"]
+            )
             self.factory_dir = os.path.join(const.FACTORY_DIR, _relative_path)
-            self.metadata_dir = os.path.join(self.output_parent_dir, params["date"])
-            processed_file_stems = [switch_raw_name_order(file.stem) for file in self._input_files]
+            self.metadata_dir = os.path.join(self.output_parent_dir, self.obs_params["nightdate"])
+            processed_file_stems = [switch_raw_name_order(file.stem) for file in self._input_file]
             self.processed_images = [
                 os.path.join(self.output_dir, "images", file_stem + ".fits") for file_stem in processed_file_stems
             ]
-        elif self.output_parent_dir in str(self._input_files[0]):
+        elif self.output_parent_dir in str(self._input_file[0]):
             self.data_type = self._data_type or "processed"
-            self.processed_images = [str(file.absolute()) for file in self._input_files]
+            self.processed_images = [str(file.absolute()) for file in self._input_file]
             # self.processed_file_stems = [file.stem for file in self._input_files]
-            self.factory_dir = os.path.join(const.FACTORY_DIR, *Path(self._input_files[0]).parts[-6:-3])
-            self.output_dir = self._input_files[0].parent.parent
+            self.factory_dir = os.path.join(const.FACTORY_DIR, *Path(self._input_file[0]).parts[-6:-3])
+            self.output_dir = self._input_file[0].parent.parent
         else:
             self.data_type = self._data_type or "user-input"
             print("User input data type detected. Assume the input is a list of processed images.")
-            self.processed_images = [str(file.absolute()) for file in self._input_files]
+            self.processed_images = [str(file.absolute()) for file in self._input_file]
             # self.processed_file_stems = [file.stem for file in self._input_files]
-            self.output_dir = self._input_files[0].parent.parent
-            self.factory_dir = self._input_files[0].parent.parent / "factory"
+            self.output_dir = self._input_file[0].parent.parent
+            self.factory_dir = self._input_file[0].parent.parent / "factory"
 
         self.image_dir = os.path.join(self.output_dir, "images")
         self.figure_dir = os.path.join(self.output_dir, "figures")
@@ -143,6 +144,18 @@ class PathHandler:
         self.photometry_ref_ris_dir = Path("/lyman/data1/factory/ref_cat")  # divided by RIS tiles
         self.photometry_ref_gaia_dir = Path("/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile")
         self.subtraction_ref_image_dir = Path("/lyman/data1/factory/ref_frame")
+
+        self._file_indep_initialized = True
+
+    def add_fits(self, files: str | Path | list):
+        self._input_file = files
+
+    def define_file_dependent_common_paths(self):
+        if not (self.is_present(self._input_file)):
+            raise FileNotFoundError(f"Not all paths exist: {self._input_file}")
+
+        self._file_dep_initialized = True
+        pass
 
     # def path_preprocess(self):
     #     pass
@@ -159,7 +172,7 @@ class PathHandler:
     # def path_subtraction(self):
     #     pass
 
-    def define_specific_path(self):
+    def define_specific_paths(self):
         # self.preprocess = PathPreprocess(path_processed=self.output_dir)
         # self.astrometry = PathAstrometry(path_processed=self.output_dir)
         pass

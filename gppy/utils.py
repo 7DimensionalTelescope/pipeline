@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 from datetime import datetime, timedelta
 from astropy.io import fits
-from .const import FACTORY_DIR, RAWDATA_DIR
+from .const import FACTORY_DIR, RAWDATA_DIR, HEADER_KEY_MAP
 
 
 def clean_up_factory():
@@ -69,8 +69,8 @@ def parse_key_params_from_filename(img):
             date = subtract_half_day(datetime_string)
 
     info = {
-        "date": date,
-        "datetime": datetime_string,
+        "nightdate": date,
+        "obstime": datetime_string,
         "filter": filt,
         "obj": target,
         "unit": units,
@@ -78,12 +78,16 @@ def parse_key_params_from_filename(img):
         "n_binning": int(formatted_n_binning[0]),
     }
 
+    # deprecated key support
+    info["date"] = info["nightdate"]
+    info["datetime"] = info["obstime"]
+
     file_type = "master_image" if any(s in str(path.stem) for s in ["BIAS", "DARK", "FLAT"]) else "sci_image"
 
     return info, file_type
 
 
-def parse_key_params_from_header(filename: str or Path) -> None:
+def parse_key_params_from_header(filename: str | Path) -> None:
     """
     Extract target information from a FITS filename.
 
@@ -96,8 +100,8 @@ def parse_key_params_from_header(filename: str or Path) -> None:
     filename = str(filename)  # in case filename is pathlib Path
     info = {}
     header = fits.getheader(filename)
-    for attr, key in zip(["exposure", "gain", "filter", "date", "obj", "unit", "n_binning"], \
-                        ["EXPOSURE", "GAIN", "FILTER", "DATE-LOC", "OBJECT", "TELESCOP", "XBINNING"]):  # fmt:skip
+
+    for attr, key in HEADER_KEY_MAP.items():
         if key == "DATE-LOC":
             header_date = datetime.fromisoformat(header[key])
             adjusted_date = header_date - timedelta(hours=12)
