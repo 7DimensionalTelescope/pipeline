@@ -13,6 +13,8 @@ image_unique_keys = const.IMAGE_IDENTIFIERS
 
 
 class PathHandler:
+    _created_dirs: set[Path] = set()
+
     def __init__(self, input):
 
         # input is obs_param
@@ -43,48 +45,72 @@ class PathHandler:
         else:
             raise TypeError(f"Input must be a path (str | Path), a list of paths, obs_params (dict), or Configuration.")
 
-        self._file_indep_initialized = False
+        # self._file_indep_initialized = False
         self._file_dep_initialized = False
         self.select_output_dir()
 
-        if not self._file_indep_initialized:
-            self.define_file_independent_common_paths()
+        # if not self._file_indep_initialized:
+        self.define_file_independent_common_paths()
+
         if not self._file_dep_initialized and self._input_file:
             self.define_file_dependent_common_paths()
         if self._file_indep_initialized and self._file_dep_initialized:
             self.define_specific_paths()
 
     def __getattribute__(self, name):
-        """Make sure accessed dirs exist"""
+        """
+        CAVEAT: This runs every time attr is accessed. Keep it short.
+        Make sure accessed dirs exist
+        """
         value = super().__getattribute__(name)
 
+        # if isinstance(value, (str, Path)):
+        #     os.makedirs(str(value), exist_ok=True)
+
         if isinstance(value, (str, Path)):
-            os.makedirs(str(value), exist_ok=True)
+            p = Path(value).expanduser()  # understands ~/
+            d = p.parent if p.suffix else p  # ensure not a file
+
+            if d not in self._created_dirs and not d.exists():
+                d.mkdir(parents=True, exist_ok=True)
+                self._created_dirs.add(d)
+
         return value
 
     def __getattr__(self, name):
-        """This runs when name is not in __dict__"""
-        # not really useful
+        """
+        Below runs when name is not in __dict__.
+        (1) If file-dependent paths have not been built yet, build them.
+        (2) Retry the lookup - if the attribute was created by the builder we
+            return it; otherwise fall through to the convenience “_to_*” hooks.
+        """
+        # ---------- 1. Lazy initialization ----------
+        if not self._file_dep_initialized and self._input_file:
+            self._file_dep_initialized = True  # set the flag first to prevent accidental recursion
+            try:
+                self.define_file_dependent_common_paths()
+            except Exception:
+                # roll back if the builder blew up
+                self._file_dep_initialized = False
+                raise
+
+            # after building, see whether that gave us the requested attr
+            if name in self.__dict__:
+                return self.__dict__[name]
+
+        # ---------- 2. “Syntactic-sugar” logic ----------
         if name.endswith("_to_string"):
-            tmp_name = name.replace("_to_string", "")
-            if getattr(self, tmp_name) is not None:
-                if isinstance(getattr(self, tmp_name), Path):
-                    return str(getattr(self, tmp_name).absolute())
-                elif isinstance(getattr(self, tmp_name), str):
-                    return getattr(self, tmp_name)
-                else:
-                    return getattr(self, tmp_name)
-        elif name.endswith("_to_path"):
-            temp_name = name.replace("_to_path", "")
-            if getattr(self, temp_name) is not None:
-                if isinstance(getattr(self, temp_name), str):
-                    return Path(getattr(self, temp_name))
-                elif isinstance(getattr(self, temp_name), Path):
-                    return getattr(self, temp_name)
-                else:
-                    return getattr(self, tmp_name)
-        else:
-            raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
+            base = name[:-10]
+            val = getattr(self, base)
+            return str(val) if isinstance(val, (Path, str)) else val
+
+        if name.endswith("_to_path"):
+            base = name[:-7]
+            val = getattr(self, base)
+            return Path(val) if isinstance(val, str) else val
+
+        # ---------- 3. Still not found → real error ----------
+        raise AttributeError(f"{self.__class__.__name__!s} has no attribute {name!r}")
 
     def __repr__(self):
         return "\n".join(f"{k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
@@ -95,7 +121,8 @@ class PathHandler:
 
     def select_output_dir(self):
         # date_utc = Path7DS(self._input_files[0]).date  # utc date. e.g., "20250101"
-        date_folder = check_params(self._input_file[0])["nightdate"]
+        # date_folder = check_params(self._input_file[0])["nightdate"]
+        date_folder = self.obs_params["nightdate"]
         if date_folder < "20260101":
             self.output_parent_dir = const.PROCESSED_DIR
         else:
@@ -103,17 +130,47 @@ class PathHandler:
 
     def define_file_independent_common_paths(self):
 
+        _relative_path = os.path.join(
+            self.obs_params["nightdate"], self.obs_params["obj"], self.obs_params["filter"], self.obs_params["unit"]
+        )
+        self.output_dir = os.path.join(self.output_parent_dir, _relative_path)
+        self.factory_dir = os.path.join(const.FACTORY_DIR, _relative_path)
+
+        # directories
+        self.image_dir = os.path.join(self.output_dir, "images")
+        self.figure_dir = os.path.join(self.output_dir, "figures")
+        self.daily_stacked_dir = os.path.join(self.output_dir, "stacked")
+        self.subtracted_dir = os.path.join(self.output_dir, "subtracted")
+        self.ref_sex_dir = os.path.join(const.REF_DIR, "srcExt")
+
+        self.astrometry_ref_ris_dir = "/lyman/data1/factory/catalog/gaia_dr3_7DT"
+        self.astrometry_ref_query_dir = "/lyman/data1/factory/ref_scamp"
+        self.photometry_ref_ris_dir = "/lyman/data1/factory/ref_cat"  # divided by RIS tiles
+        self.photometry_ref_gaia_dir = "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile"
+        self.subtraction_ref_image_dir = "/lyman/data1/factory/ref_frame"
+
+        # files
+        self.base_yml = os.path.join(const.REF_DIR, "base.yml")
+        self.output_yml = os.path.join(
+            self.output_dir,
+            f"{self.obs_params['obj']}_{self.obs_params['filter']}_{self.obs_params['unit']}_{self.obs_params['nightdate']}.yml",
+        )
+
+        self._file_indep_initialized = True
+
+    def add_fits(self, files: str | Path | list):
+        self._input_file = [Path(f) for f in files]
+
+    def define_file_dependent_common_paths(self):
+        if not (self.is_present(self._input_file)):
+            raise FileNotFoundError(f"Not all paths exist: {self._input_file}")
+
         if const.RAWDATA_DIR in str(self._input_file[0]):
             self.data_type = self._data_type or "raw"
             self.raw_images = [str(file.absolute()) for file in self._input_file]
-            _relative_path = os.path.join(
-                self.obs_params["nightdate"], self.obs_params["obj"], self.obs_params["filter"], self.obs_params["unit"]
-            )
-            self.output_dir = os.path.join(self.output_parent_dir, _relative_path)
             self.masterframe_dir = os.path.join(
                 const.MASTER_FRAME_DIR, self.obs_params["nightdate"], self.obs_params["unit"]
             )
-            self.factory_dir = os.path.join(const.FACTORY_DIR, _relative_path)
             self.metadata_dir = os.path.join(self.output_parent_dir, self.obs_params["nightdate"])
             processed_file_stems = [switch_raw_name_order(file.stem) for file in self._input_file]
             self.processed_images = [
@@ -132,27 +189,6 @@ class PathHandler:
             # self.processed_file_stems = [file.stem for file in self._input_files]
             self.output_dir = self._input_file[0].parent.parent
             self.factory_dir = self._input_file[0].parent.parent / "factory"
-
-        self.image_dir = os.path.join(self.output_dir, "images")
-        self.figure_dir = os.path.join(self.output_dir, "figures")
-        self.daily_stacked_dir = os.path.join(self.output_dir, "stacked")
-        self.subtracted_dir = os.path.join(self.output_dir, "subtracted")
-        self.ref_sex_dir = Path(os.path.join(const.REF_DIR, "srcExt"))
-
-        self.astrometry_ref_ris_dir = Path("/lyman/data1/factory/catalog/gaia_dr3_7DT")
-        self.astrometry_ref_query_dir = Path("/lyman/data1/factory/ref_scamp")
-        self.photometry_ref_ris_dir = Path("/lyman/data1/factory/ref_cat")  # divided by RIS tiles
-        self.photometry_ref_gaia_dir = Path("/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile")
-        self.subtraction_ref_image_dir = Path("/lyman/data1/factory/ref_frame")
-
-        self._file_indep_initialized = True
-
-    def add_fits(self, files: str | Path | list):
-        self._input_file = files
-
-    def define_file_dependent_common_paths(self):
-        if not (self.is_present(self._input_file)):
-            raise FileNotFoundError(f"Not all paths exist: {self._input_file}")
 
         self._file_dep_initialized = True
         pass
