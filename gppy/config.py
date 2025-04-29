@@ -15,12 +15,9 @@ from .utils import (
     swap_ext,
 )
 from .const import (
-    FACTORY_DIR,
     PROCESSED_DIR,
-    MASTER_FRAME_DIR,
     REF_DIR,
-    STACKED_DIR,
-    DAILY_STACKED_DIR,
+    HEADER_KEY_MAP,
 )
 from .base.path import PathHandler
 
@@ -47,7 +44,6 @@ class Configuration:
         config_source=None,
         logger=None,
         overwrite=False,
-        return_base=False,
         verbose=True,
         **kwargs,
     ):
@@ -59,22 +55,16 @@ class Configuration:
             config_source (str|dict, optional): Custom configuration source
             **kwargs: Additional configuration parameter overrides
         """
-        if return_base:
-            config_source = config_source or os.path.join(REF_DIR, "base.yml")
-            # self._initialized = True
-        elif overwrite:
+        # self._initialized = True
+        if overwrite:
             # Default config source if not provided
-            if config_source is None:
-                config_source = os.path.join(REF_DIR, "base.yml")
+            config_source = config_source or os.path.join(REF_DIR, "base.yml")
             self._initialized = False
         else:
             config_source = self._find_config_file(obs_params, **kwargs)
             self.config_file = config_source
 
         self._load_config(config_source, **kwargs)
-
-        if return_base:
-            return  # self  # init must return None
 
         if not self._initialized:
             self.initialize(obs_params)
@@ -203,12 +193,22 @@ class Configuration:
             self._initialized = True
             return config_files[0]
 
+    @staticmethod
+    def _legacy_name_support(obs_params):
+        if not hasattr(obs_params, "nightdate"):
+            obs_params["nightdate"] = obs_params["date"]
+        if not hasattr(obs_params, "object"):
+            obs_params["object"] = obs_params["obj"]
+
     def initialize(self, obs_params):
         """Fill in obs info, name, paths."""
+
+        self._legacy_name_support(obs_params)
+
         # Set core observation details
         self.config.obs.unit = obs_params["unit"]
-        self.config.obs.date = obs_params["date"]
-        self.config.obs.object = obs_params["obj"]
+        self.config.obs.nightdate = obs_params["nightdate"]
+        self.config.obs.obj = obs_params["obj"]
         self.config.obs.filter = obs_params["filter"]
         self.config.obs.n_binning = obs_params["n_binning"]
         self.config.obs.gain = obs_params["gain"]
@@ -232,8 +232,8 @@ class Configuration:
     @property
     def output_stem(self):
         return (
-            f"calib_{self.config.obs.unit}_{self.config.obs.object}_"
-            f"{to_datetime_string(self.config.obs.datetime[0])}_"
+            f"calib_{self.config.obs.unit}_{self.config.obs.obj}_"
+            f"{to_datetime_string(self.config.obs.obstime[0])}_"
             f"{self.config.obs.filter}_{self.config.obs.exposure[0]}"
         )
 
@@ -325,12 +325,12 @@ class Configuration:
 
         path_raw = find_raw_path(
             self.config.obs.unit,
-            self.config.obs.date,
+            self.config.obs.nightdate,
             self.config.obs.n_binning,
             self.config.obs.gain,
         )
-
-        template = f"{path_raw}/*{self.config.obs.object}_{self.config.obs.filter}_{self.config.obs.n_binning}*.fits"
+        fname = self._obsdata_basename(self.config.obs)
+        template = f"{path_raw}/{fname}"
         fits_files = sorted(glob.glob(template))
 
         raw_files = []
@@ -349,7 +349,14 @@ class Configuration:
         self.path = PathHandler(self)  # needs self.config.file.raw_files
         self.config.file.processed_files = self.path.processed_images
 
-        self._add_metadata(self.config.obs.date)
+        self._add_metadata(self.config.obs.nightdate)
+
+    @staticmethod
+    def _obsdata_basename(config):
+        # ex) '7DT11_20250102_014829_T00139_m425_1x1_100.0s_0001.fits'
+        # template = f"{path_raw}/*{self.config.obs.obj}_{self.config.obs.filter}_{self.config.obs.n_binning}*.fits"
+        # return f"{config.unit}_{config.nightdate}_*_{config.obj}_{config.filter}_{config.n_binning}x{config.n_binning}_{config.exposure}.fits"
+        return f"{config.unit}_*_*_{config.obj}_{config.filter}_{config.n_binning}x{config.n_binning}_*.fits"
 
     @staticmethod
     def _load_dict_header(fits_file):
@@ -384,7 +391,7 @@ class Configuration:
                 f.write("object unit filter n_binning gain\n")
 
         observation_data = [
-            str(self.config.obs.object),
+            str(self.config.obs.obj),
             str(self.config.obs.unit),
             str(self.config.obs.filter),
             str(self.config.obs.n_binning),
@@ -395,29 +402,30 @@ class Configuration:
             f.write(new_line)
 
     def _read_header_info(self):
+        obs_config_keys = ["ra", "dec", "obstime", "exposure"]
 
-        # Extract header metadata
-        header_mapping = {
-            "ra": "RA",
-            "dec": "DEC",
-            "datetime": "DATE-OBS",
-            "exposure": "EXPOSURE",
-        }
-
-        for config_key, header_key in header_mapping.items():
+        for config_key in obs_config_keys:
             setattr(self.config.obs, config_key, [])
 
         for header_in_dict in self.raw_headers:
-            for config_key, header_key in header_mapping.items():
+            for config_key in obs_config_keys:
+                header_key = HEADER_KEY_MAP[config_key]
                 getattr(self.config.obs, config_key).append(header_in_dict[header_key])
 
         # Identify Camera from image size
         self.config.obs.camera = get_camera(self.raw_header_sample)
+        self._check_image_coherency()
 
+        # self._generate_links()
+
+    def _check_image_coherency(self):
+        pass
+
+    def _generate_links(self):
         # Define pointer fpaths to master frames
+        # legacy gppy used tool.calculate_average_date_obs('DATE-OBS')
         path_fdz = self.path.masterframe_dir  # master_frame/date_bin_gain/unit
         date_utc = to_datetime_string(self.config.obs.datetime[0], date_only=True)
-        # legacy gppy used tool.calculate_average_date_obs('DATE-OBS')
         self.config.preprocess.mbias_link = os.path.join(
             path_fdz, f"bias_{date_utc}_{self.config.obs.camera}.link"
         )  # 7DT01/bias_20250102_C3.link
@@ -432,7 +440,7 @@ class Configuration:
 
     def _define_settings(self):
         # use local astrometric reference catalog for tile observations
-        self.config.settings.local_astref = bool(re.fullmatch(r"T\d{5}", self.config.obs.object))
+        self.config.settings.local_astref = bool(re.fullmatch(r"T\d{5}", self.config.obs.obj))
 
         # skip single frame combine for Deep mode
         obsmode = self.raw_header_sample["OBSMODE"]

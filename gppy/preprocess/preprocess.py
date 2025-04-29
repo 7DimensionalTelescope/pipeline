@@ -165,9 +165,9 @@ class Preprocess(BaseSetup):
             "processed": self.config.file.processed_files,
         }
 
-    def data_reduction(self, with_eclaire=True):
+    def data_reduction(self, use_eclaire=True):
 
-        if with_eclaire:
+        if use_eclaire:
             ofc = ec.FitsContainer(self.files["raw"])
             with prep_utils.load_data_gpu(self.files["bias"]) as mbias, \
                 prep_utils.load_data_gpu(self.files["dark"]) as mdark, \
