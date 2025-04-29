@@ -16,7 +16,6 @@ from .utils import (
 )
 from .const import (
     PROCESSED_DIR,
-    REF_DIR,
     HEADER_KEY_MAP,
 )
 from .base.path import PathHandler
@@ -56,12 +55,14 @@ class Configuration:
             **kwargs: Additional configuration parameter overrides
         """
         # self._initialized = True
+        self.path = PathHandler(obs_params)
+
         if overwrite:
             # Default config source if not provided
-            config_source = config_source or os.path.join(REF_DIR, "base.yml")
+            config_source = config_source or self.path.base_yml
             self._initialized = False
         else:
-            config_source = self._find_config_file(obs_params, **kwargs)
+            config_source = config_source or self._find_config_file(obs_params, **kwargs)
             self.config_file = config_source
 
         self._load_config(config_source, **kwargs)
@@ -97,7 +98,7 @@ class Configuration:
         if working_dir is not None:
             config.path.path_processed = working_dir
             factory_dir = os.path.join(working_dir, "factory")
-            os.makedirs(factory_dir, exist_ok=True)
+            # os.makedirs(factory_dir, exist_ok=True)
             config.path.path_factory = factory_dir
 
         if config_file:
@@ -168,36 +169,30 @@ class Configuration:
 
         self.config = ConfigurationInstance(self)
 
-        self._processed_dir = kwargs.pop("processed_dir", PROCESSED_DIR)
+        self._processed_dir = self.path.output_parent_dir
         self._update_with_kwargs(kwargs)
         self._make_instance(self._config_in_dict)
         self._loaded = True
 
     def _find_config_file(self, obs_params, **kwargs):
         """Find the configuration file in the processed directory."""
-        base_dir = kwargs.get("path_processed", PROCESSED_DIR)
-        tmp_path = define_output_dir(
-            obs_params["date"],
-            obs_params["n_binning"],
-            obs_params["gain"],
-            obj=obs_params["obj"],
-            unit=obs_params["unit"],
-            filt=obs_params["filter"],
-        )
-        base_dir = os.path.join(base_dir, tmp_path)
-        config_files = glob.glob(f"{base_dir}/*.yml")
-        if len(config_files) == 0:
+
+        base_dir = self.path.output_dir
+        # config_files = glob.glob(f"{base_dir}/*.yml")
+        # if len(config_files) == 0:
+        output_config_file = self.path.output_yml
+        if not os.path.exists(output_config_file):
             self._initialized = False
-            return os.path.join(REF_DIR, "base.yml")
+            return self.path.base_yml
         else:
             self._initialized = True
-            return config_files[0]
+            return output_config_file  # s[0]
 
     @staticmethod
     def _legacy_name_support(obs_params):
-        if not hasattr(obs_params, "nightdate"):
+        if "nightdate" not in obs_params and "date" in obs_params:
             obs_params["nightdate"] = obs_params["date"]
-        if not hasattr(obs_params, "object"):
+        if "object" not in obs_params and "obj" in obs_params:
             obs_params["object"] = obs_params["obj"]
 
     def initialize(self, obs_params):
@@ -213,7 +208,7 @@ class Configuration:
         self.config.obs.n_binning = obs_params["n_binning"]
         self.config.obs.gain = obs_params["gain"]
         self.config.obs.pixscale = self.config.obs.pixscale * float(obs_params["n_binning"])  # For initial solve
-        self.config.name = f"{obs_params['date']}_{obs_params['n_binning']}x{obs_params['n_binning']}_gain{obs_params['gain']}_{obs_params['obj']}_{obs_params['unit']}_{obs_params['filter']}"
+        self.config.name = f"{obs_params['nightdate']}_{obs_params['n_binning']}x{obs_params['n_binning']}_gain{obs_params['gain']}_{obs_params['obj']}_{obs_params['unit']}_{obs_params['filter']}"
         self.config.info.creation_datetime = datetime.now().isoformat()
 
         self._define_paths()
@@ -346,10 +341,10 @@ class Configuration:
 
         self.config.file.raw_files = raw_files
 
-        self.path = PathHandler(self)  # needs self.config.file.raw_files
+        self.path.add_fits(raw_files)
         self.config.file.processed_files = self.path.processed_images
 
-        self._add_metadata(self.config.obs.nightdate)
+        self._add_metadata()
 
     @staticmethod
     def _obsdata_basename(config):
@@ -371,7 +366,7 @@ class Configuration:
             header_in_dict = dict(fits.getheader(fits_file))
         return header_in_dict
 
-    def _add_metadata(self, name):  # for webpage only
+    def _add_metadata(self):  # for webpage only
 
         # metadata_path = os.path.join(self._processed_dir, name, "metadata.ecsv")
         metadata_path = os.path.join(self.path.metadata_dir, "metadata.ecsv")
