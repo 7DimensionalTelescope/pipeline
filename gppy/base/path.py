@@ -64,18 +64,25 @@ class PathHandler:
         """
         value = super().__getattribute__(name)
 
+        if isinstance(value, (str, Path)):
+            self._mkdir(value)
+
+        elif isinstance(value, list) and all(isinstance(p, (str, Path)) for p in value):
+            for p in value:
+                self._mkdir(p)
+
+        return value
+
+    def _mkdir(self, value):
         # if isinstance(value, (str, Path)):
         #     os.makedirs(str(value), exist_ok=True)
 
-        if isinstance(value, (str, Path)):
-            p = Path(value).expanduser()  # understands ~/
-            d = p.parent if p.suffix else p  # ensure not a file
+        p = Path(value).expanduser()  # understands ~/
+        d = p.parent if p.suffix else p  # ensure not a file
 
-            if d not in self._created_dirs and not d.exists():
-                d.mkdir(parents=True, exist_ok=True)
-                self._created_dirs.add(d)
-
-        return value
+        if d not in self._created_dirs and not d.exists():  # simple check is faster than makedirs
+            d.mkdir(parents=True, exist_ok=True)
+            self._created_dirs.add(d)
 
     def __getattr__(self, name):
         """
@@ -151,10 +158,9 @@ class PathHandler:
 
         # files
         self.base_yml = os.path.join(const.REF_DIR, "base.yml")
-        self.output_yml = os.path.join(
-            self.output_dir,
-            f"{self.obs_params['obj']}_{self.obs_params['filter']}_{self.obs_params['unit']}_{self.obs_params['nightdate']}.yml",
-        )
+        self.output_name = f"{self.obs_params['obj']}_{self.obs_params['filter']}_{self.obs_params['unit']}_{self.obs_params['nightdate']}"
+        self.output_yml = os.path.join(self.output_dir, self.output_name + ".yml")
+        self.output_log = os.path.join(self.output_dir, self.output_name + ".log")
 
         self._file_indep_initialized = True
 
