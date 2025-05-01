@@ -253,7 +253,7 @@ def get_camera(header):
     elif 14208 % header["NAXIS1"] == 0:  # NAXIS2 10656
         return "C5"
     else:
-        return "Unidentified"
+        return "UnknownCam"
 
 
 def find_raw_path(unit, date, n_binning, gain):

@@ -59,7 +59,7 @@ class Configuration:
             config_source = config_source or self.path.base_yml
             self._initialized = False
         else:
-            config_source = config_source or self._find_config_file(obs_params, **kwargs)
+            config_source = config_source or self._find_config_file()
             self.config_file = config_source
 
         self._load_config(config_source, **kwargs)
@@ -170,7 +170,7 @@ class Configuration:
         self._make_instance(self._config_in_dict)
         self._loaded = True
 
-    def _find_config_file(self, **kwargs):
+    def _find_config_file(self):
         """Find the configuration file in the processed directory."""
 
         # base_dir = self.path.output_dir
@@ -202,6 +202,8 @@ class Configuration:
 
         self._glob_raw_images()
         self._ensure_image_coherency()
+        self._add_metadata()
+        # self._generate_links()
         self._define_settings()
         self._initialized = True
 
@@ -325,15 +327,37 @@ class Configuration:
                 raw_files.append(fits_file)
                 raw_headers.append(header_in_dict)
 
-        self.raw_header_sample = raw_headers[0]
-        self.raw_headers = raw_headers
-
         self.config.file.raw_files = raw_files
+        self.path.add_fits(raw_files)  # file_dependent_common_paths work afterwards
 
-        self.path.add_fits(raw_files)
+        self.raw_headers = raw_headers
+        self.raw_header_sample = raw_headers[0]
+
+    def _ensure_image_coherency(self, **kwarg):
+        """
+        If incoherent, let it run for a subgroup of images.
+        Then manually copy the config to another file and initialize from it
+        to do run_scidata_reduction.
+        """
+        # obs_config_keys = ["ra", "dec", "obstime", "exposure"]
+        obs_config_keys = IMAGE_IDENTIFIERS
+
+        # initialize empty lists
+        for config_key in obs_config_keys:
+            setattr(self.config.obs, config_key, [])
+
+        # write select header info to config.obs
+        for header_in_dict in self.raw_headers:
+            for config_key in obs_config_keys:
+                if config_key == "camera":
+                    # Identify Camera from image size
+                    self.config.obs.camera = get_camera(header_in_dict)
+                header_key = HEADER_KEY_MAP[config_key]
+                getattr(self.config.obs, config_key).append(header_in_dict[header_key])
+
+        # check all image headers
+
         self.config.file.processed_files = self.path.processed_images
-
-        self._add_metadata()
 
     @staticmethod
     def _obsdata_basename(config):
@@ -384,29 +408,6 @@ class Configuration:
         new_line = f"{' '.join(observation_data)}\n"
         with open(metadata_path, "a") as f:
             f.write(new_line)
-
-    def _ensure_image_coherency(self):
-        # obs_config_keys = ["ra", "dec", "obstime", "exposure"]
-        obs_config_keys = IMAGE_IDENTIFIERS
-
-        # initialize empty lists
-        for config_key in obs_config_keys:
-            setattr(self.config.obs, config_key, [])
-
-        # check all image headers
-        for header_in_dict in self.raw_headers:
-            for config_key in obs_config_keys:
-                header_key = HEADER_KEY_MAP[config_key]
-                getattr(self.config.obs, config_key).append(header_in_dict[header_key])
-
-        # Identify Camera from image size
-        self.config.obs.camera = get_camera(self.raw_header_sample)
-        self._check_image_coherency()
-
-        # self._generate_links()
-
-    def _check_image_coherency(self):
-        pass
 
     def _generate_links(self):
         # Define pointer fpaths to master frames
@@ -459,7 +460,7 @@ class Configuration:
         self.config_file = config_file
 
         with open(config_file, "w") as f:
-            yaml.dump(self.config_in_dict, f)
+            yaml.dump(self.config_in_dict, f, sort_keys=False)
 
 
 class ConfigurationInstance:

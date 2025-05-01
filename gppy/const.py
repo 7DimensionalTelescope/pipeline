@@ -30,7 +30,7 @@ HEADER_KEY_MAP = {
     "obj": "OBJECT",
     "unit": "TELESCOP",
     "n_binning": "XBINNING",
-    "ra": "OBJCTRA",
+    "ra": "OBJCTRA",  # intended pointing, not what mount returns.
     "dec": "OBJCTDEC",
 }
 
