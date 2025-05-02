@@ -17,13 +17,14 @@ settings:
 
 obs:
   # OBS Info should be updated from header
+  coherent_input: true
   pixscale: 0.505  # arcsec/pix
   n_binning: 
   gain: 
   unit: 
   camera: 
   filter:
-  object:
+  obj:
   date:  # date of datetime - 12h. dirname of obsdata
   datetime:  # UTC
   ra:
@@ -38,9 +39,9 @@ file:
 
 preprocess:
   masterframe: default # closest, custom
-  mbias_link: # master_frame/2001-02-23_1x1_gain2750/7DT11/link_20250102_C3.bias
-  mdark_link: # master_frame/2001-02-23_1x1_gain2750/7DT11/link_20250102_100_C3.dark
-  mflat_link: # master_frame/2001-02-23_1x1_gain2750/7DT11/link_20250102_m625_C3.flat
+  # mbias_link: # master_frame/2001-02-23_1x1_gain2750/7DT11/link_20250102_C3.bias
+  # mdark_link: # master_frame/2001-02-23_1x1_gain2750/7DT11/link_20250102_100_C3.dark
+  # mflat_link: # master_frame/2001-02-23_1x1_gain2750/7DT11/link_20250102_m625_C3.flat
 
   mbias_file: # master_frame/2001-02-23_1x1_gain2750/7DT11/bias_20250102_C3.fits
   mdark_file: # master_frame/2001-02-23_1x1_gain2750/7DT11/dark_20250102_100s_C3.fits

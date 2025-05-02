@@ -19,12 +19,14 @@ CalibType = ["BIAS", "DARK", "FLAT"]
 
 available_7dt_units = [f"7DT0{unit}" if unit < 10 else f"7DT{unit}" for unit in range(1, 20)]
 
-IMAGE_IDENTIFIERS = {"nightdate", "obj", "filter", "unit", "exposure", "n_binning", "gain", "camera"}
+STRICT_KEYS = {"nightdate", "obj", "filter", "unit", "exposure", "n_binning", "gain", "camera"}
+ANCILLARY_KEYS = {"ra", "dec", "obstime"}
 
 HEADER_KEY_MAP = {
     "exposure": "EXPOSURE",
     "gain": "GAIN",
     "filter": "FILTER",
+    # "nightdate": "DATE-LOC",
     # "date_loc": "DATE-LOC",
     "obstime": "DATE-OBS",
     "obj": "OBJECT",

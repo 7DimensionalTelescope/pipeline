@@ -13,8 +13,9 @@ from .utils import (
     parse_exptime,
     clean_up_folder,
     swap_ext,
+    most_common_in_list,
 )
-from .const import HEADER_KEY_MAP, IMAGE_IDENTIFIERS
+from .const import HEADER_KEY_MAP, STRICT_KEYS, ANCILLARY_KEYS
 from .base.path import PathHandler
 
 
@@ -51,11 +52,10 @@ class Configuration:
             config_source (str|dict, optional): Custom configuration source
             **kwargs: Additional configuration parameter overrides
         """
-        # self._initialized = True
         self.path = PathHandler(obs_params)
 
         if overwrite:
-            # Default config source if not provided
+            # Default config source if overwrite
             config_source = config_source or self.path.base_yml
             self._initialized = False
         else:
@@ -73,6 +73,11 @@ class Configuration:
             # clean_up_folder(self.path.daily_stacked_dir)
 
         self.logger = self._setup_logger(logger, verbose=verbose)
+
+        self.check_image_coherency()
+        self.set_input_output()
+        self.check_masterframe_status()
+
         self.write_config()
 
         self.config.flag.configuration = True
@@ -90,13 +95,7 @@ class Configuration:
         config = instance.config  # configuration instance from the new object
         config.name = "user-input"
 
-        instance.path = PathHandler(instance)  # _data_type becomes user-input
-
-        if working_dir is not None:
-            config.path.path_processed = working_dir
-            factory_dir = os.path.join(working_dir, "factory")
-            # os.makedirs(factory_dir, exist_ok=True)
-            config.path.path_factory = factory_dir
+        instance.path = PathHandler(instance, working_dir=working_dir)  # _data_type becomes user-input
 
         if config_file:
             # working_dir is ignored if config_file is absolute path
@@ -110,6 +109,7 @@ class Configuration:
             else:
                 raise FileNotFoundError("Provided Configuration file does not exist")
 
+        instance._initialized = True
         return config
 
     @classmethod
@@ -197,11 +197,11 @@ class Configuration:
         self.config.obs.n_binning = obs_params["n_binning"]
         self.config.obs.gain = obs_params["gain"]
         self.config.obs.pixscale = self.config.obs.pixscale * float(obs_params["n_binning"])  # For initial solve
-        self.config.name = f"{obs_params['nightdate']}_{obs_params['n_binning']}x{obs_params['n_binning']}_gain{obs_params['gain']}_{obs_params['obj']}_{obs_params['unit']}_{obs_params['filter']}"
+        # self.config.name = f"{obs_params['nightdate']}_{obs_params['n_binning']}x{obs_params['n_binning']}_gain{obs_params['gain']}_{obs_params['obj']}_{obs_params['unit']}_{obs_params['filter']}"
+        self.config.name = f"{obs_params['nightdate']}_{obs_params['obj']}_{obs_params['filter']}_{obs_params['unit']}_{obs_params['n_binning']}x{obs_params['n_binning']}_gain{obs_params['gain']}"
         self.config.info.creation_datetime = datetime.now().isoformat()
 
         self._glob_raw_images()
-        self._ensure_image_coherency()
         self._add_metadata()
         # self._generate_links()
         self._define_settings()
@@ -270,45 +270,8 @@ class Configuration:
 
     def _glob_raw_images(self):
         """Create and set output directory paths for processed data."""
-        # # _date_dir = define_output_dir(self.config.obs.date, self.config.obs.n_binning, self.config.obs.gain)
-        # _date_dir = self.config.obs.date
 
-        # processed_rel_path = os.path.join(
-        #     _date_dir,
-        #     self.config.obs.object,
-        #     self.config.obs.unit,
-        #     self.config.obs.filter,
-        # )
-        # fdz_rel_path = os.path.join(
-        #     _date_dir,
-        #     self.config.obs.unit,
-        # )
-
-        # path_processed = os.path.join(self._processed_dir, processed_rel_path)
-        # path_factory = os.path.join(FACTORY_DIR, processed_rel_path)
-        # path_fdz = os.path.join(MASTER_FRAME_DIR, fdz_rel_path)
-        # path_stacked_prefix = STACKED_DIR if self.config.name == "user-input" else DAILY_STACKED_DIR
-        # path_stacked = os.path.join(path_stacked_prefix, processed_rel_path)
-
-        # os.makedirs(path_processed, exist_ok=True)
-        # os.makedirs(path_fdz, exist_ok=True)
-        # os.makedirs(path_factory, exist_ok=True)
-        # # os.makedirs(path_stacked, exist_ok=True)  # make dir in imstack
-
-        # self.config.path.path_processed = path_processed
-        # self.config.path.path_stacked = path_stacked
-        # self.config.path.path_factory = path_factory
-        # self.config.path.path_fdz = path_fdz
-        # self.config.path.path_raw = find_raw_path(
-        #     self.config.obs.unit,
-        #     self.config.obs.date,
-        #     self.config.obs.n_binning,
-        #     self.config.obs.gain,
-        # )
-        # self.config.path.path_sex = os.path.join(REF_DIR, "srcExt")
-        # self._add_metadata(_date_dir)
-
-        # obsdata is ill-defined
+        # obsdata is ill-defined and finding it involves searching
         path_raw = find_raw_path(
             self.config.obs.unit,
             self.config.obs.nightdate,
@@ -327,36 +290,57 @@ class Configuration:
                 raw_files.append(fits_file)
                 raw_headers.append(header_in_dict)
 
-        self.config.file.raw_files = raw_files
-        self.path.add_fits(raw_files)  # file_dependent_common_paths work afterwards
-
+        self._files = raw_files
         self.raw_headers = raw_headers
         self.raw_header_sample = raw_headers[0]
 
-    def _ensure_image_coherency(self, **kwarg):
+    def check_image_coherency(self, **kwarg):
         """
-        If incoherent, let it run for a subgroup of images.
-        Then manually copy the config to another file and initialize from it
+        If incoherent, let the pipeline run for a subgroup of images.
+        Then initialize pipeline from another manually copied config
         to do run_scidata_reduction.
         """
-        # obs_config_keys = ["ra", "dec", "obstime", "exposure"]
-        obs_config_keys = IMAGE_IDENTIFIERS
+        obs_config_keys = STRICT_KEYS | ANCILLARY_KEYS
+        # obs_config_keys.update(ANCILLARY_KEYS)
 
-        # initialize empty lists
+        # check all headers and write info to config.obs
         for config_key in obs_config_keys:
-            setattr(self.config.obs, config_key, [])
+            if config_key == "nightdate":
+                # info = [self.obs_params for header_in_dict in self.raw_headers]
+                continue
 
-        # write select header info to config.obs
-        for header_in_dict in self.raw_headers:
-            for config_key in obs_config_keys:
-                if config_key == "camera":
-                    # Identify Camera from image size
-                    self.config.obs.camera = get_camera(header_in_dict)
+            elif config_key == "camera":
+                # Identify Camera from image size
+                info = [get_camera(header_in_dict) for header_in_dict in self.raw_headers]
+
+            else:
                 header_key = HEADER_KEY_MAP[config_key]
-                getattr(self.config.obs, config_key).append(header_in_dict[header_key])
+                info = [header_in_dict[header_key] for header_in_dict in self.raw_headers]
 
-        # check all image headers
+            # collapse the list if coherent
+            if len(set(info)) == 1:
+                info = info[0]
+            elif len(set(info)) == 0:
+                raise ValueError(f"Input image information empty: {config_key}")
+            # use the most common value if a strict key is incoherent
+            elif config_key in STRICT_KEYS:
+                self.logger.warning(f"Incoherent Key {config_key}: {info}")
+                self.config.obs.coherent_input = False
 
+                num, dominant_info = most_common_in_list(info)
+                filtered_files = [f for f, val in zip(self._files, info) if val == dominant_info]
+                self._files = filtered_files
+
+                info = dominant_info
+            # save list as is if ancillary key
+            else:
+                pass
+
+            setattr(self.config.obs, config_key, info)
+
+    def set_input_output(self):
+        self.path.add_fits(self._files)  # file_dependent_common_paths work afterwards
+        self.config.file.raw_files = self.path.raw_images
         self.config.file.processed_files = self.path.processed_images
 
     @staticmethod
@@ -409,22 +393,25 @@ class Configuration:
         with open(metadata_path, "a") as f:
             f.write(new_line)
 
-    def _generate_links(self):
-        # Define pointer fpaths to master frames
-        # legacy gppy used tool.calculate_average_date_obs('DATE-OBS')
-        path_fdz = self.path.masterframe_dir  # master_frame/date_bin_gain/unit
-        date_utc = to_datetime_string(self.config.obs.datetime[0], date_only=True)
-        self.config.preprocess.mbias_link = os.path.join(
-            path_fdz, f"bias_{date_utc}_{self.config.obs.camera}.link"
-        )  # 7DT01/bias_20250102_C3.link
-        self.config.preprocess.mdark_link = os.path.join(
-            path_fdz,
-            f"dark_{date_utc}_{int(self.config.obs.exposure[0])}s_{self.config.obs.camera}.link",
-        )  # 7DT01/flat_20250102_100_C3.link
-        self.config.preprocess.mflat_link = os.path.join(
-            path_fdz,
-            f"flat_{date_utc}_{self.config.obs.filter}_{self.config.obs.camera}.link",
-        )  # 7DT01/flat_20250102_m625_C3.link
+    # def _generate_links(self):
+    #     # Define pointer fpaths to master frames
+    #     # legacy gppy used tool.calculate_average_date_obs('DATE-OBS')
+    #     path_fdz = self.path.masterframe_dir  # master_frame/date_bin_gain/unit
+    #     date_utc = to_datetime_string(self.config.obs.datetime[0], date_only=True)
+    #     self.config.preprocess.mbias_link = os.path.join(
+    #         path_fdz, f"bias_{date_utc}_{self.config.obs.camera}.link"
+    #     )  # 7DT01/bias_20250102_C3.link
+    #     self.config.preprocess.mdark_link = os.path.join(
+    #         path_fdz,
+    #         f"dark_{date_utc}_{int(self.config.obs.exposure[0])}s_{self.config.obs.camera}.link",
+    #     )  # 7DT01/flat_20250102_100_C3.link
+    #     self.config.preprocess.mflat_link = os.path.join(
+    #         path_fdz,
+    #         f"flat_{date_utc}_{self.config.obs.filter}_{self.config.obs.camera}.link",
+    #     )  # 7DT01/flat_20250102_m625_C3.link
+    def check_masterframe_status(self):
+        # fill mbias_file if on-date masterframe exists. otherwise leave it empty.
+        pass
 
     def _define_settings(self):
         # use local astrometric reference catalog for tile observations

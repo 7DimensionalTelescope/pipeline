@@ -9,13 +9,13 @@ from ..utils import check_params, get_camera, define_output_dir, Path7DS
 from .. import const
 
 
-image_unique_keys = const.IMAGE_IDENTIFIERS
+image_unique_keys = const.STRICT_KEYS
 
 
 class PathHandler:
     _created_dirs: set[Path] = set()
 
-    def __init__(self, input):
+    def __init__(self, input, working_dir=None):
 
         # input is obs_param
         if isinstance(input, dict):
@@ -47,7 +47,7 @@ class PathHandler:
 
         # self._file_indep_initialized = False
         self._file_dep_initialized = False
-        self.select_output_dir()
+        self.select_output_dir(working_dir=working_dir)
 
         # if not self._file_indep_initialized:
         self.define_file_independent_common_paths()
@@ -126,14 +126,18 @@ class PathHandler:
         paths = np.atleast_1d(path)
         return all([p.exists() for p in paths])
 
-    def select_output_dir(self):
+    def select_output_dir(self, working_dir=None):
         # date_utc = Path7DS(self._input_files[0]).date  # utc date. e.g., "20250101"
         # date_folder = check_params(self._input_file[0])["nightdate"]
-        date_folder = self.obs_params["nightdate"]
-        if date_folder < "20260101":
-            self.output_parent_dir = const.PROCESSED_DIR
+        if working_dir:
+            self.output_parent_dir = working_dir
+            self.factory_parent_dir = os.path.join(working_dir, "factory")
         else:
-            raise ValueError("Predefined date cap reached: consider moving to another disk.")
+            if self.obs_params["nightdate"] < "20260101":
+                self.output_parent_dir = const.PROCESSED_DIR
+                self.factory_parent_dir = const.FACTORY_DIR
+            else:
+                raise ValueError("Predefined date cap reached: consider moving to another disk.")
 
     def define_file_independent_common_paths(self):
 
@@ -141,7 +145,8 @@ class PathHandler:
             self.obs_params["nightdate"], self.obs_params["obj"], self.obs_params["filter"], self.obs_params["unit"]
         )
         self.output_dir = os.path.join(self.output_parent_dir, _relative_path)
-        self.factory_dir = os.path.join(const.FACTORY_DIR, _relative_path)
+        self.factory_dir = os.path.join(self.factory_parent_dir, _relative_path)
+        self.metadata_dir = os.path.join(self.output_parent_dir, self.obs_params["nightdate"])
 
         # directories
         self.image_dir = os.path.join(self.output_dir, "images")
@@ -177,7 +182,6 @@ class PathHandler:
             self.masterframe_dir = os.path.join(
                 const.MASTER_FRAME_DIR, self.obs_params["nightdate"], self.obs_params["unit"]
             )
-            self.metadata_dir = os.path.join(self.output_parent_dir, self.obs_params["nightdate"])
             processed_file_stems = [switch_raw_name_order(file.stem) for file in self._input_file]
             self.processed_images = [
                 os.path.join(self.output_dir, "images", file_stem + ".fits") for file_stem in processed_file_stems
