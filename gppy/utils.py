@@ -8,6 +8,26 @@ from astropy.io import fits
 from .const import FACTORY_DIR, RAWDATA_DIR, HEADER_KEY_MAP
 
 
+def most_common_in_dict(counts: dict):
+    best = None
+    best_count = -1
+    for key, cnt in counts.items():
+        if cnt > best_count:
+            best, best_count = key, cnt
+    return best_count, best
+
+
+def most_common_in_list(seq: list):
+    if not seq:
+        return None
+
+    counts = {}
+    for item in seq:
+        counts[item] = counts.get(item, 0) + 1
+
+    return most_common_in_dict(counts)
+
+
 def clean_up_factory():
     clean_up_folder(FACTORY_DIR)
 
