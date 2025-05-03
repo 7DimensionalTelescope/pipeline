@@ -509,3 +509,11 @@ class ConfigurationInstance:
                 repr_lines.append(f"{indent}  {k}: {v}")
 
         return "\n".join(repr_lines)
+
+    def to_dict(self):
+        result = {}
+        for k, v in self.__dict__.items():
+            if k.startswith("_"):
+                continue
+            result[k] = v.to_dict() if isinstance(v, ConfigurationInstance) else v
+        return result

@@ -28,6 +28,7 @@ from .. import external
 from ..const import PipelineError
 from ..services.setup import BaseSetup
 from ..tools.table import match_two_catalogs
+from ..base.path import PathHandler
 
 
 class Photometry(BaseSetup):
@@ -219,8 +220,11 @@ class PhotometrySingle:
         else:
             self._id = str(next(self._id_counter)) + "/" + str(total_image)
 
-        self.path_tmp = os.path.join(self.config.path.path_factory, "phot")
-        os.makedirs(self.path_tmp, exist_ok=True)
+        # self.path_tmp = os.path.join(self.config.path.path_factory, "phot")
+        # os.makedirs(self.path_tmp, exist_ok=True)
+        # self.path = PathHandler(self.config.obs.to_dict())
+        self.path = PathHandler(self.config)
+        self.path_tmp = self.path.photometry.tmp_dir
 
     def _setup_logger(self, config: Any) -> Any:
         """Initialize logger instance."""
@@ -305,15 +309,15 @@ class PhotometrySingle:
         Sets self._coord_ref
         """
         if self.ref_catalog == "GaiaXP_cor":
-            ref_cat = f"{self.config.path.path_refcat}/cor_gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
+            ref_cat = f"{self.path.photometry.ref_ris_dir}/cor_gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
         elif self.ref_catalog == "GaiaXP":
-            ref_cat = f"{self.config.path.path_refcat}/gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
+            ref_cat = f"{self.path.photometry.ref_ris_dir}/gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
 
         # generate the missing ref_cat and save on disk
         if not os.path.exists(ref_cat):  # and "gaia" in self.ref_catalog:
             ref_src_table = phot_utils.aggregate_gaia_catalogs(
                 target_coord=SkyCoord(self.image_info.racent, self.image_info.decent, unit="deg"),
-                path_calibration_field=self.config.path.path_calib_field,
+                path_calibration_field=self.path.photometry.ref_gaia_dir,
                 matching_radius=self.phot_conf.match_radius * 1.5,
                 path_save=ref_cat,
             )
@@ -702,7 +706,8 @@ class PhotometrySingle:
         plt.legend(loc="upper center", ncol=3)
         plt.tight_layout()
 
-        im_path = os.path.join(self.config.path.path_processed, "images")
+        # im_path = os.path.join(self.config.path.path_processed, "images")
+        im_path = self.path.figure_dir
 
         if not os.path.exists(im_path):
             os.makedirs(im_path)

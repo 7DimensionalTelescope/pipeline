@@ -125,20 +125,16 @@ class Astrometry(BaseSetup):
             raise
 
     def define_paths(self) -> Tuple[List[str], List[str], List[str]]:
-        """Initialize the astrometry processing environment.
-
-        Sets up necessary file paths and creates symbolic links for processing.
-
-        Returns:
-            tuple: Contains:
-                - solved_files: List of paths where solved FITS will be stored
-                - soft_links: List of symbolic link paths in factory directory
-                - inims: List of original input image paths
-        """
-        # self.path_astrometry = os.path.join(self.config.path.path_factory, "astrometry")
-        # os.makedirs(self.path_astrometry, exist_ok=True)
         self.path_astrometry = self.path.astrometry.tmp_dir
-        inims = self.config.file.processed_files
+        # inims = self.config.file.processed_files
+
+        if hasattr(self.config.astrometry, "input") and self.config.astrometry.input is not None:
+            # inims = self.config.file.processed_files
+            inims = self.config.astrometry.input
+        else:
+            inims = self.path.astrometry.input
+            self.config.astrometry.input = inims
+
         soft_links = [os.path.join(self.path_astrometry, os.path.basename(s)) for s in inims]
 
         for inim, soft_link in zip(inims, soft_links):
@@ -254,13 +250,13 @@ class Astrometry(BaseSetup):
         presex_cats = [os.path.splitext(s)[0] + f".{prefix}.cat" for s in files]
 
         # path for scamp refcat download
-        path_ref_scamp = self.config.path.path_ref_scamp
+        path_ref_scamp = self.path.astrometry.ref_query_dir
 
         # use local astrefcat if tile obs
         match = re.search(r"T\d{5}", self.config.name)
         if match:
-            astrefcat = os.path.join(self.config.path.path_astrefcat, f"{match.group()}.fits")
-            self.config.path.path_astrefcat = astrefcat
+            astrefcat = os.path.join(self.path.astrometry.ref_ris_dir, f"{match.group()}.fits")
+            self.config.astrometry.refcat = astrefcat
 
         # joint scamp
         if joint:

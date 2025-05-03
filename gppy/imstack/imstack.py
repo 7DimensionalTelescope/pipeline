@@ -26,6 +26,7 @@ from ..services.setup import BaseSetup
 from ..utils import swap_ext, define_output_dir
 from .utils import move_file  # inputlist_parser, move_file
 from .const import ZP_KEY, IC_KEYS, CORE_KEYS
+from ..base.path import PathHandler
 
 
 class ImStack(BaseSetup):
@@ -56,7 +57,7 @@ class ImStack(BaseSetup):
         working_dir = str(path.parent.absolute())
 
         config = Configuration.base_config(working_dir=working_dir)
-        config.path.path_processed = working_dir
+        # config.path.path_processed = working_dir
         config.file.processed_files = image_list
 
         return cls(config=config)
@@ -118,8 +119,9 @@ class ImStack(BaseSetup):
         self.keys_to_propagate = CORE_KEYS
 
         # self.define_paths(working_dir=self.config.path.path_processed)
-        path_tmp = os.path.join(self.config.path.path_factory, "imstack")
-        self.path_tmp = path_tmp
+        # path_tmp = os.path.join(self.config.path.path_factory, "imstack")
+        self.path = PathHandler(self.config)
+        self.path_tmp = self.path.imstack.tmp_dir
         # self.define_paths(dump_dir=path_imstack)
 
         # self.set_metadata()
@@ -128,8 +130,9 @@ class ImStack(BaseSetup):
         # Output stacked image file name
         parts = os.path.basename(self.files[-1]).split("_")
         parts[-1] = f"{self.total_exptime:.0f}s.com.fits"
-        self.config.file.stacked_file = os.path.join(self.config.path.path_stacked, "_".join(parts))
-        os.makedirs(self.config.path.path_stacked, exist_ok=True)
+        self.config.file.stacked_file = os.path.join(self.path.daily_stacked_dir, "_".join(parts))
+
+        # os.makedirs(self.config.path.path_stacked, exist_ok=True)
 
         self.logger.info(f"ImStack Initialized for {self.config.name}")
 
@@ -372,7 +375,8 @@ class ImStack(BaseSetup):
         egain = fits.getheader(self.config.preprocess.mdark_file)["EGAIN"]  # e-/ADU
 
         for i in range(len(self.config.file.processed_files)):
-            r_p_file = os.path.join(self.config.path.path_processed, self.config.file.processed_files[i])
+            # r_p_file = os.path.join(self.config.path.path_processed, self.config.file.processed_files[i])
+            r_p_file = self.path.processed_images[i]
             r_p = xp.asarray(fits.getdata(r_p_file))
 
             # bkg_file = self.config.imstack.bkg_files[i]

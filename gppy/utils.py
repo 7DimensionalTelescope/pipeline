@@ -28,6 +28,23 @@ def most_common_in_list(seq: list):
     return most_common_in_dict(counts)
 
 
+def switch_raw_name_order(name):
+    parts = name.split("_")
+    return "_".join(parts[3:5] + parts[0:1] + [format_subseconds(parts[6])] + parts[1:3])
+
+
+def format_subseconds(sec: str):
+    """100.0s -> 100s, 0.1s -> 0pt100s"""
+    s = float(sec[:-1])
+    integer_second = int(s)
+    if integer_second != 0:
+        return f"{integer_second}s"
+
+    # if subsecond
+    millis = int(abs(s) * 1000 + 0.5)  # round to nearest ms
+    return f"0pt{millis:03d}s"
+
+
 def clean_up_factory():
     clean_up_folder(FACTORY_DIR)
 
