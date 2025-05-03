@@ -1,150 +1,317 @@
+import os
+import re
+from datetime import datetime, timedelta
 from pathlib import Path
-from .. import const
+
 import numpy as np
 from ..utils import parse_key_params_from_header, parse_key_params_from_filename
 import re
 import os
+
 image_unique_keys = ["date", "gain", "filter", "obj", "unit", "n_binning", "exposure"]
 
-class PathHandler:
+from ..utils import check_params, get_camera, define_output_dir, Path7DS
+from .. import const
 
-    def __init__(self, input):
-        if isinstance(input, str):
+
+image_unique_keys = const.STRICT_KEYS
+
+
+class PathHandler:
+    _created_dirs: set[Path] = set()
+
+    def __init__(self, input, working_dir=None):
+
+        # input is obs_param
+        if isinstance(input, dict):
+            self._input_file = None
+            self._data_type = None
+            self.obs_params = input
+
+        # input is config
+        elif hasattr(input, "config"):
+            self._input_file = [Path(file) for file in input.config.file.raw_files]
+            self._data_type = input.config.name  # propagate user-input
+            self.obs_params = input.config_in_dict["obs"]
+
+        # input is a fits file
+        elif isinstance(input, str) or isinstance(input, Path):
             self._input_file = [Path(input)]
-        elif isinstance(input, Path):
-            self._input_file = [input]
+            self._data_type = None
+            self.obs_params = check_params(self._input_file)
+
+        # input is a fits file list
         elif isinstance(input, list):
             self._input_file = [Path(img) for img in input]
-        else:
-            raise TypeError("Input must be a string, Path, or list of strings/Paths.")
-        
-        if not(self.is_present(self.input_file)):
-            raise FileNotFoundError(f"Path does not exist: {self.input_file}")
-        
-        self.check_params()
+            self._data_type = None
+            self.obs_params = None
+            self.obs_params = check_params(self._input_file[0])
 
-        self._datatype = self.check_datatype()
-        
-    def __getattr__(self, name):
-        if name.startswith("__"):
-            return None
-        if hasattr(self, "_"+name) :
-            return getattr(self, "_"+name)
         else:
-            return getattr(self, name)
-    
+            raise TypeError(f"Input must be a path (str | Path), a list of paths, obs_params (dict), or Configuration.")
+
+        # self._file_indep_initialized = False
+        self._file_dep_initialized = False
+        self.select_output_dir(working_dir=working_dir)
+
+        # if not self._file_indep_initialized:
+        self.define_file_independent_common_paths()
+
+        if not self._file_dep_initialized and self._input_file:
+            self.define_file_dependent_common_paths()
+        if self._file_indep_initialized and self._file_dep_initialized:
+            self.define_specific_paths()
+
+    def __getattribute__(self, name):
+        """
+        CAVEAT: This runs every time attr is accessed. Keep it short.
+        Make sure accessed dirs exist
+        """
+        value = super().__getattribute__(name)
+
+        if isinstance(value, (str, Path)):
+            self._mkdir(value)
+
+        elif isinstance(value, list) and all(isinstance(p, (str, Path)) for p in value):
+            for p in value:
+                self._mkdir(p)
+
+        return value
+
+    def _mkdir(self, value):
+        # if isinstance(value, (str, Path)):
+        #     os.makedirs(str(value), exist_ok=True)
+
+        p = Path(value).expanduser()  # understands ~/
+        d = p.parent if p.suffix else p  # ensure not a file
+
+        if d not in self._created_dirs and not d.exists():  # simple check is faster than makedirs
+            d.mkdir(parents=True, exist_ok=True)
+            self._created_dirs.add(d)
+
+    def __getattr__(self, name):
+        """
+        Below runs when name is not in __dict__.
+        (1) If file-dependent paths have not been built yet, build them.
+        (2) Retry the lookup - if the attribute was created by the builder we
+            return it; otherwise fall through to the convenience “_to_*” hooks.
+        """
+        # ---------- 1. Lazy initialization ----------
+        if not self._file_dep_initialized and self._input_file:
+            self._file_dep_initialized = True  # set the flag first to prevent accidental recursion
+            try:
+                self.define_file_dependent_common_paths()
+            except Exception:
+                # roll back if the builder blew up
+                self._file_dep_initialized = False
+                raise
+
+            # after building, see whether that gave us the requested attr
+            if name in self.__dict__:
+                return self.__dict__[name]
+
+        # ---------- 2. “Syntactic-sugar” logic ----------
+        if name.endswith("_to_string"):
+            base = name[:-10]
+            val = getattr(self, base)
+            return str(val) if isinstance(val, (Path, str)) else val
+
+        if name.endswith("_to_path"):
+            base = name[:-7]
+            val = getattr(self, base)
+            return Path(val) if isinstance(val, str) else val
+
+        # ---------- 3. Still not found → real error ----------
+        raise AttributeError(f"{self.__class__.__name__!s} has no attribute {name!r}")
+
+    def __repr__(self):
+        return "\n".join(f"{k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
+
     def is_present(self, path):
         paths = np.atleast_1d(path)
         return all([p.exists() for p in paths])
-        
-    def check_datatype(self):
-        if const.RAWDATA_DIR in str(self.input_file[0]):
-            self._raw_image= [str(file.absolute()) for file in self.input_file]
-            _tmp_relpath = os.path.join(self.date, self.obj, self.filter, self.unit)
-            self._output_dir = Path(os.path.join(const.PROCESSED_DIR, _tmp_relpath))
-            self._factory_dir = Path(os.path.join(const.FACTORY_DIR, _tmp_relpath))
-            self._file_prefix = [
-                switch_name_order(file.stem) for file in self.input_file
-            ]
-            self._processed_image = [
-                os.path.join(self.output_dir, "images", file_prefix, ".fits") for file_prefix in self._file_prefix
-            ]
-            return "raw"
-        elif const.PROCESSED_DIR in str(self.input_file[0]):
-            self._processed_image = [str(file.absolute()) for file in self.input_file]
-            self._file_prefix = [file.stem for file in self.input_file]
-            
-            #self._factory_dir = Path(os.path.join(const.FACTORY_DIR, self.date, self.obj, self.filter, self.unit))
-            return "processed"
+
+    def select_output_dir(self, working_dir=None):
+        # date_utc = Path7DS(self._input_files[0]).date  # utc date. e.g., "20250101"
+        # date_folder = check_params(self._input_file[0])["nightdate"]
+        if working_dir:
+            self.output_parent_dir = working_dir
+            self.factory_parent_dir = os.path.join(working_dir, "factory")
         else:
-            return "user-input"
-    
-    def define_common_path(self):
-        self._output_dir = self._processed_image[0].parent.parent
+            if self.obs_params["nightdate"] < "20260101":
+                self.output_parent_dir = const.PROCESSED_DIR
+                self.factory_parent_dir = const.FACTORY_DIR
+            else:
+                raise ValueError("Predefined date cap reached: consider moving to another disk.")
 
-    def check_params(self):
-        try:
-            params = [parse_key_params_from_filename(img)[0] for img in self.input_file]
-        except:
-            try:
-                params = [parse_key_params_from_header(img)[0] for img in self.input_file]
-            except:
-                raise ValueError("No parameters found in the image file names or headers.")
-        if not params:
-            raise ValueError("No parameters found in the image file names or headers.")
-        def all_dicts_equal(lst):
-            return all(d == lst[0] for d in lst)
-        if not all_dicts_equal(params):
-            raise ValueError("Not all images have the same parameters.")
+    def define_file_independent_common_paths(self):
+
+        _relative_path = os.path.join(
+            self.obs_params["nightdate"], self.obs_params["obj"], self.obs_params["filter"], self.obs_params["unit"]
+        )
+        self.output_dir = os.path.join(self.output_parent_dir, _relative_path)
+        self.factory_dir = os.path.join(self.factory_parent_dir, _relative_path)
+        self.metadata_dir = os.path.join(self.output_parent_dir, self.obs_params["nightdate"])
+
+        # directories
+        self.image_dir = os.path.join(self.output_dir, "images")
+        self.figure_dir = os.path.join(self.output_dir, "figures")
+        self.daily_stacked_dir = os.path.join(self.output_dir, "stacked")
+        self.subtracted_dir = os.path.join(self.output_dir, "subtracted")
+        self.ref_sex_dir = os.path.join(const.REF_DIR, "srcExt")
+
+        self.astrometry_ref_ris_dir = "/lyman/data1/factory/catalog/gaia_dr3_7DT"
+        self.astrometry_ref_query_dir = "/lyman/data1/factory/ref_scamp"
+        self.photometry_ref_ris_dir = "/lyman/data1/factory/ref_cat"  # divided by RIS tiles
+        self.photometry_ref_gaia_dir = "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile"
+        self.subtraction_ref_image_dir = "/lyman/data1/factory/ref_frame"
+
+        # files
+        self.base_yml = os.path.join(const.REF_DIR, "base.yml")
+        self.output_name = f"{self.obs_params['obj']}_{self.obs_params['filter']}_{self.obs_params['unit']}_{self.obs_params['nightdate']}"
+        self.output_yml = os.path.join(self.output_dir, self.output_name + ".yml")
+        self.output_log = os.path.join(self.output_dir, self.output_name + ".log")
+
+        self._file_indep_initialized = True
+
+    def add_fits(self, files: str | Path | list):
+        self._input_file = [Path(f) for f in files]
+
+    def define_file_dependent_common_paths(self):
+        if not (self.is_present(self._input_file)):
+            raise FileNotFoundError(f"Not all paths exist: {self._input_file}")
+
+        if const.RAWDATA_DIR in str(self._input_file[0]):
+            self.data_type = self._data_type or "raw"
+            self.raw_images = [str(file.absolute()) for file in self._input_file]
+            self.masterframe_dir = os.path.join(
+                const.MASTER_FRAME_DIR, self.obs_params["nightdate"], self.obs_params["unit"]
+            )
+            processed_file_stems = [switch_raw_name_order(file.stem) for file in self._input_file]
+            self.processed_images = [
+                os.path.join(self.output_dir, "images", file_stem + ".fits") for file_stem in processed_file_stems
+            ]
+        elif self.output_parent_dir in str(self._input_file[0]):
+            self.data_type = self._data_type or "processed"
+            self.processed_images = [str(file.absolute()) for file in self._input_file]
+            # self.processed_file_stems = [file.stem for file in self._input_files]
+            self.factory_dir = os.path.join(const.FACTORY_DIR, *Path(self._input_file[0]).parts[-6:-3])
+            self.output_dir = self._input_file[0].parent.parent
         else:
-            for key in image_unique_keys:
-                setattr(self, "_"+key, params[0][key])
+            self.data_type = self._data_type or "user-input"
+            print("User input data type detected. Assume the input is a list of processed images.")
+            self.processed_images = [str(file.absolute()) for file in self._input_file]
+            # self.processed_file_stems = [file.stem for file in self._input_files]
+            self.output_dir = self._input_file[0].parent.parent
+            self.factory_dir = self._input_file[0].parent.parent / "factory"
 
-    def path_configuration(self):
-        pass
-  
-    def path_preprocess(self):
-        pass
-
-    def path_astromety(self):
+        self._file_dep_initialized = True
         pass
 
-    def path_photometry(self):
+    # def path_preprocess(self):
+    #     pass
+
+    # def path_astromety(self):
+    #     pass
+
+    # def path_photometry(self):
+    #     pass
+
+    # def path_stacking(self):
+    #     pass
+
+    # def path_subtraction(self):
+    #     pass
+
+    def define_specific_paths(self):
+        # self.preprocess = PathPreprocess(path_processed=self.output_dir)
+        # self.astrometry = PathAstrometry(path_processed=self.output_dir)
         pass
 
-    def path_stacking(self):
-        pass
 
-
-
-    def define_paths(self):
-        """Create and set output directory paths for processed data."""
-        _date_dir = define_output_dir(self.config.obs.date, self.config.obs.n_binning, self.config.obs.gain)
-
-        rel_path = os.path.join(
-            _date_dir,
-            self.config.obs.object,
-            self.config.obs.unit,
-            self.config.obs.filter,
-        )
-        fdz_rel_path = os.path.join(
-            _date_dir,
-            self.config.obs.unit,
-        )
-
-        path_processed = os.path.join(self._output_prefix, rel_path)
-        path_factory = os.path.join(FACTORY_DIR, rel_path)
-        path_fdz = os.path.join(MASTER_FRAME_DIR, fdz_rel_path)
-        path_stacked_prefix = STACKED_DIR if self.config.name == "user-input" else DAILY_STACKED_DIR
-        path_stacked = os.path.join(path_stacked_prefix, rel_path)
-
-        os.makedirs(path_processed, exist_ok=True)
-        os.makedirs(path_fdz, exist_ok=True)
-        os.makedirs(path_factory, exist_ok=True)
-        # os.makedirs(path_stacked, exist_ok=True)  # make dir in imstack
-
-        self.config.path.path_processed = path_processed
-        self.config.path.path_stacked = path_stacked
-        self.config.path.path_factory = path_factory
-        self.config.path.path_fdz = path_fdz
-        self.config.path.path_raw = find_raw_path(
-            self.config.obs.unit,
-            self.config.obs.date,
-            self.config.obs.n_binning,
-            self.config.obs.gain,
-        )
-        self.config.path.path_sex = os.path.join(REF_DIR, "srcExt")
-
-def switch_name_order(name):
-    """
-    Switch the order of the name based on the given order.
-
-    Args:
-        name (str): The name to be switched.
-        order (list): The order to switch the name.
-
-    Returns:
-        str: The switched name.
-    """
+def switch_raw_name_order(name):
     parts = name.split("_")
-    return "_".join(parts[3:5] + parts[0:1] + parts[6:7] + parts[1:3])
+    return "_".join(parts[3:5] + parts[0:1] + [format_subseconds(parts[6])] + parts[1:3])
+
+
+def format_subseconds(sec: str):
+    """100.0s -> 100s, 0.1s -> 0pt100s"""
+    s = float(sec[:-1])
+    integer_second = int(s)
+    if integer_second != 0:
+        return f"{integer_second}s"
+
+    # if subsecond
+    millis = int(abs(s) * 1000 + 0.5)  # round to nearest ms
+    return f"0pt{millis:03d}s"
+
+
+class PathPreprocess(PathHandler):
+    """
+    Gives you attributes such as
+
+        path.preprocess.mbias_link      (file - no mkdir)
+        path.preprocess.intermediate    (directory - mkdir on first access)
+
+    without building anything up-front.  Everything is resolved the first
+    time you touch the attribute.
+    """
+
+    # everything we can serve and how it should be built
+    _spec = {
+        "mbias_link": lambda self: self.path_fdz / f"bias_{self._date}_{self._cam}.link",
+        "mdark_link": lambda self: self.path_fdz / f"dark_{self._date}_{self._exp}s_{self._cam}.link",
+        "mflat_link": lambda self: self.path_fdz / f"flat_{self._date}_{self._filt}_{self._cam}.link",
+    }
+
+    # -----------------------------------------------------------------
+
+    def __init__(self, path_processed):
+        date_utc = "test"
+        filt = "test"
+        camera = "test"
+        exposure = "test"
+
+        _date_dir = define_output_dir(self.config.obs.date, self.config.obs.n_binning, self.config.obs.gain)
+        self.path_fdz = Path(_date_dir) / self.config.obs.unit
+
+    def __getattr__(self, item):
+        """lazy magic"""
+        if item not in self._spec:
+            raise AttributeError(item)
+
+        path = self._spec[item](self)  # build the Path
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    # pretty printing
+    def __repr__(self):
+        keys = sorted(k for k in (*self.__dict__, *self._spec))
+        return "\n".join(f"  {k}: {getattr(self, k)}" for k in keys)
+
+
+class PathAstrometry(PathHandler):
+    _all = {
+        "mbias_link": lambda self: self.path_fdz / f"bias_{self._date}_{self._cam}.link",
+        "mdark_link": lambda self: self.path_fdz / f"dark_{self._date}_{self._exp}s_{self._cam}.link",
+        "mflat_link": lambda self: self.path_fdz / f"flat_{self._date}_{self._filt}_{self._cam}.link",
+    }
+
+    # -----------------------------------------------------------------
+
+    def __init__(self, path_processed):
+        self.path_processed = Path(path_processed)
+
+    def __getattr__(self, item):
+        """lazy magic"""
+        if item not in self._all:
+            raise AttributeError(item)
+
+        path = self._all[item](self)  # build the Path
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    # pretty printing
+    def __repr__(self):
+        keys = sorted(k for k in (*self.__dict__, *self._all))
+        return "\n".join(f"  {k}: {getattr(self, k)}" for k in keys)
