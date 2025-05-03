@@ -17,30 +17,37 @@ settings:
 
 obs:
   # OBS Info should be updated from header
+  coherent_input: true
   pixscale: 0.505  # arcsec/pix
   n_binning: 
   gain: 
   unit: 
   camera: 
   filter:
-  object:
-  date:  # date of datetime - 12h. dirname of obsdata
-  datetime:  # UTC
+  obj:
+  nightdate:  # date of datetime - 12h. dirname of obsdata
+  obstime:  # UTC
   ra:
   dec:
   exposure:
+
+flag:
+  configuration: false
+  preprocess: false
+  astrometry: false
+  single_photometry: false
+  combine: false
+  # combined_astrometry: false
+  combined_photometry: false
+  subtraction: false
   
-path:
-  path_factory: #/data/pipeline_reform/factory_test
-  path_raw: 
-  path_processed: 
-  path_fdz:
-  path_calib_field: /lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile
-  path_refcat: /lyman/data1/factory/ref_cat
-  # path_sex: /data/pipeline_reform/gppy-gpu/gppy/ref
-  path_astrefcat: "/lyman/data1/factory/catalog/gaia_dr3_7DT"
-  path_ref_scamp: "/lyman/data1/factory/ref_scamp"
-  path_refim: "/lyman/data1/factory/ref_frame"
+logging:
+  level: INFO
+  file: 
+  format: '[%(levelname)s] %(asctime)s - %(name)s - %(message)s'
+  handlers:
+    - console
+    - file
 
 file: 
   raw_files: 
@@ -50,9 +57,9 @@ file:
 
 preprocess:
   masterframe: default # closest, custom
-  mbias_link: # master_frame/2001-02-23_1x1_gain2750/7DT11/link_20250102_C3.bias
-  mdark_link: # master_frame/2001-02-23_1x1_gain2750/7DT11/link_20250102_100_C3.dark
-  mflat_link: # master_frame/2001-02-23_1x1_gain2750/7DT11/link_20250102_m625_C3.flat
+  # mbias_link: # master_frame/2001-02-23_1x1_gain2750/7DT11/link_20250102_C3.bias
+  # mdark_link: # master_frame/2001-02-23_1x1_gain2750/7DT11/link_20250102_100_C3.dark
+  # mflat_link: # master_frame/2001-02-23_1x1_gain2750/7DT11/link_20250102_m625_C3.flat
 
   mbias_file: # master_frame/2001-02-23_1x1_gain2750/7DT11/bias_20250102_C3.fits
   mdark_file: # master_frame/2001-02-23_1x1_gain2750/7DT11/dark_20250102_100s_C3.fits
@@ -60,13 +67,18 @@ preprocess:
   bpmask_file:
 
 astrometry:
-  # To be modified by config
+  path:
+    ref_ris_dir: "/lyman/data1/factory/catalog/gaia_dr3_7DT"
+    ref_query_dir: "/lyman/data1/factory/ref_scamp"
   ahead_file: "/data/pipeline_reform/dhhyun_lab/scamptest/ahead/calib_7DT11_T07304_20250115_050155_g_60_nocrval.ahead"
 
 photometry:
   # path:  # if user-input
   #   - file1
   #   - file2
+  path:
+    ref_ris_dir: "/lyman/data1/factory/ref_cat"  # divided by RIS tiles
+    ref_gaia_dir: "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile"  # divided by Gaia team
   match_radius: 1.0
   photfraction: 0.75
   refcatname: GaiaXP
@@ -76,7 +88,7 @@ photometry:
   ref_mag_err_upper: 0.05
   flagcut: 0
   check: False
-  satur_margin: 0.99  # factor multiplied to the preprocessed hardware saturation level
+  satur_margin: 0.99  # factor multiplied to the propagated hardware upper limit
   sex_vars:
     DETECT_MINAREA: 5
     DETECT_THRESH: 3.0
@@ -87,6 +99,8 @@ photometry:
     BACKPHOTO_TYPE: LOCAL
 
 imstack:
+  path:
+    ref_image_dir: "/lyman/data1/factory/ref_frame"
   gpu: True
   zp_key: 'ZP_AUTO'
   # images_to_combine:
@@ -98,25 +112,7 @@ imstack:
   target_seeing:  # auto if it's empty or smaller than max seeing
   propagate_mask: False
 
-imsubt:
+imsubtract:
   refim_file:
   input_mask:
   template_mask:
-
-logging:
-  level: INFO
-  file: 
-  format: '[%(levelname)s] %(asctime)s - %(name)s - %(message)s'
-  handlers:
-    - console
-    - file
-
-flag:
-  configuration: false
-  preprocess: false
-  astrometry: false
-  single_photometry: false
-  combine: false
-  # combined_astrometry: false
-  combined_photometry: false
-  subtraction: false

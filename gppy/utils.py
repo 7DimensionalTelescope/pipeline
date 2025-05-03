@@ -2,9 +2,30 @@ import os
 import re
 import glob
 import shutil
+from pathlib import Path
 from datetime import datetime, timedelta
 from astropy.io import fits
-from .const import FACTORY_DIR, RAWDATA_DIR
+from .const import FACTORY_DIR, RAWDATA_DIR, HEADER_KEY_MAP
+
+
+def most_common_in_dict(counts: dict):
+    best = None
+    best_count = -1
+    for key, cnt in counts.items():
+        if cnt > best_count:
+            best, best_count = key, cnt
+    return best_count, best
+
+
+def most_common_in_list(seq: list):
+    if not seq:
+        return None
+
+    counts = {}
+    for item in seq:
+        counts[item] = counts.get(item, 0) + 1
+
+    return most_common_in_dict(counts)
 
 
 def clean_up_factory():
@@ -26,7 +47,67 @@ def clean_up_folder(path):
             print(f"Failed to delete {item_path}: {e}")
 
 
-def parse_key_params_from_header(filename: str or Path) -> None:
+def check_params(img):
+    try:
+        params = parse_key_params_from_filename(img)[0]
+    except:
+        try:
+            params = parse_key_params_from_header(img)[0]
+        except:
+            raise ValueError("No parameters found in the image file names or headers.")
+    if not params:
+        raise ValueError("No parameters found in the image file names or headers.")
+    return params
+
+
+def subtract_half_day(timestr: str) -> str:
+    dt = datetime.strptime(timestr, "%Y%m%d_%H%M%S")
+    new_dt = dt - timedelta(hours=15)  # -15h for winter, not -12h
+    return new_dt.strftime("%Y-%m-%d")
+
+
+def parse_key_params_from_filename(img):
+    if isinstance(img, str):
+        path = Path(img)
+    elif isinstance(img, Path):
+        path = img
+    else:
+        raise TypeError("Input must be a string or Path.")
+
+    # e.g., 7DT11_20250102_050704_T00223_m425_1x1_100.0s_0001.fits
+    pattern = r"^(7DT\d{2})_(\d{8}_\d{6})_([a-zA-Z0-9]+)_([a-zA-Z0-9]+)_(\dx\d)_(\d+\.?\d*)s_([0-9]+)"
+    match = re.match(pattern, path.stem)
+
+    if match:
+        units, datetime_string, target, filt, formatted_n_binning, exposure, image_number = match.groups()
+        date = subtract_half_day(datetime_string)
+    else:
+        pattern = r"([a-zA-Z0-9]+)_([a-zA-Z0-9]+)_(7DT\d{2})_(\d+\.?\d*)s_(\d{8}_\d{6})"
+        match = re.match(pattern, path.stem)
+        if match:
+            target, filt, units, exposure, datetime_string = match.groups()
+            date = subtract_half_day(datetime_string)
+
+    info = {
+        "nightdate": date,
+        "obstime": datetime_string,
+        "filter": filt,
+        "obj": target,
+        "unit": units,
+        "exposure": exposure,
+        "n_binning": int(formatted_n_binning[0]),
+    }
+
+    # deprecated key support
+    info["date"] = info["nightdate"]
+    info["datetime"] = info["obstime"]
+
+    file_type = "master_image" if any(s in str(path.stem) for s in ["BIAS", "DARK", "FLAT"]) else "sci_image"
+
+    return info, file_type
+
+
+def parse_key_params_from_header(filename: str | Path) -> None:
     """
     Extract target information from a FITS filename.
 
@@ -39,8 +120,8 @@ def parse_key_params_from_header(filename: str or Path) -> None:
     filename = str(filename)  # in case filename is pathlib Path
     info = {}
     header = fits.getheader(filename)
-    for attr, key in zip(["exposure", "gain", "filter", "date", "obj", "unit", "n_binning"], \
-                            ["EXPOSURE", "GAIN", "FILTER", "DATE-LOC", "OBJECT", "TELESCOP", "XBINNING"]):  # fmt:skip
+
+    for attr, key in HEADER_KEY_MAP.items():
         if key == "DATE-LOC":
             header_date = datetime.fromisoformat(header[key])
             adjusted_date = header_date - timedelta(hours=12)
@@ -192,7 +273,7 @@ def get_camera(header):
     elif 14208 % header["NAXIS1"] == 0:  # NAXIS2 10656
         return "C5"
     else:
-        return "Unidentified"
+        return "UnknownCam"
 
 
 def find_raw_path(unit, date, n_binning, gain):
@@ -257,6 +338,8 @@ def parse_exptime(filename, return_type="float"):
 
 def define_output_dir(date, n_binning, gain, obj=None, unit=None, filt=None):
     """
+    *deprecated*
+
     Generate a standardized output directory name.
 
     Args:
@@ -510,17 +593,20 @@ def add_suffix(filename, suffix):
         str: The modified filename with the suffix added.
     """
     base, ext = os.path.splitext(filename)
-    return f"{base}_{suffix}{ext}"
+    suffix = suffix if suffix.startswith("_") else f"_{suffix}"
+    return f"{base}{suffix}{ext}"
 
 
-class Parse7DS:
+class Path7DS:
     """
-    Parser for 7DT fits files
+    Parser for 7DT fits file names
     obsdata: 7DT11_20250102_050704_T00223_m425_1x1_100.0s_0001.fits
-    processed: calib_7DT11_T09282_20241017_060927_m425_100.fits
+    (outdated) processed: calib_7DT11_T09282_20241017_060927_m425_100.fits
+    processed: T09282_m425_7DT11_100s_20241017_060927.fits
     """
 
-    def __init__(self, file):
+    def __init__(self, file: str):
+        file = str(file)
         self.path = os.path.abspath(file)
         self.basename = os.path.basename(file)
         self.stem, self.ext = os.path.splitext(self.basename)
@@ -528,39 +614,84 @@ class Parse7DS:
             raise ValueError("Not a FITS file")
         self.parts = self.stem.split("_")
 
-        self.type = self.identify_type
-        if self.type == "obsdata":
+        self._n_binning = None  # will be filled lazily
+        self.exists = os.path.exists(self.path)
+
+        if self.type == "raw_image":
             self.parse_obsdata()
-        elif self.type == "processed":
-            self.parse_processed()
         else:
-            return None
+            self.parse_processed()
+
+    def __repr__(self):
+        return str(self.file)
 
     @property
-    def identify_type(self):
+    def type(self):
+        cat_suffix = "_cat.fits"
+        weight_suffix = "_weight.fits"
+
+        # raw
         if self.stem.startswith("7DT"):
-            return "obsdata"
-        elif self.stem.startswith("calib"):
-            return "processed"
+            return "raw_image"
+        # processsed
         else:
-            return None
+            if "subt" in self.stem:
+                image_type = "subtracted_image"
+            elif "coadd" in self.stem:
+                image_type = "coadded_image"
+            else:
+                image_type = "processed_image"
+
+            if self.stem.endswith(cat_suffix):
+                product_type = "_catalog"
+            if self.stem.endswith(weight_suffix):
+                product_type = "_weight"
+
+            return image_type + product_type
+
+    @property
+    def n_binning(self) -> int:
+        """lazy"""
+        if self._n_binning is not None:
+            return self._n_binning
+        header = fits.getheader(self.file)
+        return header["XBINNING"]
+
+    @property
+    def datetime(self):
+        return self.date + "_" + self.hms
+
+    @property
+    def raw_basename(self):
+        return f"{self.unit}_{self.date}_{self.hms}_{self.obj}_{self.filter}_{self.n_binning}x{self.n_binning}_{self.exptime}.fits"
+
+    @property
+    def processed_basename(self):
+        return f"{self.obj}_{self.filter}_{self.unit}_{self.exptime}_{self.date}_{self.hms}.fits"
+
+    @property
+    def conjugate(self):
+        if self.type == "raw_image":
+            return self.processed_basename
+        else:
+            return self.raw_basename
 
     def parse_obsdata(self):
         self.unit = self.parts[0]
         self.date = self.parts[1]
-        self.time = self.parts[2]
+        self.hms = self.parts[2]
         self.obj = self.parts[3]
         self.filter = self.parts[4]
-        self.n_binning = self.parts[5]
+        self._n_binning = int(self.parts[5][0])
         self.exptime = self.parts[6]
 
     def parse_processed(self):
-        self.unit = self.parts[1]
-        self.obj = self.parts[2]
-        self.date = self.parts[3]
-        self.time = self.parts[4]
-        self.filter = self.parts[5]
-        self.exptime = self.parts[6]
+        self.obj = self.parts[0]
+        self.filter = self.parts[1]
+        self.unit = self.parts[2]
+        self.exptime = self.parts[3]
+        self.date = self.parts[4]
+        self.hms = self.parts[5]
 
 
 def check_obs_file(params):

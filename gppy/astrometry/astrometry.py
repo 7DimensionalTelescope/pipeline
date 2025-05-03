@@ -60,10 +60,7 @@ class Astrometry(BaseSetup):
 
     @property
     def sequential_task(self):
-        return [
-            (1, "run", False),
-            (2, "flagging", False)
-        ]
+        return [(1, "run", False), (2, "flagging", False)]
 
     def run(
         self,
@@ -120,9 +117,7 @@ class Astrometry(BaseSetup):
             self.config.flag.astrometry = True
 
             end_time = time.time()
-            self.logger.info(
-                f"Astrometry Done for {self.config.name} in {end_time - start_time:.2f} seconds"
-            )
+            self.logger.info(f"Astrometry Done for {self.config.name} in {end_time - start_time:.2f} seconds")
             MemoryMonitor.cleanup_memory()
             self.logger.debug(MemoryMonitor.log_memory_usage)
         except Exception as e:
@@ -143,10 +138,8 @@ class Astrometry(BaseSetup):
         self.path_astrometry = os.path.join(self.config.path.path_factory, "astrometry")
         os.makedirs(self.path_astrometry, exist_ok=True)
         inims = self.config.file.processed_files
-        soft_links = [
-            os.path.join(self.path_astrometry, os.path.basename(s)) for s in inims
-        ]
-        
+        soft_links = [os.path.join(self.path_astrometry, os.path.basename(s)) for s in inims]
+
         for inim, soft_link in zip(inims, soft_links):
             if not os.path.exists(soft_link):
                 os.symlink(inim, soft_link)
@@ -176,9 +169,7 @@ class Astrometry(BaseSetup):
         ]
 
         if not filtered_data:
-            self.logger.info(
-                "All input images are already solved. Exiting solve-field."
-            )
+            self.logger.info("All input images are already solved. Exiting solve-field.")
             return
 
         inputs, outputs = zip(*filtered_data)
@@ -267,9 +258,7 @@ class Astrometry(BaseSetup):
         # use local astrefcat if tile obs
         match = re.search(r"T\d{5}", self.config.name)
         if match:
-            astrefcat = os.path.join(
-                self.config.path.path_astrefcat, f"{match.group()}.fits"
-            )
+            astrefcat = os.path.join(self.config.path.path_astrefcat, f"{match.group()}.fits")
             self.config.path.path_astrefcat = astrefcat
 
         # joint scamp
@@ -281,9 +270,7 @@ class Astrometry(BaseSetup):
                     f.write(f"{precat}\n")
 
             # @ is astromatic syntax.
-            external.scamp(
-                cat_to_scamp, path_ref_scamp=path_ref_scamp, local_astref=astrefcat
-            )
+            external.scamp(cat_to_scamp, path_ref_scamp=path_ref_scamp, local_astref=astrefcat)
 
         # individual, parallel
         elif self.queue:
@@ -297,9 +284,7 @@ class Astrometry(BaseSetup):
         # individual, sequential
         else:
             for precat in presex_cats:
-                external.scamp(
-                    precat, path_ref_scamp=path_ref_scamp, local_astref=astrefcat
-                )
+                external.scamp(precat, path_ref_scamp=path_ref_scamp, local_astref=astrefcat)
                 self.logger.info(f"Completed scamp for {precat}]")  # fmt:skip
                 self.logger.debug(f"{precat}")  # fmt:skip
 
@@ -336,12 +321,10 @@ class Astrometry(BaseSetup):
             for solved_head, output, inim in zip(solved_heads, links, inims):
                 output_head = "_".join(output.split("_")[:-1]) + ".head"
                 os.symlink(solved_head, output_head)  # factory/inim.head
-                external.missfits(
-                    output
-                )  # soft_link changes to a wcs-updated fits file
+                external.missfits(output)  # soft_link changes to a wcs-updated fits file
                 os.system(f"mv {output} {inim}")  # overwrite (inefficient)
         else:
-            from .utils import read_scamp_header, update_padded_header
+            from ..utils import read_scamp_header, update_padded_header
 
             # update img in processed directly
             for solved_head, target_fits in zip(solved_heads, inims):

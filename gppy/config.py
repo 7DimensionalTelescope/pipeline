@@ -4,7 +4,6 @@ import re
 import glob
 import json
 from datetime import datetime
-from astropy.table import Table
 from .utils import (
     header_to_dict,
     to_datetime_string,
@@ -14,15 +13,10 @@ from .utils import (
     parse_exptime,
     clean_up_folder,
     swap_ext,
+    most_common_in_list,
 )
-from .const import (
-    FACTORY_DIR,
-    PROCESSED_DIR,
-    MASTER_FRAME_DIR,
-    REF_DIR,
-    STACKED_DIR,
-    DAILY_STACKED_DIR,
-)
+from .const import HEADER_KEY_MAP, STRICT_KEYS, ANCILLARY_KEYS
+from .base.path import PathHandler
 
 
 class Configuration:
@@ -47,7 +41,6 @@ class Configuration:
         config_source=None,
         logger=None,
         overwrite=False,
-        return_base=False,
         verbose=True,
         **kwargs,
     ):
@@ -59,32 +52,32 @@ class Configuration:
             config_source (str|dict, optional): Custom configuration source
             **kwargs: Additional configuration parameter overrides
         """
-        if return_base:
-            config_source = config_source or os.path.join(REF_DIR, "base.yml")
-            # self._initialized = True
-        elif overwrite:
-            # Default config source if not provided
-            if config_source is None:
-                config_source = os.path.join(REF_DIR, "base.yml")
+        self.path = PathHandler(obs_params)
+
+        if overwrite:
+            # Default config source if overwrite
+            config_source = config_source or self.path.base_yml
             self._initialized = False
         else:
-            config_source = self._find_config_file(obs_params, **kwargs)
+            config_source = config_source or self._find_config_file()
             self.config_file = config_source
 
         self._load_config(config_source, **kwargs)
-
-        if return_base:
-            return  # self  # init must return None
 
         if not self._initialized:
             self.initialize(obs_params)
 
         if overwrite:
-            clean_up_folder(self.config.path.path_processed)
-            clean_up_folder(self.config.path.path_factory)
-            clean_up_folder(self.config.path.path_stacked)
+            clean_up_folder(self.path.output_dir)
+            clean_up_folder(self.path.factory_dir)
+            # clean_up_folder(self.path.daily_stacked_dir)
 
         self.logger = self._setup_logger(logger, verbose=verbose)
+
+        self.check_image_coherency()  # outside self.initialize to use self.logger
+        self.set_input_output()
+        self.check_masterframe_status()
+
         self.write_config()
 
         self.config.flag.configuration = True
@@ -102,11 +95,7 @@ class Configuration:
         config = instance.config  # configuration instance from the new object
         config.name = "user-input"
 
-        if working_dir is not None:
-            config.path.path_processed = working_dir
-            factory_dir = os.path.join(working_dir, "factory")
-            os.makedirs(factory_dir, exist_ok=True)
-            config.path.path_factory = factory_dir
+        instance.path = PathHandler(instance, working_dir=working_dir)  # _data_type becomes user-input
 
         if config_file:
             # working_dir is ignored if config_file is absolute path
@@ -120,6 +109,7 @@ class Configuration:
             else:
                 raise FileNotFoundError("Provided Configuration file does not exist")
 
+        instance._initialized = True
         return config
 
     @classmethod
@@ -156,12 +146,11 @@ class Configuration:
 
             logger = Logger(name=self.config.name, slack_channel="pipeline_report")
 
-        filename = f"{self.output_name}.log"
-        log_file = os.path.join(self.config.path.path_processed, filename)
+        log_file = self.path.output_log
         self.config.logging.file = log_file
         logger.set_output_file(log_file, overwrite=overwrite)
         logger.set_format(self.config.logging.format)
-        logger.set_pipeline_name(self.output_name)
+        logger.set_pipeline_name(self.path.output_name)
         if not (verbose):
             logger.set_level("WARNING")
 
@@ -176,48 +165,55 @@ class Configuration:
 
         self.config = ConfigurationInstance(self)
 
-        self._output_prefix = kwargs.pop("path_processed", PROCESSED_DIR)
+        self._processed_dir = self.path.output_parent_dir
         self._update_with_kwargs(kwargs)
         self._make_instance(self._config_in_dict)
         self._loaded = True
 
-    def _find_config_file(self, obs_params, **kwargs):
+    def _find_config_file(self):
         """Find the configuration file in the processed directory."""
-        base_dir = kwargs.get("path_processed", PROCESSED_DIR)
-        tmp_path = define_output_dir(
-            obs_params["date"],
-            obs_params["n_binning"],
-            obs_params["gain"],
-            obj=obs_params["obj"],
-            unit=obs_params["unit"],
-            filt=obs_params["filter"],
-        )
-        base_dir = os.path.join(base_dir, tmp_path)
-        config_files = glob.glob(f"{base_dir}/*.yml")
-        if len(config_files) == 0:
+
+        # base_dir = self.path.output_dir
+        # config_files = glob.glob(f"{base_dir}/*.yml")
+        # if len(config_files) == 0:
+        output_config_file = self.path.output_yml
+        if not os.path.exists(output_config_file):
             self._initialized = False
-            return os.path.join(REF_DIR, "base.yml")
+            return self.path.base_yml
         else:
             self._initialized = True
-            return config_files[0]
+            return output_config_file  # s[0]
 
     def initialize(self, obs_params):
         """Fill in obs info, name, paths."""
+
+        self._legacy_name_support(obs_params)
+
         # Set core observation details
         self.config.obs.unit = obs_params["unit"]
-        self.config.obs.date = obs_params["date"]
-        self.config.obs.object = obs_params["obj"]
+        self.config.obs.nightdate = obs_params["nightdate"]
+        self.config.obs.obj = obs_params["obj"]
         self.config.obs.filter = obs_params["filter"]
         self.config.obs.n_binning = obs_params["n_binning"]
         self.config.obs.gain = obs_params["gain"]
         self.config.obs.pixscale = self.config.obs.pixscale * float(obs_params["n_binning"])  # For initial solve
-        self.config.name = f"{obs_params['date']}_{obs_params['n_binning']}x{obs_params['n_binning']}_gain{obs_params['gain']}_{obs_params['obj']}_{obs_params['unit']}_{obs_params['filter']}"
+        # self.config.name = f"{obs_params['nightdate']}_{obs_params['n_binning']}x{obs_params['n_binning']}_gain{obs_params['gain']}_{obs_params['obj']}_{obs_params['unit']}_{obs_params['filter']}"
+        # self.config.name = f"{obs_params['nightdate']}_{obs_params['obj']}_{obs_params['filter']}_{obs_params['unit']}_{obs_params['n_binning']}x{obs_params['n_binning']}_gain{obs_params['gain']}"
+        self.config.name = self.path.output_name
         self.config.info.creation_datetime = datetime.now().isoformat()
 
-        self._define_paths()
-        self._define_files()
+        self._glob_raw_images()
+        self._add_metadata()
+        # self._generate_links()
         self._define_settings()
         self._initialized = True
+
+    @staticmethod
+    def _legacy_name_support(obs_params):
+        if "nightdate" not in obs_params and "date" in obs_params:
+            obs_params["nightdate"] = obs_params["date"]
+        if "object" not in obs_params and "obj" in obs_params:
+            obs_params["object"] = obs_params["obj"]
 
     @property
     def is_initialized(self):
@@ -226,31 +222,6 @@ class Configuration:
     @property
     def is_loaded(self):
         return self._loaded
-
-    @property
-    def output_name(self):
-        """
-        Generate a standardized output filename for calibrated data.
-
-        The filename follows a specific naming convention that includes:
-        - Prefix 'calib_'
-        - Observation unit identifier
-        - Object name
-        - Observation datetime (formatted as YYYYMMDD_HHMMSS)
-        - Optional additional parameters (if applicable)
-
-        Returns:
-            str: Formatted filename for the calibrated data product
-                 Example: calib_7DT11_T00139_20250102_014643_m425_100.0.fits
-
-        Raises:
-            AttributeError: If the configuration is not fully initialized
-        """
-        return (
-            f"calib_{self.config.obs.unit}_{self.config.obs.object}_"
-            f"{to_datetime_string(self.config.obs.datetime[0])}_"
-            f"{self.config.obs.filter}_{self.config.obs.exposure[0]}"
-        )
 
     @property
     def config_in_dict(self):
@@ -298,56 +269,113 @@ class Configuration:
         lower_kwargs = {key.lower(): value for key, value in kwargs.items()}
         self._config_in_dict = Configuration._merge_dicts(self._config_in_dict, lower_kwargs)  # fmt:skip
 
-    def _define_paths(self):
+    def _glob_raw_images(self):
         """Create and set output directory paths for processed data."""
-        _date_dir = define_output_dir(self.config.obs.date, self.config.obs.n_binning, self.config.obs.gain)
 
-        rel_path = os.path.join(
-            _date_dir,
-            self.config.obs.object,
+        # obsdata is ill-defined and finding it involves searching
+        path_raw = find_raw_path(
             self.config.obs.unit,
-            self.config.obs.filter,
-        )
-        fdz_rel_path = os.path.join(
-            _date_dir,
-            self.config.obs.unit,
-        )
-
-        path_processed = os.path.join(self._output_prefix, rel_path)
-        path_factory = os.path.join(FACTORY_DIR, rel_path)
-        path_fdz = os.path.join(MASTER_FRAME_DIR, fdz_rel_path)
-        path_stacked_prefix = STACKED_DIR if self.config.name == "user-input" else DAILY_STACKED_DIR
-        path_stacked = os.path.join(path_stacked_prefix, rel_path)
-
-        os.makedirs(path_processed, exist_ok=True)
-        os.makedirs(path_fdz, exist_ok=True)
-        os.makedirs(path_factory, exist_ok=True)
-        # os.makedirs(path_stacked, exist_ok=True)  # make dir in imstack
-
-        self.config.path.path_processed = path_processed
-        self.config.path.path_stacked = path_stacked
-        self.config.path.path_factory = path_factory
-        self.config.path.path_fdz = path_fdz
-        self.config.path.path_raw = find_raw_path(
-            self.config.obs.unit,
-            self.config.obs.date,
+            self.config.obs.nightdate,
             self.config.obs.n_binning,
             self.config.obs.gain,
         )
-        self.config.path.path_sex = os.path.join(REF_DIR, "srcExt")
-        self._add_metadata(_date_dir)
+        fname = self._obsdata_basename(self.config.obs)
+        template = f"{path_raw}/{fname}"
+        fits_files = sorted(glob.glob(template))
 
-    def _add_metadata(self, name):
+        raw_files = []
+        raw_headers = []
+        for fits_file in fits_files:
+            header_in_dict = self._load_dict_header(fits_file)
+            if header_in_dict["GAIN"] == self.config.obs.gain:
+                raw_files.append(fits_file)
+                raw_headers.append(header_in_dict)
 
-        metadata_path = os.path.join(self._output_prefix, name, "metadata.ecsv")
+        self._files = raw_files
+        self.raw_headers = raw_headers
+        self.raw_header_sample = raw_headers[0]
+
+    def check_image_coherency(self, **kwarg):
+        """
+        If incoherent, let the pipeline run for a subgroup of images.
+        Then initialize pipeline from another manually copied config
+        to do run_scidata_reduction.
+        """
+        obs_config_keys = STRICT_KEYS | ANCILLARY_KEYS
+        # obs_config_keys.update(ANCILLARY_KEYS)
+
+        # check all headers and write info to config.obs
+        for config_key in obs_config_keys:
+            if config_key == "nightdate":
+                # info = [self.obs_params for header_in_dict in self.raw_headers]
+                continue
+
+            elif config_key == "camera":
+                # Identify Camera from image size
+                info = [get_camera(header_in_dict) for header_in_dict in self.raw_headers]
+
+            else:
+                header_key = HEADER_KEY_MAP[config_key]
+                info = [header_in_dict[header_key] for header_in_dict in self.raw_headers]
+
+            # collapse the list if coherent
+            if len(set(info)) == 1:
+                info = info[0]
+            elif len(set(info)) == 0:
+                raise ValueError(f"Input image information empty: {config_key}")
+            # use the most common value if a strict key is incoherent
+            elif config_key in STRICT_KEYS:
+                self.logger.warning(f"Incoherent Key {config_key}: {info}")
+                self.config.obs.coherent_input = False
+
+                num, dominant_info = most_common_in_list(info)
+                filtered_files = [f for f, val in zip(self._files, info) if val == dominant_info]
+                self._files = filtered_files
+
+                info = dominant_info
+            # save list as is if ancillary key
+            else:
+                pass
+
+            setattr(self.config.obs, config_key, info)
+
+    def set_input_output(self):
+        self.path.add_fits(self._files)  # file_dependent_common_paths work afterwards
+        self.config.file.raw_files = self.path.raw_images
+        self.config.file.processed_files = self.path.processed_images
+
+    @staticmethod
+    def _obsdata_basename(config):
+        # ex) '7DT11_20250102_014829_T00139_m425_1x1_100.0s_0001.fits'
+        # template = f"{path_raw}/*{self.config.obs.obj}_{self.config.obs.filter}_{self.config.obs.n_binning}*.fits"
+        # return f"{config.unit}_{config.nightdate}_*_{config.obj}_{config.filter}_{config.n_binning}x{config.n_binning}_{config.exposure}.fits"
+        return f"{config.unit}_*_*_{config.obj}_{config.filter}_{config.n_binning}x{config.n_binning}_*.fits"
+
+    @staticmethod
+    def _load_dict_header(fits_file):
+        """use .head file if available"""
+        header_file = swap_ext(fits_file, ".head")
+
+        if os.path.exists(header_file):
+            header_in_dict = header_to_dict(header_file)
+        else:
+            from astropy.io import fits
+
+            header_in_dict = dict(fits.getheader(fits_file))
+        return header_in_dict
+
+    def _add_metadata(self):  # for webpage only
+
+        # metadata_path = os.path.join(self._processed_dir, name, "metadata.ecsv")
+        metadata_path = os.path.join(self.path.metadata_dir, "metadata.ecsv")
         if not os.path.exists(metadata_path):
             with open(metadata_path, "w") as f:
                 f.write("# %ECSV 1.0\n")
                 f.write("# ---\n")
                 f.write("# datatype:\n")
-                f.write("# - {name: object, datatype: string}\n")
-                f.write("# - {name: unit, datatype: string}\n")
+                f.write("# - {name: obj, datatype: string}\n")
                 f.write("# - {name: filter, datatype: string}\n")
+                f.write("# - {name: unit, datatype: string}\n")
                 f.write("# - {name: n_binning, datatype: int64}\n")
                 f.write("# - {name: gain, datatype: int64}\n")
                 f.write("# meta: !!omap\n")
@@ -356,7 +384,7 @@ class Configuration:
                 f.write("object unit filter n_binning gain\n")
 
         observation_data = [
-            str(self.config.obs.object),
+            str(self.config.obs.obj),
             str(self.config.obs.unit),
             str(self.config.obs.filter),
             str(self.config.obs.n_binning),
@@ -366,71 +394,29 @@ class Configuration:
         with open(metadata_path, "a") as f:
             f.write(new_line)
 
-    def _define_files(self):
-        s = f"{self.config.path.path_raw}/*{self.config.obs.object}_{self.config.obs.filter}_{self.config.obs.n_binning}*.fits"  # obsdata/7DT11/*T00001*.fits
-
-        fits_files = sorted(glob.glob(s))
-
-        # Extract header metadata
-        header_mapping = {
-            "ra": "RA",
-            "dec": "DEC",
-            "datetime": "DATE-OBS",
-            "exposure": "EXPOSURE",
-        }
-
-        for config_key, header_key in header_mapping.items():
-            setattr(self.config.obs, config_key, [])
-
-        raw_files = []
-        for fits_file in fits_files:
-            header_file = swap_ext(fits_file, ".head")
-            if os.path.exists(header_file):
-                header_in_dict = header_to_dict(header_file)
-            else:
-                from astropy.io import fits
-
-                header_in_dict = dict(fits.getheader(fits_file))
-
-            if header_in_dict["GAIN"] == self.config.obs.gain:
-                raw_files.append(fits_file)
-                for config_key, header_key in header_mapping.items():
-                    getattr(self.config.obs, config_key).append(header_in_dict[header_key])
-            self.raw_header_sample = header_in_dict
-
-        self.config.file.raw_files = raw_files
-        self.config.file.processed_files = [
-            os.path.join(
-                self.config.path.path_processed,
-                f"calib_{self.config.obs.unit}_{self.config.obs.object}_"
-                f"{to_datetime_string(datetime)}_"
-                f"{self.config.obs.filter}_{int(exp)}s.fits",
-            )
-            for datetime, exp in zip(self.config.obs.datetime, self.config.obs.exposure)
-        ]
-
-        # Identify Camera from image size
-        self.config.obs.camera = get_camera(self.raw_header_sample)
-
-        # Define pointer fpaths to master frames
-        path_fdz = self.config.path.path_fdz  # master_frame/date_bin_gain/unit
-        date_utc = to_datetime_string(self.config.obs.datetime[0], date_only=True)
-        # legacy gppy used tool.calculate_average_date_obs('DATE-OBS')
-        self.config.preprocess.mbias_link = os.path.join(
-            path_fdz, f"bias_{date_utc}_{self.config.obs.camera}.link"
-        )  # 7DT01/bias_20250102_C3.link
-        self.config.preprocess.mdark_link = os.path.join(
-            path_fdz,
-            f"dark_{date_utc}_{int(self.config.obs.exposure[0])}s_{self.config.obs.camera}.link",
-        )  # 7DT01/flat_20250102_100_C3.link
-        self.config.preprocess.mflat_link = os.path.join(
-            path_fdz,
-            f"flat_{date_utc}_{self.config.obs.filter}_{self.config.obs.camera}.link",
-        )  # 7DT01/flat_20250102_m625_C3.link
+    # def _generate_links(self):
+    #     # Define pointer fpaths to master frames
+    #     # legacy gppy used tool.calculate_average_date_obs('DATE-OBS')
+    #     path_fdz = self.path.masterframe_dir  # master_frame/date_bin_gain/unit
+    #     date_utc = to_datetime_string(self.config.obs.datetime[0], date_only=True)
+    #     self.config.preprocess.mbias_link = os.path.join(
+    #         path_fdz, f"bias_{date_utc}_{self.config.obs.camera}.link"
+    #     )  # 7DT01/bias_20250102_C3.link
+    #     self.config.preprocess.mdark_link = os.path.join(
+    #         path_fdz,
+    #         f"dark_{date_utc}_{int(self.config.obs.exposure[0])}s_{self.config.obs.camera}.link",
+    #     )  # 7DT01/flat_20250102_100_C3.link
+    #     self.config.preprocess.mflat_link = os.path.join(
+    #         path_fdz,
+    #         f"flat_{date_utc}_{self.config.obs.filter}_{self.config.obs.camera}.link",
+    #     )  # 7DT01/flat_20250102_m625_C3.link
+    def check_masterframe_status(self):
+        # fill mbias_file if on-date masterframe exists. otherwise leave it empty.
+        pass
 
     def _define_settings(self):
         # use local astrometric reference catalog for tile observations
-        self.config.settings.local_astref = bool(re.fullmatch(r"T\d{5}", self.config.obs.object))
+        self.config.settings.local_astref = bool(re.fullmatch(r"T\d{5}", self.config.obs.obj))
 
         # skip single frame combine for Deep mode
         obsmode = self.raw_header_sample["OBSMODE"]
@@ -458,13 +444,11 @@ class Configuration:
 
         self._config_in_dict["info"]["last_update_datetime"] = datetime.now().isoformat()
 
-        filename = f"{self.output_name}.yml"
-
-        config_file = os.path.join(self.config.path.path_processed, filename)
+        config_file = self.path.output_yml
         self.config_file = config_file
 
         with open(config_file, "w") as f:
-            yaml.dump(self.config_in_dict, f)
+            yaml.dump(self.config_in_dict, f, sort_keys=False)
 
 
 class ConfigurationInstance:
