@@ -74,7 +74,7 @@ class Configuration:
 
         self.logger = self._setup_logger(logger, verbose=verbose)
 
-        self.check_image_coherency()
+        self.check_image_coherency()  # outside self.initialize to use self.logger
         self.set_input_output()
         self.check_masterframe_status()
 
@@ -198,7 +198,8 @@ class Configuration:
         self.config.obs.gain = obs_params["gain"]
         self.config.obs.pixscale = self.config.obs.pixscale * float(obs_params["n_binning"])  # For initial solve
         # self.config.name = f"{obs_params['nightdate']}_{obs_params['n_binning']}x{obs_params['n_binning']}_gain{obs_params['gain']}_{obs_params['obj']}_{obs_params['unit']}_{obs_params['filter']}"
-        self.config.name = f"{obs_params['nightdate']}_{obs_params['obj']}_{obs_params['filter']}_{obs_params['unit']}_{obs_params['n_binning']}x{obs_params['n_binning']}_gain{obs_params['gain']}"
+        # self.config.name = f"{obs_params['nightdate']}_{obs_params['obj']}_{obs_params['filter']}_{obs_params['unit']}_{obs_params['n_binning']}x{obs_params['n_binning']}_gain{obs_params['gain']}"
+        self.config.name = self.path.output_name
         self.config.info.creation_datetime = datetime.now().isoformat()
 
         self._glob_raw_images()
