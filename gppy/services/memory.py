@@ -7,17 +7,17 @@ import gc
 from astropy.utils import state
 import cupy as cp
 import psutil
-from ..base import decorator
 import threading
 from contextlib import contextmanager
 from datetime import datetime
 from astropy.table import Table
 
+from ..base import decorator
+from . import utils
+
 
 @contextmanager
-def monitor_memory_usage(
-    interval: float = 1.0, logger: Optional = None, verbose: bool = False
-) -> Table:
+def monitor_memory_usage(interval: float = 1.0, logger: Optional = None, verbose: bool = False) -> Table:
     """
     Context manager that monitors and logs memory usage every X seconds
     while running code inside the `with` block.
@@ -87,9 +87,7 @@ def monitor_memory_usage(
 
 
 @contextmanager
-def monitor_io_rate(
-    interval: float = 1.0, logger: Optional = None, verbose: bool = False
-) -> Table:
+def monitor_io_rate(interval: float = 1.0, logger: Optional = None, verbose: bool = False) -> Table:
     """
     Context manager that monitors disk I/O (read/write rate) every `interval` seconds.
     Returns an astropy Table with a history of rates.
@@ -109,9 +107,7 @@ def monitor_io_rate(
         Table containing timestamps and I/O rates
     """
 
-    io_data = Table(
-        names=["time", "read_kbps", "write_kbps"], dtype=[object, float, float]
-    )
+    io_data = Table(names=["time", "read_kbps", "write_kbps"], dtype=[object, float, float])
     io_data["time"].description = "Measurement timestamp"
     io_data["read_kbps"].description = "Disk read rate (KB/s)"
     io_data["write_kbps"].description = "Disk write rate (KB/s)"
@@ -210,9 +206,7 @@ class MemoryMonitor:
         Returns:
             str: Current memory state and usage summary
         """
-        return (
-            f"MemoryMonitor(state={self.memory_state}, usage={self.log_memory_usage})"
-        )
+        return f"MemoryMonitor(state={self.memory_state}, usage={self.log_memory_usage})"
 
     @classmethod
     def cleanup_memory(cls):
@@ -248,9 +242,7 @@ class MemoryMonitor:
         try:
             return list(range(cp.cuda.runtime.getDeviceCount()))
         except Exception as e:
-            self.logger.warning(
-                f"GPU initialization failed: {e}. Falling back to CPU only."
-            )
+            self.logger.warning(f"GPU initialization failed: {e}. Falling back to CPU only.")
             return []
 
     def get_unified_state(
@@ -313,8 +305,7 @@ class MemoryMonitor:
             bool: Whether memory usage is below recovery threshold
         """
         return self.current_memory_percent <= recovery_threshold and any(
-            gpu_percent <= recovery_threshold
-            for gpu_percent in self.current_gpu_memory_percent
+            gpu_percent <= recovery_threshold for gpu_percent in self.current_gpu_memory_percent
         )
 
     def handle_state(self, trigger_source, gpu_context, stop_callback) -> None:
@@ -337,9 +328,7 @@ class MemoryMonitor:
             self._handle_critical(trigger_source, gpu_context)
         elif self.memory_state[trigger_source] == MemoryState.EMERGENCY:
             self._handle_emergency(trigger_source, gpu_context, stop_callback)
-            self.logger.critical(
-                f"Emergency memory threshold exceeded on {trigger_source}. All processes stopped."
-            )
+            self.logger.critical(f"Emergency memory threshold exceeded on {trigger_source}. All processes stopped.")
 
     def _handle_warning(self, trigger_source: str, gpu_context) -> None:
         """
@@ -402,9 +391,7 @@ class MemoryMonitor:
             )
             time.sleep(5)
 
-    def _handle_emergency(
-        self, trigger_source: str, gpu_context, stop_callback
-    ) -> None:
+    def _handle_emergency(self, trigger_source: str, gpu_context, stop_callback) -> None:
         """
         Handle EMERGENCY memory state with immediate stoppage.
 
@@ -491,9 +478,7 @@ class MemoryMonitor:
         Returns:
             List[float]: Memory usage percentage for each GPU device
         """
-        gpu_percentages = [
-            stats["percent"] for _, stats in cls.current_gpu_memory.items()
-        ]
+        gpu_percentages = [stats["percent"] for _, stats in cls.current_gpu_memory.items()]
         return gpu_percentages
 
     @decorator.classmethodproperty
@@ -504,9 +489,6 @@ class MemoryMonitor:
         Returns:
             str: Formatted string with CPU and GPU memory usage percentages
         """
-        gpu_summary = [
-            f"{device}: {percent:.2f}%"
-            for device, percent in enumerate(cls.current_gpu_memory_percent)
-        ]
+        gpu_summary = [f"{device}: {percent:.2f}%" for device, percent in enumerate(cls.current_gpu_memory_percent)]
         gpu_info = f", GPU [{', '.join(gpu_summary)}]"
         return f"System [{cls.current_memory_percent:.2f}%]{gpu_info}"

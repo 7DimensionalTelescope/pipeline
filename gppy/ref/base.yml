@@ -6,15 +6,6 @@ info:
   creation_datetime:
   last_update_datetime:
 
-settings:
-  ToO: False
-  obsmode:  # Deep Spec Color Search Single
-  header_pad: 5  # assuming final header is 5 * 2880 bytes long. 6 to include polygon info
-  local_astref: 
-  combine:
-  gpu_enabled: True
-  verbose_gpu: True  # use logger later
-
 obs:
   # OBS Info should be updated from header
   coherent_input: true
@@ -31,6 +22,12 @@ obs:
   dec:
   exposure:
 
+file: 
+  raw_files: 
+  processed_files: 
+  # stacked_file:
+  # weight_file:
+
 flag:
   configuration: false
   preprocess: false
@@ -40,6 +37,15 @@ flag:
   # combined_astrometry: false
   combined_photometry: false
   subtraction: false
+
+settings:
+  ToO: False
+  obsmode:  # Deep Spec Color Search Single
+  header_pad: 5  # assuming final header is 5 * 2880 bytes long. 6 to include polygon info
+  local_astref: 
+  combine:
+  gpu_enabled: True
+  verbose_gpu: True  # use logger later
   
 logging:
   level: INFO
@@ -48,12 +54,6 @@ logging:
   handlers:
     - console
     - file
-
-file: 
-  raw_files: 
-  processed_files: 
-  # stacked_file:
-  # weight_file:
 
 preprocess:
   masterframe: default # closest, custom

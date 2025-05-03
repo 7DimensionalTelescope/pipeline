@@ -2,8 +2,10 @@ from typing import Any, Union
 from abc import ABC, abstractmethod
 import glob
 from ..config import Configuration, ConfigurationInstance
+from ..base.path import PathHandler
 from .logger import Logger
 from .queue import QueueManager
+
 
 class BaseSetup(ABC):
     def __init__(
@@ -19,6 +21,7 @@ class BaseSetup(ABC):
             logger: Custom logger instance (optional)
             queue: QueueManager instance or boolean to enable parallel processing
         """
+        self.path = self._setup_path(config)
 
         # Setup Configuration
         self.config = self._setup_config(config)
@@ -29,8 +32,16 @@ class BaseSetup(ABC):
         # Setup queue
         self.queue = self._setup_queue(queue)
 
+    def _setup_path(self, config):
+        if isinstance(config, Configuration):
+            return config.path
+        elif isinstance(config, str):
+            return PathHandler(Configuration(config_source=config))
+        else:
+            raise ValueError("No information to initialize PathHandler")
+
     def _setup_config(self, config):
-        
+
         if isinstance(config, Configuration):
             return config.config
         elif isinstance(config, str):
@@ -41,7 +52,7 @@ class BaseSetup(ABC):
             raise ValueError("Invalid configuration object")
 
     def _setup_logger(self, logger, config):
-        
+
         if isinstance(logger, Logger):
             return logger
         elif hasattr(config, "logger") and isinstance(config.logger, Logger):
@@ -50,7 +61,7 @@ class BaseSetup(ABC):
             return Logger(name=config.config.name, slack_channel="pipeline_report")
 
     def _setup_queue(self, queue):
-       
+
         if isinstance(queue, QueueManager):
             queue.logger = self.logger
             return queue

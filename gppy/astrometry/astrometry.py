@@ -135,8 +135,9 @@ class Astrometry(BaseSetup):
                 - soft_links: List of symbolic link paths in factory directory
                 - inims: List of original input image paths
         """
-        self.path_astrometry = os.path.join(self.config.path.path_factory, "astrometry")
-        os.makedirs(self.path_astrometry, exist_ok=True)
+        # self.path_astrometry = os.path.join(self.config.path.path_factory, "astrometry")
+        # os.makedirs(self.path_astrometry, exist_ok=True)
+        self.path_astrometry = self.path.astrometry.tmp_dir
         inims = self.config.file.processed_files
         soft_links = [os.path.join(self.path_astrometry, os.path.basename(s)) for s in inims]
 
