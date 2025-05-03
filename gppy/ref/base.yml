@@ -25,12 +25,30 @@ obs:
   camera: 
   filter:
   obj:
-  date:  # date of datetime - 12h. dirname of obsdata
-  datetime:  # UTC
+  nightdate:  # date of datetime - 12h. dirname of obsdata
+  obstime:  # UTC
   ra:
   dec:
   exposure:
+
+flag:
+  configuration: false
+  preprocess: false
+  astrometry: false
+  single_photometry: false
+  combine: false
+  # combined_astrometry: false
+  combined_photometry: false
+  subtraction: false
   
+logging:
+  level: INFO
+  file: 
+  format: '[%(levelname)s] %(asctime)s - %(name)s - %(message)s'
+  handlers:
+    - console
+    - file
+
 file: 
   raw_files: 
   processed_files: 
@@ -97,21 +115,3 @@ imsubtract:
   refim_file:
   input_mask:
   template_mask:
-
-logging:
-  level: INFO
-  file: 
-  format: '[%(levelname)s] %(asctime)s - %(name)s - %(message)s'
-  handlers:
-    - console
-    - file
-
-flag:
-  configuration: false
-  preprocess: false
-  astrometry: false
-  single_photometry: false
-  combine: false
-  # combined_astrometry: false
-  combined_photometry: false
-  subtraction: false
