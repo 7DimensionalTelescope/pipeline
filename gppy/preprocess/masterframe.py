@@ -64,7 +64,7 @@ class MasterFrameGenerator:
 
     def initialize(self, obs_params):
         unit = obs_params["unit"]
-        date = obs_params["date"]
+        date = obs_params["nightdate"]
         n_binning = obs_params["n_binning"]
         gain = obs_params["gain"]
 
@@ -77,6 +77,8 @@ class MasterFrameGenerator:
         header = self._get_sample_header()
         self.date_fdz = to_datetime_string(header["DATE-OBS"], date_only=True)  # UTC
         self.camera = get_camera(header)
+
+        # self._identifiers = ["", date, "", f"{n_binning}x{n_binning}", f"gain{gain}", self.camera]
 
         self._inventory_manifest()
 

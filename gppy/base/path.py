@@ -2,25 +2,62 @@ import os
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-
+from typing import Union, TYPE_CHECKING
 import numpy as np
-from ..utils import parse_key_params_from_header, parse_key_params_from_filename
-import re
-import os
 
-image_unique_keys = ["date", "gain", "filter", "obj", "unit", "n_binning", "exposure"]
 
-from ..utils import check_params, get_camera, define_output_dir, Path7DS
+# from ..utils import parse_key_params_from_header, parse_key_params_from_filename, get_camera, define_output_dir, Path7DS
+from ..utils import check_params
 from .. import const
 
+if TYPE_CHECKING:
+    from gppy.config import Configuration  # just for type hinting. actual import will cause circular import error
 
-image_unique_keys = const.STRICT_KEYS
+
+class AutoMkdirMixin:
+    _mkdir_exclude = set()  # subclasses can override this
+
+    def __getattribute__(self, name):
+        """
+        CAVEAT: This runs every time attr is accessed. Keep it short.
+        Make sure accessed dirs exist
+        """
+        if name.startswith("_"):  # Bypass all custom logic for private attributes
+            return object.__getattribute__(self, name)
+
+        value = object.__getattribute__(self, name)
+
+        # Skip excluded attributes
+        if name in object.__getattribute__(self, "_mkdir_exclude"):
+            return value
+
+        if isinstance(value, (str, Path)):
+            self._mkdir(value)
+        elif isinstance(value, list) and all(isinstance(p, (str, Path)) for p in value):
+            for p in value:
+                self._mkdir(p)
+
+        return value
+
+    def _mkdir(self, value):
+        p = Path(value).expanduser()  # understands ~/
+        d = p.parent if p.suffix else p  # ensure directory
+
+        # Use mixin's own per-instance cache
+        created_dirs = object.__getattribute__(self, "_created_dirs_cache")
+
+        if d not in created_dirs and not d.exists():  # check cache first for performance
+            d.mkdir(parents=True, exist_ok=True)
+            created_dirs.add(d)
+
+    def __init_subclass__(cls):
+        # Ensure subclasses have their own directory cache
+        cls._created_dirs_cache = set()
 
 
-class PathHandler:
-    _created_dirs: set[Path] = set()
-
-    def __init__(self, input, working_dir=None):
+class PathHandler(AutoMkdirMixin):
+    def __init__(self, input: Union[str, Path, list, dict, "Configuration"], working_dir=None):
+        self._config = None
 
         # input is obs_param
         if isinstance(input, dict):
@@ -31,8 +68,10 @@ class PathHandler:
         # input is config
         elif hasattr(input, "config"):
             self._input_file = [Path(file) for file in input.config.file.raw_files]
+
             self._data_type = input.config.name  # propagate user-input
             self.obs_params = input.config_in_dict["obs"]
+            self._config = input.config
 
         # input is a fits file
         elif isinstance(input, str) or isinstance(input, Path):
@@ -59,35 +98,9 @@ class PathHandler:
 
         if not self._file_dep_initialized and self._input_file:
             self.define_file_dependent_common_paths()
-        if self._file_indep_initialized and self._file_dep_initialized:
-            self.define_specific_paths()
 
-    def __getattribute__(self, name):
-        """
-        CAVEAT: This runs every time attr is accessed. Keep it short.
-        Make sure accessed dirs exist
-        """
-        value = super().__getattribute__(name)
-
-        if isinstance(value, (str, Path)):
-            self._mkdir(value)
-
-        elif isinstance(value, list) and all(isinstance(p, (str, Path)) for p in value):
-            for p in value:
-                self._mkdir(p)
-
-        return value
-
-    def _mkdir(self, value):
-        # if isinstance(value, (str, Path)):
-        #     os.makedirs(str(value), exist_ok=True)
-
-        p = Path(value).expanduser()  # understands ~/
-        d = p.parent if p.suffix else p  # ensure not a file
-
-        if d not in self._created_dirs and not d.exists():  # simple check is faster than makedirs
-            d.mkdir(parents=True, exist_ok=True)
-            self._created_dirs.add(d)
+        # if self._file_indep_initialized and self._file_dep_initialized:
+        self.define_specific_paths()
 
     def __getattr__(self, name):
         """
@@ -160,12 +173,6 @@ class PathHandler:
         self.subtracted_dir = os.path.join(self.output_dir, "subtracted")
         self.ref_sex_dir = os.path.join(const.REF_DIR, "srcExt")
 
-        self.astrometry_ref_ris_dir = "/lyman/data1/factory/catalog/gaia_dr3_7DT"
-        self.astrometry_ref_query_dir = "/lyman/data1/factory/ref_scamp"
-        self.photometry_ref_ris_dir = "/lyman/data1/factory/ref_cat"  # divided by RIS tiles
-        self.photometry_ref_gaia_dir = "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile"
-        self.subtraction_ref_image_dir = "/lyman/data1/factory/ref_frame"
-
         # files
         self.base_yml = os.path.join(const.REF_DIR, "base.yml")
         self.output_name = f"{self.obs_params['obj']}_{self.obs_params['filter']}_{self.obs_params['unit']}_{self.obs_params['nightdate']}"
@@ -175,7 +182,10 @@ class PathHandler:
         self._file_indep_initialized = True
 
     def add_fits(self, files: str | Path | list):
-        self._input_file = [Path(f) for f in files]
+        if isinstance(files, list):
+            self._input_file = [Path(f) for f in files]
+        else:
+            self._input_file = Path(files)
 
     def define_file_dependent_common_paths(self):
         if not (self.is_present(self._input_file)):
@@ -185,7 +195,9 @@ class PathHandler:
             self.data_type = self._data_type or "raw"
             self.raw_images = [str(file.absolute()) for file in self._input_file]
             self.masterframe_dir = os.path.join(
-                const.MASTER_FRAME_DIR, self.obs_params["nightdate"], self.obs_params["unit"]
+                f"{const.MASTER_FRAME_DIR}",
+                f"{self.obs_params['nightdate']}_{self.obs_params['n_binning']}x{self.obs_params['n_binning']}_gain{self.obs_params['gain']}",
+                self.obs_params["unit"],
             )
             processed_file_stems = [switch_raw_name_order(file.stem) for file in self._input_file]
             self.processed_images = [
@@ -208,25 +220,11 @@ class PathHandler:
         self._file_dep_initialized = True
         pass
 
-    # def path_preprocess(self):
-    #     pass
-
-    # def path_astromety(self):
-    #     pass
-
-    # def path_photometry(self):
-    #     pass
-
-    # def path_stacking(self):
-    #     pass
-
-    # def path_subtraction(self):
-    #     pass
-
     def define_specific_paths(self):
-        # self.preprocess = PathPreprocess(path_processed=self.output_dir)
-        # self.astrometry = PathAstrometry(path_processed=self.output_dir)
-        pass
+        self.astrometry = PathAstrometry(self, self._config)
+        self.photometry = PathPhotometry(self)
+        self.imstack = PathImstack(self)
+        self.imsubtract = PathImsubtract(self)
 
 
 def switch_raw_name_order(name):
@@ -247,71 +245,82 @@ def format_subseconds(sec: str):
 
 
 class PathPreprocess(PathHandler):
-    """
-    Gives you attributes such as
-
-        path.preprocess.mbias_link      (file - no mkdir)
-        path.preprocess.intermediate    (directory - mkdir on first access)
-
-    without building anything up-front.  Everything is resolved the first
-    time you touch the attribute.
-    """
-
-    # everything we can serve and how it should be built
     _spec = {
         "mbias_link": lambda self: self.path_fdz / f"bias_{self._date}_{self._cam}.link",
         "mdark_link": lambda self: self.path_fdz / f"dark_{self._date}_{self._exp}s_{self._cam}.link",
         "mflat_link": lambda self: self.path_fdz / f"flat_{self._date}_{self._filt}_{self._cam}.link",
     }
 
-    # -----------------------------------------------------------------
-
     def __init__(self, path_processed):
-        date_utc = "test"
-        filt = "test"
-        camera = "test"
-        exposure = "test"
-
-        _date_dir = define_output_dir(self.config.obs.date, self.config.obs.n_binning, self.config.obs.gain)
+        # _date_dir = define_output_dir(self.config.obs.date, self.config.obs.n_binning, self.config.obs.gain)
+        _date_dir = os.path.join(self.config.obs.date, self.config.obs.n_binning, self.config.obs.gain)
         self.path_fdz = Path(_date_dir) / self.config.obs.unit
 
-    def __getattr__(self, item):
-        """lazy magic"""
-        if item not in self._spec:
-            raise AttributeError(item)
 
-        path = self._spec[item](self)  # build the Path
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+class PathAstrometry(AutoMkdirMixin):
+    _mkdir_exclude = {"ref_ris_dir", "ref_query_dir"}
 
-    # pretty printing
-    def __repr__(self):
-        keys = sorted(k for k in (*self.__dict__, *self._spec))
-        return "\n".join(f"  {k}: {getattr(self, k)}" for k in keys)
+    def __init__(self, parent: PathHandler, config=None):
+        self._parent = parent
+
+        # Default values
+        self.ref_ris_dir = "/lyman/data1/factory/catalog/gaia_dr3_7DT"
+        self.ref_query_dir = "/lyman/data1/factory/ref_scamp"
+
+        # Apply config overrides if provided
+        if config and hasattr(config, "path"):
+            for key, val in config.astrometry.path.items():
+                setattr(self, key, val)
+
+    # def __repr__(self):
+    #     return self.tmp_dir
+
+    @property
+    def tmp_dir(self):
+        return os.path.join(self._parent.factory_dir, "astrometry")
 
 
-class PathAstrometry(PathHandler):
-    _all = {
-        "mbias_link": lambda self: self.path_fdz / f"bias_{self._date}_{self._cam}.link",
-        "mdark_link": lambda self: self.path_fdz / f"dark_{self._date}_{self._exp}s_{self._cam}.link",
-        "mflat_link": lambda self: self.path_fdz / f"flat_{self._date}_{self._filt}_{self._cam}.link",
-    }
+class PathPhotometry(AutoMkdirMixin):
+    _mkdir_exclude = {"ref_ris_dir", "ref_gaia_dir"}
 
-    # -----------------------------------------------------------------
+    def __init__(self, parent: PathHandler, config=None):
+        self._parent = parent
 
-    def __init__(self, path_processed):
-        self.path_processed = Path(path_processed)
+        self.ref_ris_dir = "/lyman/data1/factory/ref_cat"  # divided by RIS tiles
+        self.ref_gaia_dir = "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile"
 
-    def __getattr__(self, item):
-        """lazy magic"""
-        if item not in self._all:
-            raise AttributeError(item)
+        # Apply config overrides if provided
+        if config and hasattr(config, "path"):
+            for key, val in config.photometry.path.items():
+                setattr(self, key, val)
 
-        path = self._all[item](self)  # build the Path
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+    @property
+    def tmp_dir(self):
+        return os.path.join(self._parent.factory_dir, "photometry")
 
-    # pretty printing
-    def __repr__(self):
-        keys = sorted(k for k in (*self.__dict__, *self._all))
-        return "\n".join(f"  {k}: {getattr(self, k)}" for k in keys)
+
+class PathImstack(AutoMkdirMixin):
+    def __init__(self, parent: PathHandler):
+        self._parent = parent
+
+    @property
+    def tmp_dir(self):
+        return os.path.join(self._parent.factory_dir, "imstack")
+
+
+class PathImsubtract(AutoMkdirMixin):
+    _mkdir_exclude = {"ref_image_dir"}
+
+    def __init__(self, parent: PathHandler, config=None):
+        self._parent = parent
+
+        self.ref_image_dir = "/lyman/data1/factory/ref_frame"
+
+        # Apply config overrides if provided
+        if config and hasattr(config, "path"):
+            for key, val in config.imsubtract.path.items():
+                setattr(self, key, val)
+
+    @property
+    def tmp_dir(self):
+        return os.path.join(self._parent.factory_dir, "imsubtract")

@@ -60,7 +60,6 @@ class Configuration:
             self._initialized = False
         else:
             config_source = config_source or self._find_config_file()
-            self.config_file = config_source
 
         self._load_config(config_source, **kwargs)
 
@@ -73,10 +72,6 @@ class Configuration:
             # clean_up_folder(self.path.daily_stacked_dir)
 
         self.logger = self._setup_logger(logger, verbose=verbose)
-
-        self.check_image_coherency()  # outside self.initialize to use self.logger
-        self.set_input_output()
-        self.check_masterframe_status()
 
         self.write_config()
 
@@ -165,9 +160,14 @@ class Configuration:
 
         self.config = ConfigurationInstance(self)
 
-        self._processed_dir = self.path.output_parent_dir
         self._update_with_kwargs(kwargs)
         self._make_instance(self._config_in_dict)
+
+        # once config has file.raw_files, reinitialize PathHandler
+        if self.is_initialized:
+            # self.path.add_fits(self.config.file.raw_files)
+            self.path = PathHandler(self)
+
         self._loaded = True
 
     def _find_config_file(self):
@@ -177,12 +177,12 @@ class Configuration:
         # config_files = glob.glob(f"{base_dir}/*.yml")
         # if len(config_files) == 0:
         output_config_file = self.path.output_yml
-        if not os.path.exists(output_config_file):
-            self._initialized = False
-            return self.path.base_yml
-        else:
+        if os.path.exists(output_config_file):
             self._initialized = True
             return output_config_file  # s[0]
+        else:
+            self._initialized = False
+            return self.path.base_yml
 
     def initialize(self, obs_params):
         """Fill in obs info, name, paths."""
@@ -203,6 +203,11 @@ class Configuration:
         self.config.info.creation_datetime = datetime.now().isoformat()
 
         self._glob_raw_images()
+        self.check_image_coherency()  # outside self.initialize to use self.logger
+        self.set_input_output()
+        # self.check_masterframe_status()
+        self._generate_links()
+
         self._add_metadata()
         # self._generate_links()
         self._define_settings()
@@ -291,7 +296,7 @@ class Configuration:
                 raw_files.append(fits_file)
                 raw_headers.append(header_in_dict)
 
-        self._files = raw_files
+        self._raw_files = raw_files
         self.raw_headers = raw_headers
         self.raw_header_sample = raw_headers[0]
 
@@ -325,12 +330,14 @@ class Configuration:
                 raise ValueError(f"Input image information empty: {config_key}")
             # use the most common value if a strict key is incoherent
             elif config_key in STRICT_KEYS:
-                self.logger.warning(f"Incoherent Key {config_key}: {info}")
+
+                # self.logger.warning(f"Incoherent Key {config_key}: {info}")  # logger undefined yet
+
                 self.config.obs.coherent_input = False
 
                 num, dominant_info = most_common_in_list(info)
-                filtered_files = [f for f, val in zip(self._files, info) if val == dominant_info]
-                self._files = filtered_files
+                filtered_files = [f for f, val in zip(self._raw_files, info) if val == dominant_info]
+                self._raw_files = filtered_files
 
                 info = dominant_info
             # save list as is if ancillary key
@@ -340,7 +347,7 @@ class Configuration:
             setattr(self.config.obs, config_key, info)
 
     def set_input_output(self):
-        self.path.add_fits(self._files)  # file_dependent_common_paths work afterwards
+        self.path.add_fits(self._raw_files)  # file_dependent_common_paths work afterwards
         self.config.file.raw_files = self.path.raw_images
         self.config.file.processed_files = self.path.processed_images
 
@@ -394,22 +401,23 @@ class Configuration:
         with open(metadata_path, "a") as f:
             f.write(new_line)
 
-    # def _generate_links(self):
-    #     # Define pointer fpaths to master frames
-    #     # legacy gppy used tool.calculate_average_date_obs('DATE-OBS')
-    #     path_fdz = self.path.masterframe_dir  # master_frame/date_bin_gain/unit
-    #     date_utc = to_datetime_string(self.config.obs.datetime[0], date_only=True)
-    #     self.config.preprocess.mbias_link = os.path.join(
-    #         path_fdz, f"bias_{date_utc}_{self.config.obs.camera}.link"
-    #     )  # 7DT01/bias_20250102_C3.link
-    #     self.config.preprocess.mdark_link = os.path.join(
-    #         path_fdz,
-    #         f"dark_{date_utc}_{int(self.config.obs.exposure[0])}s_{self.config.obs.camera}.link",
-    #     )  # 7DT01/flat_20250102_100_C3.link
-    #     self.config.preprocess.mflat_link = os.path.join(
-    #         path_fdz,
-    #         f"flat_{date_utc}_{self.config.obs.filter}_{self.config.obs.camera}.link",
-    #     )  # 7DT01/flat_20250102_m625_C3.link
+    def _generate_links(self):
+        # Define pointer fpaths to master frames
+        # legacy gppy used tool.calculate_average_date_obs('DATE-OBS')
+        path_fdz = self.path.masterframe_dir  # master_frame/date_bin_gain/unit
+        date_utc = to_datetime_string(self.config.obs.obstime[0], date_only=True)
+        self.config.preprocess.mbias_link = os.path.join(
+            path_fdz, f"bias_{date_utc}_{self.config.obs.camera}.link"
+        )  # 7DT01/bias_20250102_C3.link
+        self.config.preprocess.mdark_link = os.path.join(
+            path_fdz,
+            f"dark_{date_utc}_{int(self.config.obs.exposure)}s_{self.config.obs.camera}.link",  # mind exp can be list
+        )  # 7DT01/flat_20250102_100_C3.link
+        self.config.preprocess.mflat_link = os.path.join(
+            path_fdz,
+            f"flat_{date_utc}_{self.config.obs.filter}_{self.config.obs.camera}.link",
+        )  # 7DT01/flat_20250102_m625_C3.link
+
     def check_masterframe_status(self):
         # fill mbias_file if on-date masterframe exists. otherwise leave it empty.
         pass
@@ -447,7 +455,7 @@ class Configuration:
         config_file = self.path.output_yml
         self.config_file = config_file
 
-        with open(config_file, "w") as f:
+        with open(self.config_file, "w") as f:
             yaml.dump(self.config_in_dict, f, sort_keys=False)
 
 

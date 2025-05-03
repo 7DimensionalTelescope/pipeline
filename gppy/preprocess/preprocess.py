@@ -91,7 +91,7 @@ class Preprocess(BaseSetup):
                 self.logger.info(f"Calibrating image with {'Eclaire' if use_eclaire else 'Cupy'}")
                 self.data_reduction(use_eclaire=use_eclaire)
 
-                self.logger.info(f"Saving processed files to {self.config.path.path_processed}")
+                self.logger.info(f"Saving processed files to {self.path.output_dir}")
                 self.save_processed_files()
             except Exception as e:
                 self.logger.error(f"Error during preprocessing: {str(e)}")
@@ -194,7 +194,7 @@ class Preprocess(BaseSetup):
             )
             n_head_blocks = self.config.settings.header_pad
             add_padding(header, n_head_blocks, copy_header=False)
-            output_path = os.path.join(self.config.path.path_processed, out_file)
+            output_path = os.path.join(self.path.output_dir, out_file)
             fits.writeto(
                 output_path,
                 data=cp.asnumpy(self._temp_data[idx]),
