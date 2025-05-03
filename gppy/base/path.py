@@ -4,10 +4,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Union, TYPE_CHECKING
 import numpy as np
-
-
-# from ..utils import parse_key_params_from_header, parse_key_params_from_filename, get_camera, define_output_dir, Path7DS
-from ..utils import check_params
+from ..utils import check_params, switch_raw_name_order, format_subseconds
 from .. import const
 
 if TYPE_CHECKING:
@@ -15,13 +12,12 @@ if TYPE_CHECKING:
 
 
 class AutoMkdirMixin:
+    """This makes sure accessed dirs exist"""
+
     _mkdir_exclude = set()  # subclasses can override this
 
     def __getattribute__(self, name):
-        """
-        CAVEAT: This runs every time attr is accessed. Keep it short.
-        Make sure accessed dirs exist
-        """
+        """CAVEAT: This runs every time attr is accessed. Keep it short."""
         if name.startswith("_"):  # Bypass all custom logic for private attributes
             return object.__getattribute__(self, name)
 
@@ -64,6 +60,13 @@ class PathHandler(AutoMkdirMixin):
             self._input_file = None
             self._data_type = None
             self.obs_params = input
+
+        # input is ConfigurationInstance
+        elif hasattr(input, "obs"):
+            self._input_file = [Path(file) for file in input.file.raw_files]
+            self._data_type = input.name  # propagate user-input
+            self.obs_params = input.obs.to_dict()
+            self._config = input
 
         # input is config
         elif hasattr(input, "config"):
@@ -134,7 +137,7 @@ class PathHandler(AutoMkdirMixin):
             val = getattr(self, base)
             return Path(val) if isinstance(val, str) else val
 
-        # ---------- 3. Still not found → real error ----------
+        # ---------- 3. Still not found -> real error ----------
         raise AttributeError(f"{self.__class__.__name__!s} has no attribute {name!r}")
 
     def __repr__(self):
@@ -227,23 +230,6 @@ class PathHandler(AutoMkdirMixin):
         self.imsubtract = PathImsubtract(self)
 
 
-def switch_raw_name_order(name):
-    parts = name.split("_")
-    return "_".join(parts[3:5] + parts[0:1] + [format_subseconds(parts[6])] + parts[1:3])
-
-
-def format_subseconds(sec: str):
-    """100.0s -> 100s, 0.1s -> 0pt100s"""
-    s = float(sec[:-1])
-    integer_second = int(s)
-    if integer_second != 0:
-        return f"{integer_second}s"
-
-    # if subsecond
-    millis = int(abs(s) * 1000 + 0.5)  # round to nearest ms
-    return f"0pt{millis:03d}s"
-
-
 class PathPreprocess(PathHandler):
     _spec = {
         "mbias_link": lambda self: self.path_fdz / f"bias_{self._date}_{self._cam}.link",
@@ -278,6 +264,10 @@ class PathAstrometry(AutoMkdirMixin):
     @property
     def tmp_dir(self):
         return os.path.join(self._parent.factory_dir, "astrometry")
+
+    @property
+    def input(self):
+        return self._parent.processed_images
 
 
 class PathPhotometry(AutoMkdirMixin):
