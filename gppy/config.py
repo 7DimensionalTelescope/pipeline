@@ -37,10 +37,12 @@ class Configuration:
 
     def __init__(
         self,
-        obs_params=None,
-        config_source=None,
+        obs_params: dict = None,
+        config_source: str | dict = None,
         logger=None,
+        write=True,
         overwrite=False,
+        return_base=False,
         verbose=True,
         **kwargs,
     ):
@@ -52,16 +54,29 @@ class Configuration:
             config_source (str|dict, optional): Custom configuration source
             **kwargs: Additional configuration parameter overrides
         """
-        self.path = PathHandler(obs_params)
+        self.write = write
 
-        if overwrite:
-            # Default config source if overwrite
+        if return_base:
+            self.path = PathHandler()
             config_source = config_source or self.path.base_yml
             self._initialized = False
+
+        elif config_source:
+            self._initialized = True
         else:
-            config_source = config_source or self._find_config_file()
+            self.path = PathHandler(obs_params)
+
+            if overwrite:
+                # Default config source if overwrite
+                config_source = self.path.base_yml
+                self._initialized = False
+            else:
+                config_source = self._find_config_file()
 
         self._load_config(config_source, **kwargs)
+
+        if return_base:
+            return
 
         if not self._initialized:
             self.initialize(obs_params)
@@ -77,20 +92,20 @@ class Configuration:
 
         self.config.flag.configuration = True
         self.logger.info(f"Configuration initialized")
-        self.logger.debug(f"Configuration file: {self.config_file}")
+        # self.logger.debug(f"Configuration file: {self.config_file}")
 
     def __repr__(self):
         return self.config.__repr__()
 
     @classmethod
     def base_config(cls, working_dir=None, config_file=None, **kwargs):
-        """Return the base (base.yml) configuration instance."""
-        # config = cls(return_base=True, **kwargs).config  # never overwrite here
-        instance = cls(return_base=True, **kwargs)
-        config = instance.config  # configuration instance from the new object
-        config.name = "user-input"
+        """Return the base (base.yml) ConfigurationInstance."""
+        working_dir = working_dir or os.getcwd()
 
-        instance.path = PathHandler(instance, working_dir=working_dir)  # _data_type becomes user-input
+        instance = cls(return_base=True, **kwargs)  # working_dir=working_dir,
+        config = instance.config
+        config.name = "user-input"
+        # instance.path = PathHandler(instance, working_dir=working_dir)  # make _data_type 'user-input'
 
         if config_file:
             # working_dir is ignored if config_file is absolute path
@@ -105,11 +120,17 @@ class Configuration:
                 raise FileNotFoundError("Provided Configuration file does not exist")
 
         instance._initialized = True
-        return config
+        # return config
+        return instance
 
     @classmethod
     def from_obs(cls, obs, **kwargs):
-        return cls(obs.obs_params, **kwargs)
+        return cls(obs_params=obs.obs_params, **kwargs)
+
+    @classmethod
+    def from_dict(cls, config_dict, write=False, **kwargs):
+        # config_dict['file']
+        return cls(config_source=config_dict, write=write, **kwargs)
 
     @staticmethod
     def _merge_dicts(base: dict, updates: dict) -> dict:
@@ -165,8 +186,10 @@ class Configuration:
 
         # once config has file.raw_files, reinitialize PathHandler
         if self.is_initialized:
+            # if hasattr(self.config, "file") and self.config.file is not None:
             # self.path.add_fits(self.config.file.raw_files)
             self.path = PathHandler(self)
+            # self.path = PathHandler(self.config.file.raw_files)
 
         self._loaded = True
 
@@ -447,7 +470,7 @@ class Configuration:
         - Writes configuration dictionary to the output path
         """
 
-        if not self.is_initialized:
+        if not self.is_initialized or not self.write:
             return
 
         self._config_in_dict["info"]["last_update_datetime"] = datetime.now().isoformat()
@@ -510,10 +533,61 @@ class ConfigurationInstance:
 
         return "\n".join(repr_lines)
 
+    # def to_dict(self):
+    #     """shallow"""
+    #     result = {}
+    #     for k, v in self.__dict__.items():
+    #         if k.startswith("_"):
+    #             continue
+    #         result[k] = v.to_dict() if isinstance(v, ConfigurationInstance) else v
+    #     return result
+
     def to_dict(self):
+        import copy
+
         result = {}
         for k, v in self.__dict__.items():
             if k.startswith("_"):
                 continue
-            result[k] = v.to_dict() if isinstance(v, ConfigurationInstance) else v
+            if isinstance(v, ConfigurationInstance):
+                result[k] = v.to_dict()
+            else:
+                result[k] = copy.deepcopy(v)
         return result
+
+    # def extract_single_image_config(self, i: int):
+    #     from copy import deepcopy
+
+    #     config_dict = deepcopy(self._parent_config.config_in_dict)
+    #     sections = [
+    #         config_dict.get("obs", {}),
+    #         config_dict["file"].get("raw_images", {}),
+    #         config_dict["file"].get("processed_images", {}),
+    #     ]
+    #     for section in sections:
+    #         for k, v in section.items():
+    #             if isinstance(v, list):
+    #                 section[k] = v[i]
+    #     return Configuration(config_source=config_dict, write=False)
+
+    def extract_single_image_config(self, i: int):
+        from copy import deepcopy
+
+        def select_from_lists(obj):
+            if isinstance(obj, dict):
+                return {k: select_from_lists(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                try:
+                    return obj[i]
+                except IndexError:
+                    raise IndexError(f"Index {i} out of bounds for list: {obj}")
+            else:
+                return obj
+
+        # Deep copy original config to avoid mutation
+        config_dict = deepcopy(self._parent_config.config_in_dict)
+
+        # Recursively reduce all list values to i-th element
+        config_dict = select_from_lists(config_dict)
+
+        return Configuration(config_source=config_dict, write=False)

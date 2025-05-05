@@ -102,7 +102,7 @@ class Photometry(BaseSetup):
             image_list.append(path.parts[-1])
         working_dir = str(path.parent.absolute())
         config = Configuration.base_config(working_dir)
-        config.file.processed_files = image_list
+        config.config.file.processed_files = image_list
         return cls(config=config)
 
     @property

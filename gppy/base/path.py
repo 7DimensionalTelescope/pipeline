@@ -52,58 +52,67 @@ class AutoMkdirMixin:
 
 
 class PathHandler(AutoMkdirMixin):
-    def __init__(self, input: Union[str, Path, list, dict, "Configuration"], working_dir=None):
+    def __init__(self, input: Union[str, Path, list, dict, "Configuration"] = None, working_dir=None):
         self._config = None
+        self._input_files = None
+        self._data_type = None
+        self.obs_params = {}
 
+        if input is not None:
+            self._handle_input(input)
+
+        self.select_output_dir(working_dir=working_dir)
+
+        self.define_trigger_independent_paths()
+
+        # self._file_indep_initialized = False
+        # if not self._file_indep_initialized:
+        if self.obs_params and self.obs_params.get("nightdate"):
+            self.define_file_independent_paths()
+
+        self._file_dep_initialized = False
+        if not self._file_dep_initialized and self._input_files:
+            self.define_file_dependent_paths()
+
+        # if self._file_indep_initialized and self._file_dep_initialized:
+        self.define_operation_paths()
+
+    def _handle_input(self, input):
+        """init with obs_parmas is ad-hoc. Will be changed to always take filenames"""
         # input is obs_param
         if isinstance(input, dict):
-            self._input_file = None
-            self._data_type = None
             self.obs_params = input
 
         # input is ConfigurationInstance
         elif hasattr(input, "obs"):
-            self._input_file = [Path(file) for file in input.file.raw_files]
+            if input.file.raw_files is not None:
+                self._input_files = [Path(file) for file in input.config.file.raw_files]
             self._data_type = input.name  # propagate user-input
             self.obs_params = input.obs.to_dict()
             self._config = input
 
-        # input is config
+        # input is Configuration
         elif hasattr(input, "config"):
-            self._input_file = [Path(file) for file in input.config.file.raw_files]
-
+            if input.config.file.raw_files is not None:
+                self._input_files = [Path(file) for file in input.config.file.raw_files]
             self._data_type = input.config.name  # propagate user-input
             self.obs_params = input.config_in_dict["obs"]
             self._config = input.config
 
         # input is a fits file
         elif isinstance(input, str) or isinstance(input, Path):
-            self._input_file = [Path(input)]
+            self._input_files = [Path(input)]
             self._data_type = None
-            self.obs_params = check_params(self._input_file)
+            self.obs_params = check_params(self._input_files)
 
         # input is a fits file list
         elif isinstance(input, list):
-            self._input_file = [Path(img) for img in input]
+            self._input_files = [Path(img) for img in input]
             self._data_type = None
-            self.obs_params = None
-            self.obs_params = check_params(self._input_file[0])
+            self.obs_params = check_params(self._input_files[0])
 
         else:
             raise TypeError(f"Input must be a path (str | Path), a list of paths, obs_params (dict), or Configuration.")
-
-        # self._file_indep_initialized = False
-        self._file_dep_initialized = False
-        self.select_output_dir(working_dir=working_dir)
-
-        # if not self._file_indep_initialized:
-        self.define_file_independent_common_paths()
-
-        if not self._file_dep_initialized and self._input_file:
-            self.define_file_dependent_common_paths()
-
-        # if self._file_indep_initialized and self._file_dep_initialized:
-        self.define_specific_paths()
 
     def __getattr__(self, name):
         """
@@ -113,10 +122,10 @@ class PathHandler(AutoMkdirMixin):
             return it; otherwise fall through to the convenience “_to_*” hooks.
         """
         # ---------- 1. Lazy initialization ----------
-        if not self._file_dep_initialized and self._input_file:
+        if not self._file_dep_initialized and self._input_files:
             self._file_dep_initialized = True  # set the flag first to prevent accidental recursion
             try:
-                self.define_file_dependent_common_paths()
+                self.define_file_dependent_paths()
             except Exception:
                 # roll back if the builder blew up
                 self._file_dep_initialized = False
@@ -148,99 +157,128 @@ class PathHandler(AutoMkdirMixin):
         return all([p.exists() for p in paths])
 
     def select_output_dir(self, working_dir=None):
-        # date_utc = Path7DS(self._input_files[0]).date  # utc date. e.g., "20250101"
-        # date_folder = check_params(self._input_file[0])["nightdate"]
-        if working_dir:
-            self.output_parent_dir = working_dir
-            self.factory_parent_dir = os.path.join(working_dir, "factory")
+        """CWD if user-input. Assume pipeline paths otherwise."""
+        if self._input_files:
+            _file_dir = self._input_files[0].absolute().parent
+            _not_pipeline_dir = str(_file_dir) not in {const.PROCESSED_DIR}
         else:
-            if self.obs_params["nightdate"] < "20260101":
-                self.output_parent_dir = const.PROCESSED_DIR
+            _not_pipeline_dir = True
+
+        if not self.obs_params or working_dir or _not_pipeline_dir:
+            working_dir = working_dir or (self._input_files[0].absolute().parent if self._input_files else os.getcwd())
+
+            self._output_parent_dir = working_dir
+            self.factory_parent_dir = os.path.join(working_dir, "factory")
+            self._assume_pipeline = False
+
+        else:
+            from datetime import date
+
+            datestring = self.obs_params.get("nightdate") or date.today().strftime("%Y%m%d")
+            if datestring < "20260101":
+                self._output_parent_dir = const.PROCESSED_DIR
                 self.factory_parent_dir = const.FACTORY_DIR
             else:
                 raise ValueError("Predefined date cap reached: consider moving to another disk.")
+            self._assume_pipeline = True
 
-    def define_file_independent_common_paths(self):
+    @property
+    def output_parent_dir(self):
+        return self._output_parent_dir
 
-        _relative_path = os.path.join(
-            self.obs_params["nightdate"], self.obs_params["obj"], self.obs_params["filter"], self.obs_params["unit"]
-        )
-        self.output_dir = os.path.join(self.output_parent_dir, _relative_path)
-        self.factory_dir = os.path.join(self.factory_parent_dir, _relative_path)
-        self.metadata_dir = os.path.join(self.output_parent_dir, self.obs_params["nightdate"])
-
-        # directories
-        self.image_dir = os.path.join(self.output_dir, "images")
-        self.figure_dir = os.path.join(self.output_dir, "figures")
-        self.daily_stacked_dir = os.path.join(self.output_dir, "stacked")
-        self.subtracted_dir = os.path.join(self.output_dir, "subtracted")
-        self.ref_sex_dir = os.path.join(const.REF_DIR, "srcExt")
-
-        # files
+    def define_trigger_independent_paths(self):
         self.base_yml = os.path.join(const.REF_DIR, "base.yml")
-        self.output_name = f"{self.obs_params['obj']}_{self.obs_params['filter']}_{self.obs_params['unit']}_{self.obs_params['nightdate']}"
-        self.output_yml = os.path.join(self.output_dir, self.output_name + ".yml")
-        self.output_log = os.path.join(self.output_dir, self.output_name + ".log")
+        self.output_yml = os.path.join(
+            self._output_parent_dir, "config.yml"
+        )  # overridden in define_file_independent_paths()
+        # self.imstack_base_yml
+        # self.phot_base_yml
+
+    def define_file_independent_paths(self):
+        if self._assume_pipeline:
+            _relative_path = os.path.join(
+                self.obs_params["nightdate"], self.obs_params["obj"], self.obs_params["filter"], self.obs_params["unit"]
+            )
+            self.output_dir = os.path.join(self.output_parent_dir, _relative_path)
+            self.factory_dir = os.path.join(self.factory_parent_dir, _relative_path)
+            self.metadata_dir = os.path.join(self.output_parent_dir, self.obs_params["nightdate"])
+
+            # directories
+            self.image_dir = os.path.join(self.output_dir, "images")
+            self.figure_dir = os.path.join(self.output_dir, "figures")
+            self.daily_stacked_dir = os.path.join(self.output_dir, "stacked")
+            self.subtracted_dir = os.path.join(self.output_dir, "subtracted")
+            self.ref_sex_dir = os.path.join(const.REF_DIR, "srcExt")
+
+            # files
+            self.output_name = f"{self.obs_params['obj']}_{self.obs_params['filter']}_{self.obs_params['unit']}_{self.obs_params['nightdate']}"
+            self.output_yml = os.path.join(self.output_dir, self.output_name + ".yml")
+            self.output_log = os.path.join(self.output_dir, self.output_name + ".log")
+
+        else:
+            pass
 
         self._file_indep_initialized = True
 
     def add_fits(self, files: str | Path | list):
         if isinstance(files, list):
-            self._input_file = [Path(f) for f in files]
+            self._input_files = [Path(f) for f in files]
         else:
-            self._input_file = Path(files)
+            self._input_files = Path(files)
 
-    def define_file_dependent_common_paths(self):
-        if not (self.is_present(self._input_file)):
-            raise FileNotFoundError(f"Not all paths exist: {self._input_file}")
+    def define_file_dependent_paths(self):
+        if self._assume_pipeline:
+            # if not (self.is_present(self._input_file)):
+            #     raise FileNotFoundError(f"Not all paths exist: {self._input_file}")
 
-        if const.RAWDATA_DIR in str(self._input_file[0]):
-            self.data_type = self._data_type or "raw"
-            self.raw_images = [str(file.absolute()) for file in self._input_file]
-            self.masterframe_dir = os.path.join(
-                f"{const.MASTER_FRAME_DIR}",
-                f"{self.obs_params['nightdate']}_{self.obs_params['n_binning']}x{self.obs_params['n_binning']}_gain{self.obs_params['gain']}",
-                self.obs_params["unit"],
-            )
-            processed_file_stems = [switch_raw_name_order(file.stem) for file in self._input_file]
-            self.processed_images = [
-                os.path.join(self.output_dir, "images", file_stem + ".fits") for file_stem in processed_file_stems
-            ]
-        elif self.output_parent_dir in str(self._input_file[0]):
-            self.data_type = self._data_type or "processed"
-            self.processed_images = [str(file.absolute()) for file in self._input_file]
-            # self.processed_file_stems = [file.stem for file in self._input_files]
-            self.factory_dir = os.path.join(const.FACTORY_DIR, *Path(self._input_file[0]).parts[-6:-3])
-            self.output_dir = self._input_file[0].parent.parent
+            if const.RAWDATA_DIR in str(self._input_files[0]):
+                self.data_type = self._data_type or "raw"
+                self.raw_images = [str(file.absolute()) for file in self._input_files]
+                self.masterframe_dir = os.path.join(
+                    f"{const.MASTER_FRAME_DIR}",
+                    f"{self.obs_params['nightdate']}_{self.obs_params['n_binning']}x{self.obs_params['n_binning']}_gain{self.obs_params['gain']}",
+                    self.obs_params["unit"],
+                )
+                processed_file_stems = [switch_raw_name_order(file.stem) for file in self._input_files]
+                self.processed_images = [
+                    os.path.join(self.output_dir, "images", file_stem + ".fits") for file_stem in processed_file_stems
+                ]
+            elif self.output_parent_dir in str(self._input_files[0]):
+                self.data_type = self._data_type or "processed"
+                self.processed_images = [str(file.absolute()) for file in self._input_files]
+                # self.processed_file_stems = [file.stem for file in self._input_files]
+                self.factory_dir = os.path.join(const.FACTORY_DIR, *Path(self._input_files[0]).parts[-6:-3])
+                self.output_dir = self._input_files[0].parent.parent
+            else:
+                self.data_type = self._data_type or "user-input"
+                print("User input data type detected. Assume the input is a list of processed images.")
+                self.processed_images = [str(file.absolute()) for file in self._input_files]
+                # self.processed_file_stems = [file.stem for file in self._input_files]
+                self.output_dir = self._input_files[0].parent.parent
+                self.factory_dir = self._input_files[0].parent.parent / "factory"
+
         else:
-            self.data_type = self._data_type or "user-input"
-            print("User input data type detected. Assume the input is a list of processed images.")
-            self.processed_images = [str(file.absolute()) for file in self._input_file]
-            # self.processed_file_stems = [file.stem for file in self._input_files]
-            self.output_dir = self._input_file[0].parent.parent
-            self.factory_dir = self._input_file[0].parent.parent / "factory"
-
+            pass
         self._file_dep_initialized = True
-        pass
 
-    def define_specific_paths(self):
+    def define_operation_paths(self):
         self.astrometry = PathAstrometry(self, self._config)
         self.photometry = PathPhotometry(self)
         self.imstack = PathImstack(self)
         self.imsubtract = PathImsubtract(self)
 
 
-class PathPreprocess(PathHandler):
-    _spec = {
-        "mbias_link": lambda self: self.path_fdz / f"bias_{self._date}_{self._cam}.link",
-        "mdark_link": lambda self: self.path_fdz / f"dark_{self._date}_{self._exp}s_{self._cam}.link",
-        "mflat_link": lambda self: self.path_fdz / f"flat_{self._date}_{self._filt}_{self._cam}.link",
-    }
+# class PathPreprocess(PathHandler):
+#     _spec = {
+#         "mbias_link": lambda self: self.path_fdz / f"bias_{self._date}_{self._cam}.link",
+#         "mdark_link": lambda self: self.path_fdz / f"dark_{self._date}_{self._exp}s_{self._cam}.link",
+#         "mflat_link": lambda self: self.path_fdz / f"flat_{self._date}_{self._filt}_{self._cam}.link",
+#     }
 
-    def __init__(self, path_processed):
-        # _date_dir = define_output_dir(self.config.obs.date, self.config.obs.n_binning, self.config.obs.gain)
-        _date_dir = os.path.join(self.config.obs.date, self.config.obs.n_binning, self.config.obs.gain)
-        self.path_fdz = Path(_date_dir) / self.config.obs.unit
+#     def __init__(self, path_processed):
+#         # _date_dir = define_output_dir(self.config.obs.date, self.config.obs.n_binning, self.config.obs.gain)
+#         _date_dir = os.path.join(self.config.obs.date, self.config.obs.n_binning, self.config.obs.gain)
+#         self.path_fdz = Path(_date_dir) / self.config.obs.unit
 
 
 class PathAstrometry(AutoMkdirMixin):
@@ -258,8 +296,8 @@ class PathAstrometry(AutoMkdirMixin):
             for key, val in config.astrometry.path.items():
                 setattr(self, key, val)
 
-    # def __repr__(self):
-    #     return self.tmp_dir
+    def __repr__(self):
+        return "\n".join(f"{k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
 
     @property
     def tmp_dir(self):
@@ -284,6 +322,9 @@ class PathPhotometry(AutoMkdirMixin):
             for key, val in config.photometry.path.items():
                 setattr(self, key, val)
 
+    def __repr__(self):
+        return "\n".join(f"{k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
+
     @property
     def tmp_dir(self):
         return os.path.join(self._parent.factory_dir, "photometry")
@@ -292,6 +333,9 @@ class PathPhotometry(AutoMkdirMixin):
 class PathImstack(AutoMkdirMixin):
     def __init__(self, parent: PathHandler):
         self._parent = parent
+
+    def __repr__(self):
+        return "\n".join(f"{k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
 
     @property
     def tmp_dir(self):
@@ -310,6 +354,9 @@ class PathImsubtract(AutoMkdirMixin):
         if config and hasattr(config, "path"):
             for key, val in config.imsubtract.path.items():
                 setattr(self, key, val)
+
+    def __repr__(self):
+        return "\n".join(f"{k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
 
     @property
     def tmp_dir(self):

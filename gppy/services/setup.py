@@ -21,6 +21,7 @@ class BaseSetup(ABC):
             logger: Custom logger instance (optional)
             queue: QueueManager instance or boolean to enable parallel processing
         """
+        # Setup PathHandler
         self.path = self._setup_path(config)
 
         # Setup Configuration
@@ -35,6 +36,8 @@ class BaseSetup(ABC):
     def _setup_path(self, config):
         if isinstance(config, Configuration):
             return config.path
+        elif isinstance(config, ConfigurationInstance):
+            return PathHandler(config)
         elif isinstance(config, str):
             return PathHandler(Configuration(config_source=config))
         else:
