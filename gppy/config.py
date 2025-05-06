@@ -38,7 +38,7 @@ class Configuration:
     def __init__(
         self,
         obs_params: dict = None,
-        input_files: list = None,
+        # input_files: list = None,
         config_source: str | dict = None,
         logger=None,
         write=True,  # False for PhotometrySingle
@@ -163,11 +163,13 @@ class Configuration:
 
             logger = Logger(name=self.config.name, slack_channel="pipeline_report")
 
-        log_file = self.path.output_log
-        self.config.logging.file = log_file
-        logger.set_output_file(log_file, overwrite=overwrite)
-        logger.set_format(self.config.logging.format)
-        logger.set_pipeline_name(self.path.output_name)
+        if self.path.file_dep_initialized and self.write:
+            log_file = self.path.output_log
+            self.config.logging.file = log_file
+            logger.set_output_file(log_file, overwrite=overwrite)
+            logger.set_format(self.config.logging.format)
+            logger.set_pipeline_name(self.path.output_name)
+
         if not (verbose):
             logger.set_level("WARNING")
 
@@ -176,7 +178,13 @@ class Configuration:
     def _load_config(self, config_source, **kwargs):
         # Load configuration from file or dict
         self._loaded = False
-        input_dict = self.read_config(config_source) if isinstance(config_source, str) else config_source
+
+        if isinstance(config_source, str):
+            input_dict = self.read_config(config_source)
+        elif isinstance(config_source, dict):
+            input_dict = config_source
+        else:
+            raise TypeError("Invalid config_source type")
 
         self._config_in_dict = input_dict
 
@@ -330,6 +338,7 @@ class Configuration:
         Then initialize pipeline from another manually copied config
         to do run_scidata_reduction.
         """
+        _is_coherent = True
         obs_config_keys = STRICT_KEYS | ANCILLARY_KEYS
         # obs_config_keys.update(ANCILLARY_KEYS)
 
@@ -352,23 +361,26 @@ class Configuration:
                 info = info[0]
             elif len(set(info)) == 0:
                 raise ValueError(f"Input image information empty: {config_key}")
+
             # use the most common value if a strict key is incoherent
             elif config_key in STRICT_KEYS:
 
                 # self.logger.warning(f"Incoherent Key {config_key}: {info}")  # logger undefined yet
 
-                self.config.obs.coherent_input = False
+                _is_coherent = False
 
                 num, dominant_info = most_common_in_list(info)
                 filtered_files = [f for f, val in zip(self._raw_files, info) if val == dominant_info]
                 self._raw_files = filtered_files
 
                 info = dominant_info
-            # save list as is if ancillary key
+            # save ancillary key as list
             else:
                 pass
 
             setattr(self.config.obs, config_key, info)
+
+        self.config.obs.coherent_input = _is_coherent
 
     def set_input_output(self):
         self.path.add_fits(self._raw_files)  # file_dependent_common_paths work afterwards
@@ -571,24 +583,28 @@ class ConfigurationInstance:
     #                 section[k] = v[i]
     #     return Configuration(config_source=config_dict, write=False)
 
+    @staticmethod
+    def select_from_lists(obj, i):
+        if isinstance(obj, dict):
+            return {k: ConfigurationInstance.select_from_lists(v, i) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            try:
+                # return obj[i]
+                return [obj[i]]  # wrap the selected value back in a list; guard against slicing
+            except IndexError:
+                raise IndexError(f"Index {i} out of bounds for list: {obj}")
+        else:
+            return obj
+
     def extract_single_image_config(self, i: int):
+        """return Configuration, not ConfigurationInstance"""
         from copy import deepcopy
 
-        def select_from_lists(obj):
-            if isinstance(obj, dict):
-                return {k: select_from_lists(v) for k, v in obj.items()}
-            elif isinstance(obj, list):
-                try:
-                    return obj[i]
-                except IndexError:
-                    raise IndexError(f"Index {i} out of bounds for list: {obj}")
-            else:
-                return obj
-
-        # Deep copy original config to avoid mutation
+        # Deep copy to avoid mutation
         config_dict = deepcopy(self._parent_config.config_in_dict)
 
         # Recursively reduce all list values to i-th element
-        config_dict = select_from_lists(config_dict)
+        config_dict = self.select_from_lists(config_dict, i)
 
         return Configuration(config_source=config_dict, write=False)
+        # return Configuration.from_dict(config_dict, write=False)

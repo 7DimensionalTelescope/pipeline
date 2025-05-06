@@ -2,7 +2,7 @@ name:
 
 obs:
   # OBS Info should be updated from header
-  coherent_input: true
+  coherent_input:
   pixscale: 0.505  # arcsec/pix
   n_binning: 
   gain: 

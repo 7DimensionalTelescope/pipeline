@@ -51,7 +51,7 @@ class AutoMkdirMixin:
 
 
 class PathHandler(AutoMkdirMixin):
-    def __init__(self, input: Union[str, Path, list, dict, "Configuration"] = None, working_dir=None):
+    def __init__(self, input: Union[str, Path, list, dict, "Configuration"] = None, *, working_dir=None):
         self._config = None
         self._input_files = None
         self._data_type = None
@@ -96,7 +96,7 @@ class PathHandler(AutoMkdirMixin):
         elif hasattr(input, "config"):
             if input.config.file.raw_files is not None:
                 self._input_files = [Path(file) for file in input.config.file.raw_files]
-            elif input.file.processed_files is not None:
+            elif input.config.file.processed_files is not None:
                 self._input_files = [Path(file) for file in input.config.file.processed_files]
             self._data_type = input.config.name  # propagate user-input
             self.obs_params = input.config_in_dict["obs"]
@@ -191,6 +191,15 @@ class PathHandler(AutoMkdirMixin):
     @property
     def output_parent_dir(self):
         return self._output_parent_dir
+
+    @property
+    def file_dep_initialized(self):
+        """Safe from AutoMkdirMixin as it's a bool."""
+        return self._file_dep_initialized
+
+    @property
+    def assume_pipeline(self):
+        return self._assume_pipeline
 
     def define_trigger_independent_paths(self):
         self.ref_sex_dir = os.path.join(const.REF_DIR, "srcExt")

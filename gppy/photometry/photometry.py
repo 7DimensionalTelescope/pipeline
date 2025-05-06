@@ -140,9 +140,11 @@ class Photometry(BaseSetup):
         task_ids = []
         for i, image in enumerate(self.images):
             process_name = f"{self.config.name} - single photometry - {i+1} of {len(self.images)}"
+            single_config = self.config.extract_single_image_config(i)
+
             phot_single = PhotometrySingle(
                 image,
-                self.config,
+                single_config,  # self.config,
                 self.logger,
                 ref_catalog=self.ref_catalog,
             )
@@ -158,10 +160,11 @@ class Photometry(BaseSetup):
 
     def _run_sequential(self) -> None:
         """Process images sequentially."""
-        for image in self.images:
+        for i, image in enumerate(self.images):
+            single_config = self.config.extract_single_image_config(i)
             PhotometrySingle(
                 image,
-                self.config,
+                single_config,  # self.config,
                 logger=self.logger,
                 ref_catalog=self.ref_catalog,
                 total_image=len(self.images),
@@ -236,17 +239,17 @@ class PhotometrySingle:
 
         return Logger(name="7DT pipeline logger", slack_channel="pipeline_report")
 
-    @classmethod
-    def from_file(cls, image: str) -> Optional["PhotometrySingle"]:
-        """Create instance from single image file."""
-        path = Path(image)
-        if not path.is_file():
-            print("The file does not exist.")
-            return None
-        working_dir = str(path.parent.absolute())
-        config = Configuration.base_config(working_dir)
-        image = path.parts[-1]
-        return cls(image, config, name="user-input")
+    # @classmethod
+    # def from_file(cls, image: str) -> Optional["PhotometrySingle"]:
+    #     """Create instance from single image file."""
+    #     path = Path(image)
+    #     if not path.is_file():
+    #         print("The file does not exist.")
+    #         return None
+    #     working_dir = str(path.parent.absolute())
+    #     config = Configuration.base_config(working_dir)
+    #     image = path.parts[-1]
+    #     return cls(image, config, name="user-input")
 
     @property
     def tmp_file_prefix(self) -> str:
