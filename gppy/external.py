@@ -307,7 +307,7 @@ def swarp(
     # input = [os.path.abspath(f) for f in input]
     # working_dir = dump_dir or os.path.join(os.path.dirname(input[0]), "tmp_solvefield")
 
-    from .utils import swap_ext
+    from .utils import add_suffix
 
     def chatter(message):
         if logger:
@@ -330,7 +330,8 @@ def swarp(
     resample_dir = resample_dir or os.path.join(dump_dir, "resamp")
     os.makedirs(resample_dir, exist_ok=True)
     comim = output or os.path.join(dump_dir, "coadd.fits")
-    weightim = swap_ext(comim, "weight.fits")
+    # weightim = swap_ext(comim, "weight.fits")
+    weightim = add_suffix(comim, "weight")
 
     # 	SWarp
     # swarpcom = f"swarp -c {path_config}/7dt.swarp @{path_imagelist} -IMAGEOUT_NAME {comim} -CENTER_TYPE MANUAL -CENTER {center} -SUBTRACT_BACK N -RESAMPLE_DIR {path_resamp} -GAIN_KEYWORD EGAIN -GAIN_DEFAULT {gain_default} -FSCALE_KEYWORD FAKE -WEIGHTOUT_NAME {weightim}"
@@ -385,7 +386,7 @@ def hotpants(
     nrx, nry: number of image regions in x/y dimension.
     ssf: substamp file
     """
-    from .utils import swap_ext
+    from .utils import add_suffix, swap_ext
 
     n_sigma = 5
     header = fits.getheader(inim)
@@ -407,9 +408,9 @@ def hotpants(
     # nrx, nry = 1, 1
     # nrx, nry = 6, 4
 
-    outim = outim or swap_ext(inim, "subt.fits")
-    out_conv_im = out_conv_im or swap_ext(inim, "conv.fits")
-    ssf = ssf or swap_ext(inim, "ssf.txt")
+    outim = outim or add_suffix(inim, "subt")
+    out_conv_im = out_conv_im or add_suffix(inim, "conv")
+    ssf = ssf or swap_ext(add_suffix(inim, "ssf"), ".txt")
 
     hotpantscom = (
         f"hotpants -c t -n i "
