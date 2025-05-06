@@ -1,11 +1,10 @@
 import os
-import re
-from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Union, TYPE_CHECKING
 import numpy as np
-from ..utils import check_params, switch_raw_name_order, format_subseconds
 from .. import const
+from ..utils import check_params
+from .utils import switch_raw_name_order
 
 if TYPE_CHECKING:
     from gppy.config import Configuration  # just for type hinting. actual import will cause circular import error
@@ -63,12 +62,12 @@ class PathHandler(AutoMkdirMixin):
 
         self.select_output_dir(working_dir=working_dir)
 
+        self._file_indep_initialized = False
         self.define_trigger_independent_paths()
 
-        # self._file_indep_initialized = False
         # if not self._file_indep_initialized:
-        if self.obs_params and self.obs_params.get("nightdate"):
-            self.define_file_independent_paths()
+        # if self.obs_params and self.obs_params.get("nightdate"):
+        self.define_file_independent_paths()
 
         self._file_dep_initialized = False
         if not self._file_dep_initialized and self._input_files:
@@ -87,6 +86,8 @@ class PathHandler(AutoMkdirMixin):
         elif hasattr(input, "obs"):
             if input.file.raw_files is not None:
                 self._input_files = [Path(file) for file in input.config.file.raw_files]
+            elif input.file.processed_files is not None:
+                self._input_files = [Path(file) for file in input.config.file.processed_files]
             self._data_type = input.name  # propagate user-input
             self.obs_params = input.obs.to_dict()
             self._config = input
@@ -95,6 +96,8 @@ class PathHandler(AutoMkdirMixin):
         elif hasattr(input, "config"):
             if input.config.file.raw_files is not None:
                 self._input_files = [Path(file) for file in input.config.file.raw_files]
+            elif input.file.processed_files is not None:
+                self._input_files = [Path(file) for file in input.config.file.processed_files]
             self._data_type = input.config.name  # propagate user-input
             self.obs_params = input.config_in_dict["obs"]
             self._config = input.config
@@ -160,15 +163,18 @@ class PathHandler(AutoMkdirMixin):
         """CWD if user-input. Assume pipeline paths otherwise."""
         if self._input_files:
             _file_dir = self._input_files[0].absolute().parent
-            _not_pipeline_dir = str(_file_dir) not in {const.PROCESSED_DIR}
+            _pipeline_dirs = {const.RAWDATA_DIR, const.PROCESSED_DIR}
+            _not_pipeline_dir = not any(s in str(_file_dir) for s in _pipeline_dirs)
         else:
-            _not_pipeline_dir = True
+            _not_pipeline_dir = False
 
+        # insufficient info or outside-pipeline input
         if not self.obs_params or working_dir or _not_pipeline_dir:
             working_dir = working_dir or (self._input_files[0].absolute().parent if self._input_files else os.getcwd())
 
             self._output_parent_dir = working_dir
             self.factory_parent_dir = os.path.join(working_dir, "factory")
+            self.factory_dir = os.path.join(working_dir, "factory")
             self._assume_pipeline = False
 
         else:
@@ -179,7 +185,7 @@ class PathHandler(AutoMkdirMixin):
                 self._output_parent_dir = const.PROCESSED_DIR
                 self.factory_parent_dir = const.FACTORY_DIR
             else:
-                raise ValueError("Predefined date cap reached: consider moving to another disk.")
+                raise ValueError("nightdate cap reached: consider moving to another disk.")
             self._assume_pipeline = True
 
     @property
@@ -187,6 +193,7 @@ class PathHandler(AutoMkdirMixin):
         return self._output_parent_dir
 
     def define_trigger_independent_paths(self):
+        self.ref_sex_dir = os.path.join(const.REF_DIR, "srcExt")
         self.base_yml = os.path.join(const.REF_DIR, "base.yml")
         self.output_yml = os.path.join(
             self._output_parent_dir, "config.yml"
@@ -195,7 +202,8 @@ class PathHandler(AutoMkdirMixin):
         # self.phot_base_yml
 
     def define_file_independent_paths(self):
-        if self._assume_pipeline:
+
+        if self._assume_pipeline:  # and self.obs_params and self.obs_params.get("nightdate"):
             _relative_path = os.path.join(
                 self.obs_params["nightdate"], self.obs_params["obj"], self.obs_params["filter"], self.obs_params["unit"]
             )
@@ -205,10 +213,8 @@ class PathHandler(AutoMkdirMixin):
 
             # directories
             self.image_dir = os.path.join(self.output_dir, "images")
-            self.figure_dir = os.path.join(self.output_dir, "figures")
             self.daily_stacked_dir = os.path.join(self.output_dir, "stacked")
             self.subtracted_dir = os.path.join(self.output_dir, "subtracted")
-            self.ref_sex_dir = os.path.join(const.REF_DIR, "srcExt")
 
             # files
             self.output_name = f"{self.obs_params['obj']}_{self.obs_params['filter']}_{self.obs_params['unit']}_{self.obs_params['nightdate']}"
@@ -216,7 +222,10 @@ class PathHandler(AutoMkdirMixin):
             self.output_log = os.path.join(self.output_dir, self.output_name + ".log")
 
         else:
-            pass
+            self.output_dir = self.output_parent_dir
+            self.factory_dir = self.factory_parent_dir
+
+        self.figure_dir = os.path.join(self.output_dir, "figures")
 
         self._file_indep_initialized = True
 
@@ -227,6 +236,7 @@ class PathHandler(AutoMkdirMixin):
             self._input_files = Path(files)
 
     def define_file_dependent_paths(self):
+        """use utils.Path7DS for bidirectional handling"""
         if self._assume_pipeline:
             # if not (self.is_present(self._input_file)):
             #     raise FileNotFoundError(f"Not all paths exist: {self._input_file}")

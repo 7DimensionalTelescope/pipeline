@@ -26,7 +26,7 @@ from ..services.setup import BaseSetup
 from ..utils import swap_ext, define_output_dir
 from .utils import move_file  # inputlist_parser, move_file
 from .const import ZP_KEY, IC_KEYS, CORE_KEYS
-from ..base.path import PathHandler
+from ..path.path import PathHandler
 
 
 class ImStack(BaseSetup):

@@ -16,7 +16,7 @@ from .utils import (
     most_common_in_list,
 )
 from .const import HEADER_KEY_MAP, STRICT_KEYS, ANCILLARY_KEYS
-from .base.path import PathHandler
+from .path.path import PathHandler
 
 
 class Configuration:
@@ -38,11 +38,12 @@ class Configuration:
     def __init__(
         self,
         obs_params: dict = None,
+        input_files: list = None,
         config_source: str | dict = None,
         logger=None,
-        write=True,
+        write=True,  # False for PhotometrySingle
         overwrite=False,
-        return_base=False,
+        return_base=False,  # for base_config
         verbose=True,
         **kwargs,
     ):
@@ -82,7 +83,7 @@ class Configuration:
             self.initialize(obs_params)
 
         if overwrite:
-            clean_up_folder(self.path.output_dir)
+            # clean_up_folder(self.path.output_dir)
             clean_up_folder(self.path.factory_dir)
             # clean_up_folder(self.path.daily_stacked_dir)
 

@@ -28,7 +28,7 @@ from .. import external
 from ..const import PipelineError
 from ..services.setup import BaseSetup
 from ..tools.table import match_two_catalogs
-from ..base.path import PathHandler
+from ..path.path import PathHandler
 
 
 class Photometry(BaseSetup):
@@ -103,6 +103,7 @@ class Photometry(BaseSetup):
         working_dir = str(path.parent.absolute())
         config = Configuration.base_config(working_dir)
         config.config.file.processed_files = image_list
+        config.path = PathHandler(image_list)
         return cls(config=config)
 
     @property
@@ -296,7 +297,7 @@ class PhotometrySingle:
         # if not os.path.exists(catalog_dir):
         #     os.makedirs(catalog_dir)
 
-        self.output_catalog_file = add_suffix(self.image, "_cat.fits")
+        self.output_catalog_file = add_suffix(self.image, "cat")
 
     def _load_ref_catalog(self) -> None:
         """

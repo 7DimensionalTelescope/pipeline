@@ -2,7 +2,7 @@ from typing import Any, Union
 from abc import ABC, abstractmethod
 import glob
 from ..config import Configuration, ConfigurationInstance
-from ..base.path import PathHandler
+from ..path.path import PathHandler
 from .logger import Logger
 from .queue import QueueManager
 
