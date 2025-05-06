@@ -85,9 +85,9 @@ class PathHandler(AutoMkdirMixin):
         # input is ConfigurationInstance
         elif hasattr(input, "obs"):
             if input.file.raw_files is not None:
-                self._input_files = [Path(file) for file in input.config.file.raw_files]
+                self._input_files = [Path(file) for file in input.file.raw_files]
             elif input.file.processed_files is not None:
-                self._input_files = [Path(file) for file in input.config.file.processed_files]
+                self._input_files = [Path(file) for file in input.file.processed_files]
             self._data_type = input.name  # propagate user-input
             self.obs_params = input.obs.to_dict()
             self._config = input
