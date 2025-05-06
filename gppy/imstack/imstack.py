@@ -23,7 +23,7 @@ from ..const import REF_DIR
 from ..config import Configuration
 from .. import external
 from ..services.setup import BaseSetup
-from ..utils import swap_ext, define_output_dir
+from ..utils import add_suffix, swap_ext, define_output_dir
 from .utils import move_file  # inputlist_parser, move_file
 from .const import ZP_KEY, IC_KEYS, CORE_KEYS
 from ..path.path import PathHandler
@@ -129,7 +129,7 @@ class ImStack(BaseSetup):
 
         # Output stacked image file name
         parts = os.path.basename(self.files[-1]).split("_")
-        parts[-1] = f"{self.total_exptime:.0f}s.com.fits"
+        parts[-1] = add_suffix(f"{self.total_exptime:.0f}s.fits", "coadd")
         self.config.file.stacked_file = os.path.join(self.path.daily_stacked_dir, "_".join(parts))
 
         # os.makedirs(self.config.path.path_stacked, exist_ok=True)
@@ -299,7 +299,7 @@ class ImStack(BaseSetup):
         os.makedirs(self.path_bkgsub, exist_ok=True)
 
         self.config.imstack.bkgsub_files = [
-            f"{self.path_bkgsub}/{swap_ext(os.path.basename(f), 'bkgsub.fits')}" for f in self.files
+            f"{self.path_bkgsub}/{add_suffix(os.path.basename(f), 'bkgsub')}" for f in self.files
         ]
 
         if self.config.imstack.bkgsub_type.lower() == "dynamic":
@@ -330,8 +330,8 @@ class ImStack(BaseSetup):
         """
         from ..external import sextractor
 
-        bkg_files = [f"{self.path_bkgsub}/{swap_ext(os.path.basename(f), 'bkg.fits')}" for f in self.files]
-        bkg_rms_files = [f"{self.path_bkgsub}/{swap_ext(os.path.basename(f), 'bkgrms.fits')}" for f in self.files]
+        bkg_files = [f"{self.path_bkgsub}/{add_suffix(os.path.basename(f), 'bkg')}" for f in self.files]
+        bkg_rms_files = [f"{self.path_bkgsub}/{add_suffix(os.path.basename(f), 'bkgrms')}" for f in self.files]
 
         self.config.imstack.bkg_files = bkg_files
         self.config.imstack.bkg_rms_files = bkg_rms_files
@@ -362,7 +362,7 @@ class ImStack(BaseSetup):
             import numpy as xp
         from .weight import pix_err
 
-        self.config.file.bkgsub_weight_files = [swap_ext(f, "weight.fits") for f in self.config.imstack.bkgsub_files]
+        self.config.file.bkgsub_weight_files = [add_suffix(f, "weight") for f in self.config.imstack.bkgsub_files]
         # self.config.file.processed_files  # if you want to save single frame weights
 
         d_m = xp.asarray(fits.getdata(self.config.preprocess.mdark_file))
@@ -410,7 +410,7 @@ class ImStack(BaseSetup):
         os.makedirs(path_interp, exist_ok=True)
 
         self.config.imstack.interp_files = [
-            os.path.join(path_interp, swap_ext(os.path.basename(f), "interp.fits")) for f in self.files
+            os.path.join(path_interp, add_suffix(os.path.basename(f), "interp")) for f in self.files
         ]
 
         bpmask_array, header = fits.getdata(self.config.preprocess.bpmask_file, header=True)
@@ -433,8 +433,8 @@ class ImStack(BaseSetup):
             image = cp.asarray(fits.getdata(input_file))
 
             if self.config.imstack.weight_map:
-                input_weight_file = swap_ext(input_file, "weight.fits")
-                output_weight_file = swap_ext(output_file, "weight.fits")
+                input_weight_file = add_suffix(input_file, "weight")
+                output_weight_file = add_suffix(output_file, "weight")
                 weight = cp.asarray(fits.getdata(input_weight_file))  # as 1/VARIANCE
 
                 interp, interp_weight = interpolate_masked_pixels_gpu_vectorized_weight(
@@ -531,7 +531,7 @@ class ImStack(BaseSetup):
             path_conv = os.path.join(self.path_tmp, "conv")
             os.makedirs(path_conv, exist_ok=True)
             self.config.imstack.conv_files = [
-                os.path.join(path_conv, swap_ext(os.path.basename(f), "conv.fits")) for f in self.files
+                os.path.join(path_conv, add_suffix(os.path.basename(f), "conv")) for f in self.files
             ]
 
             # Get peeings for convolution
@@ -557,10 +557,7 @@ class ImStack(BaseSetup):
                     self.logger.debug(f"Skipping conv for max peeing image {os.path.basename(inim)}")
                     force_symlink(inim, outim)
                     if self.config.imstack.weight_map:
-                        force_symlink(
-                            swap_ext(inim, "weight.fits"),
-                            swap_ext(outim, "weight.fits"),
-                        )
+                        force_symlink(add_suffix(inim, "weight"), add_suffix(outim, "weight"))
                     continue
 
                 kernel = Gaussian2DKernel(x_stddev=delta_peeing / (np.sqrt(8 * np.log(2))))  # 8*sig + 1 sized
@@ -577,8 +574,8 @@ class ImStack(BaseSetup):
 
                 # wht
                 if self.config.imstack.weight_map:
-                    inim_wht = swap_ext(inim, "weight.fits")
-                    outim_wht = swap_ext(outim, "weight.fits")
+                    inim_wht = add_suffix(inim, "weight")
+                    outim_wht = add_suffix(outim, "weight")
                     if os.path.exists(inim_wht):
                         wht = fits.getdata(inim_wht)
                         convolved_wht = convolve_fft_gpu(wht, kernel)
@@ -678,13 +675,13 @@ class ImStack(BaseSetup):
             shutil.move(output_file, self.config.file.stacked_file)
         elif type == "wht":
             shutil.move(
-                swap_ext(output_file, "weight.fits"),
-                swap_ext(self.config.file.stacked_file, "weight.fits"),
+                add_suffix(output_file, "weight"),
+                add_suffix(self.config.file.stacked_file, "weight"),
             )
         elif type == "bpm":
             shutil.move(
-                swap_ext(output_file, "weight.fits"),
-                swap_ext(self.config.file.stacked_file, "bpmask.fits"),
+                add_suffix(output_file, "weight"),
+                add_suffix(self.config.file.stacked_file, "bpmask"),
             )
 
         return

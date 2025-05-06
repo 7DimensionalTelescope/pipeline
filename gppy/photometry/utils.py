@@ -198,6 +198,8 @@ def aggregate_gaia_catalogs(target_coord, path_calibration_field, matching_radiu
 
 def filter_table(table: Table, key: str, value: Any, method: str = "equal") -> Table:
     """
+    DEPRECATED: use build_condition_mask in tool.utils
+
     Filter table based on column values.
 
     Args:
