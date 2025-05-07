@@ -36,10 +36,11 @@ class Preprocess(BaseSetup):
     @property
     def sequential_task(self):
         return [
-            (1, "load_mbdf", False),
-            (2, "data_reduction", True),
-            (3, "save_processed_files", False),
-            (4, "flagging", False),
+            (1, "load_mbdf", False, False),
+            (2, "data_reduction", True, False),
+            (3, "save_processed_files", False, True),
+            (4, "make_plots", False, False),
+            (5, "flagging", False, False)
         ]
 
     @classmethod
@@ -64,6 +65,8 @@ class Preprocess(BaseSetup):
         self.load_mbdf()
 
         self.calibrate(use_eclaire=use_eclaire)
+
+        self.make_plots()
 
         self.config.flag.preprocess = True
         self.logger.info(f"Preprocessing Done for {self.config.name}")
@@ -173,10 +176,18 @@ class Preprocess(BaseSetup):
                 prep_utils.load_data_gpu(self.files["dark"]) as mdark, \
                 prep_utils.load_data_gpu(self.files["flat"]) as mflat:  # fmt:skip
                 ofc.data = ec.reduction(ofc.data, mbias, mdark, mflat)
-            self._temp_data = ofc.data.get()
-            del ofc
+            self._temp_data = cp.asnumpy(ofc.data.get())
 
-    def save_processed_files(self, make_plots=True):
+        return self._temp_data
+    
+    def save_processed_files(self, make_plots=True, **kwargs):
+
+        if "inherit_input" in kwargs:
+            self._temp_data = kwargs.pop("inherit_input")
+            import numpy as np
+            print(np.shape(self._temp_data))
+            print(self.config)
+
         self.files = {
             "bias": self.config.preprocess.mbias_file,
             "dark": self.config.preprocess.mdark_file,
@@ -184,6 +195,7 @@ class Preprocess(BaseSetup):
             "raw": self.config.file.raw_files,
             "processed": self.config.file.processed_files,
         }
+
         for idx, (raw_file, out_file) in enumerate(zip(self.files["raw"], self.files["processed"])):
             header = fits.getheader(raw_file)
             header["SATURATE"] = prep_utils.get_saturation_level(
@@ -197,12 +209,10 @@ class Preprocess(BaseSetup):
             output_path = os.path.join(self.path.output_dir, out_file)
             fits.writeto(
                 output_path,
-                data=cp.asnumpy(self._temp_data[idx]),
+                data=self._temp_data[idx],
                 header=header,
                 overwrite=True,
             )
-            if make_plots:
-                self.make_plots(raw_file, output_path)
         del self._temp_data
 
     # def _calibrate_image_eclaire(self, make_plots=True):
@@ -269,10 +279,11 @@ class Preprocess(BaseSetup):
     #     mflat_file = self.config.preprocess.mflat_file
     #     pass
 
-    def make_plots(self, raw_file, output_file):
-        path = Path(output_file)
-        os.makedirs(path.parent / "images", exist_ok=True)
-        image_name = os.path.basename(output_file).replace(".fits", "")
-        raw_image_name = image_name.replace("calib_", "raw_")
-        save_fits_as_png(raw_file, path.parent / "images" / f"{raw_image_name}.png")
-        save_fits_as_png(output_file, path.parent / "images" / f"{image_name}.png")
+    def make_plots(self):
+        for idx, (raw_file, out_file) in enumerate(zip(self.files["raw"], self.files["processed"])):
+            path = Path(output_file)
+            os.makedirs(path.parent / "images", exist_ok=True)
+            image_name = os.path.basename(output_file).replace(".fits", "")
+            raw_image_name = image_name.replace("calib_", "raw_")
+            save_fits_as_png(raw_file, path.parent / "images" / f"{raw_image_name}.png")
+            save_fits_as_png(output_file, path.parent / "images" / f"{image_name}.png")
