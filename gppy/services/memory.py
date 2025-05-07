@@ -295,8 +295,11 @@ class MemoryMonitor:
                 gpu_state.append(MemoryState.HEALTHY)
 
         # Use the healthiest state
-        sorted_gpu_states = sorted(gpu_state, key=lambda x: x.order, reverse=False)
-        states["GPU"] = sorted_gpu_states[0]
+        try:
+            sorted_gpu_states = sorted(gpu_state, key=lambda x: x.order, reverse=False)
+            states["GPU"] = sorted_gpu_states[0]
+        except:
+            states["GPU"] = MemoryState.HEALTHY
 
         self._memory_state = states
         return states
