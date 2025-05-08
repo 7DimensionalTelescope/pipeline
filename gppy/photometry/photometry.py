@@ -283,7 +283,7 @@ class PhotometrySingle:
         self.define_paths()
         self.calculate_seeing()
         self.photometry_with_sextractor()
-        self.zp_src_table = self.get_reference_matched_catalog()
+
         dicts = self.calculate_zp()
         self.update_header(*dicts)
         self.write_catalog()
@@ -560,7 +560,7 @@ class PhotometrySingle:
             Tuple of dictionaries containing zero point and aperture information
         """
 
-        zp_src_table = self.zp_src_table
+        zp_src_table = self.get_reference_matched_catalog()
         self.logger.info(f"{len(zp_src_table)} sources to calibration ZP in {self.name}")
         self.logger.info("Calculating zero points.")
 
@@ -582,7 +582,7 @@ class PhotometrySingle:
             zp, zperr = phot_utils.compute_median_nmad(np.array(zps[~mask].value), normalize=True)
 
             keys = phot_utils.keyset(mag_key, self.image_info.filter)
-            values = phot_utils.zp_correction(self.obs_src_table[mag_key], self.obs_src_table[magerr_key], zp, zperr)
+            values = phot_utils.apply_zp(self.obs_src_table[mag_key], self.obs_src_table[magerr_key], zp, zperr)
             for key, val in zip(keys, values):
                 self.obs_src_table[key] = val
                 self.obs_src_table[key].format = ".3f"
