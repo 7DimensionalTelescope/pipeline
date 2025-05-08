@@ -103,7 +103,7 @@ def limitmag(n_sigma: np.ndarray, zp: float, aper: float, skysigma: float) -> np
 
 
 @njit
-def zp_correction(mag: np.ndarray, mag_err: np.ndarray, zp: float, zperr: float) -> tuple:
+def apply_zp(mag: np.ndarray, mag_err: np.ndarray, zp: float, zperr: float) -> tuple:
     """
     Apply zero point correction to magnitudes.
 

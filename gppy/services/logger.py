@@ -141,7 +141,7 @@ class Logger:
 
         # Create logger instance
         logger = logging.getLogger(self.name)
-        print("here2", self.name, logger.name)
+        
         logger.setLevel(logging.DEBUG)  # Set to DEBUG to catch all messages
 
         # Remove existing handlers
