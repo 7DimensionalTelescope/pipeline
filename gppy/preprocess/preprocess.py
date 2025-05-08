@@ -191,9 +191,6 @@ class Preprocess(BaseSetup):
 
         if "inherit_input" in kwargs:
             self._temp_data = kwargs.pop("inherit_input")
-            import numpy as np
-            print(np.shape(self._temp_data))
-            print(self.config)
 
         self.files = {
             "bias": self.config.preprocess.mbias_file,
@@ -289,9 +286,9 @@ class Preprocess(BaseSetup):
 
     def make_plots(self):
         for idx, (raw_file, out_file) in enumerate(zip(self.files["raw"], self.files["processed"])):
-            path = Path(output_file)
+            path = Path(out_file)
             os.makedirs(path.parent / "images", exist_ok=True)
-            image_name = os.path.basename(output_file).replace(".fits", "")
+            image_name = os.path.basename(out_file).replace(".fits", "")
             raw_image_name = image_name.replace("calib_", "raw_")
             save_fits_as_png(raw_file, path.parent / "images" / f"{raw_image_name}.png")
-            save_fits_as_png(output_file, path.parent / "images" / f"{image_name}.png")
+            save_fits_as_png(out_file, path.parent / "images" / f"{image_name}.png")
