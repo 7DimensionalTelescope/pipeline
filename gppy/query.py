@@ -3,7 +3,7 @@ import fnmatch
 from .const import RAWDATA_DIR, PROCESSED_DIR
 from tqdm import tqdm
 
-def query_observations(include_keywords, datatype="processed", exclude_keywords=None, copy_file=False, calibration=True, save_path="./"):
+def query_observations(include_keywords, datatype="processed", exclude_keywords=None):
     """
     Recursively searches for .fits files in RAWDATA_DIR or PROCESSED_DATA.
     

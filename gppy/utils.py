@@ -48,6 +48,7 @@ def clean_up_folder(path):
 
 
 def check_params(img):
+    """makes obs_params, which will be deprecated in the unified MFG-preproc scheme"""
     try:
         params = parse_key_params_from_filename(img)[0]
     except:

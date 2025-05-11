@@ -219,7 +219,7 @@ class Astrometry(BaseSetup):
             for i, solved_file in enumerate(files):
                 external.sextractor(
                     solved_file,
-                    prefix=prefix,
+                    suffix=prefix,
                     logger=self.logger,
                     sex_args=["-catalog_type", "fits_ldac"],
                 )

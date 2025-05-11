@@ -2,6 +2,7 @@ import os
 import subprocess
 from astropy.io import fits
 from .const import FACTORY_DIR, REF_DIR
+from .utils import add_suffix, swap_ext
 
 
 def solve_field(inim, outim=None, dump_dir=None, get_command=False, pixscale=0.505, radius=1.0):
@@ -191,7 +192,7 @@ def missfits(inim):
 def sextractor(
     inim: str,
     outcat: str = None,
-    prefix="prep",
+    suffix="prep",
     log_file: str = None,
     sex_args: list = [],
     config=None,  # supply config.config
@@ -225,10 +226,10 @@ def sextractor(
         nnw = config.sex.nnw
         conv = config.sex.conv
     else:
-        sex, param, conv, nnw = get_sex_config(prefix)
+        sex, param, conv, nnw = get_sex_config(suffix)
 
-    outcat = outcat or os.path.splitext(inim)[0] + f".{prefix}.cat"
-    log_file = log_file or os.path.splitext(outcat)[0] + f"_sextractor.log"
+    outcat = outcat or swap_ext(add_suffix(inim, suffix), "cat")
+    log_file = log_file or swap_ext(add_suffix(outcat, "sextractor"), "log")
 
     sexcom = [
         "source-extractor", f"{inim}",
@@ -386,7 +387,6 @@ def hotpants(
     nrx, nry: number of image regions in x/y dimension.
     ssf: substamp file
     """
-    from .utils import add_suffix, swap_ext
 
     n_sigma = 5
     header = fits.getheader(inim)

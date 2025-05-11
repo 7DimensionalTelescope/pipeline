@@ -1,5 +1,4 @@
-import os
-from astropy.io import fits
+import re
 
 
 def switch_raw_name_order(name):
@@ -19,99 +18,25 @@ def format_subseconds(sec: str):
     return f"0pt{millis:03d}s"
 
 
-# class NameHandler:
-class Path7DS:
-    """
-    Parser for 7DT fits file names
-    obsdata: 7DT11_20250102_050704_T00223_m425_1x1_100.0s_0001.fits
-    (outdated) processed: calib_7DT11_T09282_20241017_060927_m425_100.fits
-    processed: T09282_m425_7DT11_100s_20241017_060927.fits
-    """
+def strip_binning(binning_string):
+    """assume the form 'nbinxnbin'"""
+    # pattern = r".*(\dx\d).*"
+    # match = re.match(pattern, binning_string)
+    # return int(match.group(1)[0])
+    return int(binning_string[0])
 
-    def __init__(self, file: str):
-        file = str(file)
-        self.path = os.path.abspath(file)
-        self.basename = os.path.basename(file)
-        self.stem, self.ext = os.path.splitext(self.basename)
-        if self.ext != ".fits":
-            raise ValueError("Not a FITS file")
-        self.parts = self.stem.split("_")
 
-        self._n_binning = None  # will be filled lazily
-        self.exists = os.path.exists(self.path)
+def format_binning(n_binning: int | str):
+    n = str(n_binning)
+    return f"{n}x{n}"
 
-        if self.type == "raw_image":
-            self.parse_obsdata()
-        else:
-            self.parse_processed()
 
-    def __repr__(self):
-        return str(self.file)
+def strip_exptime(exptime_string):
+    return float(exptime_string[:-1])
 
-    @property
-    def type(self):
-        cat_suffix = "_cat.fits"
-        weight_suffix = "_weight.fits"
 
-        # raw
-        if self.stem.startswith("7DT"):
-            return "raw_image"
-        # processsed
-        else:
-            if "subt" in self.stem:
-                image_type = "subtracted_image"
-            elif "coadd" in self.stem:
-                image_type = "coadded_image"
-            else:
-                image_type = "processed_image"
-
-            if self.stem.endswith(cat_suffix):
-                product_type = "_catalog"
-            if self.stem.endswith(weight_suffix):
-                product_type = "_weight"
-
-            return image_type + product_type
-
-    @property
-    def n_binning(self) -> int:
-        """lazy"""
-        if self._n_binning is not None:
-            return self._n_binning
-        header = fits.getheader(self.file)
-        return header["XBINNING"]
-
-    @property
-    def datetime(self):
-        return self.date + "_" + self.hms
-
-    @property
-    def raw_basename(self):
-        return f"{self.unit}_{self.date}_{self.hms}_{self.obj}_{self.filter}_{self.n_binning}x{self.n_binning}_{self.exptime}.fits"
-
-    @property
-    def processed_basename(self):
-        return f"{self.obj}_{self.filter}_{self.unit}_{self.exptime}_{self.date}_{self.hms}.fits"
-
-    @property
-    def conjugate(self):
-        if self.type == "raw_image":
-            return self.processed_basename
-        else:
-            return self.raw_basename
-
-    def parse_obsdata(self):
-        self.unit = self.parts[0]
-        self.date = self.parts[1]
-        self.hms = self.parts[2]
-        self.obj = self.parts[3]
-        self.filter = self.parts[4]
-        self._n_binning = int(self.parts[5][0])
-        self.exptime = self.parts[6]
-
-    def parse_processed(self):
-        self.obj = self.parts[0]
-        self.filter = self.parts[1]
-        self.unit = self.parts[2]
-        self.exptime = self.parts[3]
-        self.date = self.parts[4]
-        self.hms = self.parts[5]
+def format_exptime(exptime, type="raw_image"):
+    if type == "raw_image":
+        return f"{exptime:.1f}s"
+    else:
+        return f"{exptime:.0f}s"
