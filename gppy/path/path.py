@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Union, TYPE_CHECKING
 import numpy as np
 from .. import const
-from ..utils import check_params
+from ..utils import check_params, add_suffix, swap_ext
 from .utils import switch_raw_name_order
 
 if TYPE_CHECKING:
@@ -14,6 +14,10 @@ class AutoMkdirMixin:
     """This makes sure accessed dirs exist"""
 
     _mkdir_exclude = set()  # subclasses can override this
+
+    def __init_subclass__(cls):
+        # Ensure subclasses have their own created-directory cache
+        cls._created_dirs_cache = set()
 
     def __getattribute__(self, name):
         """CAVEAT: This runs every time attr is accessed. Keep it short."""
@@ -44,10 +48,6 @@ class AutoMkdirMixin:
         if d not in created_dirs and not d.exists():  # check cache first for performance
             d.mkdir(parents=True, exist_ok=True)
             created_dirs.add(d)
-
-    def __init_subclass__(cls):
-        # Ensure subclasses have their own directory cache
-        cls._created_dirs_cache = set()
 
 
 class PathHandler(AutoMkdirMixin):
@@ -173,8 +173,9 @@ class PathHandler(AutoMkdirMixin):
             working_dir = working_dir or (self._input_files[0].absolute().parent if self._input_files else os.getcwd())
 
             self._output_parent_dir = working_dir
-            self.factory_parent_dir = os.path.join(working_dir, "factory")
-            self.factory_dir = os.path.join(working_dir, "factory")
+            tmp_dir = os.path.join(working_dir, "tmp")
+            self.factory_parent_dir = tmp_dir
+            self.factory_dir = tmp_dir
             self._assume_pipeline = False
 
         else:
@@ -347,6 +348,36 @@ class PathPhotometry(AutoMkdirMixin):
     @property
     def tmp_dir(self):
         return os.path.join(self._parent.factory_dir, "photometry")
+
+    @property
+    def prep_catalog(self):
+        input = self._parent._input_files
+        if isinstance(input, list):
+            return [os.path.join(self.tmp_dir, swap_ext(add_suffix(s, "prep"), "cat")) for s in input]
+        else:
+            return os.path.join(self.tmp_dir, swap_ext(add_suffix(input, "prep"), "cat"))
+
+    @property
+    def main_catalog(self):
+        """intermediate sextractor output"""
+        input = self._parent._input_files
+        if isinstance(input, list):
+            return [os.path.join(self.tmp_dir, swap_ext(s, "cat")) for s in input]
+        else:
+            return os.path.join(self.tmp_dir, swap_ext(input, "cat"))
+
+    @property
+    def final_catalog(self):
+        """final pipeline output catalog"""
+        input = self._parent._input_files
+        if isinstance(input, list):
+            return [os.path.join(self.tmp_dir, add_suffix(s, "cat")) for s in input]
+        else:
+            return os.path.join(self.tmp_dir, add_suffix(input, "cat"))
+
+    def __getattr__(self):
+        # run file-dependent path definitions once?
+        pass
 
 
 class PathImstack(AutoMkdirMixin):

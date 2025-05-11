@@ -14,6 +14,13 @@ corrected_stack = reduce_kernel(
     sci_stack, mbias[None, ...], mdark[None, ...], mflat[None, ...]  # shape (N, H, W)  # broadcast to (N, H, W)
 )
 
+reduction_kernel = cp.ElementwiseKernel(
+    in_params='T x, T b, T d, T f',
+    out_params='F z',
+    operation='z = (x - b - d) / f',
+    name='reduction'
+)
+
 
 import numpy as np
 import cupy as cp
