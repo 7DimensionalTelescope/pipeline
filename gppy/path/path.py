@@ -5,13 +5,14 @@ import numpy as np
 from .. import const
 from ..utils import check_params, add_suffix, swap_ext
 from .utils import switch_raw_name_order
+from .name import NameHandler
 
 if TYPE_CHECKING:
     from gppy.config import Configuration  # just for type hinting. actual import will cause circular import error
 
 
 class AutoMkdirMixin:
-    """This makes sure accessed dirs exist"""
+    """This makes sure accessed dirs exist. Prepend _ to variables to prevent mkdir"""
 
     _mkdir_exclude = set()  # subclasses can override this
 
@@ -85,9 +86,9 @@ class PathHandler(AutoMkdirMixin):
         # input is ConfigurationInstance
         elif hasattr(input, "obs"):
             if input.file.raw_files is not None:
-                self._input_files = [Path(file) for file in input.file.raw_files]
+                self._input_files = [os.path.abspath(file) for file in input.file.raw_files]
             elif input.file.processed_files is not None:
-                self._input_files = [Path(file) for file in input.file.processed_files]
+                self._input_files = [os.path.abspath(file) for file in input.file.processed_files]
             self._data_type = input.name  # propagate user-input
             self.obs_params = input.obs.to_dict()
             self._config = input
@@ -95,23 +96,24 @@ class PathHandler(AutoMkdirMixin):
         # input is Configuration
         elif hasattr(input, "config"):
             if input.config.file.raw_files is not None:
-                self._input_files = [Path(file) for file in input.config.file.raw_files]
+                self._input_files = [os.path.abspath(file) for file in input.config.file.raw_files]
             elif input.config.file.processed_files is not None:
-                self._input_files = [Path(file) for file in input.config.file.processed_files]
+                self._input_files = [os.path.abspath(file) for file in input.config.file.processed_files]
             self._data_type = input.config.name  # propagate user-input
             self.obs_params = input.config_in_dict["obs"]
             self._config = input.config
 
         # input is a fits file
         elif isinstance(input, str) or isinstance(input, Path):
-            self._input_files = [Path(input)]
+            self._input_files = [os.path.abspath(input)]
             self._data_type = None
             self.obs_params = check_params(self._input_files)
 
         # input is a fits file list
         elif isinstance(input, list):
-            self._input_files = [Path(img) for img in input]
-            self._data_type = None
+            self._names = NameHandler(input)
+            self._input_files = [os.path.abspath(img) for img in input]
+            self._data_type = self._names.types
             self.obs_params = check_params(self._input_files[0])
 
         else:
@@ -157,20 +159,25 @@ class PathHandler(AutoMkdirMixin):
 
     def is_present(self, path):
         paths = np.atleast_1d(path)
-        return all([p.exists() for p in paths])
+        return all([Path(p).exists() for p in paths])
 
     def select_output_dir(self, working_dir=None):
-        """CWD if user-input. Assume pipeline paths otherwise."""
+        """
+        CWD if user-input. Assume pipeline paths otherwise.
+        obs_params check is ad-hoc
+        """
         if self._input_files:
-            _file_dir = self._input_files[0].absolute().parent
+            _file_dir = str(Path(self._input_files[0]).absolute().parent)
             _pipeline_dirs = {const.RAWDATA_DIR, const.PROCESSED_DIR}
-            _not_pipeline_dir = not any(s in str(_file_dir) for s in _pipeline_dirs)
+            _not_pipeline_dir = not any(s in _file_dir for s in _pipeline_dirs)
         else:
             _not_pipeline_dir = False
 
         # insufficient info or outside-pipeline input
         if not self.obs_params or working_dir or _not_pipeline_dir:
-            working_dir = working_dir or (self._input_files[0].absolute().parent if self._input_files else os.getcwd())
+            working_dir = working_dir or (
+                os.path.dirname(os.path.exists(self._input_files[0])) if self._input_files else os.getcwd()
+            )
 
             self._output_parent_dir = working_dir
             tmp_dir = os.path.join(working_dir, "tmp")
@@ -227,9 +234,9 @@ class PathHandler(AutoMkdirMixin):
             self.subtracted_dir = os.path.join(self.output_dir, "subtracted")
 
             # files
-            self.output_name = f"{self.obs_params['obj']}_{self.obs_params['filter']}_{self.obs_params['unit']}_{self.obs_params['nightdate']}"
-            self.output_yml = os.path.join(self.output_dir, self.output_name + ".yml")
-            self.output_log = os.path.join(self.output_dir, self.output_name + ".log")
+            self._output_name = f"{self.obs_params['obj']}_{self.obs_params['filter']}_{self.obs_params['unit']}_{self.obs_params['nightdate']}"
+            self.output_yml = os.path.join(self.output_dir, self._output_name + ".yml")
+            self.output_log = os.path.join(self.output_dir, self._output_name + ".log")
 
         else:
             self.output_dir = self.output_parent_dir
@@ -241,64 +248,107 @@ class PathHandler(AutoMkdirMixin):
 
     def add_fits(self, files: str | Path | list):
         if isinstance(files, list):
-            self._input_files = [Path(f) for f in files]
+            self._input_files = [str(f) for f in files]
         else:
-            self._input_files = Path(files)
+            self._input_files = str(files)
 
     def define_file_dependent_paths(self):
         """use utils.Path7DS for bidirectional handling"""
-        if self._assume_pipeline:
-            # if not (self.is_present(self._input_file)):
-            #     raise FileNotFoundError(f"Not all paths exist: {self._input_file}")
 
-            if const.RAWDATA_DIR in str(self._input_files[0]):
-                self.data_type = self._data_type or "raw"
-                self.raw_images = [str(file.absolute()) for file in self._input_files]
+        names = NameHandler(self._input_files)
+
+        if self._assume_pipeline:
+            if not (self.is_present(self._input_files)):
+                raise FileNotFoundError(f"Not all input paths exist: {self._input_files}")
+
+            if const.RAWDATA_DIR in str(self._input_files[0]):  # raw pipeline input
+                # self.data_type = self._data_type or "raw"  # interferes with Mkdir
+
+                # self.raw_images = self._input_files  # unnecessary
+
                 self.masterframe_dir = os.path.join(
                     f"{const.MASTER_FRAME_DIR}",
-                    f"{self.obs_params['nightdate']}_{self.obs_params['n_binning']}x{self.obs_params['n_binning']}_gain{self.obs_params['gain']}",
+                    f"{self.obs_params['nightdate']}",
                     self.obs_params["unit"],
                 )
-                processed_file_stems = [switch_raw_name_order(file.stem) for file in self._input_files]
-                self.processed_images = [
-                    os.path.join(self.output_dir, "images", file_stem + ".fits") for file_stem in processed_file_stems
-                ]
-            elif self.output_parent_dir in str(self._input_files[0]):
-                self.data_type = self._data_type or "processed"
-                self.processed_images = [str(file.absolute()) for file in self._input_files]
-                # self.processed_file_stems = [file.stem for file in self._input_files]
+                self.processed_images = [os.path.join(self.output_dir, f) for f in names.conjugate]
+
+            elif self.output_parent_dir in str(self._input_files[0]):  # processed pipeline input
+                # self.data_type = self._data_type or "processed"
+                # self.processed_images = [str(file.absolute()) for file in self._input_files]
                 self.factory_dir = os.path.join(const.FACTORY_DIR, *Path(self._input_files[0]).parts[-6:-3])
-                self.output_dir = self._input_files[0].parent.parent
-            else:
-                self.data_type = self._data_type or "user-input"
+                self.output_dir = str(Path(self._input_files[0]).parent.parent)
+
+            else:  # user input
+                # self.data_type = self._data_type or "user-input"
                 print("User input data type detected. Assume the input is a list of processed images.")
                 self.processed_images = [str(file.absolute()) for file in self._input_files]
                 # self.processed_file_stems = [file.stem for file in self._input_files]
-                self.output_dir = self._input_files[0].parent.parent
-                self.factory_dir = self._input_files[0].parent.parent / "factory"
-
+                self.output_dir = str(Path(self._input_files[0]).parent.parent)
+                self.factory_dir = str(Path(self._input_files[0]).parent.parent) / "factory"
         else:
             pass
+
         self._file_dep_initialized = True
 
     def define_operation_paths(self):
+        self.preprocess = PathPreprocess(self, self._config)
         self.astrometry = PathAstrometry(self, self._config)
-        self.photometry = PathPhotometry(self)
-        self.imstack = PathImstack(self)
-        self.imsubtract = PathImsubtract(self)
+        self.photometry = PathPhotometry(self, self._config)
+        self.imstack = PathImstack(self, self._config)
+        self.imsubtract = PathImsubtract(self, self._config)
+
+    @property
+    def conjugate(self) -> str | list[str]:
+        names = NameHandler(self._input_files)
+        basenames = names.conjugate
+        types = names.types
+
+        if not isinstance(basenames, list):  # single path
+            basenames, types, single = [basenames], [types], True
+        else:  # list of paths
+            single = False
+
+        paths = []
+        for bn, t in zip(basenames, types):
+            if t == "raw_image":
+                # original was raw → conjugate is processed
+                root = self.image_dir
+            else:
+                # original was processed → conjugate is raw
+                root = const.RAWDATA_DIR
+            paths.append(os.path.abspath(os.path.join(root, bn)))
+
+        return paths[0] if single else paths
 
 
-# class PathPreprocess(PathHandler):
-#     _spec = {
-#         "mbias_link": lambda self: self.path_fdz / f"bias_{self._date}_{self._cam}.link",
-#         "mdark_link": lambda self: self.path_fdz / f"dark_{self._date}_{self._exp}s_{self._cam}.link",
-#         "mflat_link": lambda self: self.path_fdz / f"flat_{self._date}_{self._filt}_{self._cam}.link",
-#     }
+class PathPreprocess(AutoMkdirMixin):
+    def __init__(self, parent: PathHandler, config=None):
+        self._parent = parent
 
-#     def __init__(self, path_processed):
-#         # _date_dir = define_output_dir(self.config.obs.date, self.config.obs.n_binning, self.config.obs.gain)
-#         _date_dir = os.path.join(self.config.obs.date, self.config.obs.n_binning, self.config.obs.gain)
-#         self.path_fdz = Path(_date_dir) / self.config.obs.unit
+        # Apply config overrides if provided
+        if config and hasattr(config, "path"):
+            for key, val in config.preprocess.path.items():
+                setattr(self, key, val)
+
+    def __repr__(self):
+        return "\n".join(f"{k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
+
+    @property
+    def bias(self):
+        param = self._parent.obs_params
+        # fname = "_".join(["bias", param["nightdate"], format_binning(param['n_binning'])])
+        fname = "bias"
+        # use NameHandler()
+        return os.path.join(self._parent.masterframe_dir, fname)
+
+    @property
+    def dark(self, exptime):
+        return
+
+    @property
+    def flat(self, filte):
+        return
 
 
 class PathAstrometry(AutoMkdirMixin):
@@ -381,8 +431,13 @@ class PathPhotometry(AutoMkdirMixin):
 
 
 class PathImstack(AutoMkdirMixin):
-    def __init__(self, parent: PathHandler):
+    def __init__(self, parent: PathHandler, config=None):
         self._parent = parent
+
+        # Apply config overrides if provided
+        if config and hasattr(config, "path"):
+            for key, val in config.imstack.path.items():
+                setattr(self, key, val)
 
     def __repr__(self):
         return "\n".join(f"{k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))

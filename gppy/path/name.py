@@ -5,6 +5,10 @@ from ..utils import subtract_half_day
 from .utils import strip_binning, format_binning, strip_exptime, format_exptime
 
 
+def masterframe_basename(param, typ, quality):
+    return
+
+
 # # class Path7DS:
 # class NameHandlerDeprecated:
 #     """
@@ -111,7 +115,7 @@ from .utils import strip_binning, format_binning, strip_exptime, format_exptime
 #         self.hms = self.parts[5]
 
 
-# # vectorized version of above
+# vectorized version of above
 class NameHandler:
     """
     Parser for 7DT fits file names that relies on strig split("_"), which is
@@ -243,18 +247,6 @@ class NameHandler:
             return [subtract_half_day(dt) for dt in self.datetime]
         return subtract_half_day(self.datetime)
 
-    # @property
-    # def n_binning(self):
-    #     if isinstance(self._n_binning, list):
-    #         return self._n_binning
-    #     if self._n_binning is not None:
-    #         return self._n_binning
-
-    #     from astropy.io import fits
-
-    #     header = fits.getheader(self.path)
-    #     return header["XBINNING"]
-
     @staticmethod
     def _get_binning_from_header(fpath):
         from astropy.io import fits
@@ -315,52 +307,9 @@ class NameHandler:
             )
         ]
 
-    # @property
-    # def conjugate(self):
-    #     # get lists of basenames (or wrap scalars)
-    #     raw_list = [self.raw_basename] if getattr(self, "_single", False) else self.raw_basename
-    #     proc_list = [self.processed_basename] if getattr(self, "_single", False) else self.processed_basename
-
-    #     conj_paths = []
-    #     for typ, path, raw_bn, proc_bn in zip(self.type, self.path, raw_list, proc_list):
-    #         # pick the opposite and join its directory
-    #         target = proc_bn if typ == "raw_image" else raw_bn
-    #         conj_paths.append(target)
-
-    #     return conj_paths[0] if getattr(self, "_single", False) else conj_paths
-
-    # @property
-    # def conjugate(self):
-    #     """Currently not working in the processed -> raw direction"""
-    #     single = getattr(self, "_single", False)
-
-    #     # helpers to wrap scalars as one‐element lists
-    #     def wrap(x):
-    #         return [x] if single else x
-
-    #     types = wrap(self.type)
-    #     paths = wrap(self.path)
-    #     units = wrap(self.unit)
-    #     dates = wrap(self.date)
-    #     hmses = wrap(self.hms)
-    #     objs = wrap(self.obj)
-    #     filters = wrap(self.filter)
-    #     nbins = wrap(self.n_binning)
-    #     exps = wrap(self.exptime)
-
-    #     conj_paths = []
-    #     for typ, path, unit, date, hms, obj, filte, nbin, exptime in zip(
-    #         types, paths, units, dates, hmses, objs, filters, nbins, exps
-    #     ):
-    #         if typ == "raw_image":
-    #             # for raw → processed
-    #             basename = f"{obj}_{filte}_{unit}_{date}_{hms}_{exptime}.fits"
-    #         else:
-    #             # for processed → raw
-    #             basename = f"{unit}_{date}_{hms}_{obj}_{filte}_{nbin}x{nbin}_{exptime}.fits"
-    #         conj_paths.append(basename)
-
-    #     return conj_paths[0] if single else conj_paths
+    @property
+    def masterframe_basename(self):
+        pass
 
     @property
     def conjugate(self):
@@ -377,3 +326,46 @@ class NameHandler:
 
         # unwrap for single-file mode
         return conj_list[0] if single else conj_list
+
+    def to_dict(self):
+        """
+        Return parsed fields as a dict (single-file mode) or a list of dicts
+        (multi-file mode).  Keys: unit, date, hms, obj, filte, nbin, exptime.
+        """
+        if getattr(self, "_single", False):
+            return {
+                "unit": self.unit,
+                "date": self.date,
+                "hms": self.hms,
+                "obj": self.obj,
+                "filter": self.filter,
+                "n_binning": self.n_binning,
+                "exptime": self.exptime,
+            }
+
+        # multi-file: zip up all of the parallel lists
+        return [
+            {
+                "unit": u,
+                "date": d,
+                "hms": h,
+                "obj": o,
+                "filter": f,
+                "n_binning": nb,
+                "exptime": ex,
+            }
+            for u, d, h, o, f, nb, ex in zip(
+                self.unit,
+                self.date,
+                self.hms,
+                self.obj,
+                self.filter,
+                self.n_binning,
+                self.exptime,
+            )
+        ]
+
+    @classmethod
+    def parse_params(cls, files):
+        names = cls(files)
+        return names.to_dict()
