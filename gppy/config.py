@@ -168,7 +168,7 @@ class Configuration:
             self.config.logging.file = log_file
             logger.set_output_file(log_file, overwrite=overwrite)
             logger.set_format(self.config.logging.format)
-            logger.set_pipeline_name(self.path.output_name)
+            logger.set_pipeline_name(self.path._output_name)
 
         if not (verbose):
             logger.set_level("WARNING")
@@ -231,7 +231,7 @@ class Configuration:
         self.config.obs.pixscale = self.config.obs.pixscale * float(obs_params["n_binning"])  # For initial solve
         # self.config.name = f"{obs_params['nightdate']}_{obs_params['n_binning']}x{obs_params['n_binning']}_gain{obs_params['gain']}_{obs_params['obj']}_{obs_params['unit']}_{obs_params['filter']}"
         # self.config.name = f"{obs_params['nightdate']}_{obs_params['obj']}_{obs_params['filter']}_{obs_params['unit']}_{obs_params['n_binning']}x{obs_params['n_binning']}_gain{obs_params['gain']}"
-        self.config.name = self.path.output_name
+        self.config.name = self.path._output_name
         self.config.info.creation_datetime = datetime.now().isoformat()
 
         self._glob_raw_images()
