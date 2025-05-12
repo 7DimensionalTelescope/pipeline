@@ -2,6 +2,7 @@ import os
 import time
 import gc
 import cupy as cp
+import numpy as np
 from astropy.io import fits
 from contextlib import contextmanager
 from watchdog.observers import Observer
@@ -72,6 +73,10 @@ def load_data_gpu(fpath, ext=None):
         gc.collect()  # Force garbage collection
         cp.get_default_memory_pool().free_all_blocks()
 
+def load_data(fpath):
+    if fpath.endswith(".link"):
+        fpath = read_link(fpath)
+    return fits.getdata(fpath).astype(np.float32)
 
 class FileCreationHandler(FileSystemEventHandler):
     def __init__(self, target_file):

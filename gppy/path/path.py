@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Union, TYPE_CHECKING
 import numpy as np
 from .. import const
-from ..utils import check_params, add_suffix, swap_ext
+from ..utils import check_params, add_suffix, swap_ext, collapse
 from .utils import switch_raw_name_order
 from .name import NameHandler
 
@@ -64,10 +64,7 @@ class PathHandler(AutoMkdirMixin):
         self.select_output_dir(working_dir=working_dir)
 
         self._file_indep_initialized = False
-        self.define_trigger_independent_paths()
-
-        # if not self._file_indep_initialized:
-        # if self.obs_params and self.obs_params.get("nightdate"):
+        self.define_info_agnostic_paths()
         self.define_file_independent_paths()
 
         self._file_dep_initialized = False
@@ -147,9 +144,22 @@ class PathHandler(AutoMkdirMixin):
             return str(val) if isinstance(val, (Path, str)) else val
 
         if name.endswith("_to_path"):
-            base = name[:-7]
+            base = name[:-8]
             val = getattr(self, base)
-            return Path(val) if isinstance(val, str) else val
+            return Path(val) if isinstance(val, (Path, str)) else val
+
+        if name.endswith("_collapse") or name.endswith("_squeeze") or name.endswith("_compact"):
+            if name.endswith("_collapse"):
+                base = name[:-9]
+            else:
+                base = name[:-8]
+            val = getattr(self, base)
+            if isinstance(val, list):
+                return collapse(val)
+            if isinstance(val, dict):
+                return {k: collapse(v) for k, v in val.items() if isinstance(v, list)}
+            else:
+                return val
 
         # ---------- 3. Still not found -> real error ----------
         raise AttributeError(f"{self.__class__.__name__!s} has no attribute {name!r}")
@@ -209,7 +219,7 @@ class PathHandler(AutoMkdirMixin):
     def assume_pipeline(self):
         return self._assume_pipeline
 
-    def define_trigger_independent_paths(self):
+    def define_info_agnostic_paths(self):
         self.ref_sex_dir = os.path.join(const.REF_DIR, "srcExt")
         self.base_yml = os.path.join(const.REF_DIR, "base.yml")
         self.output_yml = os.path.join(
@@ -285,7 +295,7 @@ class PathHandler(AutoMkdirMixin):
                 self.processed_images = [str(file.absolute()) for file in self._input_files]
                 # self.processed_file_stems = [file.stem for file in self._input_files]
                 self.output_dir = str(Path(self._input_files[0]).parent.parent)
-                self.factory_dir = str(Path(self._input_files[0]).parent.parent) / "factory"
+                self.factory_dir = str(Path(self._input_files[0]).parent.parent / "factory")
         else:
             pass
 
