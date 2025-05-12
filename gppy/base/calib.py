@@ -187,9 +187,3 @@ class CalibrationData:
     @property
     def name(self):
         return f"{self.date}_{self.n_binning}x{self.n_binning}_gain{self.gain}_{self.unit}_masterframe"
-
-    def generate_masterframe(self):
-        from ..preprocess import MasterFrameGenerator
-
-        master = MasterFrameGenerator(self.obs_params)
-        master.run()

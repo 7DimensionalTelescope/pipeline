@@ -1,278 +1,804 @@
-import cupy as cp
-import eclaire as ec
-from typing import Union, Any
-from astropy.io import fits
 import os
-from pathlib import Path
+import glob
+import threading
+import numpy as np
+import eclaire as ec
+from astropy.io import fits
+import time
 
-from . import utils as prep_utils
-from ..utils import add_padding
+from ..utils import (
+    find_raw_path,
+    to_datetime_string,
+    header_to_dict,
+    define_output_dir,
+    get_camera,
+    parse_exptime,
+    swap_ext,
+)
 
-from ..services.memory import MemoryMonitor
+from ..const import MASTER_FRAME_DIR
+import cupy as cp
 from ..services.queue import QueueManager, Priority
-from ..config import Configuration
+from ..services.memory import MemoryMonitor
+from ..utils import add_padding
+from ..path import PathHandler
+from .plotting import *
+from . import utils as prep_utils
 
-from ..services.setup import BaseSetup
-from .plotting import save_fits_as_png
+class Preprocess:
+    """
+    Assumes BIAS, DARK, FLAT, SCI frames taken on the same date with the smae
+    unit, n_binning and gain have all identical cameras.
+    """
 
-
-class Preprocess(BaseSetup):
     def __init__(
         self,
-        config: Union[str, Any] = None,
-        logger: Any = None,
-        queue: Union[bool, QueueManager] = False,
-    ) -> None:
-        """Initialize the astrometry module.
+        input,
+        queue=False,
+        logger=None,
+        overwrite=False,
+        min_frames=5,
+        **kwargs,
+    ):
 
-        Args:
-            config: Configuration object or path to config file
-            logger: Custom logger instance (optional)
-            queue: QueueManager instance or boolean to enable parallel processing
-        """
-        super().__init__(config, logger, queue)
-        self._flag_name = "preprocess"
+        if hasattr(input, "obs_params"):
+            obs_params = input.obs_params
+        else:
+            obs_params = input
+
+        self.overwrite = overwrite
+        self.min_frames = min_frames
+
+        # Initialize variables
+        self.initialize(obs_params)
+
+        # Setup log
+        self.logger = logger or self._setup_logger()
+
+        # Setup queue
+        self.queue = self._setup_queue(queue)
+
+        self.logger.debug(f"Masterframe output folder: {self.path_fdz}")
 
     @property
     def sequential_task(self):
         return [
-            (1, "load_mbdf", False),
-            (2, "data_reduction", True),
-            (3, "save_processed_files", False),
-            (4, "flagging", False),
+            (1, "_log_inventory", False),
+            (2, "generate_mbias", True),
+            (3, "generate_mdark", True),
+            (4, "generate_mflat", True),
+            (5, "data_reduction", True),
+            (6, "make_plots", False),
         ]
 
-    @classmethod
-    def from_list(cls, images):
-        image_list = []
-        for image in images:
-            path = Path(image)
-            if not path.is_file():
-                print("The file does not exist.")
-                return None
-            image_list.append(path.parts[-1])
-        working_dir = str(path.parent.absolute())
-        config = Configuration.base_config(working_dir)
-        config.file.processed_files = image_list
-        return cls(config=config)
+    def initialize(self, obs_params):
+        unit = obs_params["unit"]
+        date = obs_params["nightdate"]
+        n_binning = obs_params["n_binning"]
+        gain = obs_params["gain"]
 
-    def run(self, use_eclaire=True):
+        self.process_name = f"{date}_{n_binning}x{n_binning}_gain{gain}_{unit}_masterframe"
 
-        self.logger.info("-" * 80)
-        self.logger.info(f"Start preprocessing for {self.config.name}")
+        self.path_raw = find_raw_path(unit, date, n_binning, gain)
+        self.path_fdz = os.path.join(MASTER_FRAME_DIR, define_output_dir(date, n_binning, gain), unit)
+        os.makedirs(self.path_fdz, exist_ok=True)
 
-        self.load_mbdf()
+        header = self._get_sample_header()
+        self.date_fdz = to_datetime_string(header["DATE-OBS"], date_only=True)  # UTC
+        self.camera = get_camera(header)
 
-        self.calibrate(use_eclaire=use_eclaire)
+        # self._identifiers = ["", date, "", f"{n_binning}x{n_binning}", f"gain{gain}", self.camera]
 
-        self.config.flag.preprocess = True
-        self.logger.info(f"Preprocessing Done for {self.config.name}")
-        MemoryMonitor.cleanup_memory()
-        self.logger.debug(MemoryMonitor.log_memory_usage)
+        self._inventory_manifest()
 
-    def calibrate(self, use_eclaire=True):
+        if self.overwrite:
+            os.system(f"rm -rf {self.path_fdz}/*")
+
+    def _setup_logger(self):
+        from ..services.logger import Logger
+
+        logger = Logger(name="7DT masterframe logger")
+        log_file = os.path.join(self.path_fdz, self.process_name + ".log")
+        logger.set_output_file(log_file)
+        logger.set_pipeline_name(log_file)
+        return logger
+
+    def _setup_queue(self, queue):
+        if isinstance(queue, QueueManager):
+            queue.logger = self.logger
+            return queue
+        elif queue:
+            return QueueManager(logger=self.logger)
+        return None
+
+    def run(self, make_plots=True, masterframe_only=False):
+
+        self.logger.debug(f"Start generating master calibration frames: {MemoryMonitor.log_memory_usage}")
+
+        self.logger.debug(f"queue is {self.queue}")
+
+        self._log_inventory()
+
         if self.queue:
-            if use_eclaire:
-                self.queue.add_task(
-                    self._calibrate_image_eclaire,
-                    priority=Priority.MEDIUM,
-                    task_name=f"{self.config.name} - Calibration",
-                    gpu=True,
-                )
-            else:
-                self.queue.add_task(
-                    self._calibrate_image_cupy,
-                    priority=Priority.MEDIUM,
-                    task_name=f"{self.config.name} - Calibration",
-                    gpu=True,
-                )
+            task_id = self.queue.add_task(
+                self.generate_mbias,
+                priority=Priority.HIGH,
+                gpu=True,
+                task_name="generate_mbias",
+            )
+            self.queue.wait_until_task_complete(task_id)
+            task_id = self.queue.add_task(
+                self.generate_mdark,
+                priority=Priority.MEDIUM,
+                gpu=True,
+                task_name="generate_mdark",
+            )
+            self.queue.wait_until_task_complete(task_id)
+            task_id = self.queue.add_task(
+                self.generate_mflat,
+                priority=Priority.MEDIUM,
+                gpu=True,
+                task_name="generate_mflat",
+            )
+            self.queue.wait_until_task_complete(task_id)
         else:
+            self.generate_mbias()
+            self.generate_mdark()
+            self.generate_mflat()
+
+        self.logger.info(f"MasterFrameGenerator {self.process_name} completed")
+
+        if not masterframe_only:
+            self.data_reduction()
+        if make_plots:
             try:
-                self.logger.info(f"Calibrating image with {'Eclaire' if use_eclaire else 'Cupy'}")
-                self.data_reduction(use_eclaire=use_eclaire)
-
-                self.logger.info(f"Saving processed files to {self.path.output_dir}")
-                self.save_processed_files()
+                self.make_plots(masterframe_only=masterframe_only)
             except Exception as e:
-                self.logger.error(f"Error during preprocessing: {str(e)}")
-                raise
-        self.logger.info("Calibration Done")
+                self.logger.error(f"Failed to generate plots: {e}")
 
-    def load_mbdf(self):
-        selection = self.config.preprocess.masterframe
+        MemoryMonitor.cleanup_memory()
 
-        if selection == "default":  # use links under self.config.preprocess
-            mbias_file = prep_utils.read_link(self.config.preprocess.mbias_link)
-            self.config.preprocess.mbias_file = mbias_file
-            self.logger.debug("Completed reading master BIAS link; 'masterframe' is 'default'")  # fmt:skip
+    def _inventory_manifest(self):
+        """Parses file names in the raw directory"""
+        pattern = os.path.join(self.path_raw, f"*.fits")
+        all_fits = sorted(glob.glob(pattern))
 
-            mdark_file = prep_utils.read_link(self.config.preprocess.mdark_link)
-            self.config.preprocess.mdark_file = mdark_file
-            self.logger.debug("Completed reading master DARK link; 'masterframe' is 'default'")  # fmt:skip
+        self._bias_input = []
+        self._dark_input = {}
+        self._flat_input = {}
+        self._sci_input = []
 
-            mflat_file = prep_utils.read_link(self.config.preprocess.mflat_link)
-            self.config.preprocess.mflat_file = mflat_file
-            self.logger.debug("Completed reading master FLAT link; 'masterframe' is 'default'")  # fmt:skip
+        for fpath in all_fits:
+            filename = os.path.basename(fpath)
 
-        elif selection == "closest":  # search closest master frames again
-            from .utils import link_to_file, search_with_date_offsets
+            if "BIAS" in filename:
+                self._bias_input.append(fpath)
 
-            # looks for real files, not links
+            elif "DARK" in filename:
+                exptime = parse_exptime(fpath, return_type=int)  # e.g., 100
+                self._dark_input.setdefault(exptime, []).append(fpath)
 
-            self.config.preprocess.mbias_file = search_with_date_offsets(
-                link_to_file(self.config.preprocess.mbias_link), future=True
-            )
-            self.config.preprocess.mdark_file = search_with_date_offsets(
-                link_to_file(self.config.preprocess.mdark_link), future=True
-            )
-            self.config.preprocess.mflat_file = search_with_date_offsets(
-                link_to_file(self.config.preprocess.mflat_link), future=True
-            )
+            elif "FLAT" in filename:
+                filt = filename.split("_")[4]  # Parse filter info
+                self._flat_input.setdefault(filt, []).append(fpath)
 
-            # if the found is the same as link: abort processing
-            if (
-                self.config.preprocess.mbias_file == prep_utils.read_link(self.config.preprocess.mbias_link)
-                and self.config.preprocess.mdark_file == prep_utils.read_link(self.config.preprocess.mdark_link)
-                and self.config.preprocess.mflat_file == prep_utils.read_link(self.config.preprocess.mflat_link)
-            ):
-                self.logger.info("All newly found master frames are the same as existing links")  # fmt: skip
-                raise ValueError("No new closest master calibration frames. Aborting...")  # fmt: skip
-        elif selection == "custom":
-            # use self.config.preprocess.m????_file
-            if self.config.preprocess.mbias_file is None:
-                self.logger.error("No 'mbias_file' given although 'masterframe' is 'custom'")  # fmt:skip
-                raise ValueError("mbias_file must be specified when masterframe is 'custom'.")  # fmt:skip
+            else:
+                self._sci_input.append(fpath)  # Anything that isn't BIAS, DARK, or FLAT
 
-            if self.config.preprocess.mdark_file is None:
-                self.logger.error("No 'mdark_file' given although 'masterframe' is 'custom'")  # fmt:skip
-                raise ValueError("mdark_file must be specified when masterframe is 'custom'.")  # fmt:skip
-
-            if self.config.preprocess.mflat_file is None:
-                self.logger.error("No 'mflat_file' given although 'masterframe' is 'custom'")  # fmt:skip
-                raise ValueError("mflat_file must be specified when masterframe is 'custom'.")  # fmt:skip
-
-        # full paths to sigma maps
-        self.config.preprocess.biassig_file = self.config.preprocess.mbias_file.replace("bias", "biassig")  # fmt:skip
-        self.config.preprocess.darksig_file = self.config.preprocess.mdark_file.replace("dark", "darksig")  # fmt:skip
-        self.config.preprocess.flatsig_file = self.config.preprocess.mflat_file.replace("flat", "flatsig")  # fmt:skip
-        self.config.preprocess.bpmask_file = self.config.preprocess.darksig_file.replace("darksig", "bpmask")  # fmt:skip
-
-        self.files = {
-            "bias": self.config.preprocess.mbias_file,
-            "dark": self.config.preprocess.mdark_file,
-            "flat": self.config.preprocess.mflat_file,
-            "raw": self.config.file.raw_files,
-            "processed": self.config.file.processed_files,
+        # These are DIFFERENT from bias_input and so on!
+        # Extract exposures of science frames for current date and unit
+        sci_exptimes = {
+            int(float(parsed[6][:-1])) for parsed in (os.path.basename(s).split("_") for s in self._sci_input)
         }
 
-    def data_reduction(self, use_eclaire=True):
+        # Extract filts of science frames for current date and unit
+        sci_filters = {parsed[4] for parsed in (os.path.basename(s).split("_") for s in self._sci_input)}
 
-        if use_eclaire:
-            ofc = ec.FitsContainer(self.files["raw"])
-            with prep_utils.load_data_gpu(self.files["bias"]) as mbias, \
-                prep_utils.load_data_gpu(self.files["dark"]) as mdark, \
-                prep_utils.load_data_gpu(self.files["flat"]) as mflat:  # fmt:skip
-                ofc.data = ec.reduction(ofc.data, mbias, mdark, mflat)
-            self._temp_data = ofc.data.get()
-            del ofc
+        # Define paths to links
+        # CAVEAT: Links should be made for SCI Frames, not calib outputs
 
-    def save_processed_files(self, make_plots=True):
-        self.files = {
-            "bias": self.config.preprocess.mbias_file,
-            "dark": self.config.preprocess.mdark_file,
-            "flat": self.config.preprocess.mflat_file,
-            "raw": self.config.file.raw_files,
-            "processed": self.config.file.processed_files,
-        }
-        for idx, (raw_file, out_file) in enumerate(zip(self.files["raw"], self.files["processed"])):
-            header = fits.getheader(raw_file)
-            header["SATURATE"] = prep_utils.get_saturation_level(
-                header, self.files["bias"], self.files["dark"], self.files["flat"]
+        self._mdark_link = {}
+        for exptime in sci_exptimes:
+            mdark_link = os.path.join(self.path_fdz, f"dark_{self.date_fdz}_{exptime}s_{self.camera}.link")
+            self._mdark_link[exptime] = mdark_link
+
+        self._mflat_link = {}
+        for filt in sci_filters:
+            mdark_link = os.path.join(self.path_fdz, f"flat_{self.date_fdz}_{filt}_{self.camera}.link")
+            self._mflat_link[filt] = mdark_link
+
+    def _log_inventory(self):
+        self.logger.debug(f"MasterFrameGenerator Inventory")
+        self.logger.debug(f"Bias input: {self.bias_input}")
+        self.logger.debug(f"Dark input: {self.dark_input}")
+        self.logger.debug(f"Flat input: {self.flat_input}")
+        self.logger.debug(f"Sci input: {self.sci_input}")
+
+        self.logger.debug(f"Bias output: {self.mbias_output}")
+        self.logger.debug(f"Biassig output: {self.biassig_output}")
+        self.logger.debug(f"Dark output: {self.mdark_output}")
+        self.logger.debug(f"Darksig output: {self.darksig_output}")
+        self.logger.debug(f"Flat output: {self.mflat_output}")
+        self.logger.debug(f"Flatsig output: {self.flatsig_output}")
+        self.logger.debug(f"Bad pixel mask output: {self.bpmask_output}")
+
+        self.logger.debug(f"Bias link: {self.mbias_link}")
+        self.logger.debug(f"Dark link: {self.mdark_link}")
+        self.logger.debug(f"Flat link: {self.mflat_link}")
+        self.logger.debug(f"Bad pixel mask link: {self.bpmask_output}")
+
+    @property
+    def sci_input(self):
+        """List of input science frame file paths"""
+        # obsdata/7DT11/2001-02-23_gain2750/7DT11_20250102_082301_BIAS_m850_1x1_0.0s_0000.fits
+        return self._sci_input
+
+    @property
+    def bias_input(self):
+        """List of input bias file paths"""
+        # obsdata/7DT11/2001-02-23_gain2750/7DT11_20250102_082301_BIAS_m850_1x1_0.0s_0000.fits
+        return self._bias_input
+
+    @property
+    def dark_input(self):
+        """Dict of input dark file paths grouped by integer exptime"""
+        # obsdata/7DT11/2001-02-23_gain2750/7DT11_20250102_094601_DARK_m850_1x1_100.0s_0000.fits
+        return self._dark_input
+
+    @property
+    def flat_input(self):
+        """Dict of Input flat file paths grouped by filter"""
+        # obsdata/7DT11/2001-02-23_gain2750/7DT11_20250102_092231_FLAT_m425_1x1_7.7s_0000.fits
+        return self._flat_input
+
+    @property
+    def mbias_output(self):
+        # master_frame/2001-02-23_1x1_gain2750/7DT11/bias_20250102_C3.fits
+        return os.path.join(self.path_fdz, f"bias_{self.date_fdz}_{self.camera}.fits")
+
+    @property
+    def biassig_output(self):
+        # master_frame/2001-02-23_1x1_gain2750/7DT11/biassig_20250102_C3.fits
+        return os.path.join(self.path_fdz, f"biassig_{self.date_fdz}_{self.camera}.fits")
+
+    @property
+    def mdark_output(self):
+        # master_frame/2001-02-23_1x1_gain2750/7DT11/dark_20250102_100s_C3.fits
+        mdarks_out_dict = {}
+        for exptime in self.dark_input.keys():  # exptime is int
+            fpath = os.path.join(self.path_fdz, f"dark_{self.date_fdz}_{exptime}s_{self.camera}.fits")
+            mdarks_out_dict[exptime] = fpath
+        return mdarks_out_dict
+
+    @property
+    def darksig_output(self):
+        # master_frame/2001-02-23_1x1_gain2750/7DT11/darksig_20250102_100s_C3.fits
+        darksig_out_dict = {}
+        for exptime in self.dark_input.keys():  # exptime is int
+            darksig_out_dict[exptime] = os.path.join(
+                self.path_fdz, f"darksig_{self.date_fdz}_{exptime}s_{self.camera}.fits"
             )
-            header = prep_utils.write_IMCMB_to_header(
-                header, [self.files["bias"], self.files["dark"], self.files["flat"], raw_file]
+        return darksig_out_dict
+
+    @property
+    def bpmask_output(self):
+        """Dict. bad pixel mask output path"""
+        # master_frame/2001-02-23_1x1_gain2750/7DT11/bpmask_20250102_100s_C3.fits
+        bpmasks_out_dict = {}
+        for exptime in self.dark_input.keys():  # exptime is int
+            bpmasks_out_dict[exptime] = os.path.join(
+                self.path_fdz, f"bpmask_{self.date_fdz}_{exptime}s_{self.camera}.fits"
             )
-            n_head_blocks = self.config.settings.header_pad
-            add_padding(header, n_head_blocks, copy_header=False)
-            output_path = os.path.join(self.path.output_dir, out_file)
+        return bpmasks_out_dict
+
+    @property
+    def mflat_output(self):
+        """Dict."""
+        # master_frame/2001-02-23_1x1_gain2750/7DT11/flat_20250102_m625_C3.fits
+        mflats_out_dict = {}
+        for filt in self.flat_input.keys():
+            mflats_out_dict[filt] = os.path.join(self.path_fdz, f"flat_{self.date_fdz}_{filt}_{self.camera}.fits")
+        return mflats_out_dict
+
+    @property
+    def flatsig_output(self):
+        """Dict."""
+        # master_frame/2001-02-23_1x1_gain2750/7DT11/flatsig_20250102_m625_C3.fits
+        mflats_out_dict = {}
+        for filt in self.flat_input.keys():
+            mflats_out_dict[filt] = os.path.join(self.path_fdz, f"flatsig_{self.date_fdz}_{filt}_{self.camera}.fits")
+        return mflats_out_dict
+
+    @property
+    def mbias_link(self):
+        """str. Always generated even though no SCI frame exists"""
+        return os.path.join(self.path_fdz, f"bias_{self.date_fdz}_{self.camera}.link")
+
+    @property
+    def mdark_link(self):
+        """dict"""
+        return self._mdark_link
+
+    @property
+    def mflat_link(self):
+        """dict"""
+        return self._mflat_link
+
+    def _get_sample_header(self):
+        """get any .head file in self.path_raw"""
+        s = os.path.join(self.path_raw, f"*.fits")
+        fits_file = sorted(glob.glob(s))[0]
+        header_file = swap_ext(fits_file, ".head")
+        if os.path.exists(header_file):
+            return header_to_dict(header_file)
+        else:
+            from astropy.io import fits
+
+            return dict(fits.getheader(fits_file))
+
+    def _get_flatdark(self, filt):
+        """If no raw DARK for the date, searches 100s mdark of previous dates"""
+        flat_raw_exp_arr = [parse_exptime(s) for s in self.flat_input[filt]]  # float
+        flat_exp_repr = np.median(flat_raw_exp_arr)
+        if len(self.mdark_output) > 0:
+            mdarks_used = self.mdark_output
+            darkexptimes = [float(i) for i in self.mdark_link.keys()]
+            closest_dark_exp = darkexptimes[np.argmin(np.abs(darkexptimes - flat_exp_repr))]
+            mdark_used = mdarks_used[closest_dark_exp]
+            dark_scaler = flat_exp_repr / closest_dark_exp
+        else:
+            self.logger.warn(f"No master dark frame for the date. " f"Searching previous dates for 100s mdark.")
+            # master_frame/2001-02-23_1x1_gain2750/7DT11/dark_20250102_100s_C3.fits
+            search_template = os.path.join(self.path_fdz, f"dark_{self.date_fdz}_100s_{self.camera}.fits")
+            mdark_used = search_with_date_offsets(search_template, future=False)
+            dark_scaler = flat_exp_repr / 100
+        return mdark_used, dark_scaler
+
+    def _combine_and_save_eclaire(self, dtype, combine="median", **kwargs):
+
+        if dtype == "bias":
+            data_list = getattr(self, f"{dtype}_input")
+            output = getattr(self, f"m{dtype}_output")
+        elif dtype == "dark":
+            exptime = kwargs.pop("exptime")
+            data_list = getattr(self, f"{dtype}_input")[exptime]
+            output = getattr(self, f"m{dtype}_output")[exptime]
+        elif dtype == "flat":
+            filt = kwargs.pop("filt")
+            data_list = getattr(self, f"{dtype}_input")[filt]
+            output = getattr(self, f"m{dtype}_output")[filt]
+        else:
+            raise ValueError(f"Invalid dtype: {dtype}")
+
+        # Mind that there are bias, dark, flat sigma maps
+        if os.path.exists(output) and not (self.overwrite):
+            self.logger.info(f"Master {dtype} already exists: {output}")
+            return output
+
+        n = len(data_list)
+        if self.min_frames and n < self.min_frames:
+            self.logger.warning(f"Not enough {dtype.upper()} frames to generate masterframe: {n}. Skipping...")
+            return None
+
+        self.logger.info(f"Start to generate masterframe {dtype.upper()}")
+        self.logger.debug(f"{len(data_list)} {dtype.upper()} files found.")
+
+        self.logger.debug(f"Before combining {dtype}: {MemoryMonitor.log_memory_usage}")
+        if self.queue:
+            self.queue.log_memory_stats(f"Before combining {dtype}")
+
+        bfc = ec.FitsContainer(data_list)
+
+        self.logger.debug(f"After loading {dtype}: {MemoryMonitor.log_memory_usage}")
+        if self.queue:
+            self.queue.log_memory_stats(f"After loading {dtype} data")
+
+        header = fits.getheader(data_list[0])
+
+        if dtype == "bias":
+            header = write_IMCMB_to_header(header, data_list)
+            # rdnoise = self.calculate_rdnoise()
+            # header['RDNOISE'] = rdnoise
+            header["NFRAMES"] = n
+
+            # save bias sigma map (~read noise)
             fits.writeto(
-                output_path,
-                data=cp.asnumpy(self._temp_data[idx]),
+                self.biassig_output,
+                data=cp.asnumpy(cp.std(bfc.data, axis=0, ddof=1)),
                 header=header,
                 overwrite=True,
             )
-            if make_plots:
-                self.make_plots(raw_file, output_path)
-        del self._temp_data
+            self.logger.info(f"Generation of dark sigma map completed")
 
-    # def _calibrate_image_eclaire(self, make_plots=True):
-    #     mbias_file = self.config.preprocess.mbias_file
-    #     mdark_file = self.config.preprocess.mdark_file
-    #     mflat_file = self.config.preprocess.mflat_file
-    #     raw_files = self.config.file.raw_files
-    #     processed_files = self.config.file.processed_files
+        elif dtype == "dark":
+            mbias_used = read_link(self.mbias_link)
+            header = write_IMCMB_to_header(header, [mbias_used] + data_list)
+            header["NFRAMES"] = n
+            with load_data_gpu(mbias_used) as mbias:
+                bfc.data -= mbias
 
-    #     self.logger.debug(f"Calibrating {len(raw_files)} SCI frames: {self.config.obs.filter}, {self.config.obs.exposure}s")  # fmt:skip
-    #     # self.logger.debug(f"Current memory usage: {MemoryMonitor.log_memory_usage}")
-    #     # batch processing
-    #     BATCH_SIZE = 30  # 10
-    #     for i in range(0, len(raw_files), BATCH_SIZE):
-    #         batch_raw = raw_files[i : min(i + BATCH_SIZE, len(raw_files))]
-    #         processed_batch = processed_files[i : min(i + BATCH_SIZE, len(raw_files))]
+            # save dark sigma map
+            fits.writeto(
+                self.darksig_output[exptime],
+                data=cp.asnumpy(cp.std(bfc.data, axis=0, ddof=1)),
+                header=header,
+                overwrite=True,
+            )
+            self.logger.info(f"Generation of dark sigma map completed")
+            # self.generate_bpmask(bfc.data)
 
-    #         ofc = ec.FitsContainer(batch_raw)
+        elif dtype == "flat":
+            mbias_used = read_link(self.mbias_link)
+            # dark_scaler, closest_dark_exp = self._get_dark_scalar(filt)
+            # mdark_used = read_link(self.mdark_link[closest_dark_exp])
+            mdark_used, dark_scaler = self._get_flatdark(filt)
+            header = write_IMCMB_to_header(
+                header,
+                [mbias_used, mdark_used] + self.flat_input[filt],
+            )
+            header["NFRAMES"] = n
 
-    #         # 	Reduction
-    #         with prep_utils.load_data_gpu(mbias_file) as mbias, \
-    #              prep_utils.load_data_gpu(mdark_file) as mdark, \
-    #              prep_utils.load_data_gpu(mflat_file) as mflat:  # fmt:skip
-    #             ofc.data = ec.reduction(ofc.data, mbias, mdark, mflat)
+            with load_data_gpu(mbias_used) as mbias:
+                bfc.data -= mbias
+            with load_data_gpu(mdark_used) as mdark:
+                bfc.data -= mdark * dark_scaler
 
-    #         # Save each slice of the cube as a separate 2D file
-    #         for idx in range(len(batch_raw)):
-    #             header = fits.getheader(raw_files[i + idx])
-    #             header["SATURATE"] = prep_utils.get_saturation_level(
-    #                 header, mbias_file, mdark_file, mflat_file
+            # Normalize Flats
+            bfc.data /= cp.median(bfc.data, axis=(1, 2), keepdims=True)
+
+            # save flat sigma map
+            fits.writeto(
+                self.flatsig_output[filt],
+                data=cp.asnumpy(cp.std(bfc.data, axis=0, ddof=1)),
+                header=header,
+                overwrite=True,
+            )
+            self.logger.info(f"Generation of dark sigma map completed")
+
+        combined_data = ec.imcombine(
+            bfc.data,
+            combine=combine,
+            **kwargs,
+        )
+
+        self.logger.debug(f"After combining {dtype}: {MemoryMonitor.log_memory_usage}")
+        if self.queue:
+            self.queue.log_memory_stats(f"After combining {dtype} data")
+
+        if dtype == "dark":
+            self.generate_bpmask(combined_data, self.bpmask_output[exptime], header=header)
+
+        header = add_image_id(header)
+        header = record_statistics(combined_data, header)
+
+        fits.writeto(
+            output,
+            data=cp.asnumpy(combined_data),
+            header=header,
+            overwrite=True,
+        )
+
+        self.logger.debug(f"After writing {dtype}: {MemoryMonitor.log_memory_usage}")
+        if self.queue:
+            self.queue.log_memory_stats(f"After writing {dtype}")
+
+        self.logger.info(f"Generation of masterframe {dtype.upper()} completed")
+        MemoryMonitor.cleanup_memory()
+        self.logger.debug(f"Masterframe {dtype.upper()} has been created: {output}")
+        return output
+
+    def generate_bpmask(self, data, output, n_sigma=5, header=None):
+        """
+        Expects 2D cupy array as data (master dark)
+        Func to generate hot pixel mask.
+        Bad pixel criterion set by J.H. Bae
+        """
+        # from astropy.stats import sigma_clipped_stats
+        # from eclaire.stats import sigma_clipped_stats
+
+        # if self.queue:
+        #     self.queue.log_memory_stats(f"After loading {dtype} data")
+
+        # mean, median, std = sigma_clipped_stats(data, sigma=3, maxiters=5) # astropy
+        # median, std = sigma_clipped_stats(data, reduce="median", width=3, iters=5) # eclaire
+        mean, median, std = sigma_clipped_stats_cupy(data, sigma=3, maxiters=5)
+
+        hot_mask = cp.abs(data - median) > n_sigma * std  # 1 for bad, 0 for okay
+        hot_mask = cp.asnumpy(hot_mask).astype("uint8")
+
+        # # Save the file
+        # newhdu = fits.PrimaryHDU(hot_mask)
+
+        # Use CompImageHDU for less disk consumption
+        newhdu = fits.CompImageHDU(data=hot_mask)
+
+        # Create a primary HDU as placeholder
+        primary_hdu = fits.PrimaryHDU()
+
+        if header:
+            # for card in header.cards:
+            #     # skip certain keywords
+            #     if card.keyword in ("BITPIX", "NAXIS", "NAXIS1", "NAXIS2"):
+            #         continue
+            #     newhdu.header.append(card)
+            for key in [
+                "INSTRUME",
+                "GAIN",
+                "EXPTIME",
+                "EXPOSURE",
+                "JD",
+                "MJD",
+                "DATE-OBS",
+                "DATE-LOC",
+                "XBINNING",
+                "YBINNING",
+            ]:
+                newhdu.header[key] = header[key]
+            # newhdu.header.add_comment("Above header is from the first dark frame")
+            newhdu.header["COMMENT"] = "Header inherited from first dark frame"
+        newhdu.header["NHOTPIX"] = (np.sum(hot_mask), "Number of hot pixels.")
+        # newhdu.header['NDARKIMG'] = (len(bias_sub_dark_names), 'Number of bias subtracted dark images used in sigma-clipped mean combine.')
+        # newhdu.header['EXPTIME'] = dark_hdr['EXPTIME']
+        # newhdu.header['COMMENT'] = 'Stable hot pixel mask image. Algorithm produced by J.H.Bae on 20250117.'
+        newhdu.header["SIGMAC"] = (n_sigma, "HP threshold in clipped sigma")
+        newhdu.header["BADPIX"] = (1, "Pixel Value for Bad pixels")
+
+        # newhdul = fits.HDUList([newhdu])
+        newhdul = fits.HDUList([primary_hdu, newhdu])
+        newhdul.writeto(output, overwrite=True)
+
+        # if self.queue:
+        #     self.queue.log_memory_stats(f"After saving {dtype}")
+
+        self.logger.info(f"Generation of bad pixel mask completed")
+
+    # --------------- BIAS ---------------
+    def generate_mbias(self, **kwargs):
+        """
+        Generates mbiases if there are raw BIAS files.
+        Make mbias link files if there is a SCI frame.
+        """
+
+        if len(self.bias_input) > 0:  # if raw biases exist
+            mbias_file = self._combine_and_save_eclaire(dtype="bias", **kwargs)
+        else:
+            # 2001-02-23_1x1_gain2750/7DT11/bias_20250102_C3.fits
+            # 2001-02-23_1x1_gain2750/7DT11/bias_20250102_C3.link
+            self.logger.info("No raw BIAS files found for the date. Searching for the closest past master BIAS.")
+            search_template = os.path.splitext(self.mbias_link)[0] + ".fits"
+            mbias_file = search_with_date_offsets(search_template, future=True)
+            if not mbias_file:
+                self.logger.error("No master BIAS found to choose from.")
+                return
+        write_link(self.mbias_link, mbias_file)
+
+    # --------------- DARK ---------------
+
+    def generate_mdark(self, **kwargs):
+        """
+        Generates mdarks if there are raw DARK files.
+        Make mdark link files for SCI frame and FLATs for the date & unit.
+        """
+
+        generated_mdark = {}
+
+        # make master dark for existing exptimes
+        for exptime in self.dark_input:
+            self.logger.info(f"Generating master dark for exptime: {exptime}")
+            mdark_file = self._combine_and_save_eclaire(dtype="dark", exptime=exptime, **kwargs)
+            if mdark_file:
+                generated_mdark[exptime] = mdark_file
+
+        # make dark links for all sci exptimes
+        for exptime, mdark_link in self.mdark_link.items():
+            if exptime in generated_mdark:
+                mdark_file = generated_mdark[exptime]
+            else:
+                self.logger.info(f"No master dark for exptime {exptime}." f"Fetching from the closest data.")
+                search_template = swap_ext(mdark_link, ".fits")
+                mdark_file = search_with_date_offsets(search_template, future=True)
+                if not mdark_file:
+                    self.logger.error(
+                        f"Failed to generate mdark link for exptime {exptime}. " f"No fallback master dark found."
+                    )
+                    continue
+
+            write_link(mdark_link, mdark_file)
+
+    # def generate_mdark(self, **kwargs):
+    #     """
+    #     Generates mdarks if there are raw DARK files.
+    #     Make mdark link files for SCI frame and FLATs for the date & unit.
+    #     """
+
+    #     if len(self.dark_input) > 0:  # if raw darks exist
+    #         # for multiple exptimes
+    #         for exptime, mdark_link in self.mdark_link.items():  # exp is int
+    #             mdark_file = self._combine_and_save_eclaire(
+    #                 dtype="dark", exptime=exptime, **kwargs
     #             )
-    #             header = prep_utils.write_IMCMB_to_header(
-    #                 header,
-    #                 [mbias_file, mdark_file, mflat_file, raw_files[i + idx]],
-    #             )
-    #             n_head_blocks = self.config.settings.header_pad
-    #             add_padding(header, n_head_blocks, copy_header=False)
-
-    #             path = self.config.path.path_processed
-    #             output_path = os.path.join(path, processed_batch[idx])
-    #             fits.writeto(
-    #                 output_path,
-    #                 data=cp.asnumpy(ofc.data[idx]),
-    #                 header=header,
-    #                 overwrite=True,
-    #             )
-    #             if make_plots:
-    #                 self.make_plots(raw_files[i + idx], output_path)
-    #         self.logger.debug(
-    #             f"Current memory usage after {i}-th batch: {MemoryMonitor.log_memory_usage}"
+    #             write_link(mdark_link, mdark_file)
+    #     else:
+    #         # links to what they're used for, not what exists
+    #         self.logger.info(
+    #             "No raw DARK files found for the date. Searching for the closest past master DARK."
     #         )
+    #         for exptime, mdark_link in self.mdark_link.items():
+    #             search_template = os.path.splitext(mdark_link)[0] + ".fits"
+    #             mdark_file = search_with_date_offsets(search_template, future=True)
+    #             if not mdark_file:
+    #                 self.logger.error("No master DARK found to choose from.")
+    #                 return
+    #             write_link(mdark_link, mdark_file)
 
-    #     self.logger.debug(
-    #         f"Current memory usage before cleanup: {MemoryMonitor.log_memory_usage}"
-    #     )
-    #     MemoryMonitor.cleanup_memory()
-    #     self.logger.debug(
-    #         f"Current memory usage after cleanup: {MemoryMonitor.log_memory_usage}"
-    #     )
+    # --------------- FLAT ---------------
+    def generate_mflat(self, **kwargs):
+        """
+        Generates mflats if there are raw FLAT files.
+        Make mflat link files for SCI frame for the date & unit.
+        """
 
-    # def _calibrate_image_cupy(self):
-    #     mbias_file = self.config.preprocess.mbias_file
-    #     mdark_file = self.config.preprocess.mdark_file
-    #     mflat_file = self.config.preprocess.mflat_file
-    #     pass
+        # make master flat for existing filters
+        generated_mflat = {}
+        for filt in self.flat_input:
+            mflat_file = self._combine_and_save_eclaire(dtype="flat", filt=filt, **kwargs)
+            if mflat_file:
+                generated_mflat[filt] = mflat_file
 
-    def make_plots(self, raw_file, output_file):
-        path = Path(output_file)
-        os.makedirs(path.parent / "images", exist_ok=True)
-        image_name = os.path.basename(output_file).replace(".fits", "")
-        raw_image_name = image_name.replace("calib_", "raw_")
-        save_fits_as_png(raw_file, path.parent / "images" / f"{raw_image_name}.png")
-        save_fits_as_png(output_file, path.parent / "images" / f"{image_name}.png")
+        for filt, mflat_link in self.mflat_link.items():
+            if filt in generated_mflat:
+                mflat_file = generated_mflat[filt]
+            else:
+                self.logger.info(f"No master flat for filter {filt}." f"Fetching from the closest data.")
+                search_template = swap_ext(mflat_link, ".fits")
+                # master_frame/2001-02-23_1x1_gain2750/7DT11/flat_20250102_m625_C3.fits
+                mflat_file = search_with_date_offsets(search_template, future=True)
+                if not mflat_file:
+                    self.logger.error(
+                        f"Failed to generate mflat link for filter {filt}. " f"No fallback master flat found."
+                    )
+                    continue
+
+            write_link(mflat_link, mflat_file)
+
+    def make_plots(self, masterframe_only=False):
+        self.logger.info("Start to generate plots for master calibration frames")
+        try:
+            plot_bias(self.mbias_link, savefig=True)
+            mask = plot_bpmask(self.bpmask_output, savefig=True)
+            for _, value in self.bpmask_output.items():
+                if os.path.exists(value):
+                    sample_header = fits.getheader(value, ext=1)
+                    break
+            if "BADPIX" in sample_header.keys():
+                badpix = sample_header["BADPIX"]
+
+            mask = mask != badpix
+            fmask = mask.ravel()
+            plot_dark(self.mdark_link, fmask, savefig=True)
+            plot_flat(self.mflat_link, fmask, savefig=True)
+
+            if masterframe_only:
+                return
+
+            groups = self.get_image_groups()
+            for _, image_list in groups.items():
+                for image in image_list:
+                    path = PathHandler(image)
+                    os.makedirs(path.image_dir, exist_ok=True)
+                    image_name = os.path.basename(path.processed_images).replace(".fits", "")
+                    raw_image_name = "raw_"+image_name
+                    save_fits_as_png(image, path.image_dir / f"{raw_image_name}.png")
+                    save_fits_as_png(path.processed_images, path.image_dir / f"{image_name}.png")
+
+        except Exception as e:
+            self.logger.error(f"Failed to generate plots: {e}")
+
+        self.logger.info("Plots have been generated")
+
+    def get_image_groups(self):
+        from ..utils import header_to_dict
+
+        image_list = glob.glob(f"{self.path_raw}/*.head")
+
+        keys = ("EXPTIME", "GAIN", "XBINNING", "FILTER")
+        groups: dict[tuple, list[str]] = {}
+
+        for f in image_list:
+            if all(s not in f for s in ["BIAS", "DARK", "FLAT"]):
+                params = header_to_dict(f)
+                key = tuple(params.get(k) for k in keys)
+                groups.setdefault(key, []).append(str(f).replace(".head", ".fits"))
+        
+        return groups
+
+    
+    def data_reduction(self, n_head_blocks=5, use_multi_device=False, device=0, **kwargs):
+        groups = self.get_image_groups()
+        if use_multi_device:
+            num_devices = cp.cuda.runtime.getDeviceCount()
+            device = np.arange(num_devices)
+        else:
+            num_devices = 1
+            device = device
+
+        for key, image_list in groups.items():
+            exposure, gain, n_binning, filt = key
+            batch_dist = prep_utils.calc_batch_dist(image_list, num_devices=num_devices, use_multi_device=use_multi_device)
+            self.logger.info(f"Processing {len(image_list)} images (exposure: {exposure}, filter: {filt}, gain: {gain}, binning: {n_binning}) on GPU device(s): {device}")
+            
+            mbias = prep_utils.read_link(self.mbias_link)
+            mdark = prep_utils.read_link(self.mdark_link[exposure])
+            mflat = prep_utils.read_link(self.mflat_link[filt])
+
+            bias_cpu = prep_utils.load_data(mbias)
+            dark_cpu = prep_utils.load_data(mdark)
+            flat_cpu = prep_utils.load_data(mflat)
+
+            threads = []
+            results = [None] * num_devices
+            start_idx = 0
+
+            self.logger.debug("Masterframes are loaded in CPU")
+            
+            for batch in batch_dist:
+                if sum(batch) == 0:
+                    break
+                if use_multi_device:
+                    for i in range(num_devices):
+                        end_idx = start_idx + batch[i]
+                        self.logger.info(f"Device {i} will process {end_idx - start_idx} images")
+                        subset = image_list[start_idx:end_idx]
+                        t = threading.Thread(
+                            target=prep_utils.process_batch_on_device,
+                            args=(i, subset, bias_cpu, dark_cpu, flat_cpu, results)
+                        )
+                        t.start()
+                        threads.append(t)
+                        start_idx = end_idx
+                else:
+                    end_idx = start_idx + batch[0]
+                    self.logger.info(f"Device {device} will process {end_idx - start_idx} images")
+                    subset = image_list[start_idx:end_idx]
+                    t = threading.Thread(
+                        target=prep_utils.process_batch_on_device,
+                        args=(device, subset, bias_cpu, dark_cpu, flat_cpu, results)
+                    )
+                    t.start()
+                    threads.append(t)
+                    start_idx = end_idx
+
+                self.logger.info("Data reduction is now processing on GPU device(s)")
+                start_time = time.time()
+                # Wait for all threads
+                for t in threads:
+                    t.join()
+
+                self.logger.info(f"Data reduction has been completed in {time.time() - start_time:.0f} seconds for {len(image_list)} iamges.")
+
+                # Combine results
+                all_results = [item for sublist in results if sublist for item in sublist]
+
+                for idx, raw_file in enumerate(image_list):
+                    header = fits.getheader(raw_file)
+                    header["SATURATE"] = prep_utils.get_saturation_level(
+                        header, mbias, mdark, mflat
+                    )
+                    header = prep_utils.write_IMCMB_to_header(
+                        header, [mbias, mdark, mflat, raw_file]
+                    )
+                    add_padding(header, n_head_blocks, copy_header=False)
+                    out_file = PathHandler(raw_file).processed_images
+                    fits.writeto(
+                        out_file,
+                        data=cp.asnumpy(all_results[idx]),
+                        header=header,
+                        overwrite=True,
+                    )
+                    if idx/len(image_list) % 0.1 == 0:
+                        self.logger.info(f"Processed {idx/len(image_list)*100:.1f}% images")
+                
+                self.logger.info("All results have been written to the output directory")
+                del all_results
+
+        cp.get_default_memory_pool().free_all_blocks()

@@ -2,6 +2,7 @@ import os
 import time
 import gc
 import cupy as cp
+from cupy.cuda import Stream
 import numpy as np
 from astropy.io import fits
 from contextlib import contextmanager
@@ -329,3 +330,99 @@ def add_image_id(header, key="IMAGEID"):
 #     isot = yr + "-" + mo + "-" + da + "T00:00:00.000"  # 	ignore hour:min:sec
 #     t = Time(isot, format="isot", scale="utc")  # 	transform to MJD
 #     return t.mjd
+
+
+def calc_batch_dist(image_list, num_devices=None, use_multi_device=False, device=0):
+    if use_multi_device:
+        num_devices = cp.cuda.runtime.getDeviceCount()
+    else:
+        num_devices = 1
+
+    # Step 1: Estimate how many images each GPU can handle
+    max_batch_per_device = []
+    if num_devices > 1:
+        for i in range(num_devices):
+            with cp.cuda.Device(i):
+                max_batch = estimate_posssible_batch_size(image_list[0])[0]
+                max_batch_per_device.append(max_batch)
+    else:
+        with cp.cuda.Device(device):
+            max_batch = estimate_posssible_batch_size(image_list[0])[0]
+            max_batch_per_device.append(max_batch)
+
+    # Step 2: Compute initial proportional distribution
+    total_capacity = sum(max_batch_per_device)
+    ratio = [b / total_capacity for b in max_batch_per_device]
+    initial_dist = np.floor(np.array(ratio) * len(image_list)).astype(int)
+
+    # Step 3: Adjust for rounding errors
+    remaining = len(image_list) - sum(initial_dist)
+    for i in range(remaining):
+        initial_dist[i % num_devices] += 1
+
+    # Step 4: First-round distribution (capped at each GPU's capacity)
+    first_round = np.minimum(initial_dist, max_batch_per_device)
+    overflow = initial_dist - first_round
+
+    # Step 5: Redistribute any remaining overflow (that still hasn't been assigned)
+    extra_needed = len(image_list) - sum(first_round)
+    second_round = np.zeros(num_devices, dtype=int)
+
+    i = 0
+    while extra_needed > 0:
+        capacity = max_batch_per_device[i]
+        available = capacity - second_round[i]
+        assign = min(available, overflow[i], extra_needed)
+        second_round[i] += assign
+        extra_needed -= assign
+        i = (i + 1) % num_devices
+    
+    return np.vstack([first_round, second_round])
+    
+
+
+def estimate_posssible_batch_size(filename):
+    H, W = load_data(filename).shape
+    image_size = cp.float32().nbytes * H * W / 1024**2
+    available_mem = cp.cuda.runtime.memGetInfo()[0] / 1024**2
+    safe_mem = int(available_mem * 0.7)
+    batch_size = max(1, safe_mem // image_size)
+    return int(batch_size), image_size, available_mem
+
+def process_batch_on_device(device_id, image_paths, bias_cpu, dark_cpu, flat_cpu, results):
+    
+    with cp.cuda.Device(device_id):
+        load_stream = Stream(non_blocking=True)
+        compute_stream = Stream()
+
+        # Transfer bias/dark/flat to this GPU once
+        with load_stream:
+            bias = cp.asarray(bias_cpu, dtype=cp.float32)
+            dark = cp.asarray(dark_cpu, dtype=cp.float32)
+            flat = cp.asarray(flat_cpu, dtype=cp.float32)
+
+        load_stream.synchronize()
+
+        local_results = []
+        for img_path in image_paths:
+            with load_stream:
+                image = cp.asarray(load_data(img_path), dtype=cp.float32)
+            with compute_stream:
+                reduced = reduction_kernel(image, bias, dark, flat)
+                local_results.append(cp.asnumpy(reduced))
+                del reduced
+            del image
+        
+        del bias, dark, flat
+        compute_stream.synchronize()
+        cp.get_default_memory_pool().free_all_blocks()
+        results[device_id] = local_results
+
+
+# Reduction kernel
+reduction_kernel = cp.ElementwiseKernel(
+    in_params='T x, T b, T d, T f',
+    out_params='T z',
+    operation='z = (x - b - d) / f',
+    name='reduction'
+)

@@ -188,35 +188,43 @@ class NameHandler:
 
     @staticmethod
     def _detect_type(stem: str) -> str:
-        # raw
+        _type_list = []  # raw/proc, cal/sci, image/cat
+
+        # raw/master/processed
         if stem.startswith("7DT"):
-            if "bias" in stem.lower():
-                return "raw_bias_image"
-            if "dark" in stem.lower():
-                return "raw_dark_image"
-            if "flat" in stem.lower():
-                return "raw_flat_image"
-            else:
-                return "raw_science_image"  # "raw_image"
-
-        if stem.startswith("bias") or stem.startswith("bias") or stem.startswith("flat"):
-            return "master_calib_image"
-
-        # processed
-        if "subt" in stem:
-            image_type = "subtracted_image"
-        elif "coadd" in stem:
-            image_type = "coadded_image"
+            _type_list.append("raw")
+        elif stem.startswith("bias") or stem.startswith("bias") or stem.startswith("flat"):
+            _type_list.append("master")
         else:
-            image_type = "processed_image"
+            _type_list.append("processed")
 
-        product = ""
-        if stem.endswith("_cat"):
-            product = "_catalog"
+        # calib/sci
+        if "bias" in stem.lower():
+            _type_list.append("bias")
+        elif "dark" in stem.lower():
+            _type_list.append("dark")
+        elif "flat" in stem.lower():
+            _type_list.append("flat")
+        else:
+            _type_list.append("science")
+
+        # coadd/subt/weight
+        if "subt" in stem:
+            _type_list.append("subtracted_image")
+        elif "coadd" in stem:
+            _type_list.append("coadded")
         elif stem.endswith("_weight"):
-            product = "_weight"
+            _type_list.append("weight")
+        else:
+            _type_list.append(None)
 
-        return image_type + product
+        # image/weight/cat
+        if stem.endswith("_cat"):
+            _type_list.append("catalog")
+        else:
+            _type_list.append("image")
+
+        return "_".join([s for s in _type_list if s is not None])
 
     @staticmethod
     def _parse_raw_parts(parts):
@@ -267,6 +275,15 @@ class NameHandler:
         hdr = fits.getheader(fpath)
         return hdr["XBINNING"]
 
+    @staticmethod
+    def _get_gain_from_header(fpath):
+        from astropy.io import fits
+
+        if not os.path.exists(fpath):
+            raise FileNotFoundError("Supply an existing path to a processed image to get a conjugate of it.")
+        hdr = fits.getheader(fpath)
+        return hdr["GAIN"]
+
     @property
     def n_binning(self):
         # single‐file mode
@@ -287,6 +304,13 @@ class NameHandler:
                 nbins.append(self._get_binning_from_header(p))
 
         return nbins
+
+    @property
+    def gain(self):
+        if getattr(self, "_single", False):
+            return self._get_gain_from_header(self.path[0])
+        else:
+            return [self._get_gain_from_header(p) for p in self.path]
 
     @property
     def raw_basename(self):
@@ -400,3 +424,8 @@ class NameHandler:
             groups.setdefault(key, []).append(str(f))
 
         return groups
+
+    @classmethod
+    def get_grouped_calib(cls, files):
+        names = cls(files)
+        types = names.types

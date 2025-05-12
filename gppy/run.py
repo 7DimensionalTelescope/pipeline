@@ -7,7 +7,7 @@ from .imstack.imstack import ImStack
 
 # from .subtract.subtract import ImSubtract
 
-from .preprocess import Preprocess, MasterFrameGenerator
+from .preprocess import Preprocess
 from .const import RAWDATA_DIR
 import time
 
@@ -36,7 +36,7 @@ def run_masterframe_generator(obs_params, queue=False, **kwargs):
             - gain: Detector gain setting
         queue (bool, optional): Whether to use queue-based processing. Defaults to False.
     """
-    mfg = MasterFrameGenerator(obs_params, queue=queue, **kwargs)
+    mfg = Preprocess(obs_params, queue=queue, masterframe_only=True, **kwargs)
     mfg.run()
     del mfg
 
@@ -56,7 +56,7 @@ def run_masterframe_generator_with_tree(obs_params, priority=Priority.HIGH, **kw
             - gain: Detector gain setting
         queue (bool, optional): Whether to use queue-based processing. Defaults to False.
     """
-    mfg = MasterFrameGenerator(obs_params, **kwargs)
+    mfg = Preprocess(obs_params, masterframe_only=True, **kwargs)
     tasks = []
     for task in mfg.sequential_task:
         tasks.append(Task(getattr(mfg, task[1]), priority=priority, gpu=task[2], cls=mfg))
@@ -94,13 +94,10 @@ def run_scidata_reduction(
     logger = Logger(name="7DT pipeline logger", slack_channel="pipeline_report")
 
     config = Configuration(obs_params, logger=logger, **kwargs)
-
     if not (config.config.flag.preprocess) and "preprocess" in processes:
-        preproc = Preprocess(config, queue=queue)
-        preproc.run()
-        del preproc
-    else:
-        logger.info("Skipping preprocessing")
+        prep = Preprocess(config, queue=queue)
+        prep.run()
+        del prep
     if not (config.config.flag.astrometry) and "astrometry" in processes:
         astrm = Astrometry(config, queue=queue)
         astrm.run()
