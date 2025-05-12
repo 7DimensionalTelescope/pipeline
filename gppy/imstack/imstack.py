@@ -227,7 +227,7 @@ class ImStack(BaseSetup):
         self.skyvalues = [hdr["SKYVAL"] for hdr in header_list]
         self.mjd_stacked = np.mean([hdr["MJD"] for hdr in header_list])
         self.satur_level = np.min([hdr["SATURATE"] * hdr["FLXSCALE"] for hdr in header_list])
-        self.coadd_egain = np.mean([hdr["EGAIN"] / hdr["FLXSCALE"] for hdr in header_list])
+        self.coadd_egain = np.sum([hdr["EGAIN"] / hdr["FLXSCALE"] for hdr in header_list])
 
         objs = list(set([hdr["OBJECT"] for hdr in header_list]))
         filters = list(set([hdr["FILTER"] for hdr in header_list]))

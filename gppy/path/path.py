@@ -4,8 +4,8 @@ from typing import Union, TYPE_CHECKING
 import numpy as np
 from .. import const
 from ..utils import check_params, add_suffix, swap_ext, collapse
-from .utils import switch_raw_name_order
 from .name import NameHandler
+
 
 if TYPE_CHECKING:
     from gppy.config import Configuration  # just for type hinting. actual import will cause circular import error
@@ -100,14 +100,9 @@ class PathHandler(AutoMkdirMixin):
             self.obs_params = input.config_in_dict["obs"]
             self._config = input.config
 
-        # input is a fits file
-        elif isinstance(input, str) or isinstance(input, Path):
-            self._input_files = [os.path.abspath(input)]
-            self._data_type = None
-            self.obs_params = check_params(self._input_files)
-
         # input is a fits file list
-        elif isinstance(input, list):
+        elif isinstance(input, list) or isinstance(input, str) or isinstance(input, Path):
+            input = list(np.atleast_1d(input))
             self._names = NameHandler(input)
             self._input_files = [os.path.abspath(img) for img in input]
             self._data_type = self._names.types
@@ -281,7 +276,10 @@ class PathHandler(AutoMkdirMixin):
                     f"{self.obs_params['nightdate']}",
                     self.obs_params["unit"],
                 )
-                self.processed_images = [os.path.join(self.output_dir, f) for f in names.conjugate]
+                if names._single:
+                    self.processed_images = os.path.join(self.output_dir, names.conjugate)
+                else:
+                    self.processed_images = [os.path.join(self.output_dir, f) for f in names.conjugate]
 
             elif self.output_parent_dir in str(self._input_files[0]):  # processed pipeline input
                 # self.data_type = self._data_type or "processed"
