@@ -447,7 +447,7 @@ class Configuration:
         )  # 7DT01/bias_20250102_C3.link
         self.config.preprocess.mdark_link = os.path.join(
             path_fdz,
-            f"dark_{date_utc}_{int(self.config.obs.exposure)}s_{self.config.obs.camera}.link",  # mind exp can be list
+            f"dark_{date_utc}_{int(self.config.obs.exptime)}s_{self.config.obs.camera}.link",  # mind exp can be list
         )  # 7DT01/flat_20250102_100_C3.link
         self.config.preprocess.mflat_link = os.path.join(
             path_fdz,

@@ -19,11 +19,11 @@ CalibType = ["BIAS", "DARK", "FLAT"]
 
 available_7dt_units = [f"7DT0{unit}" if unit < 10 else f"7DT{unit}" for unit in range(1, 20)]
 
-STRICT_KEYS = {"nightdate", "obj", "filter", "unit", "exposure", "n_binning", "gain", "camera"}
+STRICT_KEYS = {"nightdate", "obj", "filter", "unit", "exptime", "n_binning", "gain", "camera"}
 ANCILLARY_KEYS = {"ra", "dec", "obstime"}
 
 HEADER_KEY_MAP = {
-    "exposure": "EXPOSURE",
+    "exptime": "EXPOSURE",
     "gain": "GAIN",
     "filter": "FILTER",
     # "nightdate": "DATE-LOC",
@@ -32,7 +32,7 @@ HEADER_KEY_MAP = {
     "obj": "OBJECT",
     "unit": "TELESCOP",
     "n_binning": "XBINNING",
-    "ra": "OBJCTRA",  # intended pointing, not what mount returns.
+    "ra": "OBJCTRA",  # intended pointing, not the actual mount position
     "dec": "OBJCTDEC",
 }
 

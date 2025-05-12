@@ -157,7 +157,7 @@ class NameHandler:
         # --- 4. Parse each file into its components ---
         units, dates, hmses, objs, filters, nbinnings, exptimes = [], [], [], [], [], [], []
         for parts, typ in zip(self.parts, self.types):
-            if typ == "raw_image":
+            if "raw" in typ:
                 unit, date, hms, obj, filte, nbin, exptime = self._parse_raw_parts(parts)
             else:
                 unit, date, hms, obj, filte, nbin, exptime = self._parse_processed_parts(parts)
@@ -190,7 +190,18 @@ class NameHandler:
     def _detect_type(stem: str) -> str:
         # raw
         if stem.startswith("7DT"):
-            return "raw_image"
+            if "bias" in stem.lower():
+                return "raw_bias_image"
+            if "dark" in stem.lower():
+                return "raw_dark_image"
+            if "flat" in stem.lower():
+                return "raw_flat_image"
+            else:
+                return "raw_science_image"  # "raw_image"
+
+        if stem.startswith("bias") or stem.startswith("bias") or stem.startswith("flat"):
+            return "master_calib_image"
+
         # processed
         if "subt" in stem:
             image_type = "subtracted_image"
@@ -321,7 +332,7 @@ class NameHandler:
 
         # pick the “other” basename for each entry
         conj_list = [
-            proc_bn if typ == "raw_image" else raw_bn for typ, raw_bn, proc_bn in zip(self.types, raw_list, proc_list)
+            proc_bn if "raw" in typ else raw_bn for typ, raw_bn, proc_bn in zip(self.types, raw_list, proc_list)
         ]
 
         # unwrap for single-file mode
@@ -335,6 +346,7 @@ class NameHandler:
         if getattr(self, "_single", False):
             return {
                 "unit": self.unit,
+                "nightdate": self.nightdate,  # for legacy support.
                 "date": self.date,
                 "hms": self.hms,
                 "obj": self.obj,
@@ -347,6 +359,7 @@ class NameHandler:
         return [
             {
                 "unit": u,
+                "nightdate": nd,
                 "date": d,
                 "hms": h,
                 "obj": o,
@@ -354,8 +367,9 @@ class NameHandler:
                 "n_binning": nb,
                 "exptime": ex,
             }
-            for u, d, h, o, f, nb, ex in zip(
+            for u, nd, d, h, o, f, nb, ex in zip(
                 self.unit,
+                self.nightdate,
                 self.date,
                 self.hms,
                 self.obj,
@@ -369,3 +383,20 @@ class NameHandler:
     def parse_params(cls, files):
         names = cls(files)
         return names.to_dict()
+
+    @classmethod
+    def group_homogeneous(cls, files):
+        if not isinstance(files, list) or len(files) <= 1:
+            return files
+
+        names = cls(files)
+
+        keys = ("EXPTIME", "GAIN", "XBINNING")
+        groups: dict[tuple, list[str]] = {}
+
+        for f in files:
+            hdr = fits.getheader(f)
+            key = tuple(hdr.get(k) for k in keys)
+            groups.setdefault(key, []).append(str(f))
+
+        return groups

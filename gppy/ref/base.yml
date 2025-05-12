@@ -14,7 +14,7 @@ obs:
   obstime:  # UTC
   ra:
   dec:
-  exposure:
+  exptime:
 
 file: 
   raw_files: 
