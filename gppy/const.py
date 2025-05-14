@@ -5,7 +5,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # REF_DIR = os.path.join(SCRIPT_DIR, "gppy", "ref")
 REF_DIR = os.path.join(SCRIPT_DIR, "ref")
 
-RAWDATA_DIR = os.environ["RAWDATA_DIR"]
+RAWDATA_DIR = "/lyman/data1/obsdata/"  # os.environ["RAWDATA_DIR"]
 FACTORY_DIR = os.environ["FACTORY_DIR"]
 MASTER_FRAME_DIR = os.environ["MASTER_FRAME_DIR"]
 
@@ -20,7 +20,7 @@ CalibType = ["BIAS", "DARK", "FLAT"]
 available_7dt_units = [f"7DT0{unit}" if unit < 10 else f"7DT{unit}" for unit in range(1, 20)]
 
 STRICT_KEYS = {"nightdate", "obj", "filter", "unit", "exptime", "n_binning", "gain", "camera"}
-ANCILLARY_KEYS = {"ra", "dec", "obstime"}
+ANCILLARY_KEYS = {"ra", "dec", "obstime"}  # hms
 
 HEADER_KEY_MAP = {
     "exptime": "EXPOSURE",

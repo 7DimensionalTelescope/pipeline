@@ -106,7 +106,11 @@ class PathHandler(AutoMkdirMixin):
             self._names = NameHandler(input)
             self._input_files = [os.path.abspath(img) for img in input]
             self._data_type = self._names.types
-            self.obs_params = check_params(self._input_files[0])
+            # self.obs_params = check_params(self._input_files[0])
+            if not self._names._single:
+                self.obs_params = collapse(self._names.to_dict())
+            else:
+                self.obs_params = self._names.to_dict()
 
         else:
             raise TypeError(f"Input must be a path (str | Path), a list of paths, obs_params (dict), or Configuration.")
@@ -180,9 +184,7 @@ class PathHandler(AutoMkdirMixin):
 
         # insufficient info or outside-pipeline input
         if not self.obs_params or working_dir or _not_pipeline_dir:
-            working_dir = working_dir or (
-                os.path.dirname(os.path.exists(self._input_files[0])) if self._input_files else os.getcwd()
-            )
+            working_dir = working_dir or (os.path.dirname(self._input_files[0]) if self._input_files else os.getcwd())
 
             self._output_parent_dir = working_dir
             tmp_dir = os.path.join(working_dir, "tmp")
@@ -269,7 +271,7 @@ class PathHandler(AutoMkdirMixin):
             if const.RAWDATA_DIR in str(self._input_files[0]):  # raw pipeline input
                 # self.data_type = self._data_type or "raw"  # interferes with Mkdir
 
-                # self.raw_images = self._input_files  # unnecessary
+                self.raw_images = self._input_files  # unnecessary
 
                 self.masterframe_dir = os.path.join(
                     f"{const.MASTER_FRAME_DIR}",
