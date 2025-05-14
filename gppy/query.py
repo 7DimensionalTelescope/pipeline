@@ -7,7 +7,7 @@ import numpy as np
 # def query_observations(include_keywords, datatype="processed", exclude_keywords=None, **kwargs):
 #     """
 #     Recursively searches for .fits files in RAWDATA_DIR or PROCESSED_DATA.
-    
+
 #     Files are returned if they:
 #     - contain at least one of the include_keywords (if provided), and
 #     - do not contain any of the exclude_keywords (if provided).
@@ -17,7 +17,7 @@ import numpy as np
 #     exclude_keywords (list of str): Keywords that must not appear in the file path or name.
 #                                     Default is ["bias", "dark", "flat"].
 #     **kwargs: Additional keyword arguments.
-    
+
 #     Returns:
 #     list: List of paths to matching FITS files.
 #     """
@@ -42,15 +42,15 @@ import numpy as np
 #         for filename in fnmatch.filter(filenames, "*.fits"):
 #             full_path = os.path.join(dirpath, filename)
 #             full_path_lower = full_path.lower()
-            
+
 #             if any(keyword.lower() in full_path_lower for keyword in exclude_keywords):
 #                 continue
-            
+
 #             if any(keyword.lower() not in full_path_lower for keyword in include_keywords):
 #                 continue
 
 #             matching_files.append(full_path)
-    
+
 #     return matching_files
 
 
@@ -59,19 +59,19 @@ import fnmatch
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
+from . import const
 
 
-
-def query_observations(include_keywords, exclude_keywords=None, DATA_DIR="/lyman/data1/obsdata/"):
-    default_exclude_keywords = ["BIAS", "DARK", "FLAT", "LIGHT", "test", "shift"]
+def query_observations(include_keywords, exclude_keywords=None, DATA_DIR=const.RAWDATA_DIR):
+    default_exclude_keywords = ["test", "shift"]  # ["BIAS", "DARK", "FLAT", "LIGHT", "test", "shift"]
     include_keywords = list(np.atleast_1d(include_keywords))
     if exclude_keywords is not None:
         exclude_keywords = list(np.atleast_1d(exclude_keywords))
-        exclude_keywords = exclude_keywords+default_exclude_keywords
+        exclude_keywords = exclude_keywords + default_exclude_keywords
     else:
         exclude_keywords = default_exclude_keywords
-    
-    flagging = lambda x: x.endswith('.fits') and not any(excl in x for excl in exclude_keywords)
+
+    flagging = lambda x: x.endswith(".fits") and not any(excl in x for excl in exclude_keywords)
 
     def search_obs(unit):
         result = []
@@ -82,19 +82,25 @@ def query_observations(include_keywords, exclude_keywords=None, DATA_DIR="/lyman
 
             if len(filenames) == 0:
                 continue
-            
+
             flag_dir = any(keyword in dirpath for keyword in include_keywords)
             if flag_dir:
                 result.extend([os.path.join(dirpath, fname) for fname in filenames if flagging(fname)])
                 continue
-            
+
             matched_files = [fname for fname in filenames if flagging(fname)]
             if not matched_files:
                 continue
-            
+
             flag_files = [any(keyword in fname for keyword in include_keywords) for fname in matched_files]
             if any(flag_files):
-                result.extend([os.path.join(dirpath, fname) for matched, fname in zip(flag_files, matched_files) if matched and flagging(fname)])
+                result.extend(
+                    [
+                        os.path.join(dirpath, fname)
+                        for matched, fname in zip(flag_files, matched_files)
+                        if matched and flagging(fname)
+                    ]
+                )
 
         return result
 
