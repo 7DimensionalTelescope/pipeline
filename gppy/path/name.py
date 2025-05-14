@@ -1,13 +1,17 @@
 import os
+from collections import defaultdict
 from pathlib import Path
 from astropy.io import fits
-from ..utils import subtract_half_day
-from .utils import strip_binning, format_binning, strip_exptime, format_exptime
+from ..utils import subtract_half_day, get_camera, get_header
+from .. import const
+from .utils import strip_binning, format_binning, strip_exptime, format_exptime, strip_gain
 
 
 def masterframe_basename(param, typ, quality):
     return
 
+
+GROUPING_KEYS = ["types", "obj", "filter", "unit", "nightdate", "exptime", "n_binning", "gain", "camera"]
 
 # # class Path7DS:
 # class NameHandlerDeprecated:
@@ -155,12 +159,17 @@ class NameHandler:
         self.types = [self._detect_type(stem) for stem in self.stem]
 
         # --- 4. Parse each file into its components ---
-        units, dates, hmses, objs, filters, nbinnings, exptimes = [], [], [], [], [], [], []
+        units, dates, hmses, objs, filters, nbinnings, exptimes, gains, cameras = [], [], [], [], [], [], [], [], []
         for parts, typ in zip(self.parts, self.types):
             if "raw" in typ:
-                unit, date, hms, obj, filte, nbin, exptime = self._parse_raw_parts(parts)
+                parsing_func = self._parse_raw
+            elif "master" in typ:
+                parsing_func = self._parse_master
             else:
-                unit, date, hms, obj, filte, nbin, exptime = self._parse_processed_parts(parts)
+                parsing_func = self._parse_processed
+
+            unit, date, hms, obj, filte, nbin, exptime, gain, camera = parsing_func(parts)
+
             units.append(unit)
             dates.append(date)
             hmses.append(hms)
@@ -168,6 +177,8 @@ class NameHandler:
             filters.append(filte)
             nbinnings.append(nbin)
             exptimes.append(exptime)
+            gains.append(gain)
+            cameras.append(camera)
 
         # --- 5. Attach them as lists (or scalar if single) ---
         self.unit = units if not self._single else units[0]
@@ -176,9 +187,9 @@ class NameHandler:
         self.obj = objs if not self._single else objs[0]
         self.filter = filters if not self._single else filters[0]
         self._n_binning = nbinnings if not self._single else nbinnings[0]
+        self._gain = gains if not self._single else gains[0]
         self.exptime = exptimes if not self._single else exptimes[0]
         self.exposure = self.exptime
-        self.exp = self.exptime
 
     def __repr__(self):
         # when list: show first few
@@ -187,47 +198,72 @@ class NameHandler:
         return f"<NameHandler {self.basename}>"
 
     @staticmethod
-    def _detect_type(stem: str) -> str:
-        _type_list = []  # raw/proc, cal/sci, image/cat
+    def _detect_type(stem: str) -> tuple:
+        """Classify a filename stem into a 5-component tuple.
+
+        Order of components:
+        0. raw / master / calibrated
+        1. bias / dark / flat / science
+        2. None / single / coadded       (None when a master frame)
+        3. None / difference             (None when not a diff)
+        4. image / weight / catalog
+        """
+        types = ()
 
         # raw/master/processed
         if stem.startswith("7DT"):
-            _type_list.append("raw")
-        elif stem.startswith("bias") or stem.startswith("bias") or stem.startswith("flat"):
-            _type_list.append("master")
+            types += ("raw",)
+        elif stem.startswith(("bias", "dark", "flat")):
+            types += ("master",)
         else:
-            _type_list.append("processed")
+            types += ("calibrated",)  # processed")
 
         # calib/sci
-        if "bias" in stem.lower():
-            _type_list.append("bias")
-        elif "dark" in stem.lower():
-            _type_list.append("dark")
-        elif "flat" in stem.lower():
-            _type_list.append("flat")
+        stem_lower = stem.lower()
+        if "bias" in stem_lower:
+            types += ("bias",)
+        elif "dark" in stem_lower:
+            types += ("dark",)
+        elif "flat" in stem_lower:
+            types += ("flat",)
         else:
-            _type_list.append("science")
+            types += ("science",)
 
-        # coadd/subt/weight
-        if "subt" in stem:
-            _type_list.append("subtracted_image")
+        # single/coadd
+        if "master" in types:
+            types += (None,)
         elif "coadd" in stem:
-            _type_list.append("coadded")
-        elif stem.endswith("_weight"):
-            _type_list.append("weight")
+            types += ("coadded",)
         else:
-            _type_list.append(None)
+            types += ("single",)
+
+        # diff
+        if "diff" in stem:
+            types += ("difference",)  # subtracted")
+        else:
+            types += (None,)
 
         # image/weight/cat
         if stem.endswith("_cat"):
-            _type_list.append("catalog")
+            types += ("catalog",)
+        elif stem.endswith("_weight"):
+            types += ("weight",)
         else:
-            _type_list.append("image")
+            types += ("image",)
 
-        return "_".join([s for s in _type_list if s is not None])
+        return types
+        # return "_".join([s for s in types if s is not None])
+
+    @property
+    def types_str(self):
+        """Return the type as a string."""
+        if self._single:
+            return "_".join(self.types)
+        else:
+            return ["_".join([t for t in types if t]) for types in self.types]
 
     @staticmethod
-    def _parse_raw_parts(parts):
+    def _parse_raw(parts):
         # returns (unit, date, hms, obj, filter, n_binning, exptime)
         unit = parts[0]
         date = parts[1]
@@ -236,10 +272,40 @@ class NameHandler:
         filt = parts[4]
         nb = strip_binning(parts[5])
         exptime = strip_exptime(parts[6])
-        return unit, date, hms, obj, filt, nb, exptime
+        gain = None
+        camera = None
+        return unit, date, hms, obj, filt, nb, exptime, gain, camera
 
     @staticmethod
-    def _parse_processed_parts(parts):
+    def _parse_master(parts):
+        # returns (unit, date, hms, obj, filter, n_binning, exptime)
+        obj = parts[0]
+        if len(parts) == 7:
+            no_identifier_offset = 1
+        else:
+            no_identifier_offset = 0
+
+        exptime = None
+        filt = None
+        if not no_identifier_offset:
+            mf_identifier = parts[1]
+            if mf_identifier.endswith("s"):
+                exptime = strip_exptime(mf_identifier)
+            else:
+                filt = mf_identifier
+
+        date = parts[2 - no_identifier_offset]
+        nb = strip_binning(parts[3 - no_identifier_offset])
+        gain = strip_gain(parts[4 - no_identifier_offset])
+        camera = parts[5 - no_identifier_offset]
+        # filt = parts[4-i]
+        # exptime = strip_exptime(parts[6])
+        unit = None
+        hms = None
+        return unit, date, hms, obj, filt, nb, exptime, gain, camera
+
+    @staticmethod
+    def _parse_processed(parts):
         # returns (unit, date, hms, obj, filter, n_binning, exptime)
         obj = parts[0]
         filt = parts[1]
@@ -250,42 +316,31 @@ class NameHandler:
         # we don’t have binning in processed names, so you can either
         # leave it None or derive from header later:
         nb = None
-        return unit, date, hms, obj, filt, nb, exptime
+        gain = None
+        camera = None
+        return unit, date, hms, obj, filt, nb, exptime, gain, camera
 
     @property
     def datetime(self):
         # if list-mode, this concatenates elementwise
-        if isinstance(self.date, list):
-            return [d + "_" + h for d, h in zip(self.date, self.hms)]
-        return self.date + "_" + self.hms
+        if self.hms:
+            if isinstance(self.date, list):
+                return [d + "_" + h if h else None for d, h in zip(self.date, self.hms)]
+            return self.date + "_" + self.hms
+        else:
+            raise ValueError("Unable to construct datetime: HMS unavailable")
 
     @property
     def nightdate(self):
         # works in both modes
-        if isinstance(self.datetime, list):
-            return [subtract_half_day(dt) for dt in self.datetime]
-        return subtract_half_day(self.datetime)
-
-    @staticmethod
-    def _get_binning_from_header(fpath):
-        from astropy.io import fits
-
-        if not os.path.exists(fpath):
-            raise FileNotFoundError("Supply an existing path to a processed image to get a conjugate of it.")
-        hdr = fits.getheader(fpath)
-        return hdr["XBINNING"]
-
-    @staticmethod
-    def _get_gain_from_header(fpath):
-        from astropy.io import fits
-
-        if not os.path.exists(fpath):
-            raise FileNotFoundError("Supply an existing path to a processed image to get a conjugate of it.")
-        hdr = fits.getheader(fpath)
-        return hdr["GAIN"]
+        if isinstance(self.date, list):
+            return [subtract_half_day(dt) for dt in self.date]
+        return subtract_half_day(self.date)
 
     @property
     def n_binning(self):
+        key = const.HEADER_KEY_MAP["n_binning"]
+
         # single‐file mode
         if getattr(self, "_single", False):
             # if we already parsed a binning, return it
@@ -293,7 +348,7 @@ class NameHandler:
                 return self._n_binning
             # otherwise read it from the one FITS header
             else:
-                return self._get_binning_from_header(self.path[0])
+                return get_header(self.path[0], force_return=True).get(key, None)
 
         # multi‐file mode: build a list, using header only where needed
         nbins = []
@@ -301,16 +356,26 @@ class NameHandler:
             if nb is not None:
                 nbins.append(nb)
             else:
-                nbins.append(self._get_binning_from_header(p))
+                nbins.append(get_header(p, force_return=True).get(key, None))
 
         return nbins
 
     @property
     def gain(self):
+        """self._gain is [None, None, ...]"""
+        key = const.HEADER_KEY_MAP["gain"]
         if getattr(self, "_single", False):
-            return self._get_gain_from_header(self.path[0])
+            return get_header(self.path[0], force_return=True).get(key, None)
         else:
-            return [self._get_gain_from_header(p) for p in self.path]
+            return [get_header(p, force_return=True).get(key, None) for p in self.path]
+
+    @property
+    def camera(self):
+        """self._camera is [None, None, ...]"""
+        if getattr(self, "_single", False):
+            return get_camera(self.path)[0]
+        else:
+            return [get_camera(u) for u in self.path]
 
     @property
     def raw_basename(self):
@@ -344,10 +409,14 @@ class NameHandler:
 
     @property
     def masterframe_basename(self):
+        def make(obj, filte, unit, date, hms, exptime, gain, camera):
+            return f"{obj}_{filte}_{unit}_{date}_gain{gain}_{camera}.fits"
+
         pass
 
     @property
     def conjugate(self):
+        """switch between raw and processed (existing) file paths"""
         single = getattr(self, "_single", False)
 
         # wrap scalar basenames into lists when needed
@@ -363,45 +432,29 @@ class NameHandler:
         return conj_list[0] if single else conj_list
 
     def to_dict(self):
-        """
-        Return parsed fields as a dict (single-file mode) or a list of dicts
-        (multi-file mode).  Keys: unit, date, hms, obj, filte, nbin, exptime.
-        """
-        if getattr(self, "_single", False):
-            return {
-                "unit": self.unit,
-                "nightdate": self.nightdate,  # for legacy support.
-                "date": self.date,
-                "hms": self.hms,
-                "obj": self.obj,
-                "filter": self.filter,
-                "n_binning": self.n_binning,
-                "exptime": self.exptime,
-            }
+        keys = GROUPING_KEYS
 
-        # multi-file: zip up all of the parallel lists
-        return [
-            {
-                "unit": u,
-                "nightdate": nd,
-                "date": d,
-                "hms": h,
-                "obj": o,
-                "filter": f,
-                "n_binning": nb,
-                "exptime": ex,
-            }
-            for u, nd, d, h, o, f, nb, ex in zip(
-                self.unit,
-                self.nightdate,
-                self.date,
-                self.hms,
-                self.obj,
-                self.filter,
-                self.n_binning,
-                self.exptime,
-            )
-        ]
+        # grab the raw attributes for each key
+        values = [getattr(self, key) for key in keys]
+
+        if getattr(self, "_single", False):
+            # single-file: zip the keys to their scalar values
+            return dict(zip(keys, values))
+
+        # multi-file: each attribute is a list; zip them to rows of dicts
+        return [dict(zip(keys, row)) for row in zip(*values)]
+
+    def get_grouped_files(self):
+        if not isinstance(self.path, list) or len(self.path) <= 1:
+            return self.path[0]
+
+        groups = defaultdict(list)
+        for f, obs_params in zip(self.path, self.to_dict()):
+            key = tuple(obs_params.items())
+            groups[key].append(str(f))
+            # groups.setdefault(obs_params, []).append(str(f))
+
+        return groups
 
     @classmethod
     def parse_params(cls, files):
@@ -409,7 +462,7 @@ class NameHandler:
         return names.to_dict()
 
     @classmethod
-    def group_homogeneous(cls, files):
+    def take_raw_inventory(cls, files):
         if not isinstance(files, list) or len(files) <= 1:
             return files
 
@@ -423,9 +476,11 @@ class NameHandler:
             key = tuple(hdr.get(k) for k in keys)
             groups.setdefault(key, []).append(str(f))
 
-        return groups
+        on_date_calib = [True] * len(files)
 
-    @classmethod
-    def get_grouped_calib(cls, files):
-        names = cls(files)
-        types = names.types
+        return groups, on_date_calib
+
+    # @classmethod
+    # def get_grouped_calib(cls, files):
+    #     names = cls(files)
+    #     types = names.types

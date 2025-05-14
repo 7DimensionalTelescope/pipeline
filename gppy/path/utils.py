@@ -50,3 +50,11 @@ def format_exptime(exptime: float, type="raw_image"):
         return f"{exptime:.1f}s"
     else:  # processed
         return format_subseconds(exptime) + "s"
+
+
+def strip_gain(gain_string):
+    """assume the form 'nbinxnbin'"""
+    # pattern = r".*(\dx\d).*"
+    # match = re.match(pattern, binning_string)
+    # return int(match.group(1)[0])
+    return int(gain_string[4:])

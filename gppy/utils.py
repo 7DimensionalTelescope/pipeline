@@ -54,8 +54,11 @@ def collapse(seq):
     """
     if not seq:
         return seq
+    elif isinstance(seq, list):
+        first = seq[0]
+    else:
+        first = seq
 
-    first = seq[0]
     if isinstance(first, (Path, str)):
         if all(x == first for x in seq):
             return first
@@ -107,6 +110,13 @@ def parse_key_params_from_filename(img):
             target, filt, units, exposure, datetime_string = match.groups()
             date = subtract_half_day(datetime_string)
 
+    gain = re.findall("(gain[0-9]+)", path.abspath())
+
+    if gain:
+        gain = gain[-1]
+    else:
+        gain = None
+
     info = {
         "nightdate": date,
         "obstime": datetime_string,
@@ -115,6 +125,7 @@ def parse_key_params_from_filename(img):
         "unit": units,
         "exposure": exposure,
         "n_binning": int(formatted_n_binning[0]),
+        "gain": gain,
     }
 
     # deprecated key support
@@ -157,7 +168,10 @@ def parse_key_params_from_header(filename: str | Path) -> None:
 
 
 def subtract_half_day(timestr: str) -> str:
-    dt = datetime.strptime(timestr, "%Y%m%d_%H%M%S")
+    if len(timestr) == 8:
+        dt = datetime.strptime(timestr, "%Y%m%d")
+    else:
+        dt = datetime.strptime(timestr, "%Y%m%d_%H%M%S")
     new_dt = dt - timedelta(hours=15)  # -15h for winter, not -12h
     return new_dt.strftime("%Y-%m-%d")
 
@@ -186,6 +200,32 @@ def to_datetime_string(datetime_str, date_only=False):
         return dt.strftime("%Y%m%d")
     else:
         return dt.strftime("%Y%m%d_%H%M%S")
+
+
+def get_header(filename: str | Path, force_return=False) -> dict | fits.Header:
+    """
+    Get the header of a FITS file.
+
+    Args:
+        filename (str | Path): Path to the FITS file or a .head file
+
+    Returns:
+        dict | fits.Header: Header of the FITS file
+    """
+    filename = str(filename)
+    imhead_file = swap_ext(filename, "head")
+
+    if os.path.exists(imhead_file):
+        # Read the header from the text file
+        return header_to_dict(imhead_file)
+    elif os.path.exists(filename):
+        from astropy.io import fits
+
+        return fits.getheader(swap_ext(filename, "fits"))
+    else:
+        if force_return:
+            return {}
+        raise FileNotFoundError(f"File not found: {filename}")
 
 
 def header_to_dict(file_path):
@@ -273,7 +313,7 @@ def get_camera(header):
         header (dict or str): Either a header dictionary or a path to a .head file
 
     Returns:
-        str: Camera type ('C3', 'C5', or 'Unidentified')
+        str: Camera type ('C3', 'C5', or 'UnnknownCam')
 
     Example:
         >>> get_camera({'NAXIS1': 9576, 'NAXIS2': 6388})
@@ -281,21 +321,28 @@ def get_camera(header):
         >>> get_camera('/path/to/header.head')
         'C5'
     """
-    if type(header) == dict:
+    if isinstance(header, list):
+        return [get_camera(s) for s in header]
+    elif type(header) == dict or isinstance(header, fits.Header):
         pass
+    elif isinstance(header, (str, Path)):
+        header = get_header(header, force_return=True)
     else:
-        header = header_to_dict(header)
+        raise TypeError("Input of get_camera must be a dictionary, fits.Header, or a file path.")
 
     # if header["NAXIS1"] == 9576:  # NAXIS2 6388
     #     return "C3"
     # elif header["NAXIS1"] == 14208:  # NAXIS2 10656
     #     return "C5"
-    if 9576 % header["NAXIS1"] == 0:  # NAXIS2 6388
-        return "C3"
-    elif 14208 % header["NAXIS1"] == 0:  # NAXIS2 10656
-        return "C5"
+    if header and "NAXIS1" in header:
+        if 9576 % header["NAXIS1"] == 0:  # NAXIS2 6388
+            return "C3"
+        elif 14208 % header["NAXIS1"] == 0:  # NAXIS2 10656
+            return "C5"
+        else:
+            return "UnknownCam"
     else:
-        return "UnknownCam"
+        return None
 
 
 def find_raw_path(unit, date, n_binning, gain):
