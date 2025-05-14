@@ -12,6 +12,7 @@ def masterframe_basename(param, typ, quality):
 
 
 GROUPING_KEYS = ["types", "obj", "filter", "unit", "nightdate", "exptime", "n_binning", "gain", "camera"]
+# GROUPING_KEYS = ["obj", "filter", "unit", "nightdate", "exptime", "n_binning", "gain", "camera"]
 
 # # class Path7DS:
 # class NameHandlerDeprecated:
