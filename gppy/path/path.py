@@ -387,10 +387,9 @@ class PathHandler(AutoMkdirMixin):
             raw_dark = entry["dark"]
             raw_flat = entry["flat"]
 
-            proc = PathHandler  # for brevity
-            proc_bias = proc(raw_bias).preprocess.bias
-            proc_dark = proc(raw_dark).preprocess.dark
-            proc_flat = proc(raw_flat).preprocess.flat
+            proc_bias = PathHandler(raw_bias).preprocess.bias
+            proc_dark = PathHandler(raw_dark).preprocess.dark
+            proc_flat = PathHandler(raw_flat).preprocess.flat
 
             result.append(
                 (
@@ -404,7 +403,7 @@ class PathHandler(AutoMkdirMixin):
             result.append(
                 (
                     ([], [], []),  # no raw bias/dark/flat
-                    ([], [], []),  # no processed bias/dark/flat
+                    (None, None, None),  # no master bias/dark/flat -> search them in masterframe_dir
                     sci_list,  # singleton science file
                 )
             )
@@ -448,6 +447,17 @@ class PathPreprocess(AutoMkdirMixin):
 
     @property
     def flat(self):
+        names = NameHandler(self._parent._input_files)
+        return collapse(
+            [
+                os.path.join(self._parent.masterframe_dir, s)
+                for typ, s in zip(names.types, names.masterframe_basename)
+                if typ[1] == "flat"
+            ]
+        )
+
+    @property
+    def processed(self):
         names = NameHandler(self._parent._input_files)
         return collapse(
             [
