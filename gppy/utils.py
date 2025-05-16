@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 from datetime import datetime, timedelta
 from astropy.io import fits
-from .const import FACTORY_DIR, RAWDATA_DIR, HEADER_KEY_MAP, STRICT_KEYS
+from .const import FACTORY_DIR, RAWDATA_DIR, HEADER_KEY_MAP, INSTRUM_GROUP_KEYS
 
 
 def most_common_in_dict(counts: dict):
@@ -47,7 +47,12 @@ def clean_up_folder(path):
             print(f"Failed to delete {item_path}: {e}")
 
 
-def collapse(seq):
+def equal_on_keys(d1: dict, d2: dict, keys: list):
+    # return all(d1[k] == d2[k] for k in keys)
+    return all(d1.get(k) == d2.get(k) for k in keys)  # None if key missing
+
+
+def collapse(seq, keys=INSTRUM_GROUP_KEYS):
     """
     If seq is non-empty and every element equals the first one,
     return the first element; else return seq unchanged.
@@ -63,8 +68,7 @@ def collapse(seq):
         if all(x == first for x in seq):
             return first
     elif isinstance(first, dict):
-        common_keys = [k for k in STRICT_KEYS if all(k in d for d in seq)]
-        # if all(all(d[key] == first[key] for key in common_keys) for d in seq):
+        common_keys = [k for k in keys if all(k in d for d in seq)]
         if common_keys and all(d[k] == first[k] for d in seq for k in common_keys):
             return first
     else:
