@@ -412,10 +412,21 @@ class NameHandler:
                 quality = format_exptime(exptime, type=typ)
             elif typ == "flat":
                 quality = filte
+            elif typ == "science":
+                quality = [None, format_exptime(exptime, type=typ), filte]
             else:
                 raise ValueError("Invalid type for masterframe_basename")
-            infolist = [typ, quality, unit, date, f"gain{gain}", camera]
-            return "_".join([s for s in infolist if s is not None]) + ".fits"
+
+            if not isinstance(quality, list):  # master calib name for raw calib input
+                infolist = [typ, quality, unit, date, f"gain{gain}", camera]
+                return "_".join([s for s in infolist if s is not None]) + ".fits"
+
+            else:  # master calib name for raw sci input
+                calib_bundles = []
+                for typ, q in zip(["bias", "dark", "flat"], quality):
+                    infolist = [typ, q, unit, date, f"gain{gain}", camera]
+                    calib_bundles.append("_".join([s for s in infolist if s is not None]) + ".fits")
+                return tuple(calib_bundles)
 
         if getattr(self, "_single", False):
             return make(self.types[1], self.filter, self.unit, self.date, self.exptime, self.gain, self.camera)

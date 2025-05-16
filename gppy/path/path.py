@@ -332,29 +332,84 @@ class PathHandler(AutoMkdirMixin):
 
         return paths[0] if single else paths
 
+    # @classmethod
+    # def from_grouped_calib(cls, sci_files, on_date_calib):
+    #     from collections import Counter
+
+    #     triples = [
+    #         (tuple(on_date_bias), tuple(on_date_dark), tuple(on_date_flat))
+    #         for flag, on_date_bias, on_date_dark, on_date_flat in on_date_calib
+    #         if flag == True
+    #     ]
+    #     counts = Counter(triples)
+
+    #     result = []
+    #     # in ascending order of count
+    #     for (bias_files, dark_files, flat_files), cnt in sorted(
+    #         counts.items(), key=lambda item: item[1]
+    #     ):  # reverse=True
+    #         raw_bias = list(bias_files)
+    #         raw_dark = list(dark_files)
+    #         raw_flat = list(flat_files)
+    #         master_bias = PathHandler(raw_bias).preprocess.bias
+    #         master_dark = PathHandler(raw_dark).preprocess.dark
+    #         master_flat = PathHandler(raw_flat).preprocess.flat
+
+    #         result.append(((raw_bias, raw_dark, raw_flat), (master_bias, master_dark, master_flat)))
+
+    #     return result
+
     @classmethod
-    def from_grouped_files(cls, on_date_calib):
-        from collections import Counter
+    def from_grouped_calib(cls, sci_files, on_date_calib):
+        from collections import defaultdict
 
-        triples = [
-            (tuple(on_date_bias), tuple(on_date_dark), tuple(on_date_flat))
-            for flag, on_date_bias, on_date_dark, on_date_flat in on_date_calib
-            if flag == True
-        ]
-        counts = Counter(triples)
+        # Build a map from each (bias,dark,flat) tuple → its sci_files + a single copy of the raw lists
+        calib_map = defaultdict(lambda: {"sci": [], "bias": None, "dark": None, "flat": None})
+        off_date_groups = []
 
-        _tmp_list = []
-        # in ascending order of count
-        for (bias_files, dark_files, flat_files), cnt in sorted(counts.items(), key=lambda item: item[1]):
-            _tmp_list.append(
+        for sci, (flag, bias, dark, flat) in zip(sci_files, on_date_calib):
+            if flag:
+                key = (tuple(bias), tuple(dark), tuple(flat))
+                entry = calib_map[key]
+                entry["sci"].append(sci)
+                # stash the raw lists once
+                if entry["bias"] is None:
+                    entry["bias"] = list(bias)
+                    entry["dark"] = list(dark)
+                    entry["flat"] = list(flat)
+            else:
+                # off‐date: no calibration, just itself
+                off_date_groups.append([sci])
+
+        result = []
+        for (bias_t, dark_t, flat_t), entry in sorted(calib_map.items(), key=lambda kv: len(kv[1]["sci"])):
+            raw_bias = entry["bias"]
+            raw_dark = entry["dark"]
+            raw_flat = entry["flat"]
+
+            proc = PathHandler  # for brevity
+            proc_bias = proc(raw_bias).preprocess.bias
+            proc_dark = proc(raw_dark).preprocess.dark
+            proc_flat = proc(raw_flat).preprocess.flat
+
+            result.append(
                 (
-                    PathHandler(list(bias_files)).preprocess.bias,
-                    PathHandler(list(dark_files)).preprocess.dark,
-                    PathHandler(list(flat_files)).preprocess.flat,
+                    (raw_bias, raw_dark, raw_flat),
+                    (proc_bias, proc_dark, proc_flat),
+                    entry["sci"],  # science images in this on‐date group
                 )
             )
 
-        return _tmp_list
+        for sci_list in off_date_groups:
+            result.append(
+                (
+                    ([], [], []),  # no raw bias/dark/flat
+                    ([], [], []),  # no processed bias/dark/flat
+                    sci_list,  # singleton science file
+                )
+            )
+
+        return result
 
 
 class PathPreprocess(AutoMkdirMixin):
