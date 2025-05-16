@@ -14,6 +14,7 @@ from ..utils import (
     get_camera,
     parse_exptime,
     swap_ext,
+    get_header,
 )
 
 from ..const import MASTER_FRAME_DIR
@@ -24,6 +25,7 @@ from ..utils import add_padding
 from ..path import PathHandler
 from .plotting import *
 from . import utils as prep_utils
+
 
 class Preprocess:
     """
@@ -222,10 +224,10 @@ class Preprocess:
         self.logger.debug(f"Flatsig output: {self.flatsig_output}")
         self.logger.debug(f"Bad pixel mask output: {self.bpmask_output}")
 
-        self.logger.debug(f"Bias link: {self.mbias_link}")
-        self.logger.debug(f"Dark link: {self.mdark_link}")
-        self.logger.debug(f"Flat link: {self.mflat_link}")
-        self.logger.debug(f"Bad pixel mask link: {self.bpmask_output}")
+        # self.logger.debug(f"Bias link: {self.mbias_link}")
+        # self.logger.debug(f"Dark link: {self.mdark_link}")
+        # self.logger.debug(f"Flat link: {self.mflat_link}")
+        # self.logger.debug(f"Bad pixel mask link: {self.bpmask_output}")
 
     @property
     def sci_input(self):
@@ -328,13 +330,7 @@ class Preprocess:
         """get any .head file in self.path_raw"""
         s = os.path.join(self.path_raw, f"*.fits")
         fits_file = sorted(glob.glob(s))[0]
-        header_file = swap_ext(fits_file, ".head")
-        if os.path.exists(header_file):
-            return header_to_dict(header_file)
-        else:
-            from astropy.io import fits
-
-            return dict(fits.getheader(fits_file))
+        return get_header(fits_file)
 
     def _get_flatdark(self, filt):
         """If no raw DARK for the date, searches 100s mdark of previous dates"""
@@ -350,7 +346,7 @@ class Preprocess:
             self.logger.warn(f"No master dark frame for the date. " f"Searching previous dates for 100s mdark.")
             # master_frame/2001-02-23_1x1_gain2750/7DT11/dark_20250102_100s_C3.fits
             search_template = os.path.join(self.path_fdz, f"dark_{self.date_fdz}_100s_{self.camera}.fits")
-            mdark_used = search_with_date_offsets(search_template, future=False)
+            mdark_used = prep_utils.search_with_date_offsets(search_template, future=False)
             dark_scaler = flat_exp_repr / 100
         return mdark_used, dark_scaler
 
@@ -396,7 +392,7 @@ class Preprocess:
         header = fits.getheader(data_list[0])
 
         if dtype == "bias":
-            header = write_IMCMB_to_header(header, data_list)
+            header = prep_utils.write_IMCMB_to_header(header, data_list)
             # rdnoise = self.calculate_rdnoise()
             # header['RDNOISE'] = rdnoise
             header["NFRAMES"] = n
@@ -412,9 +408,9 @@ class Preprocess:
 
         elif dtype == "dark":
             mbias_used = read_link(self.mbias_link)
-            header = write_IMCMB_to_header(header, [mbias_used] + data_list)
+            header = prep_utils.write_IMCMB_to_header(header, [mbias_used] + data_list)
             header["NFRAMES"] = n
-            with load_data_gpu(mbias_used) as mbias:
+            with prep_utils.load_data_gpu(mbias_used) as mbias:
                 bfc.data -= mbias
 
             # save dark sigma map
@@ -432,15 +428,15 @@ class Preprocess:
             # dark_scaler, closest_dark_exp = self._get_dark_scalar(filt)
             # mdark_used = read_link(self.mdark_link[closest_dark_exp])
             mdark_used, dark_scaler = self._get_flatdark(filt)
-            header = write_IMCMB_to_header(
+            header = prep_utils.write_IMCMB_to_header(
                 header,
                 [mbias_used, mdark_used] + self.flat_input[filt],
             )
             header["NFRAMES"] = n
 
-            with load_data_gpu(mbias_used) as mbias:
+            with prep_utils.load_data_gpu(mbias_used) as mbias:
                 bfc.data -= mbias
-            with load_data_gpu(mdark_used) as mdark:
+            with prep_utils.load_data_gpu(mdark_used) as mdark:
                 bfc.data -= mdark * dark_scaler
 
             # Normalize Flats
@@ -468,8 +464,8 @@ class Preprocess:
         if dtype == "dark":
             self.generate_bpmask(combined_data, self.bpmask_output[exptime], header=header)
 
-        header = add_image_id(header)
-        header = record_statistics(combined_data, header)
+        header = prep_utils.add_image_id(header)
+        header = prep_utils.record_statistics(combined_data, header)
 
         fits.writeto(
             output,
@@ -501,7 +497,7 @@ class Preprocess:
 
         # mean, median, std = sigma_clipped_stats(data, sigma=3, maxiters=5) # astropy
         # median, std = sigma_clipped_stats(data, reduce="median", width=3, iters=5) # eclaire
-        mean, median, std = sigma_clipped_stats_cupy(data, sigma=3, maxiters=5)
+        mean, median, std = prep_utils.sigma_clipped_stats_cupy(data, sigma=3, maxiters=5)
 
         hot_mask = cp.abs(data - median) > n_sigma * std  # 1 for bad, 0 for okay
         hot_mask = cp.asnumpy(hot_mask).astype("uint8")
@@ -566,11 +562,11 @@ class Preprocess:
             # 2001-02-23_1x1_gain2750/7DT11/bias_20250102_C3.link
             self.logger.info("No raw BIAS files found for the date. Searching for the closest past master BIAS.")
             search_template = os.path.splitext(self.mbias_link)[0] + ".fits"
-            mbias_file = search_with_date_offsets(search_template, future=True)
+            mbias_file = prep_utils.search_with_date_offsets(search_template, future=True)
             if not mbias_file:
                 self.logger.error("No master BIAS found to choose from.")
                 return
-        write_link(self.mbias_link, mbias_file)
+        prep_utils.write_link(self.mbias_link, mbias_file)
 
     # --------------- DARK ---------------
 
@@ -596,14 +592,14 @@ class Preprocess:
             else:
                 self.logger.info(f"No master dark for exptime {exptime}." f"Fetching from the closest data.")
                 search_template = swap_ext(mdark_link, ".fits")
-                mdark_file = search_with_date_offsets(search_template, future=True)
+                mdark_file = prep_utils.search_with_date_offsets(search_template, future=True)
                 if not mdark_file:
                     self.logger.error(
                         f"Failed to generate mdark link for exptime {exptime}. " f"No fallback master dark found."
                     )
                     continue
 
-            write_link(mdark_link, mdark_file)
+            prep_utils.write_link(mdark_link, mdark_file)
 
     # def generate_mdark(self, **kwargs):
     #     """
@@ -652,14 +648,14 @@ class Preprocess:
                 self.logger.info(f"No master flat for filter {filt}." f"Fetching from the closest data.")
                 search_template = swap_ext(mflat_link, ".fits")
                 # master_frame/2001-02-23_1x1_gain2750/7DT11/flat_20250102_m625_C3.fits
-                mflat_file = search_with_date_offsets(search_template, future=True)
+                mflat_file = prep_utils.search_with_date_offsets(search_template, future=True)
                 if not mflat_file:
                     self.logger.error(
                         f"Failed to generate mflat link for filter {filt}. " f"No fallback master flat found."
                     )
                     continue
 
-            write_link(mflat_link, mflat_file)
+            prep_utils.write_link(mflat_link, mflat_file)
 
     def make_plots(self, masterframe_only=False):
         self.logger.info("Start to generate plots for master calibration frames")
@@ -687,7 +683,7 @@ class Preprocess:
                     path = PathHandler(image)
                     os.makedirs(path.image_dir, exist_ok=True)
                     image_name = os.path.basename(path.processed_images).replace(".fits", "")
-                    raw_image_name = "raw_"+image_name
+                    raw_image_name = "raw_" + image_name
                     save_fits_as_png(image, path.image_dir / f"{raw_image_name}.png")
                     save_fits_as_png(path.processed_images, path.image_dir / f"{image_name}.png")
 
@@ -709,10 +705,9 @@ class Preprocess:
                 params = header_to_dict(f)
                 key = tuple(params.get(k) for k in keys)
                 groups.setdefault(key, []).append(str(f).replace(".head", ".fits"))
-        
+
         return groups
 
-    
     def data_reduction(self, n_head_blocks=5, use_multi_device=False, device=0, **kwargs):
         groups = self.get_image_groups()
         if use_multi_device:
@@ -724,9 +719,13 @@ class Preprocess:
 
         for key, image_list in groups.items():
             exposure, gain, n_binning, filt = key
-            batch_dist = prep_utils.calc_batch_dist(image_list, num_devices=num_devices, use_multi_device=use_multi_device)
-            self.logger.info(f"Processing {len(image_list)} images (exposure: {exposure}, filter: {filt}, gain: {gain}, binning: {n_binning}) on GPU device(s): {device}")
-            
+            batch_dist = prep_utils.calc_batch_dist(
+                image_list, num_devices=num_devices, use_multi_device=use_multi_device
+            )
+            self.logger.info(
+                f"Processing {len(image_list)} images (exposure: {exposure}, filter: {filt}, gain: {gain}, binning: {n_binning}) on GPU device(s): {device}"
+            )
+
             mbias = prep_utils.read_link(self.mbias_link)
             mdark = prep_utils.read_link(self.mdark_link[exposure])
             mflat = prep_utils.read_link(self.mflat_link[filt])
@@ -740,7 +739,7 @@ class Preprocess:
             start_idx = 0
 
             self.logger.debug("Masterframes are loaded in CPU")
-            
+
             for batch in batch_dist:
                 if sum(batch) == 0:
                     break
@@ -751,7 +750,7 @@ class Preprocess:
                         subset = image_list[start_idx:end_idx]
                         t = threading.Thread(
                             target=prep_utils.process_batch_on_device,
-                            args=(i, subset, bias_cpu, dark_cpu, flat_cpu, results)
+                            args=(i, subset, bias_cpu, dark_cpu, flat_cpu, results),
                         )
                         t.start()
                         threads.append(t)
@@ -762,7 +761,7 @@ class Preprocess:
                     subset = image_list[start_idx:end_idx]
                     t = threading.Thread(
                         target=prep_utils.process_batch_on_device,
-                        args=(device, subset, bias_cpu, dark_cpu, flat_cpu, results)
+                        args=(device, subset, bias_cpu, dark_cpu, flat_cpu, results),
                     )
                     t.start()
                     threads.append(t)
@@ -774,19 +773,17 @@ class Preprocess:
                 for t in threads:
                     t.join()
 
-                self.logger.info(f"Data reduction has been completed in {time.time() - start_time:.0f} seconds for {len(image_list)} iamges.")
+                self.logger.info(
+                    f"Data reduction has been completed in {time.time() - start_time:.0f} seconds for {len(image_list)} iamges."
+                )
 
                 # Combine results
                 all_results = [item for sublist in results if sublist for item in sublist]
 
                 for idx, raw_file in enumerate(image_list):
                     header = fits.getheader(raw_file)
-                    header["SATURATE"] = prep_utils.get_saturation_level(
-                        header, mbias, mdark, mflat
-                    )
-                    header = prep_utils.write_IMCMB_to_header(
-                        header, [mbias, mdark, mflat, raw_file]
-                    )
+                    header["SATURATE"] = prep_utils.get_saturation_level(header, mbias, mdark, mflat)
+                    header = prep_utils.write_IMCMB_to_header(header, [mbias, mdark, mflat, raw_file])
                     add_padding(header, n_head_blocks, copy_header=False)
                     out_file = PathHandler(raw_file).processed_images
                     fits.writeto(
@@ -795,9 +792,9 @@ class Preprocess:
                         header=header,
                         overwrite=True,
                     )
-                    if idx/len(image_list) % 0.1 == 0:
+                    if idx / len(image_list) % 0.1 == 0:
                         self.logger.info(f"Processed {idx/len(image_list)*100:.1f}% images")
-                
+
                 self.logger.info("All results have been written to the output directory")
                 del all_results
 

@@ -53,6 +53,7 @@ class AutoMkdirMixin:
 
 class PathHandler(AutoMkdirMixin):
     def __init__(self, input: Union[str, Path, list, dict, "Configuration"] = None, *, working_dir=None):
+        """Input homogeneous images"""
         self._config = None
         self._input_files = None
         self._data_type = None
@@ -75,7 +76,7 @@ class PathHandler(AutoMkdirMixin):
         self.define_operation_paths()
 
     def _handle_input(self, input):
-        """init with obs_parmas is ad-hoc. Will be changed to always take filenames"""
+        """init with obs_parmas and config are ad-hoc. Will be changed to always take filenames"""
         # input is obs_param
         if isinstance(input, dict):
             self.obs_params = input
@@ -100,17 +101,17 @@ class PathHandler(AutoMkdirMixin):
             self.obs_params = input.config_in_dict["obs"]
             self._config = input.config
 
-        # input is a fits file list
+        # input is a fits file list; the only method to keep
         elif isinstance(input, list) or isinstance(input, str) or isinstance(input, Path):
             input = list(np.atleast_1d(input))
             self._names = NameHandler(input)
             self._input_files = [os.path.abspath(img) for img in input]
             self._data_type = self._names.types
             # self.obs_params = check_params(self._input_files[0])
-            if not self._names._single:
-                self.obs_params = collapse(self._names.to_dict())
-            else:
-                self.obs_params = self._names.to_dict()
+            obs_params = collapse(self._names.to_dict(), keys=const.SCIENCE_GROUP_KEYS)
+            if isinstance(obs_params, list):
+                raise ValueError("PathHandler input is incoherent w.r.t. SCIENCE_GROUP_KEYS.")
+            self.obs_params = obs_params
 
         else:
             raise TypeError(f"Input must be a path (str | Path), a list of paths, obs_params (dict), or Configuration.")
@@ -331,6 +332,30 @@ class PathHandler(AutoMkdirMixin):
 
         return paths[0] if single else paths
 
+    @classmethod
+    def from_grouped_files(cls, on_date_calib):
+        from collections import Counter
+
+        triples = [
+            (tuple(on_date_bias), tuple(on_date_dark), tuple(on_date_flat))
+            for flag, on_date_bias, on_date_dark, on_date_flat in on_date_calib
+            if flag == True
+        ]
+        counts = Counter(triples)
+
+        _tmp_list = []
+        # in ascending order of count
+        for (bias_files, dark_files, flat_files), cnt in sorted(counts.items(), key=lambda item: item[1]):
+            _tmp_list.append(
+                (
+                    PathHandler(list(bias_files)).preprocess.bias,
+                    PathHandler(list(dark_files)).preprocess.dark,
+                    PathHandler(list(flat_files)).preprocess.flat,
+                )
+            )
+
+        return _tmp_list
+
 
 class PathPreprocess(AutoMkdirMixin):
     def __init__(self, parent: PathHandler, config=None):
@@ -346,19 +371,36 @@ class PathPreprocess(AutoMkdirMixin):
 
     @property
     def bias(self):
-        param = self._parent.obs_params
-        # fname = "_".join(["bias", param["nightdate"], format_binning(param['n_binning'])])
-        fname = "bias"
-        # use NameHandler()
-        return os.path.join(self._parent.masterframe_dir, fname)
+        names = NameHandler(self._parent._input_files)
+        return collapse(
+            [
+                os.path.join(self._parent.masterframe_dir, s)
+                for typ, s in zip(names.types, names.masterframe_basename)
+                if typ[1] == "bias"
+            ]
+        )  # it may not be collapsed if input is incoherent
 
     @property
-    def dark(self, exptime):
-        return
+    def dark(self):
+        names = NameHandler(self._parent._input_files)
+        return collapse(
+            [
+                os.path.join(self._parent.masterframe_dir, s)
+                for typ, s in zip(names.types, names.masterframe_basename)
+                if typ[1] == "dark"
+            ]
+        )
 
     @property
-    def flat(self, filte):
-        return
+    def flat(self):
+        names = NameHandler(self._parent._input_files)
+        return collapse(
+            [
+                os.path.join(self._parent.masterframe_dir, s)
+                for typ, s in zip(names.types, names.masterframe_basename)
+                if typ[1] == "flat"
+            ]
+        )
 
 
 class PathAstrometry(AutoMkdirMixin):

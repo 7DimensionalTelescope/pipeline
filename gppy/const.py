@@ -5,7 +5,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # REF_DIR = os.path.join(SCRIPT_DIR, "gppy", "ref")
 REF_DIR = os.path.join(SCRIPT_DIR, "ref")
 
-RAWDATA_DIR = "/lyman/data1/obsdata/"  # os.environ["RAWDATA_DIR"]
+RAWDATA_DIR = os.environ["RAWDATA_DIR"]  # "/lyman/data1/obsdata/"
 FACTORY_DIR = os.environ["FACTORY_DIR"]
 MASTER_FRAME_DIR = os.environ["MASTER_FRAME_DIR"]
 
@@ -18,6 +18,14 @@ SLACK_TOKEN = os.environ["SLACK_TOKEN"]
 CalibType = ["BIAS", "DARK", "FLAT"]
 
 available_7dt_units = [f"7DT0{unit}" if unit < 10 else f"7DT{unit}" for unit in range(1, 20)]
+
+NUM_MIN_CALIB = 5
+# GROUPING_KEYS = ["types", "obj", "filter", "unit", "nightdate", "exptime", "n_binning", "gain", "camera"]
+INSTRUM_GROUP_KEYS = ["obj", "filter", "unit", "nightdate", "exptime", "n_binning", "gain", "camera"]
+BIAS_GROUP_KEYS = ["unit", "nightdate", "n_binning", "gain", "camera"]  # account for potential ms difference
+DARK_GROUP_KEYS = ["unit", "nightdate", "exptime", "n_binning", "gain", "camera"]
+FLAT_GROUP_KEYS = ["filter", "unit", "nightdate", "n_binning", "gain", "camera"]
+SCIENCE_GROUP_KEYS = ["obj", "filter", "unit", "nightdate"]
 
 STRICT_KEYS = {"nightdate", "obj", "filter", "unit", "exptime", "n_binning", "gain", "camera"}
 ANCILLARY_KEYS = {"ra", "dec", "obstime"}  # hms

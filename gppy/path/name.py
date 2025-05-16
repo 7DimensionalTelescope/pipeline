@@ -2,17 +2,10 @@ import os
 from collections import defaultdict
 from pathlib import Path
 from astropy.io import fits
-from ..utils import subtract_half_day, get_camera, get_header
+from ..utils import subtract_half_day, get_camera, get_header, equal_on_keys
 from .. import const
 from .utils import strip_binning, format_binning, strip_exptime, format_exptime, strip_gain
 
-
-def masterframe_basename(param, typ, quality):
-    return
-
-
-GROUPING_KEYS = ["types", "obj", "filter", "unit", "nightdate", "exptime", "n_binning", "gain", "camera"]
-# GROUPING_KEYS = ["obj", "filter", "unit", "nightdate", "exptime", "n_binning", "gain", "camera"]
 
 # # class Path7DS:
 # class NameHandlerDeprecated:
@@ -409,11 +402,30 @@ class NameHandler:
         ]
 
     @property
-    def masterframe_basename(self):
-        def make(obj, filte, unit, date, hms, exptime, gain, camera):
-            return f"{obj}_{filte}_{unit}_{date}_gain{gain}_{camera}.fits"
+    def masterframe_basename(self):  # , typ, quality):
+        """works for mixed calibration file types"""
 
-        pass
+        def make(typ, filte, unit, date, exptime, gain, camera):
+            if typ == "bias":
+                quality = None
+            elif typ == "dark":
+                quality = format_exptime(exptime, type=typ)
+            elif typ == "flat":
+                quality = filte
+            else:
+                raise ValueError("Invalid type for masterframe_basename")
+            infolist = [typ, quality, unit, date, f"gain{gain}", camera]
+            return "_".join([s for s in infolist if s is not None]) + ".fits"
+
+        if getattr(self, "_single", False):
+            return make(self.types[1], self.filter, self.unit, self.date, self.exptime, self.gain, self.camera)
+
+        return [
+            make(typ[1], filte, unit, date, exptime, gain, camera)
+            for typ, filte, unit, date, exptime, gain, camera in zip(
+                self.types, self.filter, self.unit, self.date, self.exptime, self.gain, self.camera
+            )
+        ]
 
     @property
     def conjugate(self):
@@ -433,7 +445,7 @@ class NameHandler:
         return conj_list[0] if single else conj_list
 
     def to_dict(self):
-        keys = GROUPING_KEYS
+        keys = const.INSTRUM_GROUP_KEYS
 
         # grab the raw attributes for each key
         values = [getattr(self, key) for key in keys]
@@ -446,14 +458,23 @@ class NameHandler:
         return [dict(zip(keys, row)) for row in zip(*values)]
 
     def get_grouped_files(self):
+        """
+        e.g.,
+        name = NameHandler(flist)
+        grouped_files = name.get_grouped_files()
+        typ = next(iter(grouped_files))[0][0]
+        obs_params = dict(next(iter(grouped_files))[0][1])
+        """
         if not isinstance(self.path, list) or len(self.path) <= 1:
             return self.path[0]
 
-        groups = defaultdict(list)
-        for f, obs_params in zip(self.path, self.to_dict()):
-            key = tuple(obs_params.items())
-            groups[key].append(str(f))
-            # groups.setdefault(obs_params, []).append(str(f))
+        # groups = defaultdict(list)
+        #     groups[key].append(str(f))
+        groups = dict()
+        for typ, f, obs_params in zip(self.types, self.path, self.to_dict()):
+            key = (typ, tuple(obs_params.items()))  # sorted()  # check type to differentiate raw/proc with same params
+            # key = tuple(obs_params.items())
+            groups.setdefault(key, []).append(str(f))
 
         return groups
 
@@ -464,22 +485,58 @@ class NameHandler:
 
     @classmethod
     def take_raw_inventory(cls, files):
+        """
+        e.g., files = glob("/data/pipeline_reform/obsdata_test/7DT11/2025-01-01_gain2750/*.fits")
+        sci_files, on_date_calib = NameHandler.take_raw_inventory(flist)
+        """
         if not isinstance(files, list) or len(files) <= 1:
             return files
 
         names = cls(files)
+        grouped_files = names.get_grouped_files()
 
-        keys = ("EXPTIME", "GAIN", "XBINNING")
-        groups: dict[tuple, list[str]] = {}
+        bias, dark, flat, sci = {}, {}, {}, {}
 
-        for f in files:
-            hdr = fits.getheader(f)
-            key = tuple(hdr.get(k) for k in keys)
-            groups.setdefault(key, []).append(str(f))
+        for k, v in grouped_files.items():
+            if k[0][1] == "bias":
+                bias[k] = v
+            if k[0][1] == "dark":
+                dark[k] = v
+            if k[0][1] == "flat":
+                flat[k] = v
+            if k[0][1] == "science":
+                sci[k] = v
 
-        on_date_calib = [True] * len(files)
+        sci_files = []
+        on_date_calib = []
+        for key, val in sci.items():
+            sci_files.append(val)
+            key_sci = dict(key[1])
 
-        return groups, on_date_calib
+            on_date_bias = [
+                item for k, v in bias.items() if equal_on_keys(dict(k[1]), key_sci, const.BIAS_GROUP_KEYS) for item in v
+            ]  # get a flattened list, not [[], [], ..., []]
+
+            on_date_dark = [
+                item for k, v in dark.items() if equal_on_keys(dict(k[1]), key_sci, const.DARK_GROUP_KEYS) for item in v
+            ]
+
+            on_date_flat = [
+                item for k, v in flat.items() if equal_on_keys(dict(k[1]), key_sci, const.FLAT_GROUP_KEYS) for item in v
+            ]
+
+            on_date_calib.append(
+                (
+                    len(on_date_bias) >= const.NUM_MIN_CALIB
+                    and len(on_date_dark) >= const.NUM_MIN_CALIB
+                    and len(on_date_flat) >= const.NUM_MIN_CALIB,
+                    on_date_bias,
+                    on_date_dark,
+                    on_date_flat,
+                )
+            )
+
+        return sci_files, on_date_calib
 
     # @classmethod
     # def get_grouped_calib(cls, files):
