@@ -5,6 +5,7 @@ import numpy as np
 from .. import const
 from ..utils import check_params, add_suffix, swap_ext, collapse
 from .name import NameHandler
+from .utils import format_exptime
 
 
 if TYPE_CHECKING:
@@ -58,17 +59,14 @@ class PathHandler(AutoMkdirMixin):
         self._input_files = None
         self._data_type = None
         self.obs_params = {}
+        self._file_indep_initialized = False
+        self._file_dep_initialized = False
 
-        if input is not None:
-            self._handle_input(input)
-
+        self._handle_input(input)
         self.select_output_dir(working_dir=working_dir)
 
-        self._file_indep_initialized = False
-        self.define_info_agnostic_paths()
         self.define_file_independent_paths()
 
-        self._file_dep_initialized = False
         if not self._file_dep_initialized and self._input_files:
             self.define_file_dependent_paths()
 
@@ -78,31 +76,34 @@ class PathHandler(AutoMkdirMixin):
     def _handle_input(self, input):
         """init with obs_parmas and config are ad-hoc. Will be changed to always take filenames"""
         # input is obs_param
-        if isinstance(input, dict):
-            self.obs_params = input
+        # if isinstance(input, dict):
+        #     self.obs_params = input
 
-        # input is ConfigurationInstance
-        elif hasattr(input, "obs"):
-            if input.file.raw_files is not None:
-                self._input_files = [os.path.abspath(file) for file in input.file.raw_files]
-            elif input.file.processed_files is not None:
-                self._input_files = [os.path.abspath(file) for file in input.file.processed_files]
-            self._data_type = input.name  # propagate user-input
-            self.obs_params = input.obs.to_dict()
-            self._config = input
+        # # input is ConfigurationInstance
+        # elif hasattr(input, "obs"):
+        #     if input.file.raw_files is not None:
+        #         self._input_files = [os.path.abspath(file) for file in input.file.raw_files]
+        #     elif input.file.processed_files is not None:
+        #         self._input_files = [os.path.abspath(file) for file in input.file.processed_files]
+        #     self._data_type = input.name  # propagate user-input
+        #     self.obs_params = input.obs.to_dict()
+        #     self._config = input
 
-        # input is Configuration
-        elif hasattr(input, "config"):
-            if input.config.file.raw_files is not None:
-                self._input_files = [os.path.abspath(file) for file in input.config.file.raw_files]
-            elif input.config.file.processed_files is not None:
-                self._input_files = [os.path.abspath(file) for file in input.config.file.processed_files]
-            self._data_type = input.config.name  # propagate user-input
-            self.obs_params = input.config_in_dict["obs"]
-            self._config = input.config
+        # # input is Configuration
+        # elif hasattr(input, "config"):
+        #     if input.config.file.raw_files is not None:
+        #         self._input_files = [os.path.abspath(file) for file in input.config.file.raw_files]
+        #     elif input.config.file.processed_files is not None:
+        #         self._input_files = [os.path.abspath(file) for file in input.config.file.processed_files]
+        #     self._data_type = input.config.name  # propagate user-input
+        #     self.obs_params = input.config_in_dict["obs"]
+        #     self._config = input.config
+
+        if input is None:
+            pass
 
         # input is a fits file list; the only method to keep
-        elif isinstance(input, list) or isinstance(input, str) or isinstance(input, Path):
+        elif isinstance(input, list) or isinstance(input, (str, Path)):
             input = list(np.atleast_1d(input))
             self._names = NameHandler(input)
             self._input_files = [os.path.abspath(img) for img in input]
@@ -165,7 +166,7 @@ class PathHandler(AutoMkdirMixin):
         raise AttributeError(f"{self.__class__.__name__!s} has no attribute {name!r}")
 
     def __repr__(self):
-        return "\n".join(f"{k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
+        return "\n".join(f"{k}: {v}" for k, v in sorted(self.__dict__.items()) if not k.startswith("_"))
 
     def is_present(self, path):
         paths = np.atleast_1d(path)
@@ -178,8 +179,7 @@ class PathHandler(AutoMkdirMixin):
         """
         if self._input_files:
             _file_dir = str(Path(self._input_files[0]).absolute().parent)
-            _pipeline_dirs = {const.RAWDATA_DIR, const.PROCESSED_DIR}
-            _not_pipeline_dir = not any(s in _file_dir for s in _pipeline_dirs)
+            _not_pipeline_dir = not any(s in _file_dir for s in const.PIPELINE_DIRS)
         else:
             _not_pipeline_dir = False
 
@@ -189,9 +189,9 @@ class PathHandler(AutoMkdirMixin):
 
             self._output_parent_dir = working_dir
             tmp_dir = os.path.join(working_dir, "tmp")
-            self.factory_parent_dir = tmp_dir
+            self._factory_parent_dir = tmp_dir
             self.factory_dir = tmp_dir
-            self._assume_pipeline = False
+            self._within_pipeline = False
 
         else:
             from datetime import date
@@ -199,14 +199,12 @@ class PathHandler(AutoMkdirMixin):
             datestring = self.obs_params.get("nightdate") or date.today().strftime("%Y%m%d")
             if datestring < "20260101":
                 self._output_parent_dir = const.PROCESSED_DIR
-                self.factory_parent_dir = const.FACTORY_DIR
+                self.output_parent_dir = self._output_parent_dir
+                self._factory_parent_dir = const.FACTORY_DIR
+                self.factory_parent_dir = self._factory_parent_dir
             else:
                 raise ValueError("nightdate cap reached: consider moving to another disk.")
-            self._assume_pipeline = True
-
-    @property
-    def output_parent_dir(self):
-        return self._output_parent_dir
+            self._within_pipeline = True
 
     @property
     def file_dep_initialized(self):
@@ -215,43 +213,20 @@ class PathHandler(AutoMkdirMixin):
 
     @property
     def assume_pipeline(self):
-        return self._assume_pipeline
-
-    def define_info_agnostic_paths(self):
-        self.ref_sex_dir = os.path.join(const.REF_DIR, "srcExt")
-        self.base_yml = os.path.join(const.REF_DIR, "base.yml")
-        self.output_yml = os.path.join(
-            self._output_parent_dir, "config.yml"
-        )  # overridden in define_file_independent_paths()
-        # self.imstack_base_yml
-        # self.phot_base_yml
+        return self._within_pipeline
 
     def define_file_independent_paths(self):
+        self.ref_sex_dir = os.path.join(const.REF_DIR, "srcExt")
 
-        if self._assume_pipeline:  # and self.obs_params and self.obs_params.get("nightdate"):
-            _relative_path = os.path.join(
-                self.obs_params["nightdate"], self.obs_params["obj"], self.obs_params["filter"], self.obs_params["unit"]
-            )
-            self.output_dir = os.path.join(self.output_parent_dir, _relative_path)
-            self.factory_dir = os.path.join(self.factory_parent_dir, _relative_path)
-            self.metadata_dir = os.path.join(self.output_parent_dir, self.obs_params["nightdate"])
+        self.sciproc_base_yml = os.path.join(const.REF_DIR, "sciproc_base.yml")
+        self.preproc_base_yml = os.path.join(const.REF_DIR, "preproc_base.yml")
 
-            # directories
-            self.image_dir = os.path.join(self.output_dir, "images")
-            self.daily_stacked_dir = os.path.join(self.output_dir, "stacked")
-            self.subtracted_dir = os.path.join(self.output_dir, "subtracted")
+        # for non-pipeline input; overridden in define_file_independent_paths()
+        self.sciproc_output_yml = os.path.join(self._output_parent_dir, "preproc_config.yml")
+        self.preproc_output_yml = os.path.join(self._output_parent_dir, "sciproc_config.yml")
 
-            # files
-            self._output_name = f"{self.obs_params['obj']}_{self.obs_params['filter']}_{self.obs_params['unit']}_{self.obs_params['nightdate']}"
-            self.output_yml = os.path.join(self.output_dir, self._output_name + ".yml")
-            self.output_log = os.path.join(self.output_dir, self._output_name + ".log")
-
-        else:
-            self.output_dir = self.output_parent_dir
-            self.factory_dir = self.factory_parent_dir
-
-        self.figure_dir = os.path.join(self.output_dir, "figures")
-
+        # self.imstack_base_yml
+        # self.phot_base_yml
         self._file_indep_initialized = True
 
     def add_fits(self, files: str | Path | list):
@@ -261,44 +236,73 @@ class PathHandler(AutoMkdirMixin):
             self._input_files = str(files)
 
     def define_file_dependent_paths(self):
-        """use utils.Path7DS for bidirectional handling"""
 
         names = NameHandler(self._input_files)
 
-        if self._assume_pipeline:
+        if self._within_pipeline:  # and self.obs_params and self.obs_params.get("nightdate"):
             if not (self.is_present(self._input_files)):
                 raise FileNotFoundError(f"Not all input paths exist: {self._input_files}")
 
-            if const.RAWDATA_DIR in str(self._input_files[0]):  # raw pipeline input
+            # preprocess-related paths
+            _relative_path = os.path.join(self.obs_params["nightdate"], self.obs_params["unit"])
+            preproc_output_dir = os.path.join(self._output_parent_dir, _relative_path)
+            self.preproc_output_dir = preproc_output_dir
+            config_stem = "_".join([self.obs_params["nightdate"], self.obs_params["unit"]])
+            self.preproc_output_yml = os.path.join(preproc_output_dir, config_stem + ".yml")
+            self.preproc_output_log = os.path.join(preproc_output_dir, config_stem + ".log")
+
+            # sciproc-related paths
+            _relative_path = os.path.join(self.obs_params["nightdate"], self.obs_params["unit"], self.obs_params["obj"], self.obs_params["filter"])  # fmt:skip
+            self._output_dir = os.path.join(self._output_parent_dir, _relative_path)
+            self.output_dir = self._output_dir
+            self.factory_dir = os.path.join(self._factory_parent_dir, _relative_path)
+            self.metadata_dir = os.path.join(self._output_parent_dir, self.obs_params["nightdate"])
+            self.image_dir = os.path.join(self._output_dir, "images")
+            self.daily_stacked_dir = os.path.join(self._output_dir, "stacked")
+            self.subtracted_dir = os.path.join(self._output_dir, "subtracted")
+
+            config_stem = self._names.config_stem_collapse
+            if not isinstance(config_stem, str):
+                raise ValueError("Incoherent input: configuration basename is not uniquely defined")
+            self._output_name = config_stem
+            self.sciproc_output_yml = os.path.join(self._output_dir, config_stem + ".yml")
+            self.sciproc_output_log = os.path.join(self._output_dir, config_stem + ".log")
+
+            # raw pipeline images as input
+            if const.RAWDATA_DIR in str(self._input_files[0]):
                 # self.data_type = self._data_type or "raw"  # interferes with Mkdir
 
-                self.raw_images = self._input_files  # unnecessary
+                self.raw_images = self._input_files
 
                 self.masterframe_dir = os.path.join(
                     f"{const.MASTER_FRAME_DIR}",
-                    f"{self.obs_params['nightdate']}",
+                    self.obs_params["nightdate"],
                     self.obs_params["unit"],
                 )
                 if names._single:
-                    self.processed_images = os.path.join(self.output_dir, names.conjugate)
+                    self.processed_images = os.path.join(self._output_dir, names.conjugate)
                 else:
-                    self.processed_images = [os.path.join(self.output_dir, f) for f in names.conjugate]
+                    self.processed_images = [os.path.join(self._output_dir, f) for f in names.conjugate]
 
-            elif self.output_parent_dir in str(self._input_files[0]):  # processed pipeline input
+            # processed pipeline images as input
+            elif self.output_parent_dir in str(self._input_files[0]):
                 # self.data_type = self._data_type or "processed"
                 # self.processed_images = [str(file.absolute()) for file in self._input_files]
                 self.factory_dir = os.path.join(const.FACTORY_DIR, *Path(self._input_files[0]).parts[-6:-3])
-                self.output_dir = str(Path(self._input_files[0]).parent.parent)
+                self._output_dir = str(Path(self._input_files[0]).parent.parent)
 
             else:  # user input
                 # self.data_type = self._data_type or "user-input"
                 print("User input data type detected. Assume the input is a list of processed images.")
                 self.processed_images = [str(file.absolute()) for file in self._input_files]
                 # self.processed_file_stems = [file.stem for file in self._input_files]
-                self.output_dir = str(Path(self._input_files[0]).parent.parent)
+                self._output_dir = str(Path(self._input_files[0]).parent.parent)
                 self.factory_dir = str(Path(self._input_files[0]).parent.parent / "factory")
         else:
-            pass
+            self._output_dir = self._output_parent_dir
+            self.factory_dir = self._factory_parent_dir
+
+        self.figure_dir = os.path.join(self._output_dir, "figures")
 
         self._file_dep_initialized = True
 
@@ -360,15 +364,44 @@ class PathHandler(AutoMkdirMixin):
     #     return result
 
     @classmethod
-    def from_grouped_calib(cls, sci_files, on_date_calib):
+    def from_grouped_files(cls, sci_files, on_date_calib):
+        """
+        Group science files by their associated on-date calibration sets.
+
+        Parameters
+        ----------
+        sci_files : list
+            List of science file identifiers (e.g. file paths), parallel to `on_date_calib`.
+        on_date_calib : list of tuples
+            Each element is (on_date_flag, bias_list, dark_list, flat_list), where
+            `on_date_flag` is True if on-date calibration exists.
+
+        Returns
+        -------
+        list of 3-tuples
+            Each element is structured as
+            (
+                (raw_bias, raw_dark, raw_flat),
+                (master_bias, master_dark, master_flat),
+                sci_groups
+            )
+            - For on-date groups (sorted by increasing group size):
+                • raw_* lists are the original bias/dark/flat file paths
+                • master_* are the processed calibration frames via `PathHandler(...).preprocess.*`
+                • sci_groups is the list of science files sharing that calibration triple
+            - For off-date entries (appended last):
+                • raw_* are empty lists `([], [], [])`
+                • master_* are `(None, None, None)` to signal lookup in `masterframe_dir`
+                • sci_groups is a singleton list containing that science file
+        """
         from collections import defaultdict
 
         # Build a map from each (bias,dark,flat) tuple → its sci_files + a single copy of the raw lists
         calib_map = defaultdict(lambda: {"sci": [], "bias": None, "dark": None, "flat": None})
         off_date_groups = []
 
-        for sci, (flag, bias, dark, flat) in zip(sci_files, on_date_calib):
-            if flag:
+        for sci, (on_date_flag, bias, dark, flat) in zip(sci_files, on_date_calib):
+            if on_date_flag:
                 key = (tuple(bias), tuple(dark), tuple(flat))
                 entry = calib_map[key]
                 entry["sci"].append(sci)
@@ -382,14 +415,14 @@ class PathHandler(AutoMkdirMixin):
                 off_date_groups.append([sci])
 
         result = []
-        for (bias_t, dark_t, flat_t), entry in sorted(calib_map.items(), key=lambda kv: len(kv[1]["sci"])):
+        for _key, entry in sorted(calib_map.items(), key=lambda kv: len(kv[1]["sci"])):
             raw_bias = entry["bias"]
             raw_dark = entry["dark"]
             raw_flat = entry["flat"]
 
-            proc_bias = PathHandler(raw_bias).preprocess.bias
-            proc_dark = PathHandler(raw_dark).preprocess.dark
-            proc_flat = PathHandler(raw_flat).preprocess.flat
+            proc_bias = collapse(PathHandler(raw_bias).preprocess.bias)
+            proc_dark = collapse(PathHandler(raw_dark).preprocess.dark)
+            proc_flat = collapse(PathHandler(raw_flat).preprocess.flat)
 
             result.append(
                 (
@@ -426,44 +459,39 @@ class PathPreprocess(AutoMkdirMixin):
     @property
     def bias(self):
         names = NameHandler(self._parent._input_files)
-        return collapse(
-            [
-                os.path.join(self._parent.masterframe_dir, s)
-                for typ, s in zip(names.types, names.masterframe_basename)
-                if typ[1] == "bias"
-            ]
-        )  # it may not be collapsed if input is incoherent
+        return [
+            os.path.join(self._parent.masterframe_dir, s)
+            for typ, s in zip(names.types, names.masterframe_basename)
+            if typ[1] == "bias"
+        ]
 
     @property
     def dark(self):
         names = NameHandler(self._parent._input_files)
-        return collapse(
-            [
-                os.path.join(self._parent.masterframe_dir, s)
-                for typ, s in zip(names.types, names.masterframe_basename)
-                if typ[1] == "dark"
-            ]
-        )
+        return [
+            os.path.join(self._parent.masterframe_dir, s)
+            for typ, s in zip(names.types, names.masterframe_basename)
+            if typ[1] == "dark"
+        ]
 
     @property
     def flat(self):
         names = NameHandler(self._parent._input_files)
-        return collapse(
-            [
-                os.path.join(self._parent.masterframe_dir, s)
-                for typ, s in zip(names.types, names.masterframe_basename)
-                if typ[1] == "flat"
-            ]
-        )
+        return [
+            os.path.join(self._parent.masterframe_dir, s)
+            for typ, s in zip(names.types, names.masterframe_basename)
+            if typ[1] == "flat"
+        ]
 
     @property
     def processed(self):
-        names = NameHandler(self._parent._input_files)
+        names = self._parent._names
+        # names = NameHandler(self._parent._input_files)
         return collapse(
             [
-                os.path.join(self._parent.masterframe_dir, s)
-                for typ, s in zip(names.types, names.masterframe_basename)
-                if typ[1] == "flat"
+                os.path.join(self._parent._output_dir, s)
+                for typ, s in zip(names.types, names.conjugate)
+                if typ[1] == "science"
             ]
         )
 
@@ -562,6 +590,11 @@ class PathImstack(AutoMkdirMixin):
     @property
     def tmp_dir(self):
         return os.path.join(self._parent.factory_dir, "imstack")
+
+    def stacked_image(self, total_exptime):
+        names = NameHandler(self._parent._input_files)
+        fname = f"{names.obj_collapse}_{names.filter_collapse}_{names.unit_collapse}_{names.unit_collapse}_{names.datetime[-1]}_{format_exptime(total_exptime, type='stacked')}_coadd.fits"
+        return os.path.join(self._parent.daily_stacked_dir, fname)
 
 
 class PathImsubtract(AutoMkdirMixin):

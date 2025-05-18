@@ -2,7 +2,7 @@ import os
 from collections import defaultdict
 from pathlib import Path
 from astropy.io import fits
-from ..utils import subtract_half_day, get_camera, get_header, equal_on_keys
+from ..utils import subtract_half_day, get_camera, get_header, equal_on_keys, collapse
 from .. import const
 from .utils import strip_binning, format_binning, strip_exptime, format_exptime, strip_gain
 
@@ -246,15 +246,41 @@ class NameHandler:
             types += ("image",)
 
         return types
-        # return "_".join([s for s in types if s is not None])
 
-    @property
-    def types_str(self):
-        """Return the type as a string."""
-        if self._single:
-            return "_".join(self.types)
-        else:
-            return ["_".join([t for t in types if t]) for types in self.types]
+    # @property
+    # def types_str(self):
+    #     """Return the type as a string."""
+    #     if self._single:
+    #         return "_".join(self.types)
+    #     else:
+    #         return ["_".join([t for t in types if t]) for types in self.types]
+
+    def __getattr__(self, name):
+        # syntactic sugar
+        if name.endswith("_to_string"):
+            base = name[:-10]
+            val = getattr(self, base)
+            if isinstance(val, list):
+                # return joined type names
+                if len(val) > 1:
+                    return ["_".join([t for t in types if t]) for types in val]
+                else:
+                    return "_".join(val)
+
+        if name.endswith("_collapse") or name.endswith("_squeeze") or name.endswith("_compact"):
+            if name.endswith("_collapse"):
+                base = name[:-9]
+            else:
+                base = name[:-8]
+            val = getattr(self, base)
+            if isinstance(val, list):
+                return collapse(val)
+            if isinstance(val, dict):
+                return {k: collapse(v) for k, v in val.items() if isinstance(v, list)}
+            else:
+                return val
+
+        raise AttributeError(f"{self.__class__.__name__!s} has no attribute {name!r}")
 
     @staticmethod
     def _parse_raw(parts):
@@ -436,6 +462,18 @@ class NameHandler:
             for typ, filte, unit, date, exptime, gain, camera in zip(
                 self.types, self.filter, self.unit, self.date, self.exptime, self.gain, self.camera
             )
+        ]
+
+    @property
+    def config_stem(self):
+        def make(obj, filte, unit, date):
+            return f"{obj}_{filte}_{unit}_{date}"
+
+        if getattr(self, "_single", False):
+            return make(self.obj, self.filter, self.unit, self.date, self.hms, self.exptime)
+
+        return [
+            make(obj, filte, unit, date) for obj, filte, unit, date, in zip(self.obj, self.filter, self.unit, self.date)
         ]
 
     @property
