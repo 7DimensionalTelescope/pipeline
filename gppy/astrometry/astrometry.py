@@ -166,7 +166,7 @@ class Astrometry(BaseSetup):
         ]
 
         if not filtered_data:
-            self.logger.info("All input images are already solved. Exiting solve-field.")
+            self.logger.info("All input images have already been solved. Exiting solve-field.")
             return
 
         inputs, outputs = zip(*filtered_data)

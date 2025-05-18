@@ -10,8 +10,10 @@ FACTORY_DIR = os.environ["FACTORY_DIR"]
 MASTER_FRAME_DIR = os.environ["MASTER_FRAME_DIR"]
 
 PROCESSED_DIR = os.environ["PROCESSED_DIR"]
-DAILY_STACKED_DIR = os.environ["DAILY_STACKED_DIR"]
+# DAILY_STACKED_DIR = os.environ["DAILY_STACKED_DIR"]
 STACKED_DIR = os.environ["STACKED_DIR"]
+
+PIPELINE_DIRS = {RAWDATA_DIR, FACTORY_DIR, MASTER_FRAME_DIR, PROCESSED_DIR, STACKED_DIR}
 
 SLACK_TOKEN = os.environ["SLACK_TOKEN"]
 
@@ -25,7 +27,7 @@ INSTRUM_GROUP_KEYS = ["obj", "filter", "unit", "nightdate", "exptime", "n_binnin
 BIAS_GROUP_KEYS = ["unit", "nightdate", "n_binning", "gain", "camera"]  # account for potential ms difference
 DARK_GROUP_KEYS = ["unit", "nightdate", "exptime", "n_binning", "gain", "camera"]
 FLAT_GROUP_KEYS = ["filter", "unit", "nightdate", "n_binning", "gain", "camera"]
-SCIENCE_GROUP_KEYS = ["obj", "filter", "unit", "nightdate"]
+SCIENCE_GROUP_KEYS = ["obj", "filter", "unit"]  # , "nightdate"]
 
 STRICT_KEYS = {"nightdate", "obj", "filter", "unit", "exptime", "n_binning", "gain", "camera"}
 ANCILLARY_KEYS = {"ra", "dec", "obstime"}  # hms

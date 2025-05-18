@@ -4,23 +4,330 @@ import re
 import glob
 import json
 from datetime import datetime
+from . import __version__
 from .utils import (
     header_to_dict,
     to_datetime_string,
     find_raw_path,
-    define_output_dir,
     get_camera,
-    parse_exptime,
     clean_up_folder,
     swap_ext,
     most_common_in_list,
+    merge_dicts,
+    get_header,
 )
 from .const import HEADER_KEY_MAP, STRICT_KEYS, ANCILLARY_KEYS
 from .path.path import PathHandler
 
 
+class ConfigurationMixin:
+    def _make_instance(self, input_dict):
+        """
+        Transform configuration dictionary into nested, dynamic instances.
+
+        Args:
+            input_dict (dict): Hierarchical configuration dictionary
+        """
+
+        for key, value in input_dict.items():
+            if isinstance(value, dict):
+                nested_dict = {}
+                instances = ConfigurationInstance(self, key)
+                for subkey, subvalue in value.items():
+                    nested_dict[subkey] = subvalue
+                    setattr(instances, subkey, subvalue)
+                setattr(self.config, key, instances)
+                self._config_in_dict[key] = nested_dict
+            else:
+                setattr(self.config, key, value)
+                self._config_in_dict[key] = value
+
+    def __repr__(self):
+        return self.config.__repr__()
+
+    def _update_config_in_dict(self, section, key, value):
+        """Update configuration dictionary with new key-value pair."""
+        target = self._config_in_dict[section] if section else self._config_in_dict
+        target[key] = value
+
+    def _update_with_kwargs(self, kwargs):
+        """Merge additional configuration parameters."""
+        # for key, value in kwargs.items():
+        #     key = key.lower()
+        #     if key in self._config_in_dict:
+        #         self._config_in_dict[key] = value
+        #     else:
+        #         for section_dict in self._config_in_dict.values():
+        #             if isinstance(section_dict, dict) and key in section_dict:
+        #                 section_dict[key] = value
+        #                 break
+
+        lower_kwargs = {key.lower(): value for key, value in kwargs.items()}
+        self._config_in_dict = merge_dicts(self._config_in_dict, lower_kwargs)
+
+    @classmethod
+    def base_config(cls, working_dir=None, config_file=None, **kwargs):
+        """Return the base (base.yml) ConfigurationInstance."""
+        working_dir = working_dir or os.getcwd()
+
+        instance = cls(return_base=True, **kwargs)  # working_dir=working_dir,
+        config = instance.config
+        config.name = "user-input"
+        # instance.path = PathHandler(instance, working_dir=working_dir)  # make _data_type 'user-input'
+
+        if config_file:
+            # working_dir is ignored if config_file is absolute path
+            config_file = os.path.join(working_dir, config_file) if working_dir else config_file
+            if os.path.exists(config_file):
+                with open(config_file, "r") as f:
+                    new_config = yaml.load(f, Loader=yaml.FullLoader)
+
+                instance._config_in_dict = merge_dicts(instance._config_in_dict, new_config)
+                instance._make_instance(instance._config_in_dict)
+            else:
+                raise FileNotFoundError("Provided Configuration file does not exist")
+
+        instance._initialized = True
+        # return config
+        return instance
+
+    @property
+    def is_initialized(self):
+        return self._initialized
+
+    @property
+    def is_loaded(self):
+        return self._loaded
+
+    @property
+    def config_in_dict(self):
+        """Return the configuration dictionary."""
+        return self._config_in_dict
+
+    def _setup_logger(self, logger=None, overwrite=True, verbose=True):
+        if logger is None:
+            from .services.logger import Logger
+
+            logger = Logger(name=self.config.name, slack_channel="pipeline_report")
+
+        if self.write:
+            self.config.logging.file = self.log_file
+            logger.set_output_file(self.log_file, overwrite=overwrite)
+            logger.set_format(self.config.logging.format)
+            logger.set_pipeline_name(self.path._output_name)
+
+        if not (verbose):
+            logger.set_level("WARNING")
+
+        return logger
+
+    def read_config(self, config_file):
+        """Read configuration from YAML file."""
+        with open(config_file, "r") as f:
+            return yaml.load(f, Loader=yaml.FullLoader)
+
+    def write_config(self):
+        """
+        Write current configuration to a YAML file.
+
+        Generates a configuration filename using observation details:
+        - Checks if configuration is initialized
+        - Creates a filename with unit, object, datetime, filter, and exposure
+        - Writes configuration dictionary to the output path
+        """
+
+        if not self.is_initialized or not self.write:
+            return
+
+        self._config_in_dict["info"]["last_update_datetime"] = datetime.now().isoformat()
+
+        with open(self.config_file, "w") as f:
+            yaml.dump(self.config_in_dict, f, sort_keys=False)
+
+
+class SciProcConfiguration(ConfigurationMixin):
+    """
+    Comprehensive configuration management system for 7DT observation data.
+
+    Handles dynamic configuration loading, modification, and persistence across
+    different stages of data processing. Provides flexible initialization,
+    metadata extraction, and configuration file generation.
+
+    Key Features:
+    - Dynamic configuration instance creation
+    - Nested configuration support
+    - Automatic path generation
+    - Metadata extraction from observation headers
+    - Configuration file versioning
+    """
+
+    def __init__(
+        self,
+        input_files: list[str] = None,
+        config_source: str | dict = None,
+        logger=None,
+        write=True,  # False for PhotometrySingle
+        overwrite=False,
+        verbose=True,
+        **kwargs,
+    ):
+        """
+        Initialize configuration with comprehensive observation metadata.
+
+        Args:
+            obs_params (dict, optional): Dictionary of observation parameters
+            config_source (str|dict, optional): Custom configuration source
+            **kwargs: Additional configuration parameter overrides
+        """
+        self.write = write
+        self.path = PathHandler(input_files)
+        self.config_file = self.path.sciproc_output_yml
+        self.log_file = self.path.sciproc_output_log
+        self._initialized = False
+
+        if config_source:
+            self._initialized = True
+        else:
+            config_source = self.path.sciproc_base_yml
+            # config_source = self._find_config_file()
+
+        self._load_config(config_source, **kwargs)
+
+        if not self._initialized:
+            self.initialize(input_files)
+
+        if overwrite:
+            clean_up_folder(self.path.output_dir)
+            clean_up_folder(self.path.factory_dir)
+
+        self.logger = self._setup_logger(logger, verbose=verbose)
+
+        self.write_config()
+
+        # self.config.flag.configuration = True
+        self.logger.info(f"SciProcConfiguration initialized")
+        # self.logger.debug(f"Configuration file: {self.config_file}")
+
+    @classmethod
+    def from_dict(cls, config_dict, write=False, **kwargs):
+        # config_dict['file']
+        return cls(config_source=config_dict, write=write, **kwargs)
+
+    def _load_config(self, config_source, **kwargs):
+        # Load configuration from file or dict
+        self._loaded = False
+
+        if isinstance(config_source, str):
+            input_dict = self.read_config(config_source)
+        elif isinstance(config_source, dict):
+            input_dict = config_source
+        else:
+            raise TypeError("Invalid config_source type")
+
+        self._config_in_dict = input_dict
+
+        self.config = ConfigurationInstance(self)
+
+        self._update_with_kwargs(kwargs)
+        self._make_instance(self._config_in_dict)
+
+        self._loaded = True
+
+    def _find_config_file(self):
+        """Find the configuration file in the processed directory."""
+
+        output_config_file = self.path.sciproc_output_yml
+        if os.path.exists(output_config_file):
+            self._initialized = True
+            return output_config_file  # s[0]
+        else:
+            self._initialized = False
+            return self.path.base_yml
+
+    def initialize(self, input_files):
+        """Fill in obs info, name, paths."""
+
+        self.config.info.version = __version__
+
+        # Set core observation details
+        # self.config.obs.unit = obs_params["unit"]
+        # self.config.obs.nightdate = obs_params["nightdate"]
+        # self.config.obs.obj = obs_params["obj"]
+        # self.config.obs.filter = obs_params["filter"]
+        # self.config.obs.n_binning = obs_params["n_binning"]
+        # self.config.obs.gain = obs_params["gain"]
+        # self.config.obs.pixscale = self.config.obs.pixscale * float(obs_params["n_binning"])  # For initial solve
+        self.config.name = self.path._output_name
+        self.config.info.creation_datetime = datetime.now().isoformat()
+        self.config.file.input_files = input_files
+
+        self.raw_header_sample = get_header(input_files[0])
+        # self.set_input_output()
+        # self.check_masterframe_status()
+
+        self._add_metadata()
+        # self._generate_links()
+        self._define_settings()
+        self._initialized = True
+
+    # def set_input_output(self):
+    #     self.path.add_fits(self._raw_files)  # file_dependent_common_paths work afterwards
+    #     self.config.file.raw_files = self.path.raw_images
+    #     self.config.file.processed_files = self.path.processed_images
+
+    @staticmethod
+    def _obsdata_basename(config):
+        # ex) '7DT11_20250102_014829_T00139_m425_1x1_100.0s_0001.fits'
+        # template = f"{path_raw}/*{self.config.obs.obj}_{self.config.obs.filter}_{self.config.obs.n_binning}*.fits"
+        # return f"{config.unit}_{config.nightdate}_*_{config.obj}_{config.filter}_{config.n_binning}x{config.n_binning}_{config.exposure}.fits"
+        return f"{config.unit}_*_*_{config.obj}_{config.filter}_{config.n_binning}x{config.n_binning}_*.fits"
+
+    def _add_metadata(self):  # for webpage only
+
+        # metadata_path = os.path.join(self._processed_dir, name, "metadata.ecsv")
+        metadata_path = os.path.join(self.path.metadata_dir, "metadata.ecsv")
+        if not os.path.exists(metadata_path):
+            with open(metadata_path, "w") as f:
+                f.write("# %ECSV 1.0\n")
+                f.write("# ---\n")
+                f.write("# datatype:\n")
+                f.write("# - {name: obj, datatype: string}\n")
+                f.write("# - {name: filter, datatype: string}\n")
+                f.write("# - {name: unit, datatype: string}\n")
+                f.write("# - {name: n_binning, datatype: int64}\n")
+                f.write("# - {name: gain, datatype: int64}\n")
+                f.write("# meta: !!omap\n")
+                f.write("# - {created: " + datetime.now().isoformat() + "}\n")
+                f.write("# schema: astropy-2.0\n")
+                f.write("object unit filter n_binning gain\n")
+
+        observation_data = [
+            str(self.config.obs.obj),
+            str(self.config.obs.unit),
+            str(self.config.obs.filter),
+            str(self.config.obs.n_binning),
+            str(self.config.obs.gain),
+        ]
+        new_line = f"{' '.join(observation_data)}\n"
+        with open(metadata_path, "a") as f:
+            f.write(new_line)
+
+    def _define_settings(self):
+        # use local astrometric reference catalog for tile observations
+        # self.config.settings.local_astref = bool(re.fullmatch(r"T\d{5}", self.config.obs.obj))
+
+        # skip single frame combine for Deep mode
+        obsmode = self.raw_header_sample["OBSMODE"]
+        self.config.obs.obsmode = obsmode
+        self.config.settings.daily_stack = False if obsmode.lower() == "deep" else True
+
+
+###############################################################################
+
+
 class Configuration:
     """
+    DEPRECATED: Use SciProcConfiguration instead.
     Comprehensive configuration management system for 7DT observation data.
 
     Handles dynamic configuration loading, modification, and persistence across
