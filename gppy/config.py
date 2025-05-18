@@ -145,22 +145,7 @@ class ConfigurationMixin:
             yaml.dump(self.config_in_dict, f, sort_keys=False)
 
 
-class SciProcConfiguration(ConfigurationMixin):
-    """
-    Comprehensive configuration management system for 7DT observation data.
-
-    Handles dynamic configuration loading, modification, and persistence across
-    different stages of data processing. Provides flexible initialization,
-    metadata extraction, and configuration file generation.
-
-    Key Features:
-    - Dynamic configuration instance creation
-    - Nested configuration support
-    - Automatic path generation
-    - Metadata extraction from observation headers
-    - Configuration file versioning
-    """
-
+class PreprocConfiguration(ConfigurationMixin):
     def __init__(
         self,
         input_files: list[str] = None,
@@ -171,24 +156,16 @@ class SciProcConfiguration(ConfigurationMixin):
         verbose=True,
         **kwargs,
     ):
-        """
-        Initialize configuration with comprehensive observation metadata.
-
-        Args:
-            obs_params (dict, optional): Dictionary of observation parameters
-            config_source (str|dict, optional): Custom configuration source
-            **kwargs: Additional configuration parameter overrides
-        """
         self.write = write
         self.path = PathHandler(input_files)
-        self.config_file = self.path.sciproc_output_yml
-        self.log_file = self.path.sciproc_output_log
+        self.config_file = self.path.preproc_output_yml
+        self.log_file = self.path.preproc_output_log
         self._initialized = False
 
         if config_source:
             self._initialized = True
         else:
-            config_source = self.path.sciproc_base_yml
+            config_source = self.path.preproc_base_yml
             # config_source = self._find_config_file()
 
         self._load_config(config_source, **kwargs)
@@ -204,9 +181,9 @@ class SciProcConfiguration(ConfigurationMixin):
 
         self.write_config()
 
-        # self.config.flag.configuration = True
-        self.logger.info(f"SciProcConfiguration initialized")
-        # self.logger.debug(f"Configuration file: {self.config_file}")
+        self.config.flag.configuration = True
+        self.logger.info(f"PreprocConfiguration initialized")
+        self.logger.debug(f"Configuration file: {self.config_file}")
 
     @classmethod
     def from_dict(cls, config_dict, write=False, **kwargs):
@@ -265,24 +242,108 @@ class SciProcConfiguration(ConfigurationMixin):
         # self.set_input_output()
         # self.check_masterframe_status()
 
-        self._add_metadata()
         # self._generate_links()
         self._define_settings()
         self._initialized = True
 
-    # def set_input_output(self):
-    #     self.path.add_fits(self._raw_files)  # file_dependent_common_paths work afterwards
-    #     self.config.file.raw_files = self.path.raw_images
-    #     self.config.file.processed_files = self.path.processed_images
+    def _define_settings(self):
+        pass
 
-    @staticmethod
-    def _obsdata_basename(config):
-        # ex) '7DT11_20250102_014829_T00139_m425_1x1_100.0s_0001.fits'
-        # template = f"{path_raw}/*{self.config.obs.obj}_{self.config.obs.filter}_{self.config.obs.n_binning}*.fits"
-        # return f"{config.unit}_{config.nightdate}_*_{config.obj}_{config.filter}_{config.n_binning}x{config.n_binning}_{config.exposure}.fits"
-        return f"{config.unit}_*_*_{config.obj}_{config.filter}_{config.n_binning}x{config.n_binning}_*.fits"
 
-    def _add_metadata(self):  # for webpage only
+class SciProcConfiguration(ConfigurationMixin):
+    def __init__(
+        self,
+        input_files: list[str] = None,
+        config_source: str | dict = None,
+        logger=None,
+        write=True,  # False for PhotometrySingle
+        overwrite=False,
+        verbose=True,
+        **kwargs,
+    ):
+        self.write = write
+        self.path = PathHandler(input_files)
+        self.config_file = self.path.sciproc_output_yml
+        self.log_file = self.path.sciproc_output_log
+        self._initialized = False
+
+        if config_source:
+            self._initialized = True
+        else:
+            config_source = self.path.sciproc_base_yml
+            # config_source = self._find_config_file()
+
+        self._load_config(config_source, **kwargs)
+
+        if not self._initialized:
+            self.initialize(input_files)
+
+        if overwrite:
+            clean_up_folder(self.path.output_dir)
+            clean_up_folder(self.path.factory_dir)
+
+        self.logger = self._setup_logger(logger, verbose=verbose)
+
+        self.write_config()
+
+        # self.config.flag.configuration = True
+        self.logger.info(f"SciProcConfiguration initialized")
+        self.logger.debug(f"Configuration file: {self.config_file}")
+
+    @classmethod
+    def from_dict(cls, config_dict, write=False, **kwargs):
+        # config_dict['file']
+        return cls(config_source=config_dict, write=write, **kwargs)
+
+    def _load_config(self, config_source, **kwargs):
+        # Load configuration from file or dict
+        self._loaded = False
+
+        if isinstance(config_source, str):
+            input_dict = self.read_config(config_source)
+        elif isinstance(config_source, dict):
+            input_dict = config_source
+        else:
+            raise TypeError("Invalid config_source type")
+
+        self._config_in_dict = input_dict
+
+        self.config = ConfigurationInstance(self)
+
+        self._update_with_kwargs(kwargs)
+        self._make_instance(self._config_in_dict)
+
+        self._loaded = True
+
+    def _find_config_file(self):
+        """Find the configuration file in the processed directory."""
+
+        output_config_file = self.path.sciproc_output_yml
+        if os.path.exists(output_config_file):
+            self._initialized = True
+            return output_config_file  # s[0]
+        else:
+            self._initialized = False
+            return self.path.base_yml
+
+    def initialize(self, input_files):
+        """Fill in obs info, name, paths."""
+
+        self.config.info.version = __version__
+
+        self.config.name = self.path._output_name
+        self.config.info.creation_datetime = datetime.now().isoformat()
+        self.config.file.input_files = input_files
+
+        self.raw_header_sample = get_header(input_files[0])
+        # self.set_input_output()
+        # self.check_masterframe_status()
+
+        self._add_metadata()
+        self._define_settings()
+        self._initialized = True
+
+    def _add_metadata(self):  # for webpage
 
         # metadata_path = os.path.join(self._processed_dir, name, "metadata.ecsv")
         metadata_path = os.path.join(self.path.metadata_dir, "metadata.ecsv")
@@ -301,16 +362,16 @@ class SciProcConfiguration(ConfigurationMixin):
                 f.write("# schema: astropy-2.0\n")
                 f.write("object unit filter n_binning gain\n")
 
-        observation_data = [
-            str(self.config.obs.obj),
-            str(self.config.obs.unit),
-            str(self.config.obs.filter),
-            str(self.config.obs.n_binning),
-            str(self.config.obs.gain),
-        ]
-        new_line = f"{' '.join(observation_data)}\n"
-        with open(metadata_path, "a") as f:
-            f.write(new_line)
+        # observation_data = [
+        #     str(self.config.obs.obj),
+        #     str(self.config.obs.unit),
+        #     str(self.config.obs.filter),
+        #     str(self.config.obs.n_binning),
+        #     str(self.config.obs.gain),
+        # ]
+        # new_line = f"{' '.join(observation_data)}\n"
+        # with open(metadata_path, "a") as f:
+        #     f.write(new_line)
 
     def _define_settings(self):
         # use local astrometric reference catalog for tile observations
@@ -318,7 +379,7 @@ class SciProcConfiguration(ConfigurationMixin):
 
         # skip single frame combine for Deep mode
         obsmode = self.raw_header_sample["OBSMODE"]
-        self.config.obs.obsmode = obsmode
+        # self.config.obs.obsmode = obsmode
         self.config.settings.daily_stack = False if obsmode.lower() == "deep" else True
 
 

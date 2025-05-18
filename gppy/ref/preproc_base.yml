@@ -25,12 +25,12 @@ file:
 flag:
   configuration: false
   preprocess: false
-  astrometry: false
-  single_photometry: false
-  combine: false
-  # combined_astrometry: false
-  combined_photometry: false
-  subtraction: false
+  # astrometry: false
+  # single_photometry: false
+  # combine: false
+  # # combined_astrometry: false
+  # combined_photometry: false
+  # subtraction: false
 
 info:
   version: '2.0'  # legacy gppy-gpu is 1.0

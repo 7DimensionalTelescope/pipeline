@@ -364,7 +364,11 @@ class PathHandler(AutoMkdirMixin):
     #     return result
 
     @classmethod
-    def from_grouped_files(cls, sci_files, on_date_calib):
+    def take_raw_inventory(cls, files: list[str]):
+        return cls.build_preprocessing_input(*NameHandler.take_raw_inventory(files))
+
+    @classmethod
+    def build_preprocessing_input(cls, sci_files, on_date_calib):
         """
         Group science files by their associated on-date calibration sets.
 
@@ -383,7 +387,7 @@ class PathHandler(AutoMkdirMixin):
             (
                 (raw_bias, raw_dark, raw_flat),
                 (master_bias, master_dark, master_flat),
-                sci_groups
+                [[sci_group1], [sci_group2], ...]
             )
             - For on-date groups (sorted by increasing group size):
                 • raw_* lists are the original bias/dark/flat file paths

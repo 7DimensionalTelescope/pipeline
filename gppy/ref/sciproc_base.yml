@@ -1,30 +1,28 @@
 name: 
 
-obs:
-  # OBS Info should be updated from header
-  coherent_input:
-  pixscale: 0.505  # arcsec/pix
-  n_binning: 
-  gain: 
-  unit: 
-  camera: 
-  filter:
-  obj:
-  nightdate:  # date of datetime - 12h. dirname of obsdata
-  obstime:  # UTC
-  ra:
-  dec:
-  exptime:
+# obs:
+#   # OBS Info should be updated from header
+#   coherent_input:
+#   pixscale: 0.505  # arcsec/pix
+#   n_binning: 
+#   gain: 
+#   unit: 
+#   camera: 
+#   filter:
+#   obj:
+#   nightdate:  # date of datetime - 12h. dirname of obsdata
+#   obstime:  # UTC
+#   ra:
+#   dec:
+#   exptime:
 
 file: 
-  raw_files: 
-  processed_files: 
+  input_files: 
   # stacked_file:
-  # weight_file:
 
 flag:
-  configuration: false
-  preprocess: false
+  # configuration: false
+  # preprocess: false
   astrometry: false
   single_photometry: false
   combine: false
@@ -55,17 +53,6 @@ logging:
     - console
     - file
 
-preprocess:
-  masterframe: default # closest, custom
-  # mbias_link: # master_frame/2001-02-23_1x1_gain2750/7DT11/link_20250102_C3.bias
-  # mdark_link: # master_frame/2001-02-23_1x1_gain2750/7DT11/link_20250102_100_C3.dark
-  # mflat_link: # master_frame/2001-02-23_1x1_gain2750/7DT11/link_20250102_m625_C3.flat
-
-  mbias_file: # master_frame/2001-02-23_1x1_gain2750/7DT11/bias_20250102_C3.fits
-  mdark_file: # master_frame/2001-02-23_1x1_gain2750/7DT11/dark_20250102_100s_C3.fits
-  mflat_file: # master_frame/2001-02-23_1x1_gain2750/7DT11/flat_20250102_m625_C3.fits
-  bpmask_file:
-
 astrometry:
   path:
     ref_ris_dir: "/lyman/data1/factory/catalog/gaia_dr3_7DT"
@@ -73,12 +60,9 @@ astrometry:
   ahead_file: "/data/pipeline_reform/dhhyun_lab/scamptest/ahead/calib_7DT11_T07304_20250115_050155_g_60_nocrval.ahead"
 
 photometry:
-  # path:  # if user-input
-  #   - file1
-  #   - file2
-  path:
-    ref_ris_dir: "/lyman/data1/factory/ref_cat"  # divided by RIS tiles
-    ref_gaia_dir: "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile"  # divided by Gaia team
+  # path:  # can be specified manually
+  #   ref_ris_dir: "/lyman/data1/factory/ref_cat"  # divided by RIS tiles
+  #   ref_gaia_dir: "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile"  # divided by Gaia team
   match_radius: 1.0
   photfraction: 0.75
   refcatname: GaiaXP
@@ -99,8 +83,8 @@ photometry:
     BACKPHOTO_TYPE: LOCAL
 
 imstack:
-  path:
-    ref_image_dir: "/lyman/data1/factory/ref_frame"
+  # path:
+  #   ref_image_dir: "/lyman/data1/factory/ref_frame"
   gpu: True
   zp_key: 'ZP_AUTO'
   # images_to_combine:
