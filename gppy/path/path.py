@@ -240,8 +240,8 @@ class PathHandler(AutoMkdirMixin):
         names = NameHandler(self._input_files)
 
         if self._within_pipeline:  # and self.obs_params and self.obs_params.get("nightdate"):
-            if not (self.is_present(self._input_files)):
-                raise FileNotFoundError(f"Not all input paths exist: {self._input_files}")
+            # if not (self.is_present(self._input_files)):
+            #     raise FileNotFoundError(f"Not all input paths exist: {self._input_files}")
 
             # preprocess-related paths
             _relative_path = os.path.join(self.obs_params["nightdate"], self.obs_params["unit"])
@@ -257,7 +257,8 @@ class PathHandler(AutoMkdirMixin):
             self.output_dir = self._output_dir
             self.factory_dir = os.path.join(self._factory_parent_dir, _relative_path)
             self.metadata_dir = os.path.join(self._output_parent_dir, self.obs_params["nightdate"])
-            self.image_dir = os.path.join(self._output_dir, "images")
+            image_dir = os.path.join(self._output_dir, "images")
+            self.image_dir = image_dir
             self.daily_stacked_dir = os.path.join(self._output_dir, "stacked")
             self.subtracted_dir = os.path.join(self._output_dir, "subtracted")
 
@@ -280,9 +281,9 @@ class PathHandler(AutoMkdirMixin):
                     self.obs_params["unit"],
                 )
                 if names._single:
-                    self.processed_images = os.path.join(self._output_dir, names.conjugate)
+                    self.processed_images = os.path.join(image_dir, names.conjugate)
                 else:
-                    self.processed_images = [os.path.join(self._output_dir, f) for f in names.conjugate]
+                    self.processed_images = [os.path.join(image_dir, f) for f in names.conjugate]
 
             # processed pipeline images as input
             elif self.output_parent_dir in str(self._input_files[0]):
@@ -326,7 +327,7 @@ class PathHandler(AutoMkdirMixin):
 
         paths = []
         for bn, t in zip(basenames, types):
-            if t == "raw_image":
+            if "raw" in t:
                 # original was raw → conjugate is processed
                 root = self.image_dir
             else:
@@ -365,10 +366,10 @@ class PathHandler(AutoMkdirMixin):
 
     @classmethod
     def take_raw_inventory(cls, files: list[str]):
-        return cls.build_preprocessing_input(*NameHandler.take_raw_inventory(files))
+        return cls.build_preproc_input(*NameHandler.find_calib_for_sci(files))
 
     @classmethod
-    def build_preprocessing_input(cls, sci_files, on_date_calib):
+    def build_preproc_input(cls, sci_files, on_date_calib):
         """
         Group science files by their associated on-date calibration sets.
 
@@ -419,29 +420,37 @@ class PathHandler(AutoMkdirMixin):
                 off_date_groups.append([sci])
 
         result = []
+        # off-date groups first: no processing time
+        for sci_group in off_date_groups:
+            result.append(
+                (
+                    ([], [], []),  # empty if no raw bias/dark/flat -> search them in masterframe_dir
+                    (
+                        PathHandler(sci_group[0]).preprocess.bias[0],  # assume homogeneous
+                        PathHandler(sci_group[0]).preprocess.dark[0],
+                        PathHandler(sci_group[0]).preprocess.flat[0],
+                    ),  # master bdf search template
+                    sci_group,  # singleton science file
+                    [PathHandler(sci_group[0]).conjugate],
+                )
+            )
+
+        # on-date groups: sorted by increasing sci group numbers for each bdf triple
         for _key, entry in sorted(calib_map.items(), key=lambda kv: len(kv[1]["sci"])):
             raw_bias = entry["bias"]
             raw_dark = entry["dark"]
             raw_flat = entry["flat"]
 
-            proc_bias = collapse(PathHandler(raw_bias).preprocess.bias)
-            proc_dark = collapse(PathHandler(raw_dark).preprocess.dark)
-            proc_flat = collapse(PathHandler(raw_flat).preprocess.flat)
+            mbias = PathHandler(raw_bias).preprocess.bias[0]  # assume homogeneous
+            mdark = PathHandler(raw_dark).preprocess.dark[0]
+            mflat = PathHandler(raw_flat).preprocess.flat[0]
 
             result.append(
                 (
                     (raw_bias, raw_dark, raw_flat),
-                    (proc_bias, proc_dark, proc_flat),
+                    (mbias, mdark, mflat),
                     entry["sci"],  # science images in this on‐date group
-                )
-            )
-
-        for sci_list in off_date_groups:
-            result.append(
-                (
-                    ([], [], []),  # no raw bias/dark/flat
-                    (None, None, None),  # no master bias/dark/flat -> search them in masterframe_dir
-                    sci_list,  # singleton science file
+                    [PathHandler(sci_group).conjugate for sci_group in entry["sci"]],  # processed images
                 )
             )
 
@@ -463,41 +472,39 @@ class PathPreprocess(AutoMkdirMixin):
     @property
     def bias(self):
         names = NameHandler(self._parent._input_files)
+        # return os.path.join(self._parent.masterframe_dir, names.masterframe_basename[0])
         return [
-            os.path.join(self._parent.masterframe_dir, s)
+            (
+                os.path.join(self._parent.masterframe_dir, s)
+                if typ[1] == "bias"
+                else os.path.join(self._parent.masterframe_dir, s[0])
+            )
             for typ, s in zip(names.types, names.masterframe_basename)
-            if typ[1] == "bias"
-        ]
+        ]  # works for mixed input
 
     @property
     def dark(self):
         names = NameHandler(self._parent._input_files)
         return [
-            os.path.join(self._parent.masterframe_dir, s)
+            (
+                os.path.join(self._parent.masterframe_dir, s)
+                if typ[1] == "dark"
+                else os.path.join(self._parent.masterframe_dir, s[1])
+            )
             for typ, s in zip(names.types, names.masterframe_basename)
-            if typ[1] == "dark"
         ]
 
     @property
     def flat(self):
         names = NameHandler(self._parent._input_files)
         return [
-            os.path.join(self._parent.masterframe_dir, s)
+            (
+                os.path.join(self._parent.masterframe_dir, s)
+                if typ[1] == "flat"
+                else os.path.join(self._parent.masterframe_dir, s[2])
+            )
             for typ, s in zip(names.types, names.masterframe_basename)
-            if typ[1] == "flat"
         ]
-
-    @property
-    def processed(self):
-        names = self._parent._names
-        # names = NameHandler(self._parent._input_files)
-        return collapse(
-            [
-                os.path.join(self._parent._output_dir, s)
-                for typ, s in zip(names.types, names.conjugate)
-                if typ[1] == "science"
-            ]
-        )
 
 
 class PathAstrometry(AutoMkdirMixin):

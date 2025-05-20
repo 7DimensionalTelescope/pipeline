@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 from datetime import datetime, timedelta
 from astropy.io import fits
-from .const import FACTORY_DIR, RAWDATA_DIR, HEADER_KEY_MAP, INSTRUM_GROUP_KEYS
+from .const import FACTORY_DIR, RAWDATA_DIR, HEADER_KEY_MAP, ALL_GROUP_KEYS
 
 
 def most_common_in_dict(counts: dict):
@@ -52,7 +52,7 @@ def equal_on_keys(d1: dict, d2: dict, keys: list):
     return all(d1.get(k) == d2.get(k) for k in keys)  # None if key missing
 
 
-def collapse(seq, keys=INSTRUM_GROUP_KEYS):
+def collapse(seq, keys=ALL_GROUP_KEYS):
     """
     If seq is non-empty and every element equals the first one,
     return the first element; else return seq unchanged.
@@ -335,6 +335,8 @@ def get_camera(header):
 
     Identifies the camera model by examining the number of pixels in the first axis.
     Supports two camera types: C3 and C5.
+    Returns UnKnownCam if the file does not exist or the header is missing NAXIS1.
+
     Support for the overscan area of C5 is to be added.
 
     Args:
@@ -370,7 +372,19 @@ def get_camera(header):
         else:
             return "UnknownCam"
     else:
-        return None
+        return "UnknownCam"
+
+
+def get_gain(fpath):
+    key = HEADER_KEY_MAP["gain"]
+
+    def parse_from_path(path: str) -> int:
+        m = re.search(r"gain(\d{4})", path)
+        if not m:
+            return None
+        return int(m.group(1))
+
+    return get_header(fpath, force_return=True).get(key, None) or parse_from_path(fpath)
 
 
 def find_raw_path(unit, date, n_binning, gain):

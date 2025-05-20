@@ -22,12 +22,12 @@ CalibType = ["BIAS", "DARK", "FLAT"]
 available_7dt_units = [f"7DT0{unit}" if unit < 10 else f"7DT{unit}" for unit in range(1, 20)]
 
 NUM_MIN_CALIB = 5
-# GROUPING_KEYS = ["types", "obj", "filter", "unit", "nightdate", "exptime", "n_binning", "gain", "camera"]
-INSTRUM_GROUP_KEYS = ["obj", "filter", "unit", "nightdate", "exptime", "n_binning", "gain", "camera"]
-BIAS_GROUP_KEYS = ["unit", "nightdate", "n_binning", "gain", "camera"]  # account for potential ms difference
-DARK_GROUP_KEYS = ["unit", "nightdate", "exptime", "n_binning", "gain", "camera"]
-FLAT_GROUP_KEYS = ["filter", "unit", "nightdate", "n_binning", "gain", "camera"]
-SCIENCE_GROUP_KEYS = ["obj", "filter", "unit"]  # , "nightdate"]
+INSTRUM_GROUP_KEYS = ["unit", "n_binning", "gain", "camera"]
+ALL_GROUP_KEYS = ["obj", "filter", "nightdate", "exptime"] + INSTRUM_GROUP_KEYS
+BIAS_GROUP_KEYS = INSTRUM_GROUP_KEYS  # "nightdate",   # account for potential ms exp difference
+DARK_GROUP_KEYS = INSTRUM_GROUP_KEYS + ["exptime"]
+FLAT_GROUP_KEYS = INSTRUM_GROUP_KEYS + ["filter"]
+SCIENCE_GROUP_KEYS = ["obj", "filter", "unit", "n_binning"]  # , "nightdate"]
 
 STRICT_KEYS = {"nightdate", "obj", "filter", "unit", "exptime", "n_binning", "gain", "camera"}
 ANCILLARY_KEYS = {"ra", "dec", "obstime"}  # hms

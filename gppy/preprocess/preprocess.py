@@ -29,7 +29,8 @@ from . import utils as prep_utils
 
 class Preprocess:
     """
-    Assumes BIAS, DARK, FLAT, SCI frames taken on the same date with the smae
+    Assumes homogeneous BIAS, DARK, FLAT, SCI frames as input
+    taken on the same date with the same
     unit, n_binning and gain have all identical cameras.
     """
 
@@ -39,20 +40,13 @@ class Preprocess:
         queue=False,
         logger=None,
         overwrite=False,
-        min_frames=5,
         **kwargs,
     ):
 
-        if hasattr(input, "obs_params"):
-            obs_params = input.obs_params
-        else:
-            obs_params = input
-
         self.overwrite = overwrite
-        self.min_frames = min_frames
 
         # Initialize variables
-        self.initialize(obs_params)
+        self.initialize(input)
 
         # Setup log
         self.logger = logger or self._setup_logger()
@@ -73,7 +67,10 @@ class Preprocess:
             (6, "make_plots", False),
         ]
 
-    def initialize(self, obs_params):
+    def initialize(self, input):
+        (biases, darks, flats), (mbias, mdark, mflat), raw_sci_groups, proc_sci_groups = input
+
+        obs_params = PathHandler(raw_sci_groups[0]).obs_params
         unit = obs_params["unit"]
         date = obs_params["nightdate"]
         n_binning = obs_params["n_binning"]
@@ -372,9 +369,6 @@ class Preprocess:
             return output
 
         n = len(data_list)
-        if self.min_frames and n < self.min_frames:
-            self.logger.warning(f"Not enough {dtype.upper()} frames to generate masterframe: {n}. Skipping...")
-            return None
 
         self.logger.info(f"Start to generate masterframe {dtype.upper()}")
         self.logger.debug(f"{len(data_list)} {dtype.upper()} files found.")

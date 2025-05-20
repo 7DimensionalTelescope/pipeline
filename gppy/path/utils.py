@@ -46,7 +46,7 @@ def strip_exptime(exptime_string):
 
 
 def format_exptime(exptime: float, type="raw_image"):
-    if type == "raw_image":
+    if "raw" in type:
         return f"{exptime:.1f}s"
     else:  # processed
         return format_subseconds(exptime) + "s"
