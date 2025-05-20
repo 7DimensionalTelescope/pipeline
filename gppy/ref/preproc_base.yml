@@ -1,20 +1,22 @@
 name: 
 
-obs:
-  # OBS Info should be updated from header
-  coherent_input:
-  pixscale: 0.505  # arcsec/pix
-  n_binning: 
-  gain: 
-  unit: 
-  camera: 
-  filter:
-  obj:
-  nightdate:  # date of datetime - 12h. dirname of obsdata
-  obstime:  # UTC
-  ra:
-  dec:
-  exptime:
+# obs:
+#   # OBS Info should be updated from header
+#   coherent_input:
+#   pixscale: 0.505  # arcsec/pix
+#   n_binning: 
+#   gain: 
+#   unit: 
+#   camera: 
+#   filter:
+#   obj:
+#   nightdate:  # date of datetime - 12h. dirname of obsdata
+#   obstime:  # UTC
+#   ra:
+#   dec:
+#   exptime:
+
+groups:
 
 file: 
   raw_files: 
