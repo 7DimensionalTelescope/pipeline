@@ -16,8 +16,8 @@ name:
 #   dec:
 #   exptime:
 
-file: 
-  input_files: 
+files: 
+  # input_files: 
   # stacked_file:
 
 flag:
@@ -85,6 +85,7 @@ photometry:
 imstack:
   # path:
   #   ref_image_dir: "/lyman/data1/factory/ref_frame"
+  stacked_image:  # output stacked image
   gpu: True
   zp_key: 'ZP_AUTO'
   # images_to_combine:

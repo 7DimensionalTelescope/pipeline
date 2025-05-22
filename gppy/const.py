@@ -22,12 +22,14 @@ CalibType = ["BIAS", "DARK", "FLAT"]
 available_7dt_units = [f"7DT0{unit}" if unit < 10 else f"7DT{unit}" for unit in range(1, 20)]
 
 NUM_MIN_CALIB = 5
-INSTRUM_GROUP_KEYS = ["unit", "n_binning", "gain", "camera"]
+INSTRUM_GROUP_KEYS = ["unit", "n_binning", "gain", "camera"]  # "nightdate"
 ALL_GROUP_KEYS = ["obj", "filter", "nightdate", "exptime"] + INSTRUM_GROUP_KEYS
-BIAS_GROUP_KEYS = INSTRUM_GROUP_KEYS  # "nightdate",   # account for potential ms exp difference
+BIAS_GROUP_KEYS = INSTRUM_GROUP_KEYS  # no exp: account for potential ms exp difference
 DARK_GROUP_KEYS = INSTRUM_GROUP_KEYS + ["exptime"]
 FLAT_GROUP_KEYS = INSTRUM_GROUP_KEYS + ["filter"]
-SCIENCE_GROUP_KEYS = ["obj", "filter", "unit", "n_binning"]  # , "nightdate"]
+SURVEY_SCIENCE_GROUP_KEYS = ["obj", "filter"]  # , "n_binning", "unit"]
+TRANSIENT_SCIENCE_GROUP_KEYS = ["nightdate"] + SURVEY_SCIENCE_GROUP_KEYS  # used for processed image directory structure
+PATH_KEYS = ["unit"] + TRANSIENT_SCIENCE_GROUP_KEYS
 
 STRICT_KEYS = {"nightdate", "obj", "filter", "unit", "exptime", "n_binning", "gain", "camera"}
 ANCILLARY_KEYS = {"ra", "dec", "obstime"}  # hms

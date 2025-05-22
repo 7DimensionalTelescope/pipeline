@@ -8,7 +8,7 @@ import glob
 
 def query_observations(include_keywords, exclude_keywords=None, DATA_DIR=const.RAWDATA_DIR, with_calib=True):
     
-    default_exclude_keywords = ["test", "shift"] + const.CalibType
+    default_exclude_keywords = ["test", "shift", "tmp"]
 
     include_keywords = list(np.atleast_1d(include_keywords))
     if exclude_keywords is not None:
@@ -63,8 +63,8 @@ def query_observations(include_keywords, exclude_keywords=None, DATA_DIR=const.R
                 for calib in const.CalibType:
                     calibs.extend(glob.glob(os.path.join(path, f"*{calib}*.fits")))
 
-        calibs = set(calibs)
         result.extend(calibs)
+        result = list(set(result))
         return result
 
     units = []

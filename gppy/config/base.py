@@ -6,10 +6,11 @@ from .utils import (
     merge_dicts,
 )
 
+
 class BaseConfig:
 
     def __init__(self, config_source=None, **kwargs) -> None:
-        self._loaded = False
+        # self._loaded = False
         self._initialized = False
 
         self._load_config(config_source, **kwargs)
@@ -21,9 +22,9 @@ class BaseConfig:
     def is_initialized(self):
         return self._initialized
 
-    @property
-    def is_loaded(self):
-        return self._loaded
+    # @property
+    # def is_loaded(self):
+    #     return self._loaded
 
     @property
     def config_in_dict(self):
@@ -33,7 +34,7 @@ class BaseConfig:
     @classmethod
     def from_dict(cls, config_dict, write=False, **kwargs):
         return cls(config_source=config_dict, write=write, **kwargs)
-    
+
     @classmethod
     def from_file(cls, config_file, write=False, **kwargs):
         config_dict = cls.read_config(config_file)
@@ -51,7 +52,7 @@ class BaseConfig:
             raise ValueError(f"Invalid config_type: {config_type}")
 
     @classmethod
-    def base_config(cls, config_type=None, config_file=None, config_dict = None, working_dir=None, **kwargs):
+    def base_config(cls, config_type=None, config_file=None, config_dict=None, working_dir=None, **kwargs):
         """Return the base (base.yml) ConfigurationInstance."""
         working_dir = working_dir or os.getcwd()
         if config_file is not None:
@@ -66,14 +67,14 @@ class BaseConfig:
             config = cls.from_dict(config_dict=config_dict, **kwargs)
         else:
             raise ValueError("Either config_file, config_type or config_dict must be provided")
-        
+
         config.name = "user-input"
         config._initialized = True
         return config
 
     def _load_config(self, config_source, **kwargs):
         # Load configuration from file or dict
-        self._loaded = False
+        # self._loaded = False
 
         if isinstance(config_source, str):
             input_dict = self.read_config(config_source)
@@ -89,7 +90,7 @@ class BaseConfig:
         self._update_with_kwargs(kwargs)
         self._make_instance()
 
-        self._loaded = True
+        # self._loaded = True
 
     def _update_with_kwargs(self, kwargs):
         """Merge additional configuration parameters."""
@@ -140,6 +141,7 @@ class BaseConfig:
     def _setup_logger(self, logger=None, name=None, log_file=None, verbose=True, overwrite=True, **kwargs):
         if logger is None:
             from ..services.logger import Logger
+
             logger = Logger(name=name, slack_channel="pipeline_report")
 
         if self.write:
@@ -152,6 +154,20 @@ class BaseConfig:
             logger.set_level("WARNING")
 
         return logger
+
+    def extract_single_image_config(self, i: int):
+        """return a Configuration with i-th element of all lists in the config dict"""
+        from copy import deepcopy
+
+        # Deep copy to avoid mutation
+        config_dict = deepcopy(self.config_in_dict)
+
+        # Recursively reduce all list values to i-th element
+        config_dict = self.config.select_from_lists(config_dict, i)
+
+        return self(config_source=config_dict, write=False)
+        # return Configuration.from_dict(config_dict, write=False)
+
 
 class ConfigurationInstance:
     def __init__(self, parent_config=None, section=None):
@@ -177,7 +193,7 @@ class ConfigurationInstance:
             if (
                 hasattr(self._parent_config, "is_initialized")
                 and self._parent_config.is_initialized
-                and self._parent_config.is_loaded
+                # and self._parent_config.is_loaded
             ):
                 self._parent_config.write_config()
 
@@ -244,16 +260,3 @@ class ConfigurationInstance:
                 raise IndexError(f"Index {i} out of bounds for list: {obj}")
         else:
             return obj
-
-    def extract_single_image_config(self, i: int):
-        """return Configuration, not ConfigurationInstance"""
-        from copy import deepcopy
-
-        # Deep copy to avoid mutation
-        config_dict = deepcopy(self._parent_config.config_in_dict)
-
-        # Recursively reduce all list values to i-th element
-        config_dict = self.select_from_lists(config_dict, i)
-
-        return Configuration(config_source=config_dict, write=False)
-        # return Configuration.from_dict(config_dict, write=False)

@@ -5,7 +5,7 @@ import glob
 import json
 from datetime import datetime
 from .. import __version__
-from ..utils import (   
+from ..utils import (
     header_to_dict,
     to_datetime_string,
     find_raw_path,
@@ -18,8 +18,9 @@ from ..utils import (
 from .utils import merge_dicts
 from ..const import HEADER_KEY_MAP, STRICT_KEYS, ANCILLARY_KEYS
 from ..path.path import PathHandler
-from .base import BaseConfig, ConfigurationInstance
+from .base import BaseConfig
 import time
+
 
 class SciProcConfiguration(BaseConfig):
     def __init__(
@@ -32,7 +33,7 @@ class SciProcConfiguration(BaseConfig):
         verbose=True,
         **kwargs,
     ):
-        st = time.time()  
+        st = time.time()
         self.write = write
 
         self.path = PathHandler(input_files)
@@ -49,7 +50,7 @@ class SciProcConfiguration(BaseConfig):
         if config_source:
             self._initialized = True
         else:
-            config_source = self.path.preproc_base_yml
+            config_source = self.path.sciproc_base_yml
             self._initialized = False
 
         self.logger.info("Loading configuration")
@@ -64,8 +65,8 @@ class SciProcConfiguration(BaseConfig):
         self.logger.debug(f"Configuration file: {self.config_file}")
         self.write_config()
 
-        self.logger.info(f"PreprocConfiguration initialized")
-        self.logger.debug(f"PreprocConfiguration initialization took {time.time() - st:.2f} seconds")
+        self.logger.info(f"SciProcConfiguration initialized")
+        self.logger.debug(f"SciProcConfiguration initialization took {time.time() - st:.2f} seconds")
 
     def _find_config_file(self):
         """Find the configuration file in the processed directory."""
@@ -85,7 +86,8 @@ class SciProcConfiguration(BaseConfig):
         self.config.info.creation_datetime = datetime.now().isoformat()
 
         self.config.name = self.path._output_name
-        self.config.file.input_files = input_files
+        # self.config.file.input_files = input_files
+        self.config.files = input_files
 
         self.raw_header_sample = get_header(input_files[0])
         # self.set_input_output()
@@ -133,6 +135,3 @@ class SciProcConfiguration(BaseConfig):
         obsmode = self.raw_header_sample["OBSMODE"]
         # self.config.obs.obsmode = obsmode
         self.config.settings.daily_stack = False if obsmode.lower() == "deep" else True
-
-
-###############################################################################

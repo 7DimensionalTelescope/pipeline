@@ -92,7 +92,7 @@ class Preprocess(BaseSetup):
             t = threading.Thread(target=self.make_plots, args=(i,))
             t.start()
             threads_for_making_plots.append(t)
-            
+
             if i < self._n_groups - 1:
                 self.proceed_to_next_group()
 
@@ -287,7 +287,6 @@ class Preprocess(BaseSetup):
             self.logger.debug(
                 f"Data reduction has been completed in {time.time() - start_time:.0f} seconds for {len(self.sci_input)} iamges."
             )
-
         # Combine results
         all_results = [item for sublist in results if sublist for item in sublist]
         self.logger.info(
