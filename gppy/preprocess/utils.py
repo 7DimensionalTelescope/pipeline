@@ -1,83 +1,10 @@
 import os
 import time
-import gc
-import cupy as cp
-from cupy.cuda import Stream
-import numpy as np
 from astropy.io import fits
-from contextlib import contextmanager
+
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import uuid
-
-
-def sigma_clipped_stats_cupy(cp_data, sigma=3, maxiters=5, minmax=False):
-    """
-    Approximate sigma-clipping using CuPy.
-    Computes mean, median, and std after iteratively removing outliers
-    beyond 'sigma' standard deviations from the median.
-
-    Parameters
-    ----------
-    cp_data : cupy.ndarray
-        Flattened CuPy array of image pixel values.
-    sigma : float
-        Clipping threshold in terms of standard deviations.
-    maxiters : int
-        Maximum number of clipping iterations.
-
-    Returns
-    -------
-    mean_val : float
-        Mean of the clipped data (as a GPU float).
-    median_val : float
-        Median of the clipped data (as a GPU float).
-    std_val : float
-        Standard deviation of the clipped data (as a GPU float).
-    """
-    # Flatten to 1D for global clipping
-    cp_data = cp_data.ravel()
-
-    for _ in range(maxiters):
-        median_val = cp.median(cp_data)
-        std_val = cp.std(cp_data)
-        # Keep only pixels within +/- sigma * std of the median
-        mask = cp.abs(cp_data - median_val) < (sigma * std_val)
-        cp_data = cp_data[mask]
-
-    # Final statistics on the clipped data
-    mean_val = cp.mean(cp_data)
-    median_val = cp.median(cp_data)
-    std_val = cp.std(cp_data)
-
-    # Convert results back to Python floats on the CPU
-    # return float(mean_val), float(median_val), float(std_val)
-    if minmax:
-        return mean_val, median_val, std_val, cp_data.min(), cp_data.max()
-    return mean_val, median_val, std_val
-
-
-def write_link(fpath, content):
-    """path to the link, and the path link is pointing"""
-    with open(fpath, "w") as file:
-        file.write(content)
-
-
-@contextmanager
-def load_data_gpu(fpath, ext=None):
-    """Load data into GPU memory with automatic cleanup."""
-    data = cp.asarray(fits.getdata(fpath, ext=ext), dtype="float32")
-    try:
-        yield data  # Provide the loaded data to the block
-    finally:
-        del data  # Free GPU memory when the block is exited
-        gc.collect()  # Force garbage collection
-        cp.get_default_memory_pool().free_all_blocks()
-
-def load_data(fpath):
-    if fpath.endswith(".link"):
-        fpath = read_link(fpath)
-    return fits.getdata(fpath).astype(np.float32)
 
 class FileCreationHandler(FileSystemEventHandler):
     def __init__(self, target_file):
@@ -120,52 +47,6 @@ def wait_for_masterframe(file_path, timeout=1800):
     finally:
         observer.stop()
         observer.join()
-
-
-def read_link(link, timeout=1800):
-    """
-    Check if the link exists using watchdog, wait for it if it doesn't, and then read its content.
-
-    Args:
-        link (str): The file path to check and read.
-        timeout (int, optional): Maximum time (in seconds) to wait for the file. Defaults to 1200.
-
-    Returns:
-        str: The content of the file.
-
-    Raises:
-        FileNotFoundError: If the file is not found within the timeout period.
-        KeyboardInterrupt: If the user interrupts the waiting process.
-    """
-    try:
-        # Use wait_for_masterframe to watch for the file
-        if not wait_for_masterframe(link, timeout=timeout):
-            raise FileNotFoundError(
-                f"File '{link}' was not created within {timeout} seconds."
-            )
-
-        # Small delay to ensure file is fully written
-        time.sleep(0.1)
-
-        # Read and return the file content
-        with open(link, "r") as f:
-            return f.read().strip()
-
-    except KeyboardInterrupt:
-        print("KeyboardInterrupt while watching for a link. Exiting...")
-        raise  # Re-raise the exception to terminate the following processes
-
-
-def link_to_file(link):
-    """Reformat link filename, not reading it"""
-    import re
-
-    pattern = r"\.link$"
-    if re.match(pattern, link):
-        return os.path.splitext(link)[0] + ".fits"
-    else:
-        raise ValueError("Not a link")
-
 
 def search_with_date_offsets(template, max_offset=300, future=False):
     """
@@ -226,36 +107,6 @@ def search_with_date_offsets(template, max_offset=300, future=False):
 
     # If no file is found, return None
     return None
-
-
-def record_statistics(data, header, cropsize=500):
-    mean, median, std, min, max = sigma_clipped_stats_cupy(
-        data, sigma=3, maxiters=5, minmax=True
-    )  # gpu vars
-    header["CLIPMEAN"] = (float(mean), "3-sig clipped mean of the pixel values")
-    header["CLIPMED"] = (float(median), "3-sig clipped median of the pixel values")
-    header["CLIPSTD"] = (float(std), "3-sig clipped standard deviation of the pixels")
-    header["CLIPMIN"] = (float(min), "3-sig clipped minimum of the pixel values")
-    header["CLIPMAX"] = (float(max), "3-sig clipped maximum of the pixel values")
-
-    height, width = data.shape
-    start_row = (height - cropsize) // 2
-    start_col = (width - cropsize) // 2
-
-    # Slice the central 500x500 area
-    cropped_data = data[
-        start_row : start_row + cropsize, start_col : start_col + cropsize
-    ]
-    mean, median, std = sigma_clipped_stats_cupy(cropped_data, sigma=3, maxiters=5)
-    header["CENCLPMN"] = (float(mean), f"3-sig clipped mean of center {cropsize}x{cropsize}")  # fmt: skip
-    header["CENCLPMD"] = (float(median), f"3-sig clipped median of center {cropsize}x{cropsize}")  # fmt: skip
-    header["CENCLPSD"] = (float(std), f"3-sig clipped std of center {cropsize}x{cropsize}")  # fmt: skip
-
-    # header["CENCMIN"] = float(min)
-    # header["CENCMAX"] = float(max)
-
-    return header
-
 
 def get_saturation_level(header, mbias_file, mdark_file, mflat_file):
     bitpix = header["BITPIX"]
@@ -330,99 +181,3 @@ def add_image_id(header, key="IMAGEID"):
 #     isot = yr + "-" + mo + "-" + da + "T00:00:00.000"  # 	ignore hour:min:sec
 #     t = Time(isot, format="isot", scale="utc")  # 	transform to MJD
 #     return t.mjd
-
-
-def calc_batch_dist(image_list, num_devices=None, use_multi_device=False, device=0):
-    if use_multi_device:
-        num_devices = cp.cuda.runtime.getDeviceCount()
-    else:
-        num_devices = 1
-
-    # Step 1: Estimate how many images each GPU can handle
-    max_batch_per_device = []
-    if num_devices > 1:
-        for i in range(num_devices):
-            with cp.cuda.Device(i):
-                max_batch = estimate_posssible_batch_size(image_list[0])[0]
-                max_batch_per_device.append(max_batch)
-    else:
-        with cp.cuda.Device(device):
-            max_batch = estimate_posssible_batch_size(image_list[0])[0]
-            max_batch_per_device.append(max_batch)
-
-    # Step 2: Compute initial proportional distribution
-    total_capacity = sum(max_batch_per_device)
-    ratio = [b / total_capacity for b in max_batch_per_device]
-    initial_dist = np.floor(np.array(ratio) * len(image_list)).astype(int)
-
-    # Step 3: Adjust for rounding errors
-    remaining = len(image_list) - sum(initial_dist)
-    for i in range(remaining):
-        initial_dist[i % num_devices] += 1
-
-    # Step 4: First-round distribution (capped at each GPU's capacity)
-    first_round = np.minimum(initial_dist, max_batch_per_device)
-    overflow = initial_dist - first_round
-
-    # Step 5: Redistribute any remaining overflow (that still hasn't been assigned)
-    extra_needed = len(image_list) - sum(first_round)
-    second_round = np.zeros(num_devices, dtype=int)
-
-    i = 0
-    while extra_needed > 0:
-        capacity = max_batch_per_device[i]
-        available = capacity - second_round[i]
-        assign = min(available, overflow[i], extra_needed)
-        second_round[i] += assign
-        extra_needed -= assign
-        i = (i + 1) % num_devices
-    
-    return np.vstack([first_round, second_round])
-    
-
-
-def estimate_posssible_batch_size(filename):
-    H, W = load_data(filename).shape
-    image_size = cp.float32().nbytes * H * W / 1024**2
-    available_mem = cp.cuda.runtime.memGetInfo()[0] / 1024**2
-    safe_mem = int(available_mem * 0.7)
-    batch_size = max(1, safe_mem // image_size)
-    return int(batch_size), image_size, available_mem
-
-def process_batch_on_device(device_id, image_paths, bias_cpu, dark_cpu, flat_cpu, results):
-    
-    with cp.cuda.Device(device_id):
-        load_stream = Stream(non_blocking=True)
-        compute_stream = Stream()
-
-        # Transfer bias/dark/flat to this GPU once
-        with load_stream:
-            bias = cp.asarray(bias_cpu, dtype=cp.float32)
-            dark = cp.asarray(dark_cpu, dtype=cp.float32)
-            flat = cp.asarray(flat_cpu, dtype=cp.float32)
-
-        load_stream.synchronize()
-
-        local_results = []
-        for img_path in image_paths:
-            with load_stream:
-                image = cp.asarray(load_data(img_path), dtype=cp.float32)
-            with compute_stream:
-                reduced = reduction_kernel(image, bias, dark, flat)
-                local_results.append(cp.asnumpy(reduced))
-                del reduced
-            del image
-        
-        del bias, dark, flat
-        compute_stream.synchronize()
-        cp.get_default_memory_pool().free_all_blocks()
-        results[device_id] = local_results
-
-
-# Reduction kernel
-reduction_kernel = cp.ElementwiseKernel(
-    in_params='T x, T b, T d, T f',
-    out_params='T z',
-    operation='z = (x - b - d) / f',
-    name='reduction'
-)

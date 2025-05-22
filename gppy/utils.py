@@ -52,7 +52,7 @@ def equal_on_keys(d1: dict, d2: dict, keys: list):
     return all(d1.get(k) == d2.get(k) for k in keys)  # None if key missing
 
 
-def collapse(seq, keys=ALL_GROUP_KEYS):
+def collapse(seq, keys=ALL_GROUP_KEYS, raise_error=False):
     """
     If seq is non-empty and every element equals the first one,
     return the first element; else return seq unchanged.
@@ -75,31 +75,10 @@ def collapse(seq, keys=ALL_GROUP_KEYS):
         raise TypeError("Invalid type to check homogeneity")
 
     # if inhomogeneous
-    return seq
-
-
-def merge_dicts(base: dict, updates: dict) -> dict:
-    """
-    Recursively merge the updates dictionary into the base dictionary.
-
-    For each key in the updates dictionary:
-    - If the key exists in base and both values are dictionaries,
-        then merge these dictionaries recursively.
-    - Otherwise, set or override the value in base with the one from updates.
-
-    Args:
-        base (dict): The original base configuration dictionary.
-        updates (dict): The new configuration dictionary with updated values.
-
-    Returns:
-        dict: The merged dictionary containing updates from the new configuration.
-    """
-    for key, value in updates.items():
-        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
-            base[key] = merge_dicts(base[key], value)
-        else:
-            base[key] = value
-    return base
+    if raise_error:
+        raise ValueError(f"Uncollapsible: input is not homogeneous: {seq}")
+    else:
+        return seq
 
 
 def check_params(img):
@@ -379,12 +358,13 @@ def get_gain(fpath):
     key = HEADER_KEY_MAP["gain"]
 
     def parse_from_path(path: str) -> int:
-        m = re.search(r"gain(\d{4})", path)
+        m = re.search(r"gain(\d+)", path)
         if not m:
             return None
-        return int(m.group(1))
+        else:
+            return int(m.group(1))
 
-    return get_header(fpath, force_return=True).get(key, None) or parse_from_path(fpath)
+    return parse_from_path(fpath) or get_header(fpath, force_return=True).get(key, None)
 
 
 def find_raw_path(unit, date, n_binning, gain):

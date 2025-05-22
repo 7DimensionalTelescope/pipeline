@@ -1,38 +1,9 @@
 name: 
 
-# obs:
-#   # OBS Info should be updated from header
-#   coherent_input:
-#   pixscale: 0.505  # arcsec/pix
-#   n_binning: 
-#   gain: 
-#   unit: 
-#   camera: 
-#   filter:
-#   obj:
-#   nightdate:  # date of datetime - 12h. dirname of obsdata
-#   obstime:  # UTC
-#   ra:
-#   dec:
-#   exptime:
-
-groups:
-
-file: 
-  raw_files: 
-  processed_files: 
-  # stacked_file:
-  # weight_file:
-
-flag:
-  configuration: false
-  preprocess: false
-  # astrometry: false
-  # single_photometry: false
-  # combine: false
-  # # combined_astrometry: false
-  # combined_photometry: false
-  # subtraction: false
+input: 
+  masterframe_files: 
+  science_files: 
+  raw_dir: 
 
 info:
   version: '2.0'  # legacy gppy-gpu is 1.0
@@ -40,15 +11,6 @@ info:
   creation_datetime:
   last_update_datetime:
 
-settings:
-  ToO: False
-  obsmode:  # Deep Spec Color Search Single
-  header_pad: 5  # assuming final header is 5 * 2880 bytes long. 6 to include polygon info
-  local_astref: 
-  combine:
-  gpu_enabled: True
-  verbose_gpu: True  # use logger later
-  
 logging:
   level: INFO
   file: 
@@ -59,7 +21,8 @@ logging:
 
 preprocess:
   masterframe: default # closest, custom
-  mbias_file: # master_frame/2001-02-23_1x1_gain2750/7DT11/bias_20250102_C3.fits
-  mdark_file: # master_frame/2001-02-23_1x1_gain2750/7DT11/dark_20250102_100s_C3.fits
-  mflat_file: # master_frame/2001-02-23_1x1_gain2750/7DT11/flat_20250102_m625_C3.fits
-  bpmask_file:
+  n_sigma: 5
+  n_head_blocks: 5
+  use_multi_device: False
+  use_multi_thread: True
+  device: 

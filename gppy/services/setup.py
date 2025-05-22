@@ -1,10 +1,11 @@
 from typing import Any, Union
 from abc import ABC, abstractmethod
 import glob
-from ..config import Configuration, ConfigurationInstance
+from ..config import PreprocConfiguration, SciProcConfiguration, ConfigurationInstance
 from ..path.path import PathHandler
 from .logger import Logger
 from .queue import QueueManager
+import warnings
 
 
 class BaseSetup(ABC):
@@ -34,21 +35,22 @@ class BaseSetup(ABC):
         self.queue = self._setup_queue(queue)
 
     def _setup_path(self, config):
-        if isinstance(config, Configuration):
+        if isinstance(config, PreprocConfiguration) or isinstance(config, SciProcConfiguration):
             return config.path
         elif isinstance(config, ConfigurationInstance):
             return PathHandler(config)
         elif isinstance(config, str):
-            return PathHandler(Configuration(config_source=config))
+            warnings.warn("String path is deprecated. Assume SciProcConfiguration.")
+            return PathHandler(SciProcConfiguration(config_source=config))
         else:
             raise ValueError("No information to initialize PathHandler")
 
     def _setup_config(self, config):
-
-        if isinstance(config, Configuration):
+        if isinstance(config, PreprocConfiguration) or isinstance(config, SciProcConfiguration):
             return config.config
         elif isinstance(config, str):
-            return Configuration(config_source=config).config
+            warnings.warn("String path is deprecated. Assume SciProcConfiguration.")
+            return SciProcConfiguration(config_source=config).config
         elif isinstance(config, ConfigurationInstance):
             return config
         else:

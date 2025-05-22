@@ -32,6 +32,7 @@ SCIENCE_GROUP_KEYS = ["obj", "filter", "unit", "n_binning"]  # , "nightdate"]
 STRICT_KEYS = {"nightdate", "obj", "filter", "unit", "exptime", "n_binning", "gain", "camera"}
 ANCILLARY_KEYS = {"ra", "dec", "obstime"}  # hms
 
+
 HEADER_KEY_MAP = {
     "exptime": "EXPOSURE",
     "gain": "GAIN",

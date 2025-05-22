@@ -1,5 +1,14 @@
 import gc
 import cupy as cp
+import time
+import psutil
+
+import threading
+from contextlib import contextmanager
+from datetime import datetime
+from astropy.table import Table
+
+from typing import Optional
 
 def cleanup_memory() -> None:
     """
@@ -39,8 +48,6 @@ def cleanup_memory() -> None:
 
     gc.collect()  # Initial garbage collection
     
-
-
 def cpu_callback_wrapper(task, tree, callback):
     def wrapper(result):
         # Update task with result from the async operation
@@ -48,3 +55,176 @@ def cpu_callback_wrapper(task, tree, callback):
         # Call your existing callback logic
         callback(task, tree)
     return wrapper
+
+@contextmanager
+def monitor_memory_usage(interval: float = 1.0, logger: Optional = None, add_utilization=True, verbose: bool = False) -> Table:
+    """
+    Context manager that monitors and logs memory usage every X seconds
+    while running code inside the `with` block.
+    Returns an astropy Table containing the usage history after the context ends.
+
+    Parameters
+    ----------
+    interval : float, optional
+        Time interval between measurements in seconds (default: 1.0)
+    logger : logging.Logger, optional
+        Logger instance to use for logging (default: None)
+    verbose : bool, optional
+        Whether to print/log usage in real-time (default: False)
+
+    Returns
+    -------
+    astropy.table.Table
+        Table containing timestamps and memory usage data
+
+    Example
+    -------
+    with monitor_memory_usage(interval=2.0) as history:
+        run_preprocess()
+    history.write('memory_usage.csv', format='csv', overwrite=True)  # Save to file if needed
+    """
+    from .memory import MemoryMonitor
+
+    # Create column names based on number of GPUs detected
+    n_gpus = len(MemoryMonitor.current_gpu_memory_percent)
+    column_names = ["time", "cpu_memory"] + [f"gpu{i}_memory" for i in range(n_gpus)]
+    dtype = [object, float] + [float] * n_gpus
+
+    if add_utilization:
+        column_names += [f"gpu{i}_utilization" for i in range(n_gpus)]
+        dtype += [float] * n_gpus
+
+    usage_data = Table(names=column_names, dtype=dtype)
+
+    # Set column descriptions
+    usage_data["time"].description = "Measurement timestamp"
+    usage_data["cpu_memory"].description = "CPU memory usage (%)"
+    for i in range(n_gpus):
+        usage_data[f"gpu{i}_memory"].description = f"GPU {i} memory usage (%)"
+        if add_utilization:
+            usage_data[f"gpu{i}_utilization"].description = f"GPU {i} utilization (%)"
+
+    stop_thread = False
+
+    def logging_thread() -> None:
+        while not stop_thread:
+            current_time = str(datetime.now())
+            cpu_memory = MemoryMonitor.current_memory_percent
+            gpu_memories = MemoryMonitor.current_gpu_memory_percent
+            row = [current_time, cpu_memory] + gpu_memories
+
+            if add_utilization:
+                gpu_utilizations = MemoryMonitor.current_gpu_utilization
+                row += gpu_utilizations
+            
+            usage_data.add_row(row)
+            if verbose:
+                usage_str = MemoryMonitor.log_memory_usage
+                if logger:
+                    logger.info(usage_str)
+                else:
+                    print(usage_str)
+
+            time.sleep(interval)
+
+    t = threading.Thread(target=logging_thread, daemon=True)
+    t.start()
+
+    try:
+        yield usage_data
+    finally:
+        stop_thread = True
+        t.join()
+
+
+@contextmanager
+def monitor_io_rate(interval: float = 1.0, logger: Optional = None, verbose: bool = False) -> Table:
+    """
+    Context manager that monitors disk I/O (read/write rate) every `interval` seconds.
+    Returns an astropy Table with a history of rates.
+
+    Parameters
+    ----------
+    interval : float
+        Time interval between measurements (seconds)
+    logger : Logger, optional
+        Logger to use for logging (optional)
+    verbose : bool
+        Whether to print/log the I/O rate in real time
+
+    Returns
+    -------
+    astropy.table.Table
+        Table containing timestamps and I/O rates
+    """
+
+    io_data = Table(names=["time", "read_kbps", "write_kbps"], dtype=[object, float, float])
+    io_data["time"].description = "Measurement timestamp"
+    io_data["read_kbps"].description = "Disk read rate (KB/s)"
+    io_data["write_kbps"].description = "Disk write rate (KB/s)"
+
+    stop_thread = False
+
+    def logging_thread():
+        prev = psutil.disk_io_counters()
+        prev_time = time.time()
+        while not stop_thread:
+            time.sleep(interval)
+            curr = psutil.disk_io_counters()
+            curr_time = time.time()
+
+            delta_time = curr_time - prev_time
+            read_kbps = (curr.read_bytes - prev.read_bytes) / delta_time / 1024
+            write_kbps = (curr.write_bytes - prev.write_bytes) / delta_time / 1024
+
+            timestamp = str(datetime.now())
+            io_data.add_row([timestamp, read_kbps, write_kbps])
+
+            if verbose:
+                msg = f"[{timestamp}] Read: {read_kbps:.2f} KB/s, Write: {write_kbps:.2f} KB/s"
+                if logger:
+                    logger.info(msg)
+                else:
+                    print(msg)
+
+            prev, prev_time = curr, curr_time
+
+    t = threading.Thread(target=logging_thread, daemon=True)
+    t.start()
+
+    try:
+        yield io_data
+    finally:
+        stop_thread = True
+        t.join()
+
+def plot_history(history: Table, filename: Optional[str] = None, keys=None, ax=None, **kwargs) -> None:
+    """
+    Plot memory usage history.
+
+    Parameters
+    ----------
+    history : astropy.table.Table
+        Table containing memory usage history
+    filename : str, optional
+        File to save the plot to (default: None)
+    """
+    import matplotlib.pyplot as plt
+    import pandas as pd
+
+    if ax is None:
+        fig, ax = plt.subplots()
+
+    if keys is None:
+        keys = history.keys()
+        keys.remove("time")
+    times = pd.to_datetime(history["time"])
+    time = (times - times[0]).total_seconds()
+
+    for key in keys:
+        ax.plot(time, history[key], label=key, **kwargs)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Usage (%)")
+    ax.set_title("Usage History")
+    ax.legend()
+    return ax

@@ -108,7 +108,6 @@ class PathHandler(AutoMkdirMixin):
             self._names = NameHandler(input)
             self._input_files = [os.path.abspath(img) for img in input]
             self._data_type = self._names.types
-            # self.obs_params = check_params(self._input_files[0])
             obs_params = collapse(self._names.to_dict(), keys=const.SCIENCE_GROUP_KEYS)
             if isinstance(obs_params, list):
                 raise ValueError("PathHandler input is incoherent w.r.t. SCIENCE_GROUP_KEYS.")
@@ -388,7 +387,11 @@ class PathHandler(AutoMkdirMixin):
             (
                 (raw_bias, raw_dark, raw_flat),
                 (master_bias, master_dark, master_flat),
-                [[sci_group1], [sci_group2], ...]
+                {
+                    (obj, filter, unit, n_binning): ([raw_sci], [processed_sci],
+                    (): ([], []),
+                    ...
+                }
             )
             - For on-date groups (sorted by increasing group size):
                 • raw_* lists are the original bias/dark/flat file paths
@@ -396,12 +399,12 @@ class PathHandler(AutoMkdirMixin):
                 • sci_groups is the list of science files sharing that calibration triple
             - For off-date entries (appended last):
                 • raw_* are empty lists `([], [], [])`
-                • master_* are `(None, None, None)` to signal lookup in `masterframe_dir`
+                • master_* are search templates to lookup in `masterframe_dir`
                 • sci_groups is a singleton list containing that science file
         """
         from collections import defaultdict
 
-        # Build a map from each (bias,dark,flat) tuple → its sci_files + a single copy of the raw lists
+        # Build a map from each (bias,dark,flat) tuple -> sci_groups
         calib_map = defaultdict(lambda: {"sci": [], "bias": None, "dark": None, "flat": None})
         off_date_groups = []
 
@@ -417,21 +420,31 @@ class PathHandler(AutoMkdirMixin):
                     entry["flat"] = list(flat)
             else:
                 # off‐date: no calibration, just itself
-                off_date_groups.append([sci])
+                off_date_groups.append(sci)
+
+        def get_key(sci_group):
+            """Use only the values as tuple keys"""
+            return tuple(
+                v
+                for k, v in collapse(
+                    NameHandler.parse_params(sci_group, keys=const.SCIENCE_GROUP_KEYS), raise_error=True
+                ).items()
+            )
 
         result = []
+
         # off-date groups first: no processing time
         for sci_group in off_date_groups:
+            mbias = collapse(cls(sci_group).preprocess.bias, raise_error=True)
+            mdark = collapse(cls(sci_group).preprocess.dark, raise_error=True)
+            mflat = collapse(cls(sci_group).preprocess.flat, raise_error=True)
+            key = get_key(sci_group)
             result.append(
                 (
                     ([], [], []),  # empty if no raw bias/dark/flat -> search them in masterframe_dir
-                    (
-                        PathHandler(sci_group[0]).preprocess.bias[0],  # assume homogeneous
-                        PathHandler(sci_group[0]).preprocess.dark[0],
-                        PathHandler(sci_group[0]).preprocess.flat[0],
-                    ),  # master bdf search template
-                    sci_group,  # singleton science file
-                    [PathHandler(sci_group[0]).conjugate],
+                    (mbias, mdark, mflat),  # master bdf search template
+                    {key: (sci_group, cls(sci_group).conjugate)},  # singleton science file
+                    # {key: PathHandler(sci_group).conjugate},
                 )
             )
 
@@ -441,16 +454,20 @@ class PathHandler(AutoMkdirMixin):
             raw_dark = entry["dark"]
             raw_flat = entry["flat"]
 
-            mbias = PathHandler(raw_bias).preprocess.bias[0]  # assume homogeneous
-            mdark = PathHandler(raw_dark).preprocess.dark[0]
-            mflat = PathHandler(raw_flat).preprocess.flat[0]
+            mbias = collapse(cls(raw_bias).preprocess.bias, raise_error=True)
+            mdark = collapse(cls(raw_dark).preprocess.dark, raise_error=True)
+            mflat = collapse(cls(raw_flat).preprocess.flat, raise_error=True)
+
+            sci_dict = {}
+            for sci_group in entry["sci"]:
+                key = get_key(sci_group)
+                sci_dict[key] = (sci_group, cls(sci_group).conjugate)
 
             result.append(
                 (
                     (raw_bias, raw_dark, raw_flat),
                     (mbias, mdark, mflat),
-                    entry["sci"],  # science images in this on‐date group
-                    [PathHandler(sci_group).conjugate for sci_group in entry["sci"]],  # processed images
+                    sci_dict,  # a dict of tuples: (science images in this on‐date group, processed images)
                 )
             )
 
