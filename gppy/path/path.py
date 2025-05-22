@@ -108,7 +108,9 @@ class PathHandler(AutoMkdirMixin):
             self._names = NameHandler(input)
             self._input_files = [os.path.abspath(img) for img in input]
             self._data_type = self._names.types
-            obs_params = collapse(self._names.to_dict(), keys=const.SCIENCE_GROUP_KEYS)
+            # obs_params = collapse(self._names.to_dict(), keys=const.SURVEY_SCIENCE_GROUP_KEYS)
+            obs_params = collapse(self._names.to_dict(keys=const.PATH_KEYS), keys=const.SURVEY_SCIENCE_GROUP_KEYS)
+
             if isinstance(obs_params, list):
                 raise ValueError("PathHandler input is incoherent w.r.t. SCIENCE_GROUP_KEYS.")
             self.obs_params = obs_params
@@ -243,15 +245,17 @@ class PathHandler(AutoMkdirMixin):
             #     raise FileNotFoundError(f"Not all input paths exist: {self._input_files}")
 
             # preprocess-related paths
-            _relative_path = os.path.join(self.obs_params["nightdate"], self.obs_params["unit"])
-            preproc_output_dir = os.path.join(self._output_parent_dir, _relative_path)
+            # _relative_path = os.path.join(self.obs_params["nightdate"], self.obs_params["unit"])
+            preproc_output_dir = os.path.join(self._output_parent_dir, self.obs_params["nightdate"])
             self.preproc_output_dir = preproc_output_dir
             config_stem = "_".join([self.obs_params["nightdate"], self.obs_params["unit"]])
+            # config_stem = self.obs_params["nightdate"]
             self.preproc_output_yml = os.path.join(preproc_output_dir, config_stem + ".yml")
             self.preproc_output_log = os.path.join(preproc_output_dir, config_stem + ".log")
 
             # sciproc-related paths
-            _relative_path = os.path.join(self.obs_params["nightdate"], self.obs_params["unit"], self.obs_params["obj"], self.obs_params["filter"])  # fmt:skip
+            # _relative_path = os.path.join(self.obs_params["nightdate"], self.obs_params["unit"], self.obs_params["obj"], self.obs_params["filter"])  # fmt:skip
+            _relative_path = os.path.join(self.obs_params["nightdate"], self.obs_params["obj"], self.obs_params["filter"])  # fmt:skip
             self._output_dir = os.path.join(self._output_parent_dir, _relative_path)
             self.output_dir = self._output_dir
             self.factory_dir = os.path.join(self._factory_parent_dir, _relative_path)
@@ -427,7 +431,7 @@ class PathHandler(AutoMkdirMixin):
             return tuple(
                 v
                 for k, v in collapse(
-                    NameHandler.parse_params(sci_group, keys=const.SCIENCE_GROUP_KEYS), raise_error=True
+                    NameHandler.parse_params(sci_group, keys=const.SURVEY_SCIENCE_GROUP_KEYS), raise_error=True
                 ).items()
             )
 
