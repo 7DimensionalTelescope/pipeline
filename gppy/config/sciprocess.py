@@ -5,7 +5,7 @@ import glob
 import json
 from datetime import datetime
 from .. import __version__
-from ..utils import (
+from ..utils import (   
     header_to_dict,
     to_datetime_string,
     find_raw_path,
@@ -13,15 +13,15 @@ from ..utils import (
     clean_up_folder,
     swap_ext,
     most_common_in_list,
-    merge_dicts,
     get_header,
 )
+from .utils import merge_dicts
 from ..const import HEADER_KEY_MAP, STRICT_KEYS, ANCILLARY_KEYS
 from ..path.path import PathHandler
-from .base import ConfigurationMixin, ConfigurationInstance
+from .base import BaseConfig, ConfigurationInstance
+import time
 
-
-class SciProcConfiguration(ConfigurationMixin):
+class SciProcConfiguration(BaseConfig):
     def __init__(
         self,
         input_files: list[str] = None,
@@ -32,59 +32,40 @@ class SciProcConfiguration(ConfigurationMixin):
         verbose=True,
         **kwargs,
     ):
+        st = time.time()  
         self.write = write
+
         self.path = PathHandler(input_files)
         self.config_file = self.path.sciproc_output_yml
         self.log_file = self.path.sciproc_output_log
-        self._initialized = False
+        self.name = self.path._output_name
+        self.logger = self._setup_logger(logger, name=self.name, log_file=self.log_file, verbose=verbose)
+
+        if overwrite:
+            self.logger.info("Overwriting output and factory directories")
+            clean_up_folder(self.path.output_dir)
+            clean_up_folder(self.path.factory_dir)
 
         if config_source:
             self._initialized = True
         else:
-            config_source = self.path.sciproc_base_yml
-            # config_source = self._find_config_file()
+            config_source = self.path.preproc_base_yml
+            self._initialized = False
 
-        self._load_config(config_source, **kwargs)
+        self.logger.info("Loading configuration")
+        self.logger.debug(f"Configuration source: {config_source}")
+        super().__init__(config_source=config_source, **kwargs)
 
         if not self._initialized:
+            self.logger.info("Initializing configuration")
             self.initialize(input_files)
 
-        if overwrite:
-            clean_up_folder(self.path.output_dir)
-            clean_up_folder(self.path.factory_dir)
-
-        self.logger = self._setup_logger(logger, verbose=verbose)
-
+        self.logger.info(f"Writing configuration to file")
+        self.logger.debug(f"Configuration file: {self.config_file}")
         self.write_config()
 
-        # self.config.flag.configuration = True
-        self.logger.info(f"SciProcConfiguration initialized")
-        self.logger.debug(f"Configuration file: {self.config_file}")
-
-    @classmethod
-    def from_dict(cls, config_dict, write=False, **kwargs):
-        # config_dict['file']
-        return cls(config_source=config_dict, write=write, **kwargs)
-
-    def _load_config(self, config_source, **kwargs):
-        # Load configuration from file or dict
-        self._loaded = False
-
-        if isinstance(config_source, str):
-            input_dict = self.read_config(config_source)
-        elif isinstance(config_source, dict):
-            input_dict = config_source
-        else:
-            raise TypeError("Invalid config_source type")
-
-        self._config_in_dict = input_dict
-
-        self.config = ConfigurationInstance(self)
-
-        self._update_with_kwargs(kwargs)
-        self._make_instance(self._config_in_dict)
-
-        self._loaded = True
+        self.logger.info(f"PreprocConfiguration initialized")
+        self.logger.debug(f"PreprocConfiguration initialization took {time.time() - st:.2f} seconds")
 
     def _find_config_file(self):
         """Find the configuration file in the processed directory."""

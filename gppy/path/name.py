@@ -473,7 +473,7 @@ class NameHandler:
             return f"{obj}_{filte}_{unit}_{date}"
 
         if getattr(self, "_single", False):
-            return make(self.obj, self.filter, self.unit, self.date, self.hms, self.exptime)
+            return make(self.obj, self.filter, self.unit, self.date)
 
         return [
             make(obj, filte, unit, date) for obj, filte, unit, date, in zip(self.obj, self.filter, self.unit, self.date)

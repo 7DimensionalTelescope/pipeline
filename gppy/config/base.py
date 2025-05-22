@@ -2,82 +2,20 @@ import yaml
 import os
 from datetime import datetime
 from .. import __version__
-from ..utils import (
+from .utils import (
     merge_dicts,
 )
-from ..path.path import PathHandler
 
+class BaseConfig:
 
-class ConfigurationMixin:
-    def _make_instance(self, input_dict):
-        """
-        Transform configuration dictionary into nested, dynamic instances.
+    def __init__(self, config_source=None, **kwargs) -> None:
+        self._loaded = False
+        self._initialized = False
 
-        Args:
-            input_dict (dict): Hierarchical configuration dictionary
-        """
-
-        for key, value in input_dict.items():
-            if isinstance(value, dict):
-                nested_dict = {}
-                instances = ConfigurationInstance(self, key)
-                for subkey, subvalue in value.items():
-                    nested_dict[subkey] = subvalue
-                    setattr(instances, subkey, subvalue)
-                setattr(self.config, key, instances)
-                self._config_in_dict[key] = nested_dict
-            else:
-                setattr(self.config, key, value)
-                self._config_in_dict[key] = value
+        self._load_config(config_source, **kwargs)
 
     def __repr__(self):
         return self.config.__repr__()
-
-    def _update_config_in_dict(self, section, key, value):
-        """Update configuration dictionary with new key-value pair."""
-        target = self._config_in_dict[section] if section else self._config_in_dict
-        target[key] = value
-
-    def _update_with_kwargs(self, kwargs):
-        """Merge additional configuration parameters."""
-        # for key, value in kwargs.items():
-        #     key = key.lower()
-        #     if key in self._config_in_dict:
-        #         self._config_in_dict[key] = value
-        #     else:
-        #         for section_dict in self._config_in_dict.values():
-        #             if isinstance(section_dict, dict) and key in section_dict:
-        #                 section_dict[key] = value
-        #                 break
-
-        lower_kwargs = {key.lower(): value for key, value in kwargs.items()}
-        self._config_in_dict = merge_dicts(self._config_in_dict, lower_kwargs)
-
-    @classmethod
-    def base_config(cls, working_dir=None, config_file=None, **kwargs):
-        """Return the base (base.yml) ConfigurationInstance."""
-        working_dir = working_dir or os.getcwd()
-
-        instance = cls(return_base=True, **kwargs)  # working_dir=working_dir,
-        config = instance.config
-        config.name = "user-input"
-        # instance.path = PathHandler(instance, working_dir=working_dir)  # make _data_type 'user-input'
-
-        if config_file:
-            # working_dir is ignored if config_file is absolute path
-            config_file = os.path.join(working_dir, config_file) if working_dir else config_file
-            if os.path.exists(config_file):
-                with open(config_file, "r") as f:
-                    new_config = yaml.load(f, Loader=yaml.FullLoader)
-
-                instance._config_in_dict = merge_dicts(instance._config_in_dict, new_config)
-                instance._make_instance(instance._config_in_dict)
-            else:
-                raise FileNotFoundError("Provided Configuration file does not exist")
-
-        instance._initialized = True
-        # return config
-        return instance
 
     @property
     def is_initialized(self):
@@ -92,24 +30,74 @@ class ConfigurationMixin:
         """Return the configuration dictionary."""
         return self._config_in_dict
 
-    def _setup_logger(self, logger=None, overwrite=True, verbose=True):
-        if logger is None:
-            from .services.logger import Logger
+    @classmethod
+    def from_dict(cls, config_dict, write=False, **kwargs):
+        return cls(config_source=config_dict, write=write, **kwargs)
+    
+    @classmethod
+    def from_file(cls, config_file, write=False, **kwargs):
+        config_dict = cls.read_config(config_file)
+        return cls(config_source=config_dict, write=write, **kwargs)
 
-            logger = Logger(name=self.config.name, slack_channel="pipeline_report")
+    @classmethod
+    def from_base(cls, config_type, **kwargs):
+        if config_type == "preprocess":
+            config_file = os.path.join(const.REF_DIR, "preproc_base.yml")
+            return cls.from_file(config_file=config_file, **kwargs)
+        elif config_type == "sciprocess":
+            config_file = os.path.join(const.REF_DIR, "sciproc_base.yml")
+            return cls.from_file(config_file=config_file, **kwargs)
+        else:
+            raise ValueError(f"Invalid config_type: {config_type}")
 
-        if self.write:
-            self.config.logging.file = self.log_file
-            logger.set_output_file(self.log_file, overwrite=overwrite)
-            logger.set_format(self.config.logging.format)
-            logger.set_pipeline_name(self.path._output_name)
+    @classmethod
+    def base_config(cls, config_type=None, config_file=None, config_dict = None, working_dir=None, **kwargs):
+        """Return the base (base.yml) ConfigurationInstance."""
+        working_dir = working_dir or os.getcwd()
+        if config_file is not None:
+            config_file = os.path.join(working_dir, config_file) if working_dir else config_file
+            if os.path.exists(config_file):
+                config = cls.from_file(config_file=config_file, **kwargs)
+            else:
+                raise FileNotFoundError("Provided Configuration file does not exist")
+        elif config_type is not None:
+            config = cls.from_base(config_type, **kwargs)
+        elif config_dict is not None:
+            config = cls.from_dict(config_dict=config_dict, **kwargs)
+        else:
+            raise ValueError("Either config_file, config_type or config_dict must be provided")
+        
+        config.name = "user-input"
+        config._initialized = True
+        return config
 
-        if not (verbose):
-            logger.set_level("WARNING")
+    def _load_config(self, config_source, **kwargs):
+        # Load configuration from file or dict
+        self._loaded = False
 
-        return logger
+        if isinstance(config_source, str):
+            input_dict = self.read_config(config_source)
+        elif isinstance(config_source, dict):
+            input_dict = config_source
+        else:
+            raise TypeError("Invalid config_source type: must be str or dict")
 
-    def read_config(self, config_file):
+        self._config_in_dict = input_dict
+
+        self.config = ConfigurationInstance(self)
+
+        self._update_with_kwargs(kwargs)
+        self._make_instance()
+
+        self._loaded = True
+
+    def _update_with_kwargs(self, kwargs):
+        """Merge additional configuration parameters."""
+        lower_kwargs = {key.lower(): value for key, value in kwargs.items()}
+        self._config_in_dict = merge_dicts(self._config_in_dict, lower_kwargs)
+
+    @staticmethod
+    def read_config(config_file):
         """Read configuration from YAML file."""
         with open(config_file, "r") as f:
             return yaml.load(f, Loader=yaml.FullLoader)
@@ -130,8 +118,40 @@ class ConfigurationMixin:
         self._config_in_dict["info"]["last_update_datetime"] = datetime.now().isoformat()
 
         with open(self.config_file, "w") as f:
-            yaml.dump(self.config_in_dict, f, sort_keys=False)
+            yaml.dump(self._config_in_dict, f, sort_keys=False)
 
+    def _make_instance(self):
+        """
+        Transform configuration dictionary into nested, dynamic instances.
+        """
+        for key, value in self._config_in_dict.items():
+            if isinstance(value, dict):
+                nested_dict = {}
+                instances = ConfigurationInstance(self, key)
+                for subkey, subvalue in value.items():
+                    nested_dict[subkey] = subvalue
+                    setattr(instances, subkey, subvalue)
+                setattr(self.config, key, instances)
+                self._config_in_dict[key] = nested_dict
+            else:
+                setattr(self.config, key, value)
+                self._config_in_dict[key] = value
+
+    def _setup_logger(self, logger=None, name=None, log_file=None, verbose=True, overwrite=True, **kwargs):
+        if logger is None:
+            from ..services.logger import Logger
+            logger = Logger(name=name, slack_channel="pipeline_report")
+
+        if self.write:
+            logger.set_output_file(log_file, overwrite=overwrite)
+            if "log_format" in kwargs:
+                logger.set_format(kwargs.pop("log_format"))
+            logger.set_pipeline_name(name)
+
+        if not (verbose):
+            logger.set_level("WARNING")
+
+        return logger
 
 class ConfigurationInstance:
     def __init__(self, parent_config=None, section=None):
@@ -183,15 +203,6 @@ class ConfigurationInstance:
                 repr_lines.append(f"{indent}  {k}: {v}")
 
         return "\n".join(repr_lines)
-
-    # def to_dict(self):
-    #     """shallow"""
-    #     result = {}
-    #     for k, v in self.__dict__.items():
-    #         if k.startswith("_"):
-    #             continue
-    #         result[k] = v.to_dict() if isinstance(v, ConfigurationInstance) else v
-    #     return result
 
     def to_dict(self):
         import copy
