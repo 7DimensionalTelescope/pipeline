@@ -6,9 +6,10 @@ import matplotlib.colors as mcolors
 from pathlib import Path
 from PIL import Image
 
-def save_fits_as_png(
-    image_data, output_path, stretch=True, log_scale=False, max_width=1000
-):
+from ..path import PathHandler
+
+
+def save_fits_as_png(image_data, output_path, stretch=True, log_scale=False, max_width=1000):
     # Handle potential NaN or inf values
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
@@ -35,9 +36,7 @@ def save_fits_as_png(
         image_data = np.clip(image_data, vmin, vmax)
 
     # Normalize to 0-255 range for 8-bit image
-    image_data = (
-        (image_data - image_data.min()) / (image_data.max() - image_data.min()) * 255
-    ).astype(np.uint8)
+    image_data = ((image_data - image_data.min()) / (image_data.max() - image_data.min()) * 255).astype(np.uint8)
 
     # Convert to Pillow Image
     pil_image = Image.fromarray(image_data)
@@ -51,9 +50,7 @@ def save_fits_as_png(
         pil_image = pil_image.resize((new_width, new_height), Image.LANCZOS)
 
     # Save with compression
-    pil_image.save(
-        output_path, "PNG", optimize=True, compress_level=5  # Optimize compression
-    )
+    pil_image.save(output_path, "PNG", optimize=True, compress_level=5)  # Optimize compression
 
 
 def plot_bias(file, savefig=False):
@@ -95,9 +92,9 @@ def plot_bias(file, savefig=False):
     if savefig:
         path = Path(file)
         os.makedirs(path.parent / "figures", exist_ok=True)
-        plt.savefig(path.parent / "figures" / f"{path.name}.png")
+        plt.savefig(path.parent / "figures" / f"{path.stem}.png")
         plt.clf()
-        save_fits_as_png(data, path.parent / "figures" / f"{path.name}.png")
+        save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
     else:
         plt.show(block=False)
 
@@ -141,17 +138,14 @@ def plot_dark(file, fmask=None, savefig=False):
     if savefig:
         path = Path(file)
         os.makedirs(path.parent / "figures", exist_ok=True)
-        plt.savefig(
-            path.parent / "figures" / f"{path.name}.png"
-        )
+        plt.savefig(path.parent / "figures" / f"{path.stem}.png")
         plt.clf()
-        save_fits_as_png(
-            data, path.parent / "figures" / f"{path.name}.png"
-        )
+        save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
     else:
         plt.show(block=False)
 
     plot_dark_tail(fdata, file, savefig=savefig)
+
 
 def plot_dark_tail(fdata, file, savefig=False):
     p99 = np.percentile(fdata, 99, method="nearest")
@@ -181,14 +175,14 @@ def plot_dark_tail(fdata, file, savefig=False):
     if savefig:
         path = Path(file)
         os.makedirs(path.parent / "figures", exist_ok=True)
-        plt.savefig(path.parent / "figures" / f"{path.name}_tail.png")
+        plt.savefig(path.parent / "figures" / f"{path.stem}_tail.png")
         plt.clf()
     else:
         plt.show(black=False)
 
 
 def plot_flat(file, fmask=None, savefig=False):
-    
+
     data = fits.getdata(file)
     header = fits.getheader(file)
 
@@ -229,9 +223,9 @@ def plot_flat(file, fmask=None, savefig=False):
     if savefig:
         path = Path(file)
         os.makedirs(path.parent / "figures", exist_ok=True)
-        plt.savefig(path.parent / "figures" / f"{path.name}.png")
+        plt.savefig(path.parent / "figures" / f"{path.stem}.png")
         plt.clf()
-        save_fits_as_png(data, path.parent / "figures" / f"{path.name}.png")
+        save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
     else:
         plt.show()
 
@@ -256,7 +250,7 @@ def plot_bpmask(file, ext=1, badpix=1, savefig=False):
     if savefig:
         path = Path(file)
         os.makedirs(path.parent / "figures", exist_ok=True)
-        plt.savefig(path.parent / "figures" / f"{path.name}.png")
+        plt.savefig(path.parent / "figures" / f"{path.stem}.png")
         plt.clf()
     else:
         plt.show(black=False)
@@ -281,15 +275,16 @@ def plot_bpmask(file, ext=1, badpix=1, savefig=False):
         if savefig:
             path = Path(file)
             os.makedirs(path.parent / "figures", exist_ok=True)
-            plt.savefig(path.parent / "figures" / f"{path.name}.png")
+            plt.savefig(path.parent / "figures" / f"{path.stem}.png")
             plt.clf()
         else:
             plt.show(block=False)
 
     return data
 
+
 def plot_sci(input_img, output_img):
-    path = Path(input_img)
-    save_fits_as_png(fits.getdata(input_img), path.parent / "figures" / f"{path.name}.png")
-    path = Path(output_img)
-    save_fits_as_png(fits.getdata(output_img), path.parent / "figures" / f"{path.name}.png")
+    # path = Path(input_img)
+    # save_fits_as_png(fits.getdata(input_img), path.parent / "figures" / f"{path.stem}.png")
+    path = PathHandler(output_img)
+    save_fits_as_png(fits.getdata(output_img), path.figure_dir_to_path / f"{path.stem}.png")

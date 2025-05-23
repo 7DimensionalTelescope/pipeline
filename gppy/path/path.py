@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Union, TYPE_CHECKING
 import numpy as np
 from .. import const
-from ..utils import check_params, add_suffix, swap_ext, collapse
+from ..utils import add_suffix, swap_ext, collapse
 from .name import NameHandler
 from .utils import format_exptime
 
@@ -75,29 +75,6 @@ class PathHandler(AutoMkdirMixin):
 
     def _handle_input(self, input):
         """init with obs_parmas and config are ad-hoc. Will be changed to always take filenames"""
-        # input is obs_param
-        # if isinstance(input, dict):
-        #     self.obs_params = input
-
-        # # input is ConfigurationInstance
-        # elif hasattr(input, "obs"):
-        #     if input.file.raw_files is not None:
-        #         self._input_files = [os.path.abspath(file) for file in input.file.raw_files]
-        #     elif input.file.processed_files is not None:
-        #         self._input_files = [os.path.abspath(file) for file in input.file.processed_files]
-        #     self._data_type = input.name  # propagate user-input
-        #     self.obs_params = input.obs.to_dict()
-        #     self._config = input
-
-        # # input is Configuration
-        # elif hasattr(input, "config"):
-        #     if input.config.file.raw_files is not None:
-        #         self._input_files = [os.path.abspath(file) for file in input.config.file.raw_files]
-        #     elif input.config.file.processed_files is not None:
-        #         self._input_files = [os.path.abspath(file) for file in input.config.file.processed_files]
-        #     self._data_type = input.config.name  # propagate user-input
-        #     self.obs_params = input.config_in_dict["obs"]
-        #     self._config = input.config
 
         if input is None:
             pass
@@ -125,7 +102,11 @@ class PathHandler(AutoMkdirMixin):
         (2) Retry the lookup - if the attribute was created by the builder we
             return it; otherwise fall through to the convenience “_to_*” hooks.
         """
-        # ---------- 1. Lazy initialization ----------
+        # 1) Delegate any NameHandler property directly without running AutoMkdirMixin
+        if hasattr(self, "_names") and hasattr(self._names, name):
+            return collapse(getattr(self._names, name))
+
+        # ---------- 2. Lazy initialization ----------
         if not self._file_dep_initialized and self._input_files:
             self._file_dep_initialized = True  # set the flag first to prevent accidental recursion
             try:
@@ -139,7 +120,7 @@ class PathHandler(AutoMkdirMixin):
             if name in self.__dict__:
                 return self.__dict__[name]
 
-        # ---------- 2. “Syntactic-sugar” logic ----------
+        # ---------- 3. “Syntactic-sugar” logic ----------
         if name.endswith("_to_string"):
             base = name[:-10]
             val = getattr(self, base)
@@ -163,7 +144,7 @@ class PathHandler(AutoMkdirMixin):
             else:
                 return val
 
-        # ---------- 3. Still not found -> real error ----------
+        # ---------- 4. Still not found -> real error ----------
         raise AttributeError(f"{self.__class__.__name__!s} has no attribute {name!r}")
 
     def __repr__(self):
@@ -428,12 +409,14 @@ class PathHandler(AutoMkdirMixin):
 
         def get_key(sci_group):
             """Use only the values as tuple keys"""
-            return tuple(
+            tuple_key = tuple(
                 v
                 for k, v in collapse(
                     NameHandler.parse_params(sci_group, keys=const.SURVEY_SCIENCE_GROUP_KEYS), raise_error=True
                 ).items()
             )
+            # return tuple_key
+            return "_".join(tuple_key)
 
         result = []
 
