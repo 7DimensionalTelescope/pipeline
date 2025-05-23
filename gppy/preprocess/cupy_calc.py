@@ -1,3 +1,4 @@
+import gc
 import cupy as cp
 import numpy as np
 from astropy.io import fits
@@ -6,11 +7,9 @@ from contextlib import contextmanager
 
 # Reduction kernel
 reduction_kernel = cp.ElementwiseKernel(
-    in_params='T x, T b, T d, T f',
-    out_params='T z',
-    operation='z = (x - b - d) / f',
-    name='reduction'
+    in_params="T x, T b, T d, T f", out_params="T z", operation="z = (x - b - d) / f", name="reduction"
 )
+
 
 @contextmanager
 def load_data_gpu(fpath, ext=None):
@@ -22,6 +21,7 @@ def load_data_gpu(fpath, ext=None):
         del data  # Free GPU memory when the block is exited
         gc.collect()  # Force garbage collection
         cp.get_default_memory_pool().free_all_blocks()
+
 
 def calc_batch_dist(image_list, num_devices=None, use_multi_device=False, device=0):
     if use_multi_device:
@@ -67,9 +67,10 @@ def calc_batch_dist(image_list, num_devices=None, use_multi_device=False, device
         second_round[i] += assign
         extra_needed -= assign
         i = (i + 1) % num_devices
-    
+
     return np.vstack([first_round, second_round])
-    
+
+
 def estimate_posssible_batch_size(filename):
     H, W = fits.getdata(filename).astype(np.float32).shape
     image_size = cp.float32().nbytes * H * W / 1024**2
@@ -78,8 +79,9 @@ def estimate_posssible_batch_size(filename):
     batch_size = max(1, safe_mem // image_size)
     return int(batch_size), image_size, available_mem
 
+
 def process_batch_on_device(image_paths, bias, dark, flat, results, device_id=0):
-    
+
     with cp.cuda.Device(device_id):
         load_stream = Stream(non_blocking=True)
         compute_stream = Stream()
@@ -93,13 +95,15 @@ def process_batch_on_device(image_paths, bias, dark, flat, results, device_id=0)
                 local_results.append(cp.asnumpy(reduced))
                 del reduced
             del image
-        
+
         del bias, dark, flat
         compute_stream.synchronize()
         cp.get_default_memory_pool().free_all_blocks()
         results[device_id] = local_results
 
+
 def combine_images_with_cupy(images, device_id=0, subtract=None, norm=False):
+    """median is gpu, std is cpu"""
     with cp.cuda.Device(device_id):
         cp_stack = cp.stack([cp.asarray(fits.getdata(img).astype(np.float32)) for img in images])
         if subtract is not None:
@@ -177,9 +181,7 @@ def record_statistics(data, header, device_id=0, cropsize=500):
     start_col = (width - cropsize) // 2
 
     # Slice the central 500x500 area
-    cropped_data = data[
-        start_row : start_row + cropsize, start_col : start_col + cropsize
-    ]
+    cropped_data = data[start_row : start_row + cropsize, start_col : start_col + cropsize]
     mean, median, std = sigma_clipped_stats_cupy(cropped_data, device_id=device_id, sigma=3, maxiters=5)
     header["CENCLPMN"] = (float(mean), f"3-sig clipped mean of center {cropsize}x{cropsize}")  # fmt: skip
     header["CENCLPMD"] = (float(median), f"3-sig clipped median of center {cropsize}x{cropsize}")  # fmt: skip

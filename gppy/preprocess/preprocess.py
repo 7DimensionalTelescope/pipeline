@@ -1,6 +1,6 @@
 import os
 import glob
-import threading    
+import threading
 import numpy as np
 from astropy.io import fits
 import time
@@ -18,11 +18,12 @@ from ..path import PathHandler
 from ..config import PreprocConfiguration
 from ..services.setup import BaseSetup
 
+
 class Preprocess(BaseSetup):
     """
     Assumes homogeneous BIAS, DARK, FLAT, SCI frames as input
     taken on the same date with the same
-    unit, n_binning and gain have all identical cameras.
+    unit, n_binning, gain, and cameras.
     """
 
     def __init__(
@@ -58,12 +59,12 @@ class Preprocess(BaseSetup):
             (1, "initialize", False),
         ]
         for i in range(self._n_groups):
-            tasks.append((4*i+2, f"generate_masterframe", True))
-            tasks.append((4*i+3, f"data_reduction", True))
-            tasks.append((4*i+4, f"make_plots", False))
+            tasks.append((4 * i + 2, f"generate_masterframe", True))
+            tasks.append((4 * i + 3, f"data_reduction", True))
+            tasks.append((4 * i + 4, f"make_plots", False))
             if i < self._n_groups - 1:
-                tasks.append((4*i+5, f"proceed_to_next_group", False))
-        
+                tasks.append((4 * i + 5, f"proceed_to_next_group", False))
+
         return tasks
 
     def initialize(self):
@@ -79,14 +80,14 @@ class Preprocess(BaseSetup):
         self._current_group = 0
 
         self.choose_device()
-        
+
         self.logger.info(f"{self._n_groups} groups are found")
 
     def run(self):
         self.initialize()
         threads_for_making_plots = []
         for i in range(self._n_groups):
-            self.generate_masterframe()
+            self.load_masterframe()
             self.data_reduction()
 
             t = threading.Thread(target=self.make_plots, args=(i,))
@@ -102,6 +103,7 @@ class Preprocess(BaseSetup):
     def choose_device(self):
         if self.config.preprocess.device is None:
             from ..services.memory import MemoryMonitor
+
             self.logger.debug("No device specified, choosing the device with least memory usage")
             self.config.preprocess.device = np.argmin(MemoryMonitor.current_gpu_memory_percent)
             self.logger.debug(f"Chosen device: {self.config.preprocess.device}")
@@ -149,7 +151,7 @@ class Preprocess(BaseSetup):
                 else:
                     return self.raw_groups[group_index][1][key_to_index[key]]
         raise AttributeError(f"Attribute {name} not found")
-        
+
     def _parse_sci_list(self, group_index, dtype="input"):
         l = []
         for value in self.raw_groups[group_index][2].values():
@@ -177,71 +179,97 @@ class Preprocess(BaseSetup):
     def _calc_dark_scale(self):
         return 1
 
-    def generate_masterframe(self):
+    def load_masterframe(self):
         device_id = self.device_id
 
         self.logger.info(f"Generating masterframes for group {self._current_group+1} in GPU device {device_id}")
         st = time.time()
-        
+
         for dtype in ["bias", "dark", "flat"]:
-            
-            self.logger.info(f"Generating {dtype} masterframe")
+
             input_data = getattr(self, f"{dtype}_input")
-            header = self.get_header(dtype)
+            output_data = getattr(self, f"{dtype}_output")
 
-            if dtype == "bias":
-                median, std = combine_images_with_cupy(input_data, device_id=device_id)
-                self.bias_data = median
+            if input_data:  # if the list is not empty
+                if not os.path.exists(output_data) or self.overwrite:
+                    self._generate_masterframe(dtype, device_id)
+                else:
+                    self._fetch_masterframe(output_data, dtype, device_id)
+            else:
+                self._fetch_masterframe(output_data, dtype, device_id)
 
-            elif dtype == "dark":
-                median, std = combine_images_with_cupy(input_data, subtract=self.bias_data, device_id=device_id)
-                self.dark_data = median
-                n_sigma = self.config.preprocess.n_sigma
-                self.generate_bpmask(median, n_sigma=n_sigma, header=header, device_id=device_id)
+        self.logger.info(f"Generation/Loading of masterframes completed in {time.time() - st:.2f} seconds")
 
-            elif dtype == "flat":
-                dark_scale = self._calc_dark_scale()
-                median, std = combine_images_with_cupy(input_data, 
-                subtract=(self.bias_data + self.dark_data * dark_scale), norm=True, device_id=device_id)
-                self.flat_data = median
+    def _generate_masterframe(self, dtype, device_id):
+        self.logger.info(f"Generating master {dtype}")
+        input_data = getattr(self, f"{dtype}_input")
+        header = self.get_header(dtype)
 
-            fits.writeto(
-                getattr(self, f"{dtype}sig_output"),
-                data=std,
-                header=header,
-                overwrite=True,
+        if dtype == "bias":
+            median, std = combine_images_with_cupy(input_data, device_id=device_id)
+            self.bias_data = median
+
+        elif dtype == "dark":
+            median, std = combine_images_with_cupy(input_data, subtract=self.bias_data, device_id=device_id)
+            self.dark_data = median
+            n_sigma = self.config.preprocess.n_sigma
+            self.generate_bpmask(median, n_sigma=n_sigma, header=header, device_id=device_id)
+
+        elif dtype == "flat":
+            dark_scale = self._calc_dark_scale()
+            median, std = combine_images_with_cupy(
+                input_data, subtract=(self.bias_data + self.dark_data * dark_scale), norm=True, device_id=device_id
             )
+            self.flat_data = median
 
-            header = prep_utils.add_image_id(header)
-            header = record_statistics(median, header, device_id=device_id)
+        fits.writeto(
+            getattr(self, f"{dtype}sig_output"),
+            data=std,
+            header=header,
+            overwrite=True,
+        )
 
-            fits.writeto(
-                getattr(self, f"{dtype}_output"),
-                data=cp.asnumpy(median),
-                header=header,
-                overwrite=True,
+        header = prep_utils.add_image_id(header)
+        header = record_statistics(median, header, device_id=device_id)
+
+        fits.writeto(
+            getattr(self, f"{dtype}_output"),
+            data=cp.asnumpy(median),
+            header=header,
+            overwrite=True,
+        )
+
+        del median
+        cp.get_default_memory_pool().free_all_blocks()
+
+    def _fetch_masterframe(self, template, dtype, device_id):
+        self.logger.info(f"Fetching master {dtype}")
+        # existing_data can be either on-date or off-date
+        max_offset = self.config.preprocess.max_offset
+        existing_data = prep_utils.search_with_date_offsets(template, max_offset=max_offset)
+        if not existing_data:
+            raise FileNotFoundError(
+                f"No pre-existing master {dtype} found in place of {template} wihin {max_offset} days"
             )
-            
-            del median
-            cp.get_default_memory_pool().free_all_blocks()
-        self.logger.info(f"Generation of masterframes completed in {time.time() - st:.2f} seconds")
+        with cp.cuda.Device(device_id):
+            data_gpu = cp.asarray(fits.getdata(existing_data).astype(np.float32))
+
+        setattr(self, f"{dtype}_data", data_gpu)
 
     def data_reduction(self):
         st = time.time()
 
         n_head_blocks = self.config.preprocess.n_head_blocks
         use_multi_device = self.config.preprocess.use_multi_device
-        
+
         if use_multi_device:
             num_devices = cp.cuda.runtime.getDeviceCount()
             device = np.arange(num_devices)
         else:
             num_devices = 1
             device = self.device_id
-            
-        batch_dist = calc_batch_dist(
-            self.sci_input, num_devices=num_devices, use_multi_device=use_multi_device
-        )
+
+        batch_dist = calc_batch_dist(self.sci_input, num_devices=num_devices, use_multi_device=use_multi_device)
 
         self.logger.info(
             f"Processing {len(self.sci_input)} images in group {self._current_group+1} on GPU device(s): {device} "
@@ -295,8 +323,12 @@ class Preprocess(BaseSetup):
 
         for idx, (raw_file, processed_file) in enumerate(zip(self.sci_input, self.sci_output)):
             header = fits.getheader(raw_file)
-            header["SATURATE"] = prep_utils.get_saturation_level(header, self.bias_output, self.dark_output, self.flat_output)
-            header = prep_utils.write_IMCMB_to_header(header, [self.bias_output, self.dark_output, self.flat_output, raw_file])
+            header["SATURATE"] = prep_utils.get_saturation_level(
+                header, self.bias_output, self.dark_output, self.flat_output
+            )
+            header = prep_utils.write_IMCMB_to_header(
+                header, [self.bias_output, self.dark_output, self.flat_output, raw_file]
+            )
             add_padding(header, n_head_blocks, copy_header=False)
             fits.writeto(
                 processed_file,
@@ -308,23 +340,34 @@ class Preprocess(BaseSetup):
         self.logger.info(f"All images in group {self._current_group+1} are saved")
         cp.get_default_memory_pool().free_all_blocks()
         gc.collect()
-    
+
     def generate_bpmask(self, data, n_sigma=5, header=None, device_id=0):
         mean, median, std = sigma_clipped_stats_cupy(data, sigma=3, maxiters=5, device_id=device_id)
         hot_mask = cp.abs(data - median) > n_sigma * std  # 1 for bad, 0 for okay
         hot_mask_cpu = cp.asnumpy(hot_mask).astype("uint8")
         del hot_mask, mean, median, std
         cp.get_default_memory_pool().free_all_blocks()
-        
+
         newhdu = fits.CompImageHDU(data=hot_mask_cpu)
         if header:
-            for key in ["INSTRUME", "GAIN", "EXPTIME", "EXPOSURE", "JD", "MJD", "DATE-OBS", "DATE-LOC", "XBINNING", "YBINNING"]:
+            for key in [
+                "INSTRUME",
+                "GAIN",
+                "EXPTIME",
+                "EXPOSURE",
+                "JD",
+                "MJD",
+                "DATE-OBS",
+                "DATE-LOC",
+                "XBINNING",
+                "YBINNING",
+            ]:
                 newhdu.header[key] = header[key]
             newhdu.header["COMMENT"] = "Header inherited from first dark frame"
         newhdu.header["NHOTPIX"] = (np.sum(hot_mask_cpu), "Number of hot pixels.")
         newhdu.header["SIGMAC"] = (n_sigma, "HP threshold in clipped sigma")
         newhdu.header["BADPIX"] = (1, "Pixel Value for Bad pixels")
-        
+
         primary_hdu = fits.PrimaryHDU()
         newhdul = fits.HDUList([primary_hdu, newhdu])
         newhdul.writeto(self.bpmask_output, overwrite=True)
@@ -334,10 +377,9 @@ class Preprocess(BaseSetup):
         if group_index is not None:
             group_index = self._current_group
 
-        
         self.logger.info(f"Generating plots for master calibration frames of group {group_index+1}")
         use_multi_thread = self.config.preprocess.use_multi_thread
-        
+
         plot_bias(self._get_raw_group("bias_output", group_index), savefig=True)
         mask = plot_bpmask(self._get_raw_group("bpmask_output", group_index), savefig=True)
         sample_header = fits.getheader(self._get_raw_group("bpmask_output", group_index), ext=1)
@@ -352,14 +394,20 @@ class Preprocess(BaseSetup):
         self.logger.info(f"Generating plots for science frames of group {group_index+1}")
         if use_multi_thread:
             threads = []
-            for input_img, output_img in zip(self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)):
+            for input_img, output_img in zip(
+                self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)
+            ):
                 thread = threading.Thread(target=plot_sci, args=(input_img, output_img))
                 thread.start()
                 threads.append(thread)
             for thread in threads:
                 thread.join()
         else:
-            for input_img, output_img in zip(self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)):
+            for input_img, output_img in zip(
+                self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)
+            ):
                 plot_sci(input_img, output_img)
 
-        self.logger.info(f"Completed plot generation for {len(self._get_raw_group('sci_input', group_index))} images in group {group_index+1} in {time.time() - st:.2f} seconds")
+        self.logger.info(
+            f"Completed plot generation for {len(self._get_raw_group('sci_input', group_index))} images in group {group_index+1} in {time.time() - st:.2f} seconds"
+        )

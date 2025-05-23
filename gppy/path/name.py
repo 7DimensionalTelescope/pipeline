@@ -141,8 +141,7 @@ class NameHandler:
         # --- 2. Build the filesystem-related attributes as lists ---
         self.path = [os.path.abspath(f) for f in files]
         self.basename = [os.path.basename(p) for p in self.path]
-        stems_exts = [os.path.splitext(b) for b in self.basename]
-        self.stem, self.ext = zip(*stems_exts)
+        self.stem, self.ext = (list(x) for x in zip(*(os.path.splitext(b) for b in self.basename)))
         if any(ext != ".fits" for ext in self.ext):
             raise ValueError("One or more inputs are not FITS files")
 
@@ -174,6 +173,15 @@ class NameHandler:
             gains.append(gain)
             cameras.append(camera)
 
+        if self._single:
+            self.path = self.path[0]
+            self.basename = self.basename[0]
+            self.stem = self.stem[0]
+            self.ext = self.ext[0]
+            self.parts = self.parts[0]
+            self.types = self.types[0]
+            self.exists = self.exists[0]
+
         # --- 5. Attach them as lists (or scalar if single) ---
         self.unit = units if not self._single else units[0]
         self.date = dates if not self._single else dates[0]
@@ -188,7 +196,7 @@ class NameHandler:
     def __repr__(self):
         # when list: show first few
         if hasattr(self, "_single") and not self._single:
-            return f"<NameHandler of {len(self.path)} files>"
+            return f"<NameHandler of {len(self.path) if not self._single else 1} files>"
         return f"<NameHandler {self.basename}>"
 
     @staticmethod
@@ -310,7 +318,7 @@ class NameHandler:
                 return self._n_binning
             # otherwise read it from the one FITS header
             else:
-                return get_header(self.path[0], force_return=True).get(key, None)
+                return get_header(self.path, force_return=True).get(key, None)
 
         # multi‐file mode: build a list, using header only where needed
         nbins = []
@@ -329,7 +337,7 @@ class NameHandler:
         self._gain is [None, None, ...]
         """
         if getattr(self, "_single", False):
-            return get_gain(self.path[0])
+            return get_gain(self.path)
         else:
             return [get_gain(p) for p in self.path]
 
@@ -340,7 +348,7 @@ class NameHandler:
         self._camera is [None, None, ...]
         """
         if getattr(self, "_single", False):
-            return get_camera(self.path)[0]
+            return get_camera(self.path)
         else:
             return [get_camera(u) for u in self.path]
 
