@@ -3,6 +3,7 @@ import subprocess
 from astropy.io import fits
 from .const import FACTORY_DIR, REF_DIR
 from .utils import add_suffix, swap_ext
+from .path import PathHandler
 
 
 def solve_field(inim, outim=None, dump_dir=None, get_command=False, pixscale=0.505, radius=1.0):
@@ -192,7 +193,7 @@ def missfits(inim):
 def sextractor(
     inim: str,
     outcat: str = None,
-    suffix="prep",
+    se_preset="prep",
     log_file: str = None,
     sex_args: list = [],
     config=None,  # supply config.config
@@ -205,13 +206,13 @@ def sextractor(
     No support for dual mode yet.
     """
 
-    def get_sex_config(prefix, ref_path=None):
+    def get_sex_config(preset, ref_path=None):
         from .const import REF_DIR
 
         # "/data/pipeline_reform/gppy-gpu/gppy/ref/srcExt"
         ref_path = ref_path or os.path.join(REF_DIR, "srcExt")
         postfix = ["sex", "param", "conv", "nnw"]
-        return [os.path.join(ref_path, f"{prefix}.{pf}") for pf in postfix]
+        return [os.path.join(ref_path, f"{preset}.{pf}") for pf in postfix]
 
     def chatter(message):
         if logger:
@@ -226,9 +227,9 @@ def sextractor(
         nnw = config.sex.nnw
         conv = config.sex.conv
     else:
-        sex, param, conv, nnw = get_sex_config(suffix)
+        sex, param, conv, nnw = get_sex_config(se_preset)
 
-    outcat = outcat or swap_ext(add_suffix(inim, suffix), "cat")
+    outcat = outcat or add_suffix(add_suffix(inim, se_preset), "cat")
     log_file = log_file or swap_ext(add_suffix(outcat, "sextractor"), "log")
 
     sexcom = [

@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 class AutoMkdirMixin:
     """This makes sure accessed dirs exist. Prepend _ to variables to prevent mkdir"""
 
-    _mkdir_exclude = set()  # subclasses can override this
+    _mkdir_exclude = {"name", "names"}  # subclasses can override this
 
     def __init_subclass__(cls):
         # Ensure subclasses have their own created-directory cache
@@ -82,11 +82,10 @@ class PathHandler(AutoMkdirMixin):
         # input is a fits file list; the only method to keep
         elif isinstance(input, list) or isinstance(input, (str, Path)):
             input = list(np.atleast_1d(input))
-            self._names = NameHandler(input)
+            self.names = NameHandler(input)
             self._input_files = [os.path.abspath(img) for img in input]
-            self._data_type = self._names.types
-            # obs_params = collapse(self._names.to_dict(), keys=const.SURVEY_SCIENCE_GROUP_KEYS)
-            obs_params = collapse(self._names.to_dict(keys=const.PATH_KEYS), keys=const.SURVEY_SCIENCE_GROUP_KEYS)
+            self._data_type = self.names.types  # you can also use self.types from getattr delegate
+            obs_params = collapse(self.names.to_dict(keys=const.PATH_KEYS), keys=const.SURVEY_SCIENCE_GROUP_KEYS)
 
             if isinstance(obs_params, list):
                 raise ValueError("PathHandler input is incoherent w.r.t. SCIENCE_GROUP_KEYS.")
@@ -103,8 +102,10 @@ class PathHandler(AutoMkdirMixin):
             return it; otherwise fall through to the convenience “_to_*” hooks.
         """
         # 1) Delegate any NameHandler property directly without running AutoMkdirMixin
-        if hasattr(self, "_names") and hasattr(self._names, name):
-            return collapse(getattr(self._names, name))
+        # if hasattr(self, "_names") and hasattr(self.names, name):
+        if hasattr(self, "names") and hasattr(self.names, name):
+            # return collapse(getattr(self._names, name))  # use syntactic sugar _collapse in NameHandler
+            return getattr(self.names, name)
 
         # ---------- 2. Lazy initialization ----------
         if not self._file_dep_initialized and self._input_files:
@@ -246,7 +247,7 @@ class PathHandler(AutoMkdirMixin):
             self.daily_stacked_dir = os.path.join(self._output_dir, "stacked")
             self.subtracted_dir = os.path.join(self._output_dir, "subtracted")
 
-            config_stem = self._names.config_stem_collapse
+            config_stem = self.names.config_stem_collapse
             if not isinstance(config_stem, str):
                 raise ValueError("Incoherent input: configuration basename is not uniquely defined")
             self._output_name = config_stem
@@ -254,7 +255,7 @@ class PathHandler(AutoMkdirMixin):
             self.sciproc_output_log = os.path.join(self._output_dir, config_stem + ".log")
 
             # raw pipeline images as input
-            if const.RAWDATA_DIR in str(self._input_files[0]):
+            if "raw" in self._data_type[0]:  # cheating; works for _single
                 # self.data_type = self._data_type or "raw"  # interferes with Mkdir
 
                 self.raw_images = self._input_files
@@ -270,11 +271,9 @@ class PathHandler(AutoMkdirMixin):
                     self.processed_images = [os.path.join(image_dir, f) for f in names.conjugate]
 
             # processed pipeline images as input
-            elif self.output_parent_dir in str(self._input_files[0]):
-                # self.data_type = self._data_type or "processed"
-                # self.processed_images = [str(file.absolute()) for file in self._input_files]
-                self.factory_dir = os.path.join(const.FACTORY_DIR, *Path(self._input_files[0]).parts[-6:-3])
-                self._output_dir = str(Path(self._input_files[0]).parent.parent)
+            # elif self.output_parent_dir in str(self._input_files[0]):
+            elif "calibrated" in self._data_type[0]:
+                self.processed_images = self._input_files if not self.names._single else str(self._input_files[0])
 
             else:  # user input
                 # self.data_type = self._data_type or "user-input"
@@ -283,6 +282,8 @@ class PathHandler(AutoMkdirMixin):
                 # self.processed_file_stems = [file.stem for file in self._input_files]
                 self._output_dir = str(Path(self._input_files[0]).parent.parent)
                 self.factory_dir = str(Path(self._input_files[0]).parent.parent / "factory")
+
+        # outside pipeline
         else:
             self._output_dir = self._output_parent_dir
             self.factory_dir = self._factory_parent_dir
@@ -533,9 +534,19 @@ class PathAstrometry(AutoMkdirMixin):
     def tmp_dir(self):
         return os.path.join(self._parent.factory_dir, "astrometry")
 
-    @property
-    def input(self):
-        return self._parent.processed_images
+    # @property
+    # def input_files(self):
+    #     return self._parent.processed_images
+
+    # @property
+    # def solvefield_outputs(self):
+    #     exts = ["solved", "axy", "corr", "match", "rdls", "wcs"]  # -indx.xyls?
+    #     return tuple([swap_ext(image, ext) for ext in exts] for image in self.input_files)
+
+    # @property
+    # def catalog(self):
+    #     # return (add_suffix(add_suffix(inim, 'prep'), "cat") for inim in self.input_files)
+    #     return [add_suffix(inim, "cat") for inim in self.input_files]
 
 
 class PathPhotometry(AutoMkdirMixin):

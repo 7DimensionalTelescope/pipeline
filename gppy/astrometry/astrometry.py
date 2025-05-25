@@ -5,9 +5,11 @@ from pathlib import Path
 import glob
 import time
 from .. import external
+from ..utils import swap_ext, add_suffix
 from ..services.memory import MemoryMonitor
-from ..config import Configuration
+from ..config import SciProcConfiguration
 from ..services.setup import BaseSetup
+from ..path import PathHandler
 
 
 class Astrometry(BaseSetup):
@@ -54,7 +56,7 @@ class Astrometry(BaseSetup):
                 return None
             image_list.append(path.parts[-1])
         working_dir = str(path.parent.absolute())
-        config = Configuration.base_config(working_dir)
+        config = SciProcConfiguration.base_config(working_dir)
         config.file.processed_files = image_list
         return cls(config=config)
 
@@ -68,7 +70,7 @@ class Astrometry(BaseSetup):
         joint_scamp: bool = True,
         use_missfits: bool = False,
         processes=["sextractor", "scamp", "header_update"],
-        prefix: str = "prep",
+        se_preset: str = "prep",
     ) -> None:
         """Execute the complete astrometry pipeline.
 
@@ -87,31 +89,30 @@ class Astrometry(BaseSetup):
             start_time = time.time()
             self.logger.info(f"Start astrometry for {self.config.name}")
 
-            solved_files, soft_links, inims = self.define_paths()
+            self.define_paths()
 
             # solve-field
             if solve_field:
-                self.run_solve_field(soft_links, solved_files)
+                self.run_solve_field(self.soft_links_to_input, self.solved_images)
             else:
                 # add manual WCS update feature
                 pass
 
             # Source Extractor
             if "sextractor" in processes:
-                self.run_sextractor(solved_files, prefix=prefix)
+                self.run_sextractor(self.solved_images, se_preset=se_preset)
 
             if "scamp" in processes:
-                self.run_scamp(solved_files, joint=joint_scamp, prefix=prefix)
+                self.run_scamp(self.solved_images, joint=joint_scamp)
 
             # add polygon info to header - field rotation
 
             if "header_update" in processes:
                 self.update_header(
-                    solved_files,
-                    inims,
-                    soft_links,
+                    self.solved_images,
+                    self.input_images,
+                    self.soft_links_to_input,
                     use_missfits=use_missfits,
-                    prefix=prefix,
                 )
 
             self.config.flag.astrometry = True
@@ -128,12 +129,12 @@ class Astrometry(BaseSetup):
         self.path_astrometry = self.path.astrometry.tmp_dir
         # inims = self.config.file.processed_files
 
-        if hasattr(self.config.astrometry, "input") and self.config.astrometry.input is not None:
-            # inims = self.config.file.processed_files
-            inims = self.config.astrometry.input
+        # override if astrometry.input_files is set
+        if hasattr(self.config.astrometry, "input_files") and self.config.astrometry.input_files is not None:
+            inims = self.config.astrometry.input_files
         else:
-            inims = self.path.astrometry.input
-            self.config.astrometry.input = inims
+            inims = self.config.input_files
+            self.config.astrometry.input_files = inims
 
         soft_links = [os.path.join(self.path_astrometry, os.path.basename(s)) for s in inims]
 
@@ -141,8 +142,13 @@ class Astrometry(BaseSetup):
             if not os.path.exists(soft_link):
                 os.symlink(inim, soft_link)
 
-        solved_files = [os.path.splitext(s)[0] + "_solved.fits" for s in soft_links]
-        return solved_files, soft_links, inims
+        solved_files = [add_suffix(s, "solved") for s in soft_links]
+        # return solved_files, soft_links, inims
+        self.solved_images = solved_files
+        self.soft_links_to_input = soft_links
+        self.input_images = inims
+        # self.prep_cats = PathHandler(soft_links).astrometry.catalog
+        self.prep_cats = [add_suffix(inim, "cat") for inim in soft_links]
 
     def run_solve_field(self, inputs: List[str], outputs: List[str]) -> None:
         """Run astrometric plate-solving on input images.
@@ -158,7 +164,7 @@ class Astrometry(BaseSetup):
         self.logger.info(f"Start solve-field")
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
-        solved_flag_files = [os.path.splitext(input)[0] + ".solved" for input in inputs]
+        solved_flag_files = [swap_ext(input, ".solved") for input in inputs]
         filtered_data = [
             (inp, out)
             for inp, out, solved_flag_file in zip(inputs, outputs, solved_flag_files)
@@ -176,22 +182,22 @@ class Astrometry(BaseSetup):
                 external.solve_field,
                 zip(inputs, outputs),
                 dump_dir=self.path_astrometry,
-                pixscale=self.config.obs.pixscale,
+                pixscale=self.path.pixscale,  # PathHandler brings pixscale from NameHandler
             )
         else:
-            for i, (slink, sfile) in enumerate(zip(inputs, outputs)):
+            for i, (slink, sfile, pixscale) in enumerate(zip(inputs, outputs, self.path.pixscale)):
                 external.solve_field(
                     slink,
                     outim=sfile,
                     dump_dir=self.path_astrometry,
-                    pixscale=self.config.obs.pixscale,
+                    pixscale=pixscale,
                 )
                 self.logger.info(f"Completed solve-field for {self.config.name} [{i+1}/{len(inputs)}]")  # fmt:skip
                 self.logger.debug(f"input: {slink}, output: {sfile}")  # fmt:skip
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
-    def run_sextractor(self, files: List[str], prefix: str = "prep") -> List[str]:
+    def run_sextractor(self, files: List[str], se_preset: str = "prep") -> List[str]:
         """Run Source Extractor on solved images.
 
         Extracts sources from solved images for use in SCAMP calibration.
@@ -211,20 +217,22 @@ class Astrometry(BaseSetup):
             self._submit_task(
                 external.sextractor,
                 files,
-                prefix=prefix,
+                outcat=self.prep_cats,
+                prefix=se_preset,
                 logger=self.logger,
                 sex_args=["-catalog_type", "fits_ldac"],
             )
         else:
-            for i, solved_file in enumerate(files):
+            for i, (solved_image, prep_cat) in enumerate(zip(files, self.prep_cats)):
                 external.sextractor(
-                    solved_file,
-                    suffix=prefix,
+                    solved_image,
+                    outcat=prep_cat,
+                    se_preset=se_preset,
                     logger=self.logger,
                     sex_args=["-catalog_type", "fits_ldac"],
                 )
-                self.logger.info(f"Completed sextractor (prep) for {self.config.name} [{i+1}/{len(files)}]")  # fmt:skip
-                self.logger.debug(f"{solved_file}")  # fmt:skip
+                self.logger.info(f"Completed sextractor (prep) for {self.config.name} [{i+1}/{len(files)}]")
+                self.logger.debug(f"{solved_image}")
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
@@ -232,7 +240,6 @@ class Astrometry(BaseSetup):
         self,
         files: List[str],
         joint: bool = True,
-        prefix: str = "prep",
         astrefcat: str = None,
     ) -> None:
         """Run SCAMP for astrometric calibration.
@@ -247,7 +254,9 @@ class Astrometry(BaseSetup):
         self.logger.info(f"Start {'joint' if joint else 'individual'} scamp")
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
-        presex_cats = [os.path.splitext(s)[0] + f".{prefix}.cat" for s in files]
+        # presex_cats = [os.path.splitext(s)[0] + f".{prefix}.cat" for s in files]
+        presex_cats = self.prep_cats
+        self.logger.debug(f"Scamp input catalogs: {presex_cats}")
 
         # path for scamp refcat download
         path_ref_scamp = self.path.astrometry.ref_query_dir
@@ -294,12 +303,9 @@ class Astrometry(BaseSetup):
         inims: List[str],
         links: List[str],
         use_missfits: bool = False,
-        prefix: str = "prep",
     ) -> None:
-        """Update WCS information in FITS headers.
-
-        Updates WCS solutions in original FITS files using either missfits
-        or manual header updates through custom utility functions.
+        """
+        Updates WCS solutions found by SCAMP to original FITS image files
 
         Args:
             files: Paths to solved FITS files
@@ -311,7 +317,8 @@ class Astrometry(BaseSetup):
         #     f"Updating WCS {'with missfits' if use_missfits else 'manually'}"
         # )
 
-        solved_heads = [os.path.splitext(s)[0] + f".{prefix}.head" for s in files]
+        # solved_heads = [os.path.splitext(s)[0] + f".{prefix}.head" for s in files]
+        solved_heads = [swap_ext(s, "head") for s in self.prep_cats]
 
         # header update
         if use_missfits:
@@ -331,7 +338,7 @@ class Astrometry(BaseSetup):
                     update_padded_header(target_fits, solved_head)
                 else:
                     self.logger.error(f"Check SCAMP output. Possibly due to restricted access to the online VizieR catalog or disk space.") # fmt: skip
-                    raise FileNotFoundError(f"A header file does not exist: {solved_head}") # fmt: skip
+                    raise FileNotFoundError(f"SCAMP output (.head) does not exist: {solved_head}") # fmt: skip
         self.logger.info("Header WCS Updated.")
 
     def _submit_task(self, func: callable, items: List[Any], **kwargs: Any) -> None:
@@ -353,10 +360,16 @@ class Astrometry(BaseSetup):
             if type(item) is not tuple:
                 item = (item,)
 
+            # build per‐item kwargs: if the original kwarg is a list/tuple,
+            # grab its i-th element, otherwise pass it through unchanged
+            per_item_kwargs = {
+                key: (value[i] if isinstance(value, (list, tuple)) else value) for key, value in kwargs.items()
+            }
+
             task_id = self.queue.add_task(
                 func,
                 args=item,
-                kwargs=kwargs,
+                kwargs=per_item_kwargs,
                 priority=Priority.MEDIUM,
                 gpu=False,
                 task_name=f"{func.__name__}_{i}",  # Dynamic task name

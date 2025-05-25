@@ -64,15 +64,16 @@ def collapse(seq, keys=ALL_GROUP_KEYS, raise_error=False):
     else:
         first = seq
 
-    if isinstance(first, (Path, str)):
-        if all(x == first for x in seq):
-            return first
-    elif isinstance(first, dict):
+    if isinstance(first, dict):
         common_keys = [k for k in keys if all(k in d for d in seq)]
         if common_keys and all(d[k] == first[k] for d in seq for k in common_keys):
             return first
+    # if isinstance(first, (Path, str)):
     else:
-        raise TypeError("Invalid type to check homogeneity")
+        if all(x == first for x in seq):
+            return first
+    # else:
+    #     raise TypeError("Invalid type to check homogeneity")
 
     # if inhomogeneous
     if raise_error:

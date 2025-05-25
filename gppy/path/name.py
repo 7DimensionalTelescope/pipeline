@@ -353,6 +353,13 @@ class NameHandler:
             return [get_camera(u) for u in self.path]
 
     @property
+    def pixscale(self):
+        if getattr(self, "_single", False):
+            return self.n_binning * const.PIXSCALE
+        else:
+            return [nbin * const.PIXSCALE for nbin in self.n_binning]
+
+    @property
     def raw_basename(self):
         def make(unit, date, hms, obj, filte, nbin, exptime):
             return f"{unit}_{date}_{hms}_{obj}_{filte}_{format_binning(nbin)}_{format_exptime(exptime, type=self.types)}.fits"
