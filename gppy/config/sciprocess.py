@@ -43,8 +43,7 @@ class SciProcConfiguration(BaseConfig):
         self.logger = self._setup_logger(logger, name=self.name, log_file=self.log_file, verbose=verbose)
 
         if overwrite:
-            self.logger.info("Overwriting output and factory directories")
-            clean_up_folder(self.path.output_dir)
+            self.logger.info("Overwriting factory_dir")
             clean_up_folder(self.path.factory_dir)
 
         if config_source:
@@ -87,7 +86,7 @@ class SciProcConfiguration(BaseConfig):
 
         self.config.name = self.path._output_name
         # self.config.file.input_files = input_files
-        self.config.files = input_files
+        self.config.input_files = input_files
 
         self.raw_header_sample = get_header(input_files[0])
         # self.set_input_output()

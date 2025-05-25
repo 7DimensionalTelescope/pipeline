@@ -16,7 +16,7 @@ name:
 #   dec:
 #   exptime:
 
-files: 
+input_files: 
   # input_files: 
   # stacked_file:
 
@@ -39,7 +39,7 @@ info:
 settings:
   ToO: False
   obsmode:  # Deep Spec Color Search Single
-  header_pad: 5  # assuming final header is 5 * 2880 bytes long. 6 to include polygon info
+  header_pad: 7  # assuming final header is 5 * 2880 bytes long. 6 to include polygon info
   local_astref: 
   combine:
   gpu_enabled: True
@@ -54,12 +54,14 @@ logging:
     - file
 
 astrometry:
+  input_files:
   path:
     ref_ris_dir: "/lyman/data1/factory/catalog/gaia_dr3_7DT"
     ref_query_dir: "/lyman/data1/factory/ref_scamp"
   ahead_file: "/data/pipeline_reform/dhhyun_lab/scamptest/ahead/calib_7DT11_T07304_20250115_050155_g_60_nocrval.ahead"
 
 photometry:
+  input_files:
   # path:  # can be specified manually
   #   ref_ris_dir: "/lyman/data1/factory/ref_cat"  # divided by RIS tiles
   #   ref_gaia_dir: "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile"  # divided by Gaia team
@@ -83,6 +85,7 @@ photometry:
     BACKPHOTO_TYPE: LOCAL
 
 imstack:
+  input_files:
   # path:
   #   ref_image_dir: "/lyman/data1/factory/ref_frame"
   stacked_image:  # output stacked image
@@ -98,6 +101,7 @@ imstack:
   propagate_mask: False
 
 imsubtract:
+  input_files:
   refim_file:
   input_mask:
   template_mask:

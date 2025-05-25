@@ -565,7 +565,7 @@ class PhotometrySingle:
         outcome = external.sextractor(
             self.image,
             outcat=output,
-            suffix=suffix,
+            se_preset=suffix,
             # log_file=self.tmp_file_prefix + "_sextractor.log",
             logger=self.logger,
             sex_args=sex_args,
