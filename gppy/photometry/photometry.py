@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 import itertools
 import time
 from pathlib import Path
-import glob
 from dataclasses import dataclass
 
 # astropy
@@ -22,10 +21,11 @@ from astropy.stats import sigma_clip
 from . import utils as phot_utils
 from ..utils import update_padded_header, get_derived_product_path, add_suffix
 from ..config import SciProcConfiguration
+from ..config.base import ConfigurationInstance
 from ..services.memory import MemoryMonitor
 from ..services.queue import QueueManager, Priority
 from .. import external
-from ..const import PipelineError
+from ..const import PIXSCALE, PipelineError
 from ..services.setup import BaseSetup
 from ..tools.table import match_two_catalogs
 from ..path.path import PathHandler
@@ -74,13 +74,13 @@ class Photometry(BaseSetup):
         )
 
         if self.run_single_photometry:
-            self.images = images or self.config.file.processed_files
+            self.images = images or self.config.input.calibrated_images
             self.logger.debug("Running single photometry")
-            self._flag_name = "single_photometry"
+            # self._flag_name = "single_photometry"
         else:
-            self.images = images or [self.config.file.stacked_file]
+            self.images = images or [self.config.input.stacked_image]
             self.logger.debug("Running combined photometry")
-            self._flag_name = "combined_photometry"
+            # self._flag_name = "combined_photometry"
 
     @classmethod
     def from_list(cls, images: List[str]) -> Optional["Photometry"]:
@@ -101,8 +101,8 @@ class Photometry(BaseSetup):
                 return None
             image_list.append(path.parts[-1])
         working_dir = str(path.parent.absolute())
-        config = Configuration.base_config(working_dir)
-        config.config.file.processed_files = image_list
+        config = SciProcConfiguration.base_config(working_dir)
+        config.config.input.calibrated_images = image_list
         config.path = PathHandler(image_list)
         return cls(config=config)
 
@@ -199,7 +199,7 @@ class PhotometrySingle:
     def __init__(
         self,
         image: str,
-        config: Any,
+        config: ConfigurationInstance,
         logger: Any = None,
         name: Optional[str] = None,
         ref_catalog: str = "GaiaXP",
@@ -214,8 +214,8 @@ class PhotometrySingle:
         self.logger = logger or self._setup_logger(config)
         self.ref_catalog = ref_catalog
         # self.image = os.path.join(self.config.path.path_processed, image)
-        self.image = image
-        self.image_info = ImageInfo.parse_image_header_info(self.image, pixscale=self.config.obs.pixscale)
+        self.input_image = image
+        self.image_info = ImageInfo.parse_image_header_info(self.input_image)
         self.phot_conf = self.config.photometry
         self.name = name or self.config.name
         self.phot_header = PhotometryHeader()
@@ -228,7 +228,7 @@ class PhotometrySingle:
         # os.makedirs(self.path_tmp, exist_ok=True)
         # self.path = PathHandler(self.config.obs.to_dict())
         # self.path = PathHandler(self.config)
-        self.path = PathHandler(self.image)
+        self.path = PathHandler(self.input_image)
         self.path_tmp = self.path.photometry.tmp_dir
 
     def _setup_logger(self, config: Any) -> Any:
@@ -255,7 +255,7 @@ class PhotometrySingle:
     @property
     def tmp_file_prefix(self) -> str:
         """Get file prefix for output files."""
-        stem = os.path.basename(os.path.splitext(self.image)[0])
+        stem = os.path.basename(os.path.splitext(self.input_image)[0])
         return os.path.join(self.path_tmp, stem)
 
     @property
@@ -477,7 +477,7 @@ class PhotometrySingle:
         """
 
         if run_prep_sextractor:  # run sextractor for preparation
-            self._run_sextractor(suffix="prep")
+            self._run_sextractor(se_preset="prep")
         else:
             # self.obs_src_table = Table.read(self.tmp_file_prefix + ".prep.cat", format="ascii.sextractor")
             self.obs_src_table = Table.read(self.path.photometry.prep_catalog, format="ascii.sextractor")
@@ -510,7 +510,7 @@ class PhotometrySingle:
 
         self.logger.debug("Setting Apertures for Photometry.")
         sex_args = phot_utils.get_sex_args(
-            self.image,
+            self.input_image,
             self.phot_conf,
             egain=self.image_info.egain,
             peeing=self.phot_header.peeing,
@@ -524,7 +524,7 @@ class PhotometrySingle:
             sex_args.extend(["-FILTER", "N"])
 
         _, outcome = self._run_sextractor(
-            suffix="main",
+            se_preset="main",
             sex_args=sex_args,
             return_sex_output=True,
         )
@@ -535,7 +535,7 @@ class PhotometrySingle:
 
     def _run_sextractor(
         self,
-        suffix: str = "prep",
+        se_preset: str = "prep",
         sex_args: Optional[Dict] = None,
         output: str = None,
         **kwargs,
@@ -552,20 +552,19 @@ class PhotometrySingle:
         Returns:
             SExtractor execution outcome
         """
-        self.logger.info(f"Run SExtractor ({suffix}) for {self.name}")
+        self.logger.info(f"Run SExtractor ({se_preset}) for {self.name}")
 
         if output is None:
-            if suffix == "prep":
-                # output = self.tmp_file_prefix + ".prep.cat"
-                output = self.path.photometry.prep_catalog
-            elif suffix == "main":
-                # output = self.tmp_file_prefix + ".cat"
-                output = self.path.photometry.main_catalog
+            output = getattr(PathHandler(self.input_image).photometry, f"{se_preset}_catalog")
+            # if se_preset == "prep":
+            #     # output = self.tmp_file_prefix + ".prep.cat"
+            # elif se_preset == "main":
+            #     # output = self.tmp_file_prefix + ".cat"
 
         outcome = external.sextractor(
-            self.image,
+            self.input_image,
             outcat=output,
-            se_preset=suffix,
+            se_preset=se_preset,
             # log_file=self.tmp_file_prefix + "_sextractor.log",
             logger=self.logger,
             sex_args=sex_args,
@@ -720,7 +719,7 @@ class PhotometrySingle:
         if not os.path.exists(im_path):
             os.makedirs(im_path)
 
-        img_stem = os.path.splitext(os.path.basename(self.image))[0]
+        img_stem = os.path.splitext(os.path.basename(self.input_image))[0]
         plt.savefig(f"{im_path}/{img_stem}.{mag_key}.png", dpi=100)
         plt.close()
 
@@ -746,7 +745,7 @@ class PhotometrySingle:
         header_to_add.update(self.phot_header.dict)
         header_to_add.update(aper_dict)
         header_to_add.update(zp_dict)
-        update_padded_header(self.image, header_to_add)
+        update_padded_header(self.input_image, header_to_add)
         self.logger.info(f"Header updated for {self.name}")
 
     def write_catalog(self) -> None:
@@ -855,7 +854,7 @@ class ImageInfo:
         }
 
     @classmethod
-    def parse_image_header_info(cls, image_path: str, pixscale: float = 0.505) -> "ImageInfo":
+    def parse_image_header_info(cls, image_path: str) -> "ImageInfo":
         """Parses image information from a FITS header."""
 
         hdr = fits.getheader(image_path)
@@ -878,7 +877,7 @@ class ImageInfo:
             interped = True
 
         if "CTYPE1" not in hdr.keys():
-            raise PipelineError("Check Astrometry solution: no WCS information for Photometry")  # fmt: skip
+            raise PipelineError("Check Astrometry solution: no WCS information for Photometry")
 
         return cls(
             obj=hdr["OBJECT"],
@@ -897,7 +896,7 @@ class ImageInfo:
             xcent=xcent,
             ycent=ycent,
             n_binning=hdr["XBINNING"],
-            pixscale=hdr["XBINNING"] * pixscale,
+            pixscale=hdr["XBINNING"] * PIXSCALE,
             satur_level=hdr["SATURATE"],
             bpx_interp=interped,
         )

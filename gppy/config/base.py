@@ -166,7 +166,7 @@ class BaseConfig:
         # Recursively reduce all list values to i-th element
         config_dict = self.config.select_from_lists(config_dict, i)
 
-        return self(config_source=config_dict, write=False)
+        return BaseConfig(config_source=config_dict, write=False)
         # return Configuration.from_dict(config_dict, write=False)
 
 
@@ -234,6 +234,10 @@ class ConfigurationInstance:
                 result[k] = copy.deepcopy(v)
         return result
 
+    def extract_single_image_config(self, i: int):
+        """Returns ConfigurationInstance"""
+        return self._parent_config.extract_single_image_config(i).config
+
     # def extract_single_image_config(self, i: int):
     #     from copy import deepcopy
 
@@ -255,8 +259,7 @@ class ConfigurationInstance:
             return {k: ConfigurationInstance.select_from_lists(v, i) for k, v in obj.items()}
         elif isinstance(obj, list):
             try:
-                # return obj[i]
-                return [obj[i]]  # wrap the selected value back in a list; guard against slicing
+                return [obj[i]]  # wrap the selected value back in a list; pipeline can work the same way
             except IndexError:
                 raise IndexError(f"Index {i} out of bounds for list: {obj}")
         else:

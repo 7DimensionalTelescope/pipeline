@@ -56,7 +56,7 @@ class PathHandler(AutoMkdirMixin):
     def __init__(self, input: Union[str, Path, list, dict, "Configuration"] = None, *, working_dir=None):
         """Input homogeneous images"""
         self._config = None
-        self._input_files = None
+        self._input_files: list[str] = None
         self._data_type = None
         self.obs_params = {}
         self._file_indep_initialized = False
@@ -102,10 +102,10 @@ class PathHandler(AutoMkdirMixin):
             return it; otherwise fall through to the convenience “_to_*” hooks.
         """
         # 1) Delegate any NameHandler property directly without running AutoMkdirMixin
-        # if hasattr(self, "_names") and hasattr(self.names, name):
-        if hasattr(self, "names") and hasattr(self.names, name):
-            # return collapse(getattr(self._names, name))  # use syntactic sugar _collapse in NameHandler
-            return getattr(self.names, name)
+        names = self.__dict__.get("names", None)  # safe check
+        if names and hasattr(names, name):
+            # return collapse(getattr(self._names, name))
+            return getattr(self.names, name)  # use syntactic sugar _collapse in NameHandler
 
         # ---------- 2. Lazy initialization ----------
         if not self._file_dep_initialized and self._input_files:
@@ -212,11 +212,11 @@ class PathHandler(AutoMkdirMixin):
         # self.phot_base_yml
         self._file_indep_initialized = True
 
-    def add_fits(self, files: str | Path | list):
-        if isinstance(files, list):
-            self._input_files = [str(f) for f in files]
-        else:
-            self._input_files = str(files)
+    # def add_fits(self, files: str | Path | list):
+    #     if isinstance(files, list):
+    #         self._input_files = [str(f) for f in files]
+    #     else:
+    #         self._input_files = [files]
 
     def define_file_dependent_paths(self):
 
@@ -572,16 +572,16 @@ class PathPhotometry(AutoMkdirMixin):
 
     @property
     def prep_catalog(self):
-        input = self._parent._input_files
+        input = self._parent.basename
         if isinstance(input, list):
-            return [os.path.join(self.tmp_dir, swap_ext(add_suffix(s, "prep"), "cat")) for s in input]
+            return [os.path.join(self.tmp_dir, add_suffix(add_suffix(s, "prep"), "cat")) for s in input]
         else:
-            return os.path.join(self.tmp_dir, swap_ext(add_suffix(input, "prep"), "cat"))
+            return os.path.join(self.tmp_dir, add_suffix(add_suffix(input, "prep"), "cat"))
 
     @property
     def main_catalog(self):
         """intermediate sextractor output"""
-        input = self._parent._input_files
+        input = self._parent.basename
         if isinstance(input, list):
             return [os.path.join(self.tmp_dir, swap_ext(s, "cat")) for s in input]
         else:
@@ -590,11 +590,11 @@ class PathPhotometry(AutoMkdirMixin):
     @property
     def final_catalog(self):
         """final pipeline output catalog"""
-        input = self._parent._input_files
+        input = self._parent.basename
         if isinstance(input, list):
-            return [os.path.join(self.tmp_dir, add_suffix(s, "cat")) for s in input]
+            return [os.path.join(self._parent.image_dir, add_suffix(s, "cat")) for s in input]
         else:
-            return os.path.join(self.tmp_dir, add_suffix(input, "cat"))
+            return os.path.join(self._parent.image_dir, add_suffix(input, "cat"))
 
     def __getattr__(self):
         # run file-dependent path definitions once?
