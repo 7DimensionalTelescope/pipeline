@@ -11,6 +11,7 @@ from ..utils import (
     find_raw_path,
     get_camera,
     clean_up_folder,
+    clean_up_sciproduct,
     swap_ext,
     most_common_in_list,
     get_header,
@@ -44,6 +45,7 @@ class SciProcConfiguration(BaseConfig):
         if overwrite:
             self.logger.info("Overwriting factory_dir")
             clean_up_folder(self.path.factory_dir)
+            clean_up_sciproduct(self.path.output_dir)
 
         self.logger.info(f"Writing configuration to file")
         self.logger.debug(f"Configuration file: {self.config_file}")

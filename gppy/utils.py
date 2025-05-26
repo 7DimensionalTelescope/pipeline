@@ -47,12 +47,22 @@ def clean_up_folder(path):
             print(f"Failed to delete {item_path}: {e}")
 
 
+def clean_up_sciproduct(root_dir: str | Path, suffixes=(".log", "_cat.fits", ".png")) -> None:
+    root = Path(root_dir)
+    for path in root.rglob("*"):
+        if path.is_file() and any(path.name.endswith(s) for s in suffixes):
+            try:
+                path.unlink()
+            except Exception as e:
+                raise RuntimeError(f"Failed to delete {path}: {e}") from e
+
+
 def equal_on_keys(d1: dict, d2: dict, keys: list):
     # return all(d1[k] == d2[k] for k in keys)
     return all(d1.get(k) == d2.get(k) for k in keys)  # None if key missing
 
 
-def collapse(seq, keys=ALL_GROUP_KEYS, raise_error=False):
+def collapse(seq: list | dict[list], keys=ALL_GROUP_KEYS, raise_error=False):
     """
     If seq is non-empty and every element equals the first one,
     return the first element; else return seq unchanged.

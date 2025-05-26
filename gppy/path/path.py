@@ -247,6 +247,8 @@ class PathHandler(AutoMkdirMixin):
             self.daily_stacked_dir = os.path.join(self._output_dir, "stacked")
             self.subtracted_dir = os.path.join(self._output_dir, "subtracted")
 
+            self.stacked_dir = os.path.join(const.STACKED_DIR, self.obs_params["obj"], self.obs_params["filter"])
+
             config_stem = self.names.config_stem_collapse
             if not isinstance(config_stem, str):
                 raise ValueError("Incoherent input: configuration basename is not uniquely defined")
@@ -617,10 +619,20 @@ class PathImstack(AutoMkdirMixin):
     def tmp_dir(self):
         return os.path.join(self._parent.factory_dir, "imstack")
 
-    def stacked_image(self, total_exptime):
+    @property
+    def stacked_image_basename(self):
         names = NameHandler(self._parent._input_files)
+        total_exptime = np.sum(names.exptime)
         fname = f"{names.obj_collapse}_{names.filter_collapse}_{names.unit_collapse}_{names.unit_collapse}_{names.datetime[-1]}_{format_exptime(total_exptime, type='stacked')}_coadd.fits"
-        return os.path.join(self._parent.daily_stacked_dir, fname)
+        return fname
+
+    @property
+    def daily_stacked_image(self):
+        return os.path.join(self._parent.daily_stacked_dir, self.stacked_image_basename)
+
+    @property
+    def stacked_image(self):
+        return os.path.join(self._parent.stacked_dir, self.stacked_image_basename)
 
 
 class PathImsubtract(AutoMkdirMixin):

@@ -129,8 +129,8 @@ class Astrometry(BaseSetup):
         self.path_astrometry = self.path.astrometry.tmp_dir
 
         # override if astrometry.input_files is set
-        if hasattr(self.config.astrometry, "input_files") and self.config.astrometry.input_files is not None:
-            inims = self.config.astrometry.input_files
+        if hasattr(self.config.astrometry, "input_images") and self.config.astrometry.input_images is not None:
+            inims = self.config.astrometry.input_images
         # otherwise use the common input
         else:
             inims = self.config.input.calibrated_images
