@@ -142,8 +142,8 @@ class NameHandler:
         self.path = [os.path.abspath(f) for f in files]
         self.basename = [os.path.basename(p) for p in self.path]
         self.stem, self.ext = (list(x) for x in zip(*(os.path.splitext(b) for b in self.basename)))
-        if any(ext != ".fits" for ext in self.ext):
-            raise ValueError("One or more inputs are not FITS files")
+        # if any(ext != ".fits" for ext in self.ext):
+        #     raise ValueError("One or more inputs are not FITS files")
 
         self.parts = [stem.split("_") for stem in self.stem]
         self.exists = [os.path.exists(p) for p in self.path]

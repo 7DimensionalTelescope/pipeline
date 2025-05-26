@@ -57,7 +57,7 @@ class Astrometry(BaseSetup):
             image_list.append(path.parts[-1])
         working_dir = str(path.parent.absolute())
         config = SciProcConfiguration.base_config(working_dir)
-        config.file.processed_files = image_list
+        config.input.calibrated_images = image_list
         return cls(config=config)
 
     @property
@@ -127,13 +127,13 @@ class Astrometry(BaseSetup):
 
     def define_paths(self) -> Tuple[List[str], List[str], List[str]]:
         self.path_astrometry = self.path.astrometry.tmp_dir
-        # inims = self.config.file.processed_files
 
         # override if astrometry.input_files is set
         if hasattr(self.config.astrometry, "input_files") and self.config.astrometry.input_files is not None:
             inims = self.config.astrometry.input_files
+        # otherwise use the common input
         else:
-            inims = self.config.input_files
+            inims = self.config.input.calibrated_images
             self.config.astrometry.input_files = inims
 
         soft_links = [os.path.join(self.path_astrometry, os.path.basename(s)) for s in inims]

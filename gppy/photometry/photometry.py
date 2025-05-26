@@ -21,7 +21,7 @@ from astropy.stats import sigma_clip
 # gppy modules
 from . import utils as phot_utils
 from ..utils import update_padded_header, get_derived_product_path, add_suffix
-from ..config import Configuration
+from ..config import SciProcConfiguration
 from ..services.memory import MemoryMonitor
 from ..services.queue import QueueManager, Priority
 from .. import external

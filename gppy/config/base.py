@@ -2,6 +2,7 @@ import yaml
 import os
 from datetime import datetime
 from .. import __version__
+from .. import const
 from .utils import (
     merge_dicts,
 )
@@ -119,7 +120,7 @@ class BaseConfig:
         self._config_in_dict["info"]["last_update_datetime"] = datetime.now().isoformat()
 
         with open(self.config_file, "w") as f:
-            yaml.dump(self._config_in_dict, f, sort_keys=False)
+            yaml.dump(self._config_in_dict, f, sort_keys=False)  # , default_flow_style=False)
 
     def _make_instance(self):
         """
