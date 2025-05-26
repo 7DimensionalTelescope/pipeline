@@ -25,8 +25,7 @@ import time
 class SciProcConfiguration(BaseConfig):
     def __init__(
         self,
-        input_files: list[str] = None,
-        config_source: str | dict = None,
+        input: list[str] | str | dict = None,
         logger=None,
         write=True,  # False for PhotometrySingle
         overwrite=False,
@@ -36,29 +35,15 @@ class SciProcConfiguration(BaseConfig):
         st = time.time()
         self.write = write
 
-        self.path = PathHandler(input_files)
-        self.config_file = self.path.sciproc_output_yml
-        self.log_file = self.path.sciproc_output_log
-        self.name = self.path._output_name
-        self.logger = self._setup_logger(logger, name=self.name, log_file=self.log_file, verbose=verbose)
+        self._handle_input(input, logger, verbose, **kwargs)
+
+        if not self._initialized:
+            self.logger.info("Initializing configuration")
+            self.initialize(input)
 
         if overwrite:
             self.logger.info("Overwriting factory_dir")
             clean_up_folder(self.path.factory_dir)
-
-        if config_source:
-            self._initialized = True
-        else:
-            config_source = self.path.sciproc_base_yml
-            self._initialized = False
-
-        self.logger.info("Loading configuration")
-        self.logger.debug(f"Configuration source: {config_source}")
-        super().__init__(config_source=config_source, **kwargs)
-
-        if not self._initialized:
-            self.logger.info("Initializing configuration")
-            self.initialize(input_files)
 
         self.logger.info(f"Writing configuration to file")
         self.logger.debug(f"Configuration file: {self.config_file}")
@@ -67,26 +52,61 @@ class SciProcConfiguration(BaseConfig):
         self.logger.info(f"SciProcConfiguration initialized")
         self.logger.debug(f"SciProcConfiguration initialization took {time.time() - st:.2f} seconds")
 
-    def _find_config_file(self):
-        """Find the configuration file in the processed directory."""
+    def _handle_input(self, input, logger, verbose, **kwargs):
+        if isinstance(input, list):
+            self.path = PathHandler(input)
+            config_source = self.path.sciproc_base_yml
+            self.logger = self._setup_logger(
+                logger,
+                name=self.path.output_name,
+                log_file=self.path.sciproc_output_log,
+                verbose=verbose,
+            )
+            self.logger.info("Loading configuration")
+            self.logger.debug(f"Configuration source: {config_source}")
+            super().__init__(config_source=config_source, **kwargs)
 
-        output_config_file = self.path.sciproc_output_yml
-        if os.path.exists(output_config_file):
+        elif isinstance(input, str | dict):
+            config_source = input
+            super().__init__(config_source=config_source, **kwargs)
             self._initialized = True
-            return output_config_file  # s[0]
+            self.path = self._set_pathhandler_from_config()
+            self.logger = self._setup_logger(
+                logger,
+                name=self.path.output_name,
+                log_file=self.path.sciproc_output_log,
+                verbose=verbose,
+            )
+            self.logger.debug(f"Configuration source: {config_source}")
+
         else:
-            self._initialized = False
-            return self.path.base_yml
+            raise ValueError("Input must be a list of image files, a configuration file path, or a configuration dictionary.")  # fmt: skip
+
+        self.config_file = self.path.sciproc_output_yml  # used by write_config
+        return
+
+    def _set_pathhandler_from_config(self):
+        # mind the check order
+        if hasattr(self.config, "input"):
+            if hasattr(self.config.input, "calibrated_images") and self.config.input.calibrated_images:
+                return PathHandler(self.config.input.calibrated_images)
+
+            if hasattr(self.config.input, "processed_dir") and self.config.input.processed_dir:
+                f = os.path.join(self.config.input.processed_dir, "**.fits")
+                return PathHandler(sorted(glob.glob(f)))
+
+            if hasattr(self.config.input, "stacked_image") and self.config.input.stacked_image:
+                return PathHandler(self.config.input.stacked_image)
+
+        raise ValueError("Configuration does not contain valid input files or directories to create PathHandler.")
 
     def initialize(self, input_files):
         """Fill in obs info, name, paths."""
 
         self.config.info.version = __version__
         self.config.info.creation_datetime = datetime.now().isoformat()
-
-        self.config.name = self.path._output_name
-        # self.config.file.input_files = input_files
-        self.config.input_files = input_files
+        self.config.name = self.path.output_name
+        self.config.input.calibrated_images = input_files
 
         self.raw_header_sample = get_header(input_files[0])
         # self.set_input_output()

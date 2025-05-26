@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 class AutoMkdirMixin:
     """This makes sure accessed dirs exist. Prepend _ to variables to prevent mkdir"""
 
-    _mkdir_exclude = {"name", "names"}  # subclasses can override this
+    _mkdir_exclude = {"output_name", "names"}  # subclasses can override this
 
     def __init_subclass__(cls):
         # Ensure subclasses have their own created-directory cache
@@ -250,7 +250,7 @@ class PathHandler(AutoMkdirMixin):
             config_stem = self.names.config_stem_collapse
             if not isinstance(config_stem, str):
                 raise ValueError("Incoherent input: configuration basename is not uniquely defined")
-            self._output_name = config_stem
+            self.output_name = config_stem
             self.sciproc_output_yml = os.path.join(self._output_dir, config_stem + ".yml")
             self.sciproc_output_log = os.path.join(self._output_dir, config_stem + ".log")
 

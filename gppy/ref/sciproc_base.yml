@@ -16,9 +16,10 @@ name:
 #   dec:
 #   exptime:
 
-input_files: 
-  # input_files: 
-  # stacked_file:
+input: 
+  calibrated_images: 
+  processed_dir:
+  stacked_image:
 
 flag:
   # configuration: false
