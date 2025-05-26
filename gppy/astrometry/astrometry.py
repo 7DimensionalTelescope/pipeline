@@ -57,7 +57,7 @@ class Astrometry(BaseSetup):
             image_list.append(path.parts[-1])
         working_dir = str(path.parent.absolute())
         config = SciProcConfiguration.base_config(working_dir)
-        config.input.calibrated_images = image_list
+        config.config.input.calibrated_images = image_list
         return cls(config=config)
 
     @property

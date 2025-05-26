@@ -13,10 +13,11 @@ from .cupy_calc import *
 
 from ..services.queue import QueueManager, Priority
 from ..services.memory import MemoryMonitor
-from ..utils import add_padding
+from ..utils import add_padding, get_header
 from ..path import PathHandler
 from ..config import PreprocConfiguration
 from ..services.setup import BaseSetup
+from ..const import HEADER_KEY_MAP
 
 
 class Preprocess(BaseSetup):
@@ -105,7 +106,9 @@ class Preprocess(BaseSetup):
             from ..services.memory import MemoryMonitor
 
             self.logger.debug("No device specified, choosing the device with least memory usage")
-            self.config.preprocess.device = np.argmin(MemoryMonitor.current_gpu_memory_percent)
+            self.config.preprocess.device = int(
+                np.argmin(MemoryMonitor.current_gpu_memory_percent)
+            )  # np int will wreak havoc in yaml
             self.logger.debug(f"Chosen device: {self.config.preprocess.device}")
         self.device_id = self.config.preprocess.device
 
@@ -176,8 +179,9 @@ class Preprocess(BaseSetup):
             header["NFRAMES"] = len(self.flat_input)
         return header
 
-    def _calc_dark_scale(self):
-        return 1
+    def _calc_dark_scale(self, flat_exptime, dark_exptime):
+        self.logger.debug(f"FLAT DARK SCALING (FLAT / DARK): {flat_exptime} / {dark_exptime}")
+        return flat_exptime / dark_exptime
 
     def load_masterframe(self):
         device_id = self.device_id
@@ -212,11 +216,12 @@ class Preprocess(BaseSetup):
         elif dtype == "dark":
             median, std = combine_images_with_cupy(input_data, subtract=self.bias_data, device_id=device_id)
             self.dark_data = median
+            self.dark_exptime = header[HEADER_KEY_MAP["exptime"]]
             n_sigma = self.config.preprocess.n_sigma
             self.generate_bpmask(median, n_sigma=n_sigma, header=header, device_id=device_id)
 
         elif dtype == "flat":
-            dark_scale = self._calc_dark_scale()
+            dark_scale = self._calc_dark_scale(header[HEADER_KEY_MAP["exptime"]], self.dark_exptime)
             median, std = combine_images_with_cupy(
                 input_data, subtract=(self.bias_data + self.dark_data * dark_scale), norm=True, device_id=device_id
             )
@@ -255,6 +260,8 @@ class Preprocess(BaseSetup):
             data_gpu = cp.asarray(fits.getdata(existing_data).astype(np.float32))
 
         setattr(self, f"{dtype}_data", data_gpu)
+        if dtype == "dark":
+            self.dark_exptime = get_header(existing_data)[HEADER_KEY_MAP["exptime"]]
 
     def data_reduction(self):
         st = time.time()

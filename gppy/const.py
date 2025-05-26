@@ -21,7 +21,7 @@ CalibType = ["BIAS", "DARK", "FLAT"]
 
 available_7dt_units = [f"7DT0{unit}" if unit < 10 else f"7DT{unit}" for unit in range(1, 20)]
 
-PIXSCALE = 0.505  # arcsec/pixel
+PIXSCALE = 0.505  # arcsec/pixel. Default plate scale assumed prior to astrometric solving
 
 NUM_MIN_CALIB = 5
 INSTRUM_GROUP_KEYS = ["unit", "n_binning", "gain", "camera"]  # "nightdate"
