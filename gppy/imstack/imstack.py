@@ -20,12 +20,13 @@ warnings.filterwarnings("ignore")
 # warnings.filterwarnings("ignore")
 
 from ..const import REF_DIR
-from ..config import Configuration
+from ..config import SciProcConfiguration
 from .. import external
 from ..services.setup import BaseSetup
-from ..utils import add_suffix, swap_ext, define_output_dir
+from ..utils import collapse, add_suffix, swap_ext, define_output_dir
 from .utils import move_file  # inputlist_parser, move_file
 from .const import ZP_KEY, IC_KEYS, CORE_KEYS
+from ..const import PipelineError
 from ..path.path import PathHandler
 
 
@@ -36,10 +37,12 @@ class ImStack(BaseSetup):
         logger=None,
         queue=None,
         overwrite=False,
+        daily=True,
     ) -> None:
 
         super().__init__(config, logger, queue)
         self.overwrite = overwrite
+        self.daily = daily
         self._flag_name = "combine"
 
     @classmethod
@@ -56,9 +59,9 @@ class ImStack(BaseSetup):
 
         working_dir = str(path.parent.absolute())
 
-        config = Configuration.base_config(working_dir=working_dir)
+        config = SciProcConfiguration.base_config(working_dir=working_dir)
         # config.path.path_processed = working_dir
-        config.file.processed_files = image_list
+        config.input.calibrated_images = image_list
 
         return cls(config=config)
 
@@ -112,103 +115,33 @@ class ImStack(BaseSetup):
         # self.logger.debug(MemoryMonitor.log_memory_usage)
 
     def initialize(self):
-        self.files = self.config.file.processed_files
+        # use common input if imstack.input_files override is not set
+        if not (hasattr(self.config.imstack, "input_images") and self.config.imstack.input_images):
+            self.config.imstack.input_images = self.config.input.calibrated_images
+
+        self.input_images = self.config.imstack.input_images
+        if not self.input_images:
+            raise PipelineError("No Input for ImStack")
 
         self.zpkey = self.config.imstack.zp_key or ZP_KEY
         # self.ic_keys = IC_KEYS
         self.keys_to_propagate = CORE_KEYS
 
         # self.define_paths(working_dir=self.config.path.path_processed)
-        # path_tmp = os.path.join(self.config.path.path_factory, "imstack")
-        self.path = PathHandler(self.config)
+        self.path = PathHandler(self.input_images)
         self.path_tmp = self.path.imstack.tmp_dir
-        # self.define_paths(dump_dir=path_imstack)
 
         # self.set_metadata()
         self.set_metadata_without_ccdproc()
 
         # Output stacked image file name
-        parts = os.path.basename(self.files[-1]).split("_")
-        parts[-1] = add_suffix(f"{self.total_exptime:.0f}s.fits", "coadd")
-        self.config.file.stacked_file = os.path.join(self.path.daily_stacked_dir, "_".join(parts))
-
-        # os.makedirs(self.config.path.path_stacked, exist_ok=True)
+        self.config.imstack.stacked_image = (
+            self.path.imstack.daily_stacked_image if self.daily else self.path.imstack.stacked_image
+        )
+        self.config.input.stacked_image = self.config.imstack.stacked_image
+        self.logger.debug(f"Stacked Image: {self.config.imstack.stacked_image}")
 
         self.logger.info(f"ImStack Initialized for {self.config.name}")
-
-    # def define_paths(self, dump_dir=None):
-    #     # ------------------------------------------------------------
-    #     #   Define Paths
-    #     # ------------------------------------------------------------
-    #     path_tmp = dump_dir or "./tmp_imstack"
-    #     self.path_tmp = path_tmp
-    #     # path_save = f"/lyman/data1/Commission/{self.obj}/{self.filte}"
-
-    # def set_metadata(self):
-    #     """This interferes with logger due to ccdproc"""
-    #     # ------------------------------------------------------------
-    #     # 	Setting Metadata
-    #     # ------------------------------------------------------------
-    #     self.logger.debug(f"Reading images... (takes a few mins)")
-
-    #     # 	Get Image Collection (takes some time)
-    #     ic = ImageFileCollection(filenames=self.files, keywords=self.ic_keys)
-    #     self.ic = ic
-
-    #     filtered_table = ic.summary[~ic.summary[self.zpkey].mask]
-    #     self.logger.debug(f"{len(ic.summary)}, {len(filtered_table)}")
-
-    #     #   Former def
-    #     # self.files = ic.files
-    #     # self.n_stack = len(self.files)
-    #     # self.zpvalues = ic.summary[self.zpkey].data
-    #     # self.skyvalues = ic.summary["SKYVAL"].data
-    #     # self.objra = ic.summary["OBJCTRA"].data[0].replace(" ", ":")
-    #     # self.objdec = ic.summary["OBJCTDEC"].data[0].replace(" ", ":")
-    #     # self.mjd_stacked = np.mean(ic.summary["MJD"].data)
-
-    #     #   New def
-    #     self.files = [filename for filename in filtered_table["file"]]
-    #     self.n_stack = len(self.files)
-    #     self.zpvalues = filtered_table[self.zpkey].data
-    #     self.skyvalues = filtered_table["SKYVAL"].data
-    #     self.objra = filtered_table["OBJCTRA"].data[0].replace(" ", ":")
-    #     self.objdec = filtered_table["OBJCTDEC"].data[0].replace(" ", ":")
-    #     self.mjd_stacked = np.mean(filtered_table["MJD"].data)
-
-    #     # 	Total Exposure Time [sec]
-    #     self.total_exptime = np.sum(filtered_table["EXPTIME"])
-
-    #     objs = np.unique(filtered_table["OBJECT"].data)
-    #     filters = np.unique(filtered_table["FILTER"].data)
-    #     egains = np.unique(filtered_table["EGAIN"].data)
-    #     self.logger.debug(f"OBJECT(s): {objs} (N={len(objs)})")
-    #     self.logger.debug(f"FILTER(s): {filters} (N={len(filters)})")
-    #     self.logger.debug(f"EGAIN(s): {egains} (N={len(egains)})")
-    #     self.obj = unpack(objs, "object")
-    #     self.filte = unpack(filters, "filter", ex="m650")
-    #     self.gain_default = unpack(egains, "egain", ex="0.256190478801727")
-    #     #   Hard coding for the UDS field
-    #     # self.gain_default = 0.78
-
-    #     # ------------------------------------------------------------
-    #     # 	Base Image for Image Alignment
-    #     # ------------------------------------------------------------
-    #     self.header_ref_img = self.files[0]
-    #     # self.zp_base = ic.summary[self.zpkey][0]
-    #     self.zp_base = filtered_table[self.zpkey][0]
-
-    #     # ------------------------------------------------------------
-    #     # 	Print Input Summary
-    #     # ------------------------------------------------------------
-    #     self.logger.debug(f"Input Images to Stack ({len(self.files):_}):")
-    #     for ii, inim in enumerate(self.files):
-    #         self.logger.debug(f"[{ii:>6}] {os.path.basename(inim)}")
-    #         if ii > 10:
-    #             self.logger.debug("...")
-    #             break
-
-    #     # return ic
 
     def set_metadata_without_ccdproc(self):
         """
@@ -218,9 +151,9 @@ class ImStack(BaseSetup):
         The image with the highest ZP value gives the refernce ZP. This
         is a conservative choice for saturation levels across images.
         """
-        self.n_stack = len(self.files)
+        self.n_stack = len(self.input_images)
 
-        header_list = [fits.getheader(f) for f in self.files]
+        header_list = [fits.getheader(f) for f in self.input_images]
 
         self.total_exptime = np.sum([hdr["EXPTIME"] for hdr in header_list])  # sec
         self.zpvalues = [hdr[self.zpkey] for hdr in header_list]
@@ -249,7 +182,7 @@ class ImStack(BaseSetup):
         #   Hard coding for the UDS field
         # self.gain_default = 0.78
 
-        self.header_ref_img = self.files[0]
+        self.header_ref_img = self.input_images[0]
 
         # Determine Deprojection Center
         # 	Tile object (e.g. T01026)
@@ -299,7 +232,7 @@ class ImStack(BaseSetup):
         os.makedirs(self.path_bkgsub, exist_ok=True)
 
         self.config.imstack.bkgsub_files = [
-            f"{self.path_bkgsub}/{add_suffix(os.path.basename(f), 'bkgsub')}" for f in self.files
+            f"{self.path_bkgsub}/{add_suffix(os.path.basename(f), 'bkgsub')}" for f in self.input_images
         ]
 
         if self.config.imstack.bkgsub_type.lower() == "dynamic":
@@ -314,7 +247,9 @@ class ImStack(BaseSetup):
         self.images_to_stack = self.config.imstack.bkgsub_files
 
     def _const_bkgsub(self):
-        for ii, (inim, _bkg, outim) in enumerate(zip(self.files, self.skyvalues, self.config.imstack.bkgsub_files)):
+        for ii, (inim, _bkg, outim) in enumerate(
+            zip(self.input_images, self.skyvalues, self.config.imstack.bkgsub_files)
+        ):
             self.logger.debug(f"[{ii:>6}] {os.path.basename(inim)}")
             if not os.path.exists(outim) or self.overwrite:
                 with fits.open(inim, memmap=True) as hdul:
@@ -330,13 +265,15 @@ class ImStack(BaseSetup):
         """
         from ..external import sextractor
 
-        bkg_files = [f"{self.path_bkgsub}/{add_suffix(os.path.basename(f), 'bkg')}" for f in self.files]
-        bkg_rms_files = [f"{self.path_bkgsub}/{add_suffix(os.path.basename(f), 'bkgrms')}" for f in self.files]
+        bkg_files = [f"{self.path_bkgsub}/{add_suffix(os.path.basename(f), 'bkg')}" for f in self.input_images]
+        bkg_rms_files = [f"{self.path_bkgsub}/{add_suffix(os.path.basename(f), 'bkgrms')}" for f in self.input_images]
 
         self.config.imstack.bkg_files = bkg_files
         self.config.imstack.bkg_rms_files = bkg_rms_files
 
-        for inim, outim, bkg, bkg_rms in zip(self.files, self.config.imstack.bkgsub_files, bkg_files, bkg_rms_files):
+        for inim, outim, bkg, bkg_rms in zip(
+            self.input_images, self.config.imstack.bkgsub_files, bkg_files, bkg_rms_files
+        ):
             sex_args = [
                 "-CATALOG_TYPE", "NONE",  # save no source catalog
                 "-CHECKIMAGE_TYPE", "BACKGROUND,BACKGROUND_RMS",
@@ -410,7 +347,7 @@ class ImStack(BaseSetup):
         os.makedirs(path_interp, exist_ok=True)
 
         self.config.imstack.interp_files = [
-            os.path.join(path_interp, add_suffix(os.path.basename(f), "interp")) for f in self.files
+            os.path.join(path_interp, add_suffix(os.path.basename(f), "interp")) for f in self.input_images
         ]
 
         bpmask_array, header = fits.getdata(self.config.preprocess.bpmask_file, header=True)
@@ -531,14 +468,14 @@ class ImStack(BaseSetup):
             path_conv = os.path.join(self.path_tmp, "conv")
             os.makedirs(path_conv, exist_ok=True)
             self.config.imstack.conv_files = [
-                os.path.join(path_conv, add_suffix(os.path.basename(f), "conv")) for f in self.files
+                os.path.join(path_conv, add_suffix(os.path.basename(f), "conv")) for f in self.input_images
             ]
 
             # Get peeings for convolution
             peeings = [fits.getheader(inim)["PEEING"] for inim in self.images_to_stack]
             # max_peeing = np.max(peeings)
             max_peeing = (
-                self.config.imstack.target_seeing / self.config.obs.pixscale
+                self.config.imstack.target_seeing / collapse(self.path.pixscale, raise_error=True)
                 if hasattr(self.config.imstack, "target_seeing")
                 and isinstance(self.config.imstack.target_seeing, (int, float))
                 else np.max(peeings)
@@ -655,9 +592,9 @@ class ImStack(BaseSetup):
         log_file = os.path.join(working_dir, "_".join([self.config.name, type, "swarp.log"]))
 
         if type == "":
-            output_file = self.config.file.stacked_file  # to processed directly
+            output_file = self.config.imstack.stacked_image  # to processed directly
         else:
-            output_file = os.path.join(working_dir, os.path.basename(self.config.file.stacked_file))
+            output_file = os.path.join(working_dir, os.path.basename(self.config.imstack.stacked_image))
 
         external.swarp(
             input=self.path_imagelist,
@@ -740,7 +677,7 @@ class ImStack(BaseSetup):
                 header[key] = (value, comment)
 
             # 	Names of stacked single images
-            for nn, inim in enumerate(self.files):
+            for nn, inim in enumerate(self.input_images):
                 header[f"IMG{nn:0>5}"] = (os.path.basename(inim), "")
 
             hdul.flush()

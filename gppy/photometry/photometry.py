@@ -74,11 +74,13 @@ class Photometry(BaseSetup):
         )
 
         if self.run_single_photometry:
-            self.images = images or self.config.input.calibrated_images
+            self.config.photometry.input_images = images or self.config.input.calibrated_images
+            self.input_images = self.config.photometry.input_images
             self.logger.debug("Running single photometry")
             # self._flag_name = "single_photometry"
         else:
-            self.images = images or [self.config.input.stacked_image]
+            self.config.photometry.input_images = images or [self.config.input.stacked_image]
+            self.input_images = self.config.photometry.input_images
             self.logger.debug("Running combined photometry")
             # self._flag_name = "combined_photometry"
 
@@ -138,8 +140,8 @@ class Photometry(BaseSetup):
     def _run_parallel(self) -> None:
         """Process images in parallel using queue system."""
         task_ids = []
-        for i, image in enumerate(self.images):
-            process_name = f"{self.config.name} - single photometry - {i+1} of {len(self.images)}"
+        for i, image in enumerate(self.input_images):
+            process_name = f"{self.config.name} - single photometry - {i+1} of {len(self.input_images)}"
             single_config = self.config.extract_single_image_config(i)
 
             phot_single = PhotometrySingle(
@@ -160,14 +162,14 @@ class Photometry(BaseSetup):
 
     def _run_sequential(self) -> None:
         """Process images sequentially."""
-        for i, image in enumerate(self.images):
+        for i, image in enumerate(self.input_images):
             single_config = self.config.extract_single_image_config(i)
             PhotometrySingle(
                 image,
                 single_config,  # self.config,
                 logger=self.logger,
                 ref_catalog=self.ref_catalog,
-                total_image=len(self.images),
+                total_image=len(self.input_images),
             ).run()
 
 
