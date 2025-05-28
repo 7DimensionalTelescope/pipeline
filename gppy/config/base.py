@@ -10,9 +10,9 @@ from .utils import (
 
 class BaseConfig:
 
-    def __init__(self, config_source=None, **kwargs) -> None:
-        # self._loaded = False
+    def __init__(self, config_source=None, write=True, **kwargs) -> None:
         self._initialized = False
+        self.write = write
 
         self._load_config(config_source, **kwargs)
 
@@ -23,32 +23,27 @@ class BaseConfig:
     def is_initialized(self):
         return self._initialized
 
-    # @property
-    # def is_loaded(self):
-    #     return self._loaded
-
     @property
     def config_in_dict(self):
         """Return the configuration dictionary."""
         return self._config_in_dict
 
     @classmethod
-    def from_dict(cls, config_dict, write=False, **kwargs):
-        return cls(config_source=config_dict, write=write, **kwargs)
+    def from_dict(cls, input, write=False, **kwargs):
+        return cls(input, write=write, **kwargs)
 
     @classmethod
-    def from_file(cls, config_file, write=False, **kwargs):
-        config_dict = cls.read_config(config_file)
-        return cls(config_source=config_dict, write=write, **kwargs)
+    def from_file(cls, input, write=False, **kwargs):
+        return cls(input, write=write, **kwargs)
 
     @classmethod
     def from_base(cls, config_type, **kwargs):
         if config_type == "preprocess":
             config_file = os.path.join(const.REF_DIR, "preproc_base.yml")
-            return cls.from_file(config_file=config_file, **kwargs)
+            return cls.from_file(config_file, **kwargs)
         elif config_type == "sciprocess":
             config_file = os.path.join(const.REF_DIR, "sciproc_base.yml")
-            return cls.from_file(config_file=config_file, **kwargs)
+            return cls.from_file(config_file, **kwargs)
         else:
             raise ValueError(f"Invalid config_type: {config_type}")
 
@@ -74,9 +69,6 @@ class BaseConfig:
         return config
 
     def _load_config(self, config_source, **kwargs):
-        # Load configuration from file or dict
-        # self._loaded = False
-
         if isinstance(config_source, str):
             input_dict = self.read_config(config_source)
         elif isinstance(config_source, dict):
@@ -90,8 +82,6 @@ class BaseConfig:
 
         self._update_with_kwargs(kwargs)
         self._make_instance()
-
-        # self._loaded = True
 
     def _update_with_kwargs(self, kwargs):
         """Merge additional configuration parameters."""
@@ -145,11 +135,10 @@ class BaseConfig:
 
             logger = Logger(name=name, slack_channel="pipeline_report")
 
-        if self.write:
-            logger.set_output_file(log_file, overwrite=overwrite)
-            if "log_format" in kwargs:
-                logger.set_format(kwargs.pop("log_format"))
-            logger.set_pipeline_name(name)
+        logger.set_output_file(log_file, overwrite=overwrite)
+        if "log_format" in kwargs:
+            logger.set_format(kwargs.pop("log_format"))
+        logger.set_pipeline_name(name)
 
         if not (verbose):
             logger.set_level("WARNING")
@@ -237,21 +226,6 @@ class ConfigurationInstance:
     def extract_single_image_config(self, i: int):
         """Returns ConfigurationInstance"""
         return self._parent_config.extract_single_image_config(i).config
-
-    # def extract_single_image_config(self, i: int):
-    #     from copy import deepcopy
-
-    #     config_dict = deepcopy(self._parent_config.config_in_dict)
-    #     sections = [
-    #         config_dict.get("obs", {}),
-    #         config_dict["file"].get("raw_images", {}),
-    #         config_dict["file"].get("processed_images", {}),
-    #     ]
-    #     for section in sections:
-    #         for k, v in section.items():
-    #             if isinstance(v, list):
-    #                 section[k] = v[i]
-    #     return Configuration(config_source=config_dict, write=False)
 
     @staticmethod
     def select_from_lists(obj, i):

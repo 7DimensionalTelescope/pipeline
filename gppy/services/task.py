@@ -91,7 +91,7 @@ class Task:
             self.starttime = datetime.now()
             if self.gpu:
                 with self.gpu_context():
-                    self.result = self.func(*self.args, **self.kwargs)
+                    self.result = self.func(device_id = self.device, *self.args, **self.kwargs)
             else:
                 self.result = self.func(*self.args, **self.kwargs)
         except Exception as e:
@@ -142,6 +142,10 @@ class TaskTree:
     def add_task(self, task: Task) -> None:
         """Add a processing task to this tree."""
         self.tasks.append(task)
+
+    def add_tasks(self, tasks: List[Task]) -> None:
+        """Add multiple processing tasks to this tree."""
+        self.tasks.extend(tasks)
     
     def get_next_task(self) -> Optional[Task]:
         """Get the next task to be processed."""

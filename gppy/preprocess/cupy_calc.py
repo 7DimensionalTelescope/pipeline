@@ -99,8 +99,10 @@ def process_batch_on_device(image_paths, bias, dark, flat, results, device_id=0)
         del bias, dark, flat
         compute_stream.synchronize()
         cp.get_default_memory_pool().free_all_blocks()
-        results[device_id] = local_results
-
+        if np.shape(results) == (1,):
+            results[0] = local_results
+        else:
+            results[device_id] = local_results
 
 def combine_images_with_cupy(images: str, device_id=0, subtract=None, norm=False):
     """median is gpu, std is cpu"""

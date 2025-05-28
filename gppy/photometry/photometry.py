@@ -1,4 +1,5 @@
 import os
+import getpass
 from typing import Any, List, Dict, Tuple, Optional, Union
 import datetime
 import numpy as np
@@ -221,6 +222,8 @@ class PhotometrySingle:
         self.phot_conf = self.config.photometry
         self.name = name or self.config.name
         self.phot_header = PhotometryHeader()
+        self.phot_header.author = getpass.getuser()
+
         if total_image == 1:
             self._id = next(self._id_counter)
         else:
@@ -775,7 +778,7 @@ class PhotometrySingle:
 class PhotometryHeader:
     """Stores image header information related to photometry."""
 
-    author: str = "Gregory S.H. Paek"
+    author: str = "pipeline"
     photime: str = datetime.date.today().isoformat()
     jd: float = 0.0
     mjd: float = 0.0
@@ -798,7 +801,7 @@ class PhotometryHeader:
     def dict(self) -> Dict[str, Tuple[Any, str]]:
         """Generates a dictionary of header information for FITS."""
         return {
-            "AUTHOR": (self.author, "PHOTOMETRY AUTHOR"),
+            "AUTHOR": (self.author, "LAST UPDATED PHOTOMETRY HEADER"),
             "PHOTIME": (self.photime, "PHOTOMETRY TIME [KST]"),
             "JD": (self.jd, "Julian Date of the observation"),
             "MJD": (self.mjd, "Modified Julian Date of the observation"),

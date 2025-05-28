@@ -1,3 +1,4 @@
+
 def merge_dicts(base: dict, updates: dict) -> dict:
     """
     Recursively merge the updates dictionary into the base dictionary.
@@ -21,3 +22,8 @@ def merge_dicts(base: dict, updates: dict) -> dict:
             base[key] = value
     return base
 
+
+def get_key(config, key: str):
+    if hasattr(config, key) and getattr(config, key) is not None:
+        return getattr(config, key)
+    return None

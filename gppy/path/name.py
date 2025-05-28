@@ -139,21 +139,21 @@ class NameHandler:
             raise TypeError("Input must be str, Path, or list/tuple of them")
 
         # --- 2. Build the filesystem-related attributes as lists ---
-        self.path = [os.path.abspath(f) for f in files]
-        self.basename = [os.path.basename(p) for p in self.path]
+        self.abspath = [os.path.abspath(f) for f in files]
+        self.basename = [os.path.basename(p) for p in self.abspath]
         self.stem, self.ext = (list(x) for x in zip(*(os.path.splitext(b) for b in self.basename)))
         # if any(ext != ".fits" for ext in self.ext):
         #     raise ValueError("One or more inputs are not FITS files")
 
         self.parts = [stem.split("_") for stem in self.stem]
-        self.exists = [os.path.exists(p) for p in self.path]
+        self.exists = [os.path.exists(p) for p in self.abspath]
 
         # --- 3. Determine raw vs processed for each input ---
-        self.types = [self._detect_type(stem) for stem in self.stem]
+        self.type = [self._detect_type(stem) for stem in self.stem]
 
         # --- 4. Parse each file into its components ---
         units, dates, hmses, objs, filters, nbinnings, exptimes, gains, cameras = [], [], [], [], [], [], [], [], []
-        for parts, typ in zip(self.parts, self.types):
+        for parts, typ in zip(self.parts, self.type):
             if "raw" in typ:
                 parsing_func = self._parse_raw
             elif "master" in typ:
@@ -174,12 +174,12 @@ class NameHandler:
             cameras.append(camera)
 
         if self._single:
-            self.path = self.path[0]
+            self.abspath = self.abspath[0]
             self.basename = self.basename[0]
             self.stem = self.stem[0]
             self.ext = self.ext[0]
             self.parts = self.parts[0]
-            self.types = self.types[0]
+            self.type = self.type[0]
             self.exists = self.exists[0]
 
         # --- 5. Attach them as lists (or scalar if single) ---
@@ -190,13 +190,14 @@ class NameHandler:
         self.filter = filters if not self._single else filters[0]
         self._n_binning = nbinnings if not self._single else nbinnings[0]
         self._gain = gains if not self._single else gains[0]
+        self._camera = cameras if not self._single else cameras[0]
         self.exptime = exptimes if not self._single else exptimes[0]
         self.exposure = self.exptime
 
     def __repr__(self):
         # when list: show first few
         if hasattr(self, "_single") and not self._single:
-            return f"<NameHandler of {len(self.path) if not self._single else 1} files>"
+            return f"<NameHandler of {len(self.abspath) if not self._single else 1} files>"
         return f"<NameHandler {self.basename}>"
 
     @staticmethod
@@ -318,11 +319,11 @@ class NameHandler:
                 return self._n_binning
             # otherwise read it from the one FITS header
             else:
-                return get_header(self.path, force_return=True).get(key, None)
+                return get_header(self.abspath, force_return=True).get(key, None)
 
         # multi‐file mode: build a list, using header only where needed
         nbins = []
-        for nb, p in zip(self._n_binning, self.path):
+        for nb, p in zip(self._n_binning, self.abspath):
             if nb is not None:
                 nbins.append(nb)
             else:
@@ -337,9 +338,9 @@ class NameHandler:
         self._gain is [None, None, ...]
         """
         if getattr(self, "_single", False):
-            return get_gain(self.path)
+            return get_gain(self.abspath)
         else:
-            return [get_gain(p) for p in self.path]
+            return [get_gain(p) for p in self.abspath]
 
     @property
     def camera(self):
@@ -347,10 +348,15 @@ class NameHandler:
         returns None if inexistent
         self._camera is [None, None, ...]
         """
+        if (self._single and self._camera is not None) or (
+            not self._single and all(c is not None for c in self._camera)
+        ):
+            return self._camera
+
         if getattr(self, "_single", False):
-            return get_camera(self.path)
+            return get_camera(self.abspath)
         else:
-            return [get_camera(u) for u in self.path]
+            return [get_camera(u) for u in self.abspath]
 
     @property
     def pixscale(self):
@@ -362,7 +368,7 @@ class NameHandler:
     @property
     def raw_basename(self):
         def make(unit, date, hms, obj, filte, nbin, exptime):
-            return f"{unit}_{date}_{hms}_{obj}_{filte}_{format_binning(nbin)}_{format_exptime(exptime, type=self.types)}.fits"
+            return f"{unit}_{date}_{hms}_{obj}_{filte}_{format_binning(nbin)}_{format_exptime(exptime, type=self.type)}.fits"
 
         if getattr(self, "_single", False):
             return make(self.unit, self.date, self.hms, self.obj, self.filter, self.n_binning, self.exptime)
@@ -391,7 +397,7 @@ class NameHandler:
     @property
     def processed_basename(self):
         def make(obj, filte, unit, date, hms, exptime):
-            return f"{obj}_{filte}_{unit}_{date}_{hms}_{format_exptime(exptime, type=self.types)}.fits"
+            return f"{obj}_{filte}_{unit}_{date}_{hms}_{format_exptime(exptime, type=self.type)}.fits"
 
         if getattr(self, "_single", False):
             return make(self.obj, self.filter, self.unit, self.date, self.hms, self.exptime)
@@ -447,12 +453,14 @@ class NameHandler:
                 return tuple(calib_bundles)
 
         if getattr(self, "_single", False):
-            return make(self.types[1], self.filter, self.unit, self.date, self.exptime, self.gain, self.camera)
+            return make(
+                self.type[1], self.filter, self.unit, self.date, self.exptime, self.n_binning, self.gain, self.camera
+            )
 
         return [
             make(typ[1], filte, unit, date, exptime, nbin, gain, camera)
             for typ, filte, unit, date, exptime, nbin, gain, camera in zip(
-                self.types, self.filter, self.unit, self.date, self.exptime, self.n_binning, self.gain, self.camera
+                self.type, self.filter, self.unit, self.date, self.exptime, self.n_binning, self.gain, self.camera
             )
         ]
 
@@ -505,7 +513,7 @@ class NameHandler:
 
         # pick the “other” basename for each entry
         conj_list = [
-            proc_bn if "raw" in typ else raw_bn for typ, raw_bn, proc_bn in zip(self.types, raw_list, proc_list)
+            proc_bn if "raw" in typ else raw_bn for typ, raw_bn, proc_bn in zip(self.type, raw_list, proc_list)
         ]
 
         # unwrap for single-file mode
@@ -524,21 +532,24 @@ class NameHandler:
         # multi-file: each attribute is a list; zip them to rows of dicts
         return [dict(zip(keys, row)) for row in zip(*values)]
 
-    def get_grouped_files(self):
+    def get_grouped_files(self, keys=None):
         """
+        Uses ALL_GROUP_KEYS by default, but you can specify other keys
+        Output is a dict where keys are tuples of (type, obs_params) and values are lists of file paths.
+
         e.g.,
         name = NameHandler(flist)
         grouped_files = name.get_grouped_files()
         typ = next(iter(grouped_files))[0][0]
         obs_params = dict(next(iter(grouped_files))[0][1])
         """
-        if not isinstance(self.path, list) or len(self.path) <= 1:
-            return self.path[0]
+        if not isinstance(self.abspath, list) or len(self.abspath) <= 1:
+            return self.abspath[0]
 
         # groups = defaultdict(list)
         #     groups[key].append(str(f))
         groups = dict()
-        for typ, f, obs_params in zip(self.types, self.path, self.to_dict()):
+        for typ, f, obs_params in zip(self.type, self.abspath, self.to_dict(keys=keys)):
             key = (typ, tuple(obs_params.items()))  # sorted()  # check type to differentiate raw/proc with same params
             # key = tuple(obs_params.items())
             groups.setdefault(key, []).append(str(f))

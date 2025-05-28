@@ -11,8 +11,6 @@ from .plotting import *
 from . import utils as prep_utils
 from .cupy_calc import *
 
-from ..services.queue import QueueManager, Priority
-from ..services.memory import MemoryMonitor
 from ..utils import add_padding, get_header
 from ..path import PathHandler
 from ..config import PreprocConfiguration
@@ -48,6 +46,8 @@ class Preprocess(BaseSetup):
 
         self.overwrite = overwrite
 
+        self.initialize()
+
         # self.logger.debug(f"Masterframe output folder: {self.path_fdz}")
 
     @classmethod
@@ -56,22 +56,20 @@ class Preprocess(BaseSetup):
 
     @property
     def sequential_task(self):
-        tasks = [
-            (1, "initialize", False),
-        ]
+        tasks = []
         for i in range(self._n_groups):
-            tasks.append((4 * i + 2, f"generate_masterframe", True))
-            tasks.append((4 * i + 3, f"data_reduction", True))
-            tasks.append((4 * i + 4, f"make_plots", False))
+            tasks.append((4 * i, f"load_masterframe", True))
+            tasks.append((4 * i + 1, f"data_reduction", True))
+            tasks.append((4 * i + 2, f"make_plots", False))
             if i < self._n_groups - 1:
-                tasks.append((4 * i + 5, f"proceed_to_next_group", False))
+                tasks.append((4 * i + 3, f"proceed_to_next_group", False))
 
         return tasks
 
     def initialize(self):
         self.logger.info("Initializing Preprocess")
-        if self.config.input.masterframe_files and self.config.input.science_files:
-            input_files = list(self.config.input.masterframe_files) + list(self.config.input.science_files)
+        if self.config.input.masterframe_images and self.config.input.science_images:
+            input_files = list(self.config.input.masterframe_images) + list(self.config.input.science_images)
             self.raw_groups = PathHandler.take_raw_inventory(input_files)
         else:
             input_files = glob.glob(os.path.join(self.config.input.raw_dir, "*.fits"))
@@ -85,7 +83,6 @@ class Preprocess(BaseSetup):
         self.logger.info(f"{self._n_groups} groups are found")
 
     def run(self):
-        self.initialize()
         threads_for_making_plots = []
         for i in range(self._n_groups):
             self.load_masterframe()
@@ -128,11 +125,9 @@ class Preprocess(BaseSetup):
         self._current_group = group_index
 
     def __getattr__(self, name):
-        if name in self.__dict__:
-            return self.__dict__[name]
-
-        return self._get_raw_group(name, self._current_group)
-
+        if name.endswith("_input") or name.endswith("_output"):
+            return self._get_raw_group(name, self._current_group)
+        
     def _get_raw_group(self, name, group_index):
         if name == "sci_input":
             return self._parse_sci_list(group_index, "input")
@@ -183,8 +178,9 @@ class Preprocess(BaseSetup):
         self.logger.debug(f"FLAT DARK SCALING (FLAT / DARK): {flat_exptime} / {dark_exptime}")
         return flat_exptime / dark_exptime
 
-    def load_masterframe(self):
-        device_id = self.device_id
+    def load_masterframe(self, device_id=None):
+        if device_id is None:
+            device_id = self.device_id
 
         self.logger.info(f"Generating masterframes for group {self._current_group+1} in GPU device {device_id}")
         st = time.time()
@@ -263,7 +259,13 @@ class Preprocess(BaseSetup):
         if dtype == "dark":
             self.dark_exptime = get_header(existing_data)[HEADER_KEY_MAP["exptime"]]
 
-    def data_reduction(self):
+    def data_reduction(self, device_id=None):
+
+        flag = [os.path.exists(file) for file in self.sci_output]
+        if all(flag):
+            self.logger.info(f"All images in group {self._current_group+1} are already processed")
+            return
+
         st = time.time()
 
         n_head_blocks = self.config.preprocess.n_head_blocks
@@ -274,7 +276,10 @@ class Preprocess(BaseSetup):
             device = np.arange(num_devices)
         else:
             num_devices = 1
-            device = self.device_id
+            if device_id is None:
+                device = self.device_id
+            else:
+                device = self.device_id
 
         batch_dist = calc_batch_dist(self.sci_input, num_devices=num_devices, use_multi_device=use_multi_device)
 
@@ -320,7 +325,7 @@ class Preprocess(BaseSetup):
                 t.join()
 
             self.logger.debug(
-                f"Data reduction has been completed in {time.time() - start_time:.0f} seconds for {len(self.sci_input)} iamges."
+                    f"Data reduction has been completed in {time.time() - start_time:.0f} seconds for {len(self.sci_input)} iamges."
             )
         # Combine results
         all_results = [item for sublist in results if sublist for item in sublist]

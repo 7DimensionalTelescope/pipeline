@@ -22,8 +22,6 @@ import itertools
 
 from .memory import MemoryState, MemoryMonitor
 
-from .utils import cpu_callback_wrapper
-
 signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 class AbruptStopException(Exception):
@@ -259,6 +257,7 @@ class QueueManager:
 
     def add_tree(self, tree: TaskTree):
         """Add a TaskTree to the forest."""
+
         self.trees.append(tree)
         self.logger.info(f"Added tree {tree.id} with {len(tree.tasks)} branches")
         first_task = tree.tasks[0]

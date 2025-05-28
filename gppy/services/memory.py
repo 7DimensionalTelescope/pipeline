@@ -7,7 +7,6 @@ import cupy as cp
 import psutil
 import pynvml
 
-from ..base import decorator
 from . import utils
 
 
@@ -58,8 +57,12 @@ class MemoryMonitor:
         ...     monitor.handle_state(trigger, gpu_context, stop_callback)
     """
 
-    def __init__(self, logger):
-        self.logger = logger
+    def __init__(self, logger = None):
+        if logger is None:
+            from .logger import Logger
+            self.logger = Logger(name="MemoryMonitor")
+        else:
+            self.logger = logger
         self._memory_state = {"CPU": MemoryState.HEALTHY, "GPU": MemoryState.HEALTHY}
 
     def __repr__(self):
@@ -278,7 +281,7 @@ class MemoryMonitor:
         utils.cleanup_memory()
         stop_callback()
 
-    @decorator.classmethodproperty
+    @utils.classmethodproperty
     def current_memory(cls):
         """
         Get current CPU memory usage statistics.
@@ -295,7 +298,7 @@ class MemoryMonitor:
             "percent": (used / total) * 100,
         }
 
-    @decorator.classmethodproperty
+    @utils.classmethodproperty
     def current_gpu_memory(cls) -> Dict:
         """
         Get GPU memory statistics for all available devices.
@@ -323,7 +326,7 @@ class MemoryMonitor:
                     continue
         return gpu_stats
 
-    @decorator.classmethodproperty
+    @utils.classmethodproperty
     def current_memory_percent(cls):
         """
         Get current CPU memory usage percentage.
@@ -333,7 +336,7 @@ class MemoryMonitor:
         """
         return cls.current_memory["percent"]
 
-    @decorator.classmethodproperty
+    @utils.classmethodproperty
     def current_gpu_memory_percent(cls):
         """
         Get current GPU memory usage percentages.
@@ -344,7 +347,7 @@ class MemoryMonitor:
         gpu_percentages = [stats["percent"] for _, stats in cls.current_gpu_memory.items()]
         return gpu_percentages
 
-    @decorator.classmethodproperty
+    @utils.classmethodproperty
     def current_gpu_utilization(cls):
         """
         Get current GPU utilization percentages.
@@ -360,7 +363,7 @@ class MemoryMonitor:
             gpu_utils.append(util.gpu)
         return gpu_utils
 
-    @decorator.classmethodproperty
+    @utils.classmethodproperty
     def log_memory_usage(cls):
         """
         Generate a comprehensive memory usage log string.

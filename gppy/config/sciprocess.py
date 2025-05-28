@@ -40,7 +40,7 @@ class SciProcConfiguration(BaseConfig):
 
         if not self._initialized:
             self.logger.info("Initializing configuration")
-            self.initialize(input)
+            self.initialize()
 
         if overwrite:
             self.logger.info("Overwriting factory_dir")
@@ -54,8 +54,18 @@ class SciProcConfiguration(BaseConfig):
         self.logger.info(f"SciProcConfiguration initialized")
         self.logger.debug(f"SciProcConfiguration initialization took {time.time() - st:.2f} seconds")
 
+    @property
+    def name(self):
+        if hasattr(self, "path"):
+            return self.path.output_name
+        elif hasattr(self.config, "name"):
+            return self.config.name
+        else:
+            return None
+        
     def _handle_input(self, input, logger, verbose, **kwargs):
         if isinstance(input, list):
+            self.input_files = input
             self.path = PathHandler(input)
             config_source = self.path.sciproc_base_yml
             self.logger = self._setup_logger(
@@ -64,26 +74,26 @@ class SciProcConfiguration(BaseConfig):
                 log_file=self.path.sciproc_output_log,
                 verbose=verbose,
             )
-            self.logger.info("Loading configuration")
+            self.logger.info("Generating a configuration from the 'base' configuration")
             self.logger.debug(f"Configuration source: {config_source}")
-            super().__init__(config_source=config_source, **kwargs)
-
+            super().__init__(config_source=config_source, write=self.write, **kwargs)
         elif isinstance(input, str | dict):
             config_source = input
-            super().__init__(config_source=config_source, **kwargs)
+            super().__init__(config_source=config_source, write=self.write, **kwargs)
             self._initialized = True
             self.path = self._set_pathhandler_from_config()
             self.logger = self._setup_logger(
                 logger,
                 name=self.path.output_name,
-                log_file=self.path.sciproc_output_log,
+                log_file=self.config.logging.file,
                 verbose=verbose,
             )
+            self.logger.info("Loading configuration from an exisiting file or dictionary")
             self.logger.debug(f"Configuration source: {config_source}")
 
         else:
             raise ValueError("Input must be a list of image files, a configuration file path, or a configuration dictionary.")  # fmt: skip
-
+        self.config.logging.file = self.path.sciproc_output_log  # used by write_config
         self.config_file = self.path.sciproc_output_yml  # used by write_config
         return
 
@@ -102,15 +112,17 @@ class SciProcConfiguration(BaseConfig):
 
         raise ValueError("Configuration does not contain valid input files or directories to create PathHandler.")
 
-    def initialize(self, input_files):
+    def initialize(self):
         """Fill in obs info, name, paths."""
 
         self.config.info.version = __version__
         self.config.info.creation_datetime = datetime.now().isoformat()
         self.config.name = self.path.output_name
-        self.config.input.calibrated_images = input_files
 
-        self.raw_header_sample = get_header(input_files[0])
+        self.config.input.calibrated_images = self.input_files
+        self.config.input.output_dir = self.path.output_dir
+
+        self.raw_header_sample = get_header(self.input_files[0])
         # self.set_input_output()
         # self.check_masterframe_status()
 

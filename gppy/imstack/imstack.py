@@ -23,11 +23,11 @@ from ..const import REF_DIR
 from ..config import SciProcConfiguration
 from .. import external
 from ..services.setup import BaseSetup
-from ..utils import collapse, add_suffix, swap_ext, define_output_dir
+from ..utils import collapse, get_header, add_suffix, swap_ext, define_output_dir
 from .utils import move_file  # inputlist_parser, move_file
 from .const import ZP_KEY, IC_KEYS, CORE_KEYS
 from ..const import PipelineError
-from ..path.path import PathHandler
+from ..path.path import PathHandler, NameHandler
 
 
 class ImStack(BaseSetup):
@@ -202,7 +202,7 @@ class ImStack(BaseSetup):
 
         # 	Non-Tile object
         else:
-            self.logger.info(f"Using deprojection center of first image.")
+            self.logger.info(f"Using the center of the first image as the deprojection center.")
             objra = header_list[0]["OBJCTRA"]
             objdec = header_list[0]["OBJCTDEC"]
             # objra = objra.replace(' ', ':')
@@ -231,7 +231,7 @@ class ImStack(BaseSetup):
         self.path_bkgsub = os.path.join(self.path_tmp, "bkgsub")
         os.makedirs(self.path_bkgsub, exist_ok=True)
 
-        self.config.imstack.bkgsub_files = [
+        self.config.imstack.bkgsub_images = [
             f"{self.path_bkgsub}/{add_suffix(os.path.basename(f), 'bkgsub')}" for f in self.input_images
         ]
 
@@ -244,11 +244,11 @@ class ImStack(BaseSetup):
         _delt = time.time() - _st
         self.logger.debug(f"--> Done ({_delt:.1f}sec)")
 
-        self.images_to_stack = self.config.imstack.bkgsub_files
+        self.images_to_stack = self.config.imstack.bkgsub_images
 
     def _const_bkgsub(self):
         for ii, (inim, _bkg, outim) in enumerate(
-            zip(self.input_images, self.skyvalues, self.config.imstack.bkgsub_files)
+            zip(self.input_images, self.skyvalues, self.config.imstack.bkgsub_images)
         ):
             self.logger.debug(f"[{ii:>6}] {os.path.basename(inim)}")
             if not os.path.exists(outim) or self.overwrite:
@@ -265,14 +265,14 @@ class ImStack(BaseSetup):
         """
         from ..external import sextractor
 
-        bkg_files = [f"{self.path_bkgsub}/{add_suffix(os.path.basename(f), 'bkg')}" for f in self.input_images]
-        bkg_rms_files = [f"{self.path_bkgsub}/{add_suffix(os.path.basename(f), 'bkgrms')}" for f in self.input_images]
+        bkg_images = [f"{self.path_bkgsub}/{add_suffix(os.path.basename(f), 'bkg')}" for f in self.input_images]
+        bkg_rms_images = [f"{self.path_bkgsub}/{add_suffix(os.path.basename(f), 'bkgrms')}" for f in self.input_images]
 
-        self.config.imstack.bkg_files = bkg_files
-        self.config.imstack.bkg_rms_files = bkg_rms_files
+        self.config.imstack.bkg_images = bkg_images
+        self.config.imstack.bkg_rms_images = bkg_rms_images
 
         for inim, outim, bkg, bkg_rms in zip(
-            self.input_images, self.config.imstack.bkgsub_files, bkg_files, bkg_rms_files
+            self.input_images, self.config.imstack.bkgsub_images, bkg_images, bkg_rms_images
         ):
             sex_args = [
                 "-CATALOG_TYPE", "NONE",  # save no source catalog
@@ -292,6 +292,24 @@ class ImStack(BaseSetup):
                 _data -= bkg
                 fits.writeto(outim, _data, header=_hdr, overwrite=True)
 
+    @staticmethod
+    def _group_IMCMB(images):
+        calibs = []
+        for image in images:
+            header = get_header(image)
+            zdf = [v for k, v in header.items() if "IMCMB" in k]  # [z, d, f]
+            calibs.append(zdf)
+
+        groups = dict()
+        for image, zdf in zip(images, calibs):
+            key = tuple(zdf)
+            if key not in groups:
+                groups[key] = []
+            groups.setdefault(key, []).append(image)
+
+        # groups = NameHandler.get_grouped_files(bkgsub_images)
+        return groups
+
     def calculate_weight_map(self):
         if self.config.imstack.gpu:
             import cupy as xp
@@ -299,40 +317,58 @@ class ImStack(BaseSetup):
             import numpy as xp
         from .weight import pix_err
 
-        self.config.file.bkgsub_weight_files = [add_suffix(f, "weight") for f in self.config.imstack.bkgsub_files]
-        # self.config.file.processed_files  # if you want to save single frame weights
+        # self.config.imstack.input_images  # if you want to save single frame weights
+        bkgsub_images = self.config.imstack.bkgsub_images
+        bkgsub_weight_images = [add_suffix(f, "weight") for f in bkgsub_images]
+        self.config.imstack.bkgsub_weight_images = bkgsub_weight_images
 
-        d_m = xp.asarray(fits.getdata(self.config.preprocess.mdark_file))
-        f_m = xp.asarray(fits.getdata(self.config.preprocess.mflat_file))
-        sig_z = xp.asarray(fits.getdata(self.config.preprocess.biassig_file))
-        sig_f = xp.asarray(fits.getdata(self.config.preprocess.flatsig_file))
-        p_z = fits.getheader(self.config.preprocess.biassig_file)["NFRAMES"]
-        p_d = fits.getheader(self.config.preprocess.mdark_file)["NFRAMES"]
-        p_f = fits.getheader(self.config.preprocess.flatsig_file)["NFRAMES"]
-        egain = fits.getheader(self.config.preprocess.mdark_file)["EGAIN"]  # e-/ADU
+        # DEPRECATED: same groups may have different calibs, though unlikely
+        # groups = NameHandler.get_grouped_files(bkgsub_images)
+        # for (typ_tuple, obs_params_tuple), images in groups.items():
 
-        for i in range(len(self.config.file.processed_files)):
-            # r_p_file = os.path.join(self.config.path.path_processed, self.config.file.processed_files[i])
-            r_p_file = self.path.processed_images[i]
-            r_p = xp.asarray(fits.getdata(r_p_file))
+        groups = self._group_IMCMB(bkgsub_images)
+        self.logger.debug(f"{len(groups)} groups for weight map calculation.")
+        self.logger.debug(f"{groups}")
 
-            # bkg_file = self.config.imstack.bkg_files[i]
-            bkgsub_file = self.config.imstack.bkgsub_files[i]
-            sig_b = xp.zeros_like(r_p)
-            # sig_b = calculate_background_sigma(bkg_file, egain)
-            # sig_b = xp.asarray(fits.getdata(sig_b_file))
+        for (z_m_file, d_m_file, f_m_file), images in groups.items():
 
-            weight_image = pix_err(xp, r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, egain, weight=True)
+            header = fits.getheader(images[0])  # same cailb in a group
+            calibs = [v for k, v in header.items() if "IMCMB" in k]
+            d_m_file, f_m_file, sig_z_file, sig_f_file = PathHandler.weight_map_input(calibs)
 
-            if hasattr(weight_image, "get"):  # if CuPy array
-                weight_image = weight_image.get()  # Convert to NumPy array
+            d_m = xp.asarray(fits.getdata(d_m_file))
+            f_m = xp.asarray(fits.getdata(f_m_file))
+            sig_z = xp.asarray(fits.getdata(sig_z_file))
+            sig_f = xp.asarray(fits.getdata(sig_f_file))
+            p_z = fits.getheader(sig_z_file)["NFRAMES"]
+            p_d = fits.getheader(d_m_file)["NFRAMES"]
+            p_f = fits.getheader(f_m_file)["NFRAMES"]
 
-            fits.writeto(
-                # os.path.join(config.path.path_processed, weight_file),
-                self.config.file.bkgsub_weight_files[i],
-                data=weight_image,
-                overwrite=True,
-            )
+            # Pick the master dark as the source to read EGAIN.
+            # The choice shouldn't matter as long as you're in the same group
+            egain = fits.getheader(d_m_file)["EGAIN"]  # e-/ADU
+
+            for i in range(len(images)):
+                r_p_file = images[i]
+                r_p = xp.asarray(fits.getdata(r_p_file))
+
+                # bkg_file = self.config.imstack.bkg_files[i]
+                # bkgsub_file = self.config.imstack.bkgsub_files[i]
+                sig_b = xp.zeros_like(r_p)
+                # sig_b = calculate_background_sigma(bkg_file, egain)
+                # sig_b = xp.asarray(fits.getdata(sig_b_file))
+
+                weight_image = pix_err(xp, r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, egain, weight=True)
+
+                if hasattr(weight_image, "get"):  # if CuPy array
+                    weight_image = weight_image.get()  # Convert to NumPy array
+
+                fits.writeto(
+                    # os.path.join(config.path.path_processed, weight_file),
+                    bkgsub_weight_images[i],
+                    data=weight_image,
+                    overwrite=True,
+                )
 
     def apply_bpmask(self, badpix=0):
         import cupy as cp
@@ -359,9 +395,9 @@ class ImStack(BaseSetup):
             self.logger.warning("BADPIX not found in header. Using default value 0.")
         method = self.config.imstack.interp_type
 
-        for i in range(len(self.config.imstack.bkgsub_files)):
-            input_file = self.config.imstack.bkgsub_files[i]
-            output_file = self.config.imstack.interp_files[i]
+        for i in range(len(self.config.imstack.bkgsub_images)):
+            input_file = self.config.imstack.bkgsub_images[i]
+            output_file = self.config.imstack.interp_images[i]
 
             if os.path.exists(output_file) and not self.overwrite:
                 self.logger.debug(f"Skipping {output_file}")
@@ -550,20 +586,9 @@ class ImStack(BaseSetup):
         self.logger.debug(f"Total Exptime: {self.total_exptime}")
 
         if not self.config.imstack.weight_map:
-            # self.swarp_log_file = os.path.join(
-            #     self.path_tmp, f"{self.config.name}_swarp.log"
-            # )
-
-            # external.swarp(
-            #     input=self.path_imagelist,
-            #     output=self.config.file.stacked_file,
-            #     center=self.center,
-            #     resample_dir=os.path.join(self.path_tmp, "resamp"),
-            #     log_file=self.swarp_log_file,
-            #     logger=self.logger,
-            #     weight_map=self.config.imstack.weight_map,
-            # )
+            # if no weight map, just stack the images
             self._run_swarp("")
+
         else:
             # science images
             self._run_swarp("sci", args=["-RESAMPLING_TYPE", "LANCZOS3"])
@@ -586,14 +611,15 @@ class ImStack(BaseSetup):
         self.logger.debug(f"Stacking {self.n_stack} images took {delt_stack:.3f} sec")
 
     def _run_swarp(self, type="", args=None):
-        """pass type='' for no weight"""
+        """Pass type='' for no weight"""
         working_dir = os.path.join(self.path_tmp, type)
         resample_dir = os.path.join(working_dir, "resamp")
         log_file = os.path.join(working_dir, "_".join([self.config.name, type, "swarp.log"]))
 
         if type == "":
-            output_file = self.config.imstack.stacked_image  # to processed directly
+            output_file = self.config.imstack.stacked_image  # output to output_dir directly
         else:
+            # output to tmp dir, and then selectively move to output_dir
             output_file = os.path.join(working_dir, os.path.basename(self.config.imstack.stacked_image))
 
         external.swarp(
@@ -609,16 +635,16 @@ class ImStack(BaseSetup):
 
         # move files to the final directory
         if type == "sci":
-            shutil.move(output_file, self.config.file.stacked_file)
+            shutil.move(output_file, self.config.imstack.stacked_image)
         elif type == "wht":
             shutil.move(
                 add_suffix(output_file, "weight"),
-                add_suffix(self.config.file.stacked_file, "weight"),
+                add_suffix(self.config.imstack.stacked_image, "weight"),
             )
         elif type == "bpm":
             shutil.move(
                 add_suffix(output_file, "weight"),
-                add_suffix(self.config.file.stacked_file, "bpmask"),
+                add_suffix(self.config.imstack.stacked_image, "bpmask"),
             )
 
         return
@@ -647,7 +673,7 @@ class ImStack(BaseSetup):
             select_header_dict = {key: header.get(key, None) for key in self.keys_to_propagate}
 
         # 	Put them into stacked image
-        with fits.open(self.config.file.stacked_file) as hdulist:
+        with fits.open(self.config.imstack.stacked_image) as hdulist:
             header = hdulist[0].header
             for key in select_header_dict.keys():
                 header[key] = select_header_dict[key]
@@ -670,7 +696,7 @@ class ImStack(BaseSetup):
         }  # fmt: skip
 
         # 	Update Header
-        with fits.open(self.config.file.stacked_file, mode="update") as hdul:
+        with fits.open(self.config.imstack.stacked_image, mode="update") as hdul:
             header = hdul[0].header
 
             for key, (value, comment) in keywords_to_update.items():
