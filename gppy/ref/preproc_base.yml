@@ -1,8 +1,8 @@
 name: 
 
 input: 
-  masterframe_files: 
-  science_files: 
+  masterframe_images: 
+  science_images: 
   raw_dir: 
 
 info:

@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+import glob
 from .. import __version__
 from ..utils import (
     clean_up_folder,
@@ -14,8 +15,7 @@ class PreprocConfiguration(BaseConfig):
 
     def __init__(
         self,
-        input_files: str | list[str] = None,
-        config_source: str | dict = None,
+        input: list[str] | str | dict = None,
         logger=None,
         write=True,
         overwrite=False,
@@ -24,49 +24,16 @@ class PreprocConfiguration(BaseConfig):
     ):
         st = time.time()
         self.write = write
+        self._handle_input(input, logger, verbose, **kwargs)
 
-        if isinstance(input_files, list):
-            if ".fits" in input_files[0] and os.path.exists(input_files[0]):
-                sample_file = input_files[0]
-                self.input_files = input_files
-                self.input_dir = None
-            else:
-                raise ValueError("Input list must be a list of FITS files")
-        elif isinstance(input_files, str) and os.path.isdir(input_files):
-            sample_file = self._has_fits_file(input_files)
-            self.input_dir = input_files
-            self.input_files = None
-        else:
-            raise ValueError("Input must be a list of FITS files or a directory containing FITS files")
-
-        if not sample_file:
-            raise FileNotFoundError("Input directory does not contain any FITS files")
-
-        self.path = PathHandler(sample_file)
-        self.config_file = self.path.preproc_output_yml
-        self.log_file = self.path.preproc_output_log
-        self.name = os.path.basename(self.config_file).replace(".yml", "")
-
-        self.logger = self._setup_logger(logger, name=self.name, log_file=self.log_file, verbose=verbose)
+        if not self._initialized:
+            self.logger.info("Initializing configuration")
+            self.initialize()
 
         if overwrite:
             self.logger.info("Overwriting masterframe, processed, and factory directories")
             clean_up_folder(self.path.masterframe_dir)
             clean_up_folder(self.path.preproc_output_dir)
-
-        if config_source:
-            self._initialized = True
-        else:
-            config_source = self.path.preproc_base_yml
-            self._initialized = False
-
-        self.logger.info("Loading configuration")
-        self.logger.debug(f"Configuration source: {config_source}")
-        super().__init__(config_source=config_source, **kwargs)
-
-        if not self._initialized:
-            self.logger.info("Initializing configuration")
-            self.initialize()
 
         self.logger.info(f"Writing configuration to file")
         self.logger.debug(f"Configuration file: {self.config_file}")
@@ -75,21 +42,95 @@ class PreprocConfiguration(BaseConfig):
         self.logger.info(f"PreprocConfiguration initialized")
         self.logger.debug(f"PreprocConfiguration initialization took {time.time() - st:.2f} seconds")
 
+    @property
+    def name(self):
+        if hasattr(self, "path"):
+            return os.path.basename(self.path.preproc_output_yml[0]).replace(".yml", "")
+        elif hasattr(self.config, "name"):  
+            return self.config.name
+        else:
+            return None
+        
     def initialize(self):
         self.config.info.version = __version__
         self.config.info.creation_datetime = datetime.now().isoformat()
-        self.config.name = self.name
+        self.config.name = os.path.basename(self.path.preproc_output_yml[0]).replace(".yml", "")
         if self.input_files:
-            self.config.input.masterframe_files = []
-            self.config.input.science_files = []
+            self.config.input.masterframe_images = []
+            self.config.input.science_images = []
             for file in self.input_files:
                 if any(calib_type in file for calib_type in CalibType):
-                    self.config.input.masterframe_files.append(file)
+                    self.config.input.masterframe_images.append(file)
                 else:
-                    self.config.input.science_files.append(file)
+                    self.config.input.science_images.append(file)
 
         self.config.input.raw_dir = self.input_dir
         self._initialized = True
+
+    def _handle_input(self, input, logger, verbose, **kwargs):
+
+        if isinstance(input, list): # List of FITS files
+            self.path = PathHandler(input[0])
+            config_source = self.path.preproc_base_yml
+            self.logger = self._setup_logger(
+                logger,
+                name=self.name,
+                log_file=self.path.preproc_output_log,
+                verbose=verbose,
+            )
+            self.logger.info("Generating a configuration from the 'base' configuration")
+            self.logger.debug(f"Configuration source: {config_source}")
+            self.input_files = input
+            self.input_dir = None
+            super().__init__(config_source=config_source, write=self.write, **kwargs)
+        elif isinstance(input, str) and os.path.isdir(input): # Directory containing FITS files
+            sample_file = self._has_fits_file(input)
+            self.path = PathHandler(sample_file)
+            config_source = self.path.preproc_base_yml
+            self.logger = self._setup_logger(
+                logger,
+                name=self.name,
+                log_file=self.path.preproc_output_log,
+                verbose=verbose,
+            )
+            self.logger.info("Generating a configuration from the 'base' configuration")
+            self.logger.debug(f"Configuration source: {config_source}")
+            self.input_dir = input
+            self.input_files = None
+            super().__init__(config_source=config_source, write=self.write, **kwargs)
+        elif (isinstance(input, str)  and ".yml" in input) or isinstance(input, dict): # Configuration file path
+            config_source = input
+            super().__init__(config_source=config_source, write=self.write, **kwargs)
+            self.path = self._set_pathhandler_from_config()
+            self.config.logging.file = self.path.preproc_output_log  # used by write_config
+            self.logger = self._setup_logger(
+                logger,
+                name=self.config.name,
+                log_file=self.config.logging.file,
+                verbose=verbose,
+            )
+            self._initialized = True
+            self.logger.info("Loading configuration from an exisiting file or dictionary")
+            self.logger.debug(f"Configuration source: {config_source}")
+        else:
+            raise ValueError("Input must be a list of FITS files or a directory containing FITS files")
+        
+        self.config_file = self.path.preproc_output_yml  # used by write_config
+        return
+
+
+    def _set_pathhandler_from_config(self):
+        # mind the check order
+        if hasattr(self.config, "input"):
+            if hasattr(self.config.input, "science_images") and self.config.input.science_images:
+                return PathHandler(self.config.input.science_images[0])
+
+            if hasattr(self.config.input, "raw_dir") and self.config.input.raw_dir:
+                f = os.path.join(self.config.input.raw_dir, "**.fits")
+                return PathHandler(sorted(glob.glob(f))[0])
+
+        raise ValueError("Configuration does not contain valid input files or directories to create PathHandler.")
+
 
     def _has_fits_file(self, folder_path):
         with os.scandir(folder_path) as entries:

@@ -387,8 +387,8 @@ class Configuration:
 
     def set_input_output(self):
         self.path.add_fits(self._raw_files)  # file_dependent_common_paths work afterwards
-        self.config.file.raw_files = self.path.raw_images
-        self.config.file.processed_files = self.path.processed_images
+        self.config.file.raw_files = self.path.raw_image
+        self.config.file.processed_files = self.path.processed_image
 
     @staticmethod
     def _obsdata_basename(config):

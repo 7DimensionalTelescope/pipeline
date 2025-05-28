@@ -9,7 +9,6 @@ from ..utils import swap_ext, add_suffix
 from ..services.memory import MemoryMonitor
 from ..config import SciProcConfiguration
 from ..services.setup import BaseSetup
-from ..path import PathHandler
 
 
 class Astrometry(BaseSetup):
@@ -31,7 +30,7 @@ class Astrometry(BaseSetup):
 
     def __init__(
         self,
-        config: Union[str, Any] = None,
+        config: Union[str, SciProcConfiguration] = None,
         logger: Any = None,
         queue: Union[bool, Any] = False,
     ) -> None:

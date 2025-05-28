@@ -11,8 +11,8 @@ import warnings
 class BaseSetup(ABC):
     def __init__(
         self,
-        config: Union[str, Any] = None,
-        logger: Any = None,
+        config: Union[str, PreprocConfiguration, SciProcConfiguration] = None,
+        logger: Logger = None,
         queue: Union[bool, Any] = False,
     ) -> None:
         """Initialize the astrometry module.
@@ -35,7 +35,7 @@ class BaseSetup(ABC):
         self.queue = self._setup_queue(queue)
 
     def _setup_path(self, config):
-        if isinstance(config, PreprocConfiguration) or isinstance(config, SciProcConfiguration):
+        if isinstance(config, PreprocConfiguration | SciProcConfiguration):
             return config.path
         elif isinstance(config, ConfigurationInstance):
             return PathHandler(config)
@@ -89,10 +89,10 @@ class BaseSetup(ABC):
         image_list = glob.glob(f"{dir_path}/*.fits")
         return cls.from_list(image_list)
 
-    @classmethod
-    def from_text_file(cls, imagelist_file):
-        input_images = inputlist_parser(imagelist_file)
-        cls.from_list(input_images)
+    # @classmethod
+    # def from_text_file(cls, imagelist_file):
+    #     input_images = inputlist_parser(imagelist_file)
+    #     cls.from_list(input_images)
 
     def flagging(self):
         setattr(self.config.flag, self._flag_name, True)

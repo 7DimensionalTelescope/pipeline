@@ -362,7 +362,7 @@ def get_camera(header):
         else:
             return "UnknownCam"
     else:
-        return "UnknownCam"
+        return None  # "UnknownCam"
 
 
 def get_gain(fpath):
@@ -378,7 +378,7 @@ def get_gain(fpath):
     return parse_from_path(fpath) or get_header(fpath, force_return=True).get(key, None)
 
 
-def find_raw_path(unit, date, n_binning, gain):
+def find_raw_path(unit, nightdate, n_binning, gain):
     """
     Locate the raw data directory for a specific observation.
 
@@ -401,12 +401,12 @@ def find_raw_path(unit, date, n_binning, gain):
     """
     from .const import RAWDATA_DIR
 
-    raw_data_folder = glob.glob(f"{RAWDATA_DIR}/{unit}/{date}*")
+    raw_data_folder = glob.glob(f"{RAWDATA_DIR}/{unit}/{nightdate}*")
 
     if len(raw_data_folder) > 1:
-        raw_data_folder = glob.glob(f"{RAWDATA_DIR}/{unit}/{date}*_gain{gain}*")
+        raw_data_folder = glob.glob(f"{RAWDATA_DIR}/{unit}/{nightdate}*_gain{gain}*")
         if len(raw_data_folder) > 1:
-            raw_data_folder = glob.glob(f"{RAWDATA_DIR}/{unit}/{date}_{n_binning}x{n_binning}_gain{gain}*")
+            raw_data_folder = glob.glob(f"{RAWDATA_DIR}/{unit}/{nightdate}_{n_binning}x{n_binning}_gain{gain}*")
 
     elif len(raw_data_folder) == 0:
         raise ValueError("No data folder found")
