@@ -3,6 +3,7 @@ import requests
 import sys
 import time
 from typing import Optional, Union, Dict, Any
+import os
 from .. import const
 
 
@@ -157,6 +158,8 @@ class Logger:
         # Add file handlers if log_file is specified
         if self._log_file:
             # Main log file with specified level
+            os.makedirs(os.path.dirname(self._log_file), exist_ok=True)
+
             file_handler = self._create_handler(
                 "file",
                 log_file=self._log_file,
