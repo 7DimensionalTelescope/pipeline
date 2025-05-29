@@ -104,7 +104,8 @@ class PathHandler(AutoMkdirMixin):
 
         # if self._file_indep_initialized and self._file_dep_initialized:
         self.define_specific_paths()
-
+        self.make_dirs()
+        
     def __getattr__(self, name):
         """
         Below runs when name is not in __dict__.
@@ -112,14 +113,17 @@ class PathHandler(AutoMkdirMixin):
         (2) Retry the lookup - if the attribute was created by the builder we
             return it; otherwise fall through to the convenience “_to_*” hooks.
         """
+        _file_dep_initialized = object.__getattribute__(self, "_file_dep_initialized")
+        _input_file = object.__getattribute__(self, "__dict__").get("_input_file", None)
+
         # ---------- 1. Lazy initialization ----------
-        if not self._file_dep_initialized and self._input_file:
-            self._file_dep_initialized = True  # set the flag first to prevent accidental recursion
+        if not _file_dep_initialized and _input_file:
+            object.__setattr__(self, "_file_dep_initialized", True)  # set the flag first to prevent accidental recursion
             try:
                 self.define_file_dependent_common_paths()
             except Exception:
                 # roll back if the builder blew up
-                self._file_dep_initialized = False
+                object.__setattr__(self, "_file_dep_initialized", False)
                 raise
 
             # after building, see whether that gave us the requested attr
@@ -161,7 +165,7 @@ class PathHandler(AutoMkdirMixin):
                 raise ValueError("Predefined date cap reached: consider moving to another disk.")
 
     def define_file_independent_common_paths(self):
-
+        
         _relative_path = os.path.join(
             self.obs_params["nightdate"], self.obs_params["obj"], self.obs_params["filter"], self.obs_params["unit"]
         )
@@ -170,12 +174,14 @@ class PathHandler(AutoMkdirMixin):
         self.metadata_dir = os.path.join(self.output_parent_dir, self.obs_params["nightdate"])
 
         # directories
-        self.image_dir = os.path.join(self.output_dir, "images")
-        self.figure_dir = os.path.join(self.output_dir, "figures")
-        self.daily_stacked_dir = os.path.join(self.output_dir, "stacked")
-        self.subtracted_dir = os.path.join(self.output_dir, "subtracted")
+        for attr, dir_name in zip(
+            ["image_dir", "figure_dir", "daily_stacked_dir", "subtracted_dir"],
+            ["images", "figures", "stacked", "subtracted"]
+            ):
+            setattr(self, attr, os.path.join(self.output_dir, dir_name))
+        
         self.ref_sex_dir = os.path.join(const.REF_DIR, "srcExt")
-
+        
         # files
         self.base_yml = os.path.join(const.REF_DIR, "base.yml")
         self.output_name = f"{self.obs_params['obj']}_{self.obs_params['filter']}_{self.obs_params['unit']}_{self.obs_params['nightdate']}"
@@ -229,6 +235,10 @@ class PathHandler(AutoMkdirMixin):
         self.imstack = PathImstack(self)
         self.imsubtract = PathImsubtract(self)
 
+    def make_dirs(self):
+        for attr in self.__dict__:
+            if attr.endswith("_dir"):
+                os.makedirs(getattr(self, attr), exist_ok=True)
 
 class PathPreprocess(PathHandler):
     _spec = {

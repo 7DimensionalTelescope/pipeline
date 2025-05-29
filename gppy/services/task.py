@@ -104,7 +104,7 @@ class Task:
             with cp.cuda.Device(self.device):
                 yield
         except Exception as e:
-            print(f"GPU operation failed on device {device}: {e}")
+            self.logger.error(f"GPU operation failed on device {self.device}: {e}")
             raise
 
     def cleanup(self):

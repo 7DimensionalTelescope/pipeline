@@ -662,6 +662,11 @@ class ImStack(BaseSetup):
         else:
             output_file = os.path.join(working_dir, os.path.basename(self.config.file.stacked_file))
 
+        self.logger.info(f"Imagelist: {self.path_imagelist}")
+        self.logger.info(f"Output file: {output_file}")
+        self.logger.info(f"Resample dir: {resample_dir}")
+        self.logger.info(f"Weight map: {self.config.imstack.weight_map}")
+
         external.swarp(
             input=self.path_imagelist,
             output=output_file,

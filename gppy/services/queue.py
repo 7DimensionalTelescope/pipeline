@@ -215,7 +215,7 @@ class QueueManager:
         - Processing target (CPU/GPU)
 
         Args:
-            func (Callable): Function to be executed
+nherit_input             func (Callable): Function to be executed
             args (tuple, optional): Positional arguments for the function
             kwargs (dict, optional): Keyword arguments for the function
             priority (Priority, optional): Task priority level. Defaults to MEDIUM.
