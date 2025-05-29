@@ -45,7 +45,7 @@ class PreprocConfiguration(BaseConfig):
     @property
     def name(self):
         if hasattr(self, "path"):
-            return os.path.basename(self.path.preproc_output_yml[0]).replace(".yml", "")
+            return os.path.basename(self.path.preproc_output_yml).replace(".yml", "")
         elif hasattr(self.config, "name"):  
             return self.config.name
         else:
@@ -54,7 +54,7 @@ class PreprocConfiguration(BaseConfig):
     def initialize(self):
         self.config.info.version = __version__
         self.config.info.creation_datetime = datetime.now().isoformat()
-        self.config.name = os.path.basename(self.path.preproc_output_yml[0]).replace(".yml", "")
+        self.config.name = os.path.basename(self.path.preproc_output_yml).replace(".yml", "")
         if self.input_files:
             self.config.input.masterframe_images = []
             self.config.input.science_images = []

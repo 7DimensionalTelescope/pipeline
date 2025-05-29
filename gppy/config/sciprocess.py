@@ -77,23 +77,25 @@ class SciProcConfiguration(BaseConfig):
             self.logger.info("Generating a configuration from the 'base' configuration")
             self.logger.debug(f"Configuration source: {config_source}")
             super().__init__(config_source=config_source, write=self.write, **kwargs)
+            self.config.logging.file = self.path.sciproc_output_log
         elif isinstance(input, str | dict):
             config_source = input
             super().__init__(config_source=config_source, write=self.write, **kwargs)
-            self._initialized = True
             self.path = self._set_pathhandler_from_config()
+            self.config.logging.file = self.path.sciproc_output_log
             self.logger = self._setup_logger(
                 logger,
                 name=self.path.output_name,
                 log_file=self.config.logging.file,
                 verbose=verbose,
             )
+            self._initialized = True
             self.logger.info("Loading configuration from an exisiting file or dictionary")
             self.logger.debug(f"Configuration source: {config_source}")
-
+            
         else:
             raise ValueError("Input must be a list of image files, a configuration file path, or a configuration dictionary.")  # fmt: skip
-        self.config.logging.file = self.path.sciproc_output_log  # used by write_config
+          # used by write_config
         self.config_file = self.path.sciproc_output_yml  # used by write_config
         return
 

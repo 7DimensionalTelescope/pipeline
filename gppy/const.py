@@ -5,7 +5,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # REF_DIR = os.path.join(SCRIPT_DIR, "gppy", "ref")
 REF_DIR = os.path.join(SCRIPT_DIR, "ref")
 
-RAWDATA_DIR = os.environ["RAWDATA_DIR"]  # "/lyman/data1/obsdata/"
+RAWDATA_DIR = "/lyman/data1/obsdata/"
 FACTORY_DIR = os.environ["FACTORY_DIR"]
 MASTER_FRAME_DIR = os.environ["MASTER_FRAME_DIR"]
 

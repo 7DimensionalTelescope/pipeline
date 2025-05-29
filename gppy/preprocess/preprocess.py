@@ -27,22 +27,14 @@ class Preprocess(BaseSetup):
 
     def __init__(
         self,
-        input,
+        config,
         queue=False,
         logger=None,
         overwrite=False,
         **kwargs,
     ):
-
-        if isinstance(input, PreprocConfiguration):
-            self.config = input
-        elif isinstance(input, str) or isinstance(input, list):
-            self.config = PreprocConfiguration(input)
-        else:
-            raise ValueError("Input must be a PreProcConfiguration object or a string/list of file paths")
-
         # Load Configuration
-        super().__init__(self.config, logger, queue)
+        super().__init__(config, logger, queue)
 
         self.overwrite = overwrite
 
@@ -51,8 +43,9 @@ class Preprocess(BaseSetup):
         # self.logger.debug(f"Masterframe output folder: {self.path_fdz}")
 
     @classmethod
-    def from_list(cls):
-        pass
+    def from_list(cls, images):
+        config = PreprocConfiguration(images)
+        return cls(config)
 
     @property
     def sequential_task(self):
@@ -71,9 +64,11 @@ class Preprocess(BaseSetup):
         if self.config.input.masterframe_images and self.config.input.science_images:
             input_files = list(self.config.input.masterframe_images) + list(self.config.input.science_images)
             self.raw_groups = PathHandler.take_raw_inventory(input_files)
-        else:
+        elif self.config.input.raw_dir:
             input_files = glob.glob(os.path.join(self.config.input.raw_dir, "*.fits"))
             self.raw_groups = PathHandler.take_raw_inventory(input_files)
+        else:
+            raise ValueError("No input files or directory specified")
 
         self._n_groups = len(self.raw_groups)
         self._current_group = 0

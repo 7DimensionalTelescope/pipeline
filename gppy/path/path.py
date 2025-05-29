@@ -13,10 +13,74 @@ if TYPE_CHECKING:
     from gppy.config import Configuration  # just for type hinting. actual import will cause circular import error
 
 
+class SingletonUnpackMixin:
+    """Automatically unpacks singleton lists when _single is True"""
+
+    def __getattribute__(self, name):
+        if name.startswith("_"):
+            return object.__getattribute__(self, name)
+
+        value = object.__getattribute__(self, name)
+
+        # Unpack singleton lists if _single is True
+        if (
+            "_single" in self.__dict__
+            and object.__getattribute__(self, "_single")
+            and isinstance(value, list)
+            and len(value) == 1
+        ):
+            value = value[0]
+
+        return value
+
+
+class AutoCollapseMixin:
+    """Automatically collapses the output when it is a list of uniformly
+    releated elemements"""
+
+    # Define which attributes should be collapsed
+    _collapse_exclude = {}  # "output_name", "name", "preprocess"}
+    _collapse_include = {}  # "output_dir", "image_dir", "factory_dir", "stacked_dir"}
+
+    def __getattribute__(self, name):
+        if name.startswith("_"):
+            return object.__getattribute__(self, name)
+
+        value = object.__getattribute__(self, name)
+
+        # Collapse if explicitly included or path-like list
+        if name not in self._collapse_exclude and (
+            name in self._collapse_include
+            or (isinstance(value, list) and all(isinstance(v, (str, Path)) for v in value))
+        ):
+            return collapse(value)
+
+        return value
+
+    # def __getattribute__(self, name):
+    #     if name.startswith("_"):
+    #         return object.__getattribute__(self, name)
+
+    #     value = object.__getattribute__(self, name)
+    #     # Only collapse specific attributes or path-like lists
+    #     should_collapse = (
+    #         (name in getattr(self, "_collapse_include", set()) and name not in self._collapse_exclude)
+    #         or (isinstance(value, list) and all(isinstance(p, (str, Path)) for p in value))
+    #         or (isinstance(value, list) and "_yml" in name)
+    #         or (isinstance(value, list) and "_dir" in name)
+    #         or (isinstance(value, list) and "_log" in name)
+    #     )
+
+    #     if should_collapse:
+    #         return collapse(value)
+
+    #     return value
+
+
 class AutoMkdirMixin:
     """This makes sure accessed dirs exist. Prepend _ to variables to prevent mkdir"""
 
-    _mkdir_exclude = {"output_name", "name"}  # subclasses can override this
+    _mkdir_exclude = {"output_name", "config_stem", "name"}  # subclasses can override this
 
     def __init_subclass__(cls):
         # Ensure subclasses have their own created-directory cache
@@ -40,11 +104,24 @@ class AutoMkdirMixin:
         elif isinstance(value, (str, Path)):
             self._mkdir(value)
 
-        # # if single, unpack singleton list
-        # if self._single and isinstance(value, list):
-        #     value = value[0]
-
         return value
+
+    # def __getattr__(self, name):
+    #     if name.startswith("_"):  # Bypass all custom logic for private attributes
+    #         return object.__getattribute__(self, name)
+
+    #     value = object.__getattribute__(self, name)
+
+    #     if name in object.__getattribute__(self, "_mkdir_exclude"):
+    #         return value
+
+    #     if isinstance(value, list) and all(isinstance(p, (str, Path)) for p in value):
+    #         for p in value:
+    #             self._mkdir(p)
+    #     elif isinstance(value, (str, Path)):
+    #         self._mkdir(value)
+
+    #     return value
 
     def _mkdir(self, value):
         p = Path(value).expanduser()  # understands ~/
@@ -58,7 +135,7 @@ class AutoMkdirMixin:
             created_dirs.add(d)
 
 
-class PathHandler(AutoMkdirMixin):
+class PathHandler(AutoCollapseMixin, AutoMkdirMixin):  # SingletonUnpackMixin, Check MRO: PathHandler.mro()
     """
     A comprehensive path handler for 7DT pipeline.
     It defines source and destination file paths in all stages of the pipeline
@@ -136,7 +213,12 @@ class PathHandler(AutoMkdirMixin):
                 raise
 
             if name in self.__dict__:
-                return self.__dict__[name]
+                # Temporarily return uniform list as a scalar
+                returned_attr = self.__dict__[name]
+                if isinstance(returned_attr, list):
+                    if all(val == returned_attr[0] for val in returned_attr):
+                        return returned_attr[0]
+                return returned_attr
 
         # Syntactic sugar for vectorized results
         if name.endswith("_to_string"):
@@ -166,16 +248,28 @@ class PathHandler(AutoMkdirMixin):
             return converter(val)
         return val
 
-    # def _vectorize_collapse(self, val):
-    #     """Free if singleton list"""
-    #     if isinstance(val, list):
-    #         if len(val) == 1:
-    #             return val[0]
-    #         return val
-    #     return val
+    # def __repr__(self):
+    #     return "\n".join(f"{k}: {v}" for k, v in sorted(self.__dict__.items()) if not k.startswith("_"))
 
     def __repr__(self):
-        return "\n".join(f"{k}: {v}" for k, v in sorted(self.__dict__.items()) if not k.startswith("_"))
+        lines = []
+        for k, v in sorted(self.__dict__.items()):
+            if not k.startswith("_"):
+                try:
+                    v = collapse(v)
+                except:
+                    pass
+                lines.append(f"{k}: {v}")
+
+            # if k.startswith("_") and not k.startswith("__"):
+            #     public_name = k[1:]
+            #     # if public_name not in self.__dict__:
+            #     try:
+            #         collapsed = collapse(v)
+            #         lines.append(f"{public_name}: {collapsed}")
+            #     except Exception:
+            #         pass  # Skip if collapse fails
+        return "\n".join(lines)
 
     def is_present(self, path):
         """Check if vectorized paths exist"""
@@ -296,13 +390,17 @@ class PathHandler(AutoMkdirMixin):
         self._file_indep_initialized = True
 
     @property
-    def preproc_output_yml(self):
+    def preproc_output_yml(self) -> str:
         config_stems = self._config_stem if hasattr(self, "_config_stem") and self._config_stem else "preproc_config"
         return [os.path.join(d, f"{s}.yml") for d, s in zip(self._preproc_output_dir, config_stems)]
 
     @property
     def preproc_output_log(self):
-        return [swap_ext(s, "log") for s in self.preproc_output_yml]
+        # return swap_ext(self.preproc_output_yml, "log")
+        if isinstance(self.preproc_output_yml, str):
+            return swap_ext(self.preproc_output_yml, "log")
+        else:
+            return [swap_ext(s, "log") for s in self.preproc_output_yml]
 
     @property
     def sciproc_output_yml(self):
@@ -311,7 +409,10 @@ class PathHandler(AutoMkdirMixin):
 
     @property
     def sciproc_output_log(self):
-        return [swap_ext(s, "log") for s in self.sciproc_output_yml]
+        if isinstance(self.sciproc_output_yml, str):
+            return swap_ext(self.sciproc_output_yml, "log")
+        else:
+            return [swap_ext(s, "log") for s in self.sciproc_output_yml]
 
     @property
     def output_name(self) -> str:
@@ -324,14 +425,14 @@ class PathHandler(AutoMkdirMixin):
             self._input_files = [files]
 
     def define_file_dependent_paths(self):
-        output_dirs = []
-        factory_dirs = []
-        image_dirs = []
-        config_stems = []
+        self._output_dir = []
+        self._factory_dir = []
+        self._image_dir = []
+        self._config_stem = []
         # raw_images = []
         # processed_images = []
-        masterframe_dirs = []
-        figure_dirs = []
+        self._masterframe_dir = []
+        self._figure_dir = []
 
         for i, input_file in enumerate(self._input_files):
             # Get properties for this specific file
@@ -343,10 +444,10 @@ class PathHandler(AutoMkdirMixin):
 
             # Masterframe directory
             masterframe_dir = os.path.join(const.MASTER_FRAME_DIR, nightdate, unit)
-            masterframe_dirs.append(masterframe_dir)
+            self._masterframe_dir.append(masterframe_dir)
 
             config_stem = "_".join([nightdate, unit])
-            config_stems.append(config_stem)
+            self._config_stem.append(config_stem)
 
             if self._within_pipeline[i]:
                 # Within pipeline processing
@@ -355,9 +456,9 @@ class PathHandler(AutoMkdirMixin):
                 factory_dir = os.path.join(self._factory_parent_dir[i], relative_path)
                 image_dir = os.path.join(output_dir, "images")
 
-                output_dirs.append(output_dir)
-                factory_dirs.append(factory_dir)
-                image_dirs.append(image_dir)
+                self._output_dir.append(output_dir)
+                self._factory_dir.append(factory_dir)
+                self._image_dir.append(image_dir)
 
                 # # Handle processed images based on data type
                 # if "raw" in data_type:
@@ -374,61 +475,59 @@ class PathHandler(AutoMkdirMixin):
                 #     processed_images.append(str(Path(input_file).absolute()))
             else:
                 # Outside pipeline
-                output_dirs.append(self._output_parent_dir[i])
-                factory_dirs.append(self._factory_parent_dir[i])
-                image_dirs.append(self._output_parent_dir[i])
+                self._output_dir.append(self._output_parent_dir[i])
+                self._factory_dir.append(self._factory_parent_dir[i])
+                self._image_dir.append(self._output_parent_dir[i])
                 # raw_images.append(str(Path(input_file).absolute()))
 
-            figure_dirs.append(os.path.join(output_dirs[-1], "figures"))
+            self._figure_dir.append(os.path.join(self._output_dir[-1], "figures"))
 
         # Store all as lists without collapsing
-        self._output_dir = output_dirs
-        self.output_dir = output_dirs
-        self.factory_dir = factory_dirs
-        self._image_dir = image_dirs
-        self.image_dir = image_dirs
-        self.masterframe_dir = masterframe_dirs
-        self.figure_dir = figure_dirs
-        self._config_stem = config_stems
+        self.output_dir = collapse(self._output_dir)
+        self.factory_dir = collapse(self._factory_dir)
+        self.image_dir = collapse(self._image_dir)
+        self.masterframe_dir = collapse(self._masterframe_dir)
+        self.figure_dir = collapse(self._figure_dir)
+        self.config_stem = collapse(self._config_stem)
         # if raw_images:
         #     self.raw_images = raw_images
         # if processed_images:
         #     self.processed_images = processed_images
 
         # Generate additional directories
-        self._generate_additional_dirs(output_dirs)
+        self._generate_additional_dirs(self._output_dir)
 
         self._file_dep_initialized = True
 
     def _generate_additional_dirs(self, output_dirs):
         """Generate additional directories like daily_stacked_dir, etc."""
-        daily_stacked_dirs = []
-        subtracted_dirs = []
-        stacked_dirs = []
-        metadata_dirs = []
+        self._daily_stacked_dir = []
+        self._subtracted_dir = []
+        self._stacked_dir = []
+        self._metadata_dir = []
 
         for i, output_dir in enumerate(output_dirs):
             if self._within_pipeline[i]:
-                daily_stacked_dirs.append(os.path.join(output_dir, "stacked"))
-                subtracted_dirs.append(os.path.join(output_dir, "subtracted"))
+                self._daily_stacked_dir.append(os.path.join(output_dir, "stacked"))
+                self._subtracted_dir.append(os.path.join(output_dir, "subtracted"))
 
                 obj = self._get_property_at_index("obj", i)
                 filter_name = self._get_property_at_index("filter", i)
                 nightdate = self._get_property_at_index("nightdate", i)
 
-                stacked_dirs.append(os.path.join(const.STACKED_DIR, obj, filter_name))
-                metadata_dirs.append(os.path.join(self._output_parent_dir[i], nightdate))
+                self._stacked_dir.append(os.path.join(const.STACKED_DIR, obj, filter_name))
+                self._metadata_dir.append(os.path.join(self._output_parent_dir[i], nightdate))
             else:
-                daily_stacked_dirs.append(None)
-                subtracted_dirs.append(None)
-                stacked_dirs.append(None)
-                metadata_dirs.append(None)
+                self._daily_stacked_dir.append(None)
+                self._subtracted_dir.append(None)
+                self._stacked_dir.append(None)
+                self._metadata_dir.append(None)
 
         # Store as lists, filtering out None values where appropriate
-        self.daily_stacked_dir = [d for d in daily_stacked_dirs if d is not None]
-        self.subtracted_dir = [d for d in subtracted_dirs if d is not None]
-        self.stacked_dir = [d for d in stacked_dirs if d is not None]
-        self.metadata_dir = [d for d in metadata_dirs if d is not None]
+        self.daily_stacked_dir = self._daily_stacked_dir
+        self.subtracted_dir = self._subtracted_dir
+        self.stacked_dir = self._stacked_dir
+        self.metadata_dir = self._metadata_dir
 
     def define_operation_paths(self):
         self.preprocess = PathPreprocess(self, self._config)
@@ -1060,6 +1159,12 @@ class PathPreprocess(AutoMkdirMixin):
 
     def __repr__(self):
         return "\n".join(f"{k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
+    
+    @property
+    def _masterframe_dir(self):
+        if isinstance(self._parent.masterframe_dir, str):
+            return [self._parent.masterframe_dir] * len(self._parent.name.masterframe_basename)
+        return self._parent.masterframe_dir
 
     @property
     def bias(self):
@@ -1069,7 +1174,7 @@ class PathPreprocess(AutoMkdirMixin):
         # return os.path.join(self._parent.masterframe_dir, names.masterframe_basename[0])
         result = []
         for typ, d, s in zip(
-            self._parent.name.type, self._parent.masterframe_dir, self._parent.name.masterframe_basename
+            self._parent.name.type, self._masterframe_dir, self._parent.name.masterframe_basename
         ):
             if typ[1] == "bias":
                 result.append(os.path.join(d, s))
@@ -1101,7 +1206,7 @@ class PathPreprocess(AutoMkdirMixin):
         # ]
         result = []
         for typ, d, s in zip(
-            self._parent.name.type, self._parent.masterframe_dir, self._parent.name.masterframe_basename
+            self._parent.name.type, self._masterframe_dir, self._parent.name.masterframe_basename
         ):
             if typ[1] == "dark":
                 result.append(os.path.join(d, s))
@@ -1127,7 +1232,7 @@ class PathPreprocess(AutoMkdirMixin):
         # ]
         result = []
         for typ, d, s in zip(
-            self._parent.name.type, self._parent.masterframe_dir, self._parent.name.masterframe_basename
+            self._parent.name.type, self._masterframe_dir, self._parent.name.masterframe_basename
         ):
             if typ[1] == "flat":
                 result.append(os.path.join(d, s))
@@ -1148,14 +1253,14 @@ class PathPreprocess(AutoMkdirMixin):
             typ = self._parent.name.type
             if typ[1] == "science":
                 return [
-                    os.path.join(self._parent.masterframe_dir[0], s) for s in self._parent.name.masterframe_basename
+                    os.path.join(self._masterframe_dir[0], s) for s in self._parent.name.masterframe_basename
                 ]
             else:
-                return os.path.join(self._parent.masterframe_dir[0], self._parent.name.masterframe_basename)
+                return os.path.join(self._masterframe_dir[0], self._parent.name.masterframe_basename)
 
         result = []
         for typ, mfdir, ss in zip(
-            self._parent.name.type, self._parent.masterframe_dir, self._parent.name.masterframe_basename
+            self._parent.name.type, self._masterframe_dir, self._parent.name.masterframe_basename
         ):
             if typ[1] == "science":
                 result.append([os.path.join(mfdir, s) for s in ss])

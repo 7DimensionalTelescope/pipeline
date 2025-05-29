@@ -77,7 +77,7 @@ class Blueprint:
     def process_all(self):
         threads = []
         for group in self.groups.values():
-            t = threading.Thread(target=process_group, args=(group,))
+            t = threading.Thread(target=self.process_group, args=(group,))
             t.start()
             threads.append(t)
 
