@@ -41,6 +41,7 @@ class Task:
         result: Any = None,
         error: Optional[Exception] = None,
         cls: Optional[Any] = None,
+        inherit_input: Optional[bool] = False,
     ):
         self._func = func
         self.cls = cls
@@ -59,7 +60,9 @@ class Task:
         self.status = status
         self.result = result
         self.error = error
-    
+        self.time_priority = int(time.time() * 1000)
+        self.inherit_input = inherit_input
+
     def __lt__(self, other):
         return self.sort_index < other.sort_index
     
@@ -86,21 +89,13 @@ class Task:
         return getattr(self.cls, self._func.__name__)
     
     def execute(self):
-        try:
-            self.status = "processing"
-            self.starttime = datetime.now()
-            if self.gpu:
-                with self.gpu_context():
-                    self.result = self.func(device_id = self.device, *self.args, **self.kwargs)
-            else:
-                self.result = self.func(*self.args, **self.kwargs)
-        except Exception as e:
-            self.status = "failed"
-            self.result = None
-            self.error = e
-        finally:
-            self.status = "completed"
-            self.endtime = datetime.now()
+        self.status = "processing"
+        self.starttime = datetime.now()
+        if self.gpu:
+            with self.gpu_context():
+                self.result = self.func(device_id = self.device, *self.args, **self.kwargs)
+        else:
+            self.result = self.func(*self.args, **self.kwargs)
         return self
 
     @contextmanager
@@ -142,10 +137,6 @@ class TaskTree:
     def add_task(self, task: Task) -> None:
         """Add a processing task to this tree."""
         self.tasks.append(task)
-
-    def add_tasks(self, tasks: List[Task]) -> None:
-        """Add multiple processing tasks to this tree."""
-        self.tasks.extend(tasks)
     
     def get_next_task(self) -> Optional[Task]:
         """Get the next task to be processed."""

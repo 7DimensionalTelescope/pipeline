@@ -1355,7 +1355,7 @@ class PathPhotometry(AutoMkdirMixin):
         else:
             return os.path.join(self._parent.image_dir, add_suffix(input, "cat"))
 
-    def __getattr__(self):
+    def __getattr__(self, name):
         # run file-dependent path definitions once?
         pass
 
