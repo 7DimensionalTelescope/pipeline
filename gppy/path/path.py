@@ -609,7 +609,7 @@ class PathHandler(AutoCollapseMixin, AutoMkdirMixin):  # SingletonUnpackMixin, C
         return cls.build_preproc_input(*NameHandler.find_calib_for_sci(files))
 
     @classmethod
-    def build_preproc_input(cls, sci_files, on_date_calib):
+    def build_preproc_input(cls, sci_files, on_date_calib, off_date_calib=None):
         """
         Group science files by their associated on-date calibration sets.
 
@@ -620,6 +620,9 @@ class PathHandler(AutoCollapseMixin, AutoMkdirMixin):  # SingletonUnpackMixin, C
         on_date_calib : list of tuples
             Each element is (on_date_flag, bias_list, dark_list, flat_list), where
             `on_date_flag` is True if on-date calibration exists.
+        revisit : list of strings
+            Feed the list all files for the date again to pick raw calib frames
+            not paired with on-date science images.
 
         Returns
         -------
@@ -645,24 +648,6 @@ class PathHandler(AutoCollapseMixin, AutoMkdirMixin):  # SingletonUnpackMixin, C
         """
         from collections import defaultdict
 
-        # Build a map from each (bias,dark,flat) tuple -> sci_groups
-        calib_map = defaultdict(lambda: {"sci": [], "bias": None, "dark": None, "flat": None})
-        off_date_groups = []
-
-        for sci, (on_date_flag, bias, dark, flat) in zip(sci_files, on_date_calib):
-            if on_date_flag:
-                key = (tuple(bias), tuple(dark), tuple(flat))
-                entry = calib_map[key]
-                entry["sci"].append(sci)
-                # stash the raw lists once
-                if entry["bias"] is None:
-                    entry["bias"] = list(bias)
-                    entry["dark"] = list(dark)
-                    entry["flat"] = list(flat)
-            else:
-                # off‐date: no calibration, just itself
-                off_date_groups.append(sci)
-
         def get_dict_key(sci_group):
             """Use only the values as tuple keys"""
             tuple_key = tuple(
@@ -674,45 +659,82 @@ class PathHandler(AutoCollapseMixin, AutoMkdirMixin):  # SingletonUnpackMixin, C
             # return tuple_key
             return "_".join(tuple_key)
 
+        # dict with master calib 3-tuples as keys, dict of raw bdf and sci as values
+        calib_map = defaultdict(lambda: {"sci": [], "bias": None, "dark": None, "flat": None})
+
+        for sci, (bias, dark, flat) in zip(sci_files, on_date_calib):
+            mbias, mdark, mflat = cls(sci[0]).preprocess.masterframe  # trust the grouping
+
+            key = tuple((mbias, mdark, mflat))  # (tuple(bias), tuple(dark), tuple(flat))
+            entry = calib_map[key]
+            entry["sci"].append(sci)
+            # stash the raw lists once
+            if entry["bias"] is None:
+                entry["bias"] = list(bias)
+                entry["dark"] = list(dark)
+                entry["flat"] = list(flat)
+
         result = []
 
-        # off-date groups first: no processing time
-        for sci_group in off_date_groups:
-            # mbias, mdark, mflat = (s for s in zip(*cls(sci_group).preprocess.masterframe))
-            mbias, mdark, mflat = cls(sci_group[0]).preprocess.masterframe  # trust the grouping
-            key = get_dict_key(sci_group)
-            result.append(
-                (
-                    ([], [], []),  # empty if no raw bias/dark/flat -> search them in masterframe_dir
-                    (mbias, mdark, mflat),  # master bdf search template
-                    {key: (sci_group, cls(sci_group).conjugate)},  # singleton science file
-                    # {key: PathHandler(sci_group).conjugate},
-                )
-            )
-
-        # on-date groups: sorted by increasing sci group numbers for each bdf triple
-        for _key, entry in sorted(calib_map.items(), key=lambda kv: len(kv[1]["sci"])):
-            raw_bias = entry["bias"]
-            raw_dark = entry["dark"]
-            raw_flat = entry["flat"]
-
-            mbias = collapse(cls(raw_bias).preprocess.bias, raise_error=True)
-            mdark = collapse(cls(raw_dark).preprocess.dark, raise_error=True)
-            mflat = collapse(cls(raw_flat).preprocess.flat, raise_error=True)
-            # mbias, mdark, mflat = (s for s in zip(*cls(sci_group[0]).preprocess.masterframe))
+        # for _key, entry in sorted(calib_map.items(), key=lambda kv: len(kv[1]["sci"])):  # sort by # of sci groups
+        # sort by # of sci frames
+        for _key, entry in sorted(calib_map.items(), key=lambda kv: sum(len(inner) for inner in kv[1]["sci"])):
 
             sci_dict = {}
             for sci_group in entry["sci"]:
                 key = get_dict_key(sci_group)
                 sci_dict[key] = (sci_group, cls(sci_group).conjugate)
 
+            raw_bias = entry["bias"]
+            raw_dark = entry["dark"]
+            raw_flat = entry["flat"]
+            # If too few raw calib frames, ignore them.
+            if len(raw_bias) < const.NUM_MIN_CALIB:
+                raw_bias = []
+            if len(raw_dark) < const.NUM_MIN_CALIB:
+                raw_dark = []
+            if len(raw_flat) < const.NUM_MIN_CALIB:
+                raw_flat = []
+
             result.append(
                 (
                     (raw_bias, raw_dark, raw_flat),
                     (mbias, mdark, mflat),
-                    sci_dict,  # a dict of tuples: (science images in this on‐date group, processed images)
+                    sci_dict,  # a dict of tuples of lists: ([science images in this on‐date group], [processed images])
                 )
             )
+
+        if off_date_calib and any(l for l in off_date_calib):
+            off_date_bias_groups, off_date_dark_groups, off_date_flat_groups = off_date_calib
+            for off_date_bias_group in off_date_bias_groups:
+                mbias = cls(off_date_bias_group).preprocess.bias
+                result.append(
+                    (
+                        (off_date_bias_group, [], []),
+                        (mbias, [], []),
+                        dict(),
+                    )
+                )
+
+            for off_date_dark_group in off_date_dark_groups:
+                mdark = cls(off_date_dark_group).preprocess.dark
+                result.append(
+                    (
+                        ([], off_date_dark_group, []),
+                        ([], mdark, []),
+                        dict(),
+                    )
+                )
+
+            for off_date_flat_group in off_date_flat_groups:
+                mflat = cls(off_date_flat_group).preprocess.flat
+                result.append(
+                    (
+                        ([], [], off_date_flat_group),
+                        ([], [], mflat),
+                        dict(),
+                    )
+                )
 
         return result
 
@@ -1148,7 +1170,7 @@ class PathHandlerDeprecated(AutoMkdirMixin):
         return d_m_file, f_m_file, sig_z_file, sig_f_file
 
 
-class PathPreprocess(AutoMkdirMixin):
+class PathPreprocess(AutoCollapseMixin, AutoMkdirMixin):
     def __init__(self, parent: PathHandler, config=None):
         self._parent = parent
 
@@ -1159,7 +1181,7 @@ class PathPreprocess(AutoMkdirMixin):
 
     def __repr__(self):
         return "\n".join(f"{k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
-    
+
     @property
     def _masterframe_dir(self):
         if isinstance(self._parent.masterframe_dir, str):
@@ -1173,9 +1195,7 @@ class PathPreprocess(AutoMkdirMixin):
         # names = NameHandler(self._parent._input_files)
         # return os.path.join(self._parent.masterframe_dir, names.masterframe_basename[0])
         result = []
-        for typ, d, s in zip(
-            self._parent.name.type, self._masterframe_dir, self._parent.name.masterframe_basename
-        ):
+        for typ, d, s in zip(self._parent.name.type, self._masterframe_dir, self._parent.name.masterframe_basename):
             if typ[1] == "bias":
                 result.append(os.path.join(d, s))
             # if typ[1] == 'dark' or typ[1] =='flat':
@@ -1205,9 +1225,7 @@ class PathPreprocess(AutoMkdirMixin):
         #     for typ, s in zip(names.type, names.masterframe_basename)
         # ]
         result = []
-        for typ, d, s in zip(
-            self._parent.name.type, self._masterframe_dir, self._parent.name.masterframe_basename
-        ):
+        for typ, d, s in zip(self._parent.name.type, self._masterframe_dir, self._parent.name.masterframe_basename):
             if typ[1] == "dark":
                 result.append(os.path.join(d, s))
             # if typ[1] == 'dark' or typ[1] =='flat':
@@ -1231,9 +1249,7 @@ class PathPreprocess(AutoMkdirMixin):
         #     for typ, s in zip(names.type, names.masterframe_basename)
         # ]
         result = []
-        for typ, d, s in zip(
-            self._parent.name.type, self._masterframe_dir, self._parent.name.masterframe_basename
-        ):
+        for typ, d, s in zip(self._parent.name.type, self._masterframe_dir, self._parent.name.masterframe_basename):
             if typ[1] == "flat":
                 result.append(os.path.join(d, s))
             # if typ[1] == 'dark' or typ[1] =='flat':
@@ -1252,9 +1268,7 @@ class PathPreprocess(AutoMkdirMixin):
         if self._parent._single:
             typ = self._parent.name.type
             if typ[1] == "science":
-                return [
-                    os.path.join(self._masterframe_dir[0], s) for s in self._parent.name.masterframe_basename
-                ]
+                return [os.path.join(self._masterframe_dir[0], s) for s in self._parent.name.masterframe_basename]
             else:
                 return os.path.join(self._masterframe_dir[0], self._parent.name.masterframe_basename)
 

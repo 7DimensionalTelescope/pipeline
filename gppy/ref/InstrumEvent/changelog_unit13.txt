@@ -1,0 +1,3 @@
+date_start	date_end	parts	comment
+241119	241119	cam	PA
+241218	241218	mirror	collimation

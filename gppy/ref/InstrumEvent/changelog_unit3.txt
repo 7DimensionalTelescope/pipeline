@@ -1,0 +1,5 @@
+date_start	date_end	parts	comment
+240618	240618	cam	PA
+250310	250310	mirror	cleaning
+250313	250313	cam	uninstall:31090
+250313	250313	fw	uninstall:22243956

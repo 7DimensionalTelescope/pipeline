@@ -157,14 +157,19 @@ def sigma_clipped_stats_cupy(cp_data, device_id=0, sigma=3, maxiters=5, minmax=F
             cp_data = cp_data[mask]
 
         # Final statistics on the clipped data
-        mean_val = cp.mean(cp_data)
-        median_val = cp.median(cp_data)
-        std_val = cp.std(cp_data)
+        mean_val = float(cp.mean(cp_data))
+        median_val = float(cp.median(cp_data))
+        std_val = float(cp.std(cp_data))
+        min_val = float(cp.min(cp_data))
+        max_val = float(cp.max(cp_data))
+    
+    del cp_data
+    cp.get_default_memory_pool().free_all_blocks()
 
     # Convert results back to Python floats on the CPU
     # return float(mean_val), float(median_val), float(std_val)
     if minmax:
-        return mean_val, median_val, std_val, cp_data.min(), cp_data.max()
+        return mean_val, median_val, std_val, min_val, max_val
     return mean_val, median_val, std_val
 
 

@@ -562,10 +562,20 @@ class NameHandler:
         return names.to_dict(keys=keys)
 
     @classmethod
-    def find_calib_for_sci(cls, files):
+    def find_calib_for_sci(cls, files) -> (list[str], list[tuple], (list[list], list[list], list[list])):
         """
         e.g., files = glob("/data/pipeline_reform/obsdata_test/7DT11/2025-01-01_gain2750/*.fits")
         sci_files, on_date_calib = NameHandler.find_calib_for_sci(flist)
+
+        Returns
+        -------
+            sci_files
+                list of science image files
+            on_date_calib
+                list of tuples of (on_date_bias, on_date_dark, on_date_flat)
+                which corresponds to sci_files
+            off_date_calib
+                tuple of respectively grouped (bias, dark, flat)
         """
         if not isinstance(files, list) or len(files) <= 1:
             return files
@@ -575,7 +585,7 @@ class NameHandler:
 
         bias, dark, flat, sci = {}, {}, {}, {}
 
-        for k, v in grouped_files.items():
+        for k, v in grouped_files.items():  # k[0] is file type tuple, k[1] is obs_param dict
             if k[0][1] == "bias":
                 bias[k] = v
             if k[0][1] == "dark":
@@ -587,36 +597,83 @@ class NameHandler:
 
         sci_files = []
         on_date_calib = []
+        used_bias_keys = set()
+        used_dark_keys = set()
+        used_flat_keys = set()
+
+        # On-date calib frames
         for key, val in sci.items():
-            sci_files.append(val)
             key_sci = dict(key[1])
+            sci_files.append(val)
 
-            on_date_bias = [
-                item for k, v in bias.items() if equal_on_keys(dict(k[1]), key_sci, const.BIAS_GROUP_KEYS) for item in v
-            ]  # get a flattened list, not [[], [], ..., []]
+            # On-date calibration collection with group tracking
+            on_bias, on_dark, on_flat = [], [], []
 
-            on_date_dark = [
-                item for k, v in dark.items() if equal_on_keys(dict(k[1]), key_sci, const.DARK_GROUP_KEYS) for item in v
-            ]
+            for k, v in bias.items():
+                if equal_on_keys(dict(k[1]), key_sci, const.BIAS_GROUP_KEYS):
+                    on_bias.extend(v)
+                    used_bias_keys.add(k)
 
-            on_date_flat = [
-                item for k, v in flat.items() if equal_on_keys(dict(k[1]), key_sci, const.FLAT_GROUP_KEYS) for item in v
-            ]
+            for k, v in dark.items():
+                if equal_on_keys(dict(k[1]), key_sci, const.DARK_GROUP_KEYS):
+                    on_dark.extend(v)
+                    used_dark_keys.add(k)
 
-            on_date_calib.append(
-                (
-                    len(on_date_bias) >= const.NUM_MIN_CALIB
-                    and len(on_date_dark) >= const.NUM_MIN_CALIB
-                    and len(on_date_flat) >= const.NUM_MIN_CALIB,
-                    on_date_bias,
-                    on_date_dark,
-                    on_date_flat,
-                )
-            )
+            for k, v in flat.items():
+                if equal_on_keys(dict(k[1]), key_sci, const.FLAT_GROUP_KEYS):
+                    on_flat.extend(v)
+                    used_flat_keys.add(k)
 
-        return sci_files, on_date_calib
+            on_date_calib.append((on_bias, on_dark, on_flat))
 
-    # @classmethod
-    # def get_grouped_calib(cls, files):
-    #     names = cls(files)
-    #     types = names.types
+        # Off-date calib frames (not used by any on-date science images)
+        unused_bias_keys = [k for k in bias.keys() if k not in used_bias_keys]  # order-preserving
+        unused_dark_keys = [k for k in dark.keys() if k not in used_dark_keys]
+        unused_flat_keys = [k for k in flat.keys() if k not in used_flat_keys]
+
+        unused_bias_dict = defaultdict(list)
+        unused_dark_dict = defaultdict(list)
+        unused_flat_dict = defaultdict(list)
+
+        for key_tuple in unused_bias_keys:
+            bias_key_dict = dict(key_tuple[1])
+            bias_key = tuple({k: v for k, v in bias_key_dict.items() if k in const.BIAS_GROUP_KEYS}.items())
+            unused_bias_dict[bias_key].extend(bias[key_tuple])
+
+        for key_tuple in unused_dark_keys:
+            dark_key_dict = dict(key_tuple[1])
+            dark_key = tuple({k: v for k, v in dark_key_dict.items() if k in const.DARK_GROUP_KEYS}.items())
+            unused_dark_dict[dark_key].extend(dark[key_tuple])
+
+        for key_tuple in unused_flat_keys:
+            flat_key_dict = dict(key_tuple[1])
+            flat_key = tuple({k: v for k, v in flat_key_dict.items() if k in const.FLAT_GROUP_KEYS}.items())
+            unused_flat_dict[flat_key].extend(flat[key_tuple])
+
+        grouped_unused_bias = [v for v in unused_bias_dict.values()]
+        grouped_unused_dark = [v for v in unused_dark_dict.values()]
+        grouped_unused_flat = [v for v in unused_flat_dict.values()]
+
+        off_date_calib = (grouped_unused_bias, grouped_unused_dark, grouped_unused_flat)
+
+        # off_date_calib = []
+        # for key, val in sci.items():
+        #     sci_files.append(val)
+        #     key_sci = dict(key[1])
+
+        #     # on-date collection
+        #     on_date_bias = [
+        #         item for k, v in bias.items() if equal_on_keys(dict(k[1]), key_sci, const.BIAS_GROUP_KEYS) for item in v
+        #     ]  # get a flattened list, not [[], [], ..., []]
+
+        #     on_date_dark = [
+        #         item for k, v in dark.items() if equal_on_keys(dict(k[1]), key_sci, const.DARK_GROUP_KEYS) for item in v
+        #     ]
+
+        #     on_date_flat = [
+        #         item for k, v in flat.items() if equal_on_keys(dict(k[1]), key_sci, const.FLAT_GROUP_KEYS) for item in v
+        #     ]
+
+        #     on_date_calib.append((on_date_bias, on_date_dark, on_date_flat))
+
+        return sci_files, on_date_calib, off_date_calib
