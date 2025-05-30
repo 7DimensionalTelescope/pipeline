@@ -1,0 +1,7 @@
+date_start	date_end	parts	comment
+240618	240618	cam	PA
+240628	240628	mirror	collimation
+240719	240719	mirror	collimation
+241207	241207	cam	PA
+241207	241207	mount	modeling
+250311	250311	mirror	cleaning

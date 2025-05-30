@@ -45,12 +45,13 @@ class PreprocConfiguration(BaseConfig):
     @property
     def name(self):
         if hasattr(self, "path"):
-            return os.path.basename(self.path.preproc_output_yml).replace(".yml", "")
-        elif hasattr(self.config, "name"):  
+            # return os.path.basename(self.path.preproc_output_yml).replace(".yml", "")
+            return self.path.output_name
+        elif hasattr(self.config, "name"):
             return self.config.name
         else:
             return None
-        
+
     def initialize(self):
         self.config.info.version = __version__
         self.config.info.creation_datetime = datetime.now().isoformat()
@@ -69,7 +70,7 @@ class PreprocConfiguration(BaseConfig):
 
     def _handle_input(self, input, logger, verbose, **kwargs):
 
-        if isinstance(input, list): # List of FITS files
+        if isinstance(input, list):  # List of FITS files
             self.path = PathHandler(input[0])
             config_source = self.path.preproc_base_yml
             self.logger = self._setup_logger(
@@ -83,7 +84,7 @@ class PreprocConfiguration(BaseConfig):
             self.input_files = input
             self.input_dir = None
             super().__init__(config_source=config_source, write=self.write, **kwargs)
-        elif isinstance(input, str) and os.path.isdir(input): # Directory containing FITS files
+        elif isinstance(input, str) and os.path.isdir(input):  # Directory containing FITS files
             sample_file = self._has_fits_file(input)
             self.path = PathHandler(sample_file)
             config_source = self.path.preproc_base_yml
@@ -98,7 +99,7 @@ class PreprocConfiguration(BaseConfig):
             self.input_dir = input
             self.input_files = None
             super().__init__(config_source=config_source, write=self.write, **kwargs)
-        elif (isinstance(input, str)  and ".yml" in input) or isinstance(input, dict): # Configuration file path
+        elif (isinstance(input, str) and ".yml" in input) or isinstance(input, dict):  # Configuration file path
             config_source = input
             super().__init__(config_source=config_source, write=self.write, **kwargs)
             self.path = self._set_pathhandler_from_config()
@@ -114,10 +115,9 @@ class PreprocConfiguration(BaseConfig):
             self.logger.debug(f"Configuration source: {config_source}")
         else:
             raise ValueError("Input must be a list of FITS files or a directory containing FITS files")
-        
+
         self.config_file = self.path.preproc_output_yml  # used by write_config
         return
-
 
     def _set_pathhandler_from_config(self):
         # mind the check order
@@ -130,7 +130,6 @@ class PreprocConfiguration(BaseConfig):
                 return PathHandler(sorted(glob.glob(f))[0])
 
         raise ValueError("Configuration does not contain valid input files or directories to create PathHandler.")
-
 
     def _has_fits_file(self, folder_path):
         with os.scandir(folder_path) as entries:

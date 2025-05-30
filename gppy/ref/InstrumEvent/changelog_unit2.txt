@@ -1,0 +1,5 @@
+date_start	date_end	parts	comment
+240618	240618	cam	PA
+241219	241219	focuser	disabled
+250310	250310	mirror	cleaning
+250506	250506	fw	rubber_change

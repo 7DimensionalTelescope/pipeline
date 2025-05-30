@@ -61,9 +61,11 @@ class Preprocess(BaseSetup):
 
     def initialize(self):
         self.logger.info("Initializing Preprocess")
-        if self.config.input.masterframe_images and self.config.input.science_images:
-            input_files = list(self.config.input.masterframe_images) + list(self.config.input.science_images)
-            self.raw_groups = PathHandler.take_raw_inventory(input_files)
+        # if self.config.input.masterframe_images and self.config.input.science_images:
+        #     input_files = list(self.config.input.masterframe_images) + list(self.config.input.science_images)
+        #     self.raw_groups = PathHandler.take_raw_inventory(input_files)
+        if hasattr(self.config.input, "grouped_raw_images") and self.config.input.grouped_raw_images:
+            self.raw_groups = self.config.input.grouped_raw_images
         elif self.config.input.raw_dir:
             input_files = glob.glob(os.path.join(self.config.input.raw_dir, "*.fits"))
             self.raw_groups = PathHandler.take_raw_inventory(input_files)
@@ -76,6 +78,8 @@ class Preprocess(BaseSetup):
         self.choose_device()
 
         self.logger.info(f"{self._n_groups} groups are found")
+        self.logger.debug(f"raw_groups:\n{self.raw_groups}")
+        # raise ValueError("stop")  # for debug
 
     def run(self):
         threads_for_making_plots = []
@@ -120,9 +124,10 @@ class Preprocess(BaseSetup):
         self._current_group = group_index
 
     def __getattr__(self, name):
+        """bias_input, dark_input, flat_input, bias_output, dark_output, flat_input are defined here"""
         if name.endswith("_input") or name.endswith("_output"):
             return self._get_raw_group(name, self._current_group)
-        
+
     def _get_raw_group(self, name, group_index):
         if name == "sci_input":
             return self._parse_sci_list(group_index, "input")
@@ -242,19 +247,24 @@ class Preprocess(BaseSetup):
         self.logger.info(f"Fetching master {dtype}")
         # existing_data can be either on-date or off-date
         max_offset = self.config.preprocess.max_offset
+        self.logger.debug(f"Masterframe Search Template: {template}")
         existing_data = prep_utils.search_with_date_offsets(template, max_offset=max_offset)
         if not existing_data:
             raise FileNotFoundError(
                 f"No pre-existing master {dtype} found in place of {template} wihin {max_offset} days"
             )
+
         with cp.cuda.Device(device_id):
             data_gpu = cp.asarray(fits.getdata(existing_data).astype(np.float32))
+            setattr(self, f"{dtype}_data", data_gpu)
 
-        setattr(self, f"{dtype}_data", data_gpu)
         if dtype == "dark":
             self.dark_exptime = get_header(existing_data)[HEADER_KEY_MAP["exptime"]]
 
     def data_reduction(self, device_id=None):
+        if not self.sci_input:
+            self.logger.info(f"No science frames found in group {self._current_group + 1}, skipping data reduction.")
+            return
 
         flag = [os.path.exists(file) for file in self.sci_output]
         if all(flag):
@@ -320,7 +330,7 @@ class Preprocess(BaseSetup):
                 t.join()
 
             self.logger.debug(
-                    f"Data reduction has been completed in {time.time() - start_time:.0f} seconds for {len(self.sci_input)} iamges."
+                f"Data reduction has been completed in {time.time() - start_time:.0f} seconds for {len(self.sci_input)} iamges."
             )
         # Combine results
         all_results = [item for sublist in results if sublist for item in sublist]
@@ -337,6 +347,7 @@ class Preprocess(BaseSetup):
                 header, [self.bias_output, self.dark_output, self.flat_output, raw_file]
             )
             add_padding(header, n_head_blocks, copy_header=False)
+            os.makedirs(os.path.dirname(processed_file), exist_ok=True)
             fits.writeto(
                 processed_file,
                 data=all_results[idx],
