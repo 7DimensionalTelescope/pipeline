@@ -566,6 +566,8 @@ class PhotometrySingle:
             # elif se_preset == "main":
             #     # output = self.tmp_file_prefix + ".cat"
 
+        self.logger.debug(f"PhotometrySingle _run_sextractor output catalog: {output}")
+
         outcome = external.sextractor(
             self.input_image,
             outcat=output,

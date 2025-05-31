@@ -11,7 +11,7 @@ from .plotting import *
 from . import utils as prep_utils
 from .cupy_calc import *
 
-from ..utils import add_padding, get_header
+from ..utils import add_padding, get_header, flatten
 from ..path import PathHandler
 from ..config import PreprocConfiguration
 from ..services.setup import BaseSetup
@@ -61,11 +61,13 @@ class Preprocess(BaseSetup):
 
     def initialize(self):
         self.logger.info("Initializing Preprocess")
-        # if self.config.input.masterframe_images and self.config.input.science_images:
-        #     input_files = list(self.config.input.masterframe_images) + list(self.config.input.science_images)
-        #     self.raw_groups = PathHandler.take_raw_inventory(input_files)
-        if hasattr(self.config.input, "grouped_raw_images") and self.config.input.grouped_raw_images:
-            self.raw_groups = self.config.input.grouped_raw_images
+        if (hasattr(self.config.input, "calib_images") and self.config.input.calib_images) or (
+            hasattr(self.config.input, "science_images") and self.config.input.science_images
+        ):
+            bdf_flattened = flatten(self.config.input.calib_images)
+            input_files = bdf_flattened + list(self.config.input.science_images)
+            self.raw_groups = PathHandler.take_raw_inventory(input_files)
+            self.logger.debug(f"grouped_raw from manual input: {self.raw_groups}")
         elif self.config.input.raw_dir:
             input_files = glob.glob(os.path.join(self.config.input.raw_dir, "*.fits"))
             self.raw_groups = PathHandler.take_raw_inventory(input_files)
@@ -189,6 +191,8 @@ class Preprocess(BaseSetup):
 
             input_data = getattr(self, f"{dtype}_input")
             output_data = getattr(self, f"{dtype}_output")
+            self.logger.debug(f"{dtype}_input: {input_data}")
+            self.logger.debug(f"{dtype}_output: {output_data}")
 
             if input_data:  # if the list is not empty
                 if not os.path.exists(output_data) or self.overwrite:
@@ -201,6 +205,7 @@ class Preprocess(BaseSetup):
         self.logger.info(f"Generation/Loading of masterframes completed in {time.time() - st:.2f} seconds")
 
     def _generate_masterframe(self, dtype, device_id):
+        """Generate & Save masterframe and sigma image"""
         self.logger.info(f"Generating master {dtype}")
         input_data = getattr(self, f"{dtype}_input")
         header = self.get_header(dtype)
@@ -230,6 +235,8 @@ class Preprocess(BaseSetup):
             overwrite=True,
         )
 
+        self.logger.info(f"FITS Written: {getattr(self, f"{dtype}sig_output")}")
+
         header = prep_utils.add_image_id(header)
         header = record_statistics(median, header, device_id=device_id)
 
@@ -239,6 +246,8 @@ class Preprocess(BaseSetup):
             header=header,
             overwrite=True,
         )
+
+        self.logger.info(f"FITS Written: {getattr(self, f"{dtype}_output")}")
 
         del median
         cp.get_default_memory_pool().free_all_blocks()

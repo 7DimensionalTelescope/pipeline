@@ -5,7 +5,22 @@ import shutil
 from pathlib import Path
 from datetime import datetime, timedelta
 from astropy.io import fits
+from collections.abc import Iterable
 from .const import FACTORY_DIR, RAWDATA_DIR, HEADER_KEY_MAP, ALL_GROUP_KEYS
+
+
+def flatten(seq):
+    """
+    Recursively flatten any nested lists/tuples into a single flat list.
+    Strings and bytes are treated as atomic.
+    """
+    flat = []
+    for item in seq:
+        if isinstance(item, Iterable) and not isinstance(item, (str, bytes)):
+            flat.extend(flatten(item))
+        else:
+            flat.append(item)
+    return flat
 
 
 def most_common_in_dict(counts: dict):
@@ -362,7 +377,7 @@ def get_camera(header):
         else:
             return "UnknownCam"
     else:
-        return None  # "UnknownCam"
+        return "UnknownCam"  # None  # None makes the length masterframe_basename different.
 
 
 def get_gain(fpath):
