@@ -2,9 +2,7 @@ import os
 from datetime import datetime
 import glob
 from .. import __version__
-from ..utils import (
-    clean_up_folder,
-)
+from ..utils import clean_up_folder, flatten
 from ..path.path import PathHandler
 from .base import BaseConfig
 import time
@@ -124,6 +122,9 @@ class PreprocConfiguration(BaseConfig):
         if hasattr(self.config, "input"):
             if hasattr(self.config.input, "science_images") and self.config.input.science_images:
                 return PathHandler(self.config.input.science_images[0])
+
+            if hasattr(self.config.input, "calib_images") and self.config.input.calib_images:
+                return PathHandler(flatten(self.config.input.calib_images)[0])
 
             if hasattr(self.config.input, "raw_dir") and self.config.input.raw_dir:
                 f = os.path.join(self.config.input.raw_dir, "**.fits")

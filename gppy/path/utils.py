@@ -236,7 +236,11 @@ def strip_exptime(exptime_string):
     return float(exptime_string[:-1])
 
 
-def format_exptime(exptime: float, type="raw_image"):
+def format_exptime(exptime: float, type="raw"):
+    """type=='raw' is .1f float, others are rounded"""
+    if not exptime:  # when the input is not expected to have proper exptime
+        return "UndefExptime"  # indicates a bug in a regular pipeline output
+
     if "raw" in type:
         return f"{exptime:.1f}s"
     else:  # processed

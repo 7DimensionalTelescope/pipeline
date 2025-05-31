@@ -362,7 +362,7 @@ class PathHandler(AutoCollapseMixin, AutoMkdirMixin):  # SingletonUnpackMixin, C
         return self._name_cache[prop_name]
 
     def _get_property_at_index(self, prop_name: str, index: int):
-        """Get cached NameHandler property value at specific index"""
+        """Get cached NameHandler property value at specific index. Can handle single input case"""
         cached_prop = self._get_cached_namehandler_property(prop_name)
 
         if cached_prop is None:
@@ -404,8 +404,13 @@ class PathHandler(AutoCollapseMixin, AutoMkdirMixin):  # SingletonUnpackMixin, C
 
     @property
     def sciproc_output_yml(self):
-        config_stems = self._config_stem if hasattr(self, "_config_stem") and self._config_stem else "sciproc_config"
-        return [os.path.join(d, f"{s}.yml") for d, s in zip(self._output_dir, config_stems)]
+        # config_stems = self._config_stem if hasattr(self, "_config_stem") and self._config_stem else "sciproc_config"
+        # return [os.path.join(d, f"{s}.yml") for d, s in zip(self._output_dir, config_stems)]
+        yml_basenames = [
+            "_".join([obj, filte, unit, date]) + ".yml"
+            for obj, filte, unit, date in zip(self.name.obj, self.name.filter, self.name.unit, self.name.date)
+        ]
+        return bjoin(self._output_dir, yml_basenames)
 
     @property
     def sciproc_output_log(self):
@@ -433,6 +438,10 @@ class PathHandler(AutoCollapseMixin, AutoMkdirMixin):  # SingletonUnpackMixin, C
         # processed_images = []
         self._masterframe_dir = []
         self._figure_dir = []
+        self._daily_stacked_dir = []
+        self._subtracted_dir = []
+        self._stacked_dir = []
+        self._metadata_dir = []
 
         for i, input_file in enumerate(self._input_files):
             # Get properties for this specific file
@@ -440,7 +449,7 @@ class PathHandler(AutoCollapseMixin, AutoMkdirMixin):  # SingletonUnpackMixin, C
             unit = self._get_property_at_index("unit", i)
             obj = self._get_property_at_index("obj", i)
             filte = self._get_property_at_index("filter", i)
-            # data_type = self._get_property_at_index("type", i)
+            typ = self._get_property_at_index("type", i)
 
             # Masterframe directory
             masterframe_dir = os.path.join(const.MASTER_FRAME_DIR, nightdate, unit)
@@ -449,7 +458,7 @@ class PathHandler(AutoCollapseMixin, AutoMkdirMixin):  # SingletonUnpackMixin, C
             config_stem = "_".join([nightdate, unit])
             self._config_stem.append(config_stem)
 
-            if self._within_pipeline[i]:
+            if self._within_pipeline[i] and not "master" in typ:
                 # Within pipeline processing
                 relative_path = os.path.join(nightdate, obj, filte)
                 output_dir = os.path.join(self._output_parent_dir[i], relative_path)
@@ -459,6 +468,13 @@ class PathHandler(AutoCollapseMixin, AutoMkdirMixin):  # SingletonUnpackMixin, C
                 self._output_dir.append(output_dir)
                 self._factory_dir.append(factory_dir)
                 self._image_dir.append(image_dir)
+
+                self._stacked_dir.append(os.path.join(const.STACKED_DIR, obj, filte))
+                self._metadata_dir.append(os.path.join(self._output_parent_dir[i], nightdate))
+
+                # output_dir children
+                self._daily_stacked_dir.append(os.path.join(output_dir, "stacked"))
+                self._subtracted_dir.append(os.path.join(output_dir, "subtracted"))
 
                 # # Handle processed images based on data type
                 # if "raw" in data_type:
@@ -494,40 +510,16 @@ class PathHandler(AutoCollapseMixin, AutoMkdirMixin):  # SingletonUnpackMixin, C
         # if processed_images:
         #     self.processed_images = processed_images
 
-        # Generate additional directories
-        self._generate_additional_dirs(self._output_dir)
+        if self._daily_stacked_dir:
+            self.daily_stacked_dir = self._daily_stacked_dir
+        if self._subtracted_dir:
+            self.subtracted_dir = self._subtracted_dir
+        if self._stacked_dir:
+            self.stacked_dir = self._stacked_dir
+        if self._metadata_dir:
+            self.metadata_dir = self._metadata_dir
 
         self._file_dep_initialized = True
-
-    def _generate_additional_dirs(self, output_dirs):
-        """Generate additional directories like daily_stacked_dir, etc."""
-        self._daily_stacked_dir = []
-        self._subtracted_dir = []
-        self._stacked_dir = []
-        self._metadata_dir = []
-
-        for i, output_dir in enumerate(output_dirs):
-            if self._within_pipeline[i]:
-                self._daily_stacked_dir.append(os.path.join(output_dir, "stacked"))
-                self._subtracted_dir.append(os.path.join(output_dir, "subtracted"))
-
-                obj = self._get_property_at_index("obj", i)
-                filter_name = self._get_property_at_index("filter", i)
-                nightdate = self._get_property_at_index("nightdate", i)
-
-                self._stacked_dir.append(os.path.join(const.STACKED_DIR, obj, filter_name))
-                self._metadata_dir.append(os.path.join(self._output_parent_dir[i], nightdate))
-            else:
-                self._daily_stacked_dir.append(None)
-                self._subtracted_dir.append(None)
-                self._stacked_dir.append(None)
-                self._metadata_dir.append(None)
-
-        # Store as lists, filtering out None values where appropriate
-        self.daily_stacked_dir = self._daily_stacked_dir
-        self.subtracted_dir = self._subtracted_dir
-        self.stacked_dir = self._stacked_dir
-        self.metadata_dir = self._metadata_dir
 
     def define_operation_paths(self):
         self.preprocess = PathPreprocess(self, self._config)
@@ -605,11 +597,11 @@ class PathHandler(AutoCollapseMixin, AutoMkdirMixin):  # SingletonUnpackMixin, C
     #     return result
 
     @classmethod
-    def take_raw_inventory(cls, files: list[str]):
-        return cls.build_preproc_input(*NameHandler.find_calib_for_sci(files))
+    def take_raw_inventory(cls, files: list[str], lone_calib=True):
+        return cls.build_preproc_input(*NameHandler.find_calib_for_sci(files), lone_calib=lone_calib)
 
     @classmethod
-    def build_preproc_input(cls, sci_files, on_date_calib, off_date_calib=None):
+    def build_preproc_input(cls, sci_files, on_date_calib, off_date_calib=None, lone_calib=True):
         """
         Group science files by their associated on-date calibration sets.
 
@@ -660,10 +652,10 @@ class PathHandler(AutoCollapseMixin, AutoMkdirMixin):  # SingletonUnpackMixin, C
             return "_".join(tuple_key)
 
         # dict with master calib 3-tuples as keys, dict of raw bdf and sci as values
-        calib_map = defaultdict(lambda: {"sci": [], "bias": None, "dark": None, "flat": None})
+        calib_map = defaultdict(lambda: {"bias": None, "dark": None, "flat": None, "sci": []})
 
-        for sci, (bias, dark, flat) in zip(sci_files, on_date_calib):
-            mbias, mdark, mflat = cls(sci[0]).preprocess.masterframe  # trust the grouping
+        for (bias, dark, flat), sci in zip(on_date_calib, sci_files):
+            mbias, mdark, mflat = cls(sci[0]).preprocess.masterframe  # [0]: trust the grouping
 
             key = tuple((mbias, mdark, mflat))  # (tuple(bias), tuple(dark), tuple(flat))
             entry = calib_map[key]
@@ -704,10 +696,12 @@ class PathHandler(AutoCollapseMixin, AutoMkdirMixin):  # SingletonUnpackMixin, C
                 )
             )
 
-        if off_date_calib and any(l for l in off_date_calib):
+        # raw calibration frames with no corresponding on-date science frames
+        if lone_calib and off_date_calib and any(l for l in off_date_calib):
             off_date_bias_groups, off_date_dark_groups, off_date_flat_groups = off_date_calib
             for off_date_bias_group in off_date_bias_groups:
-                mbias = cls(off_date_bias_group).preprocess.bias
+                # mbias = cls(off_date_bias_group).preprocess.mbias
+                mbias = cls(off_date_bias_group).preprocess.masterframe
                 result.append(
                     (
                         (off_date_bias_group, [], []),
@@ -717,21 +711,29 @@ class PathHandler(AutoCollapseMixin, AutoMkdirMixin):  # SingletonUnpackMixin, C
                 )
 
             for off_date_dark_group in off_date_dark_groups:
-                mdark = cls(off_date_dark_group).preprocess.dark
+                mdark = cls(off_date_dark_group).preprocess.masterframe
+                mbias = cls(off_date_dark_group).preprocess.mbias  # mbias for mdark generation
+
                 result.append(
                     (
-                        ([], off_date_dark_group, []),
-                        ([], mdark, []),
+                        ([], off_date_dark_group, []),  # rely on pre-generated mbias saved to disk, even if on-date
+                        (mbias, mdark, []),
                         dict(),
                     )
                 )
 
             for off_date_flat_group in off_date_flat_groups:
-                mflat = cls(off_date_flat_group).preprocess.flat
+                mflat = cls(off_date_flat_group).preprocess.masterframe
+                path_flat = cls(off_date_flat_group)
+                """Future Update"""
+                # look for 100s mdark, though there may exist shorter exptime mdarks
+                path_flat.name.exptime = [100] * len(off_date_flat_group)
+                mdark = path_flat.preprocess.mdark
+                mbias = cls(off_date_flat_group).preprocess.mbias
                 result.append(
                     (
                         ([], [], off_date_flat_group),
-                        ([], [], mflat),
+                        (mbias, mdark, mflat),
                         dict(),
                     )
                 )
@@ -739,9 +741,14 @@ class PathHandler(AutoCollapseMixin, AutoMkdirMixin):  # SingletonUnpackMixin, C
         return result
 
     @classmethod
-    def weight_map_input(cls, zdf_list: list[str]):
-        """Returns d_m_file, f_m_file, sig_z_file, sig_f_file"""
-        z_m_file, d_m_file, f_m_file = (cls(s).preprocess.masterframe for s in zdf_list)
+    def weight_map_input(cls, mzdf_list: list[str]):
+        """
+        Input is a list of basenames of [mbias, mdark, mflat]
+
+        Returns d_m_file, f_m_file, sig_z_file, sig_f_file
+        """
+        # z_m_file, d_m_file, f_m_file = (cls(s).preprocess.masterframe for s in mzdf_list)  # basename to full path
+        z_m_file, d_m_file, f_m_file = cls(mzdf_list).preprocess.masterframe  # with vectorized PathHandler
         sig_z_file = z_m_file.replace("bias", "biassig")
         sig_f_file = f_m_file.replace("flat", "flatsig")
         return d_m_file, f_m_file, sig_z_file, sig_f_file
@@ -1123,9 +1130,9 @@ class PathHandlerDeprecated(AutoMkdirMixin):
 
         # off-date groups first: no processing time
         for sci_group in off_date_groups:
-            mbias = collapse(cls(sci_group).preprocess.bias, raise_error=True)
-            mdark = collapse(cls(sci_group).preprocess.dark, raise_error=True)
-            mflat = collapse(cls(sci_group).preprocess.flat, raise_error=True)
+            mbias = collapse(cls(sci_group).preprocess.mbias, raise_error=True)
+            mdark = collapse(cls(sci_group).preprocess.mdark, raise_error=True)
+            mflat = collapse(cls(sci_group).preprocess.mflat, raise_error=True)
             key = get_key(sci_group)
             result.append(
                 (
@@ -1142,9 +1149,9 @@ class PathHandlerDeprecated(AutoMkdirMixin):
             raw_dark = entry["dark"]
             raw_flat = entry["flat"]
 
-            mbias = collapse(cls(raw_bias).preprocess.bias, raise_error=True)
-            mdark = collapse(cls(raw_dark).preprocess.dark, raise_error=True)
-            mflat = collapse(cls(raw_flat).preprocess.flat, raise_error=True)
+            mbias = collapse(cls(raw_bias).preprocess.mbias, raise_error=True)
+            mdark = collapse(cls(raw_dark).preprocess.mdark, raise_error=True)
+            mflat = collapse(cls(raw_flat).preprocess.mflat, raise_error=True)
 
             sci_dict = {}
             for sci_group in entry["sci"]:
@@ -1184,82 +1191,65 @@ class PathPreprocess(AutoCollapseMixin, AutoMkdirMixin):
 
     @property
     def _masterframe_dir(self):
+        """returns list-wrapped masterframe_dir"""
         if isinstance(self._parent.masterframe_dir, str):
             return [self._parent.masterframe_dir] * len(self._parent.name.masterframe_basename)
         return self._parent.masterframe_dir
 
     @property
-    def bias(self):
-        """Given mixed raw calib images, pick up only bias frames and give their
-        masterframe counterparts"""
-        # names = NameHandler(self._parent._input_files)
-        # return os.path.join(self._parent.masterframe_dir, names.masterframe_basename[0])
-        result = []
-        for typ, d, s in zip(self._parent.name.type, self._masterframe_dir, self._parent.name.masterframe_basename):
-            if typ[1] == "bias":
-                result.append(os.path.join(d, s))
-            # if typ[1] == 'dark' or typ[1] =='flat':
-            #     pass
-            elif typ[1] == "science":
-                result.append(os.path.join(d, s[0]))
-            else:
-                result.append(None)
+    def mbias(self):
+        # PathHandlerDeprecated Behavior
+        # """Given mixed raw calib images, pick up only bias frames and give their
+        # masterframe counterparts"""
+        # result = []
+        # for typ, d, s in zip(self._parent.name.type, self._masterframe_dir, self._parent.name.masterframe_basename):
+        #     if typ[1] == "bias":
+        #         result.append(os.path.join(d, s))
+        #     elif typ[1] == "science":
+        #         result.append(os.path.join(d, s[0]))
+        #     else:
+        #         result.append(None)
 
-        return result
-        # return [
-        #     os.path.join(d, s) if typ[1] == "bias" else os.path.join(d, s[0])
-        #     for typ, d, s in zip(
-        #         self._parent.name.type, self._parent.masterframe_dir, self._parent.name.masterframe_basename
-        #     )
-        # ]
+        # return result
+
+        """Given a master frame, generates the name of mbias needed to create it"""
+        return bjoin(self._parent._masterframe_dir, self._parent.name.mbias_basename)
 
     @property
-    def dark(self):
-        # names = NameHandler(self._parent._input_files)
-        # return [
-        #     (
-        #         os.path.join(self._parent.masterframe_dir, s)
-        #         if typ[1] == "dark"
-        #         else os.path.join(self._parent.masterframe_dir, s[1])
-        #     )
-        #     for typ, s in zip(names.type, names.masterframe_basename)
-        # ]
-        result = []
-        for typ, d, s in zip(self._parent.name.type, self._masterframe_dir, self._parent.name.masterframe_basename):
-            if typ[1] == "dark":
-                result.append(os.path.join(d, s))
-            # if typ[1] == 'dark' or typ[1] =='flat':
-            #     pass
-            elif typ[1] == "science":
-                result.append(os.path.join(d, s[1]))
-            else:
-                result.append(None)
+    def mdark(self):
+        # result = []
+        # for typ, d, s in zip(
+        #     self._parent.name.type, self._parent._masterframe_dir, self._parent.name.masterframe_basename
+        # ):
+        #     if typ[1] == "dark":
+        #         result.append(os.path.join(d, s))
+        #     # if typ[1] == 'dark' or typ[1] =='flat':
+        #     #     pass
+        #     elif typ[1] == "science":
+        #         result.append(os.path.join(d, s[1]))
+        #     else:
+        #         result.append(None)
 
-        return result
+        # return result
+        return bjoin(self._parent._masterframe_dir, self._parent.name.mdark_basename)
 
     @property
-    def flat(self):
-        # names = NameHandler(self._parent._input_files)
-        # return [
-        #     (
-        #         os.path.join(self._parent.masterframe_dir, s)
-        #         if typ[1] == "flat"
-        #         else os.path.join(self._parent.masterframe_dir, s[2])
-        #     )
-        #     for typ, s in zip(names.type, names.masterframe_basename)
-        # ]
-        result = []
-        for typ, d, s in zip(self._parent.name.type, self._masterframe_dir, self._parent.name.masterframe_basename):
-            if typ[1] == "flat":
-                result.append(os.path.join(d, s))
-            # if typ[1] == 'dark' or typ[1] =='flat':
-            #     pass
-            elif typ[1] == "science":
-                result.append(os.path.join(d, s[2]))
-            else:
-                result.append(None)
+    def mflat(self):
+        # result = []
+        # for typ, d, s in zip(
+        #     self._parent.name.type, self._parent._masterframe_dir, self._parent.name.masterframe_basename
+        # ):
+        #     if typ[1] == "flat":
+        #         result.append(os.path.join(d, s))
+        #     # if typ[1] == 'dark' or typ[1] =='flat':
+        #     #     pass
+        #     elif typ[1] == "science":
+        #         result.append(os.path.join(d, s[2]))
+        #     else:
+        #         result.append(None)
 
-        return result
+        # return result
+        return bjoin(self._parent._masterframe_dir, self._parent.name.mflat_basename)
 
     @property
     def masterframe(self):
@@ -1273,13 +1263,13 @@ class PathPreprocess(AutoCollapseMixin, AutoMkdirMixin):
                 return os.path.join(self._masterframe_dir[0], self._parent.name.masterframe_basename)
 
         result = []
-        for typ, mfdir, ss in zip(
+        for typ, mfdir, basename in zip(
             self._parent.name.type, self._masterframe_dir, self._parent.name.masterframe_basename
         ):
             if typ[1] == "science":
-                result.append([os.path.join(mfdir, s) for s in ss])
+                result.append([os.path.join(mfdir, s) for s in basename])
             else:
-                result.append(os.path.join(mfdir, ss))
+                result.append(os.path.join(mfdir, basename))
         return result
 
         # return bjoin(self._parent.masterframe_dir, self._parent.name.masterframe_basename)
@@ -1322,7 +1312,7 @@ class PathAstrometry(AutoMkdirMixin):
     #     return [add_suffix(inim, "cat") for inim in self.input_files]
 
 
-class PathPhotometry(AutoMkdirMixin):
+class PathPhotometry(AutoCollapseMixin, AutoMkdirMixin):
     _mkdir_exclude = {"ref_ris_dir", "ref_gaia_dir"}
 
     def __init__(self, parent: PathHandler, config=None):

@@ -333,7 +333,7 @@ class ImStack(BaseSetup):
         for (z_m_file, d_m_file, f_m_file), images in groups.items():
 
             header = fits.getheader(images[0])  # same cailb in a group
-            calibs = [v for k, v in header.items() if "IMCMB" in k]
+            calibs = [v for k, v in header.items() if "IMCMB" in k]  # must be ordered mbias, mdark, mflat
             d_m_file, f_m_file, sig_z_file, sig_f_file = PathHandler.weight_map_input(calibs)
 
             d_m = xp.asarray(fits.getdata(d_m_file))

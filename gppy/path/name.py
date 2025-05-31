@@ -1,7 +1,7 @@
 import os
+from typing import List, Tuple
 from collections import defaultdict
 from pathlib import Path
-from astropy.io import fits
 from ..utils import subtract_half_day, get_camera, get_gain, get_header, equal_on_keys, collapse
 from .. import const
 from .utils import strip_binning, format_binning, strip_exptime, format_exptime, strip_gain
@@ -425,53 +425,219 @@ class NameHandler:
         camera = None
         return unit, date, hms, obj, filt, nb, exptime, gain, camera
 
+    # @property
+    # def masterframe_basename(self):
+    #     """works for mixed calibration file types"""
+
+    #     def make(typ, filte, unit, date, exptime, nbin, gain, camera):
+    #         if typ == "bias":
+    #             quality = None
+    #         elif typ == "dark":
+    #             quality = format_exptime(exptime, type=typ)
+    #         elif typ == "flat":
+    #             quality = filte
+    #         elif typ == "science":
+    #             quality = [None, format_exptime(exptime, type=typ), filte]
+    #         else:
+    #             raise ValueError("Invalid type for masterframe_basename")
+
+    #         if not isinstance(quality, list):  # master calib name for raw calib input
+    #             infolist = [typ, quality, unit, date, format_binning(nbin), f"gain{gain}", camera]
+    #             return "_".join([s for s in infolist if s is not None]) + ".fits"
+
+    #         else:  # master calib name for raw sci input
+    #             calib_bundles = []
+    #             for typ, q in zip(["bias", "dark", "flat"], quality):
+    #                 infolist = [typ, q, unit, date, format_binning(nbin), f"gain{gain}", camera]
+    #                 calib_bundles.append("_".join([s for s in infolist if s is not None]) + ".fits")
+    #             return tuple(calib_bundles)
+
+    #     if getattr(self, "_single", False):
+    #         return make(
+    #             self.type[1], self.filter, self.unit, self.date, self.exptime, self.n_binning, self.gain, self.camera
+    #         )
+
+    #     return [
+    #         make(typ[1], filte, unit, date, exptime, nbin, gain, camera)
+    #         for typ, filte, unit, date, exptime, nbin, gain, camera in zip(
+    #             self.type, self.filter, self.unit, self.date, self.exptime, self.n_binning, self.gain, self.camera
+    #         )
+    #     ]
+
+    @staticmethod
+    def _format_masterframe(typ, quality, unit, date, nbin, gain, camera):
+        """
+        Builds a string of the form
+        "<typ>_<quality>_<unit>_<date>_<bin>_gain<gain>_<camera>.fits",
+        skipping any None fields.
+        """
+        bin_str = format_binning(nbin)
+        gain_str = f"gain{gain}"
+        parts = [typ, quality, unit, date, bin_str, gain_str, camera]
+        return "_".join([p for p in parts if p is not None]) + ".fits"
+
+    # def mbias_basename(self, unit, date, nbin, gain, camera):
+    #     # quality = None
+    #     # return self._format_masterframe("bias", quality, unit, date, nbin, gain, camera)
+    #     if getattr(self, "_single", False):
+    #         return self._format_masterframe("bias", None, self.unit, self.date, self.n_binning, self.gain, self.camera)
+    #     else:
+    #         return [
+    #             self._format_masterframe("bias", None, unit, date, nbin, gain, camera)
+    #             for unit, date, nbin, gain, camera in zip(self.unit, self.date, self.n_binning, self.gain, self.camera)
+    #         ]
+
+    # def mdark_basename(self, exptime, unit, date, nbin, gain, camera):
+    #     # quality = format_exptime(exptime, type="dark")
+    #     # return self._format_masterframe("dark", quality, unit, date, nbin, gain, camera)
+    #     if getattr(self, "_single", False):
+    #         quality = format_exptime(self.exptime, type="dark")
+    #         return self._format_masterframe(
+    #             "dark", quality, self.unit, self.date, self.n_binning, self.gain, self.camera
+    #         )
+    #     else:
+    #         return [
+    #             self._format_masterframe("dark", format_exptime(exptime, type="dark"), unit, date, nbin, gain, camera)
+    #             for exptime, unit, date, nbin, gain, camera in zip(
+    #                 self.exptime, self.unit, self.date, self.n_binning, self.gain, self.camera
+    #             )
+    #         ]
+
+    # def mflat_basename(self, filte, unit, date, nbin, gain, camera):
+    #     # quality = filte
+    #     # return self._format_masterframe("flat", quality, unit, date, nbin, gain, camera)
+    #     if getattr(self, "_single", False):
+    #         return self._format_masterframe(
+    #             "flat", self.filter, self.unit, self.date, self.n_binning, self.gain, self.camera
+    #         )
+    #     else:
+    #         return [
+    #             self._format_masterframe("flat", filter, unit, date, nbin, gain, camera)
+    #             for filter, unit, date, nbin, gain, camera in zip(
+    #                 self.filter, self.unit, self.date, self.n_binning, self.gain, self.camera
+    #             )
+    #         ]
+
+    # def _make_science_basename(self, filte, exptime, unit, date, nbin, gain, camera):
+    #     bias_name = self.mbias_basename(unit, date, nbin, gain, camera)
+    #     dark_name = self.mdark_basename(exptime, unit, date, nbin, gain, camera)
+    #     flat_name = self.mflat_basename(filte, unit, date, nbin, gain, camera)
+    #     return (bias_name, dark_name, flat_name)
+
     @property
-    def masterframe_basename(self):  # , typ, quality):
-        """works for mixed calibration file types"""
+    def mbias_basename(self):
+        if getattr(self, "_single", False):
+            return self._format_masterframe("bias", None, self.unit, self.date, self.n_binning, self.gain, self.camera)
+        else:
+            return [
+                self._format_masterframe("bias", None, unit, date, nbin, gain, camera)
+                for unit, date, nbin, gain, camera in zip(self.unit, self.date, self.n_binning, self.gain, self.camera)
+            ]
 
-        def make(typ, filte, unit, date, exptime, nbin, gain, camera):
+    @property
+    def mdark_basename(self):
+        if getattr(self, "_single", False):
+            quality = format_exptime(self.exptime, type="dark")
+            return self._format_masterframe(
+                "dark", quality, self.unit, self.date, self.n_binning, self.gain, self.camera
+            )
+        else:
+            return [
+                self._format_masterframe("dark", format_exptime(exptime, type="dark"), unit, date, nbin, gain, camera)
+                for exptime, unit, date, nbin, gain, camera in zip(
+                    self.exptime, self.unit, self.date, self.n_binning, self.gain, self.camera
+                )
+            ]
+
+    @property
+    def mflat_basename(self):
+        if getattr(self, "_single", False):
+            return self._format_masterframe(
+                "flat", self.filter, self.unit, self.date, self.n_binning, self.gain, self.camera
+            )
+        else:
+            return [
+                self._format_masterframe("flat", filter, unit, date, nbin, gain, camera)
+                for filter, unit, date, nbin, gain, camera in zip(
+                    self.filter, self.unit, self.date, self.n_binning, self.gain, self.camera
+                )
+            ]
+
+    def _make_science_triplet(self, index=None):
+        if getattr(self, "_single", False):
+            return (self.mbias_basename, self.mdark_basename, self.mflat_basename)
+        else:
+            return (self.mbias_basename[index], self.mdark_basename[index], self.mflat_basename[index])
+
+    @property
+    def masterframe_basename(self):
+        def _dispatch_for_index(i):
+            typ = self.type[i][1]
             if typ == "bias":
-                quality = None
+                return self.mbias_basename[i]
             elif typ == "dark":
-                quality = format_exptime(exptime, type=typ)
+                return self.mdark_basename[i]
             elif typ == "flat":
-                quality = filte
+                return self.mflat_basename[i]
             elif typ == "science":
-                quality = [None, format_exptime(exptime, type=typ), filte]
+                return self._make_science_triplet(index=i)
             else:
-                raise ValueError("Invalid type for masterframe_basename")
-
-            if not isinstance(quality, list):  # master calib name for raw calib input
-                infolist = [typ, quality, unit, date, format_binning(nbin), f"gain{gain}", camera]
-                return "_".join([s for s in infolist if s is not None]) + ".fits"
-
-            else:  # master calib name for raw sci input
-                calib_bundles = []
-                for typ, q in zip(["bias", "dark", "flat"], quality):
-                    infolist = [typ, q, unit, date, format_binning(nbin), f"gain{gain}", camera]
-                    calib_bundles.append("_".join([s for s in infolist if s is not None]) + ".fits")
-                return tuple(calib_bundles)
+                raise ValueError(f"Invalid type '{typ}'")
 
         if getattr(self, "_single", False):
-            return make(
-                self.type[1], self.filter, self.unit, self.date, self.exptime, self.n_binning, self.gain, self.camera
-            )
+            typ = self.type[1]
+            if typ == "bias":
+                return self.mbias_basename
+            elif typ == "dark":
+                return self.mdark_basename
+            elif typ == "flat":
+                return self.mflat_basename
+            elif typ == "science":
+                return self._make_science_triplet()
+            else:
+                raise ValueError(f"Invalid type '{typ}'")
 
-        return [
-            make(typ[1], filte, unit, date, exptime, nbin, gain, camera)
-            for typ, filte, unit, date, exptime, nbin, gain, camera in zip(
-                self.type, self.filter, self.unit, self.date, self.exptime, self.n_binning, self.gain, self.camera
-            )
-        ]
+        return [_dispatch_for_index(i) for i in range(len(self.type))]
+
+    # @property
+    # def masterframe_basename(self):
+    #     """
+    #     For science frames, returns a tuple of (mbias, mdark, mflat).
+    #     """
+
+    #     def make(typ, filte, unit, date, exptime, nbin, gain, camera):
+    #         if typ == "bias":
+    #             return self.mbias_basename(unit, date, nbin, gain, camera)
+    #         elif typ == "dark":
+    #             return self.mdark_basename(exptime, unit, date, nbin, gain, camera)
+    #         elif typ == "flat":
+    #             return self.mflat_basename(filte, unit, date, nbin, gain, camera)
+    #         elif typ == "science":
+    #             # science => return (bias, dark, flat)
+    #             return self._make_science_basename(filte, exptime, unit, date, nbin, gain, camera)
+    #         else:
+    #             raise ValueError(f"Invalid type '{typ}' for masterframe_basename")
+
+    #     if getattr(self, "_single", False):
+    #         return make(self.type[1], self.filter, self.unit, self.date, self.exptime, self.n_binning, self.gain, self.camera)
+    #     else:
+    #         results = []
+    #         for typ, filte, unit, date, exptime, nbin, gain, camera in zip(
+    #             self.type, self.filter, self.unit, self.date, self.exptime, self.n_binning, self.gain, self.camera
+    #         ):
+    #             results.append(make(typ[1], filte, unit, date, exptime, nbin, gain, camera))
+    #         return results
 
     @staticmethod
     def _parse_master(parts):
         # returns (unit, date, hms, obj, filter, n_binning, exptime)
         obj = parts[0]
-        if len(parts) == 6:
-            offset = 1  # bias
+        if len(parts) == 6:  # bias
+            offset = 1
+        elif len(parts) == 7:  # dark, flat
+            offset = 0
         else:
-            offset = 0  # dark, flat
+            raise ValueError(f"Unidentified number of _-delimited masterframe parts: {len(parts)}")
 
         exptime = None
         filt = None
@@ -556,13 +722,38 @@ class NameHandler:
 
         return groups
 
+    def pick_type(self, typ):
+        """Classify a filename stem into a 5-component tuple.
+        0. raw / master / calibrated
+        1. bias / dark / flat / science
+        2. None / single / coadded       (None when a master frame)
+        3. None / difference             (None when not a diff)
+        4. image / weight / catalog
+        """
+        if typ in {"master", "raw", "calibrated"}:
+            index = 0
+        elif typ in {"bias", "dark", "flat", "science"}:
+            index = 1
+        elif typ in {"single", "coadded"}:
+            index = 2
+        elif typ in {"difference"}:
+            index = 3
+        elif typ in {"image", "weight", "catalog"}:
+            index = 4
+        else:
+            raise ValueError("Invalid file type for filtering")
+
+        return [f for f, t in zip(self.abspath, self.type) if t[index] == typ]
+
     @classmethod
     def parse_params(cls, files, keys=None):
         names = cls(files)
         return names.to_dict(keys=keys)
 
     @classmethod
-    def find_calib_for_sci(cls, files) -> (list[str], list[tuple], (list[list], list[list], list[list])):
+    def find_calib_for_sci(
+        cls, files
+    ) -> Tuple[List[str], List[Tuple], Tuple[List[List[str]], List[List[str]], List[List[str]]]]:
         """
         e.g., files = glob("/data/pipeline_reform/obsdata_test/7DT11/2025-01-01_gain2750/*.fits")
         sci_files, on_date_calib = NameHandler.find_calib_for_sci(flist)
