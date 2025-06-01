@@ -43,10 +43,16 @@ class AutoCollapseMixin:
     _collapse_include = {}  # "output_dir", "image_dir", "factory_dir", "stacked_dir"}
 
     def __getattribute__(self, name):
-        if name.startswith("_"):
-            return object.__getattribute__(self, name)
+        # if name.startswith("_"):
+        #     return object.__getattribute__(self, name)
 
-        value = object.__getattribute__(self, name)
+        # value = object.__getattribute__(self, name)
+        value = super().__getattribute__(name)
+
+        if name.startswith("_"):
+            return value
+
+        # print("collapse", name)
 
         # Collapse if explicitly included or path-like list
         if name not in self._collapse_exclude and (
@@ -88,10 +94,17 @@ class AutoMkdirMixin:
 
     def __getattribute__(self, name):
         """CAVEAT: This runs every time attr is accessed. Keep it short."""
-        if name.startswith("_"):  # Bypass all custom logic for private attributes
-            return object.__getattribute__(self, name)
+        # if name.startswith("_"):  # Bypass all custom logic for private attributes
+        #     return object.__getattribute__(self, name)
 
-        value = object.__getattribute__(self, name)
+        # value = object.__getattribute__(self, name)
+
+        value = super().__getattribute__(name)
+
+        if name.startswith("_"):
+            return value
+
+        # print("mkdir", name)
 
         # Skip excluded attributes
         if name in object.__getattribute__(self, "_mkdir_exclude"):
@@ -135,7 +148,8 @@ class AutoMkdirMixin:
             created_dirs.add(d)
 
 
-class PathHandler(AutoCollapseMixin, AutoMkdirMixin):  # SingletonUnpackMixin, Check MRO: PathHandler.mro()
+# AutoMkdirMixin super() allows AutoCollapseMixin to run first.
+class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, Check MRO: PathHandler.mro()
     """
     A comprehensive path handler for 7DT pipeline.
     It defines source and destination file paths in all stages of the pipeline
@@ -566,6 +580,14 @@ class PathHandler(AutoCollapseMixin, AutoMkdirMixin):  # SingletonUnpackMixin, C
         return [c if "raw" in typ else i for typ, i, c in zip(self.name.type, self._input_files, self.conjugate)]
 
     @property
+    def catalog(self):
+        return add_suffix(self.processed_images, "cat")
+
+    @property
+    def weight(self):
+        return add_suffix(self.processed_images, "weight")
+
+    @property
     def obs_params(self):
         return self.name.to_dict()
 
@@ -752,6 +774,34 @@ class PathHandler(AutoCollapseMixin, AutoMkdirMixin):  # SingletonUnpackMixin, C
         sig_z_file = z_m_file.replace("bias", "biassig")
         sig_f_file = f_m_file.replace("flat", "flatsig")
         return d_m_file, f_m_file, sig_z_file, sig_f_file
+
+    @classmethod
+    def get_bpmask(cls, input: Union[str, Path, "fits.Header"]) -> str | list[str]:
+        from astropy.io import fits
+
+        if isinstance(input, str | Path):
+            name = NameHandler(input)
+            if name.type[0] == "master" and (name.type[1] == "dark" or name.type[1] == "darksig"):
+                input = cls(input).preprocess.masterframe  # ensure full path to master dark, not darksig
+                return input.replace("dark", "bpmask")
+
+            elif name.type[0] == "calibrated":
+                header = fits.getheader(input)
+
+        elif isinstance(input, fits.Header):
+            header = input
+
+        elif isinstance(input, list):
+            return collapse([cls.get_bpmask(f) for f in input])
+
+        else:
+            raise ValueError("Invalid input to find bpmask")
+
+        calibs = [v for k, v in header.items() if "IMCMB" in k]
+        mdark = NameHandler(calibs).pick_type("master_dark")
+        assert isinstance(mdark, str)
+        mdark = cls(mdark).preprocess.masterframe
+        return mdark.replace("dark", "bpmask")
 
 
 ###############################################################################
@@ -1177,7 +1227,7 @@ class PathHandlerDeprecated(AutoMkdirMixin):
         return d_m_file, f_m_file, sig_z_file, sig_f_file
 
 
-class PathPreprocess(AutoCollapseMixin, AutoMkdirMixin):
+class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
     def __init__(self, parent: PathHandler, config=None):
         self._parent = parent
 
@@ -1312,7 +1362,7 @@ class PathAstrometry(AutoMkdirMixin):
     #     return [add_suffix(inim, "cat") for inim in self.input_files]
 
 
-class PathPhotometry(AutoCollapseMixin, AutoMkdirMixin):
+class PathPhotometry(AutoMkdirMixin, AutoCollapseMixin):
     _mkdir_exclude = {"ref_ris_dir", "ref_gaia_dir"}
 
     def __init__(self, parent: PathHandler, config=None):
@@ -1335,33 +1385,24 @@ class PathPhotometry(AutoCollapseMixin, AutoMkdirMixin):
 
     @property
     def prep_catalog(self):
-        input = self._parent.basename
-        if isinstance(input, list):
-            return [os.path.join(self.tmp_dir, add_suffix(add_suffix(s, "prep"), "cat")) for s in input]
-        else:
-            return os.path.join(self.tmp_dir, add_suffix(add_suffix(input, "prep"), "cat"))
+        input = self._parent.name.basename
+        return bjoin(self.tmp_dir, add_suffix(add_suffix(input, "prep"), "cat"))
 
     @property
     def main_catalog(self):
         """intermediate sextractor output"""
-        input = self._parent.basename
-        if isinstance(input, list):
-            return [os.path.join(self.tmp_dir, swap_ext(s, "cat")) for s in input]
-        else:
-            return os.path.join(self.tmp_dir, swap_ext(input, "cat"))
+        input = self._parent.name.basename
+        return bjoin(self.tmp_dir, swap_ext(input, "cat"))
 
     @property
     def final_catalog(self):
         """final pipeline output catalog"""
-        input = self._parent.basename
-        if isinstance(input, list):
-            return [os.path.join(self._parent.image_dir, add_suffix(s, "cat")) for s in input]
-        else:
-            return os.path.join(self._parent.image_dir, add_suffix(input, "cat"))
+        input = self._parent._input_files
+        return add_suffix(input, "cat")
 
-    def __getattr__(self, name):
-        # run file-dependent path definitions once?
-        pass
+    # def __getattr__(self, name):
+    #     # run file-dependent path definitions once?
+    #     pass
 
 
 class PathImstack(AutoMkdirMixin):
@@ -1385,7 +1426,8 @@ class PathImstack(AutoMkdirMixin):
         names = NameHandler(self._parent._input_files)
         _ = collapse(names.type, raise_error=True)  # ensure input images are coherent
         total_exptime = np.sum(names.exptime)
-        fname = f"{names.obj_collapse}_{names.filter_collapse}_{names.unit_collapse}_{names.unit_collapse}_{names.datetime[-1]}_{format_exptime(total_exptime, type='stacked')}_coadd.fits"
+        # use the datetime of the last image
+        fname = f"{names.obj_collapse}_{names.filter_collapse}_{names.unit_collapse}_{names.datetime[-1]}_{format_exptime(total_exptime, type='stacked')}_coadd.fits"
         return fname
 
     @property
@@ -1396,8 +1438,10 @@ class PathImstack(AutoMkdirMixin):
     def stacked_image(self):
         return os.path.join(collapse(self._parent.stacked_dir, raise_error=True), self.stacked_image_basename)
 
+    # Todo: add weight images
 
-class PathImsubtract(AutoMkdirMixin):
+
+class PathImsubtract(AutoMkdirMixin, AutoCollapseMixin):
     _mkdir_exclude = {"ref_image_dir"}
 
     def __init__(self, parent: PathHandler, config=None):
@@ -1416,3 +1460,9 @@ class PathImsubtract(AutoMkdirMixin):
     @property
     def tmp_dir(self):
         return os.path.join(self._parent.factory_dir, "imsubtract")
+
+    @property
+    def diffim(self):
+        # return bjoin(self._parent.output_dir, "difference", add_suffix(self._parent._input_files, "diff"))
+        input = os.path.basename(self._parent.processed_images)  # Define a new PathHandler with stacked_image as input
+        return bjoin(self._parent.output_dir, "difference", add_suffix(input, "diff"))

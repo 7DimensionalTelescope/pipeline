@@ -67,6 +67,7 @@ class ImStack(BaseSetup):
 
     @property
     def sequential_task(self):
+        """[(number, name, use_gpu), ...]"""
         return [
             (1, "initialize", False),
             (2, "bkgsub", False),
@@ -128,7 +129,6 @@ class ImStack(BaseSetup):
         self.keys_to_propagate = CORE_KEYS
 
         # self.define_paths(working_dir=self.config.path.path_processed)
-        self.path = PathHandler(self.input_images)
         self.path_tmp = self.path.imstack.tmp_dir
 
         # self.set_metadata()
@@ -382,15 +382,18 @@ class ImStack(BaseSetup):
         path_interp = os.path.join(self.path_tmp, "interp")
         os.makedirs(path_interp, exist_ok=True)
 
-        self.config.imstack.interp_files = [
+        self.config.imstack.interp_images = [
             os.path.join(path_interp, add_suffix(os.path.basename(f), "interp")) for f in self.input_images
         ]
 
-        bpmask_array, header = fits.getdata(self.config.preprocess.bpmask_file, header=True)
+        # bpmask_array, header = fits.getdata(self.config.preprocess.bpmask_file, header=True)
+        # ad-hoc. Todo: group input_files for different bpmask files
+        bpmask_array, header = fits.getdata(PathHandler.get_bpmask(self.config.imstack.bkgsub_images[0]), header=True)
+
         mask = cp.asarray(bpmask_array)
         if "BADPIX" in header.keys():
             badpix = header["BADPIX"]
-            self.logger.debug("BADPIX found in header. Using default value 0.")
+            self.logger.debug(f"BADPIX found in header. Using badpix {badpix}.")
         else:
             self.logger.warning("BADPIX not found in header. Using default value 0.")
         method = self.config.imstack.interp_type
@@ -430,7 +433,7 @@ class ImStack(BaseSetup):
                 overwrite=True,
             )
 
-        self.images_to_stack = self.config.imstack.interp_files
+        self.images_to_stack = self.config.imstack.interp_images
 
         self.logger.info("Completed Interpolation of Bad Pixels")
 
@@ -596,8 +599,10 @@ class ImStack(BaseSetup):
             # weight images
             self._run_swarp("wht", args=["-RESAMPLING_TYPE", "NEAREST"])
 
+            # Update/Todo: consider uncollapsed bpmask files
             if self.config.imstack.propagate_mask:
-                bpmask_file = self.config.preprocess.bpmask_file
+                # bpmask_file = self.config.preprocess.bpmask_file
+                bpmask_file = PathHandler.get_bpmask(self.images_to_stack)
                 bpmask_inverted = 1 - fits.getdata(bpmask_file)
                 bpmask_inverted_file = os.path.join(self.path_tmp, os.path.basename(bpmask_file))
                 fits.writeto(bpmask_inverted_file, bpmask_inverted, overwrite=True)

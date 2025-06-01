@@ -130,16 +130,16 @@ class NameHandler:
     def __init__(self, filenames: str | Path | list[str] | list[Path]):
         # --- 1. Normalize input to a list of strings ---
         if isinstance(filenames, (str, Path)):
-            files = [str(filenames)]
+            self.input = [str(filenames)]
             self._single = True
         elif isinstance(filenames, (list, tuple)):
-            files = [str(f) for f in filenames]
-            self._single = len(files) == 1
+            self.input = [str(f) for f in filenames]
+            self._single = len(self.input) == 1
         else:
             raise TypeError("Input must be str, Path, or list/tuple of them")
 
         # --- 2. Build the filesystem-related attributes as lists ---
-        self.abspath = [os.path.abspath(f) for f in files]
+        self.abspath = [os.path.abspath(f) for f in self.input]
         self.basename = [os.path.basename(p) for p in self.abspath]
         self.stem, self.ext = (list(x) for x in zip(*(os.path.splitext(b) for b in self.basename)))
         # if any(ext != ".fits" for ext in self.ext):
@@ -222,15 +222,14 @@ class NameHandler:
             types += ("calibrated",)  # processed")
 
         # calib/sci
-        stem_lower = stem.lower()
-        if "bias" in stem_lower:
-            types += ("bias",)
-        elif "dark" in stem_lower:
-            types += ("dark",)
-        elif "flat" in stem_lower:
-            types += ("flat",)
-        else:
-            types += ("science",)
+        def _calib_type(stem: str):
+            lower = stem.lower()
+            for base in ("bias", "dark", "flat"):
+                if base in lower:
+                    return f"{base}{'sig' if 'sig' in lower else ''}"
+            return "science"
+
+        types += (_calib_type(stem),)
 
         # single/coadd
         if "master" in types:
@@ -563,6 +562,8 @@ class NameHandler:
                 )
             ]
 
+    # Update: add m????sig_basename in getattr
+
     def _make_science_triplet(self, index=None):
         if getattr(self, "_single", False):
             return (self.mbias_basename, self.mdark_basename, self.mflat_basename)
@@ -571,13 +572,15 @@ class NameHandler:
 
     @property
     def masterframe_basename(self):
+        """sigma images can be input, but the output will be regular bias dark flat."""
+
         def _dispatch_for_index(i):
-            typ = self.type[i][1]
-            if typ == "bias":
+            typ = self.type[i][1]  # 'bias', 'biassig', 'dark', 'darksig', ...
+            if "bias" in typ:
                 return self.mbias_basename[i]
-            elif typ == "dark":
+            elif "dark" in typ:
                 return self.mdark_basename[i]
-            elif typ == "flat":
+            elif "flat" in typ:
                 return self.mflat_basename[i]
             elif typ == "science":
                 return self._make_science_triplet(index=i)
@@ -586,11 +589,11 @@ class NameHandler:
 
         if getattr(self, "_single", False):
             typ = self.type[1]
-            if typ == "bias":
+            if "bias" in typ:
                 return self.mbias_basename
-            elif typ == "dark":
+            elif "dark" in typ:
                 return self.mdark_basename
-            elif typ == "flat":
+            elif "flat" in typ:
                 return self.mflat_basename
             elif typ == "science":
                 return self._make_science_triplet()
@@ -723,27 +726,72 @@ class NameHandler:
         return groups
 
     def pick_type(self, typ):
-        """Classify a filename stem into a 5-component tuple.
+        """
+        Input ex) 'dark', 'master_dark', ('master', 'dark')
+
         0. raw / master / calibrated
         1. bias / dark / flat / science
         2. None / single / coadded       (None when a master frame)
         3. None / difference             (None when not a diff)
         4. image / weight / catalog
         """
-        if typ in {"master", "raw", "calibrated"}:
-            index = 0
-        elif typ in {"bias", "dark", "flat", "science"}:
-            index = 1
-        elif typ in {"single", "coadded"}:
-            index = 2
-        elif typ in {"difference"}:
-            index = 3
-        elif typ in {"image", "weight", "catalog"}:
-            index = 4
-        else:
-            raise ValueError("Invalid file type for filtering")
 
-        return [f for f, t in zip(self.abspath, self.type) if t[index] == typ]
+        # Simpler version
+        # if typ in {"master", "raw", "calibrated"}:
+        #     index = 0
+        # elif typ in {"bias", "dark", "flat", "science"}:
+        #     index = 1
+        # elif typ in {"single", "coadded"}:
+        #     index = 2
+        # elif typ in {"difference"}:
+        #     index = 3
+        # elif typ in {"image", "weight", "catalog"}:
+        #     index = 4
+        # else:
+        #     raise ValueError("Invalid file type for filtering")
+        # return collapse([f for f, t in zip(self.input, self.type) if t[index] == typ])
+
+        # 1) Normalize `typ` into a tuple of tokens
+        if isinstance(typ, str):
+            tokens = tuple(typ.split("_"))
+        elif isinstance(typ, (list, tuple)):
+            tokens = tuple(typ)
+        else:
+            raise TypeError("`typ` must be a string, underscore-joined string, or tuple/list of strings")
+
+        # 2) Build a quick lookup: token -> its expected index in the 5-tuple
+        token_to_index: dict[str, int] = {}
+        category_map = {
+            0: {"master", "raw", "calibrated"},
+            1: {"bias", "dark", "flat", "science"},
+            2: {"single", "coadded"},
+            3: {"difference"},
+            4: {"image", "weight", "catalog"},
+        }
+        for idx, nameset in category_map.items():
+            for name in nameset:
+                token_to_index[name] = idx
+
+        # 3) For each requested token, verify it’s valid and record its index
+        requested: list[tuple[int, str]] = []
+        for tok in tokens:
+            if tok not in token_to_index:
+                raise ValueError(f"Unknown type token '{tok}'")
+            requested.append((token_to_index[tok], tok))
+
+        # 4) Now filter: keep only those files where all (index,token) match
+        matches: list[str] = []
+        for i, file in enumerate(self.input):
+            typ_tuple = self.type[i]  # e.g. ("raw", "dark", "single", None, "image")
+            ok = True
+            for idx, tok in requested:
+                if typ_tuple[idx] != tok:
+                    ok = False
+                    break
+            if ok:
+                matches.append(file)
+
+        return collapse(matches)
 
     @classmethod
     def parse_params(cls, files, keys=None):

@@ -20,7 +20,7 @@ from astropy.stats import sigma_clip
 
 # gppy modules
 from . import utils as phot_utils
-from ..utils import update_padded_header, get_derived_product_path, add_suffix
+from ..utils import update_padded_header
 from ..config import SciProcConfiguration
 from ..config.base import ConfigurationInstance
 from ..services.memory import MemoryMonitor
@@ -111,6 +111,7 @@ class Photometry(BaseSetup):
 
     @property
     def sequential_task(self):
+        """[(number, name, use_gpu), ...]"""
         return [(1, "run", False), (2, "flagging", False)]
 
     def run(self) -> None:
