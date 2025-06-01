@@ -673,7 +673,7 @@ def update_padded_header(target_fits, header_new):
                 header.append(card, end=True)
 
 
-def swap_ext(file_path: str, new_ext: str) -> str:
+def swap_ext(file_path: str | list[str], new_ext: str) -> str:
     """
     Swap the file extension of a given file path.
 
@@ -684,6 +684,8 @@ def swap_ext(file_path: str, new_ext: str) -> str:
     Returns:
         str: The file path with the swapped extension.
     """
+    if isinstance(file_path, list):
+        return [swap_ext(f, new_ext) for f in file_path]
     base, _ = os.path.splitext(file_path)
     new_ext = new_ext if new_ext.startswith(".") else f".{new_ext}"
     return base + new_ext
@@ -691,6 +693,7 @@ def swap_ext(file_path: str, new_ext: str) -> str:
 
 def get_derived_product_path(image, subdir="catalogs", ext=".cat.fits"):
     """
+    Deprecated
     Without kwargs, returns catalog path
     """
     input_file_base = os.path.basename(image)
@@ -698,7 +701,7 @@ def get_derived_product_path(image, subdir="catalogs", ext=".cat.fits"):
     return output_file
 
 
-def add_suffix(filename, suffix):
+def add_suffix(filename: str | list[str], suffix):
     """
     Add a suffix to the filename before the extension.
 
@@ -709,6 +712,8 @@ def add_suffix(filename, suffix):
     Returns:
         str: The modified filename with the suffix added.
     """
+    if isinstance(filename, list):
+        return [add_suffix(f, suffix) for f in filename]
     base, ext = os.path.splitext(filename)
     suffix = suffix if suffix.startswith("_") else f"_{suffix}"
     return f"{base}{suffix}{ext}"

@@ -409,8 +409,8 @@ def hotpants(
     # nrx, nry = 1, 1
     # nrx, nry = 6, 4
 
-    outim = outim or add_suffix(inim, "subt")
-    out_conv_im = out_conv_im or add_suffix(inim, "conv")
+    outim = outim or add_suffix(inim, "diff")
+    out_conv_im = out_conv_im or add_suffix(inim, "conv")  # convolved sci image (oci)
     ssf = ssf or swap_ext(add_suffix(inim, "ssf"), ".txt")
 
     hotpantscom = (

@@ -235,7 +235,7 @@ class Preprocess(BaseSetup):
             overwrite=True,
         )
 
-        self.logger.info(f"FITS Written: {getattr(self, f"{dtype}sig_output")}")
+        self.logger.info(f"FITS Written: {getattr(self, f'{dtype}sig_output')}")
 
         header = prep_utils.add_image_id(header)
         header = record_statistics(median, header, device_id=device_id)
@@ -247,7 +247,7 @@ class Preprocess(BaseSetup):
             overwrite=True,
         )
 
-        self.logger.info(f"FITS Written: {getattr(self, f"{dtype}_output")}")
+        self.logger.info(f"FITS Written: {getattr(self, f'{dtype}_output')}")
 
         del median
         cp.get_default_memory_pool().free_all_blocks()

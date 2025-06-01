@@ -41,7 +41,6 @@ settings:
   ToO: False
   obsmode:  # Deep Spec Color Search Single
   header_pad: 7  # assuming final header is 5 * 2880 bytes long. 6 to include polygon info
-  local_astref: 
   combine:
   gpu_enabled: True
   verbose_gpu: True  # use logger later
@@ -60,6 +59,7 @@ astrometry:
     ref_ris_dir: "/lyman/data1/factory/catalog/gaia_dr3_7DT"
     ref_query_dir: "/lyman/data1/factory/ref_scamp"
   ahead_file: "/data/pipeline_reform/dhhyun_lab/scamptest/ahead/calib_7DT11_T07304_20250115_050155_g_60_nocrval.ahead"
+  local_astref: 
 
 photometry:
   input_images:
@@ -103,6 +103,6 @@ imstack:
 
 imsubtract:
   input_images:
-  refim_file:
+  reference_image:
   input_mask:
   template_mask:
