@@ -31,14 +31,7 @@ from ..path.path import PathHandler, NameHandler
 
 
 class ImStack(BaseSetup):
-    def __init__(
-        self,
-        config=None,
-        logger=None,
-        queue=None,
-        overwrite=False,
-        daily=True,
-    ) -> None:
+    def __init__(self, config=None, logger=None, queue=None, overwrite=False, daily=True) -> None:
 
         super().__init__(config, logger, queue)
         self.overwrite = overwrite

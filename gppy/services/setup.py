@@ -29,10 +29,17 @@ class BaseSetup(ABC):
         self.config = self._setup_config(config)
 
         # Setup log
-        self.logger = self._setup_logger(logger, config)
+        self._logger = self._setup_logger(logger, self.config)
 
         # Setup queue
         self.queue = self._setup_queue(queue)
+
+    def __getstate__(self): return self.__dict__
+    def __setstate__(self, d): self.__dict__.update(d)
+
+    @property
+    def logger(self):
+        return self._setup_logger(self._logger, self.config)
 
     def _setup_path(self, config):
         if isinstance(config, PreprocConfiguration | SciProcConfiguration):
@@ -60,10 +67,22 @@ class BaseSetup(ABC):
 
         if isinstance(logger, Logger):
             return logger
-        elif hasattr(config, "logger") and isinstance(config.logger, Logger):
-            return config.logger
         else:
-            return Logger(name=config.config.name, slack_channel="pipeline_report")
+            import logging
+            tmp_logger = logging.getLogger(config.name)
+
+            if tmp_logger.hasHandlers():
+                self._logger = tmp_logger
+                return tmp_logger
+            else:
+                from ..config.base import BaseConfig
+                tmp_logger = BaseConfig._setup_logger(
+                    name = config.name, 
+                    log_file = config.logging.file, 
+                    log_format = config.logging.format,
+                    overwrite=False)
+                self._logger = tmp_logger
+                return tmp_logger
 
     def _setup_queue(self, queue):
 

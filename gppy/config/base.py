@@ -129,7 +129,8 @@ class BaseConfig:
                 setattr(self.config, key, value)
                 self._config_in_dict[key] = value
 
-    def _setup_logger(self, logger=None, name=None, log_file=None, verbose=True, overwrite=True, **kwargs):
+    @classmethod
+    def _setup_logger(cls, logger=None, name=None, log_file=None, verbose=True, overwrite=True, **kwargs):
         if logger is None:
             from ..services.logger import Logger
 
@@ -138,7 +139,6 @@ class BaseConfig:
         logger.set_output_file(log_file, overwrite=overwrite)
         if "log_format" in kwargs:
             logger.set_format(kwargs.pop("log_format"))
-        logger.set_pipeline_name(name)
 
         if not (verbose):
             logger.set_level("WARNING")
@@ -229,12 +229,31 @@ class ConfigurationInstance:
 
     @staticmethod
     def select_from_lists(obj, i):
+        # if isinstance(obj, dict):
+        #     return {k: ConfigurationInstance.select_from_lists(v, i) for k, v in obj.items()}
+        # elif isinstance(obj, list):
+        #     try:
+        #         return [obj[i]]  # wrap the selected value back in a list; pipeline can work the same way
+        #     except IndexError:
+        #         raise IndexError(f"Index {i} out of bounds for list: {obj}")
+        # else:
+        #     return obj
+
+        exclude_keys = {"logging", "settings", "info"}
         if isinstance(obj, dict):
-            return {k: ConfigurationInstance.select_from_lists(v, i) for k, v in obj.items()}
+            result = {}
+            for k, v in obj.items():
+                if k in exclude_keys:
+                    result[k] = v
+                else:
+                    result[k] = ConfigurationInstance.select_from_lists(v, i)
+            return result
+
         elif isinstance(obj, list):
             try:
-                return [obj[i]]  # wrap the selected value back in a list; pipeline can work the same way
+                return [obj[i]]  # pick i-th element (wrapped back in a list)
             except IndexError:
                 raise IndexError(f"Index {i} out of bounds for list: {obj}")
+
         else:
             return obj

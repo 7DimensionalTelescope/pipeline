@@ -62,14 +62,17 @@ class Blueprint:
         
     
     def process_group(self, group):
-        from ..run import run_preprocess_with_tree, run_process_with_tree
+        from ..run import run_preprocess_with_task, run_process_with_tree, run_make_plots
         
         # Submit preprocess
-        pre_tree = run_preprocess_with_tree(group.masterframe_config)
-        self.queue.add_tree(pre_tree)
+        pre_task = run_preprocess_with_task(group.masterframe_config)
+        self.queue.add_task(pre_task)
         # Wait for this group's preprocess to finish
-        self.queue.wait_until_task_complete(pre_tree.id)
-        # Submit science processing for this group
+        self.queue.wait_until_task_complete(pre_task.id)
+
+        plot_task = run_make_plots(group.masterframe_config)
+        self.queue.add_task(plot_task)
+
         for config in group.science_configs:
             sci_tree = run_process_with_tree(config)
             self.queue.add_tree(sci_tree)

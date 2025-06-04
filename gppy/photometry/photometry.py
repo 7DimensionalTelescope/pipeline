@@ -67,6 +67,7 @@ class Photometry(BaseSetup):
         """
         # Load Configuration
         super().__init__(config, logger, queue)
+        self._flag_name = "photometry"
 
         self.ref_catalog = ref_catalog or self.config.photometry.refcatname
 
@@ -78,12 +79,12 @@ class Photometry(BaseSetup):
             self.config.photometry.input_images = images or self.config.input.calibrated_images
             self.input_images = self.config.photometry.input_images
             self.logger.debug("Running single photometry")
-            # self._flag_name = "single_photometry"
+            self._flag_name = "single_photometry"
         else:
             self.config.photometry.input_images = images or [self.config.input.stacked_image]
             self.input_images = self.config.photometry.input_images
             self.logger.debug("Running combined photometry")
-            # self._flag_name = "combined_photometry"
+            self._flag_name = "combined_photometry"
 
     @classmethod
     def from_list(cls, images: List[str]) -> Optional["Photometry"]:

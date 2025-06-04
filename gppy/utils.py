@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from astropy.io import fits
 from collections.abc import Iterable
 from .const import FACTORY_DIR, RAWDATA_DIR, HEADER_KEY_MAP, ALL_GROUP_KEYS
-
+import time
 
 def flatten(seq):
     """
@@ -533,73 +533,6 @@ def lapse(explanation="elapsed", print_output=True):
         return elapsed_time  # in seconds
 
 
-def add_padding(header, n, copy_header=False):
-    """
-    Add empty COMMENT entries to a FITS header to ensure specific block sizes.
-
-    This function helps manage FITS header sizes by adding padding comments.
-    Useful for maintaining specific header block structures required by
-    astronomical data processing tools.
-
-    Args:
-        header (fits.Header): Input FITS header
-        n (int): Target number of 2880-byte blocks
-        copy_header (bool, optional): If True, operates on a copy of the header.
-            Defaults to False. Note: Using True is slower.
-
-    Returns:
-        fits.Header: Header with added padding comments
-
-    Note:
-        - Each COMMENT is 80 bytes long
-        - The total header size must be a multiple of 2880 bytes
-    """
-    if copy_header:
-        import copy
-
-        header = copy.deepcopy(header)
-
-    info_size = len(header.cards) * 80
-
-    target_size = (n - 1) * 2880  # fits header size is a multiple of 2880 bytes
-    padding_needed = target_size - info_size
-    num_comments = padding_needed // 80  # (each COMMENT is 80 bytes)
-
-    # CAVEAT: END also uses one line.
-    # for _ in range(num_comments - 1):  # <<< full n-1 2880-byte blocks
-    for _ in range(num_comments):  # <<< marginal n blocks
-        header.add_comment(" ")
-
-    return header
-
-
-def remove_padding(header):
-    """
-    Remove COMMENT padding from a FITS header.
-
-    Strips all trailing COMMENT entries, returning a header with only
-    significant entries.
-
-    Args:
-        header (fits.Header): Input FITS header with potential padding
-
-    Returns:
-        fits.Header: Header with padding comments removed
-
-    Note:
-        This method is primarily useful for header inspection and may not
-        be directly applicable for header updates.
-    """
-    # Extract all header cards
-    cards = list(header.cards)
-
-    # Find the last non-COMMENT entry
-    for i in range(len(cards) - 1, -1, -1):
-        if cards[i][0] != "COMMENT":  # i is the last non-comment idx
-            break
-
-    return header[: i + 1]
-
 
 def read_scamp_header(file):
     """
@@ -759,3 +692,13 @@ def parse_list_file(imagelist_file):
     # input_table = Table.read(imagelist_file_to_stack, format="ascii.commented_header")
     files = [f for f in input_table["file"].data]
     return files
+
+def time_diff_in_seconds(datetime1, datetime2=None):
+    if datetime2 is None:
+        datetime2 = time.time()
+    if isinstance(datetime1, datetime):
+        datetime1 = datetime1.timestamp()
+    if isinstance(datetime2, datetime):
+        datetime2 = datetime2.timestamp()
+    time_diff = datetime2 - datetime1
+    return f"{abs(time_diff):.2f}"

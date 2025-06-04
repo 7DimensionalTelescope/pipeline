@@ -11,7 +11,7 @@ from .plotting import *
 from . import utils as prep_utils
 from .cupy_calc import *
 
-from ..utils import add_padding, get_header, flatten
+from ..utils import get_header, flatten, time_diff_in_seconds
 from ..path import PathHandler
 from ..config import PreprocConfiguration
 from ..services.setup import BaseSetup
@@ -31,12 +31,14 @@ class Preprocess(BaseSetup):
         queue=False,
         logger=None,
         overwrite=False,
+        master_frame_only=False,
         **kwargs,
     ):
         # Load Configuration
         super().__init__(config, logger, queue)
 
         self.overwrite = overwrite
+        self.master_frame_only = master_frame_only
 
         self.initialize()
 
@@ -53,18 +55,20 @@ class Preprocess(BaseSetup):
         for i in range(self._n_groups):
             tasks.append((4 * i, f"load_masterframe", True))
             tasks.append((4 * i + 1, f"data_reduction", True))
-            tasks.append((4 * i + 2, f"make_plots", False))
+            tasks.append((4 * i + 2, f"save_processed_images", False))
             if i < self._n_groups - 1:
                 tasks.append((4 * i + 3, f"proceed_to_next_group", False))
 
         return tasks
 
     def initialize(self):
+        from ..path import PathHandler
+
         self.logger.info("Initializing Preprocess")
-        if (hasattr(self.config.input, "calib_images") and self.config.input.calib_images) or (
+        if (hasattr(self.config.input, "masterframe_images") and self.config.input.masterframe_images) or (
             hasattr(self.config.input, "science_images") and self.config.input.science_images
         ):
-            bdf_flattened = flatten(self.config.input.calib_images)
+            bdf_flattened = flatten(self.config.input.masterframe_images)
             input_files = bdf_flattened + list(self.config.input.science_images)
             self.raw_groups = PathHandler.take_raw_inventory(input_files)
             self.logger.debug(f"grouped_raw from manual input: {self.raw_groups}")
@@ -77,39 +81,37 @@ class Preprocess(BaseSetup):
         self._n_groups = len(self.raw_groups)
         self._current_group = 0
 
-        self.choose_device()
-
         self.logger.info(f"{self._n_groups} groups are found")
         self.logger.debug(f"raw_groups:\n{self.raw_groups}")
         # raise ValueError("stop")  # for debug
 
-    def run(self):
+    def run(self, device_id = None, make_plots = True):
         threads_for_making_plots = []
         for i in range(self._n_groups):
-            self.load_masterframe()
-            self.data_reduction()
+            self.load_masterframe(device_id=device_id)
+            if not self.master_frame_only:
+                self.data_reduction(device_id=device_id)
+                self.save_processed_images()
 
-            t = threading.Thread(target=self.make_plots, args=(i,))
-            t.start()
-            threads_for_making_plots.append(t)
+            if make_plots:
+                t = threading.Thread(target=self.make_plots, args=(i,))
+                t.start()
+                threads_for_making_plots.append(t)
 
             if i < self._n_groups - 1:
                 self.proceed_to_next_group()
 
-        for t in threads_for_making_plots:
-            t.join()
-
-    def choose_device(self):
-        if self.config.preprocess.device is None:
-            from ..services.memory import MemoryMonitor
-
-            self.logger.debug("No device specified, choosing the device with least memory usage")
-            self.config.preprocess.device = int(
-                np.argmin(MemoryMonitor.current_gpu_memory_percent)
-            )  # np int will wreak havoc in yaml
-            self.logger.debug(f"Chosen device: {self.config.preprocess.device}")
-        self.device_id = self.config.preprocess.device
-
+        if make_plots:
+            for t in threads_for_making_plots:
+                t.join()
+    
+    def make_plot_all(self):
+        st = time.time()
+        self.logger.info("Making plots for all groups")
+        for i in range(self._n_groups):
+            self.make_plots(i)
+        self.logger.info(f"Finished making plots for all groups in {time_diff_in_seconds(st)} seconds")
+    
     def proceed_to_next_group(self):
         self._current_group += 1
         if self._current_group >= self._n_groups:
@@ -180,9 +182,25 @@ class Preprocess(BaseSetup):
         self.logger.debug(f"FLAT DARK SCALING (FLAT / DARK): {flat_exptime} / {dark_exptime}")
         return flat_exptime / dark_exptime
 
+    def get_device_id(self, device_id):
+        if device_id is not None:
+            return device_id
+        if self.config.preprocess.device is None:
+            from ..services.utils import get_best_gpu_device
+            return get_best_gpu_device()
+        else:
+            return self.config.preprocess.device
+
     def load_masterframe(self, device_id=None):
-        if device_id is None:
-            device_id = self.device_id
+        """
+        no raw calib -> fetch from the library of pre-generated master frames
+        raw calibs exist
+            -> if output master exists, just fetch.
+            -> if overwrite, always generate and overwrite
+
+        If there's nothing to fetch, the code will fail.
+        """
+        device_id = self.get_device_id(device_id)
 
         self.logger.info(f"Generating masterframes for group {self._current_group+1} in GPU device {device_id}")
         st = time.time()
@@ -202,7 +220,7 @@ class Preprocess(BaseSetup):
             else:
                 self._fetch_masterframe(output_data, dtype, device_id)
 
-        self.logger.info(f"Generation/Loading of masterframes completed in {time.time() - st:.2f} seconds")
+        self.logger.info(f"Generation/Loading of masterframes completed in {time_diff_in_seconds(st)} seconds")
 
     def _generate_masterframe(self, dtype, device_id):
         """Generate & Save masterframe and sigma image"""
@@ -271,18 +289,21 @@ class Preprocess(BaseSetup):
             self.dark_exptime = get_header(existing_data)[HEADER_KEY_MAP["exptime"]]
 
     def data_reduction(self, device_id=None):
+
         if not self.sci_input:
             self.logger.info(f"No science frames found in group {self._current_group + 1}, skipping data reduction.")
+            self.all_results = None
             return
 
         flag = [os.path.exists(file) for file in self.sci_output]
         if all(flag):
             self.logger.info(f"All images in group {self._current_group+1} are already processed")
             return
+        
+        device_id = self.get_device_id(device_id)
 
         st = time.time()
 
-        n_head_blocks = self.config.preprocess.n_head_blocks
         use_multi_device = self.config.preprocess.use_multi_device
 
         if use_multi_device:
@@ -298,7 +319,7 @@ class Preprocess(BaseSetup):
         batch_dist = calc_batch_dist(self.sci_input, num_devices=num_devices, use_multi_device=use_multi_device)
 
         self.logger.info(
-            f"Processing {len(self.sci_input)} images in group {self._current_group+1} on GPU device(s): {device} "
+            f"Processing {len(self.sci_input)} images in group {self._current_group+1} on GPU device(s): {device_id} "
         )
 
         threads = []
@@ -322,11 +343,11 @@ class Preprocess(BaseSetup):
                     start_idx = end_idx
             else:
                 end_idx = start_idx + batch[0]
-                self.logger.debug(f"Device {device} will process {end_idx - start_idx} images")
+                self.logger.debug(f"Device {device_id} will process {end_idx - start_idx} images")
                 subset = self.sci_input[start_idx:end_idx]
                 t = threading.Thread(
                     target=process_batch_on_device,
-                    args=(subset, self.bias_data, self.dark_data, self.flat_data, results, device),
+                    args=(subset, self.bias_data, self.dark_data, self.flat_data, results, device_id),
                 )
                 t.start()
                 threads.append(t)
@@ -339,15 +360,27 @@ class Preprocess(BaseSetup):
                 t.join()
 
             self.logger.debug(
-                f"Data reduction has been completed in {time.time() - start_time:.0f} seconds for {len(self.sci_input)} iamges."
+                f"Data reduction has been completed in {time_diff_in_seconds(start_time)} seconds for {len(self.sci_input)} iamges."
             )
+        del self.bias_data, self.dark_data, self.flat_data
+        cp.get_default_memory_pool().free_all_blocks()
+
         # Combine results
-        all_results = [item for sublist in results if sublist for item in sublist]
+        self.all_results = [item for sublist in results if sublist for item in sublist]
         self.logger.info(
-            f"Completed data reduction for {len(self.sci_input)} images in group {self._current_group+1} in {time.time() - st:.0f} seconds"
+            f"Completed data reduction for {len(self.sci_input)} images in group {self._current_group+1} in {time_diff_in_seconds(st)} seconds"
         )
 
-        for idx, (raw_file, processed_file) in enumerate(zip(self.sci_input, self.sci_output)):
+    def save_processed_images(self):
+        
+        if self.all_results is None:
+            return
+
+        st = time.time()
+        n_head_blocks = self.config.preprocess.n_head_blocks
+
+        # Write results
+        for result, raw_file, processed_file in zip(self.all_results, self.sci_input, self.sci_output):
             header = fits.getheader(raw_file)
             header["SATURATE"] = prep_utils.get_saturation_level(
                 header, self.bias_output, self.dark_output, self.flat_output
@@ -355,18 +388,54 @@ class Preprocess(BaseSetup):
             header = prep_utils.write_IMCMB_to_header(
                 header, [self.bias_output, self.dark_output, self.flat_output, raw_file]
             )
-            add_padding(header, n_head_blocks, copy_header=False)
+            header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
+            
             os.makedirs(os.path.dirname(processed_file), exist_ok=True)
             fits.writeto(
                 processed_file,
-                data=all_results[idx],
+                data=result,
                 header=header,
                 overwrite=True,
             )
-        del all_results, self.bias_data, self.dark_data, self.flat_data
-        self.logger.info(f"All images in group {self._current_group+1} are saved")
-        cp.get_default_memory_pool().free_all_blocks()
+        self.all_results = None
+        self.logger.info(f"Processed images in group {self._current_group+1} are saved in {time_diff_in_seconds(st)} seconds")
         gc.collect()
+
+    def make_plots(self, group_index=None):
+        st = time.time()
+        if group_index is None:
+            group_index = self._current_group
+
+        self.logger.info(f"Generating plots for master calibration frames of group {group_index+1}")
+        use_multi_thread = self.config.preprocess.use_multi_thread
+
+        plot_bias(self._get_raw_group("bias_output", group_index), savefig=True)
+        mask = plot_bpmask(self._get_raw_group("bpmask_output", group_index), savefig=True)
+        sample_header = fits.getheader(self._get_raw_group("bpmask_output", group_index), ext=1)
+        if "BADPIX" in sample_header.keys():
+            badpix = sample_header["BADPIX"]
+
+        mask = mask != badpix
+        fmask = mask.ravel()
+        plot_dark(self._get_raw_group("dark_output", group_index), fmask, savefig=True)
+        plot_flat(self._get_raw_group("flat_output", group_index), fmask, savefig=True)
+
+        self.logger.info(f"Generating plots for science frames of group {group_index+1} ({len(self._get_raw_group('sci_input', group_index))} images)")
+        if use_multi_thread:
+            threads = []
+            for output_img in self._get_raw_group("sci_output", group_index):
+                thread = threading.Thread(target=plot_sci, args=(output_img,))
+                thread.start()
+                threads.append(thread)
+            for thread in threads:
+                thread.join()
+        else:
+            for output_img in self._get_raw_group("sci_output", group_index):
+                plot_sci(output_img)
+
+        self.logger.info(
+            f"Completed plot generation for images in group {group_index+1} in {time_diff_in_seconds(st)} seconds"
+        )
 
     def generate_bpmask(self, data, n_sigma=5, header=None, device_id=0):
         mean, median, std = sigma_clipped_stats_cupy(data, sigma=3, maxiters=5, device_id=device_id)
@@ -398,43 +467,3 @@ class Preprocess(BaseSetup):
         primary_hdu = fits.PrimaryHDU()
         newhdul = fits.HDUList([primary_hdu, newhdu])
         newhdul.writeto(self.bpmask_output, overwrite=True)
-
-    def make_plots(self, group_index=None):
-        st = time.time()
-        if group_index is not None:
-            group_index = self._current_group
-
-        self.logger.info(f"Generating plots for master calibration frames of group {group_index+1}")
-        use_multi_thread = self.config.preprocess.use_multi_thread
-
-        plot_bias(self._get_raw_group("bias_output", group_index), savefig=True)
-        mask = plot_bpmask(self._get_raw_group("bpmask_output", group_index), savefig=True)
-        sample_header = fits.getheader(self._get_raw_group("bpmask_output", group_index), ext=1)
-        if "BADPIX" in sample_header.keys():
-            badpix = sample_header["BADPIX"]
-
-        mask = mask != badpix
-        fmask = mask.ravel()
-        plot_dark(self._get_raw_group("dark_output", group_index), fmask, savefig=True)
-        plot_flat(self._get_raw_group("flat_output", group_index), fmask, savefig=True)
-
-        self.logger.info(f"Generating plots for science frames of group {group_index+1}")
-        if use_multi_thread:
-            threads = []
-            for input_img, output_img in zip(
-                self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)
-            ):
-                thread = threading.Thread(target=plot_sci, args=(input_img, output_img))
-                thread.start()
-                threads.append(thread)
-            for thread in threads:
-                thread.join()
-        else:
-            for input_img, output_img in zip(
-                self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)
-            ):
-                plot_sci(input_img, output_img)
-
-        self.logger.info(
-            f"Completed plot generation for {len(self._get_raw_group('sci_input', group_index))} images in group {group_index+1} in {time.time() - st:.2f} seconds"
-        )

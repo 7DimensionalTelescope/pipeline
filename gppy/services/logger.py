@@ -43,7 +43,6 @@ class Logger:
     def __init__(
         self,
         name: str = "7DT pipeline logger",
-        pipeline_name: Optional[str] = None,
         log_file: Optional[str] = None,
         level: str = "INFO",
         log_format: str = "[%(levelname)s] %(asctime)s - %(name)s - %(message)s",
@@ -53,7 +52,6 @@ class Logger:
         self._log_format = log_format
         self._log_file = log_file
         self._level = level.upper()
-        self._pipeline_name = pipeline_name
         self._slack_channel = slack_channel
         self._thread_ts = None  # Store the first message timestamp
         self.logger = self._setup_logger()
@@ -135,6 +133,7 @@ class Logger:
         Raises:
             AttributeError: If an invalid log level is provided
         """
+        
         try:
             log_level = getattr(logging, self._level)
         except AttributeError:
@@ -144,35 +143,47 @@ class Logger:
         logger = logging.getLogger(self.name)
         logger.setLevel(logging.DEBUG)  # Set to DEBUG to catch all messages
 
-        # Remove existing handlers
-        for handler in logger.handlers[:]:
-            logger.removeHandler(handler)
+        # Helper function to check if a handler of specific type already exists
+        def has_handler_type(logger, handler_type):
+            for handler in logger.handlers:
+                if hasattr(handler, 'name') and handler.name == handler_type:
+                    return True
+            return False
 
-        # Add console handler
-        console_handler = self._create_handler("console", level=logging.INFO)
-        logger.addHandler(console_handler)
-        console_err_handler = self._create_handler("console_err", level=logging.ERROR)
-        logger.addHandler(console_err_handler)
+        # Add console handler if not already present
+        if not has_handler_type(logger, "console"):
+            console_handler = self._create_handler("console", level=logging.INFO)
+            console_handler.name = "console"
+            logger.addHandler(console_handler)
+        
+        if not has_handler_type(logger, "console_err"):
+            console_err_handler = self._create_handler("console_err", level=logging.ERROR)
+            console_err_handler.name = "console_err"
+            logger.addHandler(console_err_handler)
 
         # Add file handlers if log_file is specified
         if self._log_file:
             # Main log file with specified level
             os.makedirs(os.path.dirname(self._log_file), exist_ok=True)
 
-            file_handler = self._create_handler(
-                "file",
-                log_file=self._log_file,
-                level=log_level,
-                mode="w" if overwrite else "a",
-            )
-            logger.addHandler(file_handler)
+            if not has_handler_type(logger, "file"):
+                file_handler = self._create_handler(
+                    "file",
+                    log_file=self._log_file,
+                    level=log_level,
+                    mode="w" if overwrite else "a",
+                )
+                file_handler.name = "file"
+                logger.addHandler(file_handler)
 
             # Debug log file always at DEBUG level
             debug_log_file = self._log_file.replace(".log", "_debug.log")
-            debug_handler = self._create_handler(
-                "file", log_file=debug_log_file, level=logging.DEBUG
-            )
-            logger.addHandler(debug_handler)
+            if not has_handler_type(logger, "file_debug"):
+                debug_handler = self._create_handler(
+                    "file_debug", log_file=debug_log_file, level=logging.DEBUG
+                )
+                debug_handler.name = "file_debug"
+                logger.addHandler(debug_handler)
 
         return logger
 
@@ -260,8 +271,6 @@ class Logger:
             msg (str): Message to send to Slack
             level (str): Log level of the message (INFO, WARNING, etc.)
         """
-        if not self._pipeline_name:
-            return
 
         msg = f"[`{level}`] {msg}"
 
@@ -364,15 +373,6 @@ class Logger:
                     handler.setLevel(log_level)
             else:
                 handler.setLevel(log_level)
-
-    def set_pipeline_name(self, name: str) -> None:
-        """
-        Set or update the pipeline name for Slack notifications.
-
-        Args:
-            name (str): Name of the pipeline
-        """
-        self._pipeline_name = name
 
     def set_output_file(self, log_file: str, overwrite: bool = True) -> None:
         """
