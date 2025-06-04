@@ -28,6 +28,7 @@ class ImSubtract(BaseSetup):
     ) -> None:
 
         super().__init__(config, logger, queue)
+        self._flag_name = "subtract"
         self.overwrite = overwrite
 
     @classmethod

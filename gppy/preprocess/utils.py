@@ -158,26 +158,71 @@ def add_image_id(header, key="IMAGEID"):
     return header
 
 
-# def calculate_average_date_obs(date_obs_list):
-#     import numpy as np
-#     from astropy.time import Time
 
-#     t = Time(date_obs_list, format="isot", scale="utc")
-#     avg_time = np.mean(t.jd)
-#     avg_time = Time(avg_time, format="jd", scale="utc")
+def add_padding(header, n, copy_header=False):
+    """
+    Add empty COMMENT entries to a FITS header to ensure specific block sizes.
 
-#     # 'YYYY-MM-DDTHH:MM:SS'
-#     avg_time_str = avg_time.isot
+    This function helps manage FITS header sizes by adding padding comments.
+    Useful for maintaining specific header block structures required by
+    astronomical data processing tools.
 
-#     return avg_time_str
+    Args:
+        header (fits.Header): Input FITS header
+        n (int): Target number of 2880-byte blocks
+        copy_header (bool, optional): If True, operates on a copy of the header.
+            Defaults to False. Note: Using True is slower.
+
+    Returns:
+        fits.Header: Header with added padding comments
+
+    Note:
+        - Each COMMENT is 80 bytes long
+        - The total header size must be a multiple of 2880 bytes
+    """
+    if copy_header:
+        import copy
+
+        header = copy.deepcopy(header)
+
+    info_size = len(header.cards) * 80
+
+    target_size = (n - 1) * 2880  # fits header size is a multiple of 2880 bytes
+    padding_needed = target_size - info_size
+    num_comments = padding_needed // 80  # (each COMMENT is 80 bytes)
+
+    # CAVEAT: END also uses one line.
+    # for _ in range(num_comments - 1):  # <<< full n-1 2880-byte blocks
+    for _ in range(num_comments):  # <<< marginal n blocks
+        header.add_comment(" ")
+
+    return header
 
 
-# def isot_to_mjd(time):  # 20181026 to 2018-10-26T00:00:00:000 to MJD form
-#     from astropy.time import Time
+def remove_padding(header):
+    """
+    Remove COMMENT padding from a FITS header.
 
-#     yr = time[0:4]  # year
-#     mo = time[4:6]  # month
-#     da = time[6:8]  # day
-#     isot = yr + "-" + mo + "-" + da + "T00:00:00.000"  # 	ignore hour:min:sec
-#     t = Time(isot, format="isot", scale="utc")  # 	transform to MJD
-#     return t.mjd
+    Strips all trailing COMMENT entries, returning a header with only
+    significant entries.
+
+    Args:
+        header (fits.Header): Input FITS header with potential padding
+
+    Returns:
+        fits.Header: Header with padding comments removed
+
+    Note:
+        This method is primarily useful for header inspection and may not
+        be directly applicable for header updates.
+    """
+    # Extract all header cards
+    cards = list(header.cards)
+
+    # Find the last non-COMMENT entry
+    for i in range(len(cards) - 1, -1, -1):
+        if cards[i][0] != "COMMENT":  # i is the last non-comment idx
+            break
+
+    return header[: i + 1]
+

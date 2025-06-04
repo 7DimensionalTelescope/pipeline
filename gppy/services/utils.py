@@ -1,5 +1,6 @@
 import gc
 import cupy as cp
+import numpy as np
 import time
 import psutil
 
@@ -47,14 +48,6 @@ def cleanup_memory() -> None:
         pass
 
     gc.collect()  # Initial garbage collection
-    
-def cpu_callback_wrapper(task, tree, callback):
-    def wrapper(result):
-        # Update task with result from the async operation
-        task.result = result
-        # Call your existing callback logic
-        callback(task, tree)
-    return wrapper
 
 @contextmanager
 def monitor_memory_usage(interval: float = 1.0, logger: Optional = None, add_utilization=True, verbose: bool = False) -> Table:
@@ -275,3 +268,10 @@ class classmethodproperty:
             The result of calling the class method
         """
         return self.func.__get__(instance, owner)()
+
+def get_best_gpu_device():
+    from ..services.memory import MemoryMonitor
+    percent = MemoryMonitor.current_gpu_memory_percent
+    available = [p if p<90 else 100 for p in percent]
+    return np.argmin(available)
+    

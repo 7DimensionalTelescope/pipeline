@@ -57,7 +57,7 @@ class SciProcConfiguration(BaseConfig):
     @property
     def name(self):
         if hasattr(self, "path"):
-            return self.path.output_name
+            return os.path.basename(self.path.sciproc_output_log).replace(".log", "")
         elif hasattr(self.config, "name"):
             return self.config.name
         else:
@@ -70,7 +70,7 @@ class SciProcConfiguration(BaseConfig):
             config_source = self.path.sciproc_base_yml
             self.logger = self._setup_logger(
                 logger,
-                name=self.path.output_name,
+                name=self.name,
                 log_file=self.path.sciproc_output_log,
                 verbose=verbose,
             )
@@ -85,7 +85,7 @@ class SciProcConfiguration(BaseConfig):
             self.config.logging.file = self.path.sciproc_output_log
             self.logger = self._setup_logger(
                 logger,
-                name=self.path.output_name,
+                name=self.name,
                 log_file=self.config.logging.file,
                 verbose=verbose,
             )
@@ -119,17 +119,17 @@ class SciProcConfiguration(BaseConfig):
 
         self.config.info.version = __version__
         self.config.info.creation_datetime = datetime.now().isoformat()
-        self.config.name = self.path.output_name
+        self.config.name = self.name
 
-        self.config.input.calibrated_images = self.input_files
+        self.config.input.calibrated_images = PathHandler(self.input_files).processed_images
         self.config.input.output_dir = self.path.output_dir
 
-        self.raw_header_sample = get_header(self.input_files[0])
         # self.set_input_output()
         # self.check_masterframe_status()
 
         self._add_metadata()
-        self._define_settings()
+        self._define_settings(self.input_files[0])
+        self.input_files = self.config.input.calibrated_images
         self._initialized = True
 
     def _add_metadata(self):  # for webpage
@@ -162,11 +162,12 @@ class SciProcConfiguration(BaseConfig):
         # with open(metadata_path, "a") as f:
         #     f.write(new_line)
 
-    def _define_settings(self):
+    def _define_settings(self, input_file):
         # use local astrometric reference catalog for tile observations
         # self.config.settings.local_astref = bool(re.fullmatch(r"T\d{5}", self.config.obs.obj))
 
         # skip single frame combine for Deep mode
-        obsmode = self.raw_header_sample["OBSMODE"]
+        raw_header_sample = get_header(input_file)
+        obsmode = raw_header_sample["OBSMODE"]
         # self.config.obs.obsmode = obsmode
         self.config.settings.daily_stack = False if obsmode.lower() == "deep" else True

@@ -672,7 +672,7 @@ class NameHandler:
         ]
 
     @property
-    def conjugate(self):
+    def conjugate_basename(self):
         """switch between raw and processed (existing) file paths"""
         single = getattr(self, "_single", False)
 

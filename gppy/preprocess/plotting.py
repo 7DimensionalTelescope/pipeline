@@ -13,6 +13,9 @@ def save_fits_as_png(image_data, output_path, stretch=True, log_scale=False, max
     # Handle potential NaN or inf values
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
+    if output_path.exists():
+        return
+
     if isinstance(image_data, str):
         image_data = fits.getdata(image_data)
 
@@ -54,6 +57,13 @@ def save_fits_as_png(image_data, output_path, stretch=True, log_scale=False, max
 
 
 def plot_bias(file, savefig=False):
+    path = Path(file)
+    os.makedirs(path.parent / "figures", exist_ok=True)
+    output_path = path.parent / "figures" / f"{path.stem}_hist.png"
+
+    if output_path.exists():
+        return
+
     data = fits.getdata(file)
     header = fits.getheader(file)
     fdata = data.ravel()
@@ -87,12 +97,10 @@ def plot_bias(file, savefig=False):
     plt.xlim(400, 600)
     plt.ylim(1e-6, 10)
     plt.legend()
-    plt.tight_layout()
+    
 
     if savefig:
-        path = Path(file)
-        os.makedirs(path.parent / "figures", exist_ok=True)
-        plt.savefig(path.parent / "figures" / f"{path.stem}.png")
+        plt.savefig(output_path)
         plt.clf()
         save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
     else:
@@ -100,6 +108,12 @@ def plot_bias(file, savefig=False):
 
 
 def plot_dark(file, fmask=None, savefig=False):
+    path = Path(file)
+    os.makedirs(path.parent / "figures", exist_ok=True)
+    output_path = path.parent / "figures" / f"{path.stem}_hist.png"
+    if output_path.exists():
+        return
+        
     data = fits.getdata(file)
     header = fits.getheader(file)
     fdata = data.ravel()
@@ -134,11 +148,9 @@ def plot_dark(file, fmask=None, savefig=False):
 
     plt.ylim(1e-6, 10)
     plt.legend()
-    plt.tight_layout()
+    
     if savefig:
-        path = Path(file)
-        os.makedirs(path.parent / "figures", exist_ok=True)
-        plt.savefig(path.parent / "figures" / f"{path.stem}.png")
+        plt.savefig(output_path)
         plt.clf()
         save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
     else:
@@ -170,7 +182,7 @@ def plot_dark_tail(fdata, file, savefig=False):
     plt.title(f"Master Dark Tail")
 
     plt.legend()
-    plt.tight_layout()
+    
 
     if savefig:
         path = Path(file)
@@ -182,6 +194,12 @@ def plot_dark_tail(fdata, file, savefig=False):
 
 
 def plot_flat(file, fmask=None, savefig=False):
+
+    path = Path(file)
+    os.makedirs(path.parent / "figures", exist_ok=True)
+    output_path = path.parent / "figures" / f"{path.stem}_hist.png"
+    if output_path.exists():
+        return
 
     data = fits.getdata(file)
     header = fits.getheader(file)
@@ -218,12 +236,10 @@ def plot_flat(file, fmask=None, savefig=False):
     )
     plt.xlim(0, 1.5)
     plt.legend()
-    plt.tight_layout()
+    
 
     if savefig:
-        path = Path(file)
-        os.makedirs(path.parent / "figures", exist_ok=True)
-        plt.savefig(path.parent / "figures" / f"{path.stem}.png")
+        plt.savefig(output_path)
         plt.clf()
         save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
     else:
@@ -231,7 +247,12 @@ def plot_flat(file, fmask=None, savefig=False):
 
 
 def plot_bpmask(file, ext=1, badpix=1, savefig=False):
+    path = Path(file)
+    os.makedirs(path.parent / "figures", exist_ok=True)
+    output_path = path.parent / "figures" / f"{path.stem}.png"
     data = fits.getdata(file, ext=ext)
+    if output_path.exists():
+        return data
 
     header = fits.getheader(file, ext=ext)
     if "BADPIX" in header.keys():
@@ -248,43 +269,13 @@ def plot_bpmask(file, ext=1, badpix=1, savefig=False):
     plt.ylabel("Y (pixels)")
 
     if savefig:
-        path = Path(file)
-        os.makedirs(path.parent / "figures", exist_ok=True)
-        plt.savefig(path.parent / "figures" / f"{path.stem}.png")
+        plt.savefig(output_path)
         plt.clf()
     else:
         plt.show(black=False)
-        if ".link" in file:
-            file = read_link(file)
-        data = fits.getdata(file, ext=ext)
-
-        header = fits.getheader(file, ext=ext)
-        if "BADPIX" in header.keys():
-            badpix = header["BADPIX"]
-
-        if badpix == 0:
-            cmap = mcolors.ListedColormap(["red", "white"])
-        elif badpix == 1:
-            cmap = mcolors.ListedColormap(["white", "red"])
-
-        plt.imshow(data, cmap=cmap, interpolation="nearest")
-        plt.title(f"Hot pixel mask")
-        plt.xlabel("X (pixels)")
-        plt.ylabel("Y (pixels)")
-
-        if savefig:
-            path = Path(file)
-            os.makedirs(path.parent / "figures", exist_ok=True)
-            plt.savefig(path.parent / "figures" / f"{path.stem}.png")
-            plt.clf()
-        else:
-            plt.show(block=False)
-
     return data
 
 
-def plot_sci(input_img, output_img):
-    # path = Path(input_img)
-    # save_fits_as_png(fits.getdata(input_img), path.parent / "figures" / f"{path.stem}.png")
+def plot_sci(output_img):
     path = PathHandler(output_img)
-    save_fits_as_png(fits.getdata(output_img), path.figure_dir_to_path / f"{path.stem}.png")
+    save_fits_as_png(fits.getdata(output_img), path.figure_dir_to_path / f"{path.stem[0]}.png")

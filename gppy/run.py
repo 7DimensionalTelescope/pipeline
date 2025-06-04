@@ -20,7 +20,7 @@ from .services.logger import Logger
 from .services.task import Task, TaskTree
 
 
-def run_preprocess_with_tree(config, priority=Priority.HIGH, **kwargs):
+def run_preprocess_with_task(config, priority=Priority.HIGH, **kwargs):
     """
     Generate master calibration frames for a specific observation set.
 
@@ -35,16 +35,20 @@ def run_preprocess_with_tree(config, priority=Priority.HIGH, **kwargs):
             - gain: Detector gain setting
         queue (bool, optional): Whether to use queue-based processing. Defaults to False.
     """
-    tree = []
     config = PreprocConfiguration.from_file(config)
     prep = Preprocess(config)
-    for task in prep.sequential_task:
-        tree.append(Task(getattr(prep, task[1]), gpu=task[2], cls=prep, priority=priority))
-    return TaskTree(tree)
+    run_task = Task(prep.run, kwargs={"make_plots": False}, gpu=True, priority=priority)
+    return run_task
+
+def run_make_plots(config, priority=Priority.LOW):
+    config = PreprocConfiguration.from_file(config)
+    prep = Preprocess(config)
+    plot_task = Task(prep.make_plot_all, gpu=False, priority=priority)
+    return plot_task
 
 def run_process_with_tree(
     config,
-    processes=["preprocess", "astrometry", "photometry", "combine", "subtract"],
+    processes=["astrometry", "photometry", "combine", "subtract"],
     overwrite=False,
     priority=Priority.MEDIUM,
     **kwargs,
@@ -52,25 +56,25 @@ def run_process_with_tree(
     """
     Perform comprehensive scientific data reduction pipeline sequentially.
     """
-    config = SciProcConfiguration(config, **kwargs)
+    config = SciProcConfiguration.from_file(config, write=True, **kwargs)
 
     tasks = []
-    if not (config.config.flag.astrometry) and "astrometry" in processes:
+    if (not (config.config.flag.astrometry) and "astrometry" in processes) or overwrite:
         astr = Astrometry(config)
         for task in astr.sequential_task:
             tasks.append(Task(getattr(astr, task[1]), priority=priority, gpu=task[2], cls=astr))
-    if not (config.config.flag.single_photometry) and "photometry" in processes:
+    if (not (config.config.flag.single_photometry) and "photometry" in processes) or overwrite:
         phot = Photometry(config)
         for task in phot.sequential_task:
             tasks.append(Task(getattr(phot, task[1]), priority=priority, gpu=task[2], cls=phot))
-    if not (config.config.flag.combine) and "combine" in processes:
-        stk = ImStack(config)
-        for task in stk.sequential_task:
-            tasks.append(Task(getattr(stk, task[1]), priority=priority, gpu=task[2], cls=stk))
-    if not (config.config.flag.combined_photometry) and "photometry" in processes:
-        phot = Photometry(config)
-        for task in phot.sequential_task:
-            tasks.append(Task(getattr(phot, task[1]), priority=priority, gpu=task[2], cls=phot))
+    #if (not (config.config.flag.combine) and "combine" in processes) or overwrite:
+    #     stk = ImStack(config)
+    #     for task in stk.sequential_task:
+    #         tasks.append(Task(getattr(stk, task[1]), priority=priority, gpu=task[2], cls=stk))
+    # if (not (config.config.flag.combined_photometry) and "photometry" in processes) or overwrite:
+    #     phot = Photometry(config)
+    #     for task in phot.sequential_task:
+    #         tasks.append(Task(getattr(phot, task[1]), priority=priority, gpu=task[2], cls=phot))
 
     if len(tasks) != 0:
         tree = TaskTree(tasks)
