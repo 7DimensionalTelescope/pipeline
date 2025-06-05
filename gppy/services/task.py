@@ -65,13 +65,7 @@ class Task:
         self.status = status
         self.result = result
         self.error = error
-        self.time_priority = int(time.time() * 1000)
-        self.inherit_input = inherit_input
-        
-        # Set task name after initialization to avoid recursion
-        if task_name is None:
-            self.task_name = self._get_task_name()
-
+    
     def __lt__(self, other):
         return self.sort_index < other.sort_index
     
@@ -119,32 +113,31 @@ class Task:
             raise ValueError(f"No function reference available for task {self.id}")
 
     def execute(self):
-        """Execute the task's function with the provided arguments.
-        
-        Returns:
-            Task: The current task instance with updated status and result
-            
-        Raises:
-            Exception: If task execution fails
-        """
-        self.status = "processing"
-        self.starttime = datetime.now()
         try:
-            # Execute function with appropriate context
+            self.status = "processing"
+            self.starttime = datetime.now()
             if self.gpu:
-                with cp.cuda.Device(self.device):
-                    self.result = self.func(device_id = self.device, *self.args, **self.kwargs)
+                with self.gpu_context():
+                    self.result = self.func(*self.args, **self.kwargs)
             else:
                 self.result = self.func(*self.args, **self.kwargs)
-
-            self.status = "completed"
-            return self
         except Exception as e:
             self.status = "failed"
+            self.result = None
             self.error = e
-            raise
         finally:
+            self.status = "completed"
             self.endtime = datetime.now()
+        return self
+
+    @contextmanager
+    def gpu_context(self):
+        try:
+            with cp.cuda.Device(self.device):
+                yield
+        except Exception as e:
+            print(f"GPU operation failed on device {device}: {e}")
+            raise
 
     def cleanup(self):
         """Cleanup resources after task execution.

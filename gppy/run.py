@@ -59,7 +59,11 @@ def run_process_with_tree(
     config = SciProcConfiguration.from_file(config, write=True, **kwargs)
 
     tasks = []
-    if (not (config.config.flag.astrometry) and "astrometry" in processes) or overwrite:
+    if not (config.config.flag.preprocess) and "preprocess" in processes:
+        prep = Preprocess(config)
+        for task in prep.sequential_task:
+            tasks.append(Task(getattr(prep, task[1]), priority=priority, gpu=task[2], cls=prep))
+    if not (config.config.flag.astrometry) and "astrometry" in processes:
         astr = Astrometry(config)
         for task in astr.sequential_task:
             tasks.append(Task(getattr(astr, task[1]), priority=priority, gpu=task[2], cls=astr))

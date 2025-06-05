@@ -88,6 +88,7 @@ class Configuration:
         if overwrite:
             # clean_up_folder(self.path.output_dir)
             clean_up_folder(self.path.factory_dir)
+            self.path.make_dirs()
             # clean_up_folder(self.path.daily_stacked_dir)
 
         self.logger = self._setup_logger(logger, verbose=verbose)
