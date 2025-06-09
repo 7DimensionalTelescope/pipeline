@@ -87,17 +87,28 @@ def process_batch_on_device(image_paths, bias, dark, flat, results, device_id=0)
         compute_stream = Stream()
 
         local_results = []
+        prev_image = None
         for img_path in image_paths:
             with load_stream:
-                image = cp.asarray(fits.getdata(img_path).astype(np.float32))
-            with compute_stream:
-                reduced = reduction_kernel(image, bias, dark, flat)
-                local_results.append(cp.asnumpy(reduced))
-                del reduced
-            del image
+                curr_image = cp.asarray(fits.getdata(img_path).astype('float32'))
+            
+            if prev_image is not None:
+                with compute_stream:
+                    reduced = reduction_kernel(prev_image, bias, dark, flat)
+                    local_results.append(cp.asnumpy(reduced))
+                del prev_image
 
-        del bias, dark, flat
+            load_stream.synchronize()
+            prev_image = curr_image
+
+        if prev_image is not None:
+            with compute_stream:
+                reduced = reduction_kernel(prev_image, bias, dark, flat)
+                local_results.append(cp.asnumpy(reduced))
         compute_stream.synchronize()
+    
+        del bias, dark, flat, prev_image, curr_image, reduced
+
         cp.get_default_memory_pool().free_all_blocks()
         if np.shape(results) == (1,):
             results[0] = local_results

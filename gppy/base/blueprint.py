@@ -61,11 +61,11 @@ class Blueprint:
         return self.groups[list(self.groups.keys())[i]]
         
     
-    def process_group(self, group):
+    def process_group(self, group, device_id=None):
         from ..run import run_preprocess_with_task, run_process_with_tree, run_make_plots
         
         # Submit preprocess
-        pre_task = run_preprocess_with_task(group.masterframe_config)
+        pre_task = run_preprocess_with_task(group.masterframe_config, device_id=device_id)
         self.queue.add_task(pre_task)
         # Wait for this group's preprocess to finish
         self.queue.wait_until_task_complete(pre_task.id)
@@ -78,9 +78,10 @@ class Blueprint:
             self.queue.add_tree(sci_tree)
 
     def process_all(self):
+
         threads = []
-        for group in self.groups.values():
-            t = threading.Thread(target=self.process_group, args=(group,))
+        for i, group in enumerate(self.groups.values()):
+            t = threading.Thread(target=self.process_group, args=(group, i%2))
             t.start()
             threads.append(t)
 
