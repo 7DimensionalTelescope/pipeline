@@ -5,7 +5,22 @@ import shutil
 from pathlib import Path
 from datetime import datetime, timedelta
 from astropy.io import fits
-from .const import FACTORY_DIR, RAWDATA_DIR, HEADER_KEY_MAP
+from collections.abc import Iterable
+from .const import FACTORY_DIR, RAWDATA_DIR, HEADER_KEY_MAP, ALL_GROUP_KEYS
+import time
+
+def flatten(seq):
+    """
+    Recursively flatten any nested lists/tuples into a single flat list.
+    Strings and bytes are treated as atomic.
+    """
+    flat = []
+    for item in seq:
+        if isinstance(item, Iterable) and not isinstance(item, (str, bytes)):
+            flat.extend(flatten(item))
+        else:
+            flat.append(item)
+    return flat
 
 
 def most_common_in_dict(counts: dict):
@@ -28,23 +43,6 @@ def most_common_in_list(seq: list):
     return most_common_in_dict(counts)
 
 
-def switch_raw_name_order(name):
-    parts = name.split("_")
-    return "_".join(parts[3:5] + parts[0:1] + [format_subseconds(parts[6])] + parts[1:3])
-
-
-def format_subseconds(sec: str):
-    """100.0s -> 100s, 0.1s -> 0pt100s"""
-    s = float(sec[:-1])
-    integer_second = int(s)
-    if integer_second != 0:
-        return f"{integer_second}s"
-
-    # if subsecond
-    millis = int(abs(s) * 1000 + 0.5)  # round to nearest ms
-    return f"0pt{millis:03d}s"
-
-
 def clean_up_factory():
     clean_up_folder(FACTORY_DIR)
 
@@ -64,7 +62,53 @@ def clean_up_folder(path):
             print(f"Failed to delete {item_path}: {e}")
 
 
+def clean_up_sciproduct(root_dir: str | Path, suffixes=(".log", "_cat.fits", ".png")) -> None:
+    root = Path(root_dir)
+    for path in root.rglob("*"):
+        if path.is_file() and any(path.name.endswith(s) for s in suffixes):
+            try:
+                path.unlink()
+            except Exception as e:
+                raise RuntimeError(f"Failed to delete {path}: {e}") from e
+
+
+def equal_on_keys(d1: dict, d2: dict, keys: list):
+    # return all(d1[k] == d2[k] for k in keys)
+    return all(d1.get(k) == d2.get(k) for k in keys)  # None if key missing
+
+
+def collapse(seq: list | dict[list], keys=ALL_GROUP_KEYS, raise_error=False):
+    """
+    If seq is non-empty and every element equals the first one,
+    return the first element; else return seq unchanged.
+    """
+    if not seq:
+        return seq
+    elif isinstance(seq, list):
+        first = seq[0]
+    else:
+        first = seq
+
+    if isinstance(first, dict):
+        common_keys = [k for k in keys if all(k in d for d in seq)]
+        if common_keys and all(d[k] == first[k] for d in seq for k in common_keys):
+            return first
+    # if isinstance(first, (Path, str)):
+    else:
+        if all(x == first for x in seq):
+            return first
+    # else:
+    #     raise TypeError("Invalid type to check homogeneity")
+
+    # if inhomogeneous
+    if raise_error:
+        raise ValueError(f"Uncollapsible: input is not homogeneous: {seq}")
+    else:
+        return seq
+
+
 def check_params(img):
+    """makes obs_params, which will be deprecated in the unified MFG-preproc scheme"""
     try:
         params = parse_key_params_from_filename(img)[0]
     except:
@@ -75,12 +119,6 @@ def check_params(img):
     if not params:
         raise ValueError("No parameters found in the image file names or headers.")
     return params
-
-
-def subtract_half_day(timestr: str) -> str:
-    dt = datetime.strptime(timestr, "%Y%m%d_%H%M%S")
-    new_dt = dt - timedelta(hours=15)  # -15h for winter, not -12h
-    return new_dt.strftime("%Y-%m-%d")
 
 
 def parse_key_params_from_filename(img):
@@ -105,6 +143,13 @@ def parse_key_params_from_filename(img):
             target, filt, units, exposure, datetime_string = match.groups()
             date = subtract_half_day(datetime_string)
 
+    gain = re.findall("(gain[0-9]+)", path.abspath())
+
+    if gain:
+        gain = gain[-1]
+    else:
+        gain = None
+
     info = {
         "nightdate": date,
         "obstime": datetime_string,
@@ -113,6 +158,7 @@ def parse_key_params_from_filename(img):
         "unit": units,
         "exposure": exposure,
         "n_binning": int(formatted_n_binning[0]),
+        "gain": gain,
     }
 
     # deprecated key support
@@ -147,18 +193,24 @@ def parse_key_params_from_header(filename: str | Path) -> None:
         else:
             info[attr] = header[key]
 
+    info["nightdate"] = subtract_half_day(to_datetime_string(info["obstime"]))
+
     file_type = "master_image" if any(s in filename for s in ["BIAS", "DARK", "FLAT"]) else "sci_image"
 
     return info, file_type
 
 
+def subtract_half_day(timestr: str) -> str:
+    if len(timestr) == 8:
+        dt = datetime.strptime(timestr, "%Y%m%d")
+    else:
+        dt = datetime.strptime(timestr, "%Y%m%d_%H%M%S")
+    new_dt = dt - timedelta(hours=15)  # -15h for winter, not -12h
+    return new_dt.strftime("%Y-%m-%d")
+
+
 def to_datetime_string(datetime_str, date_only=False):
     """
-    Convert an ISO-formatted datetime string to a specific string representation.
-
-    This function handles datetime strings with timezone information, converting
-    them to a standardized format for astronomical data processing.
-
     Args:
         datetime_str (str): ISO-formatted datetime string (e.g., '2025-02-07T16:44:41+09:00')
         date_only (bool, optional): If True, returns only the date. Defaults to False.
@@ -181,6 +233,32 @@ def to_datetime_string(datetime_str, date_only=False):
         return dt.strftime("%Y%m%d")
     else:
         return dt.strftime("%Y%m%d_%H%M%S")
+
+
+def get_header(filename: str | Path, force_return=False) -> dict | fits.Header:
+    """
+    Get the header of a FITS file.
+
+    Args:
+        filename (str | Path): Path to the FITS file or a .head file
+
+    Returns:
+        dict | fits.Header: Header of the FITS file
+    """
+    filename = str(filename)
+    imhead_file = swap_ext(filename, "head")
+
+    if os.path.exists(imhead_file):
+        # Read the header from the text file
+        return header_to_dict(imhead_file)
+    elif os.path.exists(filename):
+        from astropy.io import fits
+
+        return fits.getheader(swap_ext(filename, "fits"))
+    else:
+        if force_return:
+            return {}
+        raise FileNotFoundError(f"File not found: {filename}")
 
 
 def header_to_dict(file_path):
@@ -262,13 +340,15 @@ def get_camera(header):
 
     Identifies the camera model by examining the number of pixels in the first axis.
     Supports two camera types: C3 and C5.
+    Returns UnKnownCam if the file does not exist or the header is missing NAXIS1.
+
     Support for the overscan area of C5 is to be added.
 
     Args:
         header (dict or str): Either a header dictionary or a path to a .head file
 
     Returns:
-        str: Camera type ('C3', 'C5', or 'Unidentified')
+        str: Camera type ('C3', 'C5', or 'UnnknownCam')
 
     Example:
         >>> get_camera({'NAXIS1': 9576, 'NAXIS2': 6388})
@@ -276,24 +356,44 @@ def get_camera(header):
         >>> get_camera('/path/to/header.head')
         'C5'
     """
-    if type(header) == dict:
+    if isinstance(header, list):
+        return [get_camera(s) for s in header]
+    elif type(header) == dict or isinstance(header, fits.Header):
         pass
+    elif isinstance(header, (str, Path)):
+        header = get_header(header, force_return=True)
     else:
-        header = header_to_dict(header)
+        raise TypeError("Input of get_camera must be a dictionary, fits.Header, or a file path.")
 
     # if header["NAXIS1"] == 9576:  # NAXIS2 6388
     #     return "C3"
     # elif header["NAXIS1"] == 14208:  # NAXIS2 10656
     #     return "C5"
-    if 9576 % header["NAXIS1"] == 0:  # NAXIS2 6388
-        return "C3"
-    elif 14208 % header["NAXIS1"] == 0:  # NAXIS2 10656
-        return "C5"
+    if header and "NAXIS1" in header:
+        if 9576 % header["NAXIS1"] == 0:  # NAXIS2 6388
+            return "C3"
+        elif 14208 % header["NAXIS1"] == 0:  # NAXIS2 10656
+            return "C5"
+        else:
+            return "UnknownCam"
     else:
-        return "UnknownCam"
+        return "UnknownCam"  # None  # None makes the length masterframe_basename different.
 
 
-def find_raw_path(unit, date, n_binning, gain):
+def get_gain(fpath):
+    key = HEADER_KEY_MAP["gain"]
+
+    def parse_from_path(path: str) -> int:
+        m = re.search(r"gain(\d+)", path)
+        if not m:
+            return None
+        else:
+            return int(m.group(1))
+
+    return parse_from_path(fpath) or get_header(fpath, force_return=True).get(key, None)
+
+
+def find_raw_path(unit, nightdate, n_binning, gain):
     """
     Locate the raw data directory for a specific observation.
 
@@ -316,12 +416,12 @@ def find_raw_path(unit, date, n_binning, gain):
     """
     from .const import RAWDATA_DIR
 
-    raw_data_folder = glob.glob(f"{RAWDATA_DIR}/{unit}/{date}*")
+    raw_data_folder = glob.glob(f"{RAWDATA_DIR}/{unit}/{nightdate}*")
 
     if len(raw_data_folder) > 1:
-        raw_data_folder = glob.glob(f"{RAWDATA_DIR}/{unit}/{date}*_gain{gain}*")
+        raw_data_folder = glob.glob(f"{RAWDATA_DIR}/{unit}/{nightdate}*_gain{gain}*")
         if len(raw_data_folder) > 1:
-            raw_data_folder = glob.glob(f"{RAWDATA_DIR}/{unit}/{date}_{n_binning}x{n_binning}_gain{gain}*")
+            raw_data_folder = glob.glob(f"{RAWDATA_DIR}/{unit}/{nightdate}_{n_binning}x{n_binning}_gain{gain}*")
 
     elif len(raw_data_folder) == 0:
         raise ValueError("No data folder found")
@@ -433,73 +533,6 @@ def lapse(explanation="elapsed", print_output=True):
         return elapsed_time  # in seconds
 
 
-def add_padding(header, n, copy_header=False):
-    """
-    Add empty COMMENT entries to a FITS header to ensure specific block sizes.
-
-    This function helps manage FITS header sizes by adding padding comments.
-    Useful for maintaining specific header block structures required by
-    astronomical data processing tools.
-
-    Args:
-        header (fits.Header): Input FITS header
-        n (int): Target number of 2880-byte blocks
-        copy_header (bool, optional): If True, operates on a copy of the header.
-            Defaults to False. Note: Using True is slower.
-
-    Returns:
-        fits.Header: Header with added padding comments
-
-    Note:
-        - Each COMMENT is 80 bytes long
-        - The total header size must be a multiple of 2880 bytes
-    """
-    if copy_header:
-        import copy
-
-        header = copy.deepcopy(header)
-
-    info_size = len(header.cards) * 80
-
-    target_size = (n - 1) * 2880  # fits header size is a multiple of 2880 bytes
-    padding_needed = target_size - info_size
-    num_comments = padding_needed // 80  # (each COMMENT is 80 bytes)
-
-    # CAVEAT: END also uses one line.
-    # for _ in range(num_comments - 1):  # <<< full n-1 2880-byte blocks
-    for _ in range(num_comments):  # <<< marginal n blocks
-        header.add_comment(" ")
-
-    return header
-
-
-def remove_padding(header):
-    """
-    Remove COMMENT padding from a FITS header.
-
-    Strips all trailing COMMENT entries, returning a header with only
-    significant entries.
-
-    Args:
-        header (fits.Header): Input FITS header with potential padding
-
-    Returns:
-        fits.Header: Header with padding comments removed
-
-    Note:
-        This method is primarily useful for header inspection and may not
-        be directly applicable for header updates.
-    """
-    # Extract all header cards
-    cards = list(header.cards)
-
-    # Find the last non-COMMENT entry
-    for i in range(len(cards) - 1, -1, -1):
-        if cards[i][0] != "COMMENT":  # i is the last non-comment idx
-            break
-
-    return header[: i + 1]
-
 
 def read_scamp_header(file):
     """
@@ -573,7 +606,7 @@ def update_padded_header(target_fits, header_new):
                 header.append(card, end=True)
 
 
-def swap_ext(file_path: str, new_ext: str) -> str:
+def swap_ext(file_path: str | list[str], new_ext: str) -> str:
     """
     Swap the file extension of a given file path.
 
@@ -584,6 +617,8 @@ def swap_ext(file_path: str, new_ext: str) -> str:
     Returns:
         str: The file path with the swapped extension.
     """
+    if isinstance(file_path, list):
+        return [swap_ext(f, new_ext) for f in file_path]
     base, _ = os.path.splitext(file_path)
     new_ext = new_ext if new_ext.startswith(".") else f".{new_ext}"
     return base + new_ext
@@ -591,6 +626,7 @@ def swap_ext(file_path: str, new_ext: str) -> str:
 
 def get_derived_product_path(image, subdir="catalogs", ext=".cat.fits"):
     """
+    Deprecated
     Without kwargs, returns catalog path
     """
     input_file_base = os.path.basename(image)
@@ -598,7 +634,7 @@ def get_derived_product_path(image, subdir="catalogs", ext=".cat.fits"):
     return output_file
 
 
-def add_suffix(filename, suffix):
+def add_suffix(filename: str | list[str], suffix):
     """
     Add a suffix to the filename before the extension.
 
@@ -609,106 +645,11 @@ def add_suffix(filename, suffix):
     Returns:
         str: The modified filename with the suffix added.
     """
+    if isinstance(filename, list):
+        return [add_suffix(f, suffix) for f in filename]
     base, ext = os.path.splitext(filename)
     suffix = suffix if suffix.startswith("_") else f"_{suffix}"
     return f"{base}{suffix}{ext}"
-
-
-class Path7DS:
-    """
-    Parser for 7DT fits file names
-    obsdata: 7DT11_20250102_050704_T00223_m425_1x1_100.0s_0001.fits
-    (outdated) processed: calib_7DT11_T09282_20241017_060927_m425_100.fits
-    processed: T09282_m425_7DT11_100s_20241017_060927.fits
-    """
-
-    def __init__(self, file: str):
-        file = str(file)
-        self.path = os.path.abspath(file)
-        self.basename = os.path.basename(file)
-        self.stem, self.ext = os.path.splitext(self.basename)
-        if self.ext != ".fits":
-            raise ValueError("Not a FITS file")
-        self.parts = self.stem.split("_")
-
-        self._n_binning = None  # will be filled lazily
-        self.exists = os.path.exists(self.path)
-
-        if self.type == "raw_image":
-            self.parse_obsdata()
-        else:
-            self.parse_processed()
-
-    def __repr__(self):
-        return str(self.file)
-
-    @property
-    def type(self):
-        cat_suffix = "_cat.fits"
-        weight_suffix = "_weight.fits"
-
-        # raw
-        if self.stem.startswith("7DT"):
-            return "raw_image"
-        # processsed
-        else:
-            if "subt" in self.stem:
-                image_type = "subtracted_image"
-            elif "coadd" in self.stem:
-                image_type = "coadded_image"
-            else:
-                image_type = "processed_image"
-
-            if self.stem.endswith(cat_suffix):
-                product_type = "_catalog"
-            if self.stem.endswith(weight_suffix):
-                product_type = "_weight"
-
-            return image_type + product_type
-
-    @property
-    def n_binning(self) -> int:
-        """lazy"""
-        if self._n_binning is not None:
-            return self._n_binning
-        header = fits.getheader(self.file)
-        return header["XBINNING"]
-
-    @property
-    def datetime(self):
-        return self.date + "_" + self.hms
-
-    @property
-    def raw_basename(self):
-        return f"{self.unit}_{self.date}_{self.hms}_{self.obj}_{self.filter}_{self.n_binning}x{self.n_binning}_{self.exptime}.fits"
-
-    @property
-    def processed_basename(self):
-        return f"{self.obj}_{self.filter}_{self.unit}_{self.exptime}_{self.date}_{self.hms}.fits"
-
-    @property
-    def conjugate(self):
-        if self.type == "raw_image":
-            return self.processed_basename
-        else:
-            return self.raw_basename
-
-    def parse_obsdata(self):
-        self.unit = self.parts[0]
-        self.date = self.parts[1]
-        self.hms = self.parts[2]
-        self.obj = self.parts[3]
-        self.filter = self.parts[4]
-        self._n_binning = int(self.parts[5][0])
-        self.exptime = self.parts[6]
-
-    def parse_processed(self):
-        self.obj = self.parts[0]
-        self.filter = self.parts[1]
-        self.unit = self.parts[2]
-        self.exptime = self.parts[3]
-        self.date = self.parts[4]
-        self.hms = self.parts[5]
 
 
 def check_obs_file(params):
@@ -751,3 +692,13 @@ def parse_list_file(imagelist_file):
     # input_table = Table.read(imagelist_file_to_stack, format="ascii.commented_header")
     files = [f for f in input_table["file"].data]
     return files
+
+def time_diff_in_seconds(datetime1, datetime2=None):
+    if datetime2 is None:
+        datetime2 = time.time()
+    if isinstance(datetime1, datetime):
+        datetime1 = datetime1.timestamp()
+    if isinstance(datetime2, datetime):
+        datetime2 = datetime2.timestamp()
+    time_diff = datetime2 - datetime1
+    return f"{abs(time_diff):.2f}"

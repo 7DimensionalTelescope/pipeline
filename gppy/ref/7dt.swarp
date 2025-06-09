@@ -3,7 +3,7 @@
 #
 #----------------------------------- Output -----------------------------------
 IMAGEOUT_NAME          coadd.fits      # Output filename
-WEIGHTOUT_NAME       coadd.weight.fits # Output weight-map filename
+WEIGHTOUT_NAME       coadd_weight.fits # Output weight-map filename
 HEADEROUT_NAME                         # Out. header filename (overrides suffix)
  
 HEADER_NAME                            # Header filename if suffix not used
@@ -16,7 +16,7 @@ TILE_COMPRESS          N               # Write tile compressed output image (Y/N
 WEIGHT_TYPE            MAP_WEIGHT            # BACKGROUND,MAP_RMS,MAP_VARIANCE
                                        # or MAP_WEIGHT
 RESCALE_WEIGHTS        N               # Rescale input weights/variances (Y/N)?
-WEIGHT_SUFFIX          .weight.fits    # Suffix to use for weight-maps
+WEIGHT_SUFFIX          _weight.fits    # Suffix to use for weight-maps
 WEIGHT_IMAGE                           # Weightmap filename if suffix not used
                                        # (all or for each weight-map)
 WEIGHT_THRESH                         # Bad pixel weight-threshold
@@ -55,7 +55,7 @@ IMAGE_SIZE             10200,6800      # Image size (0 = AUTOMATIC)
  
 RESAMPLE               Y               # Resample input images (Y/N)?
 RESAMPLE_DIR           .               # Directory path for resampled images
-RESAMPLE_SUFFIX        .resamp.fits    # filename extension for resampled images
+RESAMPLE_SUFFIX        _resamp.fits    # filename extension for resampled images
  
 RESAMPLING_TYPE        LANCZOS3        # NEAREST,BILINEAR,LANCZOS2,LANCZOS3
                                        # LANCZOS4 (1 per axis) or FLAGS

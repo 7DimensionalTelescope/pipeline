@@ -1,0 +1,4 @@
+date_start	date_end	parts	comment
+240713	240713	cam	install:31235
+241206	241206	cam	PA
+250310	250310	mirror	cleaning

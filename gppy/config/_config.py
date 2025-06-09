@@ -4,23 +4,26 @@ import re
 import glob
 import json
 from datetime import datetime
-from .utils import (
+from .. import __version__
+from ..utils import (
     header_to_dict,
     to_datetime_string,
     find_raw_path,
-    define_output_dir,
     get_camera,
-    parse_exptime,
     clean_up_folder,
     swap_ext,
     most_common_in_list,
+    merge_dicts,
+    get_header,
 )
-from .const import HEADER_KEY_MAP, STRICT_KEYS, ANCILLARY_KEYS
-from .base.path import PathHandler
+from ..const import HEADER_KEY_MAP, STRICT_KEYS, ANCILLARY_KEYS
+from ..path.path import PathHandler
+from .base import ConfigurationInstance
 
 
 class Configuration:
     """
+    DEPRECATED: Use SciProcConfiguration instead.
     Comprehensive configuration management system for 7DT observation data.
 
     Handles dynamic configuration loading, modification, and persistence across
@@ -37,10 +40,13 @@ class Configuration:
 
     def __init__(
         self,
-        obs_params=None,
-        config_source=None,
+        obs_params: dict = None,
+        # input_files: list = None,
+        config_source: str | dict = None,
         logger=None,
+        write=True,  # False for PhotometrySingle
         overwrite=False,
+        return_base=False,  # for base_config
         verbose=True,
         **kwargs,
     ):
@@ -52,22 +58,35 @@ class Configuration:
             config_source (str|dict, optional): Custom configuration source
             **kwargs: Additional configuration parameter overrides
         """
-        self.path = PathHandler(obs_params)
+        self.write = write
 
-        if overwrite:
-            # Default config source if overwrite
+        if return_base:
+            self.path = PathHandler()
             config_source = config_source or self.path.base_yml
             self._initialized = False
+
+        elif config_source:
+            self._initialized = True
         else:
-            config_source = config_source or self._find_config_file()
+            self.path = PathHandler(obs_params)
+
+            if overwrite:
+                # Default config source if overwrite
+                config_source = self.path.base_yml
+                self._initialized = False
+            else:
+                config_source = self._find_config_file()
 
         self._load_config(config_source, **kwargs)
+
+        if return_base:
+            return
 
         if not self._initialized:
             self.initialize(obs_params)
 
         if overwrite:
-            clean_up_folder(self.path.output_dir)
+            # clean_up_folder(self.path.output_dir)
             clean_up_folder(self.path.factory_dir)
             # clean_up_folder(self.path.daily_stacked_dir)
 
@@ -77,20 +96,20 @@ class Configuration:
 
         self.config.flag.configuration = True
         self.logger.info(f"Configuration initialized")
-        self.logger.debug(f"Configuration file: {self.config_file}")
+        # self.logger.debug(f"Configuration file: {self.config_file}")
 
     def __repr__(self):
         return self.config.__repr__()
 
     @classmethod
     def base_config(cls, working_dir=None, config_file=None, **kwargs):
-        """Return the base (base.yml) configuration instance."""
-        # config = cls(return_base=True, **kwargs).config  # never overwrite here
-        instance = cls(return_base=True, **kwargs)
-        config = instance.config  # configuration instance from the new object
-        config.name = "user-input"
+        """Return the base (base.yml) ConfigurationInstance."""
+        working_dir = working_dir or os.getcwd()
 
-        instance.path = PathHandler(instance, working_dir=working_dir)  # _data_type becomes user-input
+        instance = cls(return_base=True, **kwargs)  # working_dir=working_dir,
+        config = instance.config
+        config.name = "user-input"
+        # instance.path = PathHandler(instance, working_dir=working_dir)  # make _data_type 'user-input'
 
         if config_file:
             # working_dir is ignored if config_file is absolute path
@@ -105,11 +124,17 @@ class Configuration:
                 raise FileNotFoundError("Provided Configuration file does not exist")
 
         instance._initialized = True
-        return config
+        # return config
+        return instance
 
     @classmethod
     def from_obs(cls, obs, **kwargs):
-        return cls(obs.obs_params, **kwargs)
+        return cls(obs_params=obs.obs_params, **kwargs)
+
+    @classmethod
+    def from_dict(cls, config_dict, write=False, **kwargs):
+        # config_dict['file']
+        return cls(config_source=config_dict, write=write, **kwargs)
 
     @staticmethod
     def _merge_dicts(base: dict, updates: dict) -> dict:
@@ -137,15 +162,17 @@ class Configuration:
 
     def _setup_logger(self, logger=None, overwrite=True, verbose=True):
         if logger is None:
-            from .services.logger import Logger
+            from ..services.logger import Logger
 
             logger = Logger(name=self.config.name, slack_channel="pipeline_report")
 
-        log_file = self.path.output_log
-        self.config.logging.file = log_file
-        logger.set_output_file(log_file, overwrite=overwrite)
-        logger.set_format(self.config.logging.format)
-        logger.set_pipeline_name(self.path.output_name)
+        if self.path.file_dep_initialized and self.write:
+            log_file = self.path.output_log
+            self.config.logging.file = log_file
+            logger.set_output_file(log_file, overwrite=overwrite)
+            logger.set_format(self.config.logging.format)
+            logger.set_pipeline_name(self.path.output_name)
+
         if not (verbose):
             logger.set_level("WARNING")
 
@@ -154,7 +181,13 @@ class Configuration:
     def _load_config(self, config_source, **kwargs):
         # Load configuration from file or dict
         self._loaded = False
-        input_dict = self.read_config(config_source) if isinstance(config_source, str) else config_source
+
+        if isinstance(config_source, str):
+            input_dict = self.read_config(config_source)
+        elif isinstance(config_source, dict):
+            input_dict = config_source
+        else:
+            raise TypeError("Invalid config_source type")
 
         self._config_in_dict = input_dict
 
@@ -165,8 +198,10 @@ class Configuration:
 
         # once config has file.raw_files, reinitialize PathHandler
         if self.is_initialized:
+            # if hasattr(self.config, "file") and self.config.file is not None:
             # self.path.add_fits(self.config.file.raw_files)
             self.path = PathHandler(self)
+            # self.path = PathHandler(self.config.file.raw_files)
 
         self._loaded = True
 
@@ -306,6 +341,7 @@ class Configuration:
         Then initialize pipeline from another manually copied config
         to do run_scidata_reduction.
         """
+        _is_coherent = True
         obs_config_keys = STRICT_KEYS | ANCILLARY_KEYS
         # obs_config_keys.update(ANCILLARY_KEYS)
 
@@ -328,28 +364,31 @@ class Configuration:
                 info = info[0]
             elif len(set(info)) == 0:
                 raise ValueError(f"Input image information empty: {config_key}")
+
             # use the most common value if a strict key is incoherent
             elif config_key in STRICT_KEYS:
 
                 # self.logger.warning(f"Incoherent Key {config_key}: {info}")  # logger undefined yet
 
-                self.config.obs.coherent_input = False
+                _is_coherent = False
 
                 num, dominant_info = most_common_in_list(info)
                 filtered_files = [f for f, val in zip(self._raw_files, info) if val == dominant_info]
                 self._raw_files = filtered_files
 
                 info = dominant_info
-            # save list as is if ancillary key
+            # save ancillary key as list
             else:
                 pass
 
             setattr(self.config.obs, config_key, info)
 
+        self.config.obs.coherent_input = _is_coherent
+
     def set_input_output(self):
         self.path.add_fits(self._raw_files)  # file_dependent_common_paths work afterwards
-        self.config.file.raw_files = self.path.raw_images
-        self.config.file.processed_files = self.path.processed_images
+        self.config.file.raw_files = self.path.raw_image
+        self.config.file.processed_files = self.path.processed_image
 
     @staticmethod
     def _obsdata_basename(config):
@@ -411,7 +450,7 @@ class Configuration:
         )  # 7DT01/bias_20250102_C3.link
         self.config.preprocess.mdark_link = os.path.join(
             path_fdz,
-            f"dark_{date_utc}_{int(self.config.obs.exposure)}s_{self.config.obs.camera}.link",  # mind exp can be list
+            f"dark_{date_utc}_{int(self.config.obs.exptime)}s_{self.config.obs.camera}.link",  # mind exp can be list
         )  # 7DT01/flat_20250102_100_C3.link
         self.config.preprocess.mflat_link = os.path.join(
             path_fdz,
@@ -447,7 +486,7 @@ class Configuration:
         - Writes configuration dictionary to the output path
         """
 
-        if not self.is_initialized:
+        if not self.is_initialized or not self.write:
             return
 
         self._config_in_dict["info"]["last_update_datetime"] = datetime.now().isoformat()
@@ -457,63 +496,3 @@ class Configuration:
 
         with open(self.config_file, "w") as f:
             yaml.dump(self.config_in_dict, f, sort_keys=False)
-
-
-class ConfigurationInstance:
-    def __init__(self, parent_config=None, section=None):
-        self._parent_config = parent_config
-        self._section = section
-
-    def __setattr__(self, name, value):
-        if name.startswith("_"):
-            return super().__setattr__(name, value)
-
-        if self._parent_config:
-            # Update the configuration dictionary
-            if self._section:
-                # For nested configurations
-                if self._section not in self._parent_config.config_in_dict:
-                    self._parent_config.config_in_dict[self._section] = {}
-                self._parent_config.config_in_dict[self._section][name] = value
-            else:
-                # For top-level configurations
-                self._parent_config.config_in_dict[name] = value
-
-            # Always write config if initialized
-            if (
-                hasattr(self._parent_config, "is_initialized")
-                and self._parent_config.is_initialized
-                and self._parent_config.is_loaded
-            ):
-                self._parent_config.write_config()
-
-        super().__setattr__(name, value)
-
-    def __repr__(self, indent_level=0):
-        indent = "  " * indent_level
-        repr_lines = []
-
-        for k, v in self.__dict__.items():
-            if k.startswith("_"):
-                continue
-
-            # Handle nested ConfigurationInstance
-            if isinstance(v, ConfigurationInstance):
-                repr_lines.append(f"{indent}  {k}:")
-                repr_lines.append(v.__repr__(indent_level + 1))
-            elif isinstance(v, dict):
-                repr_lines.append(f"{indent}  {k}:")
-                for dict_k, dict_v in v.items():
-                    repr_lines.append(f"{indent}    {dict_k}: {dict_v}")
-            else:
-                repr_lines.append(f"{indent}  {k}: {v}")
-
-        return "\n".join(repr_lines)
-
-    def to_dict(self):
-        result = {}
-        for k, v in self.__dict__.items():
-            if k.startswith("_"):
-                continue
-            result[k] = v.to_dict() if isinstance(v, ConfigurationInstance) else v
-        return result

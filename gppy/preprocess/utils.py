@@ -1,77 +1,10 @@
 import os
 import time
-import gc
-import cupy as cp
 from astropy.io import fits
-from contextlib import contextmanager
+
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import uuid
-
-
-def sigma_clipped_stats_cupy(cp_data, sigma=3, maxiters=5, minmax=False):
-    """
-    Approximate sigma-clipping using CuPy.
-    Computes mean, median, and std after iteratively removing outliers
-    beyond 'sigma' standard deviations from the median.
-
-    Parameters
-    ----------
-    cp_data : cupy.ndarray
-        Flattened CuPy array of image pixel values.
-    sigma : float
-        Clipping threshold in terms of standard deviations.
-    maxiters : int
-        Maximum number of clipping iterations.
-
-    Returns
-    -------
-    mean_val : float
-        Mean of the clipped data (as a GPU float).
-    median_val : float
-        Median of the clipped data (as a GPU float).
-    std_val : float
-        Standard deviation of the clipped data (as a GPU float).
-    """
-    # Flatten to 1D for global clipping
-    cp_data = cp_data.ravel()
-
-    for _ in range(maxiters):
-        median_val = cp.median(cp_data)
-        std_val = cp.std(cp_data)
-        # Keep only pixels within +/- sigma * std of the median
-        mask = cp.abs(cp_data - median_val) < (sigma * std_val)
-        cp_data = cp_data[mask]
-
-    # Final statistics on the clipped data
-    mean_val = cp.mean(cp_data)
-    median_val = cp.median(cp_data)
-    std_val = cp.std(cp_data)
-
-    # Convert results back to Python floats on the CPU
-    # return float(mean_val), float(median_val), float(std_val)
-    if minmax:
-        return mean_val, median_val, std_val, cp_data.min(), cp_data.max()
-    return mean_val, median_val, std_val
-
-
-def write_link(fpath, content):
-    """path to the link, and the path link is pointing"""
-    with open(fpath, "w") as file:
-        file.write(content)
-
-
-@contextmanager
-def load_data_gpu(fpath, ext=None):
-    """Load data into GPU memory with automatic cleanup."""
-    data = cp.asarray(fits.getdata(fpath, ext=ext), dtype="float32")
-    try:
-        yield data  # Provide the loaded data to the block
-    finally:
-        del data  # Free GPU memory when the block is exited
-        gc.collect()  # Force garbage collection
-        cp.get_default_memory_pool().free_all_blocks()
-
 
 class FileCreationHandler(FileSystemEventHandler):
     def __init__(self, target_file):
@@ -114,52 +47,6 @@ def wait_for_masterframe(file_path, timeout=1800):
     finally:
         observer.stop()
         observer.join()
-
-
-def read_link(link, timeout=1800):
-    """
-    Check if the link exists using watchdog, wait for it if it doesn't, and then read its content.
-
-    Args:
-        link (str): The file path to check and read.
-        timeout (int, optional): Maximum time (in seconds) to wait for the file. Defaults to 1200.
-
-    Returns:
-        str: The content of the file.
-
-    Raises:
-        FileNotFoundError: If the file is not found within the timeout period.
-        KeyboardInterrupt: If the user interrupts the waiting process.
-    """
-    try:
-        # Use wait_for_masterframe to watch for the file
-        if not wait_for_masterframe(link, timeout=timeout):
-            raise FileNotFoundError(
-                f"File '{link}' was not created within {timeout} seconds."
-            )
-
-        # Small delay to ensure file is fully written
-        time.sleep(0.1)
-
-        # Read and return the file content
-        with open(link, "r") as f:
-            return f.read().strip()
-
-    except KeyboardInterrupt:
-        print("KeyboardInterrupt while watching for a link. Exiting...")
-        raise  # Re-raise the exception to terminate the following processes
-
-
-def link_to_file(link):
-    """Reformat link filename, not reading it"""
-    import re
-
-    pattern = r"\.link$"
-    if re.match(pattern, link):
-        return os.path.splitext(link)[0] + ".fits"
-    else:
-        raise ValueError("Not a link")
-
 
 def search_with_date_offsets(template, max_offset=300, future=False):
     """
@@ -221,36 +108,6 @@ def search_with_date_offsets(template, max_offset=300, future=False):
     # If no file is found, return None
     return None
 
-
-def record_statistics(data, header, cropsize=500):
-    mean, median, std, min, max = sigma_clipped_stats_cupy(
-        data, sigma=3, maxiters=5, minmax=True
-    )  # gpu vars
-    header["CLIPMEAN"] = (float(mean), "3-sig clipped mean of the pixel values")
-    header["CLIPMED"] = (float(median), "3-sig clipped median of the pixel values")
-    header["CLIPSTD"] = (float(std), "3-sig clipped standard deviation of the pixels")
-    header["CLIPMIN"] = (float(min), "3-sig clipped minimum of the pixel values")
-    header["CLIPMAX"] = (float(max), "3-sig clipped maximum of the pixel values")
-
-    height, width = data.shape
-    start_row = (height - cropsize) // 2
-    start_col = (width - cropsize) // 2
-
-    # Slice the central 500x500 area
-    cropped_data = data[
-        start_row : start_row + cropsize, start_col : start_col + cropsize
-    ]
-    mean, median, std = sigma_clipped_stats_cupy(cropped_data, sigma=3, maxiters=5)
-    header["CENCLPMN"] = (float(mean), f"3-sig clipped mean of center {cropsize}x{cropsize}")  # fmt: skip
-    header["CENCLPMD"] = (float(median), f"3-sig clipped median of center {cropsize}x{cropsize}")  # fmt: skip
-    header["CENCLPSD"] = (float(std), f"3-sig clipped std of center {cropsize}x{cropsize}")  # fmt: skip
-
-    # header["CENCMIN"] = float(min)
-    # header["CENCMAX"] = float(max)
-
-    return header
-
-
 def get_saturation_level(header, mbias_file, mdark_file, mflat_file):
     bitpix = header["BITPIX"]
     if bitpix > 0:
@@ -301,26 +158,71 @@ def add_image_id(header, key="IMAGEID"):
     return header
 
 
-# def calculate_average_date_obs(date_obs_list):
-#     import numpy as np
-#     from astropy.time import Time
 
-#     t = Time(date_obs_list, format="isot", scale="utc")
-#     avg_time = np.mean(t.jd)
-#     avg_time = Time(avg_time, format="jd", scale="utc")
+def add_padding(header, n, copy_header=False):
+    """
+    Add empty COMMENT entries to a FITS header to ensure specific block sizes.
 
-#     # 'YYYY-MM-DDTHH:MM:SS'
-#     avg_time_str = avg_time.isot
+    This function helps manage FITS header sizes by adding padding comments.
+    Useful for maintaining specific header block structures required by
+    astronomical data processing tools.
 
-#     return avg_time_str
+    Args:
+        header (fits.Header): Input FITS header
+        n (int): Target number of 2880-byte blocks
+        copy_header (bool, optional): If True, operates on a copy of the header.
+            Defaults to False. Note: Using True is slower.
+
+    Returns:
+        fits.Header: Header with added padding comments
+
+    Note:
+        - Each COMMENT is 80 bytes long
+        - The total header size must be a multiple of 2880 bytes
+    """
+    if copy_header:
+        import copy
+
+        header = copy.deepcopy(header)
+
+    info_size = len(header.cards) * 80
+
+    target_size = (n - 1) * 2880  # fits header size is a multiple of 2880 bytes
+    padding_needed = target_size - info_size
+    num_comments = padding_needed // 80  # (each COMMENT is 80 bytes)
+
+    # CAVEAT: END also uses one line.
+    # for _ in range(num_comments - 1):  # <<< full n-1 2880-byte blocks
+    for _ in range(num_comments):  # <<< marginal n blocks
+        header.add_comment(" ")
+
+    return header
 
 
-# def isot_to_mjd(time):  # 20181026 to 2018-10-26T00:00:00:000 to MJD form
-#     from astropy.time import Time
+def remove_padding(header):
+    """
+    Remove COMMENT padding from a FITS header.
 
-#     yr = time[0:4]  # year
-#     mo = time[4:6]  # month
-#     da = time[6:8]  # day
-#     isot = yr + "-" + mo + "-" + da + "T00:00:00.000"  # 	ignore hour:min:sec
-#     t = Time(isot, format="isot", scale="utc")  # 	transform to MJD
-#     return t.mjd
+    Strips all trailing COMMENT entries, returning a header with only
+    significant entries.
+
+    Args:
+        header (fits.Header): Input FITS header with potential padding
+
+    Returns:
+        fits.Header: Header with padding comments removed
+
+    Note:
+        This method is primarily useful for header inspection and may not
+        be directly applicable for header updates.
+    """
+    # Extract all header cards
+    cards = list(header.cards)
+
+    # Find the last non-COMMENT entry
+    for i in range(len(cards) - 1, -1, -1):
+        if cards[i][0] != "COMMENT":  # i is the last non-comment idx
+            break
+
+    return header[: i + 1]
+

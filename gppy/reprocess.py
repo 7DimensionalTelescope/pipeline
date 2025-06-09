@@ -108,19 +108,19 @@ def reprocess_folder(
             calib_data.add_fits_file(fits_file)
             obs_dataset.add_fits_file(fits_file)
 
-        # Process calibration data if exists
-        if calib_data.has_calib_files() and not calib_data.processed:
-            calib_data.mark_as_processed()
+        # # Process calibration data if exists
+        # if calib_data.has_calib_files() and not calib_data.processed:
+        #     calib_data.mark_as_processed()
             
-            tree = run_masterframe_generator_with_tree(
-                calib_data.obs_params,
-                overwrite=overwrite,
-                priority=Priority.HIGH,
-            )
-            if tree is not None:
-                queue.add_tree(tree)
+        #     tree = run_masterframe_generator_with_tree(
+        #         calib_data.obs_params,
+        #         overwrite=overwrite,
+        #         priority=Priority.HIGH,
+        #     )
+        #     if tree is not None:
+        #         queue.add_tree(tree)
 
-            time.sleep(0.1)
+        #     time.sleep(0.1)
 
         # Process observation data
         for obs in obs_dataset.get_unprocessed():

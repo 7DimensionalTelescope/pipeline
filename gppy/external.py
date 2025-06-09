@@ -2,6 +2,8 @@ import os
 import subprocess
 from astropy.io import fits
 from .const import FACTORY_DIR, REF_DIR
+from .utils import add_suffix, swap_ext
+from .path import PathHandler
 
 
 def solve_field(inim, outim=None, dump_dir=None, get_command=False, pixscale=0.505, radius=1.0):
@@ -64,13 +66,13 @@ def solve_field(inim, outim=None, dump_dir=None, get_command=False, pixscale=0.5
         os.symlink(inim, soft_link)
 
     # outname = os.path.join(working_dir, f"{Path(inim).stem}_solved.fits")
-    outname = outim or os.path.join(os.path.splitext(soft_link)[0] + "_solved.fits")
+    outim = outim or os.path.join(os.path.splitext(soft_link)[0] + "_solved.fits")
 
     # Solve-field using the soft link
     # e.g., solve-field calib_7DT11_T00139_20250102_014643_m425_100s.fits --crpix-center --scale-unit arcsecperpix --scale-low '0.4949' --scale-high '0.5151' --no-plots --new-fits solved.fits --overwrite --use-source-extractor --cpulimit 4
     solvecom = [
         "solve-field", f"{soft_link}",  # this file is not changed by solve-field
-        "--new-fits", outname,  # you can give 'none'
+        "--new-fits", outim,  # you can give 'none'
         # "--config", f"{path_cfg}",
         # "--source-extractor-config", f"{path_sex_cfg}",
         # "--no-fits2fits",  # Do not create output FITS file
@@ -113,14 +115,19 @@ def solve_field(inim, outim=None, dump_dir=None, get_command=False, pixscale=0.5
     # # Also print messages to shell: should be captured by logger
     # for line in process.stdout:
     #     print(line, end="")
-
     # process.wait()  # Ensure the process completes
-    log_file = os.path.join(working_dir, "solvefield.log")
-    solvecom = f"{' '.join(solvecom)} > {log_file} 2>&1"
-    # print(f"solve-field command {solvecom}")
-    subprocess.run(solvecom, cwd=working_dir, shell=True)
 
-    return outname
+    # solvecom = f"{' '.join(solvecom)} > {log_file} 2>&1"
+    # subprocess.run(solvecom, cwd=working_dir, shell=True)
+
+    log_file = swap_ext(add_suffix(outim, "solvefield"), "log")
+    solvecom = " ".join(solvecom)
+    solveout = subprocess.getoutput(solvecom)
+    with open(log_file, "w") as f:
+        f.write(solvecom)
+        f.write("\n" * 3)
+        f.write(solveout)
+    return outim
 
 
 def scamp(input, ahead=None, path_ref_scamp=None, local_astref=None, get_command=False):
@@ -191,7 +198,7 @@ def missfits(inim):
 def sextractor(
     inim: str,
     outcat: str = None,
-    prefix="prep",
+    se_preset="prep",
     log_file: str = None,
     sex_args: list = [],
     config=None,  # supply config.config
@@ -204,13 +211,13 @@ def sextractor(
     No support for dual mode yet.
     """
 
-    def get_sex_config(prefix, ref_path=None):
+    def get_sex_config(preset, ref_path=None):
         from .const import REF_DIR
 
         # "/data/pipeline_reform/gppy-gpu/gppy/ref/srcExt"
         ref_path = ref_path or os.path.join(REF_DIR, "srcExt")
         postfix = ["sex", "param", "conv", "nnw"]
-        return [os.path.join(ref_path, f"{prefix}.{pf}") for pf in postfix]
+        return [os.path.join(ref_path, f"{preset}.{pf}") for pf in postfix]
 
     def chatter(message):
         if logger:
@@ -225,10 +232,10 @@ def sextractor(
         nnw = config.sex.nnw
         conv = config.sex.conv
     else:
-        sex, param, conv, nnw = get_sex_config(prefix)
+        sex, param, conv, nnw = get_sex_config(se_preset)
 
-    outcat = outcat or os.path.splitext(inim)[0] + f".{prefix}.cat"
-    log_file = log_file or os.path.splitext(outcat)[0] + f"_sextractor.log"
+    outcat = outcat or add_suffix(add_suffix(inim, se_preset), "cat")
+    log_file = log_file or swap_ext(add_suffix(outcat, "sextractor"), "log")
 
     sexcom = [
         "source-extractor", f"{inim}",
@@ -307,7 +314,7 @@ def swarp(
     # input = [os.path.abspath(f) for f in input]
     # working_dir = dump_dir or os.path.join(os.path.dirname(input[0]), "tmp_solvefield")
 
-    from .utils import swap_ext
+    from .utils import add_suffix
 
     def chatter(message):
         if logger:
@@ -330,7 +337,8 @@ def swarp(
     resample_dir = resample_dir or os.path.join(dump_dir, "resamp")
     os.makedirs(resample_dir, exist_ok=True)
     comim = output or os.path.join(dump_dir, "coadd.fits")
-    weightim = swap_ext(comim, "weight.fits")
+    # weightim = swap_ext(comim, "weight.fits")
+    weightim = add_suffix(comim, "weight")
 
     # 	SWarp
     # swarpcom = f"swarp -c {path_config}/7dt.swarp @{path_imagelist} -IMAGEOUT_NAME {comim} -CENTER_TYPE MANUAL -CENTER {center} -SUBTRACT_BACK N -RESAMPLE_DIR {path_resamp} -GAIN_KEYWORD EGAIN -GAIN_DEFAULT {gain_default} -FSCALE_KEYWORD FAKE -WEIGHTOUT_NAME {weightim}"
@@ -378,6 +386,7 @@ def hotpants(
     tu=None,
     nrx=None,
     nry=None,
+    log_file=None,
 ):
     """
     il, iu: input image lower/upper limits
@@ -385,7 +394,6 @@ def hotpants(
     nrx, nry: number of image regions in x/y dimension.
     ssf: substamp file
     """
-    from .utils import swap_ext
 
     n_sigma = 5
     header = fits.getheader(inim)
@@ -407,9 +415,9 @@ def hotpants(
     # nrx, nry = 1, 1
     # nrx, nry = 6, 4
 
-    outim = outim or swap_ext(inim, "subt.fits")
-    out_conv_im = out_conv_im or swap_ext(inim, "conv.fits")
-    ssf = ssf or swap_ext(inim, "ssf.txt")
+    outim = outim or add_suffix(inim, "diff")
+    out_conv_im = out_conv_im or add_suffix(inim, "conv")  # convolved sci image (oci)
+    ssf = ssf or swap_ext(add_suffix(inim, "ssf"), ".txt")
 
     hotpantscom = (
         f"hotpants -c t -n i "
@@ -420,7 +428,14 @@ def hotpants(
         f"-nrx {nrx} -nry {nry} "
         f"-ssf {ssf}"
     )
-    os.system(hotpantscom)
+    log_file = log_file or os.path.join(os.path.dirname(out_conv_im), "hotpants.log")
+
+    hotpantsout = subprocess.getoutput(hotpantscom)
+    with open(log_file, "w") as f:
+        f.write(hotpantscom)
+        f.write("\n" * 3)
+        f.write(hotpantsout)
+    # os.system(f"{hotpantscom} > {log_file} 2>&1")
     # print(hotpantscom)
 
     return hotpantscom

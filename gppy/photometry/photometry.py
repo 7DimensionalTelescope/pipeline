@@ -1,4 +1,5 @@
 import os
+import getpass
 from typing import Any, List, Dict, Tuple, Optional, Union
 import datetime
 import numpy as np
@@ -6,7 +7,6 @@ import matplotlib.pyplot as plt
 import itertools
 import time
 from pathlib import Path
-import glob
 from dataclasses import dataclass
 
 # astropy
@@ -20,15 +20,16 @@ from astropy.stats import sigma_clip
 
 # gppy modules
 from . import utils as phot_utils
-from ..utils import update_padded_header, get_derived_product_path, add_suffix
-from ..config import Configuration
+from ..utils import update_padded_header
+from ..config import SciProcConfiguration
+from ..config.base import ConfigurationInstance
 from ..services.memory import MemoryMonitor
 from ..services.queue import QueueManager, Priority
 from .. import external
-from ..const import PipelineError
+from ..const import PIXSCALE, PipelineError
 from ..services.setup import BaseSetup
 from ..tools.table import match_two_catalogs
-from ..base.path import PathHandler
+from ..path.path import PathHandler
 
 
 class Photometry(BaseSetup):
@@ -66,6 +67,7 @@ class Photometry(BaseSetup):
         """
         # Load Configuration
         super().__init__(config, logger, queue)
+        # self._flag_name = "photometry"
 
         self.ref_catalog = ref_catalog or self.config.photometry.refcatname
 
@@ -74,16 +76,18 @@ class Photometry(BaseSetup):
         )
 
         if self.run_single_photometry:
-            self.images = images or self.config.file.processed_files
+            self.config.photometry.input_images = images or self.config.input.calibrated_images
+            self.input_images = self.config.photometry.input_images
             self.logger.debug("Running single photometry")
             self._flag_name = "single_photometry"
         else:
-            self.images = images or [self.config.file.stacked_file]
+            self.config.photometry.input_images = images or [self.config.input.stacked_image]
+            self.input_images = self.config.photometry.input_images
             self.logger.debug("Running combined photometry")
             self._flag_name = "combined_photometry"
 
     @classmethod
-    def from_list(cls, images: List[str]) -> Optional["Photometry"]:
+    def from_list(cls, images: List[str], working_dir=None) -> Optional["Photometry"]:
         """
         Create Photometry instance from a list of image paths.
 
@@ -100,13 +104,15 @@ class Photometry(BaseSetup):
                 print("The file does not exist.")
                 return None
             image_list.append(path.parts[-1])
-        working_dir = str(path.parent.absolute())
-        config = Configuration.base_config(working_dir)
-        config.file.processed_files = image_list
+        working_dir = working_dir or str(path.parent.absolute())
+        config = SciProcConfiguration.base_config(working_dir)
+        config.config.input.calibrated_images = image_list
+        config.path = PathHandler(image_list)
         return cls(config=config)
 
     @property
     def sequential_task(self):
+        """[(number, name, use_gpu), ...]"""
         return [(1, "run", False), (2, "flagging", False)]
 
     def run(self) -> None:
@@ -129,19 +135,19 @@ class Photometry(BaseSetup):
         else:
             self.config.flag.combined_photometry = True
 
-        MemoryMonitor.cleanup_memory()
-
         self.logger.info(f"Photometry Done for {self.config.name}")
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
     def _run_parallel(self) -> None:
         """Process images in parallel using queue system."""
         task_ids = []
-        for i, image in enumerate(self.images):
-            process_name = f"{self.config.name} - single photometry - {i+1} of {len(self.images)}"
+        for i, image in enumerate(self.input_images):
+            process_name = f"{self.config.name} - single photometry - {i+1} of {len(self.input_images)}"
+            single_config = self.config.extract_single_image_config(i)
+
             phot_single = PhotometrySingle(
                 image,
-                self.config,
+                single_config,  # self.config,
                 self.logger,
                 ref_catalog=self.ref_catalog,
             )
@@ -157,13 +163,14 @@ class Photometry(BaseSetup):
 
     def _run_sequential(self) -> None:
         """Process images sequentially."""
-        for image in self.images:
+        for i, image in enumerate(self.input_images):
+            single_config = self.config.extract_single_image_config(i)
             PhotometrySingle(
                 image,
-                self.config,
+                single_config,  # self.config,
                 logger=self.logger,
                 ref_catalog=self.ref_catalog,
-                total_image=len(self.images),
+                total_image=len(self.input_images),
             ).run()
 
 
@@ -195,7 +202,7 @@ class PhotometrySingle:
     def __init__(
         self,
         image: str,
-        config: Any,
+        config: ConfigurationInstance,
         logger: Any = None,
         name: Optional[str] = None,
         ref_catalog: str = "GaiaXP",
@@ -210,11 +217,13 @@ class PhotometrySingle:
         self.logger = logger or self._setup_logger(config)
         self.ref_catalog = ref_catalog
         # self.image = os.path.join(self.config.path.path_processed, image)
-        self.image = image
-        self.image_info = ImageInfo.parse_image_info(self.image, pixscale=self.config.obs.pixscale)
+        self.input_image = image
+        self.image_info = ImageInfo.parse_image_header_info(self.input_image)
         self.phot_conf = self.config.photometry
         self.name = name or self.config.name
         self.phot_header = PhotometryHeader()
+        self.phot_header.author = getpass.getuser()
+
         if total_image == 1:
             self._id = next(self._id_counter)
         else:
@@ -223,35 +232,36 @@ class PhotometrySingle:
         # self.path_tmp = os.path.join(self.config.path.path_factory, "phot")
         # os.makedirs(self.path_tmp, exist_ok=True)
         # self.path = PathHandler(self.config.obs.to_dict())
-        self.path = PathHandler(self.config)
+        # self.path = PathHandler(self.config)
+        self.path = PathHandler(self.input_image)
         self.path_tmp = self.path.photometry.tmp_dir
 
     def _setup_logger(self, config: Any) -> Any:
         """Initialize logger instance."""
         if hasattr(config, "logger") and config.logger is not None:
             return config.logger
+        else:
+            from ..services.logger import Logger
 
-        from ..services.logger import Logger
+            return Logger(name="7DT pipeline logger", slack_channel="pipeline_report")
 
-        return Logger(name="7DT pipeline logger", slack_channel="pipeline_report")
-
-    @classmethod
-    def from_file(cls, image: str) -> Optional["PhotometrySingle"]:
-        """Create instance from single image file."""
-        path = Path(image)
-        if not path.is_file():
-            print("The file does not exist.")
-            return None
-        working_dir = str(path.parent.absolute())
-        config = Configuration.base_config(working_dir)
-        image = path.parts[-1]
-        return cls(image, config, name="user-input")
+    # @classmethod
+    # def from_file(cls, image: str) -> Optional["PhotometrySingle"]:
+    #     """Create instance from single image file."""
+    #     path = Path(image)
+    #     if not path.is_file():
+    #         print("The file does not exist.")
+    #         return None
+    #     working_dir = str(path.parent.absolute())
+    #     config = Configuration.base_config(working_dir)
+    #     image = path.parts[-1]
+    #     return cls(image, config, name="user-input")
 
     @property
     def tmp_file_prefix(self) -> str:
         """Get file prefix for output files."""
-        _tmp = os.path.splitext(self.image)[0]
-        return os.path.join(self.path_tmp, os.path.basename(_tmp))
+        stem = os.path.basename(os.path.splitext(self.input_image)[0])
+        return os.path.join(self.path_tmp, stem)
 
     @property
     def is_ref_loaded(self) -> bool:
@@ -275,28 +285,32 @@ class PhotometrySingle:
         """
         start_time = time.time()
         self.logger.info(f"Start Photometry for the image {self.name} [{self._id}]")
+        self.logger.debug(f"{'=' * 7} {os.path.basename(self.input_image)} {'=' * 7}")
 
-        self.define_paths()
+        # self.define_paths()
         self.calculate_seeing()
         self.photometry_with_sextractor()
-        self.zp_src_table = self.get_reference_matched_catalog()
+
         dicts = self.calculate_zp()
         self.update_header(*dicts)
         self.write_catalog()
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
-        MemoryMonitor.cleanup_memory()
         end_time = time.time()
         self.logger.info(f"Photometry Done for {self.name} [{self._id}] in {end_time - start_time:.2f} seconds")
 
-    def define_paths(self) -> None:
-        # no subdir
-        # self.output_file = get_derived_product_path(self.image)
-        # catalog_dir = os.path.dirname(self.output_file)
-        # if not os.path.exists(catalog_dir):
-        #     os.makedirs(catalog_dir)
+    # def define_paths(self) -> None:
+    #     # no subdir
+    #     # self.output_file = get_derived_product_path(self.image)
+    #     # catalog_dir = os.path.dirname(self.output_file)
+    #     # if not os.path.exists(catalog_dir):
+    #     #     os.makedirs(catalog_dir)
 
-        self.output_catalog_file = add_suffix(self.image, "_cat.fits")
+    #     # self.output_catalog_file = add_suffix(self.image, "cat")
+    #     # self.output_catalog_file = self.path.photometry.final_catalog
+
+    #     # self.obs_src_table = self.path.photometry.prep_catalog
+    #     pass
 
     def _load_ref_catalog(self) -> None:
         """
@@ -342,6 +356,27 @@ class PhotometrySingle:
 
         self.ref_src_table = ref_src_table
         self._coord_ref = coord_ref
+
+    # def _find_ref_catalog(self) -> str:
+    #     if self.ref_catalog == "GaiaXP_cor":
+    #         ref_cat = f"{self.path.photometry.ref_ris_dir}/cor_gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
+    #     elif self.ref_catalog == "GaiaXP":
+    #         ref_cat = f"{self.path.photometry.ref_ris_dir}/gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
+
+    #     # generate the missing ref_cat and save on disk
+    #     if not os.path.exists(ref_cat):  # and "gaia" in self.ref_catalog:
+    #         ref_src_table = phot_utils.aggregate_gaia_catalogs(
+    #             target_coord=SkyCoord(self.image_info.racent, self.image_info.decent, unit="deg"),
+    #             path_calibration_field=self.path.photometry.ref_gaia_dir,
+    #             matching_radius=self.phot_conf.match_radius * 1.5,
+    #             path_save=ref_cat,
+    #         )
+    #         ref_src_table.write(ref_cat, overwrite=True)
+
+    #     else:
+    #         ref_src_table = Table.read(ref_cat)
+
+    #     return ref_src_table
 
     def get_reference_matched_catalog(
         self,
@@ -446,10 +481,11 @@ class PhotometrySingle:
             low_mag_cut: Lower magnitude limit for star selection
         """
 
-        if run_prep_sextractor:  # Always run sextractor for prep
-            self._run_sextractor(prefix="prep")
+        if run_prep_sextractor:  # run sextractor for preparation
+            self._run_sextractor(se_preset="prep")
         else:
-            self.obs_src_table = Table.read(self.tmp_file_prefix + ".prep.cat", format="ascii.sextractor")
+            # self.obs_src_table = Table.read(self.tmp_file_prefix + ".prep.cat", format="ascii.sextractor")
+            self.obs_src_table = Table.read(self.path.photometry.prep_catalog, format="ascii.sextractor")
 
         self.post_match_table = self.get_reference_matched_catalog(
             snr_cut=False, low_mag_cut=low_mag_cut, high_mag_cut=high_mag_cut
@@ -474,12 +510,12 @@ class PhotometrySingle:
         """
         self.logger.info(f"Start Source Extractor for {self.name}")
 
-        satur_level = self.image_info.satur_level * self.config.photometry.satur_margin
-        self.logger.debug(f"Saturation Level with Margin {1 - self.config.photometry.satur_margin}: {satur_level}")
+        satur_level = self.image_info.satur_level * self.phot_conf.satur_margin
+        self.logger.debug(f"Saturation Level with Margin {1 - self.phot_conf.satur_margin}: {satur_level}")
 
         self.logger.debug("Setting Apertures for Photometry.")
         sex_args = phot_utils.get_sex_args(
-            self.image,
+            self.input_image,
             self.phot_conf,
             egain=self.image_info.egain,
             peeing=self.phot_header.peeing,
@@ -493,7 +529,7 @@ class PhotometrySingle:
             sex_args.extend(["-FILTER", "N"])
 
         _, outcome = self._run_sextractor(
-            prefix="main",
+            se_preset="main",
             sex_args=sex_args,
             return_sex_output=True,
         )
@@ -504,7 +540,7 @@ class PhotometrySingle:
 
     def _run_sextractor(
         self,
-        prefix: str = "prep",
+        se_preset: str = "prep",
         sex_args: Optional[Dict] = None,
         output: str = None,
         **kwargs,
@@ -521,19 +557,22 @@ class PhotometrySingle:
         Returns:
             SExtractor execution outcome
         """
-        self.logger.info(f"Run SExtractor ({prefix}) for {self.name}")
+        self.logger.info(f"Run SExtractor ({se_preset}) for {self.name}")
 
         if output is None:
-            if prefix == "prep":
-                output = self.tmp_file_prefix + ".prep.cat"
-            elif prefix == "main":
-                output = self.tmp_file_prefix + ".cat"
+            output = getattr(PathHandler(self.input_image).photometry, f"{se_preset}_catalog")
+            # if se_preset == "prep":
+            #     # output = self.tmp_file_prefix + ".prep.cat"
+            # elif se_preset == "main":
+            #     # output = self.tmp_file_prefix + ".cat"
+
+        self.logger.debug(f"PhotometrySingle _run_sextractor output catalog: {output}")
 
         outcome = external.sextractor(
-            self.image,
+            self.input_image,
             outcat=output,
-            prefix=prefix,
-            log_file=self.tmp_file_prefix + "_sextractor.log",
+            se_preset=se_preset,
+            # log_file=self.tmp_file_prefix + "_sextractor.log",
             logger=self.logger,
             sex_args=sex_args,
             **kwargs,
@@ -556,7 +595,7 @@ class PhotometrySingle:
             Tuple of dictionaries containing zero point and aperture information
         """
 
-        zp_src_table = self.zp_src_table
+        zp_src_table = self.get_reference_matched_catalog()
         self.logger.info(f"{len(zp_src_table)} sources to calibration ZP in {self.name}")
         self.logger.info("Calculating zero points.")
 
@@ -578,7 +617,7 @@ class PhotometrySingle:
             zp, zperr = phot_utils.compute_median_nmad(np.array(zps[~mask].value), normalize=True)
 
             keys = phot_utils.keyset(mag_key, self.image_info.filter)
-            values = phot_utils.zp_correction(self.obs_src_table[mag_key], self.obs_src_table[magerr_key], zp, zperr)
+            values = phot_utils.apply_zp(self.obs_src_table[mag_key], self.obs_src_table[magerr_key], zp, zperr)
             for key, val in zip(keys, values):
                 self.obs_src_table[key] = val
                 self.obs_src_table[key].format = ".3f"
@@ -651,15 +690,7 @@ class PhotometrySingle:
         ref_mag = src_table[self.image_info.ref_mag_key]
         obs_mag = src_table[mag_key]
 
-        plt.errorbar(
-            ref_mag,
-            zp_arr,
-            xerr=0,
-            yerr=zperr_arr,
-            ls="none",
-            c="grey",
-            alpha=0.5,
-        )
+        plt.errorbar(ref_mag, zp_arr, xerr=0, yerr=zperr_arr, ls="none", c="grey", alpha=0.5)
 
         plt.plot(
             ref_mag[~mask],
@@ -672,30 +703,13 @@ class PhotometrySingle:
         )
 
         plt.plot(
-            ref_mag[mask],
-            ref_mag[mask] - obs_mag[mask],
-            "x",
-            c="tomato",
-            alpha=0.75,
-            label=f"{len(ref_mag[mask])}",
+            ref_mag[mask], ref_mag[mask] - obs_mag[mask], "x", c="tomato", alpha=0.75, label=f"{len(ref_mag[mask])}"
         )
 
         plt.axhline(y=zp, ls="-", lw=1, c="grey", zorder=1, label=f"ZP: {zp:.3f}+/-{zperr:.3f}")
         plt.axhspan(ymin=zp - zperr, ymax=zp + zperr, color="silver", alpha=0.5, zorder=0)
-        plt.axvspan(
-            xmin=0,
-            xmax=self.phot_conf.ref_mag_lower,
-            color="silver",
-            alpha=0.25,
-            zorder=0,
-        )
-        plt.axvspan(
-            xmin=self.phot_conf.ref_mag_upper,
-            xmax=25,
-            color="silver",
-            alpha=0.25,
-            zorder=0,
-        )
+        plt.axvspan(xmin=0, xmax=self.phot_conf.ref_mag_lower, color="silver", alpha=0.25, zorder=0)
+        plt.axvspan(xmin=self.phot_conf.ref_mag_upper, xmax=25, color="silver", alpha=0.25, zorder=0)
 
         plt.xlim([10, 20])
         plt.ylim([zp - 0.25, zp + 0.25])
@@ -712,7 +726,7 @@ class PhotometrySingle:
         if not os.path.exists(im_path):
             os.makedirs(im_path)
 
-        img_stem = os.path.splitext(os.path.basename(self.image))[0]
+        img_stem = os.path.splitext(os.path.basename(self.input_image))[0]
         plt.savefig(f"{im_path}/{img_stem}.{mag_key}.png", dpi=100)
         plt.close()
 
@@ -738,7 +752,7 @@ class PhotometrySingle:
         header_to_add.update(self.phot_header.dict)
         header_to_add.update(aper_dict)
         header_to_add.update(zp_dict)
-        update_padded_header(self.image, header_to_add)
+        update_padded_header(self.input_image, header_to_add)
         self.logger.info(f"Header updated for {self.name}")
 
     def write_catalog(self) -> None:
@@ -751,22 +765,22 @@ class PhotometrySingle:
         """
 
         metadata = self.image_info.metadata
-        metadata["obs"] = self.config.obs.unit
         self.obs_src_table.meta = metadata
         # self.obs_src_table.meta["comments"] = [
         #     "Zero point based on Gaia DR3",
         #     "Zero point uncertainty is not included in FLUX and MAG errors",
         # ]  # this interferes with table description
 
-        self.obs_src_table.write(self.output_catalog_file, format="fits", overwrite=True)  # "ascii.tab" "ascii.ecsv"
-        self.logger.info(f"Catalog written: {self.output_catalog_file}")
+        output_catalog_file = self.path.photometry.final_catalog
+        self.obs_src_table.write(output_catalog_file, format="fits", overwrite=True)  # "ascii.tab" "ascii.ecsv"
+        self.logger.info(f"Catalog written: {output_catalog_file}")
 
 
 @dataclass
 class PhotometryHeader:
     """Stores image header information related to photometry."""
 
-    author: str = "Gregory S.H. Paek"
+    author: str = "pipeline"
     photime: str = datetime.date.today().isoformat()
     jd: float = 0.0
     mjd: float = 0.0
@@ -789,7 +803,7 @@ class PhotometryHeader:
     def dict(self) -> Dict[str, Tuple[Any, str]]:
         """Generates a dictionary of header information for FITS."""
         return {
-            "AUTHOR": (self.author, "PHOTOMETRY AUTHOR"),
+            "AUTHOR": (self.author, "LAST UPDATED PHOTOMETRY HEADER"),
             "PHOTIME": (self.photime, "PHOTOMETRY TIME [KST]"),
             "JD": (self.jd, "Julian Date of the observation"),
             "MJD": (self.mjd, "Modified Julian Date of the observation"),
@@ -812,6 +826,7 @@ class ImageInfo:
 
     obj: str  # Object name
     filter: str  # Filter used
+    unit: str  # 7DT Unit used
     dateobs: str  # Observation date/time
     egain: float  # gain in e-/ADU, not camera gain
     naxis1: int  # Image width
@@ -839,22 +854,23 @@ class ImageInfo:
         return {
             "OBJECT": self.obj,
             "FILTER": self.filter,
+            "TELESCOP": self.unit,
             "DATE-OBS": self.dateobs,
             "JD": self.jd,
             "MJD": self.mjd,
         }
 
     @classmethod
-    def parse_image_info(cls, image_path: str, pixscale: float = 0.505) -> "ImageInfo":
+    def parse_image_header_info(cls, image_path: str) -> "ImageInfo":
         """Parses image information from a FITS header."""
 
         hdr = fits.getheader(image_path)
-        w = WCS(image_path)
+        wcs = WCS(image_path)
 
         # Center coord for reference catalog query
         xcent = (hdr["NAXIS1"] + 1) / 2.0
         ycent = (hdr["NAXIS2"] + 1) / 2.0
-        racent, decent = w.all_pix2world(xcent, ycent, 1)
+        racent, decent = wcs.all_pix2world(xcent, ycent, 1)
         racent = float(racent)
         decent = float(decent)
 
@@ -868,11 +884,12 @@ class ImageInfo:
             interped = True
 
         if "CTYPE1" not in hdr.keys():
-            raise PipelineError("Check Astrometry solution: no WCS information for Photometry")  # fmt: skip
+            raise PipelineError("Check Astrometry solution: no WCS information for Photometry")
 
         return cls(
             obj=hdr["OBJECT"],
             filter=hdr["FILTER"],
+            unit=hdr["TELESCOP"],
             dateobs=hdr["DATE-OBS"],
             egain=float(hdr["EGAIN"]),  # effective gain for combined images
             naxis1=int(hdr["NAXIS1"]),
@@ -886,7 +903,7 @@ class ImageInfo:
             xcent=xcent,
             ycent=ycent,
             n_binning=hdr["XBINNING"],
-            pixscale=hdr["XBINNING"] * pixscale,
+            pixscale=hdr["XBINNING"] * PIXSCALE,
             satur_level=hdr["SATURATE"],
             bpx_interp=interped,
         )
