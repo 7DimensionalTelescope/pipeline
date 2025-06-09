@@ -124,19 +124,22 @@ class Photometry(BaseSetup):
         """
         self.logger.info("-" * 80)
         self.logger.info(f"Start photometry for {self.config.name}")
+        try:
+            if self.queue:
+                self._run_parallel()
+            else:
+                self._run_sequential()
 
-        if self.queue:
-            self._run_parallel()
-        else:
-            self._run_sequential()
+            if self.run_single_photometry:
+                self.config.flag.single_photometry = True
+            else:
+                self.config.flag.combined_photometry = True
 
-        if self.run_single_photometry:
-            self.config.flag.single_photometry = True
-        else:
-            self.config.flag.combined_photometry = True
-
-        self.logger.info(f"Photometry Done for {self.config.name}")
-        self.logger.debug(MemoryMonitor.log_memory_usage)
+            self.logger.info(f"Photometry Done for {self.config.name}")
+            self.logger.debug(MemoryMonitor.log_memory_usage)
+        except Exception as e:
+            self.logger.error(f"Photometry failed for {self.config.name}: {str(e)}")
+            raise
 
     def _run_parallel(self) -> None:
         """Process images in parallel using queue system."""
@@ -166,7 +169,7 @@ class Photometry(BaseSetup):
         for i, image in enumerate(self.input_images):
             single_config = self.config.extract_single_image_config(i)
             PhotometrySingle(
-                image,
+                # image,
                 single_config,  # self.config,
                 logger=self.logger,
                 ref_catalog=self.ref_catalog,
@@ -201,12 +204,14 @@ class PhotometrySingle:
 
     def __init__(
         self,
-        image: str,
+        # image: str,
         config: ConfigurationInstance,
         logger: Any = None,
         name: Optional[str] = None,
         ref_catalog: str = "GaiaXP",
         total_image: int = 1,
+        trust_header_seeing=False,
+        calculate_zp=True,
     ) -> None:
         """Initialize PhotometrySingle instance."""
 
@@ -217,17 +222,19 @@ class PhotometrySingle:
         self.logger = logger or self._setup_logger(config)
         self.ref_catalog = ref_catalog
         # self.image = os.path.join(self.config.path.path_processed, image)
-        self.input_image = image
-        self.image_info = ImageInfo.parse_image_header_info(self.input_image)
+        # self.input_image = image
         self.phot_conf = self.config.photometry
+        self.input_image = self.phot_conf.input_images[0]
+        self.image_info = ImageInfo.parse_image_header_info(self.input_image)
         self.name = name or self.config.name
         self.phot_header = PhotometryHeader()
         self.phot_header.author = getpass.getuser()
 
-        if total_image == 1:
-            self._id = next(self._id_counter)
-        else:
-            self._id = str(next(self._id_counter)) + "/" + str(total_image)
+        # if total_image == 1:
+        #     self._id = next(self._id_counter)
+        # else:
+        #     self._id = str(next(self._id_counter)) + "/" + str(total_image)
+        self._id = str(next(self._id_counter)) + "/" + str(total_image)
 
         # self.path_tmp = os.path.join(self.config.path.path_factory, "phot")
         # os.makedirs(self.path_tmp, exist_ok=True)
@@ -235,6 +242,9 @@ class PhotometrySingle:
         # self.path = PathHandler(self.config)
         self.path = PathHandler(self.input_image)
         self.path_tmp = self.path.photometry.tmp_dir
+
+        self._trust_header_seeing = trust_header_seeing
+        self._calculate_zp = calculate_zp
 
     def _setup_logger(self, config: Any) -> Any:
         """Initialize logger instance."""
