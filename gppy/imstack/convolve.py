@@ -3,7 +3,7 @@ import cupy as cp
 from cupyx.scipy.signal import fftconvolve
 
 
-def convolve_fft_gpu(image, kernel, mode="same", normalize_kernel=False):
+def convolve_fft_gpu(image, kernel, mode="same", normalize_kernel=False, device_id=0):
     """
     Perform FFT convolution on the GPU using cupyx.scipy.signal.fftconvolve,
     as an alternative to astropy.convolution.convolve_fft.
@@ -25,22 +25,23 @@ def convolve_fft_gpu(image, kernel, mode="same", normalize_kernel=False):
     result : numpy.ndarray
         Convolved image as a NumPy array.
     """
-    # Convert image to float64 and transfer to GPU.
-    image = cp.asarray(image, dtype=cp.float64)
+    with cp.cuda.Device(device_id):
+        # Convert image to float64 and transfer to GPU.
+        image = cp.asarray(image, dtype=cp.float64)
 
-    # Get kernel array and transfer to GPU. It must be ODD!
-    kernel_array = cp.asarray(kernel.array, dtype=cp.float64)
-    if normalize_kernel:
-        kernel_array = kernel_array / cp.sum(kernel_array)
+        # Get kernel array and transfer to GPU. It must be ODD!
+        kernel_array = cp.asarray(kernel.array, dtype=cp.float64)
+        if normalize_kernel:
+            kernel_array = kernel_array / cp.sum(kernel_array)
 
-    # Optionally, handle any NaN values in the image.
-    image = cp.nan_to_num(image, nan=0.0)
+        # Optionally, handle any NaN values in the image.
+        image = cp.nan_to_num(image, nan=0.0)
 
-    # Perform FFT convolution on the GPU.
-    result = fftconvolve(image, kernel_array, mode=mode)
+        # Perform FFT convolution on the GPU.
+        result = fftconvolve(image, kernel_array, mode=mode)
 
-    # Transfer the result back to the CPU.
-    return cp.asnumpy(result)
+        # Transfer the result back to the CPU.
+        return cp.asnumpy(result)
 
 
 def get_edge_mask(weight_image, kernel):

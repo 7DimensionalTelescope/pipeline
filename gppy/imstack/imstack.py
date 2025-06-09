@@ -7,23 +7,17 @@ import numpy as np
 from astropy.io import fits
 from astropy.time import Time
 from typing import Any, List, Dict, Tuple, Optional, Union
+from contextlib import nullcontext
 
 import warnings
 
-# for ccdproc imagefilecollection
-# warnings.filterwarnings(
-#     "ignore", category=UserWarning, message=".*multiple entries for.*"
-# )
 warnings.filterwarnings("ignore")
-
-# import warnings
-# warnings.filterwarnings("ignore")
 
 from ..const import REF_DIR
 from ..config import SciProcConfiguration
 from .. import external
 from ..services.setup import BaseSetup
-from ..utils import collapse, get_header, add_suffix, swap_ext, define_output_dir
+from ..utils import collapse, get_header, add_suffix, swap_ext, define_output_dir, time_diff_in_seconds
 from .utils import move_file  # inputlist_parser, move_file
 from .const import ZP_KEY, IC_KEYS, CORE_KEYS
 from ..const import PipelineError
@@ -77,35 +71,38 @@ class ImStack(BaseSetup):
 
         self.logger.info("-" * 80)
         self.logger.info(f"Start imstack for {self.config.name}")
+        try:
+            self.initialize()
 
-        self.initialize()
+            # background subtraction
+            self.bkgsub()
 
-        # background subtraction
-        self.bkgsub()
+            # zero point scaling
+            self.zpscale()
 
-        # zero point scaling
-        self.zpscale()
+            if self.config.imstack.weight_map:
+                self.calculate_weight_map()
 
-        if self.config.imstack.weight_map:
-            self.calculate_weight_map()
+            # replace hot pixels
+            self.apply_bpmask()
 
-        # replace hot pixels
-        self.apply_bpmask()
+            # re-registration
+            if self.config.imstack.joint_wcs:
+                self.joint_registration()
 
-        # re-registration
-        if self.config.imstack.joint_wcs:
-            self.joint_registration()
+            # seeing convolution
+            if self.config.imstack.convolve:
+                self.convolve()
 
-        # seeing convolution
-        if self.config.imstack.convolve:
-            self.convolve()
+            # swarp imcombine
+            self.stack_with_swarp()
 
-        # swarp imcombine
-        self.stack_with_swarp()
+            self.config.flag.combine = True
 
-        self.config.flag.combine = True
-
-        self.logger.info(f"Imstack Done for {self.config.name}")
+            self.logger.info(f"Imstack Done for {self.config.name}")
+        except Exception as e:
+            self.logger.error(f"Error during imstack processing: {str(e)}")
+            raise
         # self.logger.debug(MemoryMonitor.log_memory_usage)
 
     def initialize(self):
@@ -219,7 +216,7 @@ class ImStack(BaseSetup):
         # ------------------------------------------------------------
         # 	Global Background Subtraction
         # ------------------------------------------------------------
-        _st = time.time()
+        st = time.time()
 
         self.path_bkgsub = os.path.join(self.path_tmp, "bkgsub")
         os.makedirs(self.path_bkgsub, exist_ok=True)
@@ -229,13 +226,13 @@ class ImStack(BaseSetup):
         ]
 
         if self.config.imstack.bkgsub_type.lower() == "dynamic":
-            self.logger.info("Starting Dynamic Background Subtraction")
+            self.logger.info("Start Dynamic Background Subtraction")
             self._dynamic_bkgsub()
         else:
-            self.logger.info("Starting Constant Background Subtraction")
+            self.logger.info("Start Constant Background Subtraction")
             self._const_bkgsub()
-        _delt = time.time() - _st
-        self.logger.debug(f"--> Done ({_delt:.1f}sec)")
+        
+        self.logger.info(f"Background Subtraction Done for {self.config.name} in {time_diff_in_seconds(st)} sec")
 
         self.images_to_stack = self.config.imstack.bkgsub_images
 
@@ -303,11 +300,20 @@ class ImStack(BaseSetup):
         # groups = NameHandler.get_grouped_files(bkgsub_images)
         return groups
 
-    def calculate_weight_map(self):
+    def calculate_weight_map(self, device_id=0):
+        """Retains cpu support as a code template"""
+        st = time.time()
+        self.logger.info("Start Weight Map Calculation")
+        # pick xp and device‐context based on GPU flag
         if self.config.imstack.gpu:
             import cupy as xp
+
+            device_ctx = xp.cuda.Device(device_id)
         else:
             import numpy as xp
+
+            device_ctx = nullcontext()  # no‐op context manager for CPU
+
         from .weight import pix_err
 
         # self.config.imstack.input_images  # if you want to save single frame weights
@@ -323,54 +329,58 @@ class ImStack(BaseSetup):
         self.logger.debug(f"{len(groups)} groups for weight map calculation.")
         self.logger.debug(f"{groups}")
 
-        for (z_m_file, d_m_file, f_m_file), images in groups.items():
+        with device_ctx:
+            for (z_m_file, d_m_file, f_m_file), images in groups.items():
 
-            header = fits.getheader(images[0])  # same cailb in a group
-            calibs = [v for k, v in header.items() if "IMCMB" in k]  # must be ordered mbias, mdark, mflat
-            d_m_file, f_m_file, sig_z_file, sig_f_file = PathHandler.weight_map_input(calibs)
+                header = fits.getheader(images[0])  # same cailb in a group
+                calibs = [v for k, v in header.items() if "IMCMB" in k]  # must be ordered mbias, mdark, mflat
+                d_m_file, f_m_file, sig_z_file, sig_f_file = PathHandler.weight_map_input(calibs)
 
-            d_m = xp.asarray(fits.getdata(d_m_file))
-            f_m = xp.asarray(fits.getdata(f_m_file))
-            sig_z = xp.asarray(fits.getdata(sig_z_file))
-            sig_f = xp.asarray(fits.getdata(sig_f_file))
-            p_z = fits.getheader(sig_z_file)["NFRAMES"]
-            p_d = fits.getheader(d_m_file)["NFRAMES"]
-            p_f = fits.getheader(f_m_file)["NFRAMES"]
+                d_m = xp.asarray(fits.getdata(d_m_file))
+                f_m = xp.asarray(fits.getdata(f_m_file))
+                sig_z = xp.asarray(fits.getdata(sig_z_file))
+                sig_f = xp.asarray(fits.getdata(sig_f_file))
+                p_z = fits.getheader(sig_z_file)["NFRAMES"]
+                p_d = fits.getheader(d_m_file)["NFRAMES"]
+                p_f = fits.getheader(f_m_file)["NFRAMES"]
 
-            # Pick the master dark as the source to read EGAIN.
-            # The choice shouldn't matter as long as you're in the same group
-            egain = fits.getheader(d_m_file)["EGAIN"]  # e-/ADU
+                # Pick the master dark as the source to read EGAIN.
+                # The choice shouldn't matter as long as you're in the same group
+                egain = fits.getheader(d_m_file)["EGAIN"]  # e-/ADU
 
-            for i in range(len(images)):
-                r_p_file = images[i]
-                r_p = xp.asarray(fits.getdata(r_p_file))
+                for i in range(len(images)):
+                    r_p_file = images[i]
+                    r_p = xp.asarray(fits.getdata(r_p_file))
 
-                # bkg_file = self.config.imstack.bkg_files[i]
-                # bkgsub_file = self.config.imstack.bkgsub_files[i]
-                sig_b = xp.zeros_like(r_p)
-                # sig_b = calculate_background_sigma(bkg_file, egain)
-                # sig_b = xp.asarray(fits.getdata(sig_b_file))
+                    # bkg_file = self.config.imstack.bkg_files[i]
+                    # bkgsub_file = self.config.imstack.bkgsub_files[i]
+                    sig_b = xp.zeros_like(r_p)
+                    # sig_b = calculate_background_sigma(bkg_file, egain)
+                    # sig_b = xp.asarray(fits.getdata(sig_b_file))
 
-                weight_image = pix_err(xp, r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, egain, weight=True)
+                    weight_image = pix_err(xp, r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, egain, weight=True)
 
-                if hasattr(weight_image, "get"):  # if CuPy array
-                    weight_image = weight_image.get()  # Convert to NumPy array
+                    if hasattr(weight_image, "get"):  # if CuPy array
+                        weight_image = weight_image.get()  # Convert to NumPy array
 
-                fits.writeto(
-                    # os.path.join(config.path.path_processed, weight_file),
-                    bkgsub_weight_images[i],
-                    data=weight_image,
-                    overwrite=True,
-                )
+                    fits.writeto(
+                        # os.path.join(config.path.path_processed, weight_file),
+                        bkgsub_weight_images[i],
+                        data=weight_image,
+                        overwrite=True,
+                    )
+        self.logger.info(f"Weight Map Calculation Done for {self.config.name} in {time_diff_in_seconds(st)} sec")
 
-    def apply_bpmask(self, badpix=0):
+    def apply_bpmask(self, badpix=0, device_id=0):
+        st = time.time()
+        
         import cupy as cp
         from .interpolate import (
             interpolate_masked_pixels_gpu_vectorized_weight,
             add_bpx_method,
         )
-
-        self.logger.info("Initiating Interpolating Bad Pixels")
+        st = time.time()
+        self.logger.info("Start the interpolation for bad pixels")
 
         path_interp = os.path.join(self.path_tmp, "interp")
         os.makedirs(path_interp, exist_ok=True)
@@ -383,52 +393,53 @@ class ImStack(BaseSetup):
         # ad-hoc. Todo: group input_files for different bpmask files
         bpmask_array, header = fits.getdata(PathHandler.get_bpmask(self.config.imstack.bkgsub_images[0]), header=True)
 
-        mask = cp.asarray(bpmask_array)
-        if "BADPIX" in header.keys():
-            badpix = header["BADPIX"]
-            self.logger.debug(f"BADPIX found in header. Using badpix {badpix}.")
-        else:
-            self.logger.warning("BADPIX not found in header. Using default value 0.")
-        method = self.config.imstack.interp_type
+        with cp.cuda.Device(device_id):
+            mask = cp.asarray(bpmask_array)
+            if "BADPIX" in header.keys():
+                badpix = header["BADPIX"]
+                self.logger.debug(f"BADPIX found in header. Using badpix {badpix}.")
+            else:
+                self.logger.warning("BADPIX not found in header. Using default value 0.")
+            method = self.config.imstack.interp_type
 
-        for i in range(len(self.config.imstack.bkgsub_images)):
-            input_file = self.config.imstack.bkgsub_images[i]
-            output_file = self.config.imstack.interp_images[i]
+            for i in range(len(self.config.imstack.bkgsub_images)):
+                input_file = self.config.imstack.bkgsub_images[i]
+                output_file = self.config.imstack.interp_images[i]
 
-            if os.path.exists(output_file) and not self.overwrite:
-                self.logger.debug(f"Skipping {output_file}")
-                continue
+                if os.path.exists(output_file) and not self.overwrite:
+                    self.logger.debug(f"Skipping {output_file}")
+                    continue
 
-            image = cp.asarray(fits.getdata(input_file))
+                image = cp.asarray(fits.getdata(input_file))
 
-            if self.config.imstack.weight_map:
-                input_weight_file = add_suffix(input_file, "weight")
-                output_weight_file = add_suffix(output_file, "weight")
-                weight = cp.asarray(fits.getdata(input_weight_file))  # as 1/VARIANCE
+                if self.config.imstack.weight_map:
+                    input_weight_file = add_suffix(input_file, "weight")
+                    output_weight_file = add_suffix(output_file, "weight")
+                    weight = cp.asarray(fits.getdata(input_weight_file))  # as 1/VARIANCE
 
-                interp, interp_weight = interpolate_masked_pixels_gpu_vectorized_weight(
-                    image, mask, weight=weight, method=method, badpix=badpix
-                )
+                    interp, interp_weight = interpolate_masked_pixels_gpu_vectorized_weight(
+                        image, mask, weight=weight, method=method, badpix=badpix
+                    )
+                    fits.writeto(
+                        output_weight_file,
+                        interp_weight.get(),
+                        header=add_bpx_method(fits.getheader(input_weight_file), method),
+                        overwrite=True,
+                    )
+
+                else:
+                    interp = interpolate_masked_pixels_gpu_vectorized_weight(image, mask, method=method, badpix=badpix)
+
                 fits.writeto(
-                    output_weight_file,
-                    interp_weight.get(),
-                    header=add_bpx_method(fits.getheader(input_weight_file), method),
+                    output_file,
+                    interp.get(),
+                    header=add_bpx_method(fits.getheader(input_file), method),
                     overwrite=True,
                 )
 
-            else:
-                interp = interpolate_masked_pixels_gpu_vectorized_weight(image, mask, method=method, badpix=badpix)
-
-            fits.writeto(
-                output_file,
-                interp.get(),
-                header=add_bpx_method(fits.getheader(input_file), method),
-                overwrite=True,
-            )
-
         self.images_to_stack = self.config.imstack.interp_images
 
-        self.logger.info("Completed Interpolation of Bad Pixels")
+        self.logger.info(f"Interpolation for Bad Pixels Done for {self.config.name} in {time_diff_in_seconds(st)} sec")
 
     def zpscale(self):
         """
@@ -436,6 +447,7 @@ class ImStack(BaseSetup):
         Keep FSCALE_KEYWORD = FLXSCALE in SWarp config.
         The headers of the last processed images are modified.
         """
+        st = time.time()
         for file, zp in zip(self.images_to_stack, self.zpvalues):
             flxscale = 10 ** (0.4 * (self.zp_base - zp))
             with fits.open(file, mode="update") as hdul:
@@ -445,6 +457,8 @@ class ImStack(BaseSetup):
                 )
                 hdul.flush()
             self.logger.debug(f"{os.path.basename(file)} FLXSCALE: {flxscale:.3f}")
+
+        self.logger.info(f"ZP Scaling Done for {self.config.name} in {time_diff_in_seconds(st)}sec")
 
         # ------------------------------------------------------------
         # 	ZP Scale
@@ -483,12 +497,16 @@ class ImStack(BaseSetup):
         """
         pass
 
-    def convolve(self):
+    def convolve(self, device_id=0):
         """
         This is ad-hoc. Change it to convolve after resampling and take
         advantage of uniform pixel scale.
         """
+        st = time.time()
+        
         method = self.config.imstack.convolve.lower()
+        self.logger.info(f"Start Convolution with '{method}' method")
+
         if method == "gaussian":
             from astropy.convolution import Gaussian2DKernel
             from .convolve import convolve_fft_gpu, get_edge_mask, add_conv_method
@@ -533,7 +551,7 @@ class ImStack(BaseSetup):
 
                 # sci
                 im = fits.getdata(inim)
-                convolved_im = convolve_fft_gpu(im, kernel)
+                convolved_im = convolve_fft_gpu(im, kernel, device_id=device_id)
                 fits.writeto(
                     outim,
                     convolved_im,
@@ -563,13 +581,16 @@ class ImStack(BaseSetup):
                         self.logger.warning(f"Weight map not found for {inim}")
 
             self.images_to_stack = self.config.imstack.conv_files
-            self.logger.info("Completed Gaussian convolution to match seeing")
+            
 
         else:
             self.logger.info("Undefined Convolution Method. Skipping Seeing Match")
 
+        self.logger.info(f"Convolution Done for {self.config.name} in {time_diff_in_seconds(st)} sec")
+
     def stack_with_swarp(self):
-        self.logger.info("Initiating Stacking Images")
+        st = time.time()
+        self.logger.info("Start Stacking Images")
 
         # Write target images to a text file
         self.path_imagelist = os.path.join(self.path_tmp, "images_to_stack.txt")
@@ -578,7 +599,6 @@ class ImStack(BaseSetup):
             for inim in self.images_to_stack:  # self.zpscaled_images:
                 f.write(f"{inim}\n")
 
-        t0_stack = time.time()
         self.logger.debug(f"Total Exptime: {self.total_exptime}")
 
         if not self.config.imstack.weight_map:
@@ -605,8 +625,7 @@ class ImStack(BaseSetup):
 
         self._update_header()
 
-        delt_stack = time.time() - t0_stack
-        self.logger.debug(f"Stacking {self.n_stack} images took {delt_stack:.3f} sec")
+        self.logger.info(f"Stacking Done for {self.config.name} in {time_diff_in_seconds(st)} sec")
 
     def _run_swarp(self, type="", args=None):
         """Pass type='' for no weight"""

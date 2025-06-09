@@ -48,7 +48,9 @@ class BaseConfig:
             raise ValueError(f"Invalid config_type: {config_type}")
 
     @classmethod
-    def base_config(cls, config_type=None, config_file=None, config_dict=None, working_dir=None, **kwargs):
+    def base_config(
+        cls, target_file=None, config_type=None, config_file=None, config_dict=None, working_dir=None, **kwargs
+    ):
         """Return the base (base.yml) ConfigurationInstance."""
         working_dir = working_dir or os.getcwd()
         if config_file is not None:
@@ -59,6 +61,8 @@ class BaseConfig:
                 raise FileNotFoundError("Provided Configuration file does not exist")
         elif config_type is not None:
             config = cls.from_base(config_type, **kwargs)
+            # if config_type == "sciprocess":
+            #     config.input.calibrated_images = [target_file]
         elif config_dict is not None:
             config = cls.from_dict(config_dict=config_dict, **kwargs)
         else:

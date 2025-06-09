@@ -245,3 +245,8 @@ class TaskTree:
     def __repr__(self):
         return f"TaskTree(id={self.id}, status={self.status}, tasks={len(self.tasks)})"
         
+    def execute(self):
+        while not self.is_complete():
+            task = self.get_next_task()
+            task.execute()
+            self.advance()
