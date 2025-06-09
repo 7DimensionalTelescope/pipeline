@@ -36,12 +36,33 @@ class SciProcConfiguration(BaseConfig):
             clean_up_folder(self.path.factory_dir)
             clean_up_sciproduct(self.path.output_dir)
 
+        self._add_metadata()
+
         self.logger.info(f"Writing configuration to file")
         self.logger.debug(f"Configuration file: {self.config_file}")
         self.write_config()
 
         self.logger.info(f"SciProcConfiguration initialized")
         self.logger.debug(f"SciProcConfiguration initialization took {time.time() - st:.2f} seconds")
+
+    @classmethod
+    def base_config(cls, target_file=None, config_file=None, config_dict=None, working_dir=None, **kwargs):
+        """Return the base (base.yml) ConfigurationInstance."""
+        working_dir = working_dir or os.getcwd()
+        if config_file is not None:
+            config_file = os.path.join(working_dir, config_file) if working_dir else config_file
+            if os.path.exists(config_file):
+                config = cls.from_file(config_file=config_file, **kwargs)
+            else:
+                raise FileNotFoundError("Provided Configuration file does not exist")
+        elif config_dict is not None:
+            config = cls.from_dict(config_dict=config_dict, **kwargs)
+        else:
+            raise ValueError("Either config_file, config_type or config_dict must be provided")
+
+        config.name = "user-input"
+        config._initialized = True
+        return config
 
     @classmethod
     def user_input(cls, input_files, write=True, **kwargs):
@@ -122,7 +143,7 @@ class SciProcConfiguration(BaseConfig):
         raise ValueError("Configuration does not contain valid input files or directories to create PathHandler.")
 
     def initialize(self):
-        """Fill in obs info, name, paths."""
+        """Fill in universal info, filenames, settings."""
 
         self.config.info.version = __version__
         self.config.info.creation_datetime = datetime.now().isoformat()
@@ -134,17 +155,17 @@ class SciProcConfiguration(BaseConfig):
         # self.set_input_output()
         # self.check_masterframe_status()
 
-        self._add_metadata()
         self._define_settings(self.input_files[0])
         self.input_files = self.config.input.calibrated_images
         self._initialized = True
 
-    def _add_metadata(self):  # for webpage
+    def _add_metadata(self):
+        """make an ecsv file that the pipeline webpage refers to"""
 
         # metadata_path = os.path.join(self._processed_dir, name, "metadata.ecsv")
-        metadata_path = os.path.join(self.path.metadata_dir, "metadata.ecsv")
-        if not os.path.exists(metadata_path):
-            with open(metadata_path, "w") as f:
+        metadata_file = os.path.join(self.path.metadata_dir, "metadata.ecsv")
+        if not os.path.exists(metadata_file):
+            with open(metadata_file, "w") as f:
                 f.write("# %ECSV 1.0\n")
                 f.write("# ---\n")
                 f.write("# datatype:\n")

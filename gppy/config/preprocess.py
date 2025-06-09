@@ -50,6 +50,10 @@ class PreprocConfiguration(BaseConfig):
         else:
             return None
 
+    @classmethod
+    def base_config(cls):
+        return
+
     def initialize(self):
         self.config.info.version = __version__
         self.config.info.creation_datetime = datetime.now().isoformat()

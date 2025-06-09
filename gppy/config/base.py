@@ -6,9 +6,10 @@ from .. import const
 from .utils import (
     merge_dicts,
 )
+from abc import ABC, abstractmethod
 
 
-class BaseConfig:
+class BaseConfig(ABC):
 
     def __init__(self, config_source=None, write=True, **kwargs) -> None:
         self._initialized = False
@@ -47,30 +48,35 @@ class BaseConfig:
         else:
             raise ValueError(f"Invalid config_type: {config_type}")
 
-    @classmethod
-    def base_config(
-        cls, target_file=None, config_type=None, config_file=None, config_dict=None, working_dir=None, **kwargs
-    ):
-        """Return the base (base.yml) ConfigurationInstance."""
-        working_dir = working_dir or os.getcwd()
-        if config_file is not None:
-            config_file = os.path.join(working_dir, config_file) if working_dir else config_file
-            if os.path.exists(config_file):
-                config = cls.from_file(config_file=config_file, **kwargs)
-            else:
-                raise FileNotFoundError("Provided Configuration file does not exist")
-        elif config_type is not None:
-            config = cls.from_base(config_type, **kwargs)
-            # if config_type == "sciprocess":
-            #     config.input.calibrated_images = [target_file]
-        elif config_dict is not None:
-            config = cls.from_dict(config_dict=config_dict, **kwargs)
-        else:
-            raise ValueError("Either config_file, config_type or config_dict must be provided")
+    # @classmethod
+    # def base_config(
+    #     cls, target_file=None, config_type=None, config_file=None, config_dict=None, working_dir=None, **kwargs
+    # ):
+    #     """Return the base (base.yml) ConfigurationInstance."""
+    #     working_dir = working_dir or os.getcwd()
+    #     if config_file is not None:
+    #         config_file = os.path.join(working_dir, config_file) if working_dir else config_file
+    #         if os.path.exists(config_file):
+    #             config = cls.from_file(config_file=config_file, **kwargs)
+    #         else:
+    #             raise FileNotFoundError("Provided Configuration file does not exist")
+    #     elif config_type is not None:
+    #         config = cls.from_base(config_type, **kwargs)
+    #         # if config_type == "sciprocess":
+    #         #     config.input.calibrated_images = [target_file]
+    #     elif config_dict is not None:
+    #         config = cls.from_dict(config_dict=config_dict, **kwargs)
+    #     else:
+    #         raise ValueError("Either config_file, config_type or config_dict must be provided")
 
-        config.name = "user-input"
-        config._initialized = True
-        return config
+    #     config.name = "user-input"
+    #     config._initialized = True
+    #     return config
+
+    @classmethod
+    @abstractmethod
+    def base_config(cls):
+        pass
 
     def _load_config(self, config_source, **kwargs):
         if isinstance(config_source, str):
@@ -152,15 +158,15 @@ class BaseConfig:
     def extract_single_image_config(self, i: int):
         """return a Configuration with i-th element of all lists in the config dict"""
         from copy import deepcopy
-
+        from .sciprocess import SciProcConfiguration
         # Deep copy to avoid mutation
         config_dict = deepcopy(self.config_in_dict)
 
         # Recursively reduce all list values to i-th element
         config_dict = self.config.select_from_lists(config_dict, i)
 
-        return BaseConfig(config_source=config_dict, write=False)
-        # return Configuration.from_dict(config_dict, write=False)
+        #return BaseConfig(config_source=config_dict, write=False)
+        return SciProcConfiguration.from_dict(config_dict, write=False)
 
 
 class ConfigurationInstance:
