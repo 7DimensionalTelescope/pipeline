@@ -276,6 +276,7 @@ def plot_bpmask(file, ext=1, badpix=1, savefig=False):
     return data
 
 
-def plot_sci(output_img):
+def plot_sci(input_img, output_img):
     path = PathHandler(output_img)
+    save_fits_as_png(fits.getdata(input_img), path.figure_dir_to_path / f"{path.stem[0]}_raw.png")
     save_fits_as_png(fits.getdata(output_img), path.figure_dir_to_path / f"{path.stem[0]}.png")

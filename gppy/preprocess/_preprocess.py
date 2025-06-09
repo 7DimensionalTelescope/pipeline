@@ -307,9 +307,19 @@ class Preprocess(BaseSetup):
 
         st = time.time()
 
-        num_devices = 1
+        use_multi_device = self.config.preprocess.use_multi_device
 
-        batch_dist = calc_batch_dist(self.sci_input, num_devices=num_devices)
+        if use_multi_device:
+            num_devices = cp.cuda.runtime.getDeviceCount()
+            device = np.arange(num_devices)
+        else:
+            num_devices = 1
+            if device_id is None:
+                device = self.device_id
+            else:
+                device = self.device_id
+
+        batch_dist = calc_batch_dist(self.sci_input, num_devices=num_devices, use_multi_device=use_multi_device)
 
         self.logger.info(
             f"Processing {len(self.sci_input)} images in group {self._current_group+1} on GPU device(s): {device_id} "
@@ -322,17 +332,29 @@ class Preprocess(BaseSetup):
         for batch in batch_dist:
             if sum(batch) == 0:
                 break
-
-            end_idx = start_idx + batch[0]
-            self.logger.debug(f"Device {device_id} will process {end_idx - start_idx} images")
-            subset = self.sci_input[start_idx:end_idx]
-            t = threading.Thread(
-                target=process_batch_on_device,
-                args=(subset, self.bias_data, self.dark_data, self.flat_data, results, device_id),
-            )
-            t.start()
-            threads.append(t)
-            start_idx = end_idx
+            if use_multi_device:
+                for device_id in range(num_devices):
+                    end_idx = start_idx + batch[device_id]
+                    self.logger.debug(f"Device {device_id} will process {end_idx - start_idx} images")
+                    subset = self.sci_input[start_idx:end_idx]
+                    t = threading.Thread(
+                        target=process_batch_on_device,
+                        args=(subset, self.bias_data, self.dark_data, self.flat_data, results, device_id),
+                    )
+                    t.start()
+                    threads.append(t)
+                    start_idx = end_idx
+            else:
+                end_idx = start_idx + batch[0]
+                self.logger.debug(f"Device {device_id} will process {end_idx - start_idx} images")
+                subset = self.sci_input[start_idx:end_idx]
+                t = threading.Thread(
+                    target=process_batch_on_device,
+                    args=(subset, self.bias_data, self.dark_data, self.flat_data, results, device_id),
+                )
+                t.start()
+                threads.append(t)
+                start_idx = end_idx
 
             self.logger.debug("Data reduction is now processing on GPU device(s)")
             start_time = time.time()
@@ -408,15 +430,15 @@ class Preprocess(BaseSetup):
         )
         if use_multi_thread:
             threads = []
-            for input_img, output_img in zip(self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)):
-                thread = threading.Thread(target=plot_sci, args=(input_img, output_img))
+            for output_img in self._get_raw_group("sci_output", group_index):
+                thread = threading.Thread(target=plot_sci, args=(output_img,))
                 thread.start()
                 threads.append(thread)
             for thread in threads:
                 thread.join()
         else:
-            for input_img, output_img in zip(self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)):
-                plot_sci(input_img, output_img)
+            for output_img in self._get_raw_group("sci_output", group_index):
+                plot_sci(output_img)
 
         self.logger.info(
             f"Completed plot generation for images in group {group_index+1} in {time_diff_in_seconds(st)} seconds"

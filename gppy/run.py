@@ -22,24 +22,17 @@ from .services.logger import Logger
 from .services.task import Task, TaskTree
 
 
-def run_preprocess_with_task(config, priority=Priority.HIGH, **kwargs):
+def run_preprocess_with_task(config, priority=Priority.HIGH, device_id = None, **kwargs):
     """
     Generate master calibration frames for a specific observation set.
 
     Master frames are combined calibration images (like dark, flat, bias) that
     help in reducing systematic errors in scientific observations.
 
-    Args:
-        obs_params (dict): Observation parameters including:
-            - date: Observation date
-            - unit: Observation unit/instrument
-            - n_binning: Pixel binning factor
-            - gain: Detector gain setting
-        queue (bool, optional): Whether to use queue-based processing. Defaults to False.
     """
     config = PreprocConfiguration.from_file(config)
     prep = Preprocess(config)
-    run_task = Task(prep.run, kwargs={"make_plots": False}, gpu=True, priority=priority)
+    run_task = Task(prep.run, kwargs={"make_plots": False}, gpu=True, priority=priority, device=device_id)
     return run_task
 
 
