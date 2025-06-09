@@ -2,18 +2,19 @@ from astropy.io import fits
 import os
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.stats import norm
 import matplotlib.colors as mcolors
 from pathlib import Path
 from PIL import Image
-from .utils import read_link
+
+from ..path import PathHandler
 
 
-def save_fits_as_png(
-    image_data, output_path, stretch=True, log_scale=False, max_width=1000
-):
+def save_fits_as_png(image_data, output_path, stretch=True, log_scale=False, max_width=1000):
     # Handle potential NaN or inf values
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    if output_path.exists():
+        return
 
     if isinstance(image_data, str):
         image_data = fits.getdata(image_data)
@@ -38,9 +39,7 @@ def save_fits_as_png(
         image_data = np.clip(image_data, vmin, vmax)
 
     # Normalize to 0-255 range for 8-bit image
-    image_data = (
-        (image_data - image_data.min()) / (image_data.max() - image_data.min()) * 255
-    ).astype(np.uint8)
+    image_data = ((image_data - image_data.min()) / (image_data.max() - image_data.min()) * 255).astype(np.uint8)
 
     # Convert to Pillow Image
     pil_image = Image.fromarray(image_data)
@@ -54,16 +53,19 @@ def save_fits_as_png(
         pil_image = pil_image.resize((new_width, new_height), Image.LANCZOS)
 
     # Save with compression
-    pil_image.save(
-        output_path, "PNG", optimize=True, compress_level=5  # Optimize compression
-    )
+    pil_image.save(output_path, "PNG", optimize=True, compress_level=5)  # Optimize compression
 
 
 def plot_bias(file, savefig=False):
-    if ".link" in file:
-        orig_file = read_link(file)
-    data = fits.getdata(orig_file)
-    header = fits.getheader(orig_file)
+    path = Path(file)
+    os.makedirs(path.parent / "figures", exist_ok=True)
+    output_path = path.parent / "figures" / f"{path.stem}_hist.png"
+
+    if output_path.exists():
+        return
+
+    data = fits.getdata(file)
+    header = fits.getheader(file)
     fdata = data.ravel()
 
     plt.hist(
@@ -95,81 +97,69 @@ def plot_bias(file, savefig=False):
     plt.xlim(400, 600)
     plt.ylim(1e-6, 10)
     plt.legend()
-    plt.tight_layout()
+    
 
     if savefig:
-        path = Path(file)
-        os.makedirs(path.parent / "figures", exist_ok=True)
-        plt.savefig(path.parent / "figures" / "master_bias_flatten.png")
+        plt.savefig(output_path)
         plt.clf()
-        save_fits_as_png(data, path.parent / "figures" / "master_bias.png")
+        save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
     else:
         plt.show(block=False)
 
 
-def plot_dark(file_dict, fmask=None, savefig=False, badpix=0):
-    if isinstance(file_dict, str):
-        file_dict = {0: file_dict}
-    elif isinstance(file_dict, list):
-        file_dict = {i: file for i, file in enumerate(file_dict)}
+def plot_dark(file, fmask=None, savefig=False):
+    path = Path(file)
+    os.makedirs(path.parent / "figures", exist_ok=True)
+    output_path = path.parent / "figures" / f"{path.stem}_hist.png"
+    if output_path.exists():
+        return
+        
+    data = fits.getdata(file)
+    header = fits.getheader(file)
+    fdata = data.ravel()
+    fdata = fdata[fmask] if fmask is not None else fdata
 
-    for exposure, file in file_dict.items():
-        if not os.path.exists(file):
-            continue
-        if ".link" in file:
-            orig_file = read_link(file)
-        data = fits.getdata(orig_file)
-        header = fits.getheader(orig_file)
-        fdata = data.ravel()
-        fdata = fdata[fmask] if fmask is not None else fdata
+    plt.hist(
+        fdata,
+        bins=30,
+        density=True,
+        alpha=0.6,
+        label="Masked Data",
+        histtype="step",
+    )
 
-        plt.hist(
-            fdata,
-            bins=30,
-            density=True,
-            alpha=0.6,
-            label="Masked Data",
-            histtype="step",
-        )
+    for i, key in enumerate(["CLIPMEAN", "CLIPMED", "CLIPSTD"]):
+        plt.axvline(header[key], linestyle="--", color=f"C{i+1}", label=key)
 
-        for i, key in enumerate(["CLIPMEAN", "CLIPMED", "CLIPSTD"]):
-            plt.axvline(header[key], linestyle="--", color=f"C{i+1}", label=key)
+    plt.axvspan(
+        -100,
+        header["CLIPMIN"],
+        color="gray",
+        alpha=0.5,
+        label="within CLIPMIN and CLIPMAX",
+    )
+    plt.axvspan(header["CLIPMAX"], 1000, color="gray", alpha=0.5)
 
-        plt.axvspan(
-            -100,
-            header["CLIPMIN"],
-            color="gray",
-            alpha=0.5,
-            label="within CLIPMIN and CLIPMAX",
-        )
-        plt.axvspan(header["CLIPMAX"], 1000, color="gray", alpha=0.5)
+    plt.xlim(-50, 50)
+    plt.yscale("log")
+    plt.xlabel("ADU")
+    plt.ylabel("Density")
+    plt.title(f"Master Dark")
 
-        plt.xlim(-50, 50)
-        plt.yscale("log")
-        plt.xlabel("ADU")
-        plt.ylabel("Density")
-        plt.title(f"Master Dark (exp. {exposure}s)")
+    plt.ylim(1e-6, 10)
+    plt.legend()
+    
+    if savefig:
+        plt.savefig(output_path)
+        plt.clf()
+        save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
+    else:
+        plt.show(block=False)
 
-        plt.ylim(1e-6, 10)
-        plt.legend()
-        plt.tight_layout()
-        if savefig:
-            path = Path(file)
-            os.makedirs(path.parent / "figures", exist_ok=True)
-            plt.savefig(
-                path.parent / "figures" / f"master_dark_flatten_{exposure}s.png"
-            )
-            plt.clf()
-            save_fits_as_png(
-                data, path.parent / "figures" / f"master_dark_{exposure}s.png"
-            )
-        else:
-            plt.show(block=False)
-
-        plot_dark_tail(fdata, exposure, file, savefig=savefig)
+    plot_dark_tail(fdata, file, savefig=savefig)
 
 
-def plot_dark_tail(fdata, exposure, file, savefig=False):
+def plot_dark_tail(fdata, file, savefig=False):
     p99 = np.percentile(fdata, 99, method="nearest")
     p999 = np.percentile(fdata, 99.9, method="nearest")
     fdata = fdata[fdata > 0]
@@ -189,107 +179,103 @@ def plot_dark_tail(fdata, exposure, file, savefig=False):
     plt.yscale("log")
     plt.xlabel("ADU")
     plt.ylabel("N")
-    plt.title(f"Master Dark Tail (exp. {exposure}s)")
+    plt.title(f"Master Dark Tail")
 
     plt.legend()
-    plt.tight_layout()
+    
 
     if savefig:
         path = Path(file)
         os.makedirs(path.parent / "figures", exist_ok=True)
-        plt.savefig(path.parent / "figures" / f"master_dark_tail_{exposure}s.png")
+        plt.savefig(path.parent / "figures" / f"{path.stem}_tail.png")
         plt.clf()
     else:
         plt.show(black=False)
 
 
-def plot_flat(file_dict, fmask=None, badpix=1, savefig=False):
-    if isinstance(file_dict, str):
-        file_dict = {0: file_dict}
-    elif isinstance(file_dict, list):
-        file_dict = {i: file for i, file in enumerate(file_dict)}
+def plot_flat(file, fmask=None, savefig=False):
 
-    for filt, file in file_dict.items():
-        if not (os.path.exists(file)):
-            continue
-        if ".link" in file:
-            orig_file = read_link(file)
+    path = Path(file)
+    os.makedirs(path.parent / "figures", exist_ok=True)
+    output_path = path.parent / "figures" / f"{path.stem}_hist.png"
+    if output_path.exists():
+        return
 
-        data = fits.getdata(orig_file)
-        header = fits.getheader(orig_file)
+    data = fits.getdata(file)
+    header = fits.getheader(file)
 
-        fdata = data.ravel()
-        fdata = fdata[fmask] if fmask is not None else fdata
+    fdata = data.ravel()
+    fdata = fdata[fmask] if fmask is not None else fdata
 
-        plt.hist(
-            fdata,
-            bins=100,
-            color="C0",
-            histtype="step",
-            label="Masked Data",
-        )
+    plt.hist(
+        fdata,
+        bins=100,
+        color="C0",
+        histtype="step",
+        label="Masked Data",
+    )
 
-        for i, key in enumerate(["CLIPMEAN", "CLIPMED"]):
-            plt.axvline(header[key], linestyle="--", color=f"C{i+1}", label=key)
+    for i, key in enumerate(["CLIPMEAN", "CLIPMED"]):
+        plt.axvline(header[key], linestyle="--", color=f"C{i+1}", label=key)
 
-        plt.axvspan(
-            0,
-            header["CLIPMIN"],
-            color="gray",
-            alpha=0.5,
-            label="within CLIPMIN and CLIPMAX",
-        )
-        plt.axvspan(header["CLIPMAX"], 3, color="gray", alpha=0.5)
+    plt.axvspan(
+        0,
+        header["CLIPMIN"],
+        color="gray",
+        alpha=0.5,
+        label="within CLIPMIN and CLIPMAX",
+    )
+    plt.axvspan(header["CLIPMAX"], 3, color="gray", alpha=0.5)
 
-        plt.yscale("log")
-        plt.xlabel("Normalized ADU")
-        plt.ylabel("N")
-        plt.title(f"Master Flat (filter: {filt})")
-        plt.ylim(
-            1e5,
-        )
-        plt.xlim(0, 1.5)
-        plt.legend()
-        plt.tight_layout()
+    plt.yscale("log")
+    plt.xlabel("Normalized ADU")
+    plt.ylabel("N")
+    plt.title(f"Master Flat")
+    plt.ylim(
+        1e5,
+    )
+    plt.xlim(0, 1.5)
+    plt.legend()
+    
 
-        if savefig:
-            path = Path(file)
-            os.makedirs(path.parent / "figures", exist_ok=True)
-            plt.savefig(path.parent / "figures" / f"master_flat_flatten_{filt}.png")
-            plt.clf()
-            save_fits_as_png(data, path.parent / "figures" / f"master_flat_{filt}.png")
-        else:
-            plt.show()
+    if savefig:
+        plt.savefig(output_path)
+        plt.clf()
+        save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
+    else:
+        plt.show()
 
 
-def plot_bpmask(file_dict, ext=1, badpix=1, savefig=False):
-    for exposure, file in file_dict.items():
-        if not (os.path.exists(file)):
-            continue
-        if ".link" in file:
-            file = read_link(file)
-        data = fits.getdata(file, ext=ext)
+def plot_bpmask(file, ext=1, badpix=1, savefig=False):
+    path = Path(file)
+    os.makedirs(path.parent / "figures", exist_ok=True)
+    output_path = path.parent / "figures" / f"{path.stem}.png"
+    data = fits.getdata(file, ext=ext)
+    if output_path.exists():
+        return data
 
-        header = fits.getheader(file, ext=ext)
-        if "BADPIX" in header.keys():
-            badpix = header["BADPIX"]
+    header = fits.getheader(file, ext=ext)
+    if "BADPIX" in header.keys():
+        badpix = header["BADPIX"]
 
-        if badpix == 0:
-            cmap = mcolors.ListedColormap(["red", "white"])
-        elif badpix == 1:
-            cmap = mcolors.ListedColormap(["white", "red"])
+    if badpix == 0:
+        cmap = mcolors.ListedColormap(["red", "white"])
+    elif badpix == 1:
+        cmap = mcolors.ListedColormap(["white", "red"])
 
-        plt.imshow(data, cmap=cmap, interpolation="nearest")
-        plt.title(f"Hot pixel mask (exp. {exposure}s)")
-        plt.xlabel("X (pixels)")
-        plt.ylabel("Y (pixels)")
+    plt.imshow(data, cmap=cmap, interpolation="nearest")
+    plt.title(f"Hot pixel mask")
+    plt.xlabel("X (pixels)")
+    plt.ylabel("Y (pixels)")
 
-        if savefig:
-            path = Path(file)
-            os.makedirs(path.parent / "figures", exist_ok=True)
-            plt.savefig(path.parent / "figures" / f"master_dark_bpmask_{exposure}s.png")
-            plt.clf()
-        else:
-            plt.show(block=False)
-
+    if savefig:
+        plt.savefig(output_path)
+        plt.clf()
+    else:
+        plt.show(black=False)
     return data
+
+
+def plot_sci(output_img):
+    path = PathHandler(output_img)
+    save_fits_as_png(fits.getdata(output_img), path.figure_dir_to_path / f"{path.stem[0]}.png")

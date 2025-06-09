@@ -1,0 +1,7 @@
+date_start	date_end	parts	comment
+240629	240629	cam	PA
+240730	240730	cam	cooling
+240822	240822	cam	swap:31164>31241
+241206	241206	cam	PA
+250213	250305	cam	badcolumn
+250311	250311	mirror	cleaning

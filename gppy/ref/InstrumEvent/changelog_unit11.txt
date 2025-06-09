@@ -1,0 +1,2 @@
+date_start	date_end	parts	comment
+240916	240916	cam	swap:31204>31232

@@ -42,6 +42,7 @@ def match_two_catalogs(
 
         * ``'inner'`` - return only matched rows (default)
         * ``'left'``  - return every row of *sci_tbl* and mask unmatched
+                        entries from ref_tbl
     correct_pm
         If *True*, propagate stars in the *reference* catalogue from their
         catalogued epoch (`pm_info['ref_epoch']`, default 2016.0 TDB) to
@@ -230,7 +231,7 @@ def _parse_conditions(conditions: Sequence[Any]) -> Iterable[Condition]:
       • already an iterable of 3-tuples
       • a flat 1-D list/array whose length is a multiple of 3
     """
-    # Check it looks like [(k, op, v), …]
+    # Understand something like [(k, op, v), …]
     if conditions and isinstance(conditions[0], (tuple, list)) and len(conditions[0]) == 3:
         return conditions  # type: ignore[arg-type]
 

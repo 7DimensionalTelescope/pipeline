@@ -1,7 +1,8 @@
-from typing import List, Optional, Dict, Any, Callable
+from typing import List, Optional, Dict, Any, Callable, Union, Tuple
 from enum import Enum
 from datetime import datetime
 import time
+import sys
 import itertools
 from .utils import cleanup_memory
 import cupy as cp
@@ -27,9 +28,9 @@ class Task:
 
     def __init__(
         self,
-        func: Optional[Callable]=None,
-        args: Optional[tuple] = (),
-        kwargs: Optional[dict] = {},
+        func,
+        args: Optional[tuple] = None,
+        kwargs: Optional[dict] = None,
         priority: Optional[Priority] = Priority.MEDIUM,
         id: Optional[str] = None,
         starttime: Optional[datetime] = None,
@@ -43,28 +44,43 @@ class Task:
         cls: Optional[Any] = None,
         inherit_input: Optional[bool] = False,
     ):
+        # Store function and class references
         self._func = func
+        self._func_name = func.__name__ if func else None
+        
         self.cls = cls
+        
+        # Store arguments
         self.args = args or ()
         self.kwargs = kwargs or {}
-
-        self.id = id or f"task_{next(self._id_counter)}"
-
-        self.task_name = task_name or self._get_task_name()
         
+        # Task metadata
+        self.id = id or f"task_{next(self._id_counter)}"
+        self.task_name = task_name
         self.priority = priority
         self.starttime = starttime or datetime.now()
         self.endtime = endtime or datetime.now()
         self.gpu = gpu
-        self.device = device
+        self._device = device
         self.status = status
         self.result = result
         self.error = error
         self.time_priority = int(time.time() * 1000)
         self.inherit_input = inherit_input
+        
+        # Set task name after initialization to avoid recursion
+        if task_name is None:
+            self.task_name = self._get_task_name()
 
     def __lt__(self, other):
         return self.sort_index < other.sort_index
+    
+    @property
+    def device(self):
+        if self._device is None:
+            from .utils import get_best_gpu_device
+            self._device = get_best_gpu_device()
+        return self._device
     
     @property
     def func(self):
@@ -78,61 +94,124 @@ class Task:
         self.time_priority = int(time.time() * 1000)  # milliseconds since epoch
     
     def _get_task_name(self):
+        if self.task_name:
+            return self.task_name
+        if self._func_name is None:
+            return "unnamed_task"
         if self.cls is None:
-            return self._func.__name__
-        else:
-            return f"{type(self.cls).__name__}.{self._func.__name__}"
+            return self._func_name
+        return f"{type(self.cls).__name__}.{self._func_name}"
 
     def _get_function(self):
-        if self.cls is None:
+        """Retrieve the callable function for this task.
+        
+        Returns:
+            Callable: The function to be executed
+        """
+        if self.cls is not None and self._func_name is not None:
+            func = getattr(self.cls, self._func_name, None)
+            if func is None:
+                raise ValueError(f"Function '{self._func_name}' not found in class {type(self.cls).__name__}")
+            return func
+        elif self._func is not None:
             return self._func
-        return getattr(self.cls, self._func.__name__)
-    
+        else:
+            raise ValueError(f"No function reference available for task {self.id}")
+
     def execute(self):
+        """Execute the task's function with the provided arguments.
+        
+        Returns:
+            Task: The current task instance with updated status and result
+            
+        Raises:
+            Exception: If task execution fails
+        """
         self.status = "processing"
         self.starttime = datetime.now()
-        if self.gpu:
-            with self.gpu_context():
-                self.result = self.func(*self.args, **self.kwargs)
-        else:
-            self.result = self.func(*self.args, **self.kwargs)
-        return self
-
-    @contextmanager
-    def gpu_context(self):
         try:
-            with cp.cuda.Device(self.device):
-                yield
+            # Execute function with appropriate context
+            if self.gpu:
+                with cp.cuda.Device(self.device):
+                    self.result = self.func(device_id = self.device, *self.args, **self.kwargs)
+            else:
+                self.result = self.func(*self.args, **self.kwargs)
+
+            self.status = "completed"
+            return self
         except Exception as e:
-            print(f"GPU operation failed on device {device}: {e}")
+            self.status = "failed"
+            self.error = e
             raise
+        finally:
+            self.endtime = datetime.now()
 
     def cleanup(self):
-        """Cleanup resources after task execution."""
+        """Cleanup resources after task execution.
+        
+        This method releases both CPU and GPU resources used by the task.
+        """
+        # Clear function references
         self._func = None
+        
+        # Clear arguments to free memory
         self.args = None
         self.kwargs = None
+        
+        # Clear result if it's a large object
+        if hasattr(self.result, 'nbytes') and self.result.nbytes > 1e6:  # If result is large (>1MB)
+            self.result = None
+            
+        # Clean up GPU memory if this was a GPU task
+        if self.gpu:
+            try:
+                cp.get_default_memory_pool().free_all_blocks()
+                cp.get_default_pinned_memory_pool().free_all_blocks()
+            except Exception as e:
+                print(f"Warning: Failed to free GPU memory: {e}", file=sys.stderr)
+        
+        # General memory cleanup
         cleanup_memory()
         
     def __repr__(self):
-        if self.cls is None:
-            return f"Task(id={self.id}, task_name={self.task_name}, status={self.status})"
-        else:
-            return f"Task(id={self.id}, task_name={type(self.cls).__name__}.{self.task_name}, status={self.status})"
+        """Return a string representation of the task.
+        
+        Returns:
+            str: String representation including ID, name, and status
+        """
+        cls_name = type(self.cls).__name__ if self.cls is not None else None
+        task_name = f"{cls_name}.{self.task_name}" if cls_name else self.task_name
+        
+        return (
+            f"Task(id={self.id}, "
+            f"name={task_name}, "
+            f"status={self.status}, "
+            f"gpu={self.gpu}, "
+            f"priority={self.priority.name if self.priority else 'N/A'})"
+        )
+        
 
 class TaskTree:
     """
-    Represents the processing pipeline for a single image, containing multiple tasks.
-    tasks are processed sequentially.
+    Represents a sequential processing pipeline containing multiple tasks.
+    Tasks are executed in order, with results tracked for each step.
     """
     _id_counter = itertools.count(0)
 
-    def __init__(self, tasks: List[Task], id: str=None):
+    def __init__(self, tasks: List[Task] = None, id: str = None):
         self.id = id or f"tree_{next(self._id_counter)}"
-        self.tasks = tasks
+        self.tasks = tasks or []
         self.status = "pending"
-        
         self.results = {}
+
+    def set_device(self, device_id=None) -> None:
+        from .utils import get_best_gpu_device
+
+        if device_id is None:
+            device_id = get_best_gpu_device()
+
+        for task in self.tasks:
+            task._device = device_id
     
     def add_task(self, task: Task) -> None:
         """Add a processing task to this tree."""
@@ -140,15 +219,15 @@ class TaskTree:
     
     def get_next_task(self) -> Optional[Task]:
         """Get the next task to be processed."""
-        if len(self.tasks) == 0:
-            return None
-        return self.tasks[0]
+        return self.tasks[0] if self.tasks else None
     
     def advance(self) -> None:
         """Move to the next task after current one completes."""
-        self.tasks.pop(0)
-        cleanup_memory()
-        if len(self.tasks) == 0:
+        if self.tasks:
+            self.tasks.pop(0)
+            cleanup_memory()
+            
+        if not self.tasks:
             self.status = "completed"
     
     def is_complete(self) -> bool:
@@ -164,5 +243,10 @@ class TaskTree:
         return self.results
         
     def __repr__(self):
-        base = f"TaskTree(id={self.id}, status={self.status}, tasks={len(self.tasks)})"
+        return f"TaskTree(id={self.id}, status={self.status}, tasks={len(self.tasks)})"
         
+    def execute(self):
+        while not self.is_complete():
+            task = self.get_next_task()
+            task.execute()
+            self.advance()

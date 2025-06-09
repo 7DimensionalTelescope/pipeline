@@ -1,17 +1,18 @@
 from typing import Any, Union
 from abc import ABC, abstractmethod
 import glob
-from ..config import Configuration, ConfigurationInstance
-from ..base.path import PathHandler
+from ..config import PreprocConfiguration, SciProcConfiguration, ConfigurationInstance
+from ..path.path import PathHandler
 from .logger import Logger
 from .queue import QueueManager
+import warnings
 
 
 class BaseSetup(ABC):
     def __init__(
         self,
-        config: Union[str, Any] = None,
-        logger: Any = None,
+        config: Union[str, PreprocConfiguration, SciProcConfiguration] = None,
+        logger: Logger = None,
         queue: Union[bool, Any] = False,
     ) -> None:
         """Initialize the astrometry module.
@@ -21,31 +22,42 @@ class BaseSetup(ABC):
             logger: Custom logger instance (optional)
             queue: QueueManager instance or boolean to enable parallel processing
         """
+        # Setup PathHandler
         self.path = self._setup_path(config)
 
         # Setup Configuration
         self.config = self._setup_config(config)
 
         # Setup log
-        self.logger = self._setup_logger(logger, config)
+        self._logger = self._setup_logger(logger, self.config)
 
         # Setup queue
         self.queue = self._setup_queue(queue)
 
+    def __getstate__(self): return self.__dict__
+    def __setstate__(self, d): self.__dict__.update(d)
+
+    @property
+    def logger(self):
+        return self._setup_logger(self._logger, self.config)
+
     def _setup_path(self, config):
-        if isinstance(config, Configuration):
+        if isinstance(config, PreprocConfiguration | SciProcConfiguration):
             return config.path
+        elif isinstance(config, ConfigurationInstance):
+            return PathHandler(config)
         elif isinstance(config, str):
-            return PathHandler(Configuration(config_source=config))
+            warnings.warn("String path is deprecated. Assume SciProcConfiguration.")
+            return PathHandler(SciProcConfiguration(config_source=config))
         else:
             raise ValueError("No information to initialize PathHandler")
 
     def _setup_config(self, config):
-
-        if isinstance(config, Configuration):
+        if isinstance(config, PreprocConfiguration) or isinstance(config, SciProcConfiguration):
             return config.config
         elif isinstance(config, str):
-            return Configuration(config_source=config).config
+            warnings.warn("String path is deprecated. Assume SciProcConfiguration.")
+            return SciProcConfiguration(config_source=config).config
         elif isinstance(config, ConfigurationInstance):
             return config
         else:
@@ -53,12 +65,24 @@ class BaseSetup(ABC):
 
     def _setup_logger(self, logger, config):
 
-        if isinstance(logger, Logger):
+        if isinstance(logger, Logger) and logger.logger.hasHandlers():
             return logger
-        elif hasattr(config, "logger") and isinstance(config.logger, Logger):
-            return config.logger
         else:
-            return Logger(name=config.config.name, slack_channel="pipeline_report")
+            import logging
+            tmp_logger = logging.getLogger(config.name)
+
+            if tmp_logger.hasHandlers():
+                self._logger = tmp_logger
+                return tmp_logger
+            else:
+                from ..config.base import BaseConfig
+                tmp_logger = BaseConfig._setup_logger(
+                    name = config.name, 
+                    log_file = config.logging.file, 
+                    log_format = config.logging.format,
+                    overwrite=False)
+                self._logger = tmp_logger
+                return tmp_logger
 
     def _setup_queue(self, queue):
 
@@ -84,10 +108,10 @@ class BaseSetup(ABC):
         image_list = glob.glob(f"{dir_path}/*.fits")
         return cls.from_list(image_list)
 
-    @classmethod
-    def from_text_file(cls, imagelist_file):
-        input_images = inputlist_parser(imagelist_file)
-        cls.from_list(input_images)
+    # @classmethod
+    # def from_text_file(cls, imagelist_file):
+    #     input_images = inputlist_parser(imagelist_file)
+    #     cls.from_list(input_images)
 
     def flagging(self):
         setattr(self.config.flag, self._flag_name, True)

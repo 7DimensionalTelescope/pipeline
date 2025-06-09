@@ -1,0 +1,30 @@
+name: 
+
+input: 
+  # masterframe_images: 
+  # science_images: 
+  grouped_raw_images:
+  raw_dir: 
+
+info:
+  version: '2.0'  # legacy gppy-gpu is 1.0
+  project: 7DT/7DS
+  creation_datetime:
+  last_update_datetime:
+
+logging:
+  level: INFO
+  file: 
+  format: '[%(levelname)s] %(asctime)s - %(name)s - %(message)s'
+  handlers:
+    - console
+    - file
+
+preprocess:
+  masterframe: default # closest, custom
+  max_offset: 300
+  n_sigma: 5  # bad pixel mask criterion
+  n_head_blocks: 5
+  use_multi_device: False
+  use_multi_thread: True
+  device: 

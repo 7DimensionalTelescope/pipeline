@@ -1,13 +1,14 @@
 __package__ = "gppy"
 
-from .config import Configuration
-from .astrometry.astrometry import Astrometry
-from .photometry.photometry import Photometry
-from .imstack.imstack import ImStack
+from .config import PreprocConfiguration, SciProcConfiguration
+from .preprocess import Preprocess
+from .astrometry import Astrometry
+from .photometry import Photometry
+from .imstack import ImStack
+from .subtract import ImSubtract
 
 # from .subtract.subtract import ImSubtract
 
-from .preprocess import Preprocess, MasterFrameGenerator
 from .const import RAWDATA_DIR
 import time
 
@@ -21,7 +22,7 @@ from .services.logger import Logger
 from .services.task import Task, TaskTree
 
 
-def run_masterframe_generator(obs_params, queue=False, **kwargs):
+def run_preprocess_with_task(config, priority=Priority.HIGH, **kwargs):
     """
     Generate master calibration frames for a specific observation set.
 
@@ -36,145 +37,129 @@ def run_masterframe_generator(obs_params, queue=False, **kwargs):
             - gain: Detector gain setting
         queue (bool, optional): Whether to use queue-based processing. Defaults to False.
     """
-    mfg = MasterFrameGenerator(obs_params, queue=queue, **kwargs)
-    mfg.run()
-    del mfg
+    config = PreprocConfiguration.from_file(config)
+    prep = Preprocess(config)
+    run_task = Task(prep.run, kwargs={"make_plots": False}, gpu=True, priority=priority)
+    return run_task
 
 
-def run_masterframe_generator_with_tree(obs_params, priority=Priority.HIGH, **kwargs):
-    """
-    Generate master calibration frames for a specific observation set.
-
-    Master frames are combined calibration images (like dark, flat, bias) that
-    help in reducing systematic errors in scientific observations.
-
-    Args:
-        obs_params (dict): Observation parameters including:
-            - date: Observation date
-            - unit: Observation unit/instrument
-            - n_binning: Pixel binning factor
-            - gain: Detector gain setting
-        queue (bool, optional): Whether to use queue-based processing. Defaults to False.
-    """
-    mfg = MasterFrameGenerator(obs_params, **kwargs)
-    tasks = []
-    for task in mfg.sequential_task:
-        tasks.append(Task(getattr(mfg, task[1]), priority=priority, gpu=task[2], cls=mfg))
-    return TaskTree(tasks)
+def run_make_plots(config, priority=Priority.LOW):
+    config = PreprocConfiguration.from_file(config)
+    prep = Preprocess(config)
+    plot_task = Task(prep.make_plot_all, gpu=False, priority=priority)
+    return plot_task
 
 
-def run_scidata_reduction(
-    obs_params,
-    queue=False,
-    processes=["preprocess", "astrometry", "photometry", "combine", "subtract"],
-    **kwargs,
-):
-    """
-    Perform comprehensive scientific data reduction pipeline.
-
-    This function orchestrates the complete data reduction process for scientific observations,
-    including:
-    1. Configuration initialization
-    2. Calibration
-    3. Astrometric processing
-    4. Photometric analysis
-
-    Args:
-        obs_params (dict): Observation parameters including:
-            - date: Observation date
-            - unit: Observation unit/instrument
-            - gain: Detector gain setting
-            - obj: Target object name
-            - filter: Observation filter
-            - n_binning: Pixel binning factor
-        queue (bool, optional): Whether to use queue-based processing. Defaults to False.
-        **kwargs: Additional configuration parameters
-    """
-
-    logger = Logger(name="7DT pipeline logger", slack_channel="pipeline_report")
-
-    config = Configuration(obs_params, logger=logger, **kwargs)
-
-    if not (config.config.flag.preprocess) and "preprocess" in processes:
-        preproc = Preprocess(config, queue=queue)
-        preproc.run()
-        del preproc
-    else:
-        logger.info("Skipping preprocessing")
-    if not (config.config.flag.astrometry) and "astrometry" in processes:
-        astrm = Astrometry(config, queue=queue)
-        astrm.run()
-        del astrm
-    else:
-        logger.info("Skipping astrometry")
-    if not (config.config.flag.single_photometry) and "photometry" in processes:
-        phot = Photometry(config, queue=queue)
-        phot.run()
-        del phot
-    else:
-        logger.info("Skipping single photometry")
-    if not (config.config.flag.combine) and "combine" in processes:
-        stk = ImStack(config, queue=queue)
-        stk.run()
-        del stk
-    else:
-        logger.info("Skipping imstack")
-    if not (config.config.flag.combined_photometry) and "photometry" in processes:
-        phot = Photometry(config, queue=queue)
-        phot.run()
-        del phot
-    else:
-        logger.info("Skipping combined photometry")
-    # if not (config.config.flag.subtraction) and "subtract" in processes:
-    #     subt = ImSubtract(config, queue=queue)
-    #     subt.run()
-    #     del subt
-    # else:
-    #     logger.info("Skipping transient search")
-
-    # except Exception as e:
-    #     logger.error(f"Error during abrupt stop: {e}")
-
-
-def run_scidata_reduction_with_tree(
-    obs_params,
-    processes=["preprocess", "astrometry", "photometry", "combine", "subtract"],
+def run_process_with_tree(
+    config,
+    processes=["astrometry", "photometry", "combine", "subtract"],
     overwrite=False,
     priority=Priority.MEDIUM,
     **kwargs,
 ):
     """
     Perform comprehensive scientific data reduction pipeline sequentially.
+    Control which process to run with `processes`.
     """
-    config = Configuration(obs_params, overwrite=overwrite, **kwargs)
+    config = SciProcConfiguration.from_file(config, write=True, **kwargs)
 
     tasks = []
-    if not (config.config.flag.preprocess) and "preprocess" in processes:
-        prep = Preprocess(config)
-        for task in prep.sequential_task:
-            tasks.append(Task(getattr(prep, task[1]), priority=priority, gpu=task[2], cls=prep, inherit_input=task[3]))
-    if not (config.config.flag.astrometry) and "astrometry" in processes:
+    if (not (config.config.flag.astrometry) and "astrometry" in processes) or overwrite:
         astr = Astrometry(config)
         for task in astr.sequential_task:
             tasks.append(Task(getattr(astr, task[1]), priority=priority, gpu=task[2], cls=astr))
-    if not (config.config.flag.single_photometry) and "photometry" in processes:
+    if (not (config.config.flag.single_photometry) and "photometry" in processes) or overwrite:
         phot = Photometry(config)
         for task in phot.sequential_task:
             tasks.append(Task(getattr(phot, task[1]), priority=priority, gpu=task[2], cls=phot))
-    if not (config.config.flag.combine) and "combine" in processes:
+    if (not (config.config.flag.combine) and "combine" in processes) or overwrite:
         stk = ImStack(config)
         for task in stk.sequential_task:
             tasks.append(Task(getattr(stk, task[1]), priority=priority, gpu=task[2], cls=stk))
-    if not (config.config.flag.combined_photometry) and "photometry" in processes:
+    if (not (config.config.flag.combined_photometry) and "photometry" in processes) or overwrite:
         phot = Photometry(config)
         for task in phot.sequential_task:
             tasks.append(Task(getattr(phot, task[1]), priority=priority, gpu=task[2], cls=phot))
+    if (not (config.config.flag.subtraction) and "subtract" in processes) or overwrite:
+        subt = ImSubtract(config)
+        for task in subt.sequential_task:
+            tasks.append(Task(getattr(subt, task[1]), priority=priority, gpu=task[2], cls=subt))
 
     if len(tasks) != 0:
         tree = TaskTree(tasks)
         return tree
     else:
         return None
+
+
+# def run_scidata_reduction(
+#     obs_params,
+#     queue=False,
+#     processes=["preprocess", "astrometry", "photometry", "combine", "subtract"],
+#     **kwargs,
+# ):
+#     """
+#     Perform comprehensive scientific data reduction pipeline.
+
+#     This function orchestrates the complete data reduction process for scientific observations,
+#     including:
+#     1. Configuration initialization
+#     2. Calibration
+#     3. Astrometric processing
+#     4. Photometric analysis
+
+#     Args:
+#         obs_params (dict): Observation parameters including:
+#             - date: Observation date
+#             - unit: Observation unit/instrument
+#             - gain: Detector gain setting
+#             - obj: Target object name
+#             - filter: Observation filter
+#             - n_binning: Pixel binning factor
+#         queue (bool, optional): Whether to use queue-based processing. Defaults to False.
+#         **kwargs: Additional configuration parameters
+#     """
+
+#     logger = Logger(name="7DT pipeline logger", slack_channel="pipeline_report")
+
+#     config = Configuration(obs_params, logger=logger, **kwargs)
+#     if not (config.config.flag.preprocess) and "preprocess" in processes:
+#         prep = Preprocess(config, queue=queue)
+#         prep.run()
+#         del prep
+#     if not (config.config.flag.astrometry) and "astrometry" in processes:
+#         astrm = Astrometry(config, queue=queue)
+#         astrm.run()
+#         del astrm
+#     else:
+#         logger.info("Skipping astrometry")
+#     if not (config.config.flag.single_photometry) and "photometry" in processes:
+#         phot = Photometry(config, queue=queue)
+#         phot.run()
+#         del phot
+#     else:
+#         logger.info("Skipping single photometry")
+#     if not (config.config.flag.combine) and "combine" in processes:
+#         stk = ImStack(config, queue=queue)
+#         stk.run()
+#         del stk
+#     else:
+#         logger.info("Skipping imstack")
+#     if not (config.config.flag.combined_photometry) and "photometry" in processes:
+#         phot = Photometry(config, queue=queue)
+#         phot.run()
+#         del phot
+#     else:
+#         logger.info("Skipping combined photometry")
+#     # if not (config.config.flag.subtraction) and "subtract" in processes:
+#     #     subt = ImSubtract(config, queue=queue)
+#     #     subt.run()
+#     #     del subt
+#     # else:
+#     #     logger.info("Skipping transient search")
+
+#     # except Exception as e:
+#     #     logger.error(f"Error during abrupt stop: {e}")
 
 
 def run_pipeline(
