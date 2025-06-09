@@ -66,13 +66,13 @@ def solve_field(inim, outim=None, dump_dir=None, get_command=False, pixscale=0.5
         os.symlink(inim, soft_link)
 
     # outname = os.path.join(working_dir, f"{Path(inim).stem}_solved.fits")
-    outname = outim or os.path.join(os.path.splitext(soft_link)[0] + "_solved.fits")
+    outim = outim or os.path.join(os.path.splitext(soft_link)[0] + "_solved.fits")
 
     # Solve-field using the soft link
     # e.g., solve-field calib_7DT11_T00139_20250102_014643_m425_100s.fits --crpix-center --scale-unit arcsecperpix --scale-low '0.4949' --scale-high '0.5151' --no-plots --new-fits solved.fits --overwrite --use-source-extractor --cpulimit 4
     solvecom = [
         "solve-field", f"{soft_link}",  # this file is not changed by solve-field
-        "--new-fits", outname,  # you can give 'none'
+        "--new-fits", outim,  # you can give 'none'
         # "--config", f"{path_cfg}",
         # "--source-extractor-config", f"{path_sex_cfg}",
         # "--no-fits2fits",  # Do not create output FITS file
@@ -115,14 +115,19 @@ def solve_field(inim, outim=None, dump_dir=None, get_command=False, pixscale=0.5
     # # Also print messages to shell: should be captured by logger
     # for line in process.stdout:
     #     print(line, end="")
-
     # process.wait()  # Ensure the process completes
-    log_file = os.path.join(working_dir, "solvefield.log")
-    solvecom = f"{' '.join(solvecom)} > {log_file} 2>&1"
-    # print(f"solve-field command {solvecom}")
-    subprocess.run(solvecom, cwd=working_dir, shell=True)
 
-    return outname
+    # solvecom = f"{' '.join(solvecom)} > {log_file} 2>&1"
+    # subprocess.run(solvecom, cwd=working_dir, shell=True)
+
+    log_file = swap_ext(add_suffix(outim, "solvefield"), "log")
+    solvecom = " ".join(solvecom)
+    solveout = subprocess.getoutput(solvecom)
+    with open(log_file, "w") as f:
+        f.write(solvecom)
+        f.write("\n" * 3)
+        f.write(solveout)
+    return outim
 
 
 def scamp(input, ahead=None, path_ref_scamp=None, local_astref=None, get_command=False):
@@ -381,6 +386,7 @@ def hotpants(
     tu=None,
     nrx=None,
     nry=None,
+    log_file=None,
 ):
     """
     il, iu: input image lower/upper limits
@@ -422,7 +428,14 @@ def hotpants(
         f"-nrx {nrx} -nry {nry} "
         f"-ssf {ssf}"
     )
-    os.system(hotpantscom)
+    log_file = log_file or os.path.join(os.path.dirname(out_conv_im), "hotpants.log")
+
+    hotpantsout = subprocess.getoutput(hotpantscom)
+    with open(log_file, "w") as f:
+        f.write(hotpantscom)
+        f.write("\n" * 3)
+        f.write(hotpantsout)
+    # os.system(f"{hotpantscom} > {log_file} 2>&1")
     # print(hotpantscom)
 
     return hotpantscom

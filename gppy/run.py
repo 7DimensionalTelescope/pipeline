@@ -5,6 +5,8 @@ from .preprocess import Preprocess
 from .astrometry import Astrometry
 from .photometry import Photometry
 from .imstack import ImStack
+from .subtract import ImSubtract
+
 # from .subtract.subtract import ImSubtract
 
 from .const import RAWDATA_DIR
@@ -40,11 +42,13 @@ def run_preprocess_with_task(config, priority=Priority.HIGH, **kwargs):
     run_task = Task(prep.run, kwargs={"make_plots": False}, gpu=True, priority=priority)
     return run_task
 
+
 def run_make_plots(config, priority=Priority.LOW):
     config = PreprocConfiguration.from_file(config)
     prep = Preprocess(config)
     plot_task = Task(prep.make_plot_all, gpu=False, priority=priority)
     return plot_task
+
 
 def run_process_with_tree(
     config,
@@ -55,6 +59,7 @@ def run_process_with_tree(
 ):
     """
     Perform comprehensive scientific data reduction pipeline sequentially.
+    Control which process to run with `processes`.
     """
     config = SciProcConfiguration.from_file(config, write=True, **kwargs)
 
@@ -67,14 +72,18 @@ def run_process_with_tree(
         phot = Photometry(config)
         for task in phot.sequential_task:
             tasks.append(Task(getattr(phot, task[1]), priority=priority, gpu=task[2], cls=phot))
-    #if (not (config.config.flag.combine) and "combine" in processes) or overwrite:
-    #     stk = ImStack(config)
-    #     for task in stk.sequential_task:
-    #         tasks.append(Task(getattr(stk, task[1]), priority=priority, gpu=task[2], cls=stk))
-    # if (not (config.config.flag.combined_photometry) and "photometry" in processes) or overwrite:
-    #     phot = Photometry(config)
-    #     for task in phot.sequential_task:
-    #         tasks.append(Task(getattr(phot, task[1]), priority=priority, gpu=task[2], cls=phot))
+    if (not (config.config.flag.combine) and "combine" in processes) or overwrite:
+        stk = ImStack(config)
+        for task in stk.sequential_task:
+            tasks.append(Task(getattr(stk, task[1]), priority=priority, gpu=task[2], cls=stk))
+    if (not (config.config.flag.combined_photometry) and "photometry" in processes) or overwrite:
+        phot = Photometry(config)
+        for task in phot.sequential_task:
+            tasks.append(Task(getattr(phot, task[1]), priority=priority, gpu=task[2], cls=phot))
+    if (not (config.config.flag.subtraction) and "subtract" in processes) or overwrite:
+        subt = ImSubtract(config)
+        for task in subt.sequential_task:
+            tasks.append(Task(getattr(subt, task[1]), priority=priority, gpu=task[2], cls=subt))
 
     if len(tasks) != 0:
         tree = TaskTree(tasks)
@@ -151,7 +160,6 @@ def run_process_with_tree(
 
 #     # except Exception as e:
 #     #     logger.error(f"Error during abrupt stop: {e}")
-
 
 
 def run_pipeline(

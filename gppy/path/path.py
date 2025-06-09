@@ -405,12 +405,19 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
 
     @property
     def sciproc_output_yml(self):
-        # config_stems = self._config_stem if hasattr(self, "_config_stem") and self._config_stem else "sciproc_config"
-        # return [os.path.join(d, f"{s}.yml") for d, s in zip(self._output_dir, config_stems)]
-        yml_basenames = [
-            "_".join([obj, filte, unit, date]) + ".yml"
-            for obj, filte, unit, date in zip(self.name.obj, self.name.filter, self.name.unit, self.name.date)
-        ]
+        # yml_basenames = [
+        #     "_".join([obj, filte, unit, date]) + ".yml"
+        #     for obj, filte, unit, date in zip(self.name.obj, self.name.filter, self.name.unit, self.name.date)
+        # ]
+        yml_basenames = []
+        for i in range(len(self._input_files)):
+            obj = self._get_property_at_index("obj", i)
+            filte = self._get_property_at_index("filter", i)
+            unit = self._get_property_at_index("unit", i)
+            date = self._get_property_at_index("date", i)
+
+            yml_basenames.append("_".join([obj, filte, unit, date]) + ".yml")
+
         return bjoin(self._output_dir, yml_basenames)
 
     @property
@@ -585,11 +592,13 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
 
     @property
     def catalog(self):
-        return add_suffix(self.processed_images, "cat")
+        # return add_suffix(self.processed_images, "cat")
+        return add_suffix(self._input_files, "cat")
 
     @property
     def weight(self):
-        return add_suffix(self.processed_images, "weight")
+        # return add_suffix(self.processed_images, "weight")
+        return add_suffix(self._input_files, "weight")
 
     @property
     def obs_params(self):

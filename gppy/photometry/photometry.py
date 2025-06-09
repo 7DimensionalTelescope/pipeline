@@ -67,7 +67,7 @@ class Photometry(BaseSetup):
         """
         # Load Configuration
         super().__init__(config, logger, queue)
-        self._flag_name = "photometry"
+        # self._flag_name = "photometry"
 
         self.ref_catalog = ref_catalog or self.config.photometry.refcatname
 
@@ -87,7 +87,7 @@ class Photometry(BaseSetup):
             self._flag_name = "combined_photometry"
 
     @classmethod
-    def from_list(cls, images: List[str]) -> Optional["Photometry"]:
+    def from_list(cls, images: List[str], working_dir=None) -> Optional["Photometry"]:
         """
         Create Photometry instance from a list of image paths.
 
@@ -104,7 +104,7 @@ class Photometry(BaseSetup):
                 print("The file does not exist.")
                 return None
             image_list.append(path.parts[-1])
-        working_dir = str(path.parent.absolute())
+        working_dir = working_dir or str(path.parent.absolute())
         config = SciProcConfiguration.base_config(working_dir)
         config.config.input.calibrated_images = image_list
         config.path = PathHandler(image_list)
@@ -134,8 +134,6 @@ class Photometry(BaseSetup):
             self.config.flag.single_photometry = True
         else:
             self.config.flag.combined_photometry = True
-
-        MemoryMonitor.cleanup_memory()
 
         self.logger.info(f"Photometry Done for {self.config.name}")
         self.logger.debug(MemoryMonitor.log_memory_usage)
@@ -287,6 +285,7 @@ class PhotometrySingle:
         """
         start_time = time.time()
         self.logger.info(f"Start Photometry for the image {self.name} [{self._id}]")
+        self.logger.debug(f"{'=' * 7} {os.path.basename(self.input_image)} {'=' * 7}")
 
         # self.define_paths()
         self.calculate_seeing()
@@ -297,7 +296,6 @@ class PhotometrySingle:
         self.write_catalog()
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
-        MemoryMonitor.cleanup_memory()
         end_time = time.time()
         self.logger.info(f"Photometry Done for {self.name} [{self._id}] in {end_time - start_time:.2f} seconds")
 
@@ -359,26 +357,26 @@ class PhotometrySingle:
         self.ref_src_table = ref_src_table
         self._coord_ref = coord_ref
 
-    def _find_ref_catalog(self) -> str:
-        if self.ref_catalog == "GaiaXP_cor":
-            ref_cat = f"{self.path.photometry.ref_ris_dir}/cor_gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
-        elif self.ref_catalog == "GaiaXP":
-            ref_cat = f"{self.path.photometry.ref_ris_dir}/gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
+    # def _find_ref_catalog(self) -> str:
+    #     if self.ref_catalog == "GaiaXP_cor":
+    #         ref_cat = f"{self.path.photometry.ref_ris_dir}/cor_gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
+    #     elif self.ref_catalog == "GaiaXP":
+    #         ref_cat = f"{self.path.photometry.ref_ris_dir}/gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
 
-        # generate the missing ref_cat and save on disk
-        if not os.path.exists(ref_cat):  # and "gaia" in self.ref_catalog:
-            ref_src_table = phot_utils.aggregate_gaia_catalogs(
-                target_coord=SkyCoord(self.image_info.racent, self.image_info.decent, unit="deg"),
-                path_calibration_field=self.path.photometry.ref_gaia_dir,
-                matching_radius=self.phot_conf.match_radius * 1.5,
-                path_save=ref_cat,
-            )
-            ref_src_table.write(ref_cat, overwrite=True)
+    #     # generate the missing ref_cat and save on disk
+    #     if not os.path.exists(ref_cat):  # and "gaia" in self.ref_catalog:
+    #         ref_src_table = phot_utils.aggregate_gaia_catalogs(
+    #             target_coord=SkyCoord(self.image_info.racent, self.image_info.decent, unit="deg"),
+    #             path_calibration_field=self.path.photometry.ref_gaia_dir,
+    #             matching_radius=self.phot_conf.match_radius * 1.5,
+    #             path_save=ref_cat,
+    #         )
+    #         ref_src_table.write(ref_cat, overwrite=True)
 
-        else:
-            ref_src_table = Table.read(ref_cat)
+    #     else:
+    #         ref_src_table = Table.read(ref_cat)
 
-        return ref_src_table
+    #     return ref_src_table
 
     def get_reference_matched_catalog(
         self,

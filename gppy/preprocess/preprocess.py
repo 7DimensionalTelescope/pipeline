@@ -85,7 +85,7 @@ class Preprocess(BaseSetup):
         self.logger.debug(f"raw_groups:\n{self.raw_groups}")
         # raise ValueError("stop")  # for debug
 
-    def run(self, device_id = None, make_plots = True):
+    def run(self, device_id=None, make_plots=True):
         threads_for_making_plots = []
         for i in range(self._n_groups):
             self.load_masterframe(device_id=device_id)
@@ -104,14 +104,16 @@ class Preprocess(BaseSetup):
         if make_plots:
             for t in threads_for_making_plots:
                 t.join()
-    
+
+        self.logger.info("Preprocess completed")
+
     def make_plot_all(self):
         st = time.time()
         self.logger.info("Making plots for all groups")
         for i in range(self._n_groups):
             self.make_plots(i)
         self.logger.info(f"Finished making plots for all groups in {time_diff_in_seconds(st)} seconds")
-    
+
     def proceed_to_next_group(self):
         self._current_group += 1
         if self._current_group >= self._n_groups:
@@ -187,6 +189,7 @@ class Preprocess(BaseSetup):
             return device_id
         if self.config.preprocess.device is None:
             from ..services.utils import get_best_gpu_device
+
             return get_best_gpu_device()
         else:
             return self.config.preprocess.device
@@ -299,7 +302,7 @@ class Preprocess(BaseSetup):
         if all(flag):
             self.logger.info(f"All images in group {self._current_group+1} are already processed")
             return
-        
+
         device_id = self.get_device_id(device_id)
 
         st = time.time()
@@ -372,7 +375,7 @@ class Preprocess(BaseSetup):
         )
 
     def save_processed_images(self):
-        
+
         if self.all_results is None:
             return
 
@@ -389,7 +392,7 @@ class Preprocess(BaseSetup):
                 header, [self.bias_output, self.dark_output, self.flat_output, raw_file]
             )
             header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
-            
+
             os.makedirs(os.path.dirname(processed_file), exist_ok=True)
             fits.writeto(
                 processed_file,
@@ -398,7 +401,9 @@ class Preprocess(BaseSetup):
                 overwrite=True,
             )
         self.all_results = None
-        self.logger.info(f"Processed images in group {self._current_group+1} are saved in {time_diff_in_seconds(st)} seconds")
+        self.logger.info(
+            f"Processed images in group {self._current_group+1} are saved in {time_diff_in_seconds(st)} seconds"
+        )
         gc.collect()
 
     def make_plots(self, group_index=None):
@@ -420,7 +425,9 @@ class Preprocess(BaseSetup):
         plot_dark(self._get_raw_group("dark_output", group_index), fmask, savefig=True)
         plot_flat(self._get_raw_group("flat_output", group_index), fmask, savefig=True)
 
-        self.logger.info(f"Generating plots for science frames of group {group_index+1} ({len(self._get_raw_group('sci_input', group_index))} images)")
+        self.logger.info(
+            f"Generating plots for science frames of group {group_index+1} ({len(self._get_raw_group('sci_input', group_index))} images)"
+        )
         if use_multi_thread:
             threads = []
             for output_img in self._get_raw_group("sci_output", group_index):

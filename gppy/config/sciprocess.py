@@ -1,23 +1,12 @@
-import yaml
 import os
-import re
 import glob
-import json
 from datetime import datetime
 from .. import __version__
 from ..utils import (
-    header_to_dict,
-    to_datetime_string,
-    find_raw_path,
-    get_camera,
     clean_up_folder,
     clean_up_sciproduct,
-    swap_ext,
-    most_common_in_list,
     get_header,
 )
-from .utils import merge_dicts
-from ..const import HEADER_KEY_MAP, STRICT_KEYS, ANCILLARY_KEYS
 from ..path.path import PathHandler
 from .base import BaseConfig
 import time
@@ -54,6 +43,24 @@ class SciProcConfiguration(BaseConfig):
         self.logger.info(f"SciProcConfiguration initialized")
         self.logger.debug(f"SciProcConfiguration initialization took {time.time() - st:.2f} seconds")
 
+    @classmethod
+    def user_input(cls, input_files, write=True, **kwargs):
+        self = cls.__new__(cls)
+        self.write = write
+
+        self.input_files = input_files
+        self.path = PathHandler(input_files)
+        self.config_file = self.path.sciproc_output_yml
+
+        # BaseConfig.__init__(self, config_source=base_yaml_path, write=self.write)
+        config_source = self.path.sciproc_base_yml
+        super().__init__(self, config_source=config_source, write=self.write, **kwargs)
+
+        self.initialize()
+        self.config.input.calibrated_images = input_files
+        self.config.name = "user-input"
+        return self
+
     @property
     def name(self):
         if hasattr(self, "path"):
@@ -62,7 +69,7 @@ class SciProcConfiguration(BaseConfig):
             return self.config.name
         else:
             return None
-        
+
     def _handle_input(self, input, logger, verbose, **kwargs):
         if isinstance(input, list):
             self.input_files = input
@@ -92,10 +99,10 @@ class SciProcConfiguration(BaseConfig):
             self._initialized = True
             self.logger.info("Loading configuration from an exisiting file or dictionary")
             self.logger.debug(f"Configuration source: {config_source}")
-            
+
         else:
             raise ValueError("Input must be a list of image files, a configuration file path, or a configuration dictionary.")  # fmt: skip
-          # used by write_config
+        # used by write_config
         self.config_file = self.path.sciproc_output_yml  # used by write_config
         return
 

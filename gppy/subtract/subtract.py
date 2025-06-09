@@ -48,6 +48,11 @@ class ImSubtract(BaseSetup):
         config.input.calibrated_images = image_list
         return cls(config=config)
 
+    @property
+    def sequential_task(self):
+        """[(number, name, use_gpu), ...]"""
+        return [(1, "run", False), (2, "flagging", False)]
+
     def run(self):
 
         self.find_reference_image()
@@ -64,6 +69,10 @@ class ImSubtract(BaseSetup):
         self.run_hotpants()
 
         self.mask_unsubtracted()
+
+        self.config.flag.subtraction = True
+
+        self.logger.info(f"ImSubtract completed.")
 
     def find_reference_image(self):
         # obj = self.config.obs.object

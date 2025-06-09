@@ -5,7 +5,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # REF_DIR = os.path.join(SCRIPT_DIR, "gppy", "ref")
 REF_DIR = os.path.join(SCRIPT_DIR, "ref")
 
-RAWDATA_DIR = os.environ["RAWDATA_DIR"]#"/lyman/data1/obsdata/" #
+RAWDATA_DIR = os.environ["RAWDATA_DIR"]  # "/lyman/data1/obsdata/" #
 FACTORY_DIR = os.environ["FACTORY_DIR"]
 MASTER_FRAME_DIR = os.environ["MASTER_FRAME_DIR"]
 
@@ -23,7 +23,7 @@ available_7dt_units = [f"7DT0{unit}" if unit < 10 else f"7DT{unit}" for unit in 
 
 PIXSCALE = 0.505  # arcsec/pixel. Default plate scale assumed prior to astrometric solving
 
-NUM_MIN_CALIB = 5
+NUM_MIN_CALIB = 2  # 5
 INSTRUM_GROUP_KEYS = ["unit", "n_binning", "gain", "camera"]  # "nightdate"
 ALL_GROUP_KEYS = ["obj", "filter", "nightdate", "exptime"] + INSTRUM_GROUP_KEYS
 BIAS_GROUP_KEYS = INSTRUM_GROUP_KEYS  # no exp: account for potential ms exp difference

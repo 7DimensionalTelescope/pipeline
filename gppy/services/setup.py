@@ -65,7 +65,7 @@ class BaseSetup(ABC):
 
     def _setup_logger(self, logger, config):
 
-        if isinstance(logger, Logger):
+        if isinstance(logger, Logger) and logger.logger.hasHandlers():
             return logger
         else:
             import logging
