@@ -36,7 +36,7 @@ class AutoCollapseMixin:
 
     # Define which attributes should be collapsed
     _collapse_exclude = {}  # "output_name", "name", "preprocess"}
-    _collapse_include = {}  # "output_dir", "image_dir", "factory_dir", "stacked_dir"}
+    _collapse_include = {"masterframe"}  # "output_dir", "image_dir", "factory_dir", "stacked_dir"}
 
     def __getattribute__(self, name):
         # if name.startswith("_"):
@@ -48,13 +48,14 @@ class AutoCollapseMixin:
         if name.startswith("_"):
             return value
 
-        # print("collapse", name)
+        # print("collapse", name, value)
 
         # Collapse if explicitly included or path-like list
         if name not in self._collapse_exclude and (
             name in self._collapse_include
             or (isinstance(value, list) and all(isinstance(v, (str, Path)) for v in value))
         ):
+            # print("being collapsed", name, value)
             return collapse(value)
 
         return value
@@ -701,9 +702,11 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                 entry["dark"] = list(dark)
                 entry["flat"] = list(flat)
 
+        #
+
         result = []
 
-        # for _key, entry in sorted(calib_map.items(), key=lambda kv: len(kv[1]["sci"])):  # sort by # of sci groups
+        # for _key, entry in sorted(calib_map.items(), key=lambda kv: len(kv[1]["sci"])):  # sort by number of sci groups
         # sort by # of sci frames
         for _key, entry in sorted(calib_map.items(), key=lambda kv: sum(len(inner) for inner in kv[1]["sci"])):
 
@@ -722,6 +725,9 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                 raw_dark = []
             if len(raw_flat) < const.NUM_MIN_CALIB:
                 raw_flat = []
+
+            sample_file = next(iter(sci_dict.values()))[0][0]
+            mbias, mdark, mflat = cls(sample_file).preprocess.masterframe  # trust the grouping
 
             result.append(
                 (
