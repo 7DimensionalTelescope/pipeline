@@ -1,17 +1,13 @@
 import os
-import sys
+import time
 from pathlib import Path
 from glob import glob
 from astropy.io import fits
 from astropy.table import Table
-from astropy.coordinates import SkyCoord
-import numpy as np
 
-from ..const import REF_DIR
-from ..config import SciProcConfiguration
 from .. import external
 from ..services.setup import BaseSetup
-from ..utils import add_suffix, swap_ext, collapse
+from ..utils import add_suffix, swap_ext, collapse, time_diff_in_seconds
 from ..tools.table import match_two_catalogs
 from ..path import PathHandler
 
@@ -30,10 +26,11 @@ class ImSubtract(BaseSetup):
         super().__init__(config, logger, queue)
         self._flag_name = "subtract"
         self.overwrite = overwrite
-
+        self.name = self.config.name
+        
     @classmethod
     def from_list(cls, input_images):
-
+        from ..config import SciProcConfiguration
         image_list = []
         for image in input_images:
             path = Path(image)
@@ -54,25 +51,31 @@ class ImSubtract(BaseSetup):
         return [(1, "run", False), (2, "flagging", False)]
 
     def run(self):
+        st = time.time()
+        self.logger.info("-" * 80)
+        self.logger.info(f"Start ImSubtract for {self.config.name}")
+        try:
+            self.find_reference_image()
+            if not self.reference_images:  # if not found, do not run
+                self.logger.info(f"No reference image found for {self.name}; Skipping transient search.")
+                return
 
-        self.find_reference_image()
-        if not self.reference_images:  # if not found, do not run
-            self.logger.info(f"No reference image found for {self.name}; Skipping transient search.")
-            return
+            self.define_paths()
 
-        self.define_paths()
+            self.create_substamps()
 
-        self.create_substamps()
+            self.create_masks()
 
-        self.create_masks()
+            self.run_hotpants()
 
-        self.run_hotpants()
+            self.mask_unsubtracted()
 
-        self.mask_unsubtracted()
+            self.config.flag.subtraction = True
 
-        self.config.flag.subtraction = True
-
-        self.logger.info(f"ImSubtract completed.")
+            self.logger.info(f"ImSubtract completed for {self.config.name} in {time_diff_in_seconds(st)} sec")
+        except Exception as e:
+            self.logger.error(f"Error during imsubtract processing: {str(e)}")
+            raise
 
     def find_reference_image(self):
         # obj = self.config.obs.object

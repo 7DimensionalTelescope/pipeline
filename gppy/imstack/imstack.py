@@ -69,8 +69,7 @@ class ImStack(BaseSetup):
 
     def run(self):
 
-        self.logger.info("-" * 80)
-        self.logger.info(f"Start imstack for {self.config.name}")
+
         try:
             self.initialize()
 
@@ -106,6 +105,8 @@ class ImStack(BaseSetup):
         # self.logger.debug(MemoryMonitor.log_memory_usage)
 
     def initialize(self):
+        self.logger.info("-" * 80)
+        self.logger.info(f"Start imstack for {self.config.name}")
         # use common input if imstack.input_files override is not set
         if not (hasattr(self.config.imstack, "input_images") and self.config.imstack.input_images):
             self.config.imstack.input_images = self.config.input.calibrated_images

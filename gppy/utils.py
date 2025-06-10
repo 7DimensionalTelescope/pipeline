@@ -9,6 +9,11 @@ from collections.abc import Iterable
 from .const import FACTORY_DIR, RAWDATA_DIR, HEADER_KEY_MAP, ALL_GROUP_KEYS
 import time
 
+
+def atleast1d(x):
+    return [x] if not isinstance(x, list) else x
+
+
 def flatten(seq):
     """
     Recursively flatten any nested lists/tuples into a single flat list.
@@ -533,7 +538,6 @@ def lapse(explanation="elapsed", print_output=True):
         return elapsed_time  # in seconds
 
 
-
 def read_scamp_header(file):
     """
     Read a SCAMP output HEAD file, normalizing unicode and correcting WCS types.
@@ -692,6 +696,7 @@ def parse_list_file(imagelist_file):
     # input_table = Table.read(imagelist_file_to_stack, format="ascii.commented_header")
     files = [f for f in input_table["file"].data]
     return files
+
 
 def time_diff_in_seconds(datetime1, datetime2=None):
     if datetime2 is None:

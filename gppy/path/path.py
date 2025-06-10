@@ -413,10 +413,10 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
         for i in range(len(self._input_files)):
             obj = self._get_property_at_index("obj", i)
             filte = self._get_property_at_index("filter", i)
-            unit = self._get_property_at_index("unit", i)
+            # unit = self._get_property_at_index("unit", i)
             date = self._get_property_at_index("date", i)
 
-            yml_basenames.append("_".join([obj, filte, unit, date]) + ".yml")
+            yml_basenames.append("_".join([obj, filte, date]) + ".yml")
 
         return bjoin(self._output_dir, yml_basenames)
 

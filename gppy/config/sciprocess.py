@@ -2,11 +2,7 @@ import os
 import glob
 from datetime import datetime
 from .. import __version__
-from ..utils import (
-    clean_up_folder,
-    clean_up_sciproduct,
-    get_header,
-)
+from ..utils import clean_up_folder, clean_up_sciproduct, get_header, atleast1d
 from ..path.path import PathHandler
 from .base import BaseConfig
 import time
@@ -36,8 +32,6 @@ class SciProcConfiguration(BaseConfig):
             clean_up_folder(self.path.factory_dir)
             clean_up_sciproduct(self.path.output_dir)
 
-        self._add_metadata()
-
         self.logger.info(f"Writing configuration to file")
         self.logger.debug(f"Configuration file: {self.config_file}")
         self.write_config()
@@ -45,41 +39,41 @@ class SciProcConfiguration(BaseConfig):
         self.logger.info(f"SciProcConfiguration initialized")
         self.logger.debug(f"SciProcConfiguration initialization took {time.time() - st:.2f} seconds")
 
-    @classmethod
-    def base_config(cls, target_file=None, config_file=None, config_dict=None, working_dir=None, **kwargs):
-        """Return the base (base.yml) ConfigurationInstance."""
-        working_dir = working_dir or os.getcwd()
-        if config_file is not None:
-            config_file = os.path.join(working_dir, config_file) if working_dir else config_file
-            if os.path.exists(config_file):
-                config = cls.from_file(config_file=config_file, **kwargs)
-            else:
-                raise FileNotFoundError("Provided Configuration file does not exist")
-        elif config_dict is not None:
-            config = cls.from_dict(config_dict=config_dict, **kwargs)
-        else:
-            raise ValueError("Either config_file, config_type or config_dict must be provided")
+    # @classmethod
+    # def base_config(cls, input_images=None, config_file=None, config_dict=None, working_dir=None, **kwargs):
+    #     """Return the base (base.yml) ConfigurationInstance."""
+    #     working_dir = working_dir or os.getcwd()
+    #     if config_file is not None:
+    #         config_file = os.path.join(working_dir, config_file) if working_dir else config_file
+    #         if os.path.exists(config_file):
+    #             config = cls.from_file(config_file=config_file, **kwargs)
+    #         else:
+    #             raise FileNotFoundError("Provided Configuration file does not exist")
+    #     elif config_dict is not None:
+    #         config = cls.from_dict(config_dict=config_dict, **kwargs)
+    #     else:
+    #         raise ValueError("Either config_file, config_type or config_dict must be provided")
 
-        config.name = "user-input"
-        config._initialized = True
-        return config
+    #     config.name = "user-input"
+    #     config._initialized = True
+    #     return config
 
     @classmethod
-    def user_input(cls, input_files, write=True, **kwargs):
+    def base_config(cls, input_images, write=True, **kwargs):
+        # def user_input(cls, input_images, write=True, **kwargs):
         self = cls.__new__(cls)
-        self.write = write
 
-        self.input_files = input_files
-        self.path = PathHandler(input_files)
+        self.input_files = atleast1d(input_images)
+        self.path = PathHandler(input_images)
         self.config_file = self.path.sciproc_output_yml
 
-        # BaseConfig.__init__(self, config_source=base_yaml_path, write=self.write)
         config_source = self.path.sciproc_base_yml
-        super().__init__(self, config_source=config_source, write=self.write, **kwargs)
+        super().__init__(self, config_source=config_source, write=write, **kwargs)
 
         self.initialize()
-        self.config.input.calibrated_images = input_files
+        self.config.input.calibrated_images = input_images
         self.config.name = "user-input"
+        self.config._initialized = True
         return self
 
     @property
@@ -147,14 +141,15 @@ class SciProcConfiguration(BaseConfig):
 
         self.config.info.version = __version__
         self.config.info.creation_datetime = datetime.now().isoformat()
-        self.config.name = self.name
+        self.config.name = self.config.name or self.name
 
         self.config.input.calibrated_images = PathHandler(self.input_files).processed_images
         self.config.input.output_dir = self.path.output_dir
 
         # self.set_input_output()
         # self.check_masterframe_status()
-
+        
+        self._add_metadata()
         self._define_settings(self.input_files[0])
         self.input_files = self.config.input.calibrated_images
         self._initialized = True
