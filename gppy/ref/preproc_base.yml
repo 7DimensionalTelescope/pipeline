@@ -1,8 +1,8 @@
 name: 
 
 input: 
-  # masterframe_images: 
-  # science_images: 
+  masterframe_images: 
+  science_images: 
   grouped_raw_images:
   raw_dir: 
 

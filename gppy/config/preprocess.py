@@ -127,10 +127,10 @@ class PreprocConfiguration(BaseConfig):
             if hasattr(self.config.input, "science_images") and self.config.input.science_images:
                 return PathHandler(self.config.input.science_images[0])
 
-            if hasattr(self.config.input, "calib_images") and self.config.input.calib_images:
-                return PathHandler(flatten(self.config.input.calib_images)[0])
+            elif hasattr(self.config.input, "masterframe_images") and self.config.input.masterframe_images:
+                return PathHandler(flatten(self.config.input.masterframe_images)[0])
 
-            if hasattr(self.config.input, "raw_dir") and self.config.input.raw_dir:
+            elif hasattr(self.config.input, "raw_dir") and self.config.input.raw_dir:
                 f = os.path.join(self.config.input.raw_dir, "**.fits")
                 return PathHandler(sorted(glob.glob(f))[0])
 

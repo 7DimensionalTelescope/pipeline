@@ -6,7 +6,7 @@ from ..path.path import PathHandler
 from .logger import Logger
 from .queue import QueueManager
 import warnings
-
+from logging import FileHandler
 
 class BaseSetup(ABC):
     def __init__(
