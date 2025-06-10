@@ -51,7 +51,12 @@ class Blueprint:
             if identifier not in self.groups:
                 self.groups[identifier] = MasterframeGroup(str(o.parent))
             self.groups[identifier].add_image(str(o.absolute()))
-    
+        
+        for group in self.groups.values():
+            group.initialize()
+
+
+
     def create_config(self):
         for group in self.groups.values():
             group.create_preproc_config()
@@ -59,7 +64,6 @@ class Blueprint:
     
     def get_group_by_index(self, i):
         return self.groups[list(self.groups.keys())[i]]
-        
     
     def process_group(self, group, device_id=None):
         from ..run import run_preprocess_with_task, run_process_with_tree, run_make_plots
@@ -109,6 +113,18 @@ class MasterframeGroup:
     def __hash__(self):
         return hash(self.key)
     
+    def initialize(self):
+        self.key_list = []
+        self.image_groups = []
+        sub_groups = PathHandler.take_raw_inventory(self.image_files)
+        for group in sub_groups:
+            _tmp = group[2]
+            if len(_tmp) == 0:
+                continue
+            self.key_list.extend(list(_tmp.keys()))
+            for _ in _tmp.values():
+                self.image_groups.append(_)
+            
     @property
     def usage_count(self):
         return len(self.image_files)
@@ -121,8 +137,6 @@ class MasterframeGroup:
         self.masterframe_config = c.config_file        
 
     def create_sciproc_config(self, use_threads=True):
-        
-
         if use_threads:
             lock = threading.Lock()
             threads = []
@@ -131,15 +145,14 @@ class MasterframeGroup:
                 with lock:
                     self.science_configs.append(sciproc.config_file)
             
-        for group in raw_groups:
-            for file_list in group[2].values():
-                if use_threads:
-                    thread = threading.Thread(target=gen_config, args=(file_list[0],))
-                    thread.start()
-                    threads.append(thread)
-                else:
-                    c = SciProcConfiguration(file_list[0])
-                    self.science_configs.append(c.config_file)
+        for group in self.image_groups:
+            if use_threads:
+                thread = threading.Thread(target=gen_config, args=(group,))
+                thread.start()
+                threads.append(thread)
+            else:
+                c = SciProcConfiguration(group)
+                self.science_configs.append(c.config_file)
         
         if use_threads:
             for thread in threads:
