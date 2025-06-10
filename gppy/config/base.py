@@ -18,7 +18,10 @@ class BaseConfig(ABC):
         self._load_config(config_source, **kwargs)
 
     def __repr__(self):
-        return self.config.__repr__()
+        if hasattr(self, "config"):
+            return self.config.__repr__()
+        else:
+            return f"BaseConfig"
 
     @property
     def is_initialized(self):
@@ -37,16 +40,16 @@ class BaseConfig(ABC):
     def from_file(cls, input, write=False, **kwargs):
         return cls(input, write=write, **kwargs)
 
-    @classmethod
-    def from_base(cls, config_type, **kwargs):
-        if config_type == "preprocess":
-            config_file = os.path.join(const.REF_DIR, "preproc_base.yml")
-            return cls.from_file(config_file, **kwargs)
-        elif config_type == "sciprocess":
-            config_file = os.path.join(const.REF_DIR, "sciproc_base.yml")
-            return cls.from_file(config_file, **kwargs)
-        else:
-            raise ValueError(f"Invalid config_type: {config_type}")
+    # @classmethod
+    # def from_base(cls, config_type, **kwargs):
+    #     if config_type == "preprocess":
+    #         config_file = os.path.join(const.REF_DIR, "preproc_base.yml")
+    #         return cls.from_file(config_file, **kwargs)
+    #     elif config_type == "sciprocess":
+    #         config_file = os.path.join(const.REF_DIR, "sciproc_base.yml")
+    #         return cls.from_file(config_file, **kwargs)
+    #     else:
+    #         raise ValueError(f"Invalid config_type: {config_type}")
 
     # @classmethod
     # def base_config(
@@ -90,10 +93,10 @@ class BaseConfig(ABC):
 
         self.config = ConfigurationInstance(self)
 
-        self._update_with_kwargs(kwargs)
+        self._update_with_kwargs(**kwargs)
         self._make_instance()
 
-    def _update_with_kwargs(self, kwargs):
+    def _update_with_kwargs(self, **kwargs):
         """Merge additional configuration parameters."""
         lower_kwargs = {key.lower(): value for key, value in kwargs.items()}
         self._config_in_dict = merge_dicts(self._config_in_dict, lower_kwargs)
@@ -159,13 +162,14 @@ class BaseConfig(ABC):
         """return a Configuration with i-th element of all lists in the config dict"""
         from copy import deepcopy
         from .sciprocess import SciProcConfiguration
+
         # Deep copy to avoid mutation
         config_dict = deepcopy(self.config_in_dict)
 
         # Recursively reduce all list values to i-th element
         config_dict = self.config.select_from_lists(config_dict, i)
 
-        #return BaseConfig(config_source=config_dict, write=False)
+        # return BaseConfig(config_source=config_dict, write=False)
         return SciProcConfiguration.from_dict(config_dict, write=False)
 
 

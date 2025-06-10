@@ -118,10 +118,10 @@ class MasterframeGroup:
 
     def create_preproc_config(self):
         c = PreprocConfiguration(self.image_files)
-        self.masterframe_config = c.config_file
+        self.masterframe_config = c.config_file        
 
     def create_sciproc_config(self, use_threads=True):
-        raw_groups = PathHandler.take_raw_inventory(self.image_files)
+        
 
         if use_threads:
             lock = threading.Lock()

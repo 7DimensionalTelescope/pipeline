@@ -65,13 +65,13 @@ class BaseSetup(ABC):
 
     def _setup_logger(self, logger, config):
 
-        if isinstance(logger, Logger) and logger.logger.hasHandlers():
+        if isinstance(logger, Logger) and any(isinstance(handler, FileHandler) for handler in logger.logger.handlers):
             return logger
         else:
             import logging
             tmp_logger = logging.getLogger(config.name)
 
-            if tmp_logger.hasHandlers():
+            if any(isinstance(handler, FileHandler) for handler in tmp_logger.handlers):
                 self._logger = tmp_logger
                 return tmp_logger
             else:
