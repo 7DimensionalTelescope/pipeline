@@ -1,4 +1,5 @@
 from pathlib import Path
+from re import S
 import threading
 from collections import UserDict
 
@@ -10,7 +11,7 @@ from ..services.queue import QueueManager
 
 from itertools import chain
 
-from ..run import run_preprocess_with_task, run_process_with_tree, run_make_plots
+
         
 
 def glob_files_from_db(params):
@@ -27,6 +28,8 @@ def glob_files_by_param(keywords):
 class Blueprint:
     def __init__(self, input_params, use_db=False):
         self.groups = SortedGroupDict()  # use a sorted dictionary
+        self._multi_unit_config = set()
+
         self._unified_key_list = None  # Will be populated after initialization
         self._key_usage_map = None  # Will track which keys are used in which groups
 
@@ -49,18 +52,26 @@ class Blueprint:
         image_inventory = PathHandler.take_raw_inventory(self.list_of_images)
         
         for i, group in enumerate(image_inventory):
-            mfg_key = f"mfg_{i}"
-            mfg = MasterframeGroup(mfg_key)
-            mfg.add_images(group[0])
+            try:
+                mfg_key = PathHandler(group[0][2][0]).config_stem
+            except:
+                mfg_key = f"mfg_{i}"
+                print(f"Failed to extract mfg_key from {group}")
+
+            if mfg_key in self.groups:
+                self.groups[mfg_key].add_images(group[0])
+            else:
+                mfg = MasterframeGroup(mfg_key)
+                mfg.add_images(group[0])
+                self.groups[mfg_key] = mfg
             for key, images in group[2].items():
                 if key not in self.groups:
                     self.groups[key] = ScienceGroup(key)
                 else:
                     self.groups[key].multi_units = True
                 self.groups[key].add_images(images[0])
-                mfg.add_images(images[0])
-                mfg.add_sci_keys(key)
-            self.groups[mfg_key] = mfg
+                self.groups[mfg_key].add_images(images[0])
+                self.groups[mfg_key].add_sci_keys(key)
         
     def create_config(self):
         threads = []
@@ -72,7 +83,8 @@ class Blueprint:
             t.join()
 
     def process_group(self, group, device_id=None):
-        self._multi_unit_config = []
+        from ..run import run_preprocess_with_task, run_process_with_tree, run_make_plots
+        
         # Submit preprocess
         pre_task = run_preprocess_with_task(group.config, device_id=device_id)
         self.queue.add_task(pre_task)
@@ -88,12 +100,13 @@ class Blueprint:
                 sci_tree = run_process_with_tree(sci_group.config)
                 self.queue.add_tree(sci_tree)
             else:
-                self._multi_unit_config.append(sci_group.config)
+                self._multi_unit_config.add(sci_group.config)
 
     def process_all(self):
+        from ..run import run_process_with_tree
         threads = []
         for i, (key, group) in enumerate(self.groups.items()):
-            if key.startswith("mfg"):    
+            if isinstance(group, MasterframeGroup):
                 t = threading.Thread(target=self.process_group, args=(group, i%2))
                 t.start()
                 threads.append(t)
@@ -102,10 +115,10 @@ class Blueprint:
         for t in threads:
             t.join()
         
-        if len(self._multi_unit_config) > 0:
-            for config in self._multi_unit_config:
-                multi_unit_tree = run_process_with_tree(config)
-                self.queue.add_tree(multi_unit_tree)
+        while len(self._multi_unit_config) > 0:
+            config = self._multi_unit_config.pop()
+            multi_unit_tree = run_process_with_tree(config)
+            self.queue.add_tree(multi_unit_tree)
 
 class MasterframeGroup:
     def __init__(self, key):  
@@ -224,5 +237,7 @@ class SortedGroupDict(UserDict):
         return sorted_masterframe + sorted_science
 
     def __repr__(self):
+        string = ""
         for value in self.values():
-            print(value)
+            string += str(value) + "\n"
+        return string
