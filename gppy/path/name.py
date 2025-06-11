@@ -125,6 +125,8 @@ class NameHandler:
 
     All attributes (`date`, `hms`, `obj`, etc.) will be either a single
     value or a list of values, matching your input.
+
+    CAVEAT: For NINA filenames, only raw -> processed supported
     """
 
     def __init__(self, filenames: str | Path | list[str] | list[Path]):
@@ -381,14 +383,29 @@ class NameHandler:
 
     @staticmethod
     def _parse_raw(parts):
-        # returns (unit, date, hms, obj, filter, n_binning, exptime)
-        unit = parts[0]
-        date = parts[1]
-        hms = parts[2]
-        obj = parts[3]
-        filt = parts[4]
-        nb = strip_binning(parts[5])
-        exptime = strip_exptime(parts[6])
+        # TCSpy
+        if len(parts) == 8:
+            unit = parts[0]
+            date = parts[1]
+            hms = parts[2]
+            obj = parts[3]
+            filt = parts[4]
+            nb = strip_binning(parts[5])
+            exptime = strip_exptime(parts[6])
+
+        # NINA
+        elif len(parts) == 9:
+            unit = parts[0]
+            typ = parts[1]
+            obj = parts[2]
+            date = parts[3].replace("-", "")
+            hms = parts[4].replace("-", "")
+            filt = parts[5]
+            nb = strip_binning(parts[6])
+            exptime = strip_exptime(parts[7])
+        else:
+            raise ValueError("Invalid length of parts for raw image filename")
+
         gain = None
         camera = None
         return unit, date, hms, obj, filt, nb, exptime, gain, camera

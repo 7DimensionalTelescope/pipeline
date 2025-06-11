@@ -25,11 +25,10 @@ from ..path.path import PathHandler, NameHandler
 
 
 class ImStack(BaseSetup):
-    def __init__(self, config=None, logger=None, queue=None, overwrite=False, daily=True) -> None:
+    def __init__(self, config=None, logger=None, queue=None, overwrite=False) -> None:
 
         super().__init__(config, logger, queue)
         self.overwrite = overwrite
-        self.daily = daily
         self._flag_name = "combine"
 
     @classmethod
@@ -68,8 +67,6 @@ class ImStack(BaseSetup):
         ]
 
     def run(self):
-
-
         try:
             self.initialize()
 
@@ -100,13 +97,14 @@ class ImStack(BaseSetup):
 
             self.logger.info(f"Imstack Done for {self.config.name}")
         except Exception as e:
-            self.logger.error(f"Error during imstack processing: {str(e)}")
+            self.logger.error(f"Error during imstack processing: {str(e)}", exc_info=True)
             raise
         # self.logger.debug(MemoryMonitor.log_memory_usage)
 
     def initialize(self):
         self.logger.info("-" * 80)
         self.logger.info(f"Start imstack for {self.config.name}")
+        self.logger.info(self.logger.__hash__())
         # use common input if imstack.input_files override is not set
         if not (hasattr(self.config.imstack, "input_images") and self.config.imstack.input_images):
             self.config.imstack.input_images = self.config.input.calibrated_images
@@ -127,7 +125,9 @@ class ImStack(BaseSetup):
 
         # Output stacked image file name
         self.config.imstack.stacked_image = (
-            self.path.imstack.daily_stacked_image if self.daily else self.path.imstack.stacked_image
+            self.path.imstack.daily_stacked_image
+            if self.config.settings.is_pipeline
+            else self.path.imstack.stacked_image
         )
         self.config.input.stacked_image = self.config.imstack.stacked_image
         self.logger.debug(f"Stacked Image: {self.config.imstack.stacked_image}")
@@ -232,7 +232,7 @@ class ImStack(BaseSetup):
         else:
             self.logger.info("Start Constant Background Subtraction")
             self._const_bkgsub()
-        
+
         self.logger.info(f"Background Subtraction Done for {self.config.name} in {time_diff_in_seconds(st)} sec")
 
         self.images_to_stack = self.config.imstack.bkgsub_images
@@ -265,6 +265,12 @@ class ImStack(BaseSetup):
         for inim, outim, bkg, bkg_rms in zip(
             self.input_images, self.config.imstack.bkgsub_images, bkg_images, bkg_rms_images
         ):
+
+            # if result is already in factory, use that
+            if os.path.exists(outim) and os.path.exists(bkg) and os.path.exists(bkg_rms):
+                self.logger.info(f"BKGSUB result exists; skipping: {outim}")
+                continue
+
             sex_args = [
                 "-CATALOG_TYPE", "NONE",  # save no source catalog
                 "-CHECKIMAGE_TYPE", "BACKGROUND,BACKGROUND_RMS",
@@ -304,9 +310,11 @@ class ImStack(BaseSetup):
     def calculate_weight_map(self, device_id=0):
         """Retains cpu support as a code template"""
         st = time.time()
-        self.logger.info("Start Weight Map Calculation")
+        use_gpu = self.config.imstack.gpu
+        self.logger.info(f"Start Weight Map Calculation with {'GPU' if use_gpu else 'CPU'}")
+        self.logger.info(self.logger.__hash__())
         # pick xp and device‐context based on GPU flag
-        if self.config.imstack.gpu:
+        if use_gpu:
             import cupy as xp
 
             device_ctx = xp.cuda.Device(device_id)
@@ -319,8 +327,9 @@ class ImStack(BaseSetup):
 
         # self.config.imstack.input_images  # if you want to save single frame weights
         bkgsub_images = self.config.imstack.bkgsub_images
-        bkgsub_weight_images = [add_suffix(f, "weight") for f in bkgsub_images]
-        self.config.imstack.bkgsub_weight_images = bkgsub_weight_images
+        self.config.imstack.bkgsub_weight_images = []
+        # bkgsub_weight_images = [add_suffix(f, "weight") for f in bkgsub_images]
+        # self.config.imstack.bkgsub_weight_images = bkgsub_weight_images
 
         # DEPRECATED: same groups may have different calibs, though unlikely
         # groups = NameHandler.get_grouped_files(bkgsub_images)
@@ -364,22 +373,27 @@ class ImStack(BaseSetup):
                     if hasattr(weight_image, "get"):  # if CuPy array
                         weight_image = weight_image.get()  # Convert to NumPy array
 
+                    weight_image_file = add_suffix(r_p_file, "weight")
+                    self.config.imstack.bkgsub_weight_images.append(weight_image_file)
+
                     fits.writeto(
                         # os.path.join(config.path.path_processed, weight_file),
-                        bkgsub_weight_images[i],
+                        weight_image_file,
                         data=weight_image,
                         overwrite=True,
                     )
         self.logger.info(f"Weight Map Calculation Done for {self.config.name} in {time_diff_in_seconds(st)} sec")
+        self.logger.info(self.logger.__hash__())
 
     def apply_bpmask(self, badpix=0, device_id=0):
         st = time.time()
-        
+
         import cupy as cp
         from .interpolate import (
             interpolate_masked_pixels_gpu_vectorized_weight,
             add_bpx_method,
         )
+
         st = time.time()
         self.logger.info("Start the interpolation for bad pixels")
 
@@ -504,7 +518,7 @@ class ImStack(BaseSetup):
         advantage of uniform pixel scale.
         """
         st = time.time()
-        
+
         method = self.config.imstack.convolve.lower()
         self.logger.info(f"Start Convolution with '{method}' method")
 
@@ -582,7 +596,6 @@ class ImStack(BaseSetup):
                         self.logger.warning(f"Weight map not found for {inim}")
 
             self.images_to_stack = self.config.imstack.conv_files
-            
 
         else:
             self.logger.info("Undefined Convolution Method. Skipping Seeing Match")

@@ -39,7 +39,7 @@ info:
 
 settings:
   ToO: False
-  is_pipeine: false
+  is_pipeline: false
   obsmode:  # Deep Spec Color Search Single
   header_pad: 7  # assuming final header is 5 * 2880 bytes long. 6 to include polygon info
   combine:

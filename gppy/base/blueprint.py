@@ -83,27 +83,22 @@ class Blueprint:
             t.join()
 
     def process_group(self, group, device_id=None):
-        from ..run import run_preprocess_with_task, run_process_with_tree, run_make_plots
-        
         # Submit preprocess
-        pre_task = run_preprocess_with_task(group.config, device_id=device_id)
+        pre_task, plot_task = group.get_tasks(device_id=device_id)
         self.queue.add_task(pre_task)
         # Wait for this group's preprocess to finish
         self.queue.wait_until_task_complete(pre_task.id)
-
-        plot_task = run_make_plots(group.config)
         self.queue.add_task(plot_task)
 
         for key in group.sci_keys:
             sci_group = self.groups[key]
             if not(sci_group.multi_units):
-                sci_tree = run_process_with_tree(sci_group.config)
+                sci_tree = sci_group.get_tree()
                 self.queue.add_tree(sci_tree)
             else:
                 self._multi_unit_config.add(sci_group.config)
 
     def process_all(self):
-        from ..run import run_process_with_tree
         threads = []
         for i, (key, group) in enumerate(self.groups.items()):
             if isinstance(group, MasterframeGroup):
@@ -116,15 +111,15 @@ class Blueprint:
             t.join()
         
         while len(self._multi_unit_config) > 0:
+            from ..run import get_scidata_reduction_tasktree
             config = self._multi_unit_config.pop()
-            multi_unit_tree = run_process_with_tree(config)
-            self.queue.add_tree(multi_unit_tree)
+            self.queue.add_tree(get_scidata_reduction_tasktree(config))
 
 class MasterframeGroup:
     def __init__(self, key):  
         self.key = key
         self.image_files = []
-        self.config = None
+        self._config = None
         self.sci_keys = []
 
     def __lt__(self, other):
@@ -142,6 +137,12 @@ class MasterframeGroup:
         else:
             return False
 
+    @property
+    def config(self):
+        if self._config is None:
+            self.create_config()
+        return self._config
+    
     def add_images(self, filepath):
         if isinstance(filepath, list):
             self.image_files.extend(filepath)
@@ -159,8 +160,18 @@ class MasterframeGroup:
 
     def create_config(self):
         c = PreprocConfiguration(self.image_files)
-        self.config = c.config_file
+        self._config = c.config_file
 
+    def get_tasks(self, device_id=None):
+        from ..run import get_preprocess_task, get_make_plot_task
+        pre_task = get_preprocess_task(self.config, device_id=device_id)
+        plot_task = get_make_plot_task(self.config)
+        return pre_task, plot_task
+    
+    def run(self):
+        from ..run import run_preprocess
+        return run_preprocess(self.config, make_plots=True)
+    
     def __repr__(self):
         return f"MasterframeGroup({self.key} used in {self.sci_keys} with {len(self.image_files)} images)"
 
@@ -168,9 +179,15 @@ class ScienceGroup:
     def __init__(self, key):
         self.key = key
         self.image_files = []
-        self.config = None
+        self._config = None
         self.multi_units = False
-        
+
+    @property
+    def config(self):
+        if self._config is None:
+            self.create_config()
+        return self._config
+    
     def __lt__(self, other):
         if isinstance(other, MasterframeGroup):
             # ScienceGroup always comes after MasterframeGroup
@@ -197,13 +214,28 @@ class ScienceGroup:
             
     def create_config(self):
         c = SciProcConfiguration(self.image_files)
-        self.config = c.config_file
+        self._config = c.config_file
+    
+    def get_tree(self):
+        from ..run import get_scidata_reduction_tasktree
+        return get_scidata_reduction_tasktree(self.config)
 
+    def run(self):
+        from ..run import run_scidata_reduction
+        return run_scidata_reduction(self.config)
+        
     def __repr__(self):
         return f"ScienceGroup({self.key} with {len(self.image_files)} images)"
         
 class SortedGroupDict(UserDict):
     """A dictionary that sorts its values when iterating."""
+
+    def __getitem__(self, key):
+        if type(key) == int:
+            return self.values()[key]
+        else:
+            return super().__getitem__(key)
+
     def __iter__(self):
         # First sort by type (MasterframeGroup first, then ScienceGroup)
         # Then within each type, sort by their respective criteria
