@@ -142,6 +142,9 @@ class Task:
         except Exception as e:
             self.status = "failed"
             self.error = e
+            import logging
+            tmp_logger = logging.getLogger(self.task_name)
+            tmp_logger.error(f"Task {self.id} failed with error: {str(e)}")
             raise
         finally:
             self.endtime = datetime.now()

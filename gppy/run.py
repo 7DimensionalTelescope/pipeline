@@ -22,7 +22,12 @@ from .services.logger import Logger
 from .services.task import Task, TaskTree
 
 
-def run_preprocess_with_task(config, priority=Priority.HIGH, device_id = None, **kwargs):
+def run_preprocess(config, make_plots=False):
+    config = PreprocConfiguration.from_file(config)
+    prep = Preprocess(config)
+    prep.run(make_plots=make_plots)
+
+def get_preprocess_task(config, priority=Priority.HIGH, device_id = None, **kwargs):
     """
     Generate master calibration frames for a specific observation set.
 
@@ -35,15 +40,36 @@ def run_preprocess_with_task(config, priority=Priority.HIGH, device_id = None, *
     run_task = Task(prep.run, kwargs={"make_plots": False}, gpu=True, priority=priority, device=device_id)
     return run_task
 
-
-def run_make_plots(config, priority=Priority.LOW):
+def get_make_plot_task(config, priority=Priority.LOW):
     config = PreprocConfiguration.from_file(config)
     prep = Preprocess(config)
     plot_task = Task(prep.make_plot_all, gpu=False, priority=priority)
     return plot_task
 
-
-def run_process_with_tree(
+def run_scidata_reduction(config):
+    config = SciProcConfiguration.from_file(config)
+    if (not (config.config.flag.astrometry) and "astrometry" in processes) or overwrite:
+        astr = Astrometry(config)
+        astr.run()
+        del astr
+    if (not (config.config.flag.single_photometry) and "photometry" in processes) or overwrite:
+        phot = Photometry(config)
+        phot.run()
+        del phot
+    if (not (config.config.flag.combine) and "combine" in processes) or overwrite:
+        stk = ImStack(config)
+        stk.run()
+        del stk
+    if (not (config.config.flag.combined_photometry) and "photometry" in processes) or overwrite:
+        phot = Photometry(config)
+        phot.run()
+        del phot
+    if (not (config.config.flag.subtraction) and "subtract" in processes) or overwrite:
+        subt = ImSubtract(config)
+        subt.run()
+        del subt
+    
+def get_scidata_reduction_tasktree(
     config,
     processes=["astrometry", "photometry", "combine", "subtract"],
     overwrite=False,

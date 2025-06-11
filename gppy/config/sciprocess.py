@@ -64,15 +64,16 @@ class SciProcConfiguration(BaseConfig):
         self = cls.__new__(cls)
 
         self.input_files = atleast1d(input_images)
-        self.path = PathHandler(input_images)
+        self.path = PathHandler(input_images, working_dir=os.getcwd())
         self.config_file = self.path.sciproc_output_yml
 
         config_source = self.path.sciproc_base_yml
         super().__init__(self, config_source=config_source, write=write, **kwargs)
 
-        self.initialize()
+        self.initialize(is_pipeline=False)
         self.config.input.calibrated_images = input_images
-        self.config.name = "user-input"
+        # self.config.name = "user-input"
+        self.config.settings.is_pipeline = False
         self.config._initialized = True
         return self
 
@@ -86,8 +87,8 @@ class SciProcConfiguration(BaseConfig):
             return None
 
     def _handle_input(self, input, logger, verbose, **kwargs):
-        if isinstance(input, list):
-            self.input_files = input
+        if isinstance(input, list) or (isinstance(input, str) and input.endswith(".fits")):  # list of science images
+            self.input_files = sorted(input)
             self.path = PathHandler(input)
             config_source = self.path.sciproc_base_yml
             self.logger = self._setup_logger(
@@ -100,7 +101,8 @@ class SciProcConfiguration(BaseConfig):
             self.logger.debug(f"Configuration source: {config_source}")
             super().__init__(config_source=config_source, write=self.write, **kwargs)
             self.config.logging.file = self.path.sciproc_output_log
-        elif isinstance(input, str | dict):
+
+        elif isinstance(input, str | dict):  # path of a config file
             config_source = input
             super().__init__(config_source=config_source, write=self.write, **kwargs)
             self.path = self._set_pathhandler_from_config()
@@ -136,7 +138,7 @@ class SciProcConfiguration(BaseConfig):
 
         raise ValueError("Configuration does not contain valid input files or directories to create PathHandler.")
 
-    def initialize(self):
+    def initialize(self, is_pipeline=True):
         """Fill in universal info, filenames, settings."""
 
         self.config.info.version = __version__
@@ -148,8 +150,10 @@ class SciProcConfiguration(BaseConfig):
 
         # self.set_input_output()
         # self.check_masterframe_status()
-        
-        self._add_metadata()
+
+        if is_pipeline:
+            self._add_metadata()
+            self.config.settings.is_pipeline = True
         self._define_settings(self.input_files[0])
         self.input_files = self.config.input.calibrated_images
         self._initialized = True

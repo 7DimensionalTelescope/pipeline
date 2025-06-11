@@ -289,14 +289,14 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
             self._output_parent_dir = [working_dir or os.getcwd()]
             self._preproc_output_dir = self._output_parent_dir
             self._factory_parent_dir = [os.path.join(self._output_parent_dir[0], "tmp")]
-            self._within_pipeline = [False]
+            self._is_pipeline = [False]
             return
 
         # Process each file independently
         self._output_parent_dir = []
         self._preproc_output_dir = []
         self._factory_parent_dir = []
-        self._within_pipeline = []
+        self._is_pipeline = []
 
         for i, input_file in enumerate(self._input_files):
             file_dir = str(Path(input_file).absolute().parent)
@@ -306,7 +306,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                 output_parent_dir = working_dir or os.path.dirname(input_file)
                 self._output_parent_dir.append(output_parent_dir)
                 self._factory_parent_dir.append(os.path.join(output_parent_dir, "tmp"))
-                self._within_pipeline.append(False)
+                self._is_pipeline.append(False)
             else:
                 from datetime import date
 
@@ -320,7 +320,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                     output_parent_dir = const.PROCESSED_DIR
                     self._output_parent_dir.append(output_parent_dir)
                     self._factory_parent_dir.append(const.FACTORY_DIR)
-                    self._within_pipeline.append(True)
+                    self._is_pipeline.append(True)
                 else:
                     raise ValueError(f"nightdate cap reached for file {input_file}: consider moving to another disk.")
 
@@ -452,7 +452,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
         self._stacked_dir = []
         self._metadata_dir = []
 
-        for i, input_file in enumerate(self._input_files):
+        for i in range(len(self._input_files)):
             # Get properties for this specific file
             nightdate = self._get_property_at_index("nightdate", i)
             unit = self._get_property_at_index("unit", i)
@@ -467,45 +467,47 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
             config_stem = "_".join([nightdate, unit])
             self._config_stem.append(config_stem)
 
-            if self._within_pipeline[i] and not "master" in typ:
-                # Within pipeline processing
-                relative_path = os.path.join(nightdate, obj, filte)
-                output_dir = os.path.join(self._output_parent_dir[i], relative_path)
-                factory_dir = os.path.join(self._factory_parent_dir[i], relative_path)
-                image_dir = os.path.join(output_dir, "images")
+            if "calibrated" in typ or "raw" in typ:
+                if self._is_pipeline[i]:
+                    # Within pipeline processing
+                    relative_path = os.path.join(nightdate, obj, filte)
+                    output_dir = os.path.join(self._output_parent_dir[i], relative_path)
+
+                    self._factory_dir.append(os.path.join(self._factory_parent_dir[i], relative_path))
+                    self._image_dir.append(os.path.join(output_dir, "images"))
+                    self._stacked_dir.append(os.path.join(const.STACKED_DIR, obj, filte))
+                    self._metadata_dir.append(os.path.join(self._output_parent_dir[i], nightdate))
+
+                    # if "raw" in data_type:
+                    #     conjugate = self._get_property_at_index("conjugate", i)
+                    #     processed_image = os.path.join(image_dir, conjugate)
+                    #     processed_images.append(processed_image)
+                    #     raw_images.append(input_file)
+                    # elif "calibrated" in data_type:
+                    #     conjugate = self._get_property_at_index("conjugate", i)
+                    #     raw_image = os.path.join(image_dir, conjugate)
+                    #     raw_images.append(raw_image)
+                    #     processed_images.append(input_file)
+                    # else:
+                    #     processed_images.append(str(Path(input_file).absolute()))
+                else:
+                    # Outside pipeline
+                    output_dir = self._output_parent_dir[i]
+                    self._factory_dir.append(self._factory_parent_dir[i])
+                    self._image_dir.append(output_dir)
+                    self._stacked_dir.append(output_dir)
 
                 self._output_dir.append(output_dir)
-                self._factory_dir.append(factory_dir)
-                self._image_dir.append(image_dir)
-
-                self._stacked_dir.append(os.path.join(const.STACKED_DIR, obj, filte))
-                self._metadata_dir.append(os.path.join(self._output_parent_dir[i], nightdate))
-
-                # output_dir children
                 self._daily_stacked_dir.append(os.path.join(output_dir, "stacked"))
                 self._subtracted_dir.append(os.path.join(output_dir, "subtracted"))
+                self._figure_dir.append(os.path.join(self._output_dir[-1], "figures"))
 
-                # # Handle processed images based on data type
-                # if "raw" in data_type:
-                #     conjugate = self._get_property_at_index("conjugate", i)
-                #     processed_image = os.path.join(image_dir, conjugate)
-                #     processed_images.append(processed_image)
-                #     raw_images.append(input_file)
-                # elif "calibrated" in data_type:
-                #     conjugate = self._get_property_at_index("conjugate", i)
-                #     raw_image = os.path.join(image_dir, conjugate)
-                #     raw_images.append(raw_image)
-                #     processed_images.append(input_file)
-                # else:
-                #     processed_images.append(str(Path(input_file).absolute()))
-            else:
-                # Outside pipeline
+            elif "master" in typ:
                 self._output_dir.append(self._output_parent_dir[i])
                 self._factory_dir.append(self._factory_parent_dir[i])
                 self._image_dir.append(self._output_parent_dir[i])
-                # raw_images.append(str(Path(input_file).absolute()))
-
-            self._figure_dir.append(os.path.join(self._output_dir[-1], "figures"))
+            else:
+                raise ValueError("Unrecognized type for PathHandling")
 
         # Store all as lists without collapsing
         self.output_dir = collapse(self._output_dir)
@@ -1024,7 +1026,8 @@ class PathImstack(AutoMkdirMixin):
         _ = collapse(names.type, raise_error=True)  # ensure input images are coherent
         total_exptime = np.sum(names.exptime)
         # use the datetime of the last image
-        fname = f"{names.obj_collapse}_{names.filter_collapse}_{names.unit_collapse}_{names.datetime[-1]}_{format_exptime(total_exptime, type='stacked')}_coadd.fits"
+        unit = collapse(names.unit, force=True)
+        fname = f"{names.obj_collapse}_{names.filter_collapse}_{unit}_{names.datetime[-1]}_{format_exptime(total_exptime, type='stacked')}_coadd.fits"
         return fname
 
     @property
@@ -1033,7 +1036,8 @@ class PathImstack(AutoMkdirMixin):
 
     @property
     def stacked_image(self):
-        return os.path.join(collapse(self._parent.stacked_dir, raise_error=True), self.stacked_image_basename)
+        # return os.path.join(collapse(self._parent.stacked_dir, raise_error=True), self.stacked_image_basename)
+        return bjoin(self._parent.stacked_dir, self.stacked_image_basename)
 
     # Todo: add weight images
 

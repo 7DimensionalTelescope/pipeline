@@ -82,7 +82,7 @@ def equal_on_keys(d1: dict, d2: dict, keys: list):
     return all(d1.get(k) == d2.get(k) for k in keys)  # None if key missing
 
 
-def collapse(seq: list | dict[list], keys=ALL_GROUP_KEYS, raise_error=False):
+def collapse(seq: list | dict[list], keys=ALL_GROUP_KEYS, raise_error=False, force=False):
     """
     If seq is non-empty and every element equals the first one,
     return the first element; else return seq unchanged.
@@ -100,7 +100,7 @@ def collapse(seq: list | dict[list], keys=ALL_GROUP_KEYS, raise_error=False):
             return first
     # if isinstance(first, (Path, str)):
     else:
-        if all(x == first for x in seq):
+        if all(x == first for x in seq) or force:
             return first
     # else:
     #     raise TypeError("Invalid type to check homogeneity")
