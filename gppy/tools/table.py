@@ -1,6 +1,6 @@
 from typing import Iterable, Tuple, Sequence, Any
 import numpy as np
-from astropy.coordinates import SkyCoord, Distance
+from astropy.coordinates import SkyCoord, Distance, search_around_sky
 from astropy.time import Time
 from astropy.table import Table, hstack, MaskedColumn
 import astropy.units as u
@@ -37,12 +37,14 @@ def match_two_catalogs(
     radius
         Maximum separation for a match.  A bare ``float`` is interpreted
         in **arcseconds**; a `~astropy.units.Quantity` may carry any angle unit.
-    how : {'inner', 'left'}, optional
+    how : {'inner', 'left', 'outer'}, optional
         Join strategy:
 
         * ``'inner'`` - return only matched rows (default)
         * ``'left'``  - return every row of *sci_tbl* and mask unmatched
                         entries from ref_tbl
+        * ``'outer'`` - return all matched rows *and* all unmatched from both
+                        catalogues
     correct_pm
         If *True*, propagate stars in the *reference* catalogue from their
         catalogued epoch (`pm_info['ref_epoch']`, default 2016.0 TDB) to
@@ -78,8 +80,8 @@ def match_two_catalogs(
       retained but un-moved.
     """
 
-    if how not in {"inner", "left"}:
-        raise ValueError("how must be 'inner' or 'left'")
+    if how not in {"inner", "left", "outer"}:
+        raise ValueError("how must be 'inner', 'left' or 'outer'")
 
     if x1 is None:
         x1 = x0
@@ -101,11 +103,11 @@ def match_two_catalogs(
         # Vectorised columns with units
         pm_ra = ref_tbl[pm_keys["pmra"]] * u.mas / u.yr
         pm_dec = ref_tbl[pm_keys["pmdec"]] * u.mas / u.yr
-        dist = Distance(parallax=ref_tbl[pm_keys["parallax"]] * u.mas, allow_negative=True)  # allow (-) parallax
+        dist = Distance(parallax=ref_tbl[pm_keys["parallax"]] * u.mas, allow_negative=True)
 
         good = np.isfinite(pm_ra) & np.isfinite(pm_dec) & np.isfinite(dist)
 
-        if np.any(good):  # only build a 6-D frame when possible
+        if np.any(good):
             moved = SkyCoord(
                 ra=ref_tbl[x1][good] * u.deg,
                 dec=ref_tbl[y1][good] * u.deg,
@@ -115,66 +117,102 @@ def match_two_catalogs(
                 obstime=Time(pm_keys["ref_epoch"], format="jyear"),
             ).apply_space_motion(new_obstime=obs_time)
 
-            # update with the moved coordinates
-            # coord_ref = coord_ref.replicate(copy=False, obstime=obs_time)  # this reuses memory buffer and is efficient
             coord_ref.ra[good] = moved.ra
             coord_ref.dec[good] = moved.dec
             coord_ref._sky_coord_frame.cache.clear()
 
-    # ---------------- driver selection --------------------------------
     if how == "left":
-        # science catalogue must drive so we can return all its rows
         coord0, coord1 = coord_sci, coord_ref
         tbl0, tbl1 = sci_tbl, ref_tbl
         tag1 = "ref"
-    elif len(coord_sci) > len(coord_ref):  # small-driver heuristic for a simple common table
-        coord0, coord1 = coord_ref, coord_sci  # match_to_catalog_sky is N0 * logN1 complexity
-        tbl0, tbl1 = ref_tbl, sci_tbl
-        tag1 = "sci"
+    elif how == "inner":
+        if len(coord_sci) > len(coord_ref):
+            coord0, coord1 = coord_ref, coord_sci
+            tbl0, tbl1 = ref_tbl, sci_tbl
+            tag1 = "sci"
+        else:
+            coord0, coord1 = coord_sci, coord_ref
+            tbl0, tbl1 = sci_tbl, ref_tbl
+            tag1 = "ref"
+
+    if how in {"inner", "left"}:
+        idx, sep2d, _ = coord0.match_to_catalog_sky(coord1)
+        rtol = radius * u.arcsec if not isinstance(radius, Quantity) else radius
+        matched = sep2d < rtol
+
+        if how == "left":
+            out = tbl0.copy()
+            ref_slice = tbl1[idx]
+
+            dupes = set(out.colnames) & set(ref_slice.colnames)
+            for name in dupes:
+                ref_slice.rename_column(name, f"{name}_{tag1}")
+
+            for name in ref_slice.colnames:
+                out[name] = MaskedColumn(ref_slice[name].data, mask=~matched)
+
+            out["separation"] = MaskedColumn(sep2d.arcsec, mask=~matched)
+            return out
+
+        else:
+            m0 = tbl0[matched]
+            m1 = tbl1[idx[matched]]
+
+            dupes = set(m0.colnames) & set(m1.colnames)
+            for name in dupes:
+                m1.rename_column(name, f"{name}_{tag1}")
+
+            merged = hstack([m0, m1], join_type="exact")
+            merged["separation"] = sep2d[matched].arcsec
+            return merged
+
+    elif how == "outer":
+        sep_rad = radius * u.arcsec if not isinstance(radius, Quantity) else radius
+        idx_s, idx_r, seps, _ = search_around_sky(coord_sci, coord_ref, sep_rad)
+
+        order = np.lexsort([seps.arcsec, idx_s])
+        idx_s_s, idx_r_s = idx_s[order], idx_r[order]
+        first = np.unique(idx_s_s, return_index=True)[1]
+        sci_idx = idx_s_s[first]
+        ref_idx = idx_r_s[first]
+
+        used_s = set(sci_idx)
+        used_r = set(ref_idx)
+
+        rows = []
+        for isci, iref in zip(sci_idx, ref_idx):
+            row = {}
+            for n in sci_tbl.colnames:
+                row[f"sci_{n}"] = sci_tbl[n][isci]
+            for n in ref_tbl.colnames:
+                row[f"ref_{n}"] = ref_tbl[n][iref]
+            row["separation"] = seps[(idx_s == isci) & (idx_r == iref)][0].arcsec
+            rows.append(row)
+
+        for isci in range(len(sci_tbl)):
+            if isci not in used_s:
+                row = {}
+                for n in sci_tbl.colnames:
+                    row[f"sci_{n}"] = sci_tbl[n][isci]
+                for n in ref_tbl.colnames:
+                    row[f"ref_{n}"] = np.ma.masked
+                row["separation"] = np.ma.masked
+                rows.append(row)
+
+        for iref in range(len(ref_tbl)):
+            if iref not in used_r:
+                row = {}
+                for n in sci_tbl.colnames:
+                    row[f"sci_{n}"] = np.ma.masked
+                for n in ref_tbl.colnames:
+                    row[f"ref_{n}"] = ref_tbl[n][iref]
+                row["separation"] = np.ma.masked
+                rows.append(row)
+
+        return Table(rows)
+
     else:
-        coord0, coord1 = coord_sci, coord_ref
-        tbl0, tbl1 = sci_tbl, ref_tbl
-        tag1 = "ref"
-
-    # --- catalogue matching & merge ------------------------------------------
-    idx, sep2d, _ = coord0.match_to_catalog_sky(coord1)
-    rtol = radius * u.arcsec if not isinstance(radius, Quantity) else radius
-    matched = sep2d < rtol
-
-    # This works too...
-    # merged = sci_tbl.join(ref_tbl, keys_left=coord_sci, keys_right=coord_ref,
-    #                   rtol=0*u.arcsec + radius, table_names=["sci", "ref"])
-
-    # ------------------------------- keep all science rows -------------
-    if how == "left":
-        out = tbl0.copy()  # shallow copy; cheap
-        ref_slice = tbl1[idx]  # reference rows in match order
-
-        # disambiguate duplicate column names
-        dupes = set(out.colnames) & set(ref_slice.colnames)
-        for name in dupes:
-            ref_slice.rename_column(name, f"{name}_{tag1}")
-
-        # add reference columns as masked arrays where no match
-        for name in ref_slice.colnames:
-            out[name] = MaskedColumn(ref_slice[name].data, mask=~matched)
-
-        # separation column (arcsec)
-        out["separation"] = MaskedColumn(sep2d.arcsec, mask=~matched)
-        return out
-
-    # ------------------------------- default: return only matches ------
-    else:
-        m0 = tbl0[matched]
-        m1 = tbl1[idx[matched]]
-
-        dupes = set(m0.colnames) & set(m1.colnames)
-        for name in dupes:
-            m1.rename_column(name, f"{name}_{tag1}")
-
-        merged = hstack([m0, m1], join_type="exact")
-        merged["separation"] = sep2d[matched].arcsec
-        return merged
+        raise ValueError("Unknown how: " + how)
 
 
 Condition = Tuple[str, Any, str]  # (column, value, method)
