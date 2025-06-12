@@ -94,17 +94,14 @@ class ImStack(BaseSetup):
             self.stack_with_swarp()
 
             self.config.flag.combine = True
-
-            self.logger.info(f"Imstack Done for {self.config.name}")
         except Exception as e:
             self.logger.error(f"Error during imstack processing: {str(e)}", exc_info=True)
             raise
         # self.logger.debug(MemoryMonitor.log_memory_usage)
 
     def initialize(self):
-        self.logger.info("-" * 80)
-        self.logger.info(f"Start imstack for {self.config.name}")
-        self.logger.info(self.logger.__hash__())
+        self._st = time.time()
+        self.logger.info(f"Start 'ImStack'")
         # use common input if imstack.input_files override is not set
         if not (hasattr(self.config.imstack, "input_images") and self.config.imstack.input_images):
             self.config.imstack.input_images = self.config.input.calibrated_images
@@ -132,7 +129,7 @@ class ImStack(BaseSetup):
         self.config.input.stacked_image = self.config.imstack.stacked_image
         self.logger.debug(f"Stacked Image: {self.config.imstack.stacked_image}")
 
-        self.logger.info(f"ImStack Initialized for {self.config.name}")
+        self.logger.info(f"Initialization for ImStack is completed")
 
     def set_metadata_without_ccdproc(self):
         """
@@ -200,7 +197,7 @@ class ImStack(BaseSetup):
             # objdec = objdec.replace(' ', ':')
 
         self.center = f"{objra},{objdec}"
-        self.logger.debug(f"Deprojection Center: {self.center}")
+        self.logger.debug(f"Deprojection center: {self.center}")
 
         # base zero point for flux scaling
         # base = np.where(self.zpvalues == np.max(self.zpvalues))[0][0]
@@ -211,7 +208,7 @@ class ImStack(BaseSetup):
         #         f"Scaline downward: destination ZP: ({self.zp_base}), "
         #         f"max image ZP: ({np.max(self.zpvalues)})"
         #     )
-        self.logger.debug(f"Reference ZP: {self.zp_base}")
+        self.logger.debug(f"Reference zero point: {self.zp_base}")
 
     def bkgsub(self):
         # ------------------------------------------------------------
@@ -227,13 +224,13 @@ class ImStack(BaseSetup):
         ]
 
         if self.config.imstack.bkgsub_type.lower() == "dynamic":
-            self.logger.info("Start Dynamic Background Subtraction")
+            self.logger.info("Start dynamic background subtraction")
             self._dynamic_bkgsub()
         else:
-            self.logger.info("Start Constant Background Subtraction")
+            self.logger.info("Start constant background subtraction")
             self._const_bkgsub()
 
-        self.logger.info(f"Background Subtraction Done for {self.config.name} in {time_diff_in_seconds(st)} sec")
+        self.logger.info(f"Background subtraction is completed in {time_diff_in_seconds(st)} seconds")
 
         self.images_to_stack = self.config.imstack.bkgsub_images
 
@@ -268,7 +265,7 @@ class ImStack(BaseSetup):
 
             # if result is already in factory, use that
             if os.path.exists(outim) and os.path.exists(bkg) and os.path.exists(bkg_rms):
-                self.logger.info(f"BKGSUB result exists; skipping: {outim}")
+                self.logger.info(f"Background subtraction result exists; skipping: {os.path.basename(outim)}")
                 continue
 
             sex_args = [
@@ -311,8 +308,7 @@ class ImStack(BaseSetup):
         """Retains cpu support as a code template"""
         st = time.time()
         use_gpu = self.config.imstack.gpu
-        self.logger.info(f"Start Weight Map Calculation with {'GPU' if use_gpu else 'CPU'}")
-        self.logger.info(self.logger.__hash__())
+        self.logger.info(f"Start weight-map calculation with {'GPU' if use_gpu else 'CPU'}")
         # pick xp and device‐context based on GPU flag
         if use_gpu:
             import cupy as xp
@@ -382,8 +378,7 @@ class ImStack(BaseSetup):
                         data=weight_image,
                         overwrite=True,
                     )
-        self.logger.info(f"Weight Map Calculation Done for {self.config.name} in {time_diff_in_seconds(st)} sec")
-        self.logger.info(self.logger.__hash__())
+        self.logger.info(f"Weight-map calculation is completed in {time_diff_in_seconds(st)} seconds")
 
     def apply_bpmask(self, badpix=0, device_id=0):
         st = time.time()
@@ -454,7 +449,7 @@ class ImStack(BaseSetup):
 
         self.images_to_stack = self.config.imstack.interp_images
 
-        self.logger.info(f"Interpolation for Bad Pixels Done for {self.config.name} in {time_diff_in_seconds(st)} sec")
+        self.logger.info(f"Interpolation for bad pixels is completed in {time_diff_in_seconds(st)} seconds")
 
     def zpscale(self):
         """
@@ -473,7 +468,7 @@ class ImStack(BaseSetup):
                 hdul.flush()
             self.logger.debug(f"{os.path.basename(file)} FLXSCALE: {flxscale:.3f}")
 
-        self.logger.info(f"ZP Scaling Done for {self.config.name} in {time_diff_in_seconds(st)}sec")
+        self.logger.info(f"ZP scaling is completed in {time_diff_in_seconds(st)} seconds")
 
         # ------------------------------------------------------------
         # 	ZP Scale
@@ -520,14 +515,12 @@ class ImStack(BaseSetup):
         st = time.time()
 
         method = self.config.imstack.convolve.lower()
-        self.logger.info(f"Start Convolution with '{method}' method")
+        self.logger.info(f"Start the convolution with {method} method")
 
         if method == "gaussian":
             from astropy.convolution import Gaussian2DKernel
             from .convolve import convolve_fft_gpu, get_edge_mask, add_conv_method
             from ..utils import force_symlink
-
-            self.logger.info("Initiating Convolution")
 
             # Define output path
             path_conv = os.path.join(self.path_tmp, "conv")
@@ -598,13 +591,13 @@ class ImStack(BaseSetup):
             self.images_to_stack = self.config.imstack.conv_files
 
         else:
-            self.logger.info("Undefined Convolution Method. Skipping Seeing Match")
+            self.logger.info("Undefined convolution method. Skipping seeing match")
 
-        self.logger.info(f"Convolution Done for {self.config.name} in {time_diff_in_seconds(st)} sec")
+        self.logger.info(f"Convolution is completed in {time_diff_in_seconds(st)} seconds")
 
     def stack_with_swarp(self):
         st = time.time()
-        self.logger.info("Start Stacking Images")
+        self.logger.info("Start to run swarp for stacking images")
 
         # Write target images to a text file
         self.path_imagelist = os.path.join(self.path_tmp, "images_to_stack.txt")
@@ -639,7 +632,8 @@ class ImStack(BaseSetup):
 
         self._update_header()
 
-        self.logger.info(f"Stacking Done for {self.config.name} in {time_diff_in_seconds(st)} sec")
+        self.logger.info(f"Running swarp is completed in {time_diff_in_seconds(st)} seconds")
+        self.logger.info(f"'ImStack' is Completed in {time_diff_in_seconds(self._st)} seconds")
 
     def _run_swarp(self, type="", args=None):
         """Pass type='' for no weight"""

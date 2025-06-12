@@ -121,7 +121,7 @@ class BaseConfig(ABC):
             return
 
         self._config_in_dict["info"]["last_update_datetime"] = datetime.now().isoformat()
-
+        
         with open(self.config_file, "w") as f:
             yaml.dump(self._config_in_dict, f, sort_keys=False)  # , default_flow_style=False)
 
@@ -148,13 +148,12 @@ class BaseConfig(ABC):
             from ..services.logger import Logger
 
             logger = Logger(name=name, slack_channel="pipeline_report")
+            logger.set_output_file(log_file, overwrite=overwrite)
+            if "log_format" in kwargs:
+                logger.set_format(kwargs.pop("log_format"))
 
-        logger.set_output_file(log_file, overwrite=overwrite)
-        if "log_format" in kwargs:
-            logger.set_format(kwargs.pop("log_format"))
-
-        if not (verbose):
-            logger.set_level("WARNING")
+            if not (verbose):
+                logger.set_level("WARNING")
 
         return logger
 

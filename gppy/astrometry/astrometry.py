@@ -2,7 +2,6 @@ import os
 import re
 from typing import Any, List, Tuple, Union
 from pathlib import Path
-import glob
 import time
 from .. import external
 from ..utils import swap_ext, add_suffix
@@ -43,7 +42,7 @@ class Astrometry(BaseSetup):
         """
         super().__init__(config, logger, queue)
         self._flag_name = "astrometry"
-        self.logger.debug(f"Astrometry Queue is '{queue}' for {self.config.name}")
+        self.logger.debug(f"Astrometry Queue is '{queue}'")
 
     @classmethod
     def from_list(cls, images):
@@ -85,9 +84,8 @@ class Astrometry(BaseSetup):
             prefix: Prefix for sextractor
         """
         try:
-            self.logger.info("-" * 80)
             start_time = time.time()
-            self.logger.info(f"Start astrometry for {self.config.name}")
+            self.logger.info(f"Start 'Astrometry'")
 
             self.define_paths()
 
@@ -117,7 +115,7 @@ class Astrometry(BaseSetup):
 
             self.config.flag.astrometry = True
 
-            self.logger.info(f"Astrometry Done for {self.config.name} in {time_diff_in_seconds(start_time)} seconds")
+            self.logger.info(f"'Astrometry' is completed in {time_diff_in_seconds(start_time)} seconds")
             self.logger.debug(MemoryMonitor.log_memory_usage)
         except Exception as e:
             self.logger.error(f"Error during astrometry processing: {str(e)}")
@@ -190,7 +188,7 @@ class Astrometry(BaseSetup):
                     dump_dir=self.path_astrometry,
                     pixscale=pixscale,
                 )
-                self.logger.info(f"Completed solve-field for {self.config.name} [{i+1}/{len(inputs)}]")
+                self.logger.info(f"Completed solve-field [{i+1}/{len(inputs)}]")
                 self.logger.debug(f"input: {slink}, output: {sfile}")
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
@@ -229,7 +227,7 @@ class Astrometry(BaseSetup):
                     logger=self.logger,
                     sex_args=["-catalog_type", "fits_ldac"],
                 )
-                self.logger.info(f"Completed sextractor (prep) for {self.config.name} [{i+1}/{len(files)}]")
+                self.logger.info(f"Completed sextractor (prep) [{i+1}/{len(files)}]")
                 self.logger.debug(f"{solved_image}")
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
@@ -249,6 +247,7 @@ class Astrometry(BaseSetup):
             files: Paths to astrometrically solved FITS files
             joint: Whether to process all images together
         """
+        st = time.time()
         self.logger.info(f"Start {'joint' if joint else 'individual'} scamp")
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
@@ -292,7 +291,7 @@ class Astrometry(BaseSetup):
                 self.logger.info(f"Completed scamp for {precat}]")  # fmt:skip
                 self.logger.debug(f"{precat}")  # fmt:skip
 
-        self.logger.info(f"Completed scamp for {self.config.name}")
+        self.logger.info(f"Completed scamp in {time_diff_in_seconds(st)} seconds")
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
     def update_header(
@@ -337,7 +336,7 @@ class Astrometry(BaseSetup):
                 else:
                     self.logger.error(f"Check SCAMP output. Possibly due to restricted access to the online VizieR catalog or disk space.") # fmt: skip
                     raise FileNotFoundError(f"SCAMP output (.head) does not exist: {solved_head}") # fmt: skip
-        self.logger.info("Header WCS Updated.")
+        self.logger.info("Correcting WCS in image headers is completed.")
 
     def _submit_task(self, func: callable, items: List[Any], **kwargs: Any) -> None:
         """Submit tasks to the queue manager for parallel processing.

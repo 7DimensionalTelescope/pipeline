@@ -2,10 +2,11 @@ import os
 import glob
 from datetime import datetime
 from .. import __version__
-from ..utils import clean_up_folder, clean_up_sciproduct, get_header, atleast1d
+from ..utils import clean_up_folder, clean_up_sciproduct, get_header, atleast1d, time_diff_in_seconds
 from ..path.path import PathHandler
 from .base import BaseConfig
 import time
+
 
 
 class SciProcConfiguration(BaseConfig):
@@ -26,18 +27,16 @@ class SciProcConfiguration(BaseConfig):
         if not self._initialized:
             self.logger.info("Initializing configuration")
             self.initialize()
+            self.logger.info(f"'SciProcConfiguration' initialized in {time_diff_in_seconds(st)} seconds")
+            self.logger.info(f"Writing configuration to file")
+            self.logger.debug(f"Configuration file: {self.config_file}")
 
         if overwrite:
-            self.logger.info("Overwriting factory_dir")
+            self.logger.info("Overwriting factory_dir first")
             clean_up_folder(self.path.factory_dir)
             clean_up_sciproduct(self.path.output_dir)
-
-        self.logger.info(f"Writing configuration to file")
-        self.logger.debug(f"Configuration file: {self.config_file}")
+        
         self.write_config()
-
-        self.logger.info(f"SciProcConfiguration initialized")
-        self.logger.debug(f"SciProcConfiguration initialization took {time.time() - st:.2f} seconds")
 
     # @classmethod
     # def base_config(cls, input_images=None, config_file=None, config_dict=None, working_dir=None, **kwargs):
@@ -96,8 +95,9 @@ class SciProcConfiguration(BaseConfig):
                 name=self.name,
                 log_file=self.path.sciproc_output_log,
                 verbose=verbose,
+                overwrite=self.write,
             )
-            self.logger.info("Generating a configuration from the 'base' configuration")
+            self.logger.info("Generating 'SciProcConfiguration' from the 'base' configuration")
             self.logger.debug(f"Configuration source: {config_source}")
             super().__init__(config_source=config_source, write=self.write, **kwargs)
             self.config.logging.file = self.path.sciproc_output_log
@@ -112,9 +112,10 @@ class SciProcConfiguration(BaseConfig):
                 name=self.name,
                 log_file=self.config.logging.file,
                 verbose=verbose,
+                overwrite=False,
             )
             self._initialized = True
-            self.logger.info("Loading configuration from an exisiting file or dictionary")
+            self.logger.info("Loading 'SciProcConfiguration' from an exisiting file or dictionary")
             self.logger.debug(f"Configuration source: {config_source}")
 
         else:

@@ -51,6 +51,5 @@ HEADER_KEY_MAP = {
     "dec": "OBJCTDEC",
 }
 
-
 class PipelineError(Exception):
     pass

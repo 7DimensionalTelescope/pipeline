@@ -2,6 +2,7 @@ import logging
 import requests
 import sys
 import time
+import fcntl
 from typing import Optional, Union, Dict, Any
 import os
 from .. import const
@@ -103,7 +104,7 @@ class Logger:
                 print(f"Error creating stderr handler: {e}", file=sys.__stderr__)
                 handler = logging.StreamHandler()
         else:
-            handler = logging.FileHandler(log_file, mode=mode)
+            handler = LockingFileHandler(log_file, mode=mode)
 
         handler.setLevel(level or getattr(logging, self._level))
         handler.setFormatter(logging.Formatter(self._log_format, datefmt='%Y-%m-%d %H:%M:%S'))
@@ -144,10 +145,14 @@ class Logger:
         logger.setLevel(logging.DEBUG)  # Set to DEBUG to catch all messages
 
         # Helper function to check if a handler of specific type already exists
-        def has_handler_type(logger, handler_type):
+        def has_handler_type(logger, handler_type, remove_handler=False):
             for handler in logger.handlers:
                 if hasattr(handler, 'name') and handler.name == handler_type:
-                    return True
+                    if remove_handler:
+                        logger.removeHandler(handler)
+                        return False
+                    else:
+                        return True
             return False
 
         # Add console handler if not already present
@@ -166,7 +171,7 @@ class Logger:
             # Main log file with specified level
             os.makedirs(os.path.dirname(self._log_file), exist_ok=True)
 
-            if not has_handler_type(logger, "file"):
+            if not has_handler_type(logger, "file", remove_handler=True):
                 file_handler = self._create_handler(
                     "file",
                     log_file=self._log_file,
@@ -178,7 +183,7 @@ class Logger:
 
             # Debug log file always at DEBUG level
             debug_log_file = self._log_file.replace(".log", "_debug.log")
-            if not has_handler_type(logger, "file_debug"):
+            if not has_handler_type(logger, "file_debug", remove_handler=True):
                 debug_handler = self._create_handler(
                     "file_debug", log_file=debug_log_file, level=logging.DEBUG
                 )
@@ -392,7 +397,7 @@ class Logger:
             fmt (str): New log message format
         """
         self._log_format = fmt
-        self.logger = self._setup_logger()
+        self.logger = self._setup_logger(overwrite=False)
 
 
 class StdoutToLogger:
@@ -474,105 +479,143 @@ class StderrToLogger:
         sys.__stderr__.flush()
 
 
-class PrintLogger:
+class LockingFileHandler(logging.FileHandler):
     """
-    A simple logger that prints messages to the console instead of writing to a file.
-    Useful for debugging.
-
-    Supports:
-    - Different log levels (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-    - Custom formatting for log messages
-    - Redirecting `stdout` and `stderr` to console logging
+    A file handler that uses file locking to ensure thread and process safety.
+    This prevents log corruption when multiple processes write to the same file.
     """
-
-    def __init__(
-        self,
-        name: str = "Console Logger",
-        level: str = "INFO",
-        log_format: str = "[%(levelname)s] %(asctime)s - %(message)s",
-    ):
-        self._name = name
-        self._log_format = log_format
-        self._level = level.upper()
-
-        # Redirect stdout and stderr to logger
-        sys.stdout = StdoutToPrintLogger(self)
-        sys.stderr = StderrToPrintLogger(self)
-
-    def _format_message(self, level: str, msg: str) -> str:
+    
+    def __init__(self, filename, mode='a', encoding=None, delay=False):
         """
-        Formats the log message with a timestamp.
-
-        Args:
-            level (str): The log level (e.g., INFO, ERROR)
-            msg (str): The actual log message
-
-        Returns:
-            str: The formatted log string
+        Initialize the handler with the given filename and mode.
         """
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        return f"[{level}] {timestamp} - {msg}"
-
-    def log(self, level: Union[int, str], msg: str) -> None:
+        super().__init__(filename, mode, encoding, delay)
+        
+    def emit(self, record):
         """
-        Prints a log message with the specified level.
-
-        Args:
-            level (Union[int, str]): Log level (INFO, DEBUG, etc.)
-            msg (str): The message to log
+        Emit a record with file locking to prevent concurrent writes.
         """
-        # print(self._format_message(level.upper(), msg))  # recursive call
-        formatted_message = self._format_message(level.upper(), msg)
-        sys.__stdout__.write(formatted_message + "\n")
+        if self.stream is None:
+            self.stream = self._open()
+            
+        try:
+            # Acquire an exclusive lock
+            fcntl.flock(self.stream, fcntl.LOCK_EX)
+            
+            # Format the record and write to the stream
+            msg = self.format(record)
+            self.stream.write(msg + self.terminator)
+            self.flush()
+            if self.stream and not self.stream.closed:
+                os.fsync(self.stream.fileno())
 
-    def debug(self, msg: str) -> None:
-        """Logs a DEBUG message."""
-        self.log("DEBUG", msg)
-
-    def info(self, msg: str) -> None:
-        """Logs an INFO message."""
-        self.log("INFO", msg)
-
-    def warning(self, msg: str) -> None:
-        """Logs a WARNING message."""
-        self.log("WARNING", msg)
-
-    def error(self, msg: str) -> None:
-        """Logs an ERROR message."""
-        self.log("ERROR", msg)
-
-    def critical(self, msg: str) -> None:
-        """Logs a CRITICAL message."""
-        self.log("CRITICAL", msg)
+        except Exception as e:
+            self.handleError(record)
+        finally:
+            # Always release the lock
+            fcntl.flock(self.stream, fcntl.LOCK_UN)
+            
 
 
-class StdoutToPrintLogger:
-    """Redirects `stdout` to the print-based logger."""
+# class PrintLogger:
+#     """
+#     A simple logger that prints messages to the console instead of writing to a file.
+#     Useful for debugging.
 
-    def __init__(self, logger: PrintLogger):
-        self.logger = logger
+#     Supports:
+#     - Different log levels (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+#     - Custom formatting for log messages
+#     - Redirecting `stdout` and `stderr` to console logging
+#     """
 
-    def write(self, buf):
-        """Writes messages to the logger as INFO logs."""
-        for line in buf.rstrip().splitlines():
-            self.logger.info(line)
+#     def __init__(
+#         self,
+#         name: str = "Console Logger",
+#         level: str = "INFO",
+#         log_format: str = "[%(levelname)s] %(asctime)s - %(message)s",
+#     ):
+#         self._name = name
+#         self._log_format = log_format
+#         self._level = level.upper()
 
-    def flush(self):
-        """Flushes the output (for compatibility)."""
-        sys.__stdout__.flush()
+#         # Redirect stdout and stderr to logger
+#         sys.stdout = StdoutToPrintLogger(self)
+#         sys.stderr = StderrToPrintLogger(self)
+
+#     def _format_message(self, level: str, msg: str) -> str:
+#         """
+#         Formats the log message with a timestamp.
+
+#         Args:
+#             level (str): The log level (e.g., INFO, ERROR)
+#             msg (str): The actual log message
+
+#         Returns:
+#             str: The formatted log string
+#         """
+#         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+#         return f"[{level}] {timestamp} - {msg}"
+
+#     def log(self, level: Union[int, str], msg: str) -> None:
+#         """
+#         Prints a log message with the specified level.
+
+#         Args:
+#             level (Union[int, str]): Log level (INFO, DEBUG, etc.)
+#             msg (str): The message to log
+#         """
+#         # print(self._format_message(level.upper(), msg))  # recursive call
+#         formatted_message = self._format_message(level.upper(), msg)
+#         sys.__stdout__.write(formatted_message + "\n")
+
+#     def debug(self, msg: str) -> None:
+#         """Logs a DEBUG message."""
+#         self.log("DEBUG", msg)
+
+#     def info(self, msg: str) -> None:
+#         """Logs an INFO message."""
+#         self.log("INFO", msg)
+
+#     def warning(self, msg: str) -> None:
+#         """Logs a WARNING message."""
+#         self.log("WARNING", msg)
+
+#     def error(self, msg: str) -> None:
+#         """Logs an ERROR message."""
+#         self.log("ERROR", msg)
+
+#     def critical(self, msg: str) -> None:
+#         """Logs a CRITICAL message."""
+#         self.log("CRITICAL", msg)
 
 
-class StderrToPrintLogger:
-    """Redirects `stderr` to the print-based logger."""
+# class StdoutToPrintLogger:
+#     """Redirects `stdout` to the print-based logger."""
 
-    def __init__(self, logger: PrintLogger):
-        self.logger = logger
+#     def __init__(self, logger: PrintLogger):
+#         self.logger = logger
 
-    def write(self, buf):
-        """Writes messages to the logger as ERROR logs."""
-        for line in buf.rstrip().splitlines():
-            self.logger.error(line)
+#     def write(self, buf):
+#         """Writes messages to the logger as INFO logs."""
+#         for line in buf.rstrip().splitlines():
+#             self.logger.info(line)
 
-    def flush(self):
-        """Flushes the output (for compatibility)."""
-        sys.__stderr__.flush()
+#     def flush(self):
+#         """Flushes the output (for compatibility)."""
+#         sys.__stdout__.flush()
+
+
+# class StderrToPrintLogger:
+#     """Redirects `stderr` to the print-based logger."""
+
+#     def __init__(self, logger: PrintLogger):
+#         self.logger = logger
+
+#     def write(self, buf):
+#         """Writes messages to the logger as ERROR logs."""
+#         for line in buf.rstrip().splitlines():
+#             self.logger.error(line)
+
+#     def flush(self):
+#         """Flushes the output (for compatibility)."""
+#         sys.__stderr__.flush()
