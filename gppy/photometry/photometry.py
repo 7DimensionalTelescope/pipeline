@@ -20,7 +20,7 @@ from astropy.stats import sigma_clip
 
 # gppy modules
 from . import utils as phot_utils
-from ..utils import update_padded_header
+from ..utils import update_padded_header, time_diff_in_seconds
 from ..config import SciProcConfiguration
 from ..config.base import ConfigurationInstance
 from ..services.memory import MemoryMonitor
@@ -122,8 +122,8 @@ class Photometry(BaseSetup):
         Processes images either sequentially or in parallel depending on queue configuration.
         Updates configuration flags and performs memory cleanup after completion.
         """
-        self.logger.info("-" * 80)
-        self.logger.info(f"Start photometry for {self.config.name}")
+        st = time.time()
+        self.logger.info(f"Start 'Photometry'")
         try:
             if self.queue:
                 self._run_parallel()
@@ -135,10 +135,10 @@ class Photometry(BaseSetup):
             else:
                 self.config.flag.combined_photometry = True
 
-            self.logger.info(f"Photometry Done for {self.config.name}")
+            self.logger.info(f"'Photometry' is Completed in {time_diff_in_seconds(st)} seconds")
             self.logger.debug(MemoryMonitor.log_memory_usage)
         except Exception as e:
-            self.logger.error(f"Photometry failed for {self.config.name}: {str(e)}")
+            self.logger.error(f"Photometry failed: {str(e)}")
             raise
 
     def _run_parallel(self) -> None:
@@ -226,7 +226,7 @@ class PhotometrySingle:
         self.phot_conf = self.config.photometry
         self.input_image = self.phot_conf.input_images[0]
         self.image_info = ImageInfo.parse_image_header_info(self.input_image)
-        self.name = name or self.config.name
+        self.name = os.path.basename(self.input_image)
         self.phot_header = PhotometryHeader()
         self.phot_header.author = getpass.getuser()
 
@@ -294,7 +294,7 @@ class PhotometrySingle:
         Times the complete process and performs memory cleanup after completion.
         """
         start_time = time.time()
-        self.logger.info(f"Start Photometry for the image {self.name} [{self._id}]")
+        self.logger.info(f"Start 'PhotometrySingle' for the image {self.name} [{self._id}]")
         self.logger.debug(f"{'=' * 7} {os.path.basename(self.input_image)} {'=' * 7}")
 
         # self.define_paths()
@@ -306,8 +306,7 @@ class PhotometrySingle:
         self.write_catalog()
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
-        end_time = time.time()
-        self.logger.info(f"Photometry Done for {self.name} [{self._id}] in {end_time - start_time:.2f} seconds")
+        self.logger.info(f"'PhotometrySingle' is completed for the image [{self._id}] in {time_diff_in_seconds(start_time)} seconds")
 
     # def define_paths(self) -> None:
     #     # no subdir
@@ -471,7 +470,7 @@ class PhotometrySingle:
             #     self.logger.error("Check Astrometry solution: no WCS information")
             #     raise PipelineError("Check Astrometry solution: no WCS information")
         else:
-            self.logger.info(f"Matched Sources: {len(post_match_table)} (r = {self.phot_conf.match_radius:.3f} arcsec)")
+            self.logger.info(f"Matched sources: {len(post_match_table)} (r = {self.phot_conf.match_radius:.3f} arcsec)")
 
         return post_match_table
 
@@ -518,12 +517,12 @@ class PhotometrySingle:
         Configures and executes SExtractor with appropriate parameters
         based on seeing conditions and image characteristics.
         """
-        self.logger.info(f"Start Source Extractor for {self.name}")
+        self.logger.info(f"Start source extractor (sextractor)")
 
         satur_level = self.image_info.satur_level * self.phot_conf.satur_margin
-        self.logger.debug(f"Saturation Level with Margin {1 - self.phot_conf.satur_margin}: {satur_level}")
+        self.logger.debug(f"Saturation level with margin {1 - self.phot_conf.satur_margin}: {satur_level}")
 
-        self.logger.debug("Setting Apertures for Photometry.")
+        self.logger.debug("Setting apertures for photometry.")
         sex_args = phot_utils.get_sex_args(
             self.input_image,
             self.phot_conf,
@@ -567,7 +566,7 @@ class PhotometrySingle:
         Returns:
             SExtractor execution outcome
         """
-        self.logger.info(f"Run SExtractor ({se_preset}) for {self.name}")
+        self.logger.info(f"Run source extractor (sextractor) ({se_preset})")
 
         if output is None:
             output = getattr(PathHandler(self.input_image).photometry, f"{se_preset}_catalog")
@@ -606,8 +605,7 @@ class PhotometrySingle:
         """
 
         zp_src_table = self.get_reference_matched_catalog()
-        self.logger.info(f"{len(zp_src_table)} sources to calibration ZP in {self.name}")
-        self.logger.info("Calculating zero points.")
+        self.logger.info(f"Calculating zero points with {len(zp_src_table)} sources")
 
         aperture = phot_utils.get_aperture_dict(self.phot_header.peeing, self.image_info.pixscale)
 
@@ -757,13 +755,12 @@ class PhotometrySingle:
             aper_dict: Dictionary containing aperture values and descriptions
                     Format: {'key': (value, description)}
         """
-        self.logger.debug(f"Updating Header for {self.name}")
         header_to_add = {}
         header_to_add.update(self.phot_header.dict)
         header_to_add.update(aper_dict)
         header_to_add.update(zp_dict)
         update_padded_header(self.input_image, header_to_add)
-        self.logger.info(f"Header updated for {self.name}")
+        self.logger.info(f"Image header is updated with photometry information (aperture, zero point, ...).")
 
     def write_catalog(self) -> None:
         """
@@ -783,7 +780,7 @@ class PhotometrySingle:
 
         output_catalog_file = self.path.photometry.final_catalog
         self.obs_src_table.write(output_catalog_file, format="fits", overwrite=True)  # "ascii.tab" "ascii.ecsv"
-        self.logger.info(f"Catalog written: {output_catalog_file}")
+        self.logger.info(f"Photometry catalog is written in {os.path.basename(output_catalog_file)}")
 
 
 @dataclass

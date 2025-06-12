@@ -3,10 +3,10 @@ from abc import ABC, abstractmethod
 import glob
 from ..config import PreprocConfiguration, SciProcConfiguration, ConfigurationInstance
 from ..path.path import PathHandler
-from .logger import Logger
+from .logger import Logger, LockingFileHandler
 from .queue import QueueManager
 import warnings
-from logging import FileHandler
+import logging
 
 class BaseSetup(ABC):
     def __init__(
@@ -64,25 +64,24 @@ class BaseSetup(ABC):
             raise ValueError("Invalid configuration object")
 
     def _setup_logger(self, logger, config):
-
-        if isinstance(logger, Logger) and any(isinstance(handler, FileHandler) for handler in logger.logger.handlers):
+        
+        if isinstance(logger, Logger) and any(isinstance(handler, LockingFileHandler) for handler in logger.logger.handlers):
+            logger.set_output_file(config.logging.file, overwrite=False)
+            self._logger = logger
             return logger
         else:
-            import logging
-            tmp_logger = logging.getLogger(config.name)
+            list_of_logger = logging.Logger.manager.loggerDict
+            if config.name in list_of_logger.keys():
+                tmp_logger = logging.getLogger(config.name)
+                if any(isinstance(handler, LockingFileHandler) for handler in tmp_logger.handlers):
+                    self._logger = tmp_logger
+                    return tmp_logger
 
-            if any(isinstance(handler, FileHandler) for handler in tmp_logger.handlers):
-                self._logger = tmp_logger
-                return tmp_logger
-            else:
-                from ..config.base import BaseConfig
-                tmp_logger = BaseConfig._setup_logger(
-                    name = config.name, 
-                    log_file = config.logging.file, 
-                    log_format = config.logging.format,
-                    overwrite=False)
-                self._logger = tmp_logger
-                return tmp_logger
+            tmp_logger = Logger(name=config.name)
+            tmp_logger.set_output_file(config.logging.file, overwrite=False)
+            tmp_logger.set_format(config.logging.format)
+            self._logger = tmp_logger
+            return tmp_logger
 
     def _setup_queue(self, queue):
 

@@ -2,7 +2,7 @@ import os
 from datetime import datetime
 import glob
 from .. import __version__
-from ..utils import clean_up_folder, flatten
+from ..utils import clean_up_folder, flatten, time_diff_in_seconds
 from ..path.path import PathHandler
 from .base import BaseConfig
 import time
@@ -27,18 +27,16 @@ class PreprocConfiguration(BaseConfig):
         if not self._initialized:
             self.logger.info("Initializing configuration")
             self.initialize()
+            self.logger.info(f"'PreprocConfiguration' initialized in {time_diff_in_seconds(st)} seconds")
+            self.logger.info(f"Writing configuration to file")
+            self.logger.debug(f"Configuration file: {self.config_file}")
 
         if overwrite:
-            self.logger.info("Overwriting masterframe, processed, and factory directories")
+            self.logger.info("Overwriting masterframe, processed, and factory directories first")
             clean_up_folder(self.path.masterframe_dir)
             clean_up_folder(self.path.preproc_output_dir)
 
-        self.logger.info(f"Writing configuration to file")
-        self.logger.debug(f"Configuration file: {self.config_file}")
         self.write_config()
-
-        self.logger.info(f"PreprocConfiguration initialized")
-        self.logger.debug(f"PreprocConfiguration initialization took {time.time() - st:.2f} seconds")
 
     @property
     def name(self):
@@ -81,7 +79,7 @@ class PreprocConfiguration(BaseConfig):
                 log_file=self.path.preproc_output_log,
                 verbose=verbose,
             )
-            self.logger.info("Generating a configuration from the 'base' configuration")
+            self.logger.info("Generating 'PreprocConfiguration' from the 'base' configuration")
             self.logger.debug(f"Configuration source: {config_source}")
             self.input_files = input
             self.input_dir = None
@@ -96,7 +94,7 @@ class PreprocConfiguration(BaseConfig):
                 log_file=self.path.preproc_output_log,
                 verbose=verbose,
             )
-            self.logger.info("Generating a configuration from the 'base' configuration")
+            self.logger.info("Loading 'PreprocConfiguration' from an exisiting file or dictionary")
             self.logger.debug(f"Configuration source: {config_source}")
             self.input_dir = input
             self.input_files = None
@@ -111,6 +109,7 @@ class PreprocConfiguration(BaseConfig):
                 name=self.config.name,
                 log_file=self.config.logging.file,
                 verbose=verbose,
+                overwrite=False,
             )
             self._initialized = True
             self.logger.info("Loading configuration from an exisiting file or dictionary")
