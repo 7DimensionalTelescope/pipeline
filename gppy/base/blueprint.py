@@ -1,4 +1,4 @@
-from pathlib import Path
+import os
 from re import S
 import threading
 from collections import UserDict
@@ -12,8 +12,6 @@ from ..services.queue import QueueManager
 from itertools import chain
 
 
-        
-
 def glob_files_from_db(params):
     return []
 
@@ -22,7 +20,6 @@ def glob_files_by_param(keywords):
     if isinstance(keywords, dict):
         keywords = list(keywords.values())
     return query_observations(keywords)
-
 
 
 class Blueprint:
@@ -47,10 +44,10 @@ class Blueprint:
         print("Blueprint initialized.")
 
         self.queue = QueueManager()
-    
+
     def initialize(self):
         image_inventory = PathHandler.take_raw_inventory(self.list_of_images)
-        
+
         for i, group in enumerate(image_inventory):
             try:
                 mfg_key = PathHandler(group[0][2][0]).config_stem
@@ -72,7 +69,7 @@ class Blueprint:
                 self.groups[key].add_images(images[0])
                 self.groups[mfg_key].add_images(images[0])
                 self.groups[mfg_key].add_sci_keys(key)
-        
+
     def create_config(self):
         threads = []
         for group in self.groups.values():
@@ -92,7 +89,7 @@ class Blueprint:
 
         for key in group.sci_keys:
             sci_group = self.groups[key]
-            if not(sci_group.multi_units):
+            if not (sci_group.multi_units):
                 sci_tree = sci_group.get_tree()
                 self.queue.add_tree(sci_tree)
             else:
@@ -102,21 +99,23 @@ class Blueprint:
         threads = []
         for i, (key, group) in enumerate(self.groups.items()):
             if isinstance(group, MasterframeGroup):
-                t = threading.Thread(target=self.process_group, args=(group, i%2))
+                t = threading.Thread(target=self.process_group, args=(group, i % 2))
                 t.start()
                 threads.append(t)
 
         # Optionally, wait for all threads to finish
         for t in threads:
             t.join()
-        
+
         while len(self._multi_unit_config) > 0:
             from ..run import get_scidata_reduction_tasktree
+
             config = self._multi_unit_config.pop()
             self.queue.add_tree(get_scidata_reduction_tasktree(config))
 
+
 class MasterframeGroup:
-    def __init__(self, key):  
+    def __init__(self, key):
         self.key = key
         self.image_files = []
         self._config = None
@@ -130,7 +129,7 @@ class MasterframeGroup:
         else:
             # MasterframeGroup always comes before other types
             return False
-    
+
     def __eq__(self, other):
         if hasattr(other, "sci_keys"):
             return len(self.sci_keys) == len(other.sci_keys)
@@ -142,19 +141,19 @@ class MasterframeGroup:
         if self._config is None:
             self.create_config()
         return self._config
-    
+
     def add_images(self, filepath):
         if isinstance(filepath, list):
             self.image_files.extend(filepath)
         elif isinstance(filepath, str):
             self.image_files.append(filepath)
         elif isinstance(filepath, tuple):
-            
+
             _tmp_list = list(chain.from_iterable(filepath))
             self.image_files.extend(_tmp_list)
         else:
             raise ValueError("Invalid filepath type")
-    
+
     def add_sci_keys(self, keys):
         self.sci_keys.append(keys)
 
@@ -164,16 +163,19 @@ class MasterframeGroup:
 
     def get_tasks(self, device_id=None):
         from ..run import get_preprocess_task, get_make_plot_task
+
         pre_task = get_preprocess_task(self.config, device_id=device_id)
         plot_task = get_make_plot_task(self.config)
         return pre_task, plot_task
-    
+
     def run(self):
         from ..run import run_preprocess
+
         return run_preprocess(self.config, make_plots=True)
-    
+
     def __repr__(self):
         return f"MasterframeGroup({self.key} used in {self.sci_keys} with {len(self.image_files)} images)"
+
 
 class ScienceGroup:
     def __init__(self, key):
@@ -187,7 +189,7 @@ class ScienceGroup:
         if self._config is None:
             self.create_config()
         return self._config
-    
+
     def __lt__(self, other):
         if isinstance(other, MasterframeGroup):
             # ScienceGroup always comes after MasterframeGroup
@@ -198,7 +200,7 @@ class ScienceGroup:
             return len(self.image_files) < len(other.image_files)
         else:
             return True
-            
+
     def __eq__(self, other):
         if not isinstance(other, ScienceGroup):
             return False
@@ -211,22 +213,30 @@ class ScienceGroup:
             self.image_files.append(filepath)
         else:
             raise ValueError("Invalid filepath type")
-            
+
     def create_config(self):
-        c = SciProcConfiguration(self.image_files)
+        sci_yml = PathHandler(self.image_files).sciproc_output_yml
+        if os.path.exists(sci_yml):
+            # If the config file already exists, load it
+            c = SciProcConfiguration.from_file(sci_yml, write=True)
+        else:
+            c = SciProcConfiguration(self.image_files)
         self._config = c.config_file
-    
+
     def get_tree(self):
         from ..run import get_scidata_reduction_tasktree
+
         return get_scidata_reduction_tasktree(self.config)
 
     def run(self):
         from ..run import run_scidata_reduction
+
         return run_scidata_reduction(self.config)
-        
+
     def __repr__(self):
         return f"ScienceGroup({self.key} with {len(self.image_files)} images)"
-        
+
+
 class SortedGroupDict(UserDict):
     """A dictionary that sorts its values when iterating."""
 
@@ -240,31 +250,31 @@ class SortedGroupDict(UserDict):
         # First sort by type (MasterframeGroup first, then ScienceGroup)
         # Then within each type, sort by their respective criteria
         return iter(self._get_sorted_values())
-    
+
     def values(self):
         return self._get_sorted_values()
-    
+
     def items(self):
         sorted_values = self._get_sorted_values()
-        return [(getattr(v, 'key', None), v) for v in sorted_values]
-    
+        return [(getattr(v, "key", None), v) for v in sorted_values]
+
     def _get_sorted_values(self):
         # Separate MasterframeGroup and ScienceGroup
         masterframe_groups = []
         science_groups = []
-        
+
         for value in self.data.values():
             if isinstance(value, MasterframeGroup):
                 masterframe_groups.append(value)
             else:
                 science_groups.append(value)
-        
+
         # Sort MasterframeGroup by sci_keys length (descending)
         sorted_masterframe = sorted(masterframe_groups, key=lambda x: len(x.sci_keys), reverse=True)
-        
+
         # Sort ScienceGroup by image_files length (descending)
         sorted_science = sorted(science_groups, key=lambda x: len(x.image_files), reverse=True)
-        
+
         # Return MasterframeGroup first, then ScienceGroup
         return sorted_masterframe + sorted_science
 
