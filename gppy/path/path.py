@@ -190,7 +190,10 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
         if not isinstance(input, list):
             input = [input]
         self._input_files = [os.path.abspath(img) for img in input]
-        self.name = NameHandler(input)
+        try:
+            self.name = NameHandler(input)
+        except Exception as e:
+            raise ValueError(f"NameHandler failure: not pipeline file.\n{input!r}:\n{e}")
         self._single = self.name._single
 
     def __getattr__(self, name):
@@ -290,42 +293,44 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
             self._preproc_output_dir = self._output_parent_dir
             self._factory_parent_dir = [os.path.join(self._output_parent_dir[0], "tmp")]
             self._is_pipeline = [False]
-            return
 
-        # Process each file independently
-        self._output_parent_dir = []
-        self._preproc_output_dir = []
-        self._factory_parent_dir = []
-        self._is_pipeline = []
+        else:
+            # Process each file independently
+            self._output_parent_dir = []
+            self._preproc_output_dir = []
+            self._factory_parent_dir = []
+            self._is_pipeline = []
 
-        for i, input_file in enumerate(self._input_files):
-            file_dir = str(Path(input_file).absolute().parent)
-            not_pipeline_dir = not any(s in file_dir for s in const.PIPELINE_DIRS)
+            for i, input_file in enumerate(self._input_files):
+                file_dir = str(Path(input_file).absolute().parent)
+                not_pipeline_dir = not any(s in file_dir for s in const.PIPELINE_DIRS)
 
-            if working_dir or not_pipeline_dir:
-                output_parent_dir = working_dir or os.path.dirname(input_file)
-                self._output_parent_dir.append(output_parent_dir)
-                self._factory_parent_dir.append(os.path.join(output_parent_dir, "tmp"))
-                self._is_pipeline.append(False)
-            else:
-                from datetime import date
-
-                nightdate = self._get_property_at_index("nightdate", i)
-                if isinstance(nightdate, list):
-                    current_nightdate = nightdate[i] if i < len(nightdate) else nightdate[0]
-                else:
-                    current_nightdate = nightdate or date.today().strftime("%Y%m%d")
-
-                if current_nightdate < "20260101":
-                    output_parent_dir = const.PROCESSED_DIR
+                if working_dir or not_pipeline_dir:
+                    output_parent_dir = working_dir or os.path.dirname(input_file)
                     self._output_parent_dir.append(output_parent_dir)
-                    self._factory_parent_dir.append(const.FACTORY_DIR)
-                    self._is_pipeline.append(True)
+                    self._factory_parent_dir.append(os.path.join(output_parent_dir, "tmp"))
+                    self._is_pipeline.append(False)
                 else:
-                    raise ValueError(f"nightdate cap reached for file {input_file}: consider moving to another disk.")
+                    from datetime import date
 
-            preproc_output_dir = os.path.join(output_parent_dir, self._get_property_at_index("nightdate", i))
-            self._preproc_output_dir.append(preproc_output_dir)
+                    nightdate = self._get_property_at_index("nightdate", i)
+                    if isinstance(nightdate, list):
+                        current_nightdate = nightdate[i] if i < len(nightdate) else nightdate[0]
+                    else:
+                        current_nightdate = nightdate or date.today().strftime("%Y%m%d")
+
+                    if current_nightdate < "20260101":
+                        output_parent_dir = const.PROCESSED_DIR
+                        self._output_parent_dir.append(output_parent_dir)
+                        self._factory_parent_dir.append(const.FACTORY_DIR)
+                        self._is_pipeline.append(True)
+                    else:
+                        raise ValueError(
+                            f"nightdate cap reached for file {input_file}: consider moving to another disk."
+                        )
+
+                preproc_output_dir = os.path.join(output_parent_dir, self._get_property_at_index("nightdate", i))
+                self._preproc_output_dir.append(preproc_output_dir)
 
         # Store as lists
         self.output_parent_dir = self._output_parent_dir
@@ -410,16 +415,18 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
         #     "_".join([obj, filte, unit, date]) + ".yml"
         #     for obj, filte, unit, date in zip(self.name.obj, self.name.filter, self.name.unit, self.name.date)
         # ]
-        yml_basenames = []
-        for i in range(len(self._input_files)):
-            obj = self._get_property_at_index("obj", i)
-            filte = self._get_property_at_index("filter", i)
-            # unit = self._get_property_at_index("unit", i)
-            date = self._get_property_at_index("date", i)
+        if self._input_files:
+            yml_basenames = []
+            for i in range(len(self._input_files)):
+                obj = self._get_property_at_index("obj", i)
+                filte = self._get_property_at_index("filter", i)
+                # unit = self._get_property_at_index("unit", i)
+                date = self._get_property_at_index("date", i)
 
-            yml_basenames.append("_".join([obj, filte, date]) + ".yml")
+                yml_basenames.append("_".join([obj, filte, date]) + ".yml")
 
-        return bjoin(self._output_dir, yml_basenames)
+            return bjoin(self._output_dir, yml_basenames)
+        return bjoin(self.output_parent_dir, "sciproc_config.yml")
 
     @property
     def sciproc_output_log(self):

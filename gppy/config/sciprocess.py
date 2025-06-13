@@ -8,7 +8,6 @@ from .base import BaseConfig
 import time
 
 
-
 class SciProcConfiguration(BaseConfig):
     def __init__(
         self,
@@ -35,7 +34,7 @@ class SciProcConfiguration(BaseConfig):
             self.logger.info("Overwriting factory_dir first")
             clean_up_folder(self.path.factory_dir)
             clean_up_sciproduct(self.path.output_dir)
-        
+
         self.write_config()
 
     # @classmethod
@@ -58,18 +57,19 @@ class SciProcConfiguration(BaseConfig):
     #     return config
 
     @classmethod
-    def base_config(cls, input_images, write=True, **kwargs):
-        # def user_input(cls, input_images, write=True, **kwargs):
-        self = cls.__new__(cls)
+    def base_config(cls, input_images=None, write=True, **kwargs):
+        # self = cls.__new__(cls)
 
-        self.input_files = atleast1d(input_images)
-        self.path = PathHandler(input_images, working_dir=os.getcwd())
+        # input_files = atleast1d(input_images)
+        path = PathHandler(input_images, working_dir=os.getcwd())
+        self = cls.from_file(path.sciproc_base_yml)
+        self.path = path
         self.config_file = self.path.sciproc_output_yml
 
-        config_source = self.path.sciproc_base_yml
-        super().__init__(self, config_source=config_source, write=write, **kwargs)
+        # config_source = self.path.sciproc_base_yml
+        # super().__init__(self, config_source=config_source, write=write, **kwargs)
+        # self.initialize(is_pipeline=False)
 
-        self.initialize(is_pipeline=False)
         self.config.input.calibrated_images = input_images
         # self.config.name = "user-input"
         self.config.settings.is_pipeline = False

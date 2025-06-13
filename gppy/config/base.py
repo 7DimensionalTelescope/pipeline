@@ -1,12 +1,11 @@
 import yaml
 import os
 from datetime import datetime
+from abc import ABC, abstractmethod
 from .. import __version__
 from .. import const
-from .utils import (
-    merge_dicts,
-)
-from abc import ABC, abstractmethod
+from .utils import merge_dicts
+from ..path.path import PathHandler
 
 
 class BaseConfig(ABC):
@@ -33,12 +32,29 @@ class BaseConfig(ABC):
         return self._config_in_dict
 
     @classmethod
-    def from_dict(cls, input, write=False, **kwargs):
-        return cls(input, write=write, **kwargs)
+    def from_dict(cls, input, **kwargs):
+        """No self.config_file, write is always False."""
+        # return cls(input, write=write, **kwargs)
+        self = cls.__new__(cls)
+        self._load_config(config_source=input)
+        self.config_file = None
+        self.write = False
+        self._initialized = True
+        return self
 
     @classmethod
-    def from_file(cls, input, write=False, **kwargs):
-        return cls(input, write=write, **kwargs)
+    def from_file(cls, input: str, write=False, **kwargs):
+        # return cls(input, write=write, **kwargs)
+        self = cls.__new__(cls)
+        self._load_config(config_source=input)
+        self.config_file = input
+        # initialize PathHandler with the first group of input images
+        input_dict = self.config.input.to_dict()
+        input_images = next(iter(input_dict.values())) or None  # if empty, use None
+        self.path = PathHandler(input_images)
+        self.write = write
+        self._initialized = True
+        return self
 
     # @classmethod
     # def from_base(cls, config_type, **kwargs):
@@ -121,7 +137,7 @@ class BaseConfig(ABC):
             return
 
         self._config_in_dict["info"]["last_update_datetime"] = datetime.now().isoformat()
-        
+
         with open(self.config_file, "w") as f:
             yaml.dump(self._config_in_dict, f, sort_keys=False)  # , default_flow_style=False)
 
@@ -169,7 +185,7 @@ class BaseConfig(ABC):
         config_dict = self.config.select_from_lists(config_dict, i)
 
         # return BaseConfig(config_source=config_dict, write=False)
-        return SciProcConfiguration.from_dict(config_dict, write=False)
+        return SciProcConfiguration.from_dict(config_dict)
 
 
 class ConfigurationInstance:

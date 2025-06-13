@@ -37,7 +37,7 @@ def get_preprocess_task(config, priority=Priority.HIGH, device_id = None, **kwar
     """
     config = PreprocConfiguration.from_file(config)
     prep = Preprocess(config)
-    run_task = Task(prep.run, kwargs={"make_plots": False}, gpu=True, priority=priority, device=device_id)
+    run_task = Task(prep.run, kwargs={"make_plots": False}, gpu=True, priority=priority, device=device_id, task_id = f"t{next(Task._id_counter)}")
     return run_task
 
 def get_make_plot_task(config, priority=Priority.LOW):
