@@ -17,7 +17,7 @@ from ..const import REF_DIR
 from ..config import SciProcConfiguration
 from .. import external
 from ..services.setup import BaseSetup
-from ..utils import collapse, get_header, add_suffix, swap_ext, define_output_dir, time_diff_in_seconds
+from ..utils import collapse, get_header, add_suffix, swap_ext, define_output_dir, time_diff_in_seconds, get_basename
 from .utils import move_file  # inputlist_parser, move_file
 from .const import ZP_KEY, IC_KEYS, CORE_KEYS
 from ..const import PipelineError
@@ -220,7 +220,7 @@ class ImStack(BaseSetup):
         os.makedirs(self.path_bkgsub, exist_ok=True)
 
         self.config.imstack.bkgsub_images = [
-            f"{self.path_bkgsub}/{add_suffix(os.path.basename(f), 'bkgsub')}" for f in self.input_images
+            f"{self.path_bkgsub}/{add_suffix(get_basename(f), 'bkgsub')}" for f in self.input_images
         ]
 
         if self.config.imstack.bkgsub_type.lower() == "dynamic":
@@ -238,7 +238,7 @@ class ImStack(BaseSetup):
         for ii, (inim, _bkg, outim) in enumerate(
             zip(self.input_images, self.skyvalues, self.config.imstack.bkgsub_images)
         ):
-            self.logger.debug(f"[{ii:>6}] {os.path.basename(inim)}")
+            self.logger.debug(f"[{ii:>6}] {get_basename(inim)}")
             if not os.path.exists(outim) or self.overwrite:
                 with fits.open(inim, memmap=True) as hdul:
                     _data = hdul[0].data
@@ -253,8 +253,8 @@ class ImStack(BaseSetup):
         """
         from ..external import sextractor
 
-        bkg_images = [f"{self.path_bkgsub}/{add_suffix(os.path.basename(f), 'bkg')}" for f in self.input_images]
-        bkg_rms_images = [f"{self.path_bkgsub}/{add_suffix(os.path.basename(f), 'bkgrms')}" for f in self.input_images]
+        bkg_images = [f"{self.path_bkgsub}/{add_suffix(get_basename(f), 'bkg')}" for f in self.input_images]
+        bkg_rms_images = [f"{self.path_bkgsub}/{add_suffix(get_basename(f), 'bkgrms')}" for f in self.input_images]
 
         self.config.imstack.bkg_images = bkg_images
         self.config.imstack.bkg_rms_images = bkg_rms_images
@@ -265,7 +265,7 @@ class ImStack(BaseSetup):
 
             # if result is already in factory, use that
             if os.path.exists(outim) and os.path.exists(bkg) and os.path.exists(bkg_rms):
-                self.logger.info(f"Background subtraction result exists; skipping: {os.path.basename(outim)}")
+                self.logger.info(f"Background subtraction result exists; skipping: {get_basename(outim)}")
                 continue
 
             sex_args = [
@@ -275,7 +275,7 @@ class ImStack(BaseSetup):
             ]  # fmt: skip
             sex_log = os.path.join(
                 self.path_bkgsub,
-                os.path.splitext(os.path.basename(outim))[0] + "_sextractor.log",
+                os.path.splitext(get_basename(outim))[0] + "_sextractor.log",
             )
             sextractor(inim, sex_args=sex_args, log_file=sex_log, logger=self.logger)
 
@@ -396,7 +396,7 @@ class ImStack(BaseSetup):
         os.makedirs(path_interp, exist_ok=True)
 
         self.config.imstack.interp_images = [
-            os.path.join(path_interp, add_suffix(os.path.basename(f), "interp")) for f in self.input_images
+            os.path.join(path_interp, add_suffix(get_basename(f), "interp")) for f in self.input_images
         ]
 
         # bpmask_array, header = fits.getdata(self.config.preprocess.bpmask_file, header=True)
@@ -417,7 +417,7 @@ class ImStack(BaseSetup):
                 output_file = self.config.imstack.interp_images[i]
 
                 if os.path.exists(output_file) and not self.overwrite:
-                    self.logger.debug(f"Skipping {output_file}")
+                    self.logger.debug(f"Already exists; skip generating {output_file}")
                     continue
 
                 image = cp.asarray(fits.getdata(input_file))
@@ -466,7 +466,7 @@ class ImStack(BaseSetup):
                     "flux scaling factor by 7DT Pipeline (ImStack)",
                 )
                 hdul.flush()
-            self.logger.debug(f"{os.path.basename(file)} FLXSCALE: {flxscale:.3f}")
+            self.logger.debug(f"{get_basename(file)} FLXSCALE: {flxscale:.3f}")
 
         self.logger.info(f"ZP scaling is completed in {time_diff_in_seconds(st)} seconds")
 
@@ -482,8 +482,8 @@ class ImStack(BaseSetup):
         # for ii, (inim, _zp) in enumerate(
         #     zip(self.config.imstack.bkgsub_files, self.zpvalues)
         # ):
-        #     self.logger.debug(f"[{ii:>6}] {os.path.basename(inim)}")
-        #     _fscaled_image = f"{self.path_scaled}/{os.path.basename(inim).replace('fits', 'zpscaled.fits')}"
+        #     self.logger.debug(f"[{ii:>6}] {get_basename(inim)}")
+        #     _fscaled_image = f"{self.path_scaled}/{get_basename(inim).replace('fits', 'zpscaled.fits')}"
         #     if not os.path.exists(_fscaled_image):
         #         with fits.open(inim, memmap=True) as hdul:
         #             _data = hdul[0].data
@@ -526,7 +526,7 @@ class ImStack(BaseSetup):
             path_conv = os.path.join(self.path_tmp, "conv")
             os.makedirs(path_conv, exist_ok=True)
             self.config.imstack.conv_files = [
-                os.path.join(path_conv, add_suffix(os.path.basename(f), "conv")) for f in self.input_images
+                os.path.join(path_conv, add_suffix(get_basename(f), "conv")) for f in self.input_images
             ]
 
             # Get peeings for convolution
@@ -549,7 +549,7 @@ class ImStack(BaseSetup):
 
                 # Skip the seeing reference image
                 if delta_peeing == 0:
-                    self.logger.debug(f"Skipping conv for max peeing image {os.path.basename(inim)}")
+                    self.logger.debug(f"Skipping conv for max peeing image {get_basename(inim)}")
                     force_symlink(inim, outim)
                     if self.config.imstack.weight_map:
                         force_symlink(add_suffix(inim, "weight"), add_suffix(outim, "weight"))
@@ -624,7 +624,7 @@ class ImStack(BaseSetup):
                 # bpmask_file = self.config.preprocess.bpmask_file
                 bpmask_file = PathHandler.get_bpmask(self.images_to_stack)
                 bpmask_inverted = 1 - fits.getdata(bpmask_file)
-                bpmask_inverted_file = os.path.join(self.path_tmp, os.path.basename(bpmask_file))
+                bpmask_inverted_file = os.path.join(self.path_tmp, get_basename(bpmask_file))
                 fits.writeto(bpmask_inverted_file, bpmask_inverted, overwrite=True)
                 self.logger.debug(f"Inverted bpmask saved as {bpmask_inverted_file}")
                 args = ["-WEIGHT_IMAGE", bpmask_file, "-RESAMPLING_TYPE", "LANCZOS3"]
@@ -645,7 +645,7 @@ class ImStack(BaseSetup):
             output_file = self.config.imstack.stacked_image  # output to output_dir directly
         else:
             # output to tmp dir, and then selectively move to output_dir
-            output_file = os.path.join(working_dir, os.path.basename(self.config.imstack.stacked_image))
+            output_file = os.path.join(working_dir, get_basename(self.config.imstack.stacked_image))
 
         external.swarp(
             input=self.path_imagelist,
@@ -729,7 +729,7 @@ class ImStack(BaseSetup):
 
             # 	Names of stacked single images
             for nn, inim in enumerate(self.input_images):
-                header[f"IMG{nn:0>5}"] = (os.path.basename(inim), "")
+                header[f"IMG{nn:0>5}"] = (get_basename(inim), "")
 
             hdul.flush()
 

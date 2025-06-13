@@ -28,8 +28,8 @@ class SciProcConfiguration(BaseConfig):
             self.logger.info("Initializing configuration")
             self.initialize()
             self.logger.info(f"'SciProcConfiguration' initialized in {time_diff_in_seconds(st)} seconds")
-            self.logger.info(f"Writing configuration to file")
-            self.logger.debug(f"Configuration file: {self.config_file}")
+            self.logger.info(f"Writing configuration to file: {os.path.basename(self.config_file)}")
+            self.logger.debug(f"Full path to the configuration file: {self.config_file}")
 
         if overwrite:
             self.logger.info("Overwriting factory_dir first")
