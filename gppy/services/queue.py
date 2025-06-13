@@ -39,7 +39,6 @@ class QueueManager:
     def __init__(
         self,
         max_workers: Optional[int] = None,
-        max_gpu_workers: int = 4,
         logger: Optional[Logger] = None,
         print_debug: bool = False,
         save_result: bool = False,
@@ -57,7 +56,7 @@ class QueueManager:
         self.memory_monitor = MemoryMonitor(logger=self.logger)
 
         # Default CPU allocation
-        self.total_cpu_worker = max_workers or mp.cpu_count() - 5
+        self.total_cpu_worker = max_workers or mp.cpu_count() - 30
 
         # Create CPU queues (thread-safe)
         self.cpu_queue = PriorityQueue()  # Priority queue for CPU tasks
@@ -330,7 +329,7 @@ nherit_input             func (Callable): Function to be executed
         while not self._abrupt_stop_requested.is_set():
             try:
                 self._check_abrupt_stop()
-                self.manage_memory_state()
+                self.manage_memory_state(process_type="CPU")
                 
                 # First check high priority queue
                 try:
@@ -398,7 +397,7 @@ nherit_input             func (Callable): Function to be executed
         while not self._abrupt_stop_requested.is_set():
             try:
                 self._check_abrupt_stop()
-                self.manage_memory_state()
+                self.manage_memory_state(process_type="GPU")
                 
                 if self.current_memory_state["GPU"] == MemoryState.EMERGENCY:
                     time.sleep(0.5)  # Wait during memory emergency
@@ -433,7 +432,6 @@ nherit_input             func (Callable): Function to be executed
                 self.logger.error(f"Error in GPU worker process for device {device}: {e}")
                 time.sleep(0.5)
                 raise
-
 
     def _handle_completed_task(self, task, tree, result, error):
         """Handle a completed task from either pool or GPU."""
@@ -658,37 +656,22 @@ nherit_input             func (Callable): Function to be executed
         raise KeyboardInterrupt()
 
     ######### Memory related #########
-    def manage_memory_state(self) -> None:
+    def manage_memory_state(self, process_type: str = "CPU") -> None:
         """Manage memory state considering both CPU and GPU memory."""
 
         new_state = self.memory_monitor.get_unified_state()
 
-        if new_state["CPU"] != self.current_memory_state["CPU"]:
+        if new_state[process_type] != self.current_memory_state[process_type]:
             self.logger.info(
-                f"Memory state changed from {self.current_memory_state['CPU'].state} to "
-                f"{new_state['CPU'].state} (triggered by CPU)"
+                f"Memory state changed from {self.current_memory_state[process_type].state} to "
+                f"{new_state[process_type].state} (triggered by {process_type})"
             )
             self.logger.warning(f"{self.memory_monitor.log_memory_usage}")
-            self.current_memory_state["CPU"] = new_state["CPU"]
+            self.current_memory_state[process_type] = new_state[process_type]
 
-            if self.current_memory_state["CPU"] != MemoryState.HEALTHY:
+            if self.current_memory_state[process_type] != MemoryState.HEALTHY:
                 self.memory_monitor.handle_state(
-                    trigger_source="CPU",
-                    gpu_context=self.gpu_context,
-                    stop_callback=self.stop_processing,
-                )
-
-        if new_state["GPU"] != self.current_memory_state["GPU"]:
-            self.logger.info(
-                f"Memory state changed from {self.current_memory_state['GPU'].state} to "
-                f"{new_state['GPU'].state} (triggered by GPU)"
-            )
-            self.logger.warning(f"{self.memory_monitor.log_memory_usage}")
-            self.current_memory_state["GPU"] = new_state["GPU"]
-
-            if self.current_memory_state["GPU"] != MemoryState.HEALTHY:
-                self.memory_monitor.handle_state(
-                    trigger_source="GPU",
+                    trigger_source=process_type,
                     gpu_context=self.gpu_context,
                     stop_callback=self.stop_processing,
                 )

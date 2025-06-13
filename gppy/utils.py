@@ -707,3 +707,6 @@ def time_diff_in_seconds(datetime1, datetime2=None):
         datetime2 = datetime2.timestamp()
     time_diff = datetime2 - datetime1
     return f"{abs(time_diff):.2f}"
+
+def get_basename(file_path):
+    return os.path.basename(file_path)
