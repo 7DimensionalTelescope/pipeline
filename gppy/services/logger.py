@@ -296,13 +296,13 @@ class Logger:
                 self._thread_ts = response_data["ts"]
 
             if not response_data.get("ok"):
-                self.logger.error(
+                print(
                     f"Slack API Error: {response_data.get('error')}",
                     file=sys.__stderr__,
                 )
 
         except Exception as e:
-            self.logger.error(f"Slack notification failed: {e}", file=sys.__stderr__)
+            print(f"Slack notification failed: {e}", file=sys.__stderr__)
 
     def _send_slack_with_retry(
         self, payload: Dict[str, Any], max_retries: int = 3, initial_delay: float = 1.0
@@ -346,14 +346,14 @@ class Logger:
                     continue
 
                 # Other errors
-                self.logger.error(
+                print(
                     f"Slack API Error: {response_data.get('error')}",
                     file=sys.__stderr__,
                 )
                 return None
 
             except Exception as e:
-                self.logger.error(f"Slack request failed: {e}", file=sys.__stderr__)
+                print(f"Slack request failed: {e}", file=sys.__stderr__)
                 attempt += 1
                 time.sleep(delay)
                 delay *= 2

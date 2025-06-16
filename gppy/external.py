@@ -69,7 +69,7 @@ def solve_field(inim, outim=None, dump_dir=None, get_command=False, pixscale=0.5
     outim = outim or os.path.join(os.path.splitext(soft_link)[0] + "_solved.fits")
 
     # Solve-field using the soft link
-    # e.g., solve-field calib_7DT11_T00139_20250102_014643_m425_100s.fits --crpix-center --scale-unit arcsecperpix --scale-low '0.4949' --scale-high '0.5151' --no-plots --new-fits solved.fits --overwrite --use-source-extractor --cpulimit 4
+    # e.g., solve-field calib_7DT11_T00139_20250102_014643_m425_100s.fits --crpix-center --scale-unit arcsecperpix --scale-low '0.4949' --scale-high '0.5151' --no-plots --new-fits solved.fits --overwrite --use-source-extractor --cpulimit 30
     solvecom = [
         "solve-field", f"{soft_link}",  # this file is not changed by solve-field
         "--new-fits", outim,  # you can give 'none'
@@ -82,7 +82,7 @@ def solve_field(inim, outim=None, dump_dir=None, get_command=False, pixscale=0.5
         "--scale-low", f"{pixscale*0.98}",
         "--scale-high", f"{pixscale*1.02}",
         "--use-source-extractor",  # Crucial speed boost. 30 s -> 5 s
-        "--cpulimit", f"{4}",  # 8 cores were 0.1 sec slower
+        "--cpulimit", f"{30}",  # This is not about CORES. 
         "--no-plots",  # MASSIVE speed boost. 2 min -> 5 sec
         # "--no-tweak",  # Skip SIP distortion correction. 0.3 seconds boost.
         # "--downsample", "4",  # not much difference

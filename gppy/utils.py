@@ -87,25 +87,27 @@ def collapse(seq: list | dict[list], keys=ALL_GROUP_KEYS, raise_error=False, for
     If seq is non-empty and every element equals the first one,
     return the first element; else return seq unchanged.
     """
-    if not seq:
-        return seq
-    elif isinstance(seq, list):
-        first = seq[0]
+    if isinstance(seq, list):
+        if seq:
+            first = seq[0]
+        else:
+            raise ValueError("Uncollapsible: input is empty list")
+    # dict[str, list]
+    elif isinstance(seq, dict):
+        return {k: collapse(v) if isinstance(v, list) else v for k, v in seq.items()}
     else:
-        first = seq
+        return seq
 
+    # list[dict]
     if isinstance(first, dict):
         common_keys = [k for k in keys if all(k in d for d in seq)]
         if common_keys and all(d[k] == first[k] for d in seq for k in common_keys):
             return first
-    # if isinstance(first, (Path, str)):
+    # list[str, int, float, ...]
     else:
         if all(x == first for x in seq) or force:
             return first
-    # else:
-    #     raise TypeError("Invalid type to check homogeneity")
 
-    # if inhomogeneous
     if raise_error:
         raise ValueError(f"Uncollapsible: input is not homogeneous: {seq}")
     else:
@@ -707,6 +709,7 @@ def time_diff_in_seconds(datetime1, datetime2=None):
         datetime2 = datetime2.timestamp()
     time_diff = datetime2 - datetime1
     return f"{abs(time_diff):.2f}"
+
 
 def get_basename(file_path):
     return os.path.basename(file_path)
