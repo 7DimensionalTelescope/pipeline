@@ -103,7 +103,6 @@ class Blueprint:
                 t.start()
                 threads.append(t)
 
-        # Optionally, wait for all threads to finish
         for t in threads:
             t.join()
 
@@ -113,6 +112,7 @@ class Blueprint:
             config = self._multi_unit_config.pop()
             self.queue.add_tree(get_scidata_reduction_tasktree(config))
 
+        self.queue.wait_until_task_complete("all")
 
 class MasterframeGroup:
     def __init__(self, key):

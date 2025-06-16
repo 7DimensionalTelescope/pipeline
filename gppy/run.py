@@ -37,7 +37,7 @@ def get_preprocess_task(config, priority=Priority.HIGH, device_id = None, **kwar
     """
     config = PreprocConfiguration.from_file(config)
     prep = Preprocess(config)
-    run_task = Task(prep.run, kwargs={"make_plots": False}, gpu=True, priority=priority, device=device_id, task_id = f"t{next(Task._id_counter)}")
+    run_task = Task(prep.run, kwargs={"make_plots": False}, gpu=True, priority=priority, device=device_id)
     return run_task
 
 def get_make_plot_task(config, priority=Priority.LOW):
@@ -73,7 +73,6 @@ def get_scidata_reduction_tasktree(
     config,
     processes=["astrometry", "photometry", "combine", "subtract"],
     overwrite=False,
-    priority=Priority.MEDIUM,
     **kwargs,
 ):
     """
@@ -86,23 +85,23 @@ def get_scidata_reduction_tasktree(
     if (not (config.config.flag.astrometry) and "astrometry" in processes) or overwrite:
         astr = Astrometry(config)
         for task in astr.sequential_task:
-            tasks.append(Task(getattr(astr, task[1]), priority=priority, gpu=task[2], cls=astr))
+            tasks.append(Task(getattr(astr, task[1]), priority=Priority.MEDIUM, gpu=task[2], cls=astr))
     if (not (config.config.flag.single_photometry) and "photometry" in processes) or overwrite:
         phot = Photometry(config)
         for task in phot.sequential_task:
-            tasks.append(Task(getattr(phot, task[1]), priority=priority, gpu=task[2], cls=phot))
+            tasks.append(Task(getattr(phot, task[1]), priority=Priority.MEDIUM, gpu=task[2], cls=phot))
     if (not (config.config.flag.combine) and "combine" in processes) or overwrite:
         stk = ImStack(config)
         for task in stk.sequential_task:
-            tasks.append(Task(getattr(stk, task[1]), priority=priority, gpu=task[2], cls=stk))
+            tasks.append(Task(getattr(stk, task[1]), priority=Priority.HIGH, gpu=task[2], cls=stk))
     if (not (config.config.flag.combined_photometry) and "photometry" in processes) or overwrite:
         phot = Photometry(config)
         for task in phot.sequential_task:
-            tasks.append(Task(getattr(phot, task[1]), priority=priority, gpu=task[2], cls=phot))
+            tasks.append(Task(getattr(phot, task[1]), priority=Priority.MEDIUM, gpu=task[2], cls=phot))
     if (not (config.config.flag.subtraction) and "subtract" in processes) or overwrite:
         subt = ImSubtract(config)
         for task in subt.sequential_task:
-            tasks.append(Task(getattr(subt, task[1]), priority=priority, gpu=task[2], cls=subt))
+            tasks.append(Task(getattr(subt, task[1]), priority=Priority.MEDIUM, gpu=task[2], cls=subt))
 
     if len(tasks) != 0:
         tree = TaskTree(tasks)

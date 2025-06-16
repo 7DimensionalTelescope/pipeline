@@ -63,7 +63,6 @@ class ImStack(BaseSetup):
             (6, "joint_registration", False),
             (7, "convolve", True),
             (8, "stack_with_swarp", False),
-            (9, "flagging", False),
         ]
 
     def run(self):
@@ -92,8 +91,6 @@ class ImStack(BaseSetup):
 
             # swarp imcombine
             self.stack_with_swarp()
-
-            self.config.flag.combine = True
         except Exception as e:
             self.logger.error(f"Error during imstack processing: {str(e)}", exc_info=True)
             raise
@@ -633,6 +630,8 @@ class ImStack(BaseSetup):
         self._update_header()
 
         self.logger.info(f"Running swarp is completed in {time_diff_in_seconds(st)} seconds")
+
+        self.config.flag.combine = True
         self.logger.info(f"'ImStack' is Completed in {time_diff_in_seconds(self._st)} seconds")
 
     def _run_swarp(self, type="", args=None):

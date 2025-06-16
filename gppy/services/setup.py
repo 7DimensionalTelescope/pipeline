@@ -111,6 +111,3 @@ class BaseSetup(ABC):
     # def from_text_file(cls, imagelist_file):
     #     input_images = inputlist_parser(imagelist_file)
     #     cls.from_list(input_images)
-
-    def flagging(self):
-        setattr(self.config.flag, self._flag_name, True)

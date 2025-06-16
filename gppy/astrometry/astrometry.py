@@ -61,7 +61,7 @@ class Astrometry(BaseSetup):
     @property
     def sequential_task(self):
         """[(number, name, use_gpu), ...]"""
-        return [(1, "run", False), (2, "flagging", False)]
+        return [(1, "run", False)]
 
     def run(
         self,
