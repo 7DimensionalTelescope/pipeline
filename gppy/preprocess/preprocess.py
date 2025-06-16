@@ -189,10 +189,9 @@ class Preprocess(BaseSetup):
             return device_id
         if self.config.preprocess.device is None:
             from ..services.utils import get_best_gpu_device
-
-            return get_best_gpu_device()
-        else:
-            return self.config.preprocess.device
+            self.config.preprocess.device = get_best_gpu_device()
+            
+        return self.config.preprocess.device
 
     def load_masterframe(self, device_id=None):
         """
