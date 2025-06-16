@@ -39,7 +39,7 @@ class Preprocess(BaseSetup):
 
         self.overwrite = overwrite
         self.master_frame_only = master_frame_only
-
+        self._device_id = None
         self.initialize()
 
         # self.logger.debug(f"Masterframe output folder: {self.path_fdz}")
@@ -186,8 +186,12 @@ class Preprocess(BaseSetup):
 
     def get_device_id(self, device_id):
         if device_id is not None:
+            self._device_id = device_id
             return device_id
-        if self.config.preprocess.device is None:
+        elif self._device_id is not None:
+            self.config.preprocess.device = self._device_id
+            return self._device_id
+        elif self.config.preprocess.device is None:
             from ..services.utils import get_best_gpu_device
             self.config.preprocess.device = get_best_gpu_device()
             
