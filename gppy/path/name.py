@@ -729,8 +729,12 @@ class NameHandler:
         typ = next(iter(grouped_files))[0][0]
         obs_params = dict(next(iter(grouped_files))[0][1])
         """
-        if not isinstance(self.abspath, list) or len(self.abspath) <= 1:
-            return self.abspath[0]
+        if not isinstance(self.abspath, list):
+            if isinstance(self.abspath, str):  # single input case
+                key = (self.type, tuple(self.to_dict(keys=keys).items()))
+                return {key: [self.abspath]}
+            else:
+                raise ValueError("Supply a list of file paths to get grouped files")
 
         # groups = defaultdict(list)
         #     groups[key].append(str(f))
@@ -817,7 +821,7 @@ class NameHandler:
 
     @classmethod
     def find_calib_for_sci(
-        cls, files
+        cls, files: list[str]
     ) -> Tuple[List[str], List[Tuple], Tuple[List[List[str]], List[List[str]], List[List[str]]]]:
         """
         e.g., files = glob("/data/pipeline_reform/obsdata_test/7DT11/2025-01-01_gain2750/*.fits")
@@ -833,8 +837,8 @@ class NameHandler:
             off_date_calib
                 tuple of respectively grouped (bias, dark, flat)
         """
-        if not isinstance(files, list) or len(files) <= 1:
-            return files
+        if not isinstance(files, list):  # or len(files) <= 1:
+            raise ValueError("Input must be a list of file paths")
 
         names = cls(files)
         grouped_files = names.get_grouped_files()
