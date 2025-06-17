@@ -223,8 +223,12 @@ class Preprocess(BaseSetup):
                     self._generate_masterframe(dtype, device_id)
                 else:
                     self._fetch_masterframe(output_data, dtype, device_id)
-            else:
+            elif isinstance(output_data, str) or len(output_data)>0:
                 self._fetch_masterframe(output_data, dtype, device_id)
+            else:
+                self.logger.warning(f"No input or output data for {dtype}")
+                self.logger.debug(f"{dtype}_input: {input_data}")
+                self.logger.debug(f"{dtype}_output: {output_data}")
 
         self.logger.info(f"Generation/Loading of masterframes completed in {time_diff_in_seconds(st)} seconds")
 
