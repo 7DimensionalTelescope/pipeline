@@ -157,6 +157,7 @@ class Preprocess(BaseSetup):
         raise AttributeError(f"Attribute {name} not found")
 
     def _set_raw_group(self, name, value):
+        key_to_index = {"bias": 0, "dark": 1, "flat": 2}
         if name.endswith("_output"):
             key = name[:4]  # strip "_output" (e.g., bias_output)
             if key in key_to_index:
