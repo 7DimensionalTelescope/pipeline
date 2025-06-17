@@ -92,6 +92,7 @@ imstack:
   #   ref_image_dir: "/lyman/data1/factory/ref_frame"
   stacked_image:  # output stacked image
   gpu: True
+  device: 0
   zp_key: 'ZP_AUTO'
   # images_to_combine:
   bkgsub_type: 'Dynamic'

@@ -29,7 +29,9 @@ class ImStack(BaseSetup):
 
         super().__init__(config, logger, queue)
         self.overwrite = overwrite
+        self._device_id = None
         self._flag_name = "combine"
+
 
     @classmethod
     def from_list(cls, input_images):
@@ -58,12 +60,25 @@ class ImStack(BaseSetup):
             (1, "initialize", False),
             (2, "bkgsub", False),
             (3, "zpscale", False),
-            (4, "calculate_weight_map", True),
-            (5, "apply_bpmask", True),
+            (4, "calculate_weight_map", False),
+            (5, "apply_bpmask", False),
             (6, "joint_registration", False),
-            (7, "convolve", True),
+            (7, "convolve", False),
             (8, "stack_with_swarp", False),
         ]
+
+    def get_device_id(self, device_id):
+        if device_id is not None:
+            self._device_id = device_id
+            return device_id
+        elif self._device_id is not None:
+            self.config.imstack.device = self._device_id
+            return self._device_id
+        elif self.config.imstack.device is None:
+            from ..services.utils import get_best_gpu_device
+            self.config.imstack.device = get_best_gpu_device()
+            
+        return self.config.imstack.device
 
     def run(self):
         try:
@@ -301,7 +316,7 @@ class ImStack(BaseSetup):
         # groups = NameHandler.get_grouped_files(bkgsub_images)
         return groups
 
-    def calculate_weight_map(self, device_id=0):
+    def calculate_weight_map(self, device_id=None):
         """Retains cpu support as a code template"""
         st = time.time()
         use_gpu = self.config.imstack.gpu
@@ -309,7 +324,7 @@ class ImStack(BaseSetup):
         # pick xp and device‐context based on GPU flag
         if use_gpu:
             import cupy as xp
-
+            device_id = self.get_device_id(device_id)
             device_ctx = xp.cuda.Device(device_id)
         else:
             import numpy as xp
@@ -375,10 +390,13 @@ class ImStack(BaseSetup):
                         data=weight_image,
                         overwrite=True,
                     )
+        del r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, egain, weight_image
+        cp.get_default_memory_pool().free_all_blocks()
         self.logger.info(f"Weight-map calculation is completed in {time_diff_in_seconds(st)} seconds")
 
-    def apply_bpmask(self, badpix=0, device_id=0):
+    def apply_bpmask(self, badpix=0, device_id=None):
         st = time.time()
+        device_id = self.get_device_id(device_id)
 
         import cupy as cp
         from .interpolate import (
@@ -445,7 +463,8 @@ class ImStack(BaseSetup):
                 )
 
         self.images_to_stack = self.config.imstack.interp_images
-
+        del mask, interp, image, weight, interp_weight
+        cp.get_default_memory_pool().free_all_blocks()
         self.logger.info(f"Interpolation for bad pixels is completed in {time_diff_in_seconds(st)} seconds")
 
     def zpscale(self):
@@ -504,12 +523,13 @@ class ImStack(BaseSetup):
         """
         pass
 
-    def convolve(self, device_id=0):
+    def convolve(self, device_id=None):
         """
         This is ad-hoc. Change it to convolve after resampling and take
         advantage of uniform pixel scale.
         """
         st = time.time()
+        device_id = self.get_device_id(device_id)
 
         method = self.config.imstack.convolve.lower()
         self.logger.info(f"Start the convolution with {method} method")
@@ -590,6 +610,9 @@ class ImStack(BaseSetup):
         else:
             self.logger.info("Undefined convolution method. Skipping seeing match")
 
+        del kernel, mask, convolved_wht, wht
+        cp.get_default_memory_pool().free_all_blocks()
+        
         self.logger.info(f"Convolution is completed in {time_diff_in_seconds(st)} seconds")
 
     def stack_with_swarp(self):
