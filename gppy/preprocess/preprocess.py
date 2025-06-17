@@ -234,7 +234,7 @@ class Preprocess(BaseSetup):
 
     def _generate_masterframe(self, dtype, device_id):
         """Generate & Save masterframe and sigma image"""
-        self.logger.info(f"Generating master {dtype}")
+        self.logger.info(f"Generating master {dtype} in GPU device {device_id}")
         input_data = getattr(self, f"{dtype}_input")
         header = self.get_header(dtype)
 
@@ -243,7 +243,7 @@ class Preprocess(BaseSetup):
             self.bias_data = median
 
         elif dtype == "dark":
-            median, std = combine_images_with_cupy(input_data, subtract=self.bias_data, device_id=device_id)
+            median, std = combine_images_with_cupy(input_data, device_id=device_id, subtract=self.bias_data, )
             self.dark_data = median
             self.dark_exptime = header[HEADER_KEY_MAP["exptime"]]
             n_sigma = self.config.preprocess.n_sigma
