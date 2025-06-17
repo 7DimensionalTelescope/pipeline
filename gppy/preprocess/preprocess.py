@@ -156,6 +156,12 @@ class Preprocess(BaseSetup):
                     return self.raw_groups[group_index][1][key_to_index[key]]
         raise AttributeError(f"Attribute {name} not found")
 
+    def _set_raw_group(self, name, value):
+        if name.endswith("_output"):
+            key = name[:4]  # strip "_output" (e.g., bias_output)
+            if key in key_to_index:
+                self.raw_groups[self._current_group][1][key_to_index[key]] = value
+
     def _parse_sci_list(self, group_index, dtype="input"):
         l = []
         for value in self.raw_groups[group_index][2].values():
@@ -286,6 +292,7 @@ class Preprocess(BaseSetup):
         max_offset = self.config.preprocess.max_offset
         self.logger.debug(f"Masterframe Search Template: {template}")
         existing_data = prep_utils.search_with_date_offsets(template, max_offset=max_offset)
+        
         if not existing_data:
             raise FileNotFoundError(
                 f"No pre-existing master {dtype} found in place of {template} wihin {max_offset} days"
@@ -294,6 +301,7 @@ class Preprocess(BaseSetup):
         with cp.cuda.Device(device_id):
             data_gpu = cp.asarray(fits.getdata(existing_data).astype(np.float32))
             setattr(self, f"{dtype}_data", data_gpu)
+            setattr(self, f"{dtype}_output", existing_data)
 
         if dtype == "dark":
             self.dark_exptime = get_header(existing_data)[HEADER_KEY_MAP["exptime"]]
