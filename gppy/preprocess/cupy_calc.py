@@ -115,7 +115,7 @@ def process_batch_on_device(image_paths, bias, dark, flat, results, device_id=0)
         else:
             results[device_id] = local_results
 
-def combine_images_with_cupy(images: str, device_id=0, subtract=None, norm=False):
+def combine_images_with_cupy(images: str, device_id=None, subtract=None, norm=False):
     """median is gpu, std is cpu"""
     with cp.cuda.Device(device_id):
         cp_stack = cp.stack([cp.asarray(fits.getdata(img).astype(np.float32)) for img in images])

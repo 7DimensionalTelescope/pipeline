@@ -57,6 +57,9 @@ def save_fits_as_png(image_data, output_path, stretch=True, log_scale=False, max
 
 
 def plot_bias(file, savefig=False):
+    if not(isinstance(file, str)) and not(os.path.exists(file)):
+        return
+
     path = Path(file)
     os.makedirs(path.parent / "figures", exist_ok=True)
     output_path = path.parent / "figures" / f"{path.stem}_hist.png"
@@ -108,6 +111,9 @@ def plot_bias(file, savefig=False):
 
 
 def plot_dark(file, fmask=None, savefig=False):
+    if not(isinstance(file, str)) and not(os.path.exists(file)):
+        return
+
     path = Path(file)
     os.makedirs(path.parent / "figures", exist_ok=True)
     output_path = path.parent / "figures" / f"{path.stem}_hist.png"
@@ -194,7 +200,8 @@ def plot_dark_tail(fdata, file, savefig=False):
 
 
 def plot_flat(file, fmask=None, savefig=False):
-
+    if not(isinstance(file, str)) and not(os.path.exists(file)):
+        return
     path = Path(file)
     os.makedirs(path.parent / "figures", exist_ok=True)
     output_path = path.parent / "figures" / f"{path.stem}_hist.png"
@@ -247,6 +254,8 @@ def plot_flat(file, fmask=None, savefig=False):
 
 
 def plot_bpmask(file, ext=1, badpix=1, savefig=False):
+    if not(isinstance(file, str)) and not(os.path.exists(file)):
+        return
     path = Path(file)
     os.makedirs(path.parent / "figures", exist_ok=True)
     output_path = path.parent / "figures" / f"{path.stem}.png"
@@ -277,6 +286,10 @@ def plot_bpmask(file, ext=1, badpix=1, savefig=False):
 
 
 def plot_sci(input_img, output_img):
+    if not(isinstance(input_img, str)) and not(os.path.exists(input_img)):
+        return
+    if not(isinstance(output_img, str)) and not(os.path.exists(output_img)):
+        return
     path = PathHandler(output_img)
     save_fits_as_png(fits.getdata(input_img), path.figure_dir_to_path / f"{path.stem[0]}_raw.png")
     save_fits_as_png(fits.getdata(output_img), path.figure_dir_to_path / f"{path.stem[0]}.png")
