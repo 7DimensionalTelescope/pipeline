@@ -199,8 +199,9 @@ class Preprocess(BaseSetup):
             return self._device_id
         elif self.config.preprocess.device is None:
             from ..services.utils import get_best_gpu_device
+
             self.config.preprocess.device = get_best_gpu_device()
-            
+
         return self.config.preprocess.device
 
     def load_masterframe(self, device_id=None):
@@ -229,7 +230,7 @@ class Preprocess(BaseSetup):
                     self._generate_masterframe(dtype, device_id)
                 else:
                     self._fetch_masterframe(output_data, dtype, device_id)
-            elif isinstance(output_data, str) or len(output_data)>0:
+            elif isinstance(output_data, str) or len(output_data) > 0:
                 self._fetch_masterframe(output_data, dtype, device_id)
             else:
                 self.logger.warning(f"No input or output data for {dtype}")
@@ -249,7 +250,11 @@ class Preprocess(BaseSetup):
             self.bias_data = median
 
         elif dtype == "dark":
-            median, std = combine_images_with_cupy(input_data, device_id=device_id, subtract=self.bias_data, )
+            median, std = combine_images_with_cupy(
+                input_data,
+                device_id=device_id,
+                subtract=self.bias_data,
+            )
             self.dark_data = median
             self.dark_exptime = header[HEADER_KEY_MAP["exptime"]]
             n_sigma = self.config.preprocess.n_sigma
@@ -291,20 +296,20 @@ class Preprocess(BaseSetup):
         # existing_data can be either on-date or off-date
         max_offset = self.config.preprocess.max_offset
         self.logger.debug(f"Masterframe Search Template: {template}")
-        existing_data = prep_utils.search_with_date_offsets(template, max_offset=max_offset)
-        
-        if not existing_data:
+        existing_mframe_file = prep_utils.search_with_date_offsets(template, max_offset=max_offset)
+
+        if not existing_mframe_file:
             raise FileNotFoundError(
                 f"No pre-existing master {dtype} found in place of {template} wihin {max_offset} days"
             )
 
         with cp.cuda.Device(device_id):
-            data_gpu = cp.asarray(fits.getdata(existing_data).astype(np.float32))
+            data_gpu = cp.asarray(fits.getdata(existing_mframe_file).astype(np.float32))
             setattr(self, f"{dtype}_data", data_gpu)
-            setattr(self, f"{dtype}_output", existing_data)
+            setattr(self, f"{dtype}_output", existing_mframe_file)
 
         if dtype == "dark":
-            self.dark_exptime = get_header(existing_data)[HEADER_KEY_MAP["exptime"]]
+            self.dark_exptime = get_header(existing_mframe_file)[HEADER_KEY_MAP["exptime"]]
 
     def data_reduction(self, device_id=None):
 
@@ -423,14 +428,18 @@ class Preprocess(BaseSetup):
         )
         if use_multi_thread:
             threads = []
-            for input_img, output_img in zip(self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)):
+            for input_img, output_img in zip(
+                self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)
+            ):
                 thread = threading.Thread(target=plot_sci, args=(input_img, output_img))
                 thread.start()
                 threads.append(thread)
             for thread in threads:
                 thread.join()
         else:
-            for input_img, output_img in zip(self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)):
+            for input_img, output_img in zip(
+                self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)
+            ):
                 plot_sci(input_img, output_img)
 
         self.logger.info(
