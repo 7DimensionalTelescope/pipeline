@@ -57,7 +57,8 @@ def save_fits_as_png(image_data, output_path, stretch=True, log_scale=False, max
 
 
 def plot_bias(file, savefig=False):
-    if not(isinstance(file, str)) and not(os.path.exists(file)):
+    if not(isinstance(file, str)):
+        print("An image path (bias) is not properly defined.")
         return
 
     path = Path(file)
@@ -111,7 +112,8 @@ def plot_bias(file, savefig=False):
 
 
 def plot_dark(file, fmask=None, savefig=False):
-    if not(isinstance(file, str)) and not(os.path.exists(file)):
+    if not(isinstance(file, str)):
+        print("An image path (dark) is not properly defined.")
         return
 
     path = Path(file)
@@ -200,7 +202,8 @@ def plot_dark_tail(fdata, file, savefig=False):
 
 
 def plot_flat(file, fmask=None, savefig=False):
-    if not(isinstance(file, str)) and not(os.path.exists(file)):
+    if not(isinstance(file, str)):
+        print("An image path (flat) is not properly defined.")
         return
     path = Path(file)
     os.makedirs(path.parent / "figures", exist_ok=True)
@@ -254,7 +257,8 @@ def plot_flat(file, fmask=None, savefig=False):
 
 
 def plot_bpmask(file, ext=1, badpix=1, savefig=False):
-    if not(isinstance(file, str)) and not(os.path.exists(file)):
+    if not(isinstance(file, str)):
+        print("An image path (bpmask) is not properly defined.")
         return
     path = Path(file)
     os.makedirs(path.parent / "figures", exist_ok=True)
@@ -286,9 +290,11 @@ def plot_bpmask(file, ext=1, badpix=1, savefig=False):
 
 
 def plot_sci(input_img, output_img):
-    if not(isinstance(input_img, str)) and not(os.path.exists(input_img)):
+    if not(isinstance(input_img, str)):
+        print("An image path (input_img) is not properly defined.")
         return
-    if not(isinstance(output_img, str)) and not(os.path.exists(output_img)):
+    if not(isinstance(output_img, str)):
+        print("An image path (output_img) is not properly defined.")
         return
     path = PathHandler(output_img)
     save_fits_as_png(fits.getdata(input_img), path.figure_dir_to_path / f"{path.stem[0]}_raw.png")
