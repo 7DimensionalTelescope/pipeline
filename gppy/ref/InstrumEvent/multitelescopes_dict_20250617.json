@@ -1,0 +1,722 @@
+{
+    "7DT01": {
+        "Status": "idle",
+        "Status_update_time": "2025-06-12T01:16:18.582",
+        "Mount": {
+            "is_active": true,
+            "name": "273",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Focuser": {
+            "is_active": true,
+            "name": "004",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Filterwheel": {
+            "is_active": true,
+            "name": "22345626",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Camera": {
+            "is_active": true,
+            "name": "31204",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        }
+    },
+    "7DT02": {
+        "Status": "offline",
+        "Status_update_time": "2025-06-06T22:15:01.841",
+        "Mount": {
+            "is_active": true,
+            "name": "267",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Focuser": {
+            "is_active": false,
+            "name": "",
+            "status": "maintenance",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Filterwheel": {
+            "is_active": false,
+            "name": "",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Camera": {
+            "is_active": false,
+            "name": "",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        }
+    },
+    "7DT03": {
+        "Status": "idle",
+        "Status_update_time": "2025-06-11T13:29:43.351",
+        "Mount": {
+            "is_active": true,
+            "name": "268",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Focuser": {
+            "is_active": false,
+            "name": "007",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Filterwheel": {
+            "is_active": true,
+            "name": "22243957",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Camera": {
+            "is_active": true,
+            "name": "31091",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        }
+    },
+    "7DT04": {
+        "Status": "offline",
+        "Status_update_time": "2025-06-06T22:15:01.841",
+        "Mount": {
+            "is_active": false,
+            "name": "262",
+            "status": "maintenance",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Focuser": {
+            "is_active": false,
+            "name": "",
+            "status": "maintenance",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Filterwheel": {
+            "is_active": false,
+            "name": "",
+            "status": "",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Camera": {
+            "is_active": false,
+            "name": "",
+            "status": "",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        }
+    },
+    "7DT05": {
+        "Status": "offline",
+        "Status_update_time": "2025-06-06T22:15:01.841",
+        "Mount": {
+            "is_active": false,
+            "name": "271",
+            "status": "maintenance",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Focuser": {
+            "is_active": false,
+            "name": "",
+            "status": "maintenance",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Filterwheel": {
+            "is_active": false,
+            "name": "",
+            "status": "",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Camera": {
+            "is_active": false,
+            "name": "",
+            "status": "",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        }
+    },
+    "7DT06": {
+        "Status": "idle",
+        "Status_update_time": "2025-06-12T01:16:18.584",
+        "Mount": {
+            "is_active": true,
+            "name": "277",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Focuser": {
+            "is_active": true,
+            "name": "006",
+            "status": "maintenance",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Filterwheel": {
+            "is_active": true,
+            "name": "22243955",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Camera": {
+            "is_active": true,
+            "name": "31093",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        }
+    },
+    "7DT07": {
+        "Status": "idle",
+        "Status_update_time": "2025-06-12T01:16:18.585",
+        "Mount": {
+            "is_active": true,
+            "name": "276",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Focuser": {
+            "is_active": true,
+            "name": "008",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Filterwheel": {
+            "is_active": true,
+            "name": "223444941",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Camera": {
+            "is_active": true,
+            "name": "31166",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        }
+    },
+    "7DT08": {
+        "Status": "idle",
+        "Status_update_time": "2025-06-12T01:16:18.585",
+        "Mount": {
+            "is_active": true,
+            "name": "218",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "Mount tracking issue",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Focuser": {
+            "is_active": true,
+            "name": "012",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Filterwheel": {
+            "is_active": true,
+            "name": "22344939",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Camera": {
+            "is_active": true,
+            "name": "31167",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        }
+    },
+    "7DT09": {
+        "Status": "idle",
+        "Status_update_time": "2025-06-12T01:16:18.586",
+        "Mount": {
+            "is_active": true,
+            "name": "275",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Focuser": {
+            "is_active": true,
+            "name": "011",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Filterwheel": {
+            "is_active": true,
+            "name": "22344943",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Camera": {
+            "is_active": true,
+            "name": "31165",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        }
+    },
+    "7DT10": {
+        "Status": "idle",
+        "Status_update_time": "2025-06-12T01:16:18.586",
+        "Mount": {
+            "is_active": true,
+            "name": "248",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Focuser": {
+            "is_active": true,
+            "name": "009",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Filterwheel": {
+            "is_active": true,
+            "name": "22446323",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Camera": {
+            "is_active": true,
+            "name": "31241",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        }
+    },
+    "7DT11": {
+        "Status": "idle",
+        "Status_update_time": "2025-06-12T01:16:18.587",
+        "Mount": {
+            "is_active": true,
+            "name": "113",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Focuser": {
+            "is_active": true,
+            "name": "018",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Filterwheel": {
+            "is_active": true,
+            "name": "222446322",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Camera": {
+            "is_active": true,
+            "name": "31232",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        }
+    },
+    "7DT12": {
+        "Status": "idle",
+        "Status_update_time": "2025-06-12T01:16:18.588",
+        "Mount": {
+            "is_active": true,
+            "name": "289",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Focuser": {
+            "is_active": true,
+            "name": "002",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Filterwheel": {
+            "is_active": true,
+            "name": "22344940",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Camera": {
+            "is_active": true,
+            "name": "31145",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        }
+    },
+    "7DT13": {
+        "Status": "idle",
+        "Status_update_time": "2025-06-12T01:16:18.588",
+        "Mount": {
+            "is_active": true,
+            "name": "311",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Focuser": {
+            "is_active": true,
+            "name": "028",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Filterwheel": {
+            "is_active": true,
+            "name": "22446325",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Camera": {
+            "is_active": true,
+            "name": "31234",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        }
+    },
+    "7DT14": {
+        "Status": "idle",
+        "Status_update_time": "2025-06-12T01:16:18.589",
+        "Mount": {
+            "is_active": true,
+            "name": "288",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Focuser": {
+            "is_active": true,
+            "name": "013",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Filterwheel": {
+            "is_active": "true",
+            "name": "22446146",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Camera": {
+            "is_active": true,
+            "name": "31243",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        }
+    },
+    "7DT15": {
+        "Status": "idle",
+        "Status_update_time": "2025-06-12T01:16:18.589",
+        "Mount": {
+            "is_active": true,
+            "name": "309",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Focuser": {
+            "is_active": true,
+            "name": "019",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Filterwheel": {
+            "is_active": true,
+            "name": "22243956",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Camera": {
+            "is_active": true,
+            "name": "31090",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        }
+    },
+    "7DT16": {
+        "Status": "idle",
+        "Status_update_time": "2025-06-12T01:16:18.590",
+        "Mount": {
+            "is_active": true,
+            "name": "7DT16",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Focuser": {
+            "is_active": true,
+            "name": "7DT16",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Filterwheel": {
+            "is_active": true,
+            "name": "22244179",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Camera": {
+            "is_active": true,
+            "name": "31102",
+            "status": "operational",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        }
+    },
+    "7DT17": {
+        "Status": "offline",
+        "Status_update_time": "2024-12-15T00:00:00",
+        "Mount": {
+            "is_active": false,
+            "name": "7DT17",
+            "status": "offline",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Focuser": {
+            "is_active": false,
+            "name": "7DT17",
+            "status": "offline",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Filterwheel": {
+            "is_active": false,
+            "name": "7DT17",
+            "status": "offline",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Camera": {
+            "is_active": false,
+            "name": "7DT17",
+            "status": "offline",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        }
+    },
+    "7DT18": {
+        "Status": "offline",
+        "Status_update_time": "2024-12-15T00:00:00",
+        "Mount": {
+            "is_active": false,
+            "name": "7DT18",
+            "status": "offline",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Focuser": {
+            "is_active": false,
+            "name": "7DT18",
+            "status": "offline",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Filterwheel": {
+            "is_active": false,
+            "name": "7DT18",
+            "status": "offline",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Camera": {
+            "is_active": false,
+            "name": "7DT18",
+            "status": "offline",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        }
+    },
+    "7DT19": {
+        "Status": "offline",
+        "Status_update_time": "2024-12-15T00:00:00",
+        "Mount": {
+            "is_active": false,
+            "name": "7DT19",
+            "status": "offline",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Focuser": {
+            "is_active": false,
+            "name": "7DT19",
+            "status": "offline",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Filterwheel": {
+            "is_active": false,
+            "name": "7DT19",
+            "status": "offline",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Camera": {
+            "is_active": false,
+            "name": "7DT19",
+            "status": "offline",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        }
+    },
+    "7DT20": {
+        "Status": "offline",
+        "Status_update_time": "2024-12-15T00:00:00",
+        "Mount": {
+            "is_active": false,
+            "name": "7DT20",
+            "status": "offline",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Focuser": {
+            "is_active": false,
+            "name": "7DT20",
+            "status": "offline",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Filterwheel": {
+            "is_active": false,
+            "name": "7DT20",
+            "status": "offline",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        },
+        "Camera": {
+            "is_active": false,
+            "name": "7DT20",
+            "status": "offline",
+            "timestamp": "2025-06-07",
+            "description": "",
+            "reported_by": "HyeonhoChoi"
+        }
+    }
+}
