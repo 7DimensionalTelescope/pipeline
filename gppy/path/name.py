@@ -383,8 +383,26 @@ class NameHandler:
 
     @staticmethod
     def _parse_raw(parts):
-        # TCSpy
-        if len(parts) == 8:
+        if parts[1] in ["", "BIAS", "DARK", "FLAT", "LIGHT"]:
+            # NINA
+            unit = parts[0]
+            typ = parts[1]
+            obj = parts[2]
+            date = parts[3].replace("-", "")
+            hms = parts[4].replace("-", "")
+            filt = parts[5]
+            if len(parts) == 8:
+                nb = None
+                exptime = strip_exptime(parts[6])
+            elif len(parts) == 9:
+                nb = strip_binning(parts[6])
+                exptime = strip_exptime(parts[7])
+
+            else:
+                raise ValueError("Unexpected number of parts in NINA raw filename")
+
+        else:
+            # TCSpy
             unit = parts[0]
             date = parts[1]
             hms = parts[2]
@@ -392,19 +410,6 @@ class NameHandler:
             filt = parts[4]
             nb = strip_binning(parts[5])
             exptime = strip_exptime(parts[6])
-
-        # NINA
-        elif len(parts) == 9:
-            unit = parts[0]
-            typ = parts[1]
-            obj = parts[2]
-            date = parts[3].replace("-", "")
-            hms = parts[4].replace("-", "")
-            filt = parts[5]
-            nb = strip_binning(parts[6])
-            exptime = strip_exptime(parts[7])
-        else:
-            raise ValueError("Invalid length of parts for raw image filename")
 
         gain = None
         camera = None

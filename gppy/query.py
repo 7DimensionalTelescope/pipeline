@@ -6,8 +6,9 @@ import re
 from . import const
 import glob
 
+
 def query_observations(include_keywords, exclude_keywords=None, DATA_DIR=const.RAWDATA_DIR, with_calib=True):
-    
+
     default_exclude_keywords = ["test", "shift", "tmp"]
 
     include_keywords = list(np.atleast_1d(include_keywords))
@@ -24,7 +25,7 @@ def query_observations(include_keywords, exclude_keywords=None, DATA_DIR=const.R
         paths = []
         unit_path = os.path.join(DATA_DIR, unit)
         for dirpath, _, filenames in os.walk(unit_path):
-            if "/tmp/" in dirpath:
+            if "tmp" in dirpath:
                 continue
 
             if len(filenames) == 0:
@@ -32,20 +33,16 @@ def query_observations(include_keywords, exclude_keywords=None, DATA_DIR=const.R
 
             flag_dir = all(keyword in dirpath for keyword in include_keywords)
             if flag_dir:
-                result.extend(
-                    [
-                    os.path.join(dirpath, fname)
-                    for fname in filenames 
-                    if flagging(fname)
-                    ]
-                )
+                result.extend([os.path.join(dirpath, fname) for fname in filenames if flagging(fname)])
                 continue
 
             matched_files = [fname for fname in filenames if flagging(fname)]
             if not matched_files:
                 continue
 
-            flag_files = [all(keyword in os.path.join(dirpath, fname) for keyword in include_keywords) for fname in matched_files]
+            flag_files = [
+                all(keyword in os.path.join(dirpath, fname) for keyword in include_keywords) for fname in matched_files
+            ]
             if any(flag_files):
                 result.extend(
                     [
@@ -83,8 +80,6 @@ def query_observations(include_keywords, exclude_keywords=None, DATA_DIR=const.R
             output.extend(future.result())
 
     return output
-
-
 
 
 # def query_observations(include_keywords, datatype="processed", exclude_keywords=None, **kwargs):
