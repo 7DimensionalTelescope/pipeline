@@ -390,11 +390,8 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
         self.sciproc_base_yml = os.path.join(const.REF_DIR, "sciproc_base.yml")
         self.preproc_base_yml = os.path.join(const.REF_DIR, "preproc_base.yml")
         self.changelog_dir = os.path.join(const.REF_DIR, "InstrumEvent")
+        # self.instrum_status_dict = const.INSTRUM_STATUS_DICT
 
-        # for non-pipeline input; overridden in define_file_independent_paths()
-
-        # self.imstack_base_yml
-        # self.phot_base_yml
         self._file_indep_initialized = True
 
     def get_changelog(self, unit=1):
@@ -524,8 +521,8 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
         self.output_dir = collapse(self._output_dir)
         self.factory_dir = collapse(self._factory_dir)
         self.image_dir = collapse(self._image_dir)
-        self.masterframe_dir = collapse(self._masterframe_dir)
         self.figure_dir = collapse(self._figure_dir)
+        self.masterframe_dir = collapse(self._masterframe_dir)
         self.config_stem = collapse(self._config_stem)
         # if raw_images:
         #     self.raw_images = raw_images
