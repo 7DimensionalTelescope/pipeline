@@ -1,11 +1,22 @@
-date_start	date_end	parts	comment
-240618	240618	cam	PA
-240626	240626	mount	modeling
-240630	240630	cam	swap:31093>31102
-241130	241130	cam	uninstall
-241130	241130	fw	uninstall
-241221	250313	cam	install:10046
-250310	250310	mirror	cleaning
-250516	250516	cam	install:31204
-250523	250523	mirror	collimation
-250525	250525	cam	PA
+date	parts	comment
+231010	cam	31093
+231010	fw	22345626
+231014	cam	PA
+231014	mount	modeling
+231208	mirror	collimation
+240530	cam	badimage_start
+240618	cam	PA
+240625	mount	modeling
+240628	cam	badimage_end
+240630	cam	31102
+241130	cam	0
+241130	fw	0
+241221	cam	10046
+241221	fw	22345030
+250310	mirror	cleaning
+250313	cam	0
+250313	fw	0
+250516	cam	31204
+250516	fw	22345626
+250523	mirror	collimation
+250525	cam	PA

@@ -1,5 +1,11 @@
-date_start	date_end	parts	comment
-240618	240618	cam	PA
-241219	241219	focuser	disabled
-250310	250310	mirror	cleaning
-250506	250506	fw	rubber_change
+date	parts	comment
+231016	cam	99999
+231016	fw	99999999
+231025	cam	PA
+231208	mirror	collimation
+240618	cam	PA
+240927	filt_config	g, r, i, m450, m475, m700
+241219	focuser	disabled
+250310	mirror	cleaning
+250506	fw	rubber_change
+250525	mount	fans_replace

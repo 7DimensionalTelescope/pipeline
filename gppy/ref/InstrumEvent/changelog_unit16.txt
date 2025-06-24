@@ -1,1 +1,3 @@
-date_start	date_end	parts	comment
+date	parts	comment
+250302	cam	31102
+250302	fw	22244179

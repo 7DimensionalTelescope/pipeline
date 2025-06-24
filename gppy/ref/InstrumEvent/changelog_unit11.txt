@@ -1,2 +1,5 @@
-date_start	date_end	parts	comment
-240916	240916	cam	swap:31204>31232
+date	parts	comment
+240207	cam	31204
+240207	fw	222446322
+240917	cam	31232
+240927	filt_config	g, r, i, m850, m425, m625, m400

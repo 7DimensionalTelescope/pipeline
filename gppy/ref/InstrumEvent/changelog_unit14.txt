@@ -1,3 +1,6 @@
-date_start	date_end	parts	comment
-241115	241115	mirror	collimation
-241206	241206	cam	PA
+date	parts	comment
+241027	cam	31243
+241027	fw	22446146
+241109	filt_config	g, r, I, m600, m625, m500, m775
+241115	mirror	collimation
+241206	cam	PA

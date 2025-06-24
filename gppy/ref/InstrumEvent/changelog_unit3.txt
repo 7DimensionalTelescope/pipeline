@@ -1,5 +1,13 @@
-date_start	date_end	parts	comment
-240618	240618	cam	PA
-250310	250310	mirror	cleaning
-250313	250313	cam	uninstall:31090
-250313	250313	fw	uninstall:22243956
+date	parts	comment
+231018	cam	31090
+231018	fw	22243956
+231103	cam	PA
+231208	mirror	collimation
+240618	cam	PA
+250310	mirror	cleaning
+250313	cam	0
+250313	fw	0
+250608	cam	31091
+250608	fw	22243957
+250608	mirror	collimation
+250608	cam	PA

@@ -1,8 +1,24 @@
-date_start	date_end	parts	comment	Unnamed: 4
-240616	240617	240618	cam	PA
-241128	241129	241130	cam	uninstall
-241128	241129	241130	fw	uninstall
-241218	241219	241220	cam	install:31204
-241218	241219	241220	fw	install:22345626
-250311	250312	250313	cam	uninstall:31204
-250311	250312	250313	fw	uninstall:22345626
+date	parts	comment
+231018	cam	99999
+231018	fw	99999999
+231019	filt_config	
+231103	cam	PA
+231128	mirror	collimation_start
+231130	mirror	collimation_end
+231208	motor	tipadjust
+240530	cam	badimage_start
+240618	cam	PA
+240702	cam	badimage_end
+240906	cam	badimage
+241102	filt_config	g, r, i
+241128	cam	0
+241128	fw	0
+241220	cam	31204
+241220	fw	22345626
+250313	cam	0
+250313	fw	0
+250313	focuser	repair
+250628	cam	31093
+250628	fw	22243955
+250628	mirror	collimation
+250628	cam	PA

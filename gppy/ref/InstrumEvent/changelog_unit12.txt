@@ -1,2 +1,4 @@
-date_start	date_end	parts	comment
-241201	241201	cam	swap:31164>31145
+date	parts	comment
+241115	cam	31164
+241115	fw	22344940
+241201	cam	31145
