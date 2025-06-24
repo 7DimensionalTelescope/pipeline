@@ -3,6 +3,7 @@ from re import S
 import threading
 from collections import UserDict
 
+from ..utils import flatten
 from ..path import PathHandler
 from ..query import query_observations
 from ..config import PreprocConfiguration, SciProcConfiguration
@@ -45,12 +46,29 @@ class Blueprint:
 
         self.queue = QueueManager()
 
+    @classmethod
+    def from_list(cls, list_of_images):
+        self = cls.__new__(cls)
+        self.list_of_images = list_of_images
+        self.groups = SortedGroupDict()
+        self._multi_unit_config = set()
+        self._unified_key_list = None
+        self._key_usage_map = None
+        self.input_params = None  # No input parameters for this method
+        self.queue = QueueManager()
+        self.initialize()
+        print("Blueprint initialized from user-input list.")
+        return self
+
     def initialize(self):
-        image_inventory = PathHandler.take_raw_inventory(self.list_of_images)
+        image_inventory = PathHandler.take_raw_inventory(self.list_of_images)  # [raw bdf, mframes, sci_dict]
 
         for i, group in enumerate(image_inventory):
             try:
-                mfg_key = PathHandler(group[0][2][0]).config_stem
+                # mfg_key = PathHandler(group[0][2][0]).config_stem
+                sci_dict_sample = flatten(next(iter(group[2].values())))[0]
+                mfg_key = PathHandler(sci_dict_sample).config_stem
+
             except:
                 mfg_key = f"mfg_{i}"
                 print(f"Failed to extract mfg_key from {group}")
@@ -113,6 +131,7 @@ class Blueprint:
             self.queue.add_tree(get_scidata_reduction_tasktree(config))
 
         self.queue.wait_until_task_complete("all")
+
 
 class MasterframeGroup:
     def __init__(self, key):
