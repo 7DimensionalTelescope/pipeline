@@ -20,12 +20,13 @@ SLACK_TOKEN = os.environ["SLACK_TOKEN"]
 CalibType = ["BIAS", "DARK", "FLAT"]
 
 available_7dt_units = [f"7DT0{unit}" if unit < 10 else f"7DT{unit}" for unit in range(1, 20)]
+INSTRUM_STATUS_DICT = "/home/7dt/7dt_too/backend/data/7dt/multitelescopes.dict"
 
 PIXSCALE = 0.505  # arcsec/pixel. Default plate scale assumed prior to astrometric solving
 
 NUM_MIN_CALIB = 2  # 5
-INSTRUM_GROUP_KEYS = ["unit", "n_binning", "gain", "camera"]  # "nightdate"
-ALL_GROUP_KEYS = ["obj", "filter", "nightdate", "exptime"] + INSTRUM_GROUP_KEYS
+INSTRUM_GROUP_KEYS = ["unit", "n_binning", "gain", "camera", "nightdate"]
+ALL_GROUP_KEYS = ["obj", "filter", "exptime"] + INSTRUM_GROUP_KEYS
 BIAS_GROUP_KEYS = INSTRUM_GROUP_KEYS  # no exp: account for potential ms exp difference
 DARK_GROUP_KEYS = INSTRUM_GROUP_KEYS + ["exptime"]  # darks have arbitrary filters
 FLAT_GROUP_KEYS = INSTRUM_GROUP_KEYS + ["filter"]  # flats have different exptimes
@@ -50,6 +51,7 @@ HEADER_KEY_MAP = {
     "ra": "OBJCTRA",  # intended pointing, not the actual mount position
     "dec": "OBJCTDEC",
 }
+
 
 class PipelineError(Exception):
     pass
