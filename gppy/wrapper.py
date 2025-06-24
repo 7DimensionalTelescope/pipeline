@@ -246,12 +246,12 @@ class ScienceGroup:
         self._config = c.config_file
 
     def get_tree(self):
-        from ..run import get_scidata_reduction_tasktree
+        from .run import get_scidata_reduction_tasktree
 
         return get_scidata_reduction_tasktree(self.config)
 
     def run(self):
-        from ..run import run_scidata_reduction
+        from .run import run_scidata_reduction
 
         return run_scidata_reduction(self.config)
 
