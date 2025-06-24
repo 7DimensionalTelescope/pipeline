@@ -1,7 +1,11 @@
-date_start	date_end	parts	comment
-240629	240629	cam	PA
-240730	240730	cam	cooling
-240822	240822	cam	swap:31164>31241
-241206	241206	cam	PA
-250213	250305	cam	badcolumn
-250311	250311	mirror	cleaning
+date	parts	comment
+240129	cam	31164
+240129	fw	22446323
+240506	motor	tuning
+240629	cam	PA
+240730	cam	cooling
+240822	cam	31241
+241206	cam	PA
+250213	cam	badcolumn_start
+250304	cam	badcolumn_end
+250311	mirror	cleaning

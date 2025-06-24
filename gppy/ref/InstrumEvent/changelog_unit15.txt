@@ -1,6 +1,9 @@
-date_start	date_end	parts	comment
-241119	241119	mount	modeling
-241206	241206	cam	PA
-241219	241219	mirror	collimation
-250313	250313	cam	swap:31093>31090
-250313	250313	fw	swap:22243955>22243956
+date	parts	comment
+241115	cam	31093
+241115	fw	22243955
+241119	filt_config	g, r, i, u, z
+241119	mount	modeling
+241206	cam	PA
+241219	mirror	collimation
+250313	cam	31090
+250313	fw	22243956

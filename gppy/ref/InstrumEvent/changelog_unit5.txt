@@ -1,8 +1,14 @@
-date_start	date_end	parts	comment
-240618	240618	cam	PA
-240628	240628	mirror	collimation
-240719	240719	mirror	collimation
-240815	240815	focuser	adjustment
-250117	250117	mount	modeling
-250310	250310	mirror	cleaning
-250430	250430	cam	swap:31116>31093
+date	parts	comment
+231018	cam	31116
+231018	fw	99999999
+231019	filt_config	
+231220	motor	tipadjust
+240405	fw	99999999
+240618	cam	PA
+240628	mirror	collimation
+240719	mirror	collimation
+240814	cam	PA
+240815	focuser	adjustment
+250117	mount	modeling
+250310	mirror	cleaning
+250430	cam	30193
