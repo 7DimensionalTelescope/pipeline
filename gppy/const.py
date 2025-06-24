@@ -26,7 +26,7 @@ PIXSCALE = 0.505  # arcsec/pixel. Default plate scale assumed prior to astrometr
 
 NUM_MIN_CALIB = 2  # 5
 INSTRUM_GROUP_KEYS = ["unit", "n_binning", "gain", "camera"]
-ALL_GROUP_KEYS = ["obj", "filter", "exptime"] + INSTRUM_GROUP_KEYS
+ALL_GROUP_KEYS = ["obj", "filter", "nightdate", "exptime"] + INSTRUM_GROUP_KEYS
 BIAS_GROUP_KEYS = ["nighdate"] + INSTRUM_GROUP_KEYS  # no exp: account for potential ms exp difference
 DARK_GROUP_KEYS = INSTRUM_GROUP_KEYS + ["exptime"]  # darks have arbitrary filters
 FLAT_GROUP_KEYS = INSTRUM_GROUP_KEYS + ["filter"]  # flats have different exptimes
