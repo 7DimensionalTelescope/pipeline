@@ -14,18 +14,41 @@ def atleast1d(x):
     return [x] if not isinstance(x, list) else x
 
 
-def flatten(seq):
+# def flatten(seq):
+#     """
+#     Recursively flatten any nested lists/tuples into a single flat list.
+#     Strings and bytes are treated as atomic.
+#     """
+#     flat = []
+#     for item in seq:
+#         if isinstance(item, Iterable) and not isinstance(item, (str, bytes)):
+#             flat.extend(flatten(item))
+#         else:
+#             flat.append(item)
+#     return flat
+
+
+def flatten(nested, max_depth=None):
     """
-    Recursively flatten any nested lists/tuples into a single flat list.
-    Strings and bytes are treated as atomic.
+    Flatten a nested list/tuple up to max_depth levels.
+
+    Args:
+        nested (list or tuple): input sequence
+        max_depth (int or None): how many levels to flatten.
+            None means “flatten completely”.
+
+    Returns:
+        list: flattened up to the requested depth
     """
-    flat = []
-    for item in seq:
-        if isinstance(item, Iterable) and not isinstance(item, (str, bytes)):
-            flat.extend(flatten(item))
-        else:
-            flat.append(item)
-    return flat
+
+    def _flatten(seq, depth):
+        for el in seq:
+            if isinstance(el, (list, tuple)) and (max_depth is None or depth < max_depth):
+                yield from _flatten(el, depth + 1)
+            else:
+                yield el
+
+    return list(_flatten(nested, 0))
 
 
 def most_common_in_dict(counts: dict):
@@ -91,7 +114,8 @@ def collapse(seq: list | dict[list], keys=ALL_GROUP_KEYS, raise_error=False, for
         if seq:
             first = seq[0]
         else:
-            raise ValueError("Uncollapsible: input is empty list")
+            # raise ValueError("Uncollapsible: input is empty list")
+            return seq  # just return empty list
     # dict[str, list]
     elif isinstance(seq, dict):
         return {k: collapse(v) if isinstance(v, list) else v for k, v in seq.items()}

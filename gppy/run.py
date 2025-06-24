@@ -15,11 +15,12 @@ import time
 from watchdog.observers import Observer
 
 from .services.monitor import Monitor
-from .base import ObservationDataSet, CalibrationData
 from .services.queue import QueueManager, Priority
 
 from .services.logger import Logger
 from .services.task import Task, TaskTree
+
+#from .base import ObservationDataSet, CalibrationData
 
 
 def run_preprocess(config, make_plots=False):
@@ -180,48 +181,48 @@ def get_scidata_reduction_tasktree(
 #     #     logger.error(f"Error during abrupt stop: {e}")
 
 
-def run_pipeline(
-    data,
-    queue: QueueManager,
-    processes=["preprocess", "astrometry", "photometry"],  # , "combine"],
-    overwrite=False,
-):
-    """
-    Central pipeline processing function for different types of astronomical data.
+# def run_pipeline(
+#     data,
+#     queue: QueueManager,
+#     processes=["preprocess", "astrometry", "photometry"],  # , "combine"],
+#     overwrite=False,
+# ):
+#     """
+#     Central pipeline processing function for different types of astronomical data.
 
-    Handles two primary data types:
-    1. CalibrationData: Generates master calibration frames
-    2. ObservationDataSet: Processes scientific observations
+#     Handles two primary data types:
+#     1. CalibrationData: Generates master calibration frames
+#     2. ObservationDataSet: Processes scientific observations
 
-    Processing includes:
-    - Marking data as processed to prevent reprocessing
-    - Adding tasks to the queue with appropriate priorities
-    - Supporting Time-On-Target (TOO) observations with high priority
+#     Processing includes:
+#     - Marking data as processed to prevent reprocessing
+#     - Adding tasks to the queue with appropriate priorities
+#     - Supporting Time-On-Target (TOO) observations with high priority
 
-    Args:
-        data (CalibrationData or ObservationDataSet): Input data to process
-        queue (QueueManager): Task queue for managing parallel processing
-    """
-    if isinstance(data, CalibrationData):
-        if not data.processed:
-            data.mark_as_processed()
+#     Args:
+#         data (CalibrationData or ObservationDataSet): Input data to process
+#         queue (QueueManager): Task queue for managing parallel processing
+#     """
+#     if isinstance(data, CalibrationData):
+#         if not data.processed:
+#             data.mark_as_processed()
 
-            tree = run_masterframe_generator_with_tree(obs.obs_params, priority=Priority.HIGH)
-            if tree is not None:
-                queue.add_tree(tree)
+#             tree = run_masterframe_generator_with_tree(obs.obs_params, priority=Priority.HIGH)
+#             if tree is not None:
+#                 queue.add_tree(tree)
 
-            time.sleep(0.1)
-    elif isinstance(data, ObservationDataSet):
-        for obs in data.get_unprocessed():
-            data.mark_as_processed(obs.identifier)
+#             time.sleep(0.1)
+#     elif isinstance(data, ObservationDataSet):
+#         for obs in data.get_unprocessed():
+#             data.mark_as_processed(obs.identifier)
 
-            priority = Priority.HIGH if obs.too else Priority.MEDIUM
+#             priority = Priority.HIGH if obs.too else Priority.MEDIUM
 
-            tree = run_scidata_reduction_with_tree(obs.obs_params, priority=priority)
-            if tree is not None:
-                queue.add_tree(tree)
+#             tree = run_scidata_reduction_with_tree(obs.obs_params, priority=priority)
+#             if tree is not None:
+#                 queue.add_tree(tree)
 
-            time.sleep(0.1)
+#             time.sleep(0.1)
 
 
 def start_monitoring():

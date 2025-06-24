@@ -115,7 +115,7 @@ class Photometry(BaseSetup):
         """[(number, name, use_gpu), ...]"""
         return [(1, "run", False)]
 
-    def run(self) -> None:
+    def run(self, use_gpu: bool = False) -> None:
         """
         Run photometry on all configured images.
 
@@ -212,6 +212,7 @@ class PhotometrySingle:
         total_image: int = 1,
         trust_header_seeing=False,
         calculate_zp=True,
+        use_gpu: bool = False,
     ) -> None:
         """Initialize PhotometrySingle instance."""
 
