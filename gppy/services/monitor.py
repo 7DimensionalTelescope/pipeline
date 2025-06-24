@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 from typing import List, Callable, Dict
 from .logger import Logger
-from ..base import CalibrationData, ObservationDataSet
+from .._base import CalibrationData, ObservationDataSet
 
 class Monitor(FileSystemEventHandler):
     """

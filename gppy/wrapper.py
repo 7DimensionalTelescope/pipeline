@@ -1,14 +1,13 @@
 import os
-from re import S
 import threading
 from collections import UserDict
 
-from ..utils import flatten
-from ..path import PathHandler
-from ..query import query_observations
-from ..config import PreprocConfiguration, SciProcConfiguration
+from .utils import flatten
+from .path import PathHandler
+from .query import query_observations
+from .config import PreprocConfiguration, SciProcConfiguration
 
-from ..services.queue import QueueManager
+from .services.queue import QueueManager
 
 from itertools import chain
 
@@ -23,7 +22,7 @@ def glob_files_by_param(keywords):
     return query_observations(keywords)
 
 
-class Blueprint:
+class DataReduction:
     def __init__(self, input_params, use_db=False):
         self.groups = SortedGroupDict()  # use a sorted dictionary
         self._multi_unit_config = set()
@@ -66,8 +65,12 @@ class Blueprint:
         for i, group in enumerate(image_inventory):
             try:
                 # mfg_key = PathHandler(group[0][2][0]).config_stem
-                sci_dict_sample = flatten(next(iter(group[2].values())))[0]
-                mfg_key = PathHandler(sci_dict_sample).config_stem
+                sci_dict = group[2]
+                if sci_dict:
+                    sample_file = flatten(next(iter(sci_dict.values())))[0]
+                else:
+                    sample_file = flatten(group[0])[0]
+                mfg_key = PathHandler(sample_file).config_stem
 
             except:
                 mfg_key = f"mfg_{i}"
@@ -125,7 +128,7 @@ class Blueprint:
             t.join()
 
         while len(self._multi_unit_config) > 0:
-            from ..run import get_scidata_reduction_tasktree
+            from .run import get_scidata_reduction_tasktree
 
             config = self._multi_unit_config.pop()
             self.queue.add_tree(get_scidata_reduction_tasktree(config))
@@ -181,14 +184,14 @@ class MasterframeGroup:
         self._config = c.config_file
 
     def get_tasks(self, device_id=None):
-        from ..run import get_preprocess_task, get_make_plot_task
+        from .run import get_preprocess_task, get_make_plot_task
 
         pre_task = get_preprocess_task(self.config, device_id=device_id)
         plot_task = get_make_plot_task(self.config)
         return pre_task, plot_task
 
     def run(self):
-        from ..run import run_preprocess
+        from .run import run_preprocess
 
         return run_preprocess(self.config, make_plots=True)
 

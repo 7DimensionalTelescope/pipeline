@@ -691,7 +691,9 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
             tuple_key = tuple(
                 v
                 for k, v in collapse(
-                    NameHandler.parse_params(sci_group, keys=const.SURVEY_SCIENCE_GROUP_KEYS), raise_error=True
+                    # NameHandler.parse_params(sci_group, keys=const.SURVEY_SCIENCE_GROUP_KEYS), raise_error=True
+                    NameHandler.parse_params(sci_group, keys=const.TRANSIENT_SCIENCE_GROUP_KEYS),
+                    raise_error=True,
                 ).items()
             )
             # return tuple_key

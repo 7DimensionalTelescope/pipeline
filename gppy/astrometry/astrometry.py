@@ -32,6 +32,7 @@ class Astrometry(BaseSetup):
         config: Union[str, SciProcConfiguration] = None,
         logger: Any = None,
         queue: Union[bool, Any] = False,
+        use_gpu: bool = False,
     ) -> None:
         """Initialize the astrometry module.
 
@@ -70,6 +71,7 @@ class Astrometry(BaseSetup):
         use_missfits: bool = False,
         processes=["sextractor", "scamp", "header_update"],
         se_preset: str = "prep",
+        use_gpu: bool = False,
     ) -> None:
         """Execute the complete astrometry pipeline.
 

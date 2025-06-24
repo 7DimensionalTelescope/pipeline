@@ -65,6 +65,7 @@ class QueueManager:
         self.gpu_devices = range(cp.cuda.runtime.getDeviceCount())
         self.gpu_queue = {device: queue.Queue() for device in self.gpu_devices}
         self.gpu_high_priority_queue = {device: queue.Queue() for device in self.gpu_devices}
+        self._remaind_gpu_queue = 0 
         
         # Process pool for CPU tasks
         self.cpu_pool = mp.Pool(processes=self.total_cpu_worker)
@@ -299,12 +300,20 @@ nherit_input             func (Callable): Function to be executed
     def add_to_queue(self, task, tree=None):
         """Add a task to the appropriate queue."""
         if task.gpu:
+            if self._remaind_gpu_queue >= 2:
+                task.gpu=False
+                task._device = "CPU"
+                task.kwargs["use_gpu"] = False
+                self.cpu_queue.put((task.priority, task, tree))
+                return
             if task.device is None:
                 task._device = self._choose_gpu_device()
             if task.priority == Priority.HIGH:
                 self.gpu_high_priority_queue[task.device].put((task, tree))
             else:
                 self.gpu_queue[task.device].put((task, tree))
+            with self.lock:
+                self._remaind_gpu_queue += 1
         else:
             self.cpu_queue.put((task.priority, task, tree))
 
@@ -406,6 +415,8 @@ nherit_input             func (Callable): Function to be executed
                 for task_queue in [self.gpu_high_priority_queue[device], self.gpu_queue[device]]:
                     try:
                         task, tree = task_queue.get(timeout=0.2)
+                        with self.lock:
+                            self._remaind_gpu_queue -= 1
                         break
                     except queue.Empty:
                         task, tree = None, None
