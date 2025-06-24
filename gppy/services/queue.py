@@ -34,7 +34,6 @@ class AbruptStopException(Exception):
 class QueueManager:
 
     _id_counter = itertools.count(1)
-    _gpu_device = 0
 
     def __init__(
         self,
@@ -66,6 +65,7 @@ class QueueManager:
         self.gpu_queue = {device: queue.Queue() for device in self.gpu_devices}
         self.gpu_high_priority_queue = {device: queue.Queue() for device in self.gpu_devices}
         self._remaind_gpu_queue = 0 
+        self._gpu_device = 0
         
         # Process pool for CPU tasks
         self.cpu_pool = mp.Pool(processes=self.total_cpu_worker)
@@ -395,13 +395,16 @@ nherit_input             func (Callable): Function to be executed
     def _choose_gpu_device(self):
         """Choose a GPU device to use."""
         gpu_memory = self.memory_monitor.current_gpu_memory_percent
-        if gpu_memory[self._gpu_device] > 90:
+        if self._gpu_device > len(gpu_memory):
+            self._gpu_device = 0
+        else:
+            if gpu_memory[self._gpu_device] > 90:
+                self._gpu_device += 1
             self._gpu_device += 1
-        self._gpu_device += 1
-        self._gpu_device = self._gpu_device%2
-        self.logger.info(f"Selected GPU device {self._gpu_device}")
+            self._gpu_device = self._gpu_device%2
+            self.logger.info(f"Selected GPU device {self._gpu_device}")
         return self._gpu_device
-    
+
     def _gpu_worker(self, device: int):
         while not self._abrupt_stop_requested.is_set():
             try:

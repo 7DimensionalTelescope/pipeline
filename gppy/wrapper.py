@@ -16,14 +16,14 @@ def glob_files_from_db(params):
     return []
 
 
-def glob_files_by_param(keywords):
+def glob_files_by_param(keywords, **kwargs):
     if isinstance(keywords, dict):
         keywords = list(keywords.values())
-    return query_observations(keywords)
+    return query_observations(keywords, **kwargs)
 
 
 class DataReduction:
-    def __init__(self, input_params, use_db=False):
+    def __init__(self, input_params, use_db=False, **kwargs):
         self.groups = SortedGroupDict()  # use a sorted dictionary
         self._multi_unit_config = set()
 
@@ -36,7 +36,7 @@ class DataReduction:
         if use_db:
             self.list_of_images = glob_files_from_db(input_params)
         else:
-            self.list_of_images = glob_files_by_param(input_params)
+            self.list_of_images = glob_files_by_param(input_params, **kwargs)
 
         print(f"Found {len(self.list_of_images)} images.")
         print("Grouping images...")
