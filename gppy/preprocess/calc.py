@@ -233,7 +233,7 @@ def sigma_clipped_stats(np_data, device_id=0, **kwargs):
     if device_id == "CPU":
         return sigma_clipped_stats_cpu(np_data, **kwargs)
     else:
-        return sigma_clipped_stats_cupy(np_data, device_id=0, **kwargs)
+        return sigma_clipped_stats_cupy(np_data, device_id=device_id, **kwargs)
 
 def sigma_clipped_stats_cpu(data, sigma=3, maxiters=5, minmax=False,
                             hot_mask=False, hot_mask_sigma=5):
