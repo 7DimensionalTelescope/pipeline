@@ -136,7 +136,6 @@ def process_batch_on_device_with_cupy(image_paths, bias, dark, flat, results, de
         else:
             results[device_id] = local_results
 
-
 def process_batch_on_device_with_cpu(image_paths, bias, dark, flat, results,
                              device_id=0, max_workers=4, subtract=None, normalize=False):
 
@@ -163,6 +162,7 @@ def process_batch_on_device_with_cpu(image_paths, bias, dark, flat, results,
     else:
         results[device_id] = local_results
 
+# Combine images
 def combine_images_with_cupy(images: str, device_id=None, subtract=None, norm=False):
     """median is gpu, std is cpu"""
     with cp.cuda.Device(device_id):
@@ -229,30 +229,63 @@ def _calc_median_and_std(np_stack):
 
     return median_img, std_img
 
+# Sigma Clipped Statistics
 def sigma_clipped_stats(np_data, device_id=0, **kwargs):
     if device_id == "CPU":
         return sigma_clipped_stats_cpu(np_data, **kwargs)
     else:
         return sigma_clipped_stats_cupy(np_data, device_id=device_id, **kwargs)
 
-def sigma_clipped_stats_cpu(data, sigma=3, maxiters=5, minmax=False,
-                            hot_mask=False, hot_mask_sigma=5):
-    
-    from astropy.stats import sigma_clipped_stats as _sigma_clipped_stats
-    
-    mean_val, median_val, std_val = _sigma_clipped_stats(data, sigma=sigma, maxiters=maxiters)
+@njit
+def sigma_clipped_stats_cpu(data, sigma=3.0, maxiters=5,
+                               minmax=False, hot_mask=False, hot_mask_sigma=5.0):
+    flat = data.ravel()
+    mask = _sigma_clip_1d(flat, sigma, maxiters)
+    clipped = flat[mask]
+
+    if clipped.size == 0:
+        mean_val = 0.0
+        median_val = 0.0
+        std_val = 0.0
+    else:
+        mean_val = np.mean(clipped)
+        median_val = np.median(clipped)
+        std_val = np.std(clipped)
 
     if hot_mask:
-        deviation = np.abs(data - median_val)
-        hot_mask_arr = (deviation > hot_mask_sigma * std_val).astype(np.uint8)
-        return hot_mask_arr
+        return _compute_hot_mask_2d(data, median_val, std_val, hot_mask_sigma)
 
     if minmax:
-        min_val = float(np.min(data))
-        max_val = float(np.max(data))
-        return mean_val, median_val, std_val, min_val, max_val
+        return mean_val, median_val, std_val, np.min(flat), np.max(flat)
 
-    return mean_val, median_val, std_val    
+    return mean_val, median_val, std_val
+
+
+
+@njit
+def _sigma_clip_1d(data_flat, sigma=3.0, maxiters=5):
+    mask = np.ones(data_flat.shape, dtype=np.bool_)
+    for _ in range(maxiters):
+        clipped = data_flat[mask]
+        if clipped.size == 0:
+            break
+        median = np.median(clipped)
+        std = np.std(clipped)
+        if std == 0.0:
+            break
+        for i in range(data_flat.size):
+            mask[i] = abs(data_flat[i] - median) < sigma * std
+    return mask
+
+@njit(parallel=True)
+def _compute_hot_mask_2d(data, median, std, hot_sigma):
+    H, W = data.shape
+    mask = np.empty((H, W), dtype=np.uint8)
+    threshold = hot_sigma * std
+    for i in prange(H):
+        for j in range(W):
+            mask[i, j] = 1 if abs(data[i, j] - median) > threshold else 0
+    return mask
 
 def sigma_clipped_stats_cupy(cp_data, device_id=0, sigma=3, maxiters=5, minmax=False, 
                             hot_mask=False, hot_mask_sigma=5):
