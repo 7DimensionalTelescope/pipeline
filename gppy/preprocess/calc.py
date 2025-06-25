@@ -311,27 +311,27 @@ def sigma_clipped_stats_cupy(cp_data, device_id=0, sigma=3, maxiters=5, minmax=F
     """
     with cp.cuda.Device(device_id):
         # Flatten to 1D for global clipping
-        cp_data = cp_data.ravel()
+        cp_data_flat = cp_data.ravel()
 
         for _ in range(maxiters):
-            median_val = cp.median(cp_data)
-            std_val = cp.std(cp_data)
+            median_val = cp.median(cp_data_flat)
+            std_val = cp.std(cp_data_flat)
             # Keep only pixels within +/- sigma * std of the median
-            mask = cp.abs(cp_data - median_val) < (sigma * std_val)
-            cp_data = cp_data[mask]
+            mask = cp.abs(cp_data_flat - median_val) < (sigma * std_val)
+            cp_data_flat = cp_data_flat[mask]
 
         # Final statistics on the clipped data
-        mean_val = float(cp.mean(cp_data))
-        median_val = float(cp.median(cp_data))
-        std_val = float(cp.std(cp_data))
-        min_val = float(cp.min(cp_data))
-        max_val = float(cp.max(cp_data))
+        mean_val = float(cp.mean(cp_data_flat))
+        median_val = float(cp.median(cp_data_flat))
+        std_val = float(cp.std(cp_data_flat))
+        min_val = float(cp.min(cp_data_flat))
+        max_val = float(cp.max(cp_data_flat))
 
         if hot_mask:
             hot_mask_arr = cp.abs(cp_data - median_val) > hot_mask_sigma * std_val  # 1 for bad, 0 for okay
             hot_mask_arr = cp.asnumpy(hot_mask_arr).astype("uint8")
     
-    del cp_data
+    del cp_data_flat, cp_data
     cp.get_default_memory_pool().free_all_blocks()
 
     if hot_mask:
