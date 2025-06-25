@@ -44,7 +44,7 @@ class SciProcConfiguration(BaseConfig):
     #     if config_file is not None:
     #         config_file = os.path.join(working_dir, config_file) if working_dir else config_file
     #         if os.path.exists(config_file):
-    #             config = cls.from_file(config_file=config_file, **kwargs)
+    #             config = cls.from_config(config_file=config_file, **kwargs)
     #         else:
     #             raise FileNotFoundError("Provided Configuration file does not exist")
     #     elif config_dict is not None:
@@ -62,7 +62,7 @@ class SciProcConfiguration(BaseConfig):
 
         # input_files = atleast1d(input_images)
         path = PathHandler(input_images, working_dir=os.getcwd())
-        self = cls.from_file(path.sciproc_base_yml)
+        self = cls.from_config(path.sciproc_base_yml)
         self.path = path
         self.config_file = self.path.sciproc_output_yml
 

@@ -103,11 +103,10 @@ class PreprocConfiguration(BaseConfig):
             config_source = input
             super().__init__(config_source=config_source, write=self.write, **kwargs)
             self.path = self._set_pathhandler_from_config()
-            self.config.logging.file = self.path.preproc_output_log  # used by write_config
             self.logger = self._setup_logger(
                 logger,
                 name=self.config.name,
-                log_file=self.config.logging.file,
+                log_file=self.path.preproc_output_log,
                 verbose=verbose,
                 overwrite=False,
             )
@@ -116,7 +115,8 @@ class PreprocConfiguration(BaseConfig):
             self.logger.debug(f"Configuration source: {config_source}")
         else:
             raise ValueError("Input must be a list of FITS files or a directory containing FITS files")
-
+        
+        self.config.logging.file = self.path.preproc_output_log
         self.config_file = self.path.preproc_output_yml  # used by write_config
         return
 

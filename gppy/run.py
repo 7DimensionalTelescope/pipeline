@@ -24,7 +24,7 @@ from .services.task import Task, TaskTree
 
 
 def run_preprocess(config, make_plots=False):
-    config = PreprocConfiguration.from_file(config)
+    config = PreprocConfiguration.from_config(config)
     prep = Preprocess(config)
     prep.run(make_plots=make_plots)
 
@@ -36,19 +36,19 @@ def get_preprocess_task(config, priority=Priority.HIGH, device_id = None, **kwar
     help in reducing systematic errors in scientific observations.
 
     """
-    config = PreprocConfiguration.from_file(config)
+    config = PreprocConfiguration.from_config(config)
     prep = Preprocess(config)
     run_task = Task(prep.run, kwargs={"make_plots": False}, gpu=True, priority=priority, device=device_id)
     return run_task
 
 def get_make_plot_task(config, priority=Priority.LOW):
-    config = PreprocConfiguration.from_file(config)
+    config = PreprocConfiguration.from_config(config)
     prep = Preprocess(config)
     plot_task = Task(prep.make_plot_all, gpu=False, priority=priority)
     return plot_task
 
 def run_scidata_reduction(config):
-    config = SciProcConfiguration.from_file(config)
+    config = SciProcConfiguration.from_config(config)
     if (not (config.config.flag.astrometry) and "astrometry" in processes) or overwrite:
         astr = Astrometry(config)
         astr.run()
@@ -80,7 +80,7 @@ def get_scidata_reduction_tasktree(
     Perform comprehensive scientific data reduction pipeline sequentially.
     Control which process to run with `processes`.
     """
-    config = SciProcConfiguration.from_file(config, write=True, **kwargs)
+    config = SciProcConfiguration.from_config(config, write=True, **kwargs)
 
     tasks = []
     if (not (config.config.flag.astrometry) and "astrometry" in processes) or overwrite:

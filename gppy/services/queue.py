@@ -300,7 +300,7 @@ nherit_input             func (Callable): Function to be executed
     def add_to_queue(self, task, tree=None):
         """Add a task to the appropriate queue."""
         if task.gpu:
-            if self._remaind_gpu_queue >= 2:
+            if self._remaind_gpu_queue >= 1:#len(self.gpu_devices):
                 task.gpu=False
                 task._device = "CPU"
                 task.kwargs["use_gpu"] = False
