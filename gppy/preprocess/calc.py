@@ -111,7 +111,7 @@ def process_batch_on_device_with_cupy(image_paths, bias, dark, flat, results, de
         prev_image = None
         for img_path in image_paths:
             with load_stream:
-                curr_image = cp.asarray(fits.getdata(img_path, memmap=True).astype('float32'))
+                curr_image = cp.asarray(fits.getdata(img_path).astype('float32'))
             
             if prev_image is not None:
                 with compute_stream:
@@ -141,7 +141,7 @@ def process_batch_on_device_with_cpu(image_paths, bias, dark, flat, results,
                              device_id=0, max_workers=4, subtract=None, normalize=False):
 
     def read_fits_image(path):
-        return fits.getdata(path, memmap=True).astype(np.float32)
+        return fits.getdata(path).astype(np.float32)
 
     bias = bias.astype(np.float32)
     dark = dark.astype(np.float32)
