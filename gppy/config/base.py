@@ -43,7 +43,7 @@ class BaseConfig(ABC):
         return self
 
     @classmethod
-    def from_file(cls, input: str, write=False, **kwargs):
+    def from_config(cls, input: str, write=False, **kwargs):
         # return cls(input, write=write, **kwargs)
         self = cls.__new__(cls)
         self._load_config(config_source=input)
@@ -60,10 +60,10 @@ class BaseConfig(ABC):
     # def from_base(cls, config_type, **kwargs):
     #     if config_type == "preprocess":
     #         config_file = os.path.join(const.REF_DIR, "preproc_base.yml")
-    #         return cls.from_file(config_file, **kwargs)
+    #         return cls.from_config(config_file, **kwargs)
     #     elif config_type == "sciprocess":
     #         config_file = os.path.join(const.REF_DIR, "sciproc_base.yml")
-    #         return cls.from_file(config_file, **kwargs)
+    #         return cls.from_config(config_file, **kwargs)
     #     else:
     #         raise ValueError(f"Invalid config_type: {config_type}")
 
@@ -76,7 +76,7 @@ class BaseConfig(ABC):
     #     if config_file is not None:
     #         config_file = os.path.join(working_dir, config_file) if working_dir else config_file
     #         if os.path.exists(config_file):
-    #             config = cls.from_file(config_file=config_file, **kwargs)
+    #             config = cls.from_config(config_file=config_file, **kwargs)
     #         else:
     #             raise FileNotFoundError("Provided Configuration file does not exist")
     #     elif config_type is not None:

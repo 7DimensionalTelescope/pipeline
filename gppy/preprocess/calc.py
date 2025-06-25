@@ -236,7 +236,6 @@ def sigma_clipped_stats(np_data, device_id=0, **kwargs):
     else:
         return sigma_clipped_stats_cupy(np_data, device_id=device_id, **kwargs)
 
-@njit
 def sigma_clipped_stats_cpu(data, sigma=3.0, maxiters=5,
                                minmax=False, hot_mask=False, hot_mask_sigma=5.0):
     flat = data.ravel()
@@ -259,8 +258,6 @@ def sigma_clipped_stats_cpu(data, sigma=3.0, maxiters=5,
         return mean_val, median_val, std_val, np.min(flat), np.max(flat)
 
     return mean_val, median_val, std_val
-
-
 
 @njit
 def _sigma_clip_1d(data_flat, sigma=3.0, maxiters=5):
