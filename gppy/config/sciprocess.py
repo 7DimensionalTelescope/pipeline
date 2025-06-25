@@ -196,6 +196,10 @@ class SciProcConfiguration(BaseConfig):
 
         # skip single frame combine for Deep mode
         raw_header_sample = get_header(input_file)
-        obsmode = raw_header_sample["OBSMODE"]
+        try:
+            obsmode = raw_header_sample["OBSMODE"]
+        except KeyError:
+            self.logger.warning("OBSMODE keyword not found in the header. Defaulting to 'spec'.")
+            obsmode = "spec"
         # self.config.obs.obsmode = obsmode
         self.config.settings.daily_stack = False if obsmode.lower() == "deep" else True
