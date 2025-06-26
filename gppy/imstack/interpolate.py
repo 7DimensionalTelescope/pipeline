@@ -1,8 +1,55 @@
-def interpolate_masked_pixels_cpu(image, mask, window=1):
-    # image: 2D cupy array
-    # mask: 2D cupy array with 0 (valid) and 1 (masked)
-    import numpy as np
+from numba import njit, prange
+import numpy as np
 
+@njit(parallel=True)
+def interpolate_masked_pixels_cpu_numba(image, mask, window=1):
+    assert image.shape == mask.shape
+    assert image.ndim == 2
+
+    H, W = image.shape
+    result = image.copy()
+
+    # Flatten index lookup of masked pixels
+    count = 0
+    for i in range(H):
+        for j in range(W):
+            if mask[i, j] == 1:
+                count += 1
+
+    rows = np.empty(count, dtype=np.int32)
+    cols = np.empty(count, dtype=np.int32)
+    idx = 0
+    for i in range(H):
+        for j in range(W):
+            if mask[i, j] == 1:
+                rows[idx] = i
+                cols[idx] = j
+                idx += 1
+
+    # Process each masked pixel in parallel
+    for k in prange(count):
+        r = rows[k]
+        c = cols[k]
+
+        r0 = max(0, r - window)
+        r1 = min(H, r + window + 1)
+        c0 = max(0, c - window)
+        c1 = min(W, c + window + 1)
+
+        # Collect valid neighbor values
+        vals = []
+        for y in range(r0, r1):
+            for x in range(c0, c1):
+                if mask[y, x] == 0:
+                    vals.append(image[y, x])
+
+        if len(vals) > 0:
+            vals_np = np.array(vals)
+            result[r, c] = np.median(vals_np)
+
+    return result
+
+def interpolate_masked_pixels_cpu(image, mask, window=1):
     assert image.shape == mask.shape
     assert image.ndim == 2
 
@@ -53,7 +100,7 @@ def interpolate_masked_pixels_gpu(image, mask, window=1):
         if valid_values.size > 0:
             result[r, c] = cp.median(valid_values)
 
-    return result
+    return result.get()
 
 
 def interpolate_masked_pixels_gpu_vectorized(image, mask, window=1):

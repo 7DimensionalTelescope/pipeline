@@ -18,7 +18,7 @@ from .services.monitor import Monitor
 from .services.queue import QueueManager, Priority
 
 from .services.logger import Logger
-from .services.task import Task, TaskTree
+from .services.task import Task
 
 #from .base import ObservationDataSet, CalibrationData
 
@@ -28,7 +28,7 @@ def run_preprocess(config, make_plots=False):
     prep = Preprocess(config)
     prep.run(make_plots=make_plots)
 
-def get_preprocess_task(config, priority=Priority.HIGH, device_id = None, **kwargs):
+def get_preprocess_task(config, priority=Priority.HIGH, device_id = None, only_with_sci=False, make_plots=True, **kwargs):
     """
     Generate master calibration frames for a specific observation set.
 
@@ -38,14 +38,8 @@ def get_preprocess_task(config, priority=Priority.HIGH, device_id = None, **kwar
     """
     config = PreprocConfiguration.from_config(config)
     prep = Preprocess(config)
-    run_task = Task(prep.run, kwargs={"make_plots": False}, gpu=True, priority=priority, device=device_id)
+    run_task = Task(prep.run, kwargs={"make_plots": make_plots, "only_with_sci": only_with_sci}, gpu=True, priority=priority, device=device_id)
     return run_task
-
-def get_make_plot_task(config, priority=Priority.LOW):
-    config = PreprocConfiguration.from_config(config)
-    prep = Preprocess(config)
-    plot_task = Task(prep.make_plot_all, gpu=False, priority=priority)
-    return plot_task
 
 def run_scidata_reduction(config):
     config = SciProcConfiguration.from_config(config)
@@ -94,7 +88,7 @@ def get_scidata_reduction_tasktree(
     if (not (config.config.flag.combine) and "combine" in processes) or overwrite:
         stk = ImStack(config)
         for task in stk.sequential_task:
-            tasks.append(Task(getattr(stk, task[1]), priority=Priority.HIGH, gpu=task[2], cls=stk))
+            tasks.append(Task(getattr(stk, task[1]), priority=Priority.MEDIUM, gpu=task[2], cls=stk))
     if (not (config.config.flag.combined_photometry) and "photometry" in processes) or overwrite:
         phot = Photometry(config)
         for task in phot.sequential_task:

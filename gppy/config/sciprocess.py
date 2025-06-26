@@ -100,6 +100,7 @@ class SciProcConfiguration(BaseConfig):
             self.logger.info("Generating 'SciProcConfiguration' from the 'base' configuration")
             self.logger.debug(f"Configuration source: {config_source}")
             super().__init__(config_source=config_source, write=self.write, **kwargs)
+            self.config.info.file = config_source
             self.config.logging.file = self.path.sciproc_output_log
 
         elif isinstance(input, str | dict):  # path of a config file

@@ -89,13 +89,17 @@ class Preprocess(BaseSetup):
         self.logger.debug(f"raw_groups:\n{self.raw_groups}")
         # raise ValueError("stop")  # for debug
 
-    def run(self, device_id=None, make_plots=True, use_gpu=True):
+    def run(self, device_id=None, make_plots=True, use_gpu=True, only_with_sci=False):
         self._use_gpu = all([use_gpu, self._use_gpu])
         
         device_id = self.get_device_id(device_id)
 
         threads_for_making_plots = []
         for i in range(self._n_groups):
+            if only_with_sci and len(self.sci_input) == 0:
+                self.logger.info(f"No science images for this masterframe. Skipping...")
+                continue
+
             self.load_masterframe(device_id=device_id)
             if not self.master_frame_only:
                 self.data_reduction(device_id=device_id)
@@ -349,6 +353,8 @@ class Preprocess(BaseSetup):
         if not self.sci_input:
             self.logger.info(f"No science frames found in group {self._current_group + 1}, skipping data reduction.")
             self.all_results = None
+            del self.bias_data, self.dark_data, self.flat_data
+            cp.get_default_memory_pool().free_all_blocks()
             return
 
         flag = [os.path.exists(file) for file in self.sci_output]

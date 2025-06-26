@@ -1,4 +1,4 @@
-from typing import List, Optional, Dict, Any, Callable, Union, Tuple
+from typing import Optional, Any, Callable, Union, Tuple
 from enum import Enum
 from datetime import datetime
 import time
@@ -19,9 +19,9 @@ class Priority(Enum):
 
     Allows fine-grained control over task scheduling and resource allocation.
     """
-    LOW = 0
-    MEDIUM = 1
-    HIGH = 2
+    LOW = 10
+    MEDIUM = 5
+    HIGH = 0
 
 class Task:
     _id_counter = itertools.count(0)
@@ -56,7 +56,6 @@ class Task:
         
         # Task metadata
         self.id = id or f"task_{next(self._id_counter)}"
-        self.task_name = task_name
         self.priority = priority
         self.starttime = starttime or datetime.now()
         self.endtime = endtime or datetime.now()
@@ -71,6 +70,8 @@ class Task:
         # Set task name after initialization to avoid recursion
         if task_name is None:
             self.task_name = self._get_task_name()
+        else:
+            self.task_name = task_name
 
     def __lt__(self, other):
         return self.sort_index < other.sort_index
@@ -136,18 +137,19 @@ class Task:
                     self.result = self.func(device_id = self.device, *self.args, **self.kwargs)
             else:
                 self.result = self.func(*self.args, **self.kwargs)
-
-            self.status = "completed"
-            return self
         except Exception as e:
             self.status = "failed"
             self.error = e
-            import logging
-            tmp_logger = logging.getLogger(self.task_name)
-            tmp_logger.error(f"Task {self.id} failed with error: {str(e)}")
+            try:
+                import logging
+                tmp_logger = logging.getLogger(self.task_name)
+                tmp_logger.error(f"Task {self.id} failed with error: {str(e)}")
+            except:
+                print(e)
             raise
-        finally:
-            self.endtime = datetime.now()
+        self.status = "completed"
+        self.endtime = datetime.now()
+        return self.result
 
     def cleanup(self):
         """Cleanup resources after task execution.
@@ -156,7 +158,6 @@ class Task:
         """
         # Clear function references
         self._func = None
-        
         # Clear arguments to free memory
         self.args = None
         self.kwargs = None
@@ -167,11 +168,12 @@ class Task:
             
         # Clean up GPU memory if this was a GPU task
         if self.gpu:
-            try:
-                cp.get_default_memory_pool().free_all_blocks()
-                cp.get_default_pinned_memory_pool().free_all_blocks()
-            except Exception as e:
-                print(f"Warning: Failed to free GPU memory: {e}", file=sys.stderr)
+            with cp.cuda.Device(self.device):
+                try:
+                    cp.get_default_memory_pool().free_all_blocks()
+                    cp.get_default_pinned_memory_pool().free_all_blocks()
+                except Exception as e:
+                    print(f"Warning: Failed to free GPU memory: {e}", file=sys.stderr)
         
         # General memory cleanup
         cleanup_memory()
@@ -193,63 +195,3 @@ class Task:
             f"priority={self.priority.name if self.priority else 'N/A'})"
         )
         
-
-class TaskTree:
-    """
-    Represents a sequential processing pipeline containing multiple tasks.
-    Tasks are executed in order, with results tracked for each step.
-    """
-    _id_counter = itertools.count(0)
-
-    def __init__(self, tasks: List[Task] = None, id: str = None):
-        self.id = id or f"tree_{next(self._id_counter)}"
-        self.tasks = tasks or []
-        self.status = "pending"
-        self.results = {}
-
-    def set_device(self, device_id=None) -> None:
-        from .utils import get_best_gpu_device
-
-        if device_id is None:
-            device_id = get_best_gpu_device()
-
-        for task in self.tasks:
-            task._device = device_id
-    
-    def add_task(self, task: Task) -> None:
-        """Add a processing task to this tree."""
-        self.tasks.append(task)
-    
-    def get_next_task(self) -> Optional[Task]:
-        """Get the next task to be processed."""
-        return self.tasks[0] if self.tasks else None
-    
-    def advance(self) -> None:
-        """Move to the next task after current one completes."""
-        if self.tasks:
-            self.tasks.pop(0)
-            cleanup_memory()
-            
-        if not self.tasks:
-            self.status = "completed"
-    
-    def is_complete(self) -> bool:
-        """Check if all tasks have been processed."""
-        return self.status == "completed"
-    
-    def store_result(self, task_id: str, result: Any) -> None:
-        """Store the result of a task execution."""
-        self.results[task_id] = result
-        
-    def get_all_results(self) -> Dict[str, Any]:
-        """Get all results from all tasks."""
-        return self.results
-        
-    def __repr__(self):
-        return f"TaskTree(id={self.id}, status={self.status}, tasks={len(self.tasks)})"
-        
-    def execute(self):
-        while not self.is_complete():
-            task = self.get_next_task()
-            task.execute()
-            self.advance()
