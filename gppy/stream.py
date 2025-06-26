@@ -34,6 +34,9 @@ class ReductionStream:
             self.id = f"stream_{next(self._id_counter)}"
         self.load_class()
 
+    @property
+    def current_class_name(self):
+        return self.current_class.__class__.__name__
 
     def check_status(self):
         for key in ["astrometry", "single_photometry", "combine", "combined_photometry", "subtraction"]:
@@ -57,14 +60,13 @@ class ReductionStream:
             self.load_class()
         if len(self.current_tasks) !=0:
             _, func, use_gpu = self.current_tasks.pop(0)
-            return Task(getattr(self.current_class, func), priority=Priority.MEDIUM, gpu=use_gpu, task_name = f"{self.current_class.__name__}.{func}")
+            return Task(getattr(self.current_class, func), priority=Priority.MEDIUM, gpu=use_gpu, task_name = f"{self.current_class_name}.{func}")
         else:
             return None
+
     def is_complete(self) -> bool:
         """Check if all tasks have been processed."""
         return self.status == "completed"
     
     def __repr__(self):
-        return f"TaskTree(id={self.id}, status={self.status}, current_class={self.current_class.__name__})"
-        
-    
+        return f"TaskTree(id={self.id}, status={self.status}, current_class={self.current_class_name})"
