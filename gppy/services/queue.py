@@ -1,4 +1,5 @@
 #from multiprocessing.pool import Pool
+from tkinter.constants import TRUE
 import multiprocess as mp
 import queue
 from queue import PriorityQueue
@@ -13,7 +14,8 @@ import os
 from typing import Callable, Any, Optional, List, Dict, Union
 from datetime import datetime
 from .logger import Logger
-from .task import TaskTree, Task, Priority
+from .task import Task, Priority
+
 
 from contextlib import contextmanager
 
@@ -72,7 +74,7 @@ class QueueManager:
 
         # Results and error handling
         self.tasks: List[Task] = []
-        self.trees: List[TaskTree] = []
+        self.streams: List[Taskstream] = []
         self.results: List[Any] = []
         self.errors: List[Dict] = []
         self.lock = threading.Lock()
@@ -244,52 +246,37 @@ nherit_input             func (Callable): Function to be executed
         self.log_memory_stats(f"Task {task.task_name}(id: {task.id}) submitted")
         return task_id
 
-    def add_tree(self, tree: TaskTree):
-        """Add a TaskTree to the forest."""
-        self.trees.append(tree)
-        self.logger.info(f"Added tree {tree.id} with {len(tree.tasks)} branches")
-        device = self._choose_gpu_device()
-        self.logger.info(f"This TaskTree will be executed on GPU {device}")
-        tree.set_device(device)
-        first_task = tree.tasks[0]
+    def add_stream(self, stream):
+        """Add a ReductionStream to the forest."""
+        self.streams.append(stream)
+        self.logger.info(f"Added stream {stream.id}")
 
-        first_task.set_time_priority()
-        
-        self.tasks.append(first_task)
-        
-        self.add_to_queue(first_task, tree)
+        task = stream.get_task()
+        task.set_time_priority()
+        # Add task to the task list
+        self.tasks.append(task)
+
+        # Put the task in the appropriate queue
+        self.add_to_queue(task, stream)
 
         self.logger.info(
-            f"Added {'GPU' if first_task.gpu else 'CPU'} task {first_task.task_name} (id: {first_task.id}) with priority {first_task.priority}"
+            f"Added {'GPU' if task.gpu else 'CPU'} task {task.task_name} (id: {task.id}) with priority {task.priority}"
         )
-        self.log_memory_stats(f"Tree {tree.id} submitted")
+        self.log_memory_stats(f"Stream {stream.id} submitted")
         time.sleep(0.1)
 
-    def _move_to_next_task(self, tree: TaskTree, cls: Any=None, inherit_input: Any=None) -> None:
-        """Queue the next task of a tree for processing."""
+    def _move_to_next_task(self, stream) -> None:
+        """Queue the next task of a stream for processing."""
+        task = stream.get_task()
 
-        tree.advance()
-
-        if tree.is_complete():
-            return
-
-        task = tree.get_next_task()
-
-        if task.inherit_input:
-            task.kwargs["inherit_input"] = inherit_input
-        
-        if task is None:
-            return
-
-        if cls is not None:
-            if type(cls).__name__ == type(task.cls).__name__:
-                task.cls = cls
+        if stream.is_complete():
+            return 
         
         task.set_time_priority()
 
         self.tasks.append(task)
 
-        self.add_to_queue(task, tree)
+        self.add_to_queue(task, stream)
 
         self.logger.info(
             f"Added {'GPU' if task.gpu else 'CPU'} task {task.task_name} (id: {task.id}) with priority {task.priority}"
@@ -297,43 +284,43 @@ nherit_input             func (Callable): Function to be executed
         self.log_memory_stats(f"Task {task.task_name}(id: {task.id}) submitted")
         time.sleep(0.1)
         
-    def add_to_queue(self, task, tree=None):
+    def add_to_queue(self, task, stream=None):
         """Add a task to the appropriate queue."""
         if task.gpu:
             if self._remaind_gpu_queue >= 1:#len(self.gpu_devices):
                 task.gpu=False
                 task._device = "CPU"
                 task.kwargs["use_gpu"] = False
-                self.cpu_queue.put((task.priority, task, tree))
+                self.cpu_queue.put((task.priority, task, stream))
                 return
             if task.device is None:
                 task._device = self._choose_gpu_device()
             if task.priority == Priority.HIGH:
-                self.gpu_high_priority_queue[task.device].put((task, tree))
+                self.gpu_high_priority_queue[task.device].put((task, stream))
             else:
-                self.gpu_queue[task.device].put((task, tree))
+                self.gpu_queue[task.device].put((task, stream))
             with self.lock:
                 self._remaind_gpu_queue += 1
         else:
-            self.cpu_queue.put((task.priority, task, tree))
+            self.cpu_queue.put((task.priority, task, stream))
 
     ######### Task processing #########
     def _cpu_worker(self):
         """Distribute CPU tasks to the process pool."""
 
-        def task_wrapper(task, tree):
+        def task_wrapper(task, stream):
             try:
                 result = task.execute()
-                return task, tree, result, None
+                return task, stream, result, None
             except Exception as e:
-                return task, tree, None, str(e)
+                return task, stream, None, str(e)
 
         def callback(result_tuple):
-            task, tree, result, error = result_tuple
-            self._handle_completed_task(task, tree, result, error)
+            task, stream, result, error = result_tuple
+            self._handle_completed_task(task, stream, result, error)
 
         def errback(error):
-            self._handle_completed_task(task, tree, None, str(error))
+            self._handle_completed_task(task, stream, None, str(error))
 
         while not self._abrupt_stop_requested.is_set():
             try:
@@ -342,10 +329,10 @@ nherit_input             func (Callable): Function to be executed
                 
                 # First check high priority queue
                 try:
-                    # Unpack the priority queue item (priority, task, tree)
-                    _, task, tree = self.cpu_queue.get(timeout=0.2)
+                    # Unpack the priority queue item (priority, task, stream)
+                    _, task, stream = self.cpu_queue.get(timeout=0.2)
                 except queue.Empty:
-                    task, tree = None, None
+                    task, stream = None, None
           
                 if task is None:
                     time.sleep(0.2)
@@ -356,7 +343,7 @@ nherit_input             func (Callable): Function to be executed
                 
                 try:
                     async_result = self.cpu_pool.apply_async(
-                        task_wrapper, args=(task, tree), callback=callback, error_callback=errback
+                        task_wrapper, args=(task, stream), callback=callback, error_callback=errback
                     )
                 except Exception as e:
                     import traceback
@@ -417,12 +404,12 @@ nherit_input             func (Callable): Function to be executed
                 
                 for task_queue in [self.gpu_high_priority_queue[device], self.gpu_queue[device]]:
                     try:
-                        task, tree = task_queue.get(timeout=0.2)
+                        task, stream = task_queue.get(timeout=0.2)
                         with self.lock:
                             self._remaind_gpu_queue -= 1
                         break
                     except queue.Empty:
-                        task, tree = None, None
+                        task, stream = None, None
                         continue
                 
                 if task is None:
@@ -434,10 +421,10 @@ nherit_input             func (Callable): Function to be executed
                 try:
                     with self.gpu_context(device):
                         result = task.execute()
-                        self._handle_completed_task(task, tree, result, None)
+                        self._handle_completed_task(task, stream, result, None)
 
                 except Exception as e:
-                    self._handle_completed_task(task, tree, None, str(e))
+                    self._handle_completed_task(task, stream, None, str(e))
 
             except AbruptStopException:
                 self.logger.info(f"GPU worker process for device {device} stopped.")
@@ -447,7 +434,7 @@ nherit_input             func (Callable): Function to be executed
                 time.sleep(0.5)
                 raise
 
-    def _handle_completed_task(self, task, tree, result, error):
+    def _handle_completed_task(self, task, stream, result, error):
         """Handle a completed task from either pool or GPU."""
         with self.lock:
             for submitted_task in self.tasks:
@@ -456,8 +443,6 @@ nherit_input             func (Callable): Function to be executed
                         submitted_task.status = "failed"
                     else:
                         submitted_task.status = "completed"
-                        if tree is not None and task.error is None:
-                            self._move_to_next_task(tree, task.cls, result)
                         
                         if self.save_result:
                             submitted_task.result = result
@@ -465,12 +450,16 @@ nherit_input             func (Callable): Function to be executed
                         else:
                             submitted_task.result = None
                             result = None
+
                     task.endtime = datetime.now()
                     submitted_task.endtime = datetime.now()
                     submitted_task.error = error
 
                     task.cleanup()
                     submitted_task.cleanup()
+                    
+                    if stream is not None and task.error is None:
+                        self._move_to_next_task(stream)    
                     break
             self.logger.info(f"Completed task {task.task_name}(id: {task.id}) in {time_diff_in_seconds(task.starttime, task.endtime)} seconds")
             self.log_memory_stats(f"Task {task.task_name}(id: {task.id}) completed")
@@ -627,30 +616,30 @@ nherit_input             func (Callable): Function to be executed
         if isinstance(task_id, str):
             if task_id == "all":
                 task_ids = [task.id for task in self.tasks]
-                tree_ids = [tree.id for tree in self.trees]
-            elif task_id.startswith("tree"):
+                stream_ids = [stream.id for stream in self.streams]
+            elif task_id.startswith("stream"):
                 task_ids = []
-                tree_ids = [task_id]
+                stream_ids = [task_id]
             elif task_id.startswith("t"):
                 task_ids = [task_id]
-                tree_ids = []
+                stream_ids = []
             else:
                 task_ids = [task_id]
-                tree_ids = []
+                stream_ids = []
         elif isinstance(task_id, list):
             task_ids = [tid for tid in task_id if tid.startswith("t")]
-            tree_ids = [tid for tid in task_id if tid.startswith("tree")]
+            stream_ids = [tid for tid in task_id if tid.startswith("stream")]
         else:
             return True  # Invalid input
 
-        while task_ids or tree_ids:
+        while task_ids or stream_ids:
             if timeout is not None and time.time() - start_time > timeout:
                 return False
 
             task_ids = [tid for tid in task_ids if any(task.id == tid and task.status != "completed" for task in self.tasks)]
-            tree_ids = [tid for tid in tree_ids if any(tree.id == tid and not tree.is_complete() for tree in self.trees)]
+            stream_ids = [tid for tid in stream_ids if any(stream.id == tid and not stream.is_complete() for stream in self.streams)]
 
-            if not task_ids and not tree_ids:
+            if not task_ids and not stream_ids:
                 return True
 
             time.sleep(1)

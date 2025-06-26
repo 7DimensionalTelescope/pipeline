@@ -1,66 +1,69 @@
 import numpy as np
 import cupy as cp
-from cupyx.scipy.signal import fftconvolve
 
+def convolve_fft(image, kernel, mode="same", normalize_kernel=False, device_id=0):
+    if device_id is "CPU":
+        return convolve_fft_cpu(image, kernel, normalize_kernel)
+    else:
+        return convolve_fft_gpu(image, kernel, mode, normalize_kernel, device_id)
 
 def convolve_fft_gpu(image, kernel, mode="same", normalize_kernel=False, device_id=0):
-    """
-    Perform FFT convolution on the GPU using cupyx.scipy.signal.fftconvolve,
-    as an alternative to astropy.convolution.convolve_fft.
 
-    Parameters
-    ----------
-    image : numpy.ndarray
-        Input image.
-    kernel : Kernel object (e.g., astropy.convolution.Gaussian2DKernel)
-        Convolution kernel; its values are accessed via kernel.array.
-        Its dimensions must be odd to prevent shifting of the convolved image.
-    mode : str, optional
-        Convolution mode: 'full', 'same', or 'valid'. Default is 'same'.
-    normalize_kernel : bool, optional
-        If True, the kernel is normalized so that its sum equals 1.
+    from cupyx.scipy.signal import fftconvolve
 
-    Returns
-    -------
-    result : numpy.ndarray
-        Convolved image as a NumPy array.
-    """
     with cp.cuda.Device(device_id):
-        # Convert image to float64 and transfer to GPU.
         image = cp.asarray(image, dtype=cp.float64)
-
-        # Get kernel array and transfer to GPU. It must be ODD!
         kernel_array = cp.asarray(kernel.array, dtype=cp.float64)
         if normalize_kernel:
             kernel_array = kernel_array / cp.sum(kernel_array)
 
-        # Optionally, handle any NaN values in the image.
         image = cp.nan_to_num(image, nan=0.0)
-
-        # Perform FFT convolution on the GPU.
         result = fftconvolve(image, kernel_array, mode=mode)
+        result = cp.asnumpy(result)
+        del image, kernel_array
+        cp.get_default_memory_pool().free_all_blocks()
 
-        # Transfer the result back to the CPU.
-        return cp.asnumpy(result)
+        return result
 
+def convolve_fft_cpu(image, kernel, normalize_kernel=False):
+    from astropy.convolution import convolve_fft
+    return convolve_fft(image, kernel, normalize_kernel=normalize_kernel)
 
-def get_edge_mask(weight_image, kernel):
+def get_edge_mask(weight_image, kernel, device_id=None):
+    if device_id is "CPU":
+        return get_edge_mask_cpu(weight_image, kernel)
+    else:
+        return get_edge_mask_gpu(weight_image, kernel, device_id)
+
+def get_edge_mask_cpu(weight_image, kernel):
     from scipy.ndimage import binary_dilation
 
     mask = weight_image != 0  # 0 for edge, 1 for inside
 
     size = np.shape(kernel)
-
     struct = np.ones(size, dtype=bool)
     dilated_mask = binary_dilation(mask, structure=struct)
     return dilated_mask  # mask for inside
 
+def get_edge_mask_gpu(weight_image, kernel, device_id=None):
+    from cupyx.scipy.ndimage import binary_dilation
+
+    with cp.cuda.Device(device_id):
+        mask = cp.asarray(weight_image != 0)  # 0 for edge, 1 for inside
+
+        size = cp.shape(kernel)
+
+        struct = cp.ones(size, dtype=bool)
+        dilated_mask = binary_dilation(mask, structure=struct)
+        dilated_mask = cp.asnumpy(dilated_mask)
+        del mask, struct
+        cp.get_default_memory_pool().free_all_blocks()
+        return dilated_mask  # mask for inside
 
 def add_conv_method(header, delta_peeing, method):
     header["CONV"] = (method.upper(), "Method for seeing-match convolution")
     header['CONVSIZE"'] = (delta_peeing, "Convolution kernel FWHM in pixels")
     return header
-
 
 # Example
 if __name__ == "__main__":

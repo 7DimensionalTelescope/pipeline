@@ -1,10 +1,9 @@
 import os
 from astropy.io import fits
 from ..utils import swap_ext
-
-
+from numba import njit
 import numpy as np
-
+import cupy as cp
 
 def unique(base_filename):
     """
@@ -24,9 +23,29 @@ def unique(base_filename):
     # print('saving as', new_filename)
     return new_filename
 
+def pix_err(xp, *args, **kwargs):
+    if xp is np:
+        return pix_err_numba(*args, **kwargs)
+    else:
+        return pix_err_cupy(*args, **kwargs)
 
-def pix_err(xp, r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, G, weight=True):
-    nonneg = lambda x: xp.maximum(x, 0)
+@njit
+def pix_err_numba(r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, G, weight=True):
+    sig_r_squared = np.maximum(f_m * r_p + d_m, 0) / G + sig_z**2
+    sig_zm = sig_z / np.sqrt(p_z)
+    sig_dm_squared = (d_m / G + (1 + 1 / p_z) * sig_z**2) / p_d
+    sig_fm = sig_f / np.sqrt(p_f)
+
+    sig_rp_squared = (sig_r_squared + sig_zm**2 + sig_dm_squared) / f_m**2 + (r_p / f_m) ** 2 * sig_fm**2
+
+    if weight:
+        return 1 / (sig_rp_squared + sig_b**2)
+    else:
+        return np.sqrt(sig_rp_squared + sig_b**2)
+
+
+def pix_err_cupy(r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, G, weight=True):
+    nonneg = lambda x: cp.maximum(x, 0)
     """
     r: raw pixel value. r = f * r_p + d + z
     r_p: preprocessed pixel value
@@ -35,16 +54,18 @@ def pix_err(xp, r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, G, weight=Tru
     f: flat
     """
     sig_r_squared = nonneg(f_m * r_p + d_m) / G + sig_z**2
-    sig_zm = sig_z / xp.sqrt(p_z)
+    sig_zm = sig_z / cp.sqrt(p_z)
     sig_dm_squared = (d_m / G + (1 + 1 / p_z) * sig_z**2) / p_d
-    sig_fm = sig_f / xp.sqrt(p_f)
+    sig_fm = sig_f / cp.sqrt(p_f)
 
     sig_rp_squared = (sig_r_squared + sig_zm**2 + sig_dm_squared) / f_m**2 + (r_p / f_m) ** 2 * sig_fm**2  # fmt: skip
-
     if weight:
-        return 1 / (sig_rp_squared + sig_b**2)  # 1/variance
+        output =  1 / (sig_rp_squared + sig_b**2)
     else:
-        return xp.sqrt(sig_rp_squared + sig_b**2)  # sigma
+        output = cp.sqrt(sig_rp_squared + sig_b**2)
+    del sig_r_squared, sig_zm, sig_dm_squared, sig_fm, sig_rp_squared, sig_b
+    cp.get_default_memory_pool().free_all_blocks()
+    return output.get()
 
 
 def pix_err_approx(

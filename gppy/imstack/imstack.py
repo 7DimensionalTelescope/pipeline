@@ -20,13 +20,20 @@ from .utils import move_file  # inputlist_parser, move_file
 from .const import ZP_KEY, IC_KEYS, CORE_KEYS
 from ..const import PipelineError
 from ..path.path import PathHandler, NameHandler
-from .weight import pix_err
+from .weight import pix_err_cupy, pix_err_numba
 
 warnings.filterwarnings("ignore")
 
 
 class ImStack(BaseSetup):
-    def __init__(self, config=None, logger=None, queue=None, overwrite=False, use_gpu: bool = True,) -> None:
+    def __init__(
+        self,
+        config=None,
+        logger=None,
+        queue=None,
+        overwrite=False,
+        use_gpu: bool = True,
+    ) -> None:
 
         super().__init__(config, logger, queue)
         self.overwrite = overwrite
@@ -35,7 +42,7 @@ class ImStack(BaseSetup):
         self._flag_name = "combine"
 
     @classmethod
-    def from_list(cls, input_images):
+    def from_list(cls, input_images, working_dir=None):
         """use soft link if files are from different directories"""
 
         image_list = []
@@ -46,13 +53,15 @@ class ImStack(BaseSetup):
                 return None
             image_list.append(path.parts[-1])  # str
 
-        working_dir = str(path.parent.absolute())
+        working_dir = working_dir or os.getcwd()  # str(path.parent.absolute()
 
         config = SciProcConfiguration.base_config(working_dir=working_dir)
         # config.path.path_processed = working_dir
-        config.input.calibrated_images = image_list
+        config.config.input.calibrated_images = image_list
 
-        return cls(config=config)
+        self = cls(config=config)
+        self.path = PathHandler(input_images)
+        return self
 
     @property
     def sequential_task(self):
@@ -65,8 +74,10 @@ class ImStack(BaseSetup):
             (5, "save_weight_map", False),
             (6, "apply_bpmask", True),
             (7, "joint_registration", False),
-            (8, "convolve", True),
-            (9, "stack_with_swarp", False),
+            (8, "prepare_convolution", False),
+            (9, "run_convolution", True),
+            (10, "save_convolved_images", False),
+            (11, "stack_with_swarp", False),
         ]
 
     def get_device_id(self, device_id):
@@ -78,13 +89,14 @@ class ImStack(BaseSetup):
             elif self._device_id is None:
                 if self.config.imstack.device is not None:
                     self._device_id = self.config.imstack.device
-                else: 
+                else:
                     from ..services.utils import get_best_gpu_device
+
                     self._device_id = get_best_gpu_device()
                     self.config.imstack.device = self._device_id
         else:
             self._device_id = "CPU"
-        
+
         return self._device_id
 
     def run(self, use_gpu: bool = True, device_id=None):
@@ -112,7 +124,9 @@ class ImStack(BaseSetup):
 
             # seeing convolution
             if self.config.imstack.convolve:
-                self.convolve(device_id=device_id)
+                self.prepare_convolution()
+                self.run_convolution(device_id=device_id)
+                self.save_convolved_images()
 
             # swarp imcombine
             self.stack_with_swarp()
@@ -329,18 +343,20 @@ class ImStack(BaseSetup):
     def calculate_weight_map(self, device_id=None, use_gpu: bool = True):
         """Retains cpu support as a code template"""
         st = time.time()
-        self.logger.info(f"Start weight-map calculation with {'GPU' if use_gpu else 'CPU'}")
         self._use_gpu = all([use_gpu, self.config.imstack.gpu, self._use_gpu])
+        self.logger.info(f"Start weight-map calculation with {'GPU' if self._use_gpu else 'CPU'}")
         # pick xp and device‐context based on GPU flag
         if self._use_gpu:
             import cupy as xp
 
             device_id = self.get_device_id(device_id)
             device_context = xp.cuda.Device(device_id)
+            pix_err = pix_err_cupy
         else:
             import numpy as xp
 
             device_context = nullcontext()  # no‐op context manager for CPU
+            pix_err = pix_err_numba
 
         # self.config.imstack.input_images  # if you want to save single frame weights
         bkgsub_images = self.config.imstack.bkgsub_images
@@ -367,10 +383,10 @@ class ImStack(BaseSetup):
                 self.logger.debug(f"Group {i} calibs: {calibs}")
                 d_m_file, f_m_file, sig_z_file, sig_f_file = PathHandler.weight_map_input(calibs)
 
-                d_m = xp.asarray(fits.getdata(d_m_file))
-                f_m = xp.asarray(fits.getdata(f_m_file))
-                sig_z = xp.asarray(fits.getdata(sig_z_file))
-                sig_f = xp.asarray(fits.getdata(sig_f_file))
+                d_m = xp.asarray(fits.getdata(d_m_file), dtype=xp.float32)
+                f_m = xp.asarray(fits.getdata(f_m_file), dtype=xp.float32)
+                sig_z = xp.asarray(fits.getdata(sig_z_file), dtype=xp.float32)
+                sig_f = xp.asarray(fits.getdata(sig_f_file), dtype=xp.float32)
                 p_z = fits.getheader(sig_z_file)["NFRAMES"]
                 p_d = fits.getheader(d_m_file)["NFRAMES"]
                 p_f = fits.getheader(f_m_file)["NFRAMES"]
@@ -387,15 +403,14 @@ class ImStack(BaseSetup):
                     st_image = time.time()
 
                     r_p_file = images[j]
-                    r_p = xp.asarray(fits.getdata(r_p_file))
+                    r_p = xp.asarray(fits.getdata(r_p_file), dtype=xp.float32)
 
                     # bkg_file = self.config.imstack.bkg_files[i]
                     # bkgsub_file = self.config.imstack.bkgsub_files[i]
-                    sig_b = xp.zeros_like(r_p)
+                    sig_b = xp.zeros_like(r_p, dtype=xp.float32)
                     # sig_b = calculate_background_sigma(bkg_file, egain)
                     # sig_b = xp.asarray(fits.getdata(sig_b_file))
-
-                    weight_image = pix_err(xp, r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, egain, weight=True)
+                    weight_image = pix_err(r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, egain, weight=True)
 
                     if hasattr(weight_image, "get"):  # if CuPy array
                         weight_image = weight_image.get()  # Convert to NumPy array
@@ -407,7 +422,7 @@ class ImStack(BaseSetup):
                 results[i] = group_results
 
         del r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, egain, weight_image
-        if hasattr(xp, "get_default_memory_pool"):
+        if self._use_gpu:
             xp.get_default_memory_pool().free_all_blocks()
 
         self.weight_maps_data = results
@@ -437,12 +452,22 @@ class ImStack(BaseSetup):
         self._use_gpu = all([use_gpu, self.config.imstack.gpu, self._use_gpu])
 
         device_id = self.get_device_id(device_id)
-        
-        import cupy as cp
-        from .interpolate import (
-            interpolate_masked_pixels_gpu_vectorized_weight,
-            add_bpx_method,
-        )
+
+        from .interpolate import add_bpx_method
+
+        if self._use_gpu:
+            import cupy as xp
+            from .interpolate import interpolate_masked_pixels_gpu_vectorized_weight
+
+            device_id = self.get_device_id(device_id)
+            device_context = xp.cuda.Device(device_id)
+            interpolate_masked_pixels = interpolate_masked_pixels_gpu_vectorized_weight
+        else:
+            import numpy as xp
+            from .interpolate import interpolate_masked_pixels_cpu_numba
+
+            device_context = nullcontext()  # no‐op context manager for CPU
+            interpolate_masked_pixels = interpolate_masked_pixels_cpu_numba
 
         st = time.time()
         self.logger.info("Start the interpolation for bad pixels")
@@ -458,8 +483,8 @@ class ImStack(BaseSetup):
         # ad-hoc. Todo: group input_files for different bpmask files
         bpmask_array, header = fits.getdata(PathHandler.get_bpmask(self.config.imstack.bkgsub_images[0]), header=True)
 
-        with cp.cuda.Device(device_id):
-            mask = cp.asarray(bpmask_array)
+        with device_context:
+            mask = xp.asarray(bpmask_array)
 
             # pre-bind to avoid UnboundLocalError
             interp = image = weight = interp_weight = None
@@ -480,36 +505,37 @@ class ImStack(BaseSetup):
                     self.logger.debug(f"Already exists; skip generating {output_file}")
                     continue
 
-                image = cp.asarray(fits.getdata(input_file))
+                image = xp.asarray(fits.getdata(input_file))
 
                 if self.config.imstack.weight_map:
                     input_weight_file = add_suffix(input_file, "weight")
                     output_weight_file = add_suffix(output_file, "weight")
-                    weight = cp.asarray(fits.getdata(input_weight_file))  # as 1/VARIANCE
+                    weight = xp.asarray(fits.getdata(input_weight_file))  # as 1/VARIANCE
 
-                    interp, interp_weight = interpolate_masked_pixels_gpu_vectorized_weight(
+                    interp, interp_weight = interpolate_masked_pixels(
                         image, mask, weight=weight, method=method, badpix=badpix
                     )
                     fits.writeto(
                         output_weight_file,
-                        interp_weight.get(),
+                        interp_weight,
                         header=add_bpx_method(fits.getheader(input_weight_file), method),
                         overwrite=True,
                     )
 
                 else:
-                    interp = interpolate_masked_pixels_gpu_vectorized_weight(image, mask, method=method, badpix=badpix)
+                    interp = interpolate_masked_pixels(image, mask, method=method, badpix=badpix)
 
                 fits.writeto(
                     output_file,
-                    interp.get(),
+                    interp,
                     header=add_bpx_method(fits.getheader(input_file), method),
                     overwrite=True,
                 )
 
         self.images_to_stack = self.config.imstack.interp_images
         del mask, interp, image, weight, interp_weight
-        cp.get_default_memory_pool().free_all_blocks()
+        if self._use_gpu:
+            cp.get_default_memory_pool().free_all_blocks()
         self.logger.info(f"Interpolation for bad pixels is completed in {time_diff_in_seconds(st)} seconds")
 
     def zpscale(self):
@@ -568,24 +594,19 @@ class ImStack(BaseSetup):
         """
         pass
 
-    def convolve(self, device_id=None, use_gpu: bool = True):
+    def prepare_convolution(self):
         """
         This is ad-hoc. Change it to convolve after resampling and take
         advantage of uniform pixel scale.
         """
-        st = time.time()
-        self._use_gpu = all([use_gpu, self.config.imstack.gpu, self._use_gpu])
-        device_id = self.get_device_id(device_id)
-        
-        method = self.config.imstack.convolve.lower()
-        self.logger.info(f"Start the convolution with {method} method")
 
-        # pre-bind to avoid UnboundLocalError
-        kernel = mask = convolved_wht = wht = None
+        method = self.config.imstack.convolve.lower()
+        self.logger.info(f"Prepare the convolution with {method} method")
+
+        self.kernel = []
 
         if method == "gaussian":
             from astropy.convolution import Gaussian2DKernel
-            from .convolve import convolve_fft_gpu, get_edge_mask, add_conv_method
             from ..utils import force_symlink
 
             # Define output path
@@ -598,71 +619,104 @@ class ImStack(BaseSetup):
             # Get peeings for convolution
             peeings = [fits.getheader(inim)["PEEING"] for inim in self.images_to_stack]
             # max_peeing = np.max(peeings)
-            max_peeing = (
+            self._max_peeing = (
                 self.config.imstack.target_seeing / collapse(self.path.pixscale, raise_error=True)
                 if hasattr(self.config.imstack, "target_seeing")
                 and isinstance(self.config.imstack.target_seeing, (int, float))
                 else np.max(peeings)
             )
-            delta_peeings = [np.sqrt(max_peeing**2 - peeing**2) for peeing in peeings]
+            delta_peeings = [self._calc_delta_peeing(peeing) for peeing in peeings]
             self.logger.debug(f"PEEINGs: {peeings}")
 
-            # convolve
-            for i in range(len(self.images_to_stack)):
-                inim = self.images_to_stack[i]
-                delta_peeing = delta_peeings[i]
-                outim = self.config.imstack.conv_files[i]
-
-                # Skip the seeing reference image
-                if delta_peeing == 0:
-                    self.logger.debug(f"Skipping conv for max peeing image {get_basename(inim)}")
-                    force_symlink(inim, outim)
+            for i, delta_peeing in enumerate(delta_peeings):
+                if delta_peeing is None:
+                    force_symlink(self.images_to_stack[i], self.config.imstack.conv_files[i])
                     if self.config.imstack.weight_map:
-                        force_symlink(add_suffix(inim, "weight"), add_suffix(outim, "weight"))
-                    continue
-
-                kernel = Gaussian2DKernel(x_stddev=delta_peeing / (np.sqrt(8 * np.log(2))))  # 8*sig + 1 sized
-
-                # sci
-                im = fits.getdata(inim)
-                convolved_im = convolve_fft_gpu(im, kernel, device_id=device_id)
-                fits.writeto(
-                    outim,
-                    convolved_im,
-                    header=add_conv_method(fits.getheader(inim), delta_peeing, method),
-                    overwrite=True,
-                )
-
-                # wht
-                if self.config.imstack.weight_map:
-                    inim_wht = add_suffix(inim, "weight")
-                    outim_wht = add_suffix(outim, "weight")
-                    if os.path.exists(inim_wht):
-                        wht = fits.getdata(inim_wht)
-                        convolved_wht = convolve_fft_gpu(wht, kernel)
-
-                        # Expand zero-padding by the size of the kernel
-                        mask = get_edge_mask(wht, kernel)
-                        convolved_wht[~mask] = 0
-
-                        fits.writeto(
-                            outim_wht,
-                            convolved_wht,
-                            header=add_conv_method(fits.getheader(inim_wht), delta_peeing, method),
-                            overwrite=True,
+                        force_symlink(
+                            add_suffix(self.images_to_stack[i], "weight"),
+                            add_suffix(self.config.imstack.conv_files[i], "weight"),
                         )
-                    else:
-                        self.logger.warning(f"Weight map not found for {inim}")
-
-            self.images_to_stack = self.config.imstack.conv_files
-
+                    self.kernel.append(None)
+                else:
+                    self.kernel.append(
+                        Gaussian2DKernel(x_stddev=delta_peeing / (np.sqrt(8 * np.log(2))))
+                    )  # 8*sig + 1 sized
         else:
             self.logger.info("Undefined convolution method. Skipping seeing match")
 
-        del kernel, mask, convolved_wht, wht
-        cp.get_default_memory_pool().free_all_blocks()
+    def run_convolution(self, device_id=None, use_gpu: bool = True):
+        from .convolve import convolve_fft, get_edge_mask
+
+        st = time.time()
+        self._use_gpu = all([use_gpu, self.config.imstack.gpu, self._use_gpu])
+        device_id = self.get_device_id(device_id)
+        if self._use_gpu:
+            self.logger.info(f"Using GPU {device_id} for convolution")
+        else:
+            self.logger.info("Using CPU for convolution")
+
+        self._convolved_images = []
+        self._convolved_wht_images = []
+
+        for i in range(len(self.images_to_stack)):
+            if self.kernel[i] is None:
+                self._convolved_images.append(None)
+                self._convolved_wht_images.append(None)
+                self.logger.info(f"Convolution is skipped for images due to no kernel [{i+1}/{len(self.images_to_stack)}]")
+
+                continue
+            inim = self.images_to_stack[i]
+            im = fits.getdata(inim)
+            convolved_im = convolve_fft(im, self.kernel[i], device_id=device_id)
+            self._convolved_images.append(convolved_im)
+            if self.config.imstack.weight_map:
+                inim_wht = add_suffix(inim, "weight")
+                if os.path.exists(inim_wht):
+                    wht = fits.getdata(inim_wht)
+                    convolved_wht = convolve_fft(wht, self.kernel[i], device_id=device_id)
+                    mask = get_edge_mask(wht, self.kernel[i], device_id=device_id)
+                    convolved_wht[~mask] = 0
+                    self._convolved_wht_images.append(convolved_wht)
+                else:
+                    self._convolved_wht_images.append(None)
+
+            self.logger.info(f"Convolution is completed for images [{i+1}/{len(self.images_to_stack)}]")
 
         self.logger.info(f"Convolution is completed in {time_diff_in_seconds(st)} seconds")
+
+    def save_convolved_images(self):
+        from .convolve import add_conv_method
+
+        method = self.config.imstack.convolve.lower()
+
+        for i in range(len(self.images_to_stack)):
+            peeing = fits.getheader(self.images_to_stack[i])["PEEING"]
+            delta_peeing = self._calc_delta_peeing(peeing)
+            if delta_peeing is None:
+                continue
+            header = add_conv_method(fits.getheader(self.images_to_stack[i]), delta_peeing, method)
+            fits.writeto(
+                self.config.imstack.conv_files[i],
+                self._convolved_images[i],
+                header=header,
+                overwrite=True,
+            )
+
+            if self.config.imstack.weight_map:
+                fits.writeto(
+                    add_suffix(self.config.imstack.conv_files[i], "weight"),
+                    self._convolved_wht_images[i],
+                    header=header,
+                    overwrite=True,
+                )
+
+    def _calc_delta_peeing(self, peeing):
+        delta_peeing = np.sqrt(self._max_peeing**2 - peeing**2)
+        if delta_peeing == 0:
+            self.logger.debug(f"Skipping calculating delta peeing.")
+            return None
+        else:
+            return delta_peeing
 
     def stack_with_swarp(self):
         st = time.time()

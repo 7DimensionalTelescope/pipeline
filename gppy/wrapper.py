@@ -100,41 +100,40 @@ class DataReduction:
         for t in threads:
             t.join()
 
-    def process_group(self, group, device_id=None):
-        # Submit preprocess
-        pre_task, plot_task = group.get_tasks(device_id=device_id)
-        self.queue.add_task(pre_task)
-        # Wait for this group's preprocess to finish
-        self.queue.wait_until_task_complete(pre_task.id)
-        self.queue.add_task(plot_task)
-
-        for key in group.sci_keys:
-            sci_group = self.groups[key]
-            if not (sci_group.multi_units):
-                sci_tree = sci_group.get_tree()
-                self.queue.add_tree(sci_tree)
-            else:
-                self._multi_unit_config.add(sci_group.config)
-
     def process_all(self):
-        threads = []
+        from .stream import ReductionStream
+
+        masterframe_ids= []
         for i, (key, group) in enumerate(self.groups.items()):
             if isinstance(group, MasterframeGroup):
-                t = threading.Thread(target=self.process_group, args=(group, i % 2))
-                t.start()
-                threads.append(t)
+                # Submit preprocess
+                pre_task = group.get_tasks(device_id=i % 2, only_with_sci=True, make_plots=False)
+                self.queue.add_task(pre_task)
+                masterframe_ids.append(pre_task.id)
+        
+        self.queue.wait_until_task_complete(masterframe_ids)
 
-        for t in threads:
-            t.join()
+        for key, group in self.groups.items():
+            if isinstance(group, MasterframeGroup):
+                for key in group.sci_keys:
+                    sci_group = self.groups[key]
+                    if not (sci_group.multi_units):
+                        sci_stream = sci_group.get_stream()
+                        self.queue.add_stream(sci_stream)
+                    else:
+                        self._multi_unit_config.add(sci_group.config)
+                
 
-        while len(self._multi_unit_config) > 0:
-            from .run import get_scidata_reduction_tasktree
+        for config in self._multi_unit_config:
+            self.queue.add_stream(ReductionStream(config))
 
-            config = self._multi_unit_config.pop()
-            self.queue.add_tree(get_scidata_reduction_tasktree(config))
+        for key, group in self.groups.items():
+            if isinstance(group, MasterframeGroup):
+                pre_task = group.get_tasks(device_id=i % 2, only_with_sci=False, make_plots=True)
+                self.queue.add_task(pre_task)
 
         self.queue.wait_until_task_complete("all")
-
+        
 
 class MasterframeGroup:
     def __init__(self, key):
@@ -183,12 +182,10 @@ class MasterframeGroup:
         c = PreprocConfiguration(self.image_files)
         self._config = c.config_file
 
-    def get_tasks(self, device_id=None):
-        from .run import get_preprocess_task, get_make_plot_task
-
-        pre_task = get_preprocess_task(self.config, device_id=device_id)
-        plot_task = get_make_plot_task(self.config)
-        return pre_task, plot_task
+    def get_tasks(self, device_id=None, only_with_sci=False, make_plots=True):
+        from .run import get_preprocess_task
+        pre_task = get_preprocess_task(self.config, device_id=device_id, only_with_sci=only_with_sci, make_plots=make_plots)
+        return pre_task
 
     def run(self):
         from .run import run_preprocess
@@ -245,15 +242,10 @@ class ScienceGroup:
             c = SciProcConfiguration(self.image_files)
         self._config = c.config_file
 
-    def get_tree(self):
-        from .run import get_scidata_reduction_tasktree
+    def get_stream(self):
+        from .stream import ReductionStream
 
-        return get_scidata_reduction_tasktree(self.config)
-
-    def run(self):
-        from .run import run_scidata_reduction
-
-        return run_scidata_reduction(self.config)
+        return ReductionStream(self.config)
 
     def __repr__(self):
         return f"ScienceGroup({self.key} with {len(self.image_files)} images)"
