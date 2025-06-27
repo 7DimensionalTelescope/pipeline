@@ -375,7 +375,7 @@ class Preprocess(BaseSetup):
                 f"Processing {len(self.sci_input)} images in group {self._current_group+1} on GPU device(s): {device_id} "
             )
         
-        results = process_kernel(self.sci_input, self.bias_data, self.dark_data, self.flat_data, device_id)
+        results = process_kernel(self.sci_input, self.bias_data, self.dark_data, self.flat_data, device_id=device_id)
 
         del self.bias_data, self.dark_data, self.flat_data
         
