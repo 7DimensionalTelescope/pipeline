@@ -1,6 +1,7 @@
 import gc
 import cupy as cp
 import numpy as np
+import os
 from astropy.io import fits
 from cupy.cuda import Stream
 from contextlib import contextmanager
@@ -44,7 +45,12 @@ def load_data_gpu(fpath, ext=None):
         cp.get_default_memory_pool().free_all_blocks()
 
 
-def process_image_with_cupy(image_paths, bias, dark, flat, device_id=0):
+def _save_data_in_dump_dir(data, dump_dir, img_path):
+    path = os.path.join(dump_dir, os.path.basename(img_path).replace("fits", "npy"))
+    np.save(path, data)
+    return path
+
+def process_image_with_cupy(image_paths, bias, dark, flat, dump_dir=None, device_id=0):
 
     with cp.cuda.Device(device_id):
         load_stream = Stream(non_blocking=True)
@@ -59,8 +65,12 @@ def process_image_with_cupy(image_paths, bias, dark, flat, device_id=0):
             if prev_image is not None:
                 with compute_stream:
                     reduced = reduction_kernel(prev_image, bias, dark, flat)
-                    local_results.append(cp.asnumpy(reduced))
-                del prev_image
+                    if dump_dir is not None:
+                        path = _save_data_in_dump_dir(cp.asnumpy(reduced), dump_dir, img_path)
+                        local_results.append(path)
+                    else:
+                        local_results.append(cp.asnumpy(reduced))
+                    del prev_image, reduced
 
             load_stream.synchronize()
             prev_image = curr_image
@@ -68,7 +78,12 @@ def process_image_with_cupy(image_paths, bias, dark, flat, device_id=0):
         if prev_image is not None:
             with compute_stream:
                 reduced = reduction_kernel(prev_image, bias, dark, flat)
-                local_results.append(cp.asnumpy(reduced))
+                if dump_dir is not None:
+                    path = _save_data_in_dump_dir(cp.asnumpy(reduced), dump_dir, img_path)
+                    local_results.append(path)
+                else:
+                    local_results.append(cp.asnumpy(reduced))
+
         compute_stream.synchronize()
     
         del bias, dark, flat, prev_image, curr_image, reduced
@@ -77,7 +92,7 @@ def process_image_with_cupy(image_paths, bias, dark, flat, device_id=0):
     
     return local_results
 
-def process_image_with_cpu(image_paths, bias, dark, flat, subtract=None, normalize=False, **kwargs):
+def process_image_with_cpu(image_paths, bias, dark, flat, subtract=None, normalize=False, dump_dir=None, **kwargs):
 
     def read_fits_image(path):
         return fits.getdata(path).astype(np.float32)
@@ -91,7 +106,11 @@ def process_image_with_cpu(image_paths, bias, dark, flat, subtract=None, normali
 
     for image in image_paths:
         reduced = reduction_kernel_cpu(read_fits_image(image), bias, dark, flat, subtract, normalize)
-        local_results.append(reduced)
+        if dump_dir is not None:
+            path = _save_data_in_dump_dir(reduced, dump_dir, image)
+            local_results.append(path)
+        else:
+            local_results.append(reduced)
 
     return local_results
 

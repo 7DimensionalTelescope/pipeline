@@ -273,5 +273,8 @@ def get_best_gpu_device():
     from ..services.memory import MemoryMonitor
     percent = MemoryMonitor.current_gpu_memory_percent
     available = [p if p<90 else 100 for p in percent]
-    return np.argmin(available)
+    if len(available) == 0:
+        return None
+    else:
+        return np.argmin(available)
     
