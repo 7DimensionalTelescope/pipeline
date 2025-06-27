@@ -215,7 +215,12 @@ class Preprocess(BaseSetup):
                 else: 
                     from ..services.utils import get_best_gpu_device
                     self._device_id = get_best_gpu_device()
-                    self.config.preprocess.device = self._device_id
+                    if self._device_id is None:
+                        self.logger.warning("No available GPU device found. Using CPU.")
+                        self._use_gpu = False
+                        self._device_id = "CPU"
+                    else:
+                        self.config.preprocess.device = self._device_id
         else:
             self._device_id = "CPU"
         
@@ -375,7 +380,12 @@ class Preprocess(BaseSetup):
                 f"Processing {len(self.sci_input)} images in group {self._current_group+1} on GPU device(s): {device_id} "
             )
         
-        results = process_kernel(self.sci_input, self.bias_data, self.dark_data, self.flat_data, device_id=device_id)
+        if self.path.factory_parent_dir is not None:
+            dump_dir = os.path.join(self.path.factory_parent_dir, self.path.config_stem)
+            os.makedirs(dump_dir, exist_ok=True)
+            results = process_kernel(self.sci_input, self.bias_data, self.dark_data, self.flat_data, device_id=device_id, dump_dir = dump_dir)
+        else:
+            results = process_kernel(self.sci_input, self.bias_data, self.dark_data, self.flat_data, device_id=device_id)
 
         del self.bias_data, self.dark_data, self.flat_data
         
@@ -408,9 +418,16 @@ class Preprocess(BaseSetup):
             header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
 
             os.makedirs(os.path.dirname(processed_file), exist_ok=True)
+
+            if isinstance(result, str):
+                data = np.load(result)
+                os.remove(result)
+            else:
+                data = result
+
             fits.writeto(
                 processed_file,
-                data=result,
+                data=data,
                 header=header,
                 overwrite=True,
             )
