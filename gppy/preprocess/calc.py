@@ -44,64 +44,7 @@ def load_data_gpu(fpath, ext=None):
         cp.get_default_memory_pool().free_all_blocks()
 
 
-def calc_batch_dist(image_list, num_devices=None, use_multi_device=False, device=0):
-    if use_multi_device:
-        num_devices = cp.cuda.runtime.getDeviceCount()
-    else:
-        num_devices = 1
-
-    # Step 1: Estimate how many images each GPU can handle
-    max_batch_per_device = []
-    if num_devices > 1:
-        for i in range(num_devices):
-            with cp.cuda.Device(i):
-                max_batch = estimate_posssible_batch_size(image_list[0])[0]
-                max_batch_per_device.append(max_batch)
-    else:
-        with cp.cuda.Device(device):
-            max_batch = estimate_posssible_batch_size(image_list[0])[0]
-            max_batch_per_device.append(max_batch)
-
-    # Step 2: Compute initial proportional distribution
-    total_capacity = sum(max_batch_per_device)
-    ratio = [b / total_capacity for b in max_batch_per_device]
-    initial_dist = np.floor(np.array(ratio) * len(image_list)).astype(int)
-
-    # Step 3: Adjust for rounding errors
-    remaining = len(image_list) - sum(initial_dist)
-    for i in range(remaining):
-        initial_dist[i % num_devices] += 1
-
-    # Step 4: First-round distribution (capped at each GPU's capacity)
-    first_round = np.minimum(initial_dist, max_batch_per_device)
-    overflow = initial_dist - first_round
-
-    # Step 5: Redistribute any remaining overflow (that still hasn't been assigned)
-    extra_needed = len(image_list) - sum(first_round)
-    second_round = np.zeros(num_devices, dtype=int)
-
-    i = 0
-    while extra_needed > 0:
-        capacity = max_batch_per_device[i]
-        available = capacity - second_round[i]
-        assign = min(available, overflow[i], extra_needed)
-        second_round[i] += assign
-        extra_needed -= assign
-        i = (i + 1) % num_devices
-
-    return np.vstack([first_round, second_round])
-
-
-def estimate_posssible_batch_size(filename):
-    H, W = fits.getdata(filename).astype(np.float32).shape
-    image_size = cp.float32().nbytes * H * W / 1024**2
-    available_mem = cp.cuda.runtime.memGetInfo()[0] / 1024**2
-    safe_mem = int(available_mem * 0.7)
-    batch_size = max(1, safe_mem // image_size)
-    return int(batch_size), image_size, available_mem
-
-
-def process_batch_on_device_with_cupy(image_paths, bias, dark, flat, results, device_id=0):
+def process_image_with_cupy(image_paths, bias, dark, flat, device_id=0):
 
     with cp.cuda.Device(device_id):
         load_stream = Stream(non_blocking=True)
@@ -131,13 +74,10 @@ def process_batch_on_device_with_cupy(image_paths, bias, dark, flat, results, de
         del bias, dark, flat, prev_image, curr_image, reduced
 
         cp.get_default_memory_pool().free_all_blocks()
-        if np.shape(results) == (1,):
-            results[0] = local_results
-        else:
-            results[device_id] = local_results
+    
+    return local_results
 
-def process_batch_on_device_with_cpu(image_paths, bias, dark, flat, results,
-                             device_id=0, max_workers=4, subtract=None, normalize=False):
+def process_image_with_cpu(image_paths, bias, dark, flat, subtract=None, normalize=False, **kwargs):
 
     def read_fits_image(path):
         return fits.getdata(path).astype(np.float32)
@@ -149,18 +89,11 @@ def process_batch_on_device_with_cpu(image_paths, bias, dark, flat, results,
 
     local_results = []
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        image_iter = executor.map(read_fits_image, image_paths)
+    for image in image_paths:
+        reduced = reduction_kernel_cpu(read_fits_image(image), bias, dark, flat, subtract, normalize)
+        local_results.append(reduced)
 
-        for curr_image in image_iter:
-            reduced = reduction_kernel_cpu(curr_image, bias, dark, flat, subtract, normalize)
-            local_results.append(reduced.copy())
-            del reduced
-
-    if np.shape(results) == (1,):
-        results[0] = local_results
-    else:
-        results[device_id] = local_results
+    return local_results
 
 # Combine images
 def combine_images_with_cupy(images: str, device_id=None, subtract=None, norm=False):
