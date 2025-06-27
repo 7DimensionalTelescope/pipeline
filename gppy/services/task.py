@@ -66,12 +66,7 @@ class Task:
         self.error = error
         self.time_priority = int(time.time() * 1000)
         self.inherit_input = inherit_input
-        
-        # Set task name after initialization to avoid recursion
-        if task_name is None:
-            self.task_name = self._get_task_name()
-        else:
-            self.task_name = task_name
+        self.task_name = self._get_task_name(task_name)
 
     def __lt__(self, other):
         return self.sort_index < other.sort_index
@@ -94,14 +89,15 @@ class Task:
     def set_time_priority(self):
         self.time_priority = int(time.time() * 1000)  # milliseconds since epoch
     
-    def _get_task_name(self):
-        if self.task_name:
-            return self.task_name
-        if self._func_name is None:
+    def _get_task_name(self, task_name):
+        if task_name:
+            return task_name
+        elif self._func_name is None:
             return "unnamed_task"
-        if self.cls is None:
+        elif self.cls is None:
             return self._func_name
-        return f"{type(self.cls).__name__}.{self._func_name}"
+        else:
+            return f"{type(self.cls).__name__}.{self._func_name}"
 
     def _get_function(self):
         """Retrieve the callable function for this task.
