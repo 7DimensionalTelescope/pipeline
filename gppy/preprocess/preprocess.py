@@ -364,55 +364,26 @@ class Preprocess(BaseSetup):
 
         st = time.time()
 
-        num_devices = 1
-
-        batch_dist = calc_batch_dist(self.sci_input, num_devices=num_devices)
-
         if device_id == "CPU":
-            process_batch = process_batch_on_device_with_cpu
+            process_kernel = process_image_with_cpu
             self.logger.info(
                 f"Processing {len(self.sci_input)} images in group {self._current_group+1} on CPU"
             )
         else:
-            process_batch = process_batch_on_device_with_cupy
+            process_kernel = process_image_with_cupy
             self.logger.info(
                 f"Processing {len(self.sci_input)} images in group {self._current_group+1} on GPU device(s): {device_id} "
             )
         
+        results = process_kernel(self.sci_input, self.bias_data, self.dark_data, self.flat_data, device_id)
 
-        threads = []
-        results = [None] * num_devices
-        start_idx = 0
-
-        for batch in batch_dist:
-            if sum(batch) == 0:
-                break
-
-            end_idx = start_idx + batch[0]
-            self.logger.debug(f"Device {device_id} will process {end_idx - start_idx} images")
-            subset = self.sci_input[start_idx:end_idx]
-            t = threading.Thread(
-                target=process_batch,
-                args=(subset, self.bias_data, self.dark_data, self.flat_data, results, device_id),
-            )
-            t.start()
-            threads.append(t)
-            start_idx = end_idx
-
-            self.logger.debug("Data reduction is now processing on GPU device(s)")
-            start_time = time.time()
-            # Wait for all threads
-            for t in threads:
-                t.join()
-
-            self.logger.debug(
-                f"Data reduction has been completed in {time_diff_in_seconds(start_time)} seconds for {len(self.sci_input)} iamges."
-            )
         del self.bias_data, self.dark_data, self.flat_data
-        cp.get_default_memory_pool().free_all_blocks()
+        
+        if self._use_gpu:
+            cp.get_default_memory_pool().free_all_blocks()
 
-        # Combine results
-        self.all_results = [item for sublist in results if sublist for item in sublist]
+        self.all_results = results
+
         self.logger.info(
             f"Completed data reduction for {len(self.sci_input)} images in group {self._current_group+1} in {time_diff_in_seconds(st)} seconds"
         )
