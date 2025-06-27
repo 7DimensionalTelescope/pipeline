@@ -27,9 +27,9 @@ class ReductionStream:
         self.status = "pending"
         self.current_class = None
         self.config_file = config
-        self.config = SciProcConfiguration.from_config(config)
+        config = SciProcConfiguration.from_config(self.config_file)
         try:
-            self.id = self.config.config.name
+            self.id = config.config.name
         except:
             self.id = f"stream_{next(self._id_counter)}"
         self.load_class()
@@ -39,8 +39,9 @@ class ReductionStream:
         return self.current_class.__class__.__name__
 
     def check_status(self):
+        config = SciProcConfiguration.from_config(self.config_file)
         for key in ["astrometry", "single_photometry", "combine", "combined_photometry", "subtraction"]:
-            if not(getattr(self.config.config.flag, key)):
+            if not(getattr(config.config.flag, key)):
                 self.status = "processing"
                 return key
         self.status = "completed"
@@ -52,7 +53,8 @@ class ReductionStream:
             self.current_class = None
             self.current_task = None
         else:
-            self.current_class = class_mapping[cls_name](self.config)
+            config = SciProcConfiguration.from_config(self.config_file)
+            self.current_class = class_mapping[cls_name](config)
             self.current_tasks = copy.copy(self.current_class.sequential_task)
 
     def get_task(self):
@@ -69,4 +71,4 @@ class ReductionStream:
         return self.status == "completed"
     
     def __repr__(self):
-        return f"TaskTree(id={self.id}, status={self.status}, current_class={self.current_class_name})"
+        return f"ReductionStream(id={self.id}, status={self.status}, current_class={self.current_class_name})"

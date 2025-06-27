@@ -12,8 +12,8 @@ from . import utils
 
 class MemoryState(Enum):
     HEALTHY = ("healthy", "continue", None, 0)
-    WARNING = ("warning", "cleanup", 70.0, 1)
-    CRITICAL = ("critical", "pause", 85.0, 2)
+    WARNING = ("warning", "cleanup", 80.0, 1)
+    CRITICAL = ("critical", "pause", 90.0, 2)
     EMERGENCY = ("emergency", "stop", 95.0, 3)
 
     def __init__(self, state: str, action: str, threshold: Optional[float], order: int):
