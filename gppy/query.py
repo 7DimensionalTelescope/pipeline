@@ -1,19 +1,20 @@
 import os
-from .const import RAWDATA_DIR, PROCESSED_DIR
-import numpy as np
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
-from . import const
 import glob
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from . import const
+from .const import RAWDATA_DIR, PROCESSED_DIR
+from .utils import atleast_1d
 
 
 def query_observations(include_keywords, exclude_keywords=None, DATA_DIR=const.RAWDATA_DIR, with_calib=True):
 
     default_exclude_keywords = ["test", "shift", "tmp"]
 
-    include_keywords = list(np.atleast_1d(include_keywords))
+    include_keywords = atleast_1d(include_keywords)
     if exclude_keywords is not None:
-        exclude_keywords = list(np.atleast_1d(exclude_keywords))
+        exclude_keywords = atleast_1d(exclude_keywords)
         exclude_keywords = exclude_keywords + default_exclude_keywords
     else:
         exclude_keywords = default_exclude_keywords
