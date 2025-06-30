@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Union
 import numpy as np
 from .. import const
-from ..utils import add_suffix, swap_ext, collapse, find_raw_path, atleast1d
+from ..utils import add_suffix, swap_ext, collapse, find_raw_path, atleast_1d
 from .name import NameHandler
 from .utils import format_exptime
 from .utils import broadcast_join_pure as bjoin
@@ -725,7 +725,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
             sci_dict = {}
             for sci_group in entry["sci"]:
                 key = get_dict_key(sci_group)
-                sci_dict[key] = (sci_group, atleast1d(cls(sci_group).conjugate))
+                sci_dict[key] = (sci_group, atleast_1d(cls(sci_group).conjugate))
 
             raw_bias = entry["bias"]
             raw_dark = entry["dark"]

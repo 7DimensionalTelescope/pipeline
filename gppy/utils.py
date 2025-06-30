@@ -10,7 +10,7 @@ from .const import FACTORY_DIR, RAWDATA_DIR, HEADER_KEY_MAP, ALL_GROUP_KEYS
 import time
 
 
-def atleast1d(x):
+def atleast_1d(x):
     return [x] if not isinstance(x, list) else x
 
 
