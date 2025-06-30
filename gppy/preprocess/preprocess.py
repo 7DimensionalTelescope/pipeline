@@ -358,7 +358,9 @@ class Preprocess(BaseSetup):
         if not self.sci_input:
             self.logger.info(f"No science frames found in group {self._current_group + 1}, skipping data reduction.")
             self.all_results = None
-            del self.bias_data, self.dark_data, self.flat_data
+            for attr in ('bias_data', 'dark_data', 'flat_data'):
+                if hasattr(self, attr):
+                    delattr(self, attr)
             cp.get_default_memory_pool().free_all_blocks()
             return
 
