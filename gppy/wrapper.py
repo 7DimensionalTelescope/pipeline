@@ -47,6 +47,8 @@ class DataReduction:
 
     @classmethod
     def from_list(cls, list_of_images):
+        if not all(f.endswith(".fits") for f in list_of_images):
+            raise ValueError("Non-fits images in input")
         self = cls.__new__(cls)
         self.list_of_images = list_of_images
         self.groups = SortedGroupDict()
