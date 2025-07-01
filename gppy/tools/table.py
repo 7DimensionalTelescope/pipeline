@@ -17,7 +17,7 @@ def match_two_catalogs(
     x1: str | None = None,
     y1: str | None = None,
     radius: float | Quantity = 1,
-    how: str = "inner",
+    join: str = "inner",
     correct_pm: bool = False,
     obs_time: Time | None = None,
     pm_keys: dict | None = None,
@@ -80,7 +80,7 @@ def match_two_catalogs(
       retained but un-moved.
     """
 
-    if how not in {"inner", "left", "outer"}:
+    if join not in {"inner", "left", "outer"}:
         raise ValueError("how must be 'inner', 'left' or 'outer'")
 
     if x1 is None:
@@ -121,11 +121,11 @@ def match_two_catalogs(
             coord_ref.dec[good] = moved.dec
             coord_ref._sky_coord_frame.cache.clear()
 
-    if how == "left":
+    if join == "left":
         coord0, coord1 = coord_sci, coord_ref
         tbl0, tbl1 = sci_tbl, ref_tbl
         tag1 = "ref"
-    elif how == "inner":
+    elif join == "inner":
         if len(coord_sci) > len(coord_ref):
             coord0, coord1 = coord_ref, coord_sci
             tbl0, tbl1 = ref_tbl, sci_tbl
@@ -135,12 +135,12 @@ def match_two_catalogs(
             tbl0, tbl1 = sci_tbl, ref_tbl
             tag1 = "ref"
 
-    if how in {"inner", "left"}:
+    if join in {"inner", "left"}:
         idx, sep2d, _ = coord0.match_to_catalog_sky(coord1)
         rtol = radius * u.arcsec if not isinstance(radius, Quantity) else radius
         matched = sep2d < rtol
 
-        if how == "left":
+        if join == "left":
             out = tbl0.copy()
             ref_slice = tbl1[idx]
 
@@ -166,7 +166,7 @@ def match_two_catalogs(
             merged["separation"] = sep2d[matched].arcsec
             return merged
 
-    elif how == "outer":
+    elif join == "outer":
         sep_rad = radius * u.arcsec if not isinstance(radius, Quantity) else radius
         idx_s, idx_r, seps, _ = search_around_sky(coord_sci, coord_ref, sep_rad)
 
@@ -212,7 +212,7 @@ def match_two_catalogs(
         return Table(rows)
 
     else:
-        raise ValueError("Unknown how: " + how)
+        raise ValueError("Unknown how: " + join)
 
 
 Condition = Tuple[str, Any, str]  # (column, value, method)
