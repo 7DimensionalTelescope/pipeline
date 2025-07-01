@@ -28,7 +28,7 @@ from ..services.queue import QueueManager, Priority
 from .. import external
 from ..const import PIXSCALE, PipelineError
 from ..services.setup import BaseSetup
-from ..tools.table import match_two_catalogs
+from ..tools.table import match_two_catalogs, build_condition_mask
 from ..path.path import PathHandler
 
 
@@ -285,6 +285,7 @@ class PhotometrySingle:
 
         self.calculate_seeing()
         obs_src_table = self.photometry_with_sextractor()
+        obs_src_table = self.get_reference_matched_catalog(obs_src_table)
 
         dicts = self.calculate_zp(obs_src_table)
         self.update_header(*dicts)
@@ -295,10 +296,49 @@ class PhotometrySingle:
             f"'PhotometrySingle' is completed for the image [{self._id}] in {time_diff_in_seconds(start_time)} seconds"
         )
 
-    @property
-    def is_ref_loaded(self) -> bool:
-        """Check if reference catalog is loaded."""
-        return hasattr(self, "ref_src_table") and self.ref_src_table is not None
+    def calculate_seeing(self, use_header_seeing=False) -> None:
+        """
+        Calculate seeing conditions from stellar sources in the image.
+
+        Uses source extraction to identify stars and calculate median FWHM,
+        ellipticity, and elongation values stored by self.phot_header.
+
+        Args:
+            low_mag_cut: Lower magnitude limit for star selection
+        """
+
+        if use_header_seeing:
+            header = fits.getheader(self.input_image)
+            self.phot_header.seeing = header["SEEING"]
+            self.phot_header.peeing = header["PEEING"]
+            self.phot_header.ellipticity = header["ELLIP"]
+            self.phot_header.elongation = header["ELONG"]
+
+            self.logger.debug(f"{len(post_match_table)} Star-like Sources Found")
+            self.logger.debug(f"SEEING     : {self.phot_header.seeing:.3f} arcsec")
+            self.logger.debug(f"ELONGATION : {self.phot_header.elongation:.3f}")
+            self.logger.debug(f"ELLIPTICITY: {self.phot_header.ellipticity:.3f}")
+            return
+
+        prep_cat = self.path.photometry.prep_catalog
+        if os.path.exists(prep_cat):
+            self.logger.info("Calculating seeing from a pre-existing 'prep' catalog")
+            obs_src_table = Table.read(prep_cat, format="ascii.sextractor")
+        else:
+            obs_src_table = self._run_sextractor(se_preset="prep")
+
+        post_match_table = self.get_reference_matched_catalog(obs_src_table)
+        post_match_table = self.filter_catalog(post_match_table, snr_cut=False, low_mag_cut=11.75)
+
+        self.phot_header.seeing = np.median(post_match_table["FWHM_WORLD"] * 3600)
+        self.phot_header.peeing = self.phot_header.seeing / self.image_info.pixscale
+        self.phot_header.ellipticity = round(np.median(post_match_table["ELLIPTICITY"]), 3)
+        self.phot_header.elongation = round(np.median(post_match_table["ELONGATION"]), 3)
+
+        self.logger.debug(f"{len(post_match_table)} Star-like Sources Found")
+        self.logger.debug(f"SEEING     : {self.phot_header.seeing:.3f} arcsec")
+        self.logger.debug(f"ELONGATION : {self.phot_header.elongation:.3f}")
+        self.logger.debug(f"ELLIPTICITY: {self.phot_header.ellipticity:.3f}")
 
     def _load_ref_catalog(self) -> None:
         """
@@ -306,9 +346,6 @@ class PhotometrySingle:
 
         Handles both standard and corrected GaiaXP catalogs.
         Creates new catalog if it doesn't exist by parsing Gaia data.
-
-        Sets self.ref_src_table with loaded catalog data.
-        Sets self._coord_ref
         """
         if self.ref_catalog == "GaiaXP_cor":
             ref_cat = f"{self.path.photometry.ref_ris_dir}/cor_gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
@@ -328,55 +365,46 @@ class PhotometrySingle:
         else:
             ref_src_table = Table.read(ref_cat)
 
-        coord_ref = SkyCoord(
-            ra=ref_src_table["ra"] * u.deg,
-            dec=ref_src_table["dec"] * u.deg,
-            pm_ra_cosdec=(ref_src_table["pmra"] * u.mas / u.yr if not np.isnan(ref_src_table["pmra"]).any() else None),
-            pm_dec=(ref_src_table["pmdec"] * u.mas / u.yr if not np.isnan(ref_src_table["pmdec"]).any() else None),
-            distance=(
-                (1 / (ref_src_table["parallax"] * u.mas)) if not np.isnan(ref_src_table["parallax"]).any() else None
-            ),
-            obstime=Time(2016.0, format="jyear"),
-        )
+        self.gaia_columns = ["source_id", "ra", "dec", "bp_rp", "phot_g_mean_mag", f"mag_{self.image_info.filter}"]
 
-        obs_time = Time(self.image_info.dateobs, format="isot", scale="utc")
-        coord_ref = coord_ref.apply_space_motion(new_obstime=obs_time)
-
-        self.ref_src_table = ref_src_table
-        self._coord_ref = coord_ref
-
-    # def _find_ref_catalog(self) -> str:
-    #     if self.ref_catalog == "GaiaXP_cor":
-    #         ref_cat = f"{self.path.photometry.ref_ris_dir}/cor_gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
-    #     elif self.ref_catalog == "GaiaXP":
-    #         ref_cat = f"{self.path.photometry.ref_ris_dir}/gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
-
-    #     # generate the missing ref_cat and save on disk
-    #     if not os.path.exists(ref_cat):  # and "gaia" in self.ref_catalog:
-    #         ref_src_table = phot_utils.aggregate_gaia_catalogs(
-    #             target_coord=SkyCoord(self.image_info.racent, self.image_info.decent, unit="deg"),
-    #             path_calibration_field=self.path.photometry.ref_gaia_dir,
-    #             matching_radius=self.phot_conf.match_radius * 1.5,
-    #             path_save=ref_cat,
-    #         )
-    #         ref_src_table.write(ref_cat, overwrite=True)
-
-    #     else:
-    #         ref_src_table = Table.read(ref_cat)
-
-    #     return ref_src_table
+        return ref_src_table[self.gaia_columns]
 
     def get_reference_matched_catalog(
         self,
         obs_src_table,
-        snr_cut: Union[float, bool] = 20,
-        low_mag_cut: Union[float, bool] = None,
-        high_mag_cut: Union[float, bool] = None,
     ) -> Table:
         """
         Match detected sources with reference catalog.
 
         Applies proper motion corrections and performs spatial matching.
+
+        Returns:
+            Table of matched sources
+        """
+
+        self.logger.debug("Loading reference catalog.")
+        ref_src_table = self._load_ref_catalog()
+
+        self.logger.debug("Matching sources with reference catalog.")
+        post_match_table = match_two_catalogs(obs_src_table, ref_src_table, x1="ra", y1="dec", join="left")
+
+        self.logger.info(f"Matched sources: {len(post_match_table)} (r = {self.phot_conf.match_radius:.3f} arcsec)")
+        if len(post_match_table) == 0:
+            self.logger.critical("There is no matched source for photometry. It will cause a problem in the next step.")
+        # if "CTYPE1" not in self.header.keys():
+        #     self.logger.error("Check Astrometry solution: no WCS information")
+        #     raise PipelineError("Check Astrometry solution: no WCS information")
+
+        return post_match_table
+
+    def filter_catalog(
+        self,
+        table,
+        snr_cut: Union[float, bool] = 20,
+        low_mag_cut: Union[float, bool] = None,
+        high_mag_cut: Union[float, bool] = None,
+    ):
+        """
         Filters matches based on separation, signal-to-noise, and magnitude limits.
 
         Args:
@@ -385,28 +413,13 @@ class PhotometrySingle:
             high_mag_cut: Upper magnitude limit
 
         Returns:
-            Table of matched sources meeting all criteria
+            Table of sources meeting all criteria
         """
-
-        if not self.is_ref_loaded:
-            self._load_ref_catalog()
-
-        self.logger.debug("Matching sources with reference catalog.")
-
         low_mag_cut = low_mag_cut or self.phot_conf.ref_mag_lower
         high_mag_cut = high_mag_cut or self.phot_conf.ref_mag_upper
 
-        coord_obs = SkyCoord(
-            obs_src_table["ALPHA_J2000"],
-            obs_src_table["DELTA_J2000"],
-            unit="deg",
-        )
-        index_match, sep, _ = coord_obs.match_to_catalog_sky(self._coord_ref)
+        post_match_table = table.copy()
 
-        _post_match_table = hstack([obs_src_table, self.ref_src_table[index_match]])
-        _post_match_table["sep"] = sep.arcsec
-
-        post_match_table = _post_match_table[_post_match_table["sep"] < self.phot_conf.match_radius]
         post_match_table["within_ellipse"] = phot_utils.is_within_ellipse(
             post_match_table["X_IMAGE"],
             post_match_table["Y_IMAGE"],
@@ -415,13 +428,6 @@ class PhotometrySingle:
             self.phot_conf.photfraction * self.image_info.naxis1 / 2,
             self.phot_conf.photfraction * self.image_info.naxis2 / 2,
         )
-
-        suffixes = [key.replace("FLUXERR_", "") for key in post_match_table.keys() if "FLUXERR_" in key]
-
-        for suffix in suffixes:
-            post_match_table[f"SNR_{suffix}"] = (
-                post_match_table[f"FLUX_{suffix}"] / post_match_table[f"FLUXERR_{suffix}"]
-            )
 
         post_match_table = phot_utils.filter_table(post_match_table, "FLAGS", 0)
         post_match_table = phot_utils.filter_table(post_match_table, "within_ellipse", True)
@@ -439,55 +445,7 @@ class PhotometrySingle:
         if snr_cut:
             post_match_table = phot_utils.filter_table(post_match_table, "SNR_AUTO", snr_cut, method="lower")
 
-        for key in ["source_id", "bp_rp", "phot_g_mean_mag", f"mag_{self.image_info.filter}"]:
-            valuearr = self.ref_src_table[key][index_match].data
-            masked_valuearr = MaskedColumn(valuearr, mask=(sep.arcsec > self.phot_conf.match_radius))
-            obs_src_table[key] = masked_valuearr
-
-        if len(post_match_table) == 0:
-            self.logger.critical("There is no matched source. It will cause a problem in the next step.")
-            # if "CTYPE1" not in self.header.keys():
-            #     self.logger.error("Check Astrometry solution: no WCS information")
-            #     raise PipelineError("Check Astrometry solution: no WCS information")
-        else:
-            self.logger.info(f"Matched sources: {len(post_match_table)} (r = {self.phot_conf.match_radius:.3f} arcsec)")
-
         return post_match_table
-
-    def calculate_seeing(
-        self,
-        low_mag_cut: float = 11.75,
-        high_mag_cut: float = False,
-    ) -> None:
-        """
-        Calculate seeing conditions from stellar sources in the image.
-
-        Uses source extraction to identify stars and calculate median FWHM,
-        ellipticity, and elongation values stored by self.phot_header.
-
-        Args:
-            low_mag_cut: Lower magnitude limit for star selection
-        """
-
-        prep_cat = self.path.photometry.prep_catalog
-        if os.path.exists(prep_cat):
-            obs_src_table = Table.read(prep_cat, format="ascii.sextractor")
-        else:
-            obs_src_table = self._run_sextractor(se_preset="prep")
-
-        post_match_table = self.get_reference_matched_catalog(
-            obs_src_table, snr_cut=False, low_mag_cut=low_mag_cut, high_mag_cut=high_mag_cut
-        )
-
-        self.phot_header.seeing = np.median(post_match_table["FWHM_WORLD"] * 3600)
-        self.phot_header.peeing = self.phot_header.seeing / self.image_info.pixscale
-        self.phot_header.ellipticity = round(np.median(post_match_table["ELLIPTICITY"]), 3)
-        self.phot_header.elongation = round(np.median(post_match_table["ELONGATION"]), 3)
-
-        self.logger.debug(f"{len(post_match_table)} Star-like Sources Found")
-        self.logger.debug(f"SEEING     : {self.phot_header.seeing:.3f} arcsec")
-        self.logger.debug(f"ELONGATION : {self.phot_header.elongation:.3f}")
-        self.logger.debug(f"ELLIPTICITY: {self.phot_header.ellipticity:.3f}")
 
     def photometry_with_sextractor(self) -> None:
         """
@@ -516,11 +474,19 @@ class PhotometrySingle:
             self.logger.debug("Hot pixels present. Skip SEx conv.")
             sex_args.extend(["-FILTER", "N"])
 
+        # run sextractor with 'main' preset
         obs_src_table = self._run_sextractor(
             se_preset="main",
             sex_args=sex_args,
             return_sex_output=True,
         )
+
+        # add snr columns
+        self.logger.debug("Adding columns to the sextracted table")
+        suffixes = [key.replace("FLUXERR_", "") for key in obs_src_table.keys() if "FLUXERR_" in key]
+        for suffix in suffixes:
+            obs_src_table[f"SNR_{suffix}"] = obs_src_table[f"FLUX_{suffix}"] / obs_src_table[f"FLUXERR_{suffix}"]
+
         return obs_src_table
 
     def _run_sextractor(
@@ -566,7 +532,7 @@ class PhotometrySingle:
 
         return Table.read(output, format="ascii.sextractor")
 
-    def calculate_zp(self, obs_src_table) -> Tuple[Dict, Dict]:
+    def calculate_zp(self, obs_src_table, save_plots=True) -> Tuple[Dict, Dict]:
         """
         Calculate photometric zero point.
 
@@ -580,7 +546,7 @@ class PhotometrySingle:
             Tuple of dictionaries containing zero point and aperture information
         """
 
-        zp_src_table = self.get_reference_matched_catalog(obs_src_table)
+        zp_src_table = self.filter_catalog(obs_src_table)
         self.logger.info(f"Calculating zero points with {len(zp_src_table)} sources")
 
         aperture = phot_utils.get_aperture_dict(self.phot_header.peeing, self.image_info.pixscale)
@@ -602,6 +568,8 @@ class PhotometrySingle:
 
             keys = phot_utils.keyset(mag_key, self.image_info.filter)
             values = phot_utils.apply_zp(obs_src_table[mag_key], obs_src_table[magerr_key], zp, zperr)
+
+            # add columns to obs_src_table (implicit mutation)
             for key, val in zip(keys, values):
                 obs_src_table[key] = val
                 obs_src_table[key].format = ".3f"
@@ -624,7 +592,8 @@ class PhotometrySingle:
                 }
             )  # fmt: skip
 
-            self.plot_zp(mag_key, zp_src_table, zps, zperrs, zp, zperr, mask)
+            if save_plots:
+                self.plot_zp(mag_key, zp_src_table, zps, zperrs, zp, zperr, mask)
 
         return (zp_dict, aper_dict)
 
@@ -727,7 +696,7 @@ class PhotometrySingle:
         header_to_add.update(aper_dict)
         header_to_add.update(zp_dict)
         update_padded_header(self.input_image, header_to_add)
-        self.logger.info(f"Image header is updated with photometry information (aperture, zero point, ...).")
+        self.logger.info(f"Image header has been updated with photometry information (aperture, zero point, ...).")
 
     def write_catalog(self, obs_src_table) -> None:
         """
@@ -745,6 +714,12 @@ class PhotometrySingle:
         #     "Zero point uncertainty is not included in FLUX and MAG errors",
         # ]  # this interferes with table description
 
+        # reorder gaia columns to be at the end
+        gaia_cols = self.gaia_columns + ["separation"]  # e.g. ["source_id", "bp_rp", f"mag_{self.image_info.filter}"]
+        other_cols = [c for c in obs_src_table.colnames if c not in gaia_cols]
+        obs_src_table = obs_src_table[other_cols + gaia_cols]
+
+        # save
         output_catalog_file = self.path.photometry.final_catalog
         obs_src_table.write(output_catalog_file, format="fits", overwrite=True)  # "ascii.tab" "ascii.ecsv"
         self.logger.info(f"Photometry catalog is written in {os.path.basename(output_catalog_file)}")

@@ -20,7 +20,7 @@ def match_two_catalogs(
     join: str = "inner",
     correct_pm: bool = False,
     obs_time: Time | None = None,
-    pm_keys: dict | None = None,
+    pm_keys: dict = dict(pmra="pmra", pmdec="pmdec", parallax="parallax", ref_epoch=2016.0),
 ) -> Table:
     """
     Cross-match two catalogues on the sky and (optionally) apply proper-motion
@@ -52,7 +52,7 @@ def match_two_catalogs(
     obs_time
         Observation time of the *science* catalogue as an `~astropy.time.Time`
         instance.  Required when ``correct_pm=True``.
-    pm_info
+    pm_keys
         Mapping that defines column names for the kinematic quantities and the
         reference epoch::
 
@@ -96,9 +96,6 @@ def match_two_catalogs(
 
         if obs_time is None:
             raise ValueError("obs_time must be provided if correct_pm is True")
-
-        if pm_keys is None:
-            pm_keys = dict(pmra="pmra", pmdec="pmdec", parallax="parallax", ref_epoch=2016.0)
 
         # Vectorised columns with units
         pm_ra = ref_tbl[pm_keys["pmra"]] * u.mas / u.yr
