@@ -66,19 +66,20 @@ class ImStack(BaseSetup):
     @property
     def sequential_task(self):
         """[(number, name, use_gpu), ...]"""
-        return [
-            (1, "initialize", False),
-            (2, "bkgsub", False),
-            (3, "zpscale", False),
-            (4, "calculate_weight_map", True),
-            (5, "save_weight_map", False),
-            (6, "apply_bpmask", True),
-            (7, "joint_registration", False),
-            (8, "prepare_convolution", False),
-            (9, "run_convolution", True),
-            (10, "save_convolved_images", False),
-            (11, "stack_with_swarp", False),
-        ]
+        return [(1, "run", False)]
+        # return [
+        #     (1, "initialize", False),
+        #     (2, "bkgsub", False),
+        #     (3, "zpscale", False),
+        #     (4, "calculate_weight_map", True),
+        #     (5, "save_weight_map", False),
+        #     (6, "apply_bpmask", True),
+        #     (7, "joint_registration", False),
+        #     (8, "prepare_convolution", False),
+        #     (9, "run_convolution", True),
+        #     (10, "save_convolved_images", False),
+        #     (11, "stack_with_swarp", False),
+        # ]
 
     def get_device_id(self, device_id):
         if self._use_gpu:

@@ -379,7 +379,7 @@ class Preprocess(BaseSetup):
                 f"Processing {len(self.sci_input)} images in group {self._current_group+1} on GPU device(s): {device_id} "
             )
 
-        os.path.join(self.path.factory_parent_dir, self.path.config_stem)
+        dump_dir = os.path.join(self.path.factory_parent_dir, self.path.config_stem)
         results = process_kernel(
             self.sci_input, self.bias_data, self.dark_data, self.flat_data, device_id=device_id, dump_dir=dump_dir
         )
