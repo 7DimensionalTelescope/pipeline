@@ -69,7 +69,7 @@ class ImStack(BaseSetup):
         return [(1, "run", False)]
         # return [
         #     (1, "initialize", False),
-        #     (2, "bkgsub", False),
+        #     (2, "bkgsub", Filse),
         #     (3, "zpscale", False),
         #     (4, "calculate_weight_map", True),
         #     (5, "save_weight_map", False),
@@ -375,7 +375,7 @@ class ImStack(BaseSetup):
 
         results = [None] * len(groups)
         with device_context:
-            for i, ((z_m_fiㅐe, d_m_file, f_m_file), images) in enumerate(groups.items()):
+            for i, ((z_m_file, d_m_file, f_m_file), images) in enumerate(groups.items()):
 
                 st_loop = time.time()
 
