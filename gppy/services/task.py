@@ -113,7 +113,7 @@ class Task:
         elif self._func is not None:
             return self._func
         else:
-            raise ValueError(f"No function reference available for task {self.id}")
+            raise ValueError(f"No function reference available for {self.id}")
 
     def execute(self):
         """Execute the task's function with the provided arguments.
@@ -152,12 +152,6 @@ class Task:
         
         This method releases both CPU and GPU resources used by the task.
         """
-        # Clear function references
-        self._func = None
-        # Clear arguments to free memory
-        self.args = None
-        self.kwargs = None
-        
         # Clear result if it's a large object
         if hasattr(self.result, 'nbytes') and self.result.nbytes > 1e6:  # If result is large (>1MB)
             self.result = None

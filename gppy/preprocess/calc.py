@@ -46,61 +46,70 @@ def load_data_gpu(fpath, ext=None):
         gc.collect()  # Force garbage collection
         cp.get_default_memory_pool().free_all_blocks()
 
-
-def _save_data_in_dump_dir(data, dump_dir, img_path):
-    path = os.path.join(dump_dir, os.path.basename(img_path).replace("fits", "npy"))
-    np.save(path, data)
-    return path
-
-
 def process_image_with_cupy(
     image_paths: str,
-    bias: np.array,
-    dark: np.array,
-    flat: np.array,
-    dump_dir=None,
+    bias: cp.array,
+    dark: cp.array,
+    flat: cp.array,
     device_id=0,
 ):
 
+    Nimage = len(image_paths)
+    H, W = fits.getdata(image_paths[0]).shape
+    total_shape = (Nimage, H, W)
+
+    data_np = np.empty(total_shape, dtype=np.float32)  # safe dtype
     with cp.cuda.Device(device_id):
-        load_stream = Stream(non_blocking=True)
-        compute_stream = Stream()
+        for i, o in enumerate(image_paths):
+            data_np[i] = fits.getdata(o).astype(np.float32)
 
-        local_results = []
-        prev_image = None
-        for img_path in image_paths:
-            with load_stream:
-                curr_image = cp.asarray(fits.getdata(img_path).astype("float32"))
 
-            if prev_image is not None:
-                with compute_stream:
-                    reduced = reduction_kernel(prev_image, bias, dark, flat)
-                    if dump_dir is not None:
-                        path = _save_data_in_dump_dir(cp.asnumpy(reduced), dump_dir, img_path)
-                        local_results.append(path)
-                    else:
-                        local_results.append(cp.asnumpy(reduced))
-                    del prev_image, reduced
+            data_cp = cp.asarray(data_np[i])
+            data_cp = reduction_kernel(data_cp, bias, dark, flat)
+            data_np[i] = cp.asnumpy(data_cp[i])
+        
+        del bias, dark, flat, data_cp
 
-            load_stream.synchronize()
-            prev_image = curr_image
+    return data_np
 
-        if prev_image is not None:
-            with compute_stream:
-                reduced = reduction_kernel(prev_image, bias, dark, flat)
-                if dump_dir is not None:
-                    path = _save_data_in_dump_dir(cp.asnumpy(reduced), dump_dir, img_path)
-                    local_results.append(path)
-                else:
-                    local_results.append(cp.asnumpy(reduced))
+    #     load_stream = Stream(non_blocking=True)
+    #     compute_stream = Stream()
 
-        compute_stream.synchronize()
+    #     local_results = []
+    #     prev_image = None
+    #     for img_path in image_paths:
+    #         with load_stream:
+    #             curr_image = cp.asarray(fits.getdata(img_path).astype("float32"))
 
-        del bias, dark, flat, prev_image, curr_image, reduced
+    #         if prev_image is not None:
+    #             with compute_stream:
+    #                 reduced = reduction_kernel(prev_image, bias, dark, flat)
+    #                 if dump_dir is not None:
+    #                     path = _save_data_in_dump_dir(cp.asnumpy(reduced), dump_dir, img_path)
+    #                     local_results.append(path)
+    #                 else:
+    #                     local_results.append(cp.asnumpy(reduced))
+    #                 del prev_image, reduced
 
-        cp.get_default_memory_pool().free_all_blocks()
+    #         load_stream.synchronize()
+    #         prev_image = curr_image
 
-    return local_results
+    #     if prev_image is not None:
+    #         with compute_stream:
+    #             reduced = reduction_kernel(prev_image, bias, dark, flat)
+    #             if dump_dir is not None:
+    #                 path = _save_data_in_dump_dir(cp.asnumpy(reduced), dump_dir, img_path)
+    #                 local_results.append(path)
+    #             else:
+    #                 local_results.append(cp.asnumpy(reduced))
+
+    #     compute_stream.synchronize()
+
+    #     del bias, dark, flat, prev_image, curr_image, reduced
+
+    #     cp.get_default_memory_pool().free_all_blocks()
+
+    # return local_results
 
 
 def process_image_with_cpu(
@@ -110,7 +119,6 @@ def process_image_with_cpu(
     flat: np.array,
     subtract=None,
     normalize=False,
-    dump_dir=None,
     **kwargs,
 ):
 
@@ -126,11 +134,7 @@ def process_image_with_cpu(
 
     for image in image_paths:
         reduced = reduction_kernel_cpu(read_fits_image(image), bias, dark, flat, subtract, normalize)
-        if dump_dir is not None:
-            path = _save_data_in_dump_dir(reduced, dump_dir, image)
-            local_results.append(path)
-        else:
-            local_results.append(reduced)
+        local_results.append(reduced)
 
     return local_results
 

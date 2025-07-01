@@ -116,6 +116,8 @@ class Preprocess(BaseSetup):
             for t in threads_for_making_plots:
                 t.join()
 
+        cp.get_default_memory_pool().free_all_blocks()
+
         self.logger.info("Preprocess completed")
 
     def make_plot_all(self):
@@ -324,7 +326,6 @@ class Preprocess(BaseSetup):
         self.logger.info(f"FITS Written: {getattr(self, f'{dtype}_output')}")
 
         del median
-        cp.get_default_memory_pool().free_all_blocks()
 
     def _fetch_masterframe(self, template, dtype, device_id):
         self.logger.info(f"Fetching master {dtype}")
@@ -351,16 +352,15 @@ class Preprocess(BaseSetup):
         if dtype == "dark":
             self.dark_exptime = get_header(existing_mframe_file)[HEADER_KEY_MAP["exptime"]]
 
-    def data_reduction(self, device_id=None, use_gpu: bool = True, dump_dir=None):
+    def data_reduction(self, device_id=None, use_gpu: bool = True):
         self._use_gpu = all([use_gpu, self._use_gpu])
 
         if not self.sci_input:
             self.logger.info(f"No science frames found in group {self._current_group + 1}, skipping data reduction.")
             self.all_results = None
             # delete bypassing custom getattr
-            for attr in ("bias_data", "dark_data", "flat_data"):
-                self.__dict__.pop(attr, None)
-            cp.get_default_memory_pool().free_all_blocks()
+            del self.bias_data, self.dark_data, self.flat_data
+
             return
 
         flag = [os.path.exists(file) for file in self.sci_output]
@@ -379,15 +379,12 @@ class Preprocess(BaseSetup):
                 f"Processing {len(self.sci_input)} images in group {self._current_group+1} on GPU device(s): {device_id} "
             )
 
-        dump_dir = os.path.join(self.path.factory_parent_dir, self.path.config_stem)
         results = process_kernel(
-            self.sci_input, self.bias_data, self.dark_data, self.flat_data, device_id=device_id, dump_dir=dump_dir
+            self.sci_input, self.bias_data, self.dark_data, self.flat_data, device_id=device_id
         )
 
         del self.bias_data, self.dark_data, self.flat_data
 
-        if self._use_gpu:
-            cp.get_default_memory_pool().free_all_blocks()
 
         self.all_results = results
 
