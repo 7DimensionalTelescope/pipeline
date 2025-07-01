@@ -237,10 +237,6 @@ class PhotometrySingle:
         #     self._id = str(next(self._id_counter)) + "/" + str(total_image)
         self._id = str(next(self._id_counter)) + "/" + str(total_image)
 
-        # self.path_tmp = os.path.join(self.config.path.path_factory, "phot")
-        # os.makedirs(self.path_tmp, exist_ok=True)
-        # self.path = PathHandler(self.config.obs.to_dict())
-        # self.path = PathHandler(self.config)
         self.path = PathHandler(self.input_image)
         self.path_tmp = self.path.photometry.tmp_dir
 
@@ -268,17 +264,6 @@ class PhotometrySingle:
     #     image = path.parts[-1]
     #     return cls(image, config, name="user-input")
 
-    @property
-    def tmp_file_prefix(self) -> str:
-        """Get file prefix for output files."""
-        stem = os.path.basename(os.path.splitext(self.input_image)[0])
-        return os.path.join(self.path_tmp, stem)
-
-    @property
-    def is_ref_loaded(self) -> bool:
-        """Check if reference catalog is loaded."""
-        return hasattr(self, "ref_src_table") and self.ref_src_table is not None
-
     def run(self) -> None:
         """
         Execute complete photometry pipeline for single image.
@@ -296,31 +281,24 @@ class PhotometrySingle:
         """
         start_time = time.time()
         self.logger.info(f"Start 'PhotometrySingle' for the image {self.name} [{self._id}]")
-        self.logger.debug(f"{'=' * 7} {os.path.basename(self.input_image)} {'=' * 7}")
+        self.logger.debug(f"{'=' * 13} {os.path.basename(self.input_image)} {'=' * 13}")
 
-        # self.define_paths()
         self.calculate_seeing()
-        self.photometry_with_sextractor()
+        obs_src_table = self.photometry_with_sextractor()
 
-        dicts = self.calculate_zp()
+        dicts = self.calculate_zp(obs_src_table)
         self.update_header(*dicts)
-        self.write_catalog()
+        self.write_catalog(obs_src_table)
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
-        self.logger.info(f"'PhotometrySingle' is completed for the image [{self._id}] in {time_diff_in_seconds(start_time)} seconds")
+        self.logger.info(
+            f"'PhotometrySingle' is completed for the image [{self._id}] in {time_diff_in_seconds(start_time)} seconds"
+        )
 
-    # def define_paths(self) -> None:
-    #     # no subdir
-    #     # self.output_file = get_derived_product_path(self.image)
-    #     # catalog_dir = os.path.dirname(self.output_file)
-    #     # if not os.path.exists(catalog_dir):
-    #     #     os.makedirs(catalog_dir)
-
-    #     # self.output_catalog_file = add_suffix(self.image, "cat")
-    #     # self.output_catalog_file = self.path.photometry.final_catalog
-
-    #     # self.obs_src_table = self.path.photometry.prep_catalog
-    #     pass
+    @property
+    def is_ref_loaded(self) -> bool:
+        """Check if reference catalog is loaded."""
+        return hasattr(self, "ref_src_table") and self.ref_src_table is not None
 
     def _load_ref_catalog(self) -> None:
         """
@@ -390,6 +368,7 @@ class PhotometrySingle:
 
     def get_reference_matched_catalog(
         self,
+        obs_src_table,
         snr_cut: Union[float, bool] = 20,
         low_mag_cut: Union[float, bool] = None,
         high_mag_cut: Union[float, bool] = None,
@@ -418,13 +397,13 @@ class PhotometrySingle:
         high_mag_cut = high_mag_cut or self.phot_conf.ref_mag_upper
 
         coord_obs = SkyCoord(
-            self.obs_src_table["ALPHA_J2000"],
-            self.obs_src_table["DELTA_J2000"],
+            obs_src_table["ALPHA_J2000"],
+            obs_src_table["DELTA_J2000"],
             unit="deg",
         )
         index_match, sep, _ = coord_obs.match_to_catalog_sky(self._coord_ref)
 
-        _post_match_table = hstack([self.obs_src_table, self.ref_src_table[index_match]])
+        _post_match_table = hstack([obs_src_table, self.ref_src_table[index_match]])
         _post_match_table["sep"] = sep.arcsec
 
         post_match_table = _post_match_table[_post_match_table["sep"] < self.phot_conf.match_radius]
@@ -463,7 +442,7 @@ class PhotometrySingle:
         for key in ["source_id", "bp_rp", "phot_g_mean_mag", f"mag_{self.image_info.filter}"]:
             valuearr = self.ref_src_table[key][index_match].data
             masked_valuearr = MaskedColumn(valuearr, mask=(sep.arcsec > self.phot_conf.match_radius))
-            self.obs_src_table[key] = masked_valuearr
+            obs_src_table[key] = masked_valuearr
 
         if len(post_match_table) == 0:
             self.logger.critical("There is no matched source. It will cause a problem in the next step.")
@@ -479,34 +458,33 @@ class PhotometrySingle:
         self,
         low_mag_cut: float = 11.75,
         high_mag_cut: float = False,
-        run_prep_sextractor: bool = True,
     ) -> None:
         """
         Calculate seeing conditions from stellar sources in the image.
 
         Uses source extraction to identify stars and calculate median FWHM,
-        ellipticity, and elongation values.
+        ellipticity, and elongation values stored by self.phot_header.
 
         Args:
             low_mag_cut: Lower magnitude limit for star selection
         """
 
-        if run_prep_sextractor:  # run sextractor for preparation
-            self._run_sextractor(se_preset="prep")
+        prep_cat = self.path.photometry.prep_catalog
+        if os.path.exists(prep_cat):
+            obs_src_table = Table.read(prep_cat, format="ascii.sextractor")
         else:
-            # self.obs_src_table = Table.read(self.tmp_file_prefix + ".prep.cat", format="ascii.sextractor")
-            self.obs_src_table = Table.read(self.path.photometry.prep_catalog, format="ascii.sextractor")
+            obs_src_table = self._run_sextractor(se_preset="prep")
 
-        self.post_match_table = self.get_reference_matched_catalog(
-            snr_cut=False, low_mag_cut=low_mag_cut, high_mag_cut=high_mag_cut
+        post_match_table = self.get_reference_matched_catalog(
+            obs_src_table, snr_cut=False, low_mag_cut=low_mag_cut, high_mag_cut=high_mag_cut
         )
 
-        self.phot_header.seeing = np.median(self.post_match_table["FWHM_WORLD"] * 3600)
+        self.phot_header.seeing = np.median(post_match_table["FWHM_WORLD"] * 3600)
         self.phot_header.peeing = self.phot_header.seeing / self.image_info.pixscale
-        self.phot_header.ellipticity = round(np.median(self.post_match_table["ELLIPTICITY"]), 3)
-        self.phot_header.elongation = round(np.median(self.post_match_table["ELONGATION"]), 3)
+        self.phot_header.ellipticity = round(np.median(post_match_table["ELLIPTICITY"]), 3)
+        self.phot_header.elongation = round(np.median(post_match_table["ELONGATION"]), 3)
 
-        self.logger.debug(f"{len(self.post_match_table)} Star-like Sources Found")
+        self.logger.debug(f"{len(post_match_table)} Star-like Sources Found")
         self.logger.debug(f"SEEING     : {self.phot_header.seeing:.3f} arcsec")
         self.logger.debug(f"ELONGATION : {self.phot_header.elongation:.3f}")
         self.logger.debug(f"ELLIPTICITY: {self.phot_header.ellipticity:.3f}")
@@ -538,15 +516,12 @@ class PhotometrySingle:
             self.logger.debug("Hot pixels present. Skip SEx conv.")
             sex_args.extend(["-FILTER", "N"])
 
-        _, outcome = self._run_sextractor(
+        obs_src_table = self._run_sextractor(
             se_preset="main",
             sex_args=sex_args,
             return_sex_output=True,
         )
-
-        outcome = [s for s in outcome.split("\n") if "RMS" in s][0]
-        self.phot_header.skymed = float(outcome.split("Background:")[1].split("RMS:")[0])
-        self.phot_header.skysig = float(outcome.split("RMS:")[1].split("/")[0])
+        return obs_src_table
 
     def _run_sextractor(
         self,
@@ -571,10 +546,6 @@ class PhotometrySingle:
 
         if output is None:
             output = getattr(PathHandler(self.input_image).photometry, f"{se_preset}_catalog")
-            # if se_preset == "prep":
-            #     # output = self.tmp_file_prefix + ".prep.cat"
-            # elif se_preset == "main":
-            #     # output = self.tmp_file_prefix + ".cat"
 
         self.logger.debug(f"PhotometrySingle _run_sextractor output catalog: {output}")
 
@@ -582,16 +553,20 @@ class PhotometrySingle:
             self.input_image,
             outcat=output,
             se_preset=se_preset,
-            # log_file=self.tmp_file_prefix + "_sextractor.log",
             logger=self.logger,
             sex_args=sex_args,
             **kwargs,
         )
 
-        self.obs_src_table = Table.read(output, format="ascii.sextractor")
-        return outcome
+        if se_preset == "main":
+            _, outcome = outcome
+            outcome = [s for s in outcome.split("\n") if "RMS" in s][0]
+            self.phot_header.skymed = float(outcome.split("Background:")[1].split("RMS:")[0])
+            self.phot_header.skysig = float(outcome.split("RMS:")[1].split("/")[0])
 
-    def calculate_zp(self) -> Tuple[Dict, Dict]:
+        return Table.read(output, format="ascii.sextractor")
+
+    def calculate_zp(self, obs_src_table) -> Tuple[Dict, Dict]:
         """
         Calculate photometric zero point.
 
@@ -605,7 +580,7 @@ class PhotometrySingle:
             Tuple of dictionaries containing zero point and aperture information
         """
 
-        zp_src_table = self.get_reference_matched_catalog()
+        zp_src_table = self.get_reference_matched_catalog(obs_src_table)
         self.logger.info(f"Calculating zero points with {len(zp_src_table)} sources")
 
         aperture = phot_utils.get_aperture_dict(self.phot_header.peeing, self.image_info.pixscale)
@@ -626,10 +601,10 @@ class PhotometrySingle:
             zp, zperr = phot_utils.compute_median_nmad(np.array(zps[~mask].value), normalize=True)
 
             keys = phot_utils.keyset(mag_key, self.image_info.filter)
-            values = phot_utils.apply_zp(self.obs_src_table[mag_key], self.obs_src_table[magerr_key], zp, zperr)
+            values = phot_utils.apply_zp(obs_src_table[mag_key], obs_src_table[magerr_key], zp, zperr)
             for key, val in zip(keys, values):
-                self.obs_src_table[key] = val
-                self.obs_src_table[key].format = ".3f"
+                obs_src_table[key] = val
+                obs_src_table[key].format = ".3f"
 
             if mag_key == "MAG_AUTO":
                 ul_3sig, ul_5sig = 0.0, 0.0
@@ -643,20 +618,11 @@ class PhotometrySingle:
             zp_dict.update(
                 {
                     f"ZP_{suffix}": (round(zp, 3), f"ZERO POINT for {mag_key}"),
-                    f"EZP_{suffix}": (
-                        round(zperr, 3),
-                        f"ZERO POINT ERROR for {mag_key}",
-                    ),
-                    f"UL3_{suffix}": (
-                        round(ul_3sig, 3),
-                        f"3 SIGMA LIMITING MAG FOR {mag_key}",
-                    ),
-                    f"UL5_{suffix}": (
-                        round(ul_5sig, 3),
-                        f"5 SIGMA LIMITING MAG FOR {mag_key}",
-                    ),
+                    f"EZP_{suffix}": (round(zperr, 3), f"ZERO POINT ERROR for {mag_key}"),
+                    f"UL3_{suffix}": (round(ul_3sig, 3), f"3 SIGMA LIMITING MAG FOR {mag_key}"),
+                    f"UL5_{suffix}": (round(ul_5sig, 3), f"5 SIGMA LIMITING MAG FOR {mag_key}"),
                 }
-            )
+            )  # fmt: skip
 
             self.plot_zp(mag_key, zp_src_table, zps, zperrs, zp, zperr, mask)
 
@@ -763,7 +729,7 @@ class PhotometrySingle:
         update_padded_header(self.input_image, header_to_add)
         self.logger.info(f"Image header is updated with photometry information (aperture, zero point, ...).")
 
-    def write_catalog(self) -> None:
+    def write_catalog(self, obs_src_table) -> None:
         """
         Write photometry catalog to disk.
 
@@ -773,20 +739,20 @@ class PhotometrySingle:
         """
 
         metadata = self.image_info.metadata
-        self.obs_src_table.meta = metadata
+        obs_src_table.meta = metadata
         # self.obs_src_table.meta["comments"] = [
         #     "Zero point based on Gaia DR3",
         #     "Zero point uncertainty is not included in FLUX and MAG errors",
         # ]  # this interferes with table description
 
         output_catalog_file = self.path.photometry.final_catalog
-        self.obs_src_table.write(output_catalog_file, format="fits", overwrite=True)  # "ascii.tab" "ascii.ecsv"
+        obs_src_table.write(output_catalog_file, format="fits", overwrite=True)  # "ascii.tab" "ascii.ecsv"
         self.logger.info(f"Photometry catalog is written in {os.path.basename(output_catalog_file)}")
 
 
 @dataclass
 class PhotometryHeader:
-    """Stores image header information related to photometry."""
+    """Stores image header information related to photometry to be written to the image."""
 
     author: str = "pipeline"
     photime: str = datetime.date.today().isoformat()
