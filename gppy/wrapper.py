@@ -23,6 +23,8 @@ def glob_files_by_param(keywords, **kwargs):
 
 
 class DataReduction:
+    """overwrite=True to rewrite configs"""
+
     def __init__(self, input_params, use_db=False, **kwargs):
         self.groups = SortedGroupDict()  # use a sorted dictionary
         self._multi_unit_config = set()
@@ -76,7 +78,7 @@ class DataReduction:
 
             except:
                 mfg_key = f"mfg_{i}"
-                print(f"Failed to extract mfg_key from {group}")
+                print(f"Failed to extract mfg_key from {group}. Assigned a default key {mfg_key}")
 
             if mfg_key in self.groups:
                 self.groups[mfg_key].add_images(group[0])
@@ -93,10 +95,11 @@ class DataReduction:
                 self.groups[mfg_key].add_images(images[0])
                 self.groups[mfg_key].add_sci_keys(key)
 
-    def create_config(self):
+    def create_config(self, overwrite=False):
         threads = []
+        kwargs = {"overwrite": overwrite}
         for group in self.groups.values():
-            t = threading.Thread(target=group.create_config)
+            t = threading.Thread(target=group.create_config, kwargs=kwargs)
             t.start()
             threads.append(t)
         for t in threads:
@@ -105,14 +108,14 @@ class DataReduction:
     def process_all(self):
         from .stream import ReductionStream
 
-        masterframe_ids= []
+        masterframe_ids = []
         for i, (key, group) in enumerate(self.groups.items()):
             if isinstance(group, MasterframeGroup):
                 # Submit preprocess
                 pre_task = group.get_tasks(device_id=i % 2, only_with_sci=True, make_plots=False)
                 self.queue.add_task(pre_task)
                 masterframe_ids.append(pre_task.id)
-        
+
         self.queue.wait_until_task_complete(masterframe_ids)
 
         for key, group in self.groups.items():
@@ -124,7 +127,6 @@ class DataReduction:
                         self.queue.add_stream(sci_stream)
                     else:
                         self._multi_unit_config.add(sci_group.config)
-                
 
         for config in self._multi_unit_config:
             self.queue.add_stream(ReductionStream(config))
@@ -135,7 +137,7 @@ class DataReduction:
                 self.queue.add_task(pre_task)
 
         self.queue.wait_until_task_complete("all")
-        
+
 
 class MasterframeGroup:
     def __init__(self, key):
@@ -180,13 +182,16 @@ class MasterframeGroup:
     def add_sci_keys(self, keys):
         self.sci_keys.append(keys)
 
-    def create_config(self):
+    def create_config(self, overwrite=False):
         c = PreprocConfiguration(self.image_files)
         self._config = c.config_file
 
     def get_tasks(self, device_id=None, only_with_sci=False, make_plots=True):
         from .run import get_preprocess_task
-        pre_task = get_preprocess_task(self.config, device_id=device_id, only_with_sci=only_with_sci, make_plots=make_plots)
+
+        pre_task = get_preprocess_task(
+            self.config, device_id=device_id, only_with_sci=only_with_sci, make_plots=make_plots
+        )
         return pre_task
 
     def run(self):
@@ -235,9 +240,9 @@ class ScienceGroup:
         else:
             raise ValueError("Invalid filepath type")
 
-    def create_config(self):
+    def create_config(self, overwrite=False):
         sci_yml = PathHandler(self.image_files).sciproc_output_yml
-        if os.path.exists(sci_yml):
+        if os.path.exists(sci_yml) and not overwrite:
             # If the config file already exists, load it
             c = SciProcConfiguration.from_config(sci_yml, write=True)
         else:
