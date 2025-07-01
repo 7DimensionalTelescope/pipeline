@@ -68,15 +68,18 @@ def process_image_with_cupy(
 
         local_results = []
         prev_image = None
+        prev_path = None
+        # first loop only loads, last loaded is not processed
         for img_path in image_paths:
             with load_stream:
                 curr_image = cp.asarray(fits.getdata(img_path).astype("float32"))
 
             if prev_image is not None:
                 with compute_stream:
+                    # process the image loaded in the previous loop
                     reduced = reduction_kernel(prev_image, bias, dark, flat)
                     if dump_dir is not None:
-                        path = _save_data_in_dump_dir(cp.asnumpy(reduced), dump_dir, img_path)
+                        path = _save_data_in_dump_dir(cp.asnumpy(reduced), dump_dir, prev_path)
                         local_results.append(path)
                     else:
                         local_results.append(cp.asnumpy(reduced))
@@ -84,12 +87,14 @@ def process_image_with_cupy(
 
             load_stream.synchronize()
             prev_image = curr_image
+            prev_path = img_path
 
+        # process the last image
         if prev_image is not None:
             with compute_stream:
                 reduced = reduction_kernel(prev_image, bias, dark, flat)
                 if dump_dir is not None:
-                    path = _save_data_in_dump_dir(cp.asnumpy(reduced), dump_dir, img_path)
+                    path = _save_data_in_dump_dir(cp.asnumpy(reduced), dump_dir, prev_path)
                     local_results.append(path)
                 else:
                     local_results.append(cp.asnumpy(reduced))
