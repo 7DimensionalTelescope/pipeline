@@ -43,7 +43,7 @@ class BaseConfig(ABC):
         return self
 
     @classmethod
-    def from_config(cls, input: str, write=False, **kwargs):
+    def from_config(cls, input: str, write=True, **kwargs):
         # return cls(input, write=write, **kwargs)
         self = cls.__new__(cls)
         self._load_config(config_source=input)

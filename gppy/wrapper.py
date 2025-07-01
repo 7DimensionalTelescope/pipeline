@@ -1,6 +1,7 @@
 import os
 import threading
 from collections import UserDict
+import time
 
 from .utils import flatten
 from .path import PathHandler
@@ -114,19 +115,24 @@ class DataReduction:
                 # Submit preprocess
                 pre_task = group.get_tasks(device_id=i % 2, only_with_sci=True, make_plots=False)
                 self.queue.add_task(pre_task)
-                masterframe_ids.append(pre_task.id)
+                masterframe_ids.append([pre_task, group])
 
-        self.queue.wait_until_task_complete(masterframe_ids)
+        while True:
+            for task, group in masterframe_ids:
+                if task.status == "completed":
+                    for key in group.sci_keys:
+                        sci_group = self.groups[key]
+                        if not (sci_group.multi_units):
+                            sci_stream = sci_group.get_stream()
+                            self.queue.add_stream(sci_stream)
+                        else:
+                            self._multi_unit_config.add(sci_group.config)
+                    masterframe_ids.remove([task, group])
+            
+            time.sleep(1)
 
-        for key, group in self.groups.items():
-            if isinstance(group, MasterframeGroup):
-                for key in group.sci_keys:
-                    sci_group = self.groups[key]
-                    if not (sci_group.multi_units):
-                        sci_stream = sci_group.get_stream()
-                        self.queue.add_stream(sci_stream)
-                    else:
-                        self._multi_unit_config.add(sci_group.config)
+            if len(masterframe_ids) == 0:
+                break
 
         for config in self._multi_unit_config:
             self.queue.add_stream(ReductionStream(config))

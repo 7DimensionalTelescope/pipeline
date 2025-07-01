@@ -38,28 +38,25 @@ class ReductionStream:
     def current_class_name(self):
         return self.current_class.__class__.__name__
 
-    def check_status(self):
+    def load_class(self):
         config = SciProcConfiguration.from_config(self.config_file)
         for key in ["astrometry", "single_photometry", "combine", "combined_photometry", "subtraction"]:
             if not(getattr(config.config.flag, key)):
+                print(key)
                 self.status = "processing"
-                return key
-        self.status = "completed"
-        return None
-
-    def load_class(self):
-        cls_name = self.check_status()
-        if cls_name is None:
-            self.current_class = None
-            self.current_task = None
+                break
+            else:
+                key = None
+        if key is None:
+            self.status = "completed"
         else:
-            config = SciProcConfiguration.from_config(self.config_file)
-            self.current_class = class_mapping[cls_name](config)
+            self.current_class = class_mapping[key](config)
             self.current_tasks = copy.copy(self.current_class.sequential_task)
 
     def get_task(self):
         if len(self.current_tasks) == 0:
             self.load_class()
+
         if len(self.current_tasks) !=0:
             _, func, use_gpu = self.current_tasks.pop(0)
             return Task(getattr(self.current_class, func), priority=Priority.MEDIUM, gpu=use_gpu, task_name = f"{self.current_class_name}.{func}")

@@ -131,6 +131,16 @@ class QueueManager:
         # Initialize task tracking
         self._stop_event = threading.Event()
         
+        # Create queues for task submission and completion handling
+        self.completion_queue = queue.Queue()
+        
+        # Start the task completion handler thread
+        self.completion_thread = threading.Thread(
+            target=self._completion_worker,
+            daemon=True
+        )
+        self.completion_thread.start()
+        
         # Start the task distributor thread
         self.cpu_thread = threading.Thread(
             target=self._cpu_worker,
@@ -169,6 +179,7 @@ class QueueManager:
         device: int = None,
         task_name: str = None,
         inherit_input: bool = False,
+        async_submit: bool = False,
     ) -> str:
         """
         Add a task to the processing queue with specified execution parameters.
@@ -178,15 +189,18 @@ class QueueManager:
         - Arguments
         - Priority
         - Processing target (CPU/GPU)
+        - Asynchronous submission
 
         Args:
-nherit_input             func (Callable): Function to be executed
+            func (Callable): Function to be executed
             args (tuple, optional): Positional arguments for the function
             kwargs (dict, optional): Keyword arguments for the function
             priority (Priority, optional): Task priority level. Defaults to MEDIUM.
             gpu (bool, optional): Execute on GPU. Defaults to False.
             device (int, optional): Specific GPU device. Defaults to 0.
             task_name (str, optional): Descriptive task name
+            inherit_input (bool, optional): Whether to inherit input from previous task
+            async_submit (bool, optional): Whether to submit the task asynchronously
 
         Returns:
             str: Unique task identifier for tracking
@@ -196,7 +210,8 @@ nherit_input             func (Callable): Function to be executed
             ...     process_data,
             ...     args=(dataset,),
             ...     priority=Priority.HIGH,
-            ...     gpu=True
+            ...     gpu=True,
+            ...     async_submit=True
             ... )
         """
 
@@ -206,9 +221,15 @@ nherit_input             func (Callable): Function to be executed
         
         if isinstance(func, Task):
             task = func
-            self.tasks.append(task)
-            self.add_to_queue(task, None)
-            return task.id
+            if async_submit:
+                # Add to submission queue for asynchronous processing
+                self.submission_queue.put((task, None))
+                return task.id
+            else:
+                # Process synchronously
+                self.tasks.append(task)
+                self.add_to_queue(task, None)
+                return task.id
 
         # Generate a unique task ID
         task_id = f"t{next(self._id_counter)}"
@@ -232,18 +253,23 @@ nherit_input             func (Callable): Function to be executed
         )
 
         task.set_time_priority()
-        # Add task to the task list
-        self.tasks.append(task)
-
-        # Put the task in the appropriate queue
-        self.add_to_queue(task, None)
-
-        self.logger.info(
-            f"Added {'GPU' if gpu else 'CPU'} task {task.task_name} (id: {task_id}) with priority {priority}"
-        )
-        time.sleep(0.1)
-
-        self.log_memory_stats(f"Task {task.task_name}(id: {task.id}) submitted")
+        
+        if async_submit:
+            # Add to submission queue for asynchronous processing
+            self.submission_queue.put((task, None))
+            self.logger.info(
+                f"Queued {'GPU' if gpu else 'CPU'} task {task.task_name} (id: {task_id}) with priority {priority} for async submission"
+            )
+        else:
+            # Process synchronously
+            self.tasks.append(task)
+            self.add_to_queue(task, None)
+            self.logger.info(
+                f"Added {'GPU' if gpu else 'CPU'} task {task.task_name} (id: {task_id}) with priority {priority}"
+            )
+            time.sleep(0.1)
+            self.log_memory_stats(f"Task {task.task_name}(id: {task.id}) submitted")
+        
         return task_id
 
     def add_stream(self, stream):
@@ -267,8 +293,9 @@ nherit_input             func (Callable): Function to be executed
 
     def _move_to_next_task(self, stream) -> None:
         """Queue the next task of a stream for processing."""
+        print(stream)
         task = stream.get_task()
-
+        print(task)
         if stream.is_complete():
             return 
         
@@ -287,22 +314,20 @@ nherit_input             func (Callable): Function to be executed
     def add_to_queue(self, task, stream=None):
         """Add a task to the appropriate queue."""
         if task.gpu:
-            if self._remaind_gpu_queue >= (len(self.gpu_devices)):
-                task.gpu=False
-                task._device = "CPU"
-                task.kwargs["use_gpu"] = False
-                self.cpu_queue.put((task.priority, task, stream))
-                return
+            # Choose GPU device if not specified
             if task.device is None:
                 task._device = self._choose_gpu_device()
+            
+            # Add to appropriate GPU queue based on priority
             if task.priority == Priority.HIGH:
                 self.gpu_high_priority_queue[task.device].put((task, stream))
             else:
                 self.gpu_queue[task.device].put((task, stream))
-            with self.lock:
-                self._remaind_gpu_queue += 1
         else:
-            self.cpu_queue.put((task.priority, task, stream))
+            # Add to CPU queue with priority
+            self.cpu_queue.put((task.sort_index, task, stream))
+        
+        self.logger.debug(f"Task {task.task_name}(id: {task.id}) added to {'GPU' if task.gpu else 'CPU'} queue")
 
     ######### Task processing #########
     def _cpu_worker(self):
@@ -317,10 +342,10 @@ nherit_input             func (Callable): Function to be executed
 
         def callback(result_tuple):
             task, stream, result, error = result_tuple
-            self._handle_completed_task(task, stream, result, error)
+            self.completion_queue.put((task, stream, result, error))
 
         def errback(error):
-            self._handle_completed_task(task, stream, None, str(error))
+            self.completion_queue.put((task, stream, None, str(error)))
 
         while not self._abrupt_stop_requested.is_set():
             try:
@@ -421,10 +446,10 @@ nherit_input             func (Callable): Function to be executed
                 try:
                     with self.gpu_context(device):
                         result = task.execute()
-                        self._handle_completed_task(task, stream, result, None)
+                        self.completion_queue.put((task, stream, result, None))
 
                 except Exception as e:
-                    self._handle_completed_task(task, stream, None, str(e))
+                    self.completion_queue.put((task, stream, None, str(e)))
 
             except AbruptStopException:
                 self.logger.info(f"GPU worker process for device {device} stopped.")
@@ -434,41 +459,44 @@ nherit_input             func (Callable): Function to be executed
                 time.sleep(0.5)
                 raise
 
-    def _handle_completed_task(self, task, stream, result, error):
-        """Handle a completed task from either pool or GPU."""
-        with self.lock:
-            for submitted_task in self.tasks:
-                if submitted_task.id == task.id:
-                    if error:
-                        submitted_task.status = "failed"
-                    else:
-                        submitted_task.status = "completed"
-                        
-                        if self.save_result:
-                            submitted_task.result = result
-                            self.results.append(result)
-                        else:
-                            submitted_task.result = None
-                            result = None
+    def _completion_worker(self):
+        while not self._stop_event.is_set():
+            try:
+                task, stream, result, error = self.completion_queue.get()
+                with self.lock:
+                    for submitted_task in self.tasks:
+                        if submitted_task.id == task.id:
+                            if error:
+                                submitted_task.status = "failed"
+                            else:
+                                submitted_task.status = "completed"
+                                
+                                if self.save_result:
+                                    submitted_task.result = result
+                                    self.results.append(result)
+                                else:
+                                    submitted_task.result = None
+                                    result = None
 
                     task.endtime = datetime.now()
                     submitted_task.endtime = datetime.now()
                     submitted_task.error = error
-
-                    task.cleanup()
                     submitted_task.cleanup()
                     
                     if stream is not None and task.error is None:
                         self._move_to_next_task(stream)    
                     break
-            self.logger.info(f"Completed task {task.task_name}(id: {task.id}) in {time_diff_in_seconds(task.starttime, task.endtime)} seconds")
-            self.log_memory_stats(f"Task {task.task_name}(id: {task.id}) completed")
+                self.logger.info(f"Completed task {task.task_name}(id: {task.id}) in {time_diff_in_seconds(task.starttime, task.endtime)} seconds")
+                self.log_memory_stats(f"Task {task.task_name}(id: {task.id}) completed")
 
-            if self.print_debug:
-                self.logger.debug(self.log_detailed_memory_report())
-                self.print_the_number_of_processes()
+                if self.print_debug:
+                    self.logger.debug(self.log_detailed_memory_report())
+            except Exception as e:
+                self.logger.error(f"Error in completion worker: {e}")
+                time.sleep(0.2)
+                continue
                 
-    def print_the_number_of_processes(self):
+    def log_detailed_memory_report(self):
         """Print the number of processes in each queue."""
         self.logger.info(
             f"CPU Queue: {self.cpu_queue.qsize()} tasks"
@@ -479,12 +507,10 @@ nherit_input             func (Callable): Function to be executed
                 f"GPU device {device}: {self.gpu_queue[device].qsize()} tasks"
             )
         
-
         n_processing = len([t for t in self.tasks if t.status == 'processing'])
         n_completed = len([t for t in self.tasks if t.status == 'completed'])
         n_failed = len([t for t in self.tasks if t.status == 'failed'])
         self.logger.info(f"Processing: {n_processing}, Completed: {n_completed}, Failed: {n_failed}")
-
 
     def stop_processing(self, *args):
         """
@@ -497,18 +523,39 @@ nherit_input             func (Callable): Function to be executed
 
         Notes:
             - Closes and terminates all CPU process pool
-            - Clears pending tasks in CPU and GPU queues
-            - Logs memory usage and shutdown details
+            - Stops all worker threads (submission, completion, CPU, GPU)
+            - Clears pending tasks in all queues
             - Provides a clean shutdown mechanism for the task processing system
 
         Raises:
             Exception: If an error occurs during the shutdown process
         """
         try:
+            if hasattr(self, '_stop_event') and self._stop_event.is_set():
+                self.logger.warning("Stop already in progress")
+                return
+
             self.logger.info("Initiating graceful shutdown...")
             
             # Signal all threads to stop
+            if hasattr(self, '_stop_event'):
+                self._stop_event.set()
             self._abrupt_stop_requested.set()
+            
+            # Clear submission and completion queues
+            if hasattr(self, 'submission_queue'):
+                while not self.submission_queue.empty():
+                    try:
+                        self.submission_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                        
+            if hasattr(self, 'completion_queue'):
+                while not self.completion_queue.empty():
+                    try:
+                        self.completion_queue.get_nowait()
+                    except queue.Empty:
+                        break
             
             # Clear CPU queues
             while not self.cpu_queue.empty():
@@ -534,9 +581,27 @@ nherit_input             func (Callable): Function to be executed
                 self.cpu_pool.terminate()
                 self.cpu_pool.join()
                 self.logger.info("Process pool terminated")
+                
+            # Wait for all threads to finish
+            if hasattr(self, 'submission_thread'):
+                self.logger.debug("Waiting for submission thread to finish")
+                self.submission_thread.join(timeout=2.0)
+                
+            if hasattr(self, 'completion_thread'):
+                self.logger.debug("Waiting for completion thread to finish")
+                self.completion_thread.join(timeout=2.0)
+                
+            if hasattr(self, 'cpu_thread'):
+                self.logger.debug("Waiting for CPU thread to finish")
+                self.cpu_thread.join(timeout=2.0)
+                
+            if hasattr(self, 'gpu_threads'):
+                self.logger.debug("Waiting for GPU threads to finish")
+                for t in self.gpu_threads:
+                    t.join(timeout=2.0)
 
             # Log shutdown details
-            self.logger.info("Task processing stopped")
+            self.logger.info("All task processing stopped")
             self.log_memory_stats("Shutdown")
 
         except Exception as e:
