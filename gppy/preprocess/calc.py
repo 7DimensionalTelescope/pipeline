@@ -13,11 +13,12 @@ reduction_kernel = cp.ElementwiseKernel(
     in_params="T x, T b, T d, T f", out_params="T z", operation="z = (x - b - d) / f", name="reduction"
 )
 
+
 @njit(parallel=True)
 def reduction_kernel_cpu(image, bias, dark, flat, subtract, normalize):
     h, w = image.shape
     corrected = np.empty_like(image)
-    
+
     for i in prange(h):
         for j in range(w):
             val = image[i, j] - bias[i, j] - dark[i, j]
@@ -32,6 +33,7 @@ def reduction_kernel_cpu(image, bias, dark, flat, subtract, normalize):
             corrected /= median
 
     return corrected
+
 
 @contextmanager
 def load_data_gpu(fpath, ext=None):
@@ -50,7 +52,15 @@ def _save_data_in_dump_dir(data, dump_dir, img_path):
     np.save(path, data)
     return path
 
-def process_image_with_cupy(image_paths, bias, dark, flat, dump_dir=None, device_id=0):
+
+def process_image_with_cupy(
+    image_paths: str,
+    bias: np.array,
+    dark: np.array,
+    flat: np.array,
+    dump_dir=None,
+    device_id=0,
+):
 
     with cp.cuda.Device(device_id):
         load_stream = Stream(non_blocking=True)
@@ -60,8 +70,8 @@ def process_image_with_cupy(image_paths, bias, dark, flat, dump_dir=None, device
         prev_image = None
         for img_path in image_paths:
             with load_stream:
-                curr_image = cp.asarray(fits.getdata(img_path).astype('float32'))
-            
+                curr_image = cp.asarray(fits.getdata(img_path).astype("float32"))
+
             if prev_image is not None:
                 with compute_stream:
                     reduced = reduction_kernel(prev_image, bias, dark, flat)
@@ -85,14 +95,24 @@ def process_image_with_cupy(image_paths, bias, dark, flat, dump_dir=None, device
                     local_results.append(cp.asnumpy(reduced))
 
         compute_stream.synchronize()
-    
+
         del bias, dark, flat, prev_image, curr_image, reduced
 
         cp.get_default_memory_pool().free_all_blocks()
-    
+
     return local_results
 
-def process_image_with_cpu(image_paths, bias, dark, flat, subtract=None, normalize=False, dump_dir=None, **kwargs):
+
+def process_image_with_cpu(
+    image_paths: str,
+    bias: np.array,
+    dark: np.array,
+    flat: np.array,
+    subtract=None,
+    normalize=False,
+    dump_dir=None,
+    **kwargs,
+):
 
     def read_fits_image(path):
         return fits.getdata(path).astype(np.float32)
@@ -114,6 +134,7 @@ def process_image_with_cpu(image_paths, bias, dark, flat, subtract=None, normali
 
     return local_results
 
+
 # Combine images
 def combine_images_with_cupy(images: str, device_id=None, subtract=None, norm=False):
     """median is gpu, std is cpu"""
@@ -131,6 +152,7 @@ def combine_images_with_cupy(images: str, device_id=None, subtract=None, norm=Fa
     cp.get_default_memory_pool().free_all_blocks()
     return cp_median, np_std
 
+
 def combine_images_with_cpu(images: list, subtract=None, norm=False, **kwargs):
     np_stack = np.stack([fits.getdata(img) for img in images])
     if subtract is not None:
@@ -141,6 +163,7 @@ def combine_images_with_cpu(images: list, subtract=None, norm=False, **kwargs):
 
     np_median, np_std = _calc_median_and_std(np_stack)
     return np_median, np_std
+
 
 @njit(parallel=True)
 def _normalize_stack(np_stack):
@@ -155,6 +178,7 @@ def _normalize_stack(np_stack):
         output[i] = np_stack[i] / med
 
     return output
+
 
 @njit(parallel=True)
 def _calc_median_and_std(np_stack):
@@ -181,6 +205,7 @@ def _calc_median_and_std(np_stack):
 
     return median_img, std_img
 
+
 # Sigma Clipped Statistics
 def sigma_clipped_stats(np_data, device_id=0, **kwargs):
     if device_id == "CPU":
@@ -188,8 +213,8 @@ def sigma_clipped_stats(np_data, device_id=0, **kwargs):
     else:
         return sigma_clipped_stats_cupy(np_data, device_id=device_id, **kwargs)
 
-def sigma_clipped_stats_cpu(data, sigma=3.0, maxiters=5,
-                               minmax=False, hot_mask=False, hot_mask_sigma=5.0):
+
+def sigma_clipped_stats_cpu(data, sigma=3.0, maxiters=5, minmax=False, hot_mask=False, hot_mask_sigma=5.0):
     flat = data.ravel()
     mask = _sigma_clip_1d(flat, sigma, maxiters)
     clipped = flat[mask]
@@ -211,6 +236,7 @@ def sigma_clipped_stats_cpu(data, sigma=3.0, maxiters=5,
 
     return mean_val, median_val, std_val
 
+
 @njit
 def _sigma_clip_1d(data_flat, sigma=3.0, maxiters=5):
     mask = np.ones(data_flat.shape, dtype=np.bool_)
@@ -226,6 +252,7 @@ def _sigma_clip_1d(data_flat, sigma=3.0, maxiters=5):
             mask[i] = abs(data_flat[i] - median) < sigma * std
     return mask
 
+
 @njit(parallel=True)
 def _compute_hot_mask_2d(data, median, std, hot_sigma):
     H, W = data.shape
@@ -236,8 +263,8 @@ def _compute_hot_mask_2d(data, median, std, hot_sigma):
             mask[i, j] = 1 if abs(data[i, j] - median) > threshold else 0
     return mask
 
-def sigma_clipped_stats_cupy(cp_data, device_id=0, sigma=3, maxiters=5, minmax=False, 
-                            hot_mask=False, hot_mask_sigma=5):
+
+def sigma_clipped_stats_cupy(cp_data, device_id=0, sigma=3, maxiters=5, minmax=False, hot_mask=False, hot_mask_sigma=5):
     """
     Approximate sigma-clipping using CuPy.
     Computes mean, median, and std after iteratively removing outliers
@@ -282,7 +309,7 @@ def sigma_clipped_stats_cupy(cp_data, device_id=0, sigma=3, maxiters=5, minmax=F
         if hot_mask:
             hot_mask_arr = cp.abs(cp_data - median_val) > hot_mask_sigma * std_val  # 1 for bad, 0 for okay
             hot_mask_arr = cp.asnumpy(hot_mask_arr).astype("uint8")
-    
+
     del cp_data_flat, cp_data
     cp.get_default_memory_pool().free_all_blocks()
 

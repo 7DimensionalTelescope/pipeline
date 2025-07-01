@@ -44,13 +44,12 @@ class Preprocess(BaseSetup):
         self._device_id = None if use_gpu else "CPU"
         self._use_gpu = use_gpu
         self.initialize()
-        
 
         # self.logger.debug(f"Masterframe output folder: {self.path_fdz}")
 
     @classmethod
-    def from_list(cls, images):
-        config = PreprocConfiguration(images)
+    def from_list(cls, images, **kwargs):
+        config = PreprocConfiguration(images, **kwargs)
         return cls(config)
 
     @property
@@ -91,7 +90,7 @@ class Preprocess(BaseSetup):
 
     def run(self, device_id=None, make_plots=True, use_gpu=True, only_with_sci=False):
         self._use_gpu = all([use_gpu, self._use_gpu])
-        
+
         device_id = self.get_device_id(device_id)
 
         threads_for_making_plots = []
@@ -212,8 +211,9 @@ class Preprocess(BaseSetup):
             elif self._device_id is None:
                 if self.config.preprocess.device is not None:
                     self._device_id = self.config.preprocess.device
-                else: 
+                else:
                     from ..services.utils import get_best_gpu_device
+
                     self._device_id = get_best_gpu_device()
                     if self._device_id is None:
                         self.logger.warning("No available GPU device found. Using CPU.")
@@ -223,7 +223,7 @@ class Preprocess(BaseSetup):
                         self.config.preprocess.device = self._device_id
         else:
             self._device_id = "CPU"
-        
+
         return self._device_id
 
     def load_masterframe(self, device_id=None, use_gpu: bool = True):
@@ -242,7 +242,6 @@ class Preprocess(BaseSetup):
         else:
             calc_function = combine_images_with_cupy
             self.logger.info(f"Generating masterframes for group {self._current_group+1} in GPU device {device_id}")
-        
 
         st = time.time()
 
@@ -352,14 +351,14 @@ class Preprocess(BaseSetup):
         if dtype == "dark":
             self.dark_exptime = get_header(existing_mframe_file)[HEADER_KEY_MAP["exptime"]]
 
-    def data_reduction(self, device_id=None, use_gpu: bool = True):
+    def data_reduction(self, device_id=None, use_gpu: bool = True, dump_dir=None):
         self._use_gpu = all([use_gpu, self._use_gpu])
 
         if not self.sci_input:
             self.logger.info(f"No science frames found in group {self._current_group + 1}, skipping data reduction.")
             self.all_results = None
             # delete bypassing custom getattr
-            for attr in ('bias_data', 'dark_data', 'flat_data'):
+            for attr in ("bias_data", "dark_data", "flat_data"):
                 self.__dict__.pop(attr, None)
             cp.get_default_memory_pool().free_all_blocks()
             return
@@ -373,24 +372,20 @@ class Preprocess(BaseSetup):
 
         if device_id == "CPU":
             process_kernel = process_image_with_cpu
-            self.logger.info(
-                f"Processing {len(self.sci_input)} images in group {self._current_group+1} on CPU"
-            )
+            self.logger.info(f"Processing {len(self.sci_input)} images in group {self._current_group+1} on CPU")
         else:
             process_kernel = process_image_with_cupy
             self.logger.info(
                 f"Processing {len(self.sci_input)} images in group {self._current_group+1} on GPU device(s): {device_id} "
             )
-        
-        if self.path.factory_parent_dir is not None:
-            dump_dir = os.path.join(self.path.factory_parent_dir, self.path.config_stem)
-            os.makedirs(dump_dir, exist_ok=True)
-            results = process_kernel(self.sci_input, self.bias_data, self.dark_data, self.flat_data, device_id=device_id, dump_dir = dump_dir)
-        else:
-            results = process_kernel(self.sci_input, self.bias_data, self.dark_data, self.flat_data, device_id=device_id)
+
+        os.path.join(self.path.factory_parent_dir, self.path.config_stem)
+        results = process_kernel(
+            self.sci_input, self.bias_data, self.dark_data, self.flat_data, device_id=device_id, dump_dir=dump_dir
+        )
 
         del self.bias_data, self.dark_data, self.flat_data
-        
+
         if self._use_gpu:
             cp.get_default_memory_pool().free_all_blocks()
 
@@ -482,8 +477,10 @@ class Preprocess(BaseSetup):
         )
 
     def generate_bpmask(self, data, n_sigma=5, header=None, device_id=0):
-        hot_mask = sigma_clipped_stats(data, device_id=device_id, sigma=3, maxiters=5, hot_mask=True, hot_mask_sigma=n_sigma)
-        
+        hot_mask = sigma_clipped_stats(
+            data, device_id=device_id, sigma=3, maxiters=5, hot_mask=True, hot_mask_sigma=n_sigma
+        )
+
         newhdu = fits.CompImageHDU(data=hot_mask)
         if header:
             for key in [
