@@ -1,30 +1,19 @@
 import os
 
+# System paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-# REF_DIR = os.environ["REF_DIR"]
-# REF_DIR = os.path.join(SCRIPT_DIR, "gppy", "ref")
 REF_DIR = os.path.join(SCRIPT_DIR, "ref")
-
-RAWDATA_DIR = os.environ["RAWDATA_DIR"]  # "/lyman/data1/obsdata/" #
+RAWDATA_DIR = os.environ["RAWDATA_DIR"]
 FACTORY_DIR = os.environ["FACTORY_DIR"]
 MASTER_FRAME_DIR = os.environ["MASTER_FRAME_DIR"]
-
 PROCESSED_DIR = os.environ["PROCESSED_DIR"]
-# DAILY_STACKED_DIR = os.environ["DAILY_STACKED_DIR"]
 STACKED_DIR = os.environ["STACKED_DIR"]
-
 PIPELINE_DIRS = {RAWDATA_DIR, FACTORY_DIR, MASTER_FRAME_DIR, PROCESSED_DIR, STACKED_DIR}
-
 SLACK_TOKEN = os.environ["SLACK_TOKEN"]
-
-CalibType = ["BIAS", "DARK", "FLAT"]
-
-available_7dt_units = [f"7DT0{unit}" if unit < 10 else f"7DT{unit}" for unit in range(1, 20)]
 INSTRUM_STATUS_DICT = "/home/7dt/7dt_too/backend/data/7dt/multitelescopes.dict"
 
-PIXSCALE = 0.505  # arcsec/pixel. Default plate scale assumed prior to astrometric solving
 
-NUM_MIN_CALIB = 2  # 5
+# Image grouping structure
 INSTRUM_GROUP_KEYS = ["unit", "n_binning", "gain", "camera"]
 ALL_GROUP_KEYS = ["obj", "filter", "nightdate", "exptime"] + INSTRUM_GROUP_KEYS
 BIAS_GROUP_KEYS = ["nighdate"] + INSTRUM_GROUP_KEYS  # no exp: account for potential ms exp difference
@@ -34,9 +23,16 @@ SURVEY_SCIENCE_GROUP_KEYS = ["obj", "filter"]  # , "n_binning", "unit"]
 TRANSIENT_SCIENCE_GROUP_KEYS = ["nightdate"] + SURVEY_SCIENCE_GROUP_KEYS  # used for processed image directory structure
 PATH_KEYS = ["unit"] + TRANSIENT_SCIENCE_GROUP_KEYS
 
-STRICT_KEYS = {"nightdate", "obj", "filter", "unit", "exptime", "n_binning", "gain", "camera"}
-ANCILLARY_KEYS = {"ra", "dec", "obstime"}  # hms
 
+# OBS-related
+CalibType = ["BIAS", "DARK", "FLAT"]
+available_7dt_units = [f"7DT0{unit}" if unit < 10 else f"7DT{unit}" for unit in range(1, 20)]
+WIDE_FILTERS = ["m375w", "m425w"]
+MEDIUM_FILTERS = [f"m{s}" for s in range(400, 900, 25)]
+BROAD_FILTERS = ["u", "g", "r", "i", "z"]
+ALL_FILTERS = WIDE_FILTERS + MEDIUM_FILTERS + BROAD_FILTERS
+PIXSCALE = 0.505  # arcsec/pixel. Default plate scale assumed prior to astrometric solving
+NUM_MIN_CALIB = 2  # 5
 
 HEADER_KEY_MAP = {
     "exptime": "EXPOSURE",

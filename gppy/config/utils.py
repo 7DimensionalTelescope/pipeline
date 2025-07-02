@@ -1,3 +1,5 @@
+from functools import reduce
+
 
 def merge_dicts(base: dict, updates: dict) -> dict:
     """
@@ -23,7 +25,14 @@ def merge_dicts(base: dict, updates: dict) -> dict:
     return base
 
 
-def get_key(config, key: str):
-    if hasattr(config, key) and getattr(config, key) is not None:
-        return getattr(config, key)
-    return None
+def get_key(config, key, default=None):
+    """
+    Safely walk through attributes in `key` (e.g. "photometry.path.ref_ris_dir").
+    Returns the final value or `default` if any step is missing or None.
+    """
+
+    def _get(o, attr):
+        return getattr(o, attr, None) if o is not None else None
+
+    result = reduce(_get, key.split("."), config)
+    return result if result is not None else default

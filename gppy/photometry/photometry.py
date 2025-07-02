@@ -20,13 +20,14 @@ from astropy.stats import sigma_clip
 
 # gppy modules
 from . import utils as phot_utils
+from ..config.utils import get_key
 from ..utils import update_padded_header, time_diff_in_seconds
 from ..config import SciProcConfiguration
 from ..config.base import ConfigurationInstance
 from ..services.memory import MemoryMonitor
 from ..services.queue import QueueManager, Priority
 from .. import external
-from ..const import PIXSCALE, PipelineError
+from ..const import PIXSCALE, MEDIUM_FILTERS, BROAD_FILTERS, ALL_FILTERS, PipelineError
 from ..services.setup import BaseSetup
 from ..tools.table import match_two_catalogs, build_condition_mask
 from ..path.path import PathHandler
@@ -115,7 +116,7 @@ class Photometry(BaseSetup):
         """[(number, name, use_gpu), ...]"""
         return [(1, "run", False)]
 
-    def run(self, use_gpu: bool = False) -> None:
+    def run(self) -> None:
         """
         Run photometry on all configured images.
 
@@ -211,8 +212,8 @@ class PhotometrySingle:
         ref_catalog: str = "GaiaXP",
         total_image: int = 1,
         trust_header_seeing=False,
+        check_filter=False,
         calculate_zp=True,
-        use_gpu: bool = False,
     ) -> None:
         """Initialize PhotometrySingle instance."""
 
@@ -227,14 +228,10 @@ class PhotometrySingle:
         self.phot_conf = self.config.photometry
         self.input_image = self.phot_conf.input_images[0]
         self.image_info = ImageInfo.parse_image_header_info(self.input_image)
-        self.name = os.path.basename(self.input_image)
+        self.name = name or os.path.basename(self.input_image)
         self.phot_header = PhotometryHeader()
         self.phot_header.author = getpass.getuser()
 
-        # if total_image == 1:
-        #     self._id = next(self._id_counter)
-        # else:
-        #     self._id = str(next(self._id_counter)) + "/" + str(total_image)
         self._id = str(next(self._id_counter)) + "/" + str(total_image)
 
         self.path = PathHandler(self.input_image)
@@ -242,6 +239,7 @@ class PhotometrySingle:
 
         self._trust_header_seeing = trust_header_seeing
         self._calculate_zp = calculate_zp
+        self.check_filter = check_filter
 
     def _setup_logger(self, config: Any) -> Any:
         """Initialize logger instance."""
@@ -285,15 +283,29 @@ class PhotometrySingle:
 
         self.calculate_seeing()
         obs_src_table = self.photometry_with_sextractor()
-        obs_src_table = self.get_reference_matched_catalog(obs_src_table)
 
-        dicts = self.calculate_zp(obs_src_table)
-        self.update_header(*dicts)
-        self.write_catalog(obs_src_table)
+        if self.check_filter:
+            filters_to_check = get_key(self.config.photometry, "filters_to_check") or ALL_FILTERS
+            obs_src_table = self.add_matched_reference_catalog(obs_src_table, filters=filters_to_check)
+            dicts = {}
+            for filt in filters_to_check:
+                zp_dict, aper_dict = self.calculate_zp(obs_src_table, filt=filt, save_plots=False)
+                dicts[filt] = (zp_dict, aper_dict)
+            inferred_filter = self.determine_filter(dicts)
+            self.update_image_header(*dicts[inferred_filter])
+            self.write_catalog(obs_src_table)
+
+        else:
+            print("not checking")
+            obs_src_table = self.add_matched_reference_catalog(obs_src_table)
+            zp_dict, aper_dict = self.calculate_zp(obs_src_table)
+            self.update_image_header(zp_dict, aper_dict)
+            self.write_catalog(obs_src_table)
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
         self.logger.info(
-            f"'PhotometrySingle' is completed for the image [{self._id}] in {time_diff_in_seconds(start_time)} seconds"
+            f"'PhotometrySingle' is completed for the image [{self._id}]"
+            f" in {time_diff_in_seconds(start_time)} seconds"
         )
 
     def calculate_seeing(self, use_header_seeing=False) -> None:
@@ -313,7 +325,6 @@ class PhotometrySingle:
             self.phot_header.peeing = header["PEEING"]
             self.phot_header.ellipticity = header["ELLIP"]
             self.phot_header.elongation = header["ELONG"]
-
             self.logger.debug(f"{len(post_match_table)} Star-like Sources Found")
             self.logger.debug(f"SEEING     : {self.phot_header.seeing:.3f} arcsec")
             self.logger.debug(f"ELONGATION : {self.phot_header.elongation:.3f}")
@@ -327,36 +338,39 @@ class PhotometrySingle:
         else:
             obs_src_table = self._run_sextractor(se_preset="prep")
 
-        post_match_table = self.get_reference_matched_catalog(obs_src_table)
+        post_match_table = self.add_matched_reference_catalog(obs_src_table)
         post_match_table = self.filter_catalog(post_match_table, snr_cut=False, low_mag_cut=11.75)
 
         self.phot_header.seeing = np.median(post_match_table["FWHM_WORLD"] * 3600)
         self.phot_header.peeing = self.phot_header.seeing / self.image_info.pixscale
         self.phot_header.ellipticity = round(np.median(post_match_table["ELLIPTICITY"]), 3)
         self.phot_header.elongation = round(np.median(post_match_table["ELONGATION"]), 3)
-
         self.logger.debug(f"{len(post_match_table)} Star-like Sources Found")
         self.logger.debug(f"SEEING     : {self.phot_header.seeing:.3f} arcsec")
         self.logger.debug(f"ELONGATION : {self.phot_header.elongation:.3f}")
         self.logger.debug(f"ELLIPTICITY: {self.phot_header.ellipticity:.3f}")
 
-    def _load_ref_catalog(self) -> None:
+        return
+
+    def _load_ref_catalog(self, filters=None) -> None:
         """
         Load reference catalog for photometric calibration.
 
         Handles both standard and corrected GaiaXP catalogs.
         Creates new catalog if it doesn't exist by parsing Gaia data.
         """
+        ref_ris_dir = get_key(self.config.photometry, "path.ref_ris_dir") or self.path.photometry.ref_ris_dir
         if self.ref_catalog == "GaiaXP_cor":
-            ref_cat = f"{self.path.photometry.ref_ris_dir}/cor_gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
+            ref_cat = f"{ref_ris_dir}/cor_gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
         elif self.ref_catalog == "GaiaXP":
-            ref_cat = f"{self.path.photometry.ref_ris_dir}/gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
+            ref_cat = f"{ref_ris_dir}/gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
 
         # generate the missing ref_cat and save on disk
+        ref_gaia_dir = get_key(self.config.photometry, "path.ref_gaia_dir") or self.path.photometry.ref_gaia_dir
         if not os.path.exists(ref_cat):  # and "gaia" in self.ref_catalog:
             ref_src_table = phot_utils.aggregate_gaia_catalogs(
                 target_coord=SkyCoord(self.image_info.racent, self.image_info.decent, unit="deg"),
-                path_calibration_field=self.path.photometry.ref_gaia_dir,
+                path_calibration_field=ref_gaia_dir,
                 matching_radius=self.phot_conf.match_radius * 1.5,
                 path_save=ref_cat,
             )
@@ -365,13 +379,15 @@ class PhotometrySingle:
         else:
             ref_src_table = Table.read(ref_cat)
 
-        self.gaia_columns = ["source_id", "ra", "dec", "bp_rp", "phot_g_mean_mag", f"mag_{self.image_info.filter}"]
-
+        filters = filters or [self.image_info.filter]
+        synthetic_mag_keys = [f"mag_{filt}" for filt in filters]
+        self.gaia_columns = ["source_id", "ra", "dec", "bp_rp", "phot_g_mean_mag"] + synthetic_mag_keys
         return ref_src_table[self.gaia_columns]
 
-    def get_reference_matched_catalog(
+    def add_matched_reference_catalog(
         self,
         obs_src_table,
+        filters=None,
     ) -> Table:
         """
         Match detected sources with reference catalog.
@@ -383,7 +399,7 @@ class PhotometrySingle:
         """
 
         self.logger.debug("Loading reference catalog.")
-        ref_src_table = self._load_ref_catalog()
+        ref_src_table = self._load_ref_catalog(filters=filters)
 
         self.logger.debug("Matching sources with reference catalog.")
         post_match_table = match_two_catalogs(obs_src_table, ref_src_table, x1="ra", y1="dec", join="left")
@@ -391,9 +407,6 @@ class PhotometrySingle:
         self.logger.info(f"Matched sources: {len(post_match_table)} (r = {self.phot_conf.match_radius:.3f} arcsec)")
         if len(post_match_table) == 0:
             self.logger.critical("There is no matched source for photometry. It will cause a problem in the next step.")
-        # if "CTYPE1" not in self.header.keys():
-        #     self.logger.error("Check Astrometry solution: no WCS information")
-        #     raise PipelineError("Check Astrometry solution: no WCS information")
 
         return post_match_table
 
@@ -418,6 +431,7 @@ class PhotometrySingle:
         low_mag_cut = low_mag_cut or self.phot_conf.ref_mag_lower
         high_mag_cut = high_mag_cut or self.phot_conf.ref_mag_upper
 
+        # Copy the original table to avoid mutation
         post_match_table = table.copy()
 
         post_match_table["within_ellipse"] = phot_utils.is_within_ellipse(
@@ -495,7 +509,7 @@ class PhotometrySingle:
         sex_args: Optional[Dict] = None,
         output: str = None,
         **kwargs,
-    ) -> Any:
+    ) -> Table:
         """
         Execute SExtractor on the image.
 
@@ -506,7 +520,7 @@ class PhotometrySingle:
             **kwargs: Additional keyword arguments for SExtractor
 
         Returns:
-            SExtractor execution outcome
+            Sextracted Table
         """
         self.logger.info(f"Run source extractor (sextractor) ({se_preset})")
 
@@ -532,7 +546,7 @@ class PhotometrySingle:
 
         return Table.read(output, format="ascii.sextractor")
 
-    def calculate_zp(self, obs_src_table, save_plots=True) -> Tuple[Dict, Dict]:
+    def calculate_zp(self, obs_src_table, save_plots=True, filt=None) -> Tuple[Dict, Dict]:
         """
         Calculate photometric zero point.
 
@@ -546,29 +560,36 @@ class PhotometrySingle:
             Tuple of dictionaries containing zero point and aperture information
         """
 
+        self.logger.debug(f"Filtering source catalog for zp calculation")
         zp_src_table = self.filter_catalog(obs_src_table)
-        self.logger.info(f"Calculating zero points with {len(zp_src_table)} sources")
+        self.logger.debug(f"After filtering: {len(zp_src_table)}/{len(obs_src_table)} sources")
 
-        aperture = phot_utils.get_aperture_dict(self.phot_header.peeing, self.image_info.pixscale)
+        self.logger.info(f"Calculating zero points with {len(zp_src_table)} sources")
+        apertures = phot_utils.get_aperture_dict(self.phot_header.peeing, self.image_info.pixscale)
+
+        if filt:
+            ref_mag_key = f"mag_{filt}"
+            keyset_filt = filt
+        else:
+            ref_mag_key = self.image_info.ref_mag_key
+            keyset_filt = self.image_info.filter
 
         zp_dict = {}
         aper_dict = {}
-        for mag_key in aperture.keys():
+        for mag_key in apertures.keys():
             magerr_key = mag_key.replace("MAG", "MAGERR")
 
-            zps = zp_src_table[self.image_info.ref_mag_key] - zp_src_table[mag_key]
-            # zperrs = phot_utils.rss(
-            #     zp_src_table[magerr_key], zp_src_table(refmagerrkey)
-            # )  # gaia synphot err currently unavailable
+            zps = zp_src_table[ref_mag_key] - zp_src_table[mag_key]
+            # gaia synphot err unavailable; ignored
             zperrs = zp_src_table[magerr_key]
+            # zperrs = phot_utils.rss(zp_src_table[magerr_key], zp_src_table(self.image_info.ref_magerr_key))
 
             mask = sigma_clip(zps, sigma=2.0).mask
 
             zp, zperr = phot_utils.compute_median_nmad(np.array(zps[~mask].value), normalize=True)
 
-            keys = phot_utils.keyset(mag_key, self.image_info.filter)
+            keys = phot_utils.keyset(mag_key, keyset_filt)
             values = phot_utils.apply_zp(obs_src_table[mag_key], obs_src_table[magerr_key], zp, zperr)
-
             # add columns to obs_src_table (implicit mutation)
             for key, val in zip(keys, values):
                 obs_src_table[key] = val
@@ -577,10 +598,10 @@ class PhotometrySingle:
             if mag_key == "MAG_AUTO":
                 ul_3sig, ul_5sig = 0.0, 0.0
             else:
-                ul_3sig, ul_5sig = phot_utils.limitmag(np.array([3, 5]), zp, aperture[mag_key][0], self.phot_header.skysig)  # fmt:skip
+                ul_3sig, ul_5sig = phot_utils.limitmag(np.array([3, 5]), zp, apertures[mag_key][0], self.phot_header.skysig)  # fmt:skip
 
             suffix = mag_key.replace("MAG_", "")
-            aper_dict[suffix] = round(aperture[mag_key][0], 3), aperture[mag_key][1]
+            aper_dict[suffix] = round(apertures[mag_key][0], 3), apertures[mag_key][1]
 
             suffix = suffix.replace("APER", "0").replace("0_", "")
             zp_dict.update(
@@ -595,7 +616,92 @@ class PhotometrySingle:
             if save_plots:
                 self.plot_zp(mag_key, zp_src_table, zps, zperrs, zp, zperr, mask)
 
-        return (zp_dict, aper_dict)
+        return zp_dict, aper_dict
+
+    def determine_filter(self, dicts: dict, save_plot=True):
+        zp_cut = 27
+        alleged_filter = self.image_info.filter
+        filters_checked = [k for k in dicts.keys()]
+
+        while True:
+            filters, zps, zperrs = phot_utils.dicts_to_lists(dicts)
+            idx = zperrs.index(min(zperrs))
+            inferred_filter = filters[idx]
+            zp = zps[idx]
+
+            if (inferred_filter in BROAD_FILTERS and zp <= zp_cut) or (
+                inferred_filter in MEDIUM_FILTERS and zp > zp_cut
+            ):
+                dicts.pop(inferred_filter)
+            else:
+                break
+
+        if save_plot:
+            self.plot_filter_check(alleged_filter, inferred_filter, filters_checked, filters, zps, zperrs)
+
+        if alleged_filter != inferred_filter:
+            self.logger.warning(f"The filter in header ({alleged_filter}) is not the best matching ({inferred_filter})")
+
+        return inferred_filter
+
+    def plot_filter_check(self, alleged_filter, inferred_filter, filters_checked, filters, zps, zperrs):
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+
+        fig, ax1 = plt.subplots(figsize=(10, 5))
+
+        # 1) Plot ZP on ax1
+        ax1.plot(
+            filters_checked,
+            zps,
+            marker="o",
+            label="ZP",
+            color="tab:blue",
+        )
+        ax1.set_ylabel("Zero Point (ZP)", color="tab:blue")
+        ax1.tick_params(axis="y", labelcolor="tab:blue")
+
+        # 2) Shade backgrounds for “unchecked” filters
+        for i, flt in enumerate(filters_checked):
+            if flt not in filters:
+                # span from i - 0.5 to i + 0.5 on the x-axis
+                ax1.axvspan(i - 0.5, i + 0.5, color="gray", alpha=0.3)
+
+        inf_idx = filters_checked.index(inferred_filter)
+        ax1.axvspan(inf_idx - 0.5, inf_idx + 0.5, color="gold", alpha=0.3)
+
+        # x-ticks and tilted labels
+        ax1.set_xticks(range(len(filters_checked)))
+        ax1.set_xticklabels(filters_checked, rotation=45, ha="right")
+
+        # 3) Create twin axis for EZP
+        ax2 = ax1.twinx()
+        ax2.plot(
+            filters_checked,
+            zperrs,
+            marker="x",
+            linestyle="--",
+            label="EZP",
+            color="red",
+        )
+        ax2.set_ylabel("Zero Point Error (EZP)", color="red")
+        ax2.tick_params(axis="y", labelcolor="red")
+
+        # Combine legends
+        gray_patch = mpatches.Patch(color="gray", alpha=0.3)
+        yellow_patch = mpatches.Patch(color="gold", alpha=0.3, label="Inferred Filter")
+        h1, l1 = ax1.get_legend_handles_labels()
+        h2, l2 = ax2.get_legend_handles_labels()
+        ax1.legend(h1 + h2 + [gray_patch, yellow_patch], l1 + l2 + ["Ruled Out", "Inferred Filter"], loc="upper left")
+
+        plt.title(f"Filter Sanity Check for {alleged_filter}")
+        plt.tight_layout()
+
+        img_stem = os.path.splitext(os.path.basename(self.input_image))[0]
+        f = os.path.join(self.path.figure_dir, f"{img_stem}_filtercheck.png")
+        plt.savefig(f, dpi=100)
+        plt.close()
+        return
 
     def plot_zp(
         self,
@@ -671,10 +777,10 @@ class PhotometrySingle:
             os.makedirs(im_path)
 
         img_stem = os.path.splitext(os.path.basename(self.input_image))[0]
-        plt.savefig(f"{im_path}/{img_stem}.{mag_key}.png", dpi=100)
+        plt.savefig(f"{im_path}/{img_stem}_{mag_key}.png", dpi=100)
         plt.close()
 
-    def update_header(
+    def update_image_header(
         self,
         zp_dict: Dict[str, Tuple[float, str]],
         aper_dict: Dict[str, Tuple[float, str]],
@@ -723,6 +829,8 @@ class PhotometrySingle:
         output_catalog_file = self.path.photometry.final_catalog
         obs_src_table.write(output_catalog_file, format="fits", overwrite=True)  # "ascii.tab" "ascii.ecsv"
         self.logger.info(f"Photometry catalog is written in {os.path.basename(output_catalog_file)}")
+
+        return
 
 
 @dataclass

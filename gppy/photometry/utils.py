@@ -318,3 +318,19 @@ def get_sex_args(
     sex_args = [s for key, val in sex_config.items() for s in (f"-{key}", f"{val}")]
 
     return sex_args
+
+
+def dicts_to_lists(dicts):
+    # zps = [v[0] for _, dict_pair in dicts.items() for k, v in dict_pair[0].items() if k.startswith("ZP")]
+    filters = []
+    zps = []
+    zperrs = []
+    for filt, dict_pair in dicts.items():
+        filters.append(filt)
+        for k, t in dict_pair[0].items():
+            if k == "ZP_AUTO":
+                zps.append(t[0])
+            if k == "EZP_AUTO":
+                zperrs.append(t[0])
+
+    return filters, zps, zperrs
