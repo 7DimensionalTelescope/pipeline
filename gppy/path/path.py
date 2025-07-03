@@ -720,7 +720,9 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
 
         # for _key, entry in sorted(calib_map.items(), key=lambda kv: len(kv[1]["sci"])):  # sort by number of sci groups
         # sort by # of sci frames
-        for _key, entry in sorted(calib_map.items(), key=lambda kv: sum(len(inner) for inner in kv[1]["sci"])):
+        for _key, entry in sorted(
+            calib_map.items(), key=lambda kv: sum(len(inner) for inner in kv[1]["sci"]), reverse=True
+        ):
 
             sci_dict = {}
             for sci_group in entry["sci"]:
