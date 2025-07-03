@@ -375,7 +375,7 @@ class Preprocess(BaseSetup):
             )
 
         results = process_kernel(
-            self.sci_input, self.bias_data, self.dark_data, self.flat_data, device_id=device_id, dump_file=self.sci_output
+            self.sci_input, self.bias_data, self.dark_data, self.flat_data, device_id=device_id
         )
 
         del self.bias_data, self.dark_data, self.flat_data
@@ -394,33 +394,30 @@ class Preprocess(BaseSetup):
 
         st = time.time()
         n_head_blocks = self.config.preprocess.n_head_blocks
+        bias, dark, flat = self.bias_output, self.dark_output, self.flat_output
 
         # Write results
         for result, raw_file, processed_file in zip(self.all_results, self.sci_input, self.sci_output):
             header = fits.getheader(raw_file)
             header["SATURATE"] = prep_utils.get_saturation_level(
-                header, self.bias_output, self.dark_output, self.flat_output
+                header, bias, dark, flat
             )
             header = prep_utils.write_IMCMB_to_header(
-                header, [self.bias_output, self.dark_output, self.flat_output, raw_file]
+                header, [bias, dark, flat, raw_file]
             )
             header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
 
             os.makedirs(os.path.dirname(processed_file), exist_ok=True)
 
-            if isinstance(result, str):
-                with fits.open(processed_file, mode='update') as dst:
-                    dst[0].header.update(header)
-            else:
-                fits.writeto(
-                    processed_file,
-                    data=result,
-                    header=header,
-                    overwrite=True,
-                )
+            fits.writeto(
+                processed_file,
+                data=result,
+                header=header,
+                overwrite=True,
+            )
         self.all_results = None
         self.logger.info(
-            f"Processed images in group {self._current_group+1} are saved in {time_diff_in_seconds(st)} seconds"
+            f"Processed images in group {self._current_group+1} are saved in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self.sci_input):.1f} s/image)"
         )
         gc.collect()
 

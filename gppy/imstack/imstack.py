@@ -72,13 +72,12 @@ class ImStack(BaseSetup):
         #     (2, "bkgsub", Filse),
         #     (3, "zpscale", False),
         #     (4, "calculate_weight_map", True),
-        #     (5, "save_weight_map", False),
-        #     (6, "apply_bpmask", True),
-        #     (7, "joint_registration", False),
-        #     (8, "prepare_convolution", False),
-        #     (9, "run_convolution", True),
-        #     (10, "save_convolved_images", False),
-        #     (11, "stack_with_swarp", False),
+        #     (5, "apply_bpmask", True),
+        #     (6, "joint_registration", False),
+        #     (7, "prepare_convolution", False),
+        #     (8, "run_convolution", True),
+        #     (9, "save_convolved_images", False),
+        #     (10, "stack_with_swarp", False),
         # ]
 
     def get_device_id(self, device_id):
@@ -114,7 +113,6 @@ class ImStack(BaseSetup):
 
             if self.config.imstack.weight_map:
                 self.calculate_weight_map(device_id=device_id)
-                self.save_weight_map()
 
             # replace hot pixels
             self.apply_bpmask(device_id=device_id)
@@ -373,7 +371,6 @@ class ImStack(BaseSetup):
         self.logger.debug(f"{len(groups)} groups for weight map calculation.")
         self.logger.debug(f"{groups}")
 
-        results = [None] * len(groups)
         with device_context:
             for i, ((z_m_file, d_m_file, f_m_file), images) in enumerate(groups.items()):
 
@@ -398,7 +395,7 @@ class ImStack(BaseSetup):
 
                 self.logger.debug(f"{time_diff_in_seconds(st_loop)} seconds for group {i} preparation")
 
-                group_results = []
+                result_buffer = np.empty((f_m.shape[0], f_m.shape[1]))
                 for j in range(len(images)):
 
                     st_image = time.time()
@@ -411,42 +408,27 @@ class ImStack(BaseSetup):
                     sig_b = xp.zeros_like(r_p, dtype=xp.float32)
                     # sig_b = calculate_background_sigma(bkg_file, egain)
                     # sig_b = xp.asarray(fits.getdata(sig_b_file))
-                    weight_image = pix_err(r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, egain, weight=True)
+                    result = pix_err(r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, egain, weight=True)
 
-                    if hasattr(weight_image, "get"):  # if CuPy array
-                        weight_image = weight_image.get()  # Convert to NumPy array
+                    if hasattr(result, "get"):  # if CuPy array
+                        result_buffer[:] = xp.asnumpy(result)  # Convert to NumPy array
 
-                    group_results.append((r_p_file, weight_image))
+                    weight_image_file = add_suffix(r_p_file, "weight")
+                    self.config.imstack.bkgsub_weight_images.append(weight_image_file)
+                    self.logger.debug(f"Writing weight-map to {weight_image_file}")
+                    fits.writeto(
+                        weight_image_file,
+                        data=result_buffer,
+                        overwrite=True,
+                    )
 
                     self.logger.debug(f"{time_diff_in_seconds(st_image)} seconds for image {j} in group {i}")
 
-                results[i] = group_results
-
-        del r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, egain, weight_image
-        if self._use_gpu:
-            xp.get_default_memory_pool().free_all_blocks()
-
-        self.weight_maps_data = results
+            del r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, egain, result
+            if self._use_gpu:
+                xp.get_default_memory_pool().free_all_blocks()
 
         self.logger.info(f"Weight-map calculation is completed in {time_diff_in_seconds(st)} seconds")
-
-    def save_weight_map(self):
-        self.logger.info(f"Start writing weight-map to disk")
-        st = time.time()
-
-        for r_p_file, weight_image in flatten(self.weight_maps_data, max_depth=1):
-            weight_image_file = add_suffix(r_p_file, "weight")
-            self.config.imstack.bkgsub_weight_images.append(weight_image_file)
-            self.logger.debug(f"Writing weight-map to {weight_image_file}")
-            fits.writeto(
-                weight_image_file,
-                data=weight_image,
-                overwrite=True,
-            )
-
-        del self.weight_maps_data
-
-        self.logger.info(f"Weight-map writing is completed in {time_diff_in_seconds(st)} seconds")
 
     def apply_bpmask(self, badpix=0, device_id=None, use_gpu: bool = True):
         st = time.time()
@@ -664,7 +646,6 @@ class ImStack(BaseSetup):
                 self._convolved_images.append(None)
                 self._convolved_wht_images.append(None)
                 self.logger.info(f"Convolution is skipped for images due to no kernel [{i+1}/{len(self.images_to_stack)}]")
-
                 continue
             inim = self.images_to_stack[i]
             im = fits.getdata(inim)
