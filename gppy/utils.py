@@ -724,7 +724,7 @@ def parse_list_file(imagelist_file):
     return files
 
 
-def time_diff_in_seconds(datetime1, datetime2=None):
+def time_diff_in_seconds(datetime1, datetime2=None, return_float=False):
     if datetime2 is None:
         datetime2 = time.time()
     if isinstance(datetime1, datetime):
@@ -732,7 +732,11 @@ def time_diff_in_seconds(datetime1, datetime2=None):
     if isinstance(datetime2, datetime):
         datetime2 = datetime2.timestamp()
     time_diff = datetime2 - datetime1
-    return f"{abs(time_diff):.2f}"
+    
+    if return_float:
+        return abs(time_diff)
+    else:
+        return f"{abs(time_diff):.2f}"
 
 
 def get_basename(file_path):

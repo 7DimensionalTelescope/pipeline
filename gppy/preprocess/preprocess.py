@@ -116,7 +116,8 @@ class Preprocess(BaseSetup):
             for t in threads_for_making_plots:
                 t.join()
 
-        cp.get_default_memory_pool().free_all_blocks()
+        with cp.cuda.Device(device_id):
+            cp.get_default_memory_pool().free_all_blocks()
 
         self.logger.info("Preprocess completed")
 
@@ -318,7 +319,7 @@ class Preprocess(BaseSetup):
 
         fits.writeto(
             getattr(self, f"{dtype}_output"),
-            data=cp.asnumpy(median),
+            data=median,
             header=header,
             overwrite=True,
         )
@@ -339,15 +340,9 @@ class Preprocess(BaseSetup):
                 f"No pre-existing master {dtype} found in place of {template} wihin {max_offset} days"
             )
 
-        if self._use_gpu:
-            with cp.cuda.Device(device_id):
-                data_gpu = cp.asarray(fits.getdata(existing_mframe_file).astype(np.float32))
-                setattr(self, f"{dtype}_data", data_gpu)
-                setattr(self, f"{dtype}_output", existing_mframe_file)
-        else:
-            data = fits.getdata(existing_mframe_file).astype(np.float32)
-            setattr(self, f"{dtype}_data", data)
-            setattr(self, f"{dtype}_output", existing_mframe_file)
+        data = fits.getdata(existing_mframe_file).astype(np.float32)
+        setattr(self, f"{dtype}_data", data)
+        setattr(self, f"{dtype}_output", existing_mframe_file)
 
         if dtype == "dark":
             self.dark_exptime = get_header(existing_mframe_file)[HEADER_KEY_MAP["exptime"]]
@@ -380,7 +375,7 @@ class Preprocess(BaseSetup):
             )
 
         results = process_kernel(
-            self.sci_input, self.bias_data, self.dark_data, self.flat_data, device_id=device_id
+            self.sci_input, self.bias_data, self.dark_data, self.flat_data, device_id=device_id, dump_file=self.sci_output
         )
 
         del self.bias_data, self.dark_data, self.flat_data
@@ -389,7 +384,7 @@ class Preprocess(BaseSetup):
         self.all_results = results
 
         self.logger.info(
-            f"Completed data reduction for {len(self.sci_input)} images in group {self._current_group+1} in {time_diff_in_seconds(st)} seconds"
+            f"Completed data reduction for {len(self.sci_input)} images in group {self._current_group+1} in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self.sci_input):.1f} s/image)"
         )
 
     def save_processed_images(self):
@@ -414,17 +409,15 @@ class Preprocess(BaseSetup):
             os.makedirs(os.path.dirname(processed_file), exist_ok=True)
 
             if isinstance(result, str):
-                data = np.load(result)
-                os.remove(result)
+                with fits.open(processed_file, mode='update') as dst:
+                    dst[0].header.update(header)
             else:
-                data = result
-
-            fits.writeto(
-                processed_file,
-                data=data,
-                header=header,
-                overwrite=True,
-            )
+                fits.writeto(
+                    processed_file,
+                    data=result,
+                    header=header,
+                    overwrite=True,
+                )
         self.all_results = None
         self.logger.info(
             f"Processed images in group {self._current_group+1} are saved in {time_diff_in_seconds(st)} seconds"

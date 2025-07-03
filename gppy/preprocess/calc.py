@@ -2,17 +2,17 @@ import gc
 import cupy as cp
 import numpy as np
 import os
+import copy
 from astropy.io import fits
 from cupy.cuda import Stream
 from contextlib import contextmanager
-from concurrent.futures import ThreadPoolExecutor
+
 from numba import njit, prange
 
 # Reduction kernel
 reduction_kernel = cp.ElementwiseKernel(
     in_params="T x, T b, T d, T f", out_params="T z", operation="z = (x - b - d) / f", name="reduction"
 )
-
 
 @njit(parallel=True)
 def reduction_kernel_cpu(image, bias, dark, flat, subtract, normalize):
@@ -46,71 +46,45 @@ def load_data_gpu(fpath, ext=None):
         gc.collect()  # Force garbage collection
         cp.get_default_memory_pool().free_all_blocks()
 
-def process_image_with_cupy(
-    image_paths: str,
-    bias: cp.array,
-    dark: cp.array,
-    flat: cp.array,
-    device_id=0,
-):
+def process_image_with_cupy(image_paths, bias, dark, flat, device_id=0, dump_file=None):
 
-    Nimage = len(image_paths)
-    H, W = fits.getdata(image_paths[0]).shape
-    total_shape = (Nimage, H, W)
-
-    data_np = np.empty(total_shape, dtype=np.float32)  # safe dtype
+    output = []
+    h, w = fits.getdata(image_paths[0]).shape
+    cpu_buffer = np.empty((h, w))
     with cp.cuda.Device(device_id):
+        gpu_bias = cp.asarray(bias, dtype=cp.float32)
+        gpu_dark = cp.asarray(dark, dtype=cp.float32) 
+        gpu_flat = cp.asarray(flat, dtype=cp.float32)
+
+        gpu_buffer = None
         for i, o in enumerate(image_paths):
-            data_np[i] = fits.getdata(o).astype(np.float32)
+            cpu_buffer[:] = fits.getdata(o)
 
-
-            data_cp = cp.asarray(data_np[i])
-            data_cp = reduction_kernel(data_cp, bias, dark, flat)
-            data_np[i] = cp.asnumpy(data_cp[i])
-        
-        del bias, dark, flat, data_cp
-
-    return data_np
-
-    #     load_stream = Stream(non_blocking=True)
-    #     compute_stream = Stream()
-
-    #     local_results = []
-    #     prev_image = None
-    #     for img_path in image_paths:
-    #         with load_stream:
-    #             curr_image = cp.asarray(fits.getdata(img_path).astype("float32"))
-
-    #         if prev_image is not None:
-    #             with compute_stream:
-    #                 reduced = reduction_kernel(prev_image, bias, dark, flat)
-    #                 if dump_dir is not None:
-    #                     path = _save_data_in_dump_dir(cp.asnumpy(reduced), dump_dir, img_path)
-    #                     local_results.append(path)
-    #                 else:
-    #                     local_results.append(cp.asnumpy(reduced))
-    #                 del prev_image, reduced
-
-    #         load_stream.synchronize()
-    #         prev_image = curr_image
-
-    #     if prev_image is not None:
-    #         with compute_stream:
-    #             reduced = reduction_kernel(prev_image, bias, dark, flat)
-    #             if dump_dir is not None:
-    #                 path = _save_data_in_dump_dir(cp.asnumpy(reduced), dump_dir, img_path)
-    #                 local_results.append(path)
-    #             else:
-    #                 local_results.append(cp.asnumpy(reduced))
-
-    #     compute_stream.synchronize()
-
-    #     del bias, dark, flat, prev_image, curr_image, reduced
-
-    #     cp.get_default_memory_pool().free_all_blocks()
-
-    # return local_results
-
+            # Reuse or create GPU buffer
+            if gpu_buffer is None or gpu_buffer.shape != cpu_buffer.shape:
+                if gpu_buffer is not None:
+                    del gpu_buffer
+                gpu_buffer = cp.empty(cpu_buffer.shape, dtype=cp.float32)
+            
+            gpu_buffer[:] = cp.asarray(cpu_buffer, dtype=cp.float32)
+            
+            gpu_buffer[:] = reduction_kernel(gpu_buffer, gpu_bias, gpu_dark, gpu_flat)
+            
+            # Copy result back to CPU
+            cpu_buffer[:] = cp.asnumpy(gpu_buffer)
+            
+            if dump_file:
+                fits.writeto(dump_file[i], data=cpu_buffer, overwrite=True)
+                output.append(dump_file[i])
+            else:
+                output.append(cpu_buffer)
+            
+        # Final cleanup
+        del cpu_buffer, bias, flat, dark, gpu_buffer, gpu_bias, gpu_dark, gpu_flat
+        cp.get_default_memory_pool().free_all_blocks()
+        gc.collect()
+    
+    return output
 
 def process_image_with_cpu(
     image_paths: str,
@@ -145,16 +119,17 @@ def combine_images_with_cupy(images: str, device_id=None, subtract=None, norm=Fa
     with cp.cuda.Device(device_id):
         cp_stack = cp.stack([cp.asarray(fits.getdata(img).astype(np.float32)) for img in images])
         if subtract is not None:
-            cp_stack -= subtract
+            cp_stack -= cp.asarray(subtract)
         if norm:
             cp_stack /= cp.median(cp_stack, axis=(1, 2), keepdims=True)
         cp_median = cp.median(cp_stack, axis=0)
         cp_std = cp.std(cp_stack, axis=0, ddof=1)
         np_std = cp.asnumpy(cp_std)
+        np_median = cp.asnumpy(cp_median)
 
-        del cp_stack, cp_std, subtract
-    cp.get_default_memory_pool().free_all_blocks()
-    return cp_median, np_std
+        del cp_median, cp_stack, cp_std, subtract
+        cp.get_default_memory_pool().free_all_blocks()
+    return np_median, np_std
 
 
 def combine_images_with_cpu(images: list, subtract=None, norm=False, **kwargs):
@@ -294,6 +269,7 @@ def sigma_clipped_stats_cupy(cp_data, device_id=0, sigma=3, maxiters=5, minmax=F
     """
     with cp.cuda.Device(device_id):
         # Flatten to 1D for global clipping
+        cp_data = cp.asarray(cp_data)
         cp_data_flat = cp_data.ravel()
 
         for _ in range(maxiters):
