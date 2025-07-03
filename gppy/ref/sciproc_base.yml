@@ -64,9 +64,9 @@ astrometry:
 
 photometry:
   input_images:
-  # path:  # can be specified manually
-  #   ref_ris_dir: "/lyman/data1/factory/ref_cat"  # divided by RIS tiles
-  #   ref_gaia_dir: "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile"  # divided by Gaia team
+  path:  # can be specified manually
+    ref_ris_dir:  # for RIS tiles
+    ref_gaia_dir:  # Gaia tiles
   match_radius: 1.0
   photfraction: 0.75
   refcatname: GaiaXP
@@ -76,6 +76,7 @@ photometry:
   ref_mag_err_upper: 0.05
   flagcut: 0
   check: False
+  filters_to_check:
   satur_margin: 0.99  # factor multiplied to the propagated hardware upper limit
   sex_vars:
     DETECT_MINAREA: 5
