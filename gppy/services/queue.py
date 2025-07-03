@@ -57,7 +57,7 @@ class QueueManager:
         self.memory_monitor = MemoryMonitor(logger=self.logger)
 
         # Default CPU allocation
-        self.total_cpu_worker = max_workers or mp.cpu_count() - 30
+        self.total_cpu_worker = max_workers or 60
 
         # Create CPU queues (thread-safe)
         self.cpu_queue = PriorityQueue()  # Priority queue for CPU tasks
