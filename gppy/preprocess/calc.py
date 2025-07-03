@@ -46,7 +46,7 @@ def load_data_gpu(fpath, ext=None):
         gc.collect()  # Force garbage collection
         cp.get_default_memory_pool().free_all_blocks()
 
-def process_image_with_cupy(image_paths, bias, dark, flat, device_id=0, dump_file=None):
+def process_image_with_cupy(image_paths, bias, dark, flat, device_id=0):
 
     output = []
     h, w = fits.getdata(image_paths[0]).shape
@@ -73,11 +73,7 @@ def process_image_with_cupy(image_paths, bias, dark, flat, device_id=0, dump_fil
             # Copy result back to CPU
             cpu_buffer[:] = cp.asnumpy(gpu_buffer)
             
-            if dump_file:
-                fits.writeto(dump_file[i], data=cpu_buffer, overwrite=True)
-                output.append(dump_file[i])
-            else:
-                output.append(cpu_buffer)
+            output.append(cpu_buffer)
             
         # Final cleanup
         del cpu_buffer, bias, flat, dark, gpu_buffer, gpu_bias, gpu_dark, gpu_flat
@@ -105,13 +101,17 @@ def process_image_with_cpu(
     subtract = subtract.astype(np.float32) if subtract is not None else None
 
     local_results = []
+    h, w = fits.getdata(image_paths[0]).shape
+    cpu_buffer = np.empty((h, w))
 
-    for image in image_paths:
-        reduced = reduction_kernel_cpu(read_fits_image(image), bias, dark, flat, subtract, normalize)
-        local_results.append(reduced)
+    for i, image in enumerate(image_paths):
+        cpu_buffer[:] = read_fits_image(image)
+        cpu_buffer[:] = reduction_kernel_cpu(cpu_buffer, bias, dark, flat, subtract, normalize)
+        local_results.append(cpu_buffer)
 
+    del cpu_buffer, bias, dark, flat, subtract
+    gc.collect()
     return local_results
-
 
 # Combine images
 def combine_images_with_cupy(images: str, device_id=None, subtract=None, norm=False):

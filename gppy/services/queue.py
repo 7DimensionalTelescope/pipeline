@@ -293,9 +293,8 @@ class QueueManager:
 
     def _move_to_next_task(self, stream) -> None:
         """Queue the next task of a stream for processing."""
-        print(stream)
         task = stream.get_task()
-        print(task)
+        
         if stream.is_complete():
             return 
         
