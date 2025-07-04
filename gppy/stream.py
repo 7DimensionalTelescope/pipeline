@@ -42,7 +42,6 @@ class ReductionStream:
         config = SciProcConfiguration.from_config(self.config_file)
         for key in ["astrometry", "single_photometry", "combine", "combined_photometry", "subtraction"]:
             if not(getattr(config.config.flag, key)):
-                print(key)
                 self.status = "processing"
                 break
             else:
