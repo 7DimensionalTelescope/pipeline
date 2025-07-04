@@ -1,13 +1,72 @@
 import os
 import re
 import glob
+import time
 import shutil
 from pathlib import Path
 from datetime import datetime, timedelta
 from astropy.io import fits
+from collections import Counter
 from collections.abc import Iterable
+
 from .const import FACTORY_DIR, RAWDATA_DIR, HEADER_KEY_MAP, ALL_GROUP_KEYS
-import time
+
+
+def unique(seq, *, return_counts=False, return_index=False, return_inverse=False):
+    """
+    Pure-Python version of np.unique for 1D sequences.
+
+    Parameters
+    ----------
+    seq : iterable
+        Input sequence.
+    return_counts : bool, optional
+        If True, also return the counts of each unique element.
+    return_index : bool, optional
+        If True, also return the index of the first occurrence of each unique element in the original sequence.
+    return_inverse : bool, optional
+        If True, also return an array that can be used to reconstruct the original sequence from the unique values.
+
+    Returns
+    -------
+    unique_vals : list
+        Sorted list of unique elements.
+    counts : list, optional
+        List of counts corresponding to each unique element.
+    indices : list, optional
+        List of first‐occurrence indices for each unique element.
+    inverse : list, optional
+        List of indices such that unique_vals[inverse[i]] == seq[i].
+    """
+    # Record first‐occurrence index
+    first_idx = {}
+    for i, v in enumerate(seq):
+        if v not in first_idx:
+            first_idx[v] = i
+
+    # Count occurrences
+    cnt = Counter(seq)
+
+    # Unique sorted values
+    uniques = sorted(cnt)
+
+    out = [uniques]
+
+    if return_counts:
+        out.append([cnt[v] for v in uniques])
+
+    if return_index:
+        out.append([first_idx[v] for v in uniques])
+
+    if return_inverse:
+        # Map each value to its position in the uniques list
+        pos = {v: i for i, v in enumerate(uniques)}
+        out.append([pos[v] for v in seq])
+
+    # Unpack appropriately
+    if len(out) == 1:
+        return out[0]
+    return tuple(out)
 
 
 def atleast_1d(x):
@@ -732,7 +791,7 @@ def time_diff_in_seconds(datetime1, datetime2=None, return_float=False):
     if isinstance(datetime2, datetime):
         datetime2 = datetime2.timestamp()
     time_diff = datetime2 - datetime1
-    
+
     if return_float:
         return abs(time_diff)
     else:
