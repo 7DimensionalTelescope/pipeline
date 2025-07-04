@@ -33,6 +33,18 @@ from ..tools.table import match_two_catalogs, build_condition_mask
 from ..path.path import PathHandler
 
 
+def log_once(method):
+    attr = f"_{method.__name__}_logged"
+
+    def wrapper(self, *args, **kwargs):
+        if not getattr(self, attr, False):
+            self.logger.info(f"Starting {method.__name__}")
+            setattr(self, attr, True)
+        return method(self, *args, **kwargs)
+
+    return wrapper
+
+
 class Photometry(BaseSetup):
     """
     A class to perform photometric analysis on astronomical images.
@@ -287,18 +299,25 @@ class PhotometrySingle:
         if self.check_filter:
             filters_to_check = get_key(self.config.photometry, "filters_to_check") or ALL_FILTERS
             obs_src_table = self.add_matched_reference_catalog(obs_src_table, filters=filters_to_check)
-            dicts = {}
+            temp_results = {}
+            self.logger.debug(f"Starting filter check for {filters_to_check}")
             for filt in filters_to_check:
-                zp_dict, aper_dict = self.calculate_zp(obs_src_table, filt=filt, save_plots=False)
-                dicts[filt] = (zp_dict, aper_dict)
+                zp_dict, aper_dict, cols = self.calculate_zp(obs_src_table, filt=filt, save_plots=False)
+                temp_results[filt] = (zp_dict, aper_dict, cols)
+
+            dicts = {f: (zp, ap) for f, (zp, ap, _) in temp_results.items()}
             inferred_filter = self.determine_filter(dicts)
+
+            _, _, cols = temp_results[inferred_filter]
+            self.add_reference_columns(obs_src_table, cols)
             self.update_image_header(*dicts[inferred_filter])
             self.write_catalog(obs_src_table)
 
         else:
-            print("not checking")
+            self.logger.into("Skipping filter check")
             obs_src_table = self.add_matched_reference_catalog(obs_src_table)
-            zp_dict, aper_dict = self.calculate_zp(obs_src_table)
+            zp_dict, aper_dict, cols = self.calculate_zp(obs_src_table)
+            self.add_reference_columns(obs_src_table, cols)
             self.update_image_header(zp_dict, aper_dict)
             self.write_catalog(obs_src_table)
 
@@ -546,6 +565,7 @@ class PhotometrySingle:
 
         return Table.read(output, format="ascii.sextractor")
 
+    @log_once
     def calculate_zp(self, obs_src_table, save_plots=True, filt=None) -> Tuple[Dict, Dict]:
         """
         Calculate photometric zero point.
@@ -576,24 +596,23 @@ class PhotometrySingle:
 
         zp_dict = {}
         aper_dict = {}
+        column_data: Dict[str, np.ndarray] = {}  # filter: (zp, aper, col)
         for mag_key in apertures.keys():
             magerr_key = mag_key.replace("MAG", "MAGERR")
 
             zps = zp_src_table[ref_mag_key] - zp_src_table[mag_key]
-            # gaia synphot err unavailable; ignored
-            zperrs = zp_src_table[magerr_key]
+            zperrs = zp_src_table[magerr_key]  # gaia synphot err unavailable; ignored
             # zperrs = phot_utils.rss(zp_src_table[magerr_key], zp_src_table(self.image_info.ref_magerr_key))
 
             mask = sigma_clip(zps, sigma=2.0).mask
 
             zp, zperr = phot_utils.compute_median_nmad(np.array(zps[~mask].value), normalize=True)
-
             keys = phot_utils.keyset(mag_key, keyset_filt)
             values = phot_utils.apply_zp(obs_src_table[mag_key], obs_src_table[magerr_key], zp, zperr)
-            # add columns to obs_src_table (implicit mutation)
+
+            # stash the results for later
             for key, val in zip(keys, values):
-                obs_src_table[key] = val
-                obs_src_table[key].format = ".3f"
+                column_data[key] = val
 
             if mag_key == "MAG_AUTO":
                 ul_3sig, ul_5sig = 0.0, 0.0
@@ -616,17 +635,32 @@ class PhotometrySingle:
             if save_plots:
                 self.plot_zp(mag_key, zp_src_table, zps, zperrs, zp, zperr, mask)
 
-        return zp_dict, aper_dict
+        return zp_dict, aper_dict, column_data
+
+    def add_reference_columns(self, obs_src_table, cols):
+        """Mind the implicit mutation"""
+        for key, arr in cols.items():
+            obs_src_table[key] = arr
+            obs_src_table[key].format = ".3f"
+        return
 
     def determine_filter(self, dicts: dict, save_plot=True):
         zp_cut = 27
         alleged_filter = self.image_info.filter
         filters_checked = [k for k in dicts.keys()]
+        dicts_for_plotting = dicts.copy()
 
+        # (1) rule out filters that were not present at the time
+        active_filters = self.get_active_filters()
+        self.logger.info(f"Active filters: {active_filters}")
+        for filt in list(set(filters_checked) - set(active_filters)):
+            dicts.pop(filt)
+
+        # (2) apply prior knowledge of zp for broad and medium band filters
         while True:
-            filters, zps, zperrs = phot_utils.dicts_to_lists(dicts)
+            narrowed_filters, zps, zperrs = phot_utils.dicts_to_lists(dicts)
             idx = zperrs.index(min(zperrs))
-            inferred_filter = filters[idx]
+            inferred_filter = narrowed_filters[idx]
             zp = zps[idx]
 
             if (inferred_filter in BROAD_FILTERS and zp <= zp_cut) or (
@@ -637,12 +671,28 @@ class PhotometrySingle:
                 break
 
         if save_plot:
+            filters, zps, zperrs = phot_utils.dicts_to_lists(dicts_for_plotting)
             self.plot_filter_check(alleged_filter, inferred_filter, filters_checked, filters, zps, zperrs)
 
         if alleged_filter != inferred_filter:
             self.logger.warning(f"The filter in header ({alleged_filter}) is not the best matching ({inferred_filter})")
 
         return inferred_filter
+
+    def get_active_filters(self) -> set:
+        """ad-hoc before DB integration"""
+        from glob import glob
+        from ..path import NameHandler
+
+        try:
+            f = PathHandler(self.input_image).conjugate
+            flist = glob(os.path.join(os.path.dirname(f), "*.fits"))
+            flats = NameHandler(flist).pick_type("raw_flat")
+            scis = NameHandler(flist).pick_type("raw_science")
+            return set(NameHandler(flats + scis).filter)
+        except:
+            self.logger.info("Fetching active filters failed. Using all default filters")
+            return ALL_FILTERS
 
     def plot_filter_check(self, alleged_filter, inferred_filter, filters_checked, filters, zps, zperrs):
         import matplotlib.pyplot as plt
