@@ -34,6 +34,7 @@ from ..path.path import PathHandler
 
 
 def log_once(method):
+    """not working"""
     attr = f"_{method.__name__}_logged"
 
     def wrapper(self, *args, **kwargs):
@@ -700,46 +701,50 @@ class PhotometrySingle:
 
         fig, ax1 = plt.subplots(figsize=(10, 5))
 
-        # 1) Plot ZP on ax1
+        # 1) Plot EZP on ax1
+        c_ezp = "tab:blue"
         ax1.plot(
             filters_checked,
-            zps,
-            marker="o",
-            label="ZP",
-            color="tab:blue",
+            zperrs,
+            marker="x",
+            linestyle="-",
+            label="EZP",
+            color=c_ezp,
         )
-        ax1.set_ylabel("Zero Point (ZP)", color="tab:blue")
-        ax1.tick_params(axis="y", labelcolor="tab:blue")
+        ax1.set_ylabel("Zero Point Error (EZP)", color=c_ezp)
+        ax1.tick_params(axis="y", labelcolor=c_ezp)
 
-        # 2) Shade backgrounds for “unchecked” filters
+        # 2) Shade backgrounds for ruled-out filters
         for i, flt in enumerate(filters_checked):
             if flt not in narrowed_filters:
-                # span from i - 0.5 to i + 0.5 on the x-axis
                 ax1.axvspan(i - 0.5, i + 0.5, color="gray", alpha=0.3)
+        gray_patch = mpatches.Patch(color="gray", alpha=0.3)  # patch for legend
 
         inf_idx = filters_checked.index(inferred_filter)
-        ax1.axvspan(inf_idx - 0.5, inf_idx + 0.5, color="gold", alpha=0.3)
+        ax1.axvspan(inf_idx - 0.5, inf_idx + 0.5, color="dodgerblue", alpha=0.3)
+        yellow_patch = mpatches.Patch(color="dodgerblue", alpha=0.3, label=f"Inferred Filter {inferred_filter}")
 
         # x-ticks and tilted labels
         ax1.set_xticks(range(len(filters_checked)))
         ax1.set_xticklabels(filters_checked, rotation=45, ha="right")
 
-        # 3) Create twin axis for EZP
+        # 3) Create twin axis for ZP
+        c_zp = "orange"
         ax2 = ax1.twinx()
         ax2.plot(
             filters_checked,
-            zperrs,
-            marker="x",
-            linestyle="--",
-            label="EZP",
-            color="red",
+            zps,
+            marker="o",
+            ls="--",
+            label="ZP",
+            color=c_zp,
         )
-        ax2.set_ylabel("Zero Point Error (EZP)", color="red")
-        ax2.tick_params(axis="y", labelcolor="red")
+        ax2.set_ylabel("Zero Point (ZP)", color=c_zp)
+        ax2.tick_params(axis="y", labelcolor=c_zp)
+        ax2.invert_yaxis()
+        ax1.margins(x=0)
 
         # Combine legends
-        gray_patch = mpatches.Patch(color="gray", alpha=0.3)
-        yellow_patch = mpatches.Patch(color="gold", alpha=0.3, label="Inferred Filter")
         h1, l1 = ax1.get_legend_handles_labels()
         h2, l2 = ax2.get_legend_handles_labels()
         ax1.legend(h1 + h2 + [gray_patch, yellow_patch], l1 + l2 + ["Ruled Out", "Inferred Filter"], loc="upper left")
