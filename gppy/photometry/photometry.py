@@ -645,7 +645,7 @@ class PhotometrySingle:
         return
 
     def determine_filter(self, dicts: dict, save_plot=True):
-        zp_cut = 27
+        zp_cut = 26.8
         alleged_filter = self.image_info.filter
         filters_checked = [k for k in dicts.keys()]
         dicts_for_plotting = dicts.copy()
@@ -672,7 +672,7 @@ class PhotometrySingle:
 
         if save_plot:
             filters, zps, zperrs = phot_utils.dicts_to_lists(dicts_for_plotting)
-            self.plot_filter_check(alleged_filter, inferred_filter, filters_checked, filters, zps, zperrs)
+            self.plot_filter_check(alleged_filter, inferred_filter, narrowed_filters, filters_checked, zps, zperrs)
 
         if alleged_filter != inferred_filter:
             self.logger.warning(f"The filter in header ({alleged_filter}) is not the best matching ({inferred_filter})")
@@ -694,7 +694,7 @@ class PhotometrySingle:
             self.logger.info("Fetching active filters failed. Using all default filters")
             return ALL_FILTERS
 
-    def plot_filter_check(self, alleged_filter, inferred_filter, filters_checked, filters, zps, zperrs):
+    def plot_filter_check(self, alleged_filter, inferred_filter, narrowed_filters, filters_checked, zps, zperrs):
         import matplotlib.pyplot as plt
         import matplotlib.patches as mpatches
 
@@ -713,7 +713,7 @@ class PhotometrySingle:
 
         # 2) Shade backgrounds for “unchecked” filters
         for i, flt in enumerate(filters_checked):
-            if flt not in filters:
+            if flt not in narrowed_filters:
                 # span from i - 0.5 to i + 0.5 on the x-axis
                 ax1.axvspan(i - 0.5, i + 0.5, color="gray", alpha=0.3)
 
