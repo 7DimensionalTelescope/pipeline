@@ -278,3 +278,14 @@ def get_best_gpu_device():
     else:
         return np.argmin(available)
     
+def check_gpu_availability(device):
+    if isinstance(device, str):
+        return False
+    
+    from ..services.memory import MemoryMonitor
+    percent = MemoryMonitor.current_gpu_memory_percent
+
+    if percent[device] > 80:
+        return False
+    else:
+        return True

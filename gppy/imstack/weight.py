@@ -5,6 +5,67 @@ from numba import njit
 import numpy as np
 import cupy as cp
 
+def calc_weight(images, d_m, f_m, sig_z, sig_f, p_d, p_z, p_f, egain, weight=True, device=None):
+    output = []
+    cpu_buffer = np.empty(d_m.shape)
+    sig_b = np.empty(d_m.shape, dtype=np.float32)
+
+    if device and device != "CPU":
+        with cp.cuda.Device(device):
+            d_m, f_m = cp.asarray(d_m), cp.asarray(f_m), 
+            sig_b, sig_z, sig_f = cp.asarray(sig_b), cp.asarray(sig_z), cp.asarray(sig_f), 
+            p_d, p_z, p_f = cp.asarray(p_d), cp.asarray(p_z), cp.asarray(p_f)
+
+    for o in images:
+        cpu_buffer[:] = fits.getdata(o)
+
+        if device and device != "CPU":
+            with cp.cuda.Device(device):
+                gpu_buffer = cp.asarray(cpu_buffer)
+                gpu_buffer[:] = gpu_buffer.astype(cp.float32)
+                gpu_buffer[:] = pix_err_cupy(gpu_buffer, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, egain, weight=weight)
+                cpu_buffer[:] = cp.asnumpy(gpu_buffer)
+                output.append(cpu_buffer.copy())
+        else:
+            cpu_buffer[:] = pix_err_numba(
+                cpu_buffer, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, egain, weight=weight
+            )
+            output.append(cpu_buffer.copy())
+        
+    if device and device != "CPU":
+        with cp.cuda.Device(device):
+            del gpu_buffer, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f
+            cp.get_default_memory_pool().free_all_blocks()
+    
+    del cpu_buffer
+    
+    return output
+
+
+def pix_err_cupy(r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, G, weight=True):
+    nonneg = lambda x: cp.maximum(x, 0)
+    """
+    r: raw pixel value. r = f * r_p + d + z
+    r_p: preprocessed pixel value
+    z: bias
+    d: dark
+    f: flat
+    """
+    sig_r_squared = nonneg(f_m * r_p + d_m) / G + sig_z**2
+    sig_zm = sig_z / cp.sqrt(p_z)
+    sig_dm_squared = (d_m / G + (1 + 1 / p_z) * sig_z**2) / p_d
+    sig_fm = sig_f / cp.sqrt(p_f)
+
+    sig_rp_squared = (sig_r_squared + sig_zm**2 + sig_dm_squared) / f_m**2 + (r_p / f_m) ** 2 * sig_fm**2  # fmt: skip
+    if weight:
+        output =  1 / (sig_rp_squared + sig_b**2)
+    else:
+        output = cp.sqrt(sig_rp_squared + sig_b**2)
+    del sig_r_squared, sig_zm, sig_dm_squared, sig_fm, sig_rp_squared, sig_b
+    cp.get_default_memory_pool().free_all_blocks()
+    return output
+
+
 def unique(base_filename):
     """
     Modify base_filename by appending a number to make it unique.
@@ -22,12 +83,6 @@ def unique(base_filename):
 
     # print('saving as', new_filename)
     return new_filename
-
-def pix_err(xp, *args, **kwargs):
-    if xp is np:
-        return pix_err_numba(*args, **kwargs)
-    else:
-        return pix_err_cupy(*args, **kwargs)
 
 @njit
 def pix_err_numba(r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, G, weight=True):
@@ -54,9 +109,7 @@ def pix_err_cupy(r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, G, weight=Tr
     f: flat
     """
     sig_r_squared = nonneg(f_m * r_p + d_m) / G + sig_z**2
-    sig_zm = sig_z / cp.sqrt(p_z)
-    sig_dm_squared = (d_m / G + (1 + 1 / p_z) * sig_z**2) / p_d
-    sig_fm = sig_f / cp.sqrt(p_f)
+
 
     sig_rp_squared = (sig_r_squared + sig_zm**2 + sig_dm_squared) / f_m**2 + (r_p / f_m) ** 2 * sig_fm**2  # fmt: skip
     if weight:
@@ -65,7 +118,7 @@ def pix_err_cupy(r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, G, weight=Tr
         output = cp.sqrt(sig_rp_squared + sig_b**2)
     del sig_r_squared, sig_zm, sig_dm_squared, sig_fm, sig_rp_squared, sig_b
     cp.get_default_memory_pool().free_all_blocks()
-    return output.get()
+    return output
 
 
 def pix_err_approx(

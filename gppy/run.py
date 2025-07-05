@@ -7,28 +7,16 @@ from .photometry import Photometry
 from .imstack import ImStack
 from .subtract import ImSubtract
 
-# from .subtract.subtract import ImSubtract
-
 from .const import RAWDATA_DIR
 import time
 
 from watchdog.observers import Observer
 
 from .services.monitor import Monitor
-from .services.queue import QueueManager, Priority
-
-from .services.logger import Logger
-from .services.task import Task
-
-#from .base import ObservationDataSet, CalibrationData
+from .services.queue import QueueManager
 
 
-def run_preprocess(config, make_plots=False):
-    config = PreprocConfiguration.from_config(config)
-    prep = Preprocess(config)
-    prep.run(make_plots=make_plots)
-
-def get_preprocess_task(config, priority=Priority.HIGH, device_id = None, only_with_sci=False, make_plots=True, **kwargs):
+def run_preprocess(config, device_id=None, only_with_sci=False, make_plots=True, **kwargs):
     """
     Generate master calibration frames for a specific observation set.
 
@@ -36,187 +24,40 @@ def get_preprocess_task(config, priority=Priority.HIGH, device_id = None, only_w
     help in reducing systematic errors in scientific observations.
 
     """
-    config = PreprocConfiguration.from_config(config)
-    prep = Preprocess(config)
-    run_task = Task(prep.run, kwargs={"make_plots": make_plots, "only_with_sci": only_with_sci}, gpu=True, priority=priority, device=device_id)
-    return run_task
+    try:
+        config = PreprocConfiguration.from_config(config)
+        prep = Preprocess(config, use_gpu = True if device_id is not None else False)
+        prep.run(device_id = device_id, make_plots=make_plots, only_with_sci=only_with_sci)
+        del config, prep
+    except Exception as e:
+        raise e
 
-def run_scidata_reduction(config):
-    config = SciProcConfiguration.from_config(config)
-    if (not (config.config.flag.astrometry) and "astrometry" in processes) or overwrite:
-        astr = Astrometry(config)
-        astr.run()
-        del astr
-    if (not (config.config.flag.single_photometry) and "photometry" in processes) or overwrite:
-        phot = Photometry(config)
-        phot.run()
-        del phot
-    if (not (config.config.flag.combine) and "combine" in processes) or overwrite:
-        stk = ImStack(config)
-        stk.run()
-        del stk
-    if (not (config.config.flag.combined_photometry) and "photometry" in processes) or overwrite:
-        phot = Photometry(config)
-        phot.run()
-        del phot
-    if (not (config.config.flag.subtraction) and "subtract" in processes) or overwrite:
-        subt = ImSubtract(config)
-        subt.run()
-        del subt
-    
-def get_scidata_reduction_tasktree(
-    config,
-    processes=["astrometry", "photometry", "combine", "subtract"],
-    overwrite=False,
-    **kwargs,
-):
-    """
-    Perform comprehensive scientific data reduction pipeline sequentially.
-    Control which process to run with `processes`.
-    """
-    config = SciProcConfiguration.from_config(config, write=True, **kwargs)
-
-    tasks = []
-    if (not (config.config.flag.astrometry) and "astrometry" in processes) or overwrite:
-        astr = Astrometry(config)
-        for task in astr.sequential_task:
-            tasks.append(Task(getattr(astr, task[1]), priority=Priority.MEDIUM, gpu=task[2], cls=astr))
-    if (not (config.config.flag.single_photometry) and "photometry" in processes) or overwrite:
-        phot = Photometry(config)
-        for task in phot.sequential_task:
-            tasks.append(Task(getattr(phot, task[1]), priority=Priority.MEDIUM, gpu=task[2], cls=phot))
-    if (not (config.config.flag.combine) and "combine" in processes) or overwrite:
-        stk = ImStack(config)
-        for task in stk.sequential_task:
-            tasks.append(Task(getattr(stk, task[1]), priority=Priority.MEDIUM, gpu=task[2], cls=stk))
-    if (not (config.config.flag.combined_photometry) and "photometry" in processes) or overwrite:
-        phot = Photometry(config)
-        for task in phot.sequential_task:
-            tasks.append(Task(getattr(phot, task[1]), priority=Priority.MEDIUM, gpu=task[2], cls=phot))
-    if (not (config.config.flag.subtraction) and "subtract" in processes) or overwrite:
-        subt = ImSubtract(config)
-        for task in subt.sequential_task:
-            tasks.append(Task(getattr(subt, task[1]), priority=Priority.MEDIUM, gpu=task[2], cls=subt))
-
-    if len(tasks) != 0:
-        tree = TaskTree(tasks)
-        return tree
-    else:
-        return None
-
-
-# def run_scidata_reduction(
-#     obs_params,
-#     queue=False,
-#     processes=["preprocess", "astrometry", "photometry", "combine", "subtract"],
-#     **kwargs,
-# ):
-#     """
-#     Perform comprehensive scientific data reduction pipeline.
-
-#     This function orchestrates the complete data reduction process for scientific observations,
-#     including:
-#     1. Configuration initialization
-#     2. Calibration
-#     3. Astrometric processing
-#     4. Photometric analysis
-
-#     Args:
-#         obs_params (dict): Observation parameters including:
-#             - date: Observation date
-#             - unit: Observation unit/instrument
-#             - gain: Detector gain setting
-#             - obj: Target object name
-#             - filter: Observation filter
-#             - n_binning: Pixel binning factor
-#         queue (bool, optional): Whether to use queue-based processing. Defaults to False.
-#         **kwargs: Additional configuration parameters
-#     """
-
-#     logger = Logger(name="7DT pipeline logger", slack_channel="pipeline_report")
-
-#     config = Configuration(obs_params, logger=logger, **kwargs)
-#     if not (config.config.flag.preprocess) and "preprocess" in processes:
-#         prep = Preprocess(config, queue=queue)
-#         prep.run()
-#         del prep
-#     if not (config.config.flag.astrometry) and "astrometry" in processes:
-#         astrm = Astrometry(config, queue=queue)
-#         astrm.run()
-#         del astrm
-#     else:
-#         logger.info("Skipping astrometry")
-#     if not (config.config.flag.single_photometry) and "photometry" in processes:
-#         phot = Photometry(config, queue=queue)
-#         phot.run()
-#         del phot
-#     else:
-#         logger.info("Skipping single photometry")
-#     if not (config.config.flag.combine) and "combine" in processes:
-#         stk = ImStack(config, queue=queue)
-#         stk.run()
-#         del stk
-#     else:
-#         logger.info("Skipping imstack")
-#     if not (config.config.flag.combined_photometry) and "photometry" in processes:
-#         phot = Photometry(config, queue=queue)
-#         phot.run()
-#         del phot
-#     else:
-#         logger.info("Skipping combined photometry")
-#     # if not (config.config.flag.subtraction) and "subtract" in processes:
-#     #     subt = ImSubtract(config, queue=queue)
-#     #     subt.run()
-#     #     del subt
-#     # else:
-#     #     logger.info("Skipping transient search")
-
-#     # except Exception as e:
-#     #     logger.error(f"Error during abrupt stop: {e}")
-
-
-# def run_pipeline(
-#     data,
-#     queue: QueueManager,
-#     processes=["preprocess", "astrometry", "photometry"],  # , "combine"],
-#     overwrite=False,
-# ):
-#     """
-#     Central pipeline processing function for different types of astronomical data.
-
-#     Handles two primary data types:
-#     1. CalibrationData: Generates master calibration frames
-#     2. ObservationDataSet: Processes scientific observations
-
-#     Processing includes:
-#     - Marking data as processed to prevent reprocessing
-#     - Adding tasks to the queue with appropriate priorities
-#     - Supporting Time-On-Target (TOO) observations with high priority
-
-#     Args:
-#         data (CalibrationData or ObservationDataSet): Input data to process
-#         queue (QueueManager): Task queue for managing parallel processing
-#     """
-#     if isinstance(data, CalibrationData):
-#         if not data.processed:
-#             data.mark_as_processed()
-
-#             tree = run_masterframe_generator_with_tree(obs.obs_params, priority=Priority.HIGH)
-#             if tree is not None:
-#                 queue.add_tree(tree)
-
-#             time.sleep(0.1)
-#     elif isinstance(data, ObservationDataSet):
-#         for obs in data.get_unprocessed():
-#             data.mark_as_processed(obs.identifier)
-
-#             priority = Priority.HIGH if obs.too else Priority.MEDIUM
-
-#             tree = run_scidata_reduction_with_tree(obs.obs_params, priority=priority)
-#             if tree is not None:
-#                 queue.add_tree(tree)
-
-#             time.sleep(0.1)
+def run_scidata_reduction(config, processes=["astrometry", "photometry", "combine", "subtract"], overwrite=False):
+    try:
+        config = SciProcConfiguration.from_config(config)
+        if (not (config.config.flag.astrometry) and "astrometry" in processes) or overwrite:
+            astr = Astrometry(config)
+            astr.run()
+            del astr
+        if (not (config.config.flag.single_photometry) and "photometry" in processes) or overwrite:
+            phot = Photometry(config)
+            phot.run()
+            del phot
+        if (not (config.config.flag.combine) and "combine" in processes) or overwrite:
+            stk = ImStack(config)
+            stk.run()
+            del stk
+        if (not (config.config.flag.combined_photometry) and "photometry" in processes) or overwrite:
+            phot = Photometry(config)
+            phot.run()
+            del phot
+        if (not (config.config.flag.subtraction) and "subtract" in processes) or overwrite:
+            subt = ImSubtract(config)
+            subt.run()
+            del subt
+        del config
+    except Exception as e:
+        raise e
 
 
 def start_monitoring():
