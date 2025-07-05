@@ -11,7 +11,7 @@ from .config import PreprocConfiguration, SciProcConfiguration
 from .services.queue import QueueManager
 
 from itertools import chain
-
+from .services.task import Task, Priority
 
 def glob_files_from_db(params):
     return []
@@ -107,13 +107,12 @@ class DataReduction:
             t.join()
 
     def process_all(self):
-        from .stream import ReductionStream
 
         masterframe_ids = []
         for i, (key, group) in enumerate(self.groups.items()):
             if isinstance(group, MasterframeGroup):
                 # Submit preprocess
-                pre_task = group.get_tasks(device_id=i % 2, only_with_sci=True, make_plots=False)
+                pre_task = group.get_task(device_id=i % 2, only_with_sci=True, make_plots=False)
                 self.queue.add_task(pre_task)
                 masterframe_ids.append([pre_task, group])
 
@@ -123,8 +122,7 @@ class DataReduction:
                     for key in group.sci_keys:
                         sci_group = self.groups[key]
                         if not (sci_group.multi_units):
-                            sci_stream = sci_group.get_stream()
-                            self.queue.add_stream(sci_stream)
+                            self.queue.add_task(sci_group.get_task())
                         else:
                             self._multi_unit_config.add(sci_group.config)
                     masterframe_ids.remove([task, group])
@@ -135,12 +133,20 @@ class DataReduction:
                 break
 
         for config in self._multi_unit_config:
-            self.queue.add_stream(ReductionStream(config))
+            from .run import run_scidata_reduction
+            sci_task = Task(
+                run_scidata_reduction,
+                kwargs={"config": config, "processes": ["astrometry", "photometry", "combine", "subtract"]},
+                priority=Priority.MEDIUM
+            )
+            self.queue.add_task(sci_task)
 
         for key, group in self.groups.items():
             if isinstance(group, MasterframeGroup):
-                pre_task = group.get_tasks(device_id=i % 2, only_with_sci=False, make_plots=True)
+                pre_task = group.get_task(device_id=None, only_with_sci=False, make_plots=True, priority=Priority.LOW)
                 self.queue.add_task(pre_task)
+
+        
 
         self.queue.wait_until_task_complete("all")
 
@@ -192,18 +198,12 @@ class MasterframeGroup:
         c = PreprocConfiguration(self.image_files)
         self._config = c.config_file
 
-    def get_tasks(self, device_id=None, only_with_sci=False, make_plots=True):
-        from .run import get_preprocess_task
-
-        pre_task = get_preprocess_task(
-            self.config, device_id=device_id, only_with_sci=only_with_sci, make_plots=make_plots
-        )
-        return pre_task
-
-    def run(self):
+    def get_task(self, device_id=None, only_with_sci=False, make_plots=True, priority=Priority.PREPROCESS, **kwargs):
         from .run import run_preprocess
 
-        return run_preprocess(self.config, make_plots=True)
+        prep_task = Task(run_preprocess, kwargs={"config": self.config, "make_plots": make_plots, "only_with_sci": only_with_sci, "device_id": device_id}, priority=priority)
+
+        return prep_task
 
     def __repr__(self):
         return f"MasterframeGroup({self.key} used in {self.sci_keys} with {len(self.image_files)} images)"
@@ -255,10 +255,12 @@ class ScienceGroup:
             c = SciProcConfiguration(self.image_files)
         self._config = c.config_file
 
-    def get_stream(self):
-        from .stream import ReductionStream
+    def get_task(self, priority=Priority.MEDIUM, **kwargs):
+        from .run import run_scidata_reduction
 
-        return ReductionStream(self.config)
+        sci_task = Task(run_scidata_reduction, kwargs={"config": self.config, "processes": ["astrometry", "photometry", "combine", "subtract"]}, priority=priority)
+
+        return sci_task
 
     def __repr__(self):
         return f"ScienceGroup({self.key} with {len(self.image_files)} images)"

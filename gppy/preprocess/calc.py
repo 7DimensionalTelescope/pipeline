@@ -73,7 +73,7 @@ def process_image_with_cupy(image_paths, bias, dark, flat, device_id=0):
             # Copy result back to CPU
             cpu_buffer[:] = cp.asnumpy(gpu_buffer)
             
-            output.append(cpu_buffer)
+            output.append(cpu_buffer.copy())
             
         # Final cleanup
         del cpu_buffer, bias, flat, dark, gpu_buffer, gpu_bias, gpu_dark, gpu_flat

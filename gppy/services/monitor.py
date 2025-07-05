@@ -1,9 +1,6 @@
 from watchdog.events import FileSystemEventHandler
-import re
 from pathlib import Path
 from typing import List, Callable, Dict
-from .logger import Logger
-#from .._base import CalibrationData, ObservationDataSet
 
 class Monitor(FileSystemEventHandler):
     """
