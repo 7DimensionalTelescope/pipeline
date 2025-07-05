@@ -225,7 +225,7 @@ class PhotometrySingle:
         ref_catalog: str = "GaiaXP",
         total_image: int = 1,
         trust_header_seeing=False,
-        check_filter=False,
+        check_filter=True,
         calculate_zp=True,
     ) -> None:
         """Initialize PhotometrySingle instance."""
@@ -315,7 +315,7 @@ class PhotometrySingle:
             self.write_catalog(obs_src_table)
 
         else:
-            self.logger.into("Skipping filter check")
+            self.logger.info("Skipping filter check")
             obs_src_table = self.add_matched_reference_catalog(obs_src_table)
             zp_dict, aper_dict, cols = self.calculate_zp(obs_src_table)
             self.add_reference_columns(obs_src_table, cols)

@@ -498,9 +498,13 @@ class ImStack(BaseSetup):
                     interp, interp_weight = interpolate_masked_pixels(
                         image, mask, weight=weight, method=method, badpix=badpix
                     )
+
+                    if hasattr(interp_weight, "get"):  # if CuPy array
+                        interp_weight = xp.asnumpy(interp_weight)  # Convert to NumPy array
+
                     fits.writeto(
                         output_weight_file,
-                        interp_weight,
+                        data=interp_weight,
                         header=add_bpx_method(fits.getheader(input_weight_file), method),
                         overwrite=True,
                     )
@@ -508,9 +512,12 @@ class ImStack(BaseSetup):
                 else:
                     interp = interpolate_masked_pixels(image, mask, method=method, badpix=badpix)
 
+                if hasattr(interp, "get"):  # if CuPy array
+                    interp = xp.asnumpy(interp)  # Convert to NumPy array
+
                 fits.writeto(
                     output_file,
-                    interp,
+                    data=interp,
                     header=add_bpx_method(fits.getheader(input_file), method),
                     overwrite=True,
                 )
@@ -645,7 +652,9 @@ class ImStack(BaseSetup):
             if self.kernel[i] is None:
                 self._convolved_images.append(None)
                 self._convolved_wht_images.append(None)
-                self.logger.info(f"Convolution is skipped for images due to no kernel [{i+1}/{len(self.images_to_stack)}]")
+                self.logger.info(
+                    f"Convolution is skipped for images due to no kernel [{i+1}/{len(self.images_to_stack)}]"
+                )
                 continue
             inim = self.images_to_stack[i]
             im = fits.getdata(inim)
