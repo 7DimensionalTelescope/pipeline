@@ -473,25 +473,32 @@ class ImStack(BaseSetup):
                 else:
                     uncalculated_images.append([input_file, None, output_file, None])
 
-        output, output_weight = interpolate_masked_pixels(
-            uncalculated_images, bpmask_array, method=method, badpix=badpix, device=device_id, weight=weight
-        )
+                    interp, interp_weight = interpolate_masked_pixels(
+                        image, mask, weight=weight, method=method, badpix=badpix
+                    )
 
-        for i, files in enumerate(uncalculated_images):
-            input_file, input_weight_file, output_file, output = files
-            if weight:
+                    if hasattr(interp_weight, "get"):  # if CuPy array
+                        interp_weight = xp.asnumpy(interp_weight)  # Convert to NumPy array
+
+                    fits.writeto(
+                        output_weight_file,
+                        data=interp_weight,
+                        header=add_bpx_method(fits.getheader(input_weight_file), method),
+                        overwrite=True,
+                    )
+
+                else:
+                    interp = interpolate_masked_pixels(image, mask, method=method, badpix=badpix)
+
+                if hasattr(interp, "get"):  # if CuPy array
+                    interp = xp.asnumpy(interp)  # Convert to NumPy array
+
                 fits.writeto(
-                    output_weight_file,
-                    output_weight[i],
-                    header=add_bpx_method(fits.getheader(input_weight_file), method),
+                    output_file,
+                    data=interp,
+                    header=add_bpx_method(fits.getheader(input_file), method),
                     overwrite=True,
                 )
-            fits.writeto(
-                output_file,
-                output[i],
-                header=add_bpx_method(fits.getheader(input_file), method),
-                overwrite=True,
-            )
 
         self.images_to_stack = self.config.imstack.interp_images
 
@@ -620,11 +627,22 @@ class ImStack(BaseSetup):
         else:
             self.logger.info("Using CPU for convolution")
 
-        method = self.config.imstack.convolve.lower()
+        self._convolved_images = []
+        self._convolved_wht_images = []
 
-        if weight:
-            image_list = []
-            for inim in self.images_to_stack:
+        for i in range(len(self.images_to_stack)):
+            if self.kernel[i] is None:
+                self._convolved_images.append(None)
+                self._convolved_wht_images.append(None)
+                self.logger.info(
+                    f"Convolution is skipped for images due to no kernel [{i+1}/{len(self.images_to_stack)}]"
+                )
+                continue
+            inim = self.images_to_stack[i]
+            im = fits.getdata(inim)
+            convolved_im = convolve_fft(im, self.kernel[i], device_id=device_id)
+            self._convolved_images.append(convolved_im)
+            if self.config.imstack.weight_map:
                 inim_wht = add_suffix(inim, "weight")
                 if os.path.exists(inim_wht):
                     image_list.append((inim, inim_wht))
