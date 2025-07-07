@@ -200,11 +200,9 @@ class QueueManager:
 
         def callback(result_tuple):
             task, result, error = result_tuple
-            print(error)
             self.completion_queue.put((task, result, error))
 
         def errback(error):
-            print(error)
             self.completion_queue.put((task, None, str(error)))
 
         while not self._abrupt_stop_requested.is_set():

@@ -106,7 +106,7 @@ class DataReduction:
         for t in threads:
             t.join()
 
-    def process_all(self):
+    def process_all(self, preprocess_only=False):
 
         masterframe_ids = []
         for i, (key, group) in enumerate(self.groups.items()):
@@ -115,7 +115,11 @@ class DataReduction:
                 pre_task = group.get_task(device_id=i % 2, only_with_sci=True, make_plots=False)
                 self.queue.add_task(pre_task)
                 masterframe_ids.append([pre_task, group])
-
+        
+        if preprocess_only:
+            self.queue.wait_until_task_complete("all")
+            return
+        
         while True:
             for task, group in masterframe_ids:
                 if task.status == "completed":
