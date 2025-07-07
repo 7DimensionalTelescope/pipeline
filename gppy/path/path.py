@@ -406,16 +406,17 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
 
     @property
     def preproc_output_yml(self) -> str:
-        config_stems = self._config_stem if hasattr(self, "_config_stem") and self._config_stem else "preproc_config"
-        return [os.path.join(d, f"{s}.yml") for d, s in zip(self._preproc_output_dir, config_stems)]
+        config_stems = self.config_stem if hasattr(self, "config_stem") and self.config_stem else "preproc_config"
+        # return [os.path.join(d, f"{s}.yml") for d, s in zip(self._preproc_output_dir, config_stems)]
+        return bjoin(self._preproc_output_dir, [f"{s}.yml" for s in atleast_1d(config_stems)])
 
     @property
     def preproc_output_log(self):
-        # return swap_ext(self.preproc_output_yml, "log")
-        if isinstance(self.preproc_output_yml, str):
-            return swap_ext(self.preproc_output_yml, "log")
-        else:
-            return [swap_ext(s, "log") for s in self.preproc_output_yml]
+        return swap_ext(self.preproc_output_yml, "log")
+        # if isinstance(self.preproc_output_yml, str):
+        #     return swap_ext(self.preproc_output_yml, "log")
+        # else:
+        #     return [swap_ext(s, "log") for s in self.preproc_output_yml]
 
     @property
     def sciproc_output_yml(self):

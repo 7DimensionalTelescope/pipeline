@@ -10,6 +10,7 @@ from ..config import SciProcConfiguration
 from ..services.setup import BaseSetup
 from ..utils import time_diff_in_seconds
 
+
 class Astrometry(BaseSetup):
     """A class to handle astrometric solutions for astronomical images.
 
@@ -191,7 +192,7 @@ class Astrometry(BaseSetup):
                     pixscale=pixscale,
                 )
                 self.logger.info(f"Completed solve-field [{i+1}/{len(inputs)}]")
-                self.logger.debug(f"input: {slink}, output: {sfile}")
+                self.logger.debug(f"Solve-field input: {slink}, output: {sfile}")
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
 

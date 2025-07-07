@@ -84,6 +84,7 @@ class ImStack(BaseSetup):
 
     def get_device_id(self, device_id):
         from ..services.utils import check_gpu_availability
+
         if self._use_gpu:
             if device_id is not None:
                 self._device_id = device_id
@@ -94,14 +95,15 @@ class ImStack(BaseSetup):
                     self._device_id = self.config.imstack.device
                 else:
                     from ..services.utils import get_best_gpu_device
+
                     self._device_id = get_best_gpu_device()
                     self.config.imstack.device = self._device_id
         else:
             self._device_id = "CPU"
 
-        if not(check_gpu_availability(self._device_id)):
+        if not (check_gpu_availability(self._device_id)):
             self._device_id = "CPU"
-        
+
         return self._device_id
 
     def run(self, use_gpu: bool = True, device_id=None):
@@ -348,13 +350,13 @@ class ImStack(BaseSetup):
         """Retains cpu support as a code template"""
         st = time.time()
         self._use_gpu = all([use_gpu, self.config.imstack.gpu, self._use_gpu])
-        self.logger.info(f"Start weight-map calculation with {'GPU' if self._use_gpu else 'CPU'}")
         # pick xp and device‐context based on GPU flag
         if self._use_gpu:
             device_id = self.get_device_id(device_id)
         else:
             device_id = "CPU"
-        
+        self.logger.info(f"Start weight-map calculation with device_id: {device_id}")
+
         bkgsub_images = self.config.imstack.bkgsub_images
         self.config.imstack.bkgsub_weight_images = []
 
@@ -396,11 +398,15 @@ class ImStack(BaseSetup):
                     continue
                 else:
                     uncalculated_images.append(img)
-            
+
             st_image = time.time()
-            output = calc_weight(uncalculated_images, d_m, f_m, sig_z, sig_f, p_d, p_z, p_f, egain, weight=True, device=device_id)
-            self.logger.debug(f"Weight-map calculation (device={device_id}) for group {i} is completed in {time_diff_in_seconds(st_image)} seconds")
-            
+            output = calc_weight(
+                uncalculated_images, d_m, f_m, sig_z, sig_f, p_d, p_z, p_f, egain, weight=True, device=device_id
+            )
+            self.logger.debug(
+                f"Weight-map calculation (device={device_id}) for group {i} is completed in {time_diff_in_seconds(st_image)} seconds"
+            )
+
             for i, img in enumerate(uncalculated_images):
                 weight_image_file = add_suffix(img, "weight")
                 fits.writeto(
@@ -410,8 +416,9 @@ class ImStack(BaseSetup):
                 )
 
             del output
-            self.logger.info(f"Weight-map calculation is completed in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(images):.1f} s/image)")
-
+            self.logger.info(
+                f"Weight-map calculation is completed in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(images):.1f} s/image)"
+            )
 
     def apply_bpmask(self, badpix=0, device_id=None, use_gpu: bool = True):
         st = time.time()
@@ -435,7 +442,7 @@ class ImStack(BaseSetup):
         # bpmask_array, header = fits.getdata(self.config.preprocess.bpmask_file, header=True)
         # ad-hoc. Todo: group input_files for different bpmask files
         bpmask_array, header = fits.getdata(PathHandler.get_bpmask(self.config.imstack.bkgsub_images[0]), header=True)
-        
+
         if "BADPIX" in header.keys():
             badpix = header["BADPIX"]
             self.logger.debug(f"BADPIX found in header. Using badpix {badpix}.")
@@ -463,15 +470,11 @@ class ImStack(BaseSetup):
                     uncalculated_images.append([input_file, input_weight_file, output_file, output])
                 else:
                     uncalculated_images.append([input_file, None, output_file, None])
-                
 
-        output, output_weight = interpolate_masked_pixels(uncalculated_images,
-                                                          bpmask_array,
-                                                          method=method, 
-                                                          badpix=badpix, 
-                                                          device=device_id, 
-                                                          weight=weight)
-        
+        output, output_weight = interpolate_masked_pixels(
+            uncalculated_images, bpmask_array, method=method, badpix=badpix, device=device_id, weight=weight
+        )
+
         for i, files in enumerate(uncalculated_images):
             input_file, input_weight_file, output_file, output = files
             if weight:
@@ -491,7 +494,9 @@ class ImStack(BaseSetup):
         self.images_to_stack = self.config.imstack.interp_images
 
         del output, output_weight
-        self.logger.info(f"Interpolation for bad pixels is completed in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self.images_to_stack):.1f} s/image)")
+        self.logger.info(
+            f"Interpolation for bad pixels is completed in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self.images_to_stack):.1f} s/image)"
+        )
 
     def zpscale(self):
         """
@@ -599,7 +604,6 @@ class ImStack(BaseSetup):
                         Gaussian2DKernel(x_stddev=delta_peeing / (np.sqrt(8 * np.log(2))))
                     )  # 8*sig + 1 sized
 
-
         else:
             self.logger.info("Undefined convolution method. Skipping seeing match")
 
@@ -628,7 +632,7 @@ class ImStack(BaseSetup):
             image_list = self.images_to_stack
 
         output = convolve_fft(image_list, self.kernel, device_id=device_id, apply_edge_mask=weight)
-        
+
         for img, out in zip(image_list, output):
             peeing = fits.getheader(self.images_to_stack[i])["PEEING"]
             delta_peeing = self._calc_delta_peeing(peeing)
@@ -641,7 +645,9 @@ class ImStack(BaseSetup):
                 header=header,
                 overwrite=True,
             )
-        self.logger.info(f"Convolution is completed in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self.images_to_stack):.1f} s/image)")
+        self.logger.info(
+            f"Convolution is completed in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self.images_to_stack):.1f} s/image)"
+        )
 
     def _calc_delta_peeing(self, peeing):
         delta_peeing = np.sqrt(self._max_peeing**2 - peeing**2)
