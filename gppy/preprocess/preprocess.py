@@ -4,9 +4,7 @@ import threading
 import numpy as np
 from astropy.io import fits
 import time
-import gc
 
-import cupy as cp
 from .plotting import *
 from . import utils as prep_utils
 from .calc import *
@@ -57,8 +55,8 @@ class Preprocess(BaseSetup):
         tasks = []
         for i in range(self._n_groups):
             tasks.append((4 * i, f"load_masterframe", True))
-            tasks.append((4 * i + 1, f"data_reduction", True))
-            tasks.append((4 * i + 2, f"save_processed_images", False))
+            tasks.append((4 * i + 1, f"prepare_reduction", False))
+            tasks.append((4 * i + 2, f"data_reduction", True))
             if i < self._n_groups - 1:
                 tasks.append((4 * i + 3, f"proceed_to_next_group", False))
 
@@ -101,8 +99,9 @@ class Preprocess(BaseSetup):
 
             self.load_masterframe(device_id=device_id)
             if not self.master_frame_only:
+                self.prepare_reduction()
                 self.data_reduction(device_id=device_id)
-                self.save_processed_images()
+                
 
             if make_plots:
                 t = threading.Thread(target=self.make_plots, args=(i,))
@@ -115,9 +114,6 @@ class Preprocess(BaseSetup):
         if make_plots:
             for t in threads_for_making_plots:
                 t.join()
-
-        with cp.cuda.Device(device_id):
-            cp.get_default_memory_pool().free_all_blocks()
 
         self.logger.info("Preprocess completed")
 
@@ -284,11 +280,11 @@ class Preprocess(BaseSetup):
             calc_function = combine_images_with_cupy
 
         if dtype == "bias":
-            median, std = calc_function(input_data, device_id=device_id)
+            median, std, leakage = calc_function(input_data, device_id=device_id)
             self.bias_data = median
 
         elif dtype == "dark":
-            median, std = calc_function(
+            median, std, leakage = calc_function(
                 input_data,
                 device_id=device_id,
                 subtract=self.bias_data,
@@ -300,7 +296,7 @@ class Preprocess(BaseSetup):
 
         elif dtype == "flat":
             dark_scale = self._calc_dark_scale(header[HEADER_KEY_MAP["exptime"]], self.dark_exptime)
-            median, std = calc_function(
+            median, std, leakage = calc_function(
                 input_data, subtract=(self.bias_data + self.dark_data * dark_scale), norm=True, device_id=device_id
             )
             self.flat_data = median
@@ -311,7 +307,7 @@ class Preprocess(BaseSetup):
             header=header,
             overwrite=True,
         )
-
+        self.logger.info(f"GPU meory leakage: {leakage:.2f} MB")
         self.logger.info(f"FITS Written: {getattr(self, f'{dtype}sig_output')}")
 
         header = prep_utils.add_image_id(header)
@@ -346,7 +342,30 @@ class Preprocess(BaseSetup):
 
         if dtype == "dark":
             self.dark_exptime = get_header(existing_mframe_file)[HEADER_KEY_MAP["exptime"]]
+    
+    def prepare_reduction(self):
 
+        st = time.time()
+        n_head_blocks = self.config.preprocess.n_head_blocks
+        bias, dark, flat = self.bias_output, self.dark_output, self.flat_output
+        self._headers = []
+        # Write results
+        for raw_file in self.sci_input:
+            header = fits.getheader(raw_file)
+            header["SATURATE"] = prep_utils.get_saturation_level(
+                header, bias, dark, flat
+            )
+            header = prep_utils.write_IMCMB_to_header(
+                header, [bias, dark, flat, raw_file]
+            )
+            header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
+            self._headers.append(header)
+   
+        self.all_results = None
+        self.logger.info(
+            f"Prepare image headers for group {self._current_group+1} in {time_diff_in_seconds(st)} seconds."
+        )
+    
     def data_reduction(self, device_id=None, use_gpu: bool = True):
         self._use_gpu = all([use_gpu, self._use_gpu])
 
@@ -374,53 +393,18 @@ class Preprocess(BaseSetup):
                 f"Processing {len(self.sci_input)} images in group {self._current_group+1} on GPU device(s): {device_id} "
             )
 
-        results = process_kernel(
-            self.sci_input, self.bias_data, self.dark_data, self.flat_data, device_id=device_id
+        results, leakage = process_kernel(
+            self.sci_input, self.bias_data, self.dark_data, self.flat_data, device_id=device_id, output_paths=self.sci_output, header=self._headers, use_gpu=self._use_gpu
         )
 
-        del self.bias_data, self.dark_data, self.flat_data
-
-
-        self.all_results = results
+        del self.bias_data, self.dark_data, self.flat_data, results
 
         self.logger.info(
             f"Completed data reduction for {len(self.sci_input)} images in group {self._current_group+1} in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self.sci_input):.1f} s/image)"
         )
+        self.logger.info(f"GPU meory leakage: {leakage:.2f} MB")
 
-    def save_processed_images(self):
-
-        if self.all_results is None:
-            return
-
-        st = time.time()
-        n_head_blocks = self.config.preprocess.n_head_blocks
-        bias, dark, flat = self.bias_output, self.dark_output, self.flat_output
-
-        # Write results
-        for result, raw_file, processed_file in zip(self.all_results, self.sci_input, self.sci_output):
-            header = fits.getheader(raw_file)
-            header["SATURATE"] = prep_utils.get_saturation_level(
-                header, bias, dark, flat
-            )
-            header = prep_utils.write_IMCMB_to_header(
-                header, [bias, dark, flat, raw_file]
-            )
-            header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
-
-            os.makedirs(os.path.dirname(processed_file), exist_ok=True)
-
-            fits.writeto(
-                processed_file,
-                data=result,
-                header=header,
-                overwrite=True,
-            )
-        self.all_results = None
-        self.logger.info(
-            f"Processed images in group {self._current_group+1} are saved in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self.sci_input):.1f} s/image)"
-        )
-        gc.collect()
-
+    
     def make_plots(self, group_index=None):
         st = time.time()
         if group_index is None:
