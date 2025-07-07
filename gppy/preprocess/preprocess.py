@@ -55,8 +55,9 @@ class Preprocess(BaseSetup):
         tasks = []
         for i in range(self._n_groups):
             tasks.append((4 * i, f"load_masterframe", True))
-            tasks.append((4 * i + 1, f"prepare_reduction", False))
-            tasks.append((4 * i + 2, f"data_reduction", True))
+            
+            tasks.append((4 * i + 1, f"data_reduction", True))
+            tasks.append((4 * i + 2, f"update_headers", False))
             if i < self._n_groups - 1:
                 tasks.append((4 * i + 3, f"proceed_to_next_group", False))
 
@@ -99,9 +100,8 @@ class Preprocess(BaseSetup):
 
             self.load_masterframe(device_id=device_id)
             if not self.master_frame_only:
-                self.prepare_reduction()
                 self.data_reduction(device_id=device_id)
-                
+                self.update_headers()
 
             if make_plots:
                 t = threading.Thread(target=self.make_plots, args=(i,))
@@ -307,7 +307,6 @@ class Preprocess(BaseSetup):
             header=header,
             overwrite=True,
         )
-        self.logger.info(f"GPU meory leakage: {leakage:.2f} MB")
         self.logger.info(f"FITS Written: {getattr(self, f'{dtype}sig_output')}")
 
         header = prep_utils.add_image_id(header)
@@ -342,29 +341,7 @@ class Preprocess(BaseSetup):
 
         if dtype == "dark":
             self.dark_exptime = get_header(existing_mframe_file)[HEADER_KEY_MAP["exptime"]]
-    
-    def prepare_reduction(self):
 
-        st = time.time()
-        n_head_blocks = self.config.preprocess.n_head_blocks
-        bias, dark, flat = self.bias_output, self.dark_output, self.flat_output
-        self._headers = []
-        # Write results
-        for raw_file in self.sci_input:
-            header = fits.getheader(raw_file)
-            header["SATURATE"] = prep_utils.get_saturation_level(
-                header, bias, dark, flat
-            )
-            header = prep_utils.write_IMCMB_to_header(
-                header, [bias, dark, flat, raw_file]
-            )
-            header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
-            self._headers.append(header)
-   
-        self.all_results = None
-        self.logger.info(
-            f"Prepare image headers for group {self._current_group+1} in {time_diff_in_seconds(st)} seconds."
-        )
     
     def data_reduction(self, device_id=None, use_gpu: bool = True):
         self._use_gpu = all([use_gpu, self._use_gpu])
@@ -388,13 +365,13 @@ class Preprocess(BaseSetup):
             process_kernel = process_image_with_cpu
             self.logger.info(f"Processing {len(self.sci_input)} images in group {self._current_group+1} on CPU")
         else:
-            process_kernel = process_image_with_cupy
+            process_kernel = process_image_with_subprocess
             self.logger.info(
                 f"Processing {len(self.sci_input)} images in group {self._current_group+1} on GPU device(s): {device_id} "
             )
 
         results, leakage = process_kernel(
-            self.sci_input, self.bias_data, self.dark_data, self.flat_data, device_id=device_id, output_paths=self.sci_output, header=self._headers, use_gpu=self._use_gpu
+            self.sci_input, self.bias_output, self.dark_output, self.flat_output, device_id=device_id, output_paths=self.sci_output, use_gpu=self._use_gpu
         )
 
         del self.bias_data, self.dark_data, self.flat_data, results
@@ -402,9 +379,34 @@ class Preprocess(BaseSetup):
         self.logger.info(
             f"Completed data reduction for {len(self.sci_input)} images in group {self._current_group+1} in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self.sci_input):.1f} s/image)"
         )
-        self.logger.info(f"GPU meory leakage: {leakage:.2f} MB")
+        
+        
+    def update_headers(self):
 
-    
+        st = time.time()
+        n_head_blocks = self.config.preprocess.n_head_blocks
+        bias, dark, flat = self.bias_output, self.dark_output, self.flat_output
+
+        # Write results
+        for raw_file, processed_file in zip(self.sci_input, self.sci_output):
+            header = fits.getheader(raw_file)
+            header["SATURATE"] = prep_utils.get_saturation_level(
+                header, bias, dark, flat
+            )
+            header = prep_utils.write_IMCMB_to_header(
+                header, [bias, dark, flat, raw_file]
+            )
+            header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
+
+            with fits.open(processed_file, mode="update") as hdul:
+                hdul[0].header = header
+                hdul.flush()
+   
+        self.all_results = None
+        self.logger.info(
+            f"Updated image headers for group {self._current_group+1} in {time_diff_in_seconds(st)} seconds."
+        )
+
     def make_plots(self, group_index=None):
         st = time.time()
         if group_index is None:

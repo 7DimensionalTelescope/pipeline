@@ -2,17 +2,32 @@ import gc
 import cupy as cp
 import numpy as np
 import os
-import copy
 from astropy.io import fits
-from cupy.cuda import Stream
-from contextlib import contextmanager
-
+import subprocess
 from numba import njit, prange
+from ..const import SCRIPT_DIR
 
 # Reduction kernel
 reduction_kernel = cp.ElementwiseKernel(
     in_params="T x, T b, T d, T f", out_params="T z", operation="z = (x - b - d) / f", name="reduction"
 )
+
+def read_fits_image(path):
+    return fits.getdata(path).astype(np.float32)
+
+def process_image_with_subprocess(image_paths, bias, dark, flat, device_id=0, output_paths=None, **kwargs):
+    cmd = [
+        f"{SCRIPT_DIR}/cuda/process_image",
+        "-bias", bias,
+        "-dark", dark,
+        "-flat", flat,
+        "-input", *image_paths,
+        "-output", *output_paths,
+        "-device", str(device_id)
+    ]   
+    
+    subprocess.run(cmd, check=True)
+    return None, None
 
 @njit(parallel=True)
 def reduction_kernel_cpu(image, bias, dark, flat, subtract, normalize):
@@ -35,26 +50,17 @@ def reduction_kernel_cpu(image, bias, dark, flat, subtract, normalize):
     return corrected
 
 
-@contextmanager
-def load_data_gpu(fpath, ext=None):
-    """Load data into GPU memory with automatic cleanup."""
-    data = cp.asarray(fits.getdata(fpath, ext=ext), dtype="float32")
-    try:
-        yield data  # Provide the loaded data to the block
-    finally:
-        del data  # Free GPU memory when the block is exited
-        gc.collect()  # Force garbage collection
-        cp.get_default_memory_pool().free_all_blocks()
-
-
 def process_image_with_cupy(image_paths, bias, dark, flat, device_id=0, output_paths=None, header=None, **kwargs):
     output = []
-    h, w = fits.getdata(image_paths[0]).shape
+    h, w = read_fits_image(image_paths[0]).shape
+    bias = read_fits_image(bias)
+    dark = read_fits_image(dark)
+    flat = read_fits_image(flat)
 
     with cp.cuda.Device(device_id):
         before = cp.get_default_memory_pool().used_bytes()
         pinned_mem = cp.cuda.alloc_pinned_memory(h * w * 4)  # float32: 4 bytes
-        cpu_buffer = np.frombuffer(pinned_mem, dtype=np.float32).reshape(h, w)
+        cpu_buffer = np.frombuffer(pinned_mem, dtype=np.float32, count=h*w).reshape(h, w)
         
         gpu_bias = cp.asarray(bias, dtype=cp.float32)
         gpu_dark = cp.asarray(dark, dtype=cp.float32) 
@@ -63,7 +69,7 @@ def process_image_with_cupy(image_paths, bias, dark, flat, device_id=0, output_p
         gpu_buffer = cp.empty((h, w), dtype=cp.float32)
 
         for i, o in enumerate(image_paths):
-            cpu_data = fits.getdata(o).astype(np.float32)
+            cpu_data = read_fits_image(o)
             cpu_buffer[:] = cpu_data  # copy into pinned buffer
 
             # Copy to GPU
@@ -123,12 +129,10 @@ def process_image_with_cpu(
     **kwargs,
 ):
 
-    def read_fits_image(path):
-        return fits.getdata(path).astype(np.float32)
+    bias = read_fits_image(bias)
+    dark = read_fits_image(dark)
+    flat = read_fits_image(flat)
 
-    bias = bias.astype(np.float32)
-    dark = dark.astype(np.float32)
-    flat = flat.astype(np.float32)
     subtract = subtract.astype(np.float32) if subtract is not None else None
 
     output = []
