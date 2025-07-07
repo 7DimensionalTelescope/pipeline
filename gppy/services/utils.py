@@ -11,11 +11,12 @@ from astropy.table import Table
 
 from typing import Optional
 
+
 def cleanup_memory() -> None:
     """
     Perform comprehensive memory cleanup across CPU and GPU.
 
-    This function provides a robust mechanism for releasing 
+    This function provides a robust mechanism for releasing
     unused memory resources in both CPU and GPU contexts.
 
     Key Operations:
@@ -38,7 +39,7 @@ def cleanup_memory() -> None:
         >>> # Before starting a memory-intensive task
         >>> cleanup_memory()
     """
-    
+
     try:
         for device_id in range(cp.cuda.runtime.getDeviceCount()):
             with cp.cuda.Device(device_id):
@@ -49,8 +50,11 @@ def cleanup_memory() -> None:
 
     gc.collect()  # Initial garbage collection
 
+
 @contextmanager
-def monitor_memory_usage(interval: float = 1.0, logger: Optional = None, add_utilization=True, verbose: bool = False) -> Table:
+def monitor_memory_usage(
+    interval: float = 1.0, logger: Optional = None, add_utilization=True, verbose: bool = False
+) -> Table:
     """
     Context manager that monitors and logs memory usage every X seconds
     while running code inside the `with` block.
@@ -109,7 +113,7 @@ def monitor_memory_usage(interval: float = 1.0, logger: Optional = None, add_uti
             if add_utilization:
                 gpu_utilizations = MemoryMonitor.current_gpu_utilization
                 row += gpu_utilizations
-            
+
             usage_data.add_row(row)
             if verbose:
                 usage_str = MemoryMonitor.log_memory_usage
@@ -191,6 +195,7 @@ def monitor_io_rate(interval: float = 1.0, logger: Optional = None, verbose: boo
         stop_thread = True
         t.join()
 
+
 def plot_history(history: Table, filename: Optional[str] = None, keys=None, ax=None, **kwargs) -> None:
     """
     Plot memory usage history.
@@ -223,13 +228,12 @@ def plot_history(history: Table, filename: Optional[str] = None, keys=None, ax=N
     return ax
 
 
-
 class classmethodproperty:
     """
     A custom decorator that combines class method and property behaviors.
 
-    Allows creating class-level properties that can be accessed 
-    without instantiating the class, while maintaining the 
+    Allows creating class-level properties that can be accessed
+    without instantiating the class, while maintaining the
     flexibility of class methods.
 
     Typical use cases:
@@ -255,7 +259,7 @@ class classmethodproperty:
             func (callable): The function to be converted to a class method property
         """
         self.func = classmethod(func)
-    
+
     def __get__(self, instance, owner):
         """
         Retrieve the value of the class method property.
@@ -269,20 +273,24 @@ class classmethodproperty:
         """
         return self.func.__get__(instance, owner)()
 
+
 def get_best_gpu_device():
     from ..services.memory import MemoryMonitor
+
     percent = MemoryMonitor.current_gpu_memory_percent
-    available = [p if p<90 else 100 for p in percent]
+    available = [p if p < 90 else 100 for p in percent]
     if len(available) == 0:
         return None
     else:
-        return np.argmin(available)
-    
+        return int(np.argmin(available))
+
+
 def check_gpu_availability(device):
     if isinstance(device, str):
         return False
-    
+
     from ..services.memory import MemoryMonitor
+
     percent = MemoryMonitor.current_gpu_memory_percent
 
     if percent[device] > 80:

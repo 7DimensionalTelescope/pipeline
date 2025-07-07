@@ -415,7 +415,9 @@ class Preprocess(BaseSetup):
         self.logger.info(f"Generating plots for master calibration frames of group {group_index+1}")
         use_multi_thread = self.config.preprocess.use_multi_thread
 
-        plot_bias(self._get_raw_group("bias_output", group_index), savefig=True)
+        bias_file = self._get_raw_group("bias_output", group_index)
+        if prep_utils.wait_for_masterframe(bias_file, timeout=10):
+            plot_bias(bias_file, savefig=True)
         mask = plot_bpmask(self._get_raw_group("bpmask_output", group_index), savefig=True)
         sample_header = fits.getheader(self._get_raw_group("bpmask_output", group_index), ext=1)
         if "BADPIX" in sample_header.keys():
