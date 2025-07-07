@@ -23,6 +23,20 @@ class Preprocess(BaseSetup):
     unit, n_binning, gain, and cameras.
     """
 
+    # IDE autocomplete
+    bias_input: list[str]
+    dark_input: list[str]
+    flat_input: list[str]
+    biassig_output: str
+    darksig_output: str
+    flatsig_output: str
+    bias_output: str
+    dark_output: str
+    flat_output: str
+    sci_input: list[str]
+    sci_output: list[str]
+    bpmask_output: str
+
     def __init__(
         self,
         config,
@@ -101,7 +115,6 @@ class Preprocess(BaseSetup):
             if not self.master_frame_only:
                 self.prepare_reduction()
                 self.data_reduction(device_id=device_id)
-                
 
             if make_plots:
                 t = threading.Thread(target=self.make_plots, args=(i,))
@@ -329,7 +342,7 @@ class Preprocess(BaseSetup):
         # existing_data can be either on-date or off-date
         max_offset = self.config.preprocess.max_offset
         self.logger.debug(f"Masterframe Search Template: {template}")
-        existing_mframe_file = prep_utils.search_with_date_offsets(template, max_offset=max_offset)
+        existing_mframe_file = prep_utils.search_with_date_offsets(template, max_offset=max_offset, future=True)
 
         if not existing_mframe_file:
             raise FileNotFoundError(
@@ -342,7 +355,7 @@ class Preprocess(BaseSetup):
 
         if dtype == "dark":
             self.dark_exptime = get_header(existing_mframe_file)[HEADER_KEY_MAP["exptime"]]
-    
+
     def prepare_reduction(self):
 
         st = time.time()
@@ -352,28 +365,27 @@ class Preprocess(BaseSetup):
         # Write results
         for raw_file in self.sci_input:
             header = fits.getheader(raw_file)
-            header["SATURATE"] = prep_utils.get_saturation_level(
-                header, bias, dark, flat
-            )
-            header = prep_utils.write_IMCMB_to_header(
-                header, [bias, dark, flat, raw_file]
-            )
+            header["SATURATE"] = prep_utils.get_saturation_level(header, bias, dark, flat)
+            header = prep_utils.write_IMCMB_to_header(header, [bias, dark, flat, raw_file])
             header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
             self._headers.append(header)
-   
+
         self.all_results = None
         self.logger.info(
             f"Prepare image headers for group {self._current_group+1} in {time_diff_in_seconds(st)} seconds."
         )
-    
+
     def data_reduction(self, device_id=None, use_gpu: bool = True):
         self._use_gpu = all([use_gpu, self._use_gpu])
 
         if not self.sci_input:
             self.logger.info(f"No science frames found in group {self._current_group + 1}, skipping data reduction.")
             self.all_results = None
+            # del self.bias_data, self.dark_data, self.flat_data
             # delete bypassing custom getattr
-            del self.bias_data, self.dark_data, self.flat_data
+            for attr in ("bias_data", "dark_data", "flat_data"):
+                if attr in self.__dict__:
+                    del self.__dict__[attr]
 
             return
 
@@ -394,7 +406,14 @@ class Preprocess(BaseSetup):
             )
 
         results, leakage = process_kernel(
-            self.sci_input, self.bias_data, self.dark_data, self.flat_data, device_id=device_id, output_paths=self.sci_output, header=self._headers, use_gpu=self._use_gpu
+            self.sci_input,
+            self.bias_data,
+            self.dark_data,
+            self.flat_data,
+            device_id=device_id,
+            output_paths=self.sci_output,
+            header=self._headers,
+            use_gpu=self._use_gpu,
         )
 
         del self.bias_data, self.dark_data, self.flat_data, results
@@ -404,7 +423,6 @@ class Preprocess(BaseSetup):
         )
         self.logger.info(f"GPU meory leakage: {leakage:.2f} MB")
 
-    
     def make_plots(self, group_index=None):
         st = time.time()
         if group_index is None:

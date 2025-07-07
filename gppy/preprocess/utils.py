@@ -6,6 +6,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import uuid
 
+
 class FileCreationHandler(FileSystemEventHandler):
     def __init__(self, target_file):
         self.target_file = os.path.basename(target_file)
@@ -48,6 +49,7 @@ def wait_for_masterframe(file_path, timeout=1800):
         observer.stop()
         observer.join()
 
+
 def search_with_date_offsets(template, max_offset=300, future=False):
     """
     Search for files based on a template, modifying embedded dates with offsets.
@@ -84,7 +86,7 @@ def search_with_date_offsets(template, max_offset=300, future=False):
         offsets = [offset for i in range(1, max_offset + 1) for offset in (-i, i)]
     else:
         offsets = [-i for i in range(1, max_offset + 1)]
-        offsets = [0] + offsets  # Include the original dates (offset 0)
+    offsets = [0] + offsets  # Include the original dates (offset 0)
 
     # Iterate through offsets
     for offset in offsets:
@@ -97,9 +99,7 @@ def search_with_date_offsets(template, max_offset=300, future=False):
         adjusted_date_utc = adjusted_date_utc_dt.strftime(date_utc_format)
 
         # Replace both dates in the template
-        modified_path = template.replace(date_night, adjusted_date_night).replace(
-            date_utc, adjusted_date_utc
-        )
+        modified_path = template.replace(date_night, adjusted_date_night).replace(date_utc, adjusted_date_utc)
 
         # Check if the modified path exists
         if os.path.exists(modified_path):
@@ -107,6 +107,7 @@ def search_with_date_offsets(template, max_offset=300, future=False):
 
     # If no file is found, return None
     return None
+
 
 def get_saturation_level(header, mbias_file, mdark_file, mflat_file):
     bitpix = header["BITPIX"]
@@ -156,7 +157,6 @@ def add_image_id(header, key="IMAGEID"):
     header[key] = uuid.uuid4().hex
     header.comments[key] = "Unique ID of the image"
     return header
-
 
 
 def add_padding(header, n, copy_header=False):
@@ -225,4 +225,3 @@ def remove_padding(header):
             break
 
     return header[: i + 1]
-
