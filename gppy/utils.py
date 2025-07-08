@@ -741,3 +741,16 @@ def time_diff_in_seconds(datetime1, datetime2=None, return_float=False):
 
 def get_basename(file_path):
     return os.path.basename(file_path)
+
+
+def update_header_by_overwriting(filename, header):
+    data = fits.getdata(filename)
+    fits.writeto(filename, data, header=header, overwrite=True)
+
+def write_header_into_file(filename, header):
+    if filename.endswith(".fits"):
+        filename = filename.replace(".fits", ".header")
+        
+    with open(filename, "w") as f:
+        for card in header.cards:
+            f.write(f"{card.card:80s}\n") 

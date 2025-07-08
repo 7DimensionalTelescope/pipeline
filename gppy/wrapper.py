@@ -109,13 +109,19 @@ class DataReduction:
     def process_all(self, preprocess_only=False):
 
         masterframe_ids = []
+        active_runs = 0
         for i, (key, group) in enumerate(self.groups.items()):
             if isinstance(group, MasterframeGroup):
                 # Submit preprocess
+                if active_runs == 2:
+                    self.queue.wait_until_task_complete("all")
+                    active_runs = 0
                 pre_task = group.get_task(device_id=i % 2, only_with_sci=True, make_plots=False)
                 self.queue.add_task(pre_task)
                 masterframe_ids.append([pre_task, group])
-        
+                active_runs+=1
+                
+
         if preprocess_only:
             self.queue.wait_until_task_complete("all")
             return
