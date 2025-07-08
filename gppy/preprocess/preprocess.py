@@ -24,6 +24,20 @@ class Preprocess(BaseSetup):
     unit, n_binning, gain, and cameras.
     """
 
+    # IDE autocomplete
+    bias_input: list[str]
+    dark_input: list[str]
+    flat_input: list[str]
+    biassig_output: str
+    darksig_output: str
+    flatsig_output: str
+    bias_output: str
+    dark_output: str
+    flat_output: str
+    sci_input: list[str]
+    sci_output: list[str]
+    bpmask_output: str
+
     def __init__(
         self,
         config,
@@ -105,7 +119,6 @@ class Preprocess(BaseSetup):
             if not self.master_frame_only:
                 self.prepare_headers()
                 self.data_reduction(device_id=device_id)
-                
 
             if make_plots:
                 t = threading.Thread(target=self.make_plots, kwargs={"group_index":i})
@@ -328,8 +341,7 @@ class Preprocess(BaseSetup):
         # existing_data can be either on-date or off-date
         max_offset = self.config.preprocess.max_offset
         self.logger.debug(f"Masterframe Search Template: {template}")
-
-        existing_mframe_file = prep_utils.search_with_date_offsets(template, max_offset=max_offset)
+        existing_mframe_file = prep_utils.search_with_date_offsets(template, max_offset=max_offset, future=True)
 
         if not existing_mframe_file:
             raise FileNotFoundError(
@@ -357,12 +369,8 @@ class Preprocess(BaseSetup):
         # Write results
         for raw_file, processed_file in zip(self.sci_input, self.sci_output):
             header = fits.getheader(raw_file)
-            header["SATURATE"] = prep_utils.get_saturation_level(
-                header, bias, dark, flat
-            )
-            header = prep_utils.write_IMCMB_to_header(
-                header, [bias, dark, flat, raw_file]
-            )
+            header["SATURATE"] = prep_utils.get_saturation_level(header, bias, dark, flat)
+            header = prep_utils.write_IMCMB_to_header(header, [bias, dark, flat, raw_file])
             header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
         
             write_header_into_file(processed_file, header)
@@ -378,8 +386,12 @@ class Preprocess(BaseSetup):
         if not self.sci_input:
             self.logger.info(f"No science frames found in group {self._current_group + 1}, skipping data reduction.")
             self.all_results = None
+            # del self.bias_data, self.dark_data, self.flat_data
             # delete bypassing custom getattr
-            
+            for attr in ("bias_data", "dark_data", "flat_data"):
+                if attr in self.__dict__:
+                    del self.__dict__[attr]
+
             return
 
         flag = [os.path.exists(file) for file in self.sci_output]
@@ -399,7 +411,14 @@ class Preprocess(BaseSetup):
             )
 
         results, leakage = process_kernel(
-            self.sci_input, self.bias_output, self.dark_output, self.flat_output, device_id=device_id, output_paths=self.sci_output, use_gpu=self._use_gpu
+            self.sci_input,
+            self.bias_data,
+            self.dark_data,
+            self.flat_data,
+            device_id=device_id,
+            output_paths=self.sci_output,
+            header=self._headers,
+            use_gpu=self._use_gpu,
         )
 
         self.logger.info(
