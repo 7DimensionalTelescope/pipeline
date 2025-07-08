@@ -9,11 +9,12 @@ from .plotting import *
 from . import utils as prep_utils
 from .calc import *
 
-from ..utils import get_header, flatten, time_diff_in_seconds
+from ..utils import get_header, flatten, time_diff_in_seconds, update_header_by_overwriting, write_header_into_file
 from ..path import PathHandler
 from ..config import PreprocConfiguration
 from ..services.setup import BaseSetup
 from ..const import HEADER_KEY_MAP
+
 
 
 class Preprocess(BaseSetup):
@@ -55,9 +56,10 @@ class Preprocess(BaseSetup):
         tasks = []
         for i in range(self._n_groups):
             tasks.append((4 * i, f"load_masterframe", True))
+            tasks.append((4 * i + 1, f"prepare_headers", False))
             
-            tasks.append((4 * i + 1, f"data_reduction", True))
-            tasks.append((4 * i + 2, f"update_headers", False))
+            tasks.append((4 * i + 2, f"data_reduction", True))
+            
             if i < self._n_groups - 1:
                 tasks.append((4 * i + 3, f"proceed_to_next_group", False))
 
@@ -99,12 +101,14 @@ class Preprocess(BaseSetup):
                 continue
 
             self.load_masterframe(device_id=device_id)
+            
             if not self.master_frame_only:
+                self.prepare_headers()
                 self.data_reduction(device_id=device_id)
-                self.update_headers()
+                
 
             if make_plots:
-                t = threading.Thread(target=self.make_plots, args=(i,))
+                t = threading.Thread(target=self.make_plots, kwargs={"group_index":i})
                 t.start()
                 threads_for_making_plots.append(t)
 
@@ -143,6 +147,10 @@ class Preprocess(BaseSetup):
         """bias_input, dark_input, flat_input, bias_output, dark_output, flat_input are defined here"""
         if name.endswith("_input") or name.endswith("_output"):
             return self._get_raw_group(name, self._current_group)
+    
+    @property
+    def _key_to_index(self):
+        return {"bias": 0, "dark": 1, "flat": 2}
 
     def _get_raw_group(self, name, group_index):
         if name == "sci_input":
@@ -152,26 +160,25 @@ class Preprocess(BaseSetup):
         elif name == "bpmask_output":
             return getattr(self, f"dark_output").replace("dark", f"bpmask")
 
-        key_to_index = {"bias": 0, "dark": 1, "flat": 2}
+    
         if name.endswith("_input"):
             key = name[:4]  # strip "_input" (e.g., bias_input)
-            if key in key_to_index:
-                return self.raw_groups[group_index][0][key_to_index[key]]
+            if key in self._key_to_index:
+                return self.raw_groups[group_index][0][self._key_to_index[key]]
         elif name.endswith("_output"):
             key = name[:4]  # strip "_output" (e.g., bias_output)
-            if key in key_to_index:
+            if key in self._key_to_index:
                 if "sig" in name:
                     return getattr(self, f"{key}_output").replace(key, f"{key}sig")
                 else:
-                    return self.raw_groups[group_index][1][key_to_index[key]]
+                    return self.raw_groups[group_index][1][self._key_to_index[key]]
         raise AttributeError(f"Attribute {name} not found")
 
     def _set_raw_group(self, name, value):
-        key_to_index = {"bias": 0, "dark": 1, "flat": 2}
         if name.endswith("_output"):
             key = name[:4]  # strip "_output" (e.g., bias_output)
-            if key in key_to_index:
-                self.raw_groups[self._current_group][1][key_to_index[key]] = value
+            if key in self._key_to_index:
+                self.raw_groups[self._current_group][1][self._key_to_index[key]] = value
 
     def _parse_sci_list(self, group_index, dtype="input"):
         l = []
@@ -239,7 +246,7 @@ class Preprocess(BaseSetup):
             calc_function = combine_images_with_cpu
             self.logger.info(f"Generating masterframes for group {self._current_group+1} in CPU")
         else:
-            calc_function = combine_images_with_cupy
+            calc_function = combine_images_with_subprocess
             self.logger.info(f"Generating masterframes for group {self._current_group+1} in GPU device {device_id}")
 
         st = time.time()
@@ -255,18 +262,22 @@ class Preprocess(BaseSetup):
                 if not os.path.exists(output_data) or self.overwrite:
                     self._generate_masterframe(dtype, device_id, calc_function)
                 else:
-                    self._fetch_masterframe(output_data, dtype, device_id)
+                    self._fetch_masterframe(output_data, dtype)
             elif isinstance(output_data, str) or len(output_data) > 0:
-                self._fetch_masterframe(output_data, dtype, device_id)
+                self._fetch_masterframe(output_data, dtype)
             else:
                 self.logger.warning(f"No input or output data for {dtype}")
                 self.logger.debug(f"{dtype}_input: {input_data}")
                 self.logger.debug(f"{dtype}_output: {output_data}")
-
+        
+        
+        self.generate_bpmask()
         self.logger.info(f"Generation/Loading of masterframes completed in {time_diff_in_seconds(st)} seconds")
 
     def _generate_masterframe(self, dtype, device_id, calc_function=None):
         """Generate & Save masterframe and sigma image"""
+
+        st = time.time()
 
         if self._use_gpu:
             self.logger.info(f"Generating master {dtype} in GPU device {device_id}")
@@ -277,53 +288,48 @@ class Preprocess(BaseSetup):
         header = self.get_header(dtype)
 
         if calc_function is None:
-            calc_function = combine_images_with_cupy
+            calc_function = combine_images_with_subprocess
 
         if dtype == "bias":
-            median, std, leakage = calc_function(input_data, device_id=device_id)
-            self.bias_data = median
+            calc_function(input_data, device_id=device_id, output=self.bias_output, sig_output=self.biassig_output)
 
         elif dtype == "dark":
-            median, std, leakage = calc_function(
+            calc_function(
                 input_data,
                 device_id=device_id,
-                subtract=self.bias_data,
+                subtract=[self.bias_output],
+                scale=[1],
+                output=self.dark_output, 
+                sig_output=self.darksig_output,
+                make_bpmask = self.bpmask_output,
+                bpmask_sigma = self.config.preprocess.n_sigma
             )
-            self.dark_data = median
             self.dark_exptime = header[HEADER_KEY_MAP["exptime"]]
-            n_sigma = self.config.preprocess.n_sigma
-            self.generate_bpmask(median, n_sigma=n_sigma, header=header, device_id=device_id)
 
         elif dtype == "flat":
             dark_scale = self._calc_dark_scale(header[HEADER_KEY_MAP["exptime"]], self.dark_exptime)
-            median, std, leakage = calc_function(
-                input_data, subtract=(self.bias_data + self.dark_data * dark_scale), norm=True, device_id=device_id
+            calc_function(
+                input_data, 
+                subtract=[self.bias_output, self.dark_output],
+                scale=[1, dark_scale], 
+                norm=True, 
+                device_id=device_id,
+                output=self.flat_output,
+                sig_output=self.flatsig_output
             )
-            self.flat_data = median
 
-        fits.writeto(
-            getattr(self, f"{dtype}sig_output"),
-            data=std,
-            header=header,
-            overwrite=True,
-        )
-        self.logger.info(f"FITS Written: {getattr(self, f'{dtype}sig_output')}")
+        update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), header)
 
         header = prep_utils.add_image_id(header)
-        header = record_statistics(median, header, device_id=device_id)
+        header = record_statistics(getattr(self, f"{dtype}_output"), header, device_id=device_id)
+        
+        update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
 
-        fits.writeto(
-            getattr(self, f"{dtype}_output"),
-            data=median,
-            header=header,
-            overwrite=True,
-        )
+        self.logger.info(f"Master {dtype} generated in {time_diff_in_seconds(st)} seconds")
+        self.logger.debug(f"FITS Written: {getattr(self, f'{dtype}_output')}")
 
-        self.logger.info(f"FITS Written: {getattr(self, f'{dtype}_output')}")
 
-        del median
-
-    def _fetch_masterframe(self, template, dtype, device_id):
+    def _fetch_masterframe(self, template, dtype):
         self.logger.info(f"Fetching master {dtype}")
         # existing_data can be either on-date or off-date
         max_offset = self.config.preprocess.max_offset
@@ -335,14 +341,39 @@ class Preprocess(BaseSetup):
                 f"No pre-existing master {dtype} found in place of {template} wihin {max_offset} days"
             )
 
-        data = fits.getdata(existing_mframe_file).astype(np.float32)
-        setattr(self, f"{dtype}_data", data)
         setattr(self, f"{dtype}_output", existing_mframe_file)
-
+        self._set_raw_group(f"{dtype}_output", existing_mframe_file)
+        
         if dtype == "dark":
             self.dark_exptime = get_header(existing_mframe_file)[HEADER_KEY_MAP["exptime"]]
 
     
+    def prepare_headers(self):
+
+        st = time.time()
+        n_head_blocks = self.config.preprocess.n_head_blocks
+        bias, dark, flat = self.bias_output, self.dark_output, self.flat_output
+
+        # Write results
+        for raw_file, processed_file in zip(self.sci_input, self.sci_output):
+            header = fits.getheader(raw_file)
+            header["SATURATE"] = prep_utils.get_saturation_level(
+                header, bias, dark, flat
+            )
+            header = prep_utils.write_IMCMB_to_header(
+                header, [bias, dark, flat, raw_file]
+            )
+            header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
+        
+            write_header_into_file(processed_file, header)
+            # with fits.open(processed_file, mode="update") as hdul:
+            #     hdul[0].header = header
+            #     hdul.flush()
+   
+        self.logger.info(
+            f"Prepare image headers for group {self._current_group+1} in {time_diff_in_seconds(st)} seconds."
+        )
+
     def data_reduction(self, device_id=None, use_gpu: bool = True):
         self._use_gpu = all([use_gpu, self._use_gpu])
 
@@ -350,8 +381,7 @@ class Preprocess(BaseSetup):
             self.logger.info(f"No science frames found in group {self._current_group + 1}, skipping data reduction.")
             self.all_results = None
             # delete bypassing custom getattr
-            del self.bias_data, self.dark_data, self.flat_data
-
+            
             return
 
         flag = [os.path.exists(file) for file in self.sci_output]
@@ -374,38 +404,12 @@ class Preprocess(BaseSetup):
             self.sci_input, self.bias_output, self.dark_output, self.flat_output, device_id=device_id, output_paths=self.sci_output, use_gpu=self._use_gpu
         )
 
-        del self.bias_data, self.dark_data, self.flat_data, results
-
         self.logger.info(
             f"Completed data reduction for {len(self.sci_input)} images in group {self._current_group+1} in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self.sci_input):.1f} s/image)"
         )
         
         
-    def update_headers(self):
 
-        st = time.time()
-        n_head_blocks = self.config.preprocess.n_head_blocks
-        bias, dark, flat = self.bias_output, self.dark_output, self.flat_output
-
-        # Write results
-        for raw_file, processed_file in zip(self.sci_input, self.sci_output):
-            header = fits.getheader(raw_file)
-            header["SATURATE"] = prep_utils.get_saturation_level(
-                header, bias, dark, flat
-            )
-            header = prep_utils.write_IMCMB_to_header(
-                header, [bias, dark, flat, raw_file]
-            )
-            header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
-
-            with fits.open(processed_file, mode="update") as hdul:
-                hdul[0].header = header
-                hdul.flush()
-   
-        self.all_results = None
-        self.logger.info(
-            f"Updated image headers for group {self._current_group+1} in {time_diff_in_seconds(st)} seconds."
-        )
 
     def make_plots(self, group_index=None):
         st = time.time()
@@ -449,11 +453,9 @@ class Preprocess(BaseSetup):
             f"Completed plot generation for images in group {group_index+1} in {time_diff_in_seconds(st)} seconds"
         )
 
-    def generate_bpmask(self, data, n_sigma=5, header=None, device_id=0):
-        hot_mask = sigma_clipped_stats(
-            data, device_id=device_id, sigma=3, maxiters=5, hot_mask=True, hot_mask_sigma=n_sigma
-        )
-
+    def generate_bpmask(self):
+        header = self.get_header("dark")
+        hot_mask = fits.getdata(self.bpmask_output)
         newhdu = fits.CompImageHDU(data=hot_mask)
         if header:
             for key in [
@@ -471,9 +473,10 @@ class Preprocess(BaseSetup):
                 newhdu.header[key] = header[key]
             newhdu.header["COMMENT"] = "Header inherited from first dark frame"
         newhdu.header["NHOTPIX"] = (np.sum(hot_mask), "Number of hot pixels.")
-        newhdu.header["SIGMAC"] = (n_sigma, "HP threshold in clipped sigma")
+        newhdu.header["SIGMAC"] = (self.config.preprocess.n_sigma, "HP threshold in clipped sigma")
         newhdu.header["BADPIX"] = (1, "Pixel Value for Bad pixels")
 
         primary_hdu = fits.PrimaryHDU()
         newhdul = fits.HDUList([primary_hdu, newhdu])
         newhdul.writeto(self.bpmask_output, overwrite=True)
+        

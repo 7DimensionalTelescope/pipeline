@@ -16,7 +16,6 @@ class FileCreationHandler(FileSystemEventHandler):
         if not event.is_directory and event.src_path.endswith(self.target_file):
             self.created = True
 
-
 def wait_for_masterframe(file_path, timeout=1800):
     """
     Wait for a file to be created using watchdog with timeout.
