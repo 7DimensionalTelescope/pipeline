@@ -359,7 +359,6 @@ class Preprocess(BaseSetup):
         if dtype == "dark":
             self.dark_exptime = get_header(existing_mframe_file)[HEADER_KEY_MAP["exptime"]]
 
-    
     def prepare_headers(self):
 
         st = time.time()
@@ -386,12 +385,9 @@ class Preprocess(BaseSetup):
         if not self.sci_input:
             self.logger.info(f"No science frames found in group {self._current_group + 1}, skipping data reduction.")
             self.all_results = None
-            # del self.bias_data, self.dark_data, self.flat_data
-            # delete bypassing custom getattr
             for attr in ("bias_data", "dark_data", "flat_data"):
                 if attr in self.__dict__:
                     del self.__dict__[attr]
-
             return
 
         flag = [os.path.exists(file) for file in self.sci_output]
