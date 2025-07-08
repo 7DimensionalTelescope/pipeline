@@ -13,9 +13,22 @@ import time
 from watchdog.observers import Observer
 
 from .services.monitor import Monitor
+from .services.queue import QueueManager, Priority
+
+from .services.logger import Logger
+from .services.task import Task
+
+# from .base import ObservationDataSet, CalibrationData
 from .services.queue import QueueManager
 
 
+def run_preprocess(config, make_plots=False):
+    config = PreprocConfiguration.from_config(config)
+    prep = Preprocess(config)
+    prep.run(make_plots=make_plots)
+
+
+def get_preprocess_task(config, priority=Priority.HIGH, device_id=None, only_with_sci=False, make_plots=True, **kwargs):
 def run_preprocess(config, device_id=None, only_with_sci=False, make_plots=True, **kwargs):
     """
     Generate master calibration frames for a specific observation set.
