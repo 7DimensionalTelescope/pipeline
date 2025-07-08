@@ -1,6 +1,68 @@
 from numba import njit, prange
 import numpy as np
+import cupy as cp
+from astropy.io import fits
 
+def interpolate_masked_pixels(images, mask, window=1, method=None, badpix=None, weight=True, device=None):
+
+    cpu_buffer = np.empty(mask.shape)
+    if weight:
+        cpu_buffer_weight = np.empty(mask.shape)
+    else:
+        cpu_buffer_weight = None
+
+    output = []
+    output_weight = []
+
+    if device and device != "CPU":
+        with cp.cuda.Device(device):
+            mask = cp.asarray(mask)
+
+    for (o, w) in images:
+        cpu_buffer[:] = fits.getdata(o)
+
+        if weight:
+            cpu_buffer_weight[:] = fits.getdata(w)
+
+        if device and device != "CPU":
+            with cp.cuda.Device(device):
+                gpu_buffer = cp.asarray(cpu_buffer)
+                gpu_buffer[:] = gpu_buffer.astype(cp.float32)
+                
+                if weight:
+                    gpu_buffer_weight = cp.asarray(cpu_buffer_weight)
+                    gpu_buffer_weight = gpu_buffer_weight.astype(cp.float32)
+                    gpu_buffer[:], gpu_buffer_weight[:] = interpolate_masked_pixels_gpu_vectorized_weight(
+                        gpu_buffer, mask, window=window, method=method, badpix=badpix, weight=gpu_buffer_weight
+                    )
+                else:
+                    gpu_buffer[:] = interpolate_masked_pixels_gpu_vectorized(
+                        gpu_buffer, mask, window=window, method=method, badpix=badpix
+                    )
+                    gpu_buffer_weight = None
+
+                cpu_buffer[:] = cp.asnumpy(gpu_buffer)
+                output.append(cpu_buffer.copy())
+
+                if weight:
+                    cpu_buffer_weight[:] = cp.asnumpy(gpu_buffer_weight)
+                    output_weight.append(cpu_buffer_weight.copy())
+        else:
+            cpu_buffer[:] = interpolate_masked_pixels_cpu_numba(
+                cpu_buffer, mask, window=window
+            )
+            output.append(cpu_buffer.copy())
+    
+    if device and device != "CPU":
+        with cp.cuda.Device(device):
+            del gpu_buffer, gpu_buffer_weight, mask
+            cp.get_default_memory_pool().free_all_blocks()
+    
+    del cpu_buffer
+
+    return output, output_weight
+    
+        
 @njit(parallel=True)
 def interpolate_masked_pixels_cpu_numba(image, mask, window=1):
     assert image.shape == mask.shape
@@ -318,7 +380,7 @@ def interpolate_masked_pixels_gpu_vectorized_weight(
         interp_vals = cp.nanmedian(patch_vals, axis=1)
 
         result[ys, xs] = interp_vals
-        return result
+        return result, None
 
 
 def add_bpx_method(header, method):

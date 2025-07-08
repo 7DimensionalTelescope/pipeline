@@ -383,6 +383,7 @@ class NameHandler:
 
     @staticmethod
     def _parse_raw(parts):
+        """only TCSpy has support for underscore-containing object names"""
         if parts[1] in ["", "BIAS", "DARK", "FLAT", "LIGHT"]:
             # NINA
             unit = parts[0]
@@ -406,10 +407,11 @@ class NameHandler:
             unit = parts[0]
             date = parts[1]
             hms = parts[2]
-            obj = parts[3]
-            filt = parts[4]
-            nb = strip_binning(parts[5])
-            exptime = strip_exptime(parts[6])
+            obj = "_".join(parts[3:-4])  # for objects containing "_"
+            filt = parts[-4]
+            nb = strip_binning(parts[-3])
+            exptime = strip_exptime(parts[-2])
+            # parts[-1] is the file numbering. e.g., 0001
 
         gain = None
         camera = None
@@ -789,7 +791,7 @@ class NameHandler:
         token_to_index: dict[str, int] = {}
         category_map = {
             0: {"master", "raw", "calibrated"},
-            1: {"bias", "dark", "flat", "science"},
+            1: {"bias", "dark", "flat", "science", "calib", "calibration"},
             2: {"single", "coadded"},
             3: {"difference"},
             4: {"image", "weight", "catalog"},
@@ -797,6 +799,8 @@ class NameHandler:
         for idx, nameset in category_map.items():
             for name in nameset:
                 token_to_index[name] = idx
+
+        calib_types = {"bias", "dark", "flat"}
 
         # 3) For each requested token, verify it’s valid and record its index
         requested: list[tuple[int, str]] = []
@@ -808,12 +812,20 @@ class NameHandler:
         # 4) Now filter: keep only those files where all (index,token) match
         matches: list[str] = []
         for i, file in enumerate(self.input):
-            typ_tuple = self.type[i]  # e.g. ("raw", "dark", "single", None, "image")
+            types = self.type  # not a list if self._single
+            typ_tuple = types[i] if isinstance(types, list) else types  # e.g. ("raw", "dark", "single", None, "image")
             ok = True
             for idx, tok in requested:
-                if typ_tuple[idx] != tok:
-                    ok = False
-                    break
+                if tok in ("calib", "calibration"):
+                    # match any of bias/dark/flat
+                    if typ_tuple[idx] not in calib_types:
+                        ok = False
+                        break
+                else:
+                    # exact match
+                    if typ_tuple[idx] != tok:
+                        ok = False
+                        break
             if ok:
                 matches.append(file)
 

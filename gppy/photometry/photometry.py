@@ -212,7 +212,7 @@ class PhotometrySingle:
         ref_catalog: str = "GaiaXP",
         total_image: int = 1,
         trust_header_seeing=False,
-        check_filter=False,
+        check_filter=True,
         calculate_zp=True,
     ) -> None:
         """Initialize PhotometrySingle instance."""

@@ -160,7 +160,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
     Currently lacks masterframe support
     """
 
-    def __init__(self, input: Union[str, Path, list[str | Path]] = None, *, working_dir=None, check_coherence=True):
+    def __init__(self, input: Union[str, Path, list[str | Path]] = None, *, working_dir=None):
         self._name_cache = {}  # Cache for NameHandler properties
         self._file_indep_initialized = False
         self._file_dep_initialized = False
@@ -168,7 +168,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
         self._config = None
         self._input_files: list[str] = None
 
-        self._handle_input(input, check_coherence=check_coherence)
+        self._handle_input(input)
         self.select_output_dir(working_dir=working_dir)
 
         self.define_file_independent_paths()
@@ -179,7 +179,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
         # if self._file_indep_initialized and self._file_dep_initialized:
         self.define_operation_paths()
 
-    def _handle_input(self, input, check_coherence=True):
+    def _handle_input(self, input):
         """init with obs_parmas and config are ad-hoc. Will be changed to always take filenames"""
 
         if input is None:
@@ -187,8 +187,15 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
         # elif isinstance(input, list) or isinstance(input, (str, Path)):
 
         # Normalize input to list
-        if not isinstance(input, list):
+        if isinstance(input, list):
+            pass
+        elif isinstance(input, (str, Path)):
             input = [input]
+        elif isinstance(input, np.ndarray):
+            input = list(input)
+        else:
+            raise ValueError("Invalid PathHandler input type.")
+
         self._input_files = [os.path.abspath(img) for img in input]
         try:
             self.name = NameHandler(input)
@@ -399,16 +406,17 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
 
     @property
     def preproc_output_yml(self) -> str:
-        config_stems = self._config_stem if hasattr(self, "_config_stem") and self._config_stem else "preproc_config"
-        return [os.path.join(d, f"{s}.yml") for d, s in zip(self._preproc_output_dir, config_stems)]
+        config_stems = self.config_stem if hasattr(self, "config_stem") and self.config_stem else "preproc_config"
+        # return [os.path.join(d, f"{s}.yml") for d, s in zip(self._preproc_output_dir, config_stems)]
+        return bjoin(self._preproc_output_dir, [f"{s}.yml" for s in atleast_1d(config_stems)])
 
     @property
     def preproc_output_log(self):
-        # return swap_ext(self.preproc_output_yml, "log")
-        if isinstance(self.preproc_output_yml, str):
-            return swap_ext(self.preproc_output_yml, "log")
-        else:
-            return [swap_ext(s, "log") for s in self.preproc_output_yml]
+        return swap_ext(self.preproc_output_yml, "log")
+        # if isinstance(self.preproc_output_yml, str):
+        #     return swap_ext(self.preproc_output_yml, "log")
+        # else:
+        #     return [swap_ext(s, "log") for s in self.preproc_output_yml]
 
     @property
     def sciproc_output_yml(self):
@@ -614,6 +622,13 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
     @property
     def obs_params(self):
         return self.name.to_dict()
+
+    def pick_type(self, typ):
+        return self.name.pick_type(typ)
+
+    def filter_by(self, attr, val):
+        attrs = getattr(self.name, attr)
+        return [f for f, a in zip(self._input_files, attrs) if a == val]
 
     # @classmethod
     # def from_grouped_calib(cls, sci_files, on_date_calib):
