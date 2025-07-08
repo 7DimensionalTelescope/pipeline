@@ -20,7 +20,7 @@ from .services.queue import QueueManager, Priority
 from .services.logger import Logger
 from .services.task import Task
 
-#from .base import ObservationDataSet, CalibrationData
+# from .base import ObservationDataSet, CalibrationData
 
 
 def run_preprocess(config, make_plots=False):
@@ -28,7 +28,8 @@ def run_preprocess(config, make_plots=False):
     prep = Preprocess(config)
     prep.run(make_plots=make_plots)
 
-def get_preprocess_task(config, priority=Priority.HIGH, device_id = None, only_with_sci=False, make_plots=True, **kwargs):
+
+def get_preprocess_task(config, priority=Priority.HIGH, device_id=None, only_with_sci=False, make_plots=True, **kwargs):
     """
     Generate master calibration frames for a specific observation set.
 
@@ -38,10 +39,17 @@ def get_preprocess_task(config, priority=Priority.HIGH, device_id = None, only_w
     """
     config = PreprocConfiguration.from_config(config)
     prep = Preprocess(config)
-    run_task = Task(prep.run, kwargs={"make_plots": make_plots, "only_with_sci": only_with_sci}, gpu=True, priority=priority, device=device_id)
+    run_task = Task(
+        prep.run,
+        kwargs={"make_plots": make_plots, "only_with_sci": only_with_sci},
+        gpu=True,
+        priority=priority,
+        device=device_id,
+    )
     return run_task
 
-def run_scidata_reduction(config):
+
+def run_scidata_reduction(config, processes=["astrometry", "photometry", "combine", "subtract"]):
     config = SciProcConfiguration.from_config(config)
     if (not (config.config.flag.astrometry) and "astrometry" in processes) or overwrite:
         astr = Astrometry(config)
@@ -63,7 +71,8 @@ def run_scidata_reduction(config):
         subt = ImSubtract(config)
         subt.run()
         del subt
-    
+
+
 def get_scidata_reduction_tasktree(
     config,
     processes=["astrometry", "photometry", "combine", "subtract"],
