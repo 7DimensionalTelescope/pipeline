@@ -96,6 +96,7 @@ class ImStack(BaseSetup):
                 else:
                     from ..services.utils import get_best_gpu_device
 
+
                     self._device_id = get_best_gpu_device()
                     self.config.imstack.device = self._device_id
         else:
@@ -103,6 +104,7 @@ class ImStack(BaseSetup):
 
         if not (check_gpu_availability(self._device_id)):
             self._device_id = "CPU"
+
 
         return self._device_id
 
@@ -350,12 +352,12 @@ class ImStack(BaseSetup):
         """Retains cpu support as a code template"""
         st = time.time()
         self._use_gpu = all([use_gpu, self.config.imstack.gpu, self._use_gpu])
-        self.logger.info(f"Start weight-map calculation with {'GPU' if self._use_gpu else 'CPU'}")
         # pick xp and device‐context based on GPU flag
         if self._use_gpu:
             device_id = self.get_device_id(device_id)
         else:
             device_id = "CPU"
+        self.logger.info(f"Start weight-map calculation with device_id: {device_id}")
 
         bkgsub_images = self.config.imstack.bkgsub_images
         self.config.imstack.bkgsub_weight_images = []

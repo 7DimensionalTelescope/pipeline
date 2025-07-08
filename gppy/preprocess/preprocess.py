@@ -101,7 +101,7 @@ class Preprocess(BaseSetup):
                 continue
 
             self.load_masterframe(device_id=device_id)
-            
+
             if not self.master_frame_only:
                 self.prepare_headers()
                 self.data_reduction(device_id=device_id)
@@ -173,12 +173,6 @@ class Preprocess(BaseSetup):
                 else:
                     return self.raw_groups[group_index][1][self._key_to_index[key]]
         raise AttributeError(f"Attribute {name} not found")
-
-    def _set_raw_group(self, name, value):
-        if name.endswith("_output"):
-            key = name[:4]  # strip "_output" (e.g., bias_output)
-            if key in self._key_to_index:
-                self.raw_groups[self._current_group][1][self._key_to_index[key]] = value
 
     def _parse_sci_list(self, group_index, dtype="input"):
         l = []
@@ -334,6 +328,7 @@ class Preprocess(BaseSetup):
         # existing_data can be either on-date or off-date
         max_offset = self.config.preprocess.max_offset
         self.logger.debug(f"Masterframe Search Template: {template}")
+
         existing_mframe_file = prep_utils.search_with_date_offsets(template, max_offset=max_offset)
 
         if not existing_mframe_file:
@@ -342,7 +337,12 @@ class Preprocess(BaseSetup):
             )
 
         setattr(self, f"{dtype}_output", existing_mframe_file)
-        self._set_raw_group(f"{dtype}_output", existing_mframe_file)
+
+        output = list(self.raw_groups[self._current_group])
+        next_output = list(output[1])
+        next_output[self._key_to_index[dtype]] = existing_mframe_file
+        output[1] = tuple(next_output)
+        self.raw_groups[self._current_group] = tuple(output)
         
         if dtype == "dark":
             self.dark_exptime = get_header(existing_mframe_file)[HEADER_KEY_MAP["exptime"]]
@@ -366,9 +366,7 @@ class Preprocess(BaseSetup):
             header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
         
             write_header_into_file(processed_file, header)
-            # with fits.open(processed_file, mode="update") as hdul:
-            #     hdul[0].header = header
-            #     hdul.flush()
+
    
         self.logger.info(
             f"Prepare image headers for group {self._current_group+1} in {time_diff_in_seconds(st)} seconds."
@@ -408,8 +406,6 @@ class Preprocess(BaseSetup):
             f"Completed data reduction for {len(self.sci_input)} images in group {self._current_group+1} in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self.sci_input):.1f} s/image)"
         )
         
-        
-
 
     def make_plots(self, group_index=None):
         st = time.time()
@@ -419,7 +415,9 @@ class Preprocess(BaseSetup):
         self.logger.info(f"Generating plots for master calibration frames of group {group_index+1}")
         use_multi_thread = self.config.preprocess.use_multi_thread
 
-        plot_bias(self._get_raw_group("bias_output", group_index), savefig=True)
+        bias_file = self._get_raw_group("bias_output", group_index)
+        if prep_utils.wait_for_masterframe(bias_file, timeout=10):
+            plot_bias(bias_file, savefig=True)
         mask = plot_bpmask(self._get_raw_group("bpmask_output", group_index), savefig=True)
         sample_header = fits.getheader(self._get_raw_group("bpmask_output", group_index), ext=1)
         if "BADPIX" in sample_header.keys():

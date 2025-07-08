@@ -752,5 +752,4 @@ def write_header_into_file(filename, header):
         filename = filename.replace(".fits", ".header")
         
     with open(filename, "w") as f:
-        for card in header.cards:
-            f.write(f"{card.card:80s}\n") 
+        f.write(header.tostring(sep='\n')) 
