@@ -73,6 +73,7 @@ class SciProcConfiguration(BaseConfig):
 
         self.config.input.calibrated_images = atleast_1d(input_images)
         # self.config.name = "user-input"
+        self.config.name = self.config.name or self.name
         self.config.settings.is_pipeline = False
         self.config._initialized = True
         return self
