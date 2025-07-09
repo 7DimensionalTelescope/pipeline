@@ -44,6 +44,9 @@ class ImStack(BaseSetup):
         self._use_gpu = use_gpu
         self._flag_name = "combine"
 
+        if self.config.settings.is_pipeline:
+            self.config.imstack.convolve = False
+
     @classmethod
     def from_list(cls, input_images, working_dir=None):
         """use soft link if files are from different directories"""
@@ -401,7 +404,7 @@ class ImStack(BaseSetup):
                     # "--p_d",        str(p_d),
                     # "--p_z",        str(p_z),
                     # "--p_f",        str(p_f),
-                    "--device",     str(device_id),
+                    "--device",     f"{device_id}",
                 ] + uncalculated_images  # fmt: skip
 
                 self.logger.debug(f"ImStack weight map command: {cmd}")
@@ -473,26 +476,29 @@ class ImStack(BaseSetup):
                 continue
             else:
                 if weight:
-                    uncalculated_images.append([input_image_file, input_weight_file])
+                    uncalculated_images.append([input_image_file, add_suffix(input_image_file, "weight")])
                 else:
                     uncalculated_images.append([input_image_file, None])
 
+        # run
         outputs, output_weights = interpolate_masked_pixels(
             uncalculated_images, bpmask_array, method=method, badpix=badpix, device=device_id, weight=weight
         )
 
+        # save the result
         for (input_image_file, input_weight_file), output, output_weight in zip(
             uncalculated_images, outputs, output_weights
         ):
             if weight:
-                input_weight_file = add_suffix(input_image_file, "weight")
                 output_weight_file = add_suffix(output_file, "weight")
+                self.logger.debug(f"Writing to {output_weight_file}")
                 fits.writeto(
                     output_weight_file,
                     data=output_weight,
                     header=add_bpx_method(fits.getheader(input_weight_file), method),
                     overwrite=True,
                 )
+            self.logger.debug(f"Writing to {output_file}")
             fits.writeto(
                 output_file,
                 data=output,
