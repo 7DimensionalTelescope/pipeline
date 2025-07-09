@@ -1,5 +1,5 @@
 import multiprocess as mp
-import queue 
+import queue
 import threading
 import time
 import signal
@@ -16,8 +16,10 @@ from ..utils import time_diff_in_seconds
 signal.signal(signal.SIGINT, signal.SIG_IGN)
 mp.set_start_method("spawn", force=True)
 
+
 class AbruptStopException(Exception):
     """Custom exception to signal abrupt stop processing."""
+
     pass
 
 
@@ -42,12 +44,12 @@ class QueueManager:
         self.logger.debug(f"Initialize QueueManager.")
 
         # Default CPU allocation
-        self.total_cpu_worker = max_workers or 60
+        self.total_cpu_worker = max_workers or 10
 
         # Create CPU queues (thread-safe)
         self.processing_queue = queue.PriorityQueue()  # Priority queue for CPU tasks
         self.completion_queue = queue.Queue()
-        
+
         # Process pool for CPU tasks
         self.pool = mp.Pool(processes=self.total_cpu_worker)
 
@@ -65,6 +67,7 @@ class QueueManager:
         try:
             get_ipython  # Check if running in Jupyter
             from ipykernel.kernelbase import Kernel
+
             Kernel.raw_interrupt_handler = self._jupyter_interrupt_handler
         except (NameError, ImportError):
             pass
@@ -76,23 +79,17 @@ class QueueManager:
 
         self.save_result = save_result
         self.logger.debug("QueueManager Initialization complete")
-    
+
     def _start_workers(self):
         # Initialize task tracking
         self._stop_event = threading.Event()
-        
+
         # Start the task completion handler thread
-        self.completion_thread = threading.Thread(
-            target=self._completion_worker,
-            daemon=True
-        )
+        self.completion_thread = threading.Thread(target=self._completion_worker, daemon=True)
         self.completion_thread.start()
-        
+
         # Start the task distributor thread
-        self.processing_thread = threading.Thread(
-            target=self._processing_worker,
-            daemon=True
-        )
+        self.processing_thread = threading.Thread(target=self._processing_worker, daemon=True)
 
         self.processing_thread.start()
 
@@ -150,7 +147,7 @@ class QueueManager:
         if self._abrupt_stop_requested.is_set():
             self.logger.warning("Cannot add task. Abrupt stop is active.")
             return None
-        
+
         if isinstance(func, Task):
             task = func
             self.tasks.append(task)
@@ -176,16 +173,13 @@ class QueueManager:
 
             # Process synchronously
             self.tasks.append(task)
-        
+
         self.processing_queue.put((task.priority, task))
 
-        self.logger.info(
-            f"Added task {task.task_name} (id: {task_id}) with priority {priority}"
-        )
+        self.logger.info(f"Added task {task.task_name} (id: {task_id}) with priority {priority}")
         time.sleep(0.1)
-    
-        return task_id
 
+        return task_id
 
     ######### Task processing #########
     def _processing_worker(self):
@@ -208,33 +202,34 @@ class QueueManager:
         while not self._abrupt_stop_requested.is_set():
             try:
                 self._check_abrupt_stop()
-                
+
                 # First check high priority queue
                 try:
                     # Unpack the priority queue item (priority, task)
                     _, task = self.processing_queue.get(timeout=0.2)
                 except queue.Empty:
                     task = None
-          
+
                 if task is None:
                     time.sleep(0.2)
                     continue
-                    
+
                 task.status = "processing"
                 task.starttime = datetime.now()
-                
+
                 try:
                     async_result = self.pool.apply_async(
                         task_wrapper, args=(task,), callback=callback, error_callback=errback
                     )
                 except Exception as e:
                     import traceback
+
                     self.logger.error(f"Error in processing worker: {e}")
                     errback(e)
                     time.sleep(0.5)
                     traceback.print_exc()
                     raise
-            
+
             except AbruptStopException:
                 self.logger.info(f"Processing worker stopped.")
                 break
@@ -255,7 +250,7 @@ class QueueManager:
                                 submitted_task.status = "failed"
                             else:
                                 submitted_task.status = "completed"
-                                
+
                                 if self.save_result:
                                     submitted_task.result = result
                                     self.results.append(result)
@@ -266,13 +261,15 @@ class QueueManager:
                     task.endtime = datetime.now()
                     submitted_task.endtime = datetime.now()
                     submitted_task.error = error
-                    
-                self.logger.info(f"Completed task {task.task_name} (id: {task.id}) in {time_diff_in_seconds(task.starttime, task.endtime)} seconds")
+
+                self.logger.info(
+                    f"Completed task {task.task_name} (id: {task.id}) in {time_diff_in_seconds(task.starttime, task.endtime)} seconds"
+                )
             except Exception as e:
                 self.logger.error(f"Error in completion worker: {e}")
                 time.sleep(0.2)
                 continue
-                
+
     def stop_processing(self, *args):
         """
         Gracefully stop all task processing.
@@ -292,24 +289,24 @@ class QueueManager:
             Exception: If an error occurs during the shutdown process
         """
         try:
-            if hasattr(self, '_stop_event') and self._stop_event.is_set():
+            if hasattr(self, "_stop_event") and self._stop_event.is_set():
                 self.logger.warning("Stop already in progress")
                 return
 
             self.logger.info("Initiating graceful shutdown...")
-            
+
             # Signal all threads to stop
-            if hasattr(self, '_stop_event'):
+            if hasattr(self, "_stop_event"):
                 self._stop_event.set()
             self._abrupt_stop_requested.set()
-            
+
             # Clear queues
             while not self.processing_queue.empty():
                 try:
                     self.processing_queue.get_nowait()
                 except queue.Empty:
                     break
-                
+
             while not self.completion_queue.empty():
                 try:
                     self.completion_queue.get_nowait()
@@ -318,18 +315,18 @@ class QueueManager:
 
             # Wait for pool tasks to complete
             self.logger.info("Waiting for process pool tasks to complete...")
-            
+
             # Terminate the pool
             self.cpu_pool.close()
             self.cpu_pool.terminate()
             self.cpu_pool.join()
             self.logger.info("Process pool terminated")
-                
+
             # Wait for all threads to finish
             self.processing_thread.join(timeout=2.0)
-                
+
             self.completion_thread.join(timeout=2.0)
-                
+
             # Log shutdown details
             self.logger.info("All task processing stopped")
 
@@ -340,7 +337,7 @@ class QueueManager:
     def _check_abrupt_stop(self):
         """
         Check if abrupt stop has been requested.
-        
+
         Raises AbruptStopException if abrupt stop is active.
         Provides a mechanism to gracefully exit long-running tasks.
         """
@@ -357,7 +354,7 @@ class QueueManager:
 
         self._abrupt_stop_requested.set()
         self.logger.warning("Abrupt stop initiated. Terminating all processes...")
-        
+
         try:
             # Clear CPU queues
             while not self.processing_queue.empty():
@@ -376,9 +373,7 @@ class QueueManager:
             self.logger.info("Abrupt stop completed. Terminating process.")
             os._exit(0)
 
-    def wait_until_task_complete(
-        self, task_id: Union[str, List[str]], timeout: Optional[float] = None
-    ):
+    def wait_until_task_complete(self, task_id: Union[str, List[str]], timeout: Optional[float] = None):
         """
         Wait until the specified task(s) complete or until timeout.
 
@@ -407,7 +402,9 @@ class QueueManager:
             if timeout is not None and time.time() - start_time > timeout:
                 return False
 
-            task_ids = [tid for tid in task_ids if any(task.id == tid and task.status != "completed" for task in self.tasks)]
+            task_ids = [
+                tid for tid in task_ids if any(task.id == tid and task.status != "completed" for task in self.tasks)
+            ]
 
             if not task_ids:
                 return True
@@ -415,7 +412,6 @@ class QueueManager:
             time.sleep(1)
 
         return True
-
 
     def _handle_keyboard_interrupt(self, signum, frame):
         """Handle keyboard interrupt with abrupt stop mechanism."""

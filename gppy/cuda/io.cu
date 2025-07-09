@@ -44,34 +44,37 @@ void write_fits(const char* filename, const std::vector<float>& data, long width
     int status = 0;
     long naxes[2] = {width, height};
 
-    // 새 FITS 파일 생성
     fits_create_file(&fptr, filename, &status);
     if (status) {
         fits_report_error(stderr, status);
         exit(status);
     }
+    
     fits_create_img(fptr, FLOAT_IMG, 2, naxes, &status);
     if (status) {
         fits_report_error(stderr, status);
         exit(status);
     }
 
-
     std::string fits_name(filename);
-    std::string head_name;
+    std::string clean_name = fits_name;
 
-    size_t pos = fits_name.rfind(".fits");
+    if (!clean_name.empty() && clean_name[0] == '!') {
+        clean_name = clean_name.substr(1);
+    }
+
+    std::string head_name;
+    size_t pos = clean_name.rfind(".fits");
     if (pos != std::string::npos) {
-        head_name = fits_name.substr(0, pos) + ".head";
+        head_name = clean_name.substr(0, pos) + ".header";
     } else {
-        head_name = fits_name + ".head";  
+        head_name = clean_name + ".header";  
     }
 
     std::ifstream head_file(head_name);
     if (head_file.is_open()) {
         std::string line;
         while (std::getline(head_file, line)) {
-            if (line.length() > 80) line = line.substr(0, 80);
             fits_write_record(fptr, line.c_str(), &status);
             if (status) {
                 fits_report_error(stderr, status);

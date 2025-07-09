@@ -5,9 +5,11 @@ import argparse
 import sys
 
 
-def combine_images_with_cupy(data, device_id=None, subtract=None, norm=False, make_bpmask=False, maxiters=5, sigma=3, bpmask_sigma=5, **kwargs):
+def combine_images_with_cupy(
+    data, device_id=None, subtract=None, norm=False, make_bpmask=False, maxiters=5, sigma=3, bpmask_sigma=5, **kwargs
+):
     """median is gpu, std is cpu"""
-    
+
     arr_shape = data[0].shape
     np_median = np.empty(arr_shape)
     np_std = np.empty(arr_shape)
@@ -19,7 +21,6 @@ def combine_images_with_cupy(data, device_id=None, subtract=None, norm=False, ma
         if subtract is not None:
             cp_subtract = cp.asarray(subtract).astype(cp.float32)
             cp_subtract = cp.sum(cp_subtract, axis=0)
-
             cp_stack -= cp_subtract
             del cp_subtract
         if norm:
@@ -39,25 +40,28 @@ def combine_images_with_cupy(data, device_id=None, subtract=None, norm=False, ma
                 mask = cp.abs(cp_data_flat - median_val) < (sigma * std_val)
                 cp_data_flat = cp_data_flat[mask]
                 del mask
-            
+
             # Final statistics on the clipped data
             median_val = cp.median(cp_data_flat)
             std_val = cp.std(cp_data_flat)
 
             cp_bpmask = cp.abs(cp_median - median_val) > bpmask_sigma * std_val  # 1 for bad, 0 for okay
             cp_bpmask = cp_bpmask.astype(cp.uint8)  # Convert to uint8
-            np_bpmask[:] = cp.asnumpy(cp_bpmask).astype(np.uint8) 
+            np_bpmask[:] = cp.asnumpy(cp_bpmask).astype(np.uint8)
             del cp_data_flat, cp_bpmask, median_val, std_val
         else:
             np_bpmask = None
 
         del cp_stack, cp_median, cp_std
         cp.get_default_memory_pool().free_all_blocks()
-    
+
     return np_median, np_std, np_bpmask
 
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Process FITS images with optional subtraction, normalization, and BPMask creation using CUDA.")
+    parser = argparse.ArgumentParser(
+        description="Process FITS images with optional subtraction, normalization, and BPMask creation using CUDA."
+    )
 
     parser.add_argument("-input", nargs="+", required=True, help="Input FITS image paths.")
     parser.add_argument("-median_out", required=True, help="Output FITS for median image.")
@@ -77,7 +81,7 @@ if __name__ == "__main__":
             print("Error: Number of subtract images and scale factors must match.", file=sys.stderr)
             sys.exit(1)
         else:
-            subtract = [fits.getdata(o)*args.scales[i] for i, o in enumerate(args.subtract)]
+            subtract = [fits.getdata(o) * args.scales[i] for i, o in enumerate(args.subtract)]
     else:
         subtract = None
 
@@ -90,13 +94,14 @@ if __name__ == "__main__":
     np_median, np_std, np_bpmask = combine_images_with_cupy(
         data,
         device_id=args.device,
-        subtract = subtract,
+        subtract=subtract,
         normalize=args.norm,
-        make_bpmask = make_bpmask,
-        bpmask_sigma = args.bpmask_sigma
+        make_bpmask=make_bpmask,
+        bpmask_sigma=args.bpmask_sigma,
     )
 
     fits.writeto(args.median_out, np_median, overwrite=True)
     fits.writeto(args.std_out, np_median, overwrite=True)
-    if args.bpmask:
+
+    if make_bpmask:
         fits.writeto(args.bpmask, np_bpmask, overwrite=True)
