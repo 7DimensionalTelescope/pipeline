@@ -415,9 +415,11 @@ class ImStack(BaseSetup):
                     print("STDOUT:\n", e.stdout)
                     print("STDERR:\n", e.stderr)
 
-            self.logger.debug(
-                f"Weight-map calculation (device={device_id}) for group {i} is completed in {time_diff_in_seconds(st_image)} seconds"
-            )
+                self.logger.debug(
+                    f"Weight-map calculation (device={device_id}) for group {i} is completed in {time_diff_in_seconds(st_image)} seconds"
+                )
+            else:
+                self.logger.info("All weight images already exist. Skipping weight map calculation")
 
             self.logger.info(
                 f"Weight-map calculation is completed in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(images):.1f} s/image)"
