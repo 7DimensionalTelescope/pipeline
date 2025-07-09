@@ -412,14 +412,6 @@ class ImStack(BaseSetup):
                 f"Weight-map calculation (device={device_id}) for group {i} is completed in {time_diff_in_seconds(st_image)} seconds"
             )
 
-            for i, img in enumerate(uncalculated_images):
-                weight_image_file = add_suffix(img, "weight")
-                fits.writeto(
-                    weight_image_file,
-                    data=output[i],
-                    overwrite=True,
-                )
-
             self.logger.info(
                 f"Weight-map calculation is completed in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(images):.1f} s/image)"
             )
