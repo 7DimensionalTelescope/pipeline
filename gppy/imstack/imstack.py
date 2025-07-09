@@ -129,7 +129,6 @@ class ImStack(BaseSetup):
             if self.config.imstack.convolve:
                 self.prepare_convolution()
                 self.run_convolution(device_id=device_id)
-                self.run_convolution(device_id=device_id, weight=True)
 
             # swarp imcombine
             self.stack_with_swarp()
