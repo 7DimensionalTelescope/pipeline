@@ -15,14 +15,14 @@ from ..const import REF_DIR, PipelineError
 from ..config import SciProcConfiguration
 from .. import external
 from ..services.setup import BaseSetup
-from ..utils import collapse, get_header, add_suffix, swap_ext, time_diff_in_seconds, get_basename, flatten
+from ..utils import collapse, get_header, add_suffix, time_diff_in_seconds, get_basename, atleast_1d, flatten
 from ..path.path import PathHandler
 
 from .utils import move_file  # inputlist_parser, move_file
 from .const import ZP_KEY, IC_KEYS, CORE_KEYS
 from .weight import calc_weight
 from .interpolate import interpolate_masked_pixels, add_bpx_method
-from .convolve import convolve_fft, add_conv_method, get_edge_mask
+from .convolve import convolve_fft, add_conv_header, get_edge_mask
 
 warnings.filterwarnings("ignore")
 
@@ -458,8 +458,6 @@ class ImStack(BaseSetup):
         for i in range(len(self.config.imstack.bkgsub_images)):
             input_image_file = self.config.imstack.bkgsub_images[i]
             output_file = self.config.imstack.interp_images[i]
-            print(f"input_image_file {input_image_file}")
-            print(f"output_file {output_file}")
 
             if os.path.exists(output_file) and not self.overwrite:
                 self.logger.debug(f"Already exists; skip generating {output_file}")
@@ -471,8 +469,6 @@ class ImStack(BaseSetup):
                 else:
                     uncalculated_images.append([input_image_file, None])
                     calculated_outputs.append([output_file, None])
-
-        print("uncalculated_images", uncalculated_images)
 
         # run
         outputs, output_weights = interpolate_masked_pixels(
@@ -573,11 +569,10 @@ class ImStack(BaseSetup):
         """
 
         method = self.config.imstack.convolve.lower()
+        self.conv_method = method
         self.logger.info(f"Prepare the convolution with {method} method")
 
-        self.kernel = []
-        self._convolved_images = []
-        self._convolved_wht_images = []
+        self.kernels = []
 
         if method == "gaussian":
             from astropy.convolution import Gaussian2DKernel
@@ -600,9 +595,11 @@ class ImStack(BaseSetup):
                 else np.max(peeings)
             )
             delta_peeings = [self._calc_delta_peeing(peeing) for peeing in peeings]
+            self.delta_peeings = delta_peeings
             self.logger.debug(f"PEEINGs: {peeings}")
 
             for i, delta_peeing in enumerate(delta_peeings):
+                # symlink images to conv output folder that don't need convolution
                 if delta_peeing is None:
                     force_symlink(self.images_to_stack[i], self.config.imstack.conv_files[i])
                     if self.config.imstack.weight_map:
@@ -610,9 +607,9 @@ class ImStack(BaseSetup):
                             add_suffix(self.images_to_stack[i], "weight"),
                             add_suffix(self.config.imstack.conv_files[i], "weight"),
                         )
-                    self.kernel.append(None)
+                    self.kernels.append(None)
                 else:
-                    self.kernel.append(
+                    self.kernels.append(
                         Gaussian2DKernel(x_stddev=delta_peeing / (np.sqrt(8 * np.log(2))))
                     )  # 8*sig + 1 sized
 
@@ -623,6 +620,7 @@ class ImStack(BaseSetup):
         from .convolve import convolve_fft, get_edge_mask
 
         st = time.time()
+        method = self.conv_method
         self._use_gpu = all([use_gpu, self.config.imstack.gpu, self._use_gpu])
         device_id = self.get_device_id(device_id)
         if self._use_gpu:
@@ -630,44 +628,45 @@ class ImStack(BaseSetup):
         else:
             self.logger.info("Using CPU for convolution")
 
-        self._convolved_images = []
-        self._convolved_wht_images = []
+        # compute
+        kernels = [k for k in self.kernels if k is not None]
+        image_list = [f for f, k in zip(self.images_to_stack, self.kernels) if k is not None]
+        outim_list = [f for f, k in zip(self.config.imstack.conv_files, self.kernels) if k is not None]
+        delta_peeing_list = [v for v, k in zip(self.delta_peeings, self.kernels) if k is not None]
 
-        for i in range(len(self.images_to_stack)):
-            if self.kernel[i] is None:
-                self._convolved_images.append(None)
-                self._convolved_wht_images.append(None)
-                self.logger.info(
-                    f"Convolution is skipped for images due to no kernel [{i+1}/{len(self.images_to_stack)}]"
-                )
-                continue
-            inim = self.images_to_stack[i]
-            im = fits.getdata(inim)
-            convolved_im = convolve_fft(im, self.kernel[i], device_id=device_id)
-            self._convolved_images.append(convolved_im)
-            if self.config.imstack.weight_map:
-                inim_wht = add_suffix(inim, "weight")
-                if os.path.exists(inim_wht):
-                    image_list.append((inim, inim_wht))
-                else:
-                    self.logger.warning(f"Weight map not found for {inim}. Skipping.")
-        else:
-            image_list = self.images_to_stack
+        output = convolve_fft(image_list, kernels, device=device_id, apply_edge_mask=weight)
 
-        output = convolve_fft(image_list, self.kernel, device_id=device_id, apply_edge_mask=weight)
-
-        for img, out in zip(image_list, output):
-            peeing = fits.getheader(self.images_to_stack[i])["PEEING"]
-            delta_peeing = self._calc_delta_peeing(peeing)
-            if delta_peeing is None:
-                continue
-            header = add_conv_method(fits.getheader(self.images_to_stack[i]), delta_peeing, method)
+        # save
+        for inim, outim, out, delta_peeing in zip(image_list, outim_list, output, delta_peeing_list):
+            header = add_conv_header(fits.getheader(inim), delta_peeing, method)
             fits.writeto(
-                img,
-                out,
+                outim,
+                data=out,
                 header=header,
                 overwrite=True,
             )
+
+        if weight:
+            weight_list = [f for f, k in zip(PathHandler(self.images_to_stack).weight, self.kernels) if k is not None]
+            outwim_list = [f for f, k in zip(PathHandler(self.config.imstack.conv_files).weight, self.kernels) if k is not None]  # fmt:skip
+            self.logger.debug(f"weight_list {weight_list}")
+            self.logger.debug(f"outwim_list {outwim_list}")
+
+            # compute
+            if not all([os.path.exists(f) for f in atleast_1d(weight_list)]):
+                self.logger.error(f"Weight map not found for all images. Skipping.")
+            output = convolve_fft(weight_list, kernels, device=device_id, apply_edge_mask=weight)
+
+            # save
+            for inim, outim, out, delta_peeing in zip(weight_list, outwim_list, output, delta_peeing_list):
+                header = add_conv_header(fits.getheader(inim), delta_peeing, method)
+                fits.writeto(
+                    outim,
+                    data=out,
+                    header=header,
+                    overwrite=True,
+                )
+
         self.logger.info(
             f"Convolution is completed in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self.images_to_stack):.1f} s/image)"
         )
