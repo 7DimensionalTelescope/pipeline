@@ -18,7 +18,8 @@ def interpolate_masked_pixels(
     output = []
     output_weight = []
 
-    if device and device != "CPU":
+    is_gpu = device is not None and device != "CPU"
+    if is_gpu:
         with cp.cuda.Device(device):
             mask = cp.asarray(mask)
 
@@ -28,7 +29,8 @@ def interpolate_masked_pixels(
         if weight:
             cpu_buffer_weight[:] = fits.getdata(w)
 
-        if device and device != "CPU":
+        # gpu
+        if is_gpu:
             with cp.cuda.Device(device):
                 gpu_buffer = cp.asarray(cpu_buffer)
                 gpu_buffer[:] = gpu_buffer.astype(cp.float32)
@@ -51,6 +53,7 @@ def interpolate_masked_pixels(
                 if weight:
                     cpu_buffer_weight[:] = cp.asnumpy(gpu_buffer_weight)
                     output_weight.append(cpu_buffer_weight.copy())
+        # cpu
         else:
             cpu_buffer[:] = interpolate_masked_pixels_cpu_numba(cpu_buffer, mask, window=window)
             output.append(cpu_buffer.copy())
