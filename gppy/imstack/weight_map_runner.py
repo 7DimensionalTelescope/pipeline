@@ -1,8 +1,8 @@
 import argparse
 import sys
 from astropy.io import fits
-from ..utils import add_suffix  # same for add_suffix
-from .weight import calc_weight
+from gppy.utils import add_suffix  # same for add_suffix
+from gppy.imstack.weight import calc_weight
 
 
 def main():
@@ -17,8 +17,8 @@ def main():
     p.add_argument("--device", default="CPU", help="Device identifier for calc_weight")
     p.add_argument("images", nargs="+", help="List of science images to process")
 
-    uncalculated_images = args.images
     args = p.parse_args()
+    uncalculated_images = args.images
     sig_z_file, d_m_file, sig_f_file, f_m_file = args.sig_z_file, args.d_m_file, args.sig_f_file, args.f_m_file
 
     mfg_data = []

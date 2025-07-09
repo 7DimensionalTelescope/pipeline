@@ -11,7 +11,6 @@ from astropy.time import Time
 from typing import Any, List, Dict, Tuple, Optional, Union
 from contextlib import nullcontext
 import warnings
-import cupy as cp
 
 from ..const import REF_DIR, PipelineError
 from ..config import SciProcConfiguration
@@ -401,13 +400,19 @@ class ImStack(BaseSetup):
                 # "--p_d",        str(p_d),
                 # "--p_z",        str(p_z),
                 # "--p_f",        str(p_f),
-                "--device",     device_id,
+                "--device",     str(device_id),
             ] + uncalculated_images  # fmt: skip
 
             self.logger.debug(f"ImStack weight map command: {cmd}")
 
             st_image = time.time()
-            subprocess.run(cmd)  # , check=True)
+            try:
+                subprocess.run(cmd, check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as e:
+                print("COMMAND:", e.cmd)
+                print("RETURN CODE:", e.returncode)
+                print("STDOUT:\n", e.stdout)
+                print("STDERR:\n", e.stderr)
 
             self.logger.debug(
                 f"Weight-map calculation (device={device_id}) for group {i} is completed in {time_diff_in_seconds(st_image)} seconds"
@@ -454,7 +459,7 @@ class ImStack(BaseSetup):
         method = self.config.imstack.interp_type
         weight = self.config.imstack.weight_map
 
-        groups = self._group_IMCMB(self.config.imstack.interp_images)
+        groups = self._group_IMCMB(self.input_images)
         self.logger.warning(f"{len(groups)} groups detected: multi-group bpmask not implemented. Using one bpmask")
 
         uncalculated_images = []
