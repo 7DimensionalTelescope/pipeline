@@ -9,7 +9,6 @@ import numpy as np
 from astropy.io import fits
 from astropy.time import Time
 from typing import Any, List, Dict, Tuple, Optional, Union
-from contextlib import nullcontext
 import warnings
 
 from ..const import REF_DIR, PipelineError
@@ -17,7 +16,7 @@ from ..config import SciProcConfiguration
 from .. import external
 from ..services.setup import BaseSetup
 from ..utils import collapse, get_header, add_suffix, swap_ext, time_diff_in_seconds, get_basename, flatten
-from ..path.path import PathHandler, NameHandler
+from ..path.path import PathHandler
 
 from .utils import move_file  # inputlist_parser, move_file
 from .const import ZP_KEY, IC_KEYS, CORE_KEYS
@@ -426,7 +425,6 @@ class ImStack(BaseSetup):
 
         device_id = self.get_device_id(device_id)
 
-        st = time.time()
         self.logger.info("Start the interpolation for bad pixels")
 
         path_interp = os.path.join(self.path_tmp, "interp")
@@ -456,9 +454,12 @@ class ImStack(BaseSetup):
         self.logger.warning(f"{len(groups)} groups detected: multi-group bpmask not implemented. Using one bpmask")
 
         uncalculated_images = []
+        calculated_outputs = []
         for i in range(len(self.config.imstack.bkgsub_images)):
             input_image_file = self.config.imstack.bkgsub_images[i]
             output_file = self.config.imstack.interp_images[i]
+            print(f"input_image_file {input_image_file}")
+            print(f"output_file {output_file}")
 
             if os.path.exists(output_file) and not self.overwrite:
                 self.logger.debug(f"Already exists; skip generating {output_file}")
@@ -466,8 +467,12 @@ class ImStack(BaseSetup):
             else:
                 if weight:
                     uncalculated_images.append([input_image_file, add_suffix(input_image_file, "weight")])
+                    calculated_outputs.append([output_file, add_suffix(output_file, "weight")])
                 else:
                     uncalculated_images.append([input_image_file, None])
+                    calculated_outputs.append([output_file, None])
+
+        print("uncalculated_images", uncalculated_images)
 
         # run
         outputs, output_weights = interpolate_masked_pixels(
@@ -475,8 +480,8 @@ class ImStack(BaseSetup):
         )
 
         # save the result
-        for (input_image_file, input_weight_file), output, output_weight in zip(
-            uncalculated_images, outputs, output_weights
+        for (input_image_file, input_weight_file), (output_file, output_weight_file), output, output_weight in zip(
+            uncalculated_images, calculated_outputs, outputs, output_weights
         ):
             if weight:
                 output_weight_file = add_suffix(output_file, "weight")
