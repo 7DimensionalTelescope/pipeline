@@ -104,6 +104,8 @@ class Preprocess(BaseSetup):
     def run(self, device_id=None, make_plots=True, use_gpu=True, only_with_sci=False):
         self._use_gpu = all([use_gpu, self._use_gpu])
 
+        st = time.time()
+
         threads_for_making_plots = []
         for i in range(self._n_groups):
             if only_with_sci and len(self.sci_input) == 0:
@@ -128,14 +130,14 @@ class Preprocess(BaseSetup):
             for t in threads_for_making_plots:
                 t.join()
 
-        self.logger.info("Preprocess completed")
+        self.logger.info(f"Preprocessing completed in {time_diff_in_seconds(st)} seconds")
 
     def make_plot_all(self):
         st = time.time()
-        self.logger.info("Making plots for all groups")
+        self.logger.info("Generating plots for all groups")
         for i in range(self._n_groups):
             self.make_plots(i)
-        self.logger.info(f"Finished making plots for all groups in {time_diff_in_seconds(st)} seconds")
+        self.logger.info(f"Finished generating plots for all groups in {time_diff_in_seconds(st)} seconds")
 
     def proceed_to_next_group(self):
         self._current_group += 1
@@ -347,7 +349,7 @@ class Preprocess(BaseSetup):
         st = time.time()
         n_head_blocks = self.config.preprocess.n_head_blocks
         bias, dark, flat = self.bias_output, self.dark_output, self.flat_output
-
+        self._header = []
         # Write results
         for raw_file, processed_file in zip(self.sci_input, self.sci_output):
             header = fits.getheader(raw_file)
@@ -356,6 +358,7 @@ class Preprocess(BaseSetup):
             header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
 
             write_header_into_file(processed_file, header)
+            self._header.append(header)
 
         self.logger.info(
             f"Prepare image headers for group {self._current_group+1} in {time_diff_in_seconds(st)} seconds."
@@ -396,7 +399,7 @@ class Preprocess(BaseSetup):
             self.flat_output,
             device_id=device_id,
             output_paths=self.sci_output,
-            header=self._headers,
+            header=self._header,
             use_gpu=self._use_gpu,
         )
 
