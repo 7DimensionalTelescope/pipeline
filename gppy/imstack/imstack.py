@@ -87,28 +87,22 @@ class ImStack(BaseSetup):
         # ]
 
     def get_device_id(self, device_id):
-        from ..services.utils import check_gpu_activity
 
         if self._use_gpu:
-            if device_id is not None:
-                self._device_id = device_id
-                if self.config.imstack.device is None:
-                    self.config.imstack.device = self._device_id
-            elif self._device_id is None:
-                if self.config.imstack.device is not None:
-                    self._device_id = self.config.imstack.device
-                else:
-                    from ..services.utils import get_best_gpu_device
+            if device_id is None:
+                from ..services.utils import get_best_gpu_device
 
-                    self._device_id = get_best_gpu_device()
-                    self.config.imstack.device = self._device_id
+                return get_best_gpu_device()
+            elif device_id == "CPU":
+                return "CPU"
+            from ..services.utils import check_gpu_activity
+
+            if check_gpu_activity(device_id):
+                return "CPU"
+            else:
+                return device_id
         else:
-            self._device_id = "CPU"
-
-        if not (check_gpu_activity(self._device_id)):
-            self._device_id = "CPU"
-
-        return self._device_id
+            return "CPU"
 
     def run(self, use_gpu: bool = True, device_id=None):
         try:
@@ -355,10 +349,8 @@ class ImStack(BaseSetup):
         st = time.time()
         self._use_gpu = all([use_gpu, self.config.imstack.gpu, self._use_gpu])
         # pick xp and device‐context based on GPU flag
-        if self._use_gpu:
-            device_id = self.get_device_id(device_id)
-        else:
-            device_id = "CPU"
+        device_id = self.get_device_id(device_id)
+
         self.logger.info(f"Start weight-map calculation with device_id: {device_id}")
 
         bkgsub_images = self.config.imstack.bkgsub_images
@@ -432,10 +424,7 @@ class ImStack(BaseSetup):
         st = time.time()
         self._use_gpu = all([use_gpu, self.config.imstack.gpu, self._use_gpu])
 
-        if self._use_gpu:
-            device_id = self.get_device_id(device_id)
-        else:
-            device_id = "CPU"
+        device_id = self.get_device_id(device_id)
 
         st = time.time()
         self.logger.info("Start the interpolation for bad pixels")
