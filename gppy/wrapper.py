@@ -29,7 +29,6 @@ class DataReduction:
 
     def __init__(self, input_params, use_db=False, **kwargs):
         self.groups = SortedGroupDict()  # use a sorted dictionary
-        self._multi_unit_config = set()
 
         self._unified_key_list = None  # Will be populated after initialization
         self._key_usage_map = None  # Will track which keys are used in which groups
@@ -107,8 +106,24 @@ class DataReduction:
         for t in threads:
             t.join()
 
-    def process_all(self, preprocess_only=False):
+    def config_list(self):
+        master_configs = []
+        dependent_configs = dict()
+        multiunit_config = set()
+        for i, (key, group) in enumerate(self.groups.items()):
+            if isinstance(group, ScienceGroup):
+                continue
+            master_configs.append(group.config)
+            for scikey in group.sci_keys:
+                sci_group = self.groups[scikey]
+                if not (sci_group.multi_units):
+                    dependent_configs.setdefault(key, []).append(sci_group.config)
+                else:
+                    multiunit_config.add(sci_group.config)
 
+        return master_configs, dependent_configs, multiunit_config
+
+    def process_all(self, preprocess_only=False):
         masterframe_ids = []
         for i, (key, group) in enumerate(self.groups.items()):
             if isinstance(group, MasterframeGroup):
