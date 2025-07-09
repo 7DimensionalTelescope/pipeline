@@ -25,7 +25,7 @@ class SciProcConfiguration(BaseConfig):
 
         if not self._initialized:
             self.logger.info("Initializing configuration")
-            self.initialize()
+            self.initialize(**kwargs)
             self.logger.info(f"'SciProcConfiguration' initialized in {time_diff_in_seconds(st)} seconds")
             self.logger.info(f"Writing configuration to file: {os.path.basename(self.config_file)}")
             self.logger.debug(f"Full path to the configuration file: {self.config_file}")
@@ -70,7 +70,7 @@ class SciProcConfiguration(BaseConfig):
         # super().__init__(self, config_source=config_source, write=write, **kwargs)
         # self.initialize(is_pipeline=False)
 
-        self.config.input.calibrated_images = input_images
+        self.config.input.calibrated_images = atleast_1d(input_images)
         # self.config.name = "user-input"
         self.config.settings.is_pipeline = False
         self.config._initialized = True

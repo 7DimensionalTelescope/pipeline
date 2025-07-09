@@ -367,7 +367,6 @@ class ImStack(BaseSetup):
         self.logger.debug(f"{groups}")
 
         for i, ((z_m_file, d_m_file, f_m_file), images) in enumerate(groups.items()):
-
             st_loop = time.time()
 
             header = fits.getheader(images[0])  # same cailb in a group
@@ -405,6 +404,8 @@ class ImStack(BaseSetup):
                 "--device",     device_id,
             ] + uncalculated_images  # fmt: skip
 
+            self.logger.debug(f"ImStack weight map command: {cmd}")
+
             st_image = time.time()
             subprocess.run(cmd)  # , check=True)
 
@@ -420,10 +421,12 @@ class ImStack(BaseSetup):
         st = time.time()
         self._use_gpu = all([use_gpu, self.config.imstack.gpu, self._use_gpu])
 
-        if self._use_gpu:
-            device_id = self.get_device_id(device_id)
-        else:
-            device_id = "CPU"
+        # if self._use_gpu:
+        #     device_id = self.get_device_id(device_id)
+        # else:
+        #     device_id = "CPU"
+
+        device_id = 1
 
         st = time.time()
         self.logger.info("Start the interpolation for bad pixels")
@@ -446,14 +449,17 @@ class ImStack(BaseSetup):
             self.logger.warning("BADPIX not found in header. Using default value 0.")
 
         # pre-bind to avoid UnboundLocalError
-        interp = image = weight = interp_weight = None
+        # interp = image = weight = interp_weight = None
 
         method = self.config.imstack.interp_type
         weight = self.config.imstack.weight_map
 
+        groups = self._group_IMCMB(self.config.imstack.interp_images)
+        self.logger.warning(f"{len(groups)} groups detected: multi-group bpmask not implemented. Using one bpmask")
+
         uncalculated_images = []
         for i in range(len(self.config.imstack.bkgsub_images)):
-            input_file = self.config.imstack.bkgsub_images[i]
+            input_image_file = self.config.imstack.bkgsub_images[i]
             output_file = self.config.imstack.interp_images[i]
 
             if os.path.exists(output_file) and not self.overwrite:
@@ -461,113 +467,39 @@ class ImStack(BaseSetup):
                 continue
             else:
                 if weight:
-                    input_weight_file = add_suffix(input_file, "weight")
-                    output_weight_file = add_suffix(output_file, "weight")
-                    uncalculated_images.append([input_file, input_weight_file, output_file, output])
+                    uncalculated_images.append([input_image_file, input_weight_file])
                 else:
-                    uncalculated_images.append([input_file, None, output_file, None])
+                    uncalculated_images.append([input_image_file, None])
 
-        output, output_weight = interpolate_masked_pixels(
+        outputs, output_weights = interpolate_masked_pixels(
             uncalculated_images, bpmask_array, method=method, badpix=badpix, device=device_id, weight=weight
         )
 
-        for i, files in enumerate(uncalculated_images):
-            input_file, input_weight_file, output_file, output = files
+        for (input_image_file, input_weight_file), output, output_weight in zip(
+            uncalculated_images, outputs, output_weights
+        ):
             if weight:
+                input_weight_file = add_suffix(input_image_file, "weight")
+                output_weight_file = add_suffix(output_file, "weight")
                 fits.writeto(
                     output_weight_file,
-                    output_weight[i],
+                    data=output_weight,
                     header=add_bpx_method(fits.getheader(input_weight_file), method),
                     overwrite=True,
                 )
             fits.writeto(
                 output_file,
-                output[i],
-                header=add_bpx_method(fits.getheader(input_file), method),
+                data=output,
+                header=add_bpx_method(fits.getheader(input_image_file), method),
                 overwrite=True,
             )
 
         self.images_to_stack = self.config.imstack.interp_images
 
-        del output, output_weight
-        self.logger.info(
-            f"Interpolation for bad pixels is completed in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self.images_to_stack):.1f} s/image)"
-        )
+        for attr in ("outputs", "output_weights"):
+            if attr in self.__dict__:
+                del self.__dict__[attr]
 
-    def apply_bpmask(self, badpix=0, device_id=None, use_gpu: bool = True):
-        st = time.time()
-        self._use_gpu = all([use_gpu, self.config.imstack.gpu, self._use_gpu])
-
-        if self._use_gpu:
-            device_id = self.get_device_id(device_id)
-        else:
-            device_id = "CPU"
-
-        st = time.time()
-        self.logger.info("Start the interpolation for bad pixels")
-
-        path_interp = os.path.join(self.path_tmp, "interp")
-        os.makedirs(path_interp, exist_ok=True)
-
-        self.config.imstack.interp_images = [
-            os.path.join(path_interp, add_suffix(get_basename(f), "interp")) for f in self.input_images
-        ]
-
-        # bpmask_array, header = fits.getdata(self.config.preprocess.bpmask_file, header=True)
-        # ad-hoc. Todo: group input_files for different bpmask files
-        bpmask_array, header = fits.getdata(PathHandler.get_bpmask(self.config.imstack.bkgsub_images[0]), header=True)
-
-        if "BADPIX" in header.keys():
-            badpix = header["BADPIX"]
-            self.logger.debug(f"BADPIX found in header. Using badpix {badpix}.")
-        else:
-            self.logger.warning("BADPIX not found in header. Using default value 0.")
-
-        # pre-bind to avoid UnboundLocalError
-        interp = image = weight = interp_weight = None
-
-        method = self.config.imstack.interp_type
-        weight = self.config.imstack.weight_map
-
-        uncalculated_images = []
-        for i in range(len(self.config.imstack.bkgsub_images)):
-            input_file = self.config.imstack.bkgsub_images[i]
-            output_file = self.config.imstack.interp_images[i]
-
-            if os.path.exists(output_file) and not self.overwrite:
-                self.logger.debug(f"Already exists; skip generating {output_file}")
-                continue
-            else:
-                if weight:
-                    input_weight_file = add_suffix(input_file, "weight")
-                    output_weight_file = add_suffix(output_file, "weight")
-                    uncalculated_images.append([input_file, input_weight_file, output_file, output])
-                else:
-                    uncalculated_images.append([input_file, None, output_file, None])
-
-        output, output_weight = interpolate_masked_pixels(
-            uncalculated_images, bpmask_array, method=method, badpix=badpix, device=device_id, weight=weight
-        )
-
-        for i, files in enumerate(uncalculated_images):
-            input_file, input_weight_file, output_file, output = files
-            if weight:
-                fits.writeto(
-                    output_weight_file,
-                    output_weight[i],
-                    header=add_bpx_method(fits.getheader(input_weight_file), method),
-                    overwrite=True,
-                )
-            fits.writeto(
-                output_file,
-                output[i],
-                header=add_bpx_method(fits.getheader(input_file), method),
-                overwrite=True,
-            )
-
-        self.images_to_stack = self.config.imstack.interp_images
-
-        del output, output_weight
         self.logger.info(
             f"Interpolation for bad pixels is completed in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self.images_to_stack):.1f} s/image)"
         )
