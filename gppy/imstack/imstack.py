@@ -1,7 +1,9 @@
 import os
+import sys
 import re
 import time
 import shutil
+import subprocess
 from pathlib import Path
 import numpy as np
 from astropy.io import fits
@@ -96,7 +98,6 @@ class ImStack(BaseSetup):
                 else:
                     from ..services.utils import get_best_gpu_device
 
-
                     self._device_id = get_best_gpu_device()
                     self.config.imstack.device = self._device_id
         else:
@@ -104,7 +105,6 @@ class ImStack(BaseSetup):
 
         if not (check_gpu_availability(self._device_id)):
             self._device_id = "CPU"
-
 
         return self._device_id
 
@@ -375,19 +375,6 @@ class ImStack(BaseSetup):
             self.logger.debug(f"Group {i} calibs: {calibs}")
             d_m_file, f_m_file, sig_z_file, sig_f_file = PathHandler.weight_map_input(calibs)
 
-            mfg_data = []
-            mfg_frame = []
-            for file in [sig_z_file, d_m_file, f_m_file]:
-                with fits.open(file) as hdul:
-                    mfg_data.append(hdul[0].data)
-                    mfg_frame.append(hdul[0].header["NFRAMES"])
-                    if file == d_m_file:
-                        egain = hdul[0].header["EGAIN"]  # e-/ADU
-
-            sig_z, d_m, f_m = mfg_data
-            p_z, p_d, p_f = mfg_frame
-            sig_f = fits.getdata(sig_f_file)
-
             self.logger.debug(f"{time_diff_in_seconds(st_loop)} seconds for group {i} preparation")
 
             uncalculated_images = []
@@ -401,10 +388,25 @@ class ImStack(BaseSetup):
                 else:
                     uncalculated_images.append(img)
 
-            st_image = time.time()
-            output = calc_weight(
-                uncalculated_images, d_m, f_m, sig_z, sig_f, p_d, p_z, p_f, egain, weight=True, device=device_id
-            )
+            # output = calc_weight(
+            #     uncalculated_images, d_m, f_m, sig_z, sig_f, p_d, p_z, p_f, egain, weight=True, device=device_id
+            # )
+
+            script = os.path.join(os.path.dirname(__file__), "weight_map_runner.py")
+            cmd = [
+                sys.executable, script,
+                "--d_m_file",   d_m_file,
+                "--f_m_file",   f_m_file,
+                "--sig_z_file", sig_z_file,
+                "--sig_f_file", sig_f_file,
+                # "--p_d",        str(p_d),
+                # "--p_z",        str(p_z),
+                # "--p_f",        str(p_f),
+                "--device",     device_id,
+            ] + uncalculated_images  # fmt: skip
+
+            subprocess.run(cmd, check=True)
+
             self.logger.debug(
                 f"Weight-map calculation (device={device_id}) for group {i} is completed in {time_diff_in_seconds(st_image)} seconds"
             )
@@ -473,32 +475,103 @@ class ImStack(BaseSetup):
                 else:
                     uncalculated_images.append([input_file, None, output_file, None])
 
-                    interp, interp_weight = interpolate_masked_pixels(
-                        image, mask, weight=weight, method=method, badpix=badpix
-                    )
+        output, output_weight = interpolate_masked_pixels(
+            uncalculated_images, bpmask_array, method=method, badpix=badpix, device=device_id, weight=weight
+        )
 
-                    if hasattr(interp_weight, "get"):  # if CuPy array
-                        interp_weight = xp.asnumpy(interp_weight)  # Convert to NumPy array
-
-                    fits.writeto(
-                        output_weight_file,
-                        data=interp_weight,
-                        header=add_bpx_method(fits.getheader(input_weight_file), method),
-                        overwrite=True,
-                    )
-
-                else:
-                    interp = interpolate_masked_pixels(image, mask, method=method, badpix=badpix)
-
-                if hasattr(interp, "get"):  # if CuPy array
-                    interp = xp.asnumpy(interp)  # Convert to NumPy array
-
+        for i, files in enumerate(uncalculated_images):
+            input_file, input_weight_file, output_file, output = files
+            if weight:
                 fits.writeto(
-                    output_file,
-                    data=interp,
-                    header=add_bpx_method(fits.getheader(input_file), method),
+                    output_weight_file,
+                    output_weight[i],
+                    header=add_bpx_method(fits.getheader(input_weight_file), method),
                     overwrite=True,
                 )
+            fits.writeto(
+                output_file,
+                output[i],
+                header=add_bpx_method(fits.getheader(input_file), method),
+                overwrite=True,
+            )
+
+        self.images_to_stack = self.config.imstack.interp_images
+
+        del output, output_weight
+        self.logger.info(
+            f"Interpolation for bad pixels is completed in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self.images_to_stack):.1f} s/image)"
+        )
+
+    def apply_bpmask(self, badpix=0, device_id=None, use_gpu: bool = True):
+        st = time.time()
+        self._use_gpu = all([use_gpu, self.config.imstack.gpu, self._use_gpu])
+
+        if self._use_gpu:
+            device_id = self.get_device_id(device_id)
+        else:
+            device_id = "CPU"
+
+        st = time.time()
+        self.logger.info("Start the interpolation for bad pixels")
+
+        path_interp = os.path.join(self.path_tmp, "interp")
+        os.makedirs(path_interp, exist_ok=True)
+
+        self.config.imstack.interp_images = [
+            os.path.join(path_interp, add_suffix(get_basename(f), "interp")) for f in self.input_images
+        ]
+
+        # bpmask_array, header = fits.getdata(self.config.preprocess.bpmask_file, header=True)
+        # ad-hoc. Todo: group input_files for different bpmask files
+        bpmask_array, header = fits.getdata(PathHandler.get_bpmask(self.config.imstack.bkgsub_images[0]), header=True)
+
+        if "BADPIX" in header.keys():
+            badpix = header["BADPIX"]
+            self.logger.debug(f"BADPIX found in header. Using badpix {badpix}.")
+        else:
+            self.logger.warning("BADPIX not found in header. Using default value 0.")
+
+        # pre-bind to avoid UnboundLocalError
+        interp = image = weight = interp_weight = None
+
+        method = self.config.imstack.interp_type
+        weight = self.config.imstack.weight_map
+
+        uncalculated_images = []
+        for i in range(len(self.config.imstack.bkgsub_images)):
+            input_file = self.config.imstack.bkgsub_images[i]
+            output_file = self.config.imstack.interp_images[i]
+
+            if os.path.exists(output_file) and not self.overwrite:
+                self.logger.debug(f"Already exists; skip generating {output_file}")
+                continue
+            else:
+                if weight:
+                    input_weight_file = add_suffix(input_file, "weight")
+                    output_weight_file = add_suffix(output_file, "weight")
+                    uncalculated_images.append([input_file, input_weight_file, output_file, output])
+                else:
+                    uncalculated_images.append([input_file, None, output_file, None])
+
+        output, output_weight = interpolate_masked_pixels(
+            uncalculated_images, bpmask_array, method=method, badpix=badpix, device=device_id, weight=weight
+        )
+
+        for i, files in enumerate(uncalculated_images):
+            input_file, input_weight_file, output_file, output = files
+            if weight:
+                fits.writeto(
+                    output_weight_file,
+                    output_weight[i],
+                    header=add_bpx_method(fits.getheader(input_weight_file), method),
+                    overwrite=True,
+                )
+            fits.writeto(
+                output_file,
+                output[i],
+                header=add_bpx_method(fits.getheader(input_file), method),
+                overwrite=True,
+            )
 
         self.images_to_stack = self.config.imstack.interp_images
 
