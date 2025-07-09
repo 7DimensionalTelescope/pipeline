@@ -85,7 +85,7 @@ class ImStack(BaseSetup):
         # ]
 
     def get_device_id(self, device_id):
-        from ..services.utils import check_gpu_availability
+        from ..services.utils import check_gpu_activity
 
         if self._use_gpu:
             if device_id is not None:
@@ -103,7 +103,7 @@ class ImStack(BaseSetup):
         else:
             self._device_id = "CPU"
 
-        if not (check_gpu_availability(self._device_id)):
+        if not (check_gpu_activity(self._device_id)):
             self._device_id = "CPU"
 
         return self._device_id
@@ -405,7 +405,8 @@ class ImStack(BaseSetup):
                 "--device",     device_id,
             ] + uncalculated_images  # fmt: skip
 
-            subprocess.run(cmd, check=True)
+            st_image = time.time()
+            subprocess.run(cmd)  # , check=True)
 
             self.logger.debug(
                 f"Weight-map calculation (device={device_id}) for group {i} is completed in {time_diff_in_seconds(st_image)} seconds"
@@ -419,7 +420,6 @@ class ImStack(BaseSetup):
                     overwrite=True,
                 )
 
-            del output
             self.logger.info(
                 f"Weight-map calculation is completed in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(images):.1f} s/image)"
             )
