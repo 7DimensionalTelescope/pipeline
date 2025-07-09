@@ -1,5 +1,4 @@
 import gc
-import cupy as cp
 import numpy as np
 import os
 from astropy.io import fits
@@ -7,15 +6,8 @@ import subprocess
 from numba import njit, prange
 from ..const import SCRIPT_DIR
 
-# Reduction kernel
-reduction_kernel = cp.ElementwiseKernel(
-    in_params="T x, T b, T d, T f", out_params="T z", operation="z = (x - b - d) / f", name="reduction"
-)
-
-
 def read_fits_image(path):
     return fits.getdata(path).astype(np.float32)
-
 
 def combine_images_with_subprocess(
     images,
@@ -94,33 +86,6 @@ def combine_images_with_cpu(
     return np_median, np_std, None
 
 
-def _combine_images_with_cupy(images: str, device_id=None, subtract=None, norm=False):
-    """median is gpu, std is cpu"""
-
-    with cp.cuda.Device(device_id):
-        before = cp.get_default_memory_pool().used_bytes()
-
-        cp_stack = cp.stack([cp.asarray(fits.getdata(img).astype(np.float32)) for img in images])
-        if subtract is not None:
-            cp_subtract = cp.asarray(subtract)
-            cp_stack -= cp_subtract
-            del cp_subtract
-        if norm:
-            cp_stack /= cp.median(cp_stack, axis=(1, 2), keepdims=True)
-        cp_median = cp.median(cp_stack, axis=0)
-        cp_std = cp.std(cp_stack, axis=0, ddof=1)
-        np_std = cp_std.get()
-        np_median = cp_median.get()
-
-        del cp_stack, cp_median, cp_std
-        cp.get_default_memory_pool().free_all_blocks()
-        after = cp.get_default_memory_pool().used_bytes()
-        memory_leakage = (after - before) / 1024 / 1024
-    gc.collect()
-
-    return np_median, np_std, memory_leakage
-
-
 def process_image_with_subprocess(image_paths, bias, dark, flat, device_id=0, output_paths=None, **kwargs):
     cmd = [
         f"{SCRIPT_DIR}/cuda/process_image",
@@ -181,74 +146,6 @@ def process_image_with_cpu(
     del cpu_buffer, bias, dark, flat, subtract
     gc.collect()
     return None
-
-
-def _process_image_with_cupy(image_paths, bias, dark, flat, device_id=0, output_paths=None, header=None, **kwargs):
-    output = []
-    h, w = read_fits_image(image_paths[0]).shape
-    bias = read_fits_image(bias)
-    dark = read_fits_image(dark)
-    flat = read_fits_image(flat)
-
-    with cp.cuda.Device(device_id):
-        before = cp.get_default_memory_pool().used_bytes()
-        pinned_mem = cp.cuda.alloc_pinned_memory(h * w * 4)  # float32: 4 bytes
-        cpu_buffer = np.frombuffer(pinned_mem, dtype=np.float32, count=h * w).reshape(h, w)
-
-        gpu_bias = cp.asarray(bias, dtype=cp.float32)
-        gpu_dark = cp.asarray(dark, dtype=cp.float32)
-        gpu_flat = cp.asarray(flat, dtype=cp.float32)
-
-        gpu_buffer = cp.empty((h, w), dtype=cp.float32)
-
-        for i, o in enumerate(image_paths):
-            cpu_data = read_fits_image(o)
-            cpu_buffer[:] = cpu_data  # copy into pinned buffer
-
-            # Copy to GPU
-            cp.cuda.runtime.memcpyAsync(
-                gpu_buffer.data.ptr,
-                pinned_mem.ptr,
-                gpu_buffer.nbytes,
-                cp.cuda.runtime.memcpyHostToDevice,
-                cp.cuda.Stream.null.ptr,
-            )
-
-            cp.cuda.Stream.null.synchronize()
-
-            gpu_buffer[:] = reduction_kernel(gpu_buffer, gpu_bias, gpu_dark, gpu_flat)
-
-            # GPU → CPU (to pinned buffer)
-            cp.cuda.runtime.memcpyAsync(
-                pinned_mem.ptr,
-                gpu_buffer.data.ptr,
-                gpu_buffer.nbytes,
-                cp.cuda.runtime.memcpyDeviceToHost,
-                cp.cuda.Stream.null.ptr,
-            )
-
-            cp.cuda.Stream.null.synchronize()
-
-            if output_paths is not None:
-                os.makedirs(os.path.dirname(output_paths[i]), exist_ok=True)
-                fits.writeto(
-                    output_paths[i],
-                    data=cpu_buffer,
-                    header=header[i],
-                    overwrite=True,
-                )
-            else:
-                output.append(cpu_buffer.copy())  # still on CPU
-
-        # Final cleanup
-        del gpu_buffer, gpu_bias, gpu_dark, gpu_flat
-        cp.get_default_memory_pool().free_all_blocks()
-        cp.get_default_pinned_memory_pool().free_all_blocks()
-        after = cp.get_default_memory_pool().used_bytes()
-        memory_leakage = (after - before) / 1024 / 1024
-
-    gc.collect()
-    return output, memory_leakage
 
 
 @njit(parallel=True)
@@ -368,74 +265,6 @@ def _compute_hot_mask_2d(data, median, std, hot_sigma):
         for j in range(W):
             mask[i, j] = 1 if abs(data[i, j] - median) > threshold else 0
     return mask
-
-
-def sigma_clipped_stats_cupy(cp_data, device_id=0, sigma=3, maxiters=5, minmax=False, hot_mask=False, hot_mask_sigma=5):
-    """
-    Approximate sigma-clipping using CuPy.
-    Computes mean, median, and std after iteratively removing outliers
-    beyond 'sigma' standard deviations from the median.
-
-    Parameters
-    ----------
-    cp_data : cupy.ndarray
-        Flattened CuPy array of image pixel values.
-    sigma : float
-        Clipping threshold in terms of standard deviations.
-    maxiters : int
-        Maximum number of clipping iterations.
-
-    Returns
-    -------
-    mean_val : float
-        Mean of the clipped data (as a GPU float).
-    median_val : float
-        Median of the clipped data (as a GPU float).
-    std_val : float
-        Standard deviation of the clipped data (as a GPU float).
-    """
-    with cp.cuda.Device(device_id):
-        # Flatten to 1D for global clipping
-        cp_data = cp.asarray(cp_data)
-        cp_data_flat = cp_data.ravel()
-        for _ in range(maxiters):
-            median_val = cp.median(cp_data_flat)
-            std_val = cp.std(cp_data_flat)
-            # Keep only pixels within +/- sigma * std of the median
-            mask = cp.abs(cp_data_flat - median_val) < (sigma * std_val)
-            cp_data_flat = cp_data_flat[mask]
-            del mask
-
-        # Final statistics on the clipped data
-        mean_val = cp.mean(cp_data_flat)
-        median_val = cp.median(cp_data_flat)
-        std_val = cp.std(cp_data_flat)
-        min_val = cp.min(cp_data_flat)
-        max_val = cp.max(cp_data_flat)
-
-        if hot_mask:
-            hot_mask_arr = cp.abs(cp_data - median_val) > hot_mask_sigma * std_val  # 1 for bad, 0 for okay
-            hot_mask_arr[:] = hot_mask_arr.astype(cp.uint8)  # Convert to uint8
-            hot_mask_arr_numpy = cp.asnumpy(hot_mask_arr).astype(np.uint8)  # Convert to numpy array
-            del hot_mask_arr
-
-        mean_val_cpu = mean_val.get()
-        median_val_cpu = median_val.get()
-        std_val_cpu = std_val.get()
-        min_val_cpu = min_val.get()
-        max_val_cpu = max_val.get()
-        del cp_data_flat, cp_data
-        del mean_val, median_val, std_val, min_val, max_val
-        cp.get_default_memory_pool().free_all_blocks()
-
-    gc.collect()
-
-    if hot_mask:
-        return hot_mask_arr_numpy
-    if minmax:
-        return mean_val_cpu, median_val_cpu, std_val_cpu, min_val_cpu, max_val_cpu
-    else:
-        return mean_val_cpu, median_val_cpu, std_val_cpu
 
 
 def record_statistics(data, header, device_id=0, cropsize=500):

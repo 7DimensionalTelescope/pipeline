@@ -8,7 +8,6 @@ from .base import BaseConfig
 import time
 from ..const import CalibType
 
-
 class PreprocConfiguration(BaseConfig):
 
     def __init__(

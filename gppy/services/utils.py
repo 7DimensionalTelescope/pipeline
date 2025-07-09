@@ -1,16 +1,13 @@
 import gc
-import cupy as cp
 import numpy as np
 import time
 import psutil
-
 import threading
 from contextlib import contextmanager
 from datetime import datetime
 from astropy.table import Table
 
 from typing import Optional
-import pynvml
 
 
 def cleanup_memory() -> None:
@@ -40,6 +37,7 @@ def cleanup_memory() -> None:
         >>> # Before starting a memory-intensive task
         >>> cleanup_memory()
     """
+    import cupy as cp
 
     try:
         for device_id in range(cp.cuda.runtime.getDeviceCount()):
@@ -291,6 +289,8 @@ def get_best_gpu_device():
 
 
 def check_gpu_activity(device=0, gpu_threshold=500):
+    import pynvml
+
     pynvml.nvmlInit()
     try:
         handle = pynvml.nvmlDeviceGetHandleByIndex(device)

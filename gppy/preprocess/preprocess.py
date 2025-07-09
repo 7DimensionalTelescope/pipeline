@@ -7,10 +7,8 @@ import time
 
 from .plotting import *
 from . import utils as prep_utils
-from .calc import *
 
 from ..utils import get_header, flatten, time_diff_in_seconds, update_header_by_overwriting, write_header_into_file
-from ..path import PathHandler
 from ..config import PreprocConfiguration
 from ..services.setup import BaseSetup
 from ..const import HEADER_KEY_MAP
@@ -262,7 +260,6 @@ class Preprocess(BaseSetup):
                 self.logger.debug(f"{dtype}_input: {input_data}")
                 self.logger.debug(f"{dtype}_output: {output_data}")
 
-        self.generate_bpmask()
         self.logger.info(f"Generation/Loading of masterframes completed in {time_diff_in_seconds(st)} seconds")
 
     def _generate_masterframe(self, dtype, device_id):
@@ -276,9 +273,13 @@ class Preprocess(BaseSetup):
         device_id = self.get_device_id(device_id)
 
         if device_id == "CPU":
+            from .calc import combine_images_with_cpu
+
             calc_function = combine_images_with_cpu
             self.logger.info(f"Generating masterframe {dtype} for group {self._current_group+1} in CPU")
         else:
+            from .calc import combine_images_with_subprocess
+
             calc_function = combine_images_with_subprocess
             self.logger.info(
                 f"Generating masterframe {dtype} for group {self._current_group+1} in GPU device {device_id}"
@@ -315,11 +316,16 @@ class Preprocess(BaseSetup):
         update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), header)
 
         header = prep_utils.add_image_id(header)
+        from .calc import record_statistics
+
         header = record_statistics(getattr(self, f"{dtype}_output"), header, device_id=device_id)
         update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
 
         self.logger.info(f"Master {dtype} generated in {time_diff_in_seconds(st)} seconds")
         self.logger.debug(f"FITS Written: {getattr(self, f'{dtype}_output')}")
+
+        if dtype == "dark":
+            self.update_bpmask()
 
     def _fetch_masterframe(self, template, dtype):
         self.logger.info(f"Fetching master {dtype}")
@@ -384,9 +390,13 @@ class Preprocess(BaseSetup):
 
         device_id = self.get_device_id(device_id)
         if device_id == "CPU":
+            from .calc import process_image_with_cpu
+
             process_kernel = process_image_with_cpu
             self.logger.info(f"Processing {len(self.sci_input)} images in group {self._current_group+1} on CPU")
         else:
+            from .calc import process_image_with_subprocess
+
             process_kernel = process_image_with_subprocess
             self.logger.info(
                 f"Processing {len(self.sci_input)} images in group {self._current_group+1} on GPU device(s): {device_id} "
@@ -451,7 +461,7 @@ class Preprocess(BaseSetup):
             f"Completed plot generation for images in group {group_index+1} in {time_diff_in_seconds(st)} seconds"
         )
 
-    def generate_bpmask(self):
+    def update_bpmask(self):
         header = self.get_header("dark")
         hot_mask = fits.getdata(self.bpmask_output)
         newhdu = fits.CompImageHDU(data=hot_mask)

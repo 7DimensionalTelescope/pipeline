@@ -1,4 +1,3 @@
-import cupy as cp
 from astropy.io import fits
 import numpy as np
 import argparse
@@ -9,6 +8,7 @@ def combine_images_with_cupy(
     data, device_id=None, subtract=None, norm=False, make_bpmask=False, maxiters=5, sigma=3, bpmask_sigma=5, **kwargs
 ):
     """median is gpu, std is cpu"""
+    import cupy as cp
 
     arr_shape = data[0].shape
     np_median = np.empty(arr_shape)
