@@ -250,7 +250,9 @@ class Preprocess(BaseSetup):
 
             if input_data:  # if the list is not empty
                 if not os.path.exists(output_data) or self.overwrite:
-                    self._generate_masterframe(dtype, device_id)
+                    self._generate_masterframe(dtype, device_id, calc_function)
+                    if dtype == "dark":
+                        self.generate_bpmask()
                 else:
                     self._fetch_masterframe(output_data, dtype)
             elif isinstance(output_data, str) or len(output_data) > 0:
@@ -260,7 +262,6 @@ class Preprocess(BaseSetup):
                 self.logger.debug(f"{dtype}_input: {input_data}")
                 self.logger.debug(f"{dtype}_output: {output_data}")
 
-        self.generate_bpmask()
         self.logger.info(f"Generation/Loading of masterframes completed in {time_diff_in_seconds(st)} seconds")
 
     def _generate_masterframe(self, dtype, device_id):
@@ -314,6 +315,7 @@ class Preprocess(BaseSetup):
 
         header = prep_utils.add_image_id(header)
         header = record_statistics(getattr(self, f"{dtype}_output"), header, device_id=device_id)
+
         update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
 
         self.logger.info(f"Master {dtype} generated in {time_diff_in_seconds(st)} seconds")

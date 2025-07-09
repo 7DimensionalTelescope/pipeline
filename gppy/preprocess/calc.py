@@ -138,6 +138,7 @@ def process_image_with_subprocess(image_paths, bias, dark, flat, device_id=0, ou
         str(device_id),
     ]
 
+    print(cmd)
     subprocess.run(cmd, check=True)
     return None
 
