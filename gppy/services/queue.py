@@ -7,11 +7,12 @@ import os
 from typing import Callable, Any, Optional, List, Dict, Union
 from datetime import datetime
 import itertools
-
+import subprocess
 
 from .logger import Logger
 from .task import Task, Priority
 from ..utils import time_diff_in_seconds
+from ..const import SCRIPT_DIR
 
 signal.signal(signal.SIGINT, signal.SIG_IGN)
 mp.set_start_method("spawn", force=True)
@@ -32,7 +33,7 @@ class QueueManager:
         max_workers: Optional[int] = None,
         logger: Optional[Logger] = None,
         save_result: bool = False,
-        auto_start: bool = True,
+        auto_start: bool = False,
         **kwargs,
     ):
         # Initialize logging
@@ -46,17 +47,6 @@ class QueueManager:
         # Default CPU allocation
         self.total_cpu_worker = max_workers or 10
 
-        # Create CPU queues (thread-safe)
-        self.processing_queue = queue.PriorityQueue()  # Priority queue for CPU tasks
-        self.completion_queue = queue.Queue()
-
-        # Process pool for CPU tasks
-        self.pool = mp.Pool(processes=self.total_cpu_worker)
-
-        # Results and error handling
-        self.tasks: List[Task] = []
-        self.results: List[Any] = []
-        self.errors: List[Dict] = []
         self.lock = threading.Lock()
 
         # Register signal handlers
@@ -76,22 +66,44 @@ class QueueManager:
         self._abrupt_stop_requested = mp.Event()
         if auto_start:
             self._start_workers()
+        else:
+            self.ptype = None
 
         self.save_result = save_result
         self.logger.debug("QueueManager Initialization complete")
 
-    def _start_workers(self):
+    def _start_workers(self, process_type="scheduler"):
         # Initialize task tracking
         self._stop_event = threading.Event()
 
-        # Start the task completion handler thread
-        self.completion_thread = threading.Thread(target=self._completion_worker, daemon=True)
-        self.completion_thread.start()
+        if process_type == "task":
+            # Create CPU queues (thread-safe)
+            self.processing_queue = queue.PriorityQueue()  # Priority queue for CPU tasks
+            self.completion_queue = queue.Queue()
 
-        # Start the task distributor thread
-        self.processing_thread = threading.Thread(target=self._processing_worker, daemon=True)
+            # Process pool for CPU tasks
+            self.pool = mp.Pool(processes=self.total_cpu_worker)
 
-        self.processing_thread.start()
+            # Results and error handling
+            self.tasks: List[Task] = []
+            self.results: List[Any] = []
+            self.errors: List[Dict] = []
+
+            # Start the task completion handler thread
+            self.processing_thread = threading.Thread(target=self._task_worker, daemon=True)
+            self.processing_thread.start()
+            self.completion_thread = threading.Thread(target=self._task_completion_worker, daemon=True)
+            self.completion_thread.start()
+            self.ptype = "task"
+        elif process_type == "scheduler":
+            # Start the task schduler thread
+            self.processing_thread = threading.Thread(target=self._scheduler_worker, daemon=True)
+            self.processing_thread.start()
+            self.completion_thread = threading.Thread(target=self._scheduler_completion_worker, daemon=True)
+            self.completion_thread.start()
+            self.ptype = "schedule"
+        else:
+            self.ptype = None
 
     def __exit__(self, exc_type, exc_val, _):
         """Context manager exit."""
@@ -176,13 +188,24 @@ class QueueManager:
 
         self.processing_queue.put((task.priority, task))
 
+        if not (hasattr(self, "processing_thread")):
+            self._start_workers(process_type="task")
+
         self.logger.info(f"Added task {task.task_name} (id: {task_id}) with priority {priority}")
         time.sleep(0.1)
 
         return task_id
 
+    def add_scheduler(self, scheduler):
+
+        self.scheduler = scheduler
+        self._active_processes = []
+        self._device_id = 0
+        if not (hasattr(self, "processing_thread")):
+            self._start_workers(process_type="scheduler")
+
     ######### Task processing #########
-    def _processing_worker(self):
+    def _task_worker(self):
         """Distribute CPU tasks to the process pool."""
 
         def task_wrapper(task):
@@ -239,7 +262,7 @@ class QueueManager:
                 time.sleep(0.5)
                 raise
 
-    def _completion_worker(self):
+    def _task_completion_worker(self):
         while not self._stop_event.is_set():
             try:
                 task, result, error = self.completion_queue.get()
@@ -265,6 +288,80 @@ class QueueManager:
                 self.logger.info(
                     f"Completed task {task.task_name} (id: {task.id}) in {time_diff_in_seconds(task.starttime, task.endtime)} seconds"
                 )
+            except Exception as e:
+                self.logger.error(f"Error in completion worker: {e}")
+                time.sleep(0.2)
+                continue
+
+    def _scheduler_worker(self):
+
+        while not self._abrupt_stop_requested.is_set():
+            try:
+                self._check_abrupt_stop()
+
+                if len(self._active_processes) > self.total_cpu_worker:
+                    time.sleep(1)
+                    continue
+
+                try:
+                    config, ptype = self.scheduler.get_next_task()
+                except:
+                    time.sleep(1)
+                    continue
+
+                try:
+                    if ptype == "Masterframe":
+                        cmd = [
+                            f"{SCRIPT_DIR}/bin/preprocess",
+                            "-config",
+                            config,
+                            "-device",
+                            str(int(self._device_id % 2)),
+                            "-only_with_sci",
+                        ]
+                    else:
+                        cmd = [f"{SCRIPT_DIR}/bin/data_reduction", "-config", config]
+                    proc = subprocess.Popen(cmd)
+                    self._active_processes.append([config, proc])
+                    self._device_id += 1
+                    self.logger.info(f"Process ({ptype}) with {os.path.basename(config)}({proc.pid}) submitted.")
+                    time.sleep(0.5)
+
+                except Exception as e:
+                    import traceback
+
+                    self.logger.error(f"Error in processing worker: {e}")
+                    time.sleep(0.5)
+                    traceback.print_exc()
+                    raise
+
+            except AbruptStopException:
+                self.logger.info(f"Processing worker stopped.")
+                break
+
+            except Exception as e:
+                self.logger.error(f"Error in processing worker: {e}")
+                time.sleep(0.5)
+                raise
+
+    def _scheduler_completion_worker(self):
+        while not self._stop_event.is_set():
+            try:
+                for process in list(self._active_processes):  # should store proc objects, not just PIDs
+                    config, proc = process
+                    if proc.poll() is not None:
+                        pid = proc.pid
+                        if proc.returncode == 0:
+                            self.logger.info(f"Process with {config}({pid}) completed.")
+                            self._active_processes.remove(process)
+                            # Inform the scheduler that the task is done
+                            self.scheduler.mark_done(config)
+                        else:
+                            self.logger.error(
+                                f"Process with {os.path.basename(config)}({pid}) failed with return code {proc.returncode}."
+                            )
+                            self._active_processes.remove(process)
+                time.sleep(0.5)
             except Exception as e:
                 self.logger.error(f"Error in completion worker: {e}")
                 time.sleep(0.2)
@@ -300,31 +397,54 @@ class QueueManager:
                 self._stop_event.set()
             self._abrupt_stop_requested.set()
 
-            # Clear queues
-            while not self.processing_queue.empty():
-                try:
-                    self.processing_queue.get_nowait()
-                except queue.Empty:
-                    break
+            if self.ptype == "schedule":
+                self.logger.info("Stopping all active subprocesses...")
+                for pid, proc in list(self._active_processes.items()):
+                    try:
+                        if proc.poll() is None:  # Still running
+                            self.logger.info(f"Terminating process PID {pid}")
+                            proc.terminate()
+                            try:
+                                proc.wait(timeout=5)  # Wait a few seconds to exit cleanly
+                                self.logger.info(f"Process PID {pid} terminated gracefully.")
+                            except subprocess.TimeoutExpired:
+                                self.logger.warning(f"Force killing process PID {pid}")
+                                proc.kill()
+                        else:
+                            self.logger.info(f"Process PID {pid} already finished.")
+                    except Exception as e:
+                        self.logger.error(f"Failed to stop PID {pid}: {e}")
+                    finally:
+                        del self._active_processes[pid]
 
-            while not self.completion_queue.empty():
-                try:
-                    self.completion_queue.get_nowait()
-                except queue.Empty:
-                    break
+            elif self.ptype == "task":
+                # Clear queues
+                while not self.processing_queue.empty():
+                    try:
+                        self.processing_queue.get_nowait()
+                    except queue.Empty:
+                        break
 
-            # Wait for pool tasks to complete
-            self.logger.info("Waiting for process pool tasks to complete...")
+                while not self.completion_queue.empty():
+                    try:
+                        self.completion_queue.get_nowait()
+                    except queue.Empty:
+                        break
 
-            # Terminate the pool
-            self.cpu_pool.close()
-            self.cpu_pool.terminate()
-            self.cpu_pool.join()
-            self.logger.info("Process pool terminated")
+                # Wait for pool tasks to complete
+                self.logger.info("Waiting for process pool tasks to complete...")
+
+                # Terminate the pool
+                self.cpu_pool.close()
+                self.cpu_pool.terminate()
+                self.cpu_pool.join()
+                self.logger.info("Process pool terminated")
+
+            else:
+                return
 
             # Wait for all threads to finish
             self.processing_thread.join(timeout=2.0)
-
             self.completion_thread.join(timeout=2.0)
 
             # Log shutdown details
@@ -356,16 +476,7 @@ class QueueManager:
         self.logger.warning("Abrupt stop initiated. Terminating all processes...")
 
         try:
-            # Clear CPU queues
-            while not self.processing_queue.empty():
-                try:
-                    self.processing_queue.get_nowait()
-                except queue.Empty:
-                    break
-
-            self.pool.terminate()
-            self.pool.join()
-
+            self.stop_processing()
         except Exception as e:
             self.logger.error(f"Error during abrupt stop: {e}")
             raise
