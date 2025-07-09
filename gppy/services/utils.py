@@ -10,6 +10,7 @@ from datetime import datetime
 from astropy.table import Table
 
 from typing import Optional
+import pynvml
 
 
 def cleanup_memory() -> None:
@@ -278,22 +279,33 @@ def get_best_gpu_device():
     from ..services.memory import MemoryMonitor
 
     percent = MemoryMonitor.current_gpu_memory_percent
-    available = [p if p < 90 else 100 for p in percent]
+    available = []
+    for i, p in enumerate(percent):
+        if not (check_gpu_activity(i)) and p < 90:
+            available.append(p)
+
     if len(available) == 0:
-        return None
+        return "CPU"
     else:
         return int(np.argmin(available))
 
 
-def check_gpu_availability(device):
-    if isinstance(device, str):
+def check_gpu_activity(device=0, gpu_threshold=500):
+    pynvml.nvmlInit()
+    try:
+        handle = pynvml.nvmlDeviceGetHandleByIndex(device)
+        try:
+            procs = pynvml.nvmlDeviceGetComputeRunningProcesses(handle)
+        except pynvml.NVMLError_NotSupported:
+            return False
+
+        for p in procs:
+            try:
+                mem_used_MB = p.usedGpuMemory / 1024**2
+                if mem_used_MB > gpu_threshold:
+                    return True
+            except pynvml.NVMLError:
+                continue
         return False
-
-    from ..services.memory import MemoryMonitor
-
-    percent = MemoryMonitor.current_gpu_memory_percent
-
-    if percent[device] > 80:
-        return False
-    else:
-        return True
+    finally:
+        pynvml.nvmlShutdown()
