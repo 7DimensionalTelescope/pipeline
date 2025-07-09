@@ -390,29 +390,30 @@ class ImStack(BaseSetup):
             #     uncalculated_images, d_m, f_m, sig_z, sig_f, p_d, p_z, p_f, egain, weight=True, device=device_id
             # )
 
-            script = os.path.join(os.path.dirname(__file__), "weight_map_runner.py")
-            cmd = [
-                sys.executable, script,
-                "--d_m_file",   d_m_file,
-                "--f_m_file",   f_m_file,
-                "--sig_z_file", sig_z_file,
-                "--sig_f_file", sig_f_file,
-                # "--p_d",        str(p_d),
-                # "--p_z",        str(p_z),
-                # "--p_f",        str(p_f),
-                "--device",     str(device_id),
-            ] + uncalculated_images  # fmt: skip
+            if uncalculated_images:
+                script = os.path.join(os.path.dirname(__file__), "weight_map_runner.py")
+                cmd = [
+                    sys.executable, script,
+                    "--d_m_file",   d_m_file,
+                    "--f_m_file",   f_m_file,
+                    "--sig_z_file", sig_z_file,
+                    "--sig_f_file", sig_f_file,
+                    # "--p_d",        str(p_d),
+                    # "--p_z",        str(p_z),
+                    # "--p_f",        str(p_f),
+                    "--device",     str(device_id),
+                ] + uncalculated_images  # fmt: skip
 
-            self.logger.debug(f"ImStack weight map command: {cmd}")
+                self.logger.debug(f"ImStack weight map command: {cmd}")
 
-            st_image = time.time()
-            try:
-                subprocess.run(cmd, check=True, capture_output=True, text=True)
-            except subprocess.CalledProcessError as e:
-                print("COMMAND:", e.cmd)
-                print("RETURN CODE:", e.returncode)
-                print("STDOUT:\n", e.stdout)
-                print("STDERR:\n", e.stderr)
+                st_image = time.time()
+                try:
+                    subprocess.run(cmd, check=True, capture_output=True, text=True)
+                except subprocess.CalledProcessError as e:
+                    print("COMMAND:", e.cmd)
+                    print("RETURN CODE:", e.returncode)
+                    print("STDOUT:\n", e.stdout)
+                    print("STDERR:\n", e.stderr)
 
             self.logger.debug(
                 f"Weight-map calculation (device={device_id}) for group {i} is completed in {time_diff_in_seconds(st_image)} seconds"
@@ -426,12 +427,10 @@ class ImStack(BaseSetup):
         st = time.time()
         self._use_gpu = all([use_gpu, self.config.imstack.gpu, self._use_gpu])
 
-        # if self._use_gpu:
-        #     device_id = self.get_device_id(device_id)
-        # else:
-        #     device_id = "CPU"
-
-        device_id = 1
+        if self._use_gpu:
+            device_id = self.get_device_id(device_id)
+        else:
+            device_id = "CPU"
 
         st = time.time()
         self.logger.info("Start the interpolation for bad pixels")
