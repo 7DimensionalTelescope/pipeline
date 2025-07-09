@@ -53,7 +53,6 @@ class Preprocess(BaseSetup):
         self.overwrite = overwrite
         self.master_frame_only = master_frame_only
 
-        self._device_id = None if use_gpu else "CPU"
         self._use_gpu = use_gpu
         self.initialize()
 
@@ -104,8 +103,6 @@ class Preprocess(BaseSetup):
 
     def run(self, device_id=None, make_plots=True, use_gpu=True, only_with_sci=False):
         self._use_gpu = all([use_gpu, self._use_gpu])
-
-        device_id = self.get_device_id(device_id)
 
         threads_for_making_plots = []
         for i in range(self._n_groups):
@@ -214,28 +211,22 @@ class Preprocess(BaseSetup):
         return flat_exptime / dark_exptime
 
     def get_device_id(self, device_id):
+
         if self._use_gpu:
-            if device_id is not None:
-                self._device_id = device_id
-                if self.config.preprocess.device is None:
-                    self.config.preprocess.device = self._device_id
-            elif self._device_id is None:
-                if self.config.preprocess.device is not None:
-                    self._device_id = self.config.preprocess.device
-                else:
-                    from ..services.utils import get_best_gpu_device
+            if device_id is None:
+                from ..services.utils import get_best_gpu_device
 
-                    self._device_id = get_best_gpu_device()
-                    if self._device_id is None:
-                        self.logger.warning("No available GPU device found. Using CPU.")
-                        self._use_gpu = False
-                        self._device_id = "CPU"
-                    else:
-                        self.config.preprocess.device = self._device_id
+                return get_best_gpu_device()
+            elif device_id == "CPU":
+                return "CPU"
+            from ..services.utils import check_gpu_activity
+
+            if check_gpu_activity(device_id):
+                return "CPU"
+            else:
+                return device_id
         else:
-            self._device_id = "CPU"
-
-        return self._device_id
+            return "CPU"
 
     def load_masterframe(self, device_id=None, use_gpu: bool = True):
         """
@@ -247,12 +238,6 @@ class Preprocess(BaseSetup):
         If there's nothing to fetch, the code will fail.
         """
         self._use_gpu = all([use_gpu, self._use_gpu])
-        if device_id == "CPU":
-            calc_function = combine_images_with_cpu
-            self.logger.info(f"Generating masterframes for group {self._current_group+1} in CPU")
-        else:
-            calc_function = combine_images_with_subprocess
-            self.logger.info(f"Generating masterframes for group {self._current_group+1} in GPU device {device_id}")
 
         st = time.time()
 
@@ -265,7 +250,7 @@ class Preprocess(BaseSetup):
 
             if input_data:  # if the list is not empty
                 if not os.path.exists(output_data) or self.overwrite:
-                    self._generate_masterframe(dtype, device_id, calc_function)
+                    self._generate_masterframe(dtype, device_id)
                 else:
                     self._fetch_masterframe(output_data, dtype)
             elif isinstance(output_data, str) or len(output_data) > 0:
@@ -278,20 +263,24 @@ class Preprocess(BaseSetup):
         self.generate_bpmask()
         self.logger.info(f"Generation/Loading of masterframes completed in {time_diff_in_seconds(st)} seconds")
 
-    def _generate_masterframe(self, dtype, device_id, calc_function=None):
+    def _generate_masterframe(self, dtype, device_id):
         """Generate & Save masterframe and sigma image"""
 
         st = time.time()
 
-        if self._use_gpu:
-            self.logger.info(f"Generating master {dtype} in GPU device {device_id}")
-        else:
-            self.logger.info(f"Generating master {dtype} in CPU")
-
         input_data = getattr(self, f"{dtype}_input")
+        header = self.get_header(dtype)
 
-        if calc_function is None:
+        device_id = self.get_device_id(device_id)
+
+        if device_id == "CPU":
+            calc_function = combine_images_with_cpu
+            self.logger.info(f"Generating masterframe {dtype} for group {self._current_group+1} in CPU")
+        else:
             calc_function = combine_images_with_subprocess
+            self.logger.info(
+                f"Generating masterframe {dtype} for group {self._current_group+1} in GPU device {device_id}"
+            )
 
         if dtype == "bias":
             calc_function(input_data, device_id=device_id, output=self.bias_output, sig_output=self.biassig_output)
@@ -321,7 +310,6 @@ class Preprocess(BaseSetup):
                 sig_output=self.flatsig_output,
             )
 
-        
         update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), header)
 
         header = prep_utils.add_image_id(header)
@@ -391,6 +379,7 @@ class Preprocess(BaseSetup):
 
         st = time.time()
 
+        device_id = self.get_device_id(device_id)
         if device_id == "CPU":
             process_kernel = process_image_with_cpu
             self.logger.info(f"Processing {len(self.sci_input)} images in group {self._current_group+1} on CPU")
@@ -400,7 +389,7 @@ class Preprocess(BaseSetup):
                 f"Processing {len(self.sci_input)} images in group {self._current_group+1} on GPU device(s): {device_id} "
             )
 
-        results, leakage = process_kernel(
+        process_kernel(
             self.sci_input,
             self.bias_output,
             self.dark_output,
