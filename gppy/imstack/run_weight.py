@@ -44,6 +44,8 @@ def main():
         outname = add_suffix(img, "weight")
         fits.writeto(outname, weight_image, overwrite=True)
 
+    del output
+
 
 if __name__ == "__main__":
     main()
