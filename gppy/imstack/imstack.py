@@ -87,22 +87,28 @@ class ImStack(BaseSetup):
         # ]
 
     def get_device_id(self, device_id):
+        from ..services.utils import check_gpu_activity
 
         if self._use_gpu:
-            if device_id is None:
-                from ..services.utils import get_best_gpu_device
+            if device_id is not None:
+                self._device_id = device_id
+                if self.config.imstack.device is None:
+                    self.config.imstack.device = self._device_id
+            elif self._device_id is None:
+                if self.config.imstack.device is not None:
+                    self._device_id = self.config.imstack.device
+                else:
+                    from ..services.utils import get_best_gpu_device
 
-                return get_best_gpu_device()
-            elif device_id == "CPU":
-                return "CPU"
-            from ..services.utils import check_gpu_activity
-
-            if check_gpu_activity(device_id):
-                return "CPU"
-            else:
-                return device_id
+                    self._device_id = get_best_gpu_device()
+                    self.config.imstack.device = self._device_id
         else:
-            return "CPU"
+            self._device_id = "CPU"
+
+        if not (check_gpu_activity(self._device_id)):
+            self._device_id = "CPU"
+
+        return self._device_id
 
     def run(self, use_gpu: bool = True, device_id=None):
         try:
@@ -349,8 +355,10 @@ class ImStack(BaseSetup):
         st = time.time()
         self._use_gpu = all([use_gpu, self.config.imstack.gpu, self._use_gpu])
         # pick xp and device‐context based on GPU flag
-        device_id = self.get_device_id(device_id)
-
+        if self._use_gpu:
+            device_id = self.get_device_id(device_id)
+        else:
+            device_id = "CPU"
         self.logger.info(f"Start weight-map calculation with device_id: {device_id}")
 
         bkgsub_images = self.config.imstack.bkgsub_images
@@ -424,7 +432,10 @@ class ImStack(BaseSetup):
         st = time.time()
         self._use_gpu = all([use_gpu, self.config.imstack.gpu, self._use_gpu])
 
-        device_id = self.get_device_id(device_id)
+        if self._use_gpu:
+            device_id = self.get_device_id(device_id)
+        else:
+            device_id = "CPU"
 
         st = time.time()
         self.logger.info("Start the interpolation for bad pixels")
@@ -469,32 +480,31 @@ class ImStack(BaseSetup):
                 else:
                     uncalculated_images.append([input_image_file, None])
 
-                    interp, interp_weight = interpolate_masked_pixels(
-                        image, mask, weight=weight, method=method, badpix=badpix
-                    )
+        # run
+        outputs, output_weights = interpolate_masked_pixels(
+            uncalculated_images, bpmask_array, method=method, badpix=badpix, device=device_id, weight=weight
+        )
 
-                    if hasattr(interp_weight, "get"):  # if CuPy array
-                        interp_weight = xp.asnumpy(interp_weight)  # Convert to NumPy array
-
-                    fits.writeto(
-                        output_weight_file,
-                        data=interp_weight,
-                        header=add_bpx_method(fits.getheader(input_weight_file), method),
-                        overwrite=True,
-                    )
-
-                else:
-                    interp = interpolate_masked_pixels(image, mask, method=method, badpix=badpix)
-
-                if hasattr(interp, "get"):  # if CuPy array
-                    interp = xp.asnumpy(interp)  # Convert to NumPy array
-
+        # save the result
+        for (input_image_file, input_weight_file), output, output_weight in zip(
+            uncalculated_images, outputs, output_weights
+        ):
+            if weight:
+                output_weight_file = add_suffix(output_file, "weight")
+                self.logger.debug(f"Writing to {output_weight_file}")
                 fits.writeto(
-                    output_file,
-                    data=interp,
-                    header=add_bpx_method(fits.getheader(input_file), method),
+                    output_weight_file,
+                    data=output_weight,
+                    header=add_bpx_method(fits.getheader(input_weight_file), method),
                     overwrite=True,
                 )
+            self.logger.debug(f"Writing to {output_file}")
+            fits.writeto(
+                output_file,
+                data=output,
+                header=add_bpx_method(fits.getheader(input_image_file), method),
+                overwrite=True,
+            )
 
         self.images_to_stack = self.config.imstack.interp_images
 
@@ -626,22 +636,6 @@ class ImStack(BaseSetup):
         else:
             self.logger.info("Using CPU for convolution")
 
-        self._convolved_images = []
-        self._convolved_wht_images = []
-
-        for i in range(len(self.images_to_stack)):
-            if self.kernel[i] is None:
-                self._convolved_images.append(None)
-                self._convolved_wht_images.append(None)
-                self.logger.info(
-                    f"Convolution is skipped for images due to no kernel [{i+1}/{len(self.images_to_stack)}]"
-                )
-                continue
-            inim = self.images_to_stack[i]
-            im = fits.getdata(inim)
-            convolved_im = convolve_fft(im, self.kernel[i], device_id=device_id)
-            self._convolved_images.append(convolved_im)
-            if self.config.imstack.weight_map:
         self._convolved_images = []
         self._convolved_wht_images = []
 
