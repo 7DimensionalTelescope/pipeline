@@ -338,7 +338,7 @@ def check_gpu_activity(device_id=None, gpu_threshold=500):
     return available_gpus
 
 @contextmanager
-def acquire_available_gpu(device_id=None, gpu_threshold=500, blocking=True, timeout=60):
+def acquire_available_gpu(device_id=None, gpu_threshold=500, blocking=True, timeout=5):
     """
     Context manager that locks an available GPU (based on memory and lock).
 
