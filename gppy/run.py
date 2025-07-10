@@ -22,13 +22,6 @@ from .services.task import Task
 from .services.queue import QueueManager
 
 
-def run_preprocess(config, make_plots=False):
-    config = PreprocConfiguration.from_config(config)
-    prep = Preprocess(config)
-    prep.run(make_plots=make_plots)
-
-
-def get_preprocess_task(config, priority=Priority.HIGH, device_id=None, only_with_sci=False, make_plots=True, **kwargs):
 def run_preprocess(config, device_id=None, only_with_sci=False, make_plots=True, **kwargs):
     """
     Generate master calibration frames for a specific observation set.
@@ -39,11 +32,12 @@ def run_preprocess(config, device_id=None, only_with_sci=False, make_plots=True,
     """
     try:
         config = PreprocConfiguration.from_config(config)
-        prep = Preprocess(config, use_gpu = True if device_id is not None else False)
-        prep.run(device_id = device_id, make_plots=make_plots, only_with_sci=only_with_sci)
+        prep = Preprocess(config, use_gpu=True if device_id is not None else False)
+        prep.run(device_id=device_id, make_plots=make_plots, only_with_sci=only_with_sci)
         del config, prep
     except Exception as e:
         raise e
+
 
 def run_scidata_reduction(config, processes=["astrometry", "photometry", "combine", "subtract"], overwrite=False):
     try:
