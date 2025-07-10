@@ -369,7 +369,9 @@ class NameHandler:
     @property
     def raw_basename(self):
         def make(unit, date, hms, obj, filte, nbin, exptime):
-            return f"{unit}_{date}_{hms}_{obj}_{filte}_{format_binning(nbin)}_{format_exptime(exptime, type=self.type)}.fits"
+            return (
+                f"{unit}_{date}_{hms}_{obj}_{filte}_{format_binning(nbin)}_{format_exptime(exptime, type='raw')}.fits"
+            )
 
         if getattr(self, "_single", False):
             return make(self.unit, self.date, self.hms, self.obj, self.filter, self.n_binning, self.exptime)
@@ -420,7 +422,7 @@ class NameHandler:
     @property
     def processed_basename(self):
         def make(obj, filte, unit, date, hms, exptime):
-            return f"{obj}_{filte}_{unit}_{date}_{hms}_{format_exptime(exptime, type='raw')}.fits"
+            return f"{obj}_{filte}_{unit}_{date}_{hms}_{format_exptime(exptime, type='processed')}.fits"
 
         if getattr(self, "_single", False):
             return make(self.obj, self.filter, self.unit, self.date, self.hms, self.exptime)
