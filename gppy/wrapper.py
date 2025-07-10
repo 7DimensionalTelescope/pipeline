@@ -1,5 +1,5 @@
 import os
-import threading
+from concurrent.futures import ThreadPoolExecutor
 from collections import UserDict
 import time
 
@@ -97,14 +97,14 @@ class DataReduction:
                 self.groups[mfg_key].add_sci_keys(key)
 
     def create_config(self, overwrite=False):
-        threads = []
         kwargs = {"overwrite": overwrite}
-        for group in self.groups.values():
-            t = threading.Thread(target=group.create_config, kwargs=kwargs)
-            t.start()
-            threads.append(t)
-        for t in threads:
-            t.join()
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            futures = [
+                executor.submit(group.create_config, **kwargs)
+                for group in self.groups.values()
+            ]
+            for f in futures:
+                f.result()  #
 
     def config_list(self):
         master_configs = []

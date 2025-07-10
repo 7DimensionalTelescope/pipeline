@@ -36,6 +36,7 @@ class SciProcConfiguration(BaseConfig):
             clean_up_sciproduct(self.path.output_dir)
 
         self.write_config()
+        self.logger.info("Completed to load configuration")
 
     # @classmethod
     # def base_config(cls, input_images=None, config_file=None, config_dict=None, working_dir=None, **kwargs):
