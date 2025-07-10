@@ -357,7 +357,7 @@ def acquire_available_gpu(device_id=None, gpu_threshold=500, blocking=True, time
     available_gpus = check_gpu_activity(device_id=device_id, gpu_threshold=gpu_threshold)
 
     for gpu_id in available_gpus:
-        lock_path = f"/tmp/gpu{gpu_id}.lock"
+        lock_path = f"/tmp/gpu/locks/gpu{gpu_id}.lock"
         try:
             lock_file = open(lock_path, "w")
         except Exception:
