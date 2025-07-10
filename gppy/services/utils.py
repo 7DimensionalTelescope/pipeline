@@ -365,14 +365,6 @@ def acquire_available_gpu(device_id=None, gpu_threshold=500, blocking=True, time
 
         t_start = time.time()
 
-           for gpu_id in available_gpus:
-        lock_path = f"/tmp/gpu{gpu_id}.lock"
-        try:
-            lock_file = open(lock_path, "w")
-        except Exception:
-            continue  # Skip if lock file can't be opened
-
-        t_start = time.time()
         while True:
             try:
                 flag = fcntl.LOCK_EX
