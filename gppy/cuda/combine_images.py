@@ -9,7 +9,7 @@ def combine_images_with_cupy(
 ):
     """median is gpu, std is cpu"""
     import cupy as cp
-
+    
     arr_shape = data[0].shape
     np_median = np.empty(arr_shape)
     np_std = np.empty(arr_shape)
@@ -17,9 +17,9 @@ def combine_images_with_cupy(
 
     with cp.cuda.Device(device_id):
 
-        cp_stack = cp.asarray(data).astype(cp.float32)
+        cp_stack = cp.asarray(data, dtype=cp.float32)
         if subtract is not None:
-            cp_subtract = cp.asarray(subtract).astype(cp.float32)
+            cp_subtract = cp.asarray(subtract, dtype=cp.float32)
             cp_subtract = cp.sum(cp_subtract, axis=0)
             cp_stack -= cp_subtract
             del cp_subtract
