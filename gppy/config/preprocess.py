@@ -36,6 +36,7 @@ class PreprocConfiguration(BaseConfig):
             clean_up_folder(self.path.preproc_output_dir)
 
         self.write_config()
+        self.logger.info("Completed to load configuration")
 
     @property
     def name(self):
