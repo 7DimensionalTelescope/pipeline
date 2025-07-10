@@ -48,7 +48,7 @@ def combine_images_with_subprocess(
         cmd.extend(["-bpmask", make_bpmask])
         cmd.extend(["-bpmask_sigma", str(bpmask_sigma)])
 
-    result = subprocess.run(cmd, check=True)
+    result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode != 0:
         raise RuntimeError(f"Error combining images: {result.stderr}")
@@ -102,11 +102,11 @@ def process_image_with_subprocess(image_paths, bias, dark, flat, device_id=0, ou
         "-device",
         str(device_id),
     ]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True)
 
-    subprocess.run(cmd, check=True)
     if result.returncode != 0:
         raise RuntimeError(f"Error combining images: {result.stderr}")
-
     return None
 
 

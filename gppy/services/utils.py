@@ -292,53 +292,24 @@ def get_best_gpu_device():
     import pynvml
 
 def check_gpu_activity(device_id=None, gpu_threshold=500):
-    """
-    Returns a list of GPU IDs that are not currently in use
-    based on memory usage threshold.
-
-    Args:
-        device_id (int or None): If given, only check this GPU.
-        gpu_threshold (int): Memory usage threshold in MB.
-
-    Returns:
-        List[int]: List of available GPU IDs.
-    """
-
     pynvml.nvmlInit()
-    available_gpus = []
+    device_count = pynvml.nvmlDeviceGetCount()
+    available = []
 
-    try:
-        device_ids = [device_id] if device_id is not None else list(range(pynvml.nvmlDeviceGetCount()))
+    indices = [device_id] if device_id is not None else range(device_count)
 
-        for gpu_id in device_ids:
-            try:
-                handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_id)
-                try:
-                    procs = pynvml.nvmlDeviceGetComputeRunningProcesses(handle)
-                except pynvml.NVMLError_NotSupported:
-                    procs = []
+    for i in indices:
+        handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+        meminfo = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        used_MB = meminfo.used / 1024 / 1024
+        if used_MB < gpu_threshold:
+            available.append(i)
 
-                busy = False
-                for p in procs:
-                    try:
-                        mem_used_MB = p.usedGpuMemory / 1024**2
-                        if mem_used_MB > gpu_threshold:
-                            busy = True
-                            break
-                    except pynvml.NVMLError:
-                        continue
-
-                if not busy:
-                    available_gpus.append(gpu_id)
-            except pynvml.NVMLError:
-                continue
-    finally:
-        pynvml.nvmlShutdown()
-
-    return available_gpus
+    pynvml.nvmlShutdown()
+    return available
 
 @contextmanager
-def acquire_available_gpu(device_id=None, gpu_threshold=500, blocking=True, timeout=5):
+def acquire_available_gpu(device_id=None, gpu_threshold=500, blocking=False, timeout=5):
     """
     Context manager that locks an available GPU (based on memory and lock).
 
