@@ -98,7 +98,7 @@ class DataReduction:
 
     def create_config(self, overwrite=False):
         kwargs = {"overwrite": overwrite}
-        with ThreadPoolExecutor(max_workers=20) as executor:
+        with ThreadPoolExecutor(max_workers=30) as executor:
             futures = [
                 executor.submit(group.create_config, **kwargs)
                 for group in self.groups.values()
