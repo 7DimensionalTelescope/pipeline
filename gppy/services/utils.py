@@ -9,6 +9,9 @@ from astropy.table import Table
 
 from typing import Optional
 
+import fcntl
+from contextlib import contextmanager
+import pynvml
 
 def cleanup_memory() -> None:
     """
@@ -279,33 +282,80 @@ def get_best_gpu_device():
     percent = MemoryMonitor.current_gpu_memory_percent
     available = []
     for i, p in enumerate(percent):
-        if not (check_gpu_activity(i)) and p < 90:
+        if not (acquire_available_gpu(i)) and p < 90:
             available.append(p)
 
     if len(available) == 0:
         return "CPU"
     else:
         return int(np.argmin(available))
-
-
-def check_gpu_activity(device=0, gpu_threshold=500):
     import pynvml
 
+def check_gpu_activity(device_id=None, gpu_threshold=500):
     pynvml.nvmlInit()
-    try:
-        handle = pynvml.nvmlDeviceGetHandleByIndex(device)
-        try:
-            procs = pynvml.nvmlDeviceGetComputeRunningProcesses(handle)
-        except pynvml.NVMLError_NotSupported:
-            return False
+    device_count = pynvml.nvmlDeviceGetCount()
+    available = []
 
-        for p in procs:
+    indices = [device_id] if device_id is not None else range(device_count)
+
+    for i in indices:
+        handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+        meminfo = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        used_MB = meminfo.used / 1024 / 1024
+        if used_MB < gpu_threshold:
+            available.append(i)
+
+    pynvml.nvmlShutdown()
+    return available
+
+@contextmanager
+def acquire_available_gpu(device_id=None, gpu_threshold=500, blocking=True, timeout=1):
+    """
+    Context manager that locks an available GPU (based on memory and lock).
+
+    Args:
+        device_id (int or None): If given, only try to acquire this GPU.
+        gpu_threshold (int): GPU memory usage threshold in MB.
+        blocking (bool): Whether to block when trying to acquire lock.
+        timeout (int): Timeout in seconds for lock acquisition.
+
+    Yields:
+        int or None: GPU ID if successfully locked, otherwise None.
+    """
+    if device_id == "CPU":
+        yield None
+    
+    available_gpus = check_gpu_activity(device_id=device_id, gpu_threshold=gpu_threshold)
+
+    for gpu_id in available_gpus:
+        lock_path = f"/tmp/gpu_locks/gpu{gpu_id}.lock"
+        try:
+            lock_file = open(lock_path, "w")
+        except Exception:
+            continue  # Skip if lock file can't be opened
+
+        t_start = time.time()
+
+        while True:
             try:
-                mem_used_MB = p.usedGpuMemory / 1024**2
-                if mem_used_MB > gpu_threshold:
-                    return True
-            except pynvml.NVMLError:
-                continue
-        return False
-    finally:
-        pynvml.nvmlShutdown()
+                flag = fcntl.LOCK_EX
+                if not blocking:
+                    flag |= fcntl.LOCK_NB
+
+                fcntl.flock(lock_file, flag)
+
+                try:
+                    yield gpu_id  # Success
+                finally:
+                    # Always unlock and close on exit, even on exception
+                    fcntl.flock(lock_file, fcntl.LOCK_UN)
+                    lock_file.close()
+                return
+            except BlockingIOError:
+                if not blocking or (time.time() - t_start) > timeout:
+                    break
+                time.sleep(0.1)
+
+        lock_file.close()
+
+    yield None

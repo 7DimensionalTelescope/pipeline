@@ -8,11 +8,12 @@ import time
 from .plotting import *
 from . import utils as prep_utils
 
+from .calc import record_statistics
 from ..utils import get_header, flatten, time_diff_in_seconds, update_header_by_overwriting, write_header_into_file
 from ..config import PreprocConfiguration
 from ..services.setup import BaseSetup
 from ..const import HEADER_KEY_MAP
-
+from ..services.utils import acquire_available_gpu
 
 class Preprocess(BaseSetup):
     """
@@ -210,24 +211,6 @@ class Preprocess(BaseSetup):
         self.logger.debug(f"FLAT DARK SCALING (FLAT / DARK): {flat_exptime} / {dark_exptime}")
         return flat_exptime / dark_exptime
 
-    def get_device_id(self, device_id):
-
-        if self._use_gpu:
-            if device_id is None:
-                from ..services.utils import get_best_gpu_device
-
-                return get_best_gpu_device()
-            elif device_id == "CPU":
-                return "CPU"
-            from ..services.utils import check_gpu_activity
-
-            if check_gpu_activity(device_id):
-                return "CPU"
-            else:
-                return device_id
-        else:
-            return "CPU"
-
     def load_masterframe(self, device_id=None, use_gpu: bool = True):
         """
         no raw calib -> fetch from the library of pre-generated master frames
@@ -250,9 +233,7 @@ class Preprocess(BaseSetup):
 
             if input_data:  # if the list is not empty
                 if not os.path.exists(output_data) or self.overwrite:
-                    self._generate_masterframe(dtype, device_id, calc_function)
-                    if dtype == "dark":
-                        self.generate_bpmask()
+                    self._generate_masterframe(dtype, device_id)
                 else:
                     self._fetch_masterframe(output_data, dtype)
             elif isinstance(output_data, str) or len(output_data) > 0:
@@ -272,55 +253,55 @@ class Preprocess(BaseSetup):
         input_data = getattr(self, f"{dtype}_input")
         header = self.get_header(dtype)
 
-        device_id = self.get_device_id(device_id)
+        device_id = device_id if self._use_gpu else "CPU"
 
-        if device_id == "CPU":
-            from .calc import combine_images_with_cpu
+        with acquire_available_gpu(device_id=device_id) as device_id:
+            if device_id is None:
+                from .calc import combine_images_with_cpu
 
-            calc_function = combine_images_with_cpu
-            self.logger.info(f"Generating masterframe {dtype} for group {self._current_group+1} in CPU")
-        else:
-            from .calc import combine_images_with_subprocess
+                calc_function = combine_images_with_cpu
+                self.logger.info(f"Generating masterframe {dtype} for group {self._current_group+1} in CPU")
+            else:
+                from .calc import combine_images_with_subprocess
 
-            calc_function = combine_images_with_subprocess
-            self.logger.info(
-                f"Generating masterframe {dtype} for group {self._current_group+1} in GPU device {device_id}"
-            )
+                calc_function = combine_images_with_subprocess
+                self.logger.info(
+                    f"Generating masterframe {dtype} for group {self._current_group+1} in GPU device {device_id}"
+                )
 
-        if dtype == "bias":
-            calc_function(input_data, device_id=device_id, output=self.bias_output, sig_output=self.biassig_output)
+            if dtype == "bias":
+                    calc_function(input_data, device_id=device_id, output=self.bias_output, sig_output=self.biassig_output)
 
-        elif dtype == "dark":
-            calc_function(
-                input_data,
-                device_id=device_id,
-                subtract=[self.bias_output],
-                scale=[1],
-                output=self.dark_output,
-                sig_output=self.darksig_output,
-                make_bpmask=self.bpmask_output,
-                bpmask_sigma=self.config.preprocess.n_sigma,
-            )
-            self.dark_exptime = header[HEADER_KEY_MAP["exptime"]]
+            elif dtype == "dark":
+                calc_function(
+                    input_data,
+                    device_id=device_id,
+                    subtract=[self.bias_output],
+                    scale=[1],
+                    output=self.dark_output,
+                    sig_output=self.darksig_output,
+                    make_bpmask=self.bpmask_output,
+                    bpmask_sigma=self.config.preprocess.n_sigma,
+                )
+                self.dark_exptime = header[HEADER_KEY_MAP["exptime"]]
 
-        elif dtype == "flat":
-            dark_scale = self._calc_dark_scale(header[HEADER_KEY_MAP["exptime"]], self.dark_exptime)
-            calc_function(
-                input_data,
-                subtract=[self.bias_output, self.dark_output],
-                scale=[1, dark_scale],
-                norm=True,
-                device_id=device_id,
-                output=self.flat_output,
-                sig_output=self.flatsig_output,
-            )
+            elif dtype == "flat":
+                dark_scale = self._calc_dark_scale(header[HEADER_KEY_MAP["exptime"]], self.dark_exptime)
+                calc_function(
+                    input_data,
+                    subtract=[self.bias_output, self.dark_output],
+                    scale=[1, dark_scale],
+                    norm=True,
+                    device_id=device_id,
+                    output=self.flat_output,
+                    sig_output=self.flatsig_output,
+                )
 
         update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), header)
 
         header = prep_utils.add_image_id(header)
-        from .calc import record_statistics
 
-        header = record_statistics(getattr(self, f"{dtype}_output"), header, device_id=device_id)
+        header = record_statistics(getattr(self, f"{dtype}_output"), header)
 
         update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
 
@@ -390,35 +371,36 @@ class Preprocess(BaseSetup):
             return
 
         st = time.time()
+        device_id = device_id if self._use_gpu else "CPU"
 
-        device_id = self.get_device_id(device_id)
-        if device_id == "CPU":
-            from .calc import process_image_with_cpu
+        with acquire_available_gpu(device_id=device_id) as device_id:
+            if device_id is None:
+                from .calc import process_image_with_cpu
 
-            process_kernel = process_image_with_cpu
-            self.logger.info(f"Processing {len(self.sci_input)} images in group {self._current_group+1} on CPU")
-        else:
-            from .calc import process_image_with_subprocess
+                process_kernel = process_image_with_cpu
+                self.logger.info(f"Processing {len(self.sci_input)} images in group {self._current_group+1} on CPU")
+            else:
+                from .calc import process_image_with_subprocess
 
-            process_kernel = process_image_with_subprocess
-            self.logger.info(
-                f"Processing {len(self.sci_input)} images in group {self._current_group+1} on GPU device(s): {device_id} "
+                process_kernel = process_image_with_subprocess
+                self.logger.info(
+                    f"Processing {len(self.sci_input)} images in group {self._current_group+1} on GPU device(s): {device_id} "
+                )
+
+            process_kernel(
+                self.sci_input,
+                self.bias_output,
+                self.dark_output,
+                self.flat_output,
+                device_id=device_id,
+                output_paths=self.sci_output,
+                header=self._header,
+                use_gpu=self._use_gpu,
             )
 
-        process_kernel(
-            self.sci_input,
-            self.bias_output,
-            self.dark_output,
-            self.flat_output,
-            device_id=device_id,
-            output_paths=self.sci_output,
-            header=self._header,
-            use_gpu=self._use_gpu,
-        )
-
-        self.logger.info(
-            f"Completed data reduction for {len(self.sci_input)} images in group {self._current_group+1} in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self.sci_input):.1f} s/image)"
-        )
+            self.logger.info(
+                f"Completed data reduction for {len(self.sci_input)} images in group {self._current_group+1} in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self.sci_input):.1f} s/image)"
+            )
 
     def make_plots(self, group_index=None):
         st = time.time()

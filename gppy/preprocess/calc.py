@@ -102,9 +102,11 @@ def process_image_with_subprocess(image_paths, bias, dark, flat, device_id=0, ou
         "-device",
         str(device_id),
     ]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True)
 
-    print(cmd)
-    subprocess.run(cmd, check=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"Error combining images: {result.stderr}")
     return None
 
 
