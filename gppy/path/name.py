@@ -420,7 +420,7 @@ class NameHandler:
     @property
     def processed_basename(self):
         def make(obj, filte, unit, date, hms, exptime):
-            return f"{obj}_{filte}_{unit}_{date}_{hms}_{format_exptime(exptime, type=self.type)}.fits"
+            return f"{obj}_{filte}_{unit}_{date}_{hms}_{format_exptime(exptime, type='raw')}.fits"
 
         if getattr(self, "_single", False):
             return make(self.obj, self.filter, self.unit, self.date, self.hms, self.exptime)
