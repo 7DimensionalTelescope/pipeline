@@ -7,10 +7,8 @@ import time
 
 from .plotting import *
 from . import utils as prep_utils
-from .calc import *
 
 from ..utils import get_header, flatten, time_diff_in_seconds, update_header_by_overwriting, write_header_into_file
-from ..path import PathHandler
 from ..config import PreprocConfiguration
 from ..services.setup import BaseSetup
 from ..const import HEADER_KEY_MAP
@@ -53,7 +51,6 @@ class Preprocess(BaseSetup):
         self.overwrite = overwrite
         self.master_frame_only = master_frame_only
 
-        self._device_id = None if use_gpu else "CPU"
         self._use_gpu = use_gpu
         self.initialize()
 
@@ -105,7 +102,7 @@ class Preprocess(BaseSetup):
     def run(self, device_id=None, make_plots=True, use_gpu=True, only_with_sci=False):
         self._use_gpu = all([use_gpu, self._use_gpu])
 
-        device_id = self.get_device_id(device_id)
+        st = time.time()
 
         threads_for_making_plots = []
         for i in range(self._n_groups):
@@ -120,7 +117,7 @@ class Preprocess(BaseSetup):
                 self.data_reduction(device_id=device_id)
 
             if make_plots:
-                t = threading.Thread(target=self.make_plots, kwargs={"group_index": i})
+                t = threading.Thread(target=self.make_plots, kwargs={"group_index":  i})
                 t.start()
                 threads_for_making_plots.append(t)
 
@@ -131,14 +128,14 @@ class Preprocess(BaseSetup):
             for t in threads_for_making_plots:
                 t.join()
 
-        self.logger.info("Preprocess completed")
+        self.logger.info(f"Preprocessing completed in {time_diff_in_seconds(st)} seconds")
 
     def make_plot_all(self):
         st = time.time()
-        self.logger.info("Making plots for all groups")
+        self.logger.info("Generating plots for all groups")
         for i in range(self._n_groups):
             self.make_plots(i)
-        self.logger.info(f"Finished making plots for all groups in {time_diff_in_seconds(st)} seconds")
+        self.logger.info(f"Finished generating plots for all groups in {time_diff_in_seconds(st)} seconds")
 
     def proceed_to_next_group(self):
         self._current_group += 1
@@ -214,28 +211,22 @@ class Preprocess(BaseSetup):
         return flat_exptime / dark_exptime
 
     def get_device_id(self, device_id):
+
         if self._use_gpu:
-            if device_id is not None:
-                self._device_id = device_id
-                if self.config.preprocess.device is None:
-                    self.config.preprocess.device = self._device_id
-            elif self._device_id is None:
-                if self.config.preprocess.device is not None:
-                    self._device_id = self.config.preprocess.device
-                else:
-                    from ..services.utils import get_best_gpu_device
+            if device_id is None:
+                from ..services.utils import get_best_gpu_device
 
-                    self._device_id = get_best_gpu_device()
-                    if self._device_id is None:
-                        self.logger.warning("No available GPU device found. Using CPU.")
-                        self._use_gpu = False
-                        self._device_id = "CPU"
-                    else:
-                        self.config.preprocess.device = self._device_id
+                return get_best_gpu_device()
+            elif device_id == "CPU":
+                return "CPU"
+            from ..services.utils import check_gpu_activity
+
+            if check_gpu_activity(device_id):
+                return "CPU"
+            else:
+                return device_id
         else:
-            self._device_id = "CPU"
-
-        return self._device_id
+            return "CPU"
 
     def load_masterframe(self, device_id=None, use_gpu: bool = True):
         """
@@ -247,12 +238,6 @@ class Preprocess(BaseSetup):
         If there's nothing to fetch, the code will fail.
         """
         self._use_gpu = all([use_gpu, self._use_gpu])
-        if device_id == "CPU":
-            calc_function = combine_images_with_cpu
-            self.logger.info(f"Generating masterframes for group {self._current_group+1} in CPU")
-        else:
-            calc_function = combine_images_with_subprocess
-            self.logger.info(f"Generating masterframes for group {self._current_group+1} in GPU device {device_id}")
 
         st = time.time()
 
@@ -265,9 +250,7 @@ class Preprocess(BaseSetup):
 
             if input_data:  # if the list is not empty
                 if not os.path.exists(output_data) or self.overwrite:
-                    self._generate_masterframe(dtype, device_id, calc_function)
-                    if dtype == "dark":
-                        self.generate_bpmask()
+                    self._generate_masterframe(dtype, device_id)
                 else:
                     self._fetch_masterframe(output_data, dtype)
             elif isinstance(output_data, str) or len(output_data) > 0:
@@ -279,21 +262,28 @@ class Preprocess(BaseSetup):
 
         self.logger.info(f"Generation/Loading of masterframes completed in {time_diff_in_seconds(st)} seconds")
 
-    def _generate_masterframe(self, dtype, device_id, calc_function=None):
+    def _generate_masterframe(self, dtype, device_id):
         """Generate & Save masterframe and sigma image"""
 
         st = time.time()
 
-        if self._use_gpu:
-            self.logger.info(f"Generating master {dtype} in GPU device {device_id}")
-        else:
-            self.logger.info(f"Generating master {dtype} in CPU")
-
         input_data = getattr(self, f"{dtype}_input")
         header = self.get_header(dtype)
 
-        if calc_function is None:
+        device_id = self.get_device_id(device_id)
+
+        if device_id == "CPU":
+            from .calc import combine_images_with_cpu
+
+            calc_function = combine_images_with_cpu
+            self.logger.info(f"Generating masterframe {dtype} for group {self._current_group+1} in CPU")
+        else:
+            from .calc import combine_images_with_subprocess
+
             calc_function = combine_images_with_subprocess
+            self.logger.info(
+                f"Generating masterframe {dtype} for group {self._current_group+1} in GPU device {device_id}"
+            )
 
         if dtype == "bias":
             calc_function(input_data, device_id=device_id, output=self.bias_output, sig_output=self.biassig_output)
@@ -326,12 +316,17 @@ class Preprocess(BaseSetup):
         update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), header)
 
         header = prep_utils.add_image_id(header)
+        from .calc import record_statistics
+
         header = record_statistics(getattr(self, f"{dtype}_output"), header, device_id=device_id)
 
         update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
 
         self.logger.info(f"Master {dtype} generated in {time_diff_in_seconds(st)} seconds")
         self.logger.debug(f"FITS Written: {getattr(self, f'{dtype}_output')}")
+
+        if dtype == "dark":
+            self.update_bpmask()
 
     def _fetch_masterframe(self, template, dtype):
         self.logger.info(f"Fetching master {dtype}")
@@ -361,7 +356,7 @@ class Preprocess(BaseSetup):
         st = time.time()
         n_head_blocks = self.config.preprocess.n_head_blocks
         bias, dark, flat = self.bias_output, self.dark_output, self.flat_output
-
+        self._header = []
         # Write results
         for raw_file, processed_file in zip(self.sci_input, self.sci_output):
             header = fits.getheader(raw_file)
@@ -370,6 +365,7 @@ class Preprocess(BaseSetup):
             header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
 
             write_header_into_file(processed_file, header)
+            self._header.append(header)
 
         self.logger.info(
             f"Prepare image headers for group {self._current_group+1} in {time_diff_in_seconds(st)} seconds."
@@ -393,23 +389,28 @@ class Preprocess(BaseSetup):
 
         st = time.time()
 
+        device_id = self.get_device_id(device_id)
         if device_id == "CPU":
+            from .calc import process_image_with_cpu
+
             process_kernel = process_image_with_cpu
             self.logger.info(f"Processing {len(self.sci_input)} images in group {self._current_group+1} on CPU")
         else:
+            from .calc import process_image_with_subprocess
+
             process_kernel = process_image_with_subprocess
             self.logger.info(
                 f"Processing {len(self.sci_input)} images in group {self._current_group+1} on GPU device(s): {device_id} "
             )
 
-        results, leakage = process_kernel(
+        process_kernel(
             self.sci_input,
             self.bias_output,
             self.dark_output,
             self.flat_output,
             device_id=device_id,
             output_paths=self.sci_output,
-            header=self._headers,
+            header=self._header,
             use_gpu=self._use_gpu,
         )
 
@@ -461,7 +462,7 @@ class Preprocess(BaseSetup):
             f"Completed plot generation for images in group {group_index+1} in {time_diff_in_seconds(st)} seconds"
         )
 
-    def generate_bpmask(self):
+    def update_bpmask(self):
         header = self.get_header("dark")
         hot_mask = fits.getdata(self.bpmask_output)
         newhdu = fits.CompImageHDU(data=hot_mask)

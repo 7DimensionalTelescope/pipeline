@@ -107,7 +107,7 @@ class Logger:
             handler = LockingFileHandler(log_file, mode=mode)
 
         handler.setLevel(level or getattr(logging, self._level))
-        handler.setFormatter(logging.Formatter(self._log_format, datefmt='%Y-%m-%d %H:%M:%S'))
+        handler.setFormatter(logging.Formatter(self._log_format, datefmt="%Y-%m-%d %H:%M:%S"))
         return handler
 
     def _handle_exception(self, exc_type, exc_value, exc_traceback):
@@ -115,9 +115,7 @@ class Logger:
             # Let KeyboardInterrupt through
             sys.__excepthook__(exc_type, exc_value, exc_traceback)
             return
-        self.logger.critical(
-            "Unhandled exception", exc_info=(exc_type, exc_value, exc_traceback)
-        )
+        self.logger.critical("Unhandled exception", exc_info=(exc_type, exc_value, exc_traceback))
 
     def _setup_logger(self, overwrite: bool = True) -> logging.Logger:
         """
@@ -134,7 +132,7 @@ class Logger:
         Raises:
             AttributeError: If an invalid log level is provided
         """
-        
+
         try:
             log_level = getattr(logging, self._level)
         except AttributeError:
@@ -147,7 +145,7 @@ class Logger:
         # Helper function to check if a handler of specific type already exists
         def has_handler_type(logger, handler_type, remove_handler=False):
             for handler in logger.handlers:
-                if hasattr(handler, 'name') and handler.name == handler_type:
+                if hasattr(handler, "name") and handler.name == handler_type:
                     if remove_handler:
                         logger.removeHandler(handler)
                         return False
@@ -160,7 +158,7 @@ class Logger:
             console_handler = self._create_handler("console", level=logging.INFO)
             console_handler.name = "console"
             logger.addHandler(console_handler)
-        
+
         if not has_handler_type(logger, "console_err"):
             console_err_handler = self._create_handler("console_err", level=logging.ERROR)
             console_err_handler.name = "console_err"
@@ -184,9 +182,7 @@ class Logger:
             # Debug log file always at DEBUG level
             debug_log_file = self._log_file.replace(".log", "_debug.log")
             if not has_handler_type(logger, "file_debug", remove_handler=True):
-                debug_handler = self._create_handler(
-                    "file_debug", log_file=debug_log_file, level=logging.DEBUG
-                )
+                debug_handler = self._create_handler("file_debug", log_file=debug_log_file, level=logging.DEBUG)
                 debug_handler.name = "file_debug"
                 logger.addHandler(debug_handler)
 
@@ -296,10 +292,12 @@ class Logger:
                 self._thread_ts = response_data["ts"]
 
             if not response_data.get("ok"):
-                print(
-                    f"Slack API Error: {response_data.get('error')}",
-                    file=sys.__stderr__,
-                )
+                error = response_data.get("error")
+                if error != "invalid_auth":
+                    print(
+                        f"Slack API Error: {response_data.get('error')}",
+                        file=sys.__stderr__,
+                    )
 
         except Exception as e:
             print(f"Slack notification failed: {e}", file=sys.__stderr__)
@@ -336,8 +334,8 @@ class Logger:
 
                 if response_data.get("ok"):
                     return response_data
-
-                if response_data.get("error") == "ratelimited":
+                error = response_data.get("error")
+                if error == "ratelimited":
                     # Get retry_after from headers or use exponential backoff
                     retry_after = float(response.headers.get("Retry-After", delay))
                     time.sleep(retry_after)
@@ -346,10 +344,11 @@ class Logger:
                     continue
 
                 # Other errors
-                print(
-                    f"Slack API Error: {response_data.get('error')}",
-                    file=sys.__stderr__,
-                )
+                if error != "invalid_auth":
+                    print(
+                        f"Slack API Error: {response_data.get('error')}",
+                        file=sys.__stderr__,
+                    )
                 return None
 
             except Exception as e:
@@ -484,24 +483,24 @@ class LockingFileHandler(logging.FileHandler):
     A file handler that uses file locking to ensure thread and process safety.
     This prevents log corruption when multiple processes write to the same file.
     """
-    
-    def __init__(self, filename, mode='a', encoding=None, delay=False):
+
+    def __init__(self, filename, mode="a", encoding=None, delay=False):
         """
         Initialize the handler with the given filename and mode.
         """
         super().__init__(filename, mode, encoding, delay)
-        
+
     def emit(self, record):
         """
         Emit a record with file locking to prevent concurrent writes.
         """
         if self.stream is None:
             self.stream = self._open()
-            
+
         try:
             # Acquire an exclusive lock
             fcntl.flock(self.stream, fcntl.LOCK_EX)
-            
+
             # Format the record and write to the stream
             msg = self.format(record)
             self.stream.write(msg + self.terminator)
@@ -514,7 +513,6 @@ class LockingFileHandler(logging.FileHandler):
         finally:
             # Always release the lock
             fcntl.flock(self.stream, fcntl.LOCK_UN)
-            
 
 
 # class PrintLogger:

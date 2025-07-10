@@ -115,7 +115,6 @@ def pix_err_numba(r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, G, weight=T
 
 
 def pix_err_cupy(r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, G, weight=True):
-    nonneg = lambda x: cp.maximum(x, 0)
     """
     r: raw pixel value. r = f * r_p + d + z
     r_p: preprocessed pixel value
@@ -123,7 +122,11 @@ def pix_err_cupy(r_p, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, G, weight=Tr
     d: dark
     f: flat
     """
+    nonneg = lambda x: cp.maximum(x, 0)
     sig_r_squared = nonneg(f_m * r_p + d_m) / G + sig_z**2
+    sig_zm = sig_z / np.sqrt(p_z)
+    sig_dm_squared = (d_m / G + (1 + 1 / p_z) * sig_z**2) / p_d
+    sig_fm = sig_f / np.sqrt(p_f)
 
     sig_rp_squared = (sig_r_squared + sig_zm**2 + sig_dm_squared) / f_m**2 + (r_p / f_m) ** 2 * sig_fm**2  # fmt: skip
     if weight:

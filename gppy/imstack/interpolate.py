@@ -2,8 +2,12 @@ from numba import njit, prange
 import numpy as np
 import cupy as cp
 from astropy.io import fits
+from typing import List, Tuple
 
-def interpolate_masked_pixels(images, mask, window=1, method=None, badpix=None, weight=True, device=None):
+
+def interpolate_masked_pixels(
+    images: List[Tuple[str]], mask, window=1, method=None, badpix=None, weight: bool = True, device=None
+):
 
     cpu_buffer = np.empty(mask.shape)
     if weight:
@@ -18,7 +22,7 @@ def interpolate_masked_pixels(images, mask, window=1, method=None, badpix=None, 
         with cp.cuda.Device(device):
             mask = cp.asarray(mask)
 
-    for (o, w) in images:
+    for o, w in images:
         cpu_buffer[:] = fits.getdata(o)
 
         if weight:
@@ -28,7 +32,7 @@ def interpolate_masked_pixels(images, mask, window=1, method=None, badpix=None, 
             with cp.cuda.Device(device):
                 gpu_buffer = cp.asarray(cpu_buffer)
                 gpu_buffer[:] = gpu_buffer.astype(cp.float32)
-                
+
                 if weight:
                     gpu_buffer_weight = cp.asarray(cpu_buffer_weight)
                     gpu_buffer_weight = gpu_buffer_weight.astype(cp.float32)
@@ -48,21 +52,19 @@ def interpolate_masked_pixels(images, mask, window=1, method=None, badpix=None, 
                     cpu_buffer_weight[:] = cp.asnumpy(gpu_buffer_weight)
                     output_weight.append(cpu_buffer_weight.copy())
         else:
-            cpu_buffer[:] = interpolate_masked_pixels_cpu_numba(
-                cpu_buffer, mask, window=window
-            )
+            cpu_buffer[:] = interpolate_masked_pixels_cpu_numba(cpu_buffer, mask, window=window)
             output.append(cpu_buffer.copy())
-    
+
     if device and device != "CPU":
         with cp.cuda.Device(device):
             del gpu_buffer, gpu_buffer_weight, mask
             cp.get_default_memory_pool().free_all_blocks()
-    
+
     del cpu_buffer
 
     return output, output_weight
-    
-        
+
+
 @njit(parallel=True)
 def interpolate_masked_pixels_cpu_numba(image, mask, window=1):
     assert image.shape == mask.shape
@@ -110,6 +112,7 @@ def interpolate_masked_pixels_cpu_numba(image, mask, window=1):
             result[r, c] = np.median(vals_np)
 
     return result
+
 
 def interpolate_masked_pixels_cpu(image, mask, window=1):
     assert image.shape == mask.shape
@@ -183,9 +186,7 @@ def interpolate_masked_pixels_gpu_vectorized(image, mask, window=1):
 
     # Generate patch index offsets
     # Kernel Size is 2 * window + 1
-    dy, dx = cp.meshgrid(
-        cp.arange(-window, window + 1), cp.arange(-window, window + 1), indexing="ij"
-    )
+    dy, dx = cp.meshgrid(cp.arange(-window, window + 1), cp.arange(-window, window + 1), indexing="ij")
     dy = dy.ravel()  # (K,)
     dx = dx.ravel()  # (K,)
     # K = dy.size
@@ -315,9 +316,7 @@ def interpolate_masked_pixels_gpu_vectorized_weight(
         return result, weight_result
 
     # Create patch offsets
-    dy, dx = cp.meshgrid(
-        cp.arange(-window, window + 1), cp.arange(-window, window + 1), indexing="ij"
-    )
+    dy, dx = cp.meshgrid(cp.arange(-window, window + 1), cp.arange(-window, window + 1), indexing="ij")
     dy = dy.ravel()
     dx = dx.ravel()
 

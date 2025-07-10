@@ -1,9 +1,7 @@
 import yaml
-import os
 from datetime import datetime
 from abc import ABC, abstractmethod
 from .. import __version__
-from .. import const
 from .utils import merge_dicts
 from ..path.path import PathHandler
 

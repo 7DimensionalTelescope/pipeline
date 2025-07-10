@@ -1,0 +1,65 @@
+#! /home/snu/.conda/envs/pipeline/bin/python
+
+from gppy.config import SciProcConfiguration
+from gppy.astrometry import Astrometry
+from gppy.photometry import Photometry
+from gppy.imstack import ImStack
+from gppy.subtract import ImSubtract
+
+import argparse
+import sys
+import signal
+
+
+def run_scidata_reduction(config, processes=["astrometry", "photometry", "combine", "subtract"], overwrite=False):
+    try:
+        config = SciProcConfiguration.from_config(config)
+        if (not (config.config.flag.astrometry) and "astrometry" in processes) or overwrite:
+            astr = Astrometry(config)
+            astr.run()
+            del astr
+        if (not (config.config.flag.single_photometry) and "photometry" in processes) or overwrite:
+            phot = Photometry(config)
+            phot.run()
+            del phot
+        if (not (config.config.flag.combine) and "combine" in processes) or overwrite:
+            stk = ImStack(config)
+            stk.run()
+            del stk
+        if (not (config.config.flag.combined_photometry) and "photometry" in processes) or overwrite:
+            phot = Photometry(config)
+            phot.run()
+            del phot
+        if (not (config.config.flag.subtraction) and "subtract" in processes) or overwrite:
+            subt = ImSubtract(config)
+            subt.run()
+            del subt
+        del config
+    except Exception as e:
+        raise e
+
+
+def signal_handler(sig, frame):
+    print("\nTerminate process")
+    sys.exit(0)
+
+
+signal.signal(signal.SIGINT, signal_handler)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description=(
+            "Preprocess astronomical FITS images by generating master calibration frames "
+            "(bias, dark, flat) and optionally reducing science images. "
+            "Supports GPU/CPU selection and optional plot generation."
+        )
+    )
+    parser.add_argument("-config", type=str, required=True, help="Path to the preprocessing configuration file")
+    args = parser.parse_args()
+
+    try:
+        run_scidata_reduction(args.config)
+    except Exception as e:
+        print(f"\nError: {e}")
+        sys.exit(1)
+    

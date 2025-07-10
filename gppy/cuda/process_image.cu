@@ -37,7 +37,7 @@ void process_images(
 ) {
     cudaSetDevice(device_id);
 
-    const int batch_size = 10;
+    const int batch_size = 5;
     long w = 0, h = 0;
 
     // Read calibration images into vectors and get width and height from bias image
@@ -81,7 +81,7 @@ void process_images(
 
         checkCudaError(cudaMemcpyAsync(d_images, pinned_input, current_batch * size * sizeof(float), cudaMemcpyHostToDevice, stream));
 
-        int blockSize = 512;
+        int blockSize = 1024;
         int gridSize = (size + blockSize - 1) / blockSize;
         reduction_kernel<<<gridSize, blockSize, 0, stream>>>(d_images, d_bias, d_dark, d_flat, size, current_batch);
 

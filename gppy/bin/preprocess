@@ -1,0 +1,60 @@
+#!/home/snu/.conda/envs/pipeline/bin/python
+
+from gppy.config import PreprocConfiguration
+from gppy.preprocess import Preprocess
+import argparse
+import sys
+import signal
+
+
+def run_preprocess(config, device_id=None, only_with_sci=False, make_plots=True, **kwargs):
+    """
+    Generate master calibration frames for a specific observation set.
+
+    Master frames are combined calibration images (like dark, flat, bias) that
+    help in reducing systematic errors in scientific observations.
+    """
+    try:
+        config = PreprocConfiguration.from_config(config)
+        prep = Preprocess(config, use_gpu=True)
+        prep.run(device_id=device_id, make_plots=make_plots, only_with_sci=only_with_sci)
+        del config, prep
+    except Exception as e:
+        raise e
+
+
+def signal_handler(sig, frame):
+    print("\nTerminate process")
+    sys.exit(0)
+
+
+signal.signal(signal.SIGINT, signal_handler)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description=(
+            "Preprocess astronomical FITS images by generating master calibration frames "
+            "(bias, dark, flat) and optionally reducing science images. "
+            "Supports GPU/CPU selection and optional plot generation."
+        )
+    )
+    parser.add_argument("-config", type=str, required=True, help="Path to the preprocessing configuration file")
+    parser.add_argument("-device_id", type=str, help="Device to use: 'CPU' or GPU device index (e.g., 0, 1)")
+    parser.add_argument(
+        "-only_with_sci", action="store_true", help="Process only if corresponding science images are present"
+    )
+    parser.add_argument("-make_plots", action="store_true", help="Generate diagnostic plots during preprocessing")
+    args = parser.parse_args()
+
+    try:
+        if args.device_id is None:
+            device_id = None
+        elif args.device_id == "CPU":
+            device_id = "CPU"
+        else:
+            device_id = int(args.device_id)
+
+        run_preprocess(args.config, device_id=device_id, only_with_sci=args.only_with_sci, make_plots=args.make_plots)
+    except Exception as e:
+        print(f"\nError: {e}")
+        sys.exit(1)

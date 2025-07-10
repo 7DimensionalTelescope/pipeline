@@ -13,6 +13,7 @@ from .services.queue import QueueManager
 from itertools import chain
 from .services.task import Task, Priority
 
+
 def glob_files_from_db(params):
     return []
 
@@ -28,7 +29,6 @@ class DataReduction:
 
     def __init__(self, input_params, use_db=False, **kwargs):
         self.groups = SortedGroupDict()  # use a sorted dictionary
-        self._multi_unit_config = set()
 
         self._unified_key_list = None  # Will be populated after initialization
         self._key_usage_map = None  # Will track which keys are used in which groups
@@ -106,26 +106,40 @@ class DataReduction:
         for t in threads:
             t.join()
 
-    def process_all(self, preprocess_only=False):
+    def config_list(self):
+        master_configs = []
+        dependent_configs = dict()
+        multiunit_config = set()
+        for i, (key, group) in enumerate(self.groups.items()):
+            if isinstance(group, ScienceGroup):
+                continue
+            master_configs.append(group.config)
+            for scikey in group.sci_keys:
+                sci_group = self.groups[scikey]
+                if not (sci_group.multi_units):
+                    dependent_configs.setdefault(key, []).append(sci_group.config)
+                else:
+                    multiunit_config.add(sci_group.config)
 
+        return master_configs, dependent_configs, multiunit_config
+
+    def process_all(self, preprocess_only=False):
         masterframe_ids = []
-        active_runs = 0
         for i, (key, group) in enumerate(self.groups.items()):
             if isinstance(group, MasterframeGroup):
-                # Submit preprocess
-                if active_runs == 2:
-                    self.queue.wait_until_task_complete("all")
-                    active_runs = 0
-                pre_task = group.get_task(device_id=i % 2, only_with_sci=True, make_plots=False)
+                if i < 2:
+                    device_id = i
+                else:
+                    device_id = "CPU"
+                pre_task = group.get_task(device_id=device_id, only_with_sci=True, make_plots=False)
                 self.queue.add_task(pre_task)
                 masterframe_ids.append([pre_task, group])
-                active_runs+=1
-                
+                time.sleep(1)
 
         if preprocess_only:
             self.queue.wait_until_task_complete("all")
             return
-        
+
         while True:
             for task, group in masterframe_ids:
                 if task.status == "completed":
@@ -136,7 +150,7 @@ class DataReduction:
                         else:
                             self._multi_unit_config.add(sci_group.config)
                     masterframe_ids.remove([task, group])
-            
+
             time.sleep(1)
 
             if len(masterframe_ids) == 0:
@@ -144,10 +158,11 @@ class DataReduction:
 
         for config in self._multi_unit_config:
             from .run import run_scidata_reduction
+
             sci_task = Task(
                 run_scidata_reduction,
                 kwargs={"config": config, "processes": ["astrometry", "photometry", "combine", "subtract"]},
-                priority=Priority.MEDIUM
+                priority=Priority.MEDIUM,
             )
             self.queue.add_task(sci_task)
 
@@ -155,8 +170,6 @@ class DataReduction:
             if isinstance(group, MasterframeGroup):
                 pre_task = group.get_task(device_id=None, only_with_sci=False, make_plots=True, priority=Priority.LOW)
                 self.queue.add_task(pre_task)
-
-        
 
         self.queue.wait_until_task_complete("all")
 
@@ -211,7 +224,16 @@ class MasterframeGroup:
     def get_task(self, device_id=None, only_with_sci=False, make_plots=True, priority=Priority.PREPROCESS, **kwargs):
         from .run import run_preprocess
 
-        prep_task = Task(run_preprocess, kwargs={"config": self.config, "make_plots": make_plots, "only_with_sci": only_with_sci, "device_id": device_id}, priority=priority)
+        prep_task = Task(
+            run_preprocess,
+            kwargs={
+                "config": self.config,
+                "make_plots": make_plots,
+                "only_with_sci": only_with_sci,
+                "device_id": device_id,
+            },
+            priority=priority,
+        )
 
         return prep_task
 
@@ -268,7 +290,11 @@ class ScienceGroup:
     def get_task(self, priority=Priority.MEDIUM, **kwargs):
         from .run import run_scidata_reduction
 
-        sci_task = Task(run_scidata_reduction, kwargs={"config": self.config, "processes": ["astrometry", "photometry", "combine", "subtract"]}, priority=priority)
+        sci_task = Task(
+            run_scidata_reduction,
+            kwargs={"config": self.config, "processes": ["astrometry", "photometry", "combine", "subtract"]},
+            priority=priority,
+        )
 
         return sci_task
 
