@@ -16,6 +16,7 @@ from ..const import REF_DIR, PipelineError
 from ..config import SciProcConfiguration
 from .. import external
 from ..services.setup import BaseSetup
+from ..services.utils import acquire_available_gpu
 from ..utils import collapse, get_header, add_suffix, swap_ext, time_diff_in_seconds, get_basename, flatten
 from ..path.path import PathHandler, NameHandler
 
