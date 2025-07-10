@@ -250,7 +250,7 @@ class Preprocess(BaseSetup):
 
             if input_data:  # if the list is not empty
                 if not os.path.exists(output_data) or self.overwrite:
-                    self._generate_masterframe(dtype, device_id, calc_function)
+                    self._generate_masterframe(dtype, device_id)
                     if dtype == "dark":
                         self.generate_bpmask()
                 else:
