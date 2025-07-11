@@ -1,14 +1,15 @@
-import gc
-import numpy as np
 import os
-from astropy.io import fits
+import gc
 import subprocess
+import numpy as np
+from astropy.io import fits
 from numba import njit, prange
 from ..const import SCRIPT_DIR
-import gc
+
 
 def read_fits_image(path):
     return fits.getdata(path).astype(np.float32)
+
 
 def combine_images_with_subprocess(
     images,
@@ -25,7 +26,6 @@ def combine_images_with_subprocess(
     """
     Combine images using a subprocess call to a CUDA-accelerated script.
     """
-    gc.collect()
     cmd = [
         "python",
         f"{SCRIPT_DIR}/cuda/combine_images.py",
@@ -99,7 +99,7 @@ def process_image_with_subprocess(image_paths, bias, dark, flat, device_id=0, ou
         module = "process_image"
     cmd = [
         f"{SCRIPT_DIR}/cuda/{module}",
-        # "python", 
+        # "python",
         # f"{SCRIPT_DIR}/cuda/process_image.py",
         "-bias",
         bias,
@@ -114,7 +114,7 @@ def process_image_with_subprocess(image_paths, bias, dark, flat, device_id=0, ou
         "-device",
         str(device_id),
     ]
-    
+
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode != 0:
@@ -124,21 +124,18 @@ def process_image_with_subprocess(image_paths, bias, dark, flat, device_id=0, ou
 
 def process_image_with_cpu(
     image_paths: str,
-    bias: np.array,
-    dark: np.array,
-    flat: np.array,
-    subtract=None,
+    bias: str,
+    dark: str,
+    flat: str,
     normalize=False,
     output_paths: list = None,
     header: list = None,
     **kwargs,
 ):
-    gc.collect()
+
     bias = read_fits_image(bias)
     dark = read_fits_image(dark)
     flat = read_fits_image(flat)
-
-    subtract = subtract.astype(np.float32) if subtract is not None else None
 
     output = []
     h, w = fits.getdata(image_paths[0]).shape
@@ -146,13 +143,16 @@ def process_image_with_cpu(
 
     for i, image in enumerate(image_paths):
         cpu_buffer[:] = read_fits_image(image)
-        cpu_buffer[:] = reduction_kernel_cpu(cpu_buffer, bias, dark, flat, subtract, normalize)
+        cpu_buffer[:] = reduction_kernel_cpu(cpu_buffer, bias, dark, flat, normalize)
         if output_paths is not None:
             os.makedirs(os.path.dirname(output_paths[i]), exist_ok=True)
             if header is None:
                 header_file = output_paths[i].replace(".fits", ".header")
-                with open(header_file, 'r') as f:
-                    head = fits.Header.fromstring(f.read(), sep='\n')
+                if os.path.exists(header_file):
+                    with open(header_file, "r") as f:
+                        head = fits.Header.fromstring(f.read(), sep="\n")
+                else:
+                    head = None
             else:
                 head = header[i]
             fits.writeto(
@@ -164,21 +164,19 @@ def process_image_with_cpu(
         else:
             output.append(cpu_buffer.copy())
 
-    del cpu_buffer, bias, dark, flat, subtract
+    del cpu_buffer, bias, dark, flat
     gc.collect()
     return None
 
 
 @njit(parallel=True)
-def reduction_kernel_cpu(image, bias, dark, flat, subtract, normalize):
+def reduction_kernel_cpu(image, bias, dark, flat, normalize):
     h, w = image.shape
     corrected = np.empty_like(image)
 
     for i in prange(h):
         for j in range(w):
             val = image[i, j] - bias[i, j] - dark[i, j]
-            if subtract is not None:
-                val -= subtract[i, j]
             val /= flat[i, j]
             corrected[i, j] = val
 

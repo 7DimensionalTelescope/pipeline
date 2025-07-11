@@ -164,10 +164,6 @@ int main(int argc, char* argv[]) {
         return 5;
     }
 
-    for (std::string& out : output_paths) {
-        if (out[0] != '!') out = "!" + out;
-    }
-
     process_images(image_paths, bias_path, dark_path, flat_path, output_paths, device_id);
     return 0;
 }

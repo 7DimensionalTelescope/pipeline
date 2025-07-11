@@ -24,15 +24,67 @@ def glob_files_by_param(keywords, **kwargs):
     return query_observations(keywords, **kwargs)
 
 
+
+
+class SortedGroupDict(UserDict):
+    """A dictionary that sorts its values when iterating."""
+
+    def __getitem__(self, key):
+        if type(key) == int:
+            return self.values()[key]
+        else:
+            return super().__getitem__(key)
+
+    def __iter__(self):
+        # First sort by type (MasterframeGroup first, then ScienceGroup)
+        # Then within each type, sort by their respective criteria
+        return iter(self._get_sorted_values())
+
+    def values(self):
+        return self._get_sorted_values()
+
+    def items(self):
+        sorted_values = self._get_sorted_values()
+        return [(getattr(v, "key", None), v) for v in sorted_values]
+
+    def _get_sorted_values(self):
+        # Separate MasterframeGroup and ScienceGroup
+        masterframe_groups = []
+        science_groups = []
+
+        for value in self.data.values():
+            if isinstance(value, MasterframeGroup):
+                masterframe_groups.append(value)
+            else:
+                science_groups.append(value)
+
+        # Sort MasterframeGroup by sci_keys length (descending)
+        sorted_masterframe = sorted(masterframe_groups, key=lambda x: len(x.sci_keys), reverse=True)
+
+        # Sort ScienceGroup by image_files length (descending)
+        sorted_science = sorted(science_groups, key=lambda x: len(x.image_files), reverse=True)
+
+        # Return MasterframeGroup first, then ScienceGroup
+        return sorted_masterframe + sorted_science
+
+    def __repr__(self):
+        string = ""
+        for value in self.values():
+            string += str(value) + "\n"
+        return string
+
+
 class DataReduction:
     """overwrite=True to rewrite configs"""
 
-    def __init__(self, input_params, use_db=False, **kwargs):
-        self.groups = SortedGroupDict()  # use a sorted dictionary
+    groups = SortedGroupDict()
+    _unified_key_list = None  # Will be populated after initialization
+    _key_usage_map = None  # Will track which keys are used in which groups
+    input_params = None  # No input parameters for this method
 
-        self._unified_key_list = None  # Will be populated after initialization
-        self._key_usage_map = None  # Will track which keys are used in which groups
+    _multi_unit_config = set()
 
+    def __init__(self, input_params, use_db=False, **kwargs): 
         self.input_params = input_params
         print("Globbing images with parameters:", input_params)
 
@@ -54,11 +106,6 @@ class DataReduction:
             raise ValueError("Non-fits images in input")
         self = cls.__new__(cls)
         self.list_of_images = list_of_images
-        self.groups = SortedGroupDict()
-        self._multi_unit_config = set()
-        self._unified_key_list = None
-        self._key_usage_map = None
-        self.input_params = None  # No input parameters for this method
         self.queue = QueueManager()
         self.initialize()
         print("Blueprint initialized from user-input list.")
@@ -300,51 +347,3 @@ class ScienceGroup:
 
     def __repr__(self):
         return f"ScienceGroup({self.key} with {len(self.image_files)} images)"
-
-
-class SortedGroupDict(UserDict):
-    """A dictionary that sorts its values when iterating."""
-
-    def __getitem__(self, key):
-        if type(key) == int:
-            return self.values()[key]
-        else:
-            return super().__getitem__(key)
-
-    def __iter__(self):
-        # First sort by type (MasterframeGroup first, then ScienceGroup)
-        # Then within each type, sort by their respective criteria
-        return iter(self._get_sorted_values())
-
-    def values(self):
-        return self._get_sorted_values()
-
-    def items(self):
-        sorted_values = self._get_sorted_values()
-        return [(getattr(v, "key", None), v) for v in sorted_values]
-
-    def _get_sorted_values(self):
-        # Separate MasterframeGroup and ScienceGroup
-        masterframe_groups = []
-        science_groups = []
-
-        for value in self.data.values():
-            if isinstance(value, MasterframeGroup):
-                masterframe_groups.append(value)
-            else:
-                science_groups.append(value)
-
-        # Sort MasterframeGroup by sci_keys length (descending)
-        sorted_masterframe = sorted(masterframe_groups, key=lambda x: len(x.sci_keys), reverse=True)
-
-        # Sort ScienceGroup by image_files length (descending)
-        sorted_science = sorted(science_groups, key=lambda x: len(x.image_files), reverse=True)
-
-        # Return MasterframeGroup first, then ScienceGroup
-        return sorted_masterframe + sorted_science
-
-    def __repr__(self):
-        string = ""
-        for value in self.values():
-            string += str(value) + "\n"
-        return string

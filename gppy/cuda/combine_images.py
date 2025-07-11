@@ -1,9 +1,8 @@
 from astropy.io import fits
-import numpy as np
 import argparse
 import sys
 import cupy as cp
-
+import numpy as np
 bpmask_kernel = cp.RawKernel(r'''
 extern "C" __global__
 void compute_bpmask_kernel(const float* __restrict__ img,
@@ -33,8 +32,7 @@ def combine_images_with_cupy(
     data, device_id=None, subtract=None, norm=False, make_bpmask=False, maxiters=5, sigma=3, bpmask_sigma=5, **kwargs
 ):
     """median is GPU, std is CPU. Uses pinned memory for better host-GPU transfer performance."""
-    import cupy as cp
-    import numpy as np
+
 
     arr_shape = data[0].shape
 
