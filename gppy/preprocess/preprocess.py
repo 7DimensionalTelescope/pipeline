@@ -258,12 +258,10 @@ class Preprocess(BaseSetup):
         with acquire_available_gpu(device_id=device_id) as device_id:
             if device_id is None:
                 from .calc import combine_images_with_cpu
-
                 calc_function = combine_images_with_cpu
                 self.logger.info(f"Generating masterframe {dtype} for group {self._current_group+1} in CPU")
             else:
                 from .calc import combine_images_with_subprocess
-
                 calc_function = combine_images_with_subprocess
                 self.logger.info(
                     f"Generating masterframe {dtype} for group {self._current_group+1} in GPU device {device_id}"

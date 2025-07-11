@@ -12,6 +12,7 @@ from typing import Optional
 import fcntl
 from contextlib import contextmanager
 import pynvml
+import os
 
 def cleanup_memory() -> None:
     """
@@ -294,22 +295,29 @@ def get_best_gpu_device():
 def check_gpu_activity(device_id=None, gpu_threshold=500):
     pynvml.nvmlInit()
     device_count = pynvml.nvmlDeviceGetCount()
-    available = []
+    available = set()
 
     indices = [device_id] if device_id is not None else range(device_count)
 
     for i in indices:
         handle = pynvml.nvmlDeviceGetHandleByIndex(i)
-        meminfo = pynvml.nvmlDeviceGetMemoryInfo(handle)
-        used_MB = meminfo.used / 1024 / 1024
-        if used_MB < gpu_threshold:
-            available.append(i)
-
+        try:
+            procs = pynvml.nvmlDeviceGetComputeRunningProcesses(handle)
+            if len(procs) == 0:
+                available.add(i)
+            else:
+                for p in procs:
+                    used_MB = p.usedGpuMemory / 1024 / 1024
+                    if used_MB < gpu_threshold:
+                        available.add(i)
+        except pynvml.NVMLError as e:
+            print(f"  Could not get processes: {e}")
+        
     pynvml.nvmlShutdown()
-    return available
+    return list(available)
 
 @contextmanager
-def acquire_available_gpu(device_id=None, gpu_threshold=500, blocking=True, timeout=1):
+def acquire_available_gpu(device_id=None, gpu_threshold=500, blocking=True, timeout=10):
     """
     Context manager that locks an available GPU (based on memory and lock).
 
@@ -324,15 +332,19 @@ def acquire_available_gpu(device_id=None, gpu_threshold=500, blocking=True, time
     """
     if device_id == "CPU":
         yield None
-    
+
     available_gpus = check_gpu_activity(device_id=device_id, gpu_threshold=gpu_threshold)
+    
+    username = os.getlogin()
+    lock_dir = f"/tmp/gpu_locks_{username}"
+    os.makedirs(lock_dir, exist_ok=True)
 
     for gpu_id in available_gpus:
-        lock_path = f"/tmp/gpu_locks/gpu{gpu_id}.lock"
+        lock_path = os.path.join(lock_dir, f"gpu{gpu_id}.lock")
         try:
-            lock_file = open(lock_path, "w")
+            lock_file = open(lock_path, "a+")  
         except Exception:
-            continue  # Skip if lock file can't be opened
+            continue
 
         t_start = time.time()
 
