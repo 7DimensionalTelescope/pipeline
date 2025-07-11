@@ -87,8 +87,13 @@ def combine_images_with_cpu(
 
 
 def process_image_with_subprocess(image_paths, bias, dark, flat, device_id=0, output_paths=None, **kwargs):
+
+    if len(image_paths) > 20:
+        module = "process_image_batch"
+    else:
+        module = "process_image"
     cmd = [
-        f"{SCRIPT_DIR}/cuda/process_image",
+        f"{SCRIPT_DIR}/cuda/{module}",
         "-bias",
         bias,
         "-dark",
@@ -137,10 +142,16 @@ def process_image_with_cpu(
         cpu_buffer[:] = reduction_kernel_cpu(cpu_buffer, bias, dark, flat, subtract, normalize)
         if output_paths is not None:
             os.makedirs(os.path.dirname(output_paths[i]), exist_ok=True)
+            if header is None:
+                header_file = output_paths[i].replace(".fits", ".header")
+                with open(header_file, 'r') as f:
+                    head = fits.Header.fromstring(f.read(), sep='\n')
+            else:
+                head = header[i]
             fits.writeto(
                 output_paths[i],
                 data=cpu_buffer,
-                header=header[i],
+                header=head,
                 overwrite=True,
             )
         else:

@@ -1,4 +1,4 @@
-// Optimized process_images with pinned memory, async copy, and CUDA stream (batching 40 images)
+
 #include <cuda_runtime.h>
 #include <iostream>
 #include <vector>
@@ -7,20 +7,26 @@
 #include <cstring>
 #include "io.h"  // FITS read/write helper
 
+
 #define checkCudaError(err) \
     if (err != cudaSuccess) { \
         std::cerr << "CUDA Error: " << cudaGetErrorString(err) << std::endl; \
         exit(EXIT_FAILURE); \
     }
 
-__global__ void reduction_kernel(float* image, const float* bias, const float* dark, const float* flat, int size) {
+
+__global__ void reduction_kernel(float* images, const float* bias, const float* dark, const float* flat, int size, int batch_size) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= size) return;
 
     float b = bias[idx];
     float d = dark[idx];
     float f = flat[idx];
-    image[idx] = (image[idx] - b - d) / f;
+
+    for (int i = 0; i < batch_size; ++i) {
+        float* img = images + i * size;
+        img[idx] = (img[idx] - b - d) / f;
+    }
 }
 
 void process_images(
@@ -33,65 +39,73 @@ void process_images(
 ) {
     cudaSetDevice(device_id);
 
+    const int batch_size = 20;
     long w = 0, h = 0;
+
+    // Read calibration images into vectors and get width and height from bias image
     std::vector<float> bias, dark, flat;
     read_fits(bias_path.c_str(), bias, w, h);
     read_fits(dark_path.c_str(), dark, w, h);
     read_fits(flat_path.c_str(), flat, w, h);
 
     int size = w * h;
-    float *d_bias, *d_dark, *d_flat, *d_image;
+    float *d_bias, *d_dark, *d_flat, *d_images;
     checkCudaError(cudaMalloc(&d_bias, size * sizeof(float)));
     checkCudaError(cudaMalloc(&d_dark, size * sizeof(float)));
     checkCudaError(cudaMalloc(&d_flat, size * sizeof(float)));
-    checkCudaError(cudaMalloc(&d_image, size * sizeof(float)));
-
     checkCudaError(cudaMemcpy(d_bias, bias.data(), size * sizeof(float), cudaMemcpyHostToDevice));
     checkCudaError(cudaMemcpy(d_dark, dark.data(), size * sizeof(float), cudaMemcpyHostToDevice));
     checkCudaError(cudaMemcpy(d_flat, flat.data(), size * sizeof(float), cudaMemcpyHostToDevice));
 
     float* pinned_input;
     float* pinned_output;
-    cudaHostAlloc((void**)&pinned_input, size * sizeof(float), cudaHostAllocDefault);
-    cudaHostAlloc((void**)&pinned_output, size * sizeof(float), cudaHostAllocDefault);
+    cudaHostAlloc((void**)&pinned_input, batch_size * size * sizeof(float), cudaHostAllocDefault);
+    cudaHostAlloc((void**)&pinned_output, batch_size * size * sizeof(float), cudaHostAllocDefault);
+    checkCudaError(cudaMalloc(&d_images, batch_size * size * sizeof(float)));
 
     cudaStream_t stream;
     cudaStreamCreate(&stream);
 
-    for (size_t i = 0; i < image_paths.size(); ++i) {
-        long iw = 0, ih = 0;
-        std::vector<float> temp_img;
-        read_fits(image_paths[i].c_str(), temp_img, iw, ih);
-        if (iw != w || ih != h) {
-            std::cerr << "Image size mismatch!" << std::endl;
-            exit(EXIT_FAILURE);
+    for (size_t i = 0; i < image_paths.size(); i += batch_size) {
+        int current_batch = std::min(batch_size, static_cast<int>(image_paths.size() - i));
+
+        // Read batch of images into temporary vectors, then memcpy to pinned input buffer
+        for (int j = 0; j < current_batch; ++j) {
+            long iw = 0, ih = 0;
+            std::vector<float> temp_img;
+            read_fits(image_paths[i + j].c_str(), temp_img, iw, ih);
+            if (iw != w || ih != h) {
+                std::cerr << "Image size mismatch!" << std::endl;
+                exit(EXIT_FAILURE);
+            }
+            std::memcpy(pinned_input + j * size, temp_img.data(), size * sizeof(float));
         }
 
-        std::memcpy(pinned_input, temp_img.data(), size * sizeof(float));
-
-        checkCudaError(cudaMemcpyAsync(d_image, pinned_input, size * sizeof(float), cudaMemcpyHostToDevice, stream));
+        checkCudaError(cudaMemcpyAsync(d_images, pinned_input, current_batch * size * sizeof(float), cudaMemcpyHostToDevice, stream));
 
         int blockSize = 1024;
         int gridSize = (size + blockSize - 1) / blockSize;
-        reduction_kernel<<<gridSize, blockSize, 0, stream>>>(d_image, d_bias, d_dark, d_flat, size);
+        reduction_kernel<<<gridSize, blockSize, 0, stream>>>(d_images, d_bias, d_dark, d_flat, size, current_batch);
 
-        checkCudaError(cudaMemcpyAsync(pinned_output, d_image, size * sizeof(float), cudaMemcpyDeviceToHost, stream));
+        checkCudaError(cudaMemcpyAsync(pinned_output, d_images, current_batch * size * sizeof(float), cudaMemcpyDeviceToHost, stream));
         cudaStreamSynchronize(stream);
 
-        std::filesystem::create_directories(std::filesystem::path(output_paths[i]).parent_path());
-        std::vector<float> output_vec(pinned_output, pinned_output + size);
-        write_fits(output_paths[i].c_str(), output_vec, w, h);
+        // Write batch results from pinned output buffer slices wrapped as vectors
+        for (int j = 0; j < current_batch; ++j) {
+            std::filesystem::create_directories(std::filesystem::path(output_paths[i + j]).parent_path());
+            std::vector<float> output_vec(pinned_output + j * size, pinned_output + (j + 1) * size);
+            write_fits(output_paths[i + j].c_str(), output_vec, w, h);
+        }
     }
 
     cudaFree(d_bias);
     cudaFree(d_dark);
     cudaFree(d_flat);
-    cudaFree(d_image);
+    cudaFree(d_images);
     cudaFreeHost(pinned_input);
     cudaFreeHost(pinned_output);
     cudaStreamDestroy(stream);
 }
-
 
 
 int main(int argc, char* argv[]) {
