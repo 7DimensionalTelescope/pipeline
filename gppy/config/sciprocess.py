@@ -149,7 +149,7 @@ class SciProcConfiguration(BaseConfig):
         self.config.info.creation_datetime = datetime.now().isoformat()
         self.config.name = self.config.name or self.name
 
-        self.config.input.calibrated_images = PathHandler(self.input_files).processed_images
+        self.config.input.calibrated_images = atleast_1d(PathHandler(self.input_files).processed_images)
         self.config.input.output_dir = self.path.output_dir
 
         # self.set_input_output()
