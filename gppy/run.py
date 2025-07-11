@@ -28,7 +28,6 @@ def run_preprocess(config, make_plots=False):
     prep.run(make_plots=make_plots)
 
 
-def get_preprocess_task(config, priority=Priority.HIGH, device_id=None, only_with_sci=False, make_plots=True, **kwargs):
 def run_preprocess(config, device_id=None, only_with_sci=False, make_plots=True, **kwargs):
     """
     Generate master calibration frames for a specific observation set.
