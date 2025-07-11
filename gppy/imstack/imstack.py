@@ -20,7 +20,7 @@ from ..path.path import PathHandler
 
 from .utils import move_file  # inputlist_parser, move_file
 from .const import ZP_KEY, IC_KEYS, CORE_KEYS
-from .weight import calc_weight
+from .weight import calc_weight_with_subprocess
 from .interpolate import interpolate_masked_pixels, add_bpx_method
 from .convolve import convolve_fft, add_conv_header, get_edge_mask
 
@@ -379,35 +379,9 @@ class ImStack(BaseSetup):
                 else:
                     uncalculated_images.append(img)
 
-            # output = calc_weight(
-            #     uncalculated_images, d_m, f_m, sig_z, sig_f, p_d, p_z, p_f, egain, weight=True, device=device_id
-            # )
-
             if uncalculated_images:
-                script = os.path.join(os.path.dirname(__file__), "weight_map_runner.py")
-                cmd = [
-                    sys.executable, script,
-                    "--d_m_file",   d_m_file,
-                    "--f_m_file",   f_m_file,
-                    "--sig_z_file", sig_z_file,
-                    "--sig_f_file", sig_f_file,
-                    # "--p_d",        str(p_d),
-                    # "--p_z",        str(p_z),
-                    # "--p_f",        str(p_f),
-                    "--device",     f"{device_id}",
-                ] + uncalculated_images  # fmt: skip
-
-                self.logger.debug(f"ImStack weight map command: {cmd}")
-
-                st_image = time.time()
-                try:
-                    subprocess.run(cmd, check=True, capture_output=True, text=True)
-                except subprocess.CalledProcessError as e:
-                    print("COMMAND:", e.cmd)
-                    print("RETURN CODE:", e.returncode)
-                    print("STDOUT:\n", e.stdout)
-                    print("STDERR:\n", e.stderr)
-
+                calc_weight_with_subprocess(uncalculated_images, d_m_file, f_m_file,sig_z_file, sig_f_file, device_id=device_id)
+                
                 self.logger.debug(
                     f"Weight-map calculation (device={device_id}) for group {i} is completed in {time_diff_in_seconds(st_image)} seconds"
                 )

@@ -330,8 +330,10 @@ def acquire_available_gpu(device_id=None, gpu_threshold=500, blocking=True, time
     Yields:
         int or None: GPU ID if successfully locked, otherwise None.
     """
+
     if device_id == "CPU":
         yield None
+        return
 
     available_gpus = check_gpu_activity(device_id=device_id, gpu_threshold=gpu_threshold)
     

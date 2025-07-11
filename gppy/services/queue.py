@@ -324,7 +324,7 @@ class QueueManager:
                     proc = subprocess.Popen(cmd)
                     self._active_processes.append([config, proc])
                     self._device_id += 1
-                    self.logger.info(f"Process ({ptype}) with {os.path.basename(config)}({proc.pid}) submitted.")
+                    self.logger.info(f"Process ({ptype}) with {os.path.basename(config)} (PID = {proc.pid}) submitted.")
                     time.sleep(0.5)
 
                 except Exception as e:
@@ -352,13 +352,13 @@ class QueueManager:
                     if proc.poll() is not None:
                         pid = proc.pid
                         if proc.returncode == 0:
-                            self.logger.info(f"Process with {config}({pid}) completed.")
+                            self.logger.info(f"Process with {config} (PID = {pid}) completed.")
                             self._active_processes.remove(process)
                             # Inform the scheduler that the task is done
                             self.scheduler.mark_done(config)
                         else:
                             self.logger.error(
-                                f"Process with {os.path.basename(config)}({pid}) failed with return code {proc.returncode}."
+                                f"Process with {os.path.basename(config)} (PID = {pid}) failed with return code {proc.returncode}."
                             )
                             self._active_processes.remove(process)
                 time.sleep(0.5)

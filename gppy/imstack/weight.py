@@ -4,6 +4,27 @@ from ..utils import swap_ext
 from numba import njit
 import numpy as np
 import cupy as cp
+import sys
+import subprocess
+from ..const import SCRIPT_DIR
+
+def calc_weight_with_subprocess(images, d_m_file, f_m_file, sig_z_file, sig_f_file, device_id = 0):
+    cmd = [
+        "python",
+        f"{SCRIPT_DIR}/cuda/weight_map.py",
+        "--d_m_file",   d_m_file,
+        "--f_m_file",   f_m_file,
+        "--sig_z_file", sig_z_file,
+        "--sig_f_file", sig_f_file,
+        "--device",     f"{device_id}",
+    ] + images  # fmt: skip
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        raise RuntimeError(f"Error combining images: {result.stderr}")
+
+    return None
 
 
 def calc_weight(images, d_m, f_m, sig_z, sig_f, p_d, p_z, p_f, egain, weight=True, device=None):
@@ -11,45 +32,45 @@ def calc_weight(images, d_m, f_m, sig_z, sig_f, p_d, p_z, p_f, egain, weight=Tru
     cpu_buffer = np.empty(d_m.shape)
     sig_b = np.empty(d_m.shape, dtype=np.float32)
 
-    if device and device != "CPU":
-        with cp.cuda.Device(device):
-            d_m, f_m = (
-                cp.asarray(d_m),
-                cp.asarray(f_m),
-            )
-            sig_b, sig_z, sig_f = (
-                cp.asarray(sig_b),
-                cp.asarray(sig_z),
-                cp.asarray(sig_f),
-            )
-            p_d, p_z, p_f = cp.asarray(p_d), cp.asarray(p_z), cp.asarray(p_f)
+    #if device and device != "CPU":
+    with cp.cuda.Device(device):
+        d_m, f_m = (
+            cp.asarray(d_m),
+            cp.asarray(f_m),
+        )
+        sig_b, sig_z, sig_f = (
+            cp.asarray(sig_b),
+            cp.asarray(sig_z),
+            cp.asarray(sig_f),
+        )
+        p_d, p_z, p_f = cp.asarray(p_d), cp.asarray(p_z), cp.asarray(p_f)
 
     for o in images:
         cpu_buffer[:] = fits.getdata(o)
 
-        if device and device != "CPU":
-            with cp.cuda.Device(device):
-                gpu_buffer = cp.asarray(cpu_buffer)
-                gpu_buffer[:] = gpu_buffer.astype(cp.float32)
-                gpu_buffer[:] = pix_err_cupy(
-                    gpu_buffer, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, egain, weight=weight
-                )
-                cpu_buffer[:] = cp.asnumpy(gpu_buffer)
-                output.append(cpu_buffer.copy())
-        else:
-            sig_z = np.array(sig_z, dtype=np.float32)
-            d_m = np.array(d_m, dtype=np.float32)
-            f_m = np.array(f_m, dtype=np.float32)
-            sig_f = np.array(sig_f, dtype=np.float32)
-            cpu_buffer[:] = pix_err_numba(
-                cpu_buffer, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, egain, weight=weight
-            )
-            output.append(cpu_buffer.copy())
-
-    if device and device != "CPU":
+#        if device and device != "CPU":
         with cp.cuda.Device(device):
-            del gpu_buffer, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f
-            cp.get_default_memory_pool().free_all_blocks()
+            gpu_buffer = cp.asarray(cpu_buffer)
+            gpu_buffer[:] = gpu_buffer.astype(cp.float32)
+            gpu_buffer[:] = pix_err_cupy(
+                gpu_buffer, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, egain, weight=weight
+            )
+            cpu_buffer[:] = cp.asnumpy(gpu_buffer)
+            output.append(cpu_buffer.copy())
+        # else:
+        #     sig_z = np.array(sig_z, dtype=np.float32)
+        #     d_m = np.array(d_m, dtype=np.float32)
+        #     f_m = np.array(f_m, dtype=np.float32)
+        #     sig_f = np.array(sig_f, dtype=np.float32)
+        #     cpu_buffer[:] = pix_err_numba(
+        #         cpu_buffer, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f, egain, weight=weight
+        #     )
+        #     output.append(cpu_buffer.copy())
+
+    #if device and device != "CPU":
+    with cp.cuda.Device(device):
+        del gpu_buffer, d_m, f_m, sig_b, sig_z, sig_f, p_d, p_z, p_f
+        cp.get_default_memory_pool().free_all_blocks()
 
     del cpu_buffer
 

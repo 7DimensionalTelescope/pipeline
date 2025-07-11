@@ -395,6 +395,11 @@ class Preprocess(BaseSetup):
                 header=self._header,
                 use_gpu=self._use_gpu,
             )
+            
+            for i, o in enumerate(self.sci_output):
+                with fits.open(o, mode="update") as hdul:
+                    hdul[0].header = self._header[i]
+                    hdul.flush()
 
             self.logger.info(
                 f"Completed data reduction for {len(self.sci_input)} images in group {self._current_group+1} in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self.sci_input):.1f} s/image)"
