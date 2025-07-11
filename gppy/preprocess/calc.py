@@ -5,6 +5,7 @@ from astropy.io import fits
 import subprocess
 from numba import njit, prange
 from ..const import SCRIPT_DIR
+import gc
 
 def read_fits_image(path):
     return fits.getdata(path).astype(np.float32)
@@ -24,6 +25,7 @@ def combine_images_with_subprocess(
     """
     Combine images using a subprocess call to a CUDA-accelerated script.
     """
+    gc.collect()
     cmd = [
         "python",
         f"{SCRIPT_DIR}/cuda/combine_images.py",
@@ -59,6 +61,7 @@ def combine_images_with_subprocess(
 def combine_images_with_cpu(
     images, output, sig_output, subtract=None, scale=None, norm=False, make_bpmask=None, bpmask_sigma=5, **kwargs
 ):
+    gc.collect()
     np_stack = np.stack([read_fits_image(img) for img in images])
     if subtract is not None:
         sub_arr = np.zeros_like(np_stack[0], dtype=np.float32)
@@ -87,6 +90,8 @@ def combine_images_with_cpu(
 
 
 def process_image_with_subprocess(image_paths, bias, dark, flat, device_id=0, output_paths=None, **kwargs):
+
+    gc.collect()
 
     if len(image_paths) > 20:
         module = "process_image_batch"
@@ -126,7 +131,7 @@ def process_image_with_cpu(
     header: list = None,
     **kwargs,
 ):
-
+    gc.collect()
     bias = read_fits_image(bias)
     dark = read_fits_image(dark)
     flat = read_fits_image(flat)
