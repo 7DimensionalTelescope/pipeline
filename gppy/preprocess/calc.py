@@ -99,6 +99,8 @@ def process_image_with_subprocess(image_paths, bias, dark, flat, device_id=0, ou
         module = "process_image"
     cmd = [
         f"{SCRIPT_DIR}/cuda/{module}",
+        # "python", 
+        # f"{SCRIPT_DIR}/cuda/process_image.py",
         "-bias",
         bias,
         "-dark",
@@ -116,7 +118,7 @@ def process_image_with_subprocess(image_paths, bias, dark, flat, device_id=0, ou
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode != 0:
-        raise RuntimeError(f"Error combining images: {result.stderr}")
+        raise RuntimeError(f"Error processing images: {result.stderr}")
     return None
 
 
