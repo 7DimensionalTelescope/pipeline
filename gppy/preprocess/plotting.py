@@ -58,7 +58,7 @@ def save_fits_as_png(image_data, output_path, stretch=True, log_scale=False, max
     pil_image.save(output_path, "PNG", optimize=True, compress_level=5)  # Optimize compression
 
 
-def plot_bias(file, savefig=False):
+def plot_bias(file, savefig=False, overwrite=False):
     if not (isinstance(file, str)):
         print("An image path (bias) is not properly defined.")
         return
@@ -67,7 +67,7 @@ def plot_bias(file, savefig=False):
     os.makedirs(path.parent / "figures", exist_ok=True)
     output_path = path.parent / "figures" / f"{path.stem}_hist.png"
 
-    if output_path.exists():
+    if output_path.exists() and not overwrite:
         return
 
     data = fits.getdata(file)
@@ -90,34 +90,34 @@ def plot_bias(file, savefig=False):
         histtype="step",
     )
 
-    for i, key in enumerate(["CLIPMEAN", "CLIPMED", "CLIPSTD"]):
-        plt.axvline(header[key], linestyle="--", color=f"C{i+1}", label=key)
+    lses = ["--", "-."]
+    for i, key in enumerate(["CLIPMEAN", "CLIPMED"]):
+        plt.axvline(header[key], linestyle=lses[i], color=f"C{i+1}", label=key)
 
     plt.axvspan(
         mn,
-        header["CLIPMIN"],
+        header["CLIPMEAN"] - 5 * header["CLIPSTD"],
         color="gray",
-        alpha=0.5,
-        label="outside CLIPMIN and CLIPMAX",
+        alpha=0.2,
+        label=r"outside 5 clipped $\sigma$",
     )
-    plt.axvspan(header["CLIPMAX"], mx, color="gray", alpha=0.5)
+    plt.axvspan(header["CLIPMEAN"] + 5 * header["CLIPSTD"], mx, color="gray", alpha=0.2)
     plt.yscale("log")
     plt.xlabel("ADU")
     plt.ylabel("Density")
     plt.title("Master Bias")
-
-    scope = (350, 650)  # (400, 600)
+    scope = (350, 700)  # (400, 600)(clipmin, clipmax)
     plt.xlim(*scope)
-    # plt.xlim(clipmin, clipmax)
     # plt.ylim(1e-7, 10)
-    plt.legend()
+    plt.legend(loc=2)
 
-    # Inset to show the tail
+    # Inset to show the right tail
     ax = plt.gca()
     axins = inset_axes(ax, width="30%", height="30%", loc="upper right", borderpad=2)
-    axins.hist(fdata, bins=edges, density=True, histtype="step", log=True)
-    axins.set_xlim(scope[1], mx)
-    axins.set_yscale("log")
+    tail = fdata[(fdata >= scope[1])]
+    axins.hist(tail, bins=100, density=False, histtype="step")
+    axins.set_xlim(scope[1], mx + 100)
+    # axins.set_yscale("log")
     axins.tick_params(axis="both", which="major", labelsize=8)
     axins.set_title("Right-tail zoom", fontsize=9)
 
