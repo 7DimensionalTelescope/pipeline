@@ -42,6 +42,7 @@ def get_current_camera_serial(unit: int) -> str:
 
 
 def get_camera_serial(unit: int, query_date: str):
+    """WARNING: assumes C3 if serial unavailable"""
     # 1) load camswap history
     swaps_tbl = get_cam_events(unit)
     _ = [bool(re.match(r"\d+", str(s))) for s in swaps_tbl["serial"]]
@@ -60,7 +61,9 @@ def get_camera_serial(unit: int, query_date: str):
         # find all indices where date <= qdate
         idxs = [i for i, d in enumerate(dates) if d <= qdate]
         if not idxs:
-            raise ValueError(f"No camera serial known on or before {query_date}")
+            # raise ValueError(f"No camera serial known on or before {query_date}")
+            print(f"No camera serial known on or before {query_date} for unit{unit}")
+            return f"3{str(str(unit)*4)[:4]}"
         last_idx = max(idxs)
         return serials[last_idx]
 
