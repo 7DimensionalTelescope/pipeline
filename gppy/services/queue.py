@@ -497,35 +497,37 @@ class QueueManager:
         """
         start_time = time.time()
 
-        if isinstance(task_id, str):
-            if task_id == "all":
-                task_ids = [task.id for task in self.tasks]
-            elif task_id.startswith("task"):
-                task_ids = [task_id]
+        if self.ptype == "scheduler":
+            # for scheduler
+            while self.scheduler.is_all_done():
+                time.sleep(1)
+        elif self.ptype == "task":
+
+            if isinstance(task_id, str):
+                if task_id == "all":
+                    task_ids = [task.id for task in self.tasks]
+                elif task_id.startswith("task"):
+                    task_ids = [task_id]
+                else:
+                    task_ids = [task_id]
+            elif isinstance(task_id, list):
+                task_ids = [tid for tid in task_id if tid.startswith("t")]
             else:
-                task_ids = [task_id]
-        elif isinstance(task_id, list):
-            task_ids = [tid for tid in task_id if tid.startswith("t")]
-        else:
-            return True  # Invalid input
+                return True  # Invalid input
 
-        # for scheduler
-        while self.scheduler.is_all_done():
-            time.sleep(1)
+            # for task
+            while task_id:
+                if timeout is not None and time.time() - start_time > timeout:
+                    return False
 
-        # for task
-        while task_id:
-            if timeout is not None and time.time() - start_time > timeout:
-                return False
+                task_ids = [
+                    tid for tid in task_ids if any(task.id == tid and task.status != "completed" for task in self.tasks)
+                ]
 
-            task_ids = [
-                tid for tid in task_ids if any(task.id == tid and task.status != "completed" for task in self.tasks)
-            ]
+                if not task_ids:
+                    return True
 
-            if not task_ids:
-                return True
-
-            time.sleep(1)
+                time.sleep(1)
 
         return True
 
