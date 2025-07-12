@@ -424,7 +424,7 @@ def header_to_dict(file_path):
     return fits_dict
 
 
-def get_camera(header):
+def get_camera_from_image_size(header):
     """
     Determine the camera type based on image dimensions.
 
@@ -447,7 +447,7 @@ def get_camera(header):
         'C5'
     """
     if isinstance(header, list):
-        return [get_camera(s) for s in header]
+        return [get_camera_from_image_size(s) for s in header]
     elif type(header) == dict or isinstance(header, fits.Header):
         pass
     elif isinstance(header, (str, Path)):
@@ -806,9 +806,10 @@ def update_header_by_overwriting(filename, header):
     data = fits.getdata(filename)
     fits.writeto(filename, data, header=header, overwrite=True)
 
+
 def write_header_into_file(filename, header):
     if filename.endswith(".fits"):
         filename = filename.replace(".fits", ".header")
-        
+
     with open(filename, "w") as f:
-        f.write(header.tostring(sep='\n')) 
+        f.write(header.tostring(sep="\n"))
