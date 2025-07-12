@@ -84,7 +84,7 @@ class PreprocConfiguration(BaseConfig):
             )
             self.logger.info("Generating 'PreprocConfiguration' from the 'base' configuration")
             self.logger.debug(f"Configuration source: {config_source}")
-            self.input_files = input
+            self.input_files = sorted(input)
             self.input_dir = None
             super().__init__(config_source=config_source, write=self.write, **kwargs)
         elif isinstance(input, str) and os.path.isdir(input):  # Directory containing FITS files
