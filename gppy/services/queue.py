@@ -509,6 +509,11 @@ class QueueManager:
         else:
             return True  # Invalid input
 
+        # for scheduler
+        while self.scheduler.is_all_done():
+            time.sleep(1)
+
+        # for task
         while task_id:
             if timeout is not None and time.time() - start_time > timeout:
                 return False
