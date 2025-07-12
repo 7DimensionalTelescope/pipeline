@@ -775,7 +775,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                 result.append(
                     (
                         (off_date_bias_group, [], []),
-                        (mbias, [], []),
+                        (mbias, "", ""),
                         dict(),
                     )
                 )
@@ -787,7 +787,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                 result.append(
                     (
                         ([], off_date_dark_group, []),  # rely on pre-generated mbias saved to disk, even if on-date
-                        (mbias, mdark, []),
+                        (mbias, mdark, ""),
                         dict(),
                     )
                 )

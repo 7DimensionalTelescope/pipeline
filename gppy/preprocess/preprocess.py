@@ -15,6 +15,7 @@ from ..services.setup import BaseSetup
 from ..const import HEADER_KEY_MAP
 from ..services.utils import acquire_available_gpu
 
+
 class Preprocess(BaseSetup):
     """
     Assumes homogeneous BIAS, DARK, FLAT, SCI frames as input
@@ -43,6 +44,7 @@ class Preprocess(BaseSetup):
         logger=None,
         overwrite=False,
         master_frame_only=False,
+        calib_types=None,
         use_gpu=True,
         **kwargs,
     ):
@@ -52,6 +54,8 @@ class Preprocess(BaseSetup):
         self.overwrite = overwrite
         self.master_frame_only = master_frame_only
 
+        self.calib_types = calib_types or ["bias", "dark", "flat"]
+
         self._use_gpu = use_gpu
         self.initialize()
 
@@ -60,7 +64,7 @@ class Preprocess(BaseSetup):
     @classmethod
     def from_list(cls, images, **kwargs):
         config = PreprocConfiguration(images, **kwargs)
-        return cls(config)
+        return cls(config, **kwargs)
 
     @property
     def sequential_task(self):
@@ -224,7 +228,7 @@ class Preprocess(BaseSetup):
 
         st = time.time()
 
-        for dtype in ["bias", "dark", "flat"]:
+        for dtype in self.calib_types:
 
             input_data = getattr(self, f"{dtype}_input")
             output_data = getattr(self, f"{dtype}_output")
@@ -258,17 +262,19 @@ class Preprocess(BaseSetup):
         with acquire_available_gpu(device_id=device_id) as device_id:
             if device_id is None:
                 from .calc import combine_images_with_cpu
+
                 calc_function = combine_images_with_cpu
                 self.logger.info(f"Generating masterframe {dtype} for group {self._current_group+1} in CPU")
             else:
                 from .calc import combine_images_with_subprocess
+
                 calc_function = combine_images_with_subprocess
                 self.logger.info(
                     f"Generating masterframe {dtype} for group {self._current_group+1} in GPU device {device_id}"
                 )
 
             if dtype == "bias":
-                    calc_function(input_data, device_id=device_id, output=self.bias_output, sig_output=self.biassig_output)
+                calc_function(input_data, device_id=device_id, output=self.bias_output, sig_output=self.biassig_output)
 
             elif dtype == "dark":
                 calc_function(
@@ -395,7 +401,7 @@ class Preprocess(BaseSetup):
                 header=self._header,
                 use_gpu=self._use_gpu,
             )
-            
+
             for i, o in enumerate(self.sci_output):
                 with fits.open(o, mode="update") as hdul:
                     hdul[0].header = self._header[i]
@@ -410,22 +416,32 @@ class Preprocess(BaseSetup):
         if group_index is None:
             group_index = self._current_group
 
+        # generate calib plots
         self.logger.info(f"Generating plots for master calibration frames of group {group_index+1}")
         use_multi_thread = self.config.preprocess.use_multi_thread
 
         bias_file = self._get_raw_group("bias_output", group_index)
-        if prep_utils.wait_for_masterframe(bias_file, timeout=10):
+        # if prep_utils.wait_for_masterframe(bias_file, timeout=10):
+        if "bias" in self.calib_types:
             plot_bias(bias_file, savefig=True)
-        mask = plot_bpmask(self._get_raw_group("bpmask_output", group_index), savefig=True)
-        sample_header = fits.getheader(self._get_raw_group("bpmask_output", group_index), ext=1)
-        if "BADPIX" in sample_header.keys():
-            badpix = sample_header["BADPIX"]
 
-        mask = mask != badpix
-        fmask = mask.ravel()
-        plot_dark(self._get_raw_group("dark_output", group_index), fmask, savefig=True)
-        plot_flat(self._get_raw_group("flat_output", group_index), fmask, savefig=True)
+        if "dark" in self.calib_types:
+            mask = plot_bpmask(self._get_raw_group("bpmask_output", group_index), savefig=True)
+            sample_header = fits.getheader(self._get_raw_group("bpmask_output", group_index), ext=1)
+            if "BADPIX" in sample_header.keys():
+                badpix = sample_header["BADPIX"]
+            else:
+                self.logger.warning("Header missing BADPIX; using 1")
+                badpix = 1
 
+            mask = mask != badpix
+            fmask = mask.ravel()
+            plot_dark(self._get_raw_group("dark_output", group_index), fmask, savefig=True)
+
+        if "flat" in self.calib_types:
+            plot_flat(self._get_raw_group("flat_output", group_index), fmask, savefig=True)
+
+        # generate sci plots
         self.logger.info(
             f"Generating plots for science frames of group {group_index+1} ({len(self._get_raw_group('sci_input', group_index))} images)"
         )

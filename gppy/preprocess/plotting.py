@@ -1,10 +1,12 @@
-from astropy.io import fits
 import os
-import matplotlib.pyplot as plt
 import numpy as np
+from astropy.io import fits
+from PIL import Image
+import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from pathlib import Path
-from PIL import Image
+import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
 
 from ..path import PathHandler
 
@@ -57,7 +59,7 @@ def save_fits_as_png(image_data, output_path, stretch=True, log_scale=False, max
 
 
 def plot_bias(file, savefig=False):
-    if not(isinstance(file, str)):
+    if not (isinstance(file, str)):
         print("An image path (bias) is not properly defined.")
         return
 
@@ -71,10 +73,16 @@ def plot_bias(file, savefig=False):
     data = fits.getdata(file)
     header = fits.getheader(file)
     fdata = data.ravel()
+    clipmin = int(header["CLIPMIN"])
+    clipmax = int(header["CLIPMAX"])
+    mn = fdata.min()
+    mx = fdata.max()
+
+    edges = np.unique(np.concatenate(([mn], np.arange(clipmin, clipmax + 1, 1), [mx])))
 
     plt.hist(
         fdata,
-        bins=100,
+        bins=edges,
         density=True,
         alpha=0.6,
         label="Data",
@@ -86,23 +94,34 @@ def plot_bias(file, savefig=False):
         plt.axvline(header[key], linestyle="--", color=f"C{i+1}", label=key)
 
     plt.axvspan(
-        0,
+        mn,
         header["CLIPMIN"],
         color="gray",
         alpha=0.5,
-        label="within CLIPMIN and CLIPMAX",
+        label="outside CLIPMIN and CLIPMAX",
     )
-    plt.axvspan(header["CLIPMAX"], 1e5, color="gray", alpha=0.5)
+    plt.axvspan(header["CLIPMAX"], mx, color="gray", alpha=0.5)
     plt.yscale("log")
     plt.xlabel("ADU")
     plt.ylabel("Density")
     plt.title("Master Bias")
 
-    plt.xlim(400, 600)
-    plt.ylim(1e-6, 10)
+    scope = (350, 650)  # (400, 600)
+    plt.xlim(*scope)
+    # plt.xlim(clipmin, clipmax)
+    # plt.ylim(1e-7, 10)
     plt.legend()
-    
 
+    # Inset to show the tail
+    ax = plt.gca()
+    axins = inset_axes(ax, width="30%", height="30%", loc="upper right", borderpad=2)
+    axins.hist(fdata, bins=edges, density=True, histtype="step", log=True)
+    axins.set_xlim(scope[1], mx)
+    axins.set_yscale("log")
+    axins.tick_params(axis="both", which="major", labelsize=8)
+    axins.set_title("Right-tail zoom", fontsize=9)
+
+    # save
     if savefig:
         plt.savefig(output_path)
         plt.clf()
@@ -112,7 +131,7 @@ def plot_bias(file, savefig=False):
 
 
 def plot_dark(file, fmask=None, savefig=False):
-    if not(isinstance(file, str)):
+    if not (isinstance(file, str)):
         print("An image path (dark) is not properly defined.")
         return
 
@@ -121,7 +140,7 @@ def plot_dark(file, fmask=None, savefig=False):
     output_path = path.parent / "figures" / f"{path.stem}_hist.png"
     if output_path.exists():
         return
-        
+
     data = fits.getdata(file)
     header = fits.getheader(file)
     fdata = data.ravel()
@@ -156,7 +175,7 @@ def plot_dark(file, fmask=None, savefig=False):
 
     plt.ylim(1e-6, 10)
     plt.legend()
-    
+
     if savefig:
         plt.savefig(output_path)
         plt.clf()
@@ -190,7 +209,6 @@ def plot_dark_tail(fdata, file, savefig=False):
     plt.title(f"Master Dark Tail")
 
     plt.legend()
-    
 
     if savefig:
         path = Path(file)
@@ -202,7 +220,7 @@ def plot_dark_tail(fdata, file, savefig=False):
 
 
 def plot_flat(file, fmask=None, savefig=False):
-    if not(isinstance(file, str)):
+    if not (isinstance(file, str)):
         print("An image path (flat) is not properly defined.")
         return
     path = Path(file)
@@ -246,7 +264,6 @@ def plot_flat(file, fmask=None, savefig=False):
     )
     plt.xlim(0, 1.5)
     plt.legend()
-    
 
     if savefig:
         plt.savefig(output_path)
@@ -257,7 +274,7 @@ def plot_flat(file, fmask=None, savefig=False):
 
 
 def plot_bpmask(file, ext=1, badpix=1, savefig=False):
-    if not(isinstance(file, str)):
+    if not (isinstance(file, str)):
         print("An image path (bpmask) is not properly defined.")
         return
     path = Path(file)
@@ -290,10 +307,10 @@ def plot_bpmask(file, ext=1, badpix=1, savefig=False):
 
 
 def plot_sci(input_img, output_img):
-    if not(isinstance(input_img, str)):
+    if not (isinstance(input_img, str)):
         print("An image path (input_img) is not properly defined.")
         return
-    if not(isinstance(output_img, str)):
+    if not (isinstance(output_img, str)):
         print("An image path (output_img) is not properly defined.")
         return
     path = PathHandler(output_img)
