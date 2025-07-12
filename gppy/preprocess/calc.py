@@ -288,20 +288,21 @@ def _compute_hot_mask_2d(data, median, std, hot_sigma):
 
 def record_statistics(data, header, device_id=0, cropsize=500):
     data = fits.getdata(data).astype(np.float32)  # Ensure data is float32
-    mean, median, std, min, max = sigma_clipped_stats(
-        data, device_id=device_id, sigma=3, maxiters=5, minmax=True
-    )  # gpu vars
+    mean, median, std, min, max = sigma_clipped_stats(data, device_id=device_id, sigma=3, maxiters=5, minmax=True)
     header["CLIPMEAN"] = (float(mean), "3-sig clipped mean of the pixel values")
     header["CLIPMED"] = (float(median), "3-sig clipped median of the pixel values")
     header["CLIPSTD"] = (float(std), "3-sig clipped standard deviation of the pixels")
     header["CLIPMIN"] = (float(min), "3-sig clipped minimum of the pixel values")
     header["CLIPMAX"] = (float(max), "3-sig clipped maximum of the pixel values")
 
+    # minmax again... inefficient but insignificant
+    header["UNCLPMIN"] = (float(np.min(data)), "unclipped minimum of the pixel values")
+    header["UNCLPMAX"] = (float(np.max(data)), "unclipped maximum of the pixel values")
+
+    # Slice the central 500x500 area
     height, width = data.shape
     start_row = (height - cropsize) // 2
     start_col = (width - cropsize) // 2
-
-    # Slice the central 500x500 area
     cropped_data = data[start_row : start_row + cropsize, start_col : start_col + cropsize]
     mean, median, std = sigma_clipped_stats(cropped_data, device_id=device_id, sigma=3, maxiters=5)
     header["CENCLPMN"] = (float(mean), f"3-sig clipped mean of center {cropsize}x{cropsize}")  # fmt: skip

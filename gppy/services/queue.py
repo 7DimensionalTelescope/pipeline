@@ -499,8 +499,9 @@ class QueueManager:
 
         if self.ptype == "scheduler":
             # for scheduler
-            while self.scheduler.is_all_done():
+            while not(self.scheduler.is_all_done()):
                 time.sleep(1)
+
         elif self.ptype == "task":
 
             if isinstance(task_id, str):

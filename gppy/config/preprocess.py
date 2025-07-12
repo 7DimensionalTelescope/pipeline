@@ -8,6 +8,7 @@ from .base import BaseConfig
 import time
 from ..const import CalibType
 
+
 class PreprocConfiguration(BaseConfig):
 
     def __init__(
@@ -71,6 +72,8 @@ class PreprocConfiguration(BaseConfig):
     def _handle_input(self, input, logger, verbose, **kwargs):
 
         if isinstance(input, list):  # List of FITS files
+            if len(input) < 1:
+                raise ValueError("No input images")
             self.path = PathHandler(input[0])
             config_source = self.path.preproc_base_yml
             self.logger = self._setup_logger(
@@ -115,7 +118,7 @@ class PreprocConfiguration(BaseConfig):
             self.logger.debug(f"Configuration source: {config_source}")
         else:
             raise ValueError("Input must be a list of FITS files or a directory containing FITS files")
-        
+
         self.config.logging.file = self.path.preproc_output_log
         self.config_file = self.path.preproc_output_yml  # used by write_config
         return
