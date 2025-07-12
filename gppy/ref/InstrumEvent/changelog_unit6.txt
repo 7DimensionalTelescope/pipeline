@@ -1,5 +1,5 @@
 date	parts	comment
-231018	cam	99999
+231018	cam	36666
 231018	fw	99999999
 231019	filt_config	
 231103	cam	PA
