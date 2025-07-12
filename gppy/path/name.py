@@ -2,9 +2,10 @@ import os
 from typing import List, Tuple
 from collections import defaultdict
 from pathlib import Path
-from ..utils import subtract_half_day, get_camera, get_gain, get_header, equal_on_keys, collapse
+from ..utils import subtract_half_day, get_gain, get_header, equal_on_keys, collapse
 from .. import const
-from .utils import strip_binning, format_binning, strip_exptime, format_exptime, strip_gain
+from .utils import strip_binning, format_binning, strip_exptime, format_exptime, strip_gain, format_camera
+from .cam_tracker import get_camera_serial
 
 
 # # class Path7DS:
@@ -354,10 +355,13 @@ class NameHandler:
         ):
             return self._camera
 
+        # mind the remote date offset. date = nightdate + 1
         if getattr(self, "_single", False):
-            return get_camera(self.abspath)
+            return format_camera(get_camera_serial(unit=int(self.unit[3:]), query_date=self.date))
         else:
-            return [get_camera(u) for u in self.abspath]
+            return [
+                format_camera(get_camera_serial(unit=int(u[3:]), query_date=d)) for u, d in zip(self.unit, self.date)
+            ]
 
     @property
     def pixscale(self):

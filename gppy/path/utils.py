@@ -253,3 +253,7 @@ def strip_gain(gain_string):
     # match = re.match(pattern, binning_string)
     # return int(match.group(1)[0])
     return int(gain_string[4:])
+
+
+def format_camera(serial: str | int):
+    return "C" + str(serial)
