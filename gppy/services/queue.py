@@ -101,7 +101,7 @@ class QueueManager:
             self.processing_thread.start()
             self.completion_thread = threading.Thread(target=self._scheduler_completion_worker, daemon=True)
             self.completion_thread.start()
-            self.ptype = "schedule"
+            self.ptype = "scheduler"
         else:
             self.ptype = None
 
