@@ -32,8 +32,9 @@ class PreprocConfiguration(BaseConfig):
             self.logger.debug(f"Configuration file: {self.config_file}")
 
         if overwrite:
-            self.logger.info("Overwriting masterframe, processed, and factory directories first")
-            clean_up_folder(self.path.masterframe_dir)
+            self.logger.info("Deleting processed, and factory directories to overwrite")
+            # clean_up_folder(self.path.masterframe_dir)
+            clean_up_folder(self.path.factory_dir)
             clean_up_folder(self.path.preproc_output_dir)
 
         self.write_config()
