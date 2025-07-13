@@ -771,8 +771,10 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
         if lone_calib and off_date_calib and any(l for l in off_date_calib):
             off_date_bias_groups, off_date_dark_groups, off_date_flat_groups = off_date_calib
             for off_date_bias_group in off_date_bias_groups:
-                # mbias = cls(off_date_bias_group).preprocess.mbias
-                mbias = cls(off_date_bias_group).preprocess.masterframe
+                if len(off_date_bias_group) < const.NUM_MIN_CALIB:
+                    continue
+
+                mbias = cls.ensure_unique(cls(off_date_bias_group).preprocess.masterframe)  # preprocess.mbias
                 result.append(
                     [
                         [sorted(off_date_bias_group), [], []],
@@ -782,8 +784,13 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                 )
 
             for off_date_dark_group in off_date_dark_groups:
-                mdark = cls(off_date_dark_group).preprocess.masterframe
-                mbias = cls(off_date_dark_group).preprocess.mbias  # mbias for mdark generation
+                if len(off_date_dark_group) < const.NUM_MIN_CALIB:
+                    continue
+
+                mdark = cls.ensure_unique(cls(off_date_dark_group).preprocess.masterframe)
+                mbias = cls.ensure_unique(
+                    cls(off_date_dark_group).preprocess.mbias
+                )  # mbias needed for mdark generation
 
                 result.append(
                     [
@@ -794,13 +801,16 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                 )
 
             for off_date_flat_group in off_date_flat_groups:
-                mflat = cls(off_date_flat_group).preprocess.masterframe
+                if len(off_date_flat_group) < const.NUM_MIN_CALIB:
+                    continue
+
+                mflat = cls.ensure_unique(cls(off_date_flat_group).preprocess.masterframe)
                 path_flat = cls(off_date_flat_group)
                 """Future Update"""
                 # look for 100s mdark, though there may exist shorter exptime mdarks
                 path_flat.name.exptime = [100] * len(off_date_flat_group)
-                mdark = path_flat.preprocess.mdark
-                mbias = cls(off_date_flat_group).preprocess.mbias
+                mdark = cls.ensure_unique(path_flat.preprocess.mdark)
+                mbias = cls.ensure_unique(cls(off_date_flat_group).preprocess.mbias)
                 result.append(
                     [
                         [[], [], sorted(off_date_flat_group)],
@@ -810,6 +820,14 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                 )
 
         return result
+
+    @staticmethod
+    def ensure_unique(mframe):
+        if isinstance(mframe, list):
+            mframe_selected = sorted(mframe)[-1]
+            print(f"[WARNING] Output filename degenerate: {mframe};\nusing the last: {mframe_selected}")
+            return mframe_selected
+        return mframe
 
     @classmethod
     def weight_map_input(cls, mzdf_list: list[str]):
@@ -929,7 +947,10 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def masterframe(self):
-        """Generates on-date master zdf for sci input"""
+        """
+        Deletages NameHandler.masterframe_basename to make a full absolute path
+        tuple(z, d, f) if science, just list[str] | str if calib
+        """
 
         if self._parent._single:
             typ = self._parent.name.type
