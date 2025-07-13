@@ -280,6 +280,7 @@ def plot_bpmask(file, ext=1, badpix=1, savefig=False):
     path = Path(file)
     os.makedirs(path.parent / "figures", exist_ok=True)
     output_path = path.parent / "figures" / f"{path.stem}.png"
+    print("bpmask debug print", os.path.exists(file))
     data = fits.getdata(file, ext=ext)
     if output_path.exists():
         return data

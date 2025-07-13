@@ -123,6 +123,7 @@ class Preprocess(BaseSetup):
                 continue
 
             self.load_masterframe(device_id=device_id)
+            print(os.path.exists(self.bpmask_output), self.bpmask_output)
 
             if not self.master_frame_only:
                 self.prepare_headers()
@@ -142,12 +143,12 @@ class Preprocess(BaseSetup):
 
         self.logger.info(f"Preprocessing completed in {time_diff_in_seconds(st)} seconds")
 
-    def make_plot_all(self):
-        st = time.time()
-        self.logger.info("Generating plots for all groups")
-        for i in range(self._n_groups):
-            self.make_plots(i)
-        self.logger.info(f"Finished generating plots for all groups in {time_diff_in_seconds(st)} seconds")
+    # def make_plot_all(self):
+    #     st = time.time()
+    #     self.logger.info("Generating plots for all groups")
+    #     for i in range(self._n_groups):
+    #         self.make_plots(i)
+    #     self.logger.info(f"Finished generating plots for all groups in {time_diff_in_seconds(st)} seconds")
 
     def proceed_to_next_group(self):
         self._current_group += 1
@@ -404,9 +405,9 @@ class Preprocess(BaseSetup):
                 self.bias_output,
                 self.dark_output,
                 self.flat_output,
-                device_id=device_id,
                 output_paths=self.sci_output,
                 header=self._header,
+                device_id=device_id,
                 use_gpu=self._use_gpu,
             )
 
@@ -434,6 +435,7 @@ class Preprocess(BaseSetup):
             plot_bias(bias_file, savefig=True)
 
         if "dark" in self.calib_types:
+            print(f'make_plots debug print {os.path.exists(self._get_raw_group("bpmask_output", group_index))}')
             mask = plot_bpmask(self._get_raw_group("bpmask_output", group_index), savefig=True)
             sample_header = fits.getheader(self._get_raw_group("bpmask_output", group_index), ext=1)
             if "BADPIX" in sample_header.keys():

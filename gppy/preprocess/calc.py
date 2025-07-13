@@ -93,10 +93,10 @@ def process_image_with_subprocess(image_paths, bias, dark, flat, device_id=0, ou
 
     gc.collect()
 
-    if len(image_paths) > 20:
-        module = "process_image_batch"
-    else:
-        module = "process_image"
+    # if len(image_paths) > 20:
+    #     module = "process_image_batch"
+    # else:
+    #     module = "process_image"
     cmd = [
         #f"{SCRIPT_DIR}/cuda/{module}",
         "python",
@@ -121,13 +121,11 @@ def process_image_with_subprocess(image_paths, bias, dark, flat, device_id=0, ou
         raise RuntimeError(f"Error processing images: {result.stderr}")
     return None
 
-
 def process_image_with_cpu(
     image_paths: str,
     bias: str,
     dark: str,
     flat: str,
-    normalize=False,
     output_paths: list = None,
     header: list = None,
     **kwargs,
@@ -139,11 +137,11 @@ def process_image_with_cpu(
 
     output = []
     h, w = fits.getdata(image_paths[0]).shape
-    cpu_buffer = np.empty((h, w))
+    cpu_buffer = np.empty((h, w)).astype(np.float32)
 
     for i, image in enumerate(image_paths):
-        cpu_buffer[:] = read_fits_image(image)
-        cpu_buffer[:] = reduction_kernel_cpu(cpu_buffer, bias, dark, flat, normalize)
+        data = read_fits_image(image)
+        data = reduction_kernel_cpu(cpu_buffer, bias, dark, flat, False)
         if output_paths is not None:
             os.makedirs(os.path.dirname(output_paths[i]), exist_ok=True)
             if header is None:
@@ -155,9 +153,10 @@ def process_image_with_cpu(
                     head = None
             else:
                 head = header[i]
+            
             fits.writeto(
                 output_paths[i],
-                data=cpu_buffer,
+                data=data,
                 header=head,
                 overwrite=True,
             )
@@ -167,7 +166,6 @@ def process_image_with_cpu(
     del cpu_buffer, bias, dark, flat
     gc.collect()
     return None
-
 
 @njit(parallel=True)
 def reduction_kernel_cpu(image, bias, dark, flat, normalize):

@@ -13,17 +13,17 @@ def process_image_with_cupy(obs, bias, dark, flat, output, device_id):
     """median is GPU, std is CPU. Uses pinned memory for better host-GPU transfer performance."""
 
     with cp.cuda.Device(device_id):
-        data = [fits.getdata(o) for o in obs]
+        data = [fits.getdata(o).astype(np.float32) for o in obs]
 
-        cbias = cp.asarray(fits.getdata(bias))
-        cdark = cp.asarray(fits.getdata(dark))
-        cflat = cp.asarray(fits.getdata(flat))
+        cbias = cp.asarray(fits.getdata(bias), dtype=cp.float32)
+        cdark = cp.asarray(fits.getdata(dark), dtype=cp.float32)
+        cflat = cp.asarray(fits.getdata(flat), dtype=cp.float32)
 
         cdata = cp.asarray(data)
         cdata = cdata.astype(cp.float32)
 
         cdata = reduction_kernel(cdata, cbias, cdark, cflat)
-
+        print(cdata)
         for i in range(len(data)):
             data[i][:] = cp.asnumpy(cdata[i])
 
@@ -31,10 +31,7 @@ def process_image_with_cupy(obs, bias, dark, flat, output, device_id):
         cp.get_default_memory_pool().free_all_blocks()
 
     for i, o in enumerate(output):
-        header_file = o.replace(".fits", ".header")
-        with open(header_file, 'r') as f:
-            head = fits.Header.fromstring(f.read(), sep='\n')
-        fits.writeto(o, data[i], header=head, overwrite=True)
+        fits.writeto(o, data[i], overwrite=True)
     del data
     gc.collect()
     return 
