@@ -9,7 +9,14 @@ from .plotting import *
 from . import utils as prep_utils
 
 from .calc import record_statistics
-from ..utils import get_header, flatten, time_diff_in_seconds, update_header_by_overwriting, write_header_into_file
+from ..utils import (
+    get_header,
+    flatten,
+    time_diff_in_seconds,
+    update_header_by_overwriting,
+    write_header_into_file,
+    atleast_1d,
+)
 from ..config import PreprocConfiguration
 from ..services.setup import BaseSetup
 from ..const import HEADER_KEY_MAP
@@ -62,8 +69,8 @@ class Preprocess(BaseSetup):
         # self.logger.debug(f"Masterframe output folder: {self.path_fdz}")
 
     @classmethod
-    def from_list(cls, images, **kwargs):
-        config = PreprocConfiguration(images, **kwargs)
+    def from_list(cls, images: list, **kwargs):
+        config = PreprocConfiguration(atleast_1d(images), **kwargs)
         return cls(config, **kwargs)
 
     @property
@@ -230,22 +237,29 @@ class Preprocess(BaseSetup):
 
         for dtype in self.calib_types:
 
-            input_data = getattr(self, f"{dtype}_input")
-            output_data = getattr(self, f"{dtype}_output")
-            self.logger.debug(f"{dtype}_input: {input_data}")
-            self.logger.debug(f"{dtype}_output: {output_data}")
+            input_file = getattr(self, f"{dtype}_input")
+            output_file = getattr(self, f"{dtype}_output")
+            if not isinstance(output_file, str):
+                if isinstance(output_file, list):
+                    output_file = sorted(output_file)[-1]  # to get the later date in case of multiple dates
+                    self.logger.warning(f"Output filename for {dtype} is degenerate; using the last: {output_file}")
+                else:
+                    raise ValueError(f"Output file for {dtype} should be a string. currently: {output_file}")
 
-            if input_data:  # if the list is not empty
-                if not os.path.exists(output_data) or self.overwrite:
+            self.logger.debug(f"{dtype}_input: {input_file}")
+            self.logger.debug(f"{dtype}_output: {output_file}")
+
+            if input_file:  # if the list is not empty
+                if not os.path.exists(output_file) or self.overwrite:
                     self._generate_masterframe(dtype, device_id)
                 else:
-                    self._fetch_masterframe(output_data, dtype)
-            elif isinstance(output_data, str) or len(output_data) > 0:
-                self._fetch_masterframe(output_data, dtype)
+                    self._fetch_masterframe(output_file, dtype)
+            elif isinstance(output_file, str) or len(output_file) > 0:
+                self._fetch_masterframe(output_file, dtype)
             else:
                 self.logger.warning(f"No input or output data for {dtype}")
-                self.logger.debug(f"{dtype}_input: {input_data}")
-                self.logger.debug(f"{dtype}_output: {output_data}")
+                self.logger.debug(f"{dtype}_input: {input_file}")
+                self.logger.debug(f"{dtype}_output: {output_file}")
 
         self.logger.info(f"Generation/Loading of masterframes completed in {time_diff_in_seconds(st)} seconds")
 

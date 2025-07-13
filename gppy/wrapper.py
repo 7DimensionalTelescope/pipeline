@@ -24,8 +24,6 @@ def glob_files_by_param(keywords, **kwargs):
     return query_observations(keywords, **kwargs)
 
 
-
-
 class SortedGroupDict(UserDict):
     """A dictionary that sorts its values when iterating."""
 
@@ -84,7 +82,7 @@ class DataReduction:
 
     _multi_unit_config = set()
 
-    def __init__(self, input_params, use_db=False, **kwargs): 
+    def __init__(self, input_params, use_db=False, **kwargs):
         self.input_params = input_params
         print("Globbing images with parameters:", input_params)
 
@@ -114,6 +112,9 @@ class DataReduction:
     def initialize(self):
         image_inventory = PathHandler.take_raw_inventory(self.list_of_images)  # [raw bdf, mframes, sci_dict]
 
+        if len(image_inventory) == 0:
+            self.logger.warning(f"No group for wrapper out of {self.list_of_images}\nPossibly due to NUM_MIN_CALIB")
+        
         for i, group in enumerate(image_inventory):
             try:
                 # mfg_key = PathHandler(group[0][2][0]).config_stem
@@ -129,27 +130,24 @@ class DataReduction:
                 print(f"Failed to extract mfg_key from {group}. Assigned a default key {mfg_key}")
 
             if mfg_key in self.groups:
-                self.groups[mfg_key].add_images(group[0])
+                self.groups[mfg_key].add_images(flatten(group[0]))
             else:
                 mfg = MasterframeGroup(mfg_key)
-                mfg.add_images(group[0])
+                mfg.add_images(flatten(group[0]))
                 self.groups[mfg_key] = mfg
             for key, images in group[2].items():
                 if key not in self.groups:
                     self.groups[key] = ScienceGroup(key)
                 else:
                     self.groups[key].multi_units = True
-                self.groups[key].add_images(images[0])
-                self.groups[mfg_key].add_images(images[0])
+                self.groups[key].add_images(flatten(images[0]))
+                self.groups[mfg_key].add_images(flatten(images[0]))
                 self.groups[mfg_key].add_sci_keys(key)
 
     def create_config(self, overwrite=False):
         kwargs = {"overwrite": overwrite}
         with ThreadPoolExecutor(max_workers=50) as executor:
-            futures = [
-                executor.submit(group.create_config, **kwargs)
-                for group in self.groups.values()
-            ]
+            futures = [executor.submit(group.create_config, **kwargs) for group in self.groups.values()]
             for f in futures:
                 f.result()
 
@@ -224,7 +222,7 @@ class DataReduction:
 class MasterframeGroup:
     def __init__(self, key):
         self.key = key
-        self.image_files = []
+        self._image_files = []
         self._config = None
         self.sci_keys = []
 
@@ -249,15 +247,18 @@ class MasterframeGroup:
             self.create_config()
         return self._config
 
+    @property
+    def image_files(self):
+        return self._image_files
+
     def add_images(self, filepath):
         if isinstance(filepath, list):
-            self.image_files.extend(filepath)
+            self._image_files.extend(filepath)
         elif isinstance(filepath, str):
-            self.image_files.append(filepath)
+            self._image_files.append(filepath)
         elif isinstance(filepath, tuple):
-
             _tmp_list = list(chain.from_iterable(filepath))
-            self.image_files.extend(_tmp_list)
+            self._image_files.extend(_tmp_list)
         else:
             raise ValueError("Invalid filepath type")
 
