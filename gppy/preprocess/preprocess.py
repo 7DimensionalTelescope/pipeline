@@ -123,7 +123,6 @@ class Preprocess(BaseSetup):
                 continue
 
             self.load_masterframe(device_id=device_id)
-            print(os.path.exists(self.bpmask_output), self.bpmask_output)
 
             if not self.master_frame_only:
                 self.prepare_headers()
@@ -180,7 +179,9 @@ class Preprocess(BaseSetup):
         elif name == "sci_output":
             return self._parse_sci_list(group_index, "output")
         elif name == "bpmask_output":
-            return getattr(self, f"dark_output").replace("dark", f"bpmask")
+            # return getattr(self, f"dark_output").replace("dark", f"bpmask")  <<<<<< axis of evil
+            dark_out = self._get_raw_group("dark_output", group_index)
+            return dark_out.replace("dark", "bpmask")
 
         if name.endswith("_input"):
             key = name[:4]  # strip "_input" (e.g., bias_input)
@@ -420,10 +421,8 @@ class Preprocess(BaseSetup):
                 f"Completed data reduction for {len(self.sci_input)} images in group {self._current_group+1} in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self.sci_input):.1f} s/image)"
             )
 
-    def make_plots(self, group_index=None):
+    def make_plots(self, group_index):
         st = time.time()
-        if group_index is None:
-            group_index = self._current_group
 
         # generate calib plots
         self.logger.info(f"Generating plots for master calibration frames of group {group_index+1}")
@@ -435,7 +434,7 @@ class Preprocess(BaseSetup):
             plot_bias(bias_file, savefig=True)
 
         if "dark" in self.calib_types:
-            print(f'make_plots debug print {os.path.exists(self._get_raw_group("bpmask_output", group_index))}')
+            fname = self._get_raw_group("bpmask_output", group_index)
             mask = plot_bpmask(self._get_raw_group("bpmask_output", group_index), savefig=True)
             sample_header = fits.getheader(self._get_raw_group("bpmask_output", group_index), ext=1)
             if "BADPIX" in sample_header.keys():
