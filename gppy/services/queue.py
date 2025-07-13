@@ -156,6 +156,9 @@ class QueueManager:
             ... )
         """
 
+        if not (hasattr(self, "processing_thread")):
+            self._start_workers(process_type="task")
+
         if self._abrupt_stop_requested.is_set():
             self.logger.warning("Cannot add task. Abrupt stop is active.")
             return None
@@ -188,8 +191,6 @@ class QueueManager:
 
         self.processing_queue.put((task.priority, task))
 
-        if not (hasattr(self, "processing_thread")):
-            self._start_workers(process_type="task")
 
         self.logger.info(f"Added task {task.task_name} (id: {task_id}) with priority {priority}")
         time.sleep(0.1)
