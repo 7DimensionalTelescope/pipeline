@@ -23,7 +23,6 @@ def process_image_with_cupy(obs, bias, dark, flat, output, device_id):
         cdata = cdata.astype(cp.float32)
 
         cdata = reduction_kernel(cdata, cbias, cdark, cflat)
-        print(cdata)
         for i in range(len(data)):
             data[i][:] = cp.asnumpy(cdata[i])
 

@@ -127,7 +127,6 @@ def process_image_with_cpu(
     dark: str,
     flat: str,
     output_paths: list = None,
-    header: list = None,
     **kwargs,
 ):
 
@@ -141,23 +140,13 @@ def process_image_with_cpu(
 
     for i, image in enumerate(image_paths):
         data = read_fits_image(image)
-        data = reduction_kernel_cpu(cpu_buffer, bias, dark, flat, False)
+        data = reduction_kernel_cpu(cpu_buffer, bias, dark, flat)
         if output_paths is not None:
             os.makedirs(os.path.dirname(output_paths[i]), exist_ok=True)
-            if header is None:
-                header_file = output_paths[i].replace(".fits", ".header")
-                if os.path.exists(header_file):
-                    with open(header_file, "r") as f:
-                        head = fits.Header.fromstring(f.read(), sep="\n")
-                else:
-                    head = None
-            else:
-                head = header[i]
-            
+
             fits.writeto(
                 output_paths[i],
                 data=data,
-                header=head,
                 overwrite=True,
             )
         else:
@@ -168,7 +157,7 @@ def process_image_with_cpu(
     return None
 
 @njit(parallel=True)
-def reduction_kernel_cpu(image, bias, dark, flat, normalize):
+def reduction_kernel_cpu(image, bias, dark, flat):
     h, w = image.shape
     corrected = np.empty_like(image)
 
@@ -177,11 +166,6 @@ def reduction_kernel_cpu(image, bias, dark, flat, normalize):
             val = image[i, j] - bias[i, j] - dark[i, j]
             val /= flat[i, j]
             corrected[i, j] = val
-
-    if normalize:
-        median = np.median(corrected.ravel())
-        if median != 0:
-            corrected /= median
 
     return corrected
 
