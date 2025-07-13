@@ -805,11 +805,11 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                     continue
 
                 mflat = cls.ensure_unique(cls(off_date_flat_group).preprocess.masterframe)
-                path_flat = cls(off_date_flat_group)
+                self = cls(off_date_flat_group)
                 """Future Update"""
                 # look for 100s mdark, though there may exist shorter exptime mdarks
-                path_flat.name.exptime = [100] * len(off_date_flat_group)
-                mdark = cls.ensure_unique(path_flat.preprocess.mdark)
+                self.name.exptime = [100] * len(off_date_flat_group)
+                mdark = cls.ensure_unique(self.preprocess.mdark)
                 mbias = cls.ensure_unique(cls(off_date_flat_group).preprocess.mbias)
                 result.append(
                     [
