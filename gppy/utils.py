@@ -803,9 +803,16 @@ def get_basename(file_path):
 
 
 def update_header_by_overwriting(filename, header):
-    data = fits.getdata(filename)
-    fits.writeto(filename, data, header=header, overwrite=True)
 
+    with fits.open(filename, mode="update") as hdul:
+        for key in header:
+            if key in ["SIMPLE", "BITPIX", "NAXIS", "NAXIS1", "NAXIS2", "BZERO", "BSCALE"]:
+                continue
+            value = header[key]
+            comment = header.comments.get(key, "")
+            hdul[0].header[key] = (value, comment)
+
+        hdul.flush()
 
 def write_header_into_file(filename, header):
     if filename.endswith(".fits"):
