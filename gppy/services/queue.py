@@ -321,12 +321,10 @@ class QueueManager:
                         ]
                     else:
                         cmd = [f"{SCRIPT_DIR}/bin/data_reduction", "-config", config]
-                        proc = subprocess.Popen(
-                            cmd,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            text=True  # or encoding='utf-8' for older Python
-                        )
+                        
+                    proc = subprocess.Popen(
+                        cmd,
+                    )
                     self._active_processes.append([config, proc])
                     self._device_id += 1
                     self.logger.info(f"Process ({ptype}) with {os.path.basename(config)} (PID = {proc.pid}) submitted.")
@@ -355,15 +353,12 @@ class QueueManager:
                     config, proc = process
                     if proc.poll() is not None:  # Process finished
                         pid = proc.pid
-                        stdout, stderr = proc.communicate()
                         success = proc.returncode == 0
 
                         if success:
                             self.logger.info(f"Process with {config} (PID = {pid}) completed.")
                         else:
                             self.logger.error(f"Process with {os.path.basename(config)} (PID = {pid}) failed with return code {proc.returncode}.")
-                            self.logger.error(f"STDOUT:\n{stdout.strip()}")
-                            self.logger.error(f"STDERR:\n{stderr.strip()}")
 
                         self.scheduler.mark_done(config, success=success)
                         self._active_processes.remove(process)
