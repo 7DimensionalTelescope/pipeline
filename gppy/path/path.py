@@ -759,11 +759,11 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
             mbias, mdark, mflat = cls(sample_file).preprocess.masterframe  # trust the grouping
 
             result.append(
-                (
-                    (raw_bias, raw_dark, raw_flat),
-                    (mbias, mdark, mflat),
+                [
+                    [raw_bias, raw_dark, raw_flat],
+                    [mbias, mdark, mflat],
                     sci_dict,  # a dict of tuples of lists: ([science images in this on‐date group], [processed images])
-                )
+                ]
             )
 
         # raw calibration frames with no corresponding on-date science frames
@@ -773,11 +773,11 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                 # mbias = cls(off_date_bias_group).preprocess.mbias
                 mbias = cls(off_date_bias_group).preprocess.masterframe
                 result.append(
-                    (
-                        (off_date_bias_group, [], []),
-                        (mbias, "", ""),
+                    [
+                        [off_date_bias_group, [], []],
+                        [mbias, "", ""],
                         dict(),
-                    )
+                    ]
                 )
 
             for off_date_dark_group in off_date_dark_groups:
@@ -785,11 +785,11 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                 mbias = cls(off_date_dark_group).preprocess.mbias  # mbias for mdark generation
 
                 result.append(
-                    (
-                        ([], off_date_dark_group, []),  # rely on pre-generated mbias saved to disk, even if on-date
-                        (mbias, mdark, ""),
+                    [
+                        [[], off_date_dark_group, []],  # rely on pre-generated mbias saved to disk, even if on-date
+                        [mbias, mdark, ""],
                         dict(),
-                    )
+                    ]
                 )
 
             for off_date_flat_group in off_date_flat_groups:
@@ -801,11 +801,11 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                 mdark = path_flat.preprocess.mdark
                 mbias = cls(off_date_flat_group).preprocess.mbias
                 result.append(
-                    (
-                        ([], [], off_date_flat_group),
-                        (mbias, mdark, mflat),
+                    [
+                        [[], [], off_date_flat_group],
+                        [mbias, mdark, mflat],
                         dict(),
-                    )
+                    ]
                 )
 
         return result
