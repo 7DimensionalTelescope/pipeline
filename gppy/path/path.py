@@ -741,6 +741,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
 
             sci_dict = {}
             for sci_group in entry["sci"]:
+                sci_group = sorted(sci_group)
                 key = get_dict_key(sci_group)
                 sci_dict[key] = (sci_group, atleast_1d(cls(sci_group).conjugate))
 
@@ -760,7 +761,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
 
             result.append(
                 [
-                    [raw_bias, raw_dark, raw_flat],
+                    [sorted(raw_bias), sorted(raw_dark), sorted(raw_flat)],
                     [mbias, mdark, mflat],
                     sci_dict,  # a dict of tuples of lists: ([science images in this on‐date group], [processed images])
                 ]
@@ -774,7 +775,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                 mbias = cls(off_date_bias_group).preprocess.masterframe
                 result.append(
                     [
-                        [off_date_bias_group, [], []],
+                        [sorted(off_date_bias_group), [], []],
                         [mbias, "", ""],
                         dict(),
                     ]
@@ -786,7 +787,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
 
                 result.append(
                     [
-                        [[], off_date_dark_group, []],  # rely on pre-generated mbias saved to disk, even if on-date
+                        [[], sorted(off_date_dark_group), []],  # use pre-generated mbias saved to disk, even if on-date
                         [mbias, mdark, ""],
                         dict(),
                     ]
@@ -802,7 +803,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                 mbias = cls(off_date_flat_group).preprocess.mbias
                 result.append(
                     [
-                        [[], [], off_date_flat_group],
+                        [[], [], sorted(off_date_flat_group)],
                         [mbias, mdark, mflat],
                         dict(),
                     ]
