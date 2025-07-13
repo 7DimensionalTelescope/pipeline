@@ -98,9 +98,9 @@ def process_image_with_subprocess(image_paths, bias, dark, flat, device_id=0, ou
     else:
         module = "process_image"
     cmd = [
-        f"{SCRIPT_DIR}/cuda/{module}",
-        # "python",
-        # f"{SCRIPT_DIR}/cuda/process_image.py",
+        #f"{SCRIPT_DIR}/cuda/{module}",
+        "python",
+        f"{SCRIPT_DIR}/cuda/process_image.py",
         "-bias",
         bias,
         "-dark",

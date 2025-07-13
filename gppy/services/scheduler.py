@@ -11,7 +11,9 @@ class Scheduler:
         self.task_queue = deque()
         self.completed_tasks = set()
         self.skipped_tasks = set()
-        self.task_status = {p: None for p in masters + sum(dependents.values(), []) + multiunits}
+
+        dependent_paths = [p for group in dependents.values() for p in group]
+        self.task_status = {p: None for p in masters + dependent_paths + list(multiunits)}
 
     def _key_from_path(self, path):
         """Extract master key like '2025-01-01_7DT11' from the full config path"""
