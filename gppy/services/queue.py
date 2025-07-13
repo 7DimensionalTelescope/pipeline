@@ -321,7 +321,12 @@ class QueueManager:
                         ]
                     else:
                         cmd = [f"{SCRIPT_DIR}/bin/data_reduction", "-config", config]
-                    proc = subprocess.Popen(cmd)
+                        proc = subprocess.Popen(
+                            cmd,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True  # or encoding='utf-8' for older Python
+                        )
                     self._active_processes.append([config, proc])
                     self._device_id += 1
                     self.logger.info(f"Process ({ptype}) with {os.path.basename(config)} (PID = {proc.pid}) submitted.")
@@ -343,29 +348,30 @@ class QueueManager:
                 self.logger.error(f"Error in processing worker: {e}")
                 time.sleep(0.5)
                 raise
-
     def _scheduler_completion_worker(self):
         while not self._stop_event.is_set():
             try:
-                for process in list(self._active_processes):  # should store proc objects, not just PIDs
+                for process in list(self._active_processes):  # (config_path, proc)
                     config, proc = process
-                    if proc.poll() is not None:
+                    if proc.poll() is not None:  # Process finished
                         pid = proc.pid
-                        if proc.returncode == 0:
+                        stdout, stderr = proc.communicate()
+                        success = proc.returncode == 0
+
+                        if success:
                             self.logger.info(f"Process with {config} (PID = {pid}) completed.")
-                            self._active_processes.remove(process)
-                            # Inform the scheduler that the task is done
-                            self.scheduler.mark_done(config)
                         else:
-                            self.logger.error(
-                                f"Process with {os.path.basename(config)} (PID = {pid}) failed with return code {proc.returncode}."
-                            )
-                            self._active_processes.remove(process)
+                            self.logger.error(f"Process with {os.path.basename(config)} (PID = {pid}) failed with return code {proc.returncode}.")
+                            self.logger.error(f"STDOUT:\n{stdout.strip()}")
+                            self.logger.error(f"STDERR:\n{stderr.strip()}")
+
+                        self.scheduler.mark_done(config, success=success)
+                        self._active_processes.remove(process)
+
                 time.sleep(0.5)
             except Exception as e:
                 self.logger.error(f"Error in completion worker: {e}")
                 time.sleep(0.2)
-                continue
 
     def stop_processing(self, *args):
         """
@@ -500,7 +506,8 @@ class QueueManager:
         if self.ptype == "scheduler":
             # for scheduler
             while not(self.scheduler.is_all_done()):
-                time.sleep(1)
+                time.sleep(10)
+            self.logger.info(self.scheduler.report_status())
 
         elif self.ptype == "task":
 
@@ -528,7 +535,7 @@ class QueueManager:
                 if not task_ids:
                     return True
 
-                time.sleep(1)
+                time.sleep(10)
 
         return True
 

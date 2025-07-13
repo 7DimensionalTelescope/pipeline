@@ -151,7 +151,7 @@ class DataReduction:
                 for group in self.groups.values()
             ]
             for f in futures:
-                f.result()  #
+                f.result()
 
     def config_list(self):
         master_configs = []
