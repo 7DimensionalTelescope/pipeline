@@ -138,43 +138,64 @@ def plot_dark(file, fmask=None, savefig=False):
     path = Path(file)
     os.makedirs(path.parent / "figures", exist_ok=True)
     output_path = path.parent / "figures" / f"{path.stem}_hist.png"
-    if output_path.exists():
-        return
+    # if output_path.exists():
+    #     return
 
     data = fits.getdata(file)
     header = fits.getheader(file)
     fdata = data.ravel()
+
+    clipmin = int(header["CLIPMIN"])
+    clipmax = int(header["CLIPMAX"])
+    mn = fdata.min()
+    mx = fdata.max()
+    edges = np.unique(np.concatenate(([mn], np.arange(clipmin, clipmax + 1, 1), [mx])))
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    axins = inset_axes(ax, width="40%", height="40%", loc="upper right", borderpad=2)
+
+    # unmasked data
+    ax.hist(fdata, bins=edges, density=True, alpha=0.6, label="Unmasked Data", histtype="step")
+    plot_dark_tail_on_ax(fdata, ax=axins, i=0, mx=mx)
+
+    # percentiles (unmasked)
+    fdata_pos = fdata[fdata > 0]
+    # p99 = np.percentile(fdata_pos, 99, method="nearest")
+    # p999 = np.percentile(fdata_pos, 99.9, method="nearest")
+    # ax.axvline(p99, color="k", linestyle=":", label="99th pct")
+    # ax.axvline(p999, color="k", label="99.9th pct")
+    p9973 = np.percentile(fdata_pos, 99.73, method="nearest")
+    ax.axvline(p9973, color="k", ls="-", label="99.73th percentile (unmasked)")
+
+    # masked data
     fdata = fdata[fmask] if fmask is not None else fdata
+    ax.hist(fdata, bins=edges, density=True, alpha=0.6, label="Masked Data", histtype="step", linestyle="--")
+    plot_dark_tail_on_ax(fdata, ax=axins, i=1, mx=mx)
 
-    plt.hist(
-        fdata,
-        bins=30,
-        density=True,
-        alpha=0.6,
-        label="Masked Data",
-        histtype="step",
-    )
+    # percentiles (masked)
+    fdata_pos = fdata[fdata > 0]
+    p9973 = np.percentile(fdata_pos, 99.73, method="nearest")
+    ax.axvline(p9973, color="k", ls=":", label="99.73th percentile (masked)")
 
-    for i, key in enumerate(["CLIPMEAN", "CLIPMED", "CLIPSTD"]):
-        plt.axvline(header[key], linestyle="--", color=f"C{i+1}", label=key)
+    # mean and median lines
+    lses = ["--", "-."]
+    for i, key in enumerate(["CLIPMEAN", "CLIPMED"]):
+        ax.axvline(header[key], linestyle=lses[i], color=f"C{i+1}", label=f"{key}: {header[key]:.4f}")
 
-    plt.axvspan(
-        -100,
-        header["CLIPMIN"],
-        color="gray",
-        alpha=0.5,
-        label="within CLIPMIN and CLIPMAX",
-    )
-    plt.axvspan(header["CLIPMAX"], 1000, color="gray", alpha=0.5)
+    # 5-sigma shade
+    label = r"outside 5 clipped $\sigma$"
+    ax.axvspan(mn, header["CLIPMEAN"] - 5 * header["CLIPSTD"], color="gray", alpha=0.1, label=label)
+    ax.axvspan(header["CLIPMEAN"] + 5 * header["CLIPSTD"], mx, color="gray", alpha=0.1)
 
-    plt.xlim(-50, 50)
-    plt.yscale("log")
-    plt.xlabel("ADU")
-    plt.ylabel("Density")
-    plt.title(f"Master Dark")
+    ax.set_xlim(-170, 200)
+    # plt.xscale("symlog")
+    ax.set_yscale("log")
+    ax.set_xlabel("ADU")
+    ax.set_ylabel("Density")
+    ax.set_title(f"Master Dark")
 
-    plt.ylim(1e-6, 10)
-    plt.legend()
+    # plt.ylim(1e-6, 10)
+    ax.legend(loc=2)
 
     if savefig:
         plt.savefig(output_path)
@@ -183,40 +204,57 @@ def plot_dark(file, fmask=None, savefig=False):
     else:
         plt.show(block=False)
 
-    plot_dark_tail(fdata, file, savefig=savefig)
+    # plot_dark_tail(fdata, file, savefig=savefig)
 
 
-def plot_dark_tail(fdata, file, savefig=False):
-    p99 = np.percentile(fdata, 99, method="nearest")
-    p999 = np.percentile(fdata, 99.9, method="nearest")
-    fdata = fdata[fdata > 0]
+def plot_dark_tail_on_ax(fdata, ax, i=0, mx=None):
+    fdata_tail = fdata[fdata > 200]
+    lses = ["-", "--"]
+    bins = np.unique(np.concatenate((np.geomspace(200, 2**15), np.geomspace(2**15, mx or 2 * 16 - 1, 10))))
+    ax.hist(fdata_tail, bins=bins, histtype="step", alpha=0.6, linestyle=lses[i], color=f"C{i}")
 
-    plt.figure(figsize=(10, 6))
-    plt.hist(
-        fdata,
-        bins=np.geomspace(0.8, 1e4, 20),
-        density=False,
-        alpha=0.6,
-        label="Data (ADU > 0)",
-        histtype="step",
-    )
-    plt.axvline(p99, color="gray", label="99th percentile")
-    plt.axvline(p999, color="gray", ls=":", label="99.9th percentile")
-    plt.xscale("log")
-    plt.yscale("log")
-    plt.xlabel("ADU")
-    plt.ylabel("N")
-    plt.title(f"Master Dark Tail")
+    ax.set_xlim(200, 2**16 - 1)
+    # ax.set_xscale("symlog")
+    ax.set_yscale("log")
+    ax.set_xlabel("ADU", fontsize=8)
+    ax.set_ylabel("N", fontsize=8)
+    ax.tick_params(axis="both", which="major", labelsize=6)
+    ax.set_title("Tail", fontsize=10)
+    # ax.legend(fontsize=6)
+    return ax
 
-    plt.legend()
 
-    if savefig:
-        path = Path(file)
-        os.makedirs(path.parent / "figures", exist_ok=True)
-        plt.savefig(path.parent / "figures" / f"{path.stem}_tail.png")
-        plt.clf()
-    else:
-        plt.show(black=False)
+# def plot_dark_tail(fdata, file, savefig=False):
+#     p99 = np.percentile(fdata, 99, method="nearest")
+#     p999 = np.percentile(fdata, 99.9, method="nearest")
+#     fdata = fdata[fdata > 0]
+
+#     plt.figure(figsize=(10, 6))
+#     plt.hist(
+#         fdata,
+#         bins=np.geomspace(0.8, 1e4, 20),
+#         density=False,
+#         alpha=0.6,
+#         label="Data (ADU > 0)",
+#         histtype="step",
+#     )
+#     plt.axvline(p99, color="gray", label="99th percentile")
+#     plt.axvline(p999, color="gray", ls=":", label="99.9th percentile")
+#     plt.xscale("log")
+#     plt.yscale("log")
+#     plt.xlabel("ADU")
+#     plt.ylabel("N")
+#     plt.title(f"Master Dark Tail")
+
+#     plt.legend()
+
+#     if savefig:
+#         path = Path(file)
+#         os.makedirs(path.parent / "figures", exist_ok=True)
+#         plt.savefig(path.parent / "figures" / f"{path.stem}_tail.png")
+#         plt.clf()
+#     else:
+#         plt.show(block=False)
 
 
 def plot_flat(file, fmask=None, savefig=False):

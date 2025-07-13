@@ -434,11 +434,11 @@ class Preprocess(BaseSetup):
             plot_bias(bias_file, savefig=True)
 
         if "dark" in self.calib_types:
-            fname = self._get_raw_group("bpmask_output", group_index)
-            mask = plot_bpmask(self._get_raw_group("bpmask_output", group_index), savefig=True)
-            sample_header = fits.getheader(self._get_raw_group("bpmask_output", group_index), ext=1)
-            if "BADPIX" in sample_header.keys():
-                badpix = sample_header["BADPIX"]
+            bpmask_file = self._get_raw_group("bpmask_output", group_index)
+            mask = plot_bpmask(bpmask_file, savefig=True)
+            bpmask_header = fits.getheader(bpmask_file, ext=1)
+            if "BADPIX" in bpmask_header.keys():
+                badpix = bpmask_header["BADPIX"]
             else:
                 self.logger.warning("Header missing BADPIX; using 1")
                 badpix = 1
