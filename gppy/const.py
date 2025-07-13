@@ -36,7 +36,7 @@ MEDIUM_FILTERS = [f"m{s}" for s in range(400, 900, 25)]
 BROAD_FILTERS = ["u", "g", "r", "i", "z"]
 ALL_FILTERS = WIDE_FILTERS + MEDIUM_FILTERS + BROAD_FILTERS
 PIXSCALE = 0.505  # arcsec/pixel. Default plate scale assumed prior to astrometric solving
-NUM_MIN_CALIB = 2  # 5
+NUM_MIN_CALIB = 5  # 2
 
 HEADER_KEY_MAP = {
     "exptime": "EXPOSURE",

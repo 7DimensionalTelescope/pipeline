@@ -1,4 +1,5 @@
 import os
+import sys
 from datetime import datetime
 import glob
 from .. import __version__
@@ -74,8 +75,9 @@ class PreprocConfiguration(BaseConfig):
 
         if isinstance(input, list):  # List of FITS files
             if len(input) < 1:
-                raise ValueError("No input images")
-            self.path = PathHandler(input[0])
+                self.logger.warning("No input images")
+                sys.exit(0)
+            self.path = PathHandler(sorted(input)[-1])  # in case of multiple dates, use the later date
             config_source = self.path.preproc_base_yml
             self.logger = self._setup_logger(
                 logger,
