@@ -825,7 +825,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
     def ensure_unique(mframe):
         if isinstance(mframe, list):
             mframe_selected = sorted(mframe)[-1]
-            print(f"[WARNING] Output filename degenerate: {mframe};\nusing the last: {mframe_selected}")
+            print(f"[WARNING] Degenerate output filenames: {mframe};\nUsing the last: {mframe_selected}")
             return mframe_selected
         return mframe
 
