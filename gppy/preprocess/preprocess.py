@@ -239,12 +239,6 @@ class Preprocess(BaseSetup):
 
             input_file = getattr(self, f"{dtype}_input")
             output_file = getattr(self, f"{dtype}_output")
-            if not isinstance(output_file, str):
-                if isinstance(output_file, list):
-                    output_file = sorted(output_file)[-1]  # to get the later date in case of multiple dates
-                    self.logger.warning(f"Output filename for {dtype} is degenerate; using the last: {output_file}")
-                else:
-                    raise ValueError(f"Output file for {dtype} should be a string. currently: {output_file}")
 
             self.logger.debug(f"{dtype}_input: {input_file}")
             self.logger.debug(f"{dtype}_output: {output_file}")
