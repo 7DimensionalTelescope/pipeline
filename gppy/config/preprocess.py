@@ -36,7 +36,7 @@ class PreprocConfiguration(BaseConfig):
             self.logger.info("Deleting processed, and factory directories to overwrite")
             # clean_up_folder(self.path.masterframe_dir)
             clean_up_folder(self.path.factory_dir)
-            clean_up_folder(self.path.preproc_output_dir)
+            # clean_up_folder(self.path.preproc_output_dir)
 
         self.write_config()
         self.logger.info("Completed to load configuration")

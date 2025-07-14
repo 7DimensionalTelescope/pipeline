@@ -276,9 +276,9 @@ class Preprocess(BaseSetup):
                 calc_function = combine_images_with_cpu
                 self.logger.info(f"Generating masterframe {dtype} for group {self._current_group+1} in CPU")
             else:
-                from .calc import combine_images_with_subprocess
+                from .calc import combine_images_with_subprocess_gpu
 
-                calc_function = combine_images_with_subprocess
+                calc_function = combine_images_with_subprocess_gpu
                 self.logger.info(
                     f"Generating masterframe {dtype} for group {self._current_group+1} in GPU device {device_id}"
                 )
@@ -394,9 +394,9 @@ class Preprocess(BaseSetup):
                 process_kernel = process_image_with_cpu
                 self.logger.info(f"Processing {len(self.sci_input)} images in group {self._current_group+1} on CPU")
             else:
-                from .calc import process_image_with_subprocess
+                from .calc import process_image_with_subprocess_gpu
 
-                process_kernel = process_image_with_subprocess
+                process_kernel = process_image_with_subprocess_gpu
                 self.logger.info(
                     f"Processing {len(self.sci_input)} images in group {self._current_group+1} on GPU device(s): {device_id} "
                 )
