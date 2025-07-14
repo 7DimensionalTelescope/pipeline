@@ -117,7 +117,7 @@ def plot_bias(file, overwrite=False):
     save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
 
 
-def plot_dark(file, fmask=None):
+def plot_dark(file, flattened_mask=None):
     if not (isinstance(file, str)):
         print("An image path (dark) is not properly defined.")
         return
@@ -158,14 +158,15 @@ def plot_dark(file, fmask=None):
     ax.axvline(p9973, color="k", ls="-", label="99.73th percentile (unmasked)")
 
     # masked data
-    fdata = fdata[fmask] if fmask is not None else fdata
+    fdata = fdata[flattened_mask] if flattened_mask is not None else fdata
     ax.hist(fdata, bins=edges, density=True, alpha=0.6, label="Masked Data", histtype="step", linestyle="--")
     plot_dark_tail_on_ax(fdata, ax=axins, i=1, mx=mx)
 
     # percentiles (masked)
     fdata_pos = fdata[fdata > 0]
-    p9973 = np.percentile(fdata_pos, 99.73, method="nearest")
-    ax.axvline(p9973, color="k", ls=":", label="99.73th percentile (masked)")
+    if len(fdata_pos) > 0:
+        p9973 = np.percentile(fdata_pos, 99.73, method="nearest")
+        ax.axvline(p9973, color="k", ls=":", label="99.73th percentile (masked)")
 
     # mean and median lines
     lses = ["--", "-."]
