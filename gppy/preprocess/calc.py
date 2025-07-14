@@ -134,25 +134,24 @@ def process_image_with_cpu(
     dark = read_fits_image(dark)
     flat = read_fits_image(flat)
 
-    output = []
     h, w = fits.getdata(image_paths[0]).shape
-    cpu_buffer = np.empty((h, w)).astype(np.float32)
+    data = None
 
     for i, image in enumerate(image_paths):
-        data = read_fits_image(image)
-        data = reduction_kernel_cpu(cpu_buffer, bias, dark, flat)
-        if output_paths is not None:
-            os.makedirs(os.path.dirname(output_paths[i]), exist_ok=True)
-
-            fits.writeto(
-                output_paths[i],
-                data=data,
-                overwrite=True,
-            )
+        if data is None:
+            data = read_fits_image(image)
         else:
-            output.append(cpu_buffer.copy())
+            data[:] = read_fits_image(image)
+        data = reduction_kernel_cpu(data, bias, dark, flat)
+        os.makedirs(os.path.dirname(output_paths[i]), exist_ok=True)
 
-    del cpu_buffer, bias, dark, flat
+        fits.writeto(
+            output_paths[i],
+            data=data,
+            overwrite=True,
+        )
+     
+    del bias, dark, flat
     gc.collect()
     return None
 
@@ -240,22 +239,60 @@ def sigma_clipped_stats_cpu(data, sigma=3.0, maxiters=5, minmax=False, hot_mask=
 
     return mean_val, median_val, std_val
 
+@njit
+def _fast_median(arr):
+    n = arr.size
+    if n == 0:
+        return 0.0
+    tmp = np.copy(arr)
+    tmp.sort()
+    mid = n // 2
+    if n % 2 == 0:
+        return 0.5 * (tmp[mid - 1] + tmp[mid])
+    else:
+        return tmp[mid]
+
+@njit
+def _fast_std(arr, mean):
+    n = arr.size
+    if n <= 1:
+        return 0.0
+    var = 0.0
+    for i in range(n):
+        diff = arr[i] - mean
+        var += diff * diff
+    return np.sqrt(var / (n - 1))
 
 @njit
 def _sigma_clip_1d(data_flat, sigma=3.0, maxiters=5):
     mask = np.ones(data_flat.shape, dtype=np.bool_)
     for _ in range(maxiters):
-        clipped = data_flat[mask]
-        if clipped.size == 0:
+        # count how many are True
+        n = 0
+        for i in range(data_flat.size):
+            if mask[i]:
+                n += 1
+
+        if n == 0:
             break
-        median = np.median(clipped)
-        std = np.std(clipped)
+
+        clipped = np.empty(n, dtype=np.float64)
+        j = 0
+        for i in range(data_flat.size):
+            if mask[i]:
+                clipped[j] = data_flat[i]
+                j += 1
+
+        median = _fast_median(clipped)
+        std = _fast_std(clipped, median)
+
         if std == 0.0:
             break
+
         for i in range(data_flat.size):
             mask[i] = abs(data_flat[i] - median) < sigma * std
-    return mask
 
+    return mask
 
 @njit(parallel=True)
 def _compute_hot_mask_2d(data, median, std, hot_sigma):
