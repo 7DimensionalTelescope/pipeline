@@ -10,6 +10,8 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
 
 from ..path import PathHandler
 
+import matplotlib
+matplotlib.use('Agg')
 
 def save_fits_as_png(image_data, output_path, stretch=True, log_scale=False, max_width=1000):
     # Handle potential NaN or inf values
@@ -58,7 +60,7 @@ def save_fits_as_png(image_data, output_path, stretch=True, log_scale=False, max
     pil_image.save(output_path, "PNG", optimize=True, compress_level=5)  # Optimize compression
 
 
-def plot_bias(file, savefig=False, overwrite=False):
+def plot_bias(file, overwrite=False):
     if not (isinstance(file, str)):
         print("An image path (bias) is not properly defined.")
         return
@@ -79,7 +81,7 @@ def plot_bias(file, savefig=False, overwrite=False):
     mx = fdata.max()
 
     edges = np.unique(np.concatenate(([mn], np.arange(clipmin, clipmax + 1, 1), [mx])))
-
+    plt.figure()
     plt.hist(
         fdata,
         bins=edges,
@@ -121,16 +123,12 @@ def plot_bias(file, savefig=False, overwrite=False):
     axins.tick_params(axis="both", which="major", labelsize=8)
     axins.set_title("Right-tail zoom", fontsize=9)
 
-    # save
-    if savefig:
-        plt.savefig(output_path)
-        plt.clf()
-        save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
-    else:
-        plt.show(block=False)
+    plt.savefig(output_path)
+    plt.close()
+    save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
 
 
-def plot_dark(file, fmask=None, savefig=False):
+def plot_dark(file, fmask=None):
     if not (isinstance(file, str)):
         print("An image path (dark) is not properly defined.")
         return
@@ -197,12 +195,10 @@ def plot_dark(file, fmask=None, savefig=False):
     # plt.ylim(1e-6, 10)
     ax.legend(loc=2)
 
-    if savefig:
-        plt.savefig(output_path)
-        plt.clf()
-        save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
-    else:
-        plt.show(block=False)
+    plt.savefig(output_path)
+    plt.close()
+    save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
+
 
     # plot_dark_tail(fdata, file, savefig=savefig)
 
@@ -257,7 +253,7 @@ def plot_dark_tail_on_ax(fdata, ax, i=0, mx=None):
 #         plt.show(block=False)
 
 
-def plot_flat(file, fmask=None, savefig=False):
+def plot_flat(file, fmask=None):
     if not (isinstance(file, str)):
         print("An image path (flat) is not properly defined.")
         return
@@ -273,6 +269,7 @@ def plot_flat(file, fmask=None, savefig=False):
     fdata = data.ravel()
     fdata = fdata[fmask] if fmask is not None else fdata
 
+    plt.figure()
     plt.hist(
         fdata,
         bins=100,
@@ -303,15 +300,12 @@ def plot_flat(file, fmask=None, savefig=False):
     plt.xlim(0, 1.5)
     plt.legend()
 
-    if savefig:
-        plt.savefig(output_path)
-        plt.clf()
-        save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
-    else:
-        plt.show()
-
-
-def plot_bpmask(file, ext=1, badpix=1, savefig=False):
+    plt.savefig(output_path)
+    plt.close()
+    
+    save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
+    
+def plot_bpmask(file, ext=1, badpix=1):
     if not (isinstance(file, str)):
         print("An image path (bpmask) is not properly defined.")
         return
@@ -320,7 +314,7 @@ def plot_bpmask(file, ext=1, badpix=1, savefig=False):
     output_path = path.parent / "figures" / f"{path.stem}.png"
     data = fits.getdata(file, ext=ext)
     if output_path.exists():
-        return data
+        return
 
     header = fits.getheader(file, ext=ext)
     if "BADPIX" in header.keys():
@@ -331,17 +325,15 @@ def plot_bpmask(file, ext=1, badpix=1, savefig=False):
     elif badpix == 1:
         cmap = mcolors.ListedColormap(["white", "red"])
 
+    plt.figure()
     plt.imshow(data, cmap=cmap, interpolation="nearest")
     plt.title(f"Hot pixel mask")
     plt.xlabel("X (pixels)")
     plt.ylabel("Y (pixels)")
 
-    if savefig:
-        plt.savefig(output_path)
-        plt.clf()
-    else:
-        plt.show(black=False)
-    return data
+    plt.savefig(output_path)
+    plt.close()
+    
 
 
 def plot_sci(input_img, output_img):

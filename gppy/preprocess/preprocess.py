@@ -14,7 +14,6 @@ from ..utils import (
     flatten,
     time_diff_in_seconds,
     update_header_by_overwriting,
-    write_header_into_file,
     atleast_1d,
 )
 from ..config import PreprocConfiguration
@@ -78,10 +77,7 @@ class Preprocess(BaseSetup):
         tasks = []
         for i in range(self._n_groups):
             tasks.append((4 * i, f"load_masterframe", True))
-            tasks.append((4 * i + 1, f"prepare_headers", False))
-
-            tasks.append((4 * i + 2, f"data_reduction", True))
-
+            
             if i < self._n_groups - 1:
                 tasks.append((4 * i + 3, f"proceed_to_next_group", False))
 
@@ -123,9 +119,8 @@ class Preprocess(BaseSetup):
                 continue
 
             self.load_masterframe(device_id=device_id)
-
+            
             if not self.master_frame_only:
-                self.prepare_headers()
                 self.data_reduction(device_id=device_id)
 
             if make_plots:
@@ -179,10 +174,9 @@ class Preprocess(BaseSetup):
         elif name == "sci_output":
             return self._parse_sci_list(group_index, "output")
         elif name == "bpmask_output":
-            # return getattr(self, f"dark_output").replace("dark", f"bpmask")  <<<<<< axis of evil
             dark_out = self._get_raw_group("dark_output", group_index)
             return dark_out.replace("dark", "bpmask")
-
+    
         if name.endswith("_input"):
             key = name[:4]  # strip "_input" (e.g., bias_input)
             if key in self._key_to_index:
@@ -348,26 +342,7 @@ class Preprocess(BaseSetup):
         if dtype == "dark":
             self.dark_exptime = get_header(existing_mframe_file)[HEADER_KEY_MAP["exptime"]]
 
-    def prepare_headers(self):
-
-        st = time.time()
-        n_head_blocks = self.config.preprocess.n_head_blocks
-        bias, dark, flat = self.bias_output, self.dark_output, self.flat_output
-        self._header = []
-        # Write results
-        for raw_file, processed_file in zip(self.sci_input, self.sci_output):
-            header = fits.getheader(raw_file)
-            header["SATURATE"] = prep_utils.get_saturation_level(header, bias, dark, flat)
-            header = prep_utils.write_IMCMB_to_header(header, [bias, dark, flat, raw_file])
-            header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
-
-            write_header_into_file(processed_file, header)
-            self._header.append(header)
-
-        self.logger.info(
-            f"Prepare image headers for group {self._current_group+1} in {time_diff_in_seconds(st)} seconds."
-        )
-
+    
     def data_reduction(self, device_id=None, use_gpu: bool = True):
         self._use_gpu = all([use_gpu, self._use_gpu])
 
@@ -386,6 +361,9 @@ class Preprocess(BaseSetup):
 
         st = time.time()
         device_id = device_id if self._use_gpu else "CPU"
+
+        n_head_blocks = self.config.preprocess.n_head_blocks
+        bias, dark, flat = self.bias_output, self.dark_output, self.flat_output
 
         with acquire_available_gpu(device_id=device_id) as device_id:
             if device_id is None:
@@ -407,22 +385,25 @@ class Preprocess(BaseSetup):
                 self.dark_output,
                 self.flat_output,
                 output_paths=self.sci_output,
-                header=self._header,
                 device_id=device_id,
                 use_gpu=self._use_gpu,
             )
-
-            for i, o in enumerate(self.sci_output):
-                with fits.open(o, mode="update") as hdul:
-                    hdul[0].header = self._header[i]
-                    hdul.flush()
-
             self.logger.info(
                 f"Completed data reduction for {len(self.sci_input)} images in group {self._current_group+1} in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self.sci_input):.1f} s/image)"
             )
+            
+        for raw_file, processed_file in zip(self.sci_input, self.sci_output):
+            header = fits.getheader(raw_file)
+            header["SATURATE"] = prep_utils.get_saturation_level(header, bias, dark, flat)
+            header = prep_utils.write_IMCMB_to_header(header, [bias, dark, flat, raw_file])
+            header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
 
-    def make_plots(self, group_index):
+            update_header_by_overwriting(processed_file, header)
+
+    def make_plots(self, group_index=None):
         st = time.time()
+        if group_index is None:
+            group_index = self._current_group
 
         # generate calib plots
         self.logger.info(f"Generating plots for master calibration frames of group {group_index+1}")
@@ -431,24 +412,24 @@ class Preprocess(BaseSetup):
         bias_file = self._get_raw_group("bias_output", group_index)
         # if prep_utils.wait_for_masterframe(bias_file, timeout=10):
         if "bias" in self.calib_types:
-            plot_bias(bias_file, savefig=True)
+            plot_bias(bias_file)
 
         if "dark" in self.calib_types:
-            bpmask_file = self._get_raw_group("bpmask_output", group_index)
-            mask = plot_bpmask(bpmask_file, savefig=True)
-            bpmask_header = fits.getheader(bpmask_file, ext=1)
-            if "BADPIX" in bpmask_header.keys():
-                badpix = bpmask_header["BADPIX"]
+            plot_bpmask(self._get_raw_group("bpmask_output", group_index))
+            sample_header = fits.getheader(self._get_raw_group("bpmask_output", group_index), ext=1)
+            if "BADPIX" in sample_header.keys():
+                badpix = sample_header["BADPIX"]
             else:
                 self.logger.warning("Header missing BADPIX; using 1")
                 badpix = 1
-
+                
+            mask = fits.getdata(self._get_raw_group("bpmask_output", group_index), ext=1)
             mask = mask != badpix
             fmask = mask.ravel()
-            plot_dark(self._get_raw_group("dark_output", group_index), fmask, savefig=True)
+            plot_dark(self._get_raw_group("dark_output", group_index), fmask)
 
         if "flat" in self.calib_types:
-            plot_flat(self._get_raw_group("flat_output", group_index), fmask, savefig=True)
+            plot_flat(self._get_raw_group("flat_output", group_index), fmask)
 
         # generate sci plots
         self.logger.info(

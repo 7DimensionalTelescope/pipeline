@@ -10,7 +10,7 @@ from collections import Counter
 from collections.abc import Iterable
 
 from .const import FACTORY_DIR, RAWDATA_DIR, HEADER_KEY_MAP, ALL_GROUP_KEYS
-
+import numpy as np
 
 def unique(seq, *, return_counts=False, return_index=False, return_inverse=False):
     """
@@ -802,6 +802,11 @@ def get_basename(file_path):
     return os.path.basename(file_path)
 
 
+# def update_header_by_overwriting(filename, header):
+#     data = fits.getdata(filename)
+#     fits.writeto(filename, data, header=header, overwrite=True)
+
+
 def update_header_by_overwriting(filename, header):
 
     with fits.open(filename, mode="update") as hdul:
@@ -809,14 +814,20 @@ def update_header_by_overwriting(filename, header):
             if key in ["SIMPLE", "BITPIX", "NAXIS", "NAXIS1", "NAXIS2", "BZERO", "BSCALE"]:
                 continue
             value = header[key]
-            comment = header.comments.get(key, "")
-            hdul[0].header[key] = (value, comment)
+            comment = header.comments[key]
 
+            if key == "COMMENT":
+                value = " "
+            else:
+                if value is None:
+                    continue
+                if isinstance(value, float) and (np.isnan(value) or np.isinf(value)):
+                    continue
+            
+            try:
+                hdul[0].header[key] = (value, comment)
+            except Exception as e:
+                print(f"[WARN] Skipped key '{key}': {e}")
+
+        
         hdul.flush()
-
-def write_header_into_file(filename, header):
-    if filename.endswith(".fits"):
-        filename = filename.replace(".fits", ".header")
-
-    with open(filename, "w") as f:
-        f.write(header.tostring(sep="\n"))
