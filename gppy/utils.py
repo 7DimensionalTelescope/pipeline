@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from .const import FACTORY_DIR, RAWDATA_DIR, HEADER_KEY_MAP, ALL_GROUP_KEYS
 import numpy as np
 
+
 def unique(seq, *, return_counts=False, return_index=False, return_inverse=False):
     """
     Pure-Python version of np.unique for 1D sequences.
@@ -806,28 +807,3 @@ def get_basename(file_path):
 #     data = fits.getdata(filename)
 #     fits.writeto(filename, data, header=header, overwrite=True)
 
-
-def update_header_by_overwriting(filename, header):
-
-    with fits.open(filename, mode="update") as hdul:
-        for key in header:
-            if key in ["SIMPLE", "BITPIX", "NAXIS", "NAXIS1", "NAXIS2", "BZERO", "BSCALE"]:
-                continue
-            value = header[key]
-            comment = header.comments[key]
-
-            if key == "COMMENT":
-                value = " "
-            else:
-                if value is None:
-                    continue
-                if isinstance(value, float) and (np.isnan(value) or np.isinf(value)):
-                    continue
-            
-            try:
-                hdul[0].header[key] = (value, comment)
-            except Exception as e:
-                print(f"[WARN] Skipped key '{key}': {e}")
-
-        
-        hdul.flush()

@@ -224,3 +224,34 @@ def remove_padding(header):
             break
 
     return header[: i + 1]
+
+
+def update_header_by_overwriting(filename, header, bitpix=-32):
+
+    with fits.open(filename, mode="update") as hdul:
+        if hdul[0].header["BITPIX"] == -32:
+            for key in ["BZERO", "BSCALE"]:
+                try:
+                    del header[key]
+                except:
+                    continue
+
+        for key in ["SIMPLE", "BITPIX", "NAXIS", "NAXIS1", "NAXIS2"]:
+            header[key] = hdul[0].header[key]
+
+        hdul[0].header = header
+        hdul.flush()
+
+# def update_header_by_overwriting(filename, header, bitpix=-32):
+
+#     if bitpix == -32:
+#         for key in ["BZERO", "BSCALE"]:
+#             try:
+#                 del header[key]
+#             except:
+#                 continue
+    
+#     data = fits.getdata(filename).astype(np.float32)
+
+#     fits.writeto(filename, data, header=header, overwrite=True)
+    

@@ -302,8 +302,8 @@ class PhotometrySingle:
             obs_src_table = self.add_matched_reference_catalog(obs_src_table, filters=filters_to_check)
             temp_results = {}
             self.logger.debug(f"Starting filter check for {filters_to_check}")
-            for filt in filters_to_check:
-                zp_dict, aper_dict, cols = self.calculate_zp(obs_src_table, filt=filt, save_plots=False)
+            for i, filt in enumerate(filters_to_check):
+                zp_dict, aper_dict, cols = self.calculate_zp(obs_src_table, filt=filt, save_plots=False, idx = i)
                 temp_results[filt] = (zp_dict, aper_dict, cols)
 
             dicts = {f: (zp, ap) for f, (zp, ap, _) in temp_results.items()}
@@ -567,7 +567,7 @@ class PhotometrySingle:
         return Table.read(output, format="ascii.sextractor")
 
     @log_once
-    def calculate_zp(self, obs_src_table, save_plots=True, filt=None) -> Tuple[Dict, Dict]:
+    def calculate_zp(self, obs_src_table, save_plots=True, filt=None, idx=0) -> Tuple[Dict, Dict]:
         """
         Calculate photometric zero point.
 
@@ -581,11 +581,11 @@ class PhotometrySingle:
             Tuple of dictionaries containing zero point and aperture information
         """
 
-        self.logger.debug(f"Filtering source catalog for zp calculation")
+        if idx==0: self.logger.debug(f"Filtering source catalog for zp calculation")
         zp_src_table = self.filter_catalog(obs_src_table)
-        self.logger.debug(f"After filtering: {len(zp_src_table)}/{len(obs_src_table)} sources")
+        if idx==0: self.logger.debug(f"After filtering: {len(zp_src_table)}/{len(obs_src_table)} sources")
 
-        self.logger.info(f"Calculating zero points with {len(zp_src_table)} sources")
+        if idx==0: self.logger.info(f"Calculating zero points with {len(zp_src_table)} sources")
         apertures = phot_utils.get_aperture_dict(self.phot_header.peeing, self.image_info.pixscale)
 
         if filt:

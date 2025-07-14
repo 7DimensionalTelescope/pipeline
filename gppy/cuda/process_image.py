@@ -9,6 +9,7 @@ reduction_kernel = cp.ElementwiseKernel(
     in_params="T x, T b, T d, T f", out_params="T z", operation="z = (x - b - d) / f", name="reduction"
 )
 
+
 def process_image_with_cupy(obs, bias, dark, flat, output, device_id):
     """median is GPU, std is CPU. Uses pinned memory for better host-GPU transfer performance."""
 
@@ -33,16 +34,15 @@ def process_image_with_cupy(obs, bias, dark, flat, output, device_id):
         fits.writeto(o, data[i], overwrite=True)
     del data
     gc.collect()
-    return 
+    return
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Process FITS images."
-    )
+    parser = argparse.ArgumentParser(description="Process FITS images.")
 
     parser.add_argument("-bias", type=str, required=True, help="BIAS FITS image path.")
     parser.add_argument("-dark", type=str, required=True, help="DARK FITS image path.")
-    parser.add_argument("-flat", type=str, required=True,  help="FLAT image path.")
+    parser.add_argument("-flat", type=str, required=True, help="FLAT image path.")
     parser.add_argument("-input", nargs="+", required=True, help="Input FITS image paths.")
     parser.add_argument("-output", nargs="+", required=True, help="Output FITS image paths.")
     parser.add_argument("-device", type=int, default=0, help="CUDA device ID.")
@@ -52,8 +52,8 @@ if __name__ == "__main__":
     process_image_with_cupy(
         args.input,
         args.bias,
-        args.dark, 
-        args.flat, 
+        args.dark,
+        args.flat,
         args.output,
         args.device,
     )

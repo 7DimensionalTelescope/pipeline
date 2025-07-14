@@ -1,70 +1,53 @@
 import numpy as np
-import cupy as cp
 from astropy.io import fits
+import subprocess
 
 
-# mode valid?
-def convolve_fft(images, kernels, mode="same", normalize_kernel=False, device=None, apply_edge_mask=False):
+def convolve_fft_subprocess(images, outout, kernels=None, mode="same", normalize_kernel=False, device=None, apply_edge_mask=False, method=None, delta_peeing=None):
+
+    # base command
+    cmd = ["python", f"{SCRIPT_DIR}/cuda/convolve_fft.py",
+            "-input", *images,
+            "-output", *output,
+            "-kernels", None,
+            "-mode", str(mode),
+            "-normalize_kernel", normalize_kernel,
+            "-apply_edge_mask", str(apply_edge_mask),
+            "=method", method,
+            "-delta_peeing", delta_peeing,
+            "-device", str(device)]
+        
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        raise RuntimeError(f"Error combining images: {result.stderr}")
+
+    return None
+
+def convolve_fft_cpu(images, output, kernels, mode="same", normalize_kernel=False, device=None, apply_edge_mask=False, method=None, delta_peeing=None):
     h, w = fits.getdata(images[0]).shape
-    is_gpu = device is not None and device != "CPU"
-
     cpu_buffer = np.empty((h, w))
 
-    output = []
-    for image, kernel in zip(images, kernels):
+    for i, (image, kernel) in enumerate(zip(images, kernels)):
         cpu_buffer[:] = fits.getdata(image)
-        # gpu
-        if is_gpu:
-            with cp.cuda.Device(device):
-                gpu_buffer = cp.asarray(cpu_buffer)
-                gpu_buffer[:] = gpu_buffer.astype(cp.float32)
-                gpu_buffer[:] = convolve_fft_gpu(
-                    gpu_buffer, kernel, mode=mode, normalize_kernel=normalize_kernel, device_id=device
-                )
+    
+        cpu_buffer[:] = convolve_fft_with_astropy(cpu_buffer, kernel, normalize_kernel=normalize_kernel)
 
-                if apply_edge_mask:
-                    edge_mask = get_edge_mask_gpu(gpu_buffer, kernel, device_id=device)
-                    gpu_buffer[~edge_mask] = 0
-
-                cpu_buffer[:] = cp.asnumpy(gpu_buffer)
-                output.append(cpu_buffer.copy())
-        # cpu
-        else:
-            cpu_buffer[:] = convolve_fft_cpu(cpu_buffer, kernel, normalize_kernel=normalize_kernel)
-            if apply_edge_mask:
-                edge_mask = get_edge_mask_cpu(cpu_buffer, kernel)
-                cpu_buffer[~edge_mask] = 0
-            output.append(cpu_buffer.copy())
-
-    if device and device != "CPU":
-        with cp.cuda.Device(device):
-            del gpu_buffer
-            cp.get_default_memory_pool().free_all_blocks()
-
-    del cpu_buffer
-    return output
+        if apply_edge_mask:
+            edge_mask = get_edge_mask_cpu(cpu_buffer, kernel)
+            cpu_buffer[~edge_mask] = 0
+        
+        header = add_conv_header(fits.getheader(image[i]), delta_peeing[i], method)
+        fits.writeto(
+            output[i],
+            data=cpu_buffer.copy(),
+            header=header,
+            overwrite=True,
+            )
 
 
-def convolve_fft_gpu(image, kernel, mode="same", normalize_kernel=False, device_id=0):
 
-    from cupyx.scipy.signal import fftconvolve
-
-    with cp.cuda.Device(device_id):
-        image = cp.asarray(image, dtype=cp.float64)
-        kernel_array = cp.asarray(kernel.array, dtype=cp.float64)
-        if normalize_kernel:
-            kernel_array = kernel_array / cp.sum(kernel_array)
-
-        image = cp.nan_to_num(image, nan=0.0)
-        result = fftconvolve(image, kernel_array, mode=mode)
-        # result = cp.asnumpy(result)
-        del image, kernel_array
-        cp.get_default_memory_pool().free_all_blocks()
-
-        return result
-
-
-def convolve_fft_cpu(image, kernel, normalize_kernel=False):
+def convolve_fft_with_astropy(image, kernel, normalize_kernel=False):
     from astropy.convolution import convolve_fft
 
     return convolve_fft(image, kernel, normalize_kernel=normalize_kernel)
@@ -87,19 +70,6 @@ def get_edge_mask_cpu(weight_image, kernel):
     dilated_mask = binary_dilation(mask, structure=struct)
     return dilated_mask  # mask for inside
 
-
-def get_edge_mask_gpu(weight_image, kernel, device_id=None):
-    from cupyx.scipy.ndimage import binary_dilation
-
-    with cp.cuda.Device(device_id):
-        mask = cp.asarray(weight_image != 0)  # 0 for edge, 1 for inside
-        size = cp.shape(kernel)
-        struct = cp.ones(size, dtype=bool)
-        dilated_mask = binary_dilation(mask, structure=struct)
-
-        del mask, struct, kernel
-        cp.get_default_memory_pool().free_all_blocks()
-        return dilated_mask  # mask for inside
 
 
 def add_conv_header(header, delta_peeing, method):

@@ -13,9 +13,9 @@ from ..utils import (
     get_header,
     flatten,
     time_diff_in_seconds,
-    update_header_by_overwriting,
     atleast_1d,
 )
+
 from ..config import PreprocConfiguration
 from ..services.setup import BaseSetup
 from ..const import HEADER_KEY_MAP
@@ -258,31 +258,33 @@ class Preprocess(BaseSetup):
 
         st = time.time()
 
-        input_data = getattr(self, f"{dtype}_input")
+        input_files = getattr(self, f"{dtype}_input")
         header = self.get_header(dtype)
 
         device_id = device_id if self._use_gpu else "CPU"
 
         with acquire_available_gpu(device_id=device_id) as device_id:
+            # cpu
             if device_id is None:
                 from .calc import combine_images_with_cpu
 
                 calc_function = combine_images_with_cpu
                 self.logger.info(f"Generating masterframe {dtype} for group {self._current_group+1} in CPU")
+            # gpu
             else:
-                from .calc import combine_images_with_subprocess
+                from .calc import combine_images_with_subprocess_gpu
 
-                calc_function = combine_images_with_subprocess
+                calc_function = combine_images_with_subprocess_gpu
                 self.logger.info(
                     f"Generating masterframe {dtype} for group {self._current_group+1} in GPU device {device_id}"
                 )
 
             if dtype == "bias":
-                calc_function(input_data, device_id=device_id, output=self.bias_output, sig_output=self.biassig_output)
+                calc_function(input_files, device_id=device_id, output=self.bias_output, sig_output=self.biassig_output)
 
             elif dtype == "dark":
                 calc_function(
-                    input_data,
+                    input_files,
                     device_id=device_id,
                     subtract=[self.bias_output],
                     scale=[1],
@@ -296,7 +298,7 @@ class Preprocess(BaseSetup):
             elif dtype == "flat":
                 dark_scale = self._calc_dark_scale(header[HEADER_KEY_MAP["exptime"]], self.dark_exptime)
                 calc_function(
-                    input_data,
+                    input_files,
                     subtract=[self.bias_output, self.dark_output],
                     scale=[1, dark_scale],
                     norm=True,
@@ -305,13 +307,13 @@ class Preprocess(BaseSetup):
                     sig_output=self.flatsig_output,
                 )
 
-        update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), header)
+        prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), header)
 
         header = prep_utils.add_image_id(header)
 
         header = record_statistics(getattr(self, f"{dtype}_output"), header)
 
-        update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
+        prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
 
         self.logger.info(f"Master {dtype} generated in {time_diff_in_seconds(st)} seconds")
         self.logger.debug(f"FITS Written: {getattr(self, f'{dtype}_output')}")
@@ -371,9 +373,9 @@ class Preprocess(BaseSetup):
                 process_kernel = process_image_with_cpu
                 self.logger.info(f"Processing {len(self.sci_input)} images in group {self._current_group+1} on CPU")
             else:
-                from .calc import process_image_with_subprocess
+                from .calc import process_image_with_subprocess_gpu
 
-                process_kernel = process_image_with_subprocess
+                process_kernel = process_image_with_subprocess_gpu
                 self.logger.info(
                     f"Processing {len(self.sci_input)} images in group {self._current_group+1} on GPU device(s): {device_id} "
                 )
@@ -397,7 +399,7 @@ class Preprocess(BaseSetup):
             header = prep_utils.write_IMCMB_to_header(header, [bias, dark, flat, raw_file])
             header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
 
-            update_header_by_overwriting(processed_file, header)
+            prep_utils.update_header_by_overwriting(processed_file, header)
 
     def make_plots(self, group_index: int):
         st = time.time()

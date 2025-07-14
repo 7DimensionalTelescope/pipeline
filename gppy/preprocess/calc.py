@@ -11,7 +11,7 @@ def read_fits_image(path):
     return fits.getdata(path).astype(np.float32)
 
 
-def combine_images_with_subprocess(
+def combine_images_with_subprocess_gpu(
     images,
     output,
     sig_output,
@@ -59,7 +59,15 @@ def combine_images_with_subprocess(
 
 
 def combine_images_with_cpu(
-    images, output, sig_output, subtract=None, scale=None, norm=False, make_bpmask=None, bpmask_sigma=5, **kwargs
+    images,
+    output,
+    sig_output,
+    subtract=None,
+    scale=None,
+    norm=False,
+    make_bpmask: str = None,
+    bpmask_sigma=5,
+    **kwargs,  # prevent crash if extra args are passed. e.g., device_id
 ):
     gc.collect()
     np_stack = np.stack([read_fits_image(img) for img in images])
@@ -79,17 +87,18 @@ def combine_images_with_cpu(
     if norm:
         np_stack = _normalize_stack(np_stack)
 
-    np_median, np_std = _calc_median_and_std(np_stack)
+    np_median, np_std = _calc_median_and_std(np_stack)  # coadded image and std
     fits.writeto(output, data=np_median, overwrite=True)
     fits.writeto(sig_output, data=np_std, overwrite=True)
+
     if make_bpmask is not None:
-        hot_mask = sigma_clipped_stats_cpu(np_median, bpmask_sigma, hot_mask=True)
+        hot_mask = sigma_clipped_stats_cpu(np_median, bpmask_sigma, return_mask=True)
         fits.writeto(make_bpmask, data=hot_mask.astype(np.uint8), overwrite=True)
 
     return np_median, np_std, None
 
 
-def process_image_with_subprocess(image_paths, bias, dark, flat, device_id=0, output_paths=None, **kwargs):
+def process_image_with_subprocess_gpu(image_paths, bias, dark, flat, device_id=0, output_paths=None, **kwargs):
 
     gc.collect()
 
@@ -98,7 +107,7 @@ def process_image_with_subprocess(image_paths, bias, dark, flat, device_id=0, ou
     # else:
     #     module = "process_image"
     cmd = [
-        #f"{SCRIPT_DIR}/cuda/{module}",
+        # f"{SCRIPT_DIR}/cuda/{module}",
         "python",
         f"{SCRIPT_DIR}/cuda/process_image.py",
         "-bias",
@@ -120,6 +129,7 @@ def process_image_with_subprocess(image_paths, bias, dark, flat, device_id=0, ou
     if result.returncode != 0:
         raise RuntimeError(f"Error processing images: {result.stderr}")
     return None
+
 
 def process_image_with_cpu(
     image_paths: str,
@@ -150,10 +160,11 @@ def process_image_with_cpu(
             data=data,
             overwrite=True,
         )
-     
+
     del bias, dark, flat
     gc.collect()
     return None
+
 
 @njit(parallel=True)
 def reduction_kernel_cpu(image, bias, dark, flat):
@@ -198,6 +209,7 @@ def _calc_median_and_std(np_stack):
             med = np.median(pixel_series)
 
             mean = np.mean(pixel_series)
+
             var = 0.0
             for k in range(n):
                 diff = pixel_series[k] - mean
@@ -217,7 +229,7 @@ def sigma_clipped_stats(np_data, device_id=0, **kwargs):
     #     return sigma_clipped_stats_cupy(np_data, device_id=device_id, **kwargs)
 
 
-def sigma_clipped_stats_cpu(data, sigma=3.0, maxiters=5, minmax=False, hot_mask=False, hot_mask_sigma=5.0):
+def sigma_clipped_stats_cpu(data, sigma=3.0, maxiters=5, minmax=False, return_mask=False, bpmask_sigma=5.0):
     flat = data.ravel()
     mask = _sigma_clip_1d(flat, sigma, maxiters)
     clipped = flat[mask]
@@ -231,13 +243,16 @@ def sigma_clipped_stats_cpu(data, sigma=3.0, maxiters=5, minmax=False, hot_mask=
         median_val = np.median(clipped)
         std_val = np.std(clipped)
 
-    if hot_mask:
-        return _compute_hot_mask_2d(data, median_val, std_val, hot_mask_sigma)
+    # print(f"cpu median_val {median_val}, std_val {std_val}")
+
+    if return_mask:
+        return _compute_outlier_mask_2d(data, median_val, std_val, bpmask_sigma)
 
     if minmax:
         return mean_val, median_val, std_val, np.min(flat), np.max(flat)
 
     return mean_val, median_val, std_val
+
 
 @njit
 def _fast_median(arr):
@@ -252,6 +267,7 @@ def _fast_median(arr):
     else:
         return tmp[mid]
 
+
 @njit
 def _fast_std(arr, mean):
     n = arr.size
@@ -262,6 +278,7 @@ def _fast_std(arr, mean):
         diff = arr[i] - mean
         var += diff * diff
     return np.sqrt(var / (n - 1))
+
 
 @njit
 def _sigma_clip_1d(data_flat, sigma=3.0, maxiters=5):
@@ -294,8 +311,9 @@ def _sigma_clip_1d(data_flat, sigma=3.0, maxiters=5):
 
     return mask
 
+
 @njit(parallel=True)
-def _compute_hot_mask_2d(data, median, std, hot_sigma):
+def _compute_outlier_mask_2d(data, median, std, hot_sigma):
     H, W = data.shape
     mask = np.empty((H, W), dtype=np.uint8)
     threshold = hot_sigma * std

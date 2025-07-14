@@ -1,10 +1,8 @@
 import argparse
 from astropy.io import fits
-from gppy.utils import add_suffix  # same for add_suffix
-from gppy.imstack.weight import calc_weight
-
 import numpy as np
 import cupy as cp
+import os
 
 # Reduction kernel
 sig_r_kernel = cp.ElementwiseKernel(
@@ -35,17 +33,19 @@ def calc_weight(images, d_m, f_m, sig_z, sig_f, p_d, p_z, p_f, egain, weight=Tru
     sig_b = np.empty(d_m.shape, dtype=np.float32)
 
     with cp.cuda.Device(device):
-        c_d_m, c_f_m = cp.asarray(d_m), cp.asarray(f_m)
+        c_d_m, c_f_m = cp.asarray(d_m).astype(cp.float32), cp.asarray(f_m).astype(cp.float32)
 
-        c_sig_b, c_sig_z, c_sig_f = cp.asarray(sig_b), cp.asarray(sig_z), cp.asarray(sig_f)
+        c_sig_b, c_sig_z, c_sig_f = cp.asarray(sig_b).astype(cp.float32), cp.asarray(sig_z).astype(cp.float32), cp.asarray(sig_f).astype(cp.float32)
         
         data = [fits.getdata(o) for o in images]
+
         c_r_p = cp.asarray(data)
         c_r_p = c_r_p.astype(cp.float32)
 
-        c_sig_zm = c_sig_z / cp.sqrt(float(p_z))
-        c_sig_dm_squared = (c_d_m / egain + (1 + 1 / float(p_z)) * c_sig_z**2) / float(p_d)
-        c_sig_fm = c_sig_f / cp.sqrt(float(p_f))
+        c_sig_zm = c_sig_z / cp.sqrt(cp.float32(p_z))
+        c_sig_dm_squared = (c_d_m / egain + (1 + 1 / cp.float32(p_z)) * c_sig_z**2) / cp.float32(p_d)
+        c_sig_fm = c_sig_f / cp.sqrt(cp.float32(p_f))
+
         c_sig_r_squared = sig_r_kernel(c_r_p, c_f_m, c_d_m, egain, c_sig_z)
         c_sig_rp_squared = sig_rp_squared_kernel(c_sig_r_squared, c_sig_zm, c_sig_dm_squared, c_f_m, c_r_p, c_sig_fm)
 
@@ -63,7 +63,7 @@ def calc_weight(images, d_m, f_m, sig_z, sig_f, p_d, p_z, p_f, egain, weight=Tru
 
         cp.get_default_memory_pool().free_all_blocks()
 
-    output_names = add_suffix(images)
+    output_names = add_suffix(images, "weight")
     for i, o in enumerate(output_names):
         fits.writeto(o, data[i], overwrite=True)
 
@@ -94,14 +94,14 @@ if __name__ == "__main__":
     n_images = []
     for file in [sig_z_file, d_m_file, f_m_file]:
         data, header = fits.getdata(file, header=True)
-        mfg_data.append(data)
+        mfg_data.append(data.astype(np.float32))
         n_images.append(header["NFRAMES"])
         if file == d_m_file:
             egain = header["EGAIN"]  # e-/ADU
 
     sig_z, d_m, f_m = mfg_data
     p_z, p_d, p_f = n_images
-    sig_f = fits.getdata(sig_f_file)
+    sig_f = fits.getdata(sig_f_file).astype(np.float32)
 
     # Run weight‐map calculation
     calc_weight(

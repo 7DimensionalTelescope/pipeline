@@ -68,8 +68,8 @@ def plot_bias(file, overwrite=False):
     os.makedirs(path.parent / "figures", exist_ok=True)
     output_path = path.parent / "figures" / f"{path.stem}_hist.png"
 
-    if output_path.exists() and not overwrite:
-        return
+    # if output_path.exists() and not overwrite:
+    #     return
 
     data = fits.getdata(file)
     header = fits.getheader(file)
@@ -93,7 +93,7 @@ def plot_bias(file, overwrite=False):
     label = r"outside 5 clipped $\sigma$"
     ax.axvspan(mn, header["CLIPMEAN"] - 5 * header["CLIPSTD"], color="gray", alpha=0.2, label=label)
     ax.axvspan(header["CLIPMEAN"] + 5 * header["CLIPSTD"], mx, color="gray", alpha=0.2)
-    ax.yscale("log")
+    ax.set_yscale("log")
     ax.xlabel("ADU")
     ax.ylabel("Density")
     ax.title("Master Bias")
@@ -253,8 +253,8 @@ def plot_flat(file, fmask=None):
     path = Path(file)
     os.makedirs(path.parent / "figures", exist_ok=True)
     output_path = path.parent / "figures" / f"{path.stem}_hist.png"
-    if output_path.exists():
-        return
+    # if output_path.exists():
+    #     return
 
     data = fits.getdata(file)
     header = fits.getheader(file)
@@ -311,8 +311,8 @@ def plot_bpmask(file, ext=1, badpix=1):
     os.makedirs(path.parent / "figures", exist_ok=True)
     output_path = path.parent / "figures" / f"{path.stem}.png"
     data = fits.getdata(file, ext=ext)
-    if output_path.exists():
-        return
+    # if output_path.exists():
+    #     return
 
     header = fits.getheader(file, ext=ext)
     if "BADPIX" in header.keys():
@@ -324,7 +324,7 @@ def plot_bpmask(file, ext=1, badpix=1):
         cmap = mcolors.ListedColormap(["white", "red"])
 
     # plt.figure()
-    fig = Figure(figsize=(10, 6))
+    fig = Figure(figsize=(6.4, 4.8))
     canvas = FigureCanvas(fig)
     ax = fig.add_subplot(1, 1, 1)
 
@@ -333,6 +333,7 @@ def plot_bpmask(file, ext=1, badpix=1):
     ax.set_xlabel("X (pixels)")
     ax.set_ylabel("Y (pixels)")
 
+    fig.tight_layout()
     canvas.print_figure(output_path)
     # plt.savefig(output_path)
     # plt.close()
