@@ -1,19 +1,18 @@
 import os
 import numpy as np
-from astropy.io import fits
-from PIL import Image
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 from pathlib import Path
-import matplotlib.pyplot as plt
+from astropy.io import fits
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas  # thread-safe, but savefig only.
+import matplotlib.colors as mcolors
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
 
 from ..path import PathHandler
 
-import matplotlib
-matplotlib.use('Agg')
 
 def save_fits_as_png(image_data, output_path, stretch=True, log_scale=False, max_width=1000):
+    from PIL import Image
+
     # Handle potential NaN or inf values
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
@@ -81,40 +80,29 @@ def plot_bias(file, overwrite=False):
     mx = fdata.max()
 
     edges = np.unique(np.concatenate(([mn], np.arange(clipmin, clipmax + 1, 1), [mx])))
-    plt.figure()
-    plt.hist(
-        fdata,
-        bins=edges,
-        density=True,
-        alpha=0.6,
-        label="Data",
-        log=True,
-        histtype="step",
-    )
+    fig = Figure(figsize=(10, 6))
+    canvas = FigureCanvas(fig)
+    ax = fig.add_subplot(1, 1, 1)
+    # plt.figure()
+    ax.hist(fdata, bins=edges, density=True, alpha=0.6, label="Data", log=True, histtype="step")
 
     lses = ["--", "-."]
     for i, key in enumerate(["CLIPMEAN", "CLIPMED"]):
-        plt.axvline(header[key], linestyle=lses[i], color=f"C{i+1}", label=key)
+        ax.axvline(header[key], linestyle=lses[i], color=f"C{i+1}", label=key)
 
-    plt.axvspan(
-        mn,
-        header["CLIPMEAN"] - 5 * header["CLIPSTD"],
-        color="gray",
-        alpha=0.2,
-        label=r"outside 5 clipped $\sigma$",
-    )
-    plt.axvspan(header["CLIPMEAN"] + 5 * header["CLIPSTD"], mx, color="gray", alpha=0.2)
-    plt.yscale("log")
-    plt.xlabel("ADU")
-    plt.ylabel("Density")
-    plt.title("Master Bias")
-    scope = (350, 700)  # (400, 600)(clipmin, clipmax)
-    plt.xlim(*scope)
+    label = r"outside 5 clipped $\sigma$"
+    ax.axvspan(mn, header["CLIPMEAN"] - 5 * header["CLIPSTD"], color="gray", alpha=0.2, label=label)
+    ax.axvspan(header["CLIPMEAN"] + 5 * header["CLIPSTD"], mx, color="gray", alpha=0.2)
+    ax.yscale("log")
+    ax.xlabel("ADU")
+    ax.ylabel("Density")
+    ax.title("Master Bias")
+    scope = (350, 700)  # (400, 600) (clipmin, clipmax)
+    ax.xlim(*scope)
     # plt.ylim(1e-7, 10)
-    plt.legend(loc=2)
+    ax.legend(loc=2)
 
     # Inset to show the right tail
-    ax = plt.gca()
     axins = inset_axes(ax, width="30%", height="30%", loc="upper right", borderpad=2)
     tail = fdata[(fdata >= scope[1])]
     axins.hist(tail, bins=100, density=False, histtype="step")
@@ -123,8 +111,9 @@ def plot_bias(file, overwrite=False):
     axins.tick_params(axis="both", which="major", labelsize=8)
     axins.set_title("Right-tail zoom", fontsize=9)
 
-    plt.savefig(output_path)
-    plt.close()
+    canvas.print_figure(output_path)
+    # plt.savefig(output_path)
+    # plt.close()
     save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
 
 
@@ -149,7 +138,10 @@ def plot_dark(file, fmask=None):
     mx = fdata.max()
     edges = np.unique(np.concatenate(([mn], np.arange(clipmin, clipmax + 1, 1), [mx])))
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    # fig, ax = plt.subplots(figsize=(10, 6))
+    fig = Figure(figsize=(10, 6))
+    canvas = FigureCanvas(fig)
+    ax = fig.add_subplot(1, 1, 1)
     axins = inset_axes(ax, width="40%", height="40%", loc="upper right", borderpad=2)
 
     # unmasked data
@@ -195,10 +187,10 @@ def plot_dark(file, fmask=None):
     # plt.ylim(1e-6, 10)
     ax.legend(loc=2)
 
-    plt.savefig(output_path)
-    plt.close()
+    canvas.print_figure(output_path)  # writes to PNG
+    # plt.savefig(output_path)
+    # plt.close()
     save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
-
 
     # plot_dark_tail(fdata, file, savefig=savefig)
 
@@ -269,8 +261,11 @@ def plot_flat(file, fmask=None):
     fdata = data.ravel()
     fdata = fdata[fmask] if fmask is not None else fdata
 
-    plt.figure()
-    plt.hist(
+    fig = Figure(figsize=(10, 6))
+    canvas = FigureCanvas(fig)
+    ax = fig.add_subplot(1, 1, 1)
+    # plt.figure()
+    ax.hist(
         fdata,
         bins=100,
         color="C0",
@@ -279,32 +274,34 @@ def plot_flat(file, fmask=None):
     )
 
     for i, key in enumerate(["CLIPMEAN", "CLIPMED"]):
-        plt.axvline(header[key], linestyle="--", color=f"C{i+1}", label=key)
+        ax.axvline(header[key], linestyle="--", color=f"C{i+1}", label=key)
 
-    plt.axvspan(
+    ax.axvspan(
         0,
         header["CLIPMIN"],
         color="gray",
         alpha=0.5,
         label="within CLIPMIN and CLIPMAX",
     )
-    plt.axvspan(header["CLIPMAX"], 3, color="gray", alpha=0.5)
+    ax.axvspan(header["CLIPMAX"], 3, color="gray", alpha=0.5)
 
-    plt.yscale("log")
-    plt.xlabel("Normalized ADU")
-    plt.ylabel("N")
-    plt.title(f"Master Flat")
-    plt.ylim(
+    ax.yscale("log")
+    ax.xlabel("Normalized ADU")
+    ax.ylabel("N")
+    ax.title(f"Master Flat")
+    ax.ylim(
         1e5,
     )
-    plt.xlim(0, 1.5)
-    plt.legend()
+    ax.xlim(0, 1.5)
+    ax.legend()
 
-    plt.savefig(output_path)
-    plt.close()
-    
+    canvas.print_figure(output_path)
+    # fig.savefig(output_path)
+    # fig.close()
+
     save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
-    
+
+
 def plot_bpmask(file, ext=1, badpix=1):
     if not (isinstance(file, str)):
         print("An image path (bpmask) is not properly defined.")
@@ -325,15 +322,19 @@ def plot_bpmask(file, ext=1, badpix=1):
     elif badpix == 1:
         cmap = mcolors.ListedColormap(["white", "red"])
 
-    plt.figure()
-    plt.imshow(data, cmap=cmap, interpolation="nearest")
-    plt.title(f"Hot pixel mask")
-    plt.xlabel("X (pixels)")
-    plt.ylabel("Y (pixels)")
+    # plt.figure()
+    fig = Figure(figsize=(10, 6))
+    canvas = FigureCanvas(fig)
+    ax = fig.add_subplot(1, 1, 1)
 
-    plt.savefig(output_path)
-    plt.close()
-    
+    ax.imshow(data, cmap=cmap, interpolation="nearest")
+    ax.set_title(f"Hot pixel mask")
+    ax.set_xlabel("X (pixels)")
+    ax.set_ylabel("Y (pixels)")
+
+    canvas.print_figure(output_path)
+    # plt.savefig(output_path)
+    # plt.close()
 
 
 def plot_sci(input_img, output_img):

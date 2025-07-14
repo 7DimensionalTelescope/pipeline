@@ -77,7 +77,7 @@ class Preprocess(BaseSetup):
         tasks = []
         for i in range(self._n_groups):
             tasks.append((4 * i, f"load_masterframe", True))
-            
+
             if i < self._n_groups - 1:
                 tasks.append((4 * i + 3, f"proceed_to_next_group", False))
 
@@ -119,7 +119,7 @@ class Preprocess(BaseSetup):
                 continue
 
             self.load_masterframe(device_id=device_id)
-            
+
             if not self.master_frame_only:
                 self.data_reduction(device_id=device_id)
 
@@ -176,7 +176,7 @@ class Preprocess(BaseSetup):
         elif name == "bpmask_output":
             dark_out = self._get_raw_group("dark_output", group_index)
             return dark_out.replace("dark", "bpmask")
-    
+
         if name.endswith("_input"):
             key = name[:4]  # strip "_input" (e.g., bias_input)
             if key in self._key_to_index:
@@ -342,7 +342,6 @@ class Preprocess(BaseSetup):
         if dtype == "dark":
             self.dark_exptime = get_header(existing_mframe_file)[HEADER_KEY_MAP["exptime"]]
 
-    
     def data_reduction(self, device_id=None, use_gpu: bool = True):
         self._use_gpu = all([use_gpu, self._use_gpu])
 
@@ -391,7 +390,7 @@ class Preprocess(BaseSetup):
             self.logger.info(
                 f"Completed data reduction for {len(self.sci_input)} images in group {self._current_group+1} in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self.sci_input):.1f} s/image)"
             )
-            
+
         for raw_file, processed_file in zip(self.sci_input, self.sci_output):
             header = fits.getheader(raw_file)
             header["SATURATE"] = prep_utils.get_saturation_level(header, bias, dark, flat)
@@ -400,10 +399,8 @@ class Preprocess(BaseSetup):
 
             update_header_by_overwriting(processed_file, header)
 
-    def make_plots(self, group_index=None):
+    def make_plots(self, group_index: int):
         st = time.time()
-        if group_index is None:
-            group_index = self._current_group
 
         # generate calib plots
         self.logger.info(f"Generating plots for master calibration frames of group {group_index+1}")
@@ -422,7 +419,7 @@ class Preprocess(BaseSetup):
             else:
                 self.logger.warning("Header missing BADPIX; using 1")
                 badpix = 1
-                
+
             mask = fits.getdata(self._get_raw_group("bpmask_output", group_index), ext=1)
             mask = mask != badpix
             fmask = mask.ravel()
@@ -430,6 +427,7 @@ class Preprocess(BaseSetup):
 
         if "flat" in self.calib_types:
             plot_flat(self._get_raw_group("flat_output", group_index), fmask)
+        self.logger.debug(f"Completed generating plots for master calibration frames of group {group_index+1}")
 
         # generate sci plots
         self.logger.info(
