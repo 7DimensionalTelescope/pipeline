@@ -7,10 +7,10 @@ RAWDATA_DIR = os.environ["RAWDATA_DIR"]
 FACTORY_DIR = os.environ["FACTORY_DIR"]
 MASTER_FRAME_DIR = os.environ["MASTER_FRAME_DIR"]
 PROCESSED_DIR = os.environ["PROCESSED_DIR"]
-try:
-    STACKED_DIR = os.environ["STACKED_DIR"]
-except:
-    STACKED_DIR = "/data/pipeline_reform/stacked_test"
+# try:
+STACKED_DIR = os.environ["STACKED_DIR"]
+# except:
+#     STACKED_DIR = "/data/pipeline_reform/stacked_test"
 
 PIPELINE_DIRS = {RAWDATA_DIR, FACTORY_DIR, MASTER_FRAME_DIR, PROCESSED_DIR, STACKED_DIR}
 SLACK_TOKEN = os.environ["SLACK_TOKEN"]
