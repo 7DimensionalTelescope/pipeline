@@ -34,8 +34,11 @@ class PreprocConfiguration(BaseConfig):
 
         if overwrite:
             self.logger.info("Deleting processed, and factory directories to overwrite")
+            factory_dir = self.path.factory_dir
+            if not isinstance(factory_dir, str):
+                raise ValueError(f"Multiple directories; aborting cleaning: {factory_dir}")
+            clean_up_folder(factory_dir)
             # clean_up_folder(self.path.masterframe_dir)
-            clean_up_folder(self.path.factory_dir)
             # clean_up_folder(self.path.preproc_output_dir)
 
         self.write_config()

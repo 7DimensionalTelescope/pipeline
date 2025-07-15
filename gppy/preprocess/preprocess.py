@@ -169,6 +169,8 @@ class Preprocess(BaseSetup):
         return {"bias": 0, "dark": 1, "flat": 2}
 
     def _get_raw_group(self, name, group_index):
+        """This parses from the PathHandler.take_raw_inventory output, self.raw_groups"""
+
         if name == "sci_input":
             return self._parse_sci_list(group_index, "input")
         elif name == "sci_output":
@@ -178,11 +180,11 @@ class Preprocess(BaseSetup):
             return dark_out.replace("dark", "bpmask")
 
         if name.endswith("_input"):
-            key = name[:4]  # strip "_input" (e.g., bias_input)
+            key = name[:4]  # strip "_input" (e.g., bias from bias_input)
             if key in self._key_to_index:
                 return self.raw_groups[group_index][0][self._key_to_index[key]]
         elif name.endswith("_output"):
-            key = name[:4]  # strip "_output" (e.g., bias_output)
+            key = name[:4]  # strip "_output" (e.g., bias from bias_output)
             if key in self._key_to_index:
                 if "sig" in name:
                     return getattr(self, f"{key}_output").replace(key, f"{key}sig")
@@ -241,10 +243,13 @@ class Preprocess(BaseSetup):
 
             if input_file:  # if the list is not empty
                 if not os.path.exists(output_file) or self.overwrite:
+                    # print(f"generating, {dtype}")
                     self._generate_masterframe(dtype, device_id)
                 else:
+                    # print(f"fetching despite input, {dtype}")
                     self._fetch_masterframe(output_file, dtype)
-            elif isinstance(output_file, str) or len(output_file) > 0:
+            elif isinstance(output_file, str):  # or len(output_file) > 0:
+                # print(f"fetching as no input, {dtype}")
                 self._fetch_masterframe(output_file, dtype)
             else:
                 self.logger.warning(f"No input or output data for {dtype}")
@@ -307,8 +312,10 @@ class Preprocess(BaseSetup):
                     sig_output=self.flatsig_output,
                 )
 
-
-        prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), header, )
+        prep_utils.update_header_by_overwriting(
+            getattr(self, f"{dtype}sig_output"),
+            header,
+        )
 
         header = prep_utils.add_image_id(header)
         header = record_statistics(getattr(self, f"{dtype}_output"), header)
@@ -427,31 +434,32 @@ class Preprocess(BaseSetup):
 
         if "flat" in self.calib_types:
             plot_flat(self._get_raw_group("flat_output", group_index), fmask)
-        self.logger.debug(f"Completed generating plots for master calibration frames of group {group_index+1}")
+        self.logger.info(f"Completed generating plots for master calibration frames of group {group_index+1}")
 
         # generate sci plots
-        self.logger.info(
-            f"Generating plots for science frames of group {group_index+1} ({len(self._get_raw_group('sci_input', group_index))} images)"
-        )
-        if use_multi_thread:
-            threads = []
-            for input_img, output_img in zip(
-                self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)
-            ):
-                thread = threading.Thread(target=plot_sci, args=(input_img, output_img))
-                thread.start()
-                threads.append(thread)
-            for thread in threads:
-                thread.join()
-        else:
-            for input_img, output_img in zip(
-                self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)
-            ):
-                plot_sci(input_img, output_img)
+        num_sci = len(self._get_raw_group("sci_input", group_index))
+        if num_sci:
+            self.logger.info(f"Generating plots for science frames of group {group_index+1} ({num_sci} images)")
+            if use_multi_thread:
+                threads = []
+                for input_img, output_img in zip(
+                    self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)
+                ):
+                    thread = threading.Thread(target=plot_sci, args=(input_img, output_img))
+                    thread.start()
+                    threads.append(thread)
+                for thread in threads:
+                    thread.join()
+            else:
+                for input_img, output_img in zip(
+                    self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)
+                ):
+                    plot_sci(input_img, output_img)
 
-        self.logger.info(
-            f"Completed plot generation for images in group {group_index+1} in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self._get_raw_group('sci_input', group_index))} s/image)"
-        )
+            self.logger.info(
+                f"Completed plot generation for images in group {group_index+1} in {time_diff_in_seconds(st)} seconds "
+                f"({time_diff_in_seconds(st, return_float=True)/(num_sci or 1)} s/image)"
+            )
 
     def update_bpmask(self):
         header = self.get_header("dark")

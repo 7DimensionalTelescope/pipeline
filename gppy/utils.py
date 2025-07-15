@@ -135,7 +135,7 @@ def clean_up_factory():
     clean_up_folder(FACTORY_DIR)
 
 
-def clean_up_folder(path):
+def clean_up_folder(path: str):
     if not os.path.exists(path):
         os.makedirs(path)
         return
@@ -806,4 +806,3 @@ def get_basename(file_path):
 # def update_header_by_overwriting(filename, header):
 #     data = fits.getdata(filename)
 #     fits.writeto(filename, data, header=header, overwrite=True)
-
