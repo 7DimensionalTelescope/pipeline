@@ -822,7 +822,17 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
         return result
 
     @staticmethod
-    def ensure_unique(mframe):
+    def ensure_unique(mframe, off=False):
+        """
+        CAVEAT: this is ad-hoc.
+        Using this relies on that the inputs are properly grouped by nightdate,
+        and only date of files are erroneous.
+
+        You may turn it off for future data as of 2025-07-15.
+        """
+        if off:
+            return mframe
+
         if isinstance(mframe, list):
             mframe_selected = sorted(mframe)[-1]
             print(f"[WARNING] Degenerate output filenames: {mframe};\nUsing the last: {mframe_selected}")

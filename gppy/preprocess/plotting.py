@@ -259,41 +259,43 @@ def plot_flat(file, fmask=None):
     data = fits.getdata(file)
     header = fits.getheader(file)
 
-    fdata = data.ravel()
-    fdata = fdata[fmask] if fmask is not None else fdata
-
     fig = Figure(figsize=(10, 6))
     canvas = FigureCanvas(fig)
     ax = fig.add_subplot(1, 1, 1)
-    # plt.figure()
-    ax.hist(
-        fdata,
-        bins=100,
-        color="C0",
-        histtype="step",
-        label="Masked Data",
-    )
 
+    fdata = data.ravel()
+    # unmasked data
+    ax.hist(fdata, bins=100, color="C0", histtype="step", label="Unmasked Data")
+
+    fdata = fdata[fmask] if fmask is not None else fdata
+
+    # masked data
+    ax.hist(fdata, bins=100, color="C1", histtype="step", linestyle="--", label="Masked Data")
+
+    lses = ["--", "-."]
     for i, key in enumerate(["CLIPMEAN", "CLIPMED"]):
-        ax.axvline(header[key], linestyle="--", color=f"C{i+1}", label=key)
+        ax.axvline(header[key], linestyle=lses[i], color=f"C{i+1}", label=f"{key}: {header[key]:.4f}")
 
+    # label = r"outside 5 clipped $\sigma$, inside CLIPMIN/CLIPMAX"
+    label = r"outside CLIPMIN/CLIPMAX"
+    x_min, x_max = ax.get_xlim()
+    ax.axvspan(x_min, header["CLIPMIN"], color="gray", alpha=0.1, label=label)
+    ax.axvspan(header["CLIPMAX"], x_max, color="gray", alpha=0.1)
     ax.axvspan(
-        0,
-        header["CLIPMIN"],
+        header["CLIPMEAN"] - 1 * header["CLIPSTD"],
+        header["CLIPMEAN"] + 1 * header["CLIPSTD"],
         color="gray",
-        alpha=0.5,
-        label="within CLIPMIN and CLIPMAX",
+        alpha=0.3,
+        label=r"inside 1 clipped $\sigma$",
     )
-    ax.axvspan(header["CLIPMAX"], 3, color="gray", alpha=0.5)
 
     ax.set_yscale("log")
     ax.set_xlabel("Normalized ADU")
     ax.set_ylabel("N")
     ax.set_title(f"Master Flat")
-    ax.set_ylim(
-        1e5,
-    )
-    ax.set_xlim(0, 1.5)
+    # ax.set_ylim(1e5)
+    ax.set_xlim(x_min, x_max)
+    # ax.set_xlim(0, 1.5)
     ax.legend()
 
     canvas.print_figure(output_path)

@@ -233,12 +233,12 @@ def sigma_clipped_stats_cpu(data, sigma=3.0, maxiters=5, minmax=False, return_ma
     fdata = data.ravel()
 
     for _ in range(int(5)):
-        median_val =np.mean(fdata)
+        median_val = np.mean(fdata)
         std_val = np.std(fdata, ddof=1)
         mask = np.abs(fdata - median_val) < (3 * std_val)
         fdata = fdata[mask]
-    
-    clipped = fdata[mask]
+
+    clipped = fdata  # [mask]
 
     if clipped.size == 0:
         mean_val = 0.0
@@ -256,6 +256,7 @@ def sigma_clipped_stats_cpu(data, sigma=3.0, maxiters=5, minmax=False, return_ma
         return mean_val, median_val, std_val, np.min(fdata), np.max(fdata)
 
     return mean_val, median_val, std_val
+
 
 @njit(parallel=True)
 def _compute_outlier_mask_2d(data, median, std, hot_sigma):
