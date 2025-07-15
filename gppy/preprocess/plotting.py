@@ -94,11 +94,11 @@ def plot_bias(file, overwrite=False):
     ax.axvspan(mn, header["CLIPMEAN"] - 5 * header["CLIPSTD"], color="gray", alpha=0.2, label=label)
     ax.axvspan(header["CLIPMEAN"] + 5 * header["CLIPSTD"], mx, color="gray", alpha=0.2)
     ax.set_yscale("log")
-    ax.xlabel("ADU")
-    ax.ylabel("Density")
-    ax.title("Master Bias")
+    ax.set_xlabel("ADU")
+    ax.set_ylabel("Density")
+    ax.set_title("Master Bias")
     scope = (350, 700)  # (400, 600) (clipmin, clipmax)
-    ax.xlim(*scope)
+    ax.set_xlim(*scope)
     # plt.ylim(1e-7, 10)
     ax.legend(loc=2)
 
@@ -286,14 +286,14 @@ def plot_flat(file, fmask=None):
     )
     ax.axvspan(header["CLIPMAX"], 3, color="gray", alpha=0.5)
 
-    ax.yscale("log")
-    ax.xlabel("Normalized ADU")
-    ax.ylabel("N")
-    ax.title(f"Master Flat")
-    ax.ylim(
+    ax.set_yscale("log")
+    ax.set_xlabel("Normalized ADU")
+    ax.set_ylabel("N")
+    ax.set_title(f"Master Flat")
+    ax.set_ylim(
         1e5,
     )
-    ax.xlim(0, 1.5)
+    ax.set_xlim(0, 1.5)
     ax.legend()
 
     canvas.print_figure(output_path)
