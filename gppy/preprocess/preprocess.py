@@ -307,14 +307,12 @@ class Preprocess(BaseSetup):
                     sig_output=self.flatsig_output,
                 )
 
-        prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), header)
+
+        prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), header, )
 
         header = prep_utils.add_image_id(header)
-
         header = record_statistics(getattr(self, f"{dtype}_output"), header)
-
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
-
         self.logger.info(f"Master {dtype} generated in {time_diff_in_seconds(st)} seconds")
         self.logger.debug(f"FITS Written: {getattr(self, f'{dtype}_output')}")
 
@@ -452,7 +450,7 @@ class Preprocess(BaseSetup):
                 plot_sci(input_img, output_img)
 
         self.logger.info(
-            f"Completed plot generation for images in group {group_index+1} in {time_diff_in_seconds(st)} seconds"
+            f"Completed plot generation for images in group {group_index+1} in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(self._get_raw_group('sci_input', group_index))} s/image)"
         )
 
     def update_bpmask(self):

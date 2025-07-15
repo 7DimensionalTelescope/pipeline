@@ -4,26 +4,6 @@ import sys
 import cupy as cp
 import numpy as np
 
-bpmask_kernel = cp.RawKernel(
-    r"""
-extern "C" __global__
-void compute_bpmask_kernel(const float* __restrict__ img,
-                           unsigned char* __restrict__ mask,
-                           float median, float std, float sigma, long size) {
-    long idx = blockDim.x * blockIdx.x + threadIdx.x;
-    if (idx >= size) return;
-    float val = img[idx];
-    float threshold = sigma * std;
-    if (!isnan(val) && !isinf(val)) {
-        mask[idx] = (fabsf(val - median) > threshold) ? 1 : 0;
-    } else {
-        mask[idx] = 1;
-    }
-}
-""",
-    "compute_bpmask_kernel",
-)
-
 
 def pinned_empty(shape, dtype=np.float32):
     size = np.prod(shape)
@@ -92,24 +72,7 @@ def combine_images_with_cupy(
             std_val = cp.std(cp_data_flat)
             # print(f"gpu median_val {median_val}, std_val {std_val}")
 
-            cp_bpmask = cp.empty(cp_median.size, dtype=cp.uint8)
-
-            threads_per_block = 1024
-            total_pixels = cp_median.size
-            blocks_per_grid = (total_pixels + threads_per_block - 1) // threads_per_block
-
-            bpmask_kernel(
-                (blocks_per_grid,),
-                (threads_per_block,),
-                (
-                    cp_median.ravel().data.ptr,
-                    cp_bpmask.data.ptr,
-                    float(median_val),
-                    float(std_val),
-                    float(bpmask_sigma),
-                    total_pixels,
-                ),
-            )
+            cp_bpmask = (cp.abs(cp_median - median_val) > bpmask_sigma * std_val).astype(cp.int8)
 
             cp.cuda.runtime.memcpyAsync(
                 np_bpmask.ctypes.data,

@@ -230,9 +230,15 @@ def sigma_clipped_stats(np_data, device_id=0, **kwargs):
 
 
 def sigma_clipped_stats_cpu(data, sigma=3.0, maxiters=5, minmax=False, return_mask=False, bpmask_sigma=5.0):
-    flat = data.ravel()
-    mask = _sigma_clip_1d(flat, sigma, maxiters)
-    clipped = flat[mask]
+    fdata = data.ravel()
+
+    for _ in range(int(5)):
+        median_val =np.mean(fdata)
+        std_val = np.std(fdata, ddof=1)
+        mask = np.abs(fdata - median_val) < (3 * std_val)
+        fdata = fdata[mask]
+    
+    clipped = fdata[mask]
 
     if clipped.size == 0:
         mean_val = 0.0
@@ -243,74 +249,13 @@ def sigma_clipped_stats_cpu(data, sigma=3.0, maxiters=5, minmax=False, return_ma
         median_val = np.median(clipped)
         std_val = np.std(clipped)
 
-    # print(f"cpu median_val {median_val}, std_val {std_val}")
-
     if return_mask:
         return _compute_outlier_mask_2d(data, median_val, std_val, bpmask_sigma)
 
     if minmax:
-        return mean_val, median_val, std_val, np.min(flat), np.max(flat)
+        return mean_val, median_val, std_val, np.min(fdata), np.max(fdata)
 
     return mean_val, median_val, std_val
-
-
-@njit
-def _fast_median(arr):
-    n = arr.size
-    if n == 0:
-        return 0.0
-    tmp = np.copy(arr)
-    tmp.sort()
-    mid = n // 2
-    if n % 2 == 0:
-        return 0.5 * (tmp[mid - 1] + tmp[mid])
-    else:
-        return tmp[mid]
-
-
-@njit
-def _fast_std(arr, mean):
-    n = arr.size
-    if n <= 1:
-        return 0.0
-    var = 0.0
-    for i in range(n):
-        diff = arr[i] - mean
-        var += diff * diff
-    return np.sqrt(var / (n - 1))
-
-
-@njit
-def _sigma_clip_1d(data_flat, sigma=3.0, maxiters=5):
-    mask = np.ones(data_flat.shape, dtype=np.bool_)
-    for _ in range(maxiters):
-        # count how many are True
-        n = 0
-        for i in range(data_flat.size):
-            if mask[i]:
-                n += 1
-
-        if n == 0:
-            break
-
-        clipped = np.empty(n, dtype=np.float64)
-        j = 0
-        for i in range(data_flat.size):
-            if mask[i]:
-                clipped[j] = data_flat[i]
-                j += 1
-
-        median = _fast_median(clipped)
-        std = _fast_std(clipped, median)
-
-        if std == 0.0:
-            break
-
-        for i in range(data_flat.size):
-            mask[i] = abs(data_flat[i] - median) < sigma * std
-
-    return mask
-
 
 @njit(parallel=True)
 def _compute_outlier_mask_2d(data, median, std, hot_sigma):
