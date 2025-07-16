@@ -31,6 +31,11 @@ flag:
   combined_photometry: false
   subtraction: false
 
+qa:
+  pa:
+  ellipticity:
+  seeing:
+
 info:
   version: '2.0'  # legacy gppy-gpu is 1.0
   project: 7DT/7DS
