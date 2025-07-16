@@ -360,6 +360,7 @@ class ImStack(BaseSetup):
                     uncalculated_images.append(img)
 
             if uncalculated_images:
+                st_image = time.time()
                 with acquire_available_gpu(device_id=device_id) as device_id:
                     if device_id is None:
                         from .weight import calc_weight_with_cpu
