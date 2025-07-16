@@ -306,11 +306,14 @@ def check_gpu_activity(device_id=None, gpu_threshold=500):
             if len(procs) == 0:
                 available.add(i)
             else:
+                possible = True
                 for p in procs:
                     used_MB = p.usedGpuMemory / 1024 / 1024
                     if used_MB > gpu_threshold:
+                        possible = False
                         break
-                available.add(i)
+                if possible:
+                    available.add(i)
         except pynvml.NVMLError as e:
             print(f"  Could not get processes: {e}")
         
