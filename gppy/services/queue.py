@@ -50,8 +50,9 @@ class QueueManager:
         self.lock = threading.Lock()
 
         # Register signal handlers
-        signal.signal(signal.SIGTERM, self._handle_keyboard_interrupt)
-        signal.signal(signal.SIGINT, self._handle_keyboard_interrupt)
+        if threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGTERM, self._handle_keyboard_interrupt)
+            signal.signal(signal.SIGINT, self._handle_keyboard_interrupt)
 
         # Optional: Jupyter notebook interrupt handling
         try:
