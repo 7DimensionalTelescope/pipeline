@@ -21,8 +21,8 @@ INSTRUM_STATUS_DICT = "/home/7dt/7dt_too/backend/data/7dt/multitelescopes.dict"
 INSTRUM_GROUP_KEYS = ["unit", "n_binning", "gain", "camera"]
 ALL_GROUP_KEYS = ["obj", "filter", "nightdate", "exptime"] + INSTRUM_GROUP_KEYS
 BIAS_GROUP_KEYS = ["nighdate"] + INSTRUM_GROUP_KEYS  # no exp: account for potential ms exp difference
-DARK_GROUP_KEYS = INSTRUM_GROUP_KEYS + ["exptime"]  # darks have arbitrary filters
-FLAT_GROUP_KEYS = INSTRUM_GROUP_KEYS + ["filter"]  # flats have different exptimes
+DARK_GROUP_KEYS = BIAS_GROUP_KEYS + ["exptime"]  # darks have arbitrary filters
+FLAT_GROUP_KEYS = BIAS_GROUP_KEYS + ["filter"]  # flats have different exptimes
 SURVEY_SCIENCE_GROUP_KEYS = ["obj", "filter"]  # , "n_binning", "unit"]
 TRANSIENT_SCIENCE_GROUP_KEYS = ["nightdate"] + SURVEY_SCIENCE_GROUP_KEYS  # used for processed image directory structure
 

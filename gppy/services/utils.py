@@ -315,7 +315,7 @@ def check_gpu_activity(device_id=None, gpu_threshold=500):
                 if possible:
                     available.add(i)
         except pynvml.NVMLError as e:
-            print(f"  Could not get processes: {e}")
+            print(f"Could not get processes: {e}")
         
     pynvml.nvmlShutdown()
     return list(available)
