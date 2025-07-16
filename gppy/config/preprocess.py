@@ -33,7 +33,7 @@ class PreprocConfiguration(BaseConfig):
             self.logger.debug(f"Configuration file: {self.config_file}")
 
         if overwrite:
-            self.logger.info("Deleting processed, and factory directories to overwrite")
+            self.logger.info("Deleting the factory directory to overwrite")
             factory_dir = self.path.factory_dir
             if not isinstance(factory_dir, str):
                 raise ValueError(f"Multiple directories; aborting cleaning: {factory_dir}")

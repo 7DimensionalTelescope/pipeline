@@ -132,11 +132,10 @@ def plot_dark(file, flattened_mask=None):
     header = fits.getheader(file)
     fdata = data.ravel()
 
-    clipmin = int(header["CLIPMIN"])
-    clipmax = int(header["CLIPMAX"])
+    scope = (-170, 200)
     mn = fdata.min()
     mx = fdata.max()
-    edges = np.unique(np.concatenate(([mn], np.arange(clipmin, clipmax + 1, 1), [mx])))
+    edges = np.unique(np.concatenate(([mn], np.arange(scope[0], scope[1] + 1, 1), [mx])))
 
     # fig, ax = plt.subplots(figsize=(10, 6))
     fig = Figure(figsize=(10, 6))
@@ -178,7 +177,7 @@ def plot_dark(file, flattened_mask=None):
     ax.axvspan(mn, header["CLIPMEAN"] - 5 * header["CLIPSTD"], color="gray", alpha=0.1, label=label)
     ax.axvspan(header["CLIPMEAN"] + 5 * header["CLIPSTD"], mx, color="gray", alpha=0.1)
 
-    ax.set_xlim(-170, 200)
+    ax.set_xlim(*scope)
     # plt.xscale("symlog")
     ax.set_yscale("log")
     ax.set_xlabel("ADU")
