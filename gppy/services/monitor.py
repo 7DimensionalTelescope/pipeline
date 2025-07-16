@@ -1,128 +1,62 @@
-from watchdog.events import FileSystemEventHandler
+import threading
 from pathlib import Path
-from typing import List, Callable, Dict
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+from typing import List, Callable, Dict, Any, Tuple
+from .logger import Logger
+import signal
 
 class Monitor(FileSystemEventHandler):
-    """
-    Advanced file system monitor for astronomical data processing.
-
-    Provides real-time monitoring of file system events, specifically
-    designed for tracking and processing astronomical observation data.
-
-    Key Features:
-    - Watch for new FITS files and observation folders
-    - Automatically categorize data (Calibration vs Observation)
-    - Support multiple processing callbacks
-    - Flexible and extensible design
-
-    Attributes:
-        base_path (Path): Root directory for monitoring
-        folder_data (Dict[str, Dict]): Tracked folder data
-        callbacks (List[tuple]): Registered processing callbacks
-
-    Methods:
-        add_process(): Register a new processing callback
-        on_created(): Handle file system creation events
-
-    Example:
-        >>> from watchdog.observers import Observer
-        >>> monitor = Monitor(base_path='/path/to/observations')
-        >>> monitor.add_process(process_calibration_data)
-        >>> observer = Observer()
-        >>> observer.schedule(monitor, base_path, recursive=True)
-        >>> observer.start()
-    """
-
-    def __init__(self, base_path: Path):
+    def __init__(self, base_path: Path, debounce_seconds: int = 5):
         super().__init__()
         self.base_path = Path(base_path)
-        self.folder_data: Dict[str] = {}
-        self.callbacks: List[tuple[Callable, dict]] = []
-    
-    # def add_process(self, callback: Callable[[CalibrationData, ObservationDataSet], None], **kwargs):
-    #     """
-    #     Register a processing callback for new data.
+        self.callbacks: List[Tuple[Callable, dict]] = []
+        self.logger = Logger("Monitor logger")
+        self.debounce_seconds = debounce_seconds
+        self._debounce_timer: threading.Timer | None = None
+        self._pending_files = set()
+        self._lock = threading.Lock()
+        # Register signal handlers only in main thread
+        if threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGTERM, self._handle_keyboard_interrupt)
+            signal.signal(signal.SIGINT, self._handle_keyboard_interrupt)
 
-    #     Args:
-    #         callback (Callable): Function to call when new data is detected
-    #         **kwargs: Additional keyword arguments for the callback
-    #     """
+    def _handle_keyboard_interrupt(self, signum, frame):
+        self.logger.warning("Keyboard interrupt or termination signal detected. Stopping monitor...")
+        raise KeyboardInterrupt()
 
-    #     self.callbacks.append((callback, kwargs))
+    def on_created(self, event):
+        if not event.is_directory and event.src_path.endswith('.fits'):
+            with self._lock:
+                self._pending_files.add(event.src_path)
+                # Reset debounce timer
+                if self._debounce_timer is not None:
+                    self._debounce_timer.cancel()
+                self._debounce_timer = threading.Timer(self.debounce_seconds, self._debounced_process)
+                self._debounce_timer.daemon = True
+                self._debounce_timer.start()
 
-    # def _execute_callbacks(self, data):
-    #     """
-    #     Execute all registered callbacks for a given data object.
+    def _debounced_process(self):
+        with self._lock:
+            files_to_process = list(self._pending_files)
+            self._pending_files.clear()
+            self._debounce_timer = None
+        if files_to_process:
+            self.logger.info(f"Processing {len(files_to_process)} new .fits files: {files_to_process}")
+            for callback, kwargs in self.callbacks:
+                self.logger.info(f"Triggering callback {callback.__name__} for {len(files_to_process)} files")
+                callback(files_to_process, **kwargs)
+        else:
+            self.logger.info("No .fits files to process after debounce period.")
 
-    #     Args:
-    #         data: Data object to process
-    #     """
-    #     for callback, kwargs in self.callbacks:
-    #         callback(data, **kwargs)
-            
-    # def _is_observation_folder(self, path: Path) -> bool:
-    #     """
-    #     Validate if a path represents a valid observation folder.
+    def add_callback(self, callback: Callable, **kwargs):
+        self.callbacks.append((callback, kwargs))
 
-    #     Args:
-    #         path (Path): Path to check
-
-    #     Returns:
-    #         bool: Whether the path is a valid observation folder
-    #     """
-    #     try:
-    #         if not re.match(r'\d{4}-\d{2}-\d{2}_gain\d+', path.name):
-    #             return False
-    #         if path.parent.parent != self.base_path:
-    #             return False
-    #         return True
-    #     except Exception:
-    #         return False
-
-    # def _process_new_file(self, file_path: Path):
-    #     """
-    #     Process a newly detected FITS file.
-
-    #     Attempts to add the file to calibration or observation datasets
-    #     and triggers appropriate callbacks.
-
-    #     Args:
-    #         file_path (Path): Path to the new FITS file
-    #     """
-    #     folder_path = str(file_path.parent)
-        
-    #     if folder_path not in self.folder_data:
-    #         # Initialize both calibration and observation data handlers
-    #         self.folder_data[folder_path] = {
-    #             'calib': CalibrationData(file_path.parent),
-    #             'obs': ObservationDataSet()
-    #         }
-        
-    #     data_handlers = self.folder_data[folder_path]
-        
-    #     # Try to add file to calibration data first
-    #     if data_handlers['calib'].add_fits_file(file_path):
-    #         if not data_handlers['calib'].processed and data_handlers['calib'].has_calib_files():
-    #             self._execute_callbacks(data_handlers['calib'])
-    #     # If not a calibration file, try observation data
-    #     elif data_handlers['obs'].add_fits_file(file_path):
-    #         self._execute_callbacks(data_handlers['obs'])
-    
-    # def on_created(self, event):
-    #     """
-    #     Handle file system creation events.
-
-    #     Processes new FITS files and detects new observation folders.
-
-    #     Args:
-    #         event (FileSystemEvent): Watchdog file system event
-    #     """
-       
-    #     path = Path(event.src_path)
-
-    #     if not event.is_directory and path.suffix.lower() == '.fits':
-    #         self._process_new_file(path)
-    #     elif event.is_directory and self._is_observation_folder(path):
-    #         logger = Logger()
-    #         logger.info(f"New observation folder detected: {path}")
-
+    def start(self):
+        self.logger.info(f"Start to monitor {str(self.base_path)}")
+        observer = Observer()
+        observer.schedule(self, str(self.base_path), recursive=True)
+        observer_thread = threading.Thread(target=observer.start)
+        observer_thread.daemon = True
+        observer_thread.start()
+        return observer

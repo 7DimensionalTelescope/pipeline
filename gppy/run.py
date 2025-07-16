@@ -1,5 +1,8 @@
 __package__ = "gppy"
 
+import time
+from pathlib import Path
+
 from .config import PreprocConfiguration, SciProcConfiguration
 from .preprocess import Preprocess
 from .astrometry import Astrometry
@@ -7,19 +10,11 @@ from .photometry import Photometry
 from .imstack import ImStack
 from .subtract import ImSubtract
 
-from .const import RAWDATA_DIR
-import time
-
-from watchdog.observers import Observer
-
 from .services.monitor import Monitor
-from .services.queue import QueueManager, Priority
-
-from .services.logger import Logger
-from .services.task import Task
-
-# from .base import ObservationDataSet, CalibrationData
 from .services.queue import QueueManager
+from .services.scheduler import Scheduler
+
+from .wrapper import DataReduction
 
 
 def run_preprocess(config, device_id=None, only_with_sci=False, make_plots=True, **kwargs):
@@ -67,7 +62,7 @@ def run_scidata_reduction(config, processes=["astrometry", "photometry", "combin
         raise e
 
 
-def start_monitoring():
+def start_monitoring(target_dir = None):
     """
     Initialize and start the astronomical data monitoring system.
 
@@ -82,25 +77,28 @@ def start_monitoring():
 
     Monitoring can be stopped by pressing Ctrl+C.
     """
+    if target_dir is None:
+        from .const import RAWDATA_DIR
+        target_dir = RAWDATA_DIR
 
-    queue = QueueManager(max_workers=20)
+    def process_new_images(image_paths, queue):
+        dr = DataReduction.from_list(image_paths)
+        dr.create_config()
+        configs = dr.config_list()
+        del dr
+        sc = Scheduler(*configs)
+        queue.add_scheduler(sc)
+        queue.wait_until_task_complete("all")
 
-    monitor = Monitor(RAWDATA_DIR)
-    monitor.add_process(run_pipeline, queue=queue)
-
-    observer = Observer()
-    observer.schedule(monitor, RAWDATA_DIR, recursive=True)
-    observer.start()
+    queue = QueueManager()
+    monitor = Monitor(base_path=Path(target_dir))
+    monitor.add_callback(process_new_images, queue=queue)
+    observer = monitor.start()
 
     try:
-        print(f"Starting monitoring of {RAWDATA_DIR}")
-        print("Press Ctrl+C to stop...")
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
         observer.stop()
-        if queue:
-            queue.abrupt_stop()
-        print("\nMonitoring stopped")
 
     observer.join()
