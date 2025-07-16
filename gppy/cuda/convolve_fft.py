@@ -5,12 +5,22 @@ from cupyx.scipy.ndimage import binary_dilation
 from astropy.io import fits
 from astropy.convolution import Gaussian2DKernel
 
-def convolve_fft(images, outputs, kernels=None, mode="same", normalize_kernel=False,
-                 apply_edge_mask=False, method=None, delta_peeing=None, device=0):
-  
+
+def convolve_fft(
+    images,
+    outputs,
+    kernels=None,
+    mode="same",
+    normalize_kernel=False,
+    apply_edge_mask=False,
+    method=None,
+    delta_peeing=None,
+    device=0,
+):
+
     # Validate lengths
     n = len(images)
-    
+
     for i in range(n):
         img_file = images[i]
         kern_file = kernels[i]
@@ -52,7 +62,7 @@ def convolve_fft(images, outputs, kernels=None, mode="same", normalize_kernel=Fa
         fits.writeto(out_file, data=output_data, header=header, overwrite=True)
 
 
- def add_conv_header(header, delta_peeing, method):
+def add_conv_header(header, delta_peeing, method):
     """
     Add convolution metadata to FITS header.
     """
@@ -63,27 +73,21 @@ def convolve_fft(images, outputs, kernels=None, mode="same", normalize_kernel=Fa
     return header
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        description='Convolve FITS images with kernels using GPU FFT')
-    parser.add_argument('-input', nargs='+', required=True,
-                        help='Input FITS image file paths')
-    parser.add_argument('-output', nargs='+', required=True,
-                        help='Output FITS file paths')
-    parser.add_argument('-kernels',  nargs='+', 
-                        help='Input FITS kernel file paths')
-    parser.add_argument('-mode', default='same', choices=['full', 'same', 'valid'],
-                        help='Convolution mode (default: same)')
-    parser.add_argument('-normalize-kernel', action='store_true',
-                        help='Normalize kernel to unit sum before convolution')
-    parser.add_argument('-apply-edge-mask', action='store_true',
-                        help='Zero out edge artifacts after convolution')
-    parser.add_argument('-method', type=str,
-                        help='Label for convolution method to add to header')
-    parser.add_argument('-delta-peeing', nargs='+', type=float,
-                        help='Kernel FWHM values (pixels) for header')
-    parser.add_argument('-device', type=int, default=0,
-                        help='GPU device ID (default: 0)')
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Convolve FITS images with kernels using GPU FFT")
+    parser.add_argument("-input", nargs="+", required=True, help="Input FITS image file paths")
+    parser.add_argument("-output", nargs="+", required=True, help="Output FITS file paths")
+    parser.add_argument("-kernels", nargs="+", help="Input FITS kernel file paths")
+    parser.add_argument(
+        "-mode", default="same", choices=["full", "same", "valid"], help="Convolution mode (default: same)"
+    )
+    parser.add_argument(
+        "-normalize-kernel", action="store_true", help="Normalize kernel to unit sum before convolution"
+    )
+    parser.add_argument("-apply-edge-mask", action="store_true", help="Zero out edge artifacts after convolution")
+    parser.add_argument("-method", type=str, help="Label for convolution method to add to header")
+    parser.add_argument("-delta-peeing", nargs="+", type=float, help="Kernel FWHM values (pixels) for header")
+    parser.add_argument("-device", type=int, default=0, help="GPU device ID (default: 0)")
     args = parser.parse_args()
 
     convolve_fft(
@@ -95,6 +99,5 @@ if __name__ == '__main__':
         apply_edge_mask=args.apply_edge_mask,
         method=args.method,
         delta_peeing=args.delta_peeing,
-        device=args.device
+        device=args.device,
     )
-
