@@ -2,18 +2,18 @@ from collections import deque, defaultdict
 
 
 class Scheduler:
-    def __init__(self, masters, dependents, multiunits):
+    def __init__(self, masters, dependent_configs, multiunit_configs):
         self.master_queue = deque(masters)
         self.master_status = {self._key_from_path(p): None for p in masters}  # True/False/None
-        self.dependents = dependents  # key: master_key, value: list of dependent paths
-        self.multiunits = deque(multiunits)
+        self.dependents = dependent_configs  # key: master_key, value: list of dependent paths
+        self.multiunits = deque(multiunit_configs)
 
         self.task_queue = deque()
         self.completed_tasks = set()
         self.skipped_tasks = set()
 
-        dependent_paths = [p for group in dependents.values() for p in group]
-        self.task_status = {p: None for p in masters + dependent_paths + list(multiunits)}
+        dependent_paths = [p for group in dependent_configs.values() for p in group]
+        self.task_status = {p: None for p in masters + dependent_paths + list(multiunit_configs)}
 
     def _key_from_path(self, path):
         """Extract master key like '2025-01-01_7DT11' from the full config path"""
@@ -43,12 +43,7 @@ class Scheduler:
 
         # After all masters are processed, check if multiunits can be scheduled
         if all(v is not None for v in self.master_status.values()):
-            all_required_deps = [
-                dep
-                for k, v in self.master_status.items()
-                if v
-                for dep in self.dependents.get(k, [])
-            ]
+            all_required_deps = [dep for k, v in self.master_status.items() if v for dep in self.dependents.get(k, [])]
             if all(self.task_status[dep] is not None for dep in all_required_deps):
                 while self.multiunits:
                     mu = self.multiunits.popleft()
@@ -62,9 +57,7 @@ class Scheduler:
         return None
 
     def is_all_done(self):
-        return not self.master_queue and not self.task_queue and all(
-            v is not None for v in self.task_status.values()
-        )
+        return not self.master_queue and not self.task_queue and all(v is not None for v in self.task_status.values())
 
     def report_status(self):
         return {

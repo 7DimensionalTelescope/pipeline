@@ -56,7 +56,8 @@ class ImSubtract(BaseSetup):
         try:
             self.find_reference_image()
             if not self.reference_images:  # if not found, do not run
-                self.logger.info(f"No reference image found for {self.name}; Skipping transient search.")
+                self.logger.warning(f"No reference image found for {self.name}; Skipping transient search.")
+                self.config.flag.subtraction = True
                 self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")
                 return
 
@@ -71,7 +72,6 @@ class ImSubtract(BaseSetup):
             self.mask_unsubtracted()
 
             self.config.flag.subtraction = True
-
             self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")
         except Exception as e:
             self.logger.error(f"Error during imsubtract processing: {str(e)}")

@@ -404,10 +404,10 @@ class ImStack(BaseSetup):
         # bpmask_array, header = fits.getdata(self.config.preprocess.bpmask_file, header=True)
         # ad-hoc. Todo: group input_files for different bpmask files
         mask_file = PathHandler.get_bpmask(self.config.imstack.bkgsub_images[0])
-        header = fits.getheader(mask_file)
+        mask_header = fits.getheader(mask_file, ext=1)
 
-        if "BADPIX" in header.keys():
-            badpix = header["BADPIX"]
+        if "BADPIX" in mask_header.keys():
+            badpix = mask_header["BADPIX"]
             self.logger.debug(f"BADPIX found in header. Using badpix {badpix}.")
         else:
             self.logger.warning("BADPIX not found in header. Using default value 0.")

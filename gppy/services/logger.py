@@ -223,7 +223,7 @@ class Logger:
             **kwargs: Additional keyword arguments for logging
         """
         self.logger.info(msg, **kwargs)
-        self.send_slack(msg, "INFO")
+        #self.send_slack(msg, "INFO")
 
     def warning(self, msg: str, **kwargs) -> None:
         """
@@ -234,7 +234,7 @@ class Logger:
             **kwargs: Additional keyword arguments for logging
         """
         self.logger.warning(msg, **kwargs)
-        self.send_slack(msg, "WARNING")
+        #self.send_slack(msg, "WARNING")
 
     def error(self, msg: str, **kwargs) -> None:
         """
@@ -246,7 +246,7 @@ class Logger:
         """
         # self.logger.error(msg, **kwargs)
         self.logger.error(msg, exc_info=True, **kwargs)
-        self.send_slack(msg, "ERROR")
+        #self.send_slack(msg, "ERROR")
 
     def critical(self, msg: str, **kwargs) -> None:
         """
@@ -258,7 +258,7 @@ class Logger:
         """
         # self.logger.critical(msg, **kwargs)
         self.logger.critical(msg, exc_info=True, **kwargs)
-        self.send_slack(msg, "CRITICAL")
+        #self.send_slack(msg, "CRITICAL")
 
     def send_slack(self, msg: str, level: str) -> None:
         """

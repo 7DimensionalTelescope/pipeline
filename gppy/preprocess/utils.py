@@ -241,6 +241,21 @@ def update_header_by_overwriting(filename, header, bitpix=-32):
         hdul[0].header = header
         hdul.flush()
 
+def write_header(filename, header):
+    for key in ["BZERO", "BSCALE"]:
+        try:
+            del header[key]
+        except:
+            continue
+
+    header["BITPIX"] = -32
+    
+    if filename.endswith(".fits"):
+        filename = filename.replace(".fits", ".header")
+
+    with open(filename, "w") as f:
+        f.write(header.tostring(sep="\n"))
+
 # def update_header_by_overwriting(filename, header, bitpix=-32):
 
 #     if bitpix == -32:

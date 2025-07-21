@@ -3,36 +3,58 @@ import argparse
 import cupy as cp
 import numpy as np
 import gc
-
+import os
 # Reduction kernel
 reduction_kernel = cp.ElementwiseKernel(
     in_params="T x, T b, T d, T f", out_params="T z", operation="z = (x - b - d) / f", name="reduction"
 )
 
-
 def process_image_with_cupy(obs, bias, dark, flat, output, device_id):
     """median is GPU, std is CPU. Uses pinned memory for better host-GPU transfer performance."""
 
-    with cp.cuda.Device(device_id):
-        data = [fits.getdata(o).astype(np.float32) for o in obs]
+    if len(obs) > 150:
+        with cp.cuda.Device(device_id):
+            dataset = [fits.getdata(o).astype(np.float32) for o in obs]
+            cbias = cp.asarray(fits.getdata(bias), dtype=cp.float32)
+            cdark = cp.asarray(fits.getdata(dark), dtype=cp.float32)
+            cflat = cp.asarray(fits.getdata(flat), dtype=cp.float32)
 
-        cbias = cp.asarray(fits.getdata(bias), dtype=cp.float32)
-        cdark = cp.asarray(fits.getdata(dark), dtype=cp.float32)
-        cflat = cp.asarray(fits.getdata(flat), dtype=cp.float32)
+            for i, data in enumerate(dataset):
+                cdata = cp.asarray(data)
+                cdata = cdata.astype(cp.float32)
+                cdata = reduction_kernel(cdata, cbias, cdark, cflat)
+                dataset[i][:] = cp.asnumpy(cdata)
 
-        cdata = cp.asarray(data)
-        cdata = cdata.astype(cp.float32)
+            del cbias, cdark, cflat, cdata
+            cp.get_default_memory_pool().free_all_blocks()
+    else:
+        with cp.cuda.Device(device_id):
+            dataset = [fits.getdata(o).astype(np.float32) for o in obs]
 
-        cdata = reduction_kernel(cdata, cbias, cdark, cflat)
-        for i in range(len(data)):
-            data[i][:] = cp.asnumpy(cdata[i])
+            cbias = cp.asarray(fits.getdata(bias), dtype=cp.float32)
+            cdark = cp.asarray(fits.getdata(dark), dtype=cp.float32)
+            cflat = cp.asarray(fits.getdata(flat), dtype=cp.float32)
 
-        del cbias, cdark, cflat, cdata
-        cp.get_default_memory_pool().free_all_blocks()
+            cdata = cp.asarray(dataset)
+            cdata = cdata.astype(cp.float32)
+
+            cdata = reduction_kernel(cdata, cbias, cdark, cflat)
+            for i in range(len(dataset)):
+                dataset[i][:] = cp.asnumpy(cdata[i])
+
+            del cbias, cdark, cflat, cdata
+            cp.get_default_memory_pool().free_all_blocks()
 
     for i, o in enumerate(output):
-        fits.writeto(o, data[i], overwrite=True)
-    del data
+        header_file = o.replace(".fits", ".header")
+        if os.path.exists(header_file):
+            with open(header_file, "r") as f:
+                header = fits.Header.fromstring(f.read(), sep="\n")
+
+        fits.writeto(o, dataset[i], 
+            header=header, 
+            overwrite=True)
+    del dataset
     gc.collect()
     return
 

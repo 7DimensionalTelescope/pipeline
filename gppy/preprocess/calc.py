@@ -155,9 +155,15 @@ def process_image_with_cpu(
         data = reduction_kernel_cpu(data, bias, dark, flat)
         os.makedirs(os.path.dirname(output_paths[i]), exist_ok=True)
 
+        header_file = output_paths[i].replace(".fits", ".header")
+        if os.path.exists(header_file):
+            with open(header_file, "r") as f:
+                header = fits.Header.fromstring(f.read(), sep="\n")
+
         fits.writeto(
             output_paths[i],
             data=data,
+            header=header,
             overwrite=True,
         )
 
