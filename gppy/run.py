@@ -36,7 +36,13 @@ def run_preprocess(config, device_id=None, only_with_sci=False, make_plots=True,
 
 def run_scidata_reduction(config, processes=["astrometry", "photometry", "combine", "subtract"], overwrite=False):
     try:
-        config = SciProcConfiguration.from_config(config)
+        if isinstance(config, SciProcConfiguration):
+            pass
+        elif isinstance(config, str) and config.endswith(".yml"):
+            config = SciProcConfiguration.from_config(config)
+        else:
+            raise ValueError("Invalid configuration type. Expected SciProcConfiguration or path to .yml file.")
+
         if (not (config.config.flag.astrometry) and "astrometry" in processes) or overwrite:
             astr = Astrometry(config)
             astr.run()
@@ -62,7 +68,7 @@ def run_scidata_reduction(config, processes=["astrometry", "photometry", "combin
         raise e
 
 
-def start_monitoring(target_dir = None):
+def start_monitoring(target_dir=None):
     """
     Initialize and start the astronomical data monitoring system.
 
@@ -79,9 +85,11 @@ def start_monitoring(target_dir = None):
     """
     if target_dir is None:
         from .const import RAWDATA_DIR
+
         target_dir = RAWDATA_DIR
 
-    def process_new_images(image_paths, queue):
+    def process_new_images(image_paths):
+        queue = QueueManager()
         dr = DataReduction.from_list(image_paths)
         dr.create_config()
         configs = dr.config_list()
@@ -90,9 +98,9 @@ def start_monitoring(target_dir = None):
         queue.add_scheduler(sc)
         queue.wait_until_task_complete("all")
 
-    queue = QueueManager()
+    
     monitor = Monitor(base_path=Path(target_dir))
-    monitor.add_callback(process_new_images, queue=queue)
+    monitor.add_callback(process_new_images)
     observer = monitor.start()
 
     try:

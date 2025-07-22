@@ -42,9 +42,9 @@ class Monitor(FileSystemEventHandler):
             self._pending_files.clear()
             self._debounce_timer = None
         if files_to_process:
-            self.logger.info(f"Processing {len(files_to_process)} new .fits files: {files_to_process}")
+            self.logger.info(f"Found {len(files_to_process)} new .fits files")
             for callback, kwargs in self.callbacks:
-                self.logger.info(f"Triggering callback {callback.__name__} for {len(files_to_process)} files")
+                self.logger.info(f"Start to process the new {len(files_to_process)} files.")
                 callback(files_to_process, **kwargs)
         else:
             self.logger.info("No .fits files to process after debounce period.")

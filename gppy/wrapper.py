@@ -96,15 +96,12 @@ class DataReduction:
         self.initialize()
         print("Blueprint initialized.")
 
-        self.queue = QueueManager()
-
     @classmethod
     def from_list(cls, list_of_images):
         if not all(f.endswith(".fits") for f in list_of_images):
             raise ValueError("Non-fits images in input")
         self = cls.__new__(cls)
         self.list_of_images = list_of_images
-        self.queue = QueueManager()
         self.initialize()
         print("Blueprint initialized from user-input list.")
         return self
@@ -168,7 +165,8 @@ class DataReduction:
 
         return master_configs, dependent_configs, multiunit_config
 
-    def process_all(self, preprocess_only=False):
+    def process_all(self, preprocess_only=False, only_with_sci=True, make_plots=False):
+        self.queue = QueueManager()
         masterframe_ids = []
         for i, (key, group) in enumerate(self.groups.items()):
             if isinstance(group, MasterframeGroup):
@@ -176,7 +174,7 @@ class DataReduction:
                     device_id = i
                 else:
                     device_id = "CPU"
-                pre_task = group.get_task(device_id=device_id, only_with_sci=True, make_plots=False)
+                pre_task = group.get_task(device_id=device_id, only_with_sci=only_with_sci, make_plots=make_plots)
                 self.queue.add_task(pre_task)
                 masterframe_ids.append([pre_task, group])
                 time.sleep(1)

@@ -273,8 +273,10 @@ class QueueManager:
                         if submitted_task.id == task.id:
                             if error:
                                 submitted_task.status = "failed"
+                                task.status = "failed"
                             else:
                                 submitted_task.status = "completed"
+                                task.status = "completed"
 
                                 if self.save_result:
                                     submitted_task.result = result
@@ -283,13 +285,14 @@ class QueueManager:
                                     submitted_task.result = None
                                     result = None
 
-                    task.endtime = datetime.now()
-                    submitted_task.endtime = datetime.now()
-                    submitted_task.error = error
+                            task.endtime = datetime.now()
+                            submitted_task.endtime = datetime.now()
+                            submitted_task.error = error
 
-                self.logger.info(
-                    f"Completed task {task.task_name} (id: {task.id}) in {time_diff_in_seconds(task.starttime, task.endtime)} seconds"
-                )
+                            self.logger.info(
+                                f"Completed task {task.task_name} (id: {task.id}) in {time_diff_in_seconds(task.starttime, task.endtime)} seconds"
+                            )
+                            break
             except Exception as e:
                 self.logger.error(f"Error in completion worker: {e}")
                 time.sleep(0.2)

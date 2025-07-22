@@ -306,11 +306,13 @@ class PhotometrySingle:
             for i, filt in enumerate(filters_to_check):
                 print(filters_to_check, temp_results)
                 try:
-                    zp_dict, aper_dict, cols = self.calculate_zp(obs_src_table, filt=filt, save_plots=False, recursive=i)
+                    zp_dict, aper_dict, cols = self.calculate_zp(
+                        obs_src_table, filt=filt, save_plots=False, recursive=i
+                    )
                     temp_results[filt] = (zp_dict, aper_dict, cols)
                 except:
                     continue
-                
+
             dicts = {f: (zp, ap) for f, (zp, ap, _) in temp_results.items()}
             inferred_filter = self.determine_filter(dicts)
             self.logger.info(f"Saving photometry info to header for {inferred_filter}")
@@ -565,7 +567,9 @@ class PhotometrySingle:
         )
 
         if se_preset == "main":
+            # print(f"1st outcome: {outcome}")
             _, outcome = outcome
+            # print(f"2nd outcome: {outcome}")
             outcome = [s for s in outcome.split("\n") if "RMS" in s][0]
             self.phot_header.skymed = float(outcome.split("Background:")[1].split("RMS:")[0])
             self.phot_header.skysig = float(outcome.split("RMS:")[1].split("/")[0])
@@ -587,14 +591,14 @@ class PhotometrySingle:
             Tuple of dictionaries containing zero point and aperture information
         """
 
-        if not(bool(recursive)):
+        if not (bool(recursive)):
             self.logger.debug(f"Filtering source catalog for zp calculation")
         zp_src_table = self.filter_catalog(obs_src_table)
-        
-        if not(bool(recursive)):
+
+        if not (bool(recursive)):
             self.logger.debug(f"After filtering: {len(zp_src_table)}/{len(obs_src_table)} sources")
 
-        if not(bool(recursive)):
+        if not (bool(recursive)):
             self.logger.info(f"Calculating zero points with {len(zp_src_table)} sources")
         apertures = phot_utils.get_aperture_dict(self.phot_header.peeing, self.image_info.pixscale)
 

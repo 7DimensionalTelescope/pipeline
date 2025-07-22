@@ -363,9 +363,6 @@ class Preprocess(BaseSetup):
         st = time.time()
         device_id = device_id if self._use_gpu else "CPU"
 
-        n_head_blocks = self.config.preprocess.n_head_blocks
-        bias, dark, flat = self.bias_output, self.dark_output, self.flat_output
-
         with acquire_available_gpu(device_id=device_id) as device_id:
             if device_id is None:
                 from .calc import process_image_with_cpu

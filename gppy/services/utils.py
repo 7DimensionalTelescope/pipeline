@@ -276,22 +276,6 @@ class classmethodproperty:
         """
         return self.func.__get__(instance, owner)()
 
-
-def get_best_gpu_device():
-    from ..services.memory import MemoryMonitor
-
-    percent = MemoryMonitor.current_gpu_memory_percent
-    available = []
-    for i, p in enumerate(percent):
-        if not (acquire_available_gpu(i)) and p < 90:
-            available.append(p)
-
-    if len(available) == 0:
-        return "CPU"
-    else:
-        return int(np.argmin(available))
-    import pynvml
-
 def check_gpu_activity(device_id=None, gpu_threshold=500):
     pynvml.nvmlInit()
     device_count = pynvml.nvmlDeviceGetCount()
@@ -321,59 +305,76 @@ def check_gpu_activity(device_id=None, gpu_threshold=500):
     return list(available)
 
 @contextmanager
-def acquire_available_gpu(device_id=None, gpu_threshold=500, blocking=True, timeout=10):
+def acquire_available_gpu(device_id=None, gpu_threshold=500, blocking=True, timeout=1):
     """
-    Context manager that locks an available GPU (based on memory and lock).
+    Attempt to lock any available GPU(s) for up to `timeout` seconds.
+    If no lock is acquired within the timeout, yields None.
 
     Args:
-        device_id (int or None): If given, only try to acquire this GPU.
-        gpu_threshold (int): GPU memory usage threshold in MB.
-        blocking (bool): Whether to block when trying to acquire lock.
-        timeout (int): Timeout in seconds for lock acquisition.
+        device_id (int or None): Specific GPU ID to try; if None, try all available GPUs.
+        gpu_threshold (int): Maximum GPU memory usage (in MB) to consider a GPU available.
+        blocking (bool): Whether to block when attempting to acquire the lock.
+        timeout (int | float): Total time (in seconds) to spend trying all GPUs.
 
     Yields:
-        int or None: GPU ID if successfully locked, otherwise None.
+        int or None: The GPU ID if the lock was acquired; otherwise None.
     """
-
+    # If CPU mode is requested, yield None immediately
     if device_id == "CPU":
         yield None
         return
 
+    # Get list of GPUs whose memory usage is below the threshold
     available_gpus = check_gpu_activity(device_id=device_id, gpu_threshold=gpu_threshold)
-    
+    if not available_gpus:
+        yield None
+        return
+
+    # Prepare a per-user directory for lock files
     username = os.getlogin()
     lock_dir = f"/tmp/gpu_locks_{username}"
     os.makedirs(lock_dir, exist_ok=True)
 
+    start_time = time.time()
+
+    # Try each available GPU in turn
     for gpu_id in available_gpus:
+        # If we've already spent the timeout, stop trying
+        if time.time() - start_time >= timeout:
+            break
+
         lock_path = os.path.join(lock_dir, f"gpu{gpu_id}.lock")
         try:
-            lock_file = open(lock_path, "a+")  
+            lock_file = open(lock_path, "a+")
         except Exception:
             continue
 
-        t_start = time.time()
+        try:
+            # Use exclusive lock; add non-blocking flag if requested
+            flag = fcntl.LOCK_EX
+            if not blocking:
+                flag |= fcntl.LOCK_NB
 
-        while True:
-            try:
-                flag = fcntl.LOCK_EX
-                if not blocking:
-                    flag |= fcntl.LOCK_NB
-
-                fcntl.flock(lock_file, flag)
-
+            end_time = start_time + timeout
+            # Keep trying until we either acquire the lock or hit the overall timeout
+            while True:
                 try:
-                    yield gpu_id  # Success
-                finally:
-                    # Always unlock and close on exit, even on exception
-                    fcntl.flock(lock_file, fcntl.LOCK_UN)
-                    lock_file.close()
-                return
-            except BlockingIOError:
-                if not blocking or (time.time() - t_start) > timeout:
-                    break
-                time.sleep(0.1)
+                    fcntl.flock(lock_file, flag)
+                    # Success: yield the GPU ID
+                    yield gpu_id
+                    return
+                except BlockingIOError:
+                    # If we've run out of time, stop trying this GPU
+                    if time.time() >= end_time:
+                        break
+                    time.sleep(0.05)
+        finally:
+            # Always release and close the lock file
+            try:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+            except Exception:
+                pass
+            lock_file.close()
 
-        lock_file.close()
-
+    # If no lock was acquired on any GPU, yield None
     yield None
