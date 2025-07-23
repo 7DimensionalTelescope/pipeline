@@ -457,7 +457,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
     def define_file_dependent_paths(self):
         self._output_dir = []
         self._factory_dir = []
-        self._image_dir = []
+        self._single_dir = []
         self._config_stem = []
         # raw_images = []
         # processed_images = []
@@ -490,7 +490,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                     output_dir = os.path.join(self._output_parent_dir[i], relative_path)
 
                     self._factory_dir.append(os.path.join(self._factory_parent_dir[i], relative_path))
-                    self._image_dir.append(os.path.join(output_dir, "images"))
+                    self._single_dir.append(os.path.join(output_dir, "singles"))
                     self._stacked_dir.append(os.path.join(const.STACKED_DIR, obj, filte))
                     self._metadata_dir.append(os.path.join(self._output_parent_dir[i], nightdate))
 
@@ -510,7 +510,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                     # Outside pipeline
                     output_dir = self._output_parent_dir[i]
                     self._factory_dir.append(self._factory_parent_dir[i])
-                    self._image_dir.append(output_dir)
+                    self._single_dir.append(output_dir)
                     self._stacked_dir.append(output_dir)
 
                 self._output_dir.append(output_dir)
@@ -521,14 +521,14 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
             elif "master" in typ:
                 self._output_dir.append(self._output_parent_dir[i])
                 self._factory_dir.append(self._factory_parent_dir[i])
-                self._image_dir.append(self._output_parent_dir[i])
+                self._single_dir.append(self._output_parent_dir[i])
             else:
                 raise ValueError("Unrecognized type for PathHandling")
 
         # Store all as lists without collapsing
         self.output_dir = collapse(self._output_dir)
         self.factory_dir = collapse(self._factory_dir)
-        self.image_dir = collapse(self._image_dir)
+        self.single_dir = collapse(self._single_dir)
         self.figure_dir = collapse(self._figure_dir)
         self.masterframe_dir = collapse(self._masterframe_dir)
         self.config_stem = collapse(self._config_stem)
@@ -565,7 +565,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
 
             if "raw" in typ[0]:
                 # original was raw → conjugate is processed
-                root = self._image_dir[i]
+                root = self._single_dir[i]
                 paths.append(os.path.join(root, basename))
             elif "calibrated" in typ[0]:
                 # original was processed → conjugate is raw
@@ -604,7 +604,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
         paths = []
         for i, input in enumerate(self._input_files):
             basename = self._get_property_at_index("processed_basename", i)
-            root = self._image_dir[i]
+            root = self._single_dir[i]
             paths.append(os.path.join(root, basename))
 
         return paths
@@ -658,11 +658,15 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
     #     return result
 
     @classmethod
-    def take_raw_inventory(cls, files: list[str], lone_calib=True):
-        return cls.build_preproc_input(*NameHandler.find_calib_for_sci(files), lone_calib=lone_calib)
+    def take_raw_inventory(cls, files: list[str], lone_calib=True, ignore_mult_date=False):
+        return cls.build_preproc_input(
+            *NameHandler.find_calib_for_sci(files), lone_calib=lone_calib, ignore_mult_date=ignore_mult_date
+        )
 
     @classmethod
-    def build_preproc_input(cls, sci_files, on_date_calib, off_date_calib=None, lone_calib=True):
+    def build_preproc_input(
+        cls, sci_files, on_date_calib, off_date_calib=None, lone_calib=True, ignore_mult_date=False
+    ):
         """
         Group science files by their associated on-date calibration sets.
 
@@ -774,50 +778,34 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                 if len(off_date_bias_group) < const.NUM_MIN_CALIB:
                     continue
 
-                mbias = cls.ensure_unique(cls(off_date_bias_group).preprocess.masterframe)  # preprocess.mbias
-                result.append(
-                    [
-                        [sorted(off_date_bias_group), [], []],
-                        [mbias, "", ""],
-                        dict(),
-                    ]
-                )
+                mbias = cls.ensure_unique(cls(off_date_bias_group).preprocess.masterframe, off=not ignore_mult_date)
+                # preprocess.mbias works too
+                result.append([[sorted(off_date_bias_group), [], []], [mbias, "", ""], dict()])
 
             for off_date_dark_group in off_date_dark_groups:
                 if len(off_date_dark_group) < const.NUM_MIN_CALIB:
                     continue
 
-                mdark = cls.ensure_unique(cls(off_date_dark_group).preprocess.masterframe)
+                mdark = cls.ensure_unique(cls(off_date_dark_group).preprocess.masterframe, off=not ignore_mult_date)
                 mbias = cls.ensure_unique(
-                    cls(off_date_dark_group).preprocess.mbias
+                    cls(off_date_dark_group).preprocess.mbias, off=not ignore_mult_date
                 )  # mbias needed for mdark generation
 
-                result.append(
-                    [
-                        [[], sorted(off_date_dark_group), []],  # use pre-generated mbias saved to disk, even if on-date
-                        [mbias, mdark, ""],
-                        dict(),
-                    ]
-                )
+                # use pre-generated mbias saved to disk, even if on-date
+                result.append([[[], sorted(off_date_dark_group), []], [mbias, mdark, ""], dict()])
 
             for off_date_flat_group in off_date_flat_groups:
                 if len(off_date_flat_group) < const.NUM_MIN_CALIB:
                     continue
 
-                mflat = cls.ensure_unique(cls(off_date_flat_group).preprocess.masterframe)
+                mflat = cls.ensure_unique(cls(off_date_flat_group).preprocess.masterframe, off=not ignore_mult_date)
                 self = cls(off_date_flat_group)
                 """Future Update"""
                 # look for 100s mdark, though there may exist shorter exptime mdarks
                 self.name.exptime = [100] * len(off_date_flat_group)
-                mdark = cls.ensure_unique(self.preprocess.mdark)
-                mbias = cls.ensure_unique(cls(off_date_flat_group).preprocess.mbias)
-                result.append(
-                    [
-                        [[], [], sorted(off_date_flat_group)],
-                        [mbias, mdark, mflat],
-                        dict(),
-                    ]
-                )
+                mdark = cls.ensure_unique(self.preprocess.mdark, off=not ignore_mult_date)
+                mbias = cls.ensure_unique(cls(off_date_flat_group).preprocess.mbias, off=not ignore_mult_date)
+                result.append([[[], [], sorted(off_date_flat_group)], [mbias, mdark, mflat], dict()])
 
         return result
 

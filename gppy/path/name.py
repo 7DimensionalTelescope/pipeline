@@ -2,7 +2,7 @@ import os
 from typing import List, Tuple
 from collections import defaultdict
 from pathlib import Path
-from ..utils import subtract_half_day, get_gain, get_header, equal_on_keys, collapse
+from ..utils import subtract_half_day, get_gain, get_header, equal_on_keys, collapse, get_nightdate, add_half_day
 from .. import const
 from .utils import strip_binning, format_binning, strip_exptime, format_exptime, strip_gain, format_camera
 from .cam_tracker import get_camera_serial
@@ -154,9 +154,12 @@ class NameHandler:
         # --- 3. Determine raw vs processed for each input ---
         self.type = [self._detect_type(stem) for stem in self.stem]
 
-        # --- 4. Parse each file into its components ---
+        # --- 4. Parse nightdate from the dirname if available ---
+        self.nightdate = [get_nightdate(p) for p in self.input]
+
+        # --- 5. Parse each file into its components ---
         units, dates, hmses, objs, filters, nbinnings, exptimes, gains, cameras = [], [], [], [], [], [], [], [], []
-        for parts, typ in zip(self.parts, self.type):
+        for i, (parts, typ, nightdate) in enumerate(zip(self.parts, self.type, self.nightdate)):
             if "raw" in typ:
                 parsing_func = self._parse_raw
             elif "master" in typ:
@@ -167,7 +170,6 @@ class NameHandler:
             unit, date, hms, obj, filte, nbin, exptime, gain, camera = parsing_func(parts)
 
             units.append(unit)
-            dates.append(date)
             hmses.append(hms)
             objs.append(obj)
             filters.append(filte)
@@ -175,6 +177,15 @@ class NameHandler:
             exptimes.append(exptime)
             gains.append(gain)
             cameras.append(camera)
+
+            # override date if nightdate available
+            if nightdate:
+                # date = add_half_day(nightdate)  # let's not do so
+                pass
+            else:
+                nightdate = subtract_half_day(date)
+                self.nightdate[i] = nightdate
+            dates.append(date)
 
         if self._single:
             self.abspath = self.abspath[0]
@@ -187,6 +198,7 @@ class NameHandler:
 
         # --- 5. Attach them as lists (or scalar if single) ---
         self.unit = units if not self._single else units[0]
+        self.nightdate = self.nightdate if not self._single else self.nightdate[0]
         self.date = dates if not self._single else dates[0]
         self.hms = hmses if not self._single else hmses[0]
         self.obj = objs if not self._single else objs[0]
@@ -293,6 +305,13 @@ class NameHandler:
 
         raise AttributeError(f"{self.__class__.__name__!s} has no attribute {name!r}")
 
+    # @property
+    # def nightdate(self):
+    #     # works in both modes
+    #     if isinstance(self.date, list):
+    #         return [subtract_half_day(dt) for dt in self.date]
+    #     return subtract_half_day(self.date)
+
     @property
     def datetime(self):
         # if list-mode, this concatenates elementwise
@@ -302,13 +321,6 @@ class NameHandler:
             return self.date + "_" + self.hms
         else:
             raise ValueError("Unable to construct datetime: HMS unavailable")
-
-    @property
-    def nightdate(self):
-        # works in both modes
-        if isinstance(self.date, list):
-            return [subtract_half_day(dt) for dt in self.date]
-        return subtract_half_day(self.date)
 
     @property
     def n_binning(self):

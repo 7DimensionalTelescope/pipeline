@@ -334,3 +334,15 @@ def dicts_to_lists(dicts):
                 zperrs.append(t[0])
 
     return filters, zps, zperrs
+
+def get_zp_from_dict(dicts: dict, filter: str) -> dict:
+    """
+    Get the zero point dictionary.
+
+    Args:
+        zp_dict: Zero point dictionary
+
+    Returns:
+        Zero point dictionary
+    """
+    return dicts[filter][0]["ZP_AUTO"][0], dicts[filter][0]["EZP_AUTO"][0]

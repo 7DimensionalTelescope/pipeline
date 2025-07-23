@@ -82,7 +82,7 @@ class DataReduction:
 
     _multi_unit_config = set()
 
-    def __init__(self, input_params, use_db=False, **kwargs):
+    def __init__(self, input_params, use_db=False, ignore_mult_date=False, **kwargs):
         self.input_params = input_params
         print("Globbing images with parameters:", input_params)
 
@@ -93,7 +93,7 @@ class DataReduction:
 
         print(f"Found {len(self.list_of_images)} images.")
         print("Grouping images...")
-        self.initialize()
+        self.initialize(ignore_mult_date=ignore_mult_date)
         print("Blueprint initialized.")
 
     @classmethod
@@ -106,12 +106,13 @@ class DataReduction:
         print("Blueprint initialized from user-input list.")
         return self
 
-    def initialize(self):
-        image_inventory = PathHandler.take_raw_inventory(self.list_of_images)  # [raw bdf, mframes, sci_dict]
+    def initialize(self, ignore_mult_date=False):
+        # [raw bdf, mframes, sci_dict]
+        image_inventory = PathHandler.take_raw_inventory(self.list_of_images, ignore_mult_date=ignore_mult_date)
 
         if len(image_inventory) == 0:
             self.logger.warning(f"No group for wrapper out of {self.list_of_images}\nPossibly due to NUM_MIN_CALIB")
-        
+
         for i, group in enumerate(image_inventory):
             try:
                 # mfg_key = PathHandler(group[0][2][0]).config_stem

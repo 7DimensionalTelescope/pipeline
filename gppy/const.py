@@ -2,18 +2,17 @@ import os
 
 # System paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+RAWDATA_DIR = os.getenv("RAWDATA_DIR", "/lyman/data1/obsdata/")
+FACTORY_DIR = os.getenv("FACTORY_DIR", "/lyman/data2/factory/")
+MASTER_FRAME_DIR = os.getenv("MASTER_FRAME_DIR", "/lyman/data2/master_frame/")
+PROCESSED_DIR = os.getenv("PROCESSED_DIR", "/lyman/data2/processed/")
+DAILY_STACKED_DIR = os.getenv("DAILY_STACKED_DIR", "/lyman/data2/daily_stacked/")
+STACKED_DIR = os.getenv("STACKED_DIR", "/lyman/data2/stacked/")
+
 REF_DIR = os.path.join(SCRIPT_DIR, "ref")
-RAWDATA_DIR = os.environ["RAWDATA_DIR"]
-FACTORY_DIR = os.environ["FACTORY_DIR"]
-MASTER_FRAME_DIR = os.environ["MASTER_FRAME_DIR"]
-PROCESSED_DIR = os.environ["PROCESSED_DIR"]
-# try:
-STACKED_DIR = os.environ["STACKED_DIR"]
-# except:
-#     STACKED_DIR = "/data/pipeline_reform/stacked_test"
 
 PIPELINE_DIRS = {RAWDATA_DIR, FACTORY_DIR, MASTER_FRAME_DIR, PROCESSED_DIR, STACKED_DIR}
-SLACK_TOKEN = os.environ["SLACK_TOKEN"]
+SLACK_TOKEN = os.getenv("SLACK_TOKEN", None)
 INSTRUM_STATUS_DICT = "/home/7dt/7dt_too/backend/data/7dt/multitelescopes.dict"
 
 

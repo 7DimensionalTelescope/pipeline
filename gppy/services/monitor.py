@@ -27,14 +27,21 @@ class Monitor(FileSystemEventHandler):
 
     def on_created(self, event):
         if not event.is_directory and event.src_path.endswith('.fits'):
-            with self._lock:
-                self._pending_files.add(event.src_path)
-                # Reset debounce timer
-                if self._debounce_timer is not None:
-                    self._debounce_timer.cancel()
-                self._debounce_timer = threading.Timer(self.debounce_seconds, self._debounced_process)
-                self._debounce_timer.daemon = True
-                self._debounce_timer.start()
+            # Check if the file is in an immediate subdirectory starting with "7DT"
+            file_path = Path(event.src_path)
+            relative_path = file_path.relative_to(self.base_path)
+            path_parts = relative_path.parts
+            
+            # Check if the first part (immediate subdirectory) starts with "7DT"
+            if path_parts and path_parts[0].startswith('7DT'):
+                with self._lock:
+                    self._pending_files.add(event.src_path)
+                    # Reset debounce timer
+                    if self._debounce_timer is not None:
+                        self._debounce_timer.cancel()
+                    self._debounce_timer = threading.Timer(self.debounce_seconds, self._debounced_process)
+                    self._debounce_timer.daemon = True
+                    self._debounce_timer.start()
 
     def _debounced_process(self):
         with self._lock:

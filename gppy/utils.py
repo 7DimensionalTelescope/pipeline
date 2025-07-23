@@ -291,12 +291,18 @@ def parse_key_params_from_header(filename: str | Path) -> None:
     return info, file_type
 
 
+def add_half_day(timestr: str) -> str:
+    dt = datetime.strptime(timestr, "%Y-%m-%d")
+    new_dt = dt + timedelta(days=1)
+    return new_dt.strftime("%Y%m%d")
+
+
 def subtract_half_day(timestr: str) -> str:
     if len(timestr) == 8:
         dt = datetime.strptime(timestr, "%Y%m%d")
     else:
         dt = datetime.strptime(timestr, "%Y%m%d_%H%M%S")
-    new_dt = dt - timedelta(hours=15)  # -15h for winter, not -12h
+    new_dt = dt - timedelta(hours=15)  # following TCSpy convention, but actually just a day
     return new_dt.strftime("%Y-%m-%d")
 
 
@@ -469,6 +475,18 @@ def get_camera_from_image_size(header):
             return "UnknownCam"
     else:
         return "UnknownCam"  # None  # None makes the length masterframe_basename different.
+
+
+def get_nightdate(fpath):
+    dirname = os.path.dirname(fpath)
+
+    date_regex = re.compile(r"(?P<nightdate>\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))")
+    m = date_regex.search(dirname)
+
+    if m:
+        return m.group("nightdate")
+    else:
+        return None
 
 
 def get_gain(fpath):

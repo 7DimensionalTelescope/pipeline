@@ -85,7 +85,6 @@ def start_monitoring(target_dir=None):
     """
     if target_dir is None:
         from .const import RAWDATA_DIR
-
         target_dir = RAWDATA_DIR
 
     def process_new_images(image_paths):

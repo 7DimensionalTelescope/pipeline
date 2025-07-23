@@ -322,14 +322,19 @@ class QueueManager:
                             config,
                             "-device",
                             str(int(self._device_id % 2)),
-                            "-only_with_sci",
+                            "-make_plots",
                         ]
                     else:
-                        cmd = [f"{SCRIPT_DIR}/bin/data_reduction", "-config", config]
+                        cmd = [
+                            f"{SCRIPT_DIR}/bin/data_reduction", 
+                            "-config", 
+                            config
+                        ]
                         
                     proc = subprocess.Popen(
                         cmd,
                     )
+                    
                     self._active_processes.append([config, proc])
                     self._device_id += 1
                     self.logger.info(f"Process ({ptype}) with {os.path.basename(config)} (PID = {proc.pid}) submitted.")

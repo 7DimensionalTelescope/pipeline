@@ -304,14 +304,10 @@ class PhotometrySingle:
             temp_results = {}
             self.logger.debug(f"Starting filter check for {filters_to_check}")
             for i, filt in enumerate(filters_to_check):
-                print(filters_to_check, temp_results)
-                try:
-                    zp_dict, aper_dict, cols = self.calculate_zp(
-                        obs_src_table, filt=filt, save_plots=False, recursive=i
-                    )
-                    temp_results[filt] = (zp_dict, aper_dict, cols)
-                except:
-                    continue
+                zp_dict, aper_dict, cols = self.calculate_zp(
+                    obs_src_table, filt=filt, save_plots=False, recursive=i
+                )
+                temp_results[filt] = (zp_dict, aper_dict, cols)
 
             dicts = {f: (zp, ap) for f, (zp, ap, _) in temp_results.items()}
             inferred_filter = self.determine_filter(dicts)
@@ -664,25 +660,39 @@ class PhotometrySingle:
         alleged_filter = self.image_info.filter
         filters_checked = [k for k in dicts.keys()]
         dicts_for_plotting = dicts.copy()
+        test_dicts = dicts.copy()
 
         # (1) rule out filters that were not present at the time
         active_filters = self.get_active_filters()
-        self.logger.info(f"Active filters: {active_filters}")
+        self.logger.debug(f"Active filters: {active_filters}")
+       
         for filt in list(set(filters_checked) - set(active_filters)):
-            dicts.pop(filt)
+            test_dicts.pop(filt)
+            self.logger.debug(f"Filter {filt} is not active. Removing from viable filters.")
 
+        self.logger.debug(f"Filtered dicts: {test_dicts}")
         # (2) apply prior knowledge of zp for broad and medium band filters
         while True:
-            narrowed_filters, zps, zperrs = phot_utils.dicts_to_lists(dicts)
+            narrowed_filters, zps, zperrs = phot_utils.dicts_to_lists(test_dicts)
+            
             idx = zperrs.index(min(zperrs))
             inferred_filter = narrowed_filters[idx]
             zp = zps[idx]
+            zperr = zperrs[idx]
 
             if (inferred_filter in BROAD_FILTERS and zp <= zp_cut) or (
                 inferred_filter in MEDIUM_FILTERS and zp > zp_cut
             ):
-                dicts.pop(inferred_filter)
+                self.logger.debug(f"Filter {inferred_filter} is a {'broadband' if inferred_filter in BROAD_FILTERS else 'mediumband'} filter and has a zero point (zp) of {zp} which is less than the zp cut, {zp_cut}. Removing from potential filters.")
+                test_dicts.pop(inferred_filter)
             else:
+                self.logger.debug(f"Found the best-matching filter, '{inferred_filter}', with zp = {zp}+/-{zperr}. Breaking the loop.")
+                break
+
+            if len(test_dicts) == 0:
+                zp, zperr = phot_utils.get_zp_from_dict(dicts, alleged_filter)
+                self.logger.warning(f"Filter determination process eliminated all candidates. Falling back to header filter '{alleged_filter}' (zp = {zp:.2f}±{zperr:.2f})")
+                inferred_filter = alleged_filter
                 break
 
         if save_plot:
@@ -691,6 +701,11 @@ class PhotometrySingle:
 
         if alleged_filter != inferred_filter:
             self.logger.warning(f"The filter in header ({alleged_filter}) is not the best matching ({inferred_filter})")
+            self.logger.warning(f"The best-matching filter is {inferred_filter} with zp = {zp}+/-{zperr}")
+            orig_zp, orig_zperr = phot_utils.get_zp_from_dict(dicts, alleged_filter)
+            self.logger.warning(f"The original filter is {alleged_filter} with zp = {orig_zp:.2f}±{orig_zperr:.2f}")
+        else:
+            self.logger.info(f"The inferred filter is matched to the original filter, '{alleged_filter}'")
 
         return inferred_filter
 

@@ -37,12 +37,18 @@ class Scheduler:
                 for dep in self.dependents.get(key, []):
                     self.task_status[dep] = False
                     self.skipped_tasks.add(dep)
+                
+                # Also mark all multiunits as skipped when any master fails
+                while self.multiunits:
+                    mu = self.multiunits.popleft()
+                    self.task_status[mu] = False
+                    self.skipped_tasks.add(mu)
 
         # Case 2: Normal task (dependent or multiunit)
         # No action needed here; we just track its status
 
-        # After all masters are processed, check if multiunits can be scheduled
-        if all(v is not None for v in self.master_status.values()):
+        # Schedule multiunits only if all masters succeeded
+        if all(v is True for v in self.master_status.values()):
             all_required_deps = [dep for k, v in self.master_status.items() if v for dep in self.dependents.get(k, [])]
             if all(self.task_status[dep] is not None for dep in all_required_deps):
                 while self.multiunits:
