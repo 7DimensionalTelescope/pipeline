@@ -1,4 +1,4 @@
-#!/home/snu/.conda/envs/pipeline/bin/python
+#!/home/pipeline/.conda/envs/pipeline/bin/python
 
 from gppy.config import PreprocConfiguration
 from gppy.preprocess import Preprocess

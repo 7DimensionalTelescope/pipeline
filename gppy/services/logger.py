@@ -18,6 +18,7 @@ class Logger:
     - Separate debug log file
     - Optional file and console logging
     - Slack notification integration
+    - Optional stdout/stderr redirection (disabled by default for Jupyter compatibility)
 
     Attributes:
     - name (str): The name of the logger instance.
@@ -39,6 +40,8 @@ class Logger:
     - set_pipeline_name: Set or update the pipeline name for Slack notifications.
     - set_output_file: Change the log output file and reinitialize logger.
     - set_format: Change the log message format and reinitialize logger.
+    - restore_stdout_stderr: Restore original stdout and stderr streams.
+    - redirect_stdout_stderr: Redirect stdout and stderr to the logger.
     """
 
     def __init__(
@@ -48,6 +51,8 @@ class Logger:
         level: str = "INFO",
         log_format: str = "[%(levelname)s] %(asctime)s - %(name)s - %(message)s",
         slack_channel: str = "pipeline_report",
+        redirect_stdout: bool = False,
+        redirect_stderr: bool = False,
     ):
         self._name = name
         self._log_format = log_format
@@ -57,10 +62,18 @@ class Logger:
         self._thread_ts = None  # Store the first message timestamp
         self.logger = self._setup_logger()
 
-        # Redirect stdout and stderr to the logger
-        sys.stdout = StdoutToLogger(self)
-        sys.stderr = StderrToLogger(self)
-        sys.excepthook = self._handle_exception
+        # Store original stdout/stderr for restoration
+        self._original_stdout = sys.stdout
+        self._original_stderr = sys.stderr
+        self._original_excepthook = sys.excepthook
+
+        # Redirect stdout and stderr to the logger only if requested
+        if redirect_stdout:
+            sys.stdout = StdoutToLogger(self)
+        if redirect_stderr:
+            sys.stderr = StderrToLogger(self)
+        if redirect_stdout or redirect_stderr:
+            sys.excepthook = self._handle_exception
 
     @property
     def name(self) -> str:
@@ -397,6 +410,34 @@ class Logger:
         """
         self._log_format = fmt
         self.logger = self._setup_logger(overwrite=False)
+
+    def restore_stdout_stderr(self) -> None:
+        """
+        Restore original stdout and stderr streams.
+        """
+        sys.stdout = self._original_stdout
+        sys.stderr = self._original_stderr
+        sys.excepthook = self._original_excepthook
+
+    def redirect_stdout_stderr(self) -> None:
+        """
+        Redirect stdout and stderr to the logger.
+        """
+        sys.stdout = StdoutToLogger(self)
+        sys.stderr = StderrToLogger(self)
+        sys.excepthook = self._handle_exception
+
+    def __enter__(self):
+        """
+        Context manager entry point.
+        """
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """
+        Context manager exit point - restores original streams.
+        """
+        self.restore_stdout_stderr()
 
 
 class StdoutToLogger:

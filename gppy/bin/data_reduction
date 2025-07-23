@@ -1,4 +1,4 @@
-#! /home/snu/.conda/envs/pipeline/bin/python
+#!/home/pipeline/.conda/envs/pipeline/bin/python
 
 from gppy.config import SciProcConfiguration
 from gppy.astrometry import Astrometry
@@ -49,9 +49,9 @@ signal.signal(signal.SIGINT, signal_handler)
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=(
-            "Preprocess astronomical FITS images by generating master calibration frames "
-            "(bias, dark, flat) and optionally reducing science images. "
-            "Supports GPU/CPU selection and optional plot generation."
+            "Reduce astronomical FITS images by performing astrometry, photometry, "
+            "image stacking, and image subtraction. Supports various processing steps "
+            "and optional overwrite functionality."
         )
     )
     parser.add_argument("-config", type=str, required=True, help="Path to the preprocessing configuration file")
