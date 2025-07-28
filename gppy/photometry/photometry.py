@@ -34,19 +34,6 @@ from ..tools.table import match_two_catalogs, build_condition_mask
 from ..path.path import PathHandler
 
 
-def log_once(method):
-    """not working"""
-    attr = f"_{method.__name__}_logged"
-
-    def wrapper(self, *args, **kwargs):
-        if not getattr(self, attr, False):
-            self.logger.info(f"Starting {method.__name__}")
-            setattr(self, attr, True)
-        return method(self, *args, **kwargs)
-
-    return wrapper
-
-
 class Photometry(BaseSetup):
     """
     A class to perform photometric analysis on astronomical images.
@@ -301,27 +288,34 @@ class PhotometrySingle:
         if self.check_filter:
             filters_to_check = get_key(self.config.photometry, "filters_to_check") or ALL_FILTERS
             obs_src_table = self.add_matched_reference_catalog(obs_src_table, filters=filters_to_check)
+            zp_src_table = self.get_zp_src_table(obs_src_table)
             temp_results = {}
             self.logger.debug(f"Starting filter check for {filters_to_check}")
             for i, filt in enumerate(filters_to_check):
-                zp_dict, aper_dict, cols = self.calculate_zp(
-                    obs_src_table, filt=filt, save_plots=False, recursive=i
-                )
+                zp_dict, aper_dict, cols = self.calculate_zp(zp_src_table, obs_src_table, filt=filt, save_plots=False)
                 temp_results[filt] = (zp_dict, aper_dict, cols)
+                self.logger.debug(f"Filter check for {filt} is completed")
+
+            # save the photometry result for the alledged filter as default
+            zp_dict, aper_dict, cols = self.calculate_zp(zp_src_table, obs_src_table)
+            self.add_reference_columns(obs_src_table, cols)
+            self.update_image_header(zp_dict, aper_dict)
 
             dicts = {f: (zp, ap) for f, (zp, ap, _) in temp_results.items()}
             inferred_filter = self.determine_filter(dicts)
-            self.logger.info(f"Saving photometry info to header for {inferred_filter}")
-
-            _, _, cols = temp_results[inferred_filter]
-            self.add_reference_columns(obs_src_table, cols)
-            self.update_image_header(*dicts[inferred_filter])
+            if inferred_filter != self.image_info.filter:
+                self.logger.info(f"Saving {inferred_filter} photometry to catalog too")
+                update_padded_header(self.input_image, {"INF_FILT": inferred_filter})
+                _, _, cols = temp_results[inferred_filter]
+                self.add_reference_columns(obs_src_table, cols)
+                # self.update_image_header(*dicts[inferred_filter])
             self.write_catalog(obs_src_table)
 
         else:
             self.logger.info("Skipping filter check")
-            obs_src_table = self.add_matched_reference_catalog(obs_src_table)
-            zp_dict, aper_dict, cols = self.calculate_zp(obs_src_table)
+            zp_src_table = self.get_zp_src_table(obs_src_table)
+            obs_src_table = self.add_matched_reference_catalog(zp_src_table)
+            zp_dict, aper_dict, cols = self.calculate_zp(zp_src_table, obs_src_table)
             self.add_reference_columns(obs_src_table, cols)
             self.update_image_header(zp_dict, aper_dict)
             self.write_catalog(obs_src_table)
@@ -572,8 +566,14 @@ class PhotometrySingle:
 
         return Table.read(output, format="ascii.sextractor")
 
-    @log_once
-    def calculate_zp(self, obs_src_table, save_plots=True, filt=None, recursive=False) -> Tuple[Dict, Dict]:
+    def get_zp_src_table(self, obs_src_table):
+        self.logger.debug(f"Filtering source catalog for zp calculation")
+        zp_src_table = self.filter_catalog(obs_src_table)
+        self.logger.debug(f"After filtering: {len(zp_src_table)}/{len(obs_src_table)} sources")
+        self.logger.info(f"Calculating zero points with {len(zp_src_table)} sources")
+        return zp_src_table
+
+    def calculate_zp(self, zp_src_table, obs_src_table, filt=None, save_plots=True) -> Tuple[Dict, Dict]:
         """
         Calculate photometric zero point.
 
@@ -587,15 +587,6 @@ class PhotometrySingle:
             Tuple of dictionaries containing zero point and aperture information
         """
 
-        if not (bool(recursive)):
-            self.logger.debug(f"Filtering source catalog for zp calculation")
-        zp_src_table = self.filter_catalog(obs_src_table)
-
-        if not (bool(recursive)):
-            self.logger.debug(f"After filtering: {len(zp_src_table)}/{len(obs_src_table)} sources")
-
-        if not (bool(recursive)):
-            self.logger.info(f"Calculating zero points with {len(zp_src_table)} sources")
         apertures = phot_utils.get_aperture_dict(self.phot_header.peeing, self.image_info.pixscale)
 
         if filt:
@@ -644,7 +635,7 @@ class PhotometrySingle:
             )  # fmt: skip
 
             if save_plots:
-                self.plot_zp(mag_key, zp_src_table, zps, zperrs, zp, zperr, mask)
+                self.plot_zp(mag_key, zp_src_table, zps, zperrs, zp, zperr, mask, filt=filt)
 
         return zp_dict, aper_dict, column_data
 
@@ -656,7 +647,7 @@ class PhotometrySingle:
         return
 
     def determine_filter(self, dicts: dict, save_plot=True):
-        zp_cut = 26.8
+        zp_cut = 27.2  # 26.8
         alleged_filter = self.image_info.filter
         filters_checked = [k for k in dicts.keys()]
         dicts_for_plotting = dicts.copy()
@@ -665,16 +656,17 @@ class PhotometrySingle:
         # (1) rule out filters that were not present at the time
         active_filters = self.get_active_filters()
         self.logger.debug(f"Active filters: {active_filters}")
-       
+
         for filt in list(set(filters_checked) - set(active_filters)):
             test_dicts.pop(filt)
             self.logger.debug(f"Filter {filt} is not active. Removing from viable filters.")
 
         self.logger.debug(f"Filtered dicts: {test_dicts}")
+
         # (2) apply prior knowledge of zp for broad and medium band filters
         while True:
             narrowed_filters, zps, zperrs = phot_utils.dicts_to_lists(test_dicts)
-            
+
             idx = zperrs.index(min(zperrs))
             inferred_filter = narrowed_filters[idx]
             zp = zps[idx]
@@ -683,15 +675,21 @@ class PhotometrySingle:
             if (inferred_filter in BROAD_FILTERS and zp <= zp_cut) or (
                 inferred_filter in MEDIUM_FILTERS and zp > zp_cut
             ):
-                self.logger.debug(f"Filter {inferred_filter} is a {'broadband' if inferred_filter in BROAD_FILTERS else 'mediumband'} filter and has a zero point (zp) of {zp} which is less than the zp cut, {zp_cut}. Removing from potential filters.")
+                self.logger.debug(
+                    f"Filter {inferred_filter} is a {'broadband' if inferred_filter in BROAD_FILTERS else 'mediumband'} filter and has a zero point (zp) of {zp} which is less than the zp cut, {zp_cut}. Removing from potential filters."
+                )
                 test_dicts.pop(inferred_filter)
             else:
-                self.logger.debug(f"Found the best-matching filter, '{inferred_filter}', with zp = {zp}+/-{zperr}. Breaking the loop.")
+                self.logger.debug(
+                    f"Found the best-matching filter, '{inferred_filter}', with zp = {zp}+/-{zperr}. Breaking the loop."
+                )
                 break
 
             if len(test_dicts) == 0:
                 zp, zperr = phot_utils.get_zp_from_dict(dicts, alleged_filter)
-                self.logger.warning(f"Filter determination process eliminated all candidates. Falling back to header filter '{alleged_filter}' (zp = {zp:.2f}±{zperr:.2f})")
+                self.logger.warning(
+                    f"Filter determination process eliminated all candidates. Falling back to header filter '{alleged_filter}' (zp = {zp:.2f}±{zperr:.2f})"
+                )
                 inferred_filter = alleged_filter
                 break
 
@@ -751,7 +749,7 @@ class PhotometrySingle:
 
         inf_idx = filters_checked.index(inferred_filter)
         ax1.axvspan(inf_idx - 0.5, inf_idx + 0.5, color="dodgerblue", alpha=0.3)
-        yellow_patch = mpatches.Patch(color="dodgerblue", alpha=0.3, label=f"Inferred Filter {inferred_filter}")
+        blue_patch = mpatches.Patch(color="dodgerblue", alpha=0.3, label=f"Inferred Filter")
 
         # x-ticks and tilted labels
         ax1.set_xticks(range(len(filters_checked)))
@@ -776,7 +774,11 @@ class PhotometrySingle:
         # Combine legends
         h1, l1 = ax1.get_legend_handles_labels()
         h2, l2 = ax2.get_legend_handles_labels()
-        ax1.legend(h1 + h2 + [gray_patch, yellow_patch], l1 + l2 + ["Ruled Out", "Inferred Filter"], loc="upper left")
+        ax1.legend(
+            h1 + h2 + [gray_patch, blue_patch],
+            l1 + l2 + ["Ruled Out", f"Inferred Filter ({inferred_filter})"],
+            loc="upper left",
+        )
 
         plt.title(f"Filter Sanity Check for {alleged_filter}")
         plt.tight_layout()
@@ -796,6 +798,7 @@ class PhotometrySingle:
         zp: float,
         zperr: float,
         mask: np.ndarray,
+        filt: str = None,
     ) -> None:
         """Generates and saves a zero-point calibration plot.
         The plot shows the zero-point values for each source and the final calibrated zero-point.
@@ -803,7 +806,7 @@ class PhotometrySingle:
         Parameters
         ----------
         mag_key : str
-            Key for the magnitude column in the source table
+            Key for the magnitude column in the source table. e.g., MAG_AUTO
         src_table : astropy.table.Table
             Table containing source measurements and reference magnitudes
         zp_arr : array-like
@@ -816,12 +819,17 @@ class PhotometrySingle:
             Uncertainty in the final zero-point
         mask : numpy.ndarray
             Boolean mask indicating which sources are within magnitude limits
+        filt :
+            Filter for zp calculation. e.g., m625
         Returns
         -------
         None
             Saves plot as PNG file in the processed/images directory
         """
-        ref_mag = src_table[self.image_info.ref_mag_key]
+
+        ref_mag_key = f"mag_{filt}" if filt else self.image_info.ref_mag_key
+        ref_mag = src_table[ref_mag_key]
+
         obs_mag = src_table[mag_key]
 
         plt.errorbar(ref_mag, zp_arr, xerr=0, yerr=zperr_arr, ls="none", c="grey", alpha=0.5)
@@ -854,14 +862,9 @@ class PhotometrySingle:
         plt.legend(loc="upper center", ncol=3)
         plt.tight_layout()
 
-        # im_path = os.path.join(self.config.path.path_processed, "images")
-        im_path = self.path.figure_dir
-
-        if not os.path.exists(im_path):
-            os.makedirs(im_path)
-
         img_stem = os.path.splitext(os.path.basename(self.input_image))[0]
-        plt.savefig(f"{im_path}/{img_stem}_{mag_key}.png", dpi=100)
+        fpath = os.path.join(self.path.figure_dir, f"{img_stem}_{mag_key}{'' if filt is None else '_' + filt}.png")
+        plt.savefig(fpath, dpi=100)
         plt.close()
 
     def update_image_header(

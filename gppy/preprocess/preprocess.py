@@ -415,27 +415,45 @@ class Preprocess(BaseSetup):
         self.logger.info(f"Generating plots for master calibration frames of group {group_index+1}")
         use_multi_thread = self.config.preprocess.use_multi_thread
 
-        bias_file = self._get_raw_group("bias_output", group_index)
-        # if prep_utils.wait_for_masterframe(bias_file, timeout=10):
         if "bias" in self.calib_types:
-            plot_bias(bias_file)
+            bias_file = self._get_raw_group("bias_output", group_index)
+            if os.path.exists(bias_file):
+                plot_bias(bias_file)
+            else:
+                self.logger.warning(f"Bias file {bias_file} does not exist. Skipping bias plot.")
 
         if "dark" in self.calib_types:
-            plot_bpmask(self._get_raw_group("bpmask_output", group_index))
-            sample_header = fits.getheader(self._get_raw_group("bpmask_output", group_index), ext=1)
-            if "BADPIX" in sample_header.keys():
-                badpix = sample_header["BADPIX"]
+            bpmask_file = self._get_raw_group("bpmask_output", group_index)
+            if os.path.exists(bpmask_file):
+                plot_bpmask(bpmask_file)
+                sample_header = fits.getheader(bpmask_file, ext=1)
+                if "BADPIX" in sample_header.keys():
+                    badpix = sample_header["BADPIX"]
+                else:
+                    self.logger.warning("Header missing BADPIX; using 1")
+                    badpix = 1
+                
+                mask = fits.getdata(self._get_raw_group("bpmask_output", group_index), ext=1)
+                mask = mask != badpix
+                fmask = mask.ravel()
             else:
-                self.logger.warning("Header missing BADPIX; using 1")
-                badpix = 1
+                self.logger.warning(f"BPMask file {bpmask_file} does not exist. Skipping bpmask plot.")
+                fmask = None
 
-            mask = fits.getdata(self._get_raw_group("bpmask_output", group_index), ext=1)
-            mask = mask != badpix
-            fmask = mask.ravel()
-            plot_dark(self._get_raw_group("dark_output", group_index), fmask)
+        if "dark" in self.calib_types:
+            dark_file = self._get_raw_group("dark_output", group_index)
+            if os.path.exists(dark_file):
+                plot_dark(dark_file, fmask)
+            else:
+                self.logger.warning(f"Dark file {dark_file} does not exist. Skipping dark plot.")
 
         if "flat" in self.calib_types:
-            plot_flat(self._get_raw_group("flat_output", group_index), fmask)
+            flat_file = self._get_raw_group("flat_output", group_index)
+            if os.path.exists(flat_file):
+                plot_flat(flat_file, fmask)
+            else:
+                self.logger.warning(f"Flat file {flat_file} does not exist. Skipping flat plot.")
+
         self.logger.info(f"Completed generating plots for master calibration frames of group {group_index+1}")
 
         # generate sci plots

@@ -92,6 +92,9 @@ class DataReduction:
             self.list_of_images = glob_files_by_param(input_params, **kwargs)
 
         print(f"Found {len(self.list_of_images)} images.")
+        if len(self.list_of_images) == 0:
+            print("No images found")
+            return
         print("Grouping images...")
         self.initialize(ignore_mult_date=ignore_mult_date)
         print("Blueprint initialized.")
@@ -265,7 +268,7 @@ class MasterframeGroup:
         self.sci_keys.append(keys)
 
     def create_config(self, overwrite=False):
-        c = PreprocConfiguration(self.image_files)
+        c = PreprocConfiguration(self.image_files, overwrite=overwrite)
         self._config = c.config_file
 
     def get_task(self, device_id=None, only_with_sci=False, make_plots=True, priority=Priority.PREPROCESS, **kwargs):

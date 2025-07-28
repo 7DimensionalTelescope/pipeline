@@ -430,9 +430,10 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                 obj = self._get_property_at_index("obj", i)
                 filte = self._get_property_at_index("filter", i)
                 # unit = self._get_property_at_index("unit", i)
-                date = self._get_property_at_index("date", i)
+                # date = self._get_property_at_index("date", i)
+                nightdate = self._get_property_at_index("nightdate", i)
 
-                yml_basenames.append("_".join([obj, filte, date]) + ".yml")
+                yml_basenames.append("_".join([obj, filte, nightdate]) + ".yml")
 
             return bjoin(self._output_dir, yml_basenames)
         return bjoin(self.output_parent_dir, "sciproc_config.yml")
@@ -480,7 +481,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
             masterframe_dir = os.path.join(const.MASTER_FRAME_DIR, nightdate, unit)
             self._masterframe_dir.append(masterframe_dir)
 
-            config_stem = "_".join([nightdate, unit])
+            config_stem = "_".join([nightdate, unit])  # for preproc config
             self._config_stem.append(config_stem)
 
             if "calibrated" in typ or "raw" in typ:
@@ -493,19 +494,6 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                     self._single_dir.append(os.path.join(output_dir, "singles"))
                     self._stacked_dir.append(os.path.join(const.STACKED_DIR, obj, filte))
                     self._metadata_dir.append(os.path.join(self._output_parent_dir[i], nightdate))
-
-                    # if "raw" in data_type:
-                    #     conjugate = self._get_property_at_index("conjugate", i)
-                    #     processed_image = os.path.join(image_dir, conjugate)
-                    #     processed_images.append(processed_image)
-                    #     raw_images.append(input_file)
-                    # elif "calibrated" in data_type:
-                    #     conjugate = self._get_property_at_index("conjugate", i)
-                    #     raw_image = os.path.join(image_dir, conjugate)
-                    #     raw_images.append(raw_image)
-                    #     processed_images.append(input_file)
-                    # else:
-                    #     processed_images.append(str(Path(input_file).absolute()))
                 else:
                     # Outside pipeline
                     output_dir = self._output_parent_dir[i]
@@ -532,10 +520,6 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
         self.figure_dir = collapse(self._figure_dir)
         self.masterframe_dir = collapse(self._masterframe_dir)
         self.config_stem = collapse(self._config_stem)
-        # if raw_images:
-        #     self.raw_images = raw_images
-        # if processed_images:
-        #     self.processed_images = processed_images
 
         if self._daily_stacked_dir:
             self.daily_stacked_dir = self._daily_stacked_dir

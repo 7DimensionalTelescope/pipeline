@@ -4,7 +4,7 @@ from typing import Any, List, Tuple, Union
 from pathlib import Path
 import time
 from .. import external
-from ..utils import swap_ext, add_suffix
+from ..utils import swap_ext, add_suffix, force_symlink
 from ..services.memory import MemoryMonitor
 from ..config import SciProcConfiguration
 from ..services.setup import BaseSetup
@@ -138,8 +138,9 @@ class Astrometry(BaseSetup):
         soft_links = [os.path.join(self.path_astrometry, os.path.basename(s)) for s in inims]
 
         for inim, soft_link in zip(inims, soft_links):
-            if not os.path.exists(soft_link):
-                os.symlink(inim, soft_link)
+            # if not os.path.exists(soft_link):
+            #     os.symlink(inim, soft_link)
+            force_symlink(inim, soft_link)
 
         solved_files = [add_suffix(s, "solved") for s in soft_links]
         # return solved_files, soft_links, inims
@@ -324,7 +325,8 @@ class Astrometry(BaseSetup):
         if use_missfits:
             for solved_head, output, inim in zip(solved_heads, links, inims):
                 output_head = "_".join(output.split("_")[:-1]) + ".head"
-                os.symlink(solved_head, output_head)  # factory/inim.head
+                # os.symlink(solved_head, output_head)  # factory/inim.head
+                force_symlink(solved_head, output_head)
                 external.missfits(output)  # soft_link changes to a wcs-updated fits file
                 os.system(f"mv {output} {inim}")  # overwrite (inefficient)
         else:
@@ -337,8 +339,8 @@ class Astrometry(BaseSetup):
                     solved_head = read_scamp_header(solved_head)
                     update_padded_header(target_fits, solved_head)
                 else:
-                    self.logger.error(f"Check SCAMP output. Possibly due to restricted access to the online VizieR catalog or disk space.") # fmt: skip
-                    raise FileNotFoundError(f"SCAMP output (.head) does not exist: {solved_head}") # fmt: skip
+                    self.logger.error(f"Check SCAMP output. Possibly due to restricted access to the online VizieR catalog or disk space.")  # fmt: skip
+                    raise FileNotFoundError(f"SCAMP output (.head) does not exist: {solved_head}")  # fmt: skip
         self.logger.info("Correcting WCS in image headers is completed.")
 
     def _submit_task(self, func: callable, items: List[Any], **kwargs: Any) -> None:

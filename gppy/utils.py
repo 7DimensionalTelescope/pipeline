@@ -671,6 +671,7 @@ def read_scamp_header(file):
     return hdr
 
 
+# blindly appending ver.
 def update_padded_header(target_fits, header_new):
     """
     Update a FITS file's header with header_new (scamp or photometry output).
@@ -712,6 +713,58 @@ def update_padded_header(target_fits, header_new):
                 header.insert(i + j, card)
             else:
                 header.append(card, end=True)
+
+
+# def update_padded_header(target_fits, header_new):
+#     """
+#     Update a FITS file's header with header_new (scamp or photometry output).
+#     header_new can be either astropy.io.fits.Header or dict.
+
+#     This version will override any existing key/value pairs in-place,
+#     and append truly new cards just before the trailing COMMENTs.
+
+#     Args:
+#         target_fits (str): Path to the target FITS file to be updated
+#         header_new (dict or Header): Header object or mapping with info to be added
+
+#     Note:
+#         - Modifies the target FITS file in-place
+#         - Preserves existing non-COMMENT header entries (except overridden ones)
+#         - Appends only those cards whose keys did not exist before
+#     """
+#     with fits.open(target_fits, mode="update") as hdul:
+#         header: fits.Header = hdul[0].header
+
+#         # Find the index of the last non-COMMENT card
+#         last_non_comment = None
+#         for idx, card in enumerate(header.cards):
+#             if card.keyword != "COMMENT":
+#                 last_non_comment = idx
+
+#         insert_pos = (last_non_comment + 1) if last_non_comment is not None else len(header.cards)
+
+#         # Normalize header_new into a list of (key, value, comment) tuples
+#         if isinstance(header_new, fits.Header):
+#             new_cards = [(c.keyword, c.value, c.comment) for c in header_new.cards]
+#         elif isinstance(header_new, dict):
+#             new_cards = []
+#             for key, val in header_new.items():
+#                 if isinstance(val, tuple):
+#                     new_cards.append((key, val[0], val[1]))
+#                 else:
+#                     new_cards.append((key, val, None))
+#         else:
+#             raise ValueError("Unsupported Header format for updating padded Header")
+
+#         # Apply each new card: override if exists, otherwise append in padding
+#         for key, value, comment in new_cards:
+#             if key in header:  # override existing
+#                 # header.set handles both update and insertion
+#                 header.set(key, value, comment or header.comments.get(key))
+#             else:
+#                 # insert before COMMENTS
+#                 header.insert(insert_pos, (key, value, comment), after=False)
+#                 insert_pos += 1  # shift insertion point forward
 
 
 def swap_ext(file_path: str | list[str], new_ext: str) -> str:
