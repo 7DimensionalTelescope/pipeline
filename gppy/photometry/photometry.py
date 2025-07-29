@@ -717,7 +717,9 @@ class PhotometrySingle:
             flist = glob(os.path.join(os.path.dirname(f), "*.fits"))
             flats = NameHandler(flist).pick_type("raw_flat")
             scis = NameHandler(flist).pick_type("raw_science")
-            return set(NameHandler(flats + scis).filter)
+            active_filters = set(NameHandler(flats + scis).filter)
+            self.logger.debug(f"Fetched active filters {active_filters}")
+            return active_filters
         except:
             self.logger.info("Fetching active filters failed. Using all default filters")
             return ALL_FILTERS

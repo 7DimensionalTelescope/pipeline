@@ -108,6 +108,6 @@ def compute_sig_rp(sig_r_squared, sig_zm, sig_dm_sq, f_m, r_p, sig_fm, out):
             sig_zm_sq = sig_zm[i, j] * sig_zm[i, j]
             sig_fm_sq = sig_fm[i, j] * sig_fm[i, j]
             term1 = (sig_r_squared[i, j] + sig_zm_sq + sig_dm_sq[i, j]) / fm_sq
-            term2 = (r_p[i, j] * r_p[i, j]) * (sig_fm_sq[i, j]) / fm_sq
+            term2 = (r_p[i, j] * r_p[i, j]) * (sig_fm_sq) / fm_sq
             out[i, j] = term1 + term2
 
