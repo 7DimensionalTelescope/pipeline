@@ -3,7 +3,8 @@ from pathlib import Path
 from typing import Union
 import numpy as np
 from .. import const
-from ..utils import add_suffix, swap_ext, collapse, find_raw_path, atleast_1d
+from .utils import find_raw_path
+from ..utils import add_suffix, swap_ext, collapse, atleast_1d
 from .name import NameHandler
 from .utils import format_exptime
 from .utils import broadcast_join_pure as bjoin

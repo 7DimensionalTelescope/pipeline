@@ -4,7 +4,8 @@ from typing import Any, List, Tuple, Union
 from pathlib import Path
 import time
 from .. import external
-from ..utils import swap_ext, add_suffix, force_symlink
+from ..utils import swap_ext, add_suffix
+from ..utils import force_symlink
 from ..services.memory import MemoryMonitor
 from ..config import SciProcConfiguration
 from ..services.setup import BaseSetup
