@@ -330,7 +330,7 @@ class Astrometry(BaseSetup):
                 external.missfits(output)  # soft_link changes to a wcs-updated fits file
                 os.system(f"mv {output} {inim}")  # overwrite (inefficient)
         else:
-            from ..utils import read_scamp_header, update_padded_header
+            from .utils import read_scamp_header, update_padded_header
 
             # update img in processed directly
             for solved_head, target_fits in zip(solved_heads, inims):

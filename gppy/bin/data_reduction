@@ -55,10 +55,12 @@ if __name__ == "__main__":
         )
     )
     parser.add_argument("-config", type=str, required=True, help="Path to the preprocessing configuration file")
+    parser.add_argument("-processes", nargs='+', required=False, help="Processes to run")
+    parser.add_argument("-overwrite", action="store_true", help="Overwrite existing results")
     args = parser.parse_args()
 
     try:
-        run_scidata_reduction(args.config)
+        run_scidata_reduction(args.config, processes=args.processes, overwrite=args.overwrite)
     except Exception as e:
         print(f"\nError: {e}")
         sys.exit(1)

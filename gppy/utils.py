@@ -13,79 +13,10 @@ from .const import FACTORY_DIR, RAWDATA_DIR, HEADER_KEY_MAP, ALL_GROUP_KEYS
 import numpy as np
 
 
-def unique(seq, *, return_counts=False, return_index=False, return_inverse=False):
-    """
-    Pure-Python version of np.unique for 1D sequences.
-
-    Parameters
-    ----------
-    seq : iterable
-        Input sequence.
-    return_counts : bool, optional
-        If True, also return the counts of each unique element.
-    return_index : bool, optional
-        If True, also return the index of the first occurrence of each unique element in the original sequence.
-    return_inverse : bool, optional
-        If True, also return an array that can be used to reconstruct the original sequence from the unique values.
-
-    Returns
-    -------
-    unique_vals : list
-        Sorted list of unique elements.
-    counts : list, optional
-        List of counts corresponding to each unique element.
-    indices : list, optional
-        List of first‐occurrence indices for each unique element.
-    inverse : list, optional
-        List of indices such that unique_vals[inverse[i]] == seq[i].
-    """
-    # Record first‐occurrence index
-    first_idx = {}
-    for i, v in enumerate(seq):
-        if v not in first_idx:
-            first_idx[v] = i
-
-    # Count occurrences
-    cnt = Counter(seq)
-
-    # Unique sorted values
-    uniques = sorted(cnt)
-
-    out = [uniques]
-
-    if return_counts:
-        out.append([cnt[v] for v in uniques])
-
-    if return_index:
-        out.append([first_idx[v] for v in uniques])
-
-    if return_inverse:
-        # Map each value to its position in the uniques list
-        pos = {v: i for i, v in enumerate(uniques)}
-        out.append([pos[v] for v in seq])
-
-    # Unpack appropriately
-    if len(out) == 1:
-        return out[0]
-    return tuple(out)
-
-
 def atleast_1d(x):
     return [x] if not isinstance(x, list) else x
 
 
-# def flatten(seq):
-#     """
-#     Recursively flatten any nested lists/tuples into a single flat list.
-#     Strings and bytes are treated as atomic.
-#     """
-#     flat = []
-#     for item in seq:
-#         if isinstance(item, Iterable) and not isinstance(item, (str, bytes)):
-#             flat.extend(flatten(item))
-#         else:
-#             flat.append(item)
-#     return flat
 
 
 def flatten(nested, max_depth=None):
@@ -131,10 +62,6 @@ def most_common_in_list(seq: list):
     return most_common_in_dict(counts)
 
 
-def clean_up_factory():
-    clean_up_folder(FACTORY_DIR)
-
-
 def clean_up_folder(path: str):
     if not os.path.exists(path):
         os.makedirs(path)
@@ -149,6 +76,8 @@ def clean_up_folder(path: str):
         except Exception as e:
             print(f"Failed to delete {item_path}: {e}")
 
+def clean_up_factory():
+    clean_up_folder(FACTORY_DIR)
 
 def clean_up_sciproduct(root_dir: str | Path, suffixes=(".log", "_cat.fits", ".png")) -> None:
     root = Path(root_dir)
@@ -538,60 +467,6 @@ def find_raw_path(unit, nightdate, n_binning, gain):
     return raw_data_folder[0]
 
 
-def parse_exptime(filename, return_type="float"):
-    """
-    Extract exposure time from a filename.
-
-    Args:
-        filename (str): Filename containing exposure time
-        return_type (type, optional): Return type for exposure time. Defaults to float.
-
-    Returns:
-        float or int: Exposure time extracted from the filename
-
-    Example:
-        >>> parse_exptime('calib_7DT11_T00139_20250102_014643_m425_100s.fits')
-        100.0
-        >>> parse_exptime(calib_7DT11_T00139_20250102_014643_m425_100s.fits', return_type=int)
-        100
-    """
-    match = re.search(r"_(\d+\.?\d*)s", filename)
-    if match:
-        exptime = float(match.group(1))
-        return int(exptime) if return_type == int else exptime
-    return None  # Return None if no match is found
-
-
-def define_output_dir(date, n_binning, gain, obj=None, unit=None, filt=None):
-    """
-    *deprecated*
-
-    Generate a standardized output directory name.
-
-    Args:
-        date (str): Observation date
-        n_binning (int): Pixel binning factor
-        gain (float): Detector gain setting
-
-    Returns:
-        str: Formatted output directory name
-
-    Example:
-        >>> define_output_dir('20250207', 2, 1.0)
-        '20250207_2x2_gain1.0'
-    """
-    if obj:
-        if unit:
-            if filt:
-                return f"{date}_{n_binning}x{n_binning}_gain{gain}/{obj}/{unit}/{filt}"
-            else:
-                return f"{date}_{n_binning}x{n_binning}_gain{gain}/{obj}/{unit}"
-        else:
-            return f"{date}_{n_binning}x{n_binning}_gain{gain}/{obj}"
-    else:
-        return f"{date}_{n_binning}x{n_binning}_gain{gain}"
-
-
 def lapse(explanation="elapsed", print_output=True):
     """
     Measure and report elapsed time using a global checkpoint.
@@ -640,35 +515,6 @@ def lapse(explanation="elapsed", print_output=True):
         if print_output:
             print(print_str, end="\n")  # log the elapsed time
         return elapsed_time  # in seconds
-
-
-def read_scamp_header(file):
-    """
-    Read a SCAMP output HEAD file, normalizing unicode and correcting WCS types.
-
-    Args:
-        file (str): Path to the header file
-
-    Returns:
-        fits.Header: Processed and cleaned FITS header with corrected WCS types
-
-    Note:
-        - Removes non-ASCII characters
-        - Converts WCS projection type from TAN to TPV
-    """
-    import unicodedata
-
-    with open(file, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    # Clean non-ASCII characters
-    cleaned_string = unicodedata.normalize("NFKD", content).encode("ascii", "ignore").decode("ascii")
-
-    # Correct CTYPE (TAN --> TPV)
-    hdr = fits.Header.fromstring(cleaned_string, sep="\n")
-    hdr["CTYPE1"] = ("RA---TPV", "WCS projection type for this axis")
-    hdr["CTYPE2"] = ("DEC--TPV", "WCS projection type for this axis")
-    return hdr
 
 
 # blindly appending ver.
@@ -785,16 +631,6 @@ def swap_ext(file_path: str | list[str], new_ext: str) -> str:
     return base + new_ext
 
 
-def get_derived_product_path(image, subdir="catalogs", ext=".cat.fits"):
-    """
-    Deprecated
-    Without kwargs, returns catalog path
-    """
-    input_file_base = os.path.basename(image)
-    output_file = os.path.join(os.path.dirname(image), subdir, swap_ext(input_file_base, ext))
-    return output_file
-
-
 def add_suffix(filename: str | list[str], suffix):
     """
     Add a suffix to the filename before the extension.
@@ -813,22 +649,6 @@ def add_suffix(filename: str | list[str], suffix):
     return f"{base}{suffix}{ext}"
 
 
-def check_obs_file(params):
-    for key, v in params.items():
-        if v is None:
-            params[key] = "*"
-
-    path = RAWDATA_DIR + f'/{params["unit"]}/{params["date"]}_gain{params["gain"]}/'
-    filename = (
-        f'{params["unit"]}_*_{params["obj"]}_{params["filter"]}_{params["n_binning"]}x{params["n_binning"]}*.fits'
-    )
-    files = glob.glob(path + filename)
-    if len(files) == 0:
-        return False
-    else:
-        return files
-
-
 def force_symlink(src, dst):
     """
     Remove the existing symlink `dst` if it exists, then create a new symlink.
@@ -840,19 +660,6 @@ def force_symlink(src, dst):
         pass
 
     os.symlink(src, dst)
-
-
-def parse_list_file(imagelist_file):
-    if os.path.exists(imagelist_file):
-        print(f"{imagelist_file} found!")
-    else:
-        print(f"Not Found {imagelist_file}!")
-    from astropy.table import Table
-
-    input_table = Table.read(imagelist_file, format="ascii")
-    # input_table = Table.read(imagelist_file_to_stack, format="ascii.commented_header")
-    files = [f for f in input_table["file"].data]
-    return files
 
 
 def time_diff_in_seconds(datetime1, datetime2=None, return_float=False):
@@ -872,8 +679,3 @@ def time_diff_in_seconds(datetime1, datetime2=None, return_float=False):
 
 def get_basename(file_path):
     return os.path.basename(file_path)
-
-
-# def update_header_by_overwriting(filename, header):
-#     data = fits.getdata(filename)
-#     fits.writeto(filename, data, header=header, overwrite=True)

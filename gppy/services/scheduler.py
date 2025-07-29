@@ -1,23 +1,56 @@
 from collections import deque, defaultdict
+from ..const import SCRIPT_DIR
 
 
 class Scheduler:
-    def __init__(self, masters, dependent_configs, multiunit_configs):
+    def __init__(self, dependent_configs={}, independent_configs=[], **kwargs):
+        masters = list(dependent_configs.keys())
         self.master_queue = deque(masters)
         self.master_status = {self._key_from_path(p): None for p in masters}  # True/False/None
         self.dependents = dependent_configs  # key: master_key, value: list of dependent paths
-        self.multiunits = deque(multiunit_configs)
+        self.independents = deque(independent_configs)
 
         self.task_queue = deque()
         self.completed_tasks = set()
         self.skipped_tasks = set()
 
         dependent_paths = [p for group in dependent_configs.values() for p in group]
-        self.task_status = {p: None for p in masters + dependent_paths + list(multiunit_configs)}
+        self.task_status = {p: None for p in masters + dependent_paths + list(independent_configs)}
+
+        self.processes = kwargs.get("processes", ["astrometry", "photometry", "combine", "subtract"])
+        self.overwrite = kwargs.get("overwrite", False)
+        self.device_id = 0
 
     def _key_from_path(self, path):
         """Extract master key like '2025-01-01_7DT11' from the full config path"""
         return path.split("/")[-1].replace(".yml", "")
+
+    def _generate_command(self, config, task_type):
+        """Generate command for the given config and task type"""
+        if task_type == "Masterframe":
+            cmd = [
+                f"{SCRIPT_DIR}/bin/preprocess",
+                "-config",
+                config,
+                "-device",
+                str(int(self.device_id % 2)),
+                "-make_plots",
+            ]
+            if self.overwrite:
+                cmd.append("-overwrite")
+            self.device_id += 1
+        else:  # ScienceImage
+            cmd = [
+                f"{SCRIPT_DIR}/bin/data_reduction", 
+                "-config", 
+                config,
+            ]
+            # Add processes as individual arguments
+            cmd.extend(["-processes"] + self.processes)
+            if self.overwrite:
+                cmd.append("-overwrite")
+        
+        return cmd
 
     def mark_done(self, task_path, success=True):
         """Mark a task as completed and schedule follow-up if needed"""
@@ -39,8 +72,8 @@ class Scheduler:
                     self.skipped_tasks.add(dep)
                 
                 # Also mark all multiunits as skipped when any master fails
-                while self.multiunits:
-                    mu = self.multiunits.popleft()
+                while self.independents:
+                    mu = self.independents.popleft()
                     self.task_status[mu] = False
                     self.skipped_tasks.add(mu)
 
@@ -51,15 +84,20 @@ class Scheduler:
         if all(v is True for v in self.master_status.values()):
             all_required_deps = [dep for k, v in self.master_status.items() if v for dep in self.dependents.get(k, [])]
             if all(self.task_status[dep] is not None for dep in all_required_deps):
-                while self.multiunits:
-                    mu = self.multiunits.popleft()
+                while self.independents:
+                    mu = self.independents.popleft()
                     self.task_queue.append(mu)
 
     def get_next_task(self):
+        """Get next task command"""
         if self.master_queue:
-            return self.master_queue.popleft(), "Masterframe"
+            config = self.master_queue.popleft()
+            cmd = self._generate_command(config, "Masterframe")
+            return cmd
         if self.task_queue:
-            return self.task_queue.popleft(), "ScienceImage"
+            config = self.task_queue.popleft()
+            cmd = self._generate_command(config, "ScienceImage")
+            return cmd
         return None
 
     def is_all_done(self):

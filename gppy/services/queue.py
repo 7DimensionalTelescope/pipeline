@@ -12,7 +12,6 @@ import subprocess
 from .logger import Logger
 from .task import Task, Priority
 from ..utils import time_diff_in_seconds
-from ..const import SCRIPT_DIR
 
 signal.signal(signal.SIGINT, signal.SIG_IGN)
 mp.set_start_method("spawn", force=True)
@@ -202,7 +201,6 @@ class QueueManager:
 
         self.scheduler = scheduler
         self._active_processes = []
-        self._device_id = 0
         if not (hasattr(self, "processing_thread")):
             self._start_workers(process_type="scheduler")
 
@@ -309,35 +307,22 @@ class QueueManager:
                     continue
 
                 try:
-                    config, ptype = self.scheduler.get_next_task()
+                    cmd = self.scheduler.get_next_task()
                 except:
                     time.sleep(1)
                     continue
 
+                if cmd is None:
+                    time.sleep(1)
+                    continue
+
                 try:
-                    if ptype == "Masterframe":
-                        cmd = [
-                            f"{SCRIPT_DIR}/bin/preprocess",
-                            "-config",
-                            config,
-                            "-device",
-                            str(int(self._device_id % 2)),
-                            "-make_plots",
-                        ]
-                    else:
-                        cmd = [
-                            f"{SCRIPT_DIR}/bin/data_reduction", 
-                            "-config", 
-                            config
-                        ]
-                        
-                    proc = subprocess.Popen(
-                        cmd,
-                    )
+                    proc = subprocess.Popen(cmd)
                     
+                    # Extract config path from command for tracking
+                    config = cmd[cmd.index("-config") + 1] if "-config" in cmd else "unknown"
                     self._active_processes.append([config, proc])
-                    self._device_id += 1
-                    self.logger.info(f"Process ({ptype}) with {os.path.basename(config)} (PID = {proc.pid}) submitted.")
+                    self.logger.info(f"Process with {os.path.basename(config)} (PID = {proc.pid}) submitted.")
                     time.sleep(0.5)
 
                 except Exception as e:
