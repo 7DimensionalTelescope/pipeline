@@ -2,8 +2,8 @@ import os
 from typing import List, Tuple
 from collections import defaultdict
 from pathlib import Path
-from .utils import subtract_half_day, get_gain, get_header, get_nightdate, add_half_day
-from ..utils import equal_on_keys, collapse
+from .utils import subtract_half_day, get_gain, get_nightdate, add_half_day
+from ..utils import equal_on_keys, collapse, get_header
 from .. import const
 from .utils import strip_binning, format_binning, strip_exptime, format_exptime, strip_gain, format_camera
 from .cam_tracker import get_camera_serial

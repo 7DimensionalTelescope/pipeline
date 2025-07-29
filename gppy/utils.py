@@ -17,8 +17,6 @@ def atleast_1d(x):
     return [x] if not isinstance(x, list) else x
 
 
-
-
 def flatten(nested, max_depth=None):
     """
     Flatten a nested list/tuple up to max_depth levels.
@@ -76,8 +74,10 @@ def clean_up_folder(path: str):
         except Exception as e:
             print(f"Failed to delete {item_path}: {e}")
 
+
 def clean_up_factory():
     clean_up_folder(FACTORY_DIR)
+
 
 def clean_up_sciproduct(root_dir: str | Path, suffixes=(".log", "_cat.fits", ".png")) -> None:
     root = Path(root_dir)
@@ -87,105 +87,6 @@ def clean_up_sciproduct(root_dir: str | Path, suffixes=(".log", "_cat.fits", ".p
                 path.unlink()
             except Exception as e:
                 raise RuntimeError(f"Failed to delete {path}: {e}") from e
-
-
-
-
-
-def check_params(img):
-    """makes obs_params, which will be deprecated in the unified MFG-preproc scheme"""
-    try:
-        params = parse_key_params_from_filename(img)[0]
-    except:
-        try:
-            params = parse_key_params_from_header(img)[0]
-        except:
-            raise ValueError("No parameters found in the image file names or headers.")
-    if not params:
-        raise ValueError("No parameters found in the image file names or headers.")
-    return params
-
-
-def parse_key_params_from_filename(img):
-    if isinstance(img, str):
-        path = Path(img)
-    elif isinstance(img, Path):
-        path = img
-    else:
-        raise TypeError("Input must be a string or Path.")
-
-    # e.g., 7DT11_20250102_050704_T00223_m425_1x1_100.0s_0001.fits
-    pattern = r"^(7DT\d{2})_(\d{8}_\d{6})_([a-zA-Z0-9]+)_([a-zA-Z0-9]+)_(\dx\d)_(\d+\.?\d*)s_([0-9]+)"
-    match = re.match(pattern, path.stem)
-
-    if match:
-        units, datetime_string, target, filt, formatted_n_binning, exposure, image_number = match.groups()
-        date = subtract_half_day(datetime_string)
-    else:
-        pattern = r"([a-zA-Z0-9]+)_([a-zA-Z0-9]+)_(7DT\d{2})_(\d+\.?\d*)s_(\d{8}_\d{6})"
-        match = re.match(pattern, path.stem)
-        if match:
-            target, filt, units, exposure, datetime_string = match.groups()
-            date = subtract_half_day(datetime_string)
-
-    gain = re.findall("(gain[0-9]+)", path.abspath())
-
-    if gain:
-        gain = gain[-1]
-    else:
-        gain = None
-
-    info = {
-        "nightdate": date,
-        "obstime": datetime_string,
-        "filter": filt,
-        "obj": target,
-        "unit": units,
-        "exposure": exposure,
-        "n_binning": int(formatted_n_binning[0]),
-        "gain": gain,
-    }
-
-    # deprecated key support
-    info["date"] = info["nightdate"]
-    info["datetime"] = info["obstime"]
-
-    file_type = "master_image" if any(s in str(path.stem) for s in ["BIAS", "DARK", "FLAT"]) else "sci_image"
-
-    return info, file_type
-
-
-def parse_key_params_from_header(filename: str | Path) -> None:
-    """
-    Extract target information from a FITS filename.
-
-    Args:
-        file_path (Path): Path to the FITS file
-
-    Returns:
-        tuple: Target name and filter, or None if parsing fails
-    """
-    filename = str(filename)  # in case filename is pathlib Path
-    info = {}
-    header = fits.getheader(filename)
-
-    for attr, key in HEADER_KEY_MAP.items():
-        if key == "DATE-LOC":
-            header_date = datetime.fromisoformat(header[key])
-            adjusted_date = header_date - timedelta(hours=12)
-            final_date = adjusted_date.date()
-            info[attr] = final_date.isoformat()
-        else:
-            info[attr] = header[key]
-
-    info["nightdate"] = subtract_half_day(to_datetime_string(info["obstime"]))
-
-    file_type = "master_image" if any(s in filename for s in ["BIAS", "DARK", "FLAT"]) else "sci_image"
-
-    return info, file_type
-
-
-
 
 
 def lapse(explanation="elapsed", print_output=True):
@@ -238,7 +139,6 @@ def lapse(explanation="elapsed", print_output=True):
         return elapsed_time  # in seconds
 
 
-# blindly appending ver.
 def update_padded_header(target_fits, header_new):
     """
     Update a FITS file's header with header_new (scamp or photometry output).
@@ -332,9 +232,6 @@ def update_padded_header(target_fits, header_new):
 #                 # insert before COMMENTS
 #                 header.insert(insert_pos, (key, value, comment), after=False)
 #                 insert_pos += 1  # shift insertion point forward
-
-
-
 
 
 def force_symlink(src, dst):
@@ -437,6 +334,105 @@ def collapse(seq: list | dict[list], keys=ALL_GROUP_KEYS, raise_error=False, for
         raise ValueError(f"Uncollapsible: input is not homogeneous: {seq}")
     else:
         return seq
+
+
+def get_header(filename: str | Path, force_return=False) -> dict | fits.Header:
+    """
+    Get the header of a FITS file.
+
+    Args:
+        filename (str | Path): Path to the FITS file or a .head file
+
+    Returns:
+        dict | fits.Header: Header of the FITS file
+    """
+    filename = str(filename)
+    imhead_file = swap_ext(filename, "head")
+
+    if os.path.exists(imhead_file):
+        # Read the header from the text file
+        return header_to_dict(imhead_file)
+    elif os.path.exists(filename):
+        from astropy.io import fits
+
+        return fits.getheader(swap_ext(filename, "fits"))
+    else:
+        if force_return:
+            return {}
+        raise FileNotFoundError(f"File not found: {filename}")
+
+
+def header_to_dict(file_path):
+    """
+    Parse a FITS header text file and convert it into a dictionary.
+
+    This function reads a text file containing a FITS (Flexible Image Transport System)
+    header generated by the `imhead` command, extracts key-value pairs from each line,
+    and stores them in a dictionary.
+
+    The function handles the following cases:
+    - String values enclosed in single quotes are stripped of quotes and whitespace.
+    - Numerical values are converted to integers or floats when possible.
+    - Boolean values (`T` and `F` in FITS format) are converted to Python `True` and `False`.
+    - Comments after the `/` character are ignored.
+
+    Args:
+        file_path (str): Path to the text file containing the FITS header.
+
+    Returns:
+        dict: A dictionary containing the parsed header, where keys are the FITS
+        header keywords and values are the corresponding parsed values.
+
+    Example:
+        Given a FITS header file with the following lines:
+            SIMPLE  = T / file does conform to FITS standard
+            BITPIX  = 8 / number of bits per data pixel
+            NAXIS   = 0 / number of data axes
+            EXTEND  = T / FITS dataset may contain extensions
+
+        The function will return:
+        {
+            "SIMPLE": True,
+            "BITPIX": 8,
+            "NAXIS": 0,
+            "EXTEND": True
+        }
+    """
+    # Regular expression to match FITS header format
+    fits_pattern = re.compile(r"(\S+)\s*=\s*(.+?)(?:\s*/\s*(.*))?$")
+
+    fits_dict = {}
+    # Read the FITS header from the text file
+    with open(file_path, "r", encoding="utf-8") as file:
+        for line in file:
+            match = fits_pattern.match(line)
+            if match:
+                key, value, comment = match.groups()
+                value = value.strip()
+
+                # Handle string values enclosed in single quotes
+                if value.startswith("'") and value.endswith("'"):
+                    value = value.strip("'").strip()
+
+                # Convert numerical values
+                else:
+                    try:
+                        if "." in value:
+                            value = float(value)  # Convert to float if it contains a decimal
+                        else:
+                            value = int(value)  # Convert to integer otherwise
+                    except ValueError:
+                        pass  # Leave as string if conversion fails
+
+                # Convert boolean values (T/F in FITS format)
+                if value == "T":
+                    value = True
+                elif value == "F":
+                    value = False
+
+                fits_dict[key] = value
+
+    return fits_dict
 
 
 def get_basename(file_path):

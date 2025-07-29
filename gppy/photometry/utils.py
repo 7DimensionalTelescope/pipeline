@@ -4,7 +4,7 @@ from numba import njit
 from astropy.table import Table, hstack, vstack, unique
 from astropy.coordinates import SkyCoord
 from typing import Any, Tuple, Optional, Dict, Union
-
+from astropy.io import fits
 
 @njit
 def rss(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -346,3 +346,48 @@ def get_zp_from_dict(dicts: dict, filter: str) -> dict:
         Zero point dictionary
     """
     return dicts[filter][0]["ZP_AUTO"][0], dicts[filter][0]["EZP_AUTO"][0]
+
+
+# blindly appending ver.
+def update_padded_header(target_fits, header_new):
+    """
+    Update a FITS file's header with header_new (scamp or photometry output).
+    header_new can be either astropy.io.fits.Header or dict.
+
+    CAVEAT: This overwrites COMMENTs adjacent to the padding
+
+    Args:
+        target_fits (str): Path to the target FITS file to be updated
+        header_new (dict or Header): Header object with info to be added
+
+    Note:
+        - Modifies the target FITS file in-place
+        - Preserves existing non-COMMENT header entries
+        - Appends or replaces header cards from the input header
+    """
+
+    with fits.open(target_fits, mode="update") as hdul:
+        header = hdul[0].header
+        cards = header.cards
+        for i in range(len(cards) - 1, -1, -1):
+            if cards[i][0] != "COMMENT":  # i is the last non-comment idx
+                break
+
+        # format new header for iteration
+        if isinstance(header_new, fits.Header):
+            cardpack = header_new.cards
+        elif isinstance(header_new, dict):  # (key, value) or (key, (value, comment))
+            cardpack = [
+                (key, *value) if isinstance(value, tuple) else (key, value) for key, value in header_new.items()
+            ]
+        else:
+            raise ValueError("Unsupported Header format for updating padded Header")
+
+        # Expects (key, value, comment)
+        for j, card in enumerate(cardpack):
+            if i + j <= len(cards) - 1:
+                del header[i + j]
+                header.insert(i + j, card)
+            else:
+                header.append(card, end=True)
+

@@ -22,7 +22,7 @@ from astropy.stats import sigma_clip
 # gppy modules
 from . import utils as phot_utils
 from ..config.utils import get_key
-from ..utils import update_padded_header, time_diff_in_seconds
+from ..utils import time_diff_in_seconds
 from ..config import SciProcConfiguration
 from ..config.base import ConfigurationInstance
 from ..services.memory import MemoryMonitor
@@ -305,7 +305,7 @@ class PhotometrySingle:
             inferred_filter = self.determine_filter(dicts)
             if inferred_filter != self.image_info.filter:
                 self.logger.info(f"Saving {inferred_filter} photometry to catalog too")
-                update_padded_header(self.input_image, {"INF_FILT": inferred_filter})
+                phot_utils.update_padded_header(self.input_image, {"INF_FILT": inferred_filter})
                 _, _, cols = temp_results[inferred_filter]
                 self.add_reference_columns(obs_src_table, cols)
                 # self.update_image_header(*dicts[inferred_filter])
@@ -888,7 +888,7 @@ class PhotometrySingle:
         header_to_add.update(self.phot_header.dict)
         header_to_add.update(aper_dict)
         header_to_add.update(zp_dict)
-        update_padded_header(self.input_image, header_to_add)
+        phot_utils.update_padded_header(self.input_image, header_to_add)
         self.logger.info(f"Image header has been updated with photometry information (aperture, zero point, ...).")
 
     def write_catalog(self, obs_src_table) -> None:
