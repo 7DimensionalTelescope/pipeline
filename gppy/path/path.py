@@ -321,7 +321,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                 else:
                     from datetime import date
 
-                    nightdate = self._get_property_at_index("nightdate", i)
+                    nightdate = self._get_name_property_at_index("nightdate", i)
                     if isinstance(nightdate, list):
                         current_nightdate = nightdate[i] if i < len(nightdate) else nightdate[0]
                     else:
@@ -337,7 +337,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                             f"nightdate cap reached for file {input_file}: consider moving to another disk."
                         )
 
-                preproc_output_dir = os.path.join(output_parent_dir, self._get_property_at_index("nightdate", i))
+                preproc_output_dir = os.path.join(output_parent_dir, self._get_name_property_at_index("nightdate", i))
                 self._preproc_output_dir.append(preproc_output_dir)
 
         # Store as lists
@@ -350,6 +350,8 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
         Get NameHandler property with lazy caching.
         First access fetches from NameHandler and caches it.
         Subsequent accesses return cached value.
+
+        returns singleton list for single-file case
         """
         if prop_name not in self._name_cache:
             if not hasattr(self, "name") or self.name is None:
@@ -376,7 +378,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
 
         return self._name_cache[prop_name]
 
-    def _get_property_at_index(self, prop_name: str, index: int):
+    def _get_name_property_at_index(self, prop_name: str, index: int):
         """Get cached NameHandler property value at specific index. Can handle single input case"""
         cached_prop = self._get_cached_namehandler_property(prop_name)
 
@@ -428,11 +430,11 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
         if self._input_files:
             yml_basenames = []
             for i in range(len(self._input_files)):
-                obj = self._get_property_at_index("obj", i)
-                filte = self._get_property_at_index("filter", i)
+                obj = self._get_name_property_at_index("obj", i)
+                filte = self._get_name_property_at_index("filter", i)
                 # unit = self._get_property_at_index("unit", i)
                 # date = self._get_property_at_index("date", i)
-                nightdate = self._get_property_at_index("nightdate", i)
+                nightdate = self._get_name_property_at_index("nightdate", i)
 
                 yml_basenames.append("_".join([obj, filte, nightdate]) + ".yml")
 
@@ -472,11 +474,11 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
 
         for i in range(len(self._input_files)):
             # Get properties for this specific file
-            nightdate = self._get_property_at_index("nightdate", i)
-            unit = self._get_property_at_index("unit", i)
-            obj = self._get_property_at_index("obj", i)
-            filte = self._get_property_at_index("filter", i)
-            typ = self._get_property_at_index("type", i)
+            nightdate = self._get_name_property_at_index("nightdate", i)
+            unit = self._get_name_property_at_index("unit", i)
+            obj = self._get_name_property_at_index("obj", i)
+            filte = self._get_name_property_at_index("filter", i)
+            typ = self._get_name_property_at_index("type", i)
 
             # Masterframe directory
             masterframe_dir = os.path.join(const.MASTER_FRAME_DIR, nightdate, unit)
@@ -545,8 +547,8 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
         """None signals nonexistent file(s)"""
         paths = []
         for i, input in enumerate(self._input_files):
-            typ = self._get_property_at_index("type", i)
-            basename = self._get_property_at_index("conjugate_basename", i)
+            typ = self._get_name_property_at_index("type", i)
+            basename = self._get_name_property_at_index("conjugate_basename", i)
 
             if "raw" in typ[0]:
                 # original was raw → conjugate is processed
@@ -554,10 +556,10 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                 paths.append(os.path.join(root, basename))
             elif "calibrated" in typ[0]:
                 # original was processed → conjugate is raw
-                unit = self._get_property_at_index("unit", i)
-                nightdate = self._get_property_at_index("nightdate", i)
-                n_binning = self._get_property_at_index("n_binning", i)
-                gain = self._get_property_at_index("gain", i)
+                unit = self._get_name_property_at_index("unit", i)
+                nightdate = self._get_name_property_at_index("nightdate", i)
+                n_binning = self._get_name_property_at_index("n_binning", i)
+                gain = self._get_name_property_at_index("gain", i)
                 root = find_raw_path(unit, nightdate, n_binning, gain)
                 paths.append(os.path.join(root, basename))
             else:
@@ -571,11 +573,11 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
         # return [i if "raw" in typ[0] else c for typ, i, c in zip(self.name.type, self._input_files, self.conjugate)]
         paths = []
         for i, input in enumerate(self._input_files):
-            basename = self._get_property_at_index("raw_basename", i)
-            unit = self._get_property_at_index("unit", i)
-            nightdate = self._get_property_at_index("nightdate", i)
-            n_binning = self._get_property_at_index("n_binning", i)
-            gain = self._get_property_at_index("gain", i)
+            basename = self._get_name_property_at_index("raw_basename", i)
+            unit = self._get_name_property_at_index("unit", i)
+            nightdate = self._get_name_property_at_index("nightdate", i)
+            n_binning = self._get_name_property_at_index("n_binning", i)
+            gain = self._get_name_property_at_index("gain", i)
             root = find_raw_path(unit, nightdate, n_binning, gain)
             paths.append(os.path.join(root, basename))
 
@@ -588,7 +590,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
         # return [c if "raw" in typ else i for typ, i, c in zip(self.name.type, self._input_files, self.conjugate)]
         paths = []
         for i, input in enumerate(self._input_files):
-            basename = self._get_property_at_index("processed_basename", i)
+            basename = self._get_name_property_at_index("processed_basename", i)
             root = self._single_dir[i]
             paths.append(os.path.join(root, basename))
 
@@ -614,6 +616,14 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
     def filter_by(self, attr, val):
         attrs = getattr(self.name, attr)
         return [f for f, a in zip(self._input_files, attrs) if a == val]
+
+    def get_minimum(self, attr):
+        attrs = getattr(self.name, attr)
+        if isinstance(attrs, list):
+            idx = attrs.index(min(attrs))
+            return self._input_files[idx]
+        else:
+            return self._input_files[0]
 
     # @classmethod
     # def from_grouped_calib(cls, sci_files, on_date_calib):
@@ -785,9 +795,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
 
                 mflat = cls.ensure_unique(cls(off_date_flat_group).preprocess.masterframe, off=not ignore_mult_date)
                 self = cls(off_date_flat_group)
-                """Future Update"""
-                # look for 100s mdark, though there may exist shorter exptime mdarks
-                self.name.exptime = [100] * len(off_date_flat_group)
+                self.name.exptime = ["*"] * len(off_date_flat_group)  # * is a glob wildcard
                 mdark = cls.ensure_unique(self.preprocess.mdark, off=not ignore_mult_date)
                 mbias = cls.ensure_unique(cls(off_date_flat_group).preprocess.mbias, off=not ignore_mult_date)
                 result.append([[[], [], sorted(off_date_flat_group)], [mbias, mdark, mflat], dict()])

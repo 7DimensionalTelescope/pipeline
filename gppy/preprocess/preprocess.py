@@ -109,6 +109,7 @@ class Preprocess(BaseSetup):
 
     def run(self, device_id=None, make_plots=True, use_gpu=True, only_with_sci=False):
         self._use_gpu = all([use_gpu, self._use_gpu])
+        self.skip_flag = {"bias": False, "dark": False, "flat": False, "sci": False}  # synced with self.calib_types!
 
         st = time.time()
 
@@ -125,7 +126,7 @@ class Preprocess(BaseSetup):
                 self.data_reduction(device_id=device_id)
 
             if make_plots:
-                t = threading.Thread(target=self.make_plots, kwargs={"group_index": i})
+                t = threading.Thread(target=self.make_plots, kwargs={"group_index": i, "skip_flag": self.skip_flag})
                 t.start()
                 threads_for_making_plots.append(t)
 
@@ -203,18 +204,19 @@ class Preprocess(BaseSetup):
         return l
 
     def get_header(self, dtype):
+        """updates ingredient files"""
+        header = fits.getheader(getattr(self, f"{dtype}_input")[0])
+
         if dtype == "bias":
-            header = fits.getheader(self.bias_input[0])
             header = prep_utils.write_IMCMB_to_header(header, self.bias_input)
-            header["NFRAMES"] = len(self.bias_input)
         elif dtype == "dark":
-            header = fits.getheader(self.dark_input[0])
             header = prep_utils.write_IMCMB_to_header(header, [self.bias_output] + self.dark_input)
-            header["NFRAMES"] = len(self.dark_input)
         elif dtype == "flat":
-            header = fits.getheader(self.flat_input[0])
-            header = prep_utils.write_IMCMB_to_header(header, [self.bias_output, self.dark_output] + self.flat_input)
-            header["NFRAMES"] = len(self.flat_input)
+            header = prep_utils.write_IMCMB_to_header(
+                header, [self.bias_output, self.flatdark_output] + self.flat_input
+            )
+
+        header["NFRAMES"] = len(getattr(self, f"{dtype}_input"))
         return header
 
     def _calc_dark_scale(self, flat_exptime, dark_exptime):
@@ -244,10 +246,11 @@ class Preprocess(BaseSetup):
 
             if input_file and (not os.path.exists(output_file) or self.overwrite):
                 self._generate_masterframe(dtype, device_id)
-            elif isinstance(output_file, str) and len(output_file)!=0:
+            elif isinstance(output_file, str) and len(output_file) != 0:
                 self._fetch_masterframe(output_file, dtype)
+                self.skip_flag[dtype] = True
             else:
-                self.logger.warning(f"No input or output data for {dtype}")
+                self.logger.warning(f"{dtype} has no input or output data (to fetch)")
                 self.logger.debug(f"{dtype}_input: {input_file}")
                 self.logger.debug(f"{dtype}_output: {output_file}")
 
@@ -293,13 +296,15 @@ class Preprocess(BaseSetup):
                     make_bpmask=self.bpmask_output,
                     bpmask_sigma=self.config.preprocess.n_sigma,
                 )
+                # for flatdark
+                self.flatdark_output = self.dark_output
                 self.dark_exptime = header[HEADER_KEY_MAP["exptime"]]
 
             elif dtype == "flat":
                 dark_scale = self._calc_dark_scale(header[HEADER_KEY_MAP["exptime"]], self.dark_exptime)
                 calc_function(
                     input_files,
-                    subtract=[self.bias_output, self.dark_output],
+                    subtract=[self.bias_output, self.flatdark_output],
                     scale=[1, dark_scale],
                     norm=True,
                     device_id=device_id,
@@ -333,15 +338,21 @@ class Preprocess(BaseSetup):
                 f"No pre-existing master {dtype} found in place of {template} wihin {max_offset} days"
             )
 
-        setattr(self, f"{dtype}_output", existing_mframe_file)
+        setattr(self, f"{dtype}_output", existing_mframe_file)  # mdark for sci if dtype=='dark'
 
-        output = list(self.raw_groups[self._current_group])
-        next_output = list(output[1])
-        next_output[self._key_to_index[dtype]] = existing_mframe_file
-        output[1] = tuple(next_output)
-        self.raw_groups[self._current_group] = tuple(output)
+        # update the output names in raw_groups
+        mframes_output = self.raw_groups[self._current_group][1]
+        mframes_output[self._key_to_index[dtype]] = existing_mframe_file
 
+        # for flatdark
         if dtype == "dark":
+            path = PathHandler(template)
+            path.name.exptime = "*"
+            flatdark_template = path.preprocess.masterframe
+            existing_mframe_file = prep_utils.search_with_date_offsets(
+                flatdark_template, max_offset=max_offset, future=True
+            )
+            setattr(self, "flatdark_output", existing_mframe_file)  # mdark for mflat
             self.dark_exptime = get_header(existing_mframe_file)[HEADER_KEY_MAP["exptime"]]
 
     def data_reduction(self, device_id=None, use_gpu: bool = True):
@@ -353,11 +364,13 @@ class Preprocess(BaseSetup):
             for attr in ("bias_data", "dark_data", "flat_data"):
                 if attr in self.__dict__:
                     del self.__dict__[attr]
+            self.skip_flag["sci"] = True
             return
 
         flag = [os.path.exists(file) for file in self.sci_output]
         if all(flag):
             self.logger.info(f"All images in group {self._current_group+1} are already processed")
+            self.skip_flag["sci"] = True
             return
 
         st = time.time()
@@ -408,21 +421,28 @@ class Preprocess(BaseSetup):
             header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
             prep_utils.write_header(processed_file, header)
 
-    def make_plots(self, group_index: int):
+    def make_plots(self, group_index: int, skip_flag={"bias": False, "dark": False, "flat": False, "sci": False}):
         st = time.time()
+
+        all_flag = all(skip_flag.values())
+        if all_flag:
+            self.logger.info(f"Skipping plot generation for group {group_index+1}")
+            return
 
         # generate calib plots
         self.logger.info(f"Generating plots for master calibration frames of group {group_index+1}")
         use_multi_thread = self.config.preprocess.use_multi_thread
 
-        if "bias" in self.calib_types:
+        if "bias" in self.calib_types and not skip_flag["bias"]:
             bias_file = self._get_raw_group("bias_output", group_index)
             if os.path.exists(bias_file):
                 plot_bias(bias_file)
             else:
                 self.logger.warning(f"Bias file {bias_file} does not exist. Skipping bias plot.")
+        else:
+            self.logger.info(f"Skipping bias plot for group {group_index+1}")
 
-        if "dark" in self.calib_types:
+        if "dark" in self.calib_types and not skip_flag["dark"]:
             bpmask_file = self._get_raw_group("bpmask_output", group_index)
             if os.path.exists(bpmask_file):
                 plot_bpmask(bpmask_file)
@@ -432,33 +452,39 @@ class Preprocess(BaseSetup):
                 else:
                     self.logger.warning("Header missing BADPIX; using 1")
                     badpix = 1
-                
+
                 mask = fits.getdata(self._get_raw_group("bpmask_output", group_index), ext=1)
                 mask = mask != badpix
                 fmask = mask.ravel()
             else:
                 self.logger.warning(f"BPMask file {bpmask_file} does not exist. Skipping bpmask plot.")
                 fmask = None
+        else:
+            self.logger.info(f"Skipping bpmask plot for group {group_index+1}")
 
-        if "dark" in self.calib_types:
+        if "dark" in self.calib_types and not skip_flag["dark"]:
             dark_file = self._get_raw_group("dark_output", group_index)
             if os.path.exists(dark_file):
                 plot_dark(dark_file, fmask)
             else:
                 self.logger.warning(f"Dark file {dark_file} does not exist. Skipping dark plot.")
+        else:
+            self.logger.info(f"Skipping dark plot for group {group_index+1}")
 
-        if "flat" in self.calib_types:
+        if "flat" in self.calib_types and not skip_flag["flat"]:
             flat_file = self._get_raw_group("flat_output", group_index)
             if os.path.exists(flat_file):
                 plot_flat(flat_file, fmask)
             else:
                 self.logger.warning(f"Flat file {flat_file} does not exist. Skipping flat plot.")
+        else:
+            self.logger.info(f"Skipping flat plot for group {group_index+1}")
 
         self.logger.info(f"Completed generating plots for master calibration frames of group {group_index+1}")
 
         # generate sci plots
         num_sci = len(self._get_raw_group("sci_input", group_index))
-        if num_sci:
+        if num_sci and not skip_flag["sci"]:
             self.logger.info(f"Generating plots for science frames of group {group_index+1} ({num_sci} images)")
             if use_multi_thread:
                 threads = []
@@ -480,6 +506,8 @@ class Preprocess(BaseSetup):
                 f"Completed plot generation for images in group {group_index+1} in {time_diff_in_seconds(st)} seconds "
                 f"({time_diff_in_seconds(st, return_float=True)/(num_sci or 1):.1f} s/image)"
             )
+        else:
+            self.logger.info(f"Skipping science plot for group {group_index+1}")
 
     def update_bpmask(self):
         header = self.get_header("dark")

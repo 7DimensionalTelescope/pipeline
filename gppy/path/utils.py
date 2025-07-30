@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from astropy.io import fits
 
 from ..const import HEADER_KEY_MAP
+from ..utils import get_header
 
 # def switch_raw_name_order(name):
 #     parts = name.split("_")
@@ -238,12 +239,17 @@ def format_binning(n_binning: int | str):
 
 
 def strip_exptime(exptime_string):
-    exptime_string.replace("pt", ".")
+    if exptime_string == "*":
+        return exptime_string
+    # exptime_string.replace("pt", ".")
     return float(exptime_string[:-1])
 
 
 def format_exptime(exptime: float, type="raw"):
     """type=='raw' is .1f float, others are rounded"""
+    if exptime == "*":  # put wildcard through
+        return exptime
+
     if not exptime:  # when the input is not expected to have proper exptime
         return "UndefExptime"  # indicates a bug in a regular pipeline output
 
@@ -266,6 +272,7 @@ def format_camera(serial: str | int):
 
 
 # Functions moved from main utils.py that are only used in path modules
+
 
 def add_half_day(timestr: str) -> str:
     dt = datetime.strptime(timestr, "%Y-%m-%d")
@@ -306,9 +313,6 @@ def to_datetime_string(datetime_str, date_only=False):
         return dt.strftime("%Y%m%d")
     else:
         return dt.strftime("%Y%m%d_%H%M%S")
-
-
-
 
 
 def get_nightdate(fpath):
@@ -371,6 +375,3 @@ def find_raw_path(unit, nightdate, n_binning, gain):
         raise ValueError("No data folder found")
 
     return raw_data_folder[0]
-
-
-

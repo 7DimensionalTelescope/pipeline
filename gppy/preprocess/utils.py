@@ -1,10 +1,13 @@
 import os
+from glob import glob
 import time
 from astropy.io import fits
 
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import uuid
+
+from ..path.path import PathHandler
 
 
 class FileCreationHandler(FileSystemEventHandler):
@@ -15,6 +18,7 @@ class FileCreationHandler(FileSystemEventHandler):
     def on_created(self, event):
         if not event.is_directory and event.src_path.endswith(self.target_file):
             self.created = True
+
 
 def wait_for_masterframe(file_path, timeout=1800):
     """
@@ -101,8 +105,19 @@ def search_with_date_offsets(template, max_offset=300, future=False):
         modified_path = template.replace(date_night, adjusted_date_night).replace(date_utc, adjusted_date_utc)
 
         # Check if the modified path exists
-        if os.path.exists(modified_path):
-            return modified_path
+        # if os.path.exists(modified_path):
+        #     return modified_path
+        if "*" in template:
+            # If there’s a *, glob for all matches
+            matches = glob(modified_path)
+            if matches:
+                if len(matches) == 1:
+                    return matches[0]
+                else:
+                    return PathHandler(matches).get_minimum("exptime")
+        else:
+            if os.path.exists(modified_path):
+                return modified_path
 
     # If no file is found, return None
     return None
@@ -225,6 +240,7 @@ def remove_padding(header):
 
     return header[: i + 1]
 
+
 def update_header_by_overwriting(filename, header, bitpix=-32):
 
     with fits.open(filename, mode="update") as hdul:
@@ -241,6 +257,7 @@ def update_header_by_overwriting(filename, header, bitpix=-32):
         hdul[0].header = header
         hdul.flush()
 
+
 def write_header(filename, header):
     for key in ["BZERO", "BSCALE"]:
         try:
@@ -249,12 +266,13 @@ def write_header(filename, header):
             continue
 
     header["BITPIX"] = -32
-    
+
     if filename.endswith(".fits"):
         filename = filename.replace(".fits", ".header")
 
     with open(filename, "w") as f:
         f.write(header.tostring(sep="\n"))
+
 
 # def update_header_by_overwriting(filename, header, bitpix=-32):
 
@@ -264,8 +282,7 @@ def write_header(filename, header):
 #                 del header[key]
 #             except:
 #                 continue
-    
+
 #     data = fits.getdata(filename)
 
 #     fits.writeto(filename, data, header=header, overwrite=True)
-    

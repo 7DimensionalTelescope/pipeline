@@ -683,16 +683,20 @@ class NameHandler:
         elif len(parts) == 7:  # dark, flat
             offset = 0
         else:
-            raise ValueError(f"Unidentified number of _-delimited masterframe parts: {len(parts)}")
+            raise ValueError(f"Unidentified number of underscore-delimited masterframe parts: {len(parts)}")
 
         exptime = None
         filt = None
+
+        # exptime for mdark, filter for mflat
         if not offset:
             quality = parts[1]
-            if quality.endswith("s"):
+            if obj == "dark":
                 exptime = strip_exptime(quality)
-            else:
+            elif obj == "flat":
                 filt = quality
+            else:
+                raise ValueError(f"Unexpected object type '{obj}' in masterframe basename")
 
         unit = parts[2 - offset]
         date = parts[3 - offset]
