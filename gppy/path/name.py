@@ -386,9 +386,8 @@ class NameHandler:
     @property
     def raw_basename(self):
         def make(unit, date, hms, obj, filte, nbin, exptime):
-            return (
-                f"{unit}_{date}_{hms}_{obj}_{filte}_{format_binning(nbin)}_{format_exptime(exptime, type='raw')}.fits"
-            )
+            count = "*"
+            return f"{unit}_{date}_{hms}_{obj}_{filte}_{format_binning(nbin)}_{format_exptime(exptime, type='raw')}_{count}.fits"
 
         if getattr(self, "_single", False):
             return make(self.unit, self.date, self.hms, self.obj, self.filter, self.n_binning, self.exptime)
@@ -453,7 +452,16 @@ class NameHandler:
 
     @staticmethod
     def _parse_processed(parts):
-        # returns (unit, date, hms, obj, filter, n_binning, exptime)
+        # Old pipeline file. Only Name Handling is supported, not full path.
+        if parts[0] == "calib":
+            unit = parts[1]
+            obj = parts[2]
+            date = parts[3]
+            hms = parts[4]
+            filt = parts[5]
+            exptime = strip_exptime(parts[6])
+
+        # new norm
         obj = parts[0]
         filt = parts[1]
         unit = parts[2]

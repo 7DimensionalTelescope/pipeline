@@ -242,7 +242,11 @@ def strip_exptime(exptime_string):
     if exptime_string == "*":
         return exptime_string
     # exptime_string.replace("pt", ".")
-    return float(exptime_string[:-1])
+
+    if exptime_string.endswith("s"):
+        exptime_string = exptime_string[:-1]
+
+    return float(exptime_string)
 
 
 def format_exptime(exptime: float, type="raw"):

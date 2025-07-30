@@ -14,16 +14,6 @@ from itertools import chain
 from .services.task import Task, Priority
 
 
-def glob_files_from_db(params):
-    return []
-
-
-def glob_files_by_param(keywords, **kwargs):
-    if isinstance(keywords, dict):
-        keywords = list(keywords.values())
-    return query_observations(keywords, **kwargs)
-
-
 class SortedGroupDict(UserDict):
     """A dictionary that sorts its values when iterating."""
 
@@ -71,7 +61,6 @@ class SortedGroupDict(UserDict):
             string += str(value) + "\n"
         return string
 
-
 class DataReduction:
     """overwrite=True to rewrite configs"""
 
@@ -86,10 +75,7 @@ class DataReduction:
         self.input_params = input_params
         print("Globbing images with parameters:", input_params)
 
-        if use_db:
-            self.list_of_images = glob_files_from_db(input_params)
-        else:
-            self.list_of_images = glob_files_by_param(input_params, **kwargs)
+        self.list_of_images = query_observations(input_params, use_db=use_db, **kwargs)
 
         print(f"Found {len(self.list_of_images)} images.")
         if len(self.list_of_images) == 0:
@@ -120,10 +106,11 @@ class DataReduction:
             try:
                 # mfg_key = PathHandler(group[0][2][0]).config_stem
                 sci_dict = group[2]
+                flattened_group_0 = flatten(group[0])
                 if sci_dict:
                     sample_file = flatten(next(iter(sci_dict.values())))[0]
                 else:
-                    sample_file = flatten(group[0])[0]
+                    sample_file = flattened_group_0[0]
                 mfg_key = PathHandler(sample_file).config_stem
 
             except:
@@ -131,18 +118,20 @@ class DataReduction:
                 print(f"Failed to extract mfg_key from {group}. Assigned a default key {mfg_key}")
 
             if mfg_key in self.groups:
-                self.groups[mfg_key].add_images(flatten(group[0]))
+                self.groups[mfg_key].add_images(flattened_group_0)
             else:
                 mfg = MasterframeGroup(mfg_key)
-                mfg.add_images(flatten(group[0]))
+                mfg.add_images(flattened_group_0)
                 self.groups[mfg_key] = mfg
+
             for key, images in group[2].items():
                 if key not in self.groups:
                     self.groups[key] = ScienceGroup(key)
                 else:
                     self.groups[key].multi_units = True
-                self.groups[key].add_images(flatten(images[0]))
-                self.groups[mfg_key].add_images(flatten(images[0]))
+                flattened_images = flatten(images[0])
+                self.groups[key].add_images(flattened_images)
+                self.groups[mfg_key].add_images(flattened_images)
                 self.groups[mfg_key].add_sci_keys(key)
 
     def create_config(self, overwrite=False):
@@ -158,10 +147,12 @@ class DataReduction:
         for _, group in self.groups.items():
             if isinstance(group, ScienceGroup):
                 continue
+
+            dependent_configs.setdefault(group.config, [])
             for scikey in group.sci_keys:
                 sci_group = self.groups[scikey]
                 if not (sci_group.multi_units):
-                    dependent_configs.setdefault(group.config, []).append(sci_group.config)
+                    dependent_configs[group.config].append(sci_group.config)
                 else:
                     multiunit_config.add(sci_group.config)
 
@@ -348,3 +339,4 @@ class ScienceGroup:
 
     def __repr__(self):
         return f"ScienceGroup({self.key} with {len(self.image_files)} images)"
+

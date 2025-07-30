@@ -6,10 +6,39 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from . import const
 from .const import RAWDATA_DIR, PROCESSED_DIR
 from .utils import atleast_1d
+from .database.query import RawImageQuery
 
 
-def query_observations(include_keywords, exclude_keywords=None, DATA_DIR=const.RAWDATA_DIR, with_calib=True):
+def query_observations(input_params, use_db=True, **kwargs):
+    if use_db:
+        try:
+            list_of_images = RawImageQuery(input_params).image_files(divide_by_img_type=False)
+        except Exception as e:
+            print(f"Error querying database: {e}")
+            print("Falling back to globbing files from filesystem.")
+            list_of_images = query_observations_manually(input_params, **kwargs)
+    else:
+        list_of_images = query_observations_manually(input_params, **kwargs)
+    return list_of_images
 
+
+def query_observations_manually(include_keywords, exclude_keywords=None, DATA_DIR=const.RAWDATA_DIR, with_calib=True):
+    """
+    Recursively searches for .fits files in RAWDATA_DIR or PROCESSED_DATA.
+
+    Files are returned if they:
+    - contain at least one of the include_keywords (if provided), and
+    - do not contain any of the exclude_keywords (if provided).
+
+    Parameters:
+    include_keywords (list of str): Keywords that must appear in the file path or name.
+    exclude_keywords (list of str): Keywords that must not appear in the file path or name.
+                                    Default is ["bias", "dark", "flat"].
+    **kwargs: Additional keyword arguments.
+
+    Returns:
+    list: List of paths to matching FITS files.
+    """
     default_exclude_keywords = ["test", "shift", "tmp"]
 
     include_keywords = atleast_1d(include_keywords)
@@ -81,53 +110,3 @@ def query_observations(include_keywords, exclude_keywords=None, DATA_DIR=const.R
             output.extend(future.result())
 
     return output
-
-
-# def query_observations(include_keywords, datatype="processed", exclude_keywords=None, **kwargs):
-#     """
-#     Recursively searches for .fits files in RAWDATA_DIR or PROCESSED_DATA.
-
-#     Files are returned if they:
-#     - contain at least one of the include_keywords (if provided), and
-#     - do not contain any of the exclude_keywords (if provided).
-
-#     Parameters:
-#     include_keywords (list of str): Keywords that must appear in the file path or name.
-#     exclude_keywords (list of str): Keywords that must not appear in the file path or name.
-#                                     Default is ["bias", "dark", "flat"].
-#     **kwargs: Additional keyword arguments.
-
-#     Returns:
-#     list: List of paths to matching FITS files.
-#     """
-#     if exclude_keywords is None:
-#         exclude_keywords = ["bias", "dark", "flat"]
-
-#     matching_files = []
-
-#     if kwargs.get("DATA_DIR"):
-#         DATA_DIR = kwargs.get("DATA_DIR")
-#     elif datatype == "processed":
-#         DATA_DIR = PROCESSED_DIR
-#     elif datatype == "raw":
-#         DATA_DIR = RAWDATA_DIR
-#     else:
-#         raise ValueError("Invalid datatype. Must be 'processed' or 'raw'.")
-
-#     include_keywords = np.atleast_1d(include_keywords)
-#     exclude_keywords = np.atleast_1d(exclude_keywords)
-
-#     for dirpath, _, filenames in os.walk(DATA_DIR):
-#         for filename in fnmatch.filter(filenames, "*.fits"):
-#             full_path = os.path.join(dirpath, filename)
-#             full_path_lower = full_path.lower()
-
-#             if any(keyword.lower() in full_path_lower for keyword in exclude_keywords):
-#                 continue
-
-#             if any(keyword.lower() not in full_path_lower for keyword in include_keywords):
-#                 continue
-
-#             matching_files.append(full_path)
-
-#     return matching_files

@@ -1,4 +1,5 @@
 import os
+from glob import glob
 from pathlib import Path
 from typing import Union
 import numpy as np
@@ -579,7 +580,14 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
             n_binning = self._get_name_property_at_index("n_binning", i)
             gain = self._get_name_property_at_index("gain", i)
             root = find_raw_path(unit, nightdate, n_binning, gain)
-            paths.append(os.path.join(root, basename))
+            raw_image_template = os.path.join(root, basename)
+            globbed = glob(raw_image_template)
+            if len(globbed) == 0:
+                raise FileNotFoundError(f"No raw image found for {raw_image_template}")
+            elif len(globbed) > 1:
+                raise FileExistsError(f"Multiple raw images found for {raw_image_template}")
+            raw_image = globbed[0]
+            paths.append(raw_image)
 
         return paths
 
@@ -819,6 +827,12 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
             print(f"[WARNING] Degenerate output filenames: {mframe};\nUsing the last: {mframe_selected}")
             return mframe_selected
         return mframe
+
+    @classmethod
+    def get_group_info(cls, raw_group):
+        filter = PathHandler(raw_group[1][2]).filter
+        exptime = PathHandler(raw_group[1][1]).exptime
+        return f"{filter}: {exptime}"
 
     @classmethod
     def weight_map_input(cls, mzdf_list: list[str]):

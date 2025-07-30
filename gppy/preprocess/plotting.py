@@ -2,6 +2,7 @@ import os
 import numpy as np
 from pathlib import Path
 from astropy.io import fits
+from astropy.visualization import ZScaleInterval
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas  # thread-safe, but savefig only.
 import matplotlib.colors as mcolors
@@ -33,9 +34,6 @@ def save_fits_as_png(image_data, output_path, stretch=True, log_scale=False, max
         # # Percentile-based stretching
         # p1, p99 = np.percentile(image_data[np.isfinite(image_data)], (1, 99))
         # vmin, vmax = p1, p99
-
-        from astropy.visualization import ZScaleInterval
-
         interval = ZScaleInterval()
         vmin, vmax = interval.get_limits(image_data[np.isfinite(image_data)])
 
