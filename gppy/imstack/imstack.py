@@ -399,7 +399,7 @@ class ImStack(BaseSetup):
                 f"Weight-map calculation is completed in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(images):.1f} s/image)"
             )
 
-    def _get_bpmask(self, image):
+    def _get_bpmask(self, image) -> tuple[str, int]:
         mask_file = PathHandler.get_bpmask(image)
         mask_header = fits.getheader(mask_file, ext=1)
         if "BADPIX" in mask_header.keys():
@@ -453,8 +453,7 @@ class ImStack(BaseSetup):
             # if len(groups) > 1:
             #     self.logger.warning(f"{len(groups)} groups detected: multi-group bpmask not implemented.")
 
-            for group_id, ((z, d, f), (input_images, output_images)) in enumerate(groups.items()):
-
+            for group_id, ((z, d, f), [input_images, output_images]) in enumerate(groups.items()):
                 mask_file, badpix = self._get_bpmask(input_images[0])
 
                 with acquire_available_gpu(device_id=device_id) as device_id:
