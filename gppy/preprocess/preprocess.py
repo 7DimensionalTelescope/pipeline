@@ -430,6 +430,7 @@ class Preprocess(BaseSetup):
         self.logger.info(f"[Group {group_index+1}] Generating plots for master calibration frames")
         use_multi_thread = self.config.preprocess.use_multi_thread
 
+        # bias
         if "bias" in self.calib_types and not skip_flag["bias"]:
             bias_file = self._get_raw_group("bias_output", group_index)
             if os.path.exists(bias_file):
@@ -439,6 +440,17 @@ class Preprocess(BaseSetup):
         else:
             self.logger.info(f"[Group {group_index+1}] Skipping bias plot")
 
+        # dark
+        if "dark" in self.calib_types and not skip_flag["dark"]:
+            dark_file = self._get_raw_group("dark_output", group_index)
+            if os.path.exists(dark_file):
+                plot_dark(dark_file, fmask)
+            else:
+                self.logger.warning(f"Dark file {dark_file} does not exist. Skipping dark plot.")
+        else:
+            self.logger.info(f"[Group {group_index+1}] Skipping dark plot")
+
+        # bpmask
         if "dark" in self.calib_types and not skip_flag["dark"]:
             bpmask_file = self._get_raw_group("bpmask_output", group_index)
             if os.path.exists(bpmask_file):
@@ -459,15 +471,7 @@ class Preprocess(BaseSetup):
         else:
             self.logger.info(f"[Group {group_index+1}] Skipping bpmask plot")
 
-        if "dark" in self.calib_types and not skip_flag["dark"]:
-            dark_file = self._get_raw_group("dark_output", group_index)
-            if os.path.exists(dark_file):
-                plot_dark(dark_file, fmask)
-            else:
-                self.logger.warning(f"Dark file {dark_file} does not exist. Skipping dark plot.")
-        else:
-            self.logger.info(f"[Group {group_index+1}] Skipping dark plot")
-
+        # flat
         if "flat" in self.calib_types and not skip_flag["flat"]:
             flat_file = self._get_raw_group("flat_output", group_index)
             if os.path.exists(flat_file):
@@ -479,7 +483,7 @@ class Preprocess(BaseSetup):
 
         self.logger.info(f"[Group {group_index+1}] Completed generating plots for master calibration frames")
 
-        # generate sci plots
+        # science
         num_sci = len(self._get_raw_group("sci_input", group_index))
         if num_sci and not skip_flag["sci"]:
             self.logger.info(f"[Group {group_index+1}] Generating plots for science frames ({num_sci} images)")

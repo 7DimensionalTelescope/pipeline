@@ -13,15 +13,16 @@ import warnings
 
 from ..const import REF_DIR, PipelineError
 from ..config import SciProcConfiguration
-from .. import external
-from ..services.setup import BaseSetup
-from ..utils import collapse, get_header, add_suffix, time_diff_in_seconds, get_basename, atleast_1d, flatten
 from ..path.path import PathHandler
+from ..services.setup import BaseSetup
+from ..services.utils import acquire_available_gpu
+from ..utils import collapse, get_header, add_suffix, time_diff_in_seconds, get_basename, atleast_1d, swap_ext
+from ..preprocess.plotting import save_fits_as_png
+from .. import external
 
 from .utils import move_file  # inputlist_parser, move_file
 from .const import ZP_KEY, IC_KEYS, CORE_KEYS
 
-from ..services.utils import acquire_available_gpu
 
 warnings.filterwarnings("ignore")
 
@@ -113,6 +114,11 @@ class ImStack(BaseSetup):
 
             # swarp imcombine
             self.stack_with_swarp()
+
+            self.plot_stacked_image()
+
+            self.config.flag.combine = True
+            self.logger.info(f"'ImStack' is Completed in {time_diff_in_seconds(self._st)} seconds")
         except Exception as e:
             self.logger.error(f"Error during imstack processing: {str(e)}")
             raise
@@ -306,21 +312,30 @@ class ImStack(BaseSetup):
                 fits.writeto(outim, _data, header=_hdr, overwrite=True)
 
     @staticmethod
-    def _group_IMCMB(images):
+    def _group_IMCMB(
+        input_images: list[str], output_images: list[str]
+    ) -> dict[tuple[str, str, str], tuple(list[str], list[str])]:
+        """
+        Group images by their master frames (IMCMB).
+        Same logic as the preprocessing grouping, but relies on header info
+        instead of parsing filename as in NameHandler.get_grouped_files()
+        """
         calibs = []
-        for image in images:
+        for image in input_images:
             header = get_header(image)
             zdf = [v for k, v in header.items() if "IMCMB" in k]  # [z, d, f]
+            if len(zdf) != 3:
+                raise ValueError(f"zdf not correctly found from header IMCMB of {image}")
             calibs.append(zdf)
 
         groups = dict()
-        for image, zdf in zip(images, calibs):
+        for input_image, output_image, zdf in zip(input_images, output_images, calibs):
             key = tuple(zdf)
             if key not in groups:
                 groups[key] = []
-            groups.setdefault(key, []).append(image)
+            groups.setdefault(key, [[], []])[0].append(input_image)
+            groups[key][1].append(output_image)
 
-        # groups = NameHandler.get_grouped_files(bkgsub_images)
         return groups
 
     def calculate_weight_map(self, device_id=None, use_gpu: bool = True, overwrite: bool = False):
@@ -384,7 +399,17 @@ class ImStack(BaseSetup):
                 f"Weight-map calculation is completed in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(images):.1f} s/image)"
             )
 
-    def apply_bpmask(self, badpix=0, device_id=None, use_gpu: bool = True):
+    def _get_bpmask(self, image):
+        mask_file = PathHandler.get_bpmask(image)
+        mask_header = fits.getheader(mask_file, ext=1)
+        if "BADPIX" in mask_header.keys():
+            badpix = mask_header["BADPIX"]
+            self.logger.debug(f"BADPIX found in header. Using badpix {badpix}.")
+        else:
+            self.logger.warning("BADPIX not found in header. Using default value 0.")
+        return mask_file, badpix
+
+    def apply_bpmask(self, device_id=None, use_gpu: bool = True):
         st = time.time()
 
         self._use_gpu = all([use_gpu, self.config.imstack.gpu, self._use_gpu])
@@ -401,23 +426,9 @@ class ImStack(BaseSetup):
 
         # bpmask_array, header = fits.getdata(self.config.preprocess.bpmask_file, header=True)
         # ad-hoc. Todo: group input_files for different bpmask files
-        mask_file = PathHandler.get_bpmask(self.config.imstack.bkgsub_images[0])
-        mask_header = fits.getheader(mask_file, ext=1)
-
-        if "BADPIX" in mask_header.keys():
-            badpix = mask_header["BADPIX"]
-            self.logger.debug(f"BADPIX found in header. Using badpix {badpix}.")
-        else:
-            self.logger.warning("BADPIX not found in header. Using default value 0.")
-
-        # pre-bind to avoid UnboundLocalError
-        # interp = image = weight = interp_weight = None
 
         method = self.config.imstack.interp_type
-        weight = self.config.imstack.weight_map
-
-        groups = self._group_IMCMB(self.input_images)
-        self.logger.warning(f"{len(groups)} groups detected: multi-group bpmask not implemented. Using one bpmask")
+        weight = self.config.imstack.weight_map  # boolean flag for generating weight map
 
         # find images that need interpolation
         uncalculated_images = []
@@ -436,28 +447,39 @@ class ImStack(BaseSetup):
         # interpolate
         if not uncalculated_images:
             self.logger.info("No images to interpolate. Skipping")
+
         else:
-            with acquire_available_gpu(device_id=device_id) as device_id:
-                if device_id is None:
-                    from .interpolate import interpolate_masked_pixels_cpu
+            groups = self._group_IMCMB(uncalculated_images, calculated_outputs)
+            # if len(groups) > 1:
+            #     self.logger.warning(f"{len(groups)} groups detected: multi-group bpmask not implemented.")
 
-                    interpolate_masked_pixels = interpolate_masked_pixels_cpu
-                    self.logger.info(f"Interpolate masked pixels with CPU")
-                else:
-                    from .interpolate import interpolate_masked_pixels_subprocess
+            for group_id, ((z, d, f), (input_images, output_images)) in enumerate(groups.items()):
 
-                    interpolate_masked_pixels = interpolate_masked_pixels_subprocess
-                    self.logger.info(f"Interpolate masked pixels with GPU device {device_id}")
+                mask_file, badpix = self._get_bpmask(input_images[0])
 
-                interpolate_masked_pixels(
-                    uncalculated_images,
-                    mask_file,
-                    calculated_outputs,
-                    method=method,
-                    badpix=badpix,
-                    weight=weight,
-                    device=device_id,
-                )
+                with acquire_available_gpu(device_id=device_id) as device_id:
+                    if device_id is None:
+                        from .interpolate import interpolate_masked_pixels_cpu
+
+                        interpolate_masked_pixels = interpolate_masked_pixels_cpu
+                        self.logger.info(f"Interpolate masked pixels with CPU")
+                    else:
+                        from .interpolate import interpolate_masked_pixels_subprocess
+
+                        interpolate_masked_pixels = interpolate_masked_pixels_subprocess
+                        self.logger.info(f"Interpolate masked pixels with GPU device {device_id}")
+
+                    interpolate_masked_pixels(
+                        input_images,
+                        mask_file,
+                        output_images,
+                        method=method,
+                        badpix=badpix,
+                        weight=weight,
+                        device=device_id,
+                    )
+                self.logger.debug(f"[group {group_id}] Interpolation for bad pixels is completed")
+
             self.logger.info(
                 f"Interpolation for bad pixels is completed in {time_diff_in_seconds(st)} seconds "
                 f"({time_diff_in_seconds(st, return_float=True)/len(self.images_to_stack):.1f} s/image)"
@@ -685,9 +707,6 @@ class ImStack(BaseSetup):
 
         self.logger.info(f"Running swarp is completed in {time_diff_in_seconds(st)} seconds")
 
-        self.config.flag.combine = True
-        self.logger.info(f"'ImStack' is Completed in {time_diff_in_seconds(self._st)} seconds")
-
     def _run_swarp(self, type="", args=None):
         """Pass type='' for no weight"""
         working_dir = os.path.join(self.path_tmp, type)
@@ -729,6 +748,12 @@ class ImStack(BaseSetup):
 
     def stack_with_cupy(self):
         pass
+
+    def plot_stacked_image(self):
+        stacked_img = self.config.imstack.stacked_image
+        basename = os.path.basename(stacked_img)
+        save_fits_as_png(fits.getdata(stacked_img), self.path.figure_dir_to_path / swap_ext(basename, "png"))
+        return
 
     def _update_header(self):
         # 	Get Header info
