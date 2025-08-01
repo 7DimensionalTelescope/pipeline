@@ -63,7 +63,8 @@ def get_camera_serial(unit: int, query_date: str):
         if not idxs:
             # raise ValueError(f"No camera serial known on or before {query_date}")
             print(f"No camera serial known on or before {query_date} for unit{unit}")
-            return f"3{str(str(unit)*4)[:4]}"
+            # return f"3{str(str(unit)*4)[:4]}"
+            return f"3{unit:04}"
         last_idx = max(idxs)
         return serials[last_idx]
 
