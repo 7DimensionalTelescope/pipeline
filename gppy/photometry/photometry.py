@@ -22,7 +22,7 @@ from astropy.stats import sigma_clip
 # gppy modules
 from . import utils as phot_utils
 from ..config.utils import get_key
-from ..utils import time_diff_in_seconds
+from ..utils import time_diff_in_seconds, get_header_key
 from ..config import SciProcConfiguration
 from ..config.base import ConfigurationInstance
 from ..services.memory import MemoryMonitor
@@ -103,13 +103,13 @@ class Photometry(BaseSetup):
         for image in images:
             path = Path(image)
             if not path.is_file():
-                print("The file does not exist.")
+                print(f"The file does not exist: {image}")
                 return None
-            image_list.append(path.parts[-1])
-        working_dir = working_dir or str(path.parent.absolute())
-        config = SciProcConfiguration.base_config(working_dir)
+            image_list.append(image)
+
+        config = SciProcConfiguration.base_config()
         config.config.input.calibrated_images = image_list
-        config.path = PathHandler(image_list)
+        config.path = PathHandler(image_list, working_dir=working_dir or os.getcwd())
         return cls(config=config)
 
     @property
@@ -1050,6 +1050,6 @@ class ImageInfo:
             ycent=ycent,
             n_binning=hdr["XBINNING"],
             pixscale=hdr["XBINNING"] * PIXSCALE,
-            satur_level=hdr["SATURATE"],
+            satur_level=get_header_key(image_path, "SATURATE", default=60000),
             bpx_interp=interped,
         )

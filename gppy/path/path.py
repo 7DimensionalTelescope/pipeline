@@ -199,10 +199,11 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
             raise ValueError("Invalid PathHandler input type.")
 
         self._input_files = [os.path.abspath(img) for img in input]
-        try:
-            self.name = NameHandler(input)
-        except Exception as e:
-            raise ValueError(f"NameHandler failure: not pipeline file.\n{input!r}:\n{e}")
+        if input:
+            try:
+                self.name = NameHandler(input)
+            except Exception as e:
+                raise ValueError(f"NameHandler failure: not pipeline file.\n{input!r}:\n{e}")
         self._single = self.name._single
 
     def __getattr__(self, name):
@@ -737,7 +738,6 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                 entry["flat"] = list(flat)
 
         #
-
         result = []
 
         # for _key, entry in sorted(calib_map.items(), key=lambda kv: len(kv[1]["sci"])):  # sort by number of sci groups
@@ -752,6 +752,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                 key = get_dict_key(sci_group)
                 sci_dict[key] = (sci_group, atleast_1d(cls(sci_group).conjugate))
 
+            
             raw_bias = entry["bias"]
             raw_dark = entry["dark"]
             raw_flat = entry["flat"]
@@ -765,7 +766,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
 
             sample_file = next(iter(sci_dict.values()))[0][0]
             mbias, mdark, mflat = cls(sample_file).preprocess.masterframe  # trust the grouping
-
+            
             result.append(
                 [
                     [sorted(raw_bias), sorted(raw_dark), sorted(raw_flat)],
@@ -773,7 +774,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                     sci_dict,  # a dict of tuples of lists: ([science images in this on‐date group], [processed images])
                 ]
             )
-
+        
         # raw calibration frames with no corresponding on-date science frames
         if lone_calib and off_date_calib and any(l for l in off_date_calib):
             off_date_bias_groups, off_date_dark_groups, off_date_flat_groups = off_date_calib
@@ -808,6 +809,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                 mbias = cls.ensure_unique(cls(off_date_flat_group).preprocess.mbias, off=not ignore_mult_date)
                 result.append([[[], [], sorted(off_date_flat_group)], [mbias, mdark, mflat], dict()])
 
+           
         return result
 
     @staticmethod

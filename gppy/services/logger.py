@@ -154,50 +154,47 @@ class Logger:
         # Create logger instance
         logger = logging.getLogger(self.name)
         logger.setLevel(logging.DEBUG)  # Set to DEBUG to catch all messages
+        
+        # Prevent propagation to avoid duplicate logging
+        logger.propagate = False
 
-        # Helper function to check if a handler of specific type already exists
-        def has_handler_type(logger, handler_type, remove_handler=False):
-            for handler in logger.handlers:
-                if hasattr(handler, "name") and handler.name == handler_type:
-                    if remove_handler:
-                        logger.removeHandler(handler)
-                        return False
-                    else:
-                        return True
-            return False
+        # Clear existing handlers to prevent duplicates
+        logger.handlers.clear()
 
-        # Add console handler if not already present
-        if not has_handler_type(logger, "console"):
-            console_handler = self._create_handler("console", level=logging.INFO)
-            console_handler.name = "console"
-            logger.addHandler(console_handler)
+        # Add console handler for INFO and WARNING only
+        console_handler = self._create_handler("console", level=logging.INFO)
+        console_handler.name = "console"
+        # Create a filter to exclude ERROR and CRITICAL from console handler
+        class ConsoleFilter(logging.Filter):
+            def filter(self, record):
+                return record.levelno < logging.ERROR
+        console_handler.addFilter(ConsoleFilter())
+        logger.addHandler(console_handler)
 
-        if not has_handler_type(logger, "console_err"):
-            console_err_handler = self._create_handler("console_err", level=logging.ERROR)
-            console_err_handler.name = "console_err"
-            logger.addHandler(console_err_handler)
+        # Add console error handler for ERROR and CRITICAL only
+        console_err_handler = self._create_handler("console_err", level=logging.ERROR)
+        console_err_handler.name = "console_err"
+        logger.addHandler(console_err_handler)
 
         # Add file handlers if log_file is specified
         if self._log_file:
             # Main log file with specified level
             os.makedirs(os.path.dirname(self._log_file), exist_ok=True)
 
-            if not has_handler_type(logger, "file", remove_handler=True):
-                file_handler = self._create_handler(
-                    "file",
-                    log_file=self._log_file,
-                    level=log_level,
-                    mode="w" if overwrite else "a",
-                )
-                file_handler.name = "file"
-                logger.addHandler(file_handler)
+            file_handler = self._create_handler(
+                "file",
+                log_file=self._log_file,
+                level=log_level,
+                mode="w" if overwrite else "a",
+            )
+            file_handler.name = "file"
+            logger.addHandler(file_handler)
 
             # Debug log file always at DEBUG level
             debug_log_file = self._log_file.replace(".log", "_debug.log")
-            if not has_handler_type(logger, "file_debug", remove_handler=True):
-                debug_handler = self._create_handler("file_debug", log_file=debug_log_file, level=logging.DEBUG)
-                debug_handler.name = "file_debug"
-                logger.addHandler(debug_handler)
+            debug_handler = self._create_handler("file_debug", log_file=debug_log_file, level=logging.DEBUG)
+            debug_handler.name = "file_debug"
+            logger.addHandler(debug_handler)
 
         return logger
 
@@ -215,7 +212,8 @@ class Logger:
         if isinstance(level, str):
             level = getattr(logging, level.upper())
         self.logger.log(level, msg, **kwargs)
-        sys.__stdout__.write(msg + "\n")
+        # Remove duplicate stdout write to prevent double logging
+        # sys.__stdout__.write(msg + "\n")  # This was causing double logging
 
     def debug(self, msg: str, **kwargs) -> None:
         """
@@ -257,8 +255,10 @@ class Logger:
             msg (str): Error message to log
             **kwargs: Additional keyword arguments for logging
         """
-        # self.logger.error(msg, **kwargs)
-        self.logger.error(msg, exc_info=True, **kwargs)
+        # Only use exc_info if explicitly requested or if there's an exception
+        if 'exc_info' not in kwargs:
+            kwargs['exc_info'] = False
+        self.logger.error(msg, **kwargs)
         #self.send_slack(msg, "ERROR")
 
     def critical(self, msg: str, **kwargs) -> None:
@@ -269,8 +269,10 @@ class Logger:
             msg (str): Critical message to log
             **kwargs: Additional keyword arguments for logging
         """
-        # self.logger.critical(msg, **kwargs)
-        self.logger.critical(msg, exc_info=True, **kwargs)
+        # Only use exc_info if explicitly requested or if there's an exception
+        if 'exc_info' not in kwargs:
+            kwargs['exc_info'] = False
+        self.logger.critical(msg, **kwargs)
         #self.send_slack(msg, "CRITICAL")
 
     def send_slack(self, msg: str, level: str) -> None:
@@ -383,10 +385,19 @@ class Logger:
         log_level = getattr(logging, self._level)
         self.logger.setLevel(log_level)
 
-        # Update non-debug handlers
+        # Update handlers with appropriate levels
         for handler in self.logger.handlers:
             if isinstance(handler, logging.FileHandler):
                 if not handler.baseFilename.endswith("_debug.log"):
+                    handler.setLevel(log_level)
+                # Debug handler always stays at DEBUG level
+            elif hasattr(handler, 'name'):
+                # Console handlers - keep console at INFO, console_err at ERROR
+                if handler.name == "console":
+                    handler.setLevel(logging.INFO)
+                elif handler.name == "console_err":
+                    handler.setLevel(logging.ERROR)
+                else:
                     handler.setLevel(log_level)
             else:
                 handler.setLevel(log_level)
@@ -469,10 +480,9 @@ class StdoutToLogger:
             buf (str): Buffer containing stdout output
         """
         for line in buf.rstrip().splitlines():
-            # self.logger.info(line)
-
-            # Directly write to original stderr to prevent recursion
-            sys.__stderr__.write(line + "\n")
+            # Only log non-empty lines to prevent duplicate logging
+            if line.strip():
+                self.logger.info(line)
 
     def flush(self):
         """
@@ -510,7 +520,9 @@ class StderrToLogger:
             buf (str): Buffer containing stderr output
         """
         for line in buf.rstrip().splitlines():
-            self.logger.error(line)
+            # Only log non-empty lines to prevent duplicate logging
+            if line.strip():
+                self.logger.error(line)
 
     def flush(self):
         """

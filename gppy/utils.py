@@ -362,6 +362,14 @@ def get_header(filename: str | Path, force_return=False) -> dict | fits.Header:
         raise FileNotFoundError(f"File not found: {filename}")
 
 
+def get_header_key(header_file, key, default=None):
+    header = get_header(header_file)
+    if hasattr(header, key):
+        return header[key]
+    else:
+        return default
+
+
 def header_to_dict(file_path):
     """
     Parse a FITS header text file and convert it into a dictionary.

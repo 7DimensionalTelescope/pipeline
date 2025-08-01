@@ -452,6 +452,12 @@ class NameHandler:
 
     @staticmethod
     def _parse_processed(parts):
+        # we don’t have binning in processed names, so you can either
+        # leave it None or derive from header later:
+        nb = None
+        gain = None
+        camera = None
+
         # Old pipeline file. Only Name Handling is supported, not full path.
         if parts[0] == "calib":
             unit = parts[1]
@@ -462,17 +468,14 @@ class NameHandler:
             exptime = strip_exptime(parts[6])
 
         # new norm
-        obj = parts[0]
-        filt = parts[1]
-        unit = parts[2]
-        date = parts[3]
-        hms = parts[4]
-        exptime = strip_exptime(parts[5])
-        # we don’t have binning in processed names, so you can either
-        # leave it None or derive from header later:
-        nb = None
-        gain = None
-        camera = None
+        else:
+            obj = parts[0]
+            filt = parts[1]
+            unit = parts[2]
+            date = parts[3]
+            hms = parts[4]
+            exptime = strip_exptime(parts[5])
+
         return unit, date, hms, obj, filt, nb, exptime, gain, camera
 
     # @property

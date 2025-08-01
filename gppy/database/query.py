@@ -187,7 +187,7 @@ class RawImageQuery:
     Example 1:
     subset = (RawImageQuery()
     .on_date(date.today())
-    .for_units(["7DT01"])
+    .by_units(["7DT01"])
     .of_types(["sci"])
     .fetch())
 
@@ -217,7 +217,7 @@ class RawImageQuery:
         self._params["filter_names"] = filt
         return self
 
-    def for_units(self, units: List[str]):
+    def by_units(self, units: List[str]):
         self._params["units"] = units
         return self
 

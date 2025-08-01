@@ -117,23 +117,21 @@ class Preprocess(BaseSetup):
 
         threads_for_making_plots = []
         for i in range(self._n_groups):
-            self.logger.info(f"[group {i+1}] {PathHandler.get_group_info(self.raw_groups[i])}")
+            self.logger.info(f"[Group {i+1}] {PathHandler.get_group_info(self.raw_groups[i])}")
             self.logger.debug("\n" + "#" * 100 + f"\n{' '*30}Start processing group {i+1} / {self._n_groups}\n" + "#" * 100)  # fmt: skip
             if only_with_sci and len(self.sci_input) == 0:
                 self.logger.info(f"No science images for this masterframe. Skipping...")
                 continue
-
             self.load_masterframe(device_id=device_id)
-
             if not self.master_frame_only:
                 self.prepare_header()
                 self.data_reduction(device_id=device_id)
-
+            
             if make_plots:
                 t = threading.Thread(target=self.make_plots, kwargs={"group_index": i, "skip_flag": self.skip_flag})
                 t.start()
                 threads_for_making_plots.append(t)
-
+            
             if i < self._n_groups - 1:
                 self.proceed_to_next_group()
 
@@ -245,10 +243,10 @@ class Preprocess(BaseSetup):
             input_file = getattr(self, f"{dtype}_input")
             output_file = getattr(self, f"{dtype}_output")
 
-            self.logger.debug(f"[group {self._current_group+1}] {dtype}_input: {input_file}")
-            self.logger.debug(f"[group {self._current_group+1}] {dtype}_output: {output_file}")
+            self.logger.debug(f"[Group {self._current_group+1}] {dtype}_input: {input_file}")
+            self.logger.debug(f"[Group {self._current_group+1}] {dtype}_output: {output_file}")
             if dtype == "dark":
-                self.logger.debug(f"[group {self._current_group+1}] flatdark_output: {self.flatdark_output}")
+                self.logger.debug(f"[Group {self._current_group+1}] flatdark_output: {self.flatdark_output}")
 
             if input_file and (not os.path.exists(output_file) or self.overwrite):
                 self._generate_masterframe(dtype, device_id)
@@ -257,10 +255,10 @@ class Preprocess(BaseSetup):
                 self.skip_flag[dtype] = True
             else:
                 self.logger.warning(f"{dtype} has no input or output data (to fetch)")
-                self.logger.debug(f"[group {self._current_group+1}] {dtype}_input: {input_file}")
-                self.logger.debug(f"[group {self._current_group+1}] {dtype}_output: {output_file}")
+                self.logger.debug(f"[Group {self._current_group+1}] {dtype}_input: {input_file}")
+                self.logger.debug(f"[Group {self._current_group+1}] {dtype}_output: {output_file}")
 
-        self.logger.info(f"[group {self._current_group+1}] Generation/Loading of masterframes completed in {time_diff_in_seconds(st)} seconds")  # fmt: skip
+        self.logger.info(f"[Group {self._current_group+1}] Generation/Loading of masterframes completed in {time_diff_in_seconds(st)} seconds")  # fmt: skip
 
     def _generate_masterframe(self, dtype, device_id):
         """Generate & Save masterframe and sigma image"""
@@ -278,13 +276,13 @@ class Preprocess(BaseSetup):
                 from .calc import combine_images_with_cpu
 
                 calc_function = combine_images_with_cpu
-                self.logger.info(f"[group {self._current_group+1}] Generating masterframe {dtype} in CPU")
+                self.logger.info(f"[Group {self._current_group+1}] Generating masterframe {dtype} in CPU")
             # gpu
             else:
                 from .calc import combine_images_with_subprocess_gpu
 
                 calc_function = combine_images_with_subprocess_gpu
-                self.logger.info(f"[group {self._current_group+1}] Generating masterframe {dtype} in GPU device {device_id}")  # fmt: skip
+                self.logger.info(f"[Group {self._current_group+1}] Generating masterframe {dtype} in GPU device {device_id}")  # fmt: skip
 
             if dtype == "bias":
                 calc_function(input_files, device_id=device_id, output=self.bias_output, sig_output=self.biassig_output)
@@ -324,27 +322,24 @@ class Preprocess(BaseSetup):
         header = prep_utils.add_image_id(header)
         header = record_statistics(getattr(self, f"{dtype}_output"), header)
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
-        self.logger.info(f"[group {self._current_group+1}] Master {dtype} generated in {time_diff_in_seconds(st)} seconds")  # fmt: skip
-        self.logger.debug(f"[group {self._current_group+1}] FITS Written: {getattr(self, f'{dtype}_output')}")
+        self.logger.info(f"[Group {self._current_group+1}] Master {dtype} generated in {time_diff_in_seconds(st)} seconds")  # fmt: skip
+        self.logger.debug(f"[Group {self._current_group+1}] FITS Written: {getattr(self, f'{dtype}_output')}")
 
         if dtype == "dark":
             self.update_bpmask()
 
     def _fetch_masterframe(self, template, dtype):
-        self.logger.info(f"[group {self._current_group+1}] Fetching master {dtype}")
+        self.logger.info(f"[Group {self._current_group+1}] Fetching master {dtype}")
         # existing_data can be either on-date or off-date
         max_offset = self.config.preprocess.max_offset
-        self.logger.debug(f"[group {self._current_group+1}] Masterframe Search Template: {template}")
+        self.logger.debug(f"[Group {self._current_group+1}] Masterframe Search Template: {template}")
         existing_mframe_file = prep_utils.search_with_date_offsets(template, max_offset=max_offset, future=True)
 
         if not existing_mframe_file:
-            raise FileNotFoundError(f"[group {self._current_group+1}] No pre-existing master {dtype} found in place of {template} wihin {max_offset} days")  # fmt: skip
-
-        setattr(self, f"{dtype}_output", existing_mframe_file)  # mdark for sci if dtype=='dark'
+            raise FileNotFoundError(f"[Group {self._current_group+1}] No pre-existing master {dtype} found in place of {template} wihin {max_offset} days")  # fmt: skip
 
         # update the output names in raw_groups
-        mframes_output = self.raw_groups[self._current_group][1]
-        mframes_output[self._key_to_index[dtype]] = existing_mframe_file
+        self.raw_groups[self._current_group][1][self._key_to_index[dtype]] = existing_mframe_file
 
         # for flatdark
         if dtype == "dark":
@@ -383,12 +378,12 @@ class Preprocess(BaseSetup):
                 from .calc import process_image_with_cpu
 
                 process_kernel = process_image_with_cpu
-                self.logger.info(f"[group {self._current_group+1}] Processing {len(self.sci_input)} images on CPU")
+                self.logger.info(f"[Group {self._current_group+1}] Processing {len(self.sci_input)} images on CPU")
             else:
                 from .calc import process_image_with_subprocess_gpu
 
                 process_kernel = process_image_with_subprocess_gpu
-                self.logger.info(f"[group {self._current_group+1}] Processing {len(self.sci_input)} images on GPU device(s): {device_id} ")  # fmt: skip
+                self.logger.info(f"[Group {self._current_group+1}] Processing {len(self.sci_input)} images on GPU device(s): {device_id} ")  # fmt: skip
 
             process_kernel(
                 self.sci_input,
@@ -400,7 +395,7 @@ class Preprocess(BaseSetup):
                 use_gpu=self._use_gpu,
             )
             self.logger.info(
-                f"[group {self._current_group+1}] Completed data reduction for {len(self.sci_input)} "
+                f"[Group {self._current_group+1}] Completed data reduction for {len(self.sci_input)} "
                 f"images in {time_diff_in_seconds(st)} seconds "
                 f"({time_diff_in_seconds(st, return_float=True)/len(self.sci_input):.1f} s/image)"
             )
@@ -428,11 +423,11 @@ class Preprocess(BaseSetup):
 
         all_flag = all(skip_flag.values())
         if all_flag:
-            self.logger.info(f"[group {group_index+1}] Skipping plot generation")
+            self.logger.info(f"[Group {group_index+1}] Skipping plot generation")
             return
 
         # generate calib plots
-        self.logger.info(f"[group {group_index+1}] Generating plots for master calibration frames")
+        self.logger.info(f"[Group {group_index+1}] Generating plots for master calibration frames")
         use_multi_thread = self.config.preprocess.use_multi_thread
 
         if "bias" in self.calib_types and not skip_flag["bias"]:
@@ -442,7 +437,7 @@ class Preprocess(BaseSetup):
             else:
                 self.logger.warning(f"Bias file {bias_file} does not exist. Skipping bias plot.")
         else:
-            self.logger.info(f"[group {group_index+1}] Skipping bias plot")
+            self.logger.info(f"[Group {group_index+1}] Skipping bias plot")
 
         if "dark" in self.calib_types and not skip_flag["dark"]:
             bpmask_file = self._get_raw_group("bpmask_output", group_index)
@@ -462,7 +457,7 @@ class Preprocess(BaseSetup):
                 self.logger.warning(f"BPMask file {bpmask_file} does not exist. Skipping bpmask plot.")
                 fmask = None
         else:
-            self.logger.info(f"[group {group_index+1}] Skipping bpmask plot")
+            self.logger.info(f"[Group {group_index+1}] Skipping bpmask plot")
 
         if "dark" in self.calib_types and not skip_flag["dark"]:
             dark_file = self._get_raw_group("dark_output", group_index)
@@ -471,7 +466,7 @@ class Preprocess(BaseSetup):
             else:
                 self.logger.warning(f"Dark file {dark_file} does not exist. Skipping dark plot.")
         else:
-            self.logger.info(f"[group {group_index+1}] Skipping dark plot")
+            self.logger.info(f"[Group {group_index+1}] Skipping dark plot")
 
         if "flat" in self.calib_types and not skip_flag["flat"]:
             flat_file = self._get_raw_group("flat_output", group_index)
@@ -480,14 +475,14 @@ class Preprocess(BaseSetup):
             else:
                 self.logger.warning(f"Flat file {flat_file} does not exist. Skipping flat plot.")
         else:
-            self.logger.info(f"[group {group_index+1}] Skipping flat plot")
+            self.logger.info(f"[Group {group_index+1}] Skipping flat plot")
 
-        self.logger.info(f"[group {group_index+1}] Completed generating plots for master calibration frames")
+        self.logger.info(f"[Group {group_index+1}] Completed generating plots for master calibration frames")
 
         # generate sci plots
         num_sci = len(self._get_raw_group("sci_input", group_index))
         if num_sci and not skip_flag["sci"]:
-            self.logger.info(f"[group {group_index+1}] Generating plots for science frames ({num_sci} images)")
+            self.logger.info(f"[Group {group_index+1}] Generating plots for science frames ({num_sci} images)")
             if use_multi_thread:
                 threads = []
                 for input_img, output_img in zip(
@@ -505,11 +500,11 @@ class Preprocess(BaseSetup):
                     plot_sci(input_img, output_img)
 
             self.logger.info(
-                f"[group {group_index+1}] Completed plot generation for images in {time_diff_in_seconds(st)} seconds "
+                f"[Group {group_index+1}] Completed plot generation for images in {time_diff_in_seconds(st)} seconds "
                 f"({time_diff_in_seconds(st, return_float=True)/(num_sci or 1):.1f} s/image)"
             )
         else:
-            self.logger.info(f"[group {group_index+1}] Skipping science plot")
+            self.logger.info(f"[Group {group_index+1}] Skipping science plot")
 
     def update_bpmask(self):
         header = self.get_header("dark")
