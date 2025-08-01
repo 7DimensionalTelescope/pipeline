@@ -9,6 +9,7 @@ class Scheduler:
         self.master_status = {self._key_from_path(p): None for p in masters}  # True/False/None
         self.dependents = dependent_configs  # key: master_key, value: list of dependent paths
         self.independents = deque(independent_configs)
+        self.original_independents = set(independent_configs)  # Keep track of original independents
 
         self.task_queue = deque()
         self.completed_tasks = set()
@@ -101,11 +102,28 @@ class Scheduler:
         return None
 
     def is_all_done(self):
-        return not self.master_queue and not self.task_queue and all(v is not None for v in self.task_status.values())
+        return not self.master_queue and not self.task_queue and not self.independents and all(v is not None for v in self.task_status.values())
 
     def report_status(self):
         return {
             "succeeded": [p for p, v in self.task_status.items() if v is True],
             "failed": [p for p, v in self.task_status.items() if v is False],
             "pending": [p for p, v in self.task_status.items() if v is None],
+        }
+
+    def report_number_of_tasks(self):
+        # Count total tasks
+        total_masters = len(self.master_status)
+        total_dependents = sum(len(deps) for deps in self.dependents.values())
+        total_independents = len(self.original_independents)
+        
+        # Count completed tasks
+        completed_masters = sum(1 for status in self.master_status.values() if status is not None)
+        completed_dependents = sum(1 for task, status in self.task_status.items() if status is not None and task in [dep for deps in self.dependents.values() for dep in deps])
+        completed_independents = sum(1 for task, status in self.task_status.items() if status is not None and task in self.original_independents)
+        
+        return {
+            "master": f"{completed_masters} out of {total_masters}",
+            "dependent": f"{completed_dependents} out of {total_dependents}",
+            "independent": f"{completed_independents} out of {total_independents}",
         }

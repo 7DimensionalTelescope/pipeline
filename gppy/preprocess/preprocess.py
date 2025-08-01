@@ -117,7 +117,7 @@ class Preprocess(BaseSetup):
 
         threads_for_making_plots = []
         for i in range(self._n_groups):
-            self.logger.info(f"[Group {i+1}] {PathHandler.get_group_info(self.raw_groups[i])}")
+            self.logger.info(f"[Group {i+1}] [filter: exptime] {PathHandler.get_group_info(self.raw_groups[i])}")
             self.logger.debug("\n" + "#" * 100 + f"\n{' '*30}Start processing group {i+1} / {self._n_groups}\n" + "#" * 100)  # fmt: skip
             if only_with_sci and len(self.sci_input) == 0:
                 self.logger.info(f"No science images for this masterframe. Skipping...")
@@ -126,12 +126,12 @@ class Preprocess(BaseSetup):
             if not self.master_frame_only:
                 self.prepare_header()
                 self.data_reduction(device_id=device_id)
-            
+
             if make_plots:
                 t = threading.Thread(target=self.make_plots, kwargs={"group_index": i, "skip_flag": self.skip_flag})
                 t.start()
                 threads_for_making_plots.append(t)
-            
+
             if i < self._n_groups - 1:
                 self.proceed_to_next_group()
 

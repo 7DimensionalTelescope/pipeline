@@ -40,6 +40,7 @@ class QueueManager:
             self.logger = logger
         else:
             self.logger = Logger()
+            self.logger.set_output_file(f"/var/log/pipeline/{datetime.now().strftime('%Y-%m-%d')}_{os.getpid()}.log")
 
         self.logger.debug(f"Initialize QueueManager.")
 
@@ -315,7 +316,7 @@ class QueueManager:
                 if cmd is None:
                     time.sleep(1)
                     continue
-
+                
                 try:
                     proc = subprocess.Popen(cmd)
                     
@@ -495,8 +496,12 @@ class QueueManager:
 
         if self.ptype == "scheduler":
             # for scheduler
+            i = 0
             while not(self.scheduler.is_all_done()):
+                if i % 6 == 0:
+                    self.logger.info(self.scheduler.report_number_of_tasks())
                 time.sleep(10)
+                i += 1
             self.logger.info(self.scheduler.report_status())
 
         elif self.ptype == "task":
