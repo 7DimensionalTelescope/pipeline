@@ -40,7 +40,9 @@ class QueueManager:
             self.logger = logger
         else:
             self.logger = Logger()
-            self.logger.set_output_file(f"/var/log/pipeline/{datetime.now().strftime('%Y-%m-%d')}_{os.getpid()}.log")
+            self.logger.set_output_file(
+                f"/var/log/pipeline/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_{os.getpid()}.log"
+            )
 
         self.logger.debug(f"Initialize QueueManager.")
 
@@ -192,7 +194,6 @@ class QueueManager:
 
         self.processing_queue.put((task.priority, task))
 
-
         self.logger.info(f"Added task {task.task_name} (id: {task_id}) with priority {priority}")
         time.sleep(0.1)
 
@@ -316,10 +317,10 @@ class QueueManager:
                 if cmd is None:
                     time.sleep(1)
                     continue
-                
+
                 try:
                     proc = subprocess.Popen(cmd)
-                    
+
                     # Extract config path from command for tracking
                     config = cmd[cmd.index("-config") + 1] if "-config" in cmd else "unknown"
                     self._active_processes.append([config, proc])
@@ -342,6 +343,7 @@ class QueueManager:
                 self.logger.error(f"Error in processing worker: {e}")
                 time.sleep(0.5)
                 raise
+
     def _scheduler_completion_worker(self):
         while not self._stop_event.is_set():
             try:
@@ -354,7 +356,9 @@ class QueueManager:
                         if success:
                             self.logger.info(f"Process with {config} (PID = {pid}) completed.")
                         else:
-                            self.logger.error(f"Process with {os.path.basename(config)} (PID = {pid}) failed with return code {proc.returncode}.")
+                            self.logger.error(
+                                f"Process with {os.path.basename(config)} (PID = {pid}) failed with return code {proc.returncode}."
+                            )
 
                         self.scheduler.mark_done(config, success=success)
                         self._active_processes.remove(process)
@@ -497,12 +501,13 @@ class QueueManager:
         if self.ptype == "scheduler":
             # for scheduler
             i = 0
-            while not(self.scheduler.is_all_done()):
+            while not (self.scheduler.is_all_done()):
                 if i % 6 == 0:
                     self.logger.info(self.scheduler.report_number_of_tasks())
                 time.sleep(10)
                 i += 1
             self.logger.info(self.scheduler.report_status())
+            self.logger.debug(self.scheduler.report_status_detailed())
 
         elif self.ptype == "task":
 

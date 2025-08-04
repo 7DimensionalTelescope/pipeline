@@ -312,9 +312,7 @@ class ImStack(BaseSetup):
                 fits.writeto(outim, _data, header=_hdr, overwrite=True)
 
     @staticmethod
-    def _group_IMCMB(
-        input_images: list[str], output_images: list[str]
-    ) -> dict[tuple[str, str, str], tuple(list[str], list[str])]:
+    def _group_IMCMB(input_images: list[str], output_images: list[str]) -> dict[tuple[str, str, str], list[list[str]]]:
         """
         Group images by their master frames (IMCMB).
         Same logic as the preprocessing grouping, but relies on header info

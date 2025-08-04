@@ -111,11 +111,22 @@ class Scheduler:
             and all(v is not None for v in self.task_status.values())
         )
 
-    def report_status(self):
+    def report_status_detailed(self):
         return {
             "succeeded": [p for p, v in self.task_status.items() if v is True],
             "failed": [p for p, v in self.task_status.items() if v is False],
             "pending": [p for p, v in self.task_status.items() if v is None],
+        }
+
+    def report_status(self):
+        succeeded_count = len([p for p, v in self.task_status.items() if v is True])
+        failed_count = len([p for p, v in self.task_status.items() if v is False])
+        pending_count = len([p for p, v in self.task_status.items() if v is None])
+
+        return {
+            "succeeded": succeeded_count,
+            "failed": failed_count,
+            "pending": pending_count,
         }
 
     def report_number_of_tasks(self):
