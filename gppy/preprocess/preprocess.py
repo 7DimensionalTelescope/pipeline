@@ -118,6 +118,7 @@ class Preprocess(BaseSetup):
         threads_for_making_plots = []
         for i in range(self._n_groups):
             self.logger.info(f"[Group {i+1}] [filter: exptime] {PathHandler.get_group_info(self.raw_groups[i])}")
+            # self.logger.info(f"Start processing group {i+1} / {self._n_groups}")
             self.logger.debug("\n" + "#" * 100 + f"\n{' '*30}Start processing group {i+1} / {self._n_groups}\n" + "#" * 100)  # fmt: skip
             if only_with_sci and len(self.sci_input) == 0:
                 self.logger.info(f"No science images for this masterframe. Skipping...")
@@ -440,21 +441,12 @@ class Preprocess(BaseSetup):
         else:
             self.logger.info(f"[Group {group_index+1}] Skipping bias plot")
 
-        # dark
-        if "dark" in self.calib_types and not skip_flag["dark"]:
-            dark_file = self._get_raw_group("dark_output", group_index)
-            if os.path.exists(dark_file):
-                plot_dark(dark_file, fmask)
-            else:
-                self.logger.warning(f"Dark file {dark_file} does not exist. Skipping dark plot.")
-        else:
-            self.logger.info(f"[Group {group_index+1}] Skipping dark plot")
-
         # bpmask
-        if "dark" in self.calib_types and not skip_flag["dark"]:
+        if "dark" in self.calib_types:
             bpmask_file = self._get_raw_group("bpmask_output", group_index)
             if os.path.exists(bpmask_file):
-                plot_bpmask(bpmask_file)
+                if not skip_flag["dark"]:
+                    plot_bpmask(bpmask_file)
                 sample_header = fits.getheader(bpmask_file, ext=1)
                 if "BADPIX" in sample_header.keys():
                     badpix = sample_header["BADPIX"]
@@ -470,6 +462,16 @@ class Preprocess(BaseSetup):
                 fmask = None
         else:
             self.logger.info(f"[Group {group_index+1}] Skipping bpmask plot")
+
+        # dark
+        if "dark" in self.calib_types and not skip_flag["dark"]:
+            dark_file = self._get_raw_group("dark_output", group_index)
+            if os.path.exists(dark_file):
+                plot_dark(dark_file, fmask)
+            else:
+                self.logger.warning(f"Dark file {dark_file} does not exist. Skipping dark plot.")
+        else:
+            self.logger.info(f"[Group {group_index+1}] Skipping dark plot")
 
         # flat
         if "flat" in self.calib_types and not skip_flag["flat"]:
