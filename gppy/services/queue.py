@@ -18,13 +18,50 @@ mp.set_start_method("spawn", force=True)
 
 
 class AbruptStopException(Exception):
-    """Custom exception to signal abrupt stop processing."""
-
+    """
+    Custom exception to signal abrupt stop processing.
+    
+    Raised when the queue manager needs to immediately halt all processing
+    without waiting for graceful completion of tasks.
+    """
     pass
 
 
 class QueueManager:
-
+    """
+    Advanced task queue manager for parallel processing with priority scheduling.
+    
+    This class provides a comprehensive task management system that supports
+    both CPU-based task processing and subprocess scheduling. It includes
+    priority-based task scheduling, error handling, and graceful shutdown
+    capabilities.
+    
+    Features:
+    - Priority-based task scheduling (HIGH, MEDIUM, LOW, PREPROCESS)
+    - Multi-process CPU task execution
+    - Subprocess scheduling and monitoring
+    - Comprehensive error handling and recovery
+    - Graceful and abrupt shutdown mechanisms
+    - Real-time task status tracking
+    - Jupyter notebook compatibility
+    
+    Args:
+        max_workers (int, optional): Maximum number of worker processes (default: 10)
+        logger (Logger, optional): Custom logger instance
+        save_result (bool): Whether to save task results (default: False)
+        auto_start (bool): Whether to start workers immediately (default: False)
+        **kwargs: Additional configuration options
+    
+    Example:
+        >>> queue = QueueManager(max_workers=8, save_result=True)
+        >>> task_id = queue.add_task(
+        ...     process_data,
+        ...     args=(dataset,),
+        ...     priority=Priority.HIGH
+        ... )
+        >>> queue.wait_until_task_complete(task_id)
+    """
+    
     _id_counter = itertools.count(1)
 
     def __init__(
@@ -76,6 +113,15 @@ class QueueManager:
         self.logger.debug("QueueManager Initialization complete")
 
     def _start_workers(self, process_type="scheduler"):
+        """
+        Initialize and start worker threads based on process type.
+        
+        Sets up the appropriate worker infrastructure for either task processing
+        or subprocess scheduling.
+        
+        Args:
+            process_type (str): Type of processing ("task" or "scheduler")
+        """
         # Initialize task tracking
         self._stop_event = threading.Event()
 
@@ -99,7 +145,7 @@ class QueueManager:
             self.completion_thread.start()
             self.ptype = "task"
         elif process_type == "scheduler":
-            # Start the task schduler thread
+            # Start the task scheduler thread
             self.processing_thread = threading.Thread(target=self._scheduler_worker, daemon=True)
             self.processing_thread.start()
             self.completion_thread = threading.Thread(target=self._scheduler_completion_worker, daemon=True)
@@ -109,7 +155,19 @@ class QueueManager:
             self.ptype = None
 
     def __exit__(self, exc_type, exc_val, _):
-        """Context manager exit."""
+        """
+        Context manager exit method.
+        
+        Ensures proper cleanup when used as a context manager.
+        
+        Args:
+            exc_type: Exception type if any
+            exc_val: Exception value if any
+            _: Traceback (ignored)
+            
+        Returns:
+            bool: False if exception occurred, True otherwise
+        """
         self.stop_processing()
         if exc_type:
             self.logger.error(f"Error during execution: {exc_val}")
@@ -140,11 +198,7 @@ class QueueManager:
             args (tuple, optional): Positional arguments for the function
             kwargs (dict, optional): Keyword arguments for the function
             priority (Priority, optional): Task priority level. Defaults to MEDIUM.
-            gpu (bool, optional): Execute on GPU. Defaults to False.
-            device (int, optional): Specific GPU device. Defaults to 0.
             task_name (str, optional): Descriptive task name
-            inherit_input (bool, optional): Whether to inherit input from previous task
-            async_submit (bool, optional): Whether to submit the task asynchronously
 
         Returns:
             str: Unique task identifier for tracking
@@ -154,7 +208,6 @@ class QueueManager:
             ...     process_data,
             ...     args=(dataset,),
             ...     priority=Priority.HIGH,
-            ...     gpu=True,
             ...     async_submit=True
             ... )
         """
@@ -200,7 +253,12 @@ class QueueManager:
         return task_id
 
     def add_scheduler(self, scheduler):
-
+        """
+        Add a scheduler for subprocess management.
+        
+        Args:
+            scheduler: Scheduler instance for managing subprocess tasks
+        """
         self.scheduler = scheduler
         self._active_processes = []
         if not (hasattr(self, "processing_thread")):
@@ -208,9 +266,24 @@ class QueueManager:
 
     ######### Task processing #########
     def _task_worker(self):
-        """Distribute CPU tasks to the process pool."""
+        """
+        Distribute CPU tasks to the process pool.
+        
+        This worker thread continuously processes tasks from the priority queue,
+        submitting them to the process pool for execution and handling results
+        through the completion queue.
+        """
 
         def task_wrapper(task):
+            """
+            Wrapper function for task execution in process pool.
+            
+            Args:
+                task: Task instance to execute
+                
+            Returns:
+                tuple: (task, result, error) where error is None if successful
+            """
             try:
                 result = task.execute()
                 return task, result, None
@@ -218,10 +291,22 @@ class QueueManager:
                 return task, None, str(e)
 
         def callback(result_tuple):
+            """
+            Callback for successful task completion.
+            
+            Args:
+                result_tuple: Tuple containing (task, result, error)
+            """
             task, result, error = result_tuple
             self.completion_queue.put((task, result, error))
 
         def errback(error):
+            """
+            Error callback for failed task execution.
+            
+            Args:
+                error: Exception that occurred during task execution
+            """
             self.completion_queue.put((task, None, str(error)))
 
         while not self._abrupt_stop_requested.is_set():
@@ -265,6 +350,12 @@ class QueueManager:
                 raise
 
     def _task_completion_worker(self):
+        """
+        Handle task completion and result processing.
+        
+        This worker thread processes completed tasks from the completion queue,
+        updates task status, and stores results if requested.
+        """
         while not self._stop_event.is_set():
             try:
                 task, result, error = self.completion_queue.get()
@@ -299,6 +390,12 @@ class QueueManager:
                 continue
 
     def _scheduler_worker(self):
+        """
+        Worker thread for subprocess scheduling.
+        
+        Manages the execution of subprocess tasks by retrieving commands
+        from the scheduler and launching them as separate processes.
+        """
 
         while not self._abrupt_stop_requested.is_set():
             try:
@@ -345,6 +442,12 @@ class QueueManager:
                 raise
 
     def _scheduler_completion_worker(self):
+        """
+        Worker thread for monitoring subprocess completion.
+        
+        Continuously checks the status of active subprocesses and updates
+        the scheduler when processes complete.
+        """
         while not self._stop_event.is_set():
             try:
                 for process in list(self._active_processes):  # (config_path, proc)
@@ -468,7 +571,12 @@ class QueueManager:
             raise AbruptStopException("Task processing stopped by abrupt stop mechanism.")
 
     def abrupt_stop(self):
-        """Immediately stop all processing and exit."""
+        """
+        Immediately stop all processing and exit.
+        
+        Forces immediate termination of all processes and threads,
+        then exits the current process.
+        """
         if self._abrupt_stop_requested.is_set():
             os._exit(0)
             return
@@ -540,12 +648,25 @@ class QueueManager:
         return True
 
     def _handle_keyboard_interrupt(self, signum, frame):
-        """Handle keyboard interrupt with abrupt stop mechanism."""
+        """
+        Handle keyboard interrupt with abrupt stop mechanism.
+        
+        Args:
+            signum: Signal number
+            frame: Current stack frame
+        """
         self.logger.warning("Keyboard interrupt detected. Initiating abrupt stop...")
         self.abrupt_stop()
 
     def _jupyter_interrupt_handler(self, kernel, signum, frame):
-        """Custom interrupt handler for Jupyter notebook."""
+        """
+        Custom interrupt handler for Jupyter notebook.
+        
+        Args:
+            kernel: Jupyter kernel instance
+            signum: Signal number
+            frame: Current stack frame
+        """
         self.logger.warning("Jupyter notebook interrupt detected. Initiating abrupt stop...")
         self.abrupt_stop()
         raise KeyboardInterrupt()

@@ -9,7 +9,7 @@ from astropy.io import fits
 from collections import Counter
 from collections.abc import Iterable
 
-from .const import FACTORY_DIR, RAWDATA_DIR, HEADER_KEY_MAP, ALL_GROUP_KEYS
+from .const import FACTORY_DIR, ALL_GROUP_KEYS
 import numpy as np
 
 

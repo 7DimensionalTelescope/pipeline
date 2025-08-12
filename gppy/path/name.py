@@ -181,8 +181,7 @@ class NameHandler:
 
             # override date if nightdate available
             if nightdate:
-                # date = add_half_day(nightdate)  # let's not do so
-                pass
+                date = add_half_day(nightdate)
             else:
                 nightdate = subtract_half_day(date)
                 self.nightdate[i] = nightdate

@@ -3,6 +3,11 @@ from typing import List, Dict, Optional, Union, Any, Tuple
 import psycopg
 import re
 from .const import dbname, user, host, port, password, TABLES, ALIASES
+import os
+import re
+import glob
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from ...const import RAWDATA_DIR, CalibType
 
 # all column names and data types in a table
 query_example = """
@@ -69,7 +74,11 @@ def get_image_files(
     conn = psycopg.connect(dbname=dbname, user=user, host=host, port=port, password=password)
     results: Dict[str, List[Dict]] = {}
 
-    types = normalize_types(image_types)
+    # If target_names is specified but image_types is not, only return science frames
+    if target_names and not image_types:
+        types = ["sci"]
+    else:
+        types = normalize_types(image_types)
     tables = {t: TABLES[t] for t in types}
 
     with conn.cursor() as cur:
@@ -140,15 +149,46 @@ def get_image_files(
                 params.extend(units)
 
             if target_names and img_type == "sci":
+                # Check if target_names look like tile names (T followed by numbers)
+                import re
+
+                tile_pattern = re.compile(r"^T\d+$")
+
                 if isinstance(target_names, list):
-                    # Multiple targets
-                    placeholders = ",".join(["%s"] * len(target_names))
-                    clauses.append(f"t.name IN ({placeholders})")
-                    params.extend(target_names)
+                    tile_targets = [t for t in target_names if tile_pattern.match(t)]
+                    regular_targets = [t for t in target_names if not tile_pattern.match(t)]
+
+                    if tile_targets and regular_targets:
+                        # Mixed targets - need to handle both
+                        clauses.append(
+                            "(t.name IN (%s) OR sf.tile_id IN (SELECT id FROM survey_tile WHERE name IN (%s)))"
+                        )
+                        placeholders = ",".join(["%s"] * len(regular_targets))
+                        tile_placeholders = ",".join(["%s"] * len(tile_targets))
+                        clauses[-1] = clauses[-1].replace("%s", placeholders, 1)
+                        clauses[-1] = clauses[-1].replace("%s", tile_placeholders, 1)
+                        params.extend(regular_targets)
+                        params.extend(tile_targets)
+                    elif tile_targets:
+                        # Only tile targets
+                        placeholders = ",".join(["%s"] * len(tile_targets))
+                        clauses.append(f"sf.tile_id IN (SELECT id FROM survey_tile WHERE name IN ({placeholders}))")
+                        params.extend(tile_targets)
+                    else:
+                        # Only regular targets
+                        placeholders = ",".join(["%s"] * len(regular_targets))
+                        clauses.append(f"t.name IN ({placeholders})")
+                        params.extend(regular_targets)
                 else:
                     # Single target
-                    clauses.append("t.name = %s")
-                    params.append(target_names)
+                    if tile_pattern.match(target_names):
+                        # Tile target
+                        clauses.append("sf.tile_id IN (SELECT id FROM survey_tile WHERE name = %s)")
+                        params.append(target_names)
+                    else:
+                        # Regular target
+                        clauses.append("t.name = %s")
+                        params.append(target_names)
             # ... future filters go here ...
 
             if clauses:
@@ -292,25 +332,6 @@ class RawImageQuery:
                 # Assume it's a target name (like T02524)
                 self._params["target_names"].append(param)
 
-        # Convert single-item lists to single values for compatibility
-        if len(self._params["target_date"]) == 1:
-            self._params["target_date"] = self._params["target_date"][0]
-        elif len(self._params["target_date"]) > 1:
-            # Keep as list for multiple dates
-            pass
-
-        if len(self._params["filter_names"]) == 1:
-            self._params["filter_names"] = self._params["filter_names"][0]
-        elif len(self._params["filter_names"]) > 1:
-            # Keep as list for multiple filters
-            pass
-
-        if len(self._params["target_names"]) == 1:
-            self._params["target_names"] = self._params["target_names"][0]
-        elif len(self._params["target_names"]) > 1:
-            # Keep as list for multiple targets
-            pass
-
         return self._params
 
     def image_files(self, divide_by_img_type: bool = False) -> Union[Dict[str, List[str]], List[str]]:
@@ -342,3 +363,94 @@ class RawImageQuery:
             for files in self._results.values():
                 all_paths.extend([file_info["file_path"] for file_info in files])
             return all_paths
+
+
+def query_observations_manually(include_keywords, exclude_keywords=None, DATA_DIR=RAWDATA_DIR, with_calib=True):
+    """
+    Recursively searches for .fits files in RAWDATA_DIR or PROCESSED_DATA.
+
+    Files are returned if they:
+    - contain at least one of the include_keywords (if provided), and
+    - do not contain any of the exclude_keywords (if provided).
+
+    Parameters:
+    include_keywords (list of str): Keywords that must appear in the file path or name.
+    exclude_keywords (list of str): Keywords that must not appear in the file path or name.
+                                    Default is ["bias", "dark", "flat"].
+    **kwargs: Additional keyword arguments.
+
+    Returns:
+    list: List of paths to matching FITS files.
+    """
+    default_exclude_keywords = ["test", "shift", "tmp"]
+    import numpy as np
+
+    include_keywords = np.atleast_1d(include_keywords)
+    if exclude_keywords is not None:
+        exclude_keywords = np.atleast_1d(exclude_keywords)
+        exclude_keywords = exclude_keywords + default_exclude_keywords
+    else:
+        exclude_keywords = default_exclude_keywords
+
+    flagging = lambda x: x.endswith(".fits") and not any(excl in x for excl in exclude_keywords)
+
+    def search_obs(unit):
+        result = []
+        paths = []
+        unit_path = os.path.join(DATA_DIR, unit)
+        for dirpath, _, filenames in os.walk(unit_path):
+            if "tmp" in dirpath:
+                continue
+
+            if len(filenames) == 0:
+                continue
+
+            flag_dir = all(keyword in dirpath for keyword in include_keywords)
+            if flag_dir:
+                result.extend([os.path.join(dirpath, fname) for fname in filenames if flagging(fname)])
+                continue
+
+            matched_files = [fname for fname in filenames if flagging(fname)]
+            if not matched_files:
+                continue
+
+            flag_files = [
+                all(keyword in os.path.join(dirpath, fname) for keyword in include_keywords) for fname in matched_files
+            ]
+            if any(flag_files):
+                result.extend(
+                    [
+                        os.path.join(dirpath, fname)
+                        for matched, fname in zip(flag_files, matched_files)
+                        if matched and flagging(fname)
+                    ]
+                )
+                paths.append(dirpath)
+
+        calibs = []
+        paths = list(set(paths))
+        if with_calib:
+            for path in paths:
+                for calib in CalibType:
+                    calibs.extend(glob.glob(os.path.join(path, f"*{calib}*.fits")))
+
+        result.extend(calibs)
+        result = list(set(result))
+        return result
+
+    units = []
+    for kw in include_keywords:
+        if re.match(r"(7DT\d\d)", kw):
+            units.append(re.match(r"(7DT\d\d)", kw).group())
+            include_keywords.remove(kw)
+
+    if len(units) == 0:
+        units = [f"7DT{i:02d}" for i in range(20)]
+
+    output = []
+    with ThreadPoolExecutor(max_workers=min(20, len(units))) as executor:
+        futures = [executor.submit(search_obs, unit) for unit in units]
+        for future in as_completed(futures):
+            output.extend(future.result())
+
+    return output

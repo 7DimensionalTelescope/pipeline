@@ -69,6 +69,8 @@ def monitor_memory_usage(
         Time interval between measurements in seconds (default: 1.0)
     logger : logging.Logger, optional
         Logger instance to use for logging (default: None)
+    add_utilization : bool, optional
+        Whether to include GPU utilization data (default: True)
     verbose : bool, optional
         Whether to print/log usage in real-time (default: False)
 
@@ -107,6 +109,12 @@ def monitor_memory_usage(
     stop_thread = False
 
     def logging_thread() -> None:
+        """
+        Background thread for monitoring memory usage.
+        
+        Continuously monitors memory usage at specified intervals
+        and logs the data to the usage table.
+        """
         while not stop_thread:
             current_time = str(datetime.now())
             cpu_memory = MemoryMonitor.current_memory_percent
@@ -166,6 +174,12 @@ def monitor_io_rate(interval: float = 1.0, logger: Optional = None, verbose: boo
     stop_thread = False
 
     def logging_thread():
+        """
+        Background thread for monitoring I/O rates.
+        
+        Continuously monitors disk I/O at specified intervals
+        and logs the data to the I/O table.
+        """
         prev = psutil.disk_io_counters()
         prev_time = time.time()
         while not stop_thread:
@@ -209,6 +223,12 @@ def plot_history(history: Table, filename: Optional[str] = None, keys=None, ax=N
         Table containing memory usage history
     filename : str, optional
         File to save the plot to (default: None)
+    keys : list, optional
+        Specific columns to plot (default: all except 'time')
+    ax : matplotlib.axes.Axes, optional
+        Matplotlib axes to plot on (default: None, creates new figure)
+    **kwargs : dict
+        Additional keyword arguments passed to matplotlib plot function
     """
     import matplotlib.pyplot as plt
     import pandas as pd
@@ -277,6 +297,19 @@ class classmethodproperty:
         return self.func.__get__(instance, owner)()
 
 def check_gpu_activity(device_id=None, gpu_threshold=500):
+    """
+    Check GPU activity and return list of available GPUs.
+    
+    Determines which GPUs are available for use based on current
+    memory usage and running processes.
+    
+    Args:
+        device_id (int, optional): Specific GPU to check (None for all)
+        gpu_threshold (int): Maximum GPU memory usage in MB to consider available
+        
+    Returns:
+        list: List of available GPU device IDs
+    """
     pynvml.nvmlInit()
     device_count = pynvml.nvmlDeviceGetCount()
     available = set()

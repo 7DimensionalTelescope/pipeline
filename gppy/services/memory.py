@@ -9,6 +9,21 @@ from . import utils
 
 
 class MemoryState(Enum):
+    """
+    Memory state classification for system monitoring.
+    
+    Defines different memory states with associated actions and thresholds:
+    - HEALTHY: Normal operation, no action needed
+    - WARNING: Elevated memory usage, cleanup recommended
+    - CRITICAL: High memory usage, pause processing
+    - EMERGENCY: Critical memory usage, stop all processing
+    
+    Each state includes:
+    - state: Human-readable state name
+    - action: Recommended action to take
+    - threshold: Memory percentage threshold (None for HEALTHY)
+    - order: Numeric ordering for comparison
+    """
     HEALTHY = ("healthy", "continue", None, 0)
     WARNING = ("warning", "cleanup", 80.0, 1)
     CRITICAL = ("critical", "pause", 90.0, 2)

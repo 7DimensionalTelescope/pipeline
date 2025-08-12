@@ -10,12 +10,6 @@ from .photometry import Photometry
 from .imstack import ImStack
 from .subtract import ImSubtract
 
-from .services.monitor import Monitor
-from .services.queue import QueueManager
-from .services.scheduler import Scheduler
-
-from .wrapper import DataReduction
-
 
 def run_preprocess(config, device_id=None, only_with_sci=False, make_plots=True, **kwargs):
     """
@@ -68,6 +62,22 @@ def run_scidata_reduction(config, processes=["astrometry", "photometry", "combin
         raise e
 
 
+def query_observations(input_params, use_db=True, **kwargs):
+    from .services.database import RawImageQuery, query_observations_manually
+
+    if use_db:
+        try:
+            list_of_images = RawImageQuery(input_params).image_files(divide_by_img_type=False)
+        except Exception as e:
+            print(f"Error querying database: {e}")
+            print("Falling back to globbing files from filesystem.")
+            list_of_images = query_observations_manually(input_params, **kwargs)
+    else:
+        list_of_images = query_observations_manually(input_params, **kwargs)
+    return list_of_images
+
+
+
 def start_monitoring(target_dir=None):
     """
     Initialize and start the astronomical data monitoring system.
@@ -83,6 +93,11 @@ def start_monitoring(target_dir=None):
 
     Monitoring can be stopped by pressing Ctrl+C.
     """
+    from .wrapper import DataReduction
+    from .services.monitor import Monitor
+    from .services.queue import QueueManager
+    from .services.scheduler import Scheduler
+
     if target_dir is None:
         from .const import RAWDATA_DIR
         target_dir = RAWDATA_DIR

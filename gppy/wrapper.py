@@ -5,7 +5,7 @@ import time
 
 from .utils import flatten
 from .path import PathHandler
-from .query import query_observations
+from .run import query_observations
 from .config import PreprocConfiguration, SciProcConfiguration
 
 from .services.queue import QueueManager

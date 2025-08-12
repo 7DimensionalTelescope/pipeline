@@ -1,7 +1,8 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
+env_file = os.path.join(os.path.dirname(__file__), "../../../.env")
+load_dotenv(env_file)
 
 dbname = os.environ["DBNAME"]
 user = os.environ["DBUSER"]

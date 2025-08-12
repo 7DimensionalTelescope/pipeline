@@ -91,33 +91,34 @@ def search_with_date_offsets(template, max_offset=300, future=False):
         offsets = [-i for i in range(1, max_offset + 1)]
     offsets = [0] + offsets  # Include the original dates (offset 0)
 
-    # Iterate through offsets
-    for offset in offsets:
-        # Adjust both dates by the offset
-        adjusted_date_night_dt = date_night_dt + timedelta(days=offset)
-        adjusted_date_utc_dt = date_utc_dt + timedelta(days=offset)
+    # Iterate through offsets - try all combinations of date offsets
+    for offset_night in offsets:
+        for offset_utc in offsets:
+            # Adjust dates independently
+            adjusted_date_night_dt = date_night_dt + timedelta(days=offset_night)
+            adjusted_date_utc_dt = date_utc_dt + timedelta(days=offset_utc)
 
-        # Format the adjusted dates
-        adjusted_date_night = adjusted_date_night_dt.strftime(date_night_format)
-        adjusted_date_utc = adjusted_date_utc_dt.strftime(date_utc_format)
+            # Format the adjusted dates
+            adjusted_date_night = adjusted_date_night_dt.strftime(date_night_format)
+            adjusted_date_utc = adjusted_date_utc_dt.strftime(date_utc_format)
 
-        # Replace both dates in the template
-        modified_path = template.replace(date_night, adjusted_date_night).replace(date_utc, adjusted_date_utc)
+            # Replace both dates in the template
+            modified_path = template.replace(date_night, adjusted_date_night).replace(date_utc, adjusted_date_utc)
 
-        # Check if the modified path exists
-        # if os.path.exists(modified_path):
-        #     return modified_path
-        if "*" in template:
-            # If there’s a *, glob for all matches
-            matches = glob(modified_path)
-            if matches:
-                if len(matches) == 1:
-                    return matches[0]
-                else:
-                    return PathHandler(matches).get_minimum("exptime")
-        else:
-            if os.path.exists(modified_path):
-                return modified_path
+            # Check if the modified path exists
+            # if os.path.exists(modified_path):
+            #     return modified_path
+            if "*" in template:
+                # If there's a *, glob for all matches
+                matches = glob(modified_path)
+                if matches:
+                    if len(matches) == 1:
+                        return matches[0]
+                    else:
+                        return PathHandler(matches).get_minimum("exptime")
+            else:
+                if os.path.exists(modified_path):
+                    return modified_path
 
     # If no file is found, return None
     return None

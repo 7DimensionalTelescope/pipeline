@@ -1,18 +1,19 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
-# System paths
+# Internal paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REF_DIR = os.path.join(SCRIPT_DIR, "ref")
+
+# Bashrc-defined system paths
 RAWDATA_DIR = os.environ.get("RAWDATA_DIR")  # , "/lyman/data1/obsdata/")
 FACTORY_DIR = os.environ.get("FACTORY_DIR")
 MASTER_FRAME_DIR = os.environ.get("MASTER_FRAME_DIR")
 PROCESSED_DIR = os.environ.get("PROCESSED_DIR")
 DAILY_STACKED_DIR = os.environ.get("DAILY_STACKED_DIR")
 STACKED_DIR = os.environ.get("STACKED_DIR")
-
-REF_DIR = os.path.join(SCRIPT_DIR, "ref")
 
 PIPELINE_DIRS = {RAWDATA_DIR, FACTORY_DIR, MASTER_FRAME_DIR, PROCESSED_DIR, STACKED_DIR}
 SLACK_TOKEN = os.environ.get("SLACK_TOKEN", None)

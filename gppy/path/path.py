@@ -830,8 +830,13 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
 
     @classmethod
     def get_group_info(cls, raw_group):
-        filter = collapse(PathHandler(raw_group[1][2]).filter)
-        exptime = collapse(PathHandler(raw_group[1][1]).exptime)
+        exptime, filter = "_", "_"
+        mdark = raw_group[1][1]
+        mflat = raw_group[1][2]
+        if mdark:
+            exptime = collapse(PathHandler(mdark).exptime)
+        if mflat:
+            filter = collapse(PathHandler(mflat).filter)
         return f"{filter}: {exptime}"
 
     @classmethod

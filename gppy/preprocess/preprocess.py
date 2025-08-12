@@ -8,7 +8,7 @@ from astropy.io import fits
 
 from .plotting import *
 from . import utils as prep_utils
-from .calc import record_statistics
+from .calc import record_statistics, delta_edge_center
 from ..utils import (
     get_header,
     flatten,
@@ -319,15 +319,19 @@ class Preprocess(BaseSetup):
             getattr(self, f"{dtype}sig_output"),
             header,
         )
-
+        
         header = prep_utils.add_image_id(header)
         header = record_statistics(getattr(self, f"{dtype}_output"), header)
+        
+        if dtype == "dark":
+            num_hot_pixels = self.update_bpmask()
+            delta = delta_edge_center(fits.getdata(getattr(self, f"{dtype}_output")))
+            header["NDELTA"] = (delta, "Delta between edge and center")
+            header["NHOTPIX"] = (num_hot_pixels, "Number of hot pixels")
+
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
         self.logger.info(f"[Group {self._current_group+1}] Master {dtype} generated in {time_diff_in_seconds(st)} seconds")  # fmt: skip
         self.logger.debug(f"[Group {self._current_group+1}] FITS Written: {getattr(self, f'{dtype}_output')}")
-
-        if dtype == "dark":
-            self.update_bpmask()
 
     def _fetch_masterframe(self, template, dtype):
         self.logger.info(f"[Group {self._current_group+1}] Fetching master {dtype}")
@@ -395,6 +399,7 @@ class Preprocess(BaseSetup):
                 device_id=device_id,
                 use_gpu=self._use_gpu,
             )
+
             self.logger.info(
                 f"[Group {self._current_group+1}] Completed data reduction for {len(self.sci_input)} "
                 f"images in {time_diff_in_seconds(st)} seconds "
@@ -538,3 +543,4 @@ class Preprocess(BaseSetup):
         primary_hdu = fits.PrimaryHDU()
         newhdul = fits.HDUList([primary_hdu, newhdu])
         newhdul.writeto(self.bpmask_output, overwrite=True)
+        return np.sum(hot_mask)
