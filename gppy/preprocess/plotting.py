@@ -79,7 +79,7 @@ def plot_bias(file, overwrite=False):
     scope = (350, 700)  # (400, 600) (clipmin, clipmax)
 
     # edges = np.unique(np.concatenate(([mn], np.arange(clipmin, clipmax + 1, 1), [mx])))
-    edges = np.unique(np.concatenate(([mn], np.arange(scope[0], scope[1] + 1, 1), [mx])))
+    edges = np.unique(np.concatenate(([mn], np.arange(scope[0], scope[1] + 1, 1), [mx])))+0.5
     fig = Figure(figsize=(10, 6))
     canvas = FigureCanvas(fig)
     ax = fig.add_subplot(1, 1, 1)
@@ -134,7 +134,7 @@ def plot_dark(file, flattened_mask=None):
     scope = (-170, 200)
     mn = fdata.min()
     mx = fdata.max()
-    edges = np.unique(np.concatenate(([mn], np.arange(scope[0], scope[1] + 1, 1), [mx])))
+    edges = np.unique(np.concatenate(([mn], np.arange(scope[0], scope[1] + 1, 1), [mx])))+0.5
 
     # fig, ax = plt.subplots(figsize=(10, 6))
     fig = Figure(figsize=(10, 6))

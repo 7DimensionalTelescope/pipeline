@@ -1,0 +1,48 @@
+{
+    "BIAS": {
+        "CLIPMED": {
+            "value": 513,
+            "criteria": "eq",
+            "description": "Median clipping value must be exactly 513"
+        },
+        "CLIPSTD": {
+            "value": 2.5,
+            "criteria": "lte",
+            "description": "Standard deviation must be ≤ 2.5"
+        }
+    },
+    "DARK": {
+        "UNIFORM": {
+            "value": -2.15,
+            "criteria": "lte",
+            "description": "Uniformity measure must be ≤ -2.15"
+        }
+    },
+    "FLAT": {
+        "CLIPMAX": {
+            "value": 1.3,
+            "criteria": "lt",
+            "description": "Maximum clipping value must be < 1.3"
+        },
+        "CLIPMIN": {
+            "value": 0.7,
+            "criteria": "gt",
+            "description": "Minimum clipping value must be > 0.7"
+        },
+        "EDGEVAR": {
+            "value": 0.7,
+            "criteria": "lt",
+            "description": "Edge variance must be < 0.7"
+        },
+        "SIGMEAN": {
+            "value": 0.5,
+            "criteria": "lt",
+            "description": "Mean of the errormap must be < 0.5"
+        },
+        "CUTTED": {
+            "value": true,
+            "criteria": "neq",
+            "description": "Image must NOT be cut/trimmed"
+        }
+    }
+} 

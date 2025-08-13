@@ -464,7 +464,7 @@ class NameHandler:
             date = parts[3]
             hms = parts[4]
             filt = parts[5]
-            exptime = strip_exptime(parts[6])
+            exptime = strip_exptime(parts[6].replace(".com", ""))
 
         # new norm
         else:

@@ -20,11 +20,12 @@ from ..config import PreprocConfiguration
 from ..services.setup import BaseSetup
 from ..const import HEADER_KEY_MAP
 from ..services.utils import acquire_available_gpu
+from .checker import Checker
 
 pp = pprint.PrettyPrinter(indent=2)  # , width=120)
 
 
-class Preprocess(BaseSetup):
+class Preprocess(BaseSetup, Checker):
     """
     Assumes homogeneous BIAS, DARK, FLAT, SCI frames as input
     taken on the same date with the same
@@ -66,7 +67,7 @@ class Preprocess(BaseSetup):
 
         self._use_gpu = use_gpu
         self.initialize()
-
+        
         # self.logger.debug(f"Masterframe output folder: {self.path_fdz}")
 
     @classmethod
@@ -104,6 +105,7 @@ class Preprocess(BaseSetup):
 
         self._n_groups = len(self.raw_groups)
         self._current_group = 0
+        self.load_criteria()
 
         self.logger.info(f"{self._n_groups} groups are found")
         self.logger.debug(f"raw_groups:\n{pp.pformat(self.raw_groups)}")
@@ -117,7 +119,7 @@ class Preprocess(BaseSetup):
 
         threads_for_making_plots = []
         for i in range(self._n_groups):
-            self.logger.info(f"[Group {i+1}] [filter: exptime] {PathHandler.get_group_info(self.raw_groups[i])}")
+            self.logger.debug(f"[Group {i+1}] [filter: exptime] {PathHandler.get_group_info(self.raw_groups[i])}")
             # self.logger.info(f"Start processing group {i+1} / {self._n_groups}")
             self.logger.debug("\n" + "#" * 100 + f"\n{' '*30}Start processing group {i+1} / {self._n_groups}\n" + "#" * 100)  # fmt: skip
             if only_with_sci and len(self.sci_input) == 0:
@@ -321,20 +323,23 @@ class Preprocess(BaseSetup):
         )
         
         header = prep_utils.add_image_id(header)
-        header = record_statistics(getattr(self, f"{dtype}_output"), header)
+        header = record_statistics(getattr(self, f"{dtype}_output"), header, dtype=dtype)
         
         if dtype == "dark":
-            num_hot_pixels = self.update_bpmask()
-            delta = delta_edge_center(fits.getdata(getattr(self, f"{dtype}_output")))
-            header["NDELTA"] = (delta, "Delta between edge and center")
-            header["NHOTPIX"] = (num_hot_pixels, "Number of hot pixels")
+            self.update_bpmask()
+            
+        flag, header = self.apply_criteria(header=header, dtype=dtype)
 
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
         self.logger.info(f"[Group {self._current_group+1}] Master {dtype} generated in {time_diff_in_seconds(st)} seconds")  # fmt: skip
         self.logger.debug(f"[Group {self._current_group+1}] FITS Written: {getattr(self, f'{dtype}_output')}")
+        
+        if not flag:
+            self.logger.error(f"[Group {self._current_group+1}] Master {dtype} failed quality check")
+            self._fetch_masterframe(getattr(self, f"{dtype}_output"), dtype)
 
     def _fetch_masterframe(self, template, dtype):
-        self.logger.info(f"[Group {self._current_group+1}] Fetching master {dtype}")
+        self.logger.info(f"[Group {self._current_group+1}] Fetching a 'GOOD' master {dtype}")
         # existing_data can be either on-date or off-date
         max_offset = self.config.preprocess.max_offset
         self.logger.debug(f"[Group {self._current_group+1}] Masterframe Search Template: {template}")

@@ -118,8 +118,8 @@ class Task:
                 tmp_logger = logging.getLogger(self.task_name)
                 tmp_logger.error(f"Task {self.id} failed with error: {str(e)}")
             except:
-                print(e)
-            raise
+                pass
+            raise e
         self.status = "completed"
         self.endtime = datetime.now()
         return self.result

@@ -274,29 +274,6 @@ def _compute_outlier_mask_2d(data, median, std, hot_sigma):
             mask[i, j] = 1 if abs(data[i, j] - median) > threshold else 0
     return mask
 
-def delta_edge_center(data, check_size=100):
-    h, w = data.shape
-    s = check_size  # Focus on size 100
-    s_eff = int(min(s, h//4, w//4))
-
-    # Square regions: top-left, top-right, bottom-left, bottom-right
-    top_left = data[:s_eff, :s_eff]
-    top_right = data[:s_eff, -s_eff:]
-    bottom_left = data[-s_eff:, :s_eff]
-    bottom_right = data[-s_eff:, -s_eff:]
-    # Center square
-    cy, cx = h//2, w//2
-    hs = s_eff//2
-    cy0, cy1 = max(0, cy - hs), min(h, cy + hs)
-    cx0, cx1 = max(0, cx - hs), min(w, cx + hs)
-    center = data[cy0:cy1, cx0:cx1]
-    
-    edge_means = np.array([np.median(top_left), np.median(top_right), np.median(bottom_left), np.median(bottom_right)])
-    edge_avg = max(edge_means)
-    center_mean = center.mean()
-    delta = edge_avg - center_mean
-    return delta
-
 def compute_rms(new_data, ref_data):
     if new_data.shape != ref_data.shape:
         h = min(new_data.shape[0], ref_data.shape[0])
@@ -360,12 +337,7 @@ def calculate_edge_variation(d):
         print(f"Error calculating edge variation: {e}")
         return 0.0, [0, 0, 0, 0], False
 
-def uniformity_statistical(
-    fits_path,
-    bpmask_path=None,
-    bpmask_dilate=0,
-    grid_size=32
-):
+def uniformity_statistical(fits_path, bpmask_path=None, grid_size=32):
     """
     Fast uniformity checking using statistical grid analysis.
     This divides the image into a grid and analyzes statistics of each cell.
@@ -385,10 +357,6 @@ def uniformity_statistical(
     
     # BPM mask
     hot_mask = (bpm != 0)
-    if bpmask_dilate > 0:
-        import cv2
-        k = np.ones((3,3), np.uint8)
-        hot_mask = cv2.dilate(hot_mask.astype(np.uint8), k, iterations=bpmask_dilate).astype(bool)
     
     # Auto-shift to positive
     dmin = float(d.min())
@@ -439,8 +407,8 @@ def uniformity_statistical(
     return float(log_uniformity_score)
 
 
-def record_statistics(data, header, device_id=0, cropsize=500):
-    data = fits.getdata(data).astype(np.float32)  # Ensure data is float32
+def record_statistics(filename, header, device_id=0, cropsize=500, dtype=None):
+    data = fits.getdata(filename).astype(np.float32)  # Ensure data is float32
     mean, median, std, min, max = sigma_clipped_stats(data, device_id=device_id, sigma=3, maxiters=5, minmax=True)
     header["CLIPMEAN"] = (float(mean), "3-sig clipped mean of the pixel values")
     header["CLIPMED"] = (float(median), "3-sig clipped median of the pixel values")
@@ -464,8 +432,8 @@ def record_statistics(data, header, device_id=0, cropsize=500):
     # header["CENCMIN"] = float(min)
     # header["CENCMAX"] = float(max)
 
-    if "flat" in data:
-        datasig = fits.getdata(data.replace("flat_", "flatsig_")).astype(np.float32)  # Ensure data is float32
+    if dtype.upper() == "FLAT":
+        datasig = fits.getdata(filename.replace("flat_", "flatsig_")).astype(np.float32)  # Ensure data is float32
         s_mean, s_median, s_std = sigma_clipped_stats(datasig, device_id=device_id, sigma=3, maxiters=5)
 
         header['SIGMEAN'] = (s_mean, '3-sig clipped mean of the errormap')
@@ -476,10 +444,35 @@ def record_statistics(data, header, device_id=0, cropsize=500):
         header['CUTTED'] = (cutted, 'Non-positive values in the middle of the image')
         header['EDGEVAR'] = (edge_var, 'Edge variation of the image')
 
-    elif "dark" in data:
-        uniformity_score = uniformity_statistical(data)
+    elif dtype.upper() == "DARK":
+        uniformity_score = uniformity_statistical(filename)
         header["UNIFORM"] = (uniformity_score, "Uniformity score")
-        ndelta = delta_edge_center(data)
-        header["NDELTA"] = (ndelta, "Delta between edge and center")
-
+        
     return header
+
+
+
+
+# not used
+def delta_edge_center(data, check_size=100):
+    h, w = data.shape
+    s = check_size  # Focus on size 100
+    s_eff = int(min(s, h//4, w//4))
+
+    # Square regions: top-left, top-right, bottom-left, bottom-right
+    top_left = data[:s_eff, :s_eff]
+    top_right = data[:s_eff, -s_eff:]
+    bottom_left = data[-s_eff:, :s_eff]
+    bottom_right = data[-s_eff:, -s_eff:]
+    # Center square
+    cy, cx = h//2, w//2
+    hs = s_eff//2
+    cy0, cy1 = max(0, cy - hs), min(h, cy + hs)
+    cx0, cx1 = max(0, cx - hs), min(w, cx + hs)
+    center = data[cy0:cy1, cx0:cx1]
+    
+    edge_means = np.array([np.median(top_left), np.median(top_right), np.median(bottom_left), np.median(bottom_right)])
+    edge_avg = max(edge_means)
+    center_mean = center.mean()
+    delta = edge_avg - center_mean
+    return delta

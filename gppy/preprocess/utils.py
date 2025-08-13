@@ -8,6 +8,7 @@ from watchdog.events import FileSystemEventHandler
 import uuid
 
 from ..path.path import PathHandler
+from .checker import Checker
 
 
 class FileCreationHandler(FileSystemEventHandler):
@@ -113,7 +114,8 @@ def search_with_date_offsets(template, max_offset=300, future=False):
                 matches = glob(modified_path)
                 if matches:
                     if len(matches) == 1:
-                        return matches[0]
+                        if Checker().sanity_check(matches[0]):
+                            return matches[0]
                     else:
                         return PathHandler(matches).get_minimum("exptime")
             else:

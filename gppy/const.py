@@ -3,9 +3,6 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
-# Internal paths
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-REF_DIR = os.path.join(SCRIPT_DIR, "ref")
 
 # Bashrc-defined system paths
 RAWDATA_DIR = os.environ.get("RAWDATA_DIR")  # , "/lyman/data1/obsdata/")
@@ -14,11 +11,14 @@ MASTER_FRAME_DIR = os.environ.get("MASTER_FRAME_DIR")
 PROCESSED_DIR = os.environ.get("PROCESSED_DIR")
 DAILY_STACKED_DIR = os.environ.get("DAILY_STACKED_DIR")
 STACKED_DIR = os.environ.get("STACKED_DIR")
-
-PIPELINE_DIRS = {RAWDATA_DIR, FACTORY_DIR, MASTER_FRAME_DIR, PROCESSED_DIR, STACKED_DIR}
 SLACK_TOKEN = os.environ.get("SLACK_TOKEN", None)
 INSTRUM_STATUS_DICT = os.environ.get("INSTRUM_STATUS_DICT")
 
+
+# Internal paths
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REF_DIR = os.path.join(SCRIPT_DIR, "ref")
+PIPELINE_DIRS = {RAWDATA_DIR, FACTORY_DIR, MASTER_FRAME_DIR, PROCESSED_DIR, STACKED_DIR}
 
 # Image grouping structure
 INSTRUM_GROUP_KEYS = ["unit", "n_binning", "gain", "camera"]
