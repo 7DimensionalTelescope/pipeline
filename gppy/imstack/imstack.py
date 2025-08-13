@@ -312,12 +312,15 @@ class ImStack(BaseSetup):
                 fits.writeto(outim, _data, header=_hdr, overwrite=True)
 
     @staticmethod
-    def _group_IMCMB(input_images: list[str], output_images: list[str]) -> dict[tuple[str, str, str], list[list[str]]]:
+    def _group_IMCMB(
+        input_images: list[str], output_images: list[str] = None
+    ) -> dict[tuple[str, str, str], list[list[str]]]:
         """
         Group images by their master frames (IMCMB).
         Same logic as the preprocessing grouping, but relies on header info
         instead of parsing filename as in NameHandler.get_grouped_files()
         """
+        # construct zdf bundles for dict keys
         calibs = []
         for image in input_images:
             header = get_header(image)
@@ -326,13 +329,17 @@ class ImStack(BaseSetup):
                 raise ValueError(f"zdf not correctly found from header IMCMB of {image}")
             calibs.append(zdf)
 
+        # make a dict of zdf bundles and their corresponding input and output images
         groups = dict()
-        for input_image, output_image, zdf in zip(input_images, output_images, calibs):
-            key = tuple(zdf)
-            if key not in groups:
-                groups[key] = []
-            groups.setdefault(key, [[], []])[0].append(input_image)
-            groups[key][1].append(output_image)
+        if output_images is not None:
+            for input_image, output_image, zdf in zip(input_images, output_images, calibs):
+                key = tuple(zdf)
+                groups.setdefault(key, [[], []])[0].append(input_image)
+                groups[key][1].append(output_image)
+        else:
+            for input_image, zdf in zip(input_images, calibs):
+                key = tuple(zdf)
+                groups.setdefault(key, []).append(input_image)
 
         return groups
 
@@ -351,10 +358,10 @@ class ImStack(BaseSetup):
         self.logger.debug(f"{len(groups)} groups for weight map calculation.")
         self.logger.debug(f"{groups}")
 
-        for i, ((z_m_file, d_m_file, f_m_file), images) in enumerate(groups.items()):
+        for i, ((z_m_file, d_m_file, f_m_file), input_images) in enumerate(groups.items()):
             st_loop = time.time()
 
-            header = fits.getheader(images[0])  # same cailb in a group
+            header = fits.getheader(input_images[0])  # same cailb in a group
             calibs = [v for k, v in header.items() if "IMCMB" in k]  # must be ordered mbias, mdark, mflat
             self.logger.debug(f"Group {i} calibs: {calibs}")
             d_m_file, f_m_file, sig_z_file, sig_f_file = PathHandler.weight_map_input(calibs)
@@ -363,7 +370,7 @@ class ImStack(BaseSetup):
 
             uncalculated_images = []
 
-            for img in images:
+            for img in input_images:
                 weight_image_file = add_suffix(img, "weight")
                 self.config.imstack.bkgsub_weight_images.append(weight_image_file)
                 if os.path.exists(weight_image_file) and not self.overwrite:
@@ -394,7 +401,7 @@ class ImStack(BaseSetup):
                 self.logger.info("All weight images already exist. Skipping weight map calculation")
 
             self.logger.info(
-                f"Weight-map calculation is completed in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(images):.1f} s/image)"
+                f"Weight-map calculation is completed in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(input_images):.1f} s/image)"
             )
 
     def _get_bpmask(self, image) -> tuple[str, int]:
@@ -445,11 +452,8 @@ class ImStack(BaseSetup):
         # interpolate
         if not uncalculated_images:
             self.logger.info("No images to interpolate. Skipping")
-
         else:
             groups = self._group_IMCMB(uncalculated_images, calculated_outputs)
-            # if len(groups) > 1:
-            #     self.logger.warning(f"{len(groups)} groups detected: multi-group bpmask not implemented.")
 
             for group_id, ((z, d, f), [input_images, output_images]) in enumerate(groups.items()):
                 mask_file, badpix = self._get_bpmask(input_images[0])
