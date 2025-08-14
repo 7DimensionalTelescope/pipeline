@@ -7,13 +7,13 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas  # thread-safe, but savefig only.
 import matplotlib.colors as mcolors
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
+from PIL import Image, ImageEnhance
 
 from ..path import PathHandler
 
 
 def save_fits_as_png(image_data, output_path, stretch=True, log_scale=False, max_width=1000):
-    from PIL import Image
-
+    
     # Handle potential NaN or inf values
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
@@ -31,9 +31,6 @@ def save_fits_as_png(image_data, output_path, stretch=True, log_scale=False, max
 
     # Optional stretching for better contrast
     if stretch:
-        # # Percentile-based stretching
-        # p1, p99 = np.percentile(image_data[np.isfinite(image_data)], (1, 99))
-        # vmin, vmax = p1, p99
         interval = ZScaleInterval()
         vmin, vmax = interval.get_limits(image_data[np.isfinite(image_data)])
 
@@ -54,8 +51,47 @@ def save_fits_as_png(image_data, output_path, stretch=True, log_scale=False, max
         pil_image = pil_image.resize((new_width, new_height), Image.LANCZOS)
 
     # Save with compression
-    pil_image.save(output_path, "PNG", optimize=True, compress_level=5)  # Optimize compression
+    pil_image.save(output_path, "JPEG", quality=85, optimize=True)
 
+def save_fits_with_contrast(image_data, output_path, max_width=1000):
+    # Open the FITS file
+    with fits.open(image_data) as hdu:
+        # Get the data
+        data = hdu[0].data
+        
+        # Get clipping parameters from header
+        clipmed = hdu[0].header.get('CLIPMED')
+        clipstd = hdu[0].header.get('CLIPSTD')
+
+        lower_bound = clipmed - 3 * clipstd
+        upper_bound = clipmed + 3 * clipstd
+        
+        
+        clipped_data = np.clip(data, lower_bound, upper_bound)
+        
+        if upper_bound > lower_bound:
+            normalized_data = ((clipped_data - lower_bound) / (upper_bound - lower_bound) * 255).astype(np.uint8)
+        else:    
+            normalized_data = np.full_like(data, 128, dtype=np.uint8)
+
+        # Create PIL image
+        pil_image = Image.fromarray(normalized_data, mode='L')  # Grayscale
+        
+        # Apply contrast enhancement
+        enhancer = ImageEnhance.Contrast(pil_image)
+        enhanced_image = enhancer.enhance(2.0)  # Increase contrast by factor of 4
+
+        width, height = enhanced_image.size
+
+        if width > max_width:
+            scale = max_width / width
+            new_width = max_width
+            new_height = int(height * scale)
+            enhanced_image = enhanced_image.resize((new_width, new_height), Image.LANCZOS)
+
+        enhanced_image.save(output_path, "JPEG", quality=85, optimize=True)
+        
+        return enhanced_image
 
 def plot_bias(file, overwrite=False):
     if not (isinstance(file, str)):
@@ -64,7 +100,7 @@ def plot_bias(file, overwrite=False):
 
     path = Path(file)
     os.makedirs(path.parent / "figures", exist_ok=True)
-    output_path = path.parent / "figures" / f"{path.stem}_hist.png"
+    output_path = path.parent / "figures" / f"{path.stem}_hist.jpg"
 
     # if output_path.exists() and not overwrite:
     #     return
@@ -113,8 +149,8 @@ def plot_bias(file, overwrite=False):
     canvas.print_figure(output_path)
     # plt.savefig(output_path)
     # plt.close()
-    save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
-
+    save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.jpg")
+    save_fits_with_contrast(file, path.parent / "figures" / f"{path.stem}_contrast.jpg")
 
 def plot_dark(file, flattened_mask=None):
     if not (isinstance(file, str)):
@@ -123,7 +159,7 @@ def plot_dark(file, flattened_mask=None):
 
     path = Path(file)
     os.makedirs(path.parent / "figures", exist_ok=True)
-    output_path = path.parent / "figures" / f"{path.stem}_hist.png"
+    output_path = path.parent / "figures" / f"{path.stem}_hist.jpg"
     # if output_path.exists():
     #     return
 
@@ -189,8 +225,8 @@ def plot_dark(file, flattened_mask=None):
     canvas.print_figure(output_path)  # writes to PNG
     # plt.savefig(output_path)
     # plt.close()
-    save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
-
+    save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.jpg")
+    save_fits_with_contrast(file, path.parent / "figures" / f"{path.stem}_contrast.jpg")
     # plot_dark_tail(fdata, file, savefig=savefig)
 
 
@@ -238,7 +274,7 @@ def plot_dark_tail_on_ax(fdata, ax, i=0, mx=None):
 #     if savefig:
 #         path = Path(file)
 #         os.makedirs(path.parent / "figures", exist_ok=True)
-#         plt.savefig(path.parent / "figures" / f"{path.stem}_tail.png")
+#         plt.savefig(path.parent / "figures" / f"{path.stem}_tail.jpg")
 #         plt.clf()
 #     else:
 #         plt.show(block=False)
@@ -250,7 +286,7 @@ def plot_flat(file, fmask=None):
         return
     path = Path(file)
     os.makedirs(path.parent / "figures", exist_ok=True)
-    output_path = path.parent / "figures" / f"{path.stem}_hist.png"
+    output_path = path.parent / "figures" / f"{path.stem}_hist.jpg"
     # if output_path.exists():
     #     return
 
@@ -300,7 +336,7 @@ def plot_flat(file, fmask=None):
     # fig.savefig(output_path)
     # fig.close()
 
-    save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.png")
+    save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.jpg")
 
 
 def plot_bpmask(file, ext=1, badpix=1):
@@ -309,7 +345,7 @@ def plot_bpmask(file, ext=1, badpix=1):
         return
     path = Path(file)
     os.makedirs(path.parent / "figures", exist_ok=True)
-    output_path = path.parent / "figures" / f"{path.stem}.png"
+    output_path = path.parent / "figures" / f"{path.stem}.jpg"
     data = fits.getdata(file, ext=ext)
     # if output_path.exists():
     #     return
@@ -347,5 +383,6 @@ def plot_sci(input_img, output_img):
         print("An image path (output_img) is not properly defined.")
         return
     path = PathHandler(output_img)
-    save_fits_as_png(fits.getdata(input_img), path.figure_dir_to_path / f"{path.stem[0]}_raw.png")
-    save_fits_as_png(fits.getdata(output_img), path.figure_dir_to_path / f"{path.stem[0]}.png")
+    
+    save_fits_as_png(fits.getdata(input_img), path.figure_dir_to_path / f"{path.stem[0]}_raw.jpg")
+    save_fits_as_png(fits.getdata(output_img), path.figure_dir_to_path / f"{path.stem[0]}.jpg")

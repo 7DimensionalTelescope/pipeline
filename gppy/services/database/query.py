@@ -1,13 +1,23 @@
-from datetime import date
-from typing import List, Dict, Optional, Union, Any, Tuple
-import psycopg
-import re
-from .const import dbname, user, host, port, password, TABLES, ALIASES
 import os
 import re
 import glob
+from datetime import date
+from typing import List, Dict, Optional, Union, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import psycopg
+from psycopg_pool import ConnectionPool
 from ...const import RAWDATA_DIR, CalibType
+from .const import DB_PARAMS, TABLES, ALIASES
+
+
+# Connection pool
+dsn = " ".join(f"{k}={v}" for k, v in DB_PARAMS.items())
+POOL = ConnectionPool(
+    dsn,
+    min_size=1,  # Keep 1 connection ready
+    max_size=10,  # Adjust based on concurrency needs
+    max_idle=60,  # Close idle connections after 60s
+)
 
 # all column names and data types in a table
 query_example = """
@@ -19,20 +29,27 @@ query_example = """
 
 
 # sql injection risk. dev only
+# def free_query(query: str, params: Optional[List[Any]] = None) -> List[Tuple]:
+#     """
+#     Execute a free-form query and return the results.
+#     """
+#     conn = psycopg.connect(**DB_PARAMS)
+#     with psycopg.connect(**DB_PARAMS) as conn:
+#         with conn.cursor() as cur:
+#             cur.execute(query, params)
+#             return cur.fetchall()
+
+
+# sql injection risk. dev only
 def free_query(query: str, params: Optional[List[Any]] = None) -> List[Tuple]:
     """
     Execute a free-form query and return the results.
+    Uses the global connection pool.
     """
-    conn = psycopg.connect(
-        dbname=dbname,
-        user=user,
-        host=host,
-        port=port,
-        password=password,
-    )
-    with conn.cursor() as cur:
-        cur.execute(query, params)
-        return cur.fetchall()
+    with POOL.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            return cur.fetchall()
 
 
 ###############################################################################
@@ -62,6 +79,7 @@ def get_image_files(
 ) -> Dict[str, List[Dict]]:
     """
     Core query: any combination of date, filter, types, units, ...
+    Uses the global connection pool.
     """
 
     # normalize date(s)
@@ -71,7 +89,6 @@ def get_image_files(
         # Convert list of strings to list of dates
         target_date = [date.fromisoformat(d) if isinstance(d, str) else d for d in target_date]
 
-    conn = psycopg.connect(dbname=dbname, user=user, host=host, port=port, password=password)
     results: Dict[str, List[Dict]] = {}
 
     # If target_names is specified but image_types is not, only return science frames
@@ -79,146 +96,147 @@ def get_image_files(
         types = ["sci"]
     else:
         types = normalize_types(image_types)
+
     tables = {t: TABLES[t] for t in types}
 
-    with conn.cursor() as cur:
-        for img_type, tbl in tables.items():
-            # base SELECT + joins
-            query = f"""
-            SELECT
-                sf.id,
-                sf.file_path,
-                sf.original_filename,
-                sf.unified_filename,
-                sf.obstime,
-                sf.exptime,
-                sf.instrument,
-                u.name AS unit,
-                COALESCE(f.name, NULL) AS filter,
-                n.date AS nightdate,
-                COALESCE(t.name, NULL) AS target_name
-            FROM
-                "{tbl}" sf
-            JOIN
-                facility_unit u ON sf.unit_id = u.id
-            JOIN
-                survey_night n ON sf.night_id = n.id
-            """
+    with POOL.connection() as conn:
+        with conn.cursor() as cur:
+            for img_type, tbl in tables.items():
+                # base SELECT + joins
+                query = f"""
+                SELECT
+                    sf.id,
+                    sf.file_path,
+                    sf.original_filename,
+                    sf.unified_filename,
+                    sf.obstime,
+                    sf.exptime,
+                    sf.instrument,
+                    u.name AS unit,
+                    COALESCE(f.name, NULL) AS filter,
+                    n.date AS nightdate,
+                    COALESCE(t.name, NULL) AS target_name
+                FROM
+                    "{tbl}" sf
+                JOIN
+                    facility_unit u ON sf.unit_id = u.id
+                JOIN
+                    survey_night n ON sf.night_id = n.id
+                """
 
-            if img_type in ("sci", "flat"):
-                query += " LEFT JOIN facility_filter f ON sf.filter_id = f.id"
-            else:
-                # For bias and dark frames, we don't have filter_id, so we need to handle this differently
-                query += " LEFT JOIN facility_filter f ON NULL"
-
-            # Add target join for science frames only
-            if img_type == "sci":
-                query += " LEFT JOIN survey_target t ON sf.target_id = t.id"
-            else:
-                # For other frame types, we don't have target_id
-                query += " LEFT JOIN survey_target t ON NULL"
-
-            # accumulate WHERE clauses
-            clauses: List[str] = []
-            params: List[Union[str, date]] = []
-
-            if target_date:
-                if isinstance(target_date, list):
-                    # Multiple dates
-                    placeholders = ",".join(["%s"] * len(target_date))
-                    clauses.append(f"n.date IN ({placeholders})")
-                    params.extend(target_date)
+                if img_type in ("sci", "flat"):
+                    query += " LEFT JOIN facility_filter f ON sf.filter_id = f.id"
                 else:
-                    # Single date
-                    clauses.append("n.date = %s")
-                    params.append(target_date)
+                    # For bias and dark frames, we don't have filter_id, so we need to handle this differently
+                    query += " LEFT JOIN facility_filter f ON NULL"
 
-            if filter_names and img_type in ("sci", "flat"):
-                if isinstance(filter_names, list):
-                    # Multiple filters
-                    placeholders = ",".join(["%s"] * len(filter_names))
-                    clauses.append(f"f.name IN ({placeholders})")
-                    params.extend(filter_names)
+                # Add target join for science frames only
+                if img_type == "sci":
+                    query += " LEFT JOIN survey_target t ON sf.target_id = t.id"
                 else:
-                    # Single filter
-                    clauses.append("f.name = %s")
-                    params.append(filter_names)
-            if units:
-                placeholders = ",".join(["%s"] * len(units))
-                clauses.append(f"u.name IN ({placeholders})")
-                params.extend(units)
+                    # For other frame types, we don't have target_id
+                    query += " LEFT JOIN survey_target t ON NULL"
 
-            if target_names and img_type == "sci":
-                # Check if target_names look like tile names (T followed by numbers)
-                import re
+                # accumulate WHERE clauses
+                clauses: List[str] = []
+                params: List[Union[str, date]] = []
 
-                tile_pattern = re.compile(r"^T\d+$")
-
-                if isinstance(target_names, list):
-                    tile_targets = [t for t in target_names if tile_pattern.match(t)]
-                    regular_targets = [t for t in target_names if not tile_pattern.match(t)]
-
-                    if tile_targets and regular_targets:
-                        # Mixed targets - need to handle both
-                        clauses.append(
-                            "(t.name IN (%s) OR sf.tile_id IN (SELECT id FROM survey_tile WHERE name IN (%s)))"
-                        )
-                        placeholders = ",".join(["%s"] * len(regular_targets))
-                        tile_placeholders = ",".join(["%s"] * len(tile_targets))
-                        clauses[-1] = clauses[-1].replace("%s", placeholders, 1)
-                        clauses[-1] = clauses[-1].replace("%s", tile_placeholders, 1)
-                        params.extend(regular_targets)
-                        params.extend(tile_targets)
-                    elif tile_targets:
-                        # Only tile targets
-                        placeholders = ",".join(["%s"] * len(tile_targets))
-                        clauses.append(f"sf.tile_id IN (SELECT id FROM survey_tile WHERE name IN ({placeholders}))")
-                        params.extend(tile_targets)
+                if target_date:
+                    if isinstance(target_date, list):
+                        # Multiple dates
+                        placeholders = ",".join(["%s"] * len(target_date))
+                        clauses.append(f"n.date IN ({placeholders})")
+                        params.extend(target_date)
                     else:
-                        # Only regular targets
-                        placeholders = ",".join(["%s"] * len(regular_targets))
-                        clauses.append(f"t.name IN ({placeholders})")
-                        params.extend(regular_targets)
-                else:
-                    # Single target
-                    if tile_pattern.match(target_names):
-                        # Tile target
-                        clauses.append("sf.tile_id IN (SELECT id FROM survey_tile WHERE name = %s)")
-                        params.append(target_names)
+                        # Single date
+                        clauses.append("n.date = %s")
+                        params.append(target_date)
+
+                if filter_names and img_type in ("sci", "flat"):
+                    if isinstance(filter_names, list):
+                        # Multiple filters
+                        placeholders = ",".join(["%s"] * len(filter_names))
+                        clauses.append(f"f.name IN ({placeholders})")
+                        params.extend(filter_names)
                     else:
-                        # Regular target
-                        clauses.append("t.name = %s")
-                        params.append(target_names)
-            # ... future filters go here ...
+                        # Single filter
+                        clauses.append("f.name = %s")
+                        params.append(filter_names)
+                if units:
+                    placeholders = ",".join(["%s"] * len(units))
+                    clauses.append(f"u.name IN ({placeholders})")
+                    params.extend(units)
 
-            if clauses:
-                query += " WHERE " + " AND ".join(clauses)
-            query += " ORDER BY sf.obstime;"
+                if target_names and img_type == "sci":
+                    # Check if target_names look like tile names (T followed by numbers)
+                    import re
 
-            try:
-                cur.execute(query, params)
-                rows = cur.fetchall()
-                results[img_type] = [
-                    {
-                        "id": row[0],
-                        "file_path": row[1],
-                        "original_filename": row[2],
-                        "unified_filename": row[3],
-                        "obstime": row[4],
-                        "exptime": row[5],
-                        "instrument": row[6],
-                        "unit": row[7],
-                        "filter": row[8],
-                        "nightdate": row[9],
-                        "target_name": row[10],
-                    }
-                    for row in rows
-                ]
-            except Exception as e:
-                print(f"Error querying {tbl}: {e}")
-                results[img_type] = []
+                    tile_pattern = re.compile(r"^T\d+$")
 
-    conn.close()
+                    if isinstance(target_names, list):
+                        tile_targets = [t for t in target_names if tile_pattern.match(t)]
+                        regular_targets = [t for t in target_names if not tile_pattern.match(t)]
+
+                        if tile_targets and regular_targets:
+                            # Mixed targets - need to handle both
+                            clauses.append(
+                                "(t.name IN (%s) OR sf.tile_id IN (SELECT id FROM survey_tile WHERE name IN (%s)))"
+                            )
+                            placeholders = ",".join(["%s"] * len(regular_targets))
+                            tile_placeholders = ",".join(["%s"] * len(tile_targets))
+                            clauses[-1] = clauses[-1].replace("%s", placeholders, 1)
+                            clauses[-1] = clauses[-1].replace("%s", tile_placeholders, 1)
+                            params.extend(regular_targets)
+                            params.extend(tile_targets)
+                        elif tile_targets:
+                            # Only tile targets
+                            placeholders = ",".join(["%s"] * len(tile_targets))
+                            clauses.append(f"sf.tile_id IN (SELECT id FROM survey_tile WHERE name IN ({placeholders}))")
+                            params.extend(tile_targets)
+                        else:
+                            # Only regular targets
+                            placeholders = ",".join(["%s"] * len(regular_targets))
+                            clauses.append(f"t.name IN ({placeholders})")
+                            params.extend(regular_targets)
+                    else:
+                        # Single target
+                        if tile_pattern.match(target_names):
+                            # Tile target
+                            clauses.append("sf.tile_id IN (SELECT id FROM survey_tile WHERE name = %s)")
+                            params.append(target_names)
+                        else:
+                            # Regular target
+                            clauses.append("t.name = %s")
+                            params.append(target_names)
+                # ... future filters go here ...
+
+                if clauses:
+                    query += " WHERE " + " AND ".join(clauses)
+                query += " ORDER BY sf.obstime;"
+
+                try:
+                    cur.execute(query, params)
+                    rows = cur.fetchall()
+                    results[img_type] = [
+                        {
+                            "id": row[0],
+                            "file_path": row[1],
+                            "original_filename": row[2],
+                            "unified_filename": row[3],
+                            "obstime": row[4],
+                            "exptime": row[5],
+                            "instrument": row[6],
+                            "unit": row[7],
+                            "filter": row[8],
+                            "nightdate": row[9],
+                            "target_name": row[10],
+                        }
+                        for row in rows
+                    ]
+                except Exception as e:
+                    print(f"Error querying {tbl}: {e}")
+                    results[img_type] = []
+
     return results
 
 

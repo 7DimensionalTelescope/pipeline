@@ -1,9 +1,9 @@
 {
     "BIAS": {
         "CLIPMED": {
-            "value": 513,
-            "criteria": "eq",
-            "description": "Median clipping value must be exactly 513"
+            "value": [512, 514],
+            "criteria": "within",
+            "description": "Median clipping value must be ≥ 512"
         },
         "CLIPSTD": {
             "value": 2.5,
@@ -35,13 +35,13 @@
             "description": "Edge variance must be < 0.7"
         },
         "SIGMEAN": {
-            "value": 0.5,
+            "value": 0.04,
             "criteria": "lt",
-            "description": "Mean of the errormap must be < 0.5"
+            "description": "Mean of the errormap must be < 0.04"
         },
-        "CUTTED": {
-            "value": true,
-            "criteria": "neq",
+        "TRIMMED": {
+            "value": false,
+            "criteria": "eq",
             "description": "Image must NOT be cut/trimmed"
         }
     }

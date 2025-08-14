@@ -1,5 +1,7 @@
 import json
 from astropy.io import fits
+from .. import const
+
 
 class Checker:
     def __init__(self):
@@ -7,8 +9,8 @@ class Checker:
 
     def load_criteria(self):
         try:
-            criteria_file = __file__.replace('checker.py', 'masterframe_criteria.json')
-            with open(criteria_file, 'r') as f:
+            criteria_file = const.REF_DIR + "/qa/masterframe.json"
+            with open(criteria_file, "r") as f:
                 self.criteria = json.load(f)
                 return self.criteria
         except FileNotFoundError:
@@ -18,7 +20,7 @@ class Checker:
         except Exception as e:
             raise RuntimeError(f"Failed to load criteria: {e}")
 
-    def apply_criteria(self, file_path: str=None, header: dict=None, dtype: str=None):
+    def apply_criteria(self, file_path: str = None, header: dict = None, dtype: str = None):
         if dtype is None:
             if "bias" in file_path:
                 dtype = "BIAS"
@@ -28,12 +30,12 @@ class Checker:
                 dtype = "FLAT"
             else:
                 raise ValueError(f"Unknown dtype: {file_path}")
-                
-        if not(hasattr(self, "criteria")):
+
+        if not (hasattr(self, "criteria")):
             self.load_criteria()
-        
+
         criteria = self.criteria[dtype.upper()]
-        
+
         flag = True
 
         if header is None:
@@ -54,7 +56,7 @@ class Checker:
             elif value["criteria"] == "gte":
                 if header[key] < value["value"]:
                     flag = False
-                    break 
+                    break
             elif value["criteria"] == "gt":
                 if header[key] <= value["value"]:
                     flag = False
@@ -67,11 +69,15 @@ class Checker:
                 if header[key] >= value["value"]:
                     flag = False
                     break
-        header["SANITY"] = flag
+            elif value["criteria"] == "within":
+                if header[key] < value["value"][0] or header[key] > value["value"][1]:
+                    flag = False
+                    break
+        header["SANITY"] = (flag, "Sanity flag")
 
         return flag, header
 
-    def sanity_check(self, file_path: str=None, header: dict=None, dtype: str=None):
+    def sanity_check(self, file_path: str = None, header: dict = None, dtype: str = None):
         if file_path is not None:
             header = fits.getheader(file_path)
         elif header is not None:

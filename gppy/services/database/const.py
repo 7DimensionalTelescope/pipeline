@@ -10,6 +10,15 @@ host = os.environ["DBHOST"]
 port = os.environ["DBPORT"]
 password = os.environ["DBPASSWORD"]
 
+DB_PARAMS = {
+    "dbname": dbname,
+    "user": user,
+    "host": host,
+    "port": port,
+    "password": password,
+}
+
+
 TABLES = {
     "sci": "survey_scienceframe",
     "bias": "survey_biasframe",

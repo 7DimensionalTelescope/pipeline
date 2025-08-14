@@ -114,6 +114,9 @@ def lapse(explanation="elapsed", print_output=True):
     from timeit import default_timer as timer
 
     global _dhutil_lapse_checkpoint  # Global Checkpoint
+    # Initialize if not yet defined
+    if "_dhutil_lapse_checkpoint" not in globals():
+        _dhutil_lapse_checkpoint = None
 
     current_time = timer()
 
@@ -132,7 +135,7 @@ def lapse(explanation="elapsed", print_output=True):
         _dhutil_lapse_checkpoint = current_time  # Update the checkpoint
 
         print_str = f"{dt:.3f} {unit} {explanation}"
-        print(print_str)  # log the elapsed time at INFO level
+        # print(print_str)  # log the elapsed time at INFO level
 
         if print_output:
             print(print_str, end="\n")  # log the elapsed time

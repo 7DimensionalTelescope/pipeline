@@ -4,6 +4,7 @@ import time
 import pprint
 import threading
 import numpy as np
+from datetime import datetime
 from astropy.io import fits
 
 from .plotting import *
@@ -21,6 +22,7 @@ from ..services.setup import BaseSetup
 from ..const import HEADER_KEY_MAP
 from ..services.utils import acquire_available_gpu
 from .checker import Checker
+from ..services.database import PipelineDatabase, PipelineData, generate_id
 
 pp = pprint.PrettyPrinter(indent=2)  # , width=120)
 
@@ -66,8 +68,13 @@ class Preprocess(BaseSetup, Checker):
         self.calib_types = calib_types or ["bias", "dark", "flat"]
 
         self._use_gpu = use_gpu
+
+        # Initialize database connection
+        self.db = PipelineDatabase()
+        self.pipeline_id = None
+
         self.initialize()
-        
+
         # self.logger.debug(f"Masterframe output folder: {self.path_fdz}")
 
     @classmethod
@@ -109,7 +116,130 @@ class Preprocess(BaseSetup, Checker):
 
         self.logger.info(f"{self._n_groups} groups are found")
         self.logger.debug(f"raw_groups:\n{pp.pformat(self.raw_groups)}")
+
+        # Create pipeline record in database
+        self._create_pipeline_record()
+
         # raise ValueError("stop")  # for debug
+
+    def _create_pipeline_record(self):
+        """Create a pipeline record in the database and update config"""
+        try:
+            # Generate process ID
+            process_id = generate_id()
+
+            # Get basic info from config
+            run_date = datetime.now().strftime("%Y-%m-%d")
+
+            # Determine data type based on what we're processing
+            data_type = "masterframe"
+
+            # Parse unit name from config name (format: {date}_{unit})
+            unit_name = self.config.name.split("_")[1]
+
+            # Check if existing record exists
+            existing_pipeline_id = self.db.find_existing_pipeline_record(
+                run_date=run_date,
+                data_type=data_type,
+                unit=unit_name,
+                config_file=self.config.config_file if hasattr(self.config, "config_file") else None,
+            )
+
+            if existing_pipeline_id:
+                if self.overwrite:
+                    # If overwrite is True, remove existing record and create new one
+                    self.logger.info(
+                        f"Found existing pipeline record (ID: {existing_pipeline_id}), removing it due to overwrite=True..."
+                    )
+                    try:
+                        self.db.delete_pipeline_data(existing_pipeline_id)
+                        self.logger.info(f"Successfully removed existing pipeline record (ID: {existing_pipeline_id})")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to remove existing pipeline record: {e}")
+                else:
+                    # If overwrite is False, use existing record without updating it
+                    self.logger.info(
+                        f"Found existing pipeline record (ID: {existing_pipeline_id}), using it due to overwrite=False..."
+                    )
+                    self.pipeline_id = existing_pipeline_id
+
+                    # Read existing record to get current process_id and other details
+                    existing_record = self.db.read_pipeline_data(existing_pipeline_id)
+                    if existing_record:
+                        self.config.process_id = existing_record.tag_id
+                        self.logger.info(f"Using existing process_id: {existing_record.tag_id}")
+                        self.logger.info(f"Resuming from existing pipeline record (ID: {existing_pipeline_id})")
+                        return
+                    else:
+                        self.logger.warning(f"Failed to read existing pipeline record, will create new one")
+                        self.pipeline_id = None
+
+            # If we reach here, we need to create a new record (either no existing record or overwrite=True)
+            dark_info = []
+            flat_info = []
+
+            for i, group in enumerate(self.raw_groups):
+                try:
+                    group_info = PathHandler.get_group_info(group)
+                    if ":" in group_info:
+                        filt, exptime = group_info.split(":", 1)
+                        filt = filt.strip()
+                        exptime = exptime.strip()
+                        if group[0][1]:
+                            dark_info.append(exptime)
+                        if group[0][2]:
+                            flat_info.append(filt)
+                except Exception as e:
+                    self.logger.debug(f"Could not parse group {i} info: {e}")
+
+            # Create pipeline data object
+            pipeline_data = PipelineData(
+                tag_id=process_id,
+                run_date=run_date,
+                data_type=data_type,
+                unit=unit_name,
+                status="pending",
+                progress=0,
+                bias=True if self.bias_input else False,
+                dark=dark_info,
+                flat=flat_info,
+                warnings=0,
+                errors=0,
+                comments=0,
+                config_file=self.config.name,
+                log_file=self.config.logging.file,
+                debug_file=self.config.logging.file.replace(".log", "_debug.log"),
+                comments_file=self.config.logging.file.replace(".log", "_comments.txt"),
+                last_modified=datetime.now(),
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+                output_combined_frame_id=None,
+            )
+
+            # Save to database
+            self.pipeline_id = self.db.create_pipeline_data(pipeline_data)
+
+            # Update config with process ID
+            self.config.process_id = process_id
+
+            self.logger.info(f"Created pipeline record with ID: {self.pipeline_id}, process_id: {process_id}")
+
+        except Exception as e:
+            self.logger.warning(f"Failed to create pipeline record: {e}")
+            self.pipeline_id = None
+
+    def _update_pipeline_progress(self, progress: int, status: str = None):
+        """Update pipeline progress in database"""
+        if self.pipeline_id is None:
+            return
+
+        try:
+            if status:
+                self.db.update_pipeline_data(self.pipeline_id, progress=progress, status=status)
+            else:
+                self.db.update_pipeline_data(self.pipeline_id, progress=progress)
+        except Exception as e:
+            self.logger.warning(f"Failed to update pipeline progress: {e}")
 
     def run(self, device_id=None, make_plots=True, use_gpu=True, only_with_sci=False):
         self._use_gpu = all([use_gpu, self._use_gpu])
@@ -117,8 +247,15 @@ class Preprocess(BaseSetup, Checker):
 
         st = time.time()
 
+        # Update pipeline status to running
+        self._update_pipeline_progress(0, "running")
+
         threads_for_making_plots = []
         for i in range(self._n_groups):
+            # Calculate progress percentage
+            progress = int((i / self._n_groups) * 100)
+            self._update_pipeline_progress(progress)
+
             self.logger.debug(f"[Group {i+1}] [filter: exptime] {PathHandler.get_group_info(self.raw_groups[i])}")
             # self.logger.info(f"Start processing group {i+1} / {self._n_groups}")
             self.logger.debug("\n" + "#" * 100 + f"\n{' '*30}Start processing group {i+1} / {self._n_groups}\n" + "#" * 100)  # fmt: skip
@@ -141,6 +278,9 @@ class Preprocess(BaseSetup, Checker):
         if make_plots:
             for t in threads_for_making_plots:
                 t.join()
+
+        # Update pipeline status to completed
+        self._update_pipeline_progress(100, "completed")
 
         self.logger.info(f"Preprocessing completed in {time_diff_in_seconds(st)} seconds")
 
@@ -248,6 +388,7 @@ class Preprocess(BaseSetup, Checker):
 
             self.logger.debug(f"[Group {self._current_group+1}] {dtype}_input: {input_file}")
             self.logger.debug(f"[Group {self._current_group+1}] {dtype}_output: {output_file}")
+
             if dtype == "dark":
                 self.logger.debug(f"[Group {self._current_group+1}] flatdark_output: {self.flatdark_output}")
 
@@ -260,8 +401,43 @@ class Preprocess(BaseSetup, Checker):
                 self.logger.warning(f"{dtype} has no input or output data (to fetch)")
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_input: {input_file}")
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_output: {output_file}")
+                self.db.add_warning(self.pipeline_id)
 
         self.logger.info(f"[Group {self._current_group+1}] Generation/Loading of masterframes completed in {time_diff_in_seconds(st)} seconds")  # fmt: skip
+
+        # Update pipeline progress after masterframe processing
+        if self.pipeline_id:
+            masterframe_progress = int(
+                (self._current_group + 1) / self._n_groups * 50
+            )  # Masterframes are 50% of total work
+            self._update_pipeline_progress(masterframe_progress)
+
+            # Update dark and flat information with actual processed data
+            try:
+                current_record = self.db.read_pipeline_data(self.pipeline_id)
+                if current_record:
+                    # Get current group info
+                    group_info = PathHandler.get_group_info(self.raw_groups[self._current_group])
+                    if ":" in group_info:
+                        filt, exptime = group_info.split(":", 1)
+                        filt = filt.strip()
+                        exptime = exptime.strip()
+
+                        # Update dark info if dark frames were processed
+                        if "dark" in self.calib_types and not self.skip_flag.get("dark", False):
+                            dark_info = f"{filt}_{exptime}"
+                            if dark_info not in current_record.dark:
+                                updated_dark = current_record.dark + [dark_info]
+                                self.db.update_pipeline_data(self.pipeline_id, dark=updated_dark)
+
+                        # Update flat info if flat frames were processed
+                        if "flat" in self.calib_types and not self.skip_flag.get("flat", False):
+                            flat_info = f"{filt}_{exptime}"
+                            if flat_info not in current_record.flat:
+                                updated_flat = current_record.flat + [flat_info]
+                                self.db.update_pipeline_data(self.pipeline_id, flat=updated_flat)
+            except Exception as e:
+                self.logger.debug(f"Could not update dark/flat info: {e}")
 
     def _generate_masterframe(self, dtype, device_id):
         """Generate & Save masterframe and sigma image"""
@@ -317,35 +493,42 @@ class Preprocess(BaseSetup, Checker):
                     sig_output=self.flatsig_output,
                 )
 
-        prep_utils.update_header_by_overwriting(
-            getattr(self, f"{dtype}sig_output"),
-            header,
-        )
-        
+                self.logger.info(f"[Group {self._current_group+1}] Checking the quality and updating header for {dtype}")  # fmt: skip
+
+        prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), header)
+
         header = prep_utils.add_image_id(header)
         header = record_statistics(getattr(self, f"{dtype}_output"), header, dtype=dtype)
-        
-        if dtype == "dark":
-            self.update_bpmask()
-            
+
         flag, header = self.apply_criteria(header=header, dtype=dtype)
 
+        if dtype == "dark":
+            self.update_bpmask(sanity=flag)
+
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
-        self.logger.info(f"[Group {self._current_group+1}] Master {dtype} generated in {time_diff_in_seconds(st)} seconds")  # fmt: skip
-        self.logger.debug(f"[Group {self._current_group+1}] FITS Written: {getattr(self, f'{dtype}_output')}")
-        
-        if not flag:
-            self.logger.error(f"[Group {self._current_group+1}] Master {dtype} failed quality check")
+
+        if flag:
+            self.logger.info(f"[Group {self._current_group+1}] Nominal master {dtype} generated successfully in {time_diff_in_seconds(st)} seconds")  # fmt: skip
+            self.logger.debug(f"[Group {self._current_group+1}] FITS Written: {getattr(self, f'{dtype}_output')}")
+        else:
+            self.logger.error(f"[Group {self._current_group+1}] Master {dtype} generated but failed quality check")
+            self.logger.debug(f"[Group {self._current_group+1}] FITS Written: {getattr(self, f'{dtype}_output')}")
+            self.logger.error(
+                f"[Group {self._current_group+1}] Make a plot for the current {dtype} and fetch a new one with better quality"
+            )
+            self.make_plot(getattr(self, f"{dtype}_output"), dtype, self._current_group)
+            self.db.add_error(self.pipeline_id)
             self._fetch_masterframe(getattr(self, f"{dtype}_output"), dtype)
 
     def _fetch_masterframe(self, template, dtype):
-        self.logger.info(f"[Group {self._current_group+1}] Fetching a 'GOOD' master {dtype}")
+        self.logger.info(f"[Group {self._current_group+1}] Fetching a nominal master {dtype}")
         # existing_data can be either on-date or off-date
         max_offset = self.config.preprocess.max_offset
         self.logger.debug(f"[Group {self._current_group+1}] Masterframe Search Template: {template}")
         existing_mframe_file = prep_utils.search_with_date_offsets(template, max_offset=max_offset, future=True)
 
         if not existing_mframe_file:
+            self.db.add_error(self.pipeline_id)
             raise FileNotFoundError(f"[Group {self._current_group+1}] No pre-existing master {dtype} found in place of {template} wihin {max_offset} days")  # fmt: skip
 
         # update the output names in raw_groups
@@ -411,6 +594,13 @@ class Preprocess(BaseSetup, Checker):
                 f"({time_diff_in_seconds(st, return_float=True)/len(self.sci_input):.1f} s/image)"
             )
 
+            # Update pipeline progress after data reduction
+            if self.pipeline_id:
+                data_reduction_progress = 50 + int(
+                    (self._current_group + 1) / self._n_groups * 50
+                )  # Data reduction is 50-100% of total work
+                self._update_pipeline_progress(data_reduction_progress)
+
         # for raw_file, processed_file in zip(self.sci_input, self.sci_output):
         #     header = fits.getheader(raw_file)
         #     header["SATURATE"] = prep_utils.get_saturation_level(header, bias, dark, flat)
@@ -428,6 +618,24 @@ class Preprocess(BaseSetup, Checker):
             header = prep_utils.write_IMCMB_to_header(header, [bias, dark, flat, raw_file])
             header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
             prep_utils.write_header(processed_file, header)
+
+    def make_plot(self, file_path: str, dtype: str, group_index: int):
+        if dtype == "bias":
+            plot_bias(file_path)
+        elif dtype == "dark":
+            bpmask_file = file_path.replace("dark", "bpmask")
+            plot_bpmask(bpmask_file)
+            with fits.open(bpmask_file) as hdul:
+                badpix = hdul[1].header["BADPIX"]
+                mask = hdul[1].data != badpix
+                fmask = mask.ravel()
+            plot_dark(file_path, fmask)
+        elif dtype == "flat":
+            with fits.open(self._get_raw_group("bpmask_output", group_index)) as hdul:
+                badpix = hdul[1].header["BADPIX"]
+                mask = hdul[1].data != badpix
+                fmask = mask.ravel()
+            plot_flat(file_path, fmask)
 
     def make_plots(self, group_index: int, skip_flag={"bias": False, "dark": False, "flat": False, "sci": False}):
         st = time.time()
@@ -448,6 +656,7 @@ class Preprocess(BaseSetup, Checker):
                 plot_bias(bias_file)
             else:
                 self.logger.warning(f"Bias file {bias_file} does not exist. Skipping bias plot.")
+                self.db.add_warning(self.pipeline_id)
         else:
             self.logger.info(f"[Group {group_index+1}] Skipping bias plot")
 
@@ -462,6 +671,7 @@ class Preprocess(BaseSetup, Checker):
                     badpix = sample_header["BADPIX"]
                 else:
                     self.logger.warning("Header missing BADPIX; using 1")
+                    self.db.add_warning(self.pipeline_id)
                     badpix = 1
 
                 mask = fits.getdata(self._get_raw_group("bpmask_output", group_index), ext=1)
@@ -469,6 +679,7 @@ class Preprocess(BaseSetup, Checker):
                 fmask = mask.ravel()
             else:
                 self.logger.warning(f"BPMask file {bpmask_file} does not exist. Skipping bpmask plot.")
+                self.db.add_warning(self.pipeline_id)
                 fmask = None
         else:
             self.logger.info(f"[Group {group_index+1}] Skipping bpmask plot")
@@ -480,6 +691,7 @@ class Preprocess(BaseSetup, Checker):
                 plot_dark(dark_file, fmask)
             else:
                 self.logger.warning(f"Dark file {dark_file} does not exist. Skipping dark plot.")
+                self.db.add_warning(self.pipeline_id)
         else:
             self.logger.info(f"[Group {group_index+1}] Skipping dark plot")
 
@@ -490,6 +702,7 @@ class Preprocess(BaseSetup, Checker):
                 plot_flat(flat_file, fmask)
             else:
                 self.logger.warning(f"Flat file {flat_file} does not exist. Skipping flat plot.")
+                self.db.add_warning(self.pipeline_id)
         else:
             self.logger.info(f"[Group {group_index+1}] Skipping flat plot")
 
@@ -522,7 +735,7 @@ class Preprocess(BaseSetup, Checker):
         else:
             self.logger.info(f"[Group {group_index+1}] Skipping science plot")
 
-    def update_bpmask(self):
+    def update_bpmask(self, sanity=True):
         header = self.get_header("dark")
         hot_mask = fits.getdata(self.bpmask_output)
         newhdu = fits.CompImageHDU(data=hot_mask)
@@ -544,7 +757,7 @@ class Preprocess(BaseSetup, Checker):
         newhdu.header["NHOTPIX"] = (np.sum(hot_mask), "Number of hot pixels.")
         newhdu.header["SIGMAC"] = (self.config.preprocess.n_sigma, "HP threshold in clipped sigma")
         newhdu.header["BADPIX"] = (1, "Pixel Value for Bad pixels")
-
+        newhdu.header["SANITY"] = (sanity, "Sanity flag")
         primary_hdu = fits.PrimaryHDU()
         newhdul = fits.HDUList([primary_hdu, newhdu])
         newhdul.writeto(self.bpmask_output, overwrite=True)

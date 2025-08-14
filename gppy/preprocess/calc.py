@@ -7,6 +7,7 @@ from numba import njit, prange
 from ..const import SCRIPT_DIR
 from scipy.stats import variation
 
+
 def read_fits_image(path):
     return fits.getdata(path).astype(np.float32)
 
@@ -69,7 +70,7 @@ def combine_images_with_cpu(
     bpmask_sigma=5,
     **kwargs,  # prevent crash if extra args are passed. e.g., device_id
 ):
-    gc.collect()
+
     np_stack = np.stack([read_fits_image(img) for img in images])
     if subtract is not None:
         sub_arr = np.zeros_like(np_stack[0], dtype=np.float32)
@@ -274,6 +275,7 @@ def _compute_outlier_mask_2d(data, median, std, hot_sigma):
             mask[i, j] = 1 if abs(data[i, j] - median) > threshold else 0
     return mask
 
+
 def compute_rms(new_data, ref_data):
     if new_data.shape != ref_data.shape:
         h = min(new_data.shape[0], ref_data.shape[0])
@@ -284,8 +286,9 @@ def compute_rms(new_data, ref_data):
     resid = (new_data / ref_safe) - 1.0
     resid = resid[np.isfinite(resid)]
     if resid.size == 0:
-        return float('nan')
+        return float("nan")
     return float(np.sqrt(np.mean(resid**2)))
+
 
 def calculate_edge_variation(d):
     """
@@ -294,48 +297,49 @@ def calculate_edge_variation(d):
     """
     try:
         h, w = d.shape
-        
+
         # Define edge regions (100x100 pixels at each corner)
         edge_size = 100
-        
+
         # Top-left edge
         top_left = d[:edge_size, :edge_size]
         top_left_median = np.median(top_left)
-        
+
         # Top-right edge
         top_right = d[:edge_size, -edge_size:]
         top_right_median = np.median(top_right)
-        
+
         # Bottom-left edge
         bottom_left = d[-edge_size:, :edge_size]
         bottom_left_median = np.median(bottom_left)
-        
+
         # Bottom-right edge
         bottom_right = d[-edge_size:, -edge_size:]
         bottom_right_median = np.median(bottom_right)
-        
+
         # Calculate edge values
         edge_values = [top_left_median, top_right_median, bottom_left_median, bottom_right_median]
-        
+
         # Calculate (max-min)/min ratio
         min_val = min(edge_values)
         max_val = max(edge_values)
-        
-        has_negative_middle_row = np.any(d[int(h/2.)] <= 0)
-        has_negative_middle_col = np.any(d[:, int(w/2.)] <= 0)
-        
-        cutted = has_negative_middle_row or has_negative_middle_col
+
+        has_negative_middle_row = np.any(d[int(h / 2.0)] <= 0)
+        has_negative_middle_col = np.any(d[:, int(w / 2.0)] <= 0)
+
+        trimmed = has_negative_middle_row or has_negative_middle_col
 
         if min_val > 0:  # Avoid division by zero
             edge_var = (max_val - min_val) / min_val
         else:
             edge_var = 0.0
-            
-        return edge_var, edge_values, cutted
-        
+
+        return edge_var, edge_values, trimmed
+
     except Exception as e:
         print(f"Error calculating edge variation: {e}")
         return 0.0, [0, 0, 0, 0], False
+
 
 def uniformity_statistical(fits_path, bpmask_path=None, grid_size=32):
     """
@@ -347,63 +351,63 @@ def uniformity_statistical(fits_path, bpmask_path=None, grid_size=32):
 
     # Load data
     d = fits.getdata(fits_path).astype(np.float32)
-    
+
     if bpmask_path is None:
         bpmask_path = fits_path.replace("dark", "bpmask")
     bpm = fits.getdata(bpmask_path).astype(np.float32)
-    
+
     if d.ndim != 2 or bpm.ndim != 2 or d.shape != bpm.shape:
         raise ValueError(f"Shape mismatch: data {d.shape}, bpmask {bpm.shape}")
-    
+
     # BPM mask
-    hot_mask = (bpm != 0)
-    
+    hot_mask = bpm != 0
+
     # Auto-shift to positive
     dmin = float(d.min())
     if dmin <= 0:
         d = d - dmin + 1e-8
-    
+
     # Apply mask
     d_masked = d.copy()
     d_masked[hot_mask] = np.nan
-    
+
     h, w = d_masked.shape
     cell_h, cell_w = h // grid_size, w // grid_size
-    
+
     # Analyze each grid cell
     cell_means = []
     cell_stds = []
-    
+
     for i in range(grid_size):
         for j in range(grid_size):
             start_h = i * cell_h
             end_h = (i + 1) * cell_h if i < grid_size - 1 else h
             start_w = j * cell_w
             end_w = (j + 1) * cell_w if j < grid_size - 1 else w
-            
+
             cell_data = d_masked[start_h:end_h, start_w:end_w]
             valid_cell = cell_data[~np.isnan(cell_data)]
-            
+
             if len(valid_cell) > 0:
                 cell_means.append(np.mean(valid_cell))
                 cell_stds.append(np.std(valid_cell))
-    
+
     # Calculate uniformity metrics
     cell_means = np.array(cell_means)
     cell_stds = np.array(cell_stds)
-    
+
     # Spatial uniformity (variation between cells)
     spatial_cv = variation(cell_means)
-    
+
     # Local uniformity (average variation within cells)
     local_cv = np.mean(cell_stds / (cell_means + 1e-10))
-    
+
     # Overall uniformity score
     uniformity_score = spatial_cv + 0.5 * local_cv
-    
+
     # Apply log10 for easier interpretation
     log_uniformity_score = np.log10(uniformity_score + 1e-10)
-    
+
     return float(log_uniformity_score)
 
 
@@ -436,28 +440,26 @@ def record_statistics(filename, header, device_id=0, cropsize=500, dtype=None):
         datasig = fits.getdata(filename.replace("flat_", "flatsig_")).astype(np.float32)  # Ensure data is float32
         s_mean, s_median, s_std = sigma_clipped_stats(datasig, device_id=device_id, sigma=3, maxiters=5)
 
-        header['SIGMEAN'] = (s_mean, '3-sig clipped mean of the errormap')
-        header['SIGMED']  = (s_median,  '3-sig clipped median of the errormap')
-        header['SIGSTD']  = (s_std,  '3-sig clipped std of the errormap')
+        header["SIGMEAN"] = (s_mean, "3-sig clipped mean of the errormap")
+        header["SIGMED"] = (s_median, "3-sig clipped median of the errormap")
+        header["SIGSTD"] = (s_std, "3-sig clipped std of the errormap")
 
-        edge_var, _, cutted = calculate_edge_variation(data)
-        header['CUTTED'] = (cutted, 'Non-positive values in the middle of the image')
-        header['EDGEVAR'] = (edge_var, 'Edge variation of the image')
+        edge_var, _, trimmed = calculate_edge_variation(data)
+        header["EDGEVAR"] = (edge_var, "Edge variation of the image")
+        header["TRIMMED"] = (trimmed, "Non-positive values in the middle of the image")
 
     elif dtype.upper() == "DARK":
         uniformity_score = uniformity_statistical(filename)
         header["UNIFORM"] = (uniformity_score, "Uniformity score")
-        
+
     return header
-
-
 
 
 # not used
 def delta_edge_center(data, check_size=100):
     h, w = data.shape
     s = check_size  # Focus on size 100
-    s_eff = int(min(s, h//4, w//4))
+    s_eff = int(min(s, h // 4, w // 4))
 
     # Square regions: top-left, top-right, bottom-left, bottom-right
     top_left = data[:s_eff, :s_eff]
@@ -465,12 +467,12 @@ def delta_edge_center(data, check_size=100):
     bottom_left = data[-s_eff:, :s_eff]
     bottom_right = data[-s_eff:, -s_eff:]
     # Center square
-    cy, cx = h//2, w//2
-    hs = s_eff//2
+    cy, cx = h // 2, w // 2
+    hs = s_eff // 2
     cy0, cy1 = max(0, cy - hs), min(h, cy + hs)
     cx0, cx1 = max(0, cx - hs), min(w, cx + hs)
     center = data[cy0:cy1, cx0:cx1]
-    
+
     edge_means = np.array([np.median(top_left), np.median(top_right), np.median(bottom_left), np.median(bottom_right)])
     edge_avg = max(edge_means)
     center_mean = center.mean()
