@@ -22,7 +22,7 @@ from ..services.setup import BaseSetup
 from ..const import HEADER_KEY_MAP
 from ..services.utils import acquire_available_gpu
 from .checker import Checker
-from ..services.database import PipelineDatabase, PipelineData, generate_id
+from ..services.database import PipelineDatabase, PipelineData, QAData, generate_id
 
 pp = pprint.PrettyPrinter(indent=2)  # , width=120)
 
@@ -125,58 +125,26 @@ class Preprocess(BaseSetup, Checker):
     def _create_pipeline_record(self):
         """Create a pipeline record in the database and update config"""
         try:
-            # Generate process ID
-            process_id = generate_id()
+            run_date, unit_name = self.config.name.split("_")
 
-            # Get basic info from config
-            run_date = datetime.now().strftime("%Y-%m-%d")
-
-            # Determine data type based on what we're processing
-            data_type = "masterframe"
-
-            # Parse unit name from config name (format: {date}_{unit})
-            unit_name = self.config.name.split("_")[1]
-
-            # Check if existing record exists
             existing_pipeline_id = self.db.find_existing_pipeline_record(
                 run_date=run_date,
-                data_type=data_type,
+                data_type="masterframe",
                 unit=unit_name,
                 config_file=self.config.config_file if hasattr(self.config, "config_file") else None,
             )
 
             if existing_pipeline_id:
                 if self.overwrite:
-                    # If overwrite is True, remove existing record and create new one
-                    self.logger.info(
-                        f"Found existing pipeline record (ID: {existing_pipeline_id}), removing it due to overwrite=True..."
-                    )
-                    try:
-                        self.db.delete_pipeline_data(existing_pipeline_id)
-                        self.logger.info(f"Successfully removed existing pipeline record (ID: {existing_pipeline_id})")
-                    except Exception as e:
-                        self.logger.warning(f"Failed to remove existing pipeline record: {e}")
+                    self.db.delete_pipeline_record(existing_pipeline_id)
+                    self.logger.info(f"Found existing pipeline record (ID: {existing_pipeline_id}), removing it.")
                 else:
-                    # If overwrite is False, use existing record without updating it
-                    self.logger.info(
-                        f"Found existing pipeline record (ID: {existing_pipeline_id}), using it due to overwrite=False..."
-                    )
                     self.pipeline_id = existing_pipeline_id
+                    self.config.process_id = existing_pipeline_id
+                    self.logger.info(f"Found existing pipeline record (ID: {existing_pipeline_id}), using it.")
 
-                    # Read existing record to get current process_id and other details
-                    existing_record = self.db.read_pipeline_data(existing_pipeline_id)
-                    if existing_record:
-                        self.config.process_id = existing_record.tag_id
-                        self.logger.info(f"Using existing process_id: {existing_record.tag_id}")
-                        self.logger.info(f"Resuming from existing pipeline record (ID: {existing_pipeline_id})")
-                        return
-                    else:
-                        self.logger.warning(f"Failed to read existing pipeline record, will create new one")
-                        self.pipeline_id = None
-
-            # If we reach here, we need to create a new record (either no existing record or overwrite=True)
-            dark_info = []
-            flat_info = []
+            dark_info = set([])
+            flat_info = set([])
 
             for i, group in enumerate(self.raw_groups):
                 try:
@@ -186,43 +154,19 @@ class Preprocess(BaseSetup, Checker):
                         filt = filt.strip()
                         exptime = exptime.strip()
                         if group[0][1]:
-                            dark_info.append(exptime)
+                            dark_info.add(exptime)
                         if group[0][2]:
-                            flat_info.append(filt)
+                            flat_info.add(filt)
                 except Exception as e:
                     self.logger.debug(f"Could not parse group {i} info: {e}")
 
-            # Create pipeline data object
-            pipeline_data = PipelineData(
-                tag_id=process_id,
-                run_date=run_date,
-                data_type=data_type,
-                unit=unit_name,
-                status="pending",
-                progress=0,
-                bias=True if self.bias_input else False,
-                dark=dark_info,
-                flat=flat_info,
-                warnings=0,
-                errors=0,
-                comments=0,
-                config_file=self.config.name,
-                log_file=self.config.logging.file,
-                debug_file=self.config.logging.file.replace(".log", "_debug.log"),
-                comments_file=self.config.logging.file.replace(".log", "_comments.txt"),
-                last_modified=datetime.now(),
-                created_at=datetime.now(),
-                updated_at=datetime.now(),
-                output_combined_frame_id=None,
-            )
-
-            # Save to database
+            pipeline_data = PipelineData.from_config(self.config, "masterframe")
+            pipeline_data.bias = True if self.bias_input else False
+            pipeline_data.dark = list(dark_info)
+            pipeline_data.flat = list(flat_info)
             self.pipeline_id = self.db.create_pipeline_data(pipeline_data)
 
-            # Update config with process ID
-            self.config.process_id = process_id
-
-            self.logger.info(f"Created pipeline record with ID: {self.pipeline_id}, process_id: {process_id}")
+            self.logger.info(f"Created pipeline record with ID: {self.pipeline_id}")
 
         except Exception as e:
             self.logger.warning(f"Failed to create pipeline record: {e}")
@@ -503,9 +447,13 @@ class Preprocess(BaseSetup, Checker):
         flag, header = self.apply_criteria(header=header, dtype=dtype)
 
         if dtype == "dark":
-            self.update_bpmask(sanity=flag)
+            hotpix = self.update_bpmask(sanity=flag)
+            header["NHOTPIX"] = (hotpix, "Number of hot pixels")
 
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
+
+        qa_data = QAData.from_header(header, dtype, self.pipeline_id)
+        self.db.create_qa_data(qa_data)
 
         if flag:
             self.logger.info(f"[Group {self._current_group+1}] Nominal master {dtype} generated successfully in {time_diff_in_seconds(st)} seconds")  # fmt: skip

@@ -30,9 +30,9 @@
             "description": "Minimum clipping value must be > 0.7"
         },
         "EDGEVAR": {
-            "value": 0.7,
+            "value": 0.6,
             "criteria": "lt",
-            "description": "Edge variance must be < 0.7"
+            "description": "Edge variance must be < 0.6"
         },
         "SIGMEAN": {
             "value": 0.04,

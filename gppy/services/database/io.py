@@ -3,6 +3,7 @@ from datetime import date, datetime
 from typing import List, Dict, Optional, Union, Any
 import json
 from contextlib import contextmanager
+import os
 
 # Import data classes from table module
 from .table import PipelineData, QAData
@@ -31,19 +32,6 @@ class PipelineDatabase:
         finally:
             if conn:
                 conn.close()
-
-    def test_connection(self) -> bool:
-        """Test database connection"""
-        try:
-            with self.get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT version();")
-                    version = cur.fetchone()
-                    print(f"Database connection successful! PostgreSQL version: {version[0]}")
-                    return True
-        except Exception as e:
-            print(f"Database connection failed: {e}")
-            return False
 
     def create_pipeline_data(self, pipeline_data: PipelineData) -> int:
         """Create a new pipeline data record"""
@@ -102,7 +90,7 @@ class PipelineDatabase:
                         id, tag_id, date, data_type, obj, filt, unit, status, progress,
                         bias_exists, dark_filters, flat_filters, warnings, errors, comments,
                         config_file, log_file, debug_file, comments_file, 
-                        output_combined_frame_id, last_modified, created_at, updated_at,
+                        output_combined_frame_id, created_at, updated_at,
                         param1, param2, param3, param4, param5, param6, param7, param8, param9, param10
                     FROM pipeline_pipelinedata
                     WHERE id = %s
@@ -365,74 +353,6 @@ class PipelineDatabase:
         except Exception as e:
             raise PipelineDBError(f"Failed to get pipeline with QA data: {e}")
 
-    def get_pipeline_summary(
-        self,
-        date_from: Optional[Union[str, date]] = None,
-        date_to: Optional[Union[str, date]] = None,
-        data_type: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Get summary statistics for pipeline data"""
-        try:
-            with self.get_connection() as conn:
-                # Build WHERE clause
-                where_clauses = []
-                params = {}
-
-                if date_from:
-                    if isinstance(date_from, str):
-                        date_from = date.fromisoformat(date_from)
-                    where_clauses.append("date >= %(date_from)s")
-                    params["date_from"] = date_from
-
-                if date_to:
-                    if isinstance(date_to, str):
-                        date_to = date.fromisoformat(date_to)
-                    where_clauses.append("date <= %(date_to)s")
-                    params["date_to"] = date_to
-
-                if data_type:
-                    where_clauses.append("data_type = %(data_type)s")
-                    params["data_type"] = data_type
-
-                where_clause = ""
-                if where_clauses:
-                    where_clause = "WHERE " + " AND ".join(where_clauses)
-
-                query = f"""
-                    SELECT 
-                        COUNT(*) as total_records,
-                        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed,
-                        COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending,
-                        COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed,
-                        COUNT(CASE WHEN status = 'running' THEN 1 END) as running,
-                        AVG(progress) as avg_progress,
-                        SUM(warnings) as total_warnings,
-                        SUM(errors) as total_errors,
-                        COUNT(DISTINCT date) as unique_dates,
-                        COUNT(DISTINCT obj) as unique_objects,
-                        COUNT(DISTINCT filt) as unique_filters,
-                        COUNT(DISTINCT unit) as unique_units
-                    FROM pipeline_pipelinedata
-                    {where_clause}
-                """
-
-                with conn.cursor() as cur:
-                    cur.execute(query, params)
-                    result = cur.fetchone()
-
-                    columns = [desc[0] for desc in cur.description]
-                    summary = dict(zip(columns, result))
-
-                    # Convert numeric types
-                    for key in ["avg_progress", "total_warnings", "total_errors"]:
-                        if summary[key] is not None:
-                            summary[key] = float(summary[key])
-
-                    return summary
-
-        except Exception as e:
-            raise PipelineDBError(f"Failed to get pipeline summary: {e}")
-
     def find_existing_pipeline_record(
         self, run_date: str, data_type: str, unit: str, config_file: Optional[str] = None
     ) -> Optional[int]:
@@ -519,6 +439,179 @@ class PipelineDatabase:
 
         except Exception as e:
             raise PipelineDBError(f"Failed to add error: {e}")
+
+    def export_to_ecsv(self, base_filename: str) -> Dict[str, str]:
+        """
+        Export database tables to ECSV files.
+
+        Args:
+            base_filename: Base filename without extension (e.g., "2025-01-27_unit1")
+
+        Returns:
+            Dict with paths to the exported files:
+            {
+                'pipeline_data': 'XX_process.ecsv',
+                'qa_data': 'YY_qa.ecsv'
+            }
+        """
+        try:
+            # Generate filenames
+            pipeline_filename = f"{base_filename}_process.ecsv"
+            qa_filename = f"{base_filename}_qa.ecsv"
+
+            # Export pipeline data
+            pipeline_data = self._export_pipeline_data_to_ecsv(pipeline_filename)
+
+            # Export QA data
+            qa_data = self._export_qa_data_to_ecsv(qa_filename)
+
+            return {"pipeline_data": pipeline_filename, "qa_data": qa_filename}
+
+        except Exception as e:
+            raise PipelineDBError(f"Failed to export database to ECSV: {e}")
+
+    def _export_pipeline_data_to_ecsv(self, filename: str) -> bool:
+        """Export pipeline data to ECSV file"""
+        try:
+            with self.get_connection() as conn:
+                # Get all pipeline data
+                query = """
+                    SELECT 
+                        id, tag_id, date, data_type, obj, filt, unit, status, progress,
+                        bias_exists, dark_filters, flat_filters, warnings, errors, comments,
+                        config_file, log_file, debug_file, comments_file, 
+                        output_combined_frame_id, created_at, updated_at,
+                        param1, param2, param3, param4, param5, param6, param7, param8, param9, param10
+                    FROM pipeline_pipelinedata
+                    ORDER BY date DESC, created_at DESC
+                """
+
+                with conn.cursor() as cur:
+                    cur.execute(query)
+                    rows = cur.fetchall()
+
+                    if not rows:
+                        print(f"No pipeline data found to export")
+                        return False
+
+                    # Get column names
+                    columns = [desc[0] for desc in cur.description]
+
+                    # Write to ECSV file
+                    with open(filename, "w") as f:
+                        # Write ECSV header
+                        f.write("# %ECSV 1.0\n")
+                        f.write("# ---\n")
+                        f.write("# datatype: table\n")
+                        f.write(f"# colcount: {len(columns)}\n")
+
+                        # Write column definitions
+                        for i, col in enumerate(columns):
+                            f.write(f"# col{str(i+1).zfill(2)}: name: {col}\n")
+
+                        # Write data
+                        f.write("# ---\n")
+                        f.write(",".join(columns) + "\n")
+
+                        for row in rows:
+                            # Convert each value to string, handling None values
+                            row_str = []
+                            for val in row:
+                                if val is None:
+                                    row_str.append("")
+                                elif isinstance(val, (dict, list)):
+                                    row_str.append(json.dumps(val))
+                                else:
+                                    row_str.append(str(val))
+                            f.write(",".join(row_str) + "\n")
+
+                    print(f"Exported {len(rows)} pipeline records to {filename}")
+                    return True
+
+        except Exception as e:
+            raise PipelineDBError(f"Failed to export pipeline data: {e}")
+
+    def _export_qa_data_to_ecsv(self, filename: str) -> bool:
+        """Export QA data to ECSV file"""
+        try:
+            with self.get_connection() as conn:
+                # Get all QA data
+                query = """
+                    SELECT 
+                        id, qa_id, qa_type, imagetyp, filter_name, clipmed, clipstd,
+                        clipmin, clipmax, nhotpix, ntotpix, seeing, ellipticity,
+                        rotang1, astrometric_offset, skyval, skysig, zp_auto, ezp_auto,
+                        ul5_5, stdnumb, created_at, updated_at, pipeline_id_id,
+                        qa1, qa2, qa3, qa4, qa5, qa6, qa7, qa8, qa9, qa10
+                    FROM pipeline_qadata
+                    ORDER BY created_at DESC
+                """
+
+                with conn.cursor() as cur:
+                    cur.execute(query)
+                    rows = cur.fetchall()
+
+                    if not rows:
+                        print(f"No QA data found to export")
+                        return False
+
+                    # Get column names
+                    columns = [desc[0] for desc in cur.description]
+
+                    # Write to ECSV file
+                    with open(filename, "w") as f:
+                        # Write ECSV header
+                        f.write("# %ECSV 1.0\n")
+                        f.write("# ---\n")
+                        f.write("# datatype: table\n")
+                        f.write(f"# colcount: {len(columns)}\n")
+
+                        # Write column definitions
+                        for i, col in enumerate(columns):
+                            f.write(f"# col{str(i+1).zfill(2)}: name: {col}\n")
+
+                        # Write data
+                        f.write("# ---\n")
+                        f.write(",".join(columns) + "\n")
+
+                        for row in rows:
+                            # Convert each value to string, handling None values
+                            row_str = []
+                            for val in row:
+                                if val is None:
+                                    row_str.append("")
+                                elif isinstance(val, (dict, list)):
+                                    row_str.append(json.dumps(val))
+                                else:
+                                    row_str.append(str(val))
+                            f.write(",".join(row_str) + "\n")
+
+                    print(f"Exported {len(rows)} QA records to {filename}")
+                    return True
+
+        except Exception as e:
+            raise PipelineDBError(f"Failed to export QA data: {e}")
+
+    def clear_database(self) -> bool:
+        """Clear all data from pipeline tables"""
+        try:
+            with self.get_connection() as conn:
+                # Clear QA data first (due to foreign key constraints)
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM pipeline_qadata")
+                    qa_deleted = cur.rowcount
+
+                    # Clear pipeline data
+                    cur.execute("DELETE FROM pipeline_pipelinedata")
+                    pipeline_deleted = cur.rowcount
+
+                    conn.commit()
+
+                    print(f"Cleared {qa_deleted} QA records and {pipeline_deleted} pipeline records")
+                    return True
+
+        except Exception as e:
+            raise PipelineDBError(f"Failed to clear database: {e}")
 
 
 class PipelineDBError(Exception):

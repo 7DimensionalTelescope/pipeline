@@ -400,11 +400,7 @@ class PhotometrySingle:
             ref_src_table = Table.read(ref_cat)
 
         filters = filters or [self.image_info.filter]
-        if self.ref_catalog == "GaiaXP_cor":
-            synthetic_mag_keys = [f"mag_{filt}_5" for filt in filters]
-            self.logger.warning(f"Using {synthetic_mag_keys} for GaiaXP_cor")
-        else:
-            synthetic_mag_keys = [f"mag_{filt}" for filt in filters]
+        synthetic_mag_keys = [f"mag_{filt}" for filt in filters]
 
         self.gaia_columns = ["source_id", "ra", "dec", "bp_rp", "phot_g_mean_mag"] + synthetic_mag_keys
         return ref_src_table[self.gaia_columns]
