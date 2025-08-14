@@ -382,6 +382,8 @@ class PhotometrySingle:
             ref_cat = f"{ref_ris_dir}/cor_gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
         elif self.ref_catalog == "GaiaXP":
             ref_cat = f"{ref_ris_dir}/gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
+        else:
+            raise ValueError(f"Invalid reference catalog: {self.ref_catalog}. It should be 'GaiaXP' or 'GaiaXP_cor'")
 
         # generate the missing ref_cat and save on disk
         ref_gaia_dir = get_key(self.config.photometry, "path.ref_gaia_dir") or self.path.photometry.ref_gaia_dir
@@ -398,7 +400,12 @@ class PhotometrySingle:
             ref_src_table = Table.read(ref_cat)
 
         filters = filters or [self.image_info.filter]
-        synthetic_mag_keys = [f"mag_{filt}" for filt in filters]
+        if self.ref_catalog == "GaiaXP_cor":
+            synthetic_mag_keys = [f"mag_{filt}_5" for filt in filters]
+            self.logger.warning(f"Using {synthetic_mag_keys} for GaiaXP_cor")
+        else:
+            synthetic_mag_keys = [f"mag_{filt}" for filt in filters]
+
         self.gaia_columns = ["source_id", "ra", "dec", "bp_rp", "phot_g_mean_mag"] + synthetic_mag_keys
         return ref_src_table[self.gaia_columns]
 
