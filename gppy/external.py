@@ -126,6 +126,8 @@ def solve_field(inim, outim=None, dump_dir=None, get_command=False, pixscale=0.5
         f.write(solvecom)
         f.write("\n" * 3)
         f.write(solveout)
+    if not os.path.exists(swap_ext(soft_link, ".solved")):
+        raise FileNotFoundError(f"Solve-field failed: {swap_ext(soft_link, '.solved')} not found")
     return outim
 
 

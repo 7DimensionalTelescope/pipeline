@@ -97,19 +97,13 @@ class Photometry(BaseSetup):
             images: List of paths to image files
 
         Returns:
-            Photometry instance or None if files don't exist
+            Photometry instance
         """
-        image_list = []
         for image in images:
-            path = Path(image)
-            if not path.is_file():
-                print(f"The file does not exist: {image}")
-                return None
-            image_list.append(image)
+            if not os.path.exists(image):
+                raise FileNotFoundError(f"File does not exist: {image}")
 
-        config = SciProcConfiguration.base_config()
-        config.config.input.calibrated_images = image_list
-        config.path = PathHandler(image_list, working_dir=working_dir or os.getcwd())
+        config = SciProcConfiguration.base_config(input_images=images, working_dir=working_dir, logger=True)
         return cls(config=config)
 
     @property

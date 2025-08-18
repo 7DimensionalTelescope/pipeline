@@ -58,11 +58,11 @@ class SciProcConfiguration(BaseConfig):
     #     return config
 
     @classmethod
-    def base_config(cls, input_images=None, write=True, **kwargs):
+    def base_config(cls, input_images=None, working_dir=None, write=True, logger=None, verbose=True, **kwargs):
         # self = cls.__new__(cls)
 
         # input_files = atleast1d(input_images)
-        path = PathHandler(input_images, working_dir=os.getcwd())
+        path = PathHandler(input_images, working_dir=working_dir or os.getcwd())
         self = cls.from_config(path.sciproc_base_yml)
         self.path = path
         self.config_file = self.path.sciproc_output_yml
@@ -70,6 +70,20 @@ class SciProcConfiguration(BaseConfig):
         # config_source = self.path.sciproc_base_yml
         # super().__init__(self, config_source=config_source, write=write, **kwargs)
         # self.initialize(is_pipeline=False)
+
+        if logger is True:
+            self.config.logging.file = self.path.sciproc_output_log
+            self.logger = cls._setup_logger(
+                name=self.name,
+                log_file=self.config.logging.file,
+                verbose=verbose,
+                overwrite=write,
+                **kwargs,
+            )
+        elif logger:
+            self.logger = logger
+        else:
+            self.logger = None
 
         self.config.input.calibrated_images = atleast_1d(input_images)
         # self.config.name = "user-input"

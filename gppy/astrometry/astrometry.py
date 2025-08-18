@@ -50,17 +50,11 @@ class Astrometry(BaseSetup):
 
     @classmethod
     def from_list(cls, images, working_dir=None):
-        from ..path.path import PathHandler
-
-        image_list = []
         for image in images:
             if not os.path.exists(image):
                 raise FileNotFoundError(f"File does not exist: {image}")
-            image_list.append(os.path.abspath(image))
 
-        config = SciProcConfiguration.base_config()
-        config.config.input.calibrated_images = image_list
-        config.path = PathHandler(image_list, working_dir=working_dir or os.getcwd())
+        config = SciProcConfiguration.base_config(input_images=images, working_dir=working_dir, logger=True)
         return cls(config=config)
 
     @property
@@ -381,22 +375,3 @@ class Astrometry(BaseSetup):
             task_ids.append(task_id)
 
         self.queue.wait_until_task_complete(task_ids)
-
-
-# ad-hoc
-# def astrometry_single(file, ahead=None):
-#     from .utils import read_scamp_header, update_padded_header
-
-#     solved_file = external.solve_field(file)
-
-#     outcat = external.sextractor(
-#         solved_file, prefix="prep", sex_args=["-catalog_type", "fits_ldac"]
-#     )
-
-#     solved_head = external.scamp(outcat, ahead=ahead)
-
-#     update_padded_header(file, read_scamp_header(solved_head))
-
-#     outcat = external.sextractor(solved_file, prefix="main")
-
-#     return outcat

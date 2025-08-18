@@ -50,23 +50,12 @@ class ImStack(BaseSetup):
     def from_list(cls, input_images, working_dir=None):
         """use soft link if files are from different directories"""
 
-        image_list = []
         for image in input_images:
-            path = Path(image)
-            if not path.is_file():
-                print(f"{image} does not exist.")
-                return None
-            image_list.append(path.parts[-1])  # str
+            if not os.path.exists(image):
+                raise FileNotFoundError(f"Input file does not exist: {image}")
 
-        working_dir = working_dir or os.getcwd()  # str(path.parent.absolute()
-
-        config = SciProcConfiguration.base_config(working_dir=working_dir)
-        # config.path.path_processed = working_dir
-        config.config.input.calibrated_images = image_list
-
-        self = cls(config=config)
-        self.path = PathHandler(input_images)
-        return self
+        config = SciProcConfiguration.base_config(input_images=input_images, working_dir=working_dir, logger=True)
+        return cls(config=config)
 
     @property
     def sequential_task(self):
