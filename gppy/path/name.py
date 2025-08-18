@@ -229,7 +229,7 @@ class NameHandler:
         types = ()
 
         # raw/master/processed
-        if stem.startswith("7DT"):
+        if stem.startswith(("7DT", "BIAS", "DARK", "FLAT", "LIGHT")):
             types += ("raw",)
         elif stem.startswith(("bias", "dark", "flat")):
             types += ("master",)
@@ -401,26 +401,8 @@ class NameHandler:
     @staticmethod
     def _parse_raw(parts):
         """only TCSpy has support for underscore-containing object names"""
-        if parts[1] in ["", "BIAS", "DARK", "FLAT", "LIGHT"]:
-            # NINA
-            unit = parts[0]
-            typ = parts[1]
-            obj = parts[2]
-            date = parts[3].replace("-", "")
-            hms = parts[4].replace("-", "")
-            filt = parts[5]
-            if len(parts) == 8:
-                nb = None
-                exptime = strip_exptime(parts[6])
-            elif len(parts) == 9:
-                nb = strip_binning(parts[6])
-                exptime = strip_exptime(parts[7])
 
-            else:
-                raise ValueError("Unexpected number of parts in NINA raw filename")
-
-        else:
-            # TCSpy
+        def _parse_TCSpy_raw(parts):
             unit = parts[0]
             date = parts[1]
             hms = parts[2]
@@ -429,6 +411,46 @@ class NameHandler:
             nb = strip_binning(parts[-3])
             exptime = strip_exptime(parts[-2])
             # parts[-1] is the file numbering. e.g., 0001
+            return unit, date, hms, obj, filt, nb, exptime
+
+        try:
+            # first try TCSpy
+            unit, date, hms, obj, filt, nb, exptime = _parse_TCSpy_raw(parts)
+
+        except:
+            # then try parsable NINA raw filename
+            if parts[1] in ["", "BIAS", "DARK", "FLAT", "LIGHT"]:
+                # NINA
+                unit = parts[0]
+                typ = parts[1]
+                obj = parts[2]
+                date = parts[3].replace("-", "")
+                hms = parts[4].replace("-", "")
+                filt = parts[5]
+                if len(parts) == 8:
+                    nb = None
+                    exptime = strip_exptime(parts[6])
+                elif len(parts) == 9:
+                    nb = strip_binning(parts[6])
+                    exptime = strip_exptime(parts[7])
+
+                else:
+                    raise ValueError("Unexpected number of parts in NINA raw filename")
+
+            # finally resort to DB
+            else:
+                from .db import unified_name_from_path
+
+                file_path = "_".join(parts)
+                unified_filename = unified_name_from_path(file_path)
+                if unified_filename:
+                    parts = unified_filename.split("_")
+
+                    unit, date, hms, obj, filt, nb, exptime = _parse_TCSpy_raw(parts)
+                else:
+                    # raise ValueError(f"Unified filename not found for {file_path}")
+                    print(f"Unified filename not found for {file_path}")
+                    unit, date, hms, obj, filt, nb, exptime, = None, None, None, None, None, None, None  # fmt: skip
 
         gain = None
         camera = None

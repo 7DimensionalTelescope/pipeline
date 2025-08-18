@@ -12,25 +12,26 @@ import signal
 
 
 def run_scidata_reduction(config, processes=["astrometry", "photometry", "combine", "subtract"], overwrite=False):
+
     try:
         config = SciProcConfiguration.from_config(config)
-        if (not (config.config.flag.astrometry) and "astrometry" in processes) or overwrite:
+        if "astrometry" in processes and (not config.config.flag.astrometry or overwrite):
             astr = Astrometry(config)
             astr.run()
             del astr
-        if (not (config.config.flag.single_photometry) and "photometry" in processes) or overwrite:
+        if "photometry" in processes and (not config.config.flag.single_photometry or overwrite):
             phot = Photometry(config)
             phot.run()
             del phot
-        if (not (config.config.flag.combine) and "combine" in processes) or overwrite:
+        if "combine" in processes and (not config.config.flag.combine or overwrite):
             stk = ImStack(config)
             stk.run()
             del stk
-        if (not (config.config.flag.combined_photometry) and "photometry" in processes) or overwrite:
+        if "photometry" in processes and (not config.config.flag.combined_photometry or overwrite):
             phot = Photometry(config)
             phot.run()
             del phot
-        if (not (config.config.flag.subtraction) and "subtract" in processes) or overwrite:
+        if "subtract" in processes and (not config.config.flag.subtraction or overwrite):
             subt = ImSubtract(config)
             subt.run()
             del subt
@@ -55,7 +56,7 @@ if __name__ == "__main__":
         )
     )
     parser.add_argument("-config", type=str, required=True, help="Path to the preprocessing configuration file")
-    parser.add_argument("-processes", nargs='+', required=False, help="Processes to run")
+    parser.add_argument("-processes", nargs="+", required=False, help="Processes to run")
     parser.add_argument("-overwrite", action="store_true", help="Overwrite existing results")
     args = parser.parse_args()
 
@@ -64,4 +65,3 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\nError: {e}")
         sys.exit(1)
-    

@@ -66,7 +66,11 @@ class PipelineData:
     @classmethod
     def from_row(cls, row: tuple) -> "PipelineData":
         """Create PipelineData from database row"""
-        # Parse JSON fields
+        # Add bounds checking to prevent index errors
+        if len(row) < 32:
+            raise ValueError(f"Expected at least 32 columns, got {len(row)}. Row: {row}")
+
+        # Parse JSON fields with safe access
         dark_filters = json.loads(row[10]) if row[10] and isinstance(row[10], str) else []
         flat_filters = json.loads(row[11]) if row[11] and isinstance(row[11], str) else []
 
@@ -91,18 +95,18 @@ class PipelineData:
             debug_file=row[17],
             comments_file=row[18],
             output_combined_frame_id=row[19],
-            created_at=row[21],
-            updated_at=row[22],
-            param1=row[23],
-            param2=row[24],
-            param3=row[25],
-            param4=row[26],
-            param5=row[27],
-            param6=row[28],
-            param7=row[29],
-            param8=row[30],
-            param9=row[31],
-            param10=row[32],
+            created_at=row[20],
+            updated_at=row[21],
+            param1=row[22],
+            param2=row[23],
+            param3=row[24],
+            param4=row[25],
+            param5=row[26],
+            param6=row[27],
+            param7=row[28],
+            param8=row[29],
+            param9=row[30],
+            param10=row[31],
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -147,12 +151,11 @@ class QAData:
 
     # Required fields
     qa_id: str
-    qa_type: str  # "masterframe" or "science"
+    imagetyp: str  # "masterframe" or "science"
     pipeline_id_id: int
 
     # Optional fields
-    imagetyp: Optional[str] = None  # "bias", "dark", "flat" for masterframe; "science" for science
-    filter_name: Optional[str] = None
+    qa_type: Optional[str] = None  # "bias", "dark", "flat" for masterframe; "science" for science
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -169,6 +172,7 @@ class QAData:
     trimmed: Optional[str] = None  # qa4
 
     # QA for science (when qa_type="science")
+    filter_name: Optional[str] = None
     seeing: Optional[float] = None
     ellipticity: Optional[float] = None
     rotang1: Optional[float] = None
@@ -181,93 +185,27 @@ class QAData:
     stdnumb: Optional[int] = None
 
     # Additional QA parameters
-    qa5: Optional[str] = None  # bpmask_filename (for dark frames)
-    qa6: Optional[str] = None  # n_frames_combined
-    qa7: Optional[str] = None  # quality_flag
-    qa8: Optional[str] = None  # processing_time
-    qa9: Optional[str] = None  # device_used (CPU/GPU)
-    qa10: Optional[str] = None  # device_id
+    exptime: Optional[str] = None
+    qa6: Optional[str] = None
+    qa7: Optional[str] = None
+    qa8: Optional[str] = None
+
+    # filename
+    qa9: Optional[str] = None
+
+    # sanity flag
+    qa10: Optional[str] = None
 
     # Internal field (not stored in DB)
     id: Optional[int] = None
 
-    def __post_init__(self):
-        """Validate qa_type and imagetyp combinations"""
-        valid_qa_types = ["masterframe", "science"]
-        if self.qa_type not in valid_qa_types:
-            raise ValueError(f"qa_type must be one of {valid_qa_types}")
-
-        if self.qa_type == "masterframe":
-            valid_imagetyps = ["bias", "dark", "flat"]
-            if self.imagetyp and self.imagetyp not in valid_imagetyps:
-                raise ValueError(f"For masterframe qa_type, imagetyp must be one of {valid_imagetyps}")
-
-        elif self.qa_type == "science":
-            if self.imagetyp and self.imagetyp != "science":
-                self.imagetyp = "science"  # Force science for science QA data
-
-    def is_masterframe(self) -> bool:
-        """Check if this is masterframe QA data"""
-        return self.qa_type == "masterframe"
-
-    def is_science(self) -> bool:
-        """Check if this is science QA data"""
-        return self.qa_type == "science"
-
-    def get_frame_type(self) -> Optional[str]:
-        """Get the frame type for masterframe QA data"""
-        if self.is_masterframe():
-            return self.imagetyp
-        return None
-
-    def get_masterframe_info(self) -> Dict[str, Any]:
-        """Get masterframe-specific information"""
-        if not self.is_masterframe():
-            return {}
-
-        return {
-            "frame_type": self.imagetyp,
-            "filter_name": self.filter_name,
-            "uniform": self.uniform,  # UNIFORM
-            "sigmean": self.sigmean,  # SIGMEAN
-            "edgevar": self.edgevar,  # EDGEVAR
-            "trimmed": self.trimmed,  # TRIMMED
-            "bpmask_filename": self.qa5,
-            "n_frames_combined": self.qa6,
-            "quality_flag": self.qa7,
-            "processing_time": self.qa8,
-            "device_used": self.qa9,
-            "device_id": self.qa10,
-            "clipmed": self.clipmed,
-            "clipstd": self.clipstd,
-            "clipmin": self.clipmin,
-            "clipmax": self.clipmax,
-            "nhotpix": self.nhotpix,
-            "ntotpix": self.ntotpix,
-        }
-
-    def get_science_info(self) -> Dict[str, Any]:
-        """Get science-specific information"""
-        if not self.is_science():
-            return {}
-
-        return {
-            "filter_name": self.filter_name,
-            "seeing": self.seeing,
-            "ellipticity": self.ellipticity,
-            "rotang1": self.rotang1,
-            "astrometric_offset": self.astrometric_offset,
-            "skyval": self.skyval,
-            "skysig": self.skysig,
-            "zp_auto": self.zp_auto,
-            "ezp_auto": self.ezp_auto,
-            "ul5_5": self.ul5_5,
-            "stdnumb": self.stdnumb,
-        }
-
     @classmethod
     def from_row(cls, row: tuple) -> "QAData":
         """Create QAData from database row"""
+        # Add bounds checking to prevent index errors
+        if len(row) < 34:
+            raise ValueError(f"Expected at least 34 columns, got {len(row)}. Row: {row}")
+
         return cls(
             id=row[0],
             qa_id=row[1],
@@ -297,7 +235,7 @@ class QAData:
             sigmean=row[25],
             edgevar=row[26],
             trimmed=row[27],
-            qa5=row[28],
+            exptime=row[28],  # Map qa5 column to exptime field
             qa6=row[29],
             qa7=row[30],
             qa8=row[31],
@@ -320,29 +258,40 @@ class QAData:
             data["qa3"] = data.pop("edgevar")
         if "trimmed" in data:
             data["qa4"] = data.pop("trimmed")
+        if "exptime" in data:
+            data["qa5"] = data.pop("exptime")
+        if "filename" in data:
+            data["qa9"] = data.pop("filename")
+        if "sanity" in data:
+            data["qa10"] = data.pop("sanity")
 
         return data
 
     @classmethod
-    def from_header(cls, header, imagetyp, pipeline_id):
+    def from_header(cls, header, imagetyp, qa_type, pipeline_id, filename):
         qa_id = generate_id()
 
         qa_data = cls(
             qa_id=qa_id,
-            qa_type="masterframe" if imagetyp in ["bias", "dark", "flat"] else "science",
             imagetyp=imagetyp,
+            qa_type=qa_type.lower(),
             pipeline_id_id=pipeline_id,
         )
-        if qa_data.qa_type == "masterframe":
+
+        if qa_data.imagetyp == "masterframe":
+            qa_data.exptime = header["EXPTIME"]
+            qa_data.filter_name = header["FILTER"]
             qa_data.clipmed = header["CLIPMED"]
             qa_data.clipstd = header["CLIPSTD"]
             qa_data.clipmin = header["CLIPMIN"]
             qa_data.clipmax = header["CLIPMAX"]
+            qa_data.qa9 = filename
             qa_data.qa10 = header["SANITY"]
-            if imagetyp == "dark":
+            if qa_data.qa_type == "dark":
                 qa_data.nhotpix = header["NHOTPIX"]
+                qa_data.ntotpix = header["NTOTPIX"]
                 qa_data.uniform = header["UNIFORM"]
-            elif imagetyp == "flat":
+            elif qa_data.qa_type == "flat":
                 qa_data.sigmean = header["SIGMEAN"]
                 qa_data.edgevar = header["EDGEVAR"]
                 qa_data.trimmed = header["TRIMMED"]

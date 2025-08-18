@@ -20,22 +20,23 @@ mp.set_start_method("spawn", force=True)
 class AbruptStopException(Exception):
     """
     Custom exception to signal abrupt stop processing.
-    
+
     Raised when the queue manager needs to immediately halt all processing
     without waiting for graceful completion of tasks.
     """
+
     pass
 
 
 class QueueManager:
     """
     Advanced task queue manager for parallel processing with priority scheduling.
-    
+
     This class provides a comprehensive task management system that supports
     both CPU-based task processing and subprocess scheduling. It includes
     priority-based task scheduling, error handling, and graceful shutdown
     capabilities.
-    
+
     Features:
     - Priority-based task scheduling (HIGH, MEDIUM, LOW, PREPROCESS)
     - Multi-process CPU task execution
@@ -44,14 +45,14 @@ class QueueManager:
     - Graceful and abrupt shutdown mechanisms
     - Real-time task status tracking
     - Jupyter notebook compatibility
-    
+
     Args:
         max_workers (int, optional): Maximum number of worker processes (default: 10)
         logger (Logger, optional): Custom logger instance
         save_result (bool): Whether to save task results (default: False)
         auto_start (bool): Whether to start workers immediately (default: False)
         **kwargs: Additional configuration options
-    
+
     Example:
         >>> queue = QueueManager(max_workers=8, save_result=True)
         >>> task_id = queue.add_task(
@@ -61,7 +62,7 @@ class QueueManager:
         ... )
         >>> queue.wait_until_task_complete(task_id)
     """
-    
+
     _id_counter = itertools.count(1)
 
     def __init__(
@@ -76,7 +77,7 @@ class QueueManager:
         if logger:
             self.logger = logger
         else:
-            self.logger = Logger()
+            self.logger = Logger("QueueManager")
             self.logger.set_output_file(
                 f"/var/log/pipeline/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_{os.getpid()}.log"
             )
@@ -115,10 +116,10 @@ class QueueManager:
     def _start_workers(self, process_type="scheduler"):
         """
         Initialize and start worker threads based on process type.
-        
+
         Sets up the appropriate worker infrastructure for either task processing
         or subprocess scheduling.
-        
+
         Args:
             process_type (str): Type of processing ("task" or "scheduler")
         """
@@ -157,14 +158,14 @@ class QueueManager:
     def __exit__(self, exc_type, exc_val, _):
         """
         Context manager exit method.
-        
+
         Ensures proper cleanup when used as a context manager.
-        
+
         Args:
             exc_type: Exception type if any
             exc_val: Exception value if any
             _: Traceback (ignored)
-            
+
         Returns:
             bool: False if exception occurred, True otherwise
         """
@@ -255,7 +256,7 @@ class QueueManager:
     def add_scheduler(self, scheduler):
         """
         Add a scheduler for subprocess management.
-        
+
         Args:
             scheduler: Scheduler instance for managing subprocess tasks
         """
@@ -268,7 +269,7 @@ class QueueManager:
     def _task_worker(self):
         """
         Distribute CPU tasks to the process pool.
-        
+
         This worker thread continuously processes tasks from the priority queue,
         submitting them to the process pool for execution and handling results
         through the completion queue.
@@ -277,10 +278,10 @@ class QueueManager:
         def task_wrapper(task):
             """
             Wrapper function for task execution in process pool.
-            
+
             Args:
                 task: Task instance to execute
-                
+
             Returns:
                 tuple: (task, result, error) where error is None if successful
             """
@@ -293,7 +294,7 @@ class QueueManager:
         def callback(result_tuple):
             """
             Callback for successful task completion.
-            
+
             Args:
                 result_tuple: Tuple containing (task, result, error)
             """
@@ -303,7 +304,7 @@ class QueueManager:
         def errback(error):
             """
             Error callback for failed task execution.
-            
+
             Args:
                 error: Exception that occurred during task execution
             """
@@ -352,7 +353,7 @@ class QueueManager:
     def _task_completion_worker(self):
         """
         Handle task completion and result processing.
-        
+
         This worker thread processes completed tasks from the completion queue,
         updates task status, and stores results if requested.
         """
@@ -392,7 +393,7 @@ class QueueManager:
     def _scheduler_worker(self):
         """
         Worker thread for subprocess scheduling.
-        
+
         Manages the execution of subprocess tasks by retrieving commands
         from the scheduler and launching them as separate processes.
         """
@@ -444,7 +445,7 @@ class QueueManager:
     def _scheduler_completion_worker(self):
         """
         Worker thread for monitoring subprocess completion.
-        
+
         Continuously checks the status of active subprocesses and updates
         the scheduler when processes complete.
         """
@@ -573,7 +574,7 @@ class QueueManager:
     def abrupt_stop(self):
         """
         Immediately stop all processing and exit.
-        
+
         Forces immediate termination of all processes and threads,
         then exits the current process.
         """
@@ -650,7 +651,7 @@ class QueueManager:
     def _handle_keyboard_interrupt(self, signum, frame):
         """
         Handle keyboard interrupt with abrupt stop mechanism.
-        
+
         Args:
             signum: Signal number
             frame: Current stack frame
@@ -661,7 +662,7 @@ class QueueManager:
     def _jupyter_interrupt_handler(self, kernel, signum, frame):
         """
         Custom interrupt handler for Jupyter notebook.
-        
+
         Args:
             kernel: Jupyter kernel instance
             signum: Signal number

@@ -6,7 +6,7 @@ import threading
 import numpy as np
 from datetime import datetime
 from astropy.io import fits
-
+import copy
 from .plotting import *
 from . import utils as prep_utils
 from .calc import record_statistics, delta_edge_center
@@ -22,7 +22,7 @@ from ..services.setup import BaseSetup
 from ..const import HEADER_KEY_MAP
 from ..services.utils import acquire_available_gpu
 from .checker import Checker
-from ..services.database import PipelineDatabase, PipelineData, QAData, generate_id
+from ..services.database import ProcessDB, PipelineData, QAData
 
 pp = pprint.PrettyPrinter(indent=2)  # , width=120)
 
@@ -69,9 +69,12 @@ class Preprocess(BaseSetup, Checker):
 
         self._use_gpu = use_gpu
 
-        # Initialize database connection
-        self.db = PipelineDatabase()
+        # Initialize database connection with ProcessDB (inherits from ImageDB for QA management)
+        self.db = ProcessDB()
         self.pipeline_id = None
+
+        # Log database initialization
+        self.logger.debug("Initialized ProcessDB for pipeline and QA data management")
 
         self.initialize()
 
@@ -111,6 +114,7 @@ class Preprocess(BaseSetup, Checker):
             raise ValueError("No input files or directory specified")
 
         self._n_groups = len(self.raw_groups)
+        self._original_raw_groups = copy.deepcopy(self.raw_groups)
         self._current_group = 0
         self.load_criteria()
 
@@ -127,7 +131,8 @@ class Preprocess(BaseSetup, Checker):
         try:
             run_date, unit_name = self.config.name.split("_")
 
-            existing_pipeline_id = self.db.find_existing_pipeline_record(
+            # Use ProcessDB method to find existing pipeline
+            existing_pipeline_id = self.db._find_existing_pipeline_record(
                 run_date=run_date,
                 data_type="masterframe",
                 unit=unit_name,
@@ -135,13 +140,16 @@ class Preprocess(BaseSetup, Checker):
             )
 
             if existing_pipeline_id:
+                self.logger.info(f"Found existing pipeline db record (PID: {existing_pipeline_id})")
                 if self.overwrite:
-                    self.db.delete_pipeline_record(existing_pipeline_id)
-                    self.logger.info(f"Found existing pipeline record (ID: {existing_pipeline_id}), removing it.")
+                    # Use cascade delete to properly handle foreign key constraints
+                    self.db.delete_pipeline_cascade(existing_pipeline_id)
+                    self.logger.info(f"Overwriting existing pipeline db record (PID: {existing_pipeline_id})")
                 else:
                     self.pipeline_id = existing_pipeline_id
                     self.config.process_id = existing_pipeline_id
-                    self.logger.info(f"Found existing pipeline record (ID: {existing_pipeline_id}), using it.")
+                    self.logger.info(f"Using existing pipeline db record (PID: {existing_pipeline_id})")
+                    return
 
             dark_info = set([])
             flat_info = set([])
@@ -164,9 +172,11 @@ class Preprocess(BaseSetup, Checker):
             pipeline_data.bias = True if self.bias_input else False
             pipeline_data.dark = list(dark_info)
             pipeline_data.flat = list(flat_info)
+
+            # Use ImageDB to create pipeline data (will handle duplicates automatically)
             self.pipeline_id = self.db.create_pipeline_data(pipeline_data)
 
-            self.logger.info(f"Created pipeline record with ID: {self.pipeline_id}")
+            self.logger.info(f"Created pipeline record with PID: {self.pipeline_id}")
 
         except Exception as e:
             self.logger.warning(f"Failed to create pipeline record: {e}")
@@ -204,7 +214,7 @@ class Preprocess(BaseSetup, Checker):
             # self.logger.info(f"Start processing group {i+1} / {self._n_groups}")
             self.logger.debug("\n" + "#" * 100 + f"\n{' '*30}Start processing group {i+1} / {self._n_groups}\n" + "#" * 100)  # fmt: skip
             if only_with_sci and len(self.sci_input) == 0:
-                self.logger.info(f"No science images for this masterframe. Skipping...")
+                self.logger.info(f"[Group {i+1}] No science images for this masterframe. Skipping...")
                 continue
             self.load_masterframe(device_id=device_id)
             if not self.master_frame_only:
@@ -227,13 +237,6 @@ class Preprocess(BaseSetup, Checker):
         self._update_pipeline_progress(100, "completed")
 
         self.logger.info(f"Preprocessing completed in {time_diff_in_seconds(st)} seconds")
-
-    # def make_plot_all(self):
-    #     st = time.time()
-    #     self.logger.info("Generating plots for all groups")
-    #     for i in range(self._n_groups):
-    #         self.make_plots(i)
-    #     self.logger.info(f"Finished generating plots for all groups in {time_diff_in_seconds(st)} seconds")
 
     def proceed_to_next_group(self):
         self._current_group += 1
@@ -339,10 +342,17 @@ class Preprocess(BaseSetup, Checker):
             if input_file and (not os.path.exists(output_file) or self.overwrite):
                 self._generate_masterframe(dtype, device_id)
             elif isinstance(output_file, str) and len(output_file) != 0:
+                if os.path.exists(output_file) and not self.overwrite:
+                    self._write_into_db(dtype)
+
+                self.logger.warning(
+                    f"[Group {self._current_group+1}] No {dtype} masterframe found for the current group."
+                )
+                self.db.add_warning(self.pipeline_id)
                 self._fetch_masterframe(output_file, dtype)
                 self.skip_flag[dtype] = True
             else:
-                self.logger.warning(f"{dtype} has no input or output data (to fetch)")
+                self.logger.warning(f"[Group {self._current_group+1}] {dtype} has no input or output data (to fetch)")
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_input: {input_file}")
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_output: {output_file}")
                 self.db.add_warning(self.pipeline_id)
@@ -355,33 +365,6 @@ class Preprocess(BaseSetup, Checker):
                 (self._current_group + 1) / self._n_groups * 50
             )  # Masterframes are 50% of total work
             self._update_pipeline_progress(masterframe_progress)
-
-            # Update dark and flat information with actual processed data
-            try:
-                current_record = self.db.read_pipeline_data(self.pipeline_id)
-                if current_record:
-                    # Get current group info
-                    group_info = PathHandler.get_group_info(self.raw_groups[self._current_group])
-                    if ":" in group_info:
-                        filt, exptime = group_info.split(":", 1)
-                        filt = filt.strip()
-                        exptime = exptime.strip()
-
-                        # Update dark info if dark frames were processed
-                        if "dark" in self.calib_types and not self.skip_flag.get("dark", False):
-                            dark_info = f"{filt}_{exptime}"
-                            if dark_info not in current_record.dark:
-                                updated_dark = current_record.dark + [dark_info]
-                                self.db.update_pipeline_data(self.pipeline_id, dark=updated_dark)
-
-                        # Update flat info if flat frames were processed
-                        if "flat" in self.calib_types and not self.skip_flag.get("flat", False):
-                            flat_info = f"{filt}_{exptime}"
-                            if flat_info not in current_record.flat:
-                                updated_flat = current_record.flat + [flat_info]
-                                self.db.update_pipeline_data(self.pipeline_id, flat=updated_flat)
-            except Exception as e:
-                self.logger.debug(f"Could not update dark/flat info: {e}")
 
     def _generate_masterframe(self, dtype, device_id):
         """Generate & Save masterframe and sigma image"""
@@ -442,7 +425,7 @@ class Preprocess(BaseSetup, Checker):
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), header)
 
         header = prep_utils.add_image_id(header)
-        header = record_statistics(getattr(self, f"{dtype}_output"), header, dtype=dtype)
+        header, trimmed = record_statistics(getattr(self, f"{dtype}_output"), header, dtype=dtype)
 
         flag, header = self.apply_criteria(header=header, dtype=dtype)
 
@@ -452,8 +435,7 @@ class Preprocess(BaseSetup, Checker):
 
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
 
-        qa_data = QAData.from_header(header, dtype, self.pipeline_id)
-        self.db.create_qa_data(qa_data)
+        self._write_into_db(dtype, header=header, trimmed=trimmed)
 
         if flag:
             self.logger.info(f"[Group {self._current_group+1}] Nominal master {dtype} generated successfully in {time_diff_in_seconds(st)} seconds")  # fmt: skip
@@ -468,6 +450,56 @@ class Preprocess(BaseSetup, Checker):
             self.db.add_error(self.pipeline_id)
             self._fetch_masterframe(getattr(self, f"{dtype}_output"), dtype)
 
+    def _write_into_db(self, dtype, header=None, trimmed=False):
+        self.logger.info(f"[Group {self._current_group+1}] Creating QA data for {dtype} (PID: {self.pipeline_id})")
+
+        if header is None:
+            try:
+                header = fits.getheader(self._original_raw_groups[self._current_group][1][self._key_to_index[dtype]])
+            except:
+                return
+
+        try:
+            qa_data = QAData.from_header(
+                header,
+                "masterframe",
+                f"{dtype}_{self._current_group}",
+                self.pipeline_id,
+                getattr(self, f"{dtype}_output"),
+            )
+            # Use ProcessDB (inherited from ImageDB) to create QA data (will handle duplicates automatically)
+            qa_id = self.db.create_qa_data(qa_data)
+            self.logger.debug(f"[Group {self._current_group+1}] Created QA record with ID: {qa_id}")
+        except Exception as e:
+            self.logger.error(
+                f"[Group {self._current_group+1}] Failed to create QA data for {dtype} (PID: {self.pipeline_id}): {e}"
+            )
+            self.db.add_error(self.pipeline_id)
+
+        if trimmed:
+            self.logger.error(
+                f"[Group {self._current_group+1}] {dtype} masterframe is trimmed, a set of masterframes can be trimmed."
+            )
+            self.db.add_error(self.pipeline_id)
+
+            with fits.open(
+                self._original_raw_groups[self._current_group][1][self._key_to_index["bias"]], mode="update"
+            ) as hdul:
+                hdul[0].header["TRIMMED"] = (True, "Non-positive values in the middle of the image")
+                hdul[0].header["SANITY"] = (False, "Sanity flag")
+                hdul.flush()
+
+            self.db.update_qa_data(self.pipeline_id, dtype=f"bias_{self._current_group}", trimmed=True, sanity=False)
+
+            with fits.open(
+                self._original_raw_groups[self._current_group][1][self._key_to_index["dark"]], mode="update"
+            ) as hdul:
+                hdul[0].header["TRIMMED"] = (True, "Non-positive values in the middle of the image")
+                hdul[0].header["SANITY"] = (False, "Sanity flag")
+                hdul.flush()
+
+            self.db.update_qa_data(self.pipeline_id, dtype=f"dark_{self._current_group}", trimmed=True, sanity=False)
+
     def _fetch_masterframe(self, template, dtype):
         self.logger.info(f"[Group {self._current_group+1}] Fetching a nominal master {dtype}")
         # existing_data can be either on-date or off-date
@@ -477,8 +509,13 @@ class Preprocess(BaseSetup, Checker):
 
         if not existing_mframe_file:
             self.db.add_error(self.pipeline_id)
-            raise FileNotFoundError(f"[Group {self._current_group+1}] No pre-existing master {dtype} found in place of {template} wihin {max_offset} days")  # fmt: skip
-
+            raise FileNotFoundError(
+                f"[Group {self._current_group+1}] No pre-existing master {dtype} found in place of {template} within {max_offset} days"
+            )
+        else:
+            self.logger.info(
+                f"[Group {self._current_group+1}] Found pre-existing nominal master {dtype} at {os.path.basename(existing_mframe_file)}"
+            )
         # update the output names in raw_groups
         self.raw_groups[self._current_group][1][self._key_to_index[dtype]] = existing_mframe_file
 

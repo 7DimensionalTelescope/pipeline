@@ -1,10 +1,12 @@
 #!/home/pipeline/.conda/envs/pipeline/bin/python
 
+from cupy import ElementwiseKernel
 from gppy.config import PreprocConfiguration
 from gppy.preprocess import Preprocess
 import argparse
 import sys
 import signal
+from pathlib import Path
 
 
 def run_preprocess(config, device_id=None, only_with_sci=False, make_plots=True, overwrite=False, **kwargs):
@@ -16,7 +18,19 @@ def run_preprocess(config, device_id=None, only_with_sci=False, make_plots=True,
     """
     try:
         config = PreprocConfiguration.from_config(config)
+
         prep = Preprocess(config, use_gpu=True, overwrite=overwrite)
+
+        # Check if figures folder exists and contains JPG files
+        bias_output_path = Path(prep.bias_output)
+        figures_dir = bias_output_path.parent / "figures"
+        jpg_files = list(figures_dir.glob("*.jpg")) if figures_dir.exists() else []
+
+        if bias_output_path.exists() and jpg_files:
+            prep.overwrite = False
+        else:
+            prep.overwrite = True
+
         prep.run(device_id=device_id, make_plots=make_plots, only_with_sci=only_with_sci)
         del config, prep
     except Exception as e:
@@ -55,7 +69,13 @@ if __name__ == "__main__":
         else:
             device_id = int(args.device_id)
 
-        run_preprocess(args.config, device_id=device_id, only_with_sci=args.only_with_sci, make_plots=args.make_plots, overwrite=args.overwrite)
+        run_preprocess(
+            args.config,
+            device_id=device_id,
+            only_with_sci=args.only_with_sci,
+            make_plots=args.make_plots,
+            overwrite=args.overwrite,
+        )
     except Exception as e:
         print(f"\nError: {e}")
         sys.exit(1)

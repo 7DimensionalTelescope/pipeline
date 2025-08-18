@@ -13,7 +13,7 @@ from ..path import PathHandler
 
 
 def save_fits_as_png(image_data, output_path, stretch=True, log_scale=False, max_width=1000):
-    
+
     # Handle potential NaN or inf values
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
@@ -53,30 +53,30 @@ def save_fits_as_png(image_data, output_path, stretch=True, log_scale=False, max
     # Save with compression
     pil_image.save(output_path, "JPEG", quality=85, optimize=True)
 
+
 def save_fits_with_contrast(image_data, output_path, max_width=1000):
     # Open the FITS file
     with fits.open(image_data) as hdu:
         # Get the data
         data = hdu[0].data
-        
+
         # Get clipping parameters from header
-        clipmed = hdu[0].header.get('CLIPMED')
-        clipstd = hdu[0].header.get('CLIPSTD')
+        clipmed = hdu[0].header.get("CLIPMED")
+        clipstd = hdu[0].header.get("CLIPSTD")
 
         lower_bound = clipmed - 3 * clipstd
         upper_bound = clipmed + 3 * clipstd
-        
-        
+
         clipped_data = np.clip(data, lower_bound, upper_bound)
-        
+
         if upper_bound > lower_bound:
             normalized_data = ((clipped_data - lower_bound) / (upper_bound - lower_bound) * 255).astype(np.uint8)
-        else:    
+        else:
             normalized_data = np.full_like(data, 128, dtype=np.uint8)
 
         # Create PIL image
-        pil_image = Image.fromarray(normalized_data, mode='L')  # Grayscale
-        
+        pil_image = Image.fromarray(normalized_data, mode="L")  # Grayscale
+
         # Apply contrast enhancement
         enhancer = ImageEnhance.Contrast(pil_image)
         enhanced_image = enhancer.enhance(2.0)  # Increase contrast by factor of 4
@@ -90,8 +90,9 @@ def save_fits_with_contrast(image_data, output_path, max_width=1000):
             enhanced_image = enhanced_image.resize((new_width, new_height), Image.LANCZOS)
 
         enhanced_image.save(output_path, "JPEG", quality=85, optimize=True)
-        
+
         return enhanced_image
+
 
 def plot_bias(file, overwrite=False):
     if not (isinstance(file, str)):
@@ -115,7 +116,7 @@ def plot_bias(file, overwrite=False):
     scope = (350, 700)  # (400, 600) (clipmin, clipmax)
 
     # edges = np.unique(np.concatenate(([mn], np.arange(clipmin, clipmax + 1, 1), [mx])))
-    edges = np.unique(np.concatenate(([mn], np.arange(scope[0], scope[1] + 1, 1), [mx])))+0.5
+    edges = np.unique(np.concatenate(([mn], np.arange(scope[0], scope[1] + 1, 1), [mx]))) + 0.5
     fig = Figure(figsize=(10, 6))
     canvas = FigureCanvas(fig)
     ax = fig.add_subplot(1, 1, 1)
@@ -124,7 +125,7 @@ def plot_bias(file, overwrite=False):
 
     lses = ["--", "-."]
     for i, key in enumerate(["CLIPMEAN", "CLIPMED"]):
-        ax.axvline(header[key], linestyle=lses[i], color=f"C{i+1}", label=key)
+        ax.axvline(header[key], linestyle=lses[i], color=f"C{i+1}", label=f"{key}: {header[key]:.4f}")
 
     label = r"outside 5 clipped $\sigma$"
     ax.axvspan(mn, header["CLIPMEAN"] - 5 * header["CLIPSTD"], color="gray", alpha=0.2, label=label)
@@ -152,6 +153,7 @@ def plot_bias(file, overwrite=False):
     save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.jpg")
     save_fits_with_contrast(file, path.parent / "figures" / f"{path.stem}_contrast.jpg")
 
+
 def plot_dark(file, flattened_mask=None):
     if not (isinstance(file, str)):
         print("An image path (dark) is not properly defined.")
@@ -170,7 +172,7 @@ def plot_dark(file, flattened_mask=None):
     scope = (-170, 200)
     mn = fdata.min()
     mx = fdata.max()
-    edges = np.unique(np.concatenate(([mn], np.arange(scope[0], scope[1] + 1, 1), [mx])))+0.5
+    edges = np.unique(np.concatenate(([mn], np.arange(scope[0], scope[1] + 1, 1), [mx]))) + 0.5
 
     # fig, ax = plt.subplots(figsize=(10, 6))
     fig = Figure(figsize=(10, 6))
@@ -383,6 +385,6 @@ def plot_sci(input_img, output_img):
         print("An image path (output_img) is not properly defined.")
         return
     path = PathHandler(output_img)
-    
+
     save_fits_as_png(fits.getdata(input_img), path.figure_dir_to_path / f"{path.stem[0]}_raw.jpg")
     save_fits_as_png(fits.getdata(output_img), path.figure_dir_to_path / f"{path.stem[0]}.jpg")

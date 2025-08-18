@@ -247,7 +247,11 @@ def force_symlink(src, dst):
     except FileNotFoundError:
         pass
 
+    # print(f"current working directory: {os.getcwd()}")
+    # print(f"symlinking {src} to {dst}")
     os.symlink(src, dst)
+    # os.symlink(os.path.realpath(src), dst)
+    # os.system(f"ln -s {src} {dst}")
 
 
 def time_diff_in_seconds(datetime1, datetime2=None, return_float=False):

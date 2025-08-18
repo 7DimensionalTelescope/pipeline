@@ -37,23 +37,23 @@ def run_scidata_reduction(config, processes=["astrometry", "photometry", "combin
         else:
             raise ValueError("Invalid configuration type. Expected SciProcConfiguration or path to .yml file.")
 
-        if (not (config.config.flag.astrometry) and "astrometry" in processes) or overwrite:
+        if "astrometry" in processes and (not config.config.flag.astrometry or overwrite):
             astr = Astrometry(config)
             astr.run()
             del astr
-        if (not (config.config.flag.single_photometry) and "photometry" in processes) or overwrite:
+        if "photometry" in processes and (not config.config.flag.single_photometry or overwrite):
             phot = Photometry(config)
             phot.run()
             del phot
-        if (not (config.config.flag.combine) and "combine" in processes) or overwrite:
+        if "combine" in processes and (not config.config.flag.combine or overwrite):
             stk = ImStack(config)
             stk.run()
             del stk
-        if (not (config.config.flag.combined_photometry) and "photometry" in processes) or overwrite:
+        if "photometry" in processes and (not config.config.flag.combined_photometry or overwrite):
             phot = Photometry(config)
             phot.run()
             del phot
-        if (not (config.config.flag.subtraction) and "subtract" in processes) or overwrite:
+        if "subtract" in processes and (not config.config.flag.subtraction or overwrite):
             subt = ImSubtract(config)
             subt.run()
             del subt
@@ -75,7 +75,6 @@ def query_observations(input_params, use_db=True, **kwargs):
     else:
         list_of_images = query_observations_manually(input_params, **kwargs)
     return list_of_images
-
 
 
 def start_monitoring(target_dir=None):
@@ -100,6 +99,7 @@ def start_monitoring(target_dir=None):
 
     if target_dir is None:
         from .const import RAWDATA_DIR
+
         target_dir = RAWDATA_DIR
 
     def process_new_images(image_paths):
@@ -112,7 +112,6 @@ def start_monitoring(target_dir=None):
         queue.add_scheduler(sc)
         queue.wait_until_task_complete("all")
 
-    
     monitor = Monitor(base_path=Path(target_dir))
     monitor.add_callback(process_new_images)
     observer = monitor.start()

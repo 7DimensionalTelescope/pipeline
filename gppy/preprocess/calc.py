@@ -435,7 +435,7 @@ def record_statistics(filename, header, device_id=0, cropsize=500, dtype=None):
     header["CENCLPSD"] = (float(std), f"3-sig clipped std of center {cropsize}x{cropsize}")  # fmt: skip
     # header["CENCMIN"] = float(min)
     # header["CENCMAX"] = float(max)
-
+    trimmed = False
     if dtype.upper() == "FLAT":
         datasig = fits.getdata(filename.replace("flat_", "flatsig_")).astype(np.float32)  # Ensure data is float32
         s_mean, s_median, s_std = sigma_clipped_stats(datasig, device_id=device_id, sigma=3, maxiters=5)
@@ -453,7 +453,7 @@ def record_statistics(filename, header, device_id=0, cropsize=500, dtype=None):
         header["UNIFORM"] = (uniformity_score, "Uniformity score")
         header["NTOTPIX"] = (data.shape[0] * data.shape[1], "Total number of pixels")
 
-    return header
+    return header, trimmed
 
 
 # not used
