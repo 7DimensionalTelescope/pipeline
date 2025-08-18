@@ -8,6 +8,7 @@ from ..utils import swap_ext, add_suffix
 from ..utils import force_symlink
 from ..services.memory import MemoryMonitor
 from ..config import SciProcConfiguration
+from ..config.utils import get_key
 from ..services.setup import BaseSetup
 from ..utils import time_diff_in_seconds
 
@@ -48,17 +49,18 @@ class Astrometry(BaseSetup):
         self.logger.debug(f"Astrometry Queue is '{queue}'")
 
     @classmethod
-    def from_list(cls, images):
+    def from_list(cls, images, working_dir=None):
+        from ..path.path import PathHandler
+
         image_list = []
         for image in images:
-            path = Path(image)
-            if not path.is_file():
-                print("The file does not exist.")
-                return None
-            image_list.append(path.parts[-1])
-        working_dir = str(path.parent.absolute())
-        config = SciProcConfiguration.base_config(working_dir)
+            if not os.path.exists(image):
+                raise FileNotFoundError(f"File does not exist: {image}")
+            image_list.append(os.path.abspath(image))
+
+        config = SciProcConfiguration.base_config()
         config.config.input.calibrated_images = image_list
+        config.path = PathHandler(image_list, working_dir=working_dir or os.getcwd())
         return cls(config=config)
 
     @property
@@ -128,25 +130,24 @@ class Astrometry(BaseSetup):
     def define_paths(self) -> Tuple[List[str], List[str], List[str]]:
         self.path_astrometry = self.path.astrometry.tmp_dir
 
-        # override if astrometry.input_files is set
-        if hasattr(self.config.astrometry, "input_images") and self.config.astrometry.input_images is not None:
-            inims = self.config.astrometry.input_images
+        # override if astrometry.input_images is set
+        local_inim = get_key(self.config, "astrometry.input_images")
+        if local_inim is not None:
+            inims = local_inim
         # otherwise use the common input
         else:
             inims = self.config.input.calibrated_images
-            self.config.astrometry.input_files = inims
+            self.config.astrometry.input_images = inims
 
         soft_links = [os.path.join(self.path_astrometry, os.path.basename(s)) for s in inims]
 
         for inim, soft_link in zip(inims, soft_links):
-            # if not os.path.exists(soft_link):
-            #     os.symlink(inim, soft_link)
             force_symlink(inim, soft_link)
 
         solved_files = [add_suffix(s, "solved") for s in soft_links]
         # return solved_files, soft_links, inims
-        self.solved_images = solved_files
         self.soft_links_to_input = soft_links
+        self.solved_images = solved_files
         self.input_images = inims
         # self.prep_cats = PathHandler(soft_links).astrometry.catalog
         self.prep_cats = [add_suffix(inim, "cat") for inim in soft_links]
@@ -182,7 +183,7 @@ class Astrometry(BaseSetup):
             self._submit_task(
                 external.solve_field,
                 zip(inputs, outputs),
-                dump_dir=self.path_astrometry,
+                # dump_dir=self.path_astrometry,
                 pixscale=self.path.pixscale,  # PathHandler brings pixscale from NameHandler
             )
         else:
@@ -190,7 +191,7 @@ class Astrometry(BaseSetup):
                 external.solve_field(
                     slink,
                     outim=sfile,
-                    dump_dir=self.path_astrometry,
+                    # dump_dir=self.path_astrometry,
                     pixscale=pixscale,
                 )
                 self.logger.info(f"Completed solve-field [{i+1}/{len(inputs)}]")
@@ -326,8 +327,7 @@ class Astrometry(BaseSetup):
         if use_missfits:
             for solved_head, output, inim in zip(solved_heads, links, inims):
                 output_head = "_".join(output.split("_")[:-1]) + ".head"
-                # os.symlink(solved_head, output_head)  # factory/inim.head
-                force_symlink(solved_head, output_head)
+                force_symlink(solved_head, output_head)  # factory/inim.head
                 external.missfits(output)  # soft_link changes to a wcs-updated fits file
                 os.system(f"mv {output} {inim}")  # overwrite (inefficient)
         else:
@@ -341,7 +341,7 @@ class Astrometry(BaseSetup):
                     solved_head = read_scamp_header(solved_head)
                     update_padded_header(target_fits, solved_head)
                 else:
-                    self.logger.error(f"Check SCAMP output. Possibly due to restricted access to the online VizieR catalog or disk space.")  # fmt: skip
+                    self.logger.error(f"Check SCAMP output. Check access to the online VizieR catalog, disk space or the field characteristics.")  # fmt: skip
                     raise FileNotFoundError(f"SCAMP output (.head) does not exist: {solved_head}")  # fmt: skip
         self.logger.info("Correcting WCS in image headers is completed.")
 

@@ -2,8 +2,9 @@ import os
 import subprocess
 from astropy.io import fits
 from .const import FACTORY_DIR, REF_DIR
-from .utils import add_suffix, swap_ext
+from .utils import add_suffix, force_symlink, swap_ext
 from .path import PathHandler
+from .utils import force_symlink
 
 
 def solve_field(inim, outim=None, dump_dir=None, get_command=False, pixscale=0.505, radius=1.0):
@@ -61,9 +62,7 @@ def solve_field(inim, outim=None, dump_dir=None, get_command=False, pixscale=0.5
     # soft link inside working_dir
     fname = os.path.basename(inim)
     soft_link = os.path.join(working_dir, fname)
-
-    if not (os.path.exists(soft_link)):
-        os.symlink(inim, soft_link)
+    force_symlink(inim, soft_link)
 
     # outname = os.path.join(working_dir, f"{Path(inim).stem}_solved.fits")
     outim = outim or os.path.join(os.path.splitext(soft_link)[0] + "_solved.fits")
