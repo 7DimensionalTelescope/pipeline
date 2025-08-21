@@ -18,11 +18,13 @@ from ..utils import (
 )
 
 from ..config import PreprocConfiguration
+from ..config.utils import get_key
 from ..services.setup import BaseSetup
 from ..const import HEADER_KEY_MAP
 from ..services.utils import acquire_available_gpu
 from .checker import Checker
 from ..services.database import ProcessDB, PipelineData, QAData
+from ..header import add_padding
 
 pp = pprint.PrettyPrinter(indent=2)  # , width=120)
 
@@ -100,9 +102,8 @@ class Preprocess(BaseSetup, Checker):
         from ..path import PathHandler
 
         self.logger.info("Initializing Preprocess")
-        if (hasattr(self.config.input, "masterframe_images") and self.config.input.masterframe_images) or (
-            hasattr(self.config.input, "science_images") and self.config.input.science_images
-        ):
+
+        if get_key(self.config.input, "masterframe_images") or get_key(self.config.input, "science_images"):
             bdf_flattened = flatten(self.config.input.masterframe_images)
             input_files = bdf_flattened + list(self.config.input.science_images)
             self.raw_groups = PathHandler.take_raw_inventory(input_files)
@@ -217,6 +218,7 @@ class Preprocess(BaseSetup, Checker):
                 self.logger.info(f"[Group {i+1}] No science images for this masterframe. Skipping...")
                 continue
             self.load_masterframe(device_id=device_id)
+
             if not self.master_frame_only:
                 self.prepare_header()
                 self.data_reduction(device_id=device_id)
@@ -340,23 +342,24 @@ class Preprocess(BaseSetup, Checker):
                 self.logger.debug(f"[Group {self._current_group+1}] flatdark_output: {self.flatdark_output}")
 
             if input_file and (not os.path.exists(output_file) or self.overwrite):
-                self._generate_masterframe(dtype, device_id)
+                norminal = self._generate_masterframe(dtype, device_id)
+                if not norminal:
+                    self.fetch_masterframe(output_file, dtype)
             elif isinstance(output_file, str) and len(output_file) != 0:
-                if os.path.exists(output_file) and not self.overwrite:
-                    self._write_into_db(dtype)
-
                 self.logger.warning(
                     f"[Group {self._current_group+1}] No {dtype} masterframe found for the current group."
                 )
                 self.db.add_warning(self.pipeline_id)
                 self._fetch_masterframe(output_file, dtype)
                 self.skip_flag[dtype] = True
+
             else:
                 self.logger.warning(f"[Group {self._current_group+1}] {dtype} has no input or output data (to fetch)")
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_input: {input_file}")
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_output: {output_file}")
                 self.db.add_warning(self.pipeline_id)
 
+        self._write_into_db(dtype)
         self.logger.info(f"[Group {self._current_group+1}] Generation/Loading of masterframes completed in {time_diff_in_seconds(st)} seconds")  # fmt: skip
 
         # Update pipeline progress after masterframe processing
@@ -425,7 +428,7 @@ class Preprocess(BaseSetup, Checker):
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), header)
 
         header = prep_utils.add_image_id(header)
-        header, trimmed = record_statistics(getattr(self, f"{dtype}_output"), header, dtype=dtype)
+        header = record_statistics(getattr(self, f"{dtype}_output"), header, dtype=dtype)
 
         flag, header = self.apply_criteria(header=header, dtype=dtype)
 
@@ -435,11 +438,12 @@ class Preprocess(BaseSetup, Checker):
 
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
 
-        self._write_into_db(dtype, header=header, trimmed=trimmed)
+        self._write_into_db(dtype)
 
         if flag:
             self.logger.info(f"[Group {self._current_group+1}] Nominal master {dtype} generated successfully in {time_diff_in_seconds(st)} seconds")  # fmt: skip
             self.logger.debug(f"[Group {self._current_group+1}] FITS Written: {getattr(self, f'{dtype}_output')}")
+            return True
         else:
             self.logger.error(f"[Group {self._current_group+1}] Master {dtype} generated but failed quality check")
             self.logger.debug(f"[Group {self._current_group+1}] FITS Written: {getattr(self, f'{dtype}_output')}")
@@ -448,16 +452,15 @@ class Preprocess(BaseSetup, Checker):
             )
             self.make_plot(getattr(self, f"{dtype}_output"), dtype, self._current_group)
             self.db.add_error(self.pipeline_id)
-            self._fetch_masterframe(getattr(self, f"{dtype}_output"), dtype)
+            return False
 
-    def _write_into_db(self, dtype, header=None, trimmed=False):
+    def _write_into_db(self, dtype):
         self.logger.info(f"[Group {self._current_group+1}] Creating QA data for {dtype} (PID: {self.pipeline_id})")
 
-        if header is None:
-            try:
-                header = fits.getheader(self._original_raw_groups[self._current_group][1][self._key_to_index[dtype]])
-            except:
-                return
+        try:
+            header = fits.getheader(self._original_raw_groups[self._current_group][1][self._key_to_index[dtype]])
+        except:
+            return
 
         try:
             qa_data = QAData.from_header(
@@ -467,6 +470,8 @@ class Preprocess(BaseSetup, Checker):
                 self.pipeline_id,
                 getattr(self, f"{dtype}_output"),
             )
+
+            trimmed = qa_data.trimmed
             # Use ProcessDB (inherited from ImageDB) to create QA data (will handle duplicates automatically)
             qa_id = self.db.create_qa_data(qa_data)
             self.logger.debug(f"[Group {self._current_group+1}] Created QA record with ID: {qa_id}")
@@ -573,24 +578,24 @@ class Preprocess(BaseSetup, Checker):
                 use_gpu=self._use_gpu,
             )
 
-            self.logger.info(
-                f"[Group {self._current_group+1}] Completed data reduction for {len(self.sci_input)} "
-                f"images in {time_diff_in_seconds(st)} seconds "
-                f"({time_diff_in_seconds(st, return_float=True)/len(self.sci_input):.1f} s/image)"
-            )
+        self.logger.info(
+            f"[Group {self._current_group+1}] Completed data reduction for {len(self.sci_input)} "
+            f"images in {time_diff_in_seconds(st)} seconds "
+            f"({time_diff_in_seconds(st, return_float=True)/len(self.sci_input):.1f} s/image)"
+        )
 
-            # Update pipeline progress after data reduction
-            if self.pipeline_id:
-                data_reduction_progress = 50 + int(
-                    (self._current_group + 1) / self._n_groups * 50
-                )  # Data reduction is 50-100% of total work
-                self._update_pipeline_progress(data_reduction_progress)
+        # Update pipeline progress after data reduction
+        if self.pipeline_id:
+            data_reduction_progress = 50 + int(
+                (self._current_group + 1) / self._n_groups * 50
+            )  # Data reduction is 50-100% of total work
+            self._update_pipeline_progress(data_reduction_progress)
 
         # for raw_file, processed_file in zip(self.sci_input, self.sci_output):
         #     header = fits.getheader(raw_file)
         #     header["SATURATE"] = prep_utils.get_saturation_level(header, bias, dark, flat)
         #     header = prep_utils.write_IMCMB_to_header(header, [bias, dark, flat, raw_file])
-        #     header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
+        #     header = add_padding(header, n_head_blocks, copy_header=True)
 
         #     prep_utils.update_header_by_overwriting(processed_file, header)
 
@@ -601,7 +606,7 @@ class Preprocess(BaseSetup, Checker):
             header = fits.getheader(raw_file)
             header["SATURATE"] = prep_utils.get_saturation_level(header, bias, dark, flat)
             header = prep_utils.write_IMCMB_to_header(header, [bias, dark, flat, raw_file])
-            header = prep_utils.add_padding(header, n_head_blocks, copy_header=True)
+            header = add_padding(header, n_head_blocks, copy_header=True)
             prep_utils.write_header(processed_file, header)
 
     def make_plot(self, file_path: str, dtype: str, group_index: int):

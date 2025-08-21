@@ -9,6 +9,7 @@ import uuid
 
 from ..path.path import PathHandler
 from .checker import Checker
+from ..header import write_header_file
 
 
 class FileCreationHandler(FileSystemEventHandler):
@@ -176,74 +177,6 @@ def add_image_id(header, key="IMAGEID"):
     return header
 
 
-def add_padding(header, n, copy_header=False):
-    """
-    Add empty COMMENT entries to a FITS header to ensure specific block sizes.
-
-    This function helps manage FITS header sizes by adding padding comments.
-    Useful for maintaining specific header block structures required by
-    astronomical data processing tools.
-
-    Args:
-        header (fits.Header): Input FITS header
-        n (int): Target number of 2880-byte blocks
-        copy_header (bool, optional): If True, operates on a copy of the header.
-            Defaults to False. Note: Using True is slower.
-
-    Returns:
-        fits.Header: Header with added padding comments
-
-    Note:
-        - Each COMMENT is 80 bytes long
-        - The total header size must be a multiple of 2880 bytes
-    """
-    if copy_header:
-        import copy
-
-        header = copy.deepcopy(header)
-
-    info_size = len(header.cards) * 80
-
-    target_size = (n - 1) * 2880  # fits header size is a multiple of 2880 bytes
-    padding_needed = target_size - info_size
-    num_comments = padding_needed // 80  # (each COMMENT is 80 bytes)
-
-    # CAVEAT: END also uses one line.
-    # for _ in range(num_comments - 1):  # <<< full n-1 2880-byte blocks
-    for _ in range(num_comments):  # <<< marginal n blocks
-        header.add_comment(" ")
-
-    return header
-
-
-def remove_padding(header):
-    """
-    Remove COMMENT padding from a FITS header.
-
-    Strips all trailing COMMENT entries, returning a header with only
-    significant entries.
-
-    Args:
-        header (fits.Header): Input FITS header with potential padding
-
-    Returns:
-        fits.Header: Header with padding comments removed
-
-    Note:
-        This method is primarily useful for header inspection and may not
-        be directly applicable for header updates.
-    """
-    # Extract all header cards
-    cards = list(header.cards)
-
-    # Find the last non-COMMENT entry
-    for i in range(len(cards) - 1, -1, -1):
-        if cards[i][0] != "COMMENT":  # i is the last non-comment idx
-            break
-
-    return header[: i + 1]
-
-
 def update_header_by_overwriting(filename, header, bitpix=-32):
 
     with fits.open(filename, mode="update") as hdul:
@@ -261,22 +194,6 @@ def update_header_by_overwriting(filename, header, bitpix=-32):
         hdul.flush()
 
 
-def write_header(filename, header):
-    for key in ["BZERO", "BSCALE"]:
-        try:
-            del header[key]
-        except:
-            continue
-
-    header["BITPIX"] = -32
-
-    if filename.endswith(".fits"):
-        filename = filename.replace(".fits", ".header")
-
-    with open(filename, "w") as f:
-        f.write(header.tostring(sep="\n"))
-
-
 # def update_header_by_overwriting(filename, header, bitpix=-32):
 
 #     if bitpix == -32:
@@ -289,3 +206,18 @@ def write_header(filename, header):
 #     data = fits.getdata(filename)
 
 #     fits.writeto(filename, data, header=header, overwrite=True)
+
+
+def write_header(filename, header):
+    for key in ["BZERO", "BSCALE"]:
+        try:
+            del header[key]
+        except:
+            continue
+
+    header["BITPIX"] = -32
+
+    if filename.endswith(".fits"):
+        filename = filename.replace(".fits", ".header")
+
+    write_header_file(filename, header)

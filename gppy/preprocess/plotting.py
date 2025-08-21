@@ -12,7 +12,7 @@ from PIL import Image, ImageEnhance
 from ..path import PathHandler
 
 
-def save_fits_as_png(image_data, output_path, stretch=True, log_scale=False, max_width=1000):
+def save_fits_as_figures(image_data, output_path, stretch=True, log_scale=False, max_width=1000):
 
     # Handle potential NaN or inf values
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -150,7 +150,7 @@ def plot_bias(file, overwrite=False):
     canvas.print_figure(output_path)
     # plt.savefig(output_path)
     # plt.close()
-    save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.jpg")
+    save_fits_as_figures(data, path.parent / "figures" / f"{path.stem}.jpg")
     save_fits_with_contrast(file, path.parent / "figures" / f"{path.stem}_contrast.jpg")
 
 
@@ -227,7 +227,7 @@ def plot_dark(file, flattened_mask=None):
     canvas.print_figure(output_path)  # writes to PNG
     # plt.savefig(output_path)
     # plt.close()
-    save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.jpg")
+    save_fits_as_figures(data, path.parent / "figures" / f"{path.stem}.jpg")
     save_fits_with_contrast(file, path.parent / "figures" / f"{path.stem}_contrast.jpg")
     # plot_dark_tail(fdata, file, savefig=savefig)
 
@@ -338,7 +338,7 @@ def plot_flat(file, fmask=None):
     # fig.savefig(output_path)
     # fig.close()
 
-    save_fits_as_png(data, path.parent / "figures" / f"{path.stem}.jpg")
+    save_fits_as_figures(data, path.parent / "figures" / f"{path.stem}.jpg")
 
 
 def plot_bpmask(file, ext=1, badpix=1):
@@ -386,5 +386,5 @@ def plot_sci(input_img, output_img):
         return
     path = PathHandler(output_img)
 
-    save_fits_as_png(fits.getdata(input_img), path.figure_dir_to_path / f"{path.stem[0]}_raw.jpg")
-    save_fits_as_png(fits.getdata(output_img), path.figure_dir_to_path / f"{path.stem[0]}.jpg")
+    save_fits_as_figures(fits.getdata(input_img), path.figure_dir_to_path / f"{path.stem[0]}_raw.jpg")
+    save_fits_as_figures(fits.getdata(output_img), path.figure_dir_to_path / f"{path.stem[0]}.jpg")

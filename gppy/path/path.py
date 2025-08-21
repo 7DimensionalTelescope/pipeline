@@ -1004,6 +1004,18 @@ class PathAstrometry(AutoMkdirMixin):
     def tmp_dir(self):
         return os.path.join(self._parent.factory_dir, "astrometry")
 
+    @property
+    def astrefcat(self):
+        import re
+
+        # use local astrefcat if tile obs
+        match = re.search(r"T\d{5}", self._parent.name.obj)
+        if match:
+            astrefcat = os.path.join(self.ref_ris_dir, f"{match.group()}.fits")
+        else:
+            astrefcat = None
+        return astrefcat
+
     # @property
     # def input_files(self):
     #     return self._parent.processed_images

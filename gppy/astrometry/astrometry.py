@@ -1,16 +1,21 @@
 import os
 import re
-from typing import Any, List, Tuple, Union
-from pathlib import Path
 import time
+from typing import Any, List, Tuple, Union, Any
+from dataclasses import dataclass
+from astropy.io import fits
+from astropy.time import Time
+from astropy.coordinates import Angle
+
 from .. import external
-from ..utils import swap_ext, add_suffix
-from ..utils import force_symlink
+from ..const import PIXSCALE, PipelineError
+from ..utils import swap_ext, add_suffix, force_symlink, time_diff_in_seconds
+from ..header import update_padded_header
 from ..services.memory import MemoryMonitor
 from ..config import SciProcConfiguration
 from ..config.utils import get_key
 from ..services.setup import BaseSetup
-from ..utils import time_diff_in_seconds
+from .utils import read_scamp_header, build_wcs
 
 
 class Astrometry(BaseSetup):
@@ -66,7 +71,6 @@ class Astrometry(BaseSetup):
         self,
         solve_field: bool = True,
         joint_scamp: bool = True,
-        use_missfits: bool = False,
         processes=["sextractor", "scamp", "header_update"],
         se_preset: str = "prep",
         use_gpu: bool = False,
@@ -88,10 +92,11 @@ class Astrometry(BaseSetup):
             self.logger.info(f"Start 'Astrometry'")
 
             self.define_paths()
+            self.images_info = [ImageInfo.parse_image_header_info(image) for image in self.input_images]
 
             # solve-field
             if solve_field:
-                self.run_solve_field(self.soft_links_to_input, self.solved_images)
+                self.run_solve_field(self.soft_links_to_input_images, self.solved_images)
             else:
                 # add manual WCS update feature
                 pass
@@ -109,8 +114,7 @@ class Astrometry(BaseSetup):
                 self.update_header(
                     self.solved_images,
                     self.input_images,
-                    self.soft_links_to_input,
-                    use_missfits=use_missfits,
+                    self.soft_links_to_input_images,
                 )
 
             self.config.flag.astrometry = True
@@ -140,11 +144,11 @@ class Astrometry(BaseSetup):
 
         solved_files = [add_suffix(s, "solved") for s in soft_links]
         # return solved_files, soft_links, inims
-        self.soft_links_to_input = soft_links
+        self.soft_links_to_input_images = soft_links
         self.solved_images = solved_files
         self.input_images = inims
         # self.prep_cats = PathHandler(soft_links).astrometry.catalog
-        self.prep_cats = [add_suffix(inim, "cat") for inim in soft_links]
+        self.prep_cats = [add_suffix(inim, "cat") for inim in soft_links]  # fits_ldac
 
     def run_solve_field(self, inputs: List[str], outputs: List[str]) -> None:
         """Run astrometric plate-solving on input images.
@@ -216,7 +220,7 @@ class Astrometry(BaseSetup):
                 outcat=self.prep_cats,
                 prefix=se_preset,
                 logger=self.logger,
-                sex_args=["-catalog_type", "fits_ldac"],
+                fits_ldac=True,
             )
         else:
             for i, (solved_image, prep_cat) in enumerate(zip(files, self.prep_cats)):
@@ -225,7 +229,7 @@ class Astrometry(BaseSetup):
                     outcat=prep_cat,
                     se_preset=se_preset,
                     logger=self.logger,
-                    sex_args=["-catalog_type", "fits_ldac"],
+                    fits_ldac=True,
                 )
                 self.logger.info(f"Completed sextractor (prep) [{i+1}/{len(files)}]")
                 self.logger.debug(f"{solved_image}")
@@ -259,10 +263,11 @@ class Astrometry(BaseSetup):
         path_ref_scamp = self.path.astrometry.ref_query_dir
 
         # use local astrefcat if tile obs
-        match = re.search(r"T\d{5}", self.config.name)
-        if match:
-            astrefcat = os.path.join(self.path.astrometry.ref_ris_dir, f"{match.group()}.fits")
-            self.config.astrometry.refcat = astrefcat
+        # match = re.search(r"T\d{5}", self.config.name)
+        # if match:
+        #     astrefcat = os.path.join(self.path.astrometry.ref_ris_dir, f"{match.group()}.fits")
+        #     self.config.astrometry.refcat = astrefcat
+        self.config.astrometry.refcat = self.path.astrometry.astrefcat
 
         # joint scamp
         if joint:
@@ -272,7 +277,6 @@ class Astrometry(BaseSetup):
                 for precat in presex_cats:
                     f.write(f"{precat}\n")
 
-            # @ is astromatic syntax.
             external.scamp(cat_to_scamp, path_ref_scamp=path_ref_scamp, local_astref=astrefcat)
 
         # individual, parallel
@@ -318,25 +322,16 @@ class Astrometry(BaseSetup):
         solved_heads = [swap_ext(s, "head") for s in self.prep_cats]
 
         # header update
-        if use_missfits:
-            for solved_head, output, inim in zip(solved_heads, links, inims):
-                output_head = "_".join(output.split("_")[:-1]) + ".head"
-                force_symlink(solved_head, output_head)  # factory/inim.head
-                external.missfits(output)  # soft_link changes to a wcs-updated fits file
-                os.system(f"mv {output} {inim}")  # overwrite (inefficient)
-        else:
-            from .utils import read_scamp_header
-            from ..utils import update_padded_header
 
-            # update img in processed directly
-            for solved_head, target_fits in zip(solved_heads, inims):
-                # update_scamp_head(target_fits, head_file)
-                if os.path.exists(solved_head):
-                    solved_head = read_scamp_header(solved_head)
-                    update_padded_header(target_fits, solved_head)
-                else:
-                    self.logger.error(f"Check SCAMP output. Check access to the online VizieR catalog, disk space or the field characteristics.")  # fmt: skip
-                    raise FileNotFoundError(f"SCAMP output (.head) does not exist: {solved_head}")  # fmt: skip
+        # update img in processed directly
+        for solved_head, target_fits in zip(solved_heads, inims):
+            # update_scamp_head(target_fits, head_file)
+            if os.path.exists(solved_head):
+                solved_head = read_scamp_header(solved_head)
+                update_padded_header(target_fits, solved_head)
+            else:
+                self.logger.error(f"Check SCAMP output. Check access to the online VizieR catalog, disk space or the field characteristics.")  # fmt: skip
+                raise FileNotFoundError(f"SCAMP output (.head) does not exist: {solved_head}")  # fmt: skip
         self.logger.info("Correcting WCS in image headers is completed.")
 
     def _submit_task(self, func: callable, items: List[Any], **kwargs: Any) -> None:
@@ -375,3 +370,68 @@ class Astrometry(BaseSetup):
             task_ids.append(task_id)
 
         self.queue.wait_until_task_complete(task_ids)
+
+
+@dataclass
+class ImageInfo:
+    """Stores information needed for astrometry. Mostly extracted from the FITS image header."""
+
+    dateobs: str  # Observation date/time
+    # naxis1: int  # Image width
+    # naxis2: int  # Image height
+    racent: float  # RA of image center
+    decent: float  # DEC of image center
+    xcent: float  # X coordinate of image center
+    ycent: float  # Y coordinate of image center
+    n_binning: int  # Binning factor
+    pixscale: float  # Pixel scale [arcsec/pix]
+
+    def __repr__(self) -> str:
+        """Returns a string representation of the ImageInfo."""
+        return ",\n".join(f"  {k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
+
+    @classmethod
+    def parse_image_header_info(cls, image_path: str) -> "ImageInfo":
+        """Parses image information from a FITS header."""
+
+        hdr = fits.getheader(image_path)
+
+        # Center coord for reference catalog query
+        xcent = (hdr["NAXIS1"] + 1) / 2.0
+        ycent = (hdr["NAXIS2"] + 1) / 2.0
+        n_binning = hdr["XBINNING"]
+        assert n_binning == hdr["YBINNING"]
+        pixscale = n_binning * PIXSCALE
+
+        # racent, decent = hdr["OBJCTRA"], hdr["OBJCTDEC"]  # desired pointing
+        racent, decent = hdr["RA"], hdr["DEC"]  # actual pointing
+        # racent = Angle(racent, unit="hourangle").deg
+        racent = Angle(racent, unit="deg").deg
+        decent = Angle(decent, unit="deg").deg
+
+        # wcs = WCS(image_path)
+        # racent, decent = wcs.all_pix2world(xcent, ycent, 1)
+        # racent = float(racent)
+        # decent = float(decent)
+
+        # time_obj = Time(hdr["DATE-OBS"], format="isot")
+        time_obj = hdr["DATE-OBS"]
+
+        # if solved
+        # if "CTYPE1" not in hdr.keys():
+        #     raise PipelineError("Check Astrometry solution: no WCS information for Photometry")
+
+        return cls(
+            dateobs=time_obj,  # hdr["DATE-OBS"],
+            racent=racent,
+            decent=decent,
+            xcent=xcent,
+            ycent=ycent,
+            n_binning=n_binning,
+            pixscale=pixscale,
+        )
+
+    @property
+    def coarse_wcs(self):
+        pa = 0
+        return build_wcs(self.racent, self.decent, self.xcent, self.ycent, self.pixscale, pa, flip=True)

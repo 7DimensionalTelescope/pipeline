@@ -7,7 +7,18 @@ from .path import PathHandler
 from .utils import force_symlink
 
 
-def solve_field(inim, outim=None, dump_dir=None, get_command=False, pixscale=0.505, radius=1.0):
+def solve_field(
+    inim,
+    outim=None,
+    dump_dir=None,
+    get_command=False,
+    pixscale=0.505,
+    radius=1.0,
+    sexcat=None,  # path to SExtractor catalog
+    xcol="X_IMAGE",  # column name for X (pixels)
+    ycol="Y_IMAGE",  # column name for Y (pixels)
+    sortcol=None,  # optional column to sort by
+):
     """
     Runs Astrometry.net's `solve-field` to compute the World Coordinate System (WCS) for an input FITS image.
 
@@ -69,23 +80,39 @@ def solve_field(inim, outim=None, dump_dir=None, get_command=False, pixscale=0.5
 
     # Solve-field using the soft link
     # e.g., solve-field calib_7DT11_T00139_20250102_014643_m425_100s.fits --crpix-center --scale-unit arcsecperpix --scale-low '0.4949' --scale-high '0.5151' --no-plots --new-fits solved.fits --overwrite --use-source-extractor --cpulimit 30
-    solvecom = [
-        "solve-field", f"{soft_link}",  # this file is not changed by solve-field
-        "--new-fits", outim,  # you can give 'none'
-        # "--config", f"{path_cfg}",
-        # "--source-extractor-config", f"{path_sex_cfg}",
-        # "--no-fits2fits",  # Do not create output FITS file
-        "--overwrite",
-        "--crpix-center",
-        "--scale-unit", "arcsecperpix",
-        "--scale-low", f"{pixscale*0.98}",
-        "--scale-high", f"{pixscale*1.02}",
-        "--use-source-extractor",  # Crucial speed boost. 30 s -> 5 s
-        "--cpulimit", f"{30}",  # This is not about CORES. 
-        "--no-plots",  # MASSIVE speed boost. 2 min -> 5 sec
-        # "--no-tweak",  # Skip SIP distortion correction. 0.3 seconds boost.
-        # "--downsample", "4",  # not much difference
-    ]  # fmt: skip
+    if sexcat is None:
+        solvecom = [
+            "solve-field", f"{soft_link}",  # this file is not changed by solve-field
+            "--new-fits", outim,  # you can give 'none'
+            # "--config", f"{path_cfg}",
+            # "--source-extractor-config", f"{path_sex_cfg}",
+            # "--no-fits2fits",  # Do not create output FITS file
+            "--overwrite",
+            "--crpix-center",
+            "--scale-unit", "arcsecperpix",
+            "--scale-low", f"{pixscale*0.98}",
+            "--scale-high", f"{pixscale*1.02}",
+            "--use-source-extractor",  # Crucial speed boost. 30 s -> 5 s
+            "--cpulimit", f"{30}",  # This is not about CORES. 
+            "--no-plots",  # MASSIVE speed boost. 2 min -> 5 sec
+            # "--no-tweak",  # Skip SIP distortion correction. 0.3 seconds boost.
+            # "--downsample", "4",  # not much difference
+        ]  # fmt: skip
+
+    # If user provided a Source Extractor catalog, use it instead of extracting sources
+    else:
+        sexcat = os.path.abspath(sexcat)
+        # Common SExtractor outputs work: FITS_LDAC (.cat), FITS table, or ASCII.
+        # We point solve-field at it and specify which columns to read.
+        solvecom += [
+            "solve-field", sexcat,
+            # "--x-column", xcol,
+            # "--y-column", ycol,
+        ]  # fmt: skip
+
+        if sortcol:
+            solvecom += ["--sort-column", sortcol]
+        # IMPORTANT: omit --use-source-extractor if we're providing a catalog
 
     try:
         header = fits.getheader(inim)
@@ -144,7 +171,7 @@ def scamp(input, ahead=None, path_ref_scamp=None, local_astref=None, get_command
 
     # assumes joint run if input is not fits
     if os.path.splitext(input)[1] != ".fits":
-        input = f"@{input}"
+        input = f"@{input}"  # @ is astromatic syntax.
 
     # scampcom = f’scamp {catname} -c {os.path.join(path_cfg, “kmtnet.scamp”)} -ASTREF_CATALOG FILE -ASTREFCAT_NAME {gaialdac} -POSITION_MAXERR 20.0 -CROSSID_RADIUS 5.0 -DISTORT_DEGREES 3 -PROJECTION_TYPE TPV -AHEADER_GLOBAL {ahead} -STABILITY_TYPE INSTRUMENT’
     scampcom = f"scamp -c {scampconfig} {input}"
@@ -154,14 +181,18 @@ def scamp(input, ahead=None, path_ref_scamp=None, local_astref=None, get_command
 
     # download gaia edr3 refcat
     else:
-        path_ref_scamp = path_ref_scamp or os.path.join(FACTORY_DIR, "ref_scamp")
+        path_ref_scamp = path_ref_scamp or PathHandler().astrometry.ref_query_dir
         scampcom = f"{scampcom} -REFOUT_CATPATH {path_ref_scamp}"
 
     if ahead:
         # scampcom = f"{scampcom} -AHEADER_NAME {ahead}"
         scampcom = f"{scampcom} -AHEADER_GLOBAL {ahead}"
-    scampcom = f"{scampcom} > {log_file} 2>&1"
+    scampcom = f"{scampcom} >> {log_file} 2>&1"
     # print(scampcom)
+
+    with open(log_file, "w") as f:
+        f.write(scampcom)
+        f.write("\n" * 3)
 
     if get_command:
         return scampcom
@@ -201,6 +232,7 @@ def sextractor(
     outcat: str = None,
     se_preset="prep",
     log_file: str = None,
+    fits_ldac: bool = False,
     sex_args: list = [],
     config=None,  # supply config.config
     logger=None,
@@ -235,7 +267,10 @@ def sextractor(
     else:
         sex, param, conv, nnw = get_sex_config(se_preset)
 
-    outcat = outcat or add_suffix(add_suffix(inim, se_preset), "cat")
+    default_outcat = (
+        add_suffix(add_suffix(inim, se_preset), "cat") if fits_ldac else swap_ext(add_suffix(inim, se_preset), "cat")
+    )
+    outcat = outcat or default_outcat  # default is ascii.sextractor
     log_file = log_file or swap_ext(add_suffix(outcat, "sextractor"), "log")
 
     sexcom = [
@@ -247,6 +282,9 @@ def sextractor(
         "-FILTER_NAME", f"{conv}",
         "-STARNNW_NAME", f"{nnw}",
     ]  # fmt: skip
+
+    if fits_ldac:
+        sexcom.extend(["-catalog_type", "fits_ldac"])
 
     # add additional arguments when given
     sexcom.extend(sex_args or [])

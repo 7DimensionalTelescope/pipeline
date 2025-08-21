@@ -453,7 +453,7 @@ def record_statistics(filename, header, device_id=0, cropsize=500, dtype=None):
         header["UNIFORM"] = (uniformity_score, "Uniformity score")
         header["NTOTPIX"] = (data.shape[0] * data.shape[1], "Total number of pixels")
 
-    return header, trimmed
+    return header
 
 
 # not used

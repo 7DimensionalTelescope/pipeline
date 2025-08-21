@@ -63,14 +63,16 @@ class PreprocConfiguration(BaseConfig):
         self.config.info.creation_datetime = datetime.now().isoformat()
         self.config.name = os.path.basename(self.path.preproc_output_yml).replace(".yml", "")
         if self.input_files:
-            self.config.input.masterframe_images = []
-            self.config.input.science_images = []
+            masterframe_images = set()
+            science_images = set()
             for file in self.input_files:
                 if any(calib_type in file for calib_type in CalibType):
-                    self.config.input.masterframe_images.append(file)
+                    masterframe_images.add(file)
                 else:
-                    self.config.input.science_images.append(file)
+                    science_images.add(file)
 
+        self.config.input.masterframe_images = list(masterframe_images)
+        self.config.input.science_images = list(science_images)
         self.config.input.raw_dir = self.input_dir
         self._initialized = True
 
