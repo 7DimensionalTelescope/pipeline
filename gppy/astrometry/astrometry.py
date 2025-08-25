@@ -35,6 +35,8 @@ class Astrometry(BaseSetup):
         >>> astro.run(solve_field=True, joint_scamp=True)
     """
 
+    start_time = None
+
     def __init__(
         self,
         config: Union[str, SciProcConfiguration] = None,
@@ -52,6 +54,11 @@ class Astrometry(BaseSetup):
         super().__init__(config, logger, queue)
         self._flag_name = "astrometry"
         self.logger.debug(f"Astrometry Queue is '{queue}'")
+
+        self.start_time = time.time()
+
+        self.define_paths()
+        self.images_info = [ImageInfo.parse_image_header_info(image) for image in self.input_images]
 
     @classmethod
     def from_list(cls, images, working_dir=None):
@@ -73,7 +80,7 @@ class Astrometry(BaseSetup):
         joint_scamp: bool = True,
         processes=["sextractor", "scamp", "header_update"],
         se_preset: str = "prep",
-        use_gpu: bool = False,
+        # use_gpu: bool = False,
     ) -> None:
         """Execute the complete astrometry pipeline.
 
@@ -88,11 +95,8 @@ class Astrometry(BaseSetup):
             prefix: Prefix for sextractor
         """
         try:
-            start_time = time.time()
+            start_time = self.start_time or time.time()
             self.logger.info(f"Start 'Astrometry'")
-
-            self.define_paths()
-            self.images_info = [ImageInfo.parse_image_header_info(image) for image in self.input_images]
 
             # solve-field
             if solve_field:
@@ -112,9 +116,9 @@ class Astrometry(BaseSetup):
 
             if "header_update" in processes:
                 self.update_header(
-                    self.solved_images,
-                    self.input_images,
-                    self.soft_links_to_input_images,
+                    # self.solved_images,
+                    # self.input_images,
+                    # self.soft_links_to_input_images,
                 )
 
             self.config.flag.astrometry = True
@@ -149,6 +153,7 @@ class Astrometry(BaseSetup):
         self.input_images = inims
         # self.prep_cats = PathHandler(soft_links).astrometry.catalog
         self.prep_cats = [add_suffix(inim, "cat") for inim in soft_links]  # fits_ldac
+        self.solved_heads = [swap_ext(s, "head") for s in self.prep_cats]
 
     def run_solve_field(self, inputs: List[str], outputs: List[str]) -> None:
         """Run astrometric plate-solving on input images.
@@ -263,11 +268,9 @@ class Astrometry(BaseSetup):
         path_ref_scamp = self.path.astrometry.ref_query_dir
 
         # use local astrefcat if tile obs
-        # match = re.search(r"T\d{5}", self.config.name)
-        # if match:
-        #     astrefcat = os.path.join(self.path.astrometry.ref_ris_dir, f"{match.group()}.fits")
-        #     self.config.astrometry.refcat = astrefcat
-        self.config.astrometry.refcat = self.path.astrometry.astrefcat
+        self.config.astrometry.local_astref = self.path.astrometry.astrefcat
+        astrefcat = astrefcat or self.config.astrometry.local_astref
+        self.logger.debug(f"Using astrefcat: {astrefcat}")
 
         # joint scamp
         if joint:
@@ -300,9 +303,8 @@ class Astrometry(BaseSetup):
 
     def update_header(
         self,
-        files: List[str],
-        inims: List[str],
-        links: List[str],
+        inims: List[str] = None,
+        heads: List[str] = None,
         use_missfits: bool = False,
     ) -> None:
         """
@@ -314,25 +316,19 @@ class Astrometry(BaseSetup):
             links: Paths to symbolic links (need for use_missfits)
             use_missfits: Whether to use missfits for updates
         """
-        # self.logger.info(
-        #     f"Updating WCS {'with missfits' if use_missfits else 'manually'}"
-        # )
 
-        # solved_heads = [os.path.splitext(s)[0] + f".{prefix}.head" for s in files]
-        solved_heads = [swap_ext(s, "head") for s in self.prep_cats]
+        heads = heads or self.solved_heads
+        inims = inims or self.input_images
+        self.logger.info(f"Updating WCS to header(s) of {len(heads)} image(s)")
 
-        # header update
-
-        # update img in processed directly
-        for solved_head, target_fits in zip(solved_heads, inims):
-            # update_scamp_head(target_fits, head_file)
+        for solved_head, target_fits in zip(heads, inims):
             if os.path.exists(solved_head):
                 solved_head = read_scamp_header(solved_head)
                 update_padded_header(target_fits, solved_head)
             else:
                 self.logger.error(f"Check SCAMP output. Check access to the online VizieR catalog, disk space or the field characteristics.")  # fmt: skip
                 raise FileNotFoundError(f"SCAMP output (.head) does not exist: {solved_head}")  # fmt: skip
-        self.logger.info("Correcting WCS in image headers is completed.")
+        # self.logger.info("Correcting WCS in image headers is completed.")
 
     def _submit_task(self, func: callable, items: List[Any], **kwargs: Any) -> None:
         """Submit tasks to the queue manager for parallel processing.

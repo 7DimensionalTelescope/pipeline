@@ -285,3 +285,12 @@ def get_header_key(header_file, key, default=None):
 
 def get_basename(file_path):
     return os.path.basename(file_path)
+
+
+def read_text_file(file, start_row=0):
+    """
+    Read a text file and return a list of lines.
+    """
+    with open(file, "r", encoding="utf-8") as f:
+        lines = [line.strip() for line in f][start_row:]
+        return lines

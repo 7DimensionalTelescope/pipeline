@@ -112,17 +112,17 @@ class ImageDB:
                     params["qa_type"] = qa_type
 
                 if filter_name:
-                    where_clauses.append("filter_name = %(filter_name)s")
-                    params["filter_name"] = filter_name
+                    where_clauses.append("filter = %(filter_name)s")
+                    params["filter"] = filter_name
 
                 # Build query
                 query = """
                     SELECT 
-                        id, qa_id, qa_type, imagetyp, filter_name, clipmed, clipstd,
+                        id, qa_id, qa_type, imagetyp, filter, clipmed, clipstd,
                         clipmin, clipmax, nhotpix, ntotpix, seeing, ellipticity,
                         rotang1, astrometric_offset, skyval, skysig, zp_auto, ezp_auto,
                         ul5_5, stdnumb, created_at, updated_at, pipeline_id_id,
-                        qa1, qa2, qa3, qa4, qa5, qa6, qa7, qa8, qa9, qa10
+                        uniform, sigmean, edgevar, trimmed, exptime, qa6, qa7, qa8, filename, sanity
                     FROM pipeline_qadata
                 """
 
@@ -242,8 +242,8 @@ class ImageDB:
                     params["qa_type"] = qa_data.qa_type
 
                 if qa_data.filter_name:
-                    where_clauses.append("filter_name = %(filter_name)s")
-                    params["filter_name"] = qa_data.filter_name
+                    where_clauses.append("filter = %(filter_name)s")
+                    params["filter"] = qa_data.filter_name
 
                 if qa_data.imagetyp:
                     where_clauses.append("imagetyp = %(imagetyp)s")
@@ -329,11 +329,11 @@ class ImageDB:
                 # Get all QA data
                 query = """
                     SELECT 
-                        id, qa_id, pipeline_id_id, qa_type, imagetyp, filter_name, clipmed, clipstd,
+                        id, qa_id, pipeline_id_id, qa_type, imagetyp, filter, clipmed, clipstd,
                         clipmin, clipmax, nhotpix, ntotpix, seeing, ellipticity,
                         rotang1, astrometric_offset, skyval, skysig, zp_auto, ezp_auto,
                         ul5_5, stdnumb, created_at, updated_at, pipeline_id_id,
-                        qa1, qa2, qa3, qa4, qa5, qa6, qa7, qa8, qa9, qa10
+                        uniform, sigmean, edgevar, trimmed, exptime, qa6, qa7, qa8, filename, sanity
                     FROM pipeline_qadata
                     ORDER BY created_at DESC
                 """

@@ -17,7 +17,7 @@ from ..path.path import PathHandler
 from ..services.setup import BaseSetup
 from ..services.utils import acquire_available_gpu
 from ..utils import collapse, get_header, add_suffix, time_diff_in_seconds, get_basename, atleast_1d, swap_ext
-from ..preprocess.plotting import save_fits_as_png
+from ..preprocess.plotting import save_fits_as_figures
 from .. import external
 
 from .utils import move_file  # inputlist_parser, move_file
@@ -742,7 +742,7 @@ class ImStack(BaseSetup):
     def plot_stacked_image(self):
         stacked_img = self.config.imstack.stacked_image
         basename = os.path.basename(stacked_img)
-        save_fits_as_png(fits.getdata(stacked_img), self.path.figure_dir_to_path / swap_ext(basename, "png"))
+        save_fits_as_figures(fits.getdata(stacked_img), self.path.figure_dir_to_path / swap_ext(basename, "png"))
         return
 
     def _update_header(self):

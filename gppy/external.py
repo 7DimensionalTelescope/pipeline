@@ -1,10 +1,8 @@
 import os
 import subprocess
 from astropy.io import fits
-from .const import FACTORY_DIR, REF_DIR
-from .utils import add_suffix, force_symlink, swap_ext
-from .path import PathHandler
-from .utils import force_symlink
+from .const import REF_DIR
+from .utils import add_suffix, force_symlink, swap_ext, read_text_file, collapse
 
 
 def solve_field(
@@ -160,8 +158,8 @@ def solve_field(
 
 def scamp(input, ahead=None, path_ref_scamp=None, local_astref=None, get_command=False):
     """
-    Input is a fits-ldac catalog or a text file.
-    Supply a text file of filenames to run multiple files jointly.
+    Input is a fits-ldac catalog or a text file of those catalogs.
+    Supply a text file of catalog filenames to run multiple catalogs jointly.
     """
     scampconfig = os.path.join(REF_DIR, "7dt.scamp")
     # "/data/pipeline_reform/dhhyun_lab/scamptest/7dt.scamp"
@@ -171,19 +169,26 @@ def scamp(input, ahead=None, path_ref_scamp=None, local_astref=None, get_command
 
     # assumes joint run if input is not fits
     if os.path.splitext(input)[1] != ".fits":
+        input_cat_list = read_text_file(input)
         input = f"@{input}"  # @ is astromatic syntax.
+    else:
+        input_cat_list = [input]
 
     # scampcom = f’scamp {catname} -c {os.path.join(path_cfg, “kmtnet.scamp”)} -ASTREF_CATALOG FILE -ASTREFCAT_NAME {gaialdac} -POSITION_MAXERR 20.0 -CROSSID_RADIUS 5.0 -DISTORT_DEGREES 3 -PROJECTION_TYPE TPV -AHEADER_GLOBAL {ahead} -STABILITY_TYPE INSTRUMENT’
     scampcom = f"scamp -c {scampconfig} {input}"
 
+    # use the supplied astrefcat
     if local_astref:
         scampcom = f"{scampcom} -ASTREF_CATALOG FILE -ASTREFCAT_NAME {local_astref}"
 
     # download gaia edr3 refcat
     else:
-        path_ref_scamp = path_ref_scamp or PathHandler().astrometry.ref_query_dir
+        if not path_ref_scamp:
+            path_ref_scamp = os.path.join(os.getcwd(), "ref_scamp")
+            os.makedirs(path_ref_scamp, exist_ok=True)
         scampcom = f"{scampcom} -REFOUT_CATPATH {path_ref_scamp}"
 
+    # supplied ahead file is merged to the input image header in fits_ldac hdu=1
     if ahead:
         # scampcom = f"{scampcom} -AHEADER_NAME {ahead}"
         scampcom = f"{scampcom} -AHEADER_GLOBAL {ahead}"
@@ -209,7 +214,14 @@ def scamp(input, ahead=None, path_ref_scamp=None, local_astref=None, get_command
     # except subprocess.CalledProcessError as e:
     #     print(f"Command failed with error code {e.returncode}")
     #     print(f"stderr output: {e.stderr.decode()}")
-    return os.path.splitext(input)[0] + ".head"
+    solved_heads = []
+    for input_cat in input_cat_list:
+        solved_head = swap_ext(input_cat, "head")
+        if not os.path.exists(solved_head):
+            raise FileNotFoundError(f"SCAMP output (.head) does not exist: {solved_head}\nCheck Log file: {log_file}")
+        solved_heads.append(solved_head)
+
+    return collapse(solved_heads)
 
 
 def missfits(inim):

@@ -48,11 +48,11 @@ class ProcessDB(ImageDB):
                     if "run_date" in params:
                         params["date"] = params.pop("run_date")
                     if "bias" in params:
-                        params["bias_exists"] = params.pop("bias")
+                        params["bias"] = params.pop("bias")
                     if "dark" in params:
-                        params["dark_filters"] = json.dumps(params.pop("dark") or [])
+                        params["dark"] = json.dumps(params.pop("dark") or [])
                     if "flat" in params:
-                        params["flat_filters"] = json.dumps(params.pop("flat") or [])
+                        params["flat"] = json.dumps(params.pop("flat") or [])
 
                     # Build query dynamically
                     columns = list(params.keys())
@@ -132,10 +132,10 @@ class ProcessDB(ImageDB):
                 query = """
                     SELECT 
                         id, tag_id, date, data_type, obj, filt, unit, status, progress,
-                        bias_exists, dark_filters, flat_filters, warnings, errors, comments,
+                        bias, dark, flat, warnings, errors, comments,
                         config_file, log_file, debug_file, comments_file, 
                         output_combined_frame_id, created_at, updated_at,
-                        param1, param2, param3, param4, param5, param6, param7, param8, param9, param10
+                        filename, param2, param3, param4, param5, param6, param7, param8, param9, param10
                     FROM pipeline_pipelinedata
                 """
 
@@ -396,10 +396,10 @@ class ProcessDB(ImageDB):
                 query = """
                     SELECT 
                         id, tag_id, date, data_type, obj, filt, unit, status, progress,
-                        bias_exists, dark_filters, flat_filters, warnings, errors, comments,
+                        bias, dark, flat, warnings, errors, comments,
                         config_file, log_file, debug_file, comments_file, 
                         output_combined_frame_id, created_at, updated_at,
-                        param1, param2, param3, param4, param5, param6, param7, param8, param9, param10
+                        filename, param2, param3, param4, param5, param6, param7, param8, param9, param10
                     FROM pipeline_pipelinedata
                     ORDER BY date DESC, created_at DESC
                 """

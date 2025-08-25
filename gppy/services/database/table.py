@@ -38,7 +38,7 @@ class PipelineData:
     updated_at: Optional[datetime] = None
 
     # Parameter fields
-    param1: Optional[str] = None
+    filename: Optional[str] = None
     param2: Optional[str] = None
     param3: Optional[str] = None
     param4: Optional[str] = None
@@ -71,8 +71,8 @@ class PipelineData:
             raise ValueError(f"Expected at least 32 columns, got {len(row)}. Row: {row}")
 
         # Parse JSON fields with safe access
-        dark_filters = json.loads(row[10]) if row[10] and isinstance(row[10], str) else []
-        flat_filters = json.loads(row[11]) if row[11] and isinstance(row[11], str) else []
+        dark = json.loads(row[10]) if row[10] and isinstance(row[10], str) else []
+        flat = json.loads(row[11]) if row[11] and isinstance(row[11], str) else []
 
         return cls(
             id=row[0],
@@ -85,8 +85,8 @@ class PipelineData:
             status=row[7],
             progress=row[8],
             bias=row[9],
-            dark=dark_filters,
-            flat=flat_filters,
+            dark=dark,
+            flat=flat,
             warnings=row[12],
             errors=row[13],
             comments=row[14],
@@ -97,7 +97,7 @@ class PipelineData:
             output_combined_frame_id=row[19],
             created_at=row[20],
             updated_at=row[21],
-            param1=row[22],
+            filename=row[22],
             param2=row[23],
             param3=row[24],
             param4=row[25],
@@ -172,7 +172,7 @@ class QAData:
     trimmed: Optional[str] = None  # qa4
 
     # QA for science (when qa_type="science")
-    filter_name: Optional[str] = None
+    filter: Optional[str] = None
     seeing: Optional[float] = None
     ellipticity: Optional[float] = None
     rotang1: Optional[float] = None
@@ -191,10 +191,10 @@ class QAData:
     qa8: Optional[str] = None
 
     # filename
-    qa9: Optional[str] = None
+    filenam: Optional[str] = None
 
     # sanity flag
-    qa10: Optional[str] = None
+    sanity: Optional[str] = None
 
     # Internal field (not stored in DB)
     id: Optional[int] = None
@@ -211,7 +211,7 @@ class QAData:
             qa_id=row[1],
             qa_type=row[2],
             imagetyp=row[3],
-            filter_name=row[4],
+            filter=row[4],
             clipmed=row[5],
             clipstd=row[6],
             clipmin=row[7],
@@ -239,8 +239,8 @@ class QAData:
             qa6=row[29],
             qa7=row[30],
             qa8=row[31],
-            qa9=row[32],
-            qa10=row[33],
+            filename=row[32],
+            sanity=row[33],
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -248,22 +248,6 @@ class QAData:
         data = asdict(self)
         # Remove None values and internal fields
         data = {k: v for k, v in data.items() if v is not None and k != "id"}
-
-        # Map the new field names back to database column names
-        if "uniform" in data:
-            data["qa1"] = data.pop("uniform")
-        if "sigmean" in data:
-            data["qa2"] = data.pop("sigmean")
-        if "edgevar" in data:
-            data["qa3"] = data.pop("edgevar")
-        if "trimmed" in data:
-            data["qa4"] = data.pop("trimmed")
-        if "exptime" in data:
-            data["qa5"] = data.pop("exptime")
-        if "filename" in data:
-            data["qa9"] = data.pop("filename")
-        if "sanity" in data:
-            data["qa10"] = data.pop("sanity")
 
         return data
 
@@ -280,13 +264,13 @@ class QAData:
 
         if qa_data.imagetyp == "masterframe":
             qa_data.exptime = header["EXPTIME"]
-            qa_data.filter_name = header["FILTER"]
+            qa_data.filter = header["FILTER"]
             qa_data.clipmed = header["CLIPMED"]
             qa_data.clipstd = header["CLIPSTD"]
             qa_data.clipmin = header["CLIPMIN"]
             qa_data.clipmax = header["CLIPMAX"]
-            qa_data.qa9 = filename
-            qa_data.qa10 = header["SANITY"]
+            qa_data.filename = filename
+            qa_data.sanity = header["SANITY"]
             if qa_data.qa_type == "dark":
                 qa_data.nhotpix = header["NHOTPIX"]
                 qa_data.ntotpix = header["NTOTPIX"]

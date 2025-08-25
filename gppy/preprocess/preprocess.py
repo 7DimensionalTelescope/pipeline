@@ -359,7 +359,8 @@ class Preprocess(BaseSetup, Checker):
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_output: {output_file}")
                 self.db.add_warning(self.pipeline_id)
 
-        self._write_into_db(dtype)
+            self._write_into_db(dtype)
+
         self.logger.info(f"[Group {self._current_group+1}] Generation/Loading of masterframes completed in {time_diff_in_seconds(st)} seconds")  # fmt: skip
 
         # Update pipeline progress after masterframe processing
@@ -438,8 +439,6 @@ class Preprocess(BaseSetup, Checker):
 
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
 
-        self._write_into_db(dtype)
-
         if flag:
             self.logger.info(f"[Group {self._current_group+1}] Nominal master {dtype} generated successfully in {time_diff_in_seconds(st)} seconds")  # fmt: skip
             self.logger.debug(f"[Group {self._current_group+1}] FITS Written: {getattr(self, f'{dtype}_output')}")
@@ -466,7 +465,7 @@ class Preprocess(BaseSetup, Checker):
             qa_data = QAData.from_header(
                 header,
                 "masterframe",
-                f"{dtype}_{self._current_group}",
+                f"{dtype}",
                 self.pipeline_id,
                 getattr(self, f"{dtype}_output"),
             )

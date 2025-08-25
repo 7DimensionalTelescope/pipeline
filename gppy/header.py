@@ -293,13 +293,15 @@ def reset_header(target_image: str, override_header: str | dict | fits.Header = 
             del header[i]
             header.insert(i, card)
 
-        for i in range(n_body, n_body + n_tail):
-            # if there's more to write, keep appending
-            if more_to_write:
+        # if there's more to write, keep appending
+        if more_to_write:
+            for i in range(n_body, n_body + n_tail):
                 card = override_header.cards[i]
                 header.append(card, end=True)
-            # if the original header had something left, delete them
-            else:
+
+        # if the original header has something left, delete them
+        else:
+            for i in range(n_body + n_tail - 1, n_body - 1, -1):
                 del header[i]
 
 
