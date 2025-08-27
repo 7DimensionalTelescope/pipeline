@@ -191,7 +191,7 @@ class QAData:
     qa8: Optional[str] = None
 
     # filename
-    filenam: Optional[str] = None
+    filename: Optional[str] = None
 
     # sanity flag
     sanity: Optional[str] = None

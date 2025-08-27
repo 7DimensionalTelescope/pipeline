@@ -61,3 +61,23 @@ def build_wcs(ra_deg, dec_deg, crpix1, crpix2, pixscale_arcsec, pa_deg, flip=Fal
     w.wcs.crpix = [crpix1, crpix2]  # reference pixel (in SEXtractor pixel convention; origin handled later)
     w.wcs.cd = np.array([[cd11, cd12], [cd21, cd22]], dtype=float)
     return w
+
+
+def read_TPV_wcs(image):
+    """Read a FITS header with TPV WCS and return a WCS object. If malformed, inject null PV values."""
+    hdr = fits.getheader(image)
+    formatted_pv = hdr.get("CTYPE1", "").endswith("TPV") or hdr.get("CTYPE2", "").endswith("TPV")
+    has_pv = any(k.startswith("PV") for k in hdr.keys())
+
+    # print(formatted_pv, has_pv)
+
+    if formatted_pv and not has_pv:
+        # inject null PV values
+        for ax in (1, 2):
+            hdr[f"PV{ax}_0"] = 0.0
+            hdr[f"PV{ax}_1"] = 1.0
+            hdr[f"PV{ax}_2"] = 0.0
+    #     hdr['CTYPE1'] = 'RA---TAN'
+    #     hdr['CTYPE2'] = 'DEC--TAN'
+    wcs = WCS(hdr)
+    return wcs

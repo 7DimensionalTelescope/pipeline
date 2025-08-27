@@ -13,6 +13,8 @@ from .services.queue import QueueManager
 from itertools import chain
 from .services.task import Task, Priority
 
+from .services.scheduler import Scheduler
+
 
 class SortedGroupDict(UserDict):
     """A dictionary that sorts its values when iterating."""
@@ -60,6 +62,7 @@ class SortedGroupDict(UserDict):
         for value in self.values():
             string += str(value) + "\n"
         return string
+
 
 class DataReduction:
     """overwrite=True to rewrite configs"""
@@ -158,56 +161,73 @@ class DataReduction:
 
         return dependent_configs, multiunit_config
 
-    def process_all(self, preprocess_only=False, only_with_sci=True, make_plots=False):
-        self.queue = QueueManager()
-        masterframe_ids = []
-        for i, (key, group) in enumerate(self.groups.items()):
-            if isinstance(group, MasterframeGroup):
-                if i < 2:
-                    device_id = i
-                else:
-                    device_id = "CPU"
-                pre_task = group.get_task(device_id=device_id, only_with_sci=only_with_sci, make_plots=make_plots)
-                self.queue.add_task(pre_task)
-                masterframe_ids.append([pre_task, group])
-                time.sleep(1)
+    def process_all(
+        self,
+        preprocess_only=False,
+        make_plots=False,
+        overwrite=True,
+        processes=["astrometry", "photometry", "combine", "subtract"],
+        queue=None,
+    ):
+        if queue is None:
+            from .services.queue import QueueManager
 
-        if preprocess_only:
-            self.queue.wait_until_task_complete("all")
-            return
+            queue = QueueManager()
 
-        while True:
-            for task, group in masterframe_ids:
-                if task.status == "completed":
-                    for key in group.sci_keys:
-                        sci_group = self.groups[key]
-                        if not (sci_group.multi_units):
-                            self.queue.add_task(sci_group.get_task())
-                        else:
-                            self._multi_unit_config.add(sci_group.config)
-                    masterframe_ids.remove([task, group])
+        configs = self.config_list()
+        sc = Scheduler(*configs, processes=processes, overwrite=overwrite, preprocess_only=preprocess_only)
+        queue.add_scheduler(sc)
+        queue.wait_until_task_complete("all")
 
-            time.sleep(1)
+        # self.queue = QueueManager()
+        # masterframe_ids = []
+        # for i, (key, group) in enumerate(self.groups.items()):
+        #     if isinstance(group, MasterframeGroup):
+        #         if i < 2:
+        #             device_id = i
+        #         else:
+        #             device_id = "CPU"
+        #         pre_task = group.get_task(device_id=device_id, only_with_sci=only_with_sci, make_plots=make_plots)
+        #         self.queue.add_task(pre_task)
+        #         masterframe_ids.append([pre_task, group])
+        #         time.sleep(1)
 
-            if len(masterframe_ids) == 0:
-                break
+        # if preprocess_only:
+        #     self.queue.wait_until_task_complete("all")
+        #     return
 
-        for config in self._multi_unit_config:
-            from .run import run_scidata_reduction
+        # while True:
+        #     for task, group in masterframe_ids:
+        #         if task.status == "completed":
+        #             for key in group.sci_keys:
+        #                 sci_group = self.groups[key]
+        #                 if not (sci_group.multi_units):
+        #                     self.queue.add_task(sci_group.get_task())
+        #                 else:
+        #                     self._multi_unit_config.add(sci_group.config)
+        #             masterframe_ids.remove([task, group])
 
-            sci_task = Task(
-                run_scidata_reduction,
-                kwargs={"config": config, "processes": ["astrometry", "photometry", "combine", "subtract"]},
-                priority=Priority.MEDIUM,
-            )
-            self.queue.add_task(sci_task)
+        #     time.sleep(1)
 
-        for key, group in self.groups.items():
-            if isinstance(group, MasterframeGroup):
-                pre_task = group.get_task(device_id=None, only_with_sci=False, make_plots=True, priority=Priority.LOW)
-                self.queue.add_task(pre_task)
+        #     if len(masterframe_ids) == 0:
+        #         break
 
-        self.queue.wait_until_task_complete("all")
+        # for config in self._multi_unit_config:
+        #     from .run import run_scidata_reduction
+
+        #     sci_task = Task(
+        #         run_scidata_reduction,
+        #         kwargs={"config": config, "processes": ["astrometry", "photometry", "combine", "subtract"]},
+        #         priority=Priority.MEDIUM,
+        #     )
+        #     self.queue.add_task(sci_task)
+
+        # for key, group in self.groups.items():
+        #     if isinstance(group, MasterframeGroup):
+        #         pre_task = group.get_task(device_id=None, only_with_sci=False, make_plots=True, priority=Priority.LOW)
+        #         self.queue.add_task(pre_task)
+
+        # self.queue.wait_until_task_complete("all")
 
 
 class MasterframeGroup:
@@ -339,4 +359,3 @@ class ScienceGroup:
 
     def __repr__(self):
         return f"ScienceGroup({self.key} with {len(self.image_files)} images)"
-

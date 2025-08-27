@@ -2,7 +2,7 @@ import os
 import subprocess
 from astropy.io import fits
 from .const import REF_DIR
-from .utils import add_suffix, force_symlink, swap_ext, read_text_file, collapse
+from .utils import add_suffix, force_symlink, swap_ext, read_text_file, collapse, ansi_clean
 
 
 def solve_field(
@@ -156,7 +156,7 @@ def solve_field(
     return outim
 
 
-def scamp(input, ahead=None, path_ref_scamp=None, local_astref=None, get_command=False):
+def scamp(input, ahead=None, path_ref_scamp=None, local_astref=None, get_command=False, clean_log=True):
     """
     Input is a fits-ldac catalog or a text file of those catalogs.
     Supply a text file of catalog filenames to run multiple catalogs jointly.
@@ -195,12 +195,17 @@ def scamp(input, ahead=None, path_ref_scamp=None, local_astref=None, get_command
     scampcom = f"{scampcom} >> {log_file} 2>&1"
     # print(scampcom)
 
+    if get_command:
+        return scampcom
+
+    if clean_log:
+        scampcom = ansi_clean(scampcom)
+
+    # Save the command to the log file too
     with open(log_file, "w") as f:
         f.write(scampcom)
         f.write("\n" * 3)
 
-    if get_command:
-        return scampcom
     os.system(scampcom)
     # scampcom = f"scamp -c {scampconfig} {outcat} -REFOUT_CATPATH {path_ref_scamp} -AHEADER_NAME {ahead_file}"
     # subprocess.run(f"{scampcom} > {log_file} 2>&1", shell=True, text=True)
@@ -210,7 +215,7 @@ def scamp(input, ahead=None, path_ref_scamp=None, local_astref=None, get_command
     # scamp_addcom = f"-REFOUT_CATPATH {path_ref_scamp}"
     # try:
     #     result = subprocess.run(scampcom, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    #     print(result.stdout.decode())  # 명령어 실행 결과 출력
+    #     print(result.stdout.decode())
     # except subprocess.CalledProcessError as e:
     #     print(f"Command failed with error code {e.returncode}")
     #     print(f"stderr output: {e.stderr.decode()}")
@@ -249,6 +254,7 @@ def sextractor(
     config=None,  # supply config.config
     logger=None,
     return_sex_output=False,
+    clean_log=True,
 ):
     """
     e.g., override default by supplying sex_args like ["-PIXEL_SCALE", f"{pixscale}"]
@@ -306,6 +312,9 @@ def sextractor(
 
     sexcom = " ".join(sexcom)
     chatter(f"Sextractor Command: {sexcom}")
+
+    if clean_log:
+        sexcom = ansi_clean(sexcom)
 
     sexout = subprocess.getoutput(sexcom)
     # result = subprocess.run(sexcom, shell=True, capture_output=True, text=True, stderr=subprocess.STDOUT)

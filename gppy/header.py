@@ -1,5 +1,7 @@
 import re
+import numpy as np
 from astropy.io import fits
+from astropy.io.fits.fitsrec import FITS_rec
 
 
 def read_header_file(file_path: str, as_dict=False) -> dict | fits.Header:
@@ -308,3 +310,45 @@ def reset_header(target_image: str, override_header: str | dict | fits.Header = 
 def write_header_file(filename: str, header: fits.Header):
     with open(filename, "w") as f:
         f.write(header.tostring(sep="\n"))
+
+
+###############################################################################
+################         FITS_LDAC related functions         ##################
+###############################################################################
+
+
+def fitsrec_to_header(rec: FITS_rec) -> fits.Header:
+    """Convert FITS_rec to astropy fits.Header"""
+
+    cards = (
+        fits.Card.fromstring("COMMENT " + " " * 72 if c.strip() == "COMMENT" else c) for c in rec[0][0] if c.strip()
+    )
+    return fits.Header(cards)
+
+
+def header_to_fitsrec(header: fits.Header) -> FITS_rec:
+    """
+    Convert astropy fits.Header to FITS_rec. This is the data of the second HDU of the FITS_LDAC file.
+
+    Mind the format is S80. To see it, do
+    ```
+    with fits.open(cat, character_as_bytes=True) as hdul:
+        fits_rec = hdul[1].data
+    fits_rec[0][0]
+    ```
+    fits.getdata() will change it to <U80.
+    """
+
+    text = header.tostring(sep="\n", endcard=True, padding=True)
+    lines = text.splitlines()
+    # cards_80 = [(ln + " " * 80)[:80] for ln in lines]
+    # cards_s80 = np.asarray(cards_80, dtype="S80")
+    cards_80 = [(ln + " " * 80)[:80].encode("ascii", "replace") for ln in lines]
+    new_cards = np.asarray(cards_80, dtype="S80")  # shape (N,)
+    vec = np.asarray(cards_80, dtype="S80")
+    dtype = np.dtype([("Field Header Card", "S80", (len(vec),))])
+    ra = np.recarray(shape=(1,), dtype=dtype)  # one-row record array
+    ra["Field Header Card"][0] = vec  # fill the single cell
+
+    fits_rec = ra.view(FITS_rec)
+    return fits_rec  # access it by fits_rec[0][0]

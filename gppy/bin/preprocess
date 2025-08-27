@@ -23,17 +23,14 @@ def run_preprocess(config, device_id=None, only_with_sci=False, make_plots=True,
 
         # Check if figures folder exists and contains JPG files
 
-        date, unit = config.config.name.split("_")
-        figures_dir = f"/lyman/data2/master_frame/{date}/{unit}/figures"
-    
-        jpg_files = glob.glob(f"{figures_dir}/*.jpg")
+        # date, unit = config.config.name.split("_")
+        # figures_dir = f"/lyman/data2/master_frame/{date}/{unit}/figures"
 
-        if jpg_files:
-            prep.overwrite = False
-        else:
-            prep.overwrite = True
-
-        print(prep.overwrite)
+        # jpg_files = glob.glob(f"{figures_dir}/*.jpg")
+        # if jpg_files:
+        #     prep.overwrite = False
+        # else:
+        #     prep.overwrite = True
 
         prep.run(device_id=device_id, make_plots=make_plots, only_with_sci=only_with_sci)
         del config, prep

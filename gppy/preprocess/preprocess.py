@@ -546,8 +546,11 @@ class Preprocess(BaseSetup, Checker):
             self.skip_flag["sci"] = True
             return
 
-        flag = [os.path.exists(file) for file in self.sci_output]
-        if all(flag) and not self.overwrite:
+        # flag = [os.path.exists(file) for file in self.sci_output]
+        flag = [list((Path(file).parent.parent / "figures").glob("*.jpg")) for file in self.sci_output]
+        flag = [len(f) > 0 for f in flag]
+
+        if all(flag):  # and not self.overwrite:
             self.logger.info(f"All images in group {self._current_group+1} are already processed")
             self.skip_flag["sci"] = True
             return
