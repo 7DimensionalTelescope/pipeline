@@ -69,6 +69,16 @@ class Preprocess(BaseSetup, Checker):
 
         self.calib_types = calib_types or ["bias", "dark", "flat"]
 
+        self.skip_plotting_flags = {
+            "bias": True,
+            "dark": True,
+            "flat": True,
+            "sci": True,
+        }  # keys synced with self.calib_types!
+        for calib in self.calib_types:
+            self.skip_plotting_flags[calib] = False
+        self.skip_plotting_flags["sci"] = master_frame_only
+
         self._use_gpu = use_gpu
 
         # Initialize database connection with ProcessDB (inherits from ImageDB for QA management)
@@ -79,6 +89,8 @@ class Preprocess(BaseSetup, Checker):
         self.logger.debug("Initialized ProcessDB for pipeline and QA data management")
 
         self.initialize()
+
+        self._generated_masterframes = []
 
         # self.logger.debug(f"Masterframe output folder: {self.path_fdz}")
 
@@ -198,7 +210,6 @@ class Preprocess(BaseSetup, Checker):
 
     def run(self, device_id=None, make_plots=True, use_gpu=True, only_with_sci=False):
         self._use_gpu = all([use_gpu, self._use_gpu])
-        self.skip_flag = {"bias": False, "dark": False, "flat": False, "sci": False}  # synced with self.calib_types!
 
         st = time.time()
 
@@ -224,7 +235,9 @@ class Preprocess(BaseSetup, Checker):
                 self.data_reduction(device_id=device_id)
 
             if make_plots:
-                t = threading.Thread(target=self.make_plots, kwargs={"group_index": i, "skip_flag": self.skip_flag})
+                t = threading.Thread(
+                    target=self.make_plots, kwargs={"group_index": i, "skip_flag": self.skip_plotting_flags}
+                )
                 t.start()
                 threads_for_making_plots.append(t)
 
@@ -326,6 +339,7 @@ class Preprocess(BaseSetup, Checker):
 
         If there's nothing to fetch, the code will fail.
         """
+
         self._use_gpu = all([use_gpu, self._use_gpu])
 
         st = time.time()
@@ -341,17 +355,22 @@ class Preprocess(BaseSetup, Checker):
             if dtype == "dark":
                 self.logger.debug(f"[Group {self._current_group+1}] flatdark_output: {self.flatdark_output}")
 
-            if input_file and (not os.path.exists(output_file) or self.overwrite):
+            if (
+                input_file
+                and (not os.path.exists(output_file) or self.overwrite)
+                and (output_file not in self._generated_masterframes)
+            ):
                 norminal = self._generate_masterframe(dtype, device_id)
                 if not norminal:
                     self.fetch_masterframe(output_file, dtype)
+                self._generated_masterframes.append(output_file)
             elif isinstance(output_file, str) and len(output_file) != 0:
                 self.logger.warning(
                     f"[Group {self._current_group+1}] No {dtype} masterframe found for the current group."
                 )
                 self.db.add_warning(self.pipeline_id)
                 self._fetch_masterframe(output_file, dtype)
-                self.skip_flag[dtype] = True
+                self.skip_plotting_flags[dtype] = True
 
             else:
                 self.logger.warning(f"[Group {self._current_group+1}] {dtype} has no input or output data (to fetch)")
@@ -543,7 +562,7 @@ class Preprocess(BaseSetup, Checker):
             for attr in ("bias_data", "dark_data", "flat_data"):
                 if attr in self.__dict__:
                     del self.__dict__[attr]
-            self.skip_flag["sci"] = True
+            self.skip_plotting_flags["sci"] = True
             return
 
         # flag = [os.path.exists(file) for file in self.sci_output]
@@ -552,7 +571,7 @@ class Preprocess(BaseSetup, Checker):
 
         if all(flag):  # and not self.overwrite:
             self.logger.info(f"All images in group {self._current_group+1} are already processed")
-            self.skip_flag["sci"] = True
+            self.skip_plotting_flags["sci"] = True
             return
 
         st = time.time()
@@ -630,102 +649,106 @@ class Preprocess(BaseSetup, Checker):
             plot_flat(file_path, fmask)
 
     def make_plots(self, group_index: int, skip_flag={"bias": False, "dark": False, "flat": False, "sci": False}):
-        st = time.time()
+        try:
 
-        all_flag = all(skip_flag.values())
-        if all_flag:
-            self.logger.info(f"[Group {group_index+1}] Skipping plot generation")
-            return
+            all_flag = all(skip_flag.values())
+            if all_flag:
+                self.logger.info(f"[Group {group_index+1}] Skipping plot generation")
+                return
 
-        # generate calib plots
-        self.logger.info(f"[Group {group_index+1}] Generating plots for master calibration frames")
-        use_multi_thread = self.config.preprocess.use_multi_thread
+            # generate calib plots
+            self.logger.info(f"[Group {group_index+1}] Generating plots for master calibration frames")
+            use_multi_thread = self.config.preprocess.use_multi_thread
 
-        # bias
-        if "bias" in self.calib_types and not skip_flag["bias"]:
-            bias_file = self._get_raw_group("bias_output", group_index)
-            if os.path.exists(bias_file):
-                plot_bias(bias_file)
-            else:
-                self.logger.warning(f"Bias file {bias_file} does not exist. Skipping bias plot.")
-                self.db.add_warning(self.pipeline_id)
-        else:
-            self.logger.info(f"[Group {group_index+1}] Skipping bias plot")
-
-        # bpmask
-        if "dark" in self.calib_types:
-            bpmask_file = self._get_raw_group("bpmask_output", group_index)
-            if os.path.exists(bpmask_file):
-                if not skip_flag["dark"]:
-                    plot_bpmask(bpmask_file)
-                sample_header = fits.getheader(bpmask_file, ext=1)
-                if "BADPIX" in sample_header.keys():
-                    badpix = sample_header["BADPIX"]
+            # bias
+            if "bias" in self.calib_types and not skip_flag["bias"]:
+                bias_file = self._get_raw_group("bias_output", group_index)
+                if os.path.exists(bias_file):
+                    plot_bias(bias_file)
                 else:
-                    self.logger.warning("Header missing BADPIX; using 1")
+                    self.logger.warning(f"Bias file {bias_file} does not exist. Skipping bias plot.")
                     self.db.add_warning(self.pipeline_id)
-                    badpix = 1
-
-                mask = fits.getdata(self._get_raw_group("bpmask_output", group_index), ext=1)
-                mask = mask != badpix
-                fmask = mask.ravel()
             else:
-                self.logger.warning(f"BPMask file {bpmask_file} does not exist. Skipping bpmask plot.")
-                self.db.add_warning(self.pipeline_id)
-                fmask = None
-        else:
-            self.logger.info(f"[Group {group_index+1}] Skipping bpmask plot")
+                self.logger.info(f"[Group {group_index+1}] Skipping bias plot")
 
-        # dark
-        if "dark" in self.calib_types and not skip_flag["dark"]:
-            dark_file = self._get_raw_group("dark_output", group_index)
-            if os.path.exists(dark_file):
-                plot_dark(dark_file, fmask)
+            # bpmask
+            if "dark" in self.calib_types:
+                bpmask_file = self._get_raw_group("bpmask_output", group_index)
+                if os.path.exists(bpmask_file):
+                    if not skip_flag["dark"]:
+                        plot_bpmask(bpmask_file)
+                    sample_header = fits.getheader(bpmask_file, ext=1)
+                    if "BADPIX" in sample_header.keys():
+                        badpix = sample_header["BADPIX"]
+                    else:
+                        self.logger.warning("Header missing BADPIX; using 1")
+                        self.db.add_warning(self.pipeline_id)
+                        badpix = 1
+
+                    mask = fits.getdata(self._get_raw_group("bpmask_output", group_index), ext=1)
+                    mask = mask != badpix
+                    fmask = mask.ravel()
+                else:
+                    self.logger.warning(f"BPMask file {bpmask_file} does not exist. Skipping bpmask plot.")
+                    self.db.add_warning(self.pipeline_id)
+                    fmask = None
             else:
-                self.logger.warning(f"Dark file {dark_file} does not exist. Skipping dark plot.")
-                self.db.add_warning(self.pipeline_id)
-        else:
-            self.logger.info(f"[Group {group_index+1}] Skipping dark plot")
+                self.logger.info(f"[Group {group_index+1}] Skipping bpmask plot")
 
-        # flat
-        if "flat" in self.calib_types and not skip_flag["flat"]:
-            flat_file = self._get_raw_group("flat_output", group_index)
-            if os.path.exists(flat_file):
-                plot_flat(flat_file, fmask)
+            # dark
+            if "dark" in self.calib_types and not skip_flag["dark"]:
+                dark_file = self._get_raw_group("dark_output", group_index)
+                if os.path.exists(dark_file):
+                    plot_dark(dark_file, fmask)
+                else:
+                    self.logger.warning(f"Dark file {dark_file} does not exist. Skipping dark plot.")
+                    self.db.add_warning(self.pipeline_id)
             else:
-                self.logger.warning(f"Flat file {flat_file} does not exist. Skipping flat plot.")
-                self.db.add_warning(self.pipeline_id)
-        else:
-            self.logger.info(f"[Group {group_index+1}] Skipping flat plot")
+                self.logger.info(f"[Group {group_index+1}] Skipping dark plot")
 
-        self.logger.info(f"[Group {group_index+1}] Completed generating plots for master calibration frames")
-
-        # science
-        num_sci = len(self._get_raw_group("sci_input", group_index))
-        if num_sci and not skip_flag["sci"]:
-            self.logger.info(f"[Group {group_index+1}] Generating plots for science frames ({num_sci} images)")
-            if use_multi_thread:
-                threads = []
-                for input_img, output_img in zip(
-                    self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)
-                ):
-                    thread = threading.Thread(target=plot_sci, args=(input_img, output_img))
-                    thread.start()
-                    threads.append(thread)
-                for thread in threads:
-                    thread.join()
+            # flat
+            if "flat" in self.calib_types and not skip_flag["flat"]:
+                flat_file = self._get_raw_group("flat_output", group_index)
+                if os.path.exists(flat_file):
+                    plot_flat(flat_file, fmask)
+                else:
+                    self.logger.warning(f"Flat file {flat_file} does not exist. Skipping flat plot.")
+                    self.db.add_warning(self.pipeline_id)
             else:
-                for input_img, output_img in zip(
-                    self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)
-                ):
-                    plot_sci(input_img, output_img)
+                self.logger.info(f"[Group {group_index+1}] Skipping flat plot")
 
-            self.logger.info(
-                f"[Group {group_index+1}] Completed plot generation for images in {time_diff_in_seconds(st)} seconds "
-                f"({time_diff_in_seconds(st, return_float=True)/(num_sci or 1):.1f} s/image)"
-            )
-        else:
-            self.logger.info(f"[Group {group_index+1}] Skipping science plot")
+            self.logger.info(f"[Group {group_index+1}] Completed generating plots for master calibration frames")
+
+            # science
+            st = time.time()
+            num_sci = len(self._get_raw_group("sci_input", group_index))
+            if num_sci and not skip_flag["sci"]:
+                self.logger.info(f"[Group {group_index+1}] Generating plots for science frames ({num_sci} images)")
+                if use_multi_thread:
+                    threads = []
+                    for input_img, output_img in zip(
+                        self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)
+                    ):
+                        thread = threading.Thread(target=plot_sci, args=(input_img, output_img))
+                        thread.start()
+                        threads.append(thread)
+                    for thread in threads:
+                        thread.join()
+                else:
+                    for input_img, output_img in zip(
+                        self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)
+                    ):
+                        plot_sci(input_img, output_img)
+
+                self.logger.info(
+                    f"[Group {group_index+1}] Completed plot generation for images in {time_diff_in_seconds(st)} seconds "
+                    f"({time_diff_in_seconds(st, return_float=True)/(num_sci or 1):.1f} s/image)"
+                )
+            else:
+                self.logger.info(f"[Group {group_index+1}] Skipping science plot")
+        except Exception as e:
+            self.logger.error(f"Error making plots: {e}")
+            self.db.add_warning(self.pipeline_id)
 
     def update_bpmask(self, sanity=True):
         header = self.get_header("dark")
