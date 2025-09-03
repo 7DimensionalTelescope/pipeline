@@ -156,12 +156,31 @@ def solve_field(
     return outim
 
 
-def scamp(input, ahead=None, path_ref_scamp=None, local_astref=None, get_command=False, clean_log=True):
+def scamp(
+    input,
+    scampconfig=None,
+    scamp_preset="prep",
+    ahead=None,
+    path_ref_scamp=None,
+    local_astref=None,
+    get_command=False,
+    clean_log=True,
+    scamp_args: str = None,
+) -> list[str]:
     """
     Input is a fits-ldac catalog or a text file of those catalogs.
     Supply a text file of catalog filenames to run multiple catalogs jointly.
+
+    scamp_preset: str = "prep" or "main"
+    scampconfig: str = None, this overrides scamp_preset
+    ahead: str = None
+    path_ref_scamp: str = None
+    local_astref: str = None
+    get_command: bool = False
+    clean_log: bool = True
+    scamp_args: str = None
     """
-    scampconfig = os.path.join(REF_DIR, "7dt.scamp")
+    scampconfig = scampconfig or os.path.join(REF_DIR, f"scamp_7dt_{scamp_preset}.config")
     # "/data/pipeline_reform/dhhyun_lab/scamptest/7dt.scamp"
 
     # "/data/pipeline_reform/dhhyun_lab/scamptest"
@@ -178,7 +197,7 @@ def scamp(input, ahead=None, path_ref_scamp=None, local_astref=None, get_command
     scampcom = f"scamp -c {scampconfig} {input}"
 
     # use the supplied astrefcat
-    if local_astref:
+    if local_astref and os.path.exists(local_astref):
         scampcom = f"{scampcom} -ASTREF_CATALOG FILE -ASTREFCAT_NAME {local_astref}"
 
     # download gaia edr3 refcat
@@ -192,6 +211,10 @@ def scamp(input, ahead=None, path_ref_scamp=None, local_astref=None, get_command
     if ahead:
         # scampcom = f"{scampcom} -AHEADER_NAME {ahead}"
         scampcom = f"{scampcom} -AHEADER_GLOBAL {ahead}"
+
+    if scamp_args:
+        scampcom = f"{scampcom} {scamp_args}"
+
     scampcom = f"{scampcom} >> {log_file} 2>&1"
     # print(scampcom)
 
@@ -226,7 +249,7 @@ def scamp(input, ahead=None, path_ref_scamp=None, local_astref=None, get_command
             raise FileNotFoundError(f"SCAMP output (.head) does not exist: {solved_head}\nCheck Log file: {log_file}")
         solved_heads.append(solved_head)
 
-    return collapse(solved_heads)
+    return solved_heads
 
 
 def missfits(inim):

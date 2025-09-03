@@ -320,9 +320,11 @@ def write_header_file(filename: str, header: fits.Header):
 def fitsrec_to_header(rec: FITS_rec) -> fits.Header:
     """Convert FITS_rec to astropy fits.Header"""
 
-    cards = (
-        fits.Card.fromstring("COMMENT " + " " * 72 if c.strip() == "COMMENT" else c) for c in rec[0][0] if c.strip()
-    )
+    content = rec[0][0]
+    if isinstance(content, str):
+        return fits.Header.fromstring(content)
+
+    cards = (fits.Card.fromstring("COMMENT " + " " * 72 if c.strip() == "COMMENT" else c) for c in content if c.strip())
     return fits.Header(cards)
 
 

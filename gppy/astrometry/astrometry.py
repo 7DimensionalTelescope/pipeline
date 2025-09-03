@@ -1,22 +1,25 @@
 import os
 import re
 import time
+import shutil
 from typing import Any, List, Tuple, Union, Any
 from dataclasses import dataclass
 from astropy.io import fits
 from astropy.time import Time
 from astropy.coordinates import Angle
 from astropy.wcs import WCS
+from astropy.table import Table
 
 from .. import external
 from ..const import PIXSCALE, PipelineError
 from ..utils import swap_ext, add_suffix, force_symlink, time_diff_in_seconds
-from ..header import update_padded_header, reset_header
+from ..header import update_padded_header, reset_header, fitsrec_to_header
 from ..services.memory import MemoryMonitor
 from ..config import SciProcConfiguration
 from ..config.utils import get_key
 from ..services.setup import BaseSetup
-from .utils import read_scamp_header, build_wcs
+from ..io.cfitsldac import write_ldac
+from .utils import read_scamp_header, build_wcs, polygon_info
 
 
 class Astrometry(BaseSetup):
@@ -58,11 +61,9 @@ class Astrometry(BaseSetup):
 
         self.start_time = time.time()
 
-        self.define_paths()
-        self.images_info = [ImageInfo.parse_image_header_info(image) for image in self.input_images]
-
     @classmethod
     def from_list(cls, images, working_dir=None):
+        images = [os.path.abspath(image) for image in images]  # this is critical. otherwise soft links will break
         for image in images:
             if not os.path.exists(image):
                 raise FileNotFoundError(f"File does not exist: {image}")
@@ -77,10 +78,10 @@ class Astrometry(BaseSetup):
 
     def run(
         self,
-        solve_field: bool = True,
-        joint_scamp: bool = True,
-        processes=["sextractor", "scamp", "header_update"],
         se_preset: str = "prep",
+        joint_scamp: bool = True,
+        force_solve_field: bool = False,
+        # processes=["sextractor", "scamp", "header_update"],
         # use_gpu: bool = False,
     ) -> None:
         """Execute the complete astrometry pipeline.
@@ -98,29 +99,35 @@ class Astrometry(BaseSetup):
         try:
             start_time = self.start_time or time.time()
             self.logger.info(f"Start 'Astrometry'")
+            self.define_paths()
 
-            # solve-field
-            if solve_field:
-                self.run_solve_field(self.soft_links_to_input_images, self.solved_images)
-            else:
-                # add manual WCS update feature
-                pass
-
+            self.inject_wcs_guess(self.input_images)
             # Source Extractor
-            if "sextractor" in processes:
-                self.run_sextractor(self.solved_images, se_preset=se_preset)
+            # if "sextractor" in processes:
+            self.run_sextractor(self.soft_links_to_input_images, se_preset=se_preset)
 
-            if "scamp" in processes:
-                self.run_scamp(self.solved_images, joint=joint_scamp)
+            # run initial solve: scamp or solve-field
+            try:
+                if force_solve_field:
+                    raise Exception("Force solve field")
+                self.run_scamp(self.prep_cats, scamp_preset="prep")
+            except Exception as e:
+                self.logger.warning(e)
+                self.run_solve_field(self.soft_links_to_input_images, self.solved_images)
 
-            # add polygon info to header - field rotation
+            # update the sextractor catalogs with the wcs solutions
+            self.update_catalog(self.prep_cats, self.solved_heads)
 
-            if "header_update" in processes:
-                self.update_header(
-                    # self.solved_images,
-                    # self.input_images,
-                    # self.soft_links_to_input_images,
-                )
+            # run main scamp
+            # if "scamp" in processes:
+            self.run_scamp(self.prep_cats, scamp_preset="main", joint=joint_scamp)
+
+            # if "header_update" in processes:
+            self.update_header()
+            # self.solved_images,
+            # self.input_images,
+            # self.soft_links_to_input_images,
+            # )
 
             self.config.flag.astrometry = True
 
@@ -131,6 +138,7 @@ class Astrometry(BaseSetup):
             raise
 
     def define_paths(self) -> Tuple[List[str], List[str], List[str]]:
+        self.logger.info("Defining paths for astrometry")
         self.path_astrometry = self.path.astrometry.tmp_dir
 
         # override if astrometry.input_images is set
@@ -142,23 +150,25 @@ class Astrometry(BaseSetup):
             inims = self.config.input.calibrated_images
             self.config.astrometry.input_images = inims
 
-        soft_links = [os.path.join(self.path_astrometry, os.path.basename(s)) for s in inims]
+        self.input_images = inims
 
+        soft_links = [os.path.join(self.path_astrometry, os.path.basename(s)) for s in inims]
         for inim, soft_link in zip(inims, soft_links):
             force_symlink(inim, soft_link)
-
-        solved_files = [add_suffix(s, "solved") for s in soft_links]
-        # return solved_files, soft_links, inims
+            self.logger.debug(f"Soft link created: {inim} -> {soft_link}")
         self.soft_links_to_input_images = soft_links
-        self.solved_images = solved_files
-        self.input_images = inims
-        # self.prep_cats = PathHandler(soft_links).astrometry.catalog
-        self.prep_cats = [add_suffix(inim, "cat") for inim in soft_links]  # fits_ldac
-        self.solved_heads = [swap_ext(s, "head") for s in self.prep_cats]
 
-    def inject_wcs(self, input_images: List[str], wcs_list: List[WCS] = None, reset_image_header: bool = False) -> None:
+        self.prep_cats = [add_suffix(inim, "cat") for inim in soft_links]  # fits_ldac sextractor output
+        self.solved_images = [add_suffix(s, "solved") for s in soft_links]  # solve-field output
+        self.solved_heads = [swap_ext(s, "head") for s in self.prep_cats]  # scamp output
+        self.images_info = [ImageInfo.parse_image_header_info(image) for image in self.input_images]
+
+    def inject_wcs_guess(
+        self, input_images: List[str], wcs_list: List[WCS | fits.Header] = None, reset_image_header: bool = True
+    ) -> None:
         """Inject WCS into image header."""
 
+        self.logger.info(f"Injecting initial WCS into {len(input_images)} image(s)")
         input_images = input_images or self.input_images
 
         if wcs_list:
@@ -167,6 +177,7 @@ class Astrometry(BaseSetup):
         else:
             self.logger.debug("No WCS provided. Using coarse WCS from image header.")
             wcs_list = [ImageInfo.parse_image_header_info(image).coarse_wcs for image in input_images]
+        assert len(input_images) == len(wcs_list)
 
         self.injected_wcs = []
         for image, wcs in zip(input_images, wcs_list):
@@ -177,7 +188,12 @@ class Astrometry(BaseSetup):
                 reset_header(image)
 
             with fits.open(image, mode="update") as hdul:
-                hdul[0].header.update(wcs.to_header())
+                if isinstance(wcs, fits.Header):
+                    hdul[0].header.update(wcs)
+                elif isinstance(wcs, WCS):
+                    hdul[0].header.update(wcs.to_header(relax=True))
+                else:
+                    raise ValueError(f"Invalid WCS type: {type(wcs)}")
 
     def reset_header(self, input_images: List[str] = None) -> None:
         """Reset header of input images."""
@@ -186,7 +202,7 @@ class Astrometry(BaseSetup):
             self.logger.debug(f"Resetting header of {image}")
             reset_header(image)
 
-    def run_solve_field(self, inputs: List[str], outputs: List[str]) -> None:
+    def run_solve_field(self, input_images: List[str], output_images: List[str]) -> None:
         """Run astrometric plate-solving on input images.
 
         Uses astrometry.net's solve-field to determine WCS solution for each image.
@@ -200,10 +216,10 @@ class Astrometry(BaseSetup):
         self.logger.info(f"Start solve-field")
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
-        solved_flag_files = [swap_ext(input, ".solved") for input in inputs]
+        solved_flag_files = [swap_ext(input, ".solved") for input in input_images]
         filtered_data = [
             (inp, out)
-            for inp, out, solved_flag_file in zip(inputs, outputs, solved_flag_files)
+            for inp, out, solved_flag_file in zip(input_images, output_images, solved_flag_files)
             if not os.path.exists(solved_flag_file)
         ]
 
@@ -211,29 +227,31 @@ class Astrometry(BaseSetup):
             self.logger.info("All input images have already been solved. Exiting solve-field.")
             return
 
-        inputs, outputs = zip(*filtered_data)
+        input_images, output_images = zip(*filtered_data)
 
         if self.queue:
             self._submit_task(
                 external.solve_field,
-                zip(inputs, outputs),
+                zip(input_images, output_images),
                 # dump_dir=self.path_astrometry,
                 pixscale=self.path.pixscale,  # PathHandler brings pixscale from NameHandler
             )
         else:
-            for i, (slink, sfile, pixscale) in enumerate(zip(inputs, outputs, self.path.pixscale)):
+            for i, (slink, sfile, pixscale) in enumerate(zip(input_images, output_images, self.path.pixscale)):
                 external.solve_field(
                     slink,
                     outim=sfile,
                     # dump_dir=self.path_astrometry,
                     pixscale=pixscale,
                 )
-                self.logger.info(f"Completed solve-field [{i+1}/{len(inputs)}]")
+                self.logger.info(f"Completed solve-field [{i+1}/{len(input_images)}]")
                 self.logger.debug(f"Solve-field input: {slink}, output: {sfile}")
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
-    def run_sextractor(self, files: List[str], se_preset: str = "prep") -> List[str]:
+    def run_sextractor(
+        self, input_images: List[str], output_catalogs: List[str] = None, se_preset: str = "prep"
+    ) -> List[str]:
         """Run Source Extractor on solved images.
 
         Extracts sources from solved images for use in SCAMP calibration.
@@ -249,17 +267,19 @@ class Astrometry(BaseSetup):
         self.logger.info("Start pre-sextractor")
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
+        output_catalogs = output_catalogs or self.prep_cats
+
         if self.queue:
             self._submit_task(
                 external.sextractor,
-                files,
-                outcat=self.prep_cats,
+                input_images,
+                outcat=output_catalogs,
                 prefix=se_preset,
                 logger=self.logger,
                 fits_ldac=True,
             )
         else:
-            for i, (solved_image, prep_cat) in enumerate(zip(files, self.prep_cats)):
+            for i, (solved_image, prep_cat) in enumerate(zip(input_images, output_catalogs)):
                 external.sextractor(
                     solved_image,
                     outcat=prep_cat,
@@ -267,18 +287,22 @@ class Astrometry(BaseSetup):
                     logger=self.logger,
                     fits_ldac=True,
                 )
-                self.logger.info(f"Completed sextractor (prep) [{i+1}/{len(files)}]")
+                self.logger.info(f"Completed sextractor (prep) [{i+1}/{len(input_images)}]")
                 self.logger.debug(f"{solved_image}")
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
-        return self.prep_cats
+        return output_catalogs
 
     def run_scamp(
         self,
         input_catalogs: List[str] = None,
         joint: bool = True,
         astrefcat: str = None,
+        path_ref_scamp: str = None,
+        scampconfig: str = None,
+        scamp_preset: str = "prep",
+        scamp_args: str = None,
     ) -> None:
         """Run SCAMP for astrometric calibration.
 
@@ -298,7 +322,11 @@ class Astrometry(BaseSetup):
         self.logger.debug(f"Scamp input catalogs: {input_catalogs}")
 
         # path for scamp refcat download
-        path_ref_scamp = self.path.astrometry.ref_query_dir
+        if path_ref_scamp is False:
+            self.logger.debug("SCAMP REFOUT_CATPATH is CWD")
+            path_ref_scamp = False
+        else:
+            path_ref_scamp = path_ref_scamp or self.path.astrometry.ref_query_dir
 
         # use local astrefcat if tile obs
         self.config.astrometry.local_astref = self.path.astrometry.astrefcat
@@ -313,32 +341,83 @@ class Astrometry(BaseSetup):
                 for precat in input_catalogs:
                     f.write(f"{precat}\n")
 
-            external.scamp(cat_to_scamp, path_ref_scamp=path_ref_scamp, local_astref=astrefcat)
+            solved_heads = external.scamp(
+                cat_to_scamp,
+                path_ref_scamp=path_ref_scamp,
+                local_astref=astrefcat,
+                scampconfig=scampconfig,
+                scamp_args=scamp_args,
+                scamp_preset=scamp_preset,
+            )
 
-        # individual, parallel
+        # individual, parallel: needs update to get the return (solved_heads)
         elif self.queue:
             self._submit_task(
                 external.scamp,
                 input_catalogs,
                 path_ref_scamp=path_ref_scamp,
                 local_astref=astrefcat,
+                scampconfig=scampconfig,
+                scamp_args=scamp_args,
+                scamp_preset=scamp_preset,
             )
+            solved_heads = self.queue.results[0]
 
         # individual, sequential
         else:
             for precat in input_catalogs:
-                external.scamp(precat, path_ref_scamp=path_ref_scamp, local_astref=astrefcat)
+                solved_heads = external.scamp(
+                    precat,
+                    path_ref_scamp=path_ref_scamp,
+                    local_astref=astrefcat,
+                    scampconfig=scampconfig,
+                    scamp_args=scamp_args,
+                    scamp_preset=scamp_preset,
+                )
                 self.logger.info(f"Completed scamp for {precat}]")  # fmt:skip
                 self.logger.debug(f"{precat}")  # fmt:skip
 
+        if scamp_preset == "prep":
+            for head in solved_heads:
+                backup_head = add_suffix(head, "prep")
+                shutil.copy(head, backup_head)
+                self.logger.debug(f"Backed up prep head {head} to {backup_head}")
+
         self.logger.info(f"Completed scamp in {time_diff_in_seconds(st)} seconds")
         self.logger.debug(MemoryMonitor.log_memory_usage)
+
+    def update_catalog(self, input_catalogs: List[str], solved_heads: List[str]) -> None:
+        """Update catalog with solved heads."""
+        input_catalogs = input_catalogs or self.prep_cats
+        solved_heads = solved_heads or self.solved_heads
+        assert len(input_catalogs) == len(solved_heads)
+
+        for input_catalog, solved_head in zip(input_catalogs, solved_heads):
+
+            # update wcs in LDAC_IMHEAD
+            image_header = fitsrec_to_header(
+                fits.getdata(input_catalog, ext=1)
+            )  # assuming LDAC_IMHED is the second extension
+            wcs_header = read_scamp_header(solved_head)
+            image_header.update(wcs_header)
+
+            # update coordinates in LDAC_OBJECT
+            wcs = WCS(image_header)
+            tbl = Table.read(input_catalog, hdu=2)  # assuming LDAC_OBJECT is the third extension
+            ra, dec = wcs.all_pix2world(tbl["X_IMAGE"], tbl["Y_IMAGE"], 1)
+            tbl["ALPHA_J2000"] = ra
+            tbl["DELTA_J2000"] = dec
+
+            # update (overwrite) the catalog
+            write_ldac(image_header, tbl, input_catalog)  # internally c script for cfitsio
+            self.logger.debug(f"Updated catalog {input_catalog} with {solved_head}")
 
     def update_header(
         self,
         inims: List[str] = None,
         heads: List[str] = None,
         reset_image_header: bool = True,
+        add_polygon_info: bool = True,
     ) -> None:
         """
         Updates WCS solutions found by SCAMP to original FITS image files
@@ -355,15 +434,18 @@ class Astrometry(BaseSetup):
         self.logger.info(f"Updating WCS to header(s) of {len(heads)} image(s)")
 
         for solved_head, target_fits in zip(heads, inims):
-            if os.path.exists(solved_head):
-                solved_head = read_scamp_header(solved_head)
-                if reset_image_header:
-                    reset_header(target_fits)
-                update_padded_header(target_fits, solved_head)
-            else:
-                self.logger.error(f"Check SCAMP output. Check access to the online VizieR catalog, disk space or the field characteristics.")  # fmt: skip
-                raise FileNotFoundError(f"SCAMP output (.head) does not exist: {solved_head}")  # fmt: skip
-        # self.logger.info("Correcting WCS in image headers is completed.")
+            solved_header = read_scamp_header(solved_head)
+
+            if reset_image_header:
+                reset_header(target_fits)
+
+            if add_polygon_info:
+                inim_header = fits.getheader(target_fits)[:5]  # NAXIS2 is the 5th card
+                inim_header.update(solved_header)  # polygon_info requires naxis1, naxis2
+                solved_header.update(polygon_info(inim_header))
+
+            # update the header, consuming the COMMENT padding
+            update_padded_header(target_fits, solved_header)
 
     def _submit_task(self, func: callable, items: List[Any], **kwargs: Any) -> None:
         """Submit tasks to the queue manager for parallel processing.

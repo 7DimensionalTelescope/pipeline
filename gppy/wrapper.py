@@ -58,6 +58,8 @@ class SortedGroupDict(UserDict):
         return sorted_masterframe + sorted_science
 
     def __repr__(self):
+        if len(self.values()) == 0:
+            return "Group is empty"
         string = ""
         for value in self.values():
             string += str(value) + "\n"
@@ -67,14 +69,14 @@ class SortedGroupDict(UserDict):
 class DataReduction:
     """overwrite=True to rewrite configs"""
 
-    groups = SortedGroupDict()
-    _unified_key_list = None  # Will be populated after initialization
-    _key_usage_map = None  # Will track which keys are used in which groups
-    input_params = None  # No input parameters for this method
-
-    _multi_unit_config = set()
-
     def __init__(self, input_params, use_db=False, ignore_mult_date=False, **kwargs):
+        self.groups = SortedGroupDict()
+
+        self._unified_key_list = None  # Will be populated after initialization
+        self._key_usage_map = None  # Will track which keys are used in which groups
+
+        self._multi_unit_config = set()
+
         self.input_params = input_params
         print("Globbing images with parameters:", input_params)
 
@@ -160,6 +162,15 @@ class DataReduction:
                     multiunit_config.add(sci_group.config)
 
         return dependent_configs, multiunit_config
+
+    def cleanup(self):
+        import gc
+
+        for group in self.groups.values():
+            group.cleanup()
+            del group
+        self.groups = SortedGroupDict()
+        gc.collect()
 
     def process_all(
         self,
@@ -299,6 +310,11 @@ class MasterframeGroup:
     def __repr__(self):
         return f"MasterframeGroup({self.key} used in {self.sci_keys} with {len(self.image_files)} images)"
 
+    def cleanup(self):
+        self._config = None
+        self.sci_keys = []
+        self._image_files = []
+
 
 class ScienceGroup:
     def __init__(self, key):
@@ -359,3 +375,8 @@ class ScienceGroup:
 
     def __repr__(self):
         return f"ScienceGroup({self.key} with {len(self.image_files)} images)"
+
+    def cleanup(self):
+        self._config = None
+        self.image_files = []
+        self.multi_units = False

@@ -11,6 +11,8 @@
 *   EXTNAME='LDAC_OBJECTS' (BINTABLE copied from your input table)
 *
 * Build: gcc -O2 -o write_ldac write_ldac.c -lcfitsio -lm
+* Use:  ./write_ldac -i image.fits -t source_table.fits -T 2 -o out_ldac.fits
+*   -T 2 for ext=1, ext=0 without it
 */
 
 #include <stdio.h>

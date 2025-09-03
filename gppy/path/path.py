@@ -989,7 +989,7 @@ class PathAstrometry(AutoMkdirMixin):
         self._parent = parent
 
         # Default values
-        self.ref_ris_dir = "/lyman/data1/factory/catalog/gaia_dr3_7DT"
+        self.ref_ris_dir = "/lyman/data2/factory/ref_scamp/gaia_dr3_7DT"  # "/lyman/data1/factory/catalog/gaia_dr3_7DT"
         self.ref_query_dir = "/lyman/data1/factory/ref_scamp"
 
         # Apply config overrides if provided

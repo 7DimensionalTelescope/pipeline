@@ -278,3 +278,5 @@ class Scheduler:
             "dependent": f"{completed_dependents} out of {total_dependents}",
             "independent": f"{completed_independents} out of {total_independents}",
         }
+
+ 

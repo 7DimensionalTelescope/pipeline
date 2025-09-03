@@ -43,6 +43,8 @@ def match_two_catalogs(
         * ``'inner'`` - return only matched rows (default)
         * ``'left'``  - return every row of *sci_tbl* and mask unmatched
                         entries from ref_tbl
+        * ``'right'``  - return every row of *ref_tbl* and mask unmatched
+                        entries from sci_tbl
         * ``'outer'`` - return all matched rows *and* all unmatched from both
                         catalogues
     correct_pm
@@ -80,8 +82,8 @@ def match_two_catalogs(
       retained but un-moved.
     """
 
-    if join not in {"inner", "left", "outer"}:
-        raise ValueError("how must be 'inner', 'left' or 'outer'")
+    if join not in {"inner", "left", "right", "outer"}:
+        raise ValueError("join must be 'inner', 'left' , 'right',  or 'outer'")
 
     if x1 is None:
         x1 = x0
@@ -100,19 +102,26 @@ def match_two_catalogs(
         # Vectorised columns with units
         pm_ra = ref_tbl[pm_keys["pmra"]] * u.mas / u.yr
         pm_dec = ref_tbl[pm_keys["pmdec"]] * u.mas / u.yr
-        dist = Distance(parallax=ref_tbl[pm_keys["parallax"]] * u.mas, allow_negative=True)
+        good = np.isfinite(pm_ra) & np.isfinite(pm_dec)
 
-        good = np.isfinite(pm_ra) & np.isfinite(pm_dec) & np.isfinite(dist)
+        if pm_keys.get("parallax") is not None:
+            parallax = ref_tbl[pm_keys["parallax"]] * u.mas
+            dist = Distance(parallax=parallax, allow_negative=True)
+            good &= np.isfinite(dist)
+        else:
+            dist = None  # let SkyCoord use its default (no distance)
 
         if np.any(good):
-            moved = SkyCoord(
+            kwargs = dict(
                 ra=ref_tbl[x1][good] * u.deg,
                 dec=ref_tbl[y1][good] * u.deg,
                 pm_ra_cosdec=pm_ra[good],
                 pm_dec=pm_dec[good],
-                distance=dist[good],
                 obstime=Time(pm_keys["ref_epoch"], format="jyear"),
-            ).apply_space_motion(new_obstime=obs_time)
+            )
+            if dist is not None:
+                kwargs["distance"] = dist[good]
+            moved = SkyCoord(**kwargs).apply_space_motion(new_obstime=obs_time)
 
             coord_ref.ra[good] = moved.ra
             coord_ref.dec[good] = moved.dec
@@ -122,6 +131,10 @@ def match_two_catalogs(
         coord0, coord1 = coord_sci, coord_ref
         tbl0, tbl1 = sci_tbl, ref_tbl
         tag1 = "ref"
+    elif join == "right":
+        coord0, coord1 = coord_ref, coord_sci
+        tbl0, tbl1 = ref_tbl, sci_tbl
+        tag1 = "sci"
     elif join == "inner":
         if len(coord_sci) > len(coord_ref):
             coord0, coord1 = coord_ref, coord_sci
@@ -131,22 +144,24 @@ def match_two_catalogs(
             coord0, coord1 = coord_sci, coord_ref
             tbl0, tbl1 = sci_tbl, ref_tbl
             tag1 = "ref"
+    else:
+        pass
 
-    if join in {"inner", "left"}:
+    if join in {"inner", "left", "right"}:
         idx, sep2d, _ = coord0.match_to_catalog_sky(coord1)
         rtol = radius * u.arcsec if not isinstance(radius, Quantity) else radius
         matched = sep2d < rtol
 
-        if join == "left":
+        if join == "left" or join == "right":
             out = tbl0.copy()
-            ref_slice = tbl1[idx]
+            sliced = tbl1[idx]
 
-            dupes = set(out.colnames) & set(ref_slice.colnames)
+            dupes = set(out.colnames) & set(sliced.colnames)
             for name in dupes:
-                ref_slice.rename_column(name, f"{name}_{tag1}")
+                sliced.rename_column(name, f"{name}_{tag1}")
 
-            for name in ref_slice.colnames:
-                out[name] = MaskedColumn(ref_slice[name].data, mask=~matched)
+            for name in sliced.colnames:
+                out[name] = MaskedColumn(sliced[name].data, mask=~matched)
 
             out["separation"] = MaskedColumn(sep2d.arcsec, mask=~matched)
             return out
@@ -209,7 +224,7 @@ def match_two_catalogs(
         return Table(rows)
 
     else:
-        raise ValueError("Unknown how: " + join)
+        raise ValueError(f"Unknown join method: {join}")
 
 
 Condition = Tuple[str, Any, str]  # (column, value, method)

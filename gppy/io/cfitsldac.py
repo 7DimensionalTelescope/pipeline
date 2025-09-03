@@ -1,10 +1,11 @@
+import os
+from io import BytesIO
+import ctypes
 from astropy.io import fits
 from astropy.table import Table
-from io import BytesIO
-import ctypes, sys, os
 
 # 1) Load the shared library
-libname = "./libwrite_ldac.so"
+libname = os.path.join(os.path.dirname(__file__), "libwrite_ldac.so")
 lib = ctypes.CDLL(libname)
 
 # 2) Declare arg/return types
@@ -59,7 +60,7 @@ def table_to_fits_bintable_bytes(tbl) -> bytes:
 
 
 # 5) Glue: call the C function and write the LDAC file
-def write_ldac(header: fits.Header, table, out_path: str):
+def write_ldac(header: fits.Header, table: Table | fits.BinTableHDU | fits.FITS_rec, out_path: str):
     cards_blob = header_to_cards80_bytes(header)
     ncards = len(cards_blob) // 80
     table_blob = table_to_fits_bintable_bytes(table)
