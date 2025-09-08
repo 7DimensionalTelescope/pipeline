@@ -405,6 +405,8 @@ class NameHandler:
         def _parse_TCSpy_raw(parts):
             unit = parts[0]
             date = parts[1]
+            if not len(date) == 8:  # date.isdigit() and
+                raise ValueError("date is not 8 digits")
             hms = parts[2]
             obj = "_".join(parts[3:-4])  # for objects containing "_"
             filt = parts[-4]
@@ -413,29 +415,30 @@ class NameHandler:
             # parts[-1] is the file numbering. e.g., 0001
             return unit, date, hms, obj, filt, nb, exptime
 
+        def _parse_NINA_raw(parts):
+            # NINA
+            unit = parts[0]
+            typ = parts[1]  # BIAS, DARK, FLAT, LIGHT
+            exptime = strip_exptime(parts[-2])
+            try:
+                nb = strip_binning(parts[-3])
+            except:
+                nb = None
+            filt = parts[-4 if nb else -3]
+            hms = parts[-5 if nb else -4].replace("-", "")
+            date = parts[-6 if nb else -5].replace("-", "")
+            obj = "_".join(parts[2 : -6 if nb else -5])
+
+            return unit, date, hms, obj, filt, nb, exptime
+
         try:
             # first try TCSpy
             unit, date, hms, obj, filt, nb, exptime = _parse_TCSpy_raw(parts)
 
         except:
             # then try parsable NINA raw filename
-            if parts[1] in ["", "BIAS", "DARK", "FLAT", "LIGHT"]:
-                # NINA
-                unit = parts[0]
-                typ = parts[1]
-                obj = parts[2]
-                date = parts[3].replace("-", "")
-                hms = parts[4].replace("-", "")
-                filt = parts[5]
-                if len(parts) == 8:
-                    nb = None
-                    exptime = strip_exptime(parts[6])
-                elif len(parts) == 9:
-                    nb = strip_binning(parts[6])
-                    exptime = strip_exptime(parts[7])
-
-                else:
-                    raise ValueError("Unexpected number of parts in NINA raw filename")
+            if parts[1] in ["BIAS", "DARK", "FLAT", "LIGHT"]:
+                unit, date, hms, obj, filt, nb, exptime = _parse_NINA_raw(parts)
 
             # finally resort to DB
             else:

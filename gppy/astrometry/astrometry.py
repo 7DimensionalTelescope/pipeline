@@ -2,8 +2,8 @@ import os
 import re
 import time
 import shutil
-from typing import Any, List, Tuple, Union, Any
-from dataclasses import dataclass
+from typing import Any, List, Tuple, Union, Any, Optional
+from dataclasses import dataclass, field
 from astropy.io import fits
 from astropy.time import Time
 from astropy.coordinates import Angle
@@ -19,7 +19,7 @@ from ..config import SciProcConfiguration
 from ..config.utils import get_key
 from ..services.setup import BaseSetup
 from ..io.cfitsldac import write_ldac
-from .utils import read_scamp_header, build_wcs, polygon_info
+from .utils import read_scamp_header, build_wcs, polygon_info, evaluate_wcs
 
 
 class Astrometry(BaseSetup):
@@ -63,7 +63,7 @@ class Astrometry(BaseSetup):
 
     @classmethod
     def from_list(cls, images, working_dir=None):
-        images = [os.path.abspath(image) for image in images]  # this is critical. otherwise soft links will break
+        images = [os.path.abspath(image) for image in sorted(images)]  # this is critical for soft links
         for image in images:
             if not os.path.exists(image):
                 raise FileNotFoundError(f"File does not exist: {image}")
@@ -110,7 +110,7 @@ class Astrometry(BaseSetup):
             try:
                 if force_solve_field:
                     raise Exception("Force solve field")
-                self.run_scamp(self.prep_cats, scamp_preset="prep")
+                self.run_scamp(self.prep_cats, scamp_preset="prep", joint=False)
             except Exception as e:
                 self.logger.warning(e)
                 self.run_solve_field(self.soft_links_to_input_images, self.solved_images)
@@ -122,19 +122,19 @@ class Astrometry(BaseSetup):
             # if "scamp" in processes:
             self.run_scamp(self.prep_cats, scamp_preset="main", joint=joint_scamp)
 
+            self.evaluate_solution()
+
             # if "header_update" in processes:
             self.update_header()
-            # self.solved_images,
-            # self.input_images,
-            # self.soft_links_to_input_images,
-            # )
 
             self.config.flag.astrometry = True
 
-            self.logger.info(f"'Astrometry' is completed in {time_diff_in_seconds(start_time)} seconds")
+            dt = time_diff_in_seconds(start_time)
+            dtn = dt / len(self.input_images)
+            self.logger.info(f"'Astrometry' is completed in {dt} seconds ({(dtn):.2f} seconds per image)")
             self.logger.debug(MemoryMonitor.log_memory_usage)
         except Exception as e:
-            self.logger.error(f"Error during astrometry processing: {str(e)}")
+            self.logger.error(f"Error during astrometry processing: {str(e)}", exc_info=True)
             raise
 
     def define_paths(self) -> Tuple[List[str], List[str], List[str]]:
@@ -163,6 +163,8 @@ class Astrometry(BaseSetup):
         self.solved_heads = [swap_ext(s, "head") for s in self.prep_cats]  # scamp output
         self.images_info = [ImageInfo.parse_image_header_info(image) for image in self.input_images]
 
+        self.config.astrometry.local_astref = self.path.astrometry.astrefcat  # None if no local astrefcat
+
     def inject_wcs_guess(
         self, input_images: List[str], wcs_list: List[WCS | fits.Header] = None, reset_image_header: bool = True
     ) -> None:
@@ -176,7 +178,7 @@ class Astrometry(BaseSetup):
             assert len(wcs_list) == len(input_images)
         else:
             self.logger.debug("No WCS provided. Using coarse WCS from image header.")
-            wcs_list = [ImageInfo.parse_image_header_info(image).coarse_wcs for image in input_images]
+            wcs_list = [image_info.coarse_wcs for image_info in self.images_info]
         assert len(input_images) == len(wcs_list)
 
         self.injected_wcs = []
@@ -329,7 +331,6 @@ class Astrometry(BaseSetup):
             path_ref_scamp = path_ref_scamp or self.path.astrometry.ref_query_dir
 
         # use local astrefcat if tile obs
-        self.config.astrometry.local_astref = self.path.astrometry.astrefcat
         astrefcat = astrefcat or self.config.astrometry.local_astref
         self.logger.debug(f"Using astrefcat: {astrefcat}")
 
@@ -412,6 +413,31 @@ class Astrometry(BaseSetup):
             write_ldac(image_header, tbl, input_catalog)  # internally c script for cfitsio
             self.logger.debug(f"Updated catalog {input_catalog} with {solved_head}")
 
+    def evaluate_solution(self) -> None:
+        """Evaluate the solution."""
+        self.logger.info("Evaluating the solution")
+
+        self.update_catalog(self.prep_cats, self.solved_heads)
+
+        refcat = Table.read(self.config.astrometry.local_astref, hdu=2)
+        for input_image, image_info, prep_cat in zip(self.input_images, self.images_info, self.prep_cats):
+            bname = os.path.basename(input_image)
+            plot_path = os.path.join(self.path.figure_dir, swap_ext(add_suffix(bname, "wcs"), "jpg"))
+            return_bundle = evaluate_wcs(
+                ref_cat=refcat,
+                source_cat=prep_cat,
+                date_obs=image_info.dateobs,
+                plot_save_path=plot_path,
+            )
+            (refcat_snr_thresh, num_ref_sources, unmatched_fraction, separation_stats) = return_bundle
+
+            image_info.refcat_snr_thresh = refcat_snr_thresh
+            image_info.num_ref_sources = num_ref_sources
+            image_info.unmatched_fraction = unmatched_fraction
+            image_info.set_sep_stats(separation_stats)
+
+        self.logger.debug(MemoryMonitor.log_memory_usage)
+
     def update_header(
         self,
         inims: List[str] = None,
@@ -433,16 +459,20 @@ class Astrometry(BaseSetup):
         inims = inims or self.input_images
         self.logger.info(f"Updating WCS to header(s) of {len(heads)} image(s)")
 
-        for solved_head, target_fits in zip(heads, inims):
-            solved_header = read_scamp_header(solved_head)
+        for image_info, solved_head, target_fits in zip(self.images_info, heads, inims):
+            solved_header = image_info.head or read_scamp_header(solved_head)
 
             if reset_image_header:
                 reset_header(target_fits)
 
+            if image_info.wcs_evaluated:
+                solved_header.update(image_info.wcs_eval_cards)
+                self.logger.debug(f"WCS evaluation is added to {target_fits}")
+            else:
+                self.logger.debug(f"WCS evaluation is missing for {target_fits}")
+
             if add_polygon_info:
-                inim_header = fits.getheader(target_fits)[:5]  # NAXIS2 is the 5th card
-                inim_header.update(solved_header)  # polygon_info requires naxis1, naxis2
-                solved_header.update(polygon_info(inim_header))
+                solved_header.update(polygon_info(solved_header, image_info.naxis1, image_info.naxis2))
 
             # update the header, consuming the COMMENT padding
             update_padded_header(target_fits, solved_header)
@@ -490,14 +520,28 @@ class ImageInfo:
     """Stores information needed for astrometry. Mostly extracted from the FITS image header."""
 
     dateobs: str  # Observation date/time
-    # naxis1: int  # Image width
-    # naxis2: int  # Image height
+    naxis1: int  # Image width
+    naxis2: int  # Image height
     racent: float  # RA of image center
     decent: float  # DEC of image center
     xcent: float  # X coordinate of image center
     ycent: float  # Y coordinate of image center
     n_binning: int  # Binning factor
     pixscale: float  # Pixel scale [arcsec/pix]
+
+    # solution
+    head: Optional[fits.Header] = field(default=None)
+
+    # WCS evaluation parameters
+    refcat_snr_thresh: Optional[float] = field(default=None)
+    num_ref_sources: Optional[int] = field(default=None)
+    unmatched_fraction: Optional[float] = field(default=None)
+    sep_min: Optional[float] = field(default=None)
+    sep_max: Optional[float] = field(default=None)
+    sep_rms: Optional[float] = field(default=None)
+    sep_mean: Optional[float] = field(default=None)
+    sep_median: Optional[float] = field(default=None)
+    sep_std: Optional[float] = field(default=None)
 
     def __repr__(self) -> str:
         """Returns a string representation of the ImageInfo."""
@@ -509,9 +553,11 @@ class ImageInfo:
 
         hdr = fits.getheader(image_path)
 
+        x, y = hdr["NAXIS1"], hdr["NAXIS2"]
+
         # Center coord for reference catalog query
-        xcent = (hdr["NAXIS1"] + 1) / 2.0
-        ycent = (hdr["NAXIS2"] + 1) / 2.0
+        xcent = (x + 1) / 2.0
+        ycent = (y + 1) / 2.0
         n_binning = hdr["XBINNING"]
         assert n_binning == hdr["YBINNING"]
         pixscale = n_binning * PIXSCALE
@@ -536,6 +582,8 @@ class ImageInfo:
 
         return cls(
             dateobs=time_obj,  # hdr["DATE-OBS"],
+            naxis1=x,
+            naxis2=y,
             racent=racent,
             decent=decent,
             xcent=xcent,
@@ -548,3 +596,30 @@ class ImageInfo:
     def coarse_wcs(self):
         pa = 0
         return build_wcs(self.racent, self.decent, self.xcent, self.ycent, self.pixscale, pa, flip=True)
+
+    def set_sep_stats(self, sep_stats: dict) -> None:
+        self.sep_min = sep_stats["min"]
+        self.sep_max = sep_stats["max"]
+        self.sep_rms = sep_stats["rms"]
+        self.sep_median = sep_stats["median"]
+        self.sep_std = sep_stats["std"]
+
+    @property
+    def wcs_evaluated(self) -> bool:
+        a = self.refcat_snr_thresh is not None
+        b = self.unmatched_fraction is not None
+        c = all(k for k in self.__dict__.keys() if k.startswith("sep_"))
+        return a and b and c
+
+    @property
+    def wcs_eval_cards(self) -> List[Tuple[str, float]]:
+        return [
+            (f"REFSNCUT", self.refcat_snr_thresh, "Ref star SNR threshold for statistics below"),
+            (f"NUM_REF", self.num_ref_sources, "Number of reference sources selected"),
+            (f"UNMATCH", self.unmatched_fraction, "Fraction of unmatched reference sources"),
+            (f"RSEP_MIN", self.sep_min, "Min separation from reference catalog [arcsec]"),
+            (f"RSEP_MAX", self.sep_max, "Max separation from reference catalog [arcsec]"),
+            (f"RSEP_RMS", self.sep_rms, "RMS separation from reference catalog [arcsec]"),
+            (f"RSEP_MED", self.sep_median, "Median separation from ref catalog [arcsec]"),
+            (f"RSEP_STD", self.sep_std, "STD of separation from ref catalog [arcsec]"),
+        ]

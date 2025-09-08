@@ -1,7 +1,15 @@
 import unicodedata
+from typing import List
 import numpy as np
 from astropy.io import fits
 from astropy.wcs import WCS
+from astropy.table import Table
+from astropy.time import Time
+import astropy.units as u
+from astropy.coordinates import SkyCoord, SkyOffsetFrame
+
+from ..tools.table import match_two_catalogs
+from ..utils import add_suffix
 
 
 def read_scamp_header(file, return_wcs=False):
@@ -93,11 +101,110 @@ def read_TPV_wcs(image: str | fits.Header) -> WCS:
     return wcs
 
 
-def polygon_info(input_header: fits.Header) -> fits.Header:
-    """Add polygon info to header - field rotation"""
+def evaluate_wcs(
+    ref_cat: Table,
+    source_cat: str,
+    date_obs: str,
+    head: fits.Header = None,
+    match_radius=10,
+    write_matched_catalog=True,
+    plot=True,
+    plot_save_path=None,
+):
+    """tbl: catalog of detected sources"""
+
+    # load the source catalog
+    tbl = Table(fits.getdata(source_cat, ext=2))
+
+    # update the source catalog with the WCS
+    if head is not None:
+        wcs = head or WCS(head)
+        ra, dec = wcs.all_pix2world(tbl["X_IMAGE"], tbl["Y_IMAGE"], 1)
+        tbl["ALPHA_J2000"] = ra
+        tbl["DELTA_J2000"] = dec
+
+    if plot:
+        wcs_check_plot(ref_cat, tbl, plot_save_path)
+
+    # iteratively try decreasing SNR thresholds to find NUM_MIN_REFCAT sources
+    NUM_MIN_REFCAT = 20
+    refcat_snr_thresh_list = [5000, 3000, 1000, 300, 100, 50]
+    for refcat_snr_thresh in refcat_snr_thresh_list:
+        snr = 1 / (0.4 * np.log(10) * ref_cat["phot_g_mean_mag_error"])
+        sel = snr > refcat_snr_thresh
+        # print(np.sum(sel))
+        if np.sum(sel) >= NUM_MIN_REFCAT:
+            break
+    ref_cat = ref_cat[sel]
+    num_ref_sources = len(ref_cat)
+
+    # match source tbl with refcat
+    pm_keys = dict(pmra="pmra", pmdec="pmdec", parallax=None, ref_epoch=2016.0)
+    matched = match_two_catalogs(
+        tbl,
+        ref_cat,
+        x1="ra",
+        y1="dec",
+        join="right",
+        radius=match_radius,
+        correct_pm=True,
+        obs_time=Time(date_obs),
+        pm_keys=pm_keys,
+    )
+    if write_matched_catalog:
+        matched.write(add_suffix(source_cat, "matched"), overwrite=True)
+
+    unmatched_fraction = matched["separation"].mask.sum() / len(matched)
+
+    x = matched["separation"]
+    # print(f"x: {x}")
+    separation_stats = {
+        "min": np.ma.min(x),
+        "max": np.ma.max(x),
+        "rms": np.sqrt(np.ma.mean(x**2)),
+        "median": np.ma.median(x),
+        "std": np.ma.std(x),
+    }
+
+    return (refcat_snr_thresh, num_ref_sources, unmatched_fraction, separation_stats)
+
+
+def wcs_check_plot(refcat: Table, tbl: Table, plot_save_path=None):
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(1, 2, dpi=100, figsize=(13, 7))
+
+    for ax, sci_mag_cut, ref_mag_cut in zip(axes, [14, 16], [14, 16]):
+        refcat_sel = refcat[refcat["phot_g_mean_mag"] < ref_mag_cut]
+        # print("ref stars:", len(refcat))
+
+        # tbl = tbl[tbl["FLUX_AUTO"] / tbl["FLUXERR_AUTO"] > 100]
+        tbl = tbl[tbl["MAG_AUTO"] + 26 < sci_mag_cut]
+        # print("image stars:", len(tbl))
+
+        ra, dec = tbl["ALPHA_J2000"], tbl["DELTA_J2000"]
+
+        ax.scatter(ra, dec, alpha=0.5, label="scamp wcs", s=10)
+        ax.scatter(refcat_sel["ra"], refcat_sel["dec"], alpha=0.5, label="refcat", s=20)
+        ax.legend()
+        ax.set_title(f"ref mag < {ref_mag_cut}, sci mag < {sci_mag_cut}")
+        ax.set_aspect("equal")
+
+    if plot_save_path is not None:
+        plt.savefig(plot_save_path)
+    else:
+        plt.show()
+
+
+def polygon_info(input_header: fits.Header, naxis1: int = None, naxis2: int = None) -> fits.Header:
+    """
+    Returns header with polygon info & field rotation
+    If not given NAXIS1, NAXIS2, it assumes CRPIX1, CRPIX2 is the center
+    """
 
     # FOV Center
-    x, y = input_header["NAXIS1"], input_header["NAXIS2"]
+    x = naxis1 or (input_header.get("NAXIS1", None) or input_header["CRPIX1"])
+    y = naxis2 or (input_header.get("NAXIS2", None) or input_header["CRPIX2"])
     center_pix = (x - 1) / 2, (y - 1) / 2  # 0-indexed
     wcs = WCS(input_header)
     center_world = wcs.pixel_to_world(*center_pix)
@@ -154,3 +261,47 @@ def is_flipped(wcs: WCS) -> bool:
     ((cd1_1, cd1_2), (cd2_1, cd2_2)) = wcs.wcs.cd
     determinant = cd1_1 * cd2_2 - cd1_2 * cd2_1
     return np.sign(determinant) > 0
+
+
+def inside_quad_radec(points_ra, points_dec, quad_ra, quad_dec):
+    """
+    points_*: arrays of candidate points (deg)
+    quad_*:   length-4 arrays of the quad vertices (deg), ordered either CW or CCW
+    returns:  boolean array (len = len(points_ra)) of inside/outside
+    """
+    # 1) Tangent-plane projection using an offset frame about the quad centroid
+    ra0 = np.mean(quad_ra)
+    # handle RA wraparound for the centroid:
+    d_ra = ((quad_ra - ra0 + 180) % 360) - 180
+    ra0 += np.mean(d_ra)
+    dec0 = np.mean(quad_dec)
+    center = SkyCoord(ra0 * u.deg, dec0 * u.deg, frame="icrs")
+
+    off = SkyOffsetFrame(origin=center)
+    # Project vertices
+    verts_icrs = SkyCoord(quad_ra * u.deg, quad_dec * u.deg, frame="icrs").transform_to(off)
+    vx = verts_icrs.lon.to_value(u.deg)
+    vy = verts_icrs.lat.to_value(u.deg)
+
+    # Project points
+    pts_icrs = SkyCoord(points_ra * u.deg, points_dec * u.deg, frame="icrs").transform_to(off)
+    x = pts_icrs.lon.to_value(u.deg)
+    y = pts_icrs.lat.to_value(u.deg)
+
+    # 2) Half-space test for a convex polygon (works for CW or CCW consistently)
+    # Build edge vectors and their outward normals
+    V = np.stack([vx, vy], axis=1)  # (4,2)
+    E = np.roll(V, -1, axis=0) - V  # edges (4,2)
+    # normals that keep "inside" on one side: rotate edges by +90°
+    N = np.stack([-E[:, 1], E[:, 0]], axis=1)  # (4,2)
+
+    # For consistent inequality direction, determine orientation once using the polygon center
+    poly_cent = V.mean(axis=0)
+    orient = np.sign(np.cross(E, (np.roll(V, -1, axis=0) + V) / 2 - poly_cent).sum()) or 1.0
+    # Evaluate (p - Vi)·Ni ; inside if all have same sign (≥0) after fixing orientation
+    PX = np.stack([x, y], axis=1)  # (N,2)
+    diff = PX[:, None, :] - V[None, :, :]  # (N,4,2)
+    s = (diff * N[None, :, :]).sum(axis=2)  # (N,4)
+    if orient < 0:
+        s = -s
+    return np.all(s >= 0, axis=1)
