@@ -200,7 +200,18 @@ def evaluate_single_wcs(
     }
 
     if plot_save_path is not None:
-        wcs_check_plot(ref_cat, tbl, matched, wcs, image, plot_save_path, fov_ra=fov_ra, fov_dec=fov_dec)
+        wcs_check_plot(
+            ref_cat,
+            tbl,
+            matched,
+            wcs,
+            image,
+            plot_save_path,
+            fov_ra=fov_ra,
+            fov_dec=fov_dec,
+            num_plot=num_plot,
+            sep_stats=separation_stats,
+        )
         # matched_ids = wcs_check_psf_plot(image, matched, wcs, add_suffix(plot_save_path, "psf"))
 
         # mask = np.isin(matched["id"], matched_ids)

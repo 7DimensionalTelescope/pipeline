@@ -20,7 +20,9 @@ except Exception:
     _HAVE_KDTREE = False
 
 
-def wcs_check_plot(refcat, tbl, matched, wcs, image, plot_save_path=None, fov_ra=None, fov_dec=None, num_plot=50):
+def wcs_check_plot(
+    refcat, tbl, matched, wcs, image, plot_save_path=None, fov_ra=None, fov_dec=None, num_plot=50, sep_stats=None
+):
     fig = Figure(figsize=(7, 12))
     fig.set_constrained_layout(True)
     canvas = FigureCanvas(fig)
@@ -45,8 +47,14 @@ def wcs_check_plot(refcat, tbl, matched, wcs, image, plot_save_path=None, fov_ra
 
     # Scatter top row
     ax_scatter = fig.add_subplot(gs_master[0], projection=wcs)
-    mask = np.isin(matched["id"], matched_ids)  # Highlight psf inspected sources
-    inspected = matched[mask]
+    # mask = np.isin(matched["id"], matched_ids)  # Highlight psf inspected sources
+    # inspected = matched[mask]
+    # Make an indexer array that preserves order
+    order = np.array(matched_ids)
+    mask = np.in1d(order, matched["id"])
+    order = order[mask]
+    id_to_idx = {id_: i for i, id_ in enumerate(matched["id"])}
+    inspected = matched[[id_to_idx[_id] for _id in order]]
     wcs_check_scatter_plot(
         ax_scatter,
         refcat[:num_plot],
@@ -60,7 +68,16 @@ def wcs_check_plot(refcat, tbl, matched, wcs, image, plot_save_path=None, fov_ra
     ax_scatter.set_aspect("equal", adjustable="box")
 
     # PSF block title (centered between blocks)
-    fig.text(0.5, 0.61, "PSF Cutouts Across Image (3x3 Grid)", ha="center", va="center", fontsize=12)
+    fig.text(0.5, 0.605, "PSF Cutouts Across Image (3x3 Grid)", ha="center", va="center", fontsize=12)
+    if sep_stats is not None:
+        fig.text(
+            0.5,
+            0.63,
+            f"Sep Stats: min={sep_stats['min']:.2f}\", max={sep_stats['max']:.2f}\", rms={sep_stats['rms']:.2f}\"",
+            ha="center",
+            va="center",
+            fontsize=8,
+        )
 
     if plot_save_path:
         canvas.print_figure(plot_save_path, bbox_inches="tight", dpi=150)
@@ -112,6 +129,20 @@ def wcs_check_scatter_plot(
             label="Cutout Inspected Sources",
             transform=ax.get_transform("world"),
         )
+        # Annotate each highlighted source with its index (1-based)
+        for i, (ra, dec) in enumerate(zip(highlight_ra, highlight_dec), start=1):
+            ax.annotate(
+                str(i),
+                (ra, dec),
+                xycoords=ax.get_transform("world"),  # <-- key line
+                xytext=(3, 3),
+                textcoords="offset points",
+                color="red",
+                fontsize=7,
+                ha="left",
+                va="bottom",
+                zorder=11,
+            )
 
     # optional FOV outline
     if fov_ra is not None and fov_dec is not None:
@@ -281,6 +312,7 @@ def wcs_check_psf_plot(
                 fontsize=9,
                 color="magenta",
             )
+            ax.text(0, 27, str(k + 1), fontsize=18, color="white")
 
         ax.set_title(f"matched id: {matched_catalog['id'][idx]}", fontsize=8)
         if k == 0:
