@@ -12,22 +12,73 @@ import matplotlib.colors as mcolors
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
 from PIL import Image, ImageEnhance
 
+try:
+    from scipy.spatial import cKDTree as KDTree
+
+    _HAVE_KDTREE = True
+except Exception:
+    _HAVE_KDTREE = False
+
+
+def wcs_check_plot(refcat, tbl, matched, wcs, image, plot_save_path=None, fov_ra=None, fov_dec=None, num_plot=50):
+    fig = Figure(figsize=(7, 12))
+    fig.set_constrained_layout(True)
+    canvas = FigureCanvas(fig)
+
+    # --- Master grid: 2 rows (scatter on top, PSF grid below) ---
+    gs_master = fig.add_gridspec(
+        2,
+        1,
+        height_ratios=[1.4, 3.0],
+        hspace=0.20,
+    )
+
+    # PSF grid (rows 1–3)
+    gs_psf = gs_master[1].subgridspec(
+        3,
+        3,
+        hspace=0.02,
+        wspace=-0.04,
+    )
+    axes = [fig.add_subplot(gs_psf[i, j]) for i in range(3) for j in range(3)]
+    matched_ids = wcs_check_psf_plot(axes, image, matched, wcs)
+
+    # Scatter top row
+    ax_scatter = fig.add_subplot(gs_master[0], projection=wcs)
+    mask = np.isin(matched["id"], matched_ids)  # Highlight psf inspected sources
+    inspected = matched[mask]
+    wcs_check_scatter_plot(
+        ax_scatter,
+        refcat[:num_plot],
+        tbl[:num_plot],
+        wcs,
+        fov_ra=fov_ra,
+        fov_dec=fov_dec,
+        highlight_ra=inspected["ALPHA_J2000"],
+        highlight_dec=inspected["DELTA_J2000"],
+    )
+    ax_scatter.set_aspect("equal", adjustable="box")
+
+    # PSF block title (centered between blocks)
+    fig.text(0.5, 0.63, "PSF Cutouts Across Image (3x3 Grid)", ha="center", va="center", fontsize=12)
+
+    if plot_save_path:
+        canvas.print_figure(plot_save_path, bbox_inches="tight", dpi=150)
+    else:
+        fig.show()
+
 
 def wcs_check_scatter_plot(
+    ax,
     refcat: Table,
     tbl: Table,
     wcs: WCS,
-    plot_save_path=None,
     fov_ra=None,
     fov_dec=None,
+    highlight_ra=None,
+    highlight_dec=None,
     tick_spacing_arcmin=15,  # warning occurs if not a multiple of 15
-    legend_loc="upper right",
 ):
-
-    fig = Figure(figsize=(6, 4))
-    canvas = FigureCanvas(fig)
-    ax = fig.add_subplot(1, 1, 1, projection=wcs)
-
     # scatter in world coords
     ax.scatter(
         tbl["ALPHA_J2000"],
@@ -47,6 +98,20 @@ def wcs_check_scatter_plot(
         label="Reference Catalog (Gaia DR3)",
         transform=ax.get_transform("world"),
     )
+
+    if highlight_ra is not None and highlight_dec is not None:
+        ax.scatter(
+            highlight_ra,
+            highlight_dec,
+            marker="o",
+            alpha=0.8,
+            s=50,
+            facecolor="none",
+            edgecolor="red",
+            zorder=10,
+            label="Cutout Inspected Sources",
+            transform=ax.get_transform("world"),
+        )
 
     # optional FOV outline
     if fov_ra is not None and fov_dec is not None:
@@ -84,9 +149,7 @@ def wcs_check_scatter_plot(
         # older versions fall back automatically; safe to ignore
         pass
 
-    # Add a twin RA axis on top, in degrees
-
-    # Top overlay axis in degrees
+    # Add a twin RA axis overlay on top, in degrees
     overlay = ax.get_coords_overlay("icrs")  # same frame
     lon_top = overlay[0]  # <— NOTE: version dependent api.
     lon_top.set_format_unit(u.deg)
@@ -105,97 +168,31 @@ def wcs_check_scatter_plot(
     lat_right.set_axislabel("")
     # lat_right.set_ticklabel_visible(False)
     lat_right.set_major_formatter("d.dd")
-    lat_right.set_ticks(spacing=2 * spacing)
+    lat_right.set_ticks(spacing=spacing)
     lat_right.set_ticklabel(size=8)
 
     # Grid at the (major) tick positions
     ax.coords.grid(True, color="gray", ls=":", alpha=0.6)
 
     # legend – anchor in axes coords to be explicit
-    ax.legend(loc=legend_loc, bbox_to_anchor=(0.98, 0.98), frameon=True, borderaxespad=0.0, fontsize=8)
+    ax.legend(
+        loc="upper left",
+        bbox_to_anchor=(0.02, 0.98),
+        frameon=True,
+        borderaxespad=0.0,
+        fontsize=8,
+        facecolor="lightgray",
+        framealpha=0.3,
+    )
 
-    ax.set_title(f"{len(tbl)} brightest sources in each catalog", pad=20)
-
-    if plot_save_path is not None:
-        canvas.print_figure(plot_save_path, bbox_inches="tight", dpi=150)
-    else:
-        fig.tight_layout()
-        fig.show()
+    ax.set_title(f"{len(tbl)} brightest sources in each catalog", pad=30)
 
 
 def wcs_check_psf_plot(
+    axes,
     image: str,
-    matched_catalg: Table,
+    matched_catalog: Table,
     wcs: WCS,
-    plot_save_path=None,
-):
-    fig = Figure(figsize=(6, 4))
-    canvas = FigureCanvas(fig)
-    ax = fig.add_subplot(1, 1, 1)
-
-    data = fits.getdata(image)
-
-    x_center = matched_catalg[0]["X_IMAGE"] - 1
-    y_center = matched_catalg[0]["Y_IMAGE"] - 1
-    x_ref, y_ref = wcs.all_world2pix(matched_catalg["ra"][:1], matched_catalg["dec"][:1], 0)
-
-    coords = [(x_center, y_center), (x_ref[0], y_ref[0])]
-    data_cut, coords_shifted = cutout(data, coords, x_center, y_center)
-    sci_coord_shifted = coords_shifted[0]
-    ref_coord_shifted = coords_shifted[1]
-
-    ax.imshow(
-        np.log10(data_cut),
-        cmap="gray",
-    )
-
-    # Rectangle overlay: edge only
-    rect = Rectangle(
-        sci_coord_shifted,
-        1,  # width
-        1,  # height
-        edgecolor="C0",
-        facecolor="none",
-        linewidth=1.5,
-    )
-    ax.add_patch(rect)
-
-    rect = Rectangle(
-        ref_coord_shifted,
-        1,  # width
-        1,  # height
-        edgecolor="red",
-        facecolor="none",
-        linewidth=1.5,
-    )
-    ax.add_patch(rect)
-
-    ax.annotate(
-        f"sep: {matched_catalg['separation'][0]:.2f} arcsec",
-        ref_coord_shifted,
-        fontsize=8,
-    )
-
-    if plot_save_path is not None:
-        canvas.print_figure(plot_save_path, bbox_inches="tight", dpi=150)
-    else:
-        fig.tight_layout()
-        fig.show()
-
-
-try:
-    from scipy.spatial import cKDTree as KDTree
-
-    _HAVE_KDTREE = True
-except Exception:
-    _HAVE_KDTREE = False
-
-
-def wcs_check_psf_grid_plot(
-    image: str,
-    matched_catalog: Table,  # cleaned: required cols present; no masks
-    wcs: WCS,
-    plot_save_path=None,
     cutout_size: int = 30,
 ):
     """Select 9 sources nearest to a 3x3 grid over the image and plot PSF cutouts."""
@@ -223,12 +220,8 @@ def wcs_check_psf_grid_plot(
     # For each target, pick nearest candidate; if already taken, use next nearest
     selected_idx = _select_3x3_by_nearest(cand_xy, targets)
 
-    # Build figure
-    fig = Figure(figsize=(8, 8))
-    canvas = FigureCanvas(fig)
-
-    for k in range(9):
-        ax = fig.add_subplot(3, 3, k + 1)
+    for k, ax in enumerate(axes):
+        # ax = fig.add_subplot(3, 3, k + 1)
         ax.set_xticks([])
         ax.set_yticks([])
 
@@ -241,7 +234,7 @@ def wcs_check_psf_grid_plot(
         xc = x_img[idx]
         yc = y_img[idx]
 
-        # reference pixel from RA/Dec
+        # reference coordinates in pixel coords
         xr, yr = wcs.all_world2pix(
             matched_catalog["ra"][idx : idx + 1],
             matched_catalog["dec"][idx : idx + 1],
@@ -259,16 +252,16 @@ def wcs_check_psf_grid_plot(
 
         # overlay centroids
         sci_rect = Rectangle(
-            sci_shifted,
-            1,
-            1,
+            (sci_shifted[0] - 0.5, sci_shifted[1] - 0.5),  # rectangle is centered at the lower-left corner
+            1,  # width
+            1,  # height
             edgecolor="C0",
             facecolor="none",
             linewidth=1.0,
             label="Source Centroid",
         )
         ref_rect = Rectangle(
-            ref_shifted,
+            (ref_shifted[0] - 0.5, ref_shifted[1] - 0.5),  # rectangle is centered at the lower-left corner
             1,
             1,
             edgecolor="red",
@@ -282,18 +275,12 @@ def wcs_check_psf_grid_plot(
         # optional separation label if present
         if "separation" in matched_catalog.colnames:
             ax.annotate(
-                f"sep: {matched_catalog['separation'][idx]:.2f}\"", (ref_shifted[0], ref_shifted[1]), fontsize=7
+                f"sep: {matched_catalog['separation'][idx]:.2f}\"", (ref_shifted[0], ref_shifted[1] + 3), fontsize=7
             )
 
         ax.set_title(f"matched id: {matched_catalog['id'][idx]}", fontsize=8)
         if k == 0:
             ax.legend(loc="upper left", fontsize=8)
-
-    fig.tight_layout()
-    if plot_save_path:
-        canvas.print_figure(plot_save_path, bbox_inches="tight", dpi=150)
-    else:
-        fig.show()
 
     return matched_catalog[selected_idx]["id"]
 

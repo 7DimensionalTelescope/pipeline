@@ -10,7 +10,7 @@ from astropy.coordinates import SkyCoord, SkyOffsetFrame
 
 from ..tools.table import match_two_catalogs, add_id_column
 from ..utils import add_suffix, swap_ext
-from .plotting import wcs_check_scatter_plot, wcs_check_psf_plot, wcs_check_psf_grid_plot
+from .plotting import wcs_check_plot
 from ..subtract.utils import create_ds9_region_file
 
 
@@ -114,7 +114,6 @@ def evaluate_single_wcs(
     fov_ra=None,
     fov_dec=None,
     write_matched_catalog=True,
-    plot=True,
     plot_save_path=None,
     num_sci=100,
     num_ref=100,
@@ -200,17 +199,22 @@ def evaluate_single_wcs(
         "std": np.ma.std(x),
     }
 
-    if plot:
-        # wcs_check_psf_plot(image, matched, wcs, add_suffix(plot_save_path, "psf"))
-        wcs_check_psf_grid_plot(image, matched, wcs, add_suffix(plot_save_path, "psf_grid"))
-        wcs_check_scatter_plot(
-            ref_cat[:num_plot],
-            tbl[:num_plot],
-            wcs,
-            add_suffix(plot_save_path, "scatter"),
-            fov_ra=fov_ra,
-            fov_dec=fov_dec,
-        )
+    if plot_save_path is not None:
+        wcs_check_plot(ref_cat, tbl, matched, wcs, image, plot_save_path, fov_ra=fov_ra, fov_dec=fov_dec)
+        # matched_ids = wcs_check_psf_plot(image, matched, wcs, add_suffix(plot_save_path, "psf"))
+
+        # mask = np.isin(matched["id"], matched_ids)
+        # inspected_sources = matched[mask]
+        # wcs_check_scatter_plot(
+        #     ref_cat[:num_plot],
+        #     tbl[:num_plot],
+        #     wcs,
+        #     plot_save_path=add_suffix(plot_save_path, "scatter"),
+        #     fov_ra=fov_ra,
+        #     fov_dec=fov_dec,
+        #     highlight_ra=inspected_sources["ALPHA_J2000"],
+        #     highlight_dec=inspected_sources["DELTA_J2000"],
+        # )
 
     return (REF_MAX_MAG, SCI_MAX_MAG, NUM_REF, unmatched_fraction, separation_stats)
 
