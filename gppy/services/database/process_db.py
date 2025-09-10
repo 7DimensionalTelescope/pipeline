@@ -4,6 +4,8 @@ from typing import List, Dict, Optional, Union, Any
 import json
 from contextlib import contextmanager
 import os
+from astropy.table import Table
+import pandas as pd
 
 # Import data classes and ImageDB
 from .table import PipelineData
@@ -65,7 +67,7 @@ class ProcessDB(ImageDB):
                     placeholders.append("CURRENT_TIMESTAMP")
 
                     query = f"""
-                        INSERT INTO pipeline_pipelinedata 
+                        INSERT INTO pipeline_process 
                         ({', '.join(columns)})
                         VALUES ({', '.join(placeholders)})
                         RETURNING id;
@@ -136,7 +138,7 @@ class ProcessDB(ImageDB):
                         config_file, log_file, debug_file, comments_file, 
                         output_combined_frame_id, created_at, updated_at,
                         filename, param2, param3, param4, param5, param6, param7, param8, param9, param10
-                    FROM pipeline_pipelinedata
+                    FROM pipeline_process
                 """
 
                 if where_clauses:
@@ -205,7 +207,7 @@ class ProcessDB(ImageDB):
                 set_clauses.append("updated_at = CURRENT_TIMESTAMP")
 
                 query = f"""
-                    UPDATE pipeline_pipelinedata 
+                    UPDATE pipeline_process 
                     SET {', '.join(set_clauses)}
                     WHERE id = %(pipeline_id)s
                 """
@@ -227,7 +229,7 @@ class ProcessDB(ImageDB):
         """Delete a pipeline data record"""
         try:
             with self.get_connection() as conn:
-                query = "DELETE FROM pipeline_pipelinedata WHERE id = %s"
+                query = "DELETE FROM pipeline_process WHERE id = %s"
 
                 with conn.cursor() as cur:
                     cur.execute(query, (pipeline_id,))
@@ -270,7 +272,7 @@ class ProcessDB(ImageDB):
         try:
             with self.get_connection() as conn:
                 query = """
-                    UPDATE pipeline_pipelinedata 
+                    UPDATE pipeline_process 
                     SET warnings = warnings + %s, updated_at = CURRENT_TIMESTAMP
                     WHERE id = %s
                 """
@@ -293,7 +295,7 @@ class ProcessDB(ImageDB):
         try:
             with self.get_connection() as conn:
                 query = """
-                    UPDATE pipeline_pipelinedata 
+                    UPDATE pipeline_process 
                     SET errors = errors + %s, updated_at = CURRENT_TIMESTAMP
                     WHERE id = %s
                 """
@@ -388,8 +390,8 @@ class ProcessDB(ImageDB):
 
     # ==================== EXPORT OPERATIONS ====================
 
-    def export_pipeline_data_to_ecsv(self, filename: str) -> bool:
-        """Export pipeline data to ECSV file"""
+    def export_pipeline_data_to_table(self) -> pd.DataFrame:
+        """Export pipeline data to pandas DataFrame"""
         try:
             with self.get_connection() as conn:
                 # Get all pipeline data
@@ -400,7 +402,7 @@ class ProcessDB(ImageDB):
                         config_file, log_file, debug_file, comments_file, 
                         output_combined_frame_id, created_at, updated_at,
                         filename, param2, param3, param4, param5, param6, param7, param8, param9, param10
-                    FROM pipeline_pipelinedata
+                    FROM pipeline_process
                     ORDER BY date DESC, created_at DESC
                 """
 
@@ -410,48 +412,39 @@ class ProcessDB(ImageDB):
 
                     if not rows:
                         print(f"No pipeline data found to export")
-                        return False
+                        return pd.DataFrame()
 
                     # Get column names
                     columns = [desc[0] for desc in cur.description]
 
-                    # Write to ECSV file
-                    with open(filename, "w") as f:
-                        # Write ECSV header
-                        f.write("# %ECSV 1.0\n")
-                        f.write("# ---\n")
-                        f.write("# datatype: table\n")
-                        f.write(f"# colcount: {len(columns)}\n")
+                    # Create pandas DataFrame
+                    df = pd.DataFrame(rows, columns=columns)
+                    return df
+        except Exception as e:
+            raise ProcessDBError(f"Failed to export pipeline data to table: {e}")
 
-                        # Write column definitions
-                        for i, col in enumerate(columns):
-                            f.write(f"# col{str(i+1).zfill(2)}: name: {col}\n")
+    def export_pipeline_data_to_csv(self, filename: str) -> bool:
+        """Export pipeline data to CSV file"""
+        try:
+            # Get pipeline data using the table function
+            df = self.export_pipeline_data_to_table()
 
-                        # Write data
-                        f.write("# ---\n")
-                        f.write(",".join(columns) + "\n")
+            if df.empty:
+                print(f"No pipeline data found to export")
+                return False
 
-                        for row in rows:
-                            # Convert each value to string, handling None values
-                            row_str = []
-                            for val in row:
-                                if val is None:
-                                    row_str.append("")
-                                elif isinstance(val, (dict, list)):
-                                    row_str.append(json.dumps(val))
-                                else:
-                                    row_str.append(str(val))
-                            f.write(",".join(row_str) + "\n")
+            # Write to CSV file using pandas
+            df.to_csv(filename, index=False)
 
-                    print(f"Exported {len(rows)} pipeline records to {filename}")
-                    return True
+            print(f"Exported {len(df)} pipeline records to {filename}")
+            return True
 
         except Exception as e:
             raise ProcessDBError(f"Failed to export pipeline data: {e}")
 
-    def export_to_ecsv(self, base_filename: str) -> Dict[str, str]:
+    def export_to_csv(self, base_filename: str) -> Dict[str, str]:
         """
-        Export database tables to ECSV files.
+        Export database tables to CSV files.
 
         Args:
             base_filename: Base filename without extension (e.g., "2025-01-27_unit1")
@@ -459,32 +452,32 @@ class ProcessDB(ImageDB):
         Returns:
             Dict with paths to the exported files:
             {
-                'pipeline_data': 'XX_process.ecsv',
-                'qa_data': 'YY_qa.ecsv'
+                'pipeline_data': 'XX_process.csv',
+                'qa_data': 'YY_qa.csv'
             }
         """
         try:
             # Generate filenames
-            if base_filename.endswith("_process.ecsv"):
+            if base_filename.endswith("_process.csv"):
                 pipeline_filename = base_filename
-                qa_filename = base_filename.replace("_process.ecsv", "_qa.ecsv")
-            elif base_filename.endswith(".ecsv"):
-                pipeline_filename = base_filename.replace(".ecsv", "_process.ecsv")
-                qa_filename = base_filename.replace(".ecsv", "_qa.ecsv")
+                qa_filename = base_filename.replace("_process.csv", "_qa.csv")
+            elif base_filename.endswith(".csv"):
+                pipeline_filename = base_filename.replace(".csv", "_process.csv")
+                qa_filename = base_filename.replace(".csv", "_qa.csv")
             else:
-                pipeline_filename = f"{base_filename}_process.ecsv"
-                qa_filename = f"{base_filename}_qa.ecsv"
+                pipeline_filename = f"{base_filename}_process.csv"
+                qa_filename = f"{base_filename}_qa.csv"
 
             # Export pipeline data
-            pipeline_data = self.export_pipeline_data_to_ecsv(pipeline_filename)
+            pipeline_data = self.export_pipeline_data_to_csv(pipeline_filename)
 
             # Export QA data using inherited method
-            qa_data = self.export_qa_data_to_ecsv(qa_filename)
+            qa_data = self.export_qa_data_to_csv(qa_filename)
 
             return {"pipeline_data": pipeline_filename, "qa_data": qa_filename}
 
         except Exception as e:
-            raise ProcessDBError(f"Failed to export database to ECSV: {e}")
+            raise ProcessDBError(f"Failed to export database to CSV: {e}")
 
     # ==================== CLEANUP OPERATIONS ====================
 
@@ -493,7 +486,7 @@ class ProcessDB(ImageDB):
         try:
             with self.get_connection() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("DELETE FROM pipeline_pipelinedata")
+                    cur.execute("DELETE FROM pipeline_process")
                     pipeline_deleted = cur.rowcount
                     conn.commit()
 

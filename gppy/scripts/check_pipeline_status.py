@@ -42,7 +42,7 @@ def get_all_pipeline_records():
                         config_file,
                         created_at,
                         updated_at
-                    FROM pipeline_pipelinedata 
+                    FROM pipeline_process 
                     ORDER BY created_at DESC
                 """
 

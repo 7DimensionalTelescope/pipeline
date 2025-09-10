@@ -4,6 +4,7 @@ from typing import List, Dict, Optional, Union, Any
 import json
 from contextlib import contextmanager
 import os
+import pandas as pd
 
 # Import data classes
 from .table import QAData
@@ -64,7 +65,7 @@ class ImageDB:
                     placeholders.append("CURRENT_TIMESTAMP")
 
                     query = f"""
-                        INSERT INTO pipeline_qadata 
+                        INSERT INTO pipeline_qa 
                         ({', '.join(columns)})
                         VALUES ({', '.join(placeholders)})
                         RETURNING id;
@@ -123,7 +124,7 @@ class ImageDB:
                         rotang1, astrometric_offset, skyval, skysig, zp_auto, ezp_auto,
                         ul5_5, stdnumb, created_at, updated_at, pipeline_id_id,
                         uniform, sigmean, edgevar, trimmed, exptime, qa6, qa7, qa8, filename, sanity
-                    FROM pipeline_qadata
+                    FROM pipeline_qa
                 """
 
                 if where_clauses:
@@ -184,7 +185,7 @@ class ImageDB:
                 set_clauses.append("updated_at = CURRENT_TIMESTAMP")
 
                 query = f"""
-                    UPDATE pipeline_qadata 
+                    UPDATE pipeline_qa 
                     SET {', '.join(set_clauses)}
                     WHERE qa_id = %(qa_id)s
                 """
@@ -206,7 +207,7 @@ class ImageDB:
         """Delete a QA data record"""
         try:
             with self.get_connection() as conn:
-                query = "DELETE FROM pipeline_qadata WHERE qa_id = %s"
+                query = "DELETE FROM pipeline_qa WHERE qa_id = %s"
 
                 with conn.cursor() as cur:
                     cur.execute(query, (qa_id,))
@@ -256,7 +257,7 @@ class ImageDB:
                 where_clause = " AND ".join(where_clauses)
 
                 query = f"""
-                    SELECT qa_id FROM pipeline_qadata
+                    SELECT qa_id FROM pipeline_qa
                     WHERE {where_clause}
                     ORDER BY created_at DESC
                     LIMIT 1
@@ -322,8 +323,8 @@ class ImageDB:
         except Exception as e:
             return {"total_count": 0, "types": [], "by_type": {}, "quality_metrics": {}, "error": str(e)}
 
-    def export_qa_data_to_ecsv(self, filename: str) -> bool:
-        """Export QA data to ECSV file"""
+    def export_qa_data_to_table(self) -> pd.DataFrame:
+        """Export QA data to pandas DataFrame"""
         try:
             with self.get_connection() as conn:
                 # Get all QA data
@@ -334,7 +335,7 @@ class ImageDB:
                         rotang1, astrometric_offset, skyval, skysig, zp_auto, ezp_auto,
                         ul5_5, stdnumb, created_at, updated_at, pipeline_id_id,
                         uniform, sigmean, edgevar, trimmed, exptime, qa6, qa7, qa8, filename, sanity
-                    FROM pipeline_qadata
+                    FROM pipeline_qa
                     ORDER BY created_at DESC
                 """
 
@@ -344,41 +345,32 @@ class ImageDB:
 
                     if not rows:
                         print(f"No QA data found to export")
-                        return False
+                        return pd.DataFrame()
 
                     # Get column names
                     columns = [desc[0] for desc in cur.description]
 
-                    # Write to ECSV file
-                    with open(filename, "w") as f:
-                        # Write ECSV header
-                        f.write("# %ECSV 1.0\n")
-                        f.write("# ---\n")
-                        f.write("# datatype: table\n")
-                        f.write(f"# colcount: {len(columns)}\n")
+                    # Create pandas DataFrame
+                    df = pd.DataFrame(rows, columns=columns)
+                    return df
+        except Exception as e:
+            raise ImageDBError(f"Failed to export QA data to table: {e}")
 
-                        # Write column definitions
-                        for i, col in enumerate(columns):
-                            f.write(f"# col{str(i+1).zfill(2)}: name: {col}\n")
+    def export_qa_data_to_csv(self, filename: str) -> bool:
+        """Export QA data to CSV file"""
+        try:
+            # Get QA data using the table function
+            df = self.export_qa_data_to_table()
 
-                        # Write data
-                        f.write("# ---\n")
-                        f.write(",".join(columns) + "\n")
+            if df.empty:
+                print(f"No QA data found to export")
+                return False
 
-                        for row in rows:
-                            # Convert each value to string, handling None values
-                            row_str = []
-                            for val in row:
-                                if val is None:
-                                    row_str.append("")
-                                elif isinstance(val, (dict, list)):
-                                    row_str.append(json.dumps(val))
-                                else:
-                                    row_str.append(str(val))
-                            f.write(",".join(row_str) + "\n")
+            # Write to CSV file using pandas
+            df.to_csv(filename, index=False)
 
-                    print(f"Exported {len(rows)} QA records to {filename}")
-                    return True
+            print(f"Exported {len(df)} QA records to {filename}")
+            return True
 
         except Exception as e:
             raise ImageDBError(f"Failed to export QA data: {e}")
@@ -388,7 +380,7 @@ class ImageDB:
         try:
             with self.get_connection() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("DELETE FROM pipeline_qadata")
+                    cur.execute("DELETE FROM pipeline_qa")
                     qa_deleted = cur.rowcount
                     conn.commit()
 

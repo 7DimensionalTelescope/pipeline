@@ -95,7 +95,7 @@ class SciProcConfiguration(BaseConfig):
     @property
     def name(self):
         if hasattr(self, "path"):
-            return os.path.basename(self.path.sciproc_output_log).replace(".log", "")
+            return os.path.basename(self.path.sciproc_output_yml).replace(".yml", "")
         elif hasattr(self.config, "name"):
             return self.config.name
         else:

@@ -59,6 +59,7 @@ class Preprocess(BaseSetup, Checker):
         master_frame_only=False,
         calib_types=None,
         use_gpu=True,
+        add_database=True,
         **kwargs,
     ):
         # Load Configuration
@@ -82,7 +83,7 @@ class Preprocess(BaseSetup, Checker):
         self._use_gpu = use_gpu
 
         # Initialize database connection with ProcessDB (inherits from ImageDB for QA management)
-        self.db = ProcessDB()
+        self.db = ProcessDB() if add_database else None
         self.pipeline_id = None
 
         # Log database initialization
@@ -135,7 +136,8 @@ class Preprocess(BaseSetup, Checker):
         self.logger.debug(f"raw_groups:\n{pp.pformat(self.raw_groups)}")
 
         # Create pipeline record in database
-        self._create_pipeline_record()
+        if self.db is not None:
+            self._create_pipeline_record()
 
         # raise ValueError("stop")  # for debug
 
@@ -200,6 +202,9 @@ class Preprocess(BaseSetup, Checker):
         if self.pipeline_id is None:
             return
 
+        if self.db is None:
+            return
+
         try:
             if status:
                 self.db.update_pipeline_data(self.pipeline_id, progress=progress, status=status)
@@ -207,6 +212,68 @@ class Preprocess(BaseSetup, Checker):
                 self.db.update_pipeline_data(self.pipeline_id, progress=progress)
         except Exception as e:
             self.logger.warning(f"Failed to update pipeline progress: {e}")
+
+    def _write_into_db(self, dtype):
+        if self.db is None:
+            return
+
+        self.logger.info(f"[Group {self._current_group+1}] Creating QA data for {dtype} (PID: {self.pipeline_id})")
+
+        try:
+            header = fits.getheader(self._original_raw_groups[self._current_group][1][self._key_to_index[dtype]])
+        except:
+            return
+
+        try:
+            qa_data = QAData.from_header(
+                header,
+                "masterframe",
+                f"{dtype}",
+                self.pipeline_id,
+                getattr(self, f"{dtype}_output"),
+            )
+
+            trimmed = qa_data.trimmed
+            # Use ProcessDB (inherited from ImageDB) to create QA data (will handle duplicates automatically)
+            qa_id = self.db.create_qa_data(qa_data)
+            self.logger.debug(f"[Group {self._current_group+1}] Created QA record with ID: {qa_id}")
+        except Exception as e:
+            self.logger.error(
+                f"[Group {self._current_group+1}] Failed to create QA data for {dtype} (PID: {self.pipeline_id}): {e}"
+            )
+            self.db.add_error(self.pipeline_id)
+
+        if trimmed:
+            self.logger.error(
+                f"[Group {self._current_group+1}] {dtype} masterframe is trimmed, a set of masterframes can be trimmed."
+            )
+            self.db.add_error(self.pipeline_id)
+
+            with fits.open(
+                self._original_raw_groups[self._current_group][1][self._key_to_index["bias"]], mode="update"
+            ) as hdul:
+                hdul[0].header["TRIMMED"] = (True, "Non-positive values in the middle of the image")
+                hdul[0].header["SANITY"] = (False, "Sanity flag")
+                hdul.flush()
+
+            self.db.update_qa_data(self.pipeline_id, dtype=f"bias_{self._current_group}", trimmed=True, sanity=False)
+
+            with fits.open(
+                self._original_raw_groups[self._current_group][1][self._key_to_index["dark"]], mode="update"
+            ) as hdul:
+                hdul[0].header["TRIMMED"] = (True, "Non-positive values in the middle of the image")
+                hdul[0].header["SANITY"] = (False, "Sanity flag")
+                hdul.flush()
+
+            self.db.update_qa_data(self.pipeline_id, dtype=f"dark_{self._current_group}", trimmed=True, sanity=False)
+
+    def _add_warning(self, dtype):
+        if self.db is not None:
+            self.db.add_warning(self.pipeline_id)
+
+    def _add_error(self, dtype):
+        if self.db is not None:
+            self.db.add_error(self.pipeline_id)
 
     def run(self, device_id=None, make_plots=True, use_gpu=True, only_with_sci=False):
         self._use_gpu = all([use_gpu, self._use_gpu])
@@ -355,6 +422,9 @@ class Preprocess(BaseSetup, Checker):
             if dtype == "dark":
                 self.logger.debug(f"[Group {self._current_group+1}] flatdark_output: {self.flatdark_output}")
 
+            if os.path.exists(output_file) and not (QAData.check_header(fits.getheader(output_file), dtype)):
+                self.overwrite = True
+
             if (
                 input_file
                 and (not os.path.exists(output_file) or self.overwrite)
@@ -362,13 +432,13 @@ class Preprocess(BaseSetup, Checker):
             ):
                 norminal = self._generate_masterframe(dtype, device_id)
                 if not norminal:
-                    self.fetch_masterframe(output_file, dtype)
+                    self._fetch_masterframe(output_file, dtype)
                 self._generated_masterframes.append(output_file)
             elif isinstance(output_file, str) and len(output_file) != 0:
                 self.logger.warning(
                     f"[Group {self._current_group+1}] No {dtype} masterframe found for the current group."
                 )
-                self.db.add_warning(self.pipeline_id)
+                self._add_warning(dtype)
                 self._fetch_masterframe(output_file, dtype)
                 self.skip_plotting_flags[dtype] = True
 
@@ -376,7 +446,7 @@ class Preprocess(BaseSetup, Checker):
                 self.logger.warning(f"[Group {self._current_group+1}] {dtype} has no input or output data (to fetch)")
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_input: {input_file}")
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_output: {output_file}")
-                self.db.add_warning(self.pipeline_id)
+                self._add_warning(dtype)
 
             self._write_into_db(dtype)
 
@@ -463,65 +533,14 @@ class Preprocess(BaseSetup, Checker):
             self.logger.debug(f"[Group {self._current_group+1}] FITS Written: {getattr(self, f'{dtype}_output')}")
             return True
         else:
-            self.logger.error(f"[Group {self._current_group+1}] Master {dtype} generated but failed quality check")
+            self.logger.warning(f"[Group {self._current_group+1}] Master {dtype} generated but failed quality check")
             self.logger.debug(f"[Group {self._current_group+1}] FITS Written: {getattr(self, f'{dtype}_output')}")
-            self.logger.error(
+            self.logger.warning(
                 f"[Group {self._current_group+1}] Make a plot for the current {dtype} and fetch a new one with better quality"
             )
             self.make_plot(getattr(self, f"{dtype}_output"), dtype, self._current_group)
-            self.db.add_error(self.pipeline_id)
+            self._add_error(dtype)
             return False
-
-    def _write_into_db(self, dtype):
-        self.logger.info(f"[Group {self._current_group+1}] Creating QA data for {dtype} (PID: {self.pipeline_id})")
-
-        try:
-            header = fits.getheader(self._original_raw_groups[self._current_group][1][self._key_to_index[dtype]])
-        except:
-            return
-
-        try:
-            qa_data = QAData.from_header(
-                header,
-                "masterframe",
-                f"{dtype}",
-                self.pipeline_id,
-                getattr(self, f"{dtype}_output"),
-            )
-
-            trimmed = qa_data.trimmed
-            # Use ProcessDB (inherited from ImageDB) to create QA data (will handle duplicates automatically)
-            qa_id = self.db.create_qa_data(qa_data)
-            self.logger.debug(f"[Group {self._current_group+1}] Created QA record with ID: {qa_id}")
-        except Exception as e:
-            self.logger.error(
-                f"[Group {self._current_group+1}] Failed to create QA data for {dtype} (PID: {self.pipeline_id}): {e}"
-            )
-            self.db.add_error(self.pipeline_id)
-
-        if trimmed:
-            self.logger.error(
-                f"[Group {self._current_group+1}] {dtype} masterframe is trimmed, a set of masterframes can be trimmed."
-            )
-            self.db.add_error(self.pipeline_id)
-
-            with fits.open(
-                self._original_raw_groups[self._current_group][1][self._key_to_index["bias"]], mode="update"
-            ) as hdul:
-                hdul[0].header["TRIMMED"] = (True, "Non-positive values in the middle of the image")
-                hdul[0].header["SANITY"] = (False, "Sanity flag")
-                hdul.flush()
-
-            self.db.update_qa_data(self.pipeline_id, dtype=f"bias_{self._current_group}", trimmed=True, sanity=False)
-
-            with fits.open(
-                self._original_raw_groups[self._current_group][1][self._key_to_index["dark"]], mode="update"
-            ) as hdul:
-                hdul[0].header["TRIMMED"] = (True, "Non-positive values in the middle of the image")
-                hdul[0].header["SANITY"] = (False, "Sanity flag")
-                hdul.flush()
-
-            self.db.update_qa_data(self.pipeline_id, dtype=f"dark_{self._current_group}", trimmed=True, sanity=False)
 
     def _fetch_masterframe(self, template, dtype):
         self.logger.info(f"[Group {self._current_group+1}] Fetching a nominal master {dtype}")
@@ -531,7 +550,7 @@ class Preprocess(BaseSetup, Checker):
         existing_mframe_file = prep_utils.search_with_date_offsets(template, max_offset=max_offset, future=True)
 
         if not existing_mframe_file:
-            self.db.add_error(self.pipeline_id)
+            self._add_error(dtype)
             raise FileNotFoundError(
                 f"[Group {self._current_group+1}] No pre-existing master {dtype} found in place of {template} within {max_offset} days"
             )
@@ -565,9 +584,9 @@ class Preprocess(BaseSetup, Checker):
             self.skip_plotting_flags["sci"] = True
             return
 
-        # flag = [os.path.exists(file) for file in self.sci_output]
-        flag = [list((Path(file).parent.parent / "figures").glob("*.jpg")) for file in self.sci_output]
-        flag = [len(f) > 0 for f in flag]
+        flag = [os.path.exists(file) for file in self.sci_output]
+        # flag = [list((Path(file).parent.parent / "figures").glob("*.jpg")) for file in self.sci_output]
+        # flag = [len(f) > 0 for f in flag]
 
         if all(flag):  # and not self.overwrite:
             self.logger.info(f"All images in group {self._current_group+1} are already processed")
@@ -667,7 +686,7 @@ class Preprocess(BaseSetup, Checker):
                     plot_bias(bias_file)
                 else:
                     self.logger.warning(f"Bias file {bias_file} does not exist. Skipping bias plot.")
-                    self.db.add_warning(self.pipeline_id)
+                    self._add_warning("bias")
             else:
                 self.logger.info(f"[Group {group_index+1}] Skipping bias plot")
 
@@ -682,7 +701,7 @@ class Preprocess(BaseSetup, Checker):
                         badpix = sample_header["BADPIX"]
                     else:
                         self.logger.warning("Header missing BADPIX; using 1")
-                        self.db.add_warning(self.pipeline_id)
+                        self._add_warning("dark")
                         badpix = 1
 
                     mask = fits.getdata(self._get_raw_group("bpmask_output", group_index), ext=1)
@@ -690,7 +709,7 @@ class Preprocess(BaseSetup, Checker):
                     fmask = mask.ravel()
                 else:
                     self.logger.warning(f"BPMask file {bpmask_file} does not exist. Skipping bpmask plot.")
-                    self.db.add_warning(self.pipeline_id)
+                    self._add_warning("dark")
                     fmask = None
             else:
                 self.logger.info(f"[Group {group_index+1}] Skipping bpmask plot")
@@ -702,7 +721,7 @@ class Preprocess(BaseSetup, Checker):
                     plot_dark(dark_file, fmask)
                 else:
                     self.logger.warning(f"Dark file {dark_file} does not exist. Skipping dark plot.")
-                    self.db.add_warning(self.pipeline_id)
+                    self._add_warning("dark")
             else:
                 self.logger.info(f"[Group {group_index+1}] Skipping dark plot")
 
@@ -713,7 +732,7 @@ class Preprocess(BaseSetup, Checker):
                     plot_flat(flat_file, fmask)
                 else:
                     self.logger.warning(f"Flat file {flat_file} does not exist. Skipping flat plot.")
-                    self.db.add_warning(self.pipeline_id)
+                    self._add_warning("flat")
             else:
                 self.logger.info(f"[Group {group_index+1}] Skipping flat plot")
 
@@ -748,7 +767,7 @@ class Preprocess(BaseSetup, Checker):
                 self.logger.info(f"[Group {group_index+1}] Skipping science plot")
         except Exception as e:
             self.logger.error(f"Error making plots: {e}")
-            self.db.add_warning(self.pipeline_id)
+            self._add_warning("sci")
 
     def update_bpmask(self, sanity=True):
         header = self.get_header("dark")

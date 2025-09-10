@@ -6,8 +6,9 @@ from .utils import add_suffix, force_symlink, swap_ext, read_text_file, collapse
 
 
 def solve_field(
-    inim,
-    outim=None,
+    input_image=None,
+    input_catalog=None,
+    output_image=None,
     dump_dir=None,
     get_command=False,
     pixscale=0.505,
@@ -62,58 +63,62 @@ def solve_field(
         ```
     """
 
-    inim = os.path.abspath(inim)
-    img_dir = os.path.dirname(inim)
+    input_image = os.path.abspath(input_image)
+    img_dir = os.path.dirname(input_image)
     working_dir = dump_dir or os.path.join(img_dir, "tmp_solvefield")
     working_dir = os.path.abspath(working_dir)
     os.makedirs(working_dir, exist_ok=True)
 
     # soft link inside working_dir
-    fname = os.path.basename(inim)
+    fname = os.path.basename(input_image)
     soft_link = os.path.join(working_dir, fname)
-    force_symlink(inim, soft_link)
+    force_symlink(input_image, soft_link)
 
     # outname = os.path.join(working_dir, f"{Path(inim).stem}_solved.fits")
-    outim = outim or os.path.join(os.path.splitext(soft_link)[0] + "_solved.fits")
+    output_image = output_image or os.path.join(os.path.splitext(soft_link)[0] + "_solved.fits")
 
     # Solve-field using the soft link
     # e.g., solve-field calib_7DT11_T00139_20250102_014643_m425_100s.fits --crpix-center --scale-unit arcsecperpix --scale-low '0.4949' --scale-high '0.5151' --no-plots --new-fits solved.fits --overwrite --use-source-extractor --cpulimit 30
-    if sexcat is None:
-        solvecom = [
-            "solve-field", f"{soft_link}",  # this file is not changed by solve-field
-            "--new-fits", outim,  # you can give 'none'
-            # "--config", f"{path_cfg}",
-            # "--source-extractor-config", f"{path_sex_cfg}",
-            # "--no-fits2fits",  # Do not create output FITS file
-            "--overwrite",
-            "--crpix-center",
-            "--scale-unit", "arcsecperpix",
-            "--scale-low", f"{pixscale*0.98}",
-            "--scale-high", f"{pixscale*1.02}",
-            "--use-source-extractor",  # Crucial speed boost. 30 s -> 5 s
-            "--cpulimit", f"{30}",  # This is not about CORES. 
-            "--no-plots",  # MASSIVE speed boost. 2 min -> 5 sec
-            # "--no-tweak",  # Skip SIP distortion correction. 0.3 seconds boost.
-            # "--downsample", "4",  # not much difference
-        ]  # fmt: skip
+    if input_catalog:
+        solvecom = "solve-field sources.xyls   --fields 1   --x-column X_IMAGE --y-column Y_IMAGE   --width 9576 --height 6388   --scale-unit arcsecperpix --scale-low 0.49 --scale-high 0.52 --crpix-center"
 
-    # If user provided a Source Extractor catalog, use it instead of extracting sources
-    else:
-        sexcat = os.path.abspath(sexcat)
-        # Common SExtractor outputs work: FITS_LDAC (.cat), FITS table, or ASCII.
-        # We point solve-field at it and specify which columns to read.
-        solvecom += [
-            "solve-field", sexcat,
-            # "--x-column", xcol,
-            # "--y-column", ycol,
-        ]  # fmt: skip
+    elif input_image:
+        if sexcat is None:
+            solvecom = [
+                "solve-field", f"{soft_link}",  # this file is not changed by solve-field
+                "--new-fits", output_image,  # you can give 'none'
+                # "--config", f"{path_cfg}",
+                # "--source-extractor-config", f"{path_sex_cfg}",
+                # "--no-fits2fits",  # Do not create output FITS file
+                "--overwrite",
+                "--crpix-center",
+                "--scale-unit", "arcsecperpix",
+                "--scale-low", f"{pixscale*0.98}",
+                "--scale-high", f"{pixscale*1.02}",
+                "--use-source-extractor",  # Crucial speed boost. 30 s -> 5 s
+                "--cpulimit", f"{30}",  # This is not about CORES. 
+                "--no-plots",  # MASSIVE speed boost. 2 min -> 5 sec
+                # "--no-tweak",  # Skip SIP distortion correction. 0.3 seconds boost.
+                # "--downsample", "4",  # not much difference
+            ]  # fmt: skip
 
-        if sortcol:
-            solvecom += ["--sort-column", sortcol]
-        # IMPORTANT: omit --use-source-extractor if we're providing a catalog
+        # If user provided a Source Extractor catalog, use it instead of extracting sources
+        else:
+            sexcat = os.path.abspath(sexcat)
+            # Common SExtractor outputs work: FITS_LDAC (.cat), FITS table, or ASCII.
+            # We point solve-field at it and specify which columns to read.
+            solvecom += [
+                "solve-field", sexcat,
+                # "--x-column", xcol,
+                # "--y-column", ycol,
+            ]  # fmt: skip
+
+            if sortcol:
+                solvecom += ["--sort-column", sortcol]
+            # IMPORTANT: omit --use-source-extractor if we're providing a catalog
 
     try:
-        header = fits.getheader(inim)
+        header = fits.getheader(input_image)
         ra = header["ra"]
         dec = header["dec"]
         solvecom = solvecom + [
@@ -144,7 +149,7 @@ def solve_field(
     # solvecom = f"{' '.join(solvecom)} > {log_file} 2>&1"
     # subprocess.run(solvecom, cwd=working_dir, shell=True)
 
-    log_file = swap_ext(add_suffix(outim, "solvefield"), "log")
+    log_file = swap_ext(add_suffix(output_image, "solvefield"), "log")
     solvecom = " ".join(solvecom)
     solveout = subprocess.getoutput(solvecom)
     with open(log_file, "w") as f:
@@ -153,7 +158,7 @@ def solve_field(
         f.write(solveout)
     if not os.path.exists(swap_ext(soft_link, ".solved")):
         raise FileNotFoundError(f"Solve-field failed: {swap_ext(soft_link, '.solved')} not found")
-    return outim
+    return output_image
 
 
 def scamp(

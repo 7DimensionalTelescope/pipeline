@@ -93,6 +93,7 @@ def match_two_catalogs(
     coord_sci = SkyCoord(sci_tbl[x0], sci_tbl[y0], unit="deg", copy=False)
     coord_ref = SkyCoord(ref_tbl[x1], ref_tbl[y1], unit="deg", copy=False)
 
+    # update coord_ref if correct_pm is True
     if correct_pm:
         from astropy.coordinates import Distance
 
@@ -295,3 +296,27 @@ def _parse_conditions(conditions: Sequence[Any]) -> Iterable[Condition]:
 def filter_table(table: Table, conditions: Iterable[Condition]) -> Table:
     mask = build_condition_mask(table, conditions)
     return table[mask]
+
+
+def add_id_column(table: Table) -> Table:
+    """
+    Add an 'id' column as the first column of an Astropy Table.
+    The 'id' values are 0-based row indices.
+
+    Parameters
+    ----------
+    table : astropy.table.Table
+        The input table.
+
+    Returns
+    -------
+    astropy.table.Table
+        A new table with 'id' as the first column.
+    """
+    # Create an index array
+    ids = np.arange(len(table))
+
+    # Insert the column at position 0
+    table.add_column(ids, name="id", index=0)
+
+    return table

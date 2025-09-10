@@ -281,3 +281,35 @@ class QAData:
                 qa_data.trimmed = header["TRIMMED"]
 
         return qa_data
+    
+    @classmethod
+    def check_header(cls, header, qa_type):
+        if "EXPTIME" not in header:
+            return False
+        if "FILTER" not in header:
+            return False
+        if "CLIPMED" not in header:
+            return False
+        if "CLIPSTD" not in header:
+            return False
+        if "CLIPMIN" not in header:
+            return False
+        if "CLIPMAX" not in header:
+            return False
+        if "SANITY" not in header:
+            return False
+        if qa_type == "dark":
+            if "NHOTPIX" not in header:
+                return False
+            if "NTOTPIX" not in header:
+                return False
+            if "UNIFORM" not in header:
+                return False
+        if qa_type == "flat":
+            if "SIGMEAN" not in header:
+                return False
+            if "EDGEVAR" not in header:
+                return False
+            if "TRIMMED" not in header:
+                return False
+        return True

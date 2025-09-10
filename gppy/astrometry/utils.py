@@ -1,15 +1,17 @@
 import unicodedata
 from typing import List
 import numpy as np
+import astropy.units as u
 from astropy.io import fits
 from astropy.wcs import WCS
 from astropy.table import Table
 from astropy.time import Time
-import astropy.units as u
 from astropy.coordinates import SkyCoord, SkyOffsetFrame
 
-from ..tools.table import match_two_catalogs
-from ..utils import add_suffix
+from ..tools.table import match_two_catalogs, add_id_column
+from ..utils import add_suffix, swap_ext
+from .plotting import wcs_check_scatter_plot, wcs_check_psf_plot, wcs_check_psf_grid_plot
+from ..subtract.utils import create_ds9_region_file
 
 
 def read_scamp_header(file, return_wcs=False):
@@ -101,20 +103,34 @@ def read_TPV_wcs(image: str | fits.Header) -> WCS:
     return wcs
 
 
-def evaluate_wcs(
+def evaluate_single_wcs(
+    image: str,
     ref_cat: Table,
-    source_cat: str,
+    source_cat: str | Table,
     date_obs: str,
+    wcs: WCS,
     head: fits.Header = None,
     match_radius=10,
+    fov_ra=None,
+    fov_dec=None,
     write_matched_catalog=True,
     plot=True,
     plot_save_path=None,
+    num_sci=100,
+    num_ref=100,
+    num_plot=50,
+    ds9_region=True,
 ):
-    """tbl: catalog of detected sources"""
+    """Ensure num_plot <= num_sci, num_ref"""
 
     # load the source catalog
-    tbl = Table(fits.getdata(source_cat, ext=2))
+    if isinstance(source_cat, str):
+        tbl = Table(fits.getdata(source_cat, ext=2))
+    elif isinstance(source_cat, Table):
+        tbl = source_cat
+        source_cat = "table_evaluated.fits"
+    else:
+        raise ValueError(f"Invalid input type: {type(source_cat)}")
 
     # update the source catalog with the WCS
     if head is not None:
@@ -123,20 +139,37 @@ def evaluate_wcs(
         tbl["ALPHA_J2000"] = ra
         tbl["DELTA_J2000"] = dec
 
-    if plot:
-        wcs_check_plot(ref_cat, tbl, plot_save_path)
+    # # sort tables by SNR (higher first)
+    # ref_cat["snr"] = 1 / (0.4 * np.log(10) * ref_cat["phot_g_mean_mag_error"])
+    # ref_cat.sort("snr", reverse=True)
+    # tbl["snr"] = 1 / (0.4 * np.log(10) * tbl["MAGERR_AUTO"])
+    # tbl.sort("snr", reverse=True)
 
-    # iteratively try decreasing SNR thresholds to find NUM_MIN_REFCAT sources
-    NUM_MIN_REFCAT = 20
-    refcat_snr_thresh_list = [5000, 3000, 1000, 300, 100, 50]
-    for refcat_snr_thresh in refcat_snr_thresh_list:
-        snr = 1 / (0.4 * np.log(10) * ref_cat["phot_g_mean_mag_error"])
-        sel = snr > refcat_snr_thresh
-        # print(np.sum(sel))
-        if np.sum(sel) >= NUM_MIN_REFCAT:
-            break
-    ref_cat = ref_cat[sel]
-    num_ref_sources = len(ref_cat)
+    # sort tables by magnitude (brighter first)
+    ref_cat.sort("phot_g_mean_mag")
+    tbl.sort("MAG_AUTO")
+    tbl = tbl[tbl["FLAGS"] == 0]  # exclude saturated sources
+    # tbl = tbl[tbl["MAG_AUTO"] > sci_inst_mag_llim]  # exclude too bright sci sources
+
+    # filter sources in REFCAT by FOV
+    if fov_ra is not None and fov_dec is not None:
+        assert len(fov_ra) == len(fov_dec)
+        sel = inside_quad_spherical(ref_cat["ra"], ref_cat["dec"], fov_ra, fov_dec)  # inside_quad_radec fails at poles
+        ref_cat = ref_cat[sel]
+
+    if ds9_region:
+        x, y = wcs.all_world2pix(ref_cat["ra"], ref_cat["dec"], 1)
+        create_ds9_region_file(x=x, y=y, filename=swap_ext(source_cat, "reg"))
+        # create_ds9_region_file(ra=ref_cat["ra"], dec=ref_cat["dec"], filename=swap_ext(source_cat, "reg"))
+
+    # extract highest SNR sources to calculate separation statistics
+    ref_cat = ref_cat[:num_ref]
+    tbl = tbl[:num_sci]
+    # REF_MIN_SNR = ref_cat["snr"][-1]
+    # SCI_MIN_SNR = tbl["snr"][-1]
+    REF_MAX_MAG = ref_cat["phot_g_mean_mag"][-1]
+    SCI_MAX_MAG = tbl["MAG_AUTO"][-1]
+    NUM_REF = len(ref_cat)
 
     # match source tbl with refcat
     pm_keys = dict(pmra="pmra", pmdec="pmdec", parallax=None, ref_epoch=2016.0)
@@ -150,7 +183,8 @@ def evaluate_wcs(
         correct_pm=True,
         obs_time=Time(date_obs),
         pm_keys=pm_keys,
-    )
+    )  # right join: preserve all ref sources
+    matched = add_id_column(matched)  # id needed to plot selected 9 stars
     if write_matched_catalog:
         matched.write(add_suffix(source_cat, "matched"), overwrite=True)
 
@@ -166,63 +200,86 @@ def evaluate_wcs(
         "std": np.ma.std(x),
     }
 
-    return (refcat_snr_thresh, num_ref_sources, unmatched_fraction, separation_stats)
+    if plot:
+        # wcs_check_psf_plot(image, matched, wcs, add_suffix(plot_save_path, "psf"))
+        wcs_check_psf_grid_plot(image, matched, wcs, add_suffix(plot_save_path, "psf_grid"))
+        wcs_check_scatter_plot(
+            ref_cat[:num_plot],
+            tbl[:num_plot],
+            wcs,
+            add_suffix(plot_save_path, "scatter"),
+            fov_ra=fov_ra,
+            fov_dec=fov_dec,
+        )
+
+    return (REF_MAX_MAG, SCI_MAX_MAG, NUM_REF, unmatched_fraction, separation_stats)
 
 
-def wcs_check_plot(refcat: Table, tbl: Table, plot_save_path=None):
-    import matplotlib.pyplot as plt
-
-    fig, axes = plt.subplots(1, 2, dpi=100, figsize=(13, 7))
-
-    for ax, sci_mag_cut, ref_mag_cut in zip(axes, [14, 16], [14, 16]):
-        refcat_sel = refcat[refcat["phot_g_mean_mag"] < ref_mag_cut]
-        # print("ref stars:", len(refcat))
-
-        # tbl = tbl[tbl["FLUX_AUTO"] / tbl["FLUXERR_AUTO"] > 100]
-        tbl = tbl[tbl["MAG_AUTO"] + 26 < sci_mag_cut]
-        # print("image stars:", len(tbl))
-
-        ra, dec = tbl["ALPHA_J2000"], tbl["DELTA_J2000"]
-
-        ax.scatter(ra, dec, alpha=0.5, label="scamp wcs", s=10)
-        ax.scatter(refcat_sel["ra"], refcat_sel["dec"], alpha=0.5, label="refcat", s=20)
-        ax.legend()
-        ax.set_title(f"ref mag < {ref_mag_cut}, sci mag < {sci_mag_cut}")
-        ax.set_aspect("equal")
-
-    if plot_save_path is not None:
-        plt.savefig(plot_save_path)
-    else:
-        plt.show()
+def evaluate_joint_wcs(images_info: List["ImageInfo"]):
+    separation_stats = {
+        "min": np.ma.min(x),
+        "max": np.ma.max(x),
+        "rms": np.sqrt(np.ma.mean(x**2)),
+        "median": np.ma.median(x),
+        "std": np.ma.std(x),
+    }
+    return separation_stats
 
 
-def polygon_info(input_header: fits.Header, naxis1: int = None, naxis2: int = None) -> fits.Header:
-    """
-    Returns header with polygon info & field rotation
-    If not given NAXIS1, NAXIS2, it assumes CRPIX1, CRPIX2 is the center
-    """
-
-    # FOV Center
-    x = naxis1 or (input_header.get("NAXIS1", None) or input_header["CRPIX1"])
-    y = naxis2 or (input_header.get("NAXIS2", None) or input_header["CRPIX2"])
-    center_pix = (x - 1) / 2, (y - 1) / 2  # 0-indexed
-    wcs = WCS(input_header)
+def get_fov_center(wcs: WCS, naxis1: int, naxis2: int):
+    center_pix = (naxis1 - 1) / 2, (naxis2 - 1) / 2  # 0-indexed
     center_world = wcs.pixel_to_world(*center_pix)
+    return center_world.ra.deg, center_world.dec.deg
+
+
+def get_fov_quad(wcs, x, y, edge=True):
+    if is_flipped(wcs):
+        vertices = np.array([[x, y], [x, 1], [0, 1], [0, y]], dtype="float")
+        if edge:
+            vertices[0] += 0.5
+            vertices[1, 0] += 0.5
+            vertices[1, 1] -= 0.5
+            vertices[2] -= 0.5
+            vertices[3, 0] -= 0.5
+            vertices[3, 1] += 0.5
+    else:
+        vertices = np.array([[0, y], [0, 0], [x, 0], [x, y]], dtype="float")
+        if edge:
+            vertices[0, 0] -= 0.5
+            vertices[0, 1] += 0.5
+            vertices[1] -= 0.5
+            vertices[2, 0] += 0.5
+            vertices[2, 1] -= 0.5
+            vertices[3] += 0.5
+    ra, dec = wcs.all_pix2world(vertices[:, 0], vertices[:, 1], 1)
+    return ra, dec
+
+
+def polygon_info_header(image_info: "ImageInfo") -> fits.Header:
+    fov_ra = image_info.get("fov_ra", None)
+    fov_dec = image_info.get("fov_dec", None)
+    return make_polygon_header(image_info.wcs, image_info.naxis1, image_info.naxis2, fov_ra=fov_ra, fov_dec=fov_dec)
+
+
+def make_polygon_header(
+    wcs: WCS, naxis1: int, naxis2: int, fov_ra: np.array = None, fov_dec: np.array = None
+) -> fits.Header:
+    """Returns header with polygon info & field rotation"""
+
+    ra, dec = get_fov_center(wcs, naxis1, naxis2)
+    # FOV Center
     cards = [
-        ("RACENT", round(center_world.ra.deg, 3), "RA CENTER [deg]"),
-        ("DECCENT", round(center_world.dec.deg, 3), "DEC CENTER [deg]"),
+        ("RACENT", round(ra, 3), "RA CENTER [deg]"),
+        ("DECCENT", round(dec, 3), "DEC CENTER [deg]"),
     ]
 
     # FOV Polygon
-    if is_flipped(wcs):
-        vertices = np.array([[x - 1, y - 1], [x - 1, 0], [0, 0], [0, y - 1]])
-    else:
-        vertices = np.array([[0, y - 1], [0, 0], [x - 1, 0], [x - 1, y - 1]])
-    for i in range(4):
-        coord = wcs.pixel_to_world(vertices[i, 0], vertices[i, 1])
-        ra, dec = coord.ra.deg, coord.dec.deg
-        cards.append((f"RAPOLY{i}", round(ra, 3), f"RA POLYGON {i} [deg]"))
-        cards.append((f"DEPOLY{i}", round(dec, 3), f"DEC POLYGON {i} [deg]"))
+    if fov_ra is None or fov_dec is None:
+        fov_ra, fov_dec = get_fov_quad(wcs, naxis1, naxis2)
+
+    for i in range(len(fov_ra)):
+        cards.append((f"RAPOLY{i}", round(fov_ra[i], 3), f"RA POLYGON {i} [deg]"))
+        cards.append((f"DEPOLY{i}", round(fov_dec[i], 3), f"DEC POLYGON {i} [deg]"))
 
     # Field Rotation
     rotation_angle_1 = field_rotation(wcs)
@@ -263,45 +320,76 @@ def is_flipped(wcs: WCS) -> bool:
     return np.sign(determinant) > 0
 
 
-def inside_quad_radec(points_ra, points_dec, quad_ra, quad_dec):
+def _order_ccw(xy):
+    """Return points ordered CCW around their centroid."""
+    c = xy.mean(axis=0)
+    ang = np.arctan2(xy[:, 1] - c[1], xy[:, 0] - c[0])
+    return xy[np.argsort(ang)]
+
+
+def inside_quad_radec(points_ra, points_dec, quad_ra, quad_dec, eps=1e-12):
     """
+    Vectorized inclusion test of points in a convex quad on the sky.
     points_*: arrays of candidate points (deg)
-    quad_*:   length-4 arrays of the quad vertices (deg), ordered either CW or CCW
-    returns:  boolean array (len = len(points_ra)) of inside/outside
+    quad_*:   length-4 arrays/lists of quad vertices (deg), any order
+    eps:      numerical tolerance in projected plane units (deg)
+    Returns:  boolean array of length len(points_ra)
     """
-    # 1) Tangent-plane projection using an offset frame about the quad centroid
+    quad_ra = np.asarray(quad_ra, dtype=float)
+    quad_dec = np.asarray(quad_dec, dtype=float)
+
+    # 1) Choose a projection center near the quad, handling RA wrap
     ra0 = np.mean(quad_ra)
-    # handle RA wraparound for the centroid:
-    d_ra = ((quad_ra - ra0 + 180) % 360) - 180
-    ra0 += np.mean(d_ra)
+    dra = ((quad_ra - ra0 + 180) % 360) - 180
+    ra0 = ra0 + np.mean(dra)
     dec0 = np.mean(quad_dec)
     center = SkyCoord(ra0 * u.deg, dec0 * u.deg, frame="icrs")
-
     off = SkyOffsetFrame(origin=center)
-    # Project vertices
-    verts_icrs = SkyCoord(quad_ra * u.deg, quad_dec * u.deg, frame="icrs").transform_to(off)
-    vx = verts_icrs.lon.to_value(u.deg)
-    vy = verts_icrs.lat.to_value(u.deg)
 
-    # Project points
-    pts_icrs = SkyCoord(points_ra * u.deg, points_dec * u.deg, frame="icrs").transform_to(off)
-    x = pts_icrs.lon.to_value(u.deg)
-    y = pts_icrs.lat.to_value(u.deg)
+    # 2) Project vertices and points to the tangent plane
+    verts = SkyCoord(quad_ra * u.deg, quad_dec * u.deg, frame="icrs").transform_to(off)
+    V = np.column_stack([verts.lon.to_value(u.deg), verts.lat.to_value(u.deg)])
+    V = _order_ccw(V)  # enforce CCW
 
-    # 2) Half-space test for a convex polygon (works for CW or CCW consistently)
-    # Build edge vectors and their outward normals
-    V = np.stack([vx, vy], axis=1)  # (4,2)
+    pts = SkyCoord(points_ra * u.deg, points_dec * u.deg, frame="icrs").transform_to(off)
+    P = np.column_stack([pts.lon.to_value(u.deg), pts.lat.to_value(u.deg)])
+
+    # 3) Half-space (cross-product) test
+    # For CCW vertices, (E_i x (P - V_i)) >= 0 for all i means inside.
     E = np.roll(V, -1, axis=0) - V  # edges (4,2)
-    # normals that keep "inside" on one side: rotate edges by +90°
-    N = np.stack([-E[:, 1], E[:, 0]], axis=1)  # (4,2)
+    # 2D "cross" z-component for all points vs each edge
+    # cross((dx,dy), (ux,uy)) = dx*uy - dy*ux
+    U = P[:, None, :] - V[None, :, :]  # (N,4,2)
+    cross = E[None, :, 0] * U[:, :, 1] - E[None, :, 1] * U[:, :, 0]  # (N,4)
 
-    # For consistent inequality direction, determine orientation once using the polygon center
-    poly_cent = V.mean(axis=0)
-    orient = np.sign(np.cross(E, (np.roll(V, -1, axis=0) + V) / 2 - poly_cent).sum()) or 1.0
-    # Evaluate (p - Vi)·Ni ; inside if all have same sign (≥0) after fixing orientation
-    PX = np.stack([x, y], axis=1)  # (N,2)
-    diff = PX[:, None, :] - V[None, :, :]  # (N,4,2)
-    s = (diff * N[None, :, :]).sum(axis=2)  # (N,4)
-    if orient < 0:
-        s = -s
-    return np.all(s >= 0, axis=1)
+    # 4) Accept points on or inside (tolerance eps)
+    return np.all(cross >= -eps, axis=1)
+
+
+# precise but slower
+def inside_quad_spherical(points_ra, points_dec, quad_ra, quad_dec):
+    """
+    points_*: array-like (deg) — can be scalars or numpy arrays
+    quad_*:   4 vertices (deg), ordered around the boundary (CW or CCW)
+    returns:  boolean array of shape broadcast(points_ra, points_dec)
+    """
+    from spherical_geometry.polygon import SphericalPolygon
+
+    # build polygon in degrees
+    poly = SphericalPolygon.from_radec(quad_ra, quad_dec, degrees=True)
+
+    # ensure arrays and broadcast to a common shape
+    ra = np.atleast_1d(points_ra)
+    dec = np.atleast_1d(points_dec)
+    ra_b, dec_b = np.broadcast_arrays(ra, dec)
+
+    # evaluate point-by-point (contains_lonlat expects scalars)
+    out = np.empty(ra_b.shape, dtype=bool)
+    it = np.nditer(
+        [ra_b, dec_b, out], flags=["multi_index", "refs_ok"], op_flags=[["readonly"], ["readonly"], ["writeonly"]]
+    )
+    for lon, lat, o in it:
+        o[...] = bool(poly.contains_lonlat(float(lon), float(lat), degrees=True))
+
+    # return a scalar bool if inputs were scalars
+    return out if out.shape else bool(out)
