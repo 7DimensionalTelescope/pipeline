@@ -60,7 +60,7 @@ def wcs_check_plot(refcat, tbl, matched, wcs, image, plot_save_path=None, fov_ra
     ax_scatter.set_aspect("equal", adjustable="box")
 
     # PSF block title (centered between blocks)
-    fig.text(0.5, 0.63, "PSF Cutouts Across Image (3x3 Grid)", ha="center", va="center", fontsize=12)
+    fig.text(0.5, 0.61, "PSF Cutouts Across Image (3x3 Grid)", ha="center", va="center", fontsize=12)
 
     if plot_save_path:
         canvas.print_figure(plot_save_path, bbox_inches="tight", dpi=150)
@@ -175,15 +175,16 @@ def wcs_check_scatter_plot(
     ax.coords.grid(True, color="gray", ls=":", alpha=0.6)
 
     # legend – anchor in axes coords to be explicit
-    ax.legend(
+    leg = ax.legend(
         loc="upper left",
         bbox_to_anchor=(0.02, 0.98),
         frameon=True,
         borderaxespad=0.0,
         fontsize=8,
-        facecolor="lightgray",
-        framealpha=0.3,
+        facecolor="white",
+        framealpha=0.8,
     )
+    leg.set_zorder(30)
 
     ax.set_title(f"{len(tbl)} brightest sources in each catalog", pad=30)
 
@@ -275,7 +276,10 @@ def wcs_check_psf_plot(
         # optional separation label if present
         if "separation" in matched_catalog.colnames:
             ax.annotate(
-                f"sep: {matched_catalog['separation'][idx]:.2f}\"", (ref_shifted[0], ref_shifted[1] + 3), fontsize=7
+                f"Sep: {matched_catalog['separation'][idx]:.2f}\"",
+                (ref_shifted[0], ref_shifted[1] + 3),
+                fontsize=9,
+                color="magenta",
             )
 
         ax.set_title(f"matched id: {matched_catalog['id'][idx]}", fontsize=8)
