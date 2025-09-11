@@ -91,6 +91,7 @@ class Astrometry(BaseSetup):
         se_preset: str = "prep",
         joint_scamp: bool = True,
         force_solve_field: bool = False,
+        evaluate_prep_sol: bool = True,
         # processes=["sextractor", "scamp", "header_update"],
         # use_gpu: bool = False,
     ) -> None:
@@ -125,10 +126,14 @@ class Astrometry(BaseSetup):
                 self.run_solve_field(self.soft_links_to_input_images, self.solved_images)
 
             # update the sextractor catalogs with the wcs solutions for next scamp
-            self.update_catalog(self.prep_cats, self.solved_heads)
 
-            # self.evaluate_solution()
-            # print(self.images_info[0]._single_wcs_eval_cards)
+            # even more refinement
+            self.run_scamp(self.prep_cats, scamp_preset="main", joint=False)
+            if evaluate_prep_sol:
+                self.evaluate_solution(suffix="prep2wcs")
+
+            if evaluate_prep_sol:
+                self.evaluate_solution(suffix="prepwcs")
 
             # run main scamp
             self.run_scamp(self.prep_cats, scamp_preset="main", joint=joint_scamp)
@@ -215,6 +220,7 @@ class Astrometry(BaseSetup):
             self.logger.debug(f"Resetting header of {image}")
             reset_header(image)
 
+    # not working now
     def run_solve_field(self, input_images: List[str], output_images: List[str]) -> None:
         """Run astrometric plate-solving on input images.
 
@@ -261,6 +267,8 @@ class Astrometry(BaseSetup):
                 self.logger.debug(f"Solve-field input: {slink}, output: {sfile}")
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
+
+        self.update_catalog(self.prep_cats, self.solved_heads)
 
     def run_sextractor(
         self, input_images: List[str], output_catalogs: List[str] = None, se_preset: str = "prep"
@@ -316,6 +324,7 @@ class Astrometry(BaseSetup):
         scampconfig: str = None,
         scamp_preset: str = "prep",
         scamp_args: str = None,
+        apply_wcs_to_catalog: bool = True,
     ) -> None:
         """Run SCAMP for astrometric calibration.
 
@@ -325,6 +334,8 @@ class Astrometry(BaseSetup):
         Args:
             files: Paths to astrometrically solved FITS files
             joint: Whether to process all images together
+            apply_wcs_to_catalog: Whether to apply the solved WCS to the catalog.
+                If it's the last scamp, it's not necessary unless you want to evaluate the solution.
         """
         st = time.time()
         self.logger.info(f"Start {'joint' if joint else 'individual'} scamp")
@@ -361,6 +372,7 @@ class Astrometry(BaseSetup):
                 scamp_args=scamp_args,
                 scamp_preset=scamp_preset,
             )
+            self.logger.debug(f"Joint run solved_heads: {solved_heads}")
 
         # individual, parallel: needs update to get the return (solved_heads)
         elif self.queue:
@@ -374,11 +386,13 @@ class Astrometry(BaseSetup):
                 scamp_preset=scamp_preset,
             )
             solved_heads = self.queue.results[0]
+            self.logger.debug(f"Parallel run solved_heads: {solved_heads}")
 
         # individual, sequential
         else:
+            solved_heads = []
             for precat in input_catalogs:
-                solved_heads = external.scamp(
+                solved_head = external.scamp(
                     precat,
                     path_ref_scamp=path_ref_scamp,
                     local_astref=astrefcat,
@@ -386,8 +400,10 @@ class Astrometry(BaseSetup):
                     scamp_args=scamp_args,
                     scamp_preset=scamp_preset,
                 )
+                solved_heads.extend(solved_head)
                 self.logger.info(f"Completed scamp for {precat}]")  # fmt:skip
                 self.logger.debug(f"{precat}")  # fmt:skip
+            self.logger.debug(f"Individual run solved_heads: {solved_heads}")
 
         if scamp_preset == "prep":
             for head in solved_heads:
@@ -398,9 +414,14 @@ class Astrometry(BaseSetup):
         # update WCS in ImageInfo
         for image_info, solved_head in zip(self.images_info, solved_heads):
             image_info.head = solved_head
+            self.logger.debug(f"Updated WCS in ImageInfo {image_info.head}")
 
         self.logger.info(f"Completed scamp in {time_diff_in_seconds(st)} seconds")
         self.logger.debug(MemoryMonitor.log_memory_usage)
+
+        if apply_wcs_to_catalog:
+            self.update_catalog(input_catalogs, solved_heads)
+            self.logger.info(f"Updated catalogs with solved heads")
 
     def update_catalog(self, input_catalogs: List[str], solved_heads: List[str]) -> None:
         """Update catalog with solved heads."""
@@ -429,11 +450,9 @@ class Astrometry(BaseSetup):
             write_ldac(image_header, tbl, input_catalog)  # internally c script with cfitsio
             self.logger.debug(f"Updated catalog {input_catalog} with {solved_head}")
 
-    def evaluate_solution(self, isep=False) -> None:
+    def evaluate_solution(self, isep=False, suffix=None) -> None:
         """Evaluate the solution. This was developed in lack of latest scamp version."""
         self.logger.info("Evaluating the solution")
-
-        self.update_catalog(self.prep_cats, self.solved_heads)  # this wcs is used for evaluation
 
         # update FOV polygon to ImageInfo. It will be cached and put into final image header later
         for image_info in self.images_info:
@@ -445,7 +464,7 @@ class Astrometry(BaseSetup):
         # evaluate for each image
         for input_image, image_info, prep_cat in zip(self.input_images, self.images_info, self.prep_cats):
             bname = os.path.basename(input_image)
-            plot_path = os.path.join(self.path.figure_dir, swap_ext(add_suffix(bname, "wcs"), "jpg"))
+            plot_path = os.path.join(self.path.figure_dir, swap_ext(add_suffix(bname, suffix or "wcs"), "jpg"))
             return_bundle = evaluate_single_wcs(
                 image=input_image,
                 ref_cat=refcat,
@@ -456,12 +475,24 @@ class Astrometry(BaseSetup):
                 fov_dec=image_info.fov_dec,
                 plot_save_path=plot_path,
             )
-            (ref_max_mag, sci_max_mag, num_ref, unmatched_fraction, separation_stats) = return_bundle
+            (
+                matched,
+                ref_max_mag,
+                sci_max_mag,
+                num_ref,
+                unmatched_fraction,
+                subpixel_fraction,
+                subsecond_fraction,
+                separation_stats,
+            ) = return_bundle
 
+            image_info.matched_catalog = matched
             image_info.ref_max_mag = ref_max_mag
             image_info.sci_max_mag = sci_max_mag
             image_info.num_ref_sources = num_ref
             image_info.unmatched_fraction = unmatched_fraction
+            image_info.subpixel_fraction = subpixel_fraction
+            image_info.subsecond_fraction = subsecond_fraction
             image_info.set_sep_stats(separation_stats)
             self.logger.debug(f"Evaluated solution for {input_image}")
 
@@ -578,6 +609,10 @@ class ImageInfo:
     sci_max_mag: Optional[float] = field(default=None)
     num_ref_sources: Optional[int] = field(default=None)
     unmatched_fraction: Optional[float] = field(default=None)
+    subpixel_fraction: Optional[float] = field(default=None)
+    subsecond_fraction: Optional[float] = field(default=None)
+    # matched catalog itself
+    matched_catalog: Optional[Table] = field(default=None)
 
     # separation statistics from reference catalog
     sep_min: Optional[float] = field(default=None)
@@ -656,8 +691,10 @@ class ImageInfo:
         self.sep_min = sep_stats["min"]
         self.sep_max = sep_stats["max"]
         self.sep_rms = sep_stats["rms"]
-        self.sep_median = sep_stats["median"]
-        self.sep_std = sep_stats["std"]
+        # self.sep_median = sep_stats["median"]
+        self.sep_q1 = sep_stats["q1"]
+        self.sep_q2 = sep_stats["q2"]
+        self.sep_q3 = sep_stats["q3"]
 
     def set_internal_sep_stats(self, sep_stats: dict) -> None:
         self.internal_sep_min = sep_stats["min"]
@@ -683,12 +720,18 @@ class ImageInfo:
             (f"SCIMXMAG", self.sci_max_mag, "Highest inst mag of selected science sources"),
             (f"NUM_REF", self.num_ref_sources, "Number of reference sources selected"),
             (f"UNMATCH", self.unmatched_fraction, "Fraction of unmatched reference sources"),
+            (f"SUBPIXEL", self.subpixel_fraction, "Fraction of matched with sep < PIXSCALE"),
+            (f"SUBSEC", self.subsecond_fraction, "Fraction of matched with sep < 1"),
             (f"RSEP_MIN", self.sep_min, "Min separation from reference catalog [arcsec]"),
             (f"RSEP_MAX", self.sep_max, "Max separation from reference catalog [arcsec]"),
             (f"RSEP_RMS", self.sep_rms, "RMS separation from reference catalog [arcsec]"),
-            (f"RSEP_MED", self.sep_median, "Median separation from ref catalog [arcsec]"),
-            (f"RSEP_STD", self.sep_std, "STD of separation from ref catalog [arcsec]"),
+            (f"RSEP_Q1", self.sep_q1, "Q1 separation from ref catalog [arcsec]"),
+            (f"RSEP_Q2", self.sep_q2, "Q2 separation from ref catalog [arcsec]"),
+            (f"RSEP_Q3", self.sep_q3, "Q3 separation from ref catalog [arcsec]"),
+            # (f"RSEP_MED", self.sep_median, "Median separation from ref catalog [arcsec]"),
+            # (f"RSEP_STD", self.sep_std, "STD of separation from ref catalog [arcsec]"),
         ]
+        # sometimes the value can be masked
         for k, v, c in cards:
             if not isinstance(v, (float, int, str, np.float32, np.int32)):
                 raise PipelineError(f"WCS statistics contains type {type(v)} {v} for {k}")
@@ -717,7 +760,8 @@ class ImageInfo:
                 cards.append((key, val, descriptions[key]))
         return cards
 
-    @cached_property
+    # @cached_property  # cache prevents update
+    @property
     def wcs(self) -> WCS:
         """Updated every time run_scamp is completed"""
         if not self.head:

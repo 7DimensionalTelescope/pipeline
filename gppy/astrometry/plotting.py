@@ -21,7 +21,18 @@ except Exception:
 
 
 def wcs_check_plot(
-    refcat, tbl, matched, wcs, image, plot_save_path=None, fov_ra=None, fov_dec=None, num_plot=50, sep_stats=None
+    refcat,
+    tbl,
+    matched,
+    wcs,
+    image,
+    plot_save_path=None,
+    fov_ra=None,
+    fov_dec=None,
+    num_plot=50,
+    sep_stats=None,
+    subpixel_fraction=None,
+    subsecond_fraction=None,
 ):
     fig = Figure(figsize=(7, 12))
     fig.set_constrained_layout(True)
@@ -70,10 +81,15 @@ def wcs_check_plot(
     # PSF block title (centered between blocks)
     fig.text(0.5, 0.605, "PSF Cutouts Across Image (3x3 Grid)", ha="center", va="center", fontsize=12)
     if sep_stats is not None:
+        text = f"Separation Stats: RMS={sep_stats['rms']:.2f}\", Q1={sep_stats['q1']:.2f}\", Q3={sep_stats['q3']:.2f}\""
+        if subsecond_fraction is not None:
+            text = f"Superarcsec Fraction: {1 - subsecond_fraction:.3f}, " + text
+        if subpixel_fraction is not None:
+            text = f"Subpixel Fraction: {subpixel_fraction:.2f}, " + text
         fig.text(
             0.5,
             0.63,
-            f"Sep Stats: min={sep_stats['min']:.2f}\", max={sep_stats['max']:.2f}\", rms={sep_stats['rms']:.2f}\"",
+            text,
             ha="center",
             va="center",
             fontsize=8,

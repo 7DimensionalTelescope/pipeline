@@ -1,10 +1,12 @@
-from typing import Iterable, Tuple, Sequence, Any
+from __future__ import annotations
+from typing import Iterable, Tuple, Sequence, Any, List, Dict, Optional
 import numpy as np
 from astropy.coordinates import SkyCoord, Distance, search_around_sky
 from astropy.time import Time
 from astropy.table import Table, hstack, MaskedColumn
 import astropy.units as u
 from astropy.units import Quantity
+from astropy.coordinates import SkyCoord, Angle
 import operator
 
 
@@ -181,7 +183,7 @@ def match_two_catalogs(
 
     elif join == "outer":
         sep_rad = radius * u.arcsec if not isinstance(radius, Quantity) else radius
-        idx_s, idx_r, seps, _ = search_around_sky(coord_sci, coord_ref, sep_rad)
+        idx_s, idx_r, seps, _ = search_around_sky(coord_sci, coord_ref, sep_rad)  # avoid match_to_catalog_sky for outer
 
         order = np.lexsort([seps.arcsec, idx_s])
         idx_s_s, idx_r_s = idx_s[order], idx_r[order]
@@ -226,6 +228,245 @@ def match_two_catalogs(
 
     else:
         raise ValueError(f"Unknown join method: {join}")
+
+
+###############################################################################
+
+
+def match_multi_catalogs(
+    cats: Sequence[Table],
+    *,
+    ra_keys: Sequence[str] = ("ALPHA_J2000",),
+    dec_keys: Sequence[str] = ("DELTA_J2000",),
+    radius: float | u.Quantity = 1.0,  # arcsec if float
+    join: str = "inner",  # {'inner','left','outer'}
+    cat_names: Optional[Sequence[str]] = None,  # nice labels for suffixing
+    pivot: int | None = 0,  # index of pivot catalog used for tie-breaks and separations
+) -> Table:
+    """
+    Joint sky crossmatch of N catalogs using a friends-of-friends graph (single-linkage)
+    within *radius*. Returns one row per matched group (component), with at most one
+    row selected from each catalog.
+
+    Strategy
+    --------
+    1) Build SkyCoord for each catalog.
+    2) Add edges for all cross-catalog pairs within *radius* (search_around_sky).
+    3) Take connected components; for each component select ≤1 row per catalog:
+       - choose a pivot row (prefer pivot catalog if present, else the lowest-index present);
+       - in each other catalog, pick the row closest to the pivot.
+    4) Emit rows per component according to *join*:
+       - 'inner': components that include all catalogs
+       - 'left' : components that include the pivot catalog (default: cats[0])
+       - 'outer': any component with ≥1 catalog
+
+    Notes
+    -----
+    * *radius* is in arcsec if float; any angle Quantity works.
+    * Duplicate column names are suffixed with f"_{name}" where *name* is taken
+      from *cat_names* (or f"cat{i}" if omitted), matching your 2-way behavior.
+    * Adds separation columns (to the pivot) named 'sep_arcsec_<name>'.
+    """
+    # --- normalize inputs ---
+    if isinstance(radius, (int, float)):
+        radius = float(radius) * u.arcsec
+    if cat_names is None:
+        cat_names = [f"cat{i}" for i in range(len(cats))]
+    if len(cats) != len(cat_names):
+        raise ValueError("len(cat_names) must match number of catalogs")
+    if pivot is None:
+        pivot = 0
+    if not (0 <= pivot < len(cats)):
+        raise ValueError("pivot must be a valid catalog index")
+
+    # Resolve RA/Dec keys for each catalog (allow a single key applied to all)
+    def key_for(keys, i):
+        return keys[i] if i < len(keys) else keys[-1]
+
+    ra_cols = [key_for(ra_keys, i) for i in range(len(cats))]
+    dec_cols = [key_for(dec_keys, i) for i in range(len(cats))]
+
+    # --- SkyCoord per catalog ---
+    coords = []
+    for i, (tbl, ra, dec) in enumerate(zip(cats, ra_cols, dec_cols)):
+        if ra not in tbl.colnames or dec not in tbl.colnames:
+            raise KeyError(f"Catalog {i} missing RA/Dec columns: {ra}, {dec}")
+        coords.append(SkyCoord(ra=tbl[ra] * u.deg, dec=tbl[dec] * u.deg, frame="icrs"))
+
+    # --- Union-Find (Disjoint Set) over all rows of all catalogs ---
+    # Global node id = (catalog_index, row_index) -> map to integer id
+    offsets = [0]
+    for t in cats:
+        offsets.append(offsets[-1] + len(t))
+    total = offsets[-1]
+
+    parent = list(range(total))
+    rank = [0] * total
+
+    def gid(cat_idx: int, row_idx: int) -> int:
+        return offsets[cat_idx] + row_idx
+
+    def find(a: int) -> int:
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    def union(a: int, b: int):
+        ra = find(a)
+        rb = find(b)
+        if ra == rb:
+            return
+        if rank[ra] < rank[rb]:
+            parent[ra] = rb
+        elif rank[rb] < rank[ra]:
+            parent[rb] = ra
+        else:
+            parent[rb] = ra
+            rank[ra] += 1
+
+    # --- Add edges for every cross-catalog pair within radius ---
+    for i in range(len(cats)):
+        for j in range(i + 1, len(cats)):
+            idx_i, idx_j, sep, _ = coords[i].search_around_sky(coords[j], radius)
+            # idx_i are indices into coords[j]; idx_j into coords[i] (yes, astropy returns (j,i) order)
+            # To keep it intuitive, re-map correctly:
+            # search_around_sky(A, B) returns indices (idxA, idxB) such that sep(A[idxA], B[idxB]) < radius
+            # We called with coords[j] as first arg and coords[i] as second.
+            a_idx = idx_i  # in catalog j
+            b_idx = idx_j  # in catalog i
+            for rj, ri in zip(a_idx, b_idx):
+                union(gid(j, int(rj)), gid(i, int(ri)))
+
+    # --- Collect components -> {root: {cat: [row_indices...]}} ---
+    comps: Dict[int, Dict[int, list]] = {}
+    for cat_i, tbl in enumerate(cats):
+        for row_i in range(len(tbl)):
+            node = gid(cat_i, row_i)
+            root = find(node)
+            d = comps.setdefault(root, {})
+            d.setdefault(cat_i, []).append(row_i)
+
+    # --- Helper: choose one row per catalog in a component ---
+    def choose_representatives(comp: Dict[int, list]) -> Tuple[int, Dict[int, int]]:
+        """Return (pivot_cat, {cat: row_idx}) for a component."""
+        cats_present = sorted(comp.keys())
+        # choose pivot catalog (prefer requested pivot if present, else smallest present)
+        piv_cat = pivot if pivot in comp else cats_present[0]
+        # choose a pivot row (if multiple in piv_cat, pick the one with highest local density / or arbitrary closest to median)
+        # Simpler heuristic: if multiple, choose the row with minimal average separation to all other catalogs' nearest
+        piv_candidates = comp[piv_cat]
+        if len(piv_candidates) == 1 or len(cats_present) == 1:
+            piv_row = piv_candidates[0]
+        else:
+            # score each candidate by sum of nearest separations to other catalogs present
+            best_score, piv_row = None, piv_candidates[0]
+            for pr in piv_candidates:
+                c_pr = coords[piv_cat][pr]
+                score = 0.0
+                for other in cats_present:
+                    if other == piv_cat:
+                        continue
+                    # nearest in 'other'
+                    sep = c_pr.separation(coords[other][comp[other]]).arcsec
+                    score += float(sep.min()) if len(sep) else 1e9
+                if best_score is None or score < best_score:
+                    best_score, piv_row = score, pr
+
+        chosen = {piv_cat: piv_row}
+        # now pick closest per other catalog
+        c_piv = coords[piv_cat][piv_row]
+        for other in cats_present:
+            if other == piv_cat:
+                continue
+            cand_rows = comp[other]
+            seps = c_piv.separation(coords[other][cand_rows]).arcsec
+            best_j = int(seps.argmin())
+            chosen[other] = cand_rows[best_j]
+        return piv_cat, chosen
+
+    # --- Build output rows according to join policy ---
+    rows_per_component: List[Dict[Tuple[int, str], Any]] = []
+    sep_names = []  # to retain order for later column creation
+    for root, comp in comps.items():
+        cats_present = set(comp.keys())
+
+        if join == "inner":
+            if len(cats_present) < len(cats):
+                continue
+        elif join == "left":
+            if pivot not in cats_present:
+                continue
+        elif join == "outer":
+            pass
+        else:
+            raise ValueError("join must be one of {'inner','left','outer'}")
+
+        piv_cat, chosen = choose_representatives(comp)
+
+        # Construct a dict mapping (cat_i, colname) -> value
+        row_dict: Dict[Tuple[int, str], Any] = {}
+        # Also keep separations to pivot
+        for cat_i, tbl in enumerate(cats):
+            name = cat_names[cat_i]
+            if cat_i in chosen:
+                ri = chosen[cat_i]
+                for col in tbl.colnames:
+                    row_dict[(cat_i, col)] = tbl[col][ri]
+            else:
+                # unmatched: create masked entries later
+                for col in tbl.colnames:
+                    row_dict[(cat_i, col)] = None  # will become masked if column supports it
+
+        # separations to pivot (arcsec)
+        c_piv = coords[piv_cat][chosen[piv_cat]]
+        for cat_i in range(len(cats)):
+            label = f"sep_arcsec_{cat_names[cat_i]}"
+            if cat_i in chosen:
+                c_i = coords[cat_i][chosen[cat_i]]
+                sep_arcsec = c_piv.separation(c_i).arcsec
+                row_dict[(-1, label)] = sep_arcsec
+            else:
+                row_dict[(-1, label)] = None
+            if label not in sep_names:
+                sep_names.append(label)
+
+        rows_per_component.append(row_dict)
+
+    # --- Assemble merged Table with suffixed columns per catalog ---
+    # Determine output columns order & masks
+    out_cols: List[Tuple[Tuple[int, str], str]] = []  # ((cat_i, colname), out_colname)
+    # build per-catalog column mapping with suffix if duplicate
+    seen = {}
+    for cat_i, tbl in enumerate(cats):
+        name = cat_names[cat_i]
+        for col in tbl.colnames:
+            base = col
+            out = base if (base not in seen) else f"{base}_{name}"
+            seen[out] = True
+            out_cols.append(((cat_i, col), out))
+    # add separations at the end
+    out_cols.extend([((-1, sn), sn) for sn in sep_names])
+
+    # create astropy Table
+    out = Table()
+    for key, out_name in out_cols:
+        data = [row.get(key, None) for row in rows_per_component]
+        # make masked column if there are Nones
+        if any(v is None for v in data):
+            col = MaskedColumn(data=data, name=out_name, mask=[v is None for v in data])
+        else:
+            col = data
+        out[out_name] = col
+
+    return out
+
+
+###############################################################################
+
+###############################################################################
+
+###############################################################################
 
 
 Condition = Tuple[str, Any, str]  # (column, value, method)

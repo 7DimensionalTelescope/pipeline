@@ -8,6 +8,7 @@ from astropy.table import Table
 from astropy.time import Time
 from astropy.coordinates import SkyCoord, SkyOffsetFrame
 
+from ..const import PIXSCALE
 from ..tools.table import match_two_catalogs, add_id_column
 from ..utils import add_suffix, swap_ext
 from .plotting import wcs_check_plot
@@ -109,7 +110,6 @@ def evaluate_single_wcs(
     source_cat: str | Table,
     date_obs: str,
     wcs: WCS,
-    head: fits.Header = None,
     match_radius=10,
     fov_ra=None,
     fov_dec=None,
@@ -131,12 +131,12 @@ def evaluate_single_wcs(
     else:
         raise ValueError(f"Invalid input type: {type(source_cat)}")
 
-    # update the source catalog with the WCS
-    if head is not None:
-        wcs = head or WCS(head)
-        ra, dec = wcs.all_pix2world(tbl["X_IMAGE"], tbl["Y_IMAGE"], 1)
-        tbl["ALPHA_J2000"] = ra
-        tbl["DELTA_J2000"] = dec
+    # # update the source catalog with the WCS
+    # if head is not None:
+    #     wcs = head or WCS(head)
+    #     ra, dec = wcs.all_pix2world(tbl["X_IMAGE"], tbl["Y_IMAGE"], 1)
+    #     tbl["ALPHA_J2000"] = ra
+    #     tbl["DELTA_J2000"] = dec
 
     # # sort tables by SNR (higher first)
     # ref_cat["snr"] = 1 / (0.4 * np.log(10) * ref_cat["phot_g_mean_mag_error"])
@@ -187,16 +187,30 @@ def evaluate_single_wcs(
     if write_matched_catalog:
         matched.write(add_suffix(source_cat, "matched"), overwrite=True)
 
-    unmatched_fraction = matched["separation"].mask.sum() / len(matched)
-
     x = matched["separation"]
     # print(f"x: {x}")
+
+    # Fractions
+    unmatched_fraction = x.mask.sum() / x.size  # same as before
+
+    n_valid = x.count()
+    if n_valid == 0:
+        subpixel_fraction = np.nan
+        subsecond_fraction = np.nan
+    else:
+        # np.ma.mean ignores masked entries, so this is the fraction over unmasked data
+        subpixel_fraction = float(np.ma.mean(x < PIXSCALE))
+        subsecond_fraction = float(np.ma.mean(x < 1.0))
+
     separation_stats = {
+        "rms": np.sqrt(np.ma.mean(x**2)),
         "min": np.ma.min(x),
         "max": np.ma.max(x),
-        "rms": np.sqrt(np.ma.mean(x**2)),
-        "median": np.ma.median(x),
-        "std": np.ma.std(x),
+        # "median": np.ma.median(x),
+        # "std": np.ma.std(x),
+        "q1": np.percentile(x.compressed(), 25),
+        "q2": np.percentile(x.compressed(), 50),  # same as median
+        "q3": np.percentile(x.compressed(), 75),
     }
 
     if plot_save_path is not None:
@@ -211,6 +225,8 @@ def evaluate_single_wcs(
             fov_dec=fov_dec,
             num_plot=num_plot,
             sep_stats=separation_stats,
+            subpixel_fraction=subpixel_fraction,
+            subsecond_fraction=subsecond_fraction,
         )
         # matched_ids = wcs_check_psf_plot(image, matched, wcs, add_suffix(plot_save_path, "psf"))
 
@@ -227,7 +243,16 @@ def evaluate_single_wcs(
         #     highlight_dec=inspected_sources["DELTA_J2000"],
         # )
 
-    return (REF_MAX_MAG, SCI_MAX_MAG, NUM_REF, unmatched_fraction, separation_stats)
+    return (
+        matched,
+        REF_MAX_MAG,
+        SCI_MAX_MAG,
+        NUM_REF,
+        unmatched_fraction,
+        subpixel_fraction,
+        subsecond_fraction,
+        separation_stats,
+    )
 
 
 def evaluate_joint_wcs(images_info: List["ImageInfo"]):
