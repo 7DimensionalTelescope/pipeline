@@ -98,6 +98,7 @@ def evaluate_single_wcs(
         x1="ra",
         y1="dec",
         join="right",
+        sep_2d=True,
         radius=match_radius,
         correct_pm=True,
         obs_time=Time(date_obs),

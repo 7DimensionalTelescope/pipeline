@@ -658,9 +658,12 @@ class ImageInfo:
     sep_min: Optional[float] = field(default=None)
     sep_max: Optional[float] = field(default=None)
     sep_rms: Optional[float] = field(default=None)
-    sep_mean: Optional[float] = field(default=None)
-    sep_median: Optional[float] = field(default=None)
-    sep_std: Optional[float] = field(default=None)
+    sep_q1: Optional[float] = field(default=None)
+    sep_q2: Optional[float] = field(default=None)
+    sep_q3: Optional[float] = field(default=None)
+    # sep_mean: Optional[float] = field(default=None)
+    # sep_median: Optional[float] = field(default=None)
+    # sep_std: Optional[float] = field(default=None)
 
     # Internal separation statistics (between multiple images)
     internal_sep_min: Optional[float] = field(default=None)
@@ -731,7 +734,6 @@ class ImageInfo:
         self.sep_min = sep_stats["min"]
         self.sep_max = sep_stats["max"]
         self.sep_rms = sep_stats["rms"]
-        # self.sep_median = sep_stats["median"]
         self.sep_q1 = sep_stats["q1"]
         self.sep_q2 = sep_stats["q2"]
         self.sep_q3 = sep_stats["q3"]
@@ -740,12 +742,14 @@ class ImageInfo:
         self.internal_sep_min = sep_stats["min"]
         self.internal_sep_max = sep_stats["max"]
         self.internal_sep_rms = sep_stats["rms"]
-        self.internal_sep_median = sep_stats["median"]
-        self.internal_sep_std = sep_stats["std"]
+        self.internal_sep_q1 = sep_stats["q1"]
+        self.internal_sep_q2 = sep_stats["q2"]
+        self.internal_sep_q3 = sep_stats["q3"]
 
     @property
     def wcs_evaluated(self) -> bool:
-        """only checks the existence of reference separation statistics"""
+        """only checks the existence of reference separation statistics.
+        Ensures that all the keys are updated by set_sep_stats."""
         sep_keys = [k for k in self.__dict__.keys() if k.startswith("sep_")]
         return all(getattr(self, k) is not None for k in sep_keys)
 

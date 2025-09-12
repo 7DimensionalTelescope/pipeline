@@ -10,6 +10,38 @@ from astropy.coordinates import SkyCoord, Angle
 import operator
 
 
+def _correct_pm(coord_ref: SkyCoord, ref_tbl: Table, x1: str, y1: str, obs_time: Time, pm_keys: dict):
+    from astropy.coordinates import Distance
+
+    # Vectorised columns with units
+    pm_ra = ref_tbl[pm_keys["pmra"]] * u.mas / u.yr
+    pm_dec = ref_tbl[pm_keys["pmdec"]] * u.mas / u.yr
+    good = np.isfinite(pm_ra) & np.isfinite(pm_dec)
+
+    if pm_keys.get("parallax"):  # is not None:
+        parallax = ref_tbl[pm_keys["parallax"]] * u.mas
+        dist = Distance(parallax=parallax, allow_negative=True)
+        good &= np.isfinite(dist)
+    else:
+        dist = None  # let SkyCoord use its default (no distance)
+
+    if np.any(good):
+        kwargs = dict(
+            ra=ref_tbl[x1][good] * u.deg,
+            dec=ref_tbl[y1][good] * u.deg,
+            pm_ra_cosdec=pm_ra[good],
+            pm_dec=pm_dec[good],
+            obstime=Time(pm_keys["ref_epoch"], format="jyear"),
+        )
+        if dist is not None:
+            kwargs["distance"] = dist[good]
+        moved = SkyCoord(**kwargs).apply_space_motion(new_obstime=obs_time)
+
+        coord_ref.ra[good] = moved.ra
+        coord_ref.dec[good] = moved.dec
+        coord_ref._sky_coord_frame.cache.clear()
+
+
 def match_two_catalogs(
     sci_tbl: Table,
     ref_tbl: Table,
@@ -20,6 +52,7 @@ def match_two_catalogs(
     y1: str | None = None,
     radius: float | Quantity = 1,
     join: str = "inner",
+    sep_2d: bool = False,
     correct_pm: bool = False,
     obs_time: Time | None = None,
     pm_keys: dict = dict(pmra="pmra", pmdec="pmdec", parallax="parallax", ref_epoch=2016.0),
@@ -28,6 +61,7 @@ def match_two_catalogs(
     Cross-match two catalogues on the sky and (optionally) apply proper-motion
     correction to the *reference* catalogue before matching.
     The coordinates are assumed to be Equatorial (RA, Dec) in degrees.
+    The output table contains a column named "separation" in arcseconds.
 
     Parameters
     ----------
@@ -39,7 +73,7 @@ def match_two_catalogs(
     radius
         Maximum separation for a match.  A bare ``float`` is interpreted
         in **arcseconds**; a `~astropy.units.Quantity` may carry any angle unit.
-    how : {'inner', 'left', 'outer'}, optional
+    join : {'inner', 'left', 'outer'}, optional
         Join strategy:
 
         * ``'inner'`` - return only matched rows (default)
@@ -49,6 +83,12 @@ def match_two_catalogs(
                         entries from sci_tbl
         * ``'outer'`` - return all matched rows *and* all unmatched from both
                         catalogues
+    sep_2d
+        If *True*, add columns named "dra_cosdec" and "ddec" to the output table.
+        These are the 2D separations in arcseconds.
+        dlon is +east (i.e. increasing RA), dlat is +north (increasing Dec)
+        sci - ref if join == "left", ref - sci if join == "right"
+        if join == "inner", whichever shorter - longer
     correct_pm
         If *True*, propagate stars in the *reference* catalogue from their
         catalogued epoch (`pm_info['ref_epoch']`, default 2016.0 TDB) to
@@ -64,6 +104,7 @@ def match_two_catalogs(
                  parallax="parallax", ref_epoch=2016.0)
 
         You can pass additional keys (e.g. ``"rv"``) without hurting anything.
+        ref_epoch is the year of ref_tbl in float and not a key, despite the inconsistency.
 
     Returns
     -------
@@ -97,38 +138,9 @@ def match_two_catalogs(
 
     # update coord_ref if correct_pm is True
     if correct_pm:
-        from astropy.coordinates import Distance
-
         if obs_time is None:
             raise ValueError("obs_time must be provided if correct_pm is True")
-
-        # Vectorised columns with units
-        pm_ra = ref_tbl[pm_keys["pmra"]] * u.mas / u.yr
-        pm_dec = ref_tbl[pm_keys["pmdec"]] * u.mas / u.yr
-        good = np.isfinite(pm_ra) & np.isfinite(pm_dec)
-
-        if pm_keys.get("parallax") is not None:
-            parallax = ref_tbl[pm_keys["parallax"]] * u.mas
-            dist = Distance(parallax=parallax, allow_negative=True)
-            good &= np.isfinite(dist)
-        else:
-            dist = None  # let SkyCoord use its default (no distance)
-
-        if np.any(good):
-            kwargs = dict(
-                ra=ref_tbl[x1][good] * u.deg,
-                dec=ref_tbl[y1][good] * u.deg,
-                pm_ra_cosdec=pm_ra[good],
-                pm_dec=pm_dec[good],
-                obstime=Time(pm_keys["ref_epoch"], format="jyear"),
-            )
-            if dist is not None:
-                kwargs["distance"] = dist[good]
-            moved = SkyCoord(**kwargs).apply_space_motion(new_obstime=obs_time)
-
-            coord_ref.ra[good] = moved.ra
-            coord_ref.dec[good] = moved.dec
-            coord_ref._sky_coord_frame.cache.clear()
+        _correct_pm(coord_ref, ref_tbl, x1, y1, obs_time, pm_keys)  # in-place modification of coord_ref
 
     if join == "left":
         coord0, coord1 = coord_sci, coord_ref
@@ -147,13 +159,15 @@ def match_two_catalogs(
             coord0, coord1 = coord_sci, coord_ref
             tbl0, tbl1 = sci_tbl, ref_tbl
             tag1 = "ref"
-    else:
-        pass
+    else:  # outer
+        pass  # add tag to both
 
     if join in {"inner", "left", "right"}:
         idx, sep2d, _ = coord0.match_to_catalog_sky(coord1)
         rtol = radius * u.arcsec if not isinstance(radius, Quantity) else radius
         matched = sep2d < rtol
+        if sep_2d:
+            dlon, dlat = coord0.spherical_offsets_to(coord1[idx])  # Angle quantities
 
         if join == "left" or join == "right":
             out = tbl0.copy()
@@ -167,9 +181,12 @@ def match_two_catalogs(
                 out[name] = MaskedColumn(sliced[name].data, mask=~matched)
 
             out["separation"] = MaskedColumn(sep2d.arcsec, mask=~matched)
+            if sep_2d:
+                out["dra_cosdec"] = MaskedColumn(dlon.to_value(u.arcsec), mask=~matched)
+                out["ddec"] = MaskedColumn(dlat.to_value(u.arcsec), mask=~matched)
             return out
 
-        else:
+        else:  # inner
             m0 = tbl0[matched]
             m1 = tbl1[idx[matched]]
 
@@ -179,29 +196,42 @@ def match_two_catalogs(
 
             merged = hstack([m0, m1], join_type="exact")
             merged["separation"] = sep2d[matched].arcsec
+            if sep_2d:
+                dlon = dlon[matched]
+                dlat = dlat[matched]
+                merged["dra_cosdec"] = dlon.to_value(u.arcsec)
+                merged["ddec"] = dlat.to_value(u.arcsec)
             return merged
 
     elif join == "outer":
         sep_rad = radius * u.arcsec if not isinstance(radius, Quantity) else radius
         idx_s, idx_r, seps, _ = search_around_sky(coord_sci, coord_ref, sep_rad)  # avoid match_to_catalog_sky for outer
 
-        order = np.lexsort([seps.arcsec, idx_s])
+        order = np.lexsort([seps.arcsec, idx_s])  # last (idx_s) is primary key. within each group sorted by separation
         idx_s_s, idx_r_s = idx_s[order], idx_r[order]
-        first = np.unique(idx_s_s, return_index=True)[1]
-        sci_idx = idx_s_s[first]
-        ref_idx = idx_r_s[first]
+        seps_s = seps[order]
+        first = np.unique(idx_s_s, return_index=True)[1]  # idx of first unique occurrences of sci sources
+        sci_idx = idx_s_s[first]  # matched sci
+        ref_idx = idx_r_s[first]  # ref closest to matched sci. not unique
+        seps_best = seps_s[first]  # the best (closest) separation
+        if sep_2d:
+            dlon, dlat = coord_sci[sci_idx].spherical_offsets_to(coord_ref[ref_idx])
 
         used_s = set(sci_idx)
         used_r = set(ref_idx)
 
         rows = []
-        for isci, iref in zip(sci_idx, ref_idx):
+        for k, (isci, iref) in enumerate(zip(sci_idx, ref_idx)):
             row = {}
             for n in sci_tbl.colnames:
                 row[f"sci_{n}"] = sci_tbl[n][isci]
             for n in ref_tbl.colnames:
                 row[f"ref_{n}"] = ref_tbl[n][iref]
-            row["separation"] = seps[(idx_s == isci) & (idx_r == iref)][0].arcsec
+            # row["separation"] = seps[(idx_s == isci) & (idx_r == iref)][0].arcsec
+            row["separation"] = seps_best[k].to_value(u.arcsec)
+            if sep_2d:
+                row["dra_cosdec"] = dlon[k].to_value(u.arcsec)
+                row["ddec"] = dlat[k].to_value(u.arcsec)
             rows.append(row)
 
         for isci in range(len(sci_tbl)):
@@ -212,6 +242,9 @@ def match_two_catalogs(
                 for n in ref_tbl.colnames:
                     row[f"ref_{n}"] = np.ma.masked
                 row["separation"] = np.ma.masked
+                if sep_2d:
+                    row["dra_cosdec"] = np.ma.masked
+                    row["ddec"] = np.ma.masked
                 rows.append(row)
 
         for iref in range(len(ref_tbl)):
@@ -222,6 +255,9 @@ def match_two_catalogs(
                 for n in ref_tbl.colnames:
                     row[f"ref_{n}"] = ref_tbl[n][iref]
                 row["separation"] = np.ma.masked
+                if sep_2d:
+                    row["dra_cosdec"] = np.ma.masked
+                    row["ddec"] = np.ma.masked
                 rows.append(row)
 
         return Table(rows)
