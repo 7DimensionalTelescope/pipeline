@@ -118,9 +118,8 @@ def solve_field(
             # IMPORTANT: omit --use-source-extractor if we're providing a catalog
 
     try:
-        header = fits.getheader(input_image)
-        ra = header["ra"]
-        dec = header["dec"]
+        ra = fits.getval(input_image, "ra")
+        dec = fits.getval(input_image, "dec")
         solvecom = solvecom + [
             "--ra", f"{ra:.4f}",
             "--dec", f"{dec:.4f}",

@@ -48,7 +48,7 @@ def calc_weight_with_cpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, wei
     p_z, p_d, p_f = n_images
     sig_f = fits.getdata(sig_f_file).astype(np.float32)
     sig_b = np.empty(d_m.shape, dtype=np.float32)
-    
+
     sig_zm = sig_z / np.sqrt(p_z)
     sig_dm_sq = (d_m / egain + (1 + 1 / p_z) * sig_z**2) / p_d
     sig_fm = sig_f / np.sqrt(p_f)
@@ -57,7 +57,7 @@ def calc_weight_with_cpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, wei
     for fname in images:
         data = fits.getdata(fname).astype(np.float32)
         stacked.append(data)
-    
+
     H, W = data.shape
 
     sig_r_sq = np.empty((H, W), dtype=np.float32)
@@ -110,4 +110,3 @@ def compute_sig_rp(sig_r_squared, sig_zm, sig_dm_sq, f_m, r_p, sig_fm, out):
             term1 = (sig_r_squared[i, j] + sig_zm_sq + sig_dm_sq[i, j]) / fm_sq
             term2 = (r_p[i, j] * r_p[i, j]) * (sig_fm_sq) / fm_sq
             out[i, j] = term1 + term2
-

@@ -7,9 +7,8 @@ import os
 from astropy.table import Table
 import pandas as pd
 
-# Import data classes and ImageDB
+# Import data classes
 from .table import PipelineData
-from .image_db import ImageDB
 from .const import DB_PARAMS
 from .utils import generate_id
 
@@ -18,12 +17,27 @@ class ProcessDBError(Exception):
     pass
 
 
-class ProcessDB(ImageDB):
-    """Database class for managing pipeline process data and associated QA data"""
+class ProcessDB:
+    """Database class for managing pipeline process data"""
 
     def __init__(self, db_params: Optional[Dict[str, Any]] = None):
         """Initialize with database parameters"""
-        super().__init__(db_params)
+        self.db_params = db_params or DB_PARAMS
+
+    @contextmanager
+    def get_connection(self):
+        """Context manager for database connections"""
+        conn = None
+        try:
+            conn = psycopg.connect(**self.db_params)
+            yield conn
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            raise ProcessDBError(f"Database operation failed: {e}")
+        finally:
+            if conn:
+                conn.close()
 
     # ==================== PIPELINE DATA MANAGEMENT ====================
 
@@ -313,80 +327,14 @@ class ProcessDB(ImageDB):
         except Exception as e:
             raise ProcessDBError(f"Failed to add error: {e}")
 
-    # ==================== COMBINED OPERATIONS ====================
-
-    def get_pipeline_with_qa(self, pipeline_id: int) -> Optional[Dict[str, Any]]:
-        """Get pipeline data with associated QA data"""
-        try:
-            # Get pipeline data
-            pipeline_record = self.read_pipeline_data(pipeline_id=pipeline_id)
-            if not pipeline_record:
-                return None
-
-            # Get associated QA data using inherited method
-            qa_data = self.read_qa_data(pipeline_id_id=pipeline_id)
-            if isinstance(qa_data, list):
-                qa_list = qa_data
-            else:
-                qa_list = [qa_data] if qa_data else []
-
-            return {"pipeline": pipeline_record, "qa_data": qa_list, "qa_count": len(qa_list)}
-
-        except Exception as e:
-            raise ProcessDBError(f"Failed to get pipeline with QA data: {e}")
-
-    def create_pipeline_with_qa(self, pipeline_data: PipelineData, qa_data_list: List) -> Dict[str, int]:
-        """Create pipeline data with associated QA data in a single transaction"""
-        try:
-            # Create pipeline first
-            pipeline_id = self.create_pipeline_data(pipeline_data)
-
-            # Create QA data with pipeline_id reference using inherited method
-            qa_ids = []
-            for qa_data in qa_data_list:
-                qa_data.pipeline_id_id = pipeline_id
-                qa_id = self.create_qa_data(qa_data)
-                qa_ids.append(qa_id)
-
-            return {"pipeline_id": pipeline_id, "qa_ids": qa_ids, "total_qa_records": len(qa_ids)}
-
-        except Exception as e:
-            raise ProcessDBError(f"Failed to create pipeline with QA data: {e}")
-
-    def update_pipeline_and_qa(
-        self, pipeline_id: int, pipeline_updates: Dict[str, Any], qa_updates: List[Dict[str, Any]]
-    ) -> bool:
-        """Update pipeline data and associated QA data in a single transaction"""
-        try:
-            # Update pipeline data
-            if pipeline_updates:
-                self.update_pipeline_data(pipeline_id, **pipeline_updates)
-
-            # Update QA data using inherited method
-            for qa_update in qa_updates:
-                qa_id = qa_update.pop("qa_id", None)
-                if qa_id and qa_update:
-                    self.update_qa_data(qa_id, **qa_update)
-
-            return True
-
-        except Exception as e:
-            raise ProcessDBError(f"Failed to update pipeline and QA data: {e}")
-
     def delete_pipeline_cascade(self, pipeline_id: int) -> bool:
-        """Delete pipeline data and all associated QA data"""
+        """Delete pipeline data (QA data should be handled separately)"""
         try:
-            # Delete QA data first (due to foreign key constraints) using inherited method
-            qa_data = self.read_qa_data(pipeline_id_id=pipeline_id)
-            if isinstance(qa_data, list):
-                for qa in qa_data:
-                    self.delete_qa_data(qa.qa_id)
-
-            # Delete pipeline data
+            # Only delete pipeline data - QA data should be handled by ImageDB
             return self.delete_pipeline_data(pipeline_id)
 
         except Exception as e:
-            raise ProcessDBError(f"Failed to delete pipeline cascade: {e}")
+            raise ProcessDBError(f"Failed to delete pipeline: {e}")
 
     # ==================== EXPORT OPERATIONS ====================
 
@@ -442,43 +390,6 @@ class ProcessDB(ImageDB):
         except Exception as e:
             raise ProcessDBError(f"Failed to export pipeline data: {e}")
 
-    def export_to_csv(self, base_filename: str) -> Dict[str, str]:
-        """
-        Export database tables to CSV files.
-
-        Args:
-            base_filename: Base filename without extension (e.g., "2025-01-27_unit1")
-
-        Returns:
-            Dict with paths to the exported files:
-            {
-                'pipeline_data': 'XX_process.csv',
-                'qa_data': 'YY_qa.csv'
-            }
-        """
-        try:
-            # Generate filenames
-            if base_filename.endswith("_process.csv"):
-                pipeline_filename = base_filename
-                qa_filename = base_filename.replace("_process.csv", "_qa.csv")
-            elif base_filename.endswith(".csv"):
-                pipeline_filename = base_filename.replace(".csv", "_process.csv")
-                qa_filename = base_filename.replace(".csv", "_qa.csv")
-            else:
-                pipeline_filename = f"{base_filename}_process.csv"
-                qa_filename = f"{base_filename}_qa.csv"
-
-            # Export pipeline data
-            pipeline_data = self.export_pipeline_data_to_csv(pipeline_filename)
-
-            # Export QA data using inherited method
-            qa_data = self.export_qa_data_to_csv(qa_filename)
-
-            return {"pipeline_data": pipeline_filename, "qa_data": qa_filename}
-
-        except Exception as e:
-            raise ProcessDBError(f"Failed to export database to CSV: {e}")
-
     # ==================== CLEANUP OPERATIONS ====================
 
     def clear_pipeline_data(self) -> bool:
@@ -495,18 +406,3 @@ class ProcessDB(ImageDB):
 
         except Exception as e:
             raise ProcessDBError(f"Failed to clear pipeline data: {e}")
-
-    def clear_database(self) -> bool:
-        """Clear all data from pipeline tables"""
-        try:
-            # Clear QA data first (due to foreign key constraints) using inherited method
-            qa_deleted = self.clear_qa_data()
-
-            # Clear pipeline data
-            pipeline_deleted = self.clear_pipeline_data()
-
-            print(f"Cleared {qa_deleted} QA records and {pipeline_deleted} pipeline records")
-            return True
-
-        except Exception as e:
-            raise ProcessDBError(f"Failed to clear database: {e}")

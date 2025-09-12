@@ -78,14 +78,16 @@ class Checker:
         return flag, header
 
     def sanity_check(self, file_path: str = None, header: dict = None, dtype: str = None):
+
         if file_path is not None:
-            header = fits.getheader(file_path)
+            try:
+                sanity = fits.getval(file_path, "SANITY")
+                if sanity is not None:
+                    return sanity
+            except:
+                pass
+            return self.apply_criteria(file_path, dtype)[0]
         elif header is not None:
             pass
         else:
             raise ValueError("Either file_path or header must be provided")
-
-        if "SANITY" in header:
-            return header["SANITY"]
-        else:
-            return self.apply_criteria(file_path, dtype)[0]

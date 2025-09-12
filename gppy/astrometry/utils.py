@@ -1,18 +1,10 @@
 import unicodedata
-from typing import List
+import re
 import numpy as np
 import astropy.units as u
 from astropy.io import fits
 from astropy.wcs import WCS
-from astropy.table import Table
-from astropy.time import Time
 from astropy.coordinates import SkyCoord, SkyOffsetFrame
-
-from ..const import PIXSCALE
-from ..tools.table import match_two_catalogs, add_id_column
-from ..utils import add_suffix, swap_ext
-from .plotting import wcs_check_plot
-from ..subtract.utils import create_ds9_region_file
 
 
 def read_scamp_header(file, return_wcs=False):
@@ -104,166 +96,78 @@ def read_TPV_wcs(image: str | fits.Header) -> WCS:
     return wcs
 
 
-def evaluate_single_wcs(
-    image: str,
-    ref_cat: Table,
-    source_cat: str | Table,
-    date_obs: str,
-    wcs: WCS,
-    match_radius=10,
-    fov_ra=None,
-    fov_dec=None,
-    write_matched_catalog=True,
-    plot_save_path=None,
-    num_sci=100,
-    num_ref=100,
-    num_plot=50,
-    ds9_region=True,
-):
-    """Ensure num_plot <= num_sci, num_ref"""
+def strip_wcs(header: fits.Header, *, extra_keys=None, keep_keys=None) -> fits.Header:
+    """
+    Remove WCS-/SIP-related cards from a FITS Header by iterating backwards.
 
-    # load the source catalog
-    if isinstance(source_cat, str):
-        tbl = Table(fits.getdata(source_cat, ext=2))
-    elif isinstance(source_cat, Table):
-        tbl = source_cat
-        source_cat = "table_evaluated.fits"
-    else:
-        raise ValueError(f"Invalid input type: {type(source_cat)}")
+    Parameters
+    ----------
+    header : astropy.io.fits.Header
+        The header to modify in place.
+    extra_keys : Iterable[str], optional
+        Additional exact keyword names to remove (e.g., {"CD3_3"}).
+    keep_keys : Iterable[str], optional
+        Exact keyword names to preserve even if they match patterns.
 
-    # # update the source catalog with the WCS
-    # if head is not None:
-    #     wcs = head or WCS(head)
-    #     ra, dec = wcs.all_pix2world(tbl["X_IMAGE"], tbl["Y_IMAGE"], 1)
-    #     tbl["ALPHA_J2000"] = ra
-    #     tbl["DELTA_J2000"] = dec
+    Returns
+    -------
+    astropy.io.fits.Header
+        The same header object, for convenience.
 
-    # # sort tables by SNR (higher first)
-    # ref_cat["snr"] = 1 / (0.4 * np.log(10) * ref_cat["phot_g_mean_mag_error"])
-    # ref_cat.sort("snr", reverse=True)
-    # tbl["snr"] = 1 / (0.4 * np.log(10) * tbl["MAGERR_AUTO"])
-    # tbl.sort("snr", reverse=True)
+    Notes
+    -----
+    - Iterates indices from end to start to safely remove duplicates.
+    - Supports alternate WCS versions via optional trailing letter (e.g., CTYPE1A).
+    - Skips non-key cards like COMMENT/HISTORY/CONTINUE/blank.
+    """
 
-    # sort tables by magnitude (brighter first)
-    ref_cat.sort("phot_g_mean_mag")
-    tbl.sort("MAG_AUTO")
-    tbl = tbl[tbl["FLAGS"] == 0]  # exclude saturated sources
-    # tbl = tbl[tbl["MAG_AUTO"] > sci_inst_mag_llim]  # exclude too bright sci sources
+    _WCS_PATTERNS = [
+        # Matrix and parameterized transforms
+        r"CD\d_\d[A-Z]?", r"PC\d_\d[A-Z]?",
+        r"PV\d+_\d+[A-Z]?", r"PS\d+_\d+[A-Z]?",
+        # Core WCS axis definitions
+        r"WCSAXES[A-Z]?", r"WCSNAME\d*[A-Z]?",
+        r"CTYPE\d+[A-Z]?", r"CUNIT\d+[A-Z]?",
+        r"CRPIX\d+[A-Z]?", r"CRVAL\d+[A-Z]?", r"CDELT\d+[A-Z]?",
+        r"CROTA\d+[A-Z]?",
+        # Reference system / epoch bits commonly tied to WCS
+        r"RADESYS[A-Z]?", r"EQUINOX[A-Z]?",
+        r"LONPOLE[A-Z]?", r"LATPOLE[A-Z]?",
+        # Observing time sometimes bundled with WCS definitions
+        # r"MJD-OBS[A-Z]?", r"DATE-OBS[A-Z]?",
+        r"MJDREF[A-Z]?", # this shows up in our coarse wcs
+        # Uncertainty keywords used with WCS in some headers
+        r"CRDER\d*[A-Z]?", r"CSYER\d*[A-Z]?",
+        # SIP distortion (TAN-SIP) keywords
+        r"A_ORDER[A-Z]?", r"B_ORDER[A-Z]?",
+        r"A_DMAX[A-Z]?", r"B_DMAX[A-Z]?",
+        r"A_\d+_\d+[A-Z]?", r"B_\d+_\d+[A-Z]?",
+        r"AP_\d+_\d+[A-Z]?", r"BP_\d+_\d+[A-Z]?",
+    ]  # fmt: skip
 
-    # filter sources in REFCAT by FOV
-    if fov_ra is not None and fov_dec is not None:
-        assert len(fov_ra) == len(fov_dec)
-        sel = inside_quad_spherical(ref_cat["ra"], ref_cat["dec"], fov_ra, fov_dec)  # inside_quad_radec fails at poles
-        ref_cat = ref_cat[sel]
+    _WCS_REGEXES = [re.compile(p + r"$") for p in _WCS_PATTERNS]
+    preserve = set(k.upper() for k in (keep_keys or ()))
+    extra = set(k.upper() for k in (extra_keys or ()))
 
-    if ds9_region:
-        x, y = wcs.all_world2pix(ref_cat["ra"], ref_cat["dec"], 1)
-        create_ds9_region_file(x=x, y=y, filename=swap_ext(source_cat, "reg"))
-        # create_ds9_region_file(ra=ref_cat["ra"], dec=ref_cat["dec"], filename=swap_ext(source_cat, "reg"))
+    def _is_wcs_key(k: str) -> bool:
+        if not k or k in ("COMMENT", "HISTORY", "CONTINUE"):
+            return False
+        ku = k.upper()
+        if ku in preserve:
+            return False
+        if ku in extra:
+            return True
+        return any(rx.match(ku) for rx in _WCS_REGEXES)
 
-    # extract highest SNR sources to calculate separation statistics
-    ref_cat = ref_cat[:num_ref]
-    tbl = tbl[:num_sci]
-    # REF_MIN_SNR = ref_cat["snr"][-1]
-    # SCI_MIN_SNR = tbl["snr"][-1]
-    REF_MAX_MAG = ref_cat["phot_g_mean_mag"][-1]
-    SCI_MAX_MAG = tbl["MAG_AUTO"][-1]
-    NUM_REF = len(ref_cat)
+    # Walk backwards and pop by index to handle duplicates reliably
+    for idx in range(len(header) - 1, -1, -1):
+        card = header.cards[idx]
+        # Some cards can have blank keywords; guard for that
+        key = getattr(card, "keyword", None)
+        if key and _is_wcs_key(key):
+            header.pop(idx)
 
-    # match source tbl with refcat
-    pm_keys = dict(pmra="pmra", pmdec="pmdec", parallax=None, ref_epoch=2016.0)
-    matched = match_two_catalogs(
-        tbl,
-        ref_cat,
-        x1="ra",
-        y1="dec",
-        join="right",
-        radius=match_radius,
-        correct_pm=True,
-        obs_time=Time(date_obs),
-        pm_keys=pm_keys,
-    )  # right join: preserve all ref sources
-    matched = add_id_column(matched)  # id needed to plot selected 9 stars
-    if write_matched_catalog:
-        matched.write(add_suffix(source_cat, "matched"), overwrite=True)
-
-    x = matched["separation"]
-    # print(f"x: {x}")
-
-    # Fractions
-    unmatched_fraction = x.mask.sum() / x.size  # same as before
-
-    n_valid = x.count()
-    if n_valid == 0:
-        subpixel_fraction = np.nan
-        subsecond_fraction = np.nan
-    else:
-        # np.ma.mean ignores masked entries, so this is the fraction over unmasked data
-        subpixel_fraction = float(np.ma.mean(x < PIXSCALE))
-        subsecond_fraction = float(np.ma.mean(x < 1.0))
-
-    separation_stats = {
-        "rms": np.sqrt(np.ma.mean(x**2)),
-        "min": np.ma.min(x),
-        "max": np.ma.max(x),
-        # "median": np.ma.median(x),
-        # "std": np.ma.std(x),
-        "q1": np.percentile(x.compressed(), 25),
-        "q2": np.percentile(x.compressed(), 50),  # same as median
-        "q3": np.percentile(x.compressed(), 75),
-    }
-
-    if plot_save_path is not None:
-        wcs_check_plot(
-            ref_cat,
-            tbl,
-            matched,
-            wcs,
-            image,
-            plot_save_path,
-            fov_ra=fov_ra,
-            fov_dec=fov_dec,
-            num_plot=num_plot,
-            sep_stats=separation_stats,
-            subpixel_fraction=subpixel_fraction,
-            subsecond_fraction=subsecond_fraction,
-        )
-        # matched_ids = wcs_check_psf_plot(image, matched, wcs, add_suffix(plot_save_path, "psf"))
-
-        # mask = np.isin(matched["id"], matched_ids)
-        # inspected_sources = matched[mask]
-        # wcs_check_scatter_plot(
-        #     ref_cat[:num_plot],
-        #     tbl[:num_plot],
-        #     wcs,
-        #     plot_save_path=add_suffix(plot_save_path, "scatter"),
-        #     fov_ra=fov_ra,
-        #     fov_dec=fov_dec,
-        #     highlight_ra=inspected_sources["ALPHA_J2000"],
-        #     highlight_dec=inspected_sources["DELTA_J2000"],
-        # )
-
-    return (
-        matched,
-        REF_MAX_MAG,
-        SCI_MAX_MAG,
-        NUM_REF,
-        unmatched_fraction,
-        subpixel_fraction,
-        subsecond_fraction,
-        separation_stats,
-    )
-
-
-def evaluate_joint_wcs(images_info: List["ImageInfo"]):
-    separation_stats = {
-        "min": np.ma.min(x),
-        "max": np.ma.max(x),
-        "rms": np.sqrt(np.ma.mean(x**2)),
-        "median": np.ma.median(x),
-        "std": np.ma.std(x),
-    }
-    return separation_stats
+    return header
 
 
 def get_fov_center(wcs: WCS, naxis1: int, naxis2: int):
@@ -367,6 +271,7 @@ def _order_ccw(xy):
     return xy[np.argsort(ang)]
 
 
+# quick but fails at poles
 def inside_quad_radec(points_ra, points_dec, quad_ra, quad_dec, eps=1e-12):
     """
     Vectorized inclusion test of points in a convex quad on the sky.

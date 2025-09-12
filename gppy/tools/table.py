@@ -242,6 +242,7 @@ def match_multi_catalogs(
     join: str = "inner",  # {'inner','left','outer'}
     cat_names: Optional[Sequence[str]] = None,  # nice labels for suffixing
     pivot: int | None = 0,  # index of pivot catalog used for tie-breaks and separations
+    suffix_first: bool = True,
 ) -> Table:
     """
     Joint sky crossmatch of N catalogs using a friends-of-friends graph (single-linkage)
@@ -436,15 +437,23 @@ def match_multi_catalogs(
     # --- Assemble merged Table with suffixed columns per catalog ---
     # Determine output columns order & masks
     out_cols: List[Tuple[Tuple[int, str], str]] = []  # ((cat_i, colname), out_colname)
-    # build per-catalog column mapping with suffix if duplicate
-    seen = {}
-    for cat_i, tbl in enumerate(cats):
-        name = cat_names[cat_i]
-        for col in tbl.colnames:
-            base = col
-            out = base if (base not in seen) else f"{base}_{name}"
-            seen[out] = True
-            out_cols.append(((cat_i, col), out))
+    # all columns are suffixed with cat_names
+    if suffix_first:
+        for cat_i, tbl in enumerate(cats):
+            name = cat_names[cat_i]
+            for col in tbl.colnames:
+                out = f"{col}_{name}"
+                out_cols.append(((cat_i, col), out))
+    # add suffix only when the column is duplicate
+    else:
+        seen = {}
+        for cat_i, tbl in enumerate(cats):
+            name = cat_names[cat_i]
+            for col in tbl.colnames:
+                out = col if (col not in seen) else f"{col}_{name}"
+                seen[out] = True
+                out_cols.append(((cat_i, col), out))
+
     # add separations at the end
     out_cols.extend([((-1, sn), sn) for sn in sep_names])
 

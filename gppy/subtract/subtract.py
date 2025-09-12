@@ -27,10 +27,11 @@ class ImSubtract(BaseSetup):
         self._flag_name = "subtract"
         self.overwrite = overwrite
         self.name = self.config.name
-        
+
     @classmethod
     def from_list(cls, input_images):
         from ..config import SciProcConfiguration
+
         image_list = []
         for image in input_images:
             path = Path(image)

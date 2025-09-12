@@ -11,11 +11,11 @@ from .table import QAData
 from .const import DB_PARAMS
 
 
-class ImageDBError(Exception):
+class QADBError(Exception):
     pass
 
 
-class ImageDB:
+class QADB:
     """Database class for managing image QA data"""
 
     def __init__(self, db_params: Optional[Dict[str, Any]] = None):
@@ -32,7 +32,7 @@ class ImageDB:
         except Exception as e:
             if conn:
                 conn.rollback()
-            raise ImageDBError(f"Database operation failed: {e}")
+            raise QADBError(f"Database operation failed: {e}")
         finally:
             if conn:
                 conn.close()
@@ -79,10 +79,10 @@ class ImageDB:
                         if result:
                             return result[0]
                         else:
-                            raise ImageDBError("Failed to get ID of created QA record")
+                            raise QADBError("Failed to get ID of created QA record")
 
         except Exception as e:
-            raise ImageDBError(f"Failed to create QA data: {e}")
+            raise QADBError(f"Failed to create QA data: {e}")
 
     def read_qa_data(
         self,
@@ -158,20 +158,20 @@ class ImageDB:
                         return result
 
         except Exception as e:
-            raise ImageDBError(f"Failed to read QA data: {e}")
+            raise QADBError(f"Failed to read QA data: {e}")
 
     def update_qa_data(self, qa_id: str, **kwargs) -> bool:
         """Update QA data record"""
         try:
             with self.get_connection() as conn:
                 if not kwargs:
-                    raise ImageDBError("No fields to update")
+                    raise QADBError("No fields to update")
 
                 # Filter out None values to prevent constraint violations
                 update_data = {k: v for k, v in kwargs.items() if v is not None}
 
                 if not update_data:
-                    raise ImageDBError("No non-None fields to update")
+                    raise QADBError("No non-None fields to update")
 
                 # Build SET clause
                 set_clauses = []
@@ -196,12 +196,12 @@ class ImageDB:
                     conn.commit()
 
                     if rows_affected == 0:
-                        raise ImageDBError(f"No QA record found with ID {qa_id}")
+                        raise QADBError(f"No QA record found with ID {qa_id}")
 
                     return True
 
         except Exception as e:
-            raise ImageDBError(f"Failed to update QA data: {e}")
+            raise QADBError(f"Failed to update QA data: {e}")
 
     def delete_qa_data(self, qa_id: str) -> bool:
         """Delete a QA data record"""
@@ -215,12 +215,12 @@ class ImageDB:
                     conn.commit()
 
                     if rows_affected == 0:
-                        raise ImageDBError(f"No QA record found with ID {qa_id}")
+                        raise QADBError(f"No QA record found with ID {qa_id}")
 
                     return True
 
         except Exception as e:
-            raise ImageDBError(f"Failed to delete QA data: {e}")
+            raise QADBError(f"Failed to delete QA data: {e}")
 
     def _find_existing_qa_data(self, qa_data: QAData) -> Optional[str]:
         """Find existing QA data record by key fields"""
@@ -354,7 +354,7 @@ class ImageDB:
                     df = pd.DataFrame(rows, columns=columns)
                     return df
         except Exception as e:
-            raise ImageDBError(f"Failed to export QA data to table: {e}")
+            raise QADBError(f"Failed to export QA data to table: {e}")
 
     def export_qa_data_to_csv(self, filename: str) -> bool:
         """Export QA data to CSV file"""
@@ -373,7 +373,7 @@ class ImageDB:
             return True
 
         except Exception as e:
-            raise ImageDBError(f"Failed to export QA data: {e}")
+            raise QADBError(f"Failed to export QA data: {e}")
 
     def clear_qa_data(self) -> bool:
         """Clear all QA data"""
@@ -388,4 +388,4 @@ class ImageDB:
                     return True
 
         except Exception as e:
-            raise ImageDBError(f"Failed to clear QA data: {e}")
+            raise QADBError(f"Failed to clear QA data: {e}")

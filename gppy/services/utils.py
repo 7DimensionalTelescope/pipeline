@@ -14,6 +14,7 @@ from contextlib import contextmanager
 import pynvml
 import os
 
+
 def cleanup_memory() -> None:
     """
     Perform comprehensive memory cleanup across CPU and GPU.
@@ -111,7 +112,7 @@ def monitor_memory_usage(
     def logging_thread() -> None:
         """
         Background thread for monitoring memory usage.
-        
+
         Continuously monitors memory usage at specified intervals
         and logs the data to the usage table.
         """
@@ -176,7 +177,7 @@ def monitor_io_rate(interval: float = 1.0, logger: Optional = None, verbose: boo
     def logging_thread():
         """
         Background thread for monitoring I/O rates.
-        
+
         Continuously monitors disk I/O at specified intervals
         and logs the data to the I/O table.
         """
@@ -296,17 +297,18 @@ class classmethodproperty:
         """
         return self.func.__get__(instance, owner)()
 
+
 def check_gpu_activity(device_id=None, gpu_threshold=500):
     """
     Check GPU activity and return list of available GPUs.
-    
+
     Determines which GPUs are available for use based on current
     memory usage and running processes.
-    
+
     Args:
         device_id (int, optional): Specific GPU to check (None for all)
         gpu_threshold (int): Maximum GPU memory usage in MB to consider available
-        
+
     Returns:
         list: List of available GPU device IDs
     """
@@ -333,9 +335,10 @@ def check_gpu_activity(device_id=None, gpu_threshold=500):
                     available.add(i)
         except pynvml.NVMLError as e:
             print(f"Could not get processes: {e}")
-        
+
     pynvml.nvmlShutdown()
     return list(available)
+
 
 @contextmanager
 def acquire_available_gpu(device_id=None, gpu_threshold=400, blocking=True, timeout=1):
@@ -383,24 +386,20 @@ def acquire_available_gpu(device_id=None, gpu_threshold=400, blocking=True, time
             continue
 
         try:
-            # Use exclusive lock; add non-blocking flag if requested
-            flag = fcntl.LOCK_EX
-            if not blocking:
-                flag |= fcntl.LOCK_NB
+            # Use non-blocking lock to avoid futex waits
+            # This eliminates the futex_wait_queue_me bottleneck
+            flag = fcntl.LOCK_EX | fcntl.LOCK_NB
 
-            end_time = start_time + timeout
-            # Keep trying until we either acquire the lock or hit the overall timeout
-            while True:
-                try:
-                    fcntl.flock(lock_file, flag)
-                    # Success: yield the GPU ID
-                    yield gpu_id
-                    return
-                except BlockingIOError:
-                    # If we've run out of time, stop trying this GPU
-                    if time.time() >= end_time:
-                        break
-                    time.sleep(0.05)
+            try:
+                fcntl.flock(lock_file, flag)
+                # Success: yield the GPU ID
+                yield gpu_id
+                return
+            except BlockingIOError:
+                # GPU is busy, try next one immediately
+                # No futex wait - fail fast and move on
+                continue
+
         finally:
             # Always release and close the lock file
             try:

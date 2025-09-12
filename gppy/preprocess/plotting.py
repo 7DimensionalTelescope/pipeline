@@ -56,42 +56,41 @@ def save_fits_as_figures(image_data, output_path, stretch=True, log_scale=False,
 
 def save_fits_with_contrast(image_data, output_path, max_width=1000):
     # Open the FITS file
-    with fits.open(image_data) as hdu:
-        # Get the data
-        data = hdu[0].data
 
-        # Get clipping parameters from header
-        clipmed = hdu[0].header.get("CLIPMED")
-        clipstd = hdu[0].header.get("CLIPSTD")
+    data = fits.getdata(image_data)
 
-        lower_bound = clipmed - 3 * clipstd
-        upper_bound = clipmed + 3 * clipstd
+    # Get clipping parameters from header
+    clipmed = fits.getval(image_data, "CLIPMED")
+    clipstd = fits.getval(image_data, "CLIPSTD")
 
-        clipped_data = np.clip(data, lower_bound, upper_bound)
+    lower_bound = clipmed - 3 * clipstd
+    upper_bound = clipmed + 3 * clipstd
 
-        if upper_bound > lower_bound:
-            normalized_data = ((clipped_data - lower_bound) / (upper_bound - lower_bound) * 255).astype(np.uint8)
-        else:
-            normalized_data = np.full_like(data, 128, dtype=np.uint8)
+    clipped_data = np.clip(data, lower_bound, upper_bound)
 
-        # Create PIL image
-        pil_image = Image.fromarray(normalized_data, mode="L")  # Grayscale
+    if upper_bound > lower_bound:
+        normalized_data = ((clipped_data - lower_bound) / (upper_bound - lower_bound) * 255).astype(np.uint8)
+    else:
+        normalized_data = np.full_like(data, 128, dtype=np.uint8)
 
-        # Apply contrast enhancement
-        enhancer = ImageEnhance.Contrast(pil_image)
-        enhanced_image = enhancer.enhance(2.0)  # Increase contrast by factor of 4
+    # Create PIL image
+    pil_image = Image.fromarray(normalized_data, mode="L")  # Grayscale
 
-        width, height = enhanced_image.size
+    # Apply contrast enhancement
+    enhancer = ImageEnhance.Contrast(pil_image)
+    enhanced_image = enhancer.enhance(2.0)  # Increase contrast by factor of 4
 
-        if width > max_width:
-            scale = max_width / width
-            new_width = max_width
-            new_height = int(height * scale)
-            enhanced_image = enhanced_image.resize((new_width, new_height), Image.LANCZOS)
+    width, height = enhanced_image.size
 
-        enhanced_image.save(output_path, "JPEG", quality=85, optimize=True)
+    if width > max_width:
+        scale = max_width / width
+        new_width = max_width
+        new_height = int(height * scale)
+        enhanced_image = enhanced_image.resize((new_width, new_height), Image.LANCZOS)
 
-        return enhanced_image
+    enhanced_image.save(output_path, "JPEG", quality=85, optimize=True)
+
+    return enhanced_image
 
 
 def plot_bias(file, overwrite=False):
@@ -106,8 +105,9 @@ def plot_bias(file, overwrite=False):
     # if output_path.exists() and not overwrite:
     #     return
 
-    data = fits.getdata(file)
-    header = fits.getheader(file)
+    with fits.open(file, memmap=True) as hdul:
+        data = hdul[0].data
+        header = hdul[0].header
     fdata = data.ravel()
     clipmin = int(header["CLIPMIN"])
     clipmax = int(header["CLIPMAX"])

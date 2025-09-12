@@ -11,6 +11,8 @@ from astropy.coordinates import Angle
 from astropy.wcs import WCS
 from astropy.table import Table
 from functools import cached_property
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 
 from .. import external
 from ..const import PIXSCALE, PipelineError
@@ -27,9 +29,9 @@ from .utils import (
     build_wcs,
     polygon_info_header,
     get_fov_quad,
-    evaluate_single_wcs,
-    evaluate_joint_wcs,
+    strip_wcs,
 )
+from .evaluation import evaluate_single_wcs, evaluate_joint_wcs
 
 
 class Astrometry(BaseSetup):
@@ -92,6 +94,8 @@ class Astrometry(BaseSetup):
         joint_scamp: bool = True,
         force_solve_field: bool = False,
         evaluate_prep_sol: bool = True,
+        refine_init_wcs: bool = True,
+        use_threading: bool = True,
         # processes=["sextractor", "scamp", "header_update"],
         # use_gpu: bool = False,
     ) -> None:
@@ -125,21 +129,20 @@ class Astrometry(BaseSetup):
                 self.logger.warning(e)
                 self.run_solve_field(self.soft_links_to_input_images, self.solved_images)
 
-            # update the sextractor catalogs with the wcs solutions for next scamp
+            if evaluate_prep_sol:
+                self.evaluate_solution(suffix="prepwcs", use_threading=use_threading)
 
             # even more refinement
-            self.run_scamp(self.prep_cats, scamp_preset="main", joint=False)
-            if evaluate_prep_sol:
-                self.evaluate_solution(suffix="prep2wcs")
-
-            if evaluate_prep_sol:
-                self.evaluate_solution(suffix="prepwcs")
+            if refine_init_wcs:
+                self.run_scamp(self.prep_cats, scamp_preset="main", joint=False)
+                if evaluate_prep_sol:
+                    self.evaluate_solution(suffix="prep2wcs", use_threading=use_threading)
 
             # run main scamp
             self.run_scamp(self.prep_cats, scamp_preset="main", joint=joint_scamp)
+            self.evaluate_solution(use_threading=use_threading)
 
-            self.evaluate_solution()
-
+            # update the input image
             self.update_header()
 
             self.config.flag.astrometry = True
@@ -430,11 +433,11 @@ class Astrometry(BaseSetup):
         assert len(input_catalogs) == len(solved_heads)
 
         for input_catalog, solved_head in zip(input_catalogs, solved_heads):
-
             # update wcs in LDAC_IMHEAD
             image_header = fitsrec_to_header(
                 fits.getdata(input_catalog, ext=1)
             )  # assuming LDAC_IMHED is the second extension
+            image_header = strip_wcs(image_header)  # strip the previous WCS
             wcs_header = read_scamp_header(solved_head)
             image_header.update(wcs_header)
 
@@ -450,7 +453,7 @@ class Astrometry(BaseSetup):
             write_ldac(image_header, tbl, input_catalog)  # internally c script with cfitsio
             self.logger.debug(f"Updated catalog {input_catalog} with {solved_head}")
 
-    def evaluate_solution(self, isep=False, suffix=None) -> None:
+    def evaluate_solution(self, isep=False, suffix=None, num_sci=300, num_ref=300, use_threading=True) -> None:
         """Evaluate the solution. This was developed in lack of latest scamp version."""
         self.logger.info("Evaluating the solution")
 
@@ -461,10 +464,15 @@ class Astrometry(BaseSetup):
 
         refcat = Table.read(self.config.astrometry.local_astref, hdu=2)
 
-        # evaluate for each image
-        for input_image, image_info, prep_cat in zip(self.input_images, self.images_info, self.prep_cats):
+        def _eval_one(idx: int):
+            "threading helper"
+            input_image = self.input_images[idx]
+            image_info = self.images_info[idx]
+            prep_cat = self.prep_cats[idx]
+
             bname = os.path.basename(input_image)
             plot_path = os.path.join(self.path.figure_dir, swap_ext(add_suffix(bname, suffix or "wcs"), "jpg"))
+
             return_bundle = evaluate_single_wcs(
                 image=input_image,
                 ref_cat=refcat,
@@ -474,29 +482,51 @@ class Astrometry(BaseSetup):
                 fov_ra=image_info.fov_ra,
                 fov_dec=image_info.fov_dec,
                 plot_save_path=plot_path,
+                num_sci=num_sci,
+                num_ref=num_ref,
             )
+            return idx, return_bundle
+
+        def _apply(idx: int, bundle):
+            """apply helper to avoid code duplication"""
             (
                 matched,
                 ref_max_mag,
                 sci_max_mag,
-                num_ref,
+                num_ref_out,
                 unmatched_fraction,
                 subpixel_fraction,
                 subsecond_fraction,
                 separation_stats,
-            ) = return_bundle
+            ) = bundle
 
-            image_info.matched_catalog = matched
-            image_info.ref_max_mag = ref_max_mag
-            image_info.sci_max_mag = sci_max_mag
-            image_info.num_ref_sources = num_ref
-            image_info.unmatched_fraction = unmatched_fraction
-            image_info.subpixel_fraction = subpixel_fraction
-            image_info.subsecond_fraction = subsecond_fraction
-            image_info.set_sep_stats(separation_stats)
-            self.logger.debug(f"Evaluated solution for {input_image}")
+            info = self.images_info[idx]
+            info.matched_catalog = matched
+            info.ref_max_mag = ref_max_mag
+            info.sci_max_mag = sci_max_mag
+            info.num_ref_sources = num_ref_out
+            info.unmatched_fraction = unmatched_fraction
+            info.subpixel_fraction = subpixel_fraction
+            info.subsecond_fraction = subsecond_fraction
+            info.set_sep_stats(separation_stats)
+            self.logger.debug(f"Evaluated solution for {self.input_images[idx]}")
 
-        # evaluate the internal consistency of all images
+        def _produce_sequential():
+            for idx in range(len(self.input_images)):
+                yield _eval_one(idx)  # yield makes a generator
+
+        def _produce_parallel():
+            max_workers = min(len(self.input_images), int(os.cpu_count() / 2))
+            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="wcs_eval") as ex:
+                futures = {ex.submit(_eval_one, idx): idx for idx in range(len(self.input_images))}
+                for fut in as_completed(futures):
+                    yield fut.result()
+
+        producer = _produce_parallel if use_threading else _produce_sequential
+        for idx, bundle in producer():
+            _apply(idx, bundle)
+
+        # Optional joint evaluation (internal rms)
         if len(self.input_images) > 1 and isep:
             internal_sep_stats_list = evaluate_joint_wcs(self.images_info)
             for image_info, internal_sep_stats in zip(self.images_info, internal_sep_stats_list):
@@ -504,6 +534,15 @@ class Astrometry(BaseSetup):
 
         self.logger.debug(f"Evaluated solution for all images")
         self.logger.debug(MemoryMonitor.log_memory_usage)
+
+    def update_qa_config(self) -> None:
+        """Update the QA configuration."""
+        self.config.qa.ellipticity = [image_info.ellipticity for image_info in self.images_info]
+        self.config.qa.seeing = [image_info.seeing for image_info in self.images_info]
+        self.config.qa.pa = [fits.getheader(img)["ROTANG"] for img in self.input_images]
+        self.logger.debug(f"SEEING     : {self.config.qa.seeing:.3f} arcsec")
+        self.logger.debug(f"ELLIPTICITY: {self.config.qa.ellipticity:.3f}")
+        self.logger.debug(f"PA         : {self.config.qa.pa:.3f} deg")
 
     def update_header(
         self,
@@ -587,6 +626,7 @@ class Astrometry(BaseSetup):
 class ImageInfo:
     """Stores information needed for astrometry. Mostly extracted from the FITS image header."""
 
+    # Header information
     dateobs: str  # Observation date/time
     naxis1: int  # Image width
     naxis2: int  # Image height
@@ -597,7 +637,7 @@ class ImageInfo:
     n_binning: int  # Binning factor
     pixscale: float  # Pixel scale [arcsec/pix]
 
-    # solution
+    # WCS solution
     head: Optional[fits.Header] = field(default=None)
 
     # FOV polygon
@@ -768,3 +808,12 @@ class ImageInfo:
             raise PipelineError("No self.head in ImageInfo")
         wcs_header = read_scamp_header(self.head)
         return WCS(wcs_header)
+
+    @property
+    def seeing(self) -> float:
+        """seeing from gaia-matched point sources"""
+        return np.ma.median(self.matched_catalog["FWHM_WORLD"]) * 3600
+
+    @property
+    def ellipticity(self) -> float:
+        return np.ma.median(self.matched_catalog["ELLIPTICITY"])

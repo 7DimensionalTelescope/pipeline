@@ -6,6 +6,8 @@ from astropy.io import fits
 from numba import njit, prange
 from ..const import SCRIPT_DIR
 from scipy.stats import variation
+from multiprocessing import Pool, cpu_count
+from functools import partial
 
 
 def read_fits_image(path):
@@ -138,43 +140,128 @@ def process_image_with_cpu(
     dark: str,
     flat: str,
     output_paths: list = None,
+    n_workers: int = None,
     **kwargs,
 ):
+    """
+    Process images using CPU with optional parallelization.
 
-    bias = read_fits_image(bias)
-    dark = read_fits_image(dark)
-    flat = read_fits_image(flat)
+    Args:
+        image_paths: List of input image paths
+        bias: Bias frame path
+        dark: Dark frame path
+        flat: Flat frame path
+        output_paths: List of output image paths
+        n_workers: Number of parallel workers (default: cpu_count())
+    """
+    if n_workers is None:
+        n_workers = min(cpu_count(), len(image_paths))
 
-    h, w = fits.getdata(image_paths[0]).shape
-    data = None
+    # If only one image or one worker, use sequential processing
+    if len(image_paths) == 1 or n_workers == 1:
+        return _process_image_with_cpu_sequential(image_paths, bias, dark, flat, output_paths)
 
-    for i, image in enumerate(image_paths):
-        if data is None:
-            data = read_fits_image(image)
-        else:
-            data[:] = read_fits_image(image)
-        data = reduction_kernel_cpu(data, bias, dark, flat)
-        os.makedirs(os.path.dirname(output_paths[i]), exist_ok=True)
+    # Use parallel processing for multiple images
+    return _process_image_with_cpu_parallel(image_paths, bias, dark, flat, output_paths, n_workers)
 
-        header_file = output_paths[i].replace(".fits", ".header")
-        if os.path.exists(header_file):
-            with open(header_file, "r") as f:
-                header = fits.Header.fromstring(f.read(), sep="\n")
 
-        fits.writeto(
-            output_paths[i],
-            data=data,
-            header=header,
-            overwrite=True,
-        )
+def _process_image_with_cpu_sequential(
+    image_paths: str,
+    bias: str,
+    dark: str,
+    flat: str,
+    output_paths: list = None,
+):
+    """Sequential processing using the shared core function"""
+    # Load calibration frames once
+    bias_data = read_fits_image(bias)
+    dark_data = read_fits_image(dark)
+    flat_data = read_fits_image(flat)
 
-    del bias, dark, flat
+    # Process each image sequentially using the shared function
+    for image_path, output_path in zip(image_paths, output_paths):
+        _process_single_image(image_path, output_path, bias_data, dark_data, flat_data)
+
+    # Clean up
+    del bias_data, dark_data, flat_data
     gc.collect()
     return None
 
 
+def _process_image_with_cpu_parallel(
+    image_paths: str,
+    bias: str,
+    dark: str,
+    flat: str,
+    output_paths: list = None,
+    n_workers: int = None,
+):
+    """Parallel processing using multiprocessing"""
+    # Load calibration frames once
+    bias_data = read_fits_image(bias)
+    dark_data = read_fits_image(dark)
+    flat_data = read_fits_image(flat)
+
+    # Create worker function with calibration data pre-loaded
+    worker_func = partial(_process_single_image, bias_data=bias_data, dark_data=dark_data, flat_data=flat_data)
+
+    # Prepare arguments for each worker
+    worker_args = list(zip(image_paths, output_paths))
+
+    # Process images in parallel
+    with Pool(processes=n_workers) as pool:
+        pool.starmap(worker_func, worker_args)
+
+    # Clean up
+    del bias_data, dark_data, flat_data
+    gc.collect()
+    return None
+
+
+def _process_single_image(
+    image_path: str,
+    output_path: str,
+    bias_data: np.ndarray,
+    dark_data: np.ndarray,
+    flat_data: np.ndarray,
+):
+    """
+    Process a single image with given calibration data.
+    This is the core processing function used by both sequential and parallel modes.
+    """
+    try:
+        # Read image
+        image_data = read_fits_image(image_path)
+        h, w = image_data.shape
+
+        # Apply reduction
+        processed_data = reduction_kernel_cpu(image_data, bias_data, dark_data, flat_data, h, w)
+
+        # Create output directory
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+        # Handle header
+        header_file = output_path.replace(".fits", ".header")
+        header = None
+        if os.path.exists(header_file):
+            with open(header_file, "r") as f:
+                header = fits.Header.fromstring(f.read(), sep="\n")
+
+        # Write output
+        fits.writeto(
+            output_path,
+            data=processed_data,
+            header=header,
+            overwrite=True,
+        )
+
+    except Exception as e:
+        print(f"Error processing {image_path}: {e}")
+        raise
+
+
 @njit(parallel=True)
-def reduction_kernel_cpu(image, bias, dark, flat):
+def reduction_kernel_cpu(image, bias, dark, flat, h, w):
     h, w = image.shape
     corrected = np.empty_like(image)
 

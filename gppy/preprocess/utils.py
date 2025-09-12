@@ -137,9 +137,9 @@ def get_saturation_level(header, mbias_file, mdark_file, mflat_file):
         raise ValueError("BITPIX value is not positive.")
 
     try:
-        z = fits.getheader(mbias_file)["CLIPMED"]
-        d = fits.getheader(mdark_file)["CLIPMED"]
-        f = fits.getheader(mflat_file)["CENCLPMD"]
+        z = fits.getval(mbias_file, "CLIPMED")
+        d = fits.getval(mdark_file, "CLIPMED")
+        f = fits.getval(mflat_file, "CENCLPMD")
         satur_level = (maxval - z - d) / f
 
     except KeyError as e:

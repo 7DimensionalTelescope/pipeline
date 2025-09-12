@@ -5,6 +5,7 @@ from astropy.io import fits
 import subprocess
 from ..const import SCRIPT_DIR
 
+
 def interpolate_masked_pixels_subprocess(
     images: list[str],
     mask: str,
@@ -16,18 +17,28 @@ def interpolate_masked_pixels_subprocess(
     weight: bool = True,
 ):
     # base command
-    cmd = ["python", f"{SCRIPT_DIR}/cuda/interpolate_masked_pixels.py",
-            "-input", *images,
-            "-output", *output,
-            "-mask", mask,
-            "-window", str(window),
-            "-method", method,
-            "-badpix", str(badpix),
-            "-device", str(device)]
+    cmd = [
+        "python",
+        f"{SCRIPT_DIR}/cuda/interpolate_masked_pixels.py",
+        "-input",
+        *images,
+        "-output",
+        *output,
+        "-mask",
+        mask,
+        "-window",
+        str(window),
+        "-method",
+        method,
+        "-badpix",
+        str(badpix),
+        "-device",
+        str(device),
+    ]
 
-    if not(weight):
+    if not (weight):
         cmd += ["-no-weight"]
-        
+
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode != 0:
@@ -36,7 +47,9 @@ def interpolate_masked_pixels_subprocess(
     return None
 
 
-def interpolate_masked_pixels_cpu(images, mask_path, output_paths, window=1, method='median', badpix=1, weight=True, device=None):
+def interpolate_masked_pixels_cpu(
+    images, mask_path, output_paths, window=1, method="median", badpix=1, weight=True, device=None
+):
     """
     High-level function: reads FITS images, applies numba interpolation, and writes output.
 
@@ -53,37 +66,38 @@ def interpolate_masked_pixels_cpu(images, mask_path, output_paths, window=1, met
         sci = fits.getdata(sci_in).astype(np.float32)
         wgt = fits.getdata(add_suffix(sci_in, "weight")).astype(np.float32) if weight else None
 
-
         if weight:
             interp_img, interp_wt = interpolate_masked_pixels_cpu_numba(
-                sci, mask, window=window, weight=wgt, use_median=(method == "median"))
+                sci, mask, window=window, weight=wgt, use_median=(method == "median")
+            )
         else:
             interp_img, interp_wt = interpolate_masked_pixels_cpu_numba_no_weight(sci, mask, window=window)
 
         sci_out = output_paths[idx]
         fits.writeto(sci_out, interp_img, header=add_bpx_method(fits.getheader(sci_in), method), overwrite=True)
         if weight and interp_wt is not None:
-            fits.writeto(add_suffix(sci_out, "weight"), interp_wt, header=add_bpx_method(fits.getheader(add_suffix(sci_in, "weight")), method), overwrite=True)
+            fits.writeto(
+                add_suffix(sci_out, "weight"),
+                interp_wt,
+                header=add_bpx_method(fits.getheader(add_suffix(sci_in, "weight")), method),
+                overwrite=True,
+            )
 
 
 @njit(parallel=True)
 def interpolate_masked_pixels_cpu_numba(
-    image: np.ndarray,
-    mask: np.ndarray,
-    weight: np.ndarray,        # must always be an array!
-    window: int,
-    use_median: bool
+    image: np.ndarray, mask: np.ndarray, weight: np.ndarray, window: int, use_median: bool  # must always be an array!
 ):
     """
     image:      2D float array.
     mask:       2D int8 or bool array; 1 = pixel to interpolate.
-    weight:     2D float array of same shape (e.g. 1/variance). 
+    weight:     2D float array of same shape (e.g. 1/variance).
                 For unweighted median, just pass np.ones_like(image).
     window:     radius in pixels to search neighbors.
     inverse_variance: True => weighted mean; False => median.
     """
     H, W = image.shape
-    result       = image.copy()
+    result = image.copy()
     weight_result = np.zeros_like(image)
 
     # Collect masked coords
@@ -105,8 +119,8 @@ def interpolate_masked_pixels_cpu_numba(
 
     max_patch = (2 * window + 1) ** 2
     vals = np.empty(max_patch, dtype=image.dtype)
-    wts  = np.empty(max_patch, dtype=image.dtype)
-    tmp  = np.empty(max_patch, dtype=image.dtype)
+    wts = np.empty(max_patch, dtype=image.dtype)
+    tmp = np.empty(max_patch, dtype=image.dtype)
 
     # Parallel loop
     for k in prange(count):
@@ -125,16 +139,15 @@ def interpolate_masked_pixels_cpu_numba(
             for xx in range(c0, c1):
                 if mask[yy, xx] == 0:
                     vals[n] = image[yy, xx]
-                    wts[n]  = weight[yy, xx]
+                    wts[n] = weight[yy, xx]
                     n += 1
 
         if n == 0:
             # no unmasked neighbors
-            result[r, c]       = 0.0
+            result[r, c] = 0.0
             weight_result[r, c] = 0.0
             continue
 
-        
         if use_median:
             # median (unweighted or for picking weight)
             # insertion‐sort first n elements of vals → tmp
@@ -179,8 +192,8 @@ def interpolate_masked_pixels_cpu_numba(
                 result[r, c] = 0.0
             weight_result[r, c] = wsum
 
-
     return result, weight_result
+
 
 @njit(parallel=True)
 def interpolate_masked_pixels_cpu_numba_no_weight(image, mask, window=1):
@@ -229,6 +242,7 @@ def interpolate_masked_pixels_cpu_numba_no_weight(image, mask, window=1):
             result[r, c] = np.median(vals_np)
 
     return result, None
+
 
 def add_bpx_method(header, method):
     header["INTERP"] = (method.upper(), "Method for bad pixel interpolation")
@@ -449,4 +463,3 @@ def add_bpx_method(header, method):
 # #     # Fill in interpolated values
 # #     result[ys, xs] = interp_vals
 # #     return result
-

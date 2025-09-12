@@ -558,7 +558,7 @@ class ImStack(BaseSetup):
             ]
 
             # Get peeings for convolution
-            peeings = [fits.getheader(inim)["PEEING"] for inim in self.images_to_stack]
+            peeings = [fits.getval(inim, "PEEING") for inim in self.images_to_stack]
             # max_peeing = np.max(peeings)
             self._max_peeing = (
                 self.config.imstack.target_seeing / collapse(self.path.pixscale, raise_error=True)

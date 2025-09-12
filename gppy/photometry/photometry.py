@@ -332,31 +332,40 @@ class PhotometrySingle:
         """
 
         if use_header_seeing:
-            header = fits.getheader(self.input_image)
-            self.phot_header.seeing = header["SEEING"]
-            self.phot_header.peeing = header["PEEING"]
-            self.phot_header.ellipticity = header["ELLIP"]
-            self.phot_header.elongation = header["ELONG"]
+            self.phot_header.seeing = fits.getval(self.input_image, "SEEING")
+            self.phot_header.peeing = fits.getval(self.input_image, "PEEING")
+            self.phot_header.ellipticity = fits.getval(self.input_image, "ELLIP")
+            self.phot_header.elongation = fits.getval(self.input_image, "ELONG")
             self.logger.debug(f"{len(post_match_table)} Star-like Sources Found")
             self.logger.debug(f"SEEING     : {self.phot_header.seeing:.3f} arcsec")
             self.logger.debug(f"ELONGATION : {self.phot_header.elongation:.3f}")
             self.logger.debug(f"ELLIPTICITY: {self.phot_header.ellipticity:.3f}")
             return
 
-        prep_cat = self.path.photometry.prep_catalog
-        if os.path.exists(prep_cat):
-            self.logger.info("Calculating seeing from a pre-existing 'prep' catalog")
-            obs_src_table = Table.read(prep_cat, format="ascii.sextractor")
+        config_seeing = get_key(self.config.config.qa, "seeing")
+        config_ellipticity = get_key(self.config.config.qa, "ellipticity")
+        if config_seeing and config_ellipticity:
+            self.logger.debug(f"Using seeing, ellipticity, and pa from the config")
+            self.phot_header.seeing = config_seeing
+            self.phot_header.ellipticity = config_ellipticity  # 1 - b/a
+            self.phot_header.elongation = 1 / (1 - config_ellipticity)  # a/b
+
         else:
-            obs_src_table = self._run_sextractor(se_preset="prep")
+            prep_cat = self.path.photometry.prep_catalog
+            if os.path.exists(prep_cat):
+                self.logger.info("Calculating seeing from a pre-existing 'prep' catalog")
+                obs_src_table = Table.read(prep_cat, format="ascii.sextractor")
+            else:
+                obs_src_table = self._run_sextractor(se_preset="prep")
 
-        post_match_table = self.add_matched_reference_catalog(obs_src_table)
-        post_match_table = self.filter_catalog(post_match_table, snr_cut=False, low_mag_cut=11.75)
+            post_match_table = self.add_matched_reference_catalog(obs_src_table)
+            post_match_table = self.filter_catalog(post_match_table, snr_cut=False, low_mag_cut=11.75)
 
-        self.phot_header.seeing = np.median(post_match_table["FWHM_WORLD"] * 3600)
-        self.phot_header.peeing = self.phot_header.seeing / self.image_info.pixscale
-        self.phot_header.ellipticity = round(np.median(post_match_table["ELLIPTICITY"]), 3)
-        self.phot_header.elongation = round(np.median(post_match_table["ELONGATION"]), 3)
+            self.phot_header.seeing = np.median(post_match_table["FWHM_WORLD"] * 3600)
+            self.phot_header.peeing = self.phot_header.seeing / self.image_info.pixscale
+            self.phot_header.ellipticity = round(np.median(post_match_table["ELLIPTICITY"]), 3)
+            self.phot_header.elongation = round(np.median(post_match_table["ELONGATION"]), 3)
+
         self.logger.debug(f"{len(post_match_table)} Star-like Sources Found")
         self.logger.debug(f"SEEING     : {self.phot_header.seeing:.3f} arcsec")
         self.logger.debug(f"ELONGATION : {self.phot_header.elongation:.3f}")
