@@ -9,10 +9,13 @@ from datetime import datetime, timedelta
 from ..const import REF_DIR, INSTRUM_STATUS_DICT
 
 
-def get_cam_events(unit: int):
-    """Caution: the logs are in KST, telescopes are in CLST."""
+def get_cam_events(unit: int, swap_only: bool = False):
+    """
+    Caution: the logs are in KST, telescopes are in CLST.
+    This function returns in CLST.
+    """
     changelog = os.path.join(REF_DIR, f"InstrumEvent/changelog_unit{unit}.txt")
-    tbl = Table.read(changelog, format="ascii")
+    tbl = Table.read(changelog, format="ascii.tab")
 
     is_cam = tbl["parts"] == "cam"
     # is_install = np.char.startswith(comments, "install:")
@@ -22,15 +25,19 @@ def get_cam_events(unit: int):
     # combine all conditions with bitwise ops
     mask = is_cam  # & (is_install | is_uninstall | is_swap)
     filtered_tbl = tbl[mask]
-    camswap_tbl = Table()
+    cam_event_tbl = Table()
     # KST
     date_kst = [datetime.strptime(str(s), "%y%m%d") for s in filtered_tbl["date"]]
     # CLST
-    camswap_tbl["nightdate"] = [s - timedelta(days=1) for s in date_kst]
+    cam_event_tbl["nightdate"] = [s - timedelta(days=1) for s in date_kst]
     # camswap_tbl["serial"] = [s.split(":")[-1].split(">")[-1] for s in filtered_tbl["comment"]]
-    camswap_tbl["serial"] = filtered_tbl["comment"]
+    cam_event_tbl["serial"] = filtered_tbl["comment"]
+    if swap_only:
+        _ = [bool(re.match(r"\d+", str(s))) for s in cam_event_tbl["serial"]]
+        cam_event_tbl = cam_event_tbl[cam_event_tbl["serial"].astype(str) != ""]
+        return cam_event_tbl[np.asarray(_)]
 
-    return camswap_tbl
+    return cam_event_tbl
 
 
 def get_current_camera_serial(unit: int) -> str:
@@ -44,11 +51,9 @@ def get_current_camera_serial(unit: int) -> str:
 def get_camera_serial(unit: int, query_date: str):
     """WARNING: assumes C3 if serial unavailable"""
     # 1) load camswap history
-    swaps_tbl = get_cam_events(unit)
-    _ = [bool(re.match(r"\d+", str(s))) for s in swaps_tbl["serial"]]
-    swaps_tbl = swaps_tbl[np.asarray(_)]
-    dates = list(swaps_tbl["nightdate"])
-    serials = [str(s) for s in swaps_tbl["serial"]]
+    cam_swap_tbl = get_cam_events(unit, swap_only=True)
+    dates = list(cam_swap_tbl["nightdate"])
+    serials = [str(s) for s in cam_swap_tbl["serial"]]
     # serials = list(swaps_tbl["serial"])
 
     # 2) parse query_date ("YYYY-MM-DD" or "YYYYMMDD")
@@ -76,8 +81,8 @@ def get_camera_serial(unit: int, query_date: str):
         return serials[-1]
     else:
         raise ValueError(
-            f"Reference serial ({current_serial}) does not match last known "
-            f"swapped serial ({serials[-1]}) as of {last_date.date()}"
+            f"Current serial ({current_serial}) does not match the last "
+            f"reported serial ({serials[-1]}) on {last_date.date()}"
         )
 
 

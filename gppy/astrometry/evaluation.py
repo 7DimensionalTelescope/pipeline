@@ -108,33 +108,35 @@ def evaluate_single_wcs(
     if write_matched_catalog:
         matched.write(add_suffix(source_cat, "matched"), overwrite=True)
 
-    x = matched["separation"]
-    # print(f"x type: {type(x)}")
-    # print(f"x: {x}")
-    # print(f"x.compressed(): {x.compressed()}")
+    sep = matched["separation"]
+    n_valid = sep.count()
+    sep_sci = sep.compressed()  # unmasked
+    if n_valid > 0:
+        # Fractions
+        unmatched_fraction = sep.mask.sum() / sep.size
+        subpixel_fraction = float(np.ma.mean(sep < PIXSCALE))
+        subsecond_fraction = float(np.ma.mean(sep < 1.0))
 
-    # Fractions
-    unmatched_fraction = x.mask.sum() / x.size  # same as before
-
-    n_valid = x.count()
-    if n_valid == 0:
-        subpixel_fraction = np.nan
-        subsecond_fraction = np.nan
+        separation_stats = {
+            "rms": np.sqrt(np.mean(sep_sci**2)),
+            "min": np.min(sep_sci),
+            "max": np.max(sep_sci),
+            "q1": np.percentile(sep_sci, 25),
+            "q2": np.percentile(sep_sci, 50),  # same as median
+            "q3": np.percentile(sep_sci, 75),
+        }
     else:
-        # np.ma.mean ignores masked entries, so this is the fraction over unmasked data
-        subpixel_fraction = float(np.ma.mean(x < PIXSCALE))
-        subsecond_fraction = float(np.ma.mean(x < 1.0))
-
-    separation_stats = {
-        "rms": np.sqrt(np.ma.mean(x**2)),
-        "min": np.ma.min(x),
-        "max": np.ma.max(x),
-        # "median": np.ma.median(x),
-        # "std": np.ma.std(x),
-        "q1": np.percentile(x.compressed(), 25),
-        "q2": np.percentile(x.compressed(), 50),  # same as median
-        "q3": np.percentile(x.compressed(), 75),
-    }
+        unmatched_fraction = 1.0  # no NaN. fits requires values
+        subpixel_fraction = 0
+        subsecond_fraction = 0
+        separation_stats = {
+            "rms": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "q1": 0.0,
+            "q2": 0.0,
+            "q3": 0.0,
+        }
 
     if plot_save_path is not None:
         wcs_check_plot(

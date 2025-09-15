@@ -8,3 +8,4 @@ date	parts	comment
 240111	mirror	collimation_end
 240506	motor	tuning
 250311	mirror	cleaning
+250914	cam	0

@@ -12,3 +12,4 @@ date	parts	comment
 250117	mount	modeling
 250310	mirror	cleaning
 250430	cam	30193
+250914	cam	31165

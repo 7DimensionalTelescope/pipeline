@@ -405,7 +405,7 @@ class Astrometry(BaseSetup):
                     scamp_preset=scamp_preset,
                 )
                 solved_heads.extend(solved_head)
-                self.logger.info(f"Completed scamp for {precat}]")  # fmt:skip
+                self.logger.info(f"Completed scamp for {precat}")  # fmt:skip
                 self.logger.debug(f"{precat}")  # fmt:skip
             self.logger.debug(f"Individual run solved_heads: {solved_heads}")
 

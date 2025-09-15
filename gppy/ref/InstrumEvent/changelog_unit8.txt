@@ -7,3 +7,4 @@ date	parts	comment
 241207	cam	PA
 241207	mount	modeling
 250311	mirror	cleaning
+250914	cam	0
