@@ -10,7 +10,7 @@ from ..tools.table import match_two_catalogs, add_id_column, match_multi_catalog
 from ..utils import add_suffix, swap_ext
 from .plotting import wcs_check_plot
 from ..subtract.utils import create_ds9_region_file
-from .utils import inside_quad_spherical
+from .utils import inside_quad_spherical, compute_rms_stats, well_matchedness_stats
 
 
 def evaluate_single_wcs(
@@ -98,7 +98,7 @@ def evaluate_single_wcs(
         x1="ra",
         y1="dec",
         join="right",
-        sep_2d=True,
+        sep_components=True,
         radius=match_radius,
         correct_pm=True,
         obs_time=Time(date_obs),
@@ -164,18 +164,32 @@ def evaluate_single_wcs(
     )
 
 
+###############################################################################
+
+
 def evaluate_joint_wcs(images_info: List["ImageInfo"]):
+    """
+    Uses the matched cats from the previous step as it helps point source selection,
+    but it hurts completeness as the gaia reference is trimmed to num_ref sources.
+    You may want to refine the logic to use the original sextractor catalogs instead.
+    """
+
     matched_cats = [image_info.matched_catalog for image_info in images_info]
-    matched_all = match_multi_catalogs(matched_cats, radius=3, join="outer")
-    matched_all = add_id_column(matched_all)
+    matched_all = match_multi_catalogs(matched_cats, radius=3, join="outer", sep_components=True, suffix_first=True)
 
-    # x = matched_all["separation"]
+    rms_stats = compute_rms_stats(matched_all, [f"cat{i}" for i in range(len(matched_cats))])
+    match_stats = well_matchedness_stats(matched_all, n_cats=len(matched_cats))
 
-    # separation_stats = {
-    #     "min": np.ma.min(x),
-    #     "max": np.ma.max(x),
-    #     "rms": np.sqrt(np.ma.mean(x**2)),
-    #     "median": np.ma.median(x),
-    #     "std": np.ma.std(x),
-    # }
-    # return separation_stats
+    # reformat
+    rms_stats_list = [d for d in rms_stats.values()]
+    # Refactor recall into a list of dicts
+    match_stats_list = [
+        {
+            "catalog": cat,  # keep cat0, cat1, etc.
+            "recall": val,  # the recall value
+            **{k: v for k, v in match_stats.items() if k != "recall"},  # all other keys
+        }
+        for cat, val in match_stats["recall"].items()
+    ]
+
+    return rms_stats_list, match_stats_list

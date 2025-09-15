@@ -10,6 +10,7 @@ from astropy.time import Time
 from astropy.coordinates import Angle
 from astropy.wcs import WCS
 from astropy.table import Table
+import astropy.units as u
 from functools import cached_property
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -95,7 +96,7 @@ class Astrometry(BaseSetup):
         force_solve_field: bool = False,
         evaluate_prep_sol: bool = True,
         refine_init_wcs: bool = True,
-        use_threading: bool = True,
+        use_threading: bool = False,
         # processes=["sextractor", "scamp", "header_update"],
         # use_gpu: bool = False,
     ) -> None:
@@ -130,13 +131,13 @@ class Astrometry(BaseSetup):
                 self.run_solve_field(self.soft_links_to_input_images, self.solved_images)
 
             if evaluate_prep_sol:
-                self.evaluate_solution(suffix="prepwcs", use_threading=use_threading)
+                self.evaluate_solution(suffix="prepwcs", use_threading=use_threading, export_eval_cards=True)
 
             # even more refinement
             if refine_init_wcs:
                 self.run_scamp(self.prep_cats, scamp_preset="main", joint=False)
                 if evaluate_prep_sol:
-                    self.evaluate_solution(suffix="prep2wcs", use_threading=use_threading)
+                    self.evaluate_solution(suffix="prep2wcs", use_threading=use_threading, export_eval_cards=True)
 
             # run main scamp
             self.run_scamp(self.prep_cats, scamp_preset="main", joint=joint_scamp)
@@ -453,7 +454,9 @@ class Astrometry(BaseSetup):
             write_ldac(image_header, tbl, input_catalog)  # internally c script with cfitsio
             self.logger.debug(f"Updated catalog {input_catalog} with {solved_head}")
 
-    def evaluate_solution(self, isep=False, suffix=None, num_sci=300, num_ref=300, use_threading=True) -> None:
+    def evaluate_solution(
+        self, isep=True, suffix=None, num_sci=200, num_ref=200, use_threading=True, export_eval_cards=False
+    ) -> None:
         """Evaluate the solution. This was developed in lack of latest scamp version."""
         self.logger.info("Evaluating the solution")
 
@@ -462,6 +465,7 @@ class Astrometry(BaseSetup):
             image_info.fov_ra, image_info.fov_dec = get_fov_quad(image_info.wcs, image_info.naxis1, image_info.naxis2)
             self.logger.debug(f"Updated FOV polygon. RA: {image_info.fov_ra}, Dec: {image_info.fov_dec}")
 
+        suffix = suffix or "wcs"
         refcat = Table.read(self.config.astrometry.local_astref, hdu=2)
 
         def _eval_one(idx: int):
@@ -471,7 +475,7 @@ class Astrometry(BaseSetup):
             prep_cat = self.prep_cats[idx]
 
             bname = os.path.basename(input_image)
-            plot_path = os.path.join(self.path.figure_dir, swap_ext(add_suffix(bname, suffix or "wcs"), "jpg"))
+            plot_path = os.path.join(self.path.figure_dir, swap_ext(add_suffix(bname, suffix), "jpg"))
 
             return_bundle = evaluate_single_wcs(
                 image=input_image,
@@ -522,18 +526,27 @@ class Astrometry(BaseSetup):
                 for fut in as_completed(futures):
                     yield fut.result()
 
+        # Single evaluation (external rms)
         producer = _produce_parallel if use_threading else _produce_sequential
         for idx, bundle in producer():
             _apply(idx, bundle)
 
         # Optional joint evaluation (internal rms)
         if len(self.input_images) > 1 and isep:
-            internal_sep_stats_list = evaluate_joint_wcs(self.images_info)
-            for image_info, internal_sep_stats in zip(self.images_info, internal_sep_stats_list):
+            isep_stats_list, match_stat_list = evaluate_joint_wcs(self.images_info)
+            for image_info, internal_sep_stats, match_stats in zip(self.images_info, isep_stats_list, match_stat_list):
                 image_info.set_internal_sep_stats(internal_sep_stats)
+                image_info.set_internal_match_stats(match_stats)
 
         self.logger.debug(f"Evaluated solution for all images")
         self.logger.debug(MemoryMonitor.log_memory_usage)
+
+        if export_eval_cards:
+            for image_info, prep_cat in zip(self.images_info, self.prep_cats):
+                cards = image_info.wcs_eval_cards
+                text_path = swap_ext(add_suffix(prep_cat, f"{suffix}_eval_cards"), "txt")
+                with open(text_path, "w") as f:
+                    f.write(fits.Header(cards).tostring(sep="\n"))
 
     def update_qa_config(self) -> None:
         """Update the QA configuration."""
@@ -626,6 +639,8 @@ class Astrometry(BaseSetup):
 class ImageInfo:
     """Stores information needed for astrometry. Mostly extracted from the FITS image header."""
 
+    image_path: str
+
     # Header information
     dateobs: str  # Observation date/time
     naxis1: int  # Image width
@@ -669,9 +684,11 @@ class ImageInfo:
     internal_sep_min: Optional[float] = field(default=None)
     internal_sep_max: Optional[float] = field(default=None)
     internal_sep_rms: Optional[float] = field(default=None)
-    internal_sep_mean: Optional[float] = field(default=None)
-    internal_sep_median: Optional[float] = field(default=None)
-    internal_sep_std: Optional[float] = field(default=None)
+    internal_sep_q1: Optional[float] = field(default=None)
+    internal_sep_q2: Optional[float] = field(default=None)
+    internal_sep_q3: Optional[float] = field(default=None)
+    internal_match_counts: Optional[list] = field(default=None)
+    internal_match_recall: Optional[list] = field(default=None)
 
     def __repr__(self) -> str:
         """Returns a string representation of the ImageInfo."""
@@ -714,6 +731,7 @@ class ImageInfo:
         #     raise PipelineError("Check Astrometry solution: no WCS information for Photometry")
 
         return cls(
+            image_path=image_path,
             dateobs=time_obj,  # hdr["DATE-OBS"],
             naxis1=x,
             naxis2=y,
@@ -739,12 +757,18 @@ class ImageInfo:
         self.sep_q3 = sep_stats["q3"]
 
     def set_internal_sep_stats(self, sep_stats: dict) -> None:
-        self.internal_sep_min = sep_stats["min"]
-        self.internal_sep_max = sep_stats["max"]
+        self.internal_sep_rms_x = sep_stats["rms_x"]
+        self.internal_sep_rms_y = sep_stats["rms_y"]
         self.internal_sep_rms = sep_stats["rms"]
+        self.internal_sep_min = sep_stats["min"]
         self.internal_sep_q1 = sep_stats["q1"]
         self.internal_sep_q2 = sep_stats["q2"]
         self.internal_sep_q3 = sep_stats["q3"]
+        self.internal_sep_max = sep_stats["max"]
+
+    def set_internal_match_stats(self, match_stats: dict) -> None:
+        self.internal_match_counts = match_stats["counts_by_group_size"]  # ex) {2: 70, 3: 180, 1: 16}
+        self.internal_match_recall = match_stats["recall"]
 
     @property
     def wcs_evaluated(self) -> bool:
@@ -786,22 +810,36 @@ class ImageInfo:
         # Include internal separation statistics if they exist on the instance.
         cards: List[Tuple[str, float]] = []
         internal_vals = {
-            "ISEP_MIN": getattr(self, "internal_sep_min", None),
-            "ISEP_MAX": getattr(self, "internal_sep_max", None),
+            "ISEPRMSX": getattr(self, "internal_sep_rms_x", None),
+            "ISEPRMSY": getattr(self, "internal_sep_rms_y", None),
             "ISEP_RMS": getattr(self, "internal_sep_rms", None),
-            "ISEP_MED": getattr(self, "internal_sep_median", None),
-            "ISEP_STD": getattr(self, "internal_sep_std", None),
+            "ISEP_MIN": getattr(self, "internal_sep_min", None),
+            "ISEP_Q1": getattr(self, "internal_sep_q1", None),
+            "ISEP_Q2": getattr(self, "internal_sep_q2", None),
+            "ISEP_Q3": getattr(self, "internal_sep_q3", None),
+            "ISEP_MAX": getattr(self, "internal_sep_max", None),
+            # "IMATCH_COUNTS": getattr(self, "internal_match_counts", None),
+            "I_RECALL": getattr(self, "internal_match_recall", None),
         }
         descriptions = {
-            "ISEP_MIN": "Min internal separation between matched sources [arcsec]",
-            "ISEP_MAX": "Max internal separation between matched sources [arcsec]",
-            "ISEP_RMS": "RMS internal separation between matched sources [arcsec]",
-            "ISEP_MED": "Median internal separation between matched sources [arcsec]",
-            "ISEP_STD": "STD of internal separation between matched sources [arcsec]",
+            "ISEPRMSX": "RMS x internal sep of outer-matched [arcsec]",
+            "ISEPRMSY": "RMS y internal sep of outer-matched [arcsec]",
+            "ISEP_RMS": "RMS internal sep of outer-matched [arcsec]",
+            "ISEP_MIN": "Min internal sep of outer-matched [arcsec]",
+            "ISEP_Q1": "Q1 internal sep of outer-matched [arcsec]",
+            "ISEP_Q2": "Q2 internal sep of outer-matched [arcsec]",
+            "ISEP_Q3": "Q3 internal sep of outer-matched [arcsec]",
+            "ISEP_MAX": "Max internal sep of outer-matched [arcsec]",
+            # "IMATCH_COUNTS": "Counts of matched sources by group size",
+            "I_RECALL": "Recovery frac in internal-matched outer-joined cat",
         }
         for key, val in internal_vals.items():
             if val is not None:
-                cards.append((key, val, descriptions[key]))
+                if isinstance(val, u.Quantity):
+                    v = val.to(u.arcsec).value
+                else:
+                    v = val
+                cards.append((key, v, descriptions[key]))
         return cards
 
     # @cached_property  # cache prevents update

@@ -423,9 +423,10 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
         if not existing_mframe_file:
             self.add_error()
-            raise FileNotFoundError(
+            self.logger.error(
                 f"[Group {self._current_group+1}] No pre-existing master {dtype} found in place of {template} within {max_offset} days"
             )
+            raise FileNotFoundError
         else:
             self.logger.info(
                 f"[Group {self._current_group+1}] Found pre-existing nominal master {dtype} at {os.path.basename(existing_mframe_file)}"
@@ -482,12 +483,12 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
             # Determine number of workers for CPU processing
             n_workers = None
-            if device_id is None:  # CPU processing
-                # Use up to 32 workers to avoid overwhelming the system
-                n_workers = min(5, len(self.sci_input), cpu_count())
-                self.logger.info(
-                    f"[Group {self._current_group+1}] Using {n_workers} parallel workers for CPU processing"
-                )
+            # if device_id is None:  # CPU processing
+            #     # Use up to 32 workers to avoid overwhelming the system
+            #     n_workers = min(3, len(self.sci_input), cpu_count())
+            #     self.logger.info(
+            #         f"[Group {self._current_group+1}] Using {n_workers} parallel workers for CPU processing"
+            #     )
 
             process_kernel(
                 self.sci_input,

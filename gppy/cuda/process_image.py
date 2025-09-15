@@ -4,15 +4,17 @@ import cupy as cp
 import numpy as np
 import gc
 import os
+
 # Reduction kernel
 reduction_kernel = cp.ElementwiseKernel(
     in_params="T x, T b, T d, T f", out_params="T z", operation="z = (x - b - d) / f", name="reduction"
 )
 
+
 def process_image_with_cupy(obs, bias, dark, flat, output, device_id):
     """median is GPU, std is CPU. Uses pinned memory for better host-GPU transfer performance."""
 
-    if len(obs) > 150:
+    if len(obs) > 100:
         with cp.cuda.Device(device_id):
             dataset = [fits.getdata(o).astype(np.float32) for o in obs]
             cbias = cp.asarray(fits.getdata(bias), dtype=cp.float32)
@@ -51,9 +53,7 @@ def process_image_with_cupy(obs, bias, dark, flat, output, device_id):
             with open(header_file, "r") as f:
                 header = fits.Header.fromstring(f.read(), sep="\n")
 
-        fits.writeto(o, dataset[i], 
-            header=header, 
-            overwrite=True)
+        fits.writeto(o, dataset[i], header=header, overwrite=True)
     del dataset
     gc.collect()
     return

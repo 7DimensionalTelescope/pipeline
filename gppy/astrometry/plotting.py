@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from astropy.io import fits
 from astropy.table import Table
@@ -78,17 +79,27 @@ def wcs_check_plot(
     )
     ax_scatter.set_aspect("equal", adjustable="box")
 
+    # file path title
+    # fig.subplots_adjust(top=0.90)  # add space at the top
+    fig.text(0.5, 0.998, os.path.basename(plot_save_path), ha="center", va="top", fontsize=10)
+
+    # fig.suptitle(f"{num_plot} brightest sources in each catalog", y=0.97)
+    ax_scatter.set_title(f"\n{num_plot} brightest sources in each catalog", ha="center", va="top", fontsize=12, pad=45)
+
     # PSF block title (centered between blocks)
-    fig.text(0.5, 0.605, "PSF Cutouts Across Image (3x3 Grid)", ha="center", va="center", fontsize=12)
+    fig.text(0.5, 0.60, "PSF Cutouts Across Image (3x3 Grid)", ha="center", va="center", fontsize=12)
+
     if sep_stats is not None:
-        text = f"Separation Stats: RMS={sep_stats['rms']:.2f}\", Q1={sep_stats['q1']:.2f}\", Q3={sep_stats['q3']:.2f}\""
+        text = f"Sep Stats: RMS={sep_stats['rms']:.2f}\", Q1={sep_stats['q1']:.2f}\", Q3={sep_stats['q3']:.2f}\""
         if subsecond_fraction is not None:
-            text = f"Superarcsec Fraction: {1 - subsecond_fraction:.3f}, " + text
+            text = f"Superarcsec Frac: {1 - subsecond_fraction:.3f}, " + text
         if subpixel_fraction is not None:
-            text = f"Subpixel Fraction: {subpixel_fraction:.2f}, " + text
+            text = f"Subpixel Frac: {subpixel_fraction:.2f}, " + text
+        text = f"[{np.sum(~matched['separation'].mask)} Matched Sources]  " + text
+
         fig.text(
             0.5,
-            0.63,
+            0.62,
             text,
             ha="center",
             va="center",
@@ -201,7 +212,7 @@ def wcs_check_scatter_plot(
     lon_top = overlay[0]  # <— NOTE: version dependent api.
     lon_top.set_format_unit(u.deg)
     lon_top.set_major_formatter("d.dd")
-    lon_top.set_ticks(spacing=spacing)
+    lon_top.set_ticks(spacing=2 * spacing)  # reduce text overlap
     lon_top.set_ticklabel(size=8)
 
     # Move labels/ticks to the top
@@ -233,7 +244,8 @@ def wcs_check_scatter_plot(
     )
     leg.set_zorder(30)
 
-    ax.set_title(f"{len(tbl)} brightest sources in each catalog", pad=30)
+    # ax.set_title(f"{len(tbl)} brightest sources in each catalog", pad=30)
+    ax.set_title(f"", pad=30)  # give the combined plot some room
 
 
 def wcs_check_psf_plot(

@@ -11,19 +11,20 @@ from . import utils
 class MemoryState(Enum):
     """
     Memory state classification for system monitoring.
-    
+
     Defines different memory states with associated actions and thresholds:
     - HEALTHY: Normal operation, no action needed
     - WARNING: Elevated memory usage, cleanup recommended
     - CRITICAL: High memory usage, pause processing
     - EMERGENCY: Critical memory usage, stop all processing
-    
+
     Each state includes:
     - state: Human-readable state name
     - action: Recommended action to take
     - threshold: Memory percentage threshold (None for HEALTHY)
     - order: Numeric ordering for comparison
     """
+
     HEALTHY = ("healthy", "continue", None, 0)
     WARNING = ("warning", "cleanup", 80.0, 1)
     CRITICAL = ("critical", "pause", 90.0, 2)
@@ -105,13 +106,15 @@ class MemoryMonitor:
         Returns:
             Dict: Memory usage details including total, used, free memory, and percentage
         """
-        used = psutil.Process().memory_info().rss / 1024 / 1024
-        total = psutil.virtual_memory().total / 1024 / 1024
+        virtual_memory = psutil.virtual_memory()
+        total = virtual_memory.total / 1024 / 1024
+        used = virtual_memory.used / 1024 / 1024
+        free = virtual_memory.available / 1024 / 1024
         return {
             "total": total,
             "used": used,
-            "free": total - used,
-            "percent": (used / total) * 100,
+            "free": free,
+            "percent": virtual_memory.percent,
         }
 
     @utils.classmethodproperty
@@ -201,8 +204,9 @@ class MemoryMonitor:
         Generate a comprehensive memory usage log string.
 
         Returns:
-            str: Formatted string with CPU and GPU memory usage percentages
+            str: Formatted string with CPU memory usage, CPU utilization, and GPU memory usage percentages
         """
+        cpu_utilization = psutil.cpu_percent(interval=None)
         gpu_summary = [f"{device}: {percent:.2f}%" for device, percent in enumerate(cls.current_gpu_memory_percent)]
         gpu_info = f", GPU [{', '.join(gpu_summary)}]"
-        return f"System [{cls.current_memory_percent:.2f}%]{gpu_info}"
+        return f"System [{cls.current_memory_percent:.2f}%], CPU util [{cpu_utilization:.2f}%]{gpu_info}"

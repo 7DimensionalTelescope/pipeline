@@ -155,7 +155,7 @@ def process_image_with_cpu(
         n_workers: Number of parallel workers (default: cpu_count())
     """
     if n_workers is None:
-        n_workers = min(cpu_count(), len(image_paths))
+        n_workers = 1
 
     # If only one image or one worker, use sequential processing
     if len(image_paths) == 1 or n_workers == 1:

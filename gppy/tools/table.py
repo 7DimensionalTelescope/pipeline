@@ -6,7 +6,7 @@ from astropy.time import Time
 from astropy.table import Table, hstack, MaskedColumn
 import astropy.units as u
 from astropy.units import Quantity
-from astropy.coordinates import SkyCoord, Angle
+from astropy.coordinates import SkyCoord, Angle, CartesianRepresentation
 import operator
 
 
@@ -52,7 +52,7 @@ def match_two_catalogs(
     y1: str | None = None,
     radius: float | Quantity = 1,
     join: str = "inner",
-    sep_2d: bool = False,
+    sep_components: bool = False,
     correct_pm: bool = False,
     obs_time: Time | None = None,
     pm_keys: dict = dict(pmra="pmra", pmdec="pmdec", parallax="parallax", ref_epoch=2016.0),
@@ -83,8 +83,8 @@ def match_two_catalogs(
                         entries from sci_tbl
         * ``'outer'`` - return all matched rows *and* all unmatched from both
                         catalogues
-    sep_2d
-        If *True*, add columns named "dra_cosdec" and "ddec" to the output table.
+    sep_components
+        If *True*, add columns named "dra_cosdec_arcsec" and "ddec_arcsec" to the output table.
         These are the 2D separations in arcseconds.
         dlon is +east (i.e. increasing RA), dlat is +north (increasing Dec)
         sci - ref if join == "left", ref - sci if join == "right"
@@ -166,7 +166,7 @@ def match_two_catalogs(
         idx, sep2d, _ = coord0.match_to_catalog_sky(coord1)
         rtol = radius * u.arcsec if not isinstance(radius, Quantity) else radius
         matched = sep2d < rtol
-        if sep_2d:
+        if sep_components:
             dlon, dlat = coord0.spherical_offsets_to(coord1[idx])  # Angle quantities
 
         if join == "left" or join == "right":
@@ -181,7 +181,7 @@ def match_two_catalogs(
                 out[name] = MaskedColumn(sliced[name].data, mask=~matched)
 
             out["separation"] = MaskedColumn(sep2d.arcsec, mask=~matched)
-            if sep_2d:
+            if sep_components:
                 out["dra_cosdec"] = MaskedColumn(dlon.to_value(u.arcsec), mask=~matched)
                 out["ddec"] = MaskedColumn(dlat.to_value(u.arcsec), mask=~matched)
             return out
@@ -196,7 +196,7 @@ def match_two_catalogs(
 
             merged = hstack([m0, m1], join_type="exact")
             merged["separation"] = sep2d[matched].arcsec
-            if sep_2d:
+            if sep_components:
                 dlon = dlon[matched]
                 dlat = dlat[matched]
                 merged["dra_cosdec"] = dlon.to_value(u.arcsec)
@@ -205,7 +205,7 @@ def match_two_catalogs(
 
     elif join == "outer":
         sep_rad = radius * u.arcsec if not isinstance(radius, Quantity) else radius
-        idx_s, idx_r, seps, _ = search_around_sky(coord_sci, coord_ref, sep_rad)  # avoid match_to_catalog_sky for outer
+        idx_s, idx_r, seps, _ = search_around_sky(coord_sci, coord_ref, sep_rad)  # finds all pairs within radius
 
         order = np.lexsort([seps.arcsec, idx_s])  # last (idx_s) is primary key. within each group sorted by separation
         idx_s_s, idx_r_s = idx_s[order], idx_r[order]
@@ -214,7 +214,7 @@ def match_two_catalogs(
         sci_idx = idx_s_s[first]  # matched sci
         ref_idx = idx_r_s[first]  # ref closest to matched sci. not unique
         seps_best = seps_s[first]  # the best (closest) separation
-        if sep_2d:
+        if sep_components:
             dlon, dlat = coord_sci[sci_idx].spherical_offsets_to(coord_ref[ref_idx])
 
         used_s = set(sci_idx)
@@ -229,7 +229,7 @@ def match_two_catalogs(
                 row[f"ref_{n}"] = ref_tbl[n][iref]
             # row["separation"] = seps[(idx_s == isci) & (idx_r == iref)][0].arcsec
             row["separation"] = seps_best[k].to_value(u.arcsec)
-            if sep_2d:
+            if sep_components:
                 row["dra_cosdec"] = dlon[k].to_value(u.arcsec)
                 row["ddec"] = dlat[k].to_value(u.arcsec)
             rows.append(row)
@@ -242,7 +242,7 @@ def match_two_catalogs(
                 for n in ref_tbl.colnames:
                     row[f"ref_{n}"] = np.ma.masked
                 row["separation"] = np.ma.masked
-                if sep_2d:
+                if sep_components:
                     row["dra_cosdec"] = np.ma.masked
                     row["ddec"] = np.ma.masked
                 rows.append(row)
@@ -255,7 +255,7 @@ def match_two_catalogs(
                 for n in ref_tbl.colnames:
                     row[f"ref_{n}"] = ref_tbl[n][iref]
                 row["separation"] = np.ma.masked
-                if sep_2d:
+                if sep_components:
                     row["dra_cosdec"] = np.ma.masked
                     row["ddec"] = np.ma.masked
                 rows.append(row)
@@ -269,6 +269,19 @@ def match_two_catalogs(
 ###############################################################################
 
 
+def spherical_centroid(coords_list: list[SkyCoord]) -> SkyCoord:
+    """Unit-vector mean on the sphere; returns ICRS SkyCoord."""
+    if not coords_list:
+        raise ValueError("No coordinates provided for centroid")
+    vecs = np.array([c.cartesian.xyz.value for c in coords_list])  # (k,3)
+    mean_vec = vecs.mean(axis=0)
+    norm = np.linalg.norm(mean_vec)
+    if norm == 0.0:
+        return coords_list[0]
+    rep = CartesianRepresentation(*(mean_vec / norm))
+    return SkyCoord(rep, frame="icrs")
+
+
 def match_multi_catalogs(
     cats: Sequence[Table],
     *,
@@ -276,8 +289,9 @@ def match_multi_catalogs(
     dec_keys: Sequence[str] = ("DELTA_J2000",),
     radius: float | u.Quantity = 1.0,  # arcsec if float
     join: str = "inner",  # {'inner','left','outer'}
+    sep_components: bool = False,
     cat_names: Optional[Sequence[str]] = None,  # nice labels for suffixing
-    pivot: int | None = 0,  # index of pivot catalog used for tie-breaks and separations
+    pivot: int | str | None = "centroid",  # index of pivot catalog used for tie-breaks and separations
     suffix_first: bool = True,
 ) -> Table:
     """
@@ -303,6 +317,13 @@ def match_multi_catalogs(
     * Duplicate column names are suffixed with f"_{name}" where *name* is taken
       from *cat_names* (or f"cat{i}" if omitted), matching your 2-way behavior.
     * Adds separation columns (to the pivot) named 'sep_arcsec_<name>'.
+    * If *sep_components* is True, also adds signed components:
+        - 'dra_cosdec_arcsec_<name>'  (eastward, ΔRA·cosδ)
+        - 'ddec_arcsec_<name>'        (northward, ΔDec)
+    * Reference for these separations:
+        - If pivot is an int n → n-th unmasked catalog in the row is chosen as the pivot.
+        - If pivot == 'centroid' → the spherical centroid of all present matches
+        in the row (computed from unit cartesian vectors).
     """
     # --- normalize inputs ---
     if isinstance(radius, (int, float)):
@@ -313,8 +334,10 @@ def match_multi_catalogs(
         raise ValueError("len(cat_names) must match number of catalogs")
     if pivot is None:
         pivot = 0
-    if not (0 <= pivot < len(cats)):
-        raise ValueError("pivot must be a valid catalog index")
+    pivot_is_centroid = pivot == "centroid"
+    if not pivot_is_centroid:
+        if not (isinstance(pivot, int) and 0 <= pivot < len(cats)):
+            raise ValueError("pivot must be an int catalog index or 'centroid'")
 
     # Resolve RA/Dec keys for each catalog (allow a single key applied to all)
     def key_for(keys, i):
@@ -388,8 +411,17 @@ def match_multi_catalogs(
     def choose_representatives(comp: Dict[int, list]) -> Tuple[int, Dict[int, int]]:
         """Return (pivot_cat, {cat: row_idx}) for a component."""
         cats_present = sorted(comp.keys())
-        # choose pivot catalog (prefer requested pivot if present, else smallest present)
-        piv_cat = pivot if pivot in comp else cats_present[0]
+
+        # # choose pivot catalog (prefer requested pivot if present, else smallest present)
+        # piv_cat = pivot if pivot in comp else cats_present[0]
+
+        # CHANGED: when pivot is 'centroid', pick the smallest-present catalog;
+        # otherwise prefer the requested pivot catalog if present.
+        if pivot_is_centroid:
+            piv_cat = cats_present[0]
+        else:
+            piv_cat = pivot if pivot in comp else cats_present[0]
+
         # choose a pivot row (if multiple in piv_cat, pick the one with highest local density / or arbitrary closest to median)
         # Simpler heuristic: if multiple, choose the row with minimal average separation to all other catalogs' nearest
         piv_candidates = comp[piv_cat]
@@ -425,6 +457,8 @@ def match_multi_catalogs(
     # --- Build output rows according to join policy ---
     rows_per_component: List[Dict[Tuple[int, str], Any]] = []
     sep_names = []  # to retain order for later column creation
+    if sep_components:
+        comp_names = []  # order for dra_cosdec/ddec columns
     for root, comp in comps.items():
         cats_present = set(comp.keys())
 
@@ -432,7 +466,9 @@ def match_multi_catalogs(
             if len(cats_present) < len(cats):
                 continue
         elif join == "left":
-            if pivot not in cats_present:
+            # if pivot not in cats_present:
+            #     continue
+            if not pivot_is_centroid and pivot not in cats_present:
                 continue
         elif join == "outer":
             pass
@@ -456,17 +492,48 @@ def match_multi_catalogs(
                     row_dict[(cat_i, col)] = None  # will become masked if column supports it
 
         # separations to pivot (arcsec)
-        c_piv = coords[piv_cat][chosen[piv_cat]]
+        # c_piv = coords[piv_cat][chosen[piv_cat]]
+        # CHANGED: choose reference either pivot-row or centroid
+        if pivot_is_centroid:
+            present_coords = [coords[ci][chosen[ci]] for ci in range(len(cats)) if ci in chosen]  # NEW
+            c_ref = spherical_centroid(present_coords)  # NEW
+        else:
+            c_ref = coords[piv_cat][chosen[piv_cat]]  # CHANGED (was c_piv)
+
         for cat_i in range(len(cats)):
             label = f"sep_arcsec_{cat_names[cat_i]}"
             if cat_i in chosen:
                 c_i = coords[cat_i][chosen[cat_i]]
-                sep_arcsec = c_piv.separation(c_i).arcsec
+                # sep_arcsec = c_piv.separation(c_i).arcsec
+                sep_arcsec = c_ref.separation(c_i).arcsec  # CHANGED
+
                 row_dict[(-1, label)] = sep_arcsec
             else:
                 row_dict[(-1, label)] = None
             if label not in sep_names:
                 sep_names.append(label)
+            # Optional 2D signed components (east/north)
+            if sep_components:
+                dra_label = f"dra_cosdec_arcsec_{cat_names[cat_i]}"
+                ddec_label = f"ddec_arcsec_{cat_names[cat_i]}"
+                if cat_i in chosen:
+                    # position angle from pivot to target; sep is great-circle distance
+                    c_i = coords[cat_i][chosen[cat_i]]
+                    # sep = c_piv.separation(c_i)  # Angle
+                    # pa = c_piv.position_angle(c_i)  # Angle (radians under the hood)
+                    sep = c_ref.separation(c_i)  # CHANGED
+                    pa = c_ref.position_angle(c_i)  # CHANGED
+                    # Components in arcsec: +east (RA) and +north (Dec)
+                    d_east = (sep * np.sin(pa)).to(u.arcsec).value
+                    d_north = (sep * np.cos(pa)).to(u.arcsec).value
+                    row_dict[(-2, dra_label)] = d_east
+                    row_dict[(-2, ddec_label)] = d_north
+                else:
+                    row_dict[(-2, dra_label)] = None
+                    row_dict[(-2, ddec_label)] = None
+                for lab in (dra_label, ddec_label):
+                    if lab not in comp_names:
+                        comp_names.append(lab)
 
         rows_per_component.append(row_dict)
 
@@ -492,6 +559,8 @@ def match_multi_catalogs(
 
     # add separations at the end
     out_cols.extend([((-1, sn), sn) for sn in sep_names])
+    if sep_components:
+        out_cols.extend([((-2, cn), cn) for cn in comp_names])
 
     # create astropy Table
     out = Table()

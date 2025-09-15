@@ -8,10 +8,12 @@ from typing import Callable, Any, Optional, List, Dict, Union
 from datetime import datetime
 import itertools
 import subprocess
+from .memory import MemoryMonitor
 
 from .logger import Logger
 from .task import Task, Priority
 from ..utils import time_diff_in_seconds
+
 
 signal.signal(signal.SIGINT, signal.SIG_IGN)
 mp.set_start_method("spawn", force=True)
@@ -613,6 +615,7 @@ class QueueManager:
             while not (self.scheduler.is_all_done()):
                 if i % 6 == 0:
                     self.logger.info(self.scheduler.report_number_of_tasks())
+                    self.logger.info(MemoryMonitor.log_memory_usage)
                 time.sleep(10)
                 i += 1
             self.logger.info(self.scheduler.report_status())
