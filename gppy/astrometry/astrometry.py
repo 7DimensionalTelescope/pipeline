@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .. import external
 from ..const import PIXSCALE, PipelineError
-from ..utils import swap_ext, add_suffix, force_symlink, time_diff_in_seconds
+from ..utils import swap_ext, add_suffix, force_symlink, time_diff_in_seconds, unique_filename
 from ..header import update_padded_header, reset_header, fitsrec_to_header
 from ..services.memory import MemoryMonitor
 from ..config import SciProcConfiguration
@@ -159,7 +159,7 @@ class Astrometry(BaseSetup):
 
     def define_paths(self) -> Tuple[List[str], List[str], List[str]]:
         self.logger.info("Defining paths for astrometry")
-        self.path_astrometry = self.path.astrometry.tmp_dir
+        # self.path_astrometry = self.path.astrometry.tmp_dir
 
         # override if astrometry.input_images is set
         local_inim = get_key(self.config, "astrometry.input_images")
@@ -172,13 +172,14 @@ class Astrometry(BaseSetup):
 
         self.input_images = inims
 
-        soft_links = [os.path.join(self.path_astrometry, os.path.basename(s)) for s in inims]
+        # soft_links = [os.path.join(self.path_astrometry, os.path.basename(s)) for s in inims]
+        soft_links = self.path.astrometry.soft_link
         for inim, soft_link in zip(inims, soft_links):
             force_symlink(inim, soft_link)
             self.logger.debug(f"Soft link created: {inim} -> {soft_link}")
         self.soft_links_to_input_images = soft_links
 
-        self.prep_cats = [add_suffix(inim, "cat") for inim in soft_links]  # fits_ldac sextractor output
+        self.prep_cats = self.path.astrometry.catalog  # fits_ldac sextractor output
         self.solved_images = [add_suffix(s, "solved") for s in soft_links]  # solve-field output
         self.solved_heads = [swap_ext(s, "head") for s in self.prep_cats]  # scamp output
         self.images_info = [ImageInfo.parse_image_header_info(image) for image in self.input_images]
@@ -363,7 +364,7 @@ class Astrometry(BaseSetup):
         # joint scamp
         if joint:
             # write target files into a text file
-            cat_to_scamp = os.path.join(self.path_astrometry, "scamp_input.cat")
+            cat_to_scamp = os.path.join(self.path.astrometry.tmp_dir, "scamp_input.cat")
             with open(cat_to_scamp, "w") as f:
                 for precat in input_catalogs:
                     f.write(f"{precat}\n")
@@ -409,9 +410,9 @@ class Astrometry(BaseSetup):
                 self.logger.debug(f"{precat}")  # fmt:skip
             self.logger.debug(f"Individual run solved_heads: {solved_heads}")
 
-        if scamp_preset == "prep":
+        if scamp_preset != "main":
             for head in solved_heads:
-                backup_head = add_suffix(head, "prep")
+                backup_head = unique_filename(add_suffix(head, "prep"))
                 shutil.copy(head, backup_head)
                 self.logger.debug(f"Backed up prep head {head} to {backup_head}")
 
@@ -419,6 +420,10 @@ class Astrometry(BaseSetup):
         for image_info, solved_head in zip(self.images_info, solved_heads):
             image_info.head = solved_head
             self.logger.debug(f"Updated WCS in ImageInfo {image_info.head}")
+            with open(solved_head, "r") as f:
+                if not any("PV1_0" in line for line in f):
+                    # self.logger.error(f"No PV1_0 in {solved_head} - solution invalid")
+                    raise PipelineError(f"No PV1_0 in {solved_head} - solution invalid")
 
         self.logger.info(f"Completed scamp in {time_diff_in_seconds(st)} seconds")
         self.logger.debug(MemoryMonitor.log_memory_usage)
@@ -504,6 +509,12 @@ class Astrometry(BaseSetup):
                 separation_stats,
             ) = bundle
 
+            if unmatched_fraction == 1.0:
+                self.logger.error(
+                    f"Unmatched fraction is 1.0 for {self.input_images[idx]}. "
+                    f"Check the initial WCS guess or the reference catalog."
+                )
+
             info = self.images_info[idx]
             info.matched_catalog = matched
             info.ref_max_mag = ref_max_mag
@@ -514,6 +525,7 @@ class Astrometry(BaseSetup):
             info.subsecond_fraction = subsecond_fraction
             info.set_sep_stats(separation_stats)
             self.logger.debug(f"Evaluated solution for {self.input_images[idx]}")
+            return
 
         def _produce_sequential():
             for idx in range(len(self.input_images)):
@@ -755,6 +767,8 @@ class ImageInfo:
         self.sep_q1 = sep_stats["q1"]
         self.sep_q2 = sep_stats["q2"]
         self.sep_q3 = sep_stats["q3"]
+        self.sep_p95 = sep_stats["p95"]
+        self.sep_p99 = sep_stats["p99"]
 
     def set_internal_sep_stats(self, sep_stats: dict) -> None:
         self.internal_sep_rms_x = sep_stats["rms_x"]
@@ -764,6 +778,8 @@ class ImageInfo:
         self.internal_sep_q1 = sep_stats["q1"]
         self.internal_sep_q2 = sep_stats["q2"]
         self.internal_sep_q3 = sep_stats["q3"]
+        self.internal_sep_p95 = sep_stats["p95"]
+        self.internal_sep_p99 = sep_stats["p99"]
         self.internal_sep_max = sep_stats["max"]
 
     def set_internal_match_stats(self, match_stats: dict) -> None:
@@ -796,6 +812,8 @@ class ImageInfo:
             (f"RSEP_Q1", self.sep_q1, "Q1 separation from ref catalog [arcsec]"),
             (f"RSEP_Q2", self.sep_q2, "Q2 separation from ref catalog [arcsec]"),
             (f"RSEP_Q3", self.sep_q3, "Q3 separation from ref catalog [arcsec]"),
+            (f"RSEP_P95", self.sep_p95, "95 percentile sep from ref catalog [arcsec]"),
+            (f"RSEP_P99", self.sep_p99, "99 percentile sep from ref catalog [arcsec]"),
             # (f"RSEP_MED", self.sep_median, "Median separation from ref catalog [arcsec]"),
             # (f"RSEP_STD", self.sep_std, "STD of separation from ref catalog [arcsec]"),
         ]
@@ -818,6 +836,8 @@ class ImageInfo:
             "ISEP_Q2": getattr(self, "internal_sep_q2", None),
             "ISEP_Q3": getattr(self, "internal_sep_q3", None),
             "ISEP_MAX": getattr(self, "internal_sep_max", None),
+            "ISEP_P95": getattr(self, "internal_sep_p95", None),
+            "ISEP_P99": getattr(self, "internal_sep_p99", None),
             # "IMATCH_COUNTS": getattr(self, "internal_match_counts", None),
             "I_RECALL": getattr(self, "internal_match_recall", None),
         }
@@ -830,8 +850,10 @@ class ImageInfo:
             "ISEP_Q2": "Q2 internal sep of outer-matched [arcsec]",
             "ISEP_Q3": "Q3 internal sep of outer-matched [arcsec]",
             "ISEP_MAX": "Max internal sep of outer-matched [arcsec]",
+            "ISEP_P95": "95 percentile of outer-matched [arcsec]",
+            "ISEP_P99": "99 percentile of outer-matched [arcsec]",
             # "IMATCH_COUNTS": "Counts of matched sources by group size",
-            "I_RECALL": "Recovery frac in internal-matched outer-joined cat",
+            "I_RECALL": "Recovery fraction in outer-matched cat",
         }
         for key, val in internal_vals.items():
             if val is not None:

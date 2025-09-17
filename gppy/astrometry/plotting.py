@@ -56,17 +56,16 @@ def wcs_check_plot(
     )
     axes = [fig.add_subplot(gs_psf[i, j]) for i in range(3) for j in range(3)]
     matched_ids = wcs_check_psf_plot(axes, image, matched, wcs)
-
-    # Scatter top row
-    ax_scatter = fig.add_subplot(gs_master[0], projection=wcs)
-    # mask = np.isin(matched["id"], matched_ids)  # Highlight psf inspected sources
-    # inspected = matched[mask]
-    # Make an indexer array that preserves order
-    order = np.array(matched_ids)
+    # Highlight psf inspected sources, preserving order
+    order = np.array(matched_ids)  # Make an indexer array that preserves order
     mask = np.in1d(order, matched["id"])
     order = order[mask]
     id_to_idx = {id_: i for i, id_ in enumerate(matched["id"])}
     inspected = matched[[id_to_idx[_id] for _id in order]]
+
+    # Scatter top row
+    ax_scatter = fig.add_subplot(gs_master[0], projection=wcs)
+
     wcs_check_scatter_plot(
         ax_scatter,
         refcat[:num_plot],
@@ -261,6 +260,8 @@ def wcs_check_psf_plot(
 
     # remove ref-only rows
     matched_catalog = matched_catalog[~matched_catalog["separation"].mask]
+    if len(matched_catalog) == 0:
+        return []
 
     # centers in 0-based pixel coords (SExtractor is 1-based)
     x_img = matched_catalog["X_IMAGE"].astype(float) - 1.0
@@ -346,7 +347,8 @@ def wcs_check_psf_plot(
         if k == 0:
             ax.legend(loc="upper left", fontsize=8)
 
-    return matched_catalog[selected_idx]["id"]
+    return [matched_catalog[i]["id"] for i in selected_idx if i is not None]
+    # return matched_catalog[selected_idx]["id"]
 
 
 def _select_3x3_by_nearest(cand_xy, targets):

@@ -430,10 +430,10 @@ def compute_rms_stats(out: Table, cat_names, unit: u.Quantity | str = u.arcsec):
 
         if len(rv) > 0:
             rms = np.sqrt(np.mean(rv**2)).to(unit)
-            rv_q = np.percentile(rv.value, [0, 25, 50, 75, 100]) * rv.unit
-            min_, q1, q2, q3, max_ = rv_q.to(unit)
+            rv_q = np.percentile(rv.value, [0, 25, 50, 75, 95, 99, 100]) * rv.unit
+            min_, q1, q2, q3, p95, p99, max_ = rv_q.to(unit)
         else:
-            rms = min_ = q1 = q2 = q3 = max_ = np.nan * unit
+            rms = min_ = q1 = q2 = q3 = p95 = p99 = max_ = np.nan * unit
 
         res[name] = {
             "n": int(valid.sum()),
@@ -444,6 +444,8 @@ def compute_rms_stats(out: Table, cat_names, unit: u.Quantity | str = u.arcsec):
             "q1": q1,
             "q2": q2,
             "q3": q3,
+            "p95": p95,
+            "p99": p99,
             "max": max_,
         }
 

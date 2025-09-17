@@ -110,11 +110,15 @@ class MemoryMonitor:
         total = virtual_memory.total / 1024 / 1024
         used = virtual_memory.used / 1024 / 1024
         free = virtual_memory.available / 1024 / 1024
+        cgroup_status = utils.read_cgroup_mem()
         return {
-            "total": total,
+            "total": total,  # in MB
             "used": used,
             "free": free,
             "percent": virtual_memory.percent,
+            "cg_current": cgroup_status["gb_current"],  # in GB
+            "cg_max": cgroup_status["gb_max"],
+            "cg_percent": cgroup_status["percent_of_cap"],
         }
 
     @utils.classmethodproperty
@@ -209,4 +213,4 @@ class MemoryMonitor:
         cpu_utilization = psutil.cpu_percent(interval=None)
         gpu_summary = [f"{device}: {percent:.2f}%" for device, percent in enumerate(cls.current_gpu_memory_percent)]
         gpu_info = f", GPU [{', '.join(gpu_summary)}]"
-        return f"System [{cls.current_memory_percent:.2f}%], CPU util [{cpu_utilization:.2f}%]{gpu_info}"
+        return f"System [virtual: {cls.current_memory_percent:.2f}%, cgroup: {cls.current_memory['cg_percent']}%], CPU util [{cpu_utilization:.2f}%]{gpu_info}"

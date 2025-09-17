@@ -6,7 +6,9 @@ from typing import List, Dict, Optional, Union, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import psycopg
 from psycopg_pool import ConnectionPool
+
 from ...const import RAWDATA_DIR, CalibType
+from ...utils import atleast_1d
 from .const import DB_PARAMS, TABLES, ALIASES
 
 
@@ -276,11 +278,11 @@ class RawImageQuery:
         return self
 
     def by_units(self, units: List[str]):
-        self._params["units"] = units
+        self._params["units"] = atleast_1d(units)
         return self
 
     def of_types(self, types: List[str]):
-        self._params["image_types"] = types
+        self._params["image_types"] = atleast_1d(types)
         return self
 
     def for_target(self, target: Union[str, List[str]]):

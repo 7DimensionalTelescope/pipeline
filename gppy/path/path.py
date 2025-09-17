@@ -3,6 +3,8 @@ from glob import glob
 from pathlib import Path
 from typing import Union
 import numpy as np
+from functools import cached_property
+
 from .. import const
 from .utils import find_raw_path
 from ..utils import add_suffix, swap_ext, collapse, atleast_1d
@@ -116,6 +118,12 @@ class AutoMkdirMixin:
         elif isinstance(value, (str, Path)):
             self._mkdir(value)
 
+        # # DEBUG
+        # for key in ["BIAS", "DARK", "FLAT"]:
+        #     if isinstance(value, str) and key in os.path.dirname(value):
+        #         print(f"AutoMkdirMixin _mkdir {name} {value}")
+        #         raise RuntimeError(f"AutoMkdirMixin _mkdir {name} {value}")
+
         return value
 
     # def __getattr__(self, name):
@@ -177,9 +185,6 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
 
         if not self._file_dep_initialized and self._input_files:
             self.define_file_dependent_paths()
-
-        # if self._file_indep_initialized and self._file_dep_initialized:
-        self.define_operation_paths()
 
     def _handle_input(self, input):
         """init with obs_parmas and config are ad-hoc. Will be changed to always take filenames"""
@@ -537,12 +542,26 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
 
         self._file_dep_initialized = True
 
-    def define_operation_paths(self):
-        self.preprocess = PathPreprocess(self, self._config)
-        self.astrometry = PathAstrometry(self, self._config)
-        self.photometry = PathPhotometry(self, self._config)
-        self.imstack = PathImstack(self, self._config)
-        self.imsubtract = PathImsubtract(self, self._config)
+    # lazy, cached
+    @cached_property
+    def preprocess(self):
+        return PathPreprocess(self, self._config)
+
+    @cached_property
+    def astrometry(self):
+        return PathAstrometry(self, self._config)
+
+    @cached_property
+    def photometry(self):
+        return PathPhotometry(self, self._config)
+
+    @cached_property
+    def imstack(self):
+        return PathImstack(self, self._config)
+
+    @cached_property
+    def imsubtract(self):
+        return PathImsubtract(self, self._config)
 
     @property
     def conjugate(self) -> str | list[str]:
@@ -989,8 +1008,8 @@ class PathAstrometry(AutoMkdirMixin):
         self._parent = parent
 
         # Default values
-        self.ref_ris_dir = "/lyman/data2/factory/ref_scamp/gaia_dr3_7DT"  # "/lyman/data1/factory/catalog/gaia_dr3_7DT"
-        self.ref_query_dir = "/lyman/data1/factory/ref_scamp"
+        self.ref_ris_dir = const.ASTRM_REF_DIR
+        self.ref_query_dir = const.SCAMP_QUERY_DIR
 
         # Apply config overrides if provided
         if config and hasattr(config, "path"):
@@ -1017,19 +1036,25 @@ class PathAstrometry(AutoMkdirMixin):
             astrefcat = None
         return astrefcat
 
-    # @property
-    # def input_files(self):
-    #     return self._parent.processed_images
+    @cached_property
+    def input_files(self):
+        """This better be a property.
+        Whole PathAstrometry is always triggered using PathHandler, and processed_images involves AutoMkdirMixin"""
+        return atleast_1d(self._parent.processed_images)
 
     # @property
     # def solvefield_outputs(self):
     #     exts = ["solved", "axy", "corr", "match", "rdls", "wcs"]  # -indx.xyls?
     #     return tuple([swap_ext(image, ext) for ext in exts] for image in self.input_files)
 
-    # @property
-    # def catalog(self):
-    #     # return (add_suffix(add_suffix(inim, 'prep'), "cat") for inim in self.input_files)
-    #     return [add_suffix(inim, "cat") for inim in self.input_files]
+    @cached_property
+    def soft_link(self):
+        return [os.path.join(self.tmp_dir, os.path.basename(s)) for s in self.input_files]
+
+    @property
+    def catalog(self):
+        # return (add_suffix(add_suffix(inim, 'prep'), "cat") for inim in self.input_files)
+        return [add_suffix(inim, "cat") for inim in self.soft_link]
 
 
 class PathPhotometry(AutoMkdirMixin, AutoCollapseMixin):
@@ -1038,8 +1063,8 @@ class PathPhotometry(AutoMkdirMixin, AutoCollapseMixin):
     def __init__(self, parent: PathHandler, config=None):
         self._parent = parent
 
-        self.ref_ris_dir = "/lyman/data1/factory/ref_cat"  # divided by RIS tiles
-        self.ref_gaia_dir = "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile"
+        self.ref_ris_dir = const.PHOT_REF_DIR
+        self.ref_gaia_dir = const.GAIA_REF_DIR
 
         # Apply config overrides if provided
         if config and hasattr(config, "path"):
@@ -1120,7 +1145,7 @@ class PathImsubtract(AutoMkdirMixin, AutoCollapseMixin):
     def __init__(self, parent: PathHandler, config=None):
         self._parent = parent
 
-        self.ref_image_dir = "/lyman/data1/factory/ref_frame"
+        self.ref_image_dir = const.REF_IMAGE_DIR
 
         # Apply config overrides if provided
         if config and hasattr(config, "path"):

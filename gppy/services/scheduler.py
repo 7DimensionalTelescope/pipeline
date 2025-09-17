@@ -29,6 +29,7 @@ class Scheduler:
             - processes (list): List of processes to run (default: ["astrometry", "photometry", "combine", "subtract"])
             - overwrite (bool): Whether to overwrite existing results (default: False)
             - device_id (int): Starting GPU device ID (default: 0)
+            - max_devices (int): Maximum number of GPU devices available (default: 2)
 
     Example:
         >>> scheduler = Scheduler(
@@ -41,42 +42,39 @@ class Scheduler:
     """
 
     def __init__(self, dependent_configs={}, independent_configs=[], preprocess_only=False, **kwargs):
+
+
         # Initialize master queue and status tracking
         masters = list(dependent_configs.keys())
         self.master_queue = deque(masters)
         self.master_status = {self._key_from_path(p): None for p in masters}
 
-        # Convert dependents config to use extracted keys
-        self.dependents = {self._key_from_path(k): v for k, v in dependent_configs.items()}
-
-        # Only track independents if not in preprocess_only mode
-        if not preprocess_only:
-            self.independents = deque(independent_configs)
-            self.original_independents = set(independent_configs)
-        else:
+        if preprocess_only:
+            self.dependents = {}
             self.independents = deque()
             self.original_independents = set()
-
-        # Task tracking
-        self.task_queue = deque()
-        self.completed_tasks = set()
-        self.skipped_tasks = set()
-
-        # Build task status tracking - only for tasks that will actually run
-        dependent_paths = [p for group in dependent_configs.values() for p in group]
-        if preprocess_only:
-            # In preprocess_only mode, only track master tasks
             self.task_status = {self._key_from_path(p): None for p in masters}
         else:
-            # Track all tasks in normal mode
+            self.dependents = {self._key_from_path(k): v for k, v in dependent_configs.items()}
+            self.independents = deque(independent_configs)
+            self.original_independents = set(independent_configs)
+            dependent_paths = [p for group in dependent_configs.values() for p in group]
             self.task_status = {
                 self._key_from_path(p): None for p in masters + dependent_paths + list(independent_configs)
             }
 
+        self.task_queue = deque()
+        self.completed_tasks = set()
+        self.skipped_tasks = set()
+
         # Configuration options
-        self.processes = kwargs.get("processes", ["astrometry", "photometry", "combine", "subtract"])
+        processes = kwargs.get("processes", ["astrometry", "photometry", "combine", "subtract"])
+
+        self.processes = processes
+
         self.overwrite = kwargs.get("overwrite", False)
-        self.device_id = 0
+        self.device_id = kwargs.get("device_id", 0)
+        self.max_devices = kwargs.get("max_devices", 2)  # Default to 2 GPUs
         self.preprocess_only = preprocess_only
 
     def _key_from_path(self, path):
@@ -89,6 +87,8 @@ class Scheduler:
         Returns:
             str: Extracted key from the filename without extension
         """
+        if not path:
+            raise ValueError("Path cannot be empty")
         return path.split("/")[-1].replace(".yml", "")
 
     def _generate_command(self, config, task_type):
@@ -111,7 +111,7 @@ class Scheduler:
                 "-config",
                 config,
                 "-device",
-                str(int(self.device_id % 2)),
+                str(int(self.device_id % self.max_devices)),
                 "-make_plots",
             ]
             if self.overwrite:
@@ -156,11 +156,11 @@ class Scheduler:
         # Case 1: Masterframe
         if key in self.master_status:
             self.master_status[key] = success
-            if success and not self.preprocess_only:
+            if success:
                 # Schedule dependent tasks when master succeeds (only if not preprocess_only)
                 for dep in self.dependents.get(key, []):
                     self.task_queue.append(dep)
-            elif not success:
+            else:
                 # Mark dependent tasks as failed when master fails
                 for dep in self.dependents.get(key, []):
                     self.task_status[self._key_from_path(dep)] = False
@@ -172,13 +172,11 @@ class Scheduler:
                     self.task_status[self._key_from_path(mu)] = False
                     self.skipped_tasks.add(mu)
 
-        # Schedule independents only if all masters succeeded and not in preprocess_only mode
-        if not self.preprocess_only and all(v is True for v in self.master_status.values()):
-            all_required_deps = [dep for k, v in self.master_status.items() if v for dep in self.dependents.get(k, [])]
-            if all(self.task_status[self._key_from_path(dep)] is not None for dep in all_required_deps):
-                while self.independents:
-                    mu = self.independents.popleft()
-                    self.task_queue.append(mu)
+        # Schedule independents only if all masters succeeded
+        if all(v is True for v in self.master_status.values()):
+            while self.independents:
+                mu = self.independents.popleft()
+                self.task_queue.append(mu)
 
     def get_next_task(self):
         """
@@ -194,7 +192,7 @@ class Scheduler:
             config = self.master_queue.popleft()
             cmd = self._generate_command(config, "Masterframe")
             return cmd
-        if self.task_queue and not self.preprocess_only:
+        if self.task_queue:
             config = self.task_queue.popleft()
             cmd = self._generate_command(config, "ScienceImage")
             return cmd
@@ -207,45 +205,12 @@ class Scheduler:
         Returns:
             bool: True if all tasks are finished, False otherwise
         """
-        if self.preprocess_only:
-            return not self.master_queue and all(v is not None for v in self.task_status.values())
-        else:
-            return (
-                not self.master_queue
-                and not self.task_queue
-                and not self.independents
-                and all(v is not None for v in self.task_status.values())
-            )
-
-    def report_status_detailed(self):
-        """
-        Get detailed status report of all tasks.
-
-        Returns:
-            dict: Dictionary containing lists of succeeded, failed, and pending tasks
-        """
-        return {
-            "succeeded": [p for p, v in self.task_status.items() if v is True],
-            "failed": [p for p, v in self.task_status.items() if v is False],
-            "pending": [p for p, v in self.task_status.items() if v is None],
-        }
-
-    def report_status(self):
-        """
-        Get summary status report with task counts.
-
-        Returns:
-            dict: Dictionary containing counts of succeeded, failed, and pending tasks
-        """
-        succeeded_count = len([p for p, v in self.task_status.items() if v is True])
-        failed_count = len([p for p, v in self.task_status.items() if v is False])
-        pending_count = len([p for p, v in self.task_status.items() if v is None])
-
-        return {
-            "succeeded": succeeded_count,
-            "failed": failed_count,
-            "pending": pending_count,
-        }
+        return (
+            not self.master_queue
+            and not self.task_queue
+            and not self.independents
+            and all(v is not None for v in self.task_status.values())
+        )
 
     def report_number_of_tasks(self):
         """
@@ -261,22 +226,53 @@ class Scheduler:
 
         # Count completed tasks
         completed_masters = sum(1 for status in self.master_status.values() if status is not None)
+
+        # Count dependent tasks that are completed (have non-None status)
+        dependent_keys = set()
+        for deps in self.dependents.values():
+            dependent_keys.update(self._key_from_path(dep) for dep in deps)
         completed_dependents = sum(
-            1
-            for task, status in self.task_status.items()
-            if status is not None
-            and task in [self._key_from_path(dep) for deps in self.dependents.values() for dep in deps]
+            1 for task, status in self.task_status.items() if task in dependent_keys and status is not None
         )
+
+        # Count independent tasks that are completed (have non-None status)
+        independent_keys = set(self._key_from_path(ind) for ind in self.original_independents)
         completed_independents = sum(
-            1
-            for task, status in self.task_status.items()
-            if status is not None and task in [self._key_from_path(ind) for ind in self.original_independents]
+            1 for task, status in self.task_status.items() if task in independent_keys and status is not None
+        )
+
+        # Count successful and failed tasks by category
+        successful_masters = sum(1 for v in self.master_status.values() if v is True)
+        failed_masters = sum(1 for v in self.master_status.values() if v is False)
+
+        successful_dependents = sum(
+            1 for task, status in self.task_status.items() if task in dependent_keys and status is True
+        )
+        failed_dependents = sum(
+            1 for task, status in self.task_status.items() if task in dependent_keys and status is False
+        )
+
+        successful_independents = sum(
+            1 for task, status in self.task_status.items() if task in independent_keys and status is True
+        )
+        failed_independents = sum(
+            1 for task, status in self.task_status.items() if task in independent_keys and status is False
         )
 
         return {
-            "master": f"{completed_masters} out of {total_masters}",
-            "dependent": f"{completed_dependents} out of {total_dependents}",
-            "independent": f"{completed_independents} out of {total_independents}",
+            "master": f"{completed_masters} out of {total_masters} (success: {successful_masters}, failed: {failed_masters})",
+            "dependent": f"{completed_dependents} out of {total_dependents} (success: {successful_dependents}, failed: {failed_dependents})",
+            "independent": f"{completed_independents} out of {total_independents} (success: {successful_independents}, failed: {failed_independents})",
         }
 
- 
+    def status_of_queues(self):
+        """
+        Get status of all queues.
+
+        Returns:
+            dict: Dictionary containing status of all queues
+        """
+        return {
+            "master": self.master_queue,
+            "dependent": self.task_queue,
+        }

@@ -11,8 +11,6 @@ import logging
 from pathlib import Path
 from gppy.services.monitor import Monitor
 from gppy.wrapper import DataReduction
-from gppy.services.queue import QueueManager
-from gppy.services.scheduler import Scheduler
 
 # Set up logging
 logging.basicConfig(
@@ -30,30 +28,12 @@ def process_new_images(image_paths):
     """
     try:
         logger.info(f"Processing {len(image_paths)} new images")
-        queue = QueueManager()
         dr = DataReduction.from_list(image_paths)
         dr.create_config()
-        configs = dr.config_list()
-        dr.cleanup()
-        del dr
-        sc = Scheduler(*configs)
-        queue.add_scheduler(sc)
-        queue.wait_until_task_complete("all")
+        dr.process_all()
         logger.info(f"Successfully processed {len(image_paths)} images")
     except Exception as e:
         logger.error(f"Error processing images: {e}")
-
-
-def trigger_processor(image_paths):
-    """
-    Process new images directly when detected.
-    This function is called by the Monitor when new images are found.
-    """
-    try:
-        logger.info(f"New images detected: {len(image_paths)} images")
-        process_new_images(image_paths)
-    except Exception as e:
-        logger.error(f"Failed to process images: {e}")
 
 
 def start_trigger_monitoring():
@@ -62,7 +42,7 @@ def start_trigger_monitoring():
 
     # Create the monitor using the existing codebase
     monitor = Monitor(base_path=Path(RAWDATA_DIR))
-    monitor.add_callback(trigger_processor)
+    monitor.add_callback(process_new_images)
     observer = monitor.start()
 
     logger.info("Trigger service started - monitoring directories for new images")

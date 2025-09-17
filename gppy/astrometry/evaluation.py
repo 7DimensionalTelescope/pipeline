@@ -5,7 +5,7 @@ from astropy.time import Time
 from astropy.wcs import WCS
 import astropy.io.fits as fits
 
-from ..const import PIXSCALE
+from ..const import PIXSCALE, PipelineError
 from ..tools.table import match_two_catalogs, add_id_column, match_multi_catalogs
 from ..utils import add_suffix, swap_ext
 from .plotting import wcs_check_plot
@@ -124,6 +124,8 @@ def evaluate_single_wcs(
             "q1": np.percentile(sep_sci, 25),
             "q2": np.percentile(sep_sci, 50),  # same as median
             "q3": np.percentile(sep_sci, 75),
+            "p95": np.percentile(sep_sci, 95),
+            "p99": np.percentile(sep_sci, 99),
         }
     else:
         unmatched_fraction = 1.0  # no NaN. fits requires values
@@ -136,9 +138,14 @@ def evaluate_single_wcs(
             "q1": 0.0,
             "q2": 0.0,
             "q3": 0.0,
+            "p95": 0.0,
+            "p99": 0.0,
         }
 
-    if plot_save_path is not None:
+    # if unmatched_fraction == 1.0:
+    #     raise PipelineError(f"Unmatched fraction is 1.0 for {image}")
+
+    if plot_save_path is not None and unmatched_fraction < 1.0:
         wcs_check_plot(
             ref_cat,
             tbl,

@@ -14,6 +14,12 @@ STACKED_DIR = os.environ.get("STACKED_DIR")
 SLACK_TOKEN = os.environ.get("SLACK_TOKEN", None)
 INSTRUM_STATUS_DICT = os.environ.get("INSTRUM_STATUS_DICT")
 
+# Paths to pre-generated data
+ASTRM_REF_DIR = "/lyman/data2/factory/ref_scamp/gaia_dr3_7DT"  #  "/lyman/data1/factory/catalog/gaia_dr3_7DT"
+SCAMP_QUERY_DIR = "/lyman/data1/factory/ref_scamp"  # "/lyman/data1/factory/catalog/gaia_dr3_7DT"
+PHOT_REF_DIR = "/lyman/data1/factory/ref_cat"  # divided by RIS tiles
+GAIA_REF_DIR = "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile"
+REF_IMAGE_DIR = "/lyman/data1/factory/ref_frame"
 
 # Internal paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))

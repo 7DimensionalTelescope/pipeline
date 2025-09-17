@@ -188,9 +188,9 @@ def swap_ext(file_path: str | list[str], new_ext: str) -> str:
     """
     if isinstance(file_path, list):
         return [swap_ext(f, new_ext) for f in file_path]
-    base, _ = os.path.splitext(file_path)
+    stem, _ = os.path.splitext(file_path)
     new_ext = new_ext if new_ext.startswith(".") else f".{new_ext}"
-    return base + new_ext
+    return stem + new_ext
 
 
 def add_suffix(filename: str | list[str], suffix):
@@ -206,9 +206,51 @@ def add_suffix(filename: str | list[str], suffix):
     """
     if isinstance(filename, list):
         return [add_suffix(f, suffix) for f in filename]
-    base, ext = os.path.splitext(filename)
+    stem, ext = os.path.splitext(filename)
     suffix = suffix if suffix.startswith("_") else f"_{suffix}"
-    return f"{base}{suffix}{ext}"
+    return f"{stem}{suffix}{ext}"
+
+
+def drop_suffix(filename: str | list[str], suffix: str | None = None):
+    """
+    Remove a suffix from the filename before the extension.
+    If no suffix is provided, remove the last underscore section.
+
+    Args:
+        filename (str | list[str]): The original filename(s).
+        suffix (str | None): The suffix to remove (without extension).
+                             If None, drops the last '_suffix'.
+
+    Returns:
+        str | list[str]: The modified filename(s).
+    """
+    if isinstance(filename, list):
+        return [drop_suffix(f, suffix) for f in filename]
+
+    stem, ext = os.path.splitext(filename)
+
+    if suffix is None:
+        if "_" in stem:
+            stem = stem.rsplit("_", 1)[0]
+    else:
+        suffix = suffix if suffix.startswith("_") else f"_{suffix}"
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)]
+
+    return f"{stem}{ext}"
+
+
+def unique_filename(fpath: str):
+    if not os.path.exists(fpath):
+        return fpath
+    else:
+        idx = 0
+        while True:
+            idx += 1
+            fpath_new = add_suffix(fpath, f"{idx}")
+            if not os.path.exists(fpath_new):
+                break
+        return fpath_new
 
 
 def equal_on_keys(d1: dict, d2: dict, keys: list):

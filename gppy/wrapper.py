@@ -91,12 +91,42 @@ class DataReduction:
         print("Blueprint initialized.")
 
     @classmethod
-    def from_list(cls, list_of_images):
-        if not all(f.endswith(".fits") for f in list_of_images):
+    def from_list(cls, list_of_images, ignore_mult_date=False):
+        # if not all(f.endswith(".fits") for f in list_of_images):
+        #     raise ValueError("Non-fits images in input")
+        # self = cls.__new__(cls)
+        # self.list_of_images = list_of_images
+        # self.initialize()
+        # print("Blueprint initialized from user-input list.")
+        # return self
+        if not list_of_images:
+            raise ValueError("Empty list_of_images")
+
+        if not all(isinstance(f, str) and f.endswith(".fits") for f in list_of_images):
             raise ValueError("Non-fits images in input")
+
+        # Bypass __init__ but reproduce its initialization
         self = cls.__new__(cls)
+
+        # Match fields initialized in __init__
+        self.groups = SortedGroupDict()
+        self._unified_key_list = None
+        self._key_usage_map = None
+        self._multi_unit_config = set()
+
+        # Record where these came from for parity with __init__
+        self.input_params = {"source": "user_list", "patterns": list(list_of_images)}
+
+        # Set images directly (no DB / globbing here)
         self.list_of_images = list_of_images
-        self.initialize()
+
+        print(f"Found {len(self.list_of_images)} images.")
+        if len(self.list_of_images) == 0:
+            print("No images found")
+            return self
+
+        print("Grouping images...")
+        self.initialize(ignore_mult_date=ignore_mult_date)
         print("Blueprint initialized from user-input list.")
         return self
 
@@ -175,7 +205,6 @@ class DataReduction:
     def process_all(
         self,
         preprocess_only=False,
-        make_plots=False,
         overwrite=True,
         processes=["astrometry", "photometry", "combine", "subtract"],
         queue=None,
@@ -189,56 +218,6 @@ class DataReduction:
         sc = Scheduler(*configs, processes=processes, overwrite=overwrite, preprocess_only=preprocess_only)
         queue.add_scheduler(sc)
         queue.wait_until_task_complete("all")
-
-        # self.queue = QueueManager()
-        # masterframe_ids = []
-        # for i, (key, group) in enumerate(self.groups.items()):
-        #     if isinstance(group, MasterframeGroup):
-        #         if i < 2:
-        #             device_id = i
-        #         else:
-        #             device_id = "CPU"
-        #         pre_task = group.get_task(device_id=device_id, only_with_sci=only_with_sci, make_plots=make_plots)
-        #         self.queue.add_task(pre_task)
-        #         masterframe_ids.append([pre_task, group])
-        #         time.sleep(1)
-
-        # if preprocess_only:
-        #     self.queue.wait_until_task_complete("all")
-        #     return
-
-        # while True:
-        #     for task, group in masterframe_ids:
-        #         if task.status == "completed":
-        #             for key in group.sci_keys:
-        #                 sci_group = self.groups[key]
-        #                 if not (sci_group.multi_units):
-        #                     self.queue.add_task(sci_group.get_task())
-        #                 else:
-        #                     self._multi_unit_config.add(sci_group.config)
-        #             masterframe_ids.remove([task, group])
-
-        #     time.sleep(1)
-
-        #     if len(masterframe_ids) == 0:
-        #         break
-
-        # for config in self._multi_unit_config:
-        #     from .run import run_scidata_reduction
-
-        #     sci_task = Task(
-        #         run_scidata_reduction,
-        #         kwargs={"config": config, "processes": ["astrometry", "photometry", "combine", "subtract"]},
-        #         priority=Priority.MEDIUM,
-        #     )
-        #     self.queue.add_task(sci_task)
-
-        # for key, group in self.groups.items():
-        #     if isinstance(group, MasterframeGroup):
-        #         pre_task = group.get_task(device_id=None, only_with_sci=False, make_plots=True, priority=Priority.LOW)
-        #         self.queue.add_task(pre_task)
-
-        # self.queue.wait_until_task_complete("all")
 
 
 class MasterframeGroup:

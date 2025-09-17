@@ -82,7 +82,8 @@ class PreprocConfiguration(BaseConfig):
             if len(input) < 1:
                 self.logger.warning("No input images")
                 sys.exit(0)
-            self.path = PathHandler(sorted(input)[-1])  # in case of multiple dates, use the later date
+            sci_images = PathHandler(input).pick_type("science")
+            self.path = PathHandler(sorted(sci_images)[-1])  # in case of multiple dates, use the later date
             config_source = self.path.preproc_base_yml
             self.logger = self._setup_logger(
                 logger,

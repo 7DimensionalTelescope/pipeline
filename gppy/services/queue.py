@@ -616,10 +616,8 @@ class QueueManager:
                 if i % 6 == 0:
                     self.logger.info(self.scheduler.report_number_of_tasks())
                     self.logger.info(MemoryMonitor.log_memory_usage)
-                time.sleep(10)
+                    time.sleep(10)
                 i += 1
-            self.logger.info(self.scheduler.report_status())
-            self.logger.debug(self.scheduler.report_status_detailed())
 
         elif self.ptype == "task":
 

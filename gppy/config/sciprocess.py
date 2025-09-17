@@ -1,11 +1,13 @@
 import os
 import glob
+import time
 from datetime import datetime
+
 from .. import __version__
+from ..const import PipelineError
 from ..utils import clean_up_folder, clean_up_sciproduct, get_header, atleast_1d, time_diff_in_seconds
 from ..path.path import PathHandler
 from .base import BaseConfig
-import time
 
 
 class SciProcConfiguration(BaseConfig):
@@ -66,6 +68,8 @@ class SciProcConfiguration(BaseConfig):
         self = cls.from_config(path.sciproc_base_yml)
         self.path = path
         self.config_file = self.path.sciproc_output_yml
+        if isinstance(self.config_file, list):
+            raise PipelineError("Inhomogeneous input images; config not uniquely defined")
 
         # config_source = self.path.sciproc_base_yml
         # super().__init__(self, config_source=config_source, write=write, **kwargs)

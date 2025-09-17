@@ -15,6 +15,53 @@ import pynvml
 import os
 
 
+_cached_cg_path = None  # cache for resolved cgroup path
+
+
+def read_cgroup_mem(cg_path=None):
+    """
+    Return cgroup-v2 memory usage for a slice/cgroup.
+    If cg_path is None, use the current process's cgroup.
+    The resolved sysfs path is cached for faster repeated calls.
+    """
+    global _cached_cg_path
+
+    if _cached_cg_path is None:
+        if cg_path is None:
+            # Find this process's cgroup (line starting with "0::")
+            with open("/proc/self/cgroup", "r") as f:
+                cg_rel = None
+                for line in f:
+                    if line.startswith("0::"):
+                        cg_rel = line.split("::", 1)[1].strip().lstrip("/")
+                        break
+            if cg_rel is None:
+                raise RuntimeError("cgroup v2 path not found in /proc/self/cgroup")
+            _cached_cg_path = os.path.join("/sys/fs/cgroup", cg_rel)
+        else:
+            _cached_cg_path = os.path.join("/sys/fs/cgroup", cg_path.lstrip("/"))
+
+    cg_dir = _cached_cg_path
+
+    # read memory.current
+    with open(os.path.join(cg_dir, "memory.current"), "r") as f:
+        mem_current = int(f.read().strip())
+
+    # read memory.max
+    with open(os.path.join(cg_dir, "memory.max"), "r") as f:
+        mem_max_raw = f.read().strip()
+    mem_max = None if mem_max_raw == "max" else int(mem_max_raw)
+
+    return {
+        "bytes_current": mem_current,
+        "bytes_max": mem_max,  # None == unlimited
+        "gb_current": mem_current / (1024**3),
+        "gb_max": None if mem_max is None else mem_max / (1024**3),
+        "percent_of_cap": None if mem_max is None else (mem_current / mem_max) * 100.0,
+        "path": cg_dir,
+    }
+
+
 def cleanup_memory() -> None:
     """
     Perform comprehensive memory cleanup across CPU and GPU.
