@@ -432,8 +432,12 @@ class Astrometry(BaseSetup):
             self.update_catalog(input_catalogs, solved_heads)
             self.logger.info(f"Updated catalogs with solved heads")
 
-    def update_catalog(self, input_catalogs: List[str], solved_heads: List[str]) -> None:
-        """Update catalog with solved heads."""
+    def update_catalog(self, input_catalogs: List[str], solved_heads: List[str], update_fwhm: bool = False) -> None:
+        """
+        Update catalog with solved heads.
+        Currently only updates RA/Dec.
+        FWHM_WORLD not updated.
+        """
         input_catalogs = input_catalogs or self.prep_cats
         solved_heads = solved_heads or self.solved_heads
         assert len(input_catalogs) == len(solved_heads)
@@ -454,6 +458,10 @@ class Astrometry(BaseSetup):
             ra, dec = wcs.all_pix2world(tbl["X_IMAGE"], tbl["Y_IMAGE"], 1)
             tbl["ALPHA_J2000"] = ra
             tbl["DELTA_J2000"] = dec
+
+            if update_fwhm:
+                # tbl["FWHM_WORLD"] = something
+                pass
 
             # update (overwrite) the catalog
             write_ldac(image_header, tbl, input_catalog)  # internally c script with cfitsio
@@ -482,34 +490,30 @@ class Astrometry(BaseSetup):
             bname = os.path.basename(input_image)
             plot_path = os.path.join(self.path.figure_dir, swap_ext(add_suffix(bname, suffix), "jpg"))
 
-            return_bundle = evaluate_single_wcs(
+            eval_result = evaluate_single_wcs(
                 image=input_image,
                 ref_cat=refcat,
                 source_cat=prep_cat,
                 date_obs=image_info.dateobs,
                 wcs=image_info.wcs,
+                H=image_info.naxis2,
+                W=image_info.naxis1,
                 fov_ra=image_info.fov_ra,
                 fov_dec=image_info.fov_dec,
                 plot_save_path=plot_path,
                 num_sci=num_sci,
                 num_ref=num_ref,
+                cutout_size=30,
             )
-            return idx, return_bundle
+            return idx, eval_result
 
-        def _apply(idx: int, bundle):
+        def _apply(idx: int, eval_result):
             """apply helper to avoid code duplication"""
-            (
-                matched,
-                ref_max_mag,
-                sci_max_mag,
-                num_ref_out,
-                unmatched_fraction,
-                subpixel_fraction,
-                subsecond_fraction,
-                separation_stats,
-            ) = bundle
+            matched = eval_result.matched
+            rsep_stats = eval_result.rsep_stats
+            psf_stats = eval_result.psf_stats
 
-            if unmatched_fraction == 1.0:
+            if rsep_stats.unmatched_fraction == 1.0:
                 self.logger.error(
                     f"Unmatched fraction is 1.0 for {self.input_images[idx]}. "
                     f"Check the initial WCS guess or the reference catalog."
@@ -517,13 +521,13 @@ class Astrometry(BaseSetup):
 
             info = self.images_info[idx]
             info.matched_catalog = matched
-            info.ref_max_mag = ref_max_mag
-            info.sci_max_mag = sci_max_mag
-            info.num_ref_sources = num_ref_out
-            info.unmatched_fraction = unmatched_fraction
-            info.subpixel_fraction = subpixel_fraction
-            info.subsecond_fraction = subsecond_fraction
-            info.set_sep_stats(separation_stats)
+            info.ref_max_mag = rsep_stats.ref_max_mag
+            info.sci_max_mag = rsep_stats.sci_max_mag
+            info.num_ref_sources = rsep_stats.num_ref
+            info.unmatched_fraction = rsep_stats.unmatched_fraction
+            info.subpixel_fraction = rsep_stats.subpixel_fraction
+            info.subsecond_fraction = rsep_stats.subsecond_fraction
+            info.set_sep_stats(rsep_stats.separation_stats)
             self.logger.debug(f"Evaluated solution for {self.input_images[idx]}")
             return
 
@@ -597,14 +601,16 @@ class Astrometry(BaseSetup):
                 reset_header(target_fits)
 
             if image_info.wcs_evaluated:
-                solved_header.update(image_info.wcs_eval_cards)
+                # solved_header.update(image_info.wcs_eval_cards)  # this removes duplicate COMMENT cards
+                solved_header.extend(image_info.wcs_eval_cards)
                 self.logger.debug(f"WCS evaluation is added to {target_fits}")
             else:
                 self.logger.debug(f"WCS evaluation is missing for {target_fits}")
 
             if add_polygon_info:
                 polygon_header = polygon_info_header(image_info)
-                solved_header.update(polygon_header)
+                # solved_header.update(polygon_header)
+                solved_header.extend(polygon_header)
 
             # update the header, consuming the COMMENT padding
             update_padded_header(target_fits, solved_header)
@@ -876,8 +882,16 @@ class ImageInfo:
     @property
     def seeing(self) -> float:
         """seeing from gaia-matched point sources"""
-        return np.ma.median(self.matched_catalog["FWHM_WORLD"]) * 3600
+        return np.ma.median(self.matched_catalog["FWHM_WORLD"]) * 3600  # in arcsec
+
+    @property
+    def seeing_error(self) -> float:
+        return np.ma.std(self.matched_catalog["FWHM_WORLD"]) * 3600
 
     @property
     def ellipticity(self) -> float:
         return np.ma.median(self.matched_catalog["ELLIPTICITY"])
+
+    @property
+    def ellipticity_error(self) -> float:
+        return np.ma.std(self.matched_catalog["ELLIPTICITY"])

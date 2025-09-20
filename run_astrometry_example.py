@@ -3,9 +3,6 @@ from gppy.services.scheduler import Scheduler
 from gppy.services.queue import QueueManager
 from gppy.services.database.query import free_query
 
-from gppy.services.database import DatabaseHandler
-
-DatabaseHandler().clear_database()
 import gc
 
 query = """
@@ -21,8 +18,9 @@ reprocess_dates = [r[0].strftime("%Y-%m-%d") for r in rows]
 
 queue = QueueManager(max_workers=5)
 skip = True
+print(reprocess_dates)
 for date in reprocess_dates[::-1]:  # processing backwards for mframe selection
-    if date == "2025-08-31":  # start date (inclusive)
+    if date == "2025-08-28":  # start date (inclusive)
         skip = False
 
     if skip:

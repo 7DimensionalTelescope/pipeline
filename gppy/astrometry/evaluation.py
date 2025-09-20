@@ -1,4 +1,5 @@
-from typing import List
+from dataclasses import dataclass
+from typing import Optional, TypedDict, List
 import numpy as np
 from astropy.table import Table
 from astropy.time import Time
@@ -7,10 +8,50 @@ import astropy.io.fits as fits
 
 from ..const import PIXSCALE, PipelineError
 from ..tools.table import match_two_catalogs, add_id_column, match_multi_catalogs
+from ..tools.angle import pa_alignment
 from ..utils import add_suffix, swap_ext
 from .plotting import wcs_check_plot
 from ..subtract.utils import create_ds9_region_file
-from .utils import inside_quad_spherical, compute_rms_stats, well_matchedness_stats
+from .utils import inside_quad_spherical, compute_rms_stats, well_matchedness_stats, get_3x3_stars, find_id_rows
+
+
+class SeparationStats(TypedDict):
+    rms: float
+    min: float
+    max: float
+    q1: float
+    q2: float
+    q3: float
+    p95: float
+    p99: float
+
+
+@dataclass(frozen=True)
+class RSEPSStats:
+    ref_max_mag: float
+    sci_max_mag: float
+    num_ref: int
+    unmatched_fraction: float
+    subpixel_fraction: float
+    subsecond_fraction: float
+    separation_stats: SeparationStats
+
+
+class PsfStats(TypedDict):
+    FWHMCRMN: float
+    FWHMCRSD: float
+    AWINCRMN: float
+    AWINCRSD: float
+    PA_ALIGN: float
+    ELLIPAVG: float
+    ELLIPSTD: float
+
+
+@dataclass(frozen=True)
+class EvaluationResult:
+    matched: Table
+    rsep_stats: RSEPSStats
+    psf_stats: Optional[PsfStats]
 
 
 def evaluate_single_wcs(
@@ -19,6 +60,8 @@ def evaluate_single_wcs(
     source_cat: str | Table,
     date_obs: str,
     wcs: WCS,
+    H: int,
+    W: int,
     match_radius=10,
     fov_ra=None,
     fov_dec=None,
@@ -28,6 +71,7 @@ def evaluate_single_wcs(
     num_ref=100,
     num_plot=50,
     ds9_region=True,
+    cutout_size=30,
 ):
     """Ensure num_plot <= num_sci, num_ref"""
 
@@ -108,6 +152,7 @@ def evaluate_single_wcs(
     if write_matched_catalog:
         matched.write(add_suffix(source_cat, "matched"), overwrite=True)
 
+    # compute separation statistics
     sep = matched["separation"]
     n_valid = sep.count()
     sep_sci = sep.compressed()  # unmasked
@@ -117,33 +162,47 @@ def evaluate_single_wcs(
         subpixel_fraction = float(np.ma.mean(sep < PIXSCALE))
         subsecond_fraction = float(np.ma.mean(sep < 1.0))
 
-        separation_stats = {
-            "rms": np.sqrt(np.mean(sep_sci**2)),
-            "min": np.min(sep_sci),
-            "max": np.max(sep_sci),
-            "q1": np.percentile(sep_sci, 25),
-            "q2": np.percentile(sep_sci, 50),  # same as median
-            "q3": np.percentile(sep_sci, 75),
-            "p95": np.percentile(sep_sci, 95),
-            "p99": np.percentile(sep_sci, 99),
-        }
+        separation_stats = SeparationStats(
+            rms=np.sqrt(np.mean(sep_sci**2)),
+            min=np.min(sep_sci),
+            max=np.max(sep_sci),
+            q1=np.percentile(sep_sci, 25),
+            q2=np.percentile(sep_sci, 50),
+            q3=np.percentile(sep_sci, 75),
+            p95=np.percentile(sep_sci, 95),
+            p99=np.percentile(sep_sci, 99),
+        )
     else:
         unmatched_fraction = 1.0  # no NaN. fits requires values
         subpixel_fraction = 0
         subsecond_fraction = 0
-        separation_stats = {
-            "rms": 0.0,
-            "min": 0.0,
-            "max": 0.0,
-            "q1": 0.0,
-            "q2": 0.0,
-            "q3": 0.0,
-            "p95": 0.0,
-            "p99": 0.0,
-        }
+        separation_stats = SeparationStats(
+            rms=0.0,
+            min=0.0,
+            max=0.0,
+            q1=0.0,
+            q2=0.0,
+            q3=0.0,
+            p95=0.0,
+            p99=0.0,
+        )
 
     # if unmatched_fraction == 1.0:
     #     raise PipelineError(f"Unmatched fraction is 1.0 for {image}")
+
+    rsep_stats = RSEPSStats(
+        ref_max_mag=REF_MAX_MAG,
+        sci_max_mag=SCI_MAX_MAG,
+        num_ref=NUM_REF,
+        unmatched_fraction=unmatched_fraction,
+        subpixel_fraction=subpixel_fraction,
+        subsecond_fraction=subsecond_fraction,
+        separation_stats=separation_stats,
+    )
+
+    # 2D PSF stats
+    matched_ids = get_3x3_stars(matched, H, W, cutout_size)
+    psf_stats = compute_psf_stats(matched, matched_ids)
 
     if plot_save_path is not None and unmatched_fraction < 1.0:
         wcs_check_plot(
@@ -159,18 +218,65 @@ def evaluate_single_wcs(
             sep_stats=separation_stats,
             subpixel_fraction=subpixel_fraction,
             subsecond_fraction=subsecond_fraction,
+            matched_ids=matched_ids,
+            cutout_size=cutout_size,
         )
 
-    return (
-        matched,
-        REF_MAX_MAG,
-        SCI_MAX_MAG,
-        NUM_REF,
-        unmatched_fraction,
-        subpixel_fraction,
-        subsecond_fraction,
-        separation_stats,
+    return EvaluationResult(
+        matched=matched,
+        rsep_stats=rsep_stats,
+        psf_stats=psf_stats,
     )
+
+    # return (
+    #     matched,
+    #     REF_MAX_MAG,
+    #     SCI_MAX_MAG,
+    #     NUM_REF,
+    #     unmatched_fraction,
+    #     subpixel_fraction,
+    #     subsecond_fraction,
+    #     separation_stats,
+    # )
+
+
+def compute_psf_stats(matched_catalog, matched_ids):
+    selected_stars = find_id_rows(matched_catalog, matched_ids)
+    if len(selected_stars) == 0:
+        return
+
+    assert len(matched_ids) == 9
+
+    matched_ids = [i for i in matched_ids if i is not None]  # clean potential Nones
+
+    # 2D PSF Variation
+    fwhm_in_pix = selected_stars["FWHM_IMAGE"]
+    fwhm_ratio = fwhm_in_pix / fwhm_in_pix[4]
+    awin_in_pix = selected_stars["AWIN_IMAGE"]
+    awin_ratio = awin_in_pix / awin_in_pix[4]
+    # rms_in_pix = selected_stars["A_IMAGE"]
+    # rms_ratio = rms_in_pix / rms_in_pix[4]
+
+    # Tracking Issue
+    pa = selected_stars["THETA_IMAGE"]  # [-90, 90]
+
+    pa_align, _, _, _, _ = pa_alignment(pa)
+
+    # Both
+    ellip = selected_stars["ELLIPTICITY"]
+
+    stats = PsfStats(
+        FWHMCRMN=np.mean(fwhm_ratio),
+        FWHMCRSD=np.std(fwhm_ratio),
+        AWINCRMN=np.mean(awin_ratio),
+        AWINCRSD=np.std(awin_ratio),
+        # "PA_MEAN": np.mean(pa),
+        # "PA_STD": np.std(pa),
+        PA_ALIGN=pa_align,
+        ELLIPAVG=np.mean(ellip),
+        ELLIPSTD=np.std(ellip),
+    )
+    return stats
 
 
 ###############################################################################

@@ -9,6 +9,16 @@ from astropy.wcs import WCS
 from astropy.coordinates import SkyCoord, SkyOffsetFrame
 
 
+def read_text_header(file):
+    with open(file, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # Clean non-ASCII characters
+    cleaned_string = unicodedata.normalize("NFKD", content).encode("ascii", "ignore").decode("ascii")
+    hdr = fits.Header.fromstring(cleaned_string, sep="\n")
+    return hdr
+
+
 def read_scamp_header(file, return_wcs=False):
     """
     Read a SCAMP output HEAD file, normalizing unicode and correcting WCS types.
@@ -24,14 +34,8 @@ def read_scamp_header(file, return_wcs=False):
         - Converts WCS projection type from TAN to TPV
     """
 
-    with open(file, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    # Clean non-ASCII characters
-    cleaned_string = unicodedata.normalize("NFKD", content).encode("ascii", "ignore").decode("ascii")
-
+    hdr = read_text_header(file)
     # Correct CTYPE (TAN --> TPV)
-    hdr = fits.Header.fromstring(cleaned_string, sep="\n")
     hdr["CTYPE1"] = ("RA---TPV", "WCS projection type for this axis")
     hdr["CTYPE2"] = ("DEC--TPV", "WCS projection type for this axis")
 
@@ -232,7 +236,8 @@ def make_polygon_header(
     cards.append(("ROTANG", rotation_angle_1, "Counterclockwise from North [deg]"))
     # updates.append(("ROTANG2", rotation_angle_2, "Rotation angle from East [deg]"))
 
-    return fits.Header(cards)
+    # return fits.Header(cards)
+    return cards
 
 
 def field_rotation(wcs: WCS) -> float:
@@ -340,6 +345,108 @@ def inside_quad_spherical(points_ra, points_dec, quad_ra, quad_dec):
 
     # return a scalar bool if inputs were scalars
     return out if out.shape else bool(out)
+
+
+def get_3x3_stars(
+    matched_catalog: Table, H: int, W: int, cutout_size=30, return_id: bool = True, id_col: str = "id"
+) -> list[int]:
+    # H, W = data.shape  # numpy: (y, x)
+
+    # remove ref-only rows
+    matched_catalog = matched_catalog[~matched_catalog["separation"].mask]
+    if len(matched_catalog) == 0:
+        return []
+
+    # centers in 0-based pixel coords (SExtractor is 1-based)
+    x_img = matched_catalog["X_IMAGE"].astype(float) - 1.0
+    y_img = matched_catalog["Y_IMAGE"].astype(float) - 1.0
+
+    # 3x3 target points (corners, edge centers, center), clamped so cutouts fit
+    margin = int(np.ceil(cutout_size / 2)) + 1
+    xs = np.array([0, W / 2, W - 1], dtype=float)
+    ys = np.array([0, H / 2, H - 1], dtype=float)
+    targets = np.array([(x, y) for y in ys for x in xs], dtype=float)
+    targets[:, 0] = np.clip(targets[:, 0], margin, W - 1 - margin)
+    targets[:, 1] = np.clip(targets[:, 1], margin, H - 1 - margin)
+
+    # Precompute candidate matrix
+    cand_xy = np.c_[x_img, y_img]
+
+    # For each target, pick nearest candidate; if already taken, use next nearest
+    selected_idx = _select_3x3_by_nearest(cand_xy, targets)
+    if not return_id:
+        return selected_idx
+
+    # unique ids of sources in matched catalog
+    matched_ids = [matched_catalog[i][id_col] if i is not None else None for i in selected_idx]
+    return matched_ids  # None if no candidate available
+
+
+def find_id_rows(matched_catalog: Table, matched_ids: list[int], id_col: str = "id") -> Table:
+    order = np.array(matched_ids)  # Make an indexer array that preserves order
+    mask = np.in1d(order, matched_catalog[id_col])
+    order = order[mask]
+    id_to_idx = {id_: i for i, id_ in enumerate(matched_catalog[id_col])}
+    return matched_catalog[[id_to_idx[_id] for _id in order]]
+
+
+def _select_3x3_by_nearest(cand_xy, targets):
+    """
+    For each target, pick the nearest candidate (by Euclidean distance).
+    Deduplicate: if the same source would be used twice, assign to the target
+    where it is closer; for the other target, pick next-nearest.
+
+    Returns a list of length 9 with catalog indices (into the original table)
+    or None if no candidate available (should be rare given the logic).
+    """
+    try:
+        from scipy.spatial import cKDTree as KDTree
+
+        _HAVE_KDTREE = True
+    except Exception:
+        _HAVE_KDTREE = False
+
+    selected = [None] * len(targets)
+    taken = set()
+
+    if _HAVE_KDTREE and len(cand_xy) > 0:
+        tree = KDTree(cand_xy)
+        # Query more than 1 in case of duplicates; cap at len(cand_xy)
+        k_step = 5
+        max_k = min(200, len(cand_xy))
+        for ti, t in enumerate(targets):
+            k = k_step
+            while selected[ti] is None and k <= max_k:
+                dists, nn = tree.query(t, k=k)
+                if np.isscalar(nn):
+                    nn = np.array([nn])
+                    dists = np.array([dists])
+                # Sort by distance explicitly (tree.query already returns ordered, but be safe)
+                order = np.argsort(dists)
+                for oi in order:
+                    ci = int(nn[oi])
+                    gi = int(ci)
+                    if gi not in taken:
+                        selected[ti] = gi
+                        taken.add(gi)
+                        break
+                k += k_step
+
+    else:
+        # NumPy fallback: brute-force distances
+        for ti, t in enumerate(targets):
+            if len(cand_xy) == 0:
+                break
+            d = np.hypot(cand_xy[:, 0] - t[0], cand_xy[:, 1] - t[1])
+            order = np.argsort(d)
+            for ci in order:
+                gi = int(ci)
+                if gi not in taken:
+                    selected[ti] = gi
+                    taken.add(gi)
+                    break
+
+    return selected
 
 
 # derive stats from matched table
