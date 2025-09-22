@@ -9,13 +9,13 @@ from astropy.wcs import WCS
 from astropy.coordinates import SkyCoord, SkyOffsetFrame
 
 
-def read_text_header(file):
+def read_text_header(file, sep="\n"):
     with open(file, "r", encoding="utf-8") as f:
         content = f.read()
 
     # Clean non-ASCII characters
     cleaned_string = unicodedata.normalize("NFKD", content).encode("ascii", "ignore").decode("ascii")
-    hdr = fits.Header.fromstring(cleaned_string, sep="\n")
+    hdr = fits.Header.fromstring(cleaned_string, sep=sep)
     return hdr
 
 

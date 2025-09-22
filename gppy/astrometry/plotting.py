@@ -333,6 +333,7 @@ def wcs_check_psf_plot(
     H, W = data.shape  # numpy: (y, x)
 
     if matched_ids is None:
+        print(f"matched_ids not provided. Selecting sources now.")
         # # remove ref-only rows
         matched_catalog = matched_catalog[~matched_catalog["separation"].mask]
         if len(matched_catalog) == 0:
@@ -340,6 +341,7 @@ def wcs_check_psf_plot(
         selected_idx = get_3x3_stars(matched_catalog, H, W, cutout_size, return_id=False)
         selected_stars = matched_catalog[selected_idx]
     else:
+        print(f"matched_ids in psf_plot {matched_ids}")
         selected_stars = find_id_rows(matched_catalog, matched_ids)
 
     # centers in 0-based pixel coords (SExtractor is 1-based)
@@ -434,7 +436,7 @@ def wcs_check_psf_plot(
             theta_image=float(selected_stars[idx]["THETA_IMAGE"]),
             edgecolor="yellow",
             linewidth=1.5,
-            label="RMS Ellipse" if idx == ellipse_legend_idx else None,  # legend once
+            label="RMS Ellipse (A_IMAGE)" if idx == ellipse_legend_idx else None,  # legend once
         )
 
         # add windowed (2" gaussian) RMS ellipses
@@ -447,7 +449,7 @@ def wcs_check_psf_plot(
             theta_image=float(selected_stars[idx]["THETA_IMAGE"]),
             edgecolor="orange",
             linewidth=1.5,
-            label="Windowed Ellipse" if idx == ellipse_legend_idx else None,  # legend once
+            label="Windowed Ellipse (AWIN_IMAGE)" if idx == ellipse_legend_idx else None,  # legend once
         )
 
         # add FWHM ellipses

@@ -30,20 +30,21 @@ class SeparationStats(TypedDict):
 class RSEPSStats:
     ref_max_mag: float
     sci_max_mag: float
-    num_ref: int
+    num_ref_sources: int
     unmatched_fraction: float
     subpixel_fraction: float
     subsecond_fraction: float
     separation_stats: SeparationStats
 
 
-class PsfStats(TypedDict):
+@dataclass(frozen=True)
+class PsfStats:
     FWHMCRMN: float
     FWHMCRSD: float
     AWINCRMN: float
     AWINCRSD: float
     PA_ALIGN: float
-    ELLIPAVG: float
+    ELLIPMN: float
     ELLIPSTD: float
 
 
@@ -59,9 +60,9 @@ def evaluate_single_wcs(
     ref_cat: Table,
     source_cat: str | Table,
     date_obs: str,
-    wcs: WCS,
-    H: int,
-    W: int,
+    wcs: WCS = None,
+    H: int = None,
+    W: int = None,
     match_radius=10,
     fov_ra=None,
     fov_dec=None,
@@ -69,11 +70,18 @@ def evaluate_single_wcs(
     plot_save_path=None,
     num_sci=100,
     num_ref=100,
-    num_plot=50,
+    num_plot=100,
     ds9_region=True,
     cutout_size=30,
+    logger=None,
 ):
     """Ensure num_plot <= num_sci, num_ref"""
+
+    def chatter(msg: str, level: str = "debug"):
+        if logger is not None:
+            return getattr(logger, level)(msg)
+        else:
+            print(f"[evaluate_single_wcs:{level.upper()}] {msg}")
 
     # load the source catalog
     if isinstance(source_cat, str):
@@ -83,6 +91,14 @@ def evaluate_single_wcs(
         source_cat = "table_evaluated.fits"
     else:
         raise ValueError(f"Invalid input type: {type(source_cat)}")
+
+    if wcs is None:
+        chatter(f"WCS is not provided. Loading from {image}", "info")
+        wcs = WCS(fits.getheader(image))
+
+    if H is None or W is None:
+        chatter(f"H and W are not provided. Loading from {image}", "info")
+        H, W = fits.getdata(image).shape
 
     # # update the source catalog with the WCS
     # if head is not None:
@@ -193,7 +209,7 @@ def evaluate_single_wcs(
     rsep_stats = RSEPSStats(
         ref_max_mag=REF_MAX_MAG,
         sci_max_mag=SCI_MAX_MAG,
-        num_ref=NUM_REF,
+        num_ref_sources=NUM_REF,
         unmatched_fraction=unmatched_fraction,
         subpixel_fraction=subpixel_fraction,
         subsecond_fraction=subsecond_fraction,
@@ -203,6 +219,9 @@ def evaluate_single_wcs(
     # 2D PSF stats
     matched_ids = get_3x3_stars(matched, H, W, cutout_size)
     psf_stats = compute_psf_stats(matched, matched_ids)
+
+    chatter(f"evaluate_single_wcs: matched_ids {matched_ids}")
+    chatter(f"evaluate_single_wcs: psf_stats {psf_stats}")
 
     if plot_save_path is not None and unmatched_fraction < 1.0:
         wcs_check_plot(
@@ -243,7 +262,16 @@ def evaluate_single_wcs(
 def compute_psf_stats(matched_catalog, matched_ids):
     selected_stars = find_id_rows(matched_catalog, matched_ids)
     if len(selected_stars) == 0:
-        return
+        stats = PsfStats(
+            FWHMCRMN=np.nan,
+            FWHMCRSD=np.nan,
+            AWINCRMN=np.nan,
+            AWINCRSD=np.nan,
+            PA_ALIGN=np.nan,
+            ELLIPMN=np.nan,
+            ELLIPSTD=np.nan,
+        )
+        return stats
 
     assert len(matched_ids) == 9
 
@@ -273,7 +301,7 @@ def compute_psf_stats(matched_catalog, matched_ids):
         # "PA_MEAN": np.mean(pa),
         # "PA_STD": np.std(pa),
         PA_ALIGN=pa_align,
-        ELLIPAVG=np.mean(ellip),
+        ELLIPMN=np.mean(ellip),
         ELLIPSTD=np.std(ellip),
     )
     return stats

@@ -126,12 +126,16 @@ class Astrometry(BaseSetup):
                 if force_solve_field:
                     raise Exception("Force solve field")
                 self.run_scamp(self.prep_cats, scamp_preset="prep", joint=False)
+                if evaluate_prep_sol:
+                    self.evaluate_solution(suffix="prepwcs", use_threading=use_threading, export_eval_cards=True)
             except Exception as e:
+                if evaluate_prep_sol:
+                    self.evaluate_solution(suffix="prepwcs", use_threading=use_threading, export_eval_cards=True)
                 self.logger.warning(e)
+                raise e  # solve-field incomplete yet
                 self.run_solve_field(self.soft_links_to_input_images, self.solved_images)
-
-            if evaluate_prep_sol:
-                self.evaluate_solution(suffix="prepwcs", use_threading=use_threading, export_eval_cards=True)
+                if evaluate_prep_sol:
+                    self.evaluate_solution(suffix="solvefieldwcs", use_threading=use_threading, export_eval_cards=True)
 
             # even more refinement
             if refine_init_wcs:
@@ -183,6 +187,8 @@ class Astrometry(BaseSetup):
         self.solved_images = [add_suffix(s, "solved") for s in soft_links]  # solve-field output
         self.solved_heads = [swap_ext(s, "head") for s in self.prep_cats]  # scamp output
         self.images_info = [ImageInfo.parse_image_header_info(image) for image in self.input_images]
+        for image_info in self.images_info:
+            image_info.logger = self.logger  # pass the logger
 
         self.config.astrometry.local_astref = self.path.astrometry.astrefcat  # None if no local astrefcat
 
@@ -422,8 +428,8 @@ class Astrometry(BaseSetup):
             self.logger.debug(f"Updated WCS in ImageInfo {image_info.head}")
             with open(solved_head, "r") as f:
                 if not any("PV1_0" in line for line in f):
-                    # self.logger.error(f"No PV1_0 in {solved_head} - solution invalid")
-                    raise PipelineError(f"No PV1_0 in {solved_head} - solution invalid")
+                    self.logger.error(f"No PV1_0 in {solved_head} - solution invalid")
+                    # raise PipelineError(f"No PV1_0 in {solved_head} - solution invalid")
 
         self.logger.info(f"Completed scamp in {time_diff_in_seconds(st)} seconds")
         self.logger.debug(MemoryMonitor.log_memory_usage)
@@ -475,8 +481,13 @@ class Astrometry(BaseSetup):
 
         # update FOV polygon to ImageInfo. It will be cached and put into final image header later
         for image_info in self.images_info:
-            image_info.fov_ra, image_info.fov_dec = get_fov_quad(image_info.wcs, image_info.naxis1, image_info.naxis2)
-            self.logger.debug(f"Updated FOV polygon. RA: {image_info.fov_ra}, Dec: {image_info.fov_dec}")
+            try:
+                image_info.fov_ra, image_info.fov_dec = get_fov_quad(
+                    image_info.wcs, image_info.naxis1, image_info.naxis2
+                )
+                self.logger.debug(f"Updated FOV polygon. RA: {image_info.fov_ra}, Dec: {image_info.fov_dec}")
+            except Exception as e:
+                self.logger.error(f"Failed to update FOV polygon for {image_info.image_path}: {e}")
 
         suffix = suffix or "wcs"
         refcat = Table.read(self.config.astrometry.local_astref, hdu=2)
@@ -488,7 +499,7 @@ class Astrometry(BaseSetup):
             prep_cat = self.prep_cats[idx]
 
             bname = os.path.basename(input_image)
-            plot_path = os.path.join(self.path.figure_dir, swap_ext(add_suffix(bname, suffix), "jpg"))
+            plot_path = unique_filename(os.path.join(self.path.figure_dir, swap_ext(add_suffix(bname, suffix), "jpg")))
 
             eval_result = evaluate_single_wcs(
                 image=input_image,
@@ -504,6 +515,7 @@ class Astrometry(BaseSetup):
                 num_sci=num_sci,
                 num_ref=num_ref,
                 cutout_size=30,
+                logger=self.logger,
             )
             return idx, eval_result
 
@@ -521,13 +533,15 @@ class Astrometry(BaseSetup):
 
             info = self.images_info[idx]
             info.matched_catalog = matched
-            info.ref_max_mag = rsep_stats.ref_max_mag
-            info.sci_max_mag = rsep_stats.sci_max_mag
-            info.num_ref_sources = rsep_stats.num_ref
-            info.unmatched_fraction = rsep_stats.unmatched_fraction
-            info.subpixel_fraction = rsep_stats.subpixel_fraction
-            info.subsecond_fraction = rsep_stats.subsecond_fraction
-            info.set_sep_stats(rsep_stats.separation_stats)
+            info.rsep_stats = rsep_stats
+            # info.ref_max_mag = rsep_stats.ref_max_mag
+            # info.sci_max_mag = rsep_stats.sci_max_mag
+            # info.num_ref_sources = rsep_stats.num_ref
+            # info.unmatched_fraction = rsep_stats.unmatched_fraction
+            # info.subpixel_fraction = rsep_stats.subpixel_fraction
+            # info.subsecond_fraction = rsep_stats.subsecond_fraction
+            info.set_reference_sep_stats(rsep_stats.separation_stats)
+            info.psf_stats = psf_stats
             self.logger.debug(f"Evaluated solution for {self.input_images[idx]}")
             return
 
@@ -678,12 +692,14 @@ class ImageInfo:
     fov_dec: list = field(default=None)
 
     # WCS evaluation parameters
-    ref_max_mag: Optional[float] = field(default=None)
-    sci_max_mag: Optional[float] = field(default=None)
-    num_ref_sources: Optional[int] = field(default=None)
-    unmatched_fraction: Optional[float] = field(default=None)
-    subpixel_fraction: Optional[float] = field(default=None)
-    subsecond_fraction: Optional[float] = field(default=None)
+    # ref_max_mag: Optional[float] = field(default=None)
+    # sci_max_mag: Optional[float] = field(default=None)
+    # num_ref_sources: Optional[int] = field(default=None)
+    # unmatched_fraction: Optional[float] = field(default=None)
+    # subpixel_fraction: Optional[float] = field(default=None)
+    # subsecond_fraction: Optional[float] = field(default=None)
+
+    rsep_stats: Optional["RSEPSStats"] = field(default=None)
     # matched catalog itself
     matched_catalog: Optional[Table] = field(default=None)
 
@@ -698,6 +714,9 @@ class ImageInfo:
     # sep_median: Optional[float] = field(default=None)
     # sep_std: Optional[float] = field(default=None)
 
+    # psf qa statistics
+    psf_stats: Optional["PsfStats"] = field(default=None)
+
     # Internal separation statistics (between multiple images)
     internal_sep_min: Optional[float] = field(default=None)
     internal_sep_max: Optional[float] = field(default=None)
@@ -707,6 +726,22 @@ class ImageInfo:
     internal_sep_q3: Optional[float] = field(default=None)
     internal_match_counts: Optional[list] = field(default=None)
     internal_match_recall: Optional[list] = field(default=None)
+
+    # dependency logger
+    logger: Any = None
+
+    def _log(self, msg: str, level: str = "error", *args, **kwargs):
+        """Log or fallback to print/raise if logger missing."""
+        if self.logger is not None:
+            log_fn = getattr(self.logger, level, None)
+            if callable(log_fn):
+                log_fn(msg, *args, **kwargs)
+                return
+        # no logger available
+        if level.lower() in ("error", "critical"):
+            raise PipelineError(msg % args if args else msg)
+        else:
+            print(f"[ImageInfo:{level.upper()}] {msg % args if args else msg}")
 
     def __repr__(self) -> str:
         """Returns a string representation of the ImageInfo."""
@@ -766,7 +801,7 @@ class ImageInfo:
         pa = 0
         return build_wcs(self.racent, self.decent, self.xcent, self.ycent, self.pixscale, pa, flip=True)
 
-    def set_sep_stats(self, sep_stats: dict) -> None:
+    def set_reference_sep_stats(self, sep_stats: dict) -> None:
         self.sep_min = sep_stats["min"]
         self.sep_max = sep_stats["max"]
         self.sep_rms = sep_stats["rms"]
@@ -801,17 +836,26 @@ class ImageInfo:
 
     @property
     def wcs_eval_cards(self) -> List[Tuple[str, float]]:
-        return self._single_wcs_eval_cards + self._joint_wcs_eval_cards
+
+        cards = self._single_wcs_eval_cards + self._joint_wcs_eval_cards
+        # Clean invalid values
+        for i, (k, v, c) in enumerate(cards):
+            if np.isnan(v):
+                self._log(f"WCS statistics contains nan for {k}", level="warning")
+                cards[i] = (k, None, c)
+            elif not isinstance(v, (float, int, str, np.float32, np.int32)):  # sometimes the value can be masked
+                self._log(f"WCS statistics contains type {type(v)} {v} for {k}")
+        return cards
 
     @property
     def _single_wcs_eval_cards(self) -> List[Tuple[str, float]]:
         cards = [
-            (f"REFMXMAG", self.ref_max_mag, "Highest g mag of selected reference sources"),
-            (f"SCIMXMAG", self.sci_max_mag, "Highest inst mag of selected science sources"),
-            (f"NUM_REF", self.num_ref_sources, "Number of reference sources selected"),
-            (f"UNMATCH", self.unmatched_fraction, "Fraction of unmatched reference sources"),
-            (f"SUBPIXEL", self.subpixel_fraction, "Fraction of matched with sep < PIXSCALE"),
-            (f"SUBSEC", self.subsecond_fraction, "Fraction of matched with sep < 1"),
+            (f"REFMXMAG", self.rsep_stats.ref_max_mag, "Highest g mag of selected reference sources"),
+            (f"SCIMXMAG", self.rsep_stats.sci_max_mag, "Highest inst mag of selected science sources"),
+            (f"NUM_REF", self.rsep_stats.num_ref_sources, "Number of reference sources selected"),
+            (f"UNMATCH", self.rsep_stats.unmatched_fraction, "Fraction of unmatched reference sources"),
+            (f"SUBPIXEL", self.rsep_stats.subpixel_fraction, "Fraction of matched with sep < PIXSCALE"),
+            (f"SUBSEC", self.rsep_stats.subsecond_fraction, "Fraction of matched with sep < 1"),
             (f"RSEP_MIN", self.sep_min, "Min separation from reference catalog [arcsec]"),
             (f"RSEP_MAX", self.sep_max, "Max separation from reference catalog [arcsec]"),
             (f"RSEP_RMS", self.sep_rms, "RMS separation from reference catalog [arcsec]"),
@@ -822,11 +866,14 @@ class ImageInfo:
             (f"RSEP_P99", self.sep_p99, "99 percentile sep from ref catalog [arcsec]"),
             # (f"RSEP_MED", self.sep_median, "Median separation from ref catalog [arcsec]"),
             # (f"RSEP_STD", self.sep_std, "STD of separation from ref catalog [arcsec]"),
+            (f"FWHMCRMN", self.psf_stats.FWHMCRMN, "Mean corner/center FWHM ratio (9 PSFs)"),
+            (f"FWHMCRSD", self.psf_stats.FWHMCRSD, "STD of corner/center FWHM ratio (9 PSFs)"),
+            (f"AWINCRMN", self.psf_stats.AWINCRMN, "Mean corner/center AWIN ratio (9 PSFs)"),
+            (f"AWINCRSD", self.psf_stats.AWINCRSD, "STD of corner/center AWIN ratio (9 PSFs)"),
+            (f"PA_ALIGN", self.psf_stats.PA_ALIGN, "PA alignment score of 3x3 selected PSFs"),
+            (f"ELLIPMN", self.psf_stats.ELLIPMN, "Mean ellipticity of the 9 PSFs"),
+            (f"ELLIPSTD", self.psf_stats.ELLIPSTD, "STD of ellipticities of the 9 PSFs"),
         ]
-        # sometimes the value can be masked
-        for k, v, c in cards:
-            if not isinstance(v, (float, int, str, np.float32, np.int32)):
-                raise PipelineError(f"WCS statistics contains type {type(v)} {v} for {k}")
         return cards
 
     @property
@@ -875,7 +922,10 @@ class ImageInfo:
     def wcs(self) -> WCS:
         """Updated every time run_scamp is completed"""
         if not self.head:
-            raise PipelineError("No self.head in ImageInfo")
+            # raise PipelineError("No self.head in ImageInfo")
+            print("[WARNING] No self.head in ImageInfo. Using coarse_wcs")
+            return self.coarse_wcs
+
         wcs_header = read_scamp_header(self.head)
         return WCS(wcs_header)
 
