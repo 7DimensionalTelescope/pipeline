@@ -301,7 +301,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 self._generated_masterframes.append(output_file)
             elif isinstance(output_file, str) and len(output_file) != 0:
                 self.logger.warning(
-                    f"[Group {self._current_group+1}] No {dtype} masterframe found for the current group."
+                    f"[Group {self._current_group+1}] No {dtype} masterframe found for the current group of inputs."
                 )
                 self.add_warning()
                 self._fetch_masterframe(output_file, dtype)

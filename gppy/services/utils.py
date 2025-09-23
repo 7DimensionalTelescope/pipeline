@@ -1,4 +1,5 @@
 import gc
+import re
 import numpy as np
 import time
 import psutil
@@ -18,43 +19,84 @@ import os
 _cached_cg_path = None  # cache for resolved cgroup path
 
 
-def read_cgroup_mem(cg_path=None):
+def _discover_user_slice_dir():
+    """
+    Return the absolute /sys/fs/cgroup path to the current user's systemd user slice:
+      /sys/fs/cgroup/user.slice/user-<UID>.slice
+    Tries to infer from /proc/self/cgroup; falls back to UID-derived path.
+    """
+    uid = os.getuid()
+    uid_slice = f"user-{uid}.slice"
+    from_proc = None
+
+    # 1) Parse cgroup v2 unified line from /proc/self/cgroup
+    try:
+        with open("/proc/self/cgroup", "r") as f:
+            for line in f:
+                # cgroup v2 unified hierarchy typically: "0::/some/path"
+                if line.startswith("0::"):
+                    rel = line.split("::", 1)[1].strip().lstrip("/")
+                    # Look for ".../user.slice/user-<uid>.slice[/...]" and cut at the slice level
+                    m = re.search(r"(?:^|/)user\.slice/(user-\d+\.slice)(?:/|$)", rel)
+                    if m and m.group(1) == uid_slice:
+                        # Keep only up to the user-<uid>.slice component
+                        prefix = rel.split("user.slice/")[0].rstrip("/")
+                        from_proc = "/".join(p for p in ["/sys/fs/cgroup", "user.slice", uid_slice] if p)
+                    break
+    except FileNotFoundError:
+        pass  # Non-Linux or very unusual env; we'll try the fallback
+
+    # 2) Use the discovered path if it exists
+    if from_proc and os.path.isdir(from_proc):
+        return from_proc
+
+    # 3) Fallback: construct from UID
+    candidate = f"/sys/fs/cgroup/user.slice/{uid_slice}"
+    if os.path.isdir(candidate):
+        return candidate
+
+    # 4) Nothing worked
+    raise RuntimeError(
+        f"Could not locate user slice for UID {uid}. "
+        f"Tried derived path: {candidate}. "
+        f"If running in a container or non-systemd env, pass cg_path explicitly."
+    )
+
+
+def read_cgroup_mem(cg_path="auto"):
     """
     Return cgroup-v2 memory usage for a slice/cgroup.
-    If cg_path is None, use the current process's cgroup.
-    The resolved sysfs path is cached for faster repeated calls.
+    If cg_path == 'auto' or None, resolve the current account's user slice automatically:
+      /sys/fs/cgroup/user.slice/user-<UID>.slice
+    You can still pass a custom relative path like 'user.slice/user-10019.slice'
+    or an absolute path under /sys/fs/cgroup.
     """
     global _cached_cg_path
 
+    # Resolve and cache the cgroup directory
     if _cached_cg_path is None:
-        if cg_path is None:
-            # Find this process's cgroup (line starting with "0::")
-            with open("/proc/self/cgroup", "r") as f:
-                cg_rel = None
-                for line in f:
-                    if line.startswith("0::"):
-                        cg_rel = line.split("::", 1)[1].strip().lstrip("/")
-                        break
-            if cg_rel is None:
-                raise RuntimeError("cgroup v2 path not found in /proc/self/cgroup")
-            _cached_cg_path = os.path.join("/sys/fs/cgroup", cg_rel)
+        if cg_path in (None, "auto"):
+            cg_dir = _discover_user_slice_dir()
         else:
-            _cached_cg_path = os.path.join("/sys/fs/cgroup", cg_path.lstrip("/"))
+            cg_dir = cg_path
+            if not cg_dir.startswith("/"):
+                cg_dir = os.path.join("/sys/fs/cgroup", cg_dir.lstrip("/"))
+        _cached_cg_path = cg_dir
 
     cg_dir = _cached_cg_path
 
-    # read memory.current
+    # Read memory.current
     with open(os.path.join(cg_dir, "memory.current"), "r") as f:
         mem_current = int(f.read().strip())
 
-    # read memory.max
+    # Read memory.max (may be "max")
     with open(os.path.join(cg_dir, "memory.max"), "r") as f:
         mem_max_raw = f.read().strip()
     mem_max = None if mem_max_raw == "max" else int(mem_max_raw)
 
     return {
         "bytes_current": mem_current,
-        "bytes_max": mem_max,  # None == unlimited
+        "bytes_max": mem_max,  # None == unlimited at this slice
         "gb_current": mem_current / (1024**3),
         "gb_max": None if mem_max is None else mem_max / (1024**3),
         "percent_of_cap": None if mem_max is None else (mem_current / mem_max) * 100.0,
