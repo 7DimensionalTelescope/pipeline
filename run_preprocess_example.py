@@ -21,10 +21,11 @@ reprocess_dates = [r[0].strftime("%Y-%m-%d") for r in rows]
 queue = QueueManager(max_workers=5)
 skip = True
 for date in reprocess_dates[::-1]:  # processing backwards for mframe selection
-    if date == "2025-04-28":  # start date (inclusive)
+    if date == "2024-11-29":  # start date (inclusive)
         skip = False
 
     if skip:
+        # print(f"Skipping {date}")
         continue
     try:
         dr = DataReduction([date], use_db=True)

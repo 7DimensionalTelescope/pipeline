@@ -1,4 +1,5 @@
 import os
+from typing import List, Tuple
 import numpy as np
 from astropy.io import fits
 from astropy.table import Table
@@ -19,6 +20,7 @@ from PIL import Image, ImageEnhance
 
 from ..utils import lupton_asinh
 from .utils import get_3x3_stars, find_id_rows
+from .plotting_helpers import cutout, adaptive_ra_spacing, draw_ellipse, HandlerEllipse
 
 
 def wcs_check_plot(
@@ -42,15 +44,8 @@ def wcs_check_plot(
     fig.set_constrained_layout(True)
     canvas = FigureCanvas(fig)
 
-    # --- Master grid: 2 rows (scatter on top, PSF grid below) ---
-    # gs_master = fig.add_gridspec(
-    #     2,
-    #     1,
-    #     height_ratios=[1.4, 3.0],
-    #     hspace=0.20,
-    # )
-    gs_master = fig.add_gridspec(4, 1, height_ratios=[1.4, 0.18, 3.0, 0.06], hspace=0.00)
-    # gs_master = fig.add_gridspec(3, 1, height_ratios=[1.4, 3.0, 0.28])
+    # --- Master grid: 4 rows (scatter on top, PSF grid below, spacers between) ---
+    gs_master = fig.add_gridspec(4, 1, height_ratios=[1.4, 0.18, 3.1, 0.06], hspace=0.00)
 
     ax_spacer = fig.add_subplot(gs_master[1])
     ax_spacer.axis("off")
@@ -59,13 +54,9 @@ def wcs_check_plot(
 
     # Scatterplot at the top
     ax_scatter = fig.add_subplot(gs_master[0], projection=wcs)
+
     # PSF grid (rows 1–3)
-    gs_psf = gs_master[2].subgridspec(
-        3,
-        3,
-        hspace=0.02,
-        wspace=-0.04,
-    )
+    gs_psf = gs_master[2].subgridspec(3, 3, hspace=0.02, wspace=-0.04)
     psf_axes = [fig.add_subplot(gs_psf[i, j]) for i in range(3) for j in range(3)]
 
     # Plot PSF grid
@@ -77,6 +68,7 @@ def wcs_check_plot(
         matched_ids=matched_ids,
         cutout_size=cutout_size,
         stretch_type=stretch_type,
+        title_ax=ax_spacer,
         legend_ax=ax_leg,
     )
 
@@ -93,15 +85,12 @@ def wcs_check_plot(
         highlight_ra=inspected["ALPHA_J2000"],
         highlight_dec=inspected["DELTA_J2000"],
     )
-    ax_scatter.set_aspect("equal", adjustable="box")
 
     # file path title
     # fig.subplots_adjust(top=0.90)  # add space at the top
     fig.text(0.5, 0.998, os.path.basename(plot_save_path), ha="center", va="top", fontsize=10)
 
-    # fig.suptitle(f"{num_plot} brightest sources in each catalog", y=0.97)
-    ax_scatter.set_title(f"\n{num_plot} Brightest Sources in Each Catalog", ha="center", va="top", fontsize=12, pad=45)
-
+    # # Separation statistics (centered between blocks)
     if sep_stats is not None:
         text = f"Sep Stats: RMS={sep_stats['rms']:.2f}\", Q1={sep_stats['q1']:.2f}\", Q3={sep_stats['q3']:.2f}\""
         if subsecond_fraction is not None:
@@ -113,20 +102,9 @@ def wcs_check_plot(
         # fig.text(0.5, 0.62, text, ha="center", va="center", fontsize=8)
         ax_spacer.text(0.5, 0.9, text, ha="center", va="center", fontsize=8, transform=ax_spacer.transAxes)
 
-    # PSF block title (centered between blocks)
-    # fig.text(0.5, 0.60, f"3x3 PSF Cutouts Across Image ({stretch_type})", ha="center", va="center", fontsize=12)
-    ax_spacer.text(
-        0.5,
-        0.18,
-        f"3x3 PSF Cutouts Across Image ({stretch_type})",
-        ha="center",
-        va="center",
-        fontsize=12,
-        transform=ax_spacer.transAxes,
-    )
-
     if plot_save_path:
-        canvas.print_figure(plot_save_path, bbox_inches="tight", dpi=150)
+        # canvas.print_figure(plot_save_path, bbox_inches="tight", dpi=150)
+        canvas.print_figure(plot_save_path, dpi=150)
     else:
         fig.show()
 
@@ -211,7 +189,7 @@ def wcs_check_scatter_plot(
 
     # --- Major ticks at your chosen spacing ---
     spacing = tick_spacing_arcmin * u.arcmin
-    lon_spacing = _adaptive_ra_spacing(base_arcmin=tick_spacing_arcmin, dec=np.mean(fov_dec))
+    lon_spacing = adaptive_ra_spacing(base_arcmin=tick_spacing_arcmin, dec=np.mean(fov_dec))
     lon.set_ticks(spacing=lon_spacing)
     lat.set_ticks(spacing=spacing)
     lon.set_ticklabel(size=8)
@@ -264,53 +242,10 @@ def wcs_check_scatter_plot(
     )
     leg.set_zorder(30)
 
-    # ax.set_title(f"{len(tbl)} brightest sources in each catalog", pad=30)
-    ax.set_title(f"", pad=30)  # give the combined plot some room
-
-
-def _adaptive_ra_spacing(base_arcmin=15, dec=None, min_cos=0.15):
-    """Return an Angle for RA tick spacing that keeps roughly-constant on-sky separation.
-
-    base_arcmin: desired *on-sky* spacing (arcmin) at equator.
-    max_ticks:   cap the number of RA ticks to avoid label collisions.
-    min_cos:     floor for cos(|dec|) so spacing doesn't blow up at the pole.
-    """
-    spacing_on_sky = base_arcmin * u.arcmin
-
-    cosd = max(min_cos, np.cos(np.deg2rad(dec)))
-
-    ra_spacing = (spacing_on_sky / cosd).to(u.deg)
-
-    return _round_to_nice_angle(ra_spacing)
-
-
-def _round_to_nice_angle(angle_deg, base_arcmin=15):
-    """
-    Round an angle (Quantity in deg) to a 'nice' value acceptable by WCSAxes
-    tick locator (multiples of 1, 2, 3, 5 x 10^n).
-    """
-    import numpy as np
-    from astropy import units as u
-
-    # convert to degrees
-    val = angle_deg.to(u.deg).value
-
-    # find power of 10
-    exp = np.floor(np.log10(val))
-    frac = val / 10**exp
-
-    # snap fraction to 1, 2, 3, or 5
-    if frac < 1.5:
-        nice = 1
-    elif frac < 3.5:
-        nice = 2
-    elif frac < 7.5:
-        nice = 5
-    else:
-        nice = 10
-
-    rounded = nice * 10**exp
-    return rounded * u.deg
+    ax.set_aspect("equal", adjustable="box")
+    num_plot = len(tbl)
+    ax.set_title(f"\n{num_plot} Brightest Sources in Each Catalog", ha="center", va="top", fontsize=12, pad=45)
+    # fig.suptitle(f"{num_plot} brightest sources in each catalog", y=0.97)
 
 
 def wcs_check_psf_plot(
@@ -323,6 +258,7 @@ def wcs_check_psf_plot(
     stretch_type: str = "Lupton Asinh",
     centroid_legend_idx: int = 2,
     ellipse_legend_idx: int = 2,
+    title_ax=None,
     legend_ax=None,
 ):
     """
@@ -341,7 +277,7 @@ def wcs_check_psf_plot(
         selected_idx = get_3x3_stars(matched_catalog, H, W, cutout_size, return_id=False)
         selected_stars = matched_catalog[selected_idx]
     else:
-        print(f"matched_ids in psf_plot {matched_ids}")
+        # print(f"matched_ids in psf_plot {matched_ids}")
         selected_stars = find_id_rows(matched_catalog, matched_ids)
 
     # centers in 0-based pixel coords (SExtractor is 1-based)
@@ -514,7 +450,9 @@ def wcs_check_psf_plot(
                     proxy_handles,
                     labels,
                     loc="center",
-                    ncol=4,
+                    bbox_to_anchor=(0.5, 0.5),
+                    bbox_transform=legend_ax.transAxes,
+                    ncol=3,
                     frameon=True,
                     fontsize=8,
                     borderaxespad=0.2,
@@ -536,85 +474,22 @@ def wcs_check_psf_plot(
             #         handlelength=2.0,
             #     )
 
+        # PSF block title (centered between blocks)
+        if title_ax is not None:
+            title_ax.text(
+                0.5,
+                0.18,
+                f"3x3 PSF Cutouts Across Image ({stretch_type})",
+                ha="center",
+                va="center",
+                fontsize=12,
+                transform=title_ax.transAxes,
+            )
+        else:
+            fig = ax.get_figure()
+            fig.suptitle(
+                f"3x3 PSF Cutouts Across Image ({stretch_type})",
+                fontsize=12,
+            )
     return
     # return [matched_catalog[i]["id"] for i in selected_idx if i is not None]
-
-
-class HandlerEllipse(HandlerPatch):
-    def create_artists(self, legend, orig_handle, xdescent, ydescent, width, height, fontsize, trans):
-        # scale the ellipse into the legend box
-        center = width / 2 - xdescent, height / 2 - ydescent
-        p = Ellipse(
-            xy=center,
-            width=width,
-            height=height,
-            facecolor=orig_handle.get_facecolor(),
-            edgecolor=orig_handle.get_edgecolor(),
-            lw=orig_handle.get_linewidth(),
-        )
-        self.update_prop(p, orig_handle, legend)
-        p.set_transform(trans)
-        return [p]
-
-
-def cutout(data, coords, x, y, size=30):
-    h = size / 2
-    x_min = int(x - h)
-    x_max = int(x + h) + 1
-    y_min = int(y - h)
-    y_max = int(y + h) + 1
-    data_cut = data[y_min:y_max, x_min:x_max]
-    coords_shifted = []
-    for coord in coords:
-        coord_shifted = (coord[0] - x_min, coord[1] - y_min)
-        coords_shifted.append(coord_shifted)
-    return data_cut, coords_shifted
-
-
-def draw_ellipse(
-    ax,
-    x_cen: float,
-    y_cen: float,
-    a_image: float,  # SExtractor: RMS along major axis (pixels)
-    b_image: float,  # SExtractor: RMS along minor axis (pixels)
-    theta_image: float,  # degrees, CCW from +X (SExtractor convention)
-    *,
-    edgecolor="yellow",
-    linewidth=1.2,
-    alpha=1.0,
-    label=None,
-):
-    """
-    Draw the FWHM ellipse implied by SExtractor's A_IMAGE/B_IMAGE/THETA_IMAGE
-    on a Matplotlib Axes (assumes the image is shown with origin='lower').
-
-    Parameters
-    ----------
-    ax : matplotlib.axes.Axes
-        Target axes.
-    x_cen, y_cen : float
-        Ellipse center in pixel coords (0-based if you've converted).
-    a_image, b_image : float
-        SExtractor RMS lengths along major/minor axes, in pixels.
-    theta_image : float
-        Position angle in degrees, CCW from +X (SExtractor).
-    """
-    FWHM_FACTOR = 2.354820045  # 2.0 * np.sqrt(2.0 * np.log(2.0))  why bother calculating?
-
-    # convert sigma to FWHM
-    width = FWHM_FACTOR * a_image  # along X' (major), in pixels
-    height = FWHM_FACTOR * b_image  # along Y' (minor), in pixels
-
-    e = Ellipse(
-        (x_cen, y_cen),
-        width=width,
-        height=height,
-        angle=theta_image,  # Matplotlib uses degrees CCW from +X, matches SExtractor
-        fill=False,
-        edgecolor=edgecolor,
-        linewidth=linewidth,
-        alpha=alpha,
-        label=label,
-    )
-    ax.add_patch(e)
-    return e

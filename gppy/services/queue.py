@@ -173,7 +173,7 @@ class QueueManager:
         """
         self.stop_processing()
         if exc_type:
-            self.logger.error(f"Error during execution: {exc_val}")
+            self.logger.error(f"Error during execution: {exc_val}", exc_info=True)
             return False
         return True
 

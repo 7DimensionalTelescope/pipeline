@@ -69,7 +69,7 @@ class SortedGroupDict(UserDict):
 class DataReduction:
     """overwrite=True to rewrite configs"""
 
-    def __init__(self, input_params, use_db=False, ignore_mult_date=False, **kwargs):
+    def __init__(self, input_params=None, list_of_images=None, use_db=False, ignore_mult_date=False, **kwargs):
         self.groups = SortedGroupDict()
 
         self._unified_key_list = None  # Will be populated after initialization
@@ -80,7 +80,11 @@ class DataReduction:
         self.input_params = input_params
         print("Globbing images with parameters:", input_params)
 
-        self.list_of_images = query_observations(input_params, use_db=use_db, **kwargs)
+        if list_of_images is None:
+            assert input_params is not None
+            self.list_of_images = query_observations(input_params, use_db=use_db, **kwargs)
+        else:
+            self.list_of_images = list_of_images
 
         print(f"Found {len(self.list_of_images)} images.")
         if len(self.list_of_images) == 0:
@@ -91,44 +95,40 @@ class DataReduction:
         print("Blueprint initialized.")
 
     @classmethod
-    def from_list(cls, list_of_images, ignore_mult_date=False):
+    def from_list(cls, list_of_images: list[str], ignore_mult_date=False, **kwargs):
         # if not all(f.endswith(".fits") for f in list_of_images):
         #     raise ValueError("Non-fits images in input")
-        # self = cls.__new__(cls)
-        # self.list_of_images = list_of_images
-        # self.initialize()
-        # print("Blueprint initialized from user-input list.")
-        # return self
         if not list_of_images:
             raise ValueError("Empty list_of_images")
 
         if not all(isinstance(f, str) and f.endswith(".fits") for f in list_of_images):
             raise ValueError("Non-fits images in input")
 
-        # Bypass __init__ but reproduce its initialization
-        self = cls.__new__(cls)
+        return cls(list_of_images=list_of_images, ignore_mult_date=ignore_mult_date, **kwargs)
+        # # Bypass __init__ but reproduce its initialization
+        # self = cls.__new__(cls)
 
-        # Match fields initialized in __init__
-        self.groups = SortedGroupDict()
-        self._unified_key_list = None
-        self._key_usage_map = None
-        self._multi_unit_config = set()
+        # # Match fields initialized in __init__
+        # self.groups = SortedGroupDict()
+        # self._unified_key_list = None
+        # self._key_usage_map = None
+        # self._multi_unit_config = set()
 
-        # Record where these came from for parity with __init__
-        self.input_params = {"source": "user_list", "patterns": list(list_of_images)}
+        # # Record where these came from for parity with __init__
+        # self.input_params = {"source": "user_list", "patterns": list(list_of_images)}
 
-        # Set images directly (no DB / globbing here)
-        self.list_of_images = list_of_images
+        # # Set images directly (no DB / globbing here)
+        # self.list_of_images = list_of_images
 
-        print(f"Found {len(self.list_of_images)} images.")
-        if len(self.list_of_images) == 0:
-            print("No images found")
-            return self
+        # print(f"Found {len(self.list_of_images)} images.")
+        # if len(self.list_of_images) == 0:
+        #     print("No images found")
+        #     return self
 
-        print("Grouping images...")
-        self.initialize(ignore_mult_date=ignore_mult_date)
-        print("Blueprint initialized from user-input list.")
-        return self
+        # print("Grouping images...")
+        # self.initialize(ignore_mult_date=ignore_mult_date)
+        # print("Blueprint initialized from user-input list.")
+        # return self
 
     def initialize(self, ignore_mult_date=False):
         # [raw bdf, mframes, sci_dict]
