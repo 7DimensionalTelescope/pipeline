@@ -73,6 +73,7 @@ class Astrometry(BaseSetup):
         self.logger.debug(f"Astrometry Queue is '{queue}'")
 
         self.start_time = time.time()
+        self.define_paths()
 
     @classmethod
     def from_list(cls, images, working_dir=None):
@@ -92,7 +93,7 @@ class Astrometry(BaseSetup):
     def run(
         self,
         se_preset: str = "prep",
-        joint_scamp: bool = True,
+        joint_scamp: bool = False,
         force_solve_field: bool = False,
         evaluate_prep_sol: bool = True,
         max_scamp: int = 3,
@@ -113,9 +114,8 @@ class Astrometry(BaseSetup):
             prefix: Prefix for sextractor
         """
         try:
-            start_time = self.start_time or time.time()
+            self.start_time = time.time()
             self.logger.info(f"Start 'Astrometry'")
-            self.define_paths()
 
             self.inject_wcs_guess(self.input_images)
             # Source Extractor
@@ -147,18 +147,19 @@ class Astrometry(BaseSetup):
                             images_info=image_info,
                             prep_cats=prep_cat,
                             suffix="iterwcs",
+                            plot=False,
                             isep=False,
                             use_threading=use_threading,
                             export_eval_cards=True,
                         )
-                        self.logger.debug(f"SEP_P95: {image_info.sep_p95} for {image_info.image_path}")
-                        if image_info.sep_p95 < PIXSCALE:
+                        self.logger.debug(f"SEP_P95: {image_info.reference_sep_p95} for {image_info.image_path}")
+                        if image_info.reference_sep_p95 < PIXSCALE:
                             self.logger.debug(f"Stop iterating at {_}")
                             break
 
             # run main scamp
             # self.run_scamp(self.prep_cats, scamp_preset="main", joint=joint_scamp)
-            self.evaluate_solution(suffix="main", isep=True, use_threading=use_threading)
+            self.evaluate_solution(suffix="wcs", isep=True, use_threading=use_threading, scamp_preset="main")
 
             # update the input image
             self.update_header()
@@ -166,8 +167,8 @@ class Astrometry(BaseSetup):
             self.config.flag.astrometry = True
 
             self.logger.info(
-                f"'Astrometry' is completed in {time_diff_in_seconds(start_time)} seconds "
-                f"({time_diff_in_seconds(start_time, return_float=True) / len(self.input_images):.2f} seconds per image)"
+                f"'Astrometry' is completed in {time_diff_in_seconds(self.start_time)} seconds "
+                f"({time_diff_in_seconds(self.start_time, return_float=True) / len(self.input_images):.2f} seconds per image)"
             )
             self.logger.debug(MemoryMonitor.log_memory_usage)
         except Exception as e:
@@ -513,7 +514,7 @@ class Astrometry(BaseSetup):
             image_info.head = solved_head
             self.logger.debug(f"Updated WCS in ImageInfo {image_info.head}")
             with open(solved_head, "r") as f:
-                if not any("PV1_0" in line for line in f):
+                if scamp_preset == "main" and not any("PV1_0" in line for line in f):
                     self.logger.error(f"No PV1_0 in {solved_head} - solution invalid")
                     # raise PipelineError(f"No PV1_0 in {solved_head} - solution invalid")
 
@@ -571,6 +572,7 @@ class Astrometry(BaseSetup):
         num_ref=200,
         use_threading=True,
         export_eval_cards=False,
+        scamp_preset="prep",  # for determining error
     ) -> None:
         """Evaluate the solution. This was developed in lack of latest scamp version."""
         self.logger.info("Evaluating the solution")
@@ -625,7 +627,7 @@ class Astrometry(BaseSetup):
             rsep_stats = eval_result.rsep_stats
             psf_stats = eval_result.psf_stats
 
-            if rsep_stats.unmatched_fraction == 1.0:
+            if scamp_preset == "main" and rsep_stats.unmatched_fraction == 1.0:
                 self.logger.error(
                     f"Unmatched fraction is 1.0 for {input_images[idx]}. "
                     f"Check the initial WCS guess or the reference catalog."
@@ -804,12 +806,12 @@ class ImageInfo:
     matched_catalog: Optional[Table] = field(default=None)
 
     # separation statistics from reference catalog
-    sep_min: Optional[float] = field(default=None)
-    sep_max: Optional[float] = field(default=None)
-    sep_rms: Optional[float] = field(default=None)
-    sep_q1: Optional[float] = field(default=None)
-    sep_q2: Optional[float] = field(default=None)
-    sep_q3: Optional[float] = field(default=None)
+    reference_sep_min: Optional[float] = field(default=None)
+    reference_sep_max: Optional[float] = field(default=None)
+    reference_sep_rms: Optional[float] = field(default=None)
+    reference_sep_q1: Optional[float] = field(default=None)
+    reference_sep_q2: Optional[float] = field(default=None)
+    reference_sep_q3: Optional[float] = field(default=None)
     # sep_mean: Optional[float] = field(default=None)
     # sep_median: Optional[float] = field(default=None)
     # sep_std: Optional[float] = field(default=None)
@@ -829,6 +831,8 @@ class ImageInfo:
 
     # dependency logger
     logger: Any = None
+
+    _joint_cards_up_to_date = False  # prevent single and joint eval cards coming from different solutions
 
     def _log(self, msg: str, level: str = "error", *args, **kwargs):
         """Log or fallback to print/raise if logger missing."""
@@ -902,16 +906,18 @@ class ImageInfo:
         return build_wcs(self.racent, self.decent, self.xcent, self.ycent, self.pixscale, pa, flip=True)
 
     def set_reference_sep_stats(self, sep_stats: dict) -> None:
-        self.sep_min = sep_stats["min"]
-        self.sep_max = sep_stats["max"]
-        self.sep_rms = sep_stats["rms"]
-        self.sep_q1 = sep_stats["q1"]
-        self.sep_q2 = sep_stats["q2"]
-        self.sep_q3 = sep_stats["q3"]
-        self.sep_p95 = sep_stats["p95"]
-        self.sep_p99 = sep_stats["p99"]
+        self._joint_cards_up_to_date = False
+        self.reference_sep_min = sep_stats["min"]
+        self.reference_sep_max = sep_stats["max"]
+        self.reference_sep_rms = sep_stats["rms"]
+        self.reference_sep_q1 = sep_stats["q1"]
+        self.reference_sep_q2 = sep_stats["q2"]
+        self.reference_sep_q3 = sep_stats["q3"]
+        self.reference_sep_p95 = sep_stats["p95"]
+        self.reference_sep_p99 = sep_stats["p99"]
 
     def set_internal_sep_stats(self, sep_stats: dict) -> None:
+        self._joint_cards_up_to_date = True
         self.internal_sep_rms_x = sep_stats["rms_x"]
         self.internal_sep_rms_y = sep_stats["rms_y"]
         self.internal_sep_rms = sep_stats["rms"]
@@ -937,7 +943,11 @@ class ImageInfo:
     @property
     def wcs_eval_cards(self) -> List[Tuple[str, float]]:
 
-        cards = self._single_wcs_eval_cards + self._joint_wcs_eval_cards
+        cards = (
+            self._single_wcs_eval_cards + self._joint_wcs_eval_cards
+            if self._joint_cards_up_to_date
+            else self._single_wcs_eval_cards
+        )
         # Clean invalid values
         for i, (k, v, c) in enumerate(cards):
             if np.isnan(v):
@@ -956,14 +966,14 @@ class ImageInfo:
             (f"UNMATCH", self.rsep_stats.unmatched_fraction, "Fraction of unmatched reference sources"),
             (f"SUBPIXEL", self.rsep_stats.subpixel_fraction, "Fraction of matched with sep < PIXSCALE"),
             (f"SUBSEC", self.rsep_stats.subsecond_fraction, "Fraction of matched with sep < 1"),
-            (f"RSEP_MIN", self.sep_min, "Min separation from reference catalog [arcsec]"),
-            (f"RSEP_MAX", self.sep_max, "Max separation from reference catalog [arcsec]"),
-            (f"RSEP_RMS", self.sep_rms, "RMS separation from reference catalog [arcsec]"),
-            (f"RSEP_Q1", self.sep_q1, "Q1 separation from ref catalog [arcsec]"),
-            (f"RSEP_Q2", self.sep_q2, "Q2 separation from ref catalog [arcsec]"),
-            (f"RSEP_Q3", self.sep_q3, "Q3 separation from ref catalog [arcsec]"),
-            (f"RSEP_P95", self.sep_p95, "95 percentile sep from ref catalog [arcsec]"),
-            (f"RSEP_P99", self.sep_p99, "99 percentile sep from ref catalog [arcsec]"),
+            (f"RSEP_MIN", self.reference_sep_min, "Min separation from reference catalog [arcsec]"),
+            (f"RSEP_MAX", self.reference_sep_max, "Max separation from reference catalog [arcsec]"),
+            (f"RSEP_RMS", self.reference_sep_rms, "RMS separation from reference catalog [arcsec]"),
+            (f"RSEP_Q1", self.reference_sep_q1, "Q1 separation from ref catalog [arcsec]"),
+            (f"RSEP_Q2", self.reference_sep_q2, "Q2 separation from ref catalog [arcsec]"),
+            (f"RSEP_Q3", self.reference_sep_q3, "Q3 separation from ref catalog [arcsec]"),
+            (f"RSEP_P95", self.reference_sep_p95, "95 percentile sep from ref catalog [arcsec]"),
+            (f"RSEP_P99", self.reference_sep_p99, "99 percentile sep from ref catalog [arcsec]"),
             # (f"RSEP_MED", self.sep_median, "Median separation from ref catalog [arcsec]"),
             # (f"RSEP_STD", self.sep_std, "STD of separation from ref catalog [arcsec]"),
             (f"FWHMCRMN", self.psf_stats.FWHMCRMN, "Mean corner/center FWHM ratio (9 PSFs)"),

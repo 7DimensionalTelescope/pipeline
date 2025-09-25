@@ -45,6 +45,17 @@ def read_scamp_header(file, return_wcs=False):
     return hdr
 
 
+def extract_from_scamp_log(filename: str) -> None:
+    """
+    Open a text file, read it line by line,
+    and print all lines containing 'removed'.
+    """
+    with open(filename, "r", encoding="utf-8") as f:
+        for line in f:
+            if "removed" in line:
+                print(line.rstrip())
+
+
 def build_wcs(ra_deg, dec_deg, crpix1, crpix2, pixscale_arcsec, pa_deg, flip=True):
     """
     Build an Astropy WCS with TAN projection and a CD matrix from pixel scale + PA.
@@ -447,153 +458,3 @@ def _select_3x3_by_nearest(cand_xy, targets):
                     break
 
     return selected
-
-
-# derive stats from matched table
-
-
-def compute_rms_stats(out: Table, cat_names, unit: u.Quantity | str = u.arcsec):
-    """
-    Astrometric precision statistics per catalog, including SCAMP-style internal rms.
-
-    Uses dra_cosdec_arcsec_<name>, ddec_arcsec_<name> for component RMS,
-    and sep_arcsec_<name> for radial RMS and distribution statistics.
-
-    Returns dict:
-        {
-            name: {
-                'n': N,
-                'rms_x': Quantity,
-                'rms_y': Quantity,
-                'rms': Quantity (radial RMS),
-                'min': Quantity,
-                'q1': Quantity,
-                'q2': Quantity (median),
-                'q3': Quantity,
-                'max': Quantity
-            }
-        }
-    """
-    unit = u.Unit(unit)
-    res = {}
-
-    for name in cat_names:
-        cx = f"dra_cosdec_arcsec_{name}"
-        cy = f"ddec_arcsec_{name}"
-        cr = f"sep_arcsec_{name}"
-
-        # Skip if none of the relevant columns exist
-        if all(c not in out.colnames for c in [cx, cy, cr]):
-            continue
-
-        # collect data
-        x = out[cx] if cx in out.colnames else None
-        y = out[cy] if cy in out.colnames else None
-        r = out[cr] if cr in out.colnames else None
-
-        # validity mask
-        valid = np.ones(len(out), dtype=bool)
-        if x is not None and hasattr(x, "mask"):
-            valid &= ~x.mask
-        if y is not None and hasattr(y, "mask"):
-            valid &= ~y.mask
-        if r is not None and hasattr(r, "mask"):
-            valid &= ~r.mask
-
-        if valid.sum() == 0:
-            res[name] = {
-                "n": 0,
-                "rms_x": np.nan * unit,
-                "rms_y": np.nan * unit,
-                "rms": np.nan * unit,
-                "min": np.nan * unit,
-                "q1": np.nan * unit,
-                "q2": np.nan * unit,
-                "q3": np.nan * unit,
-                "max": np.nan * unit,
-            }
-            continue
-
-        # components
-        if x is not None:
-            xv = np.asarray(x)[valid] * u.arcsec
-            rms_x = np.sqrt(np.mean(xv**2)).to(unit)
-        else:
-            rms_x = np.nan * unit
-
-        if y is not None:
-            yv = np.asarray(y)[valid] * u.arcsec
-            rms_y = np.sqrt(np.mean(yv**2)).to(unit)
-        else:
-            rms_y = np.nan * unit
-
-        # radial
-        if r is not None:
-            rv = np.asarray(r)[valid] * u.arcsec
-        elif x is not None and y is not None:
-            rv = np.sqrt(xv**2 + yv**2)
-        else:
-            rv = np.array([]) * u.arcsec
-
-        if len(rv) > 0:
-            rms = np.sqrt(np.mean(rv**2)).to(unit)
-            rv_q = np.percentile(rv.value, [0, 25, 50, 75, 95, 99, 100]) * rv.unit
-            min_, q1, q2, q3, p95, p99, max_ = rv_q.to(unit)
-        else:
-            rms = min_ = q1 = q2 = q3 = p95 = p99 = max_ = np.nan * unit
-
-        res[name] = {
-            "n": int(valid.sum()),
-            "rms_x": rms_x,
-            "rms_y": rms_y,
-            "rms": rms,
-            "min": min_,
-            "q1": q1,
-            "q2": q2,
-            "q3": q3,
-            "p95": p95,
-            "p99": p99,
-            "max": max_,
-        }
-
-    return res
-
-
-def well_matchedness_stats(merged, n_cats=3):
-    """
-    Compute well-matchedness stats from an outer-merged catalog
-    produced by match_multi_catalogs with pivot='centroid' and sep_components=True.
-
-    Assumes:
-      - sep_arcsec_cat{i} columns (masked if absent)
-      - dra_cosdec_arcsec_cat{i}, ddec_arcsec_cat{i}
-    """
-    cat_names = [f"cat{i}" for i in range(n_cats)]
-
-    # Presence matrix
-    P = np.zeros((len(merged), n_cats), dtype=bool)
-    for j, c in enumerate(cat_names):
-        col = merged[f"sep_arcsec_{c}"]
-        m = getattr(col, "mask", None)
-        if m is not None and len(m):
-            P[:, j] = ~m
-        else:
-            P[:, j] = np.isfinite(col)
-
-    sizes = P.sum(axis=1)
-
-    # Counts by group size
-    counts_by_group_size = dict(Counter(sizes))
-
-    # Recall per catalog
-    recall = {}
-    for j, c in enumerate(cat_names):
-        others_present = (sizes - P[:, j]) >= 1
-        denom = others_present.sum()
-        num = (P[:, j] & others_present).sum()
-        recall[c] = (num / denom) if denom else np.nan
-
-    return {
-        "counts_by_group_size": counts_by_group_size,
-        "recall": recall,
-    }

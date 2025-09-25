@@ -1,18 +1,18 @@
 from dataclasses import dataclass
-from typing import Optional, TypedDict, List
+from typing import Optional, TypedDict, List, Union
 import numpy as np
 from astropy.table import Table
 from astropy.time import Time
 from astropy.wcs import WCS
 import astropy.io.fits as fits
 
-from ..const import PIXSCALE, PipelineError
+from ..const import PIXSCALE
 from ..tools.table import match_two_catalogs, add_id_column, match_multi_catalogs
-from ..tools.angle import pa_alignment
 from ..utils import add_suffix, swap_ext
 from .plotting import wcs_check_plot
 from ..subtract.utils import create_ds9_region_file
-from .utils import inside_quad_spherical, compute_rms_stats, well_matchedness_stats, get_3x3_stars, find_id_rows
+from .utils import inside_quad_spherical, get_3x3_stars
+from .evaluation_helpers import compute_psf_stats, compute_rms_stats, well_matchedness_stats, PsfStats
 
 
 class SeparationStats(TypedDict):
@@ -35,17 +35,6 @@ class RSEPSStats:
     subpixel_fraction: float
     subsecond_fraction: float
     separation_stats: SeparationStats
-
-
-@dataclass(frozen=True)
-class PsfStats:
-    FWHMCRMN: float
-    FWHMCRSD: float
-    AWINCRMN: float
-    AWINCRSD: float
-    PA_ALIGN: float
-    ELLIPMN: float
-    ELLIPSTD: float
 
 
 @dataclass(frozen=True)
@@ -257,54 +246,6 @@ def evaluate_single_wcs(
     #     subsecond_fraction,
     #     separation_stats,
     # )
-
-
-def compute_psf_stats(matched_catalog, matched_ids):
-    selected_stars = find_id_rows(matched_catalog, matched_ids)
-    if len(selected_stars) == 0:
-        stats = PsfStats(
-            FWHMCRMN=np.nan,
-            FWHMCRSD=np.nan,
-            AWINCRMN=np.nan,
-            AWINCRSD=np.nan,
-            PA_ALIGN=np.nan,
-            ELLIPMN=np.nan,
-            ELLIPSTD=np.nan,
-        )
-        return stats
-
-    assert len(matched_ids) == 9
-
-    matched_ids = [i for i in matched_ids if i is not None]  # clean potential Nones
-
-    # 2D PSF Variation
-    fwhm_in_pix = selected_stars["FWHM_IMAGE"]
-    fwhm_ratio = fwhm_in_pix / fwhm_in_pix[4]
-    awin_in_pix = selected_stars["AWIN_IMAGE"]
-    awin_ratio = awin_in_pix / awin_in_pix[4]
-    # rms_in_pix = selected_stars["A_IMAGE"]
-    # rms_ratio = rms_in_pix / rms_in_pix[4]
-
-    # Tracking Issue
-    pa = selected_stars["THETA_IMAGE"]  # [-90, 90]
-
-    pa_align, _, _, _, _ = pa_alignment(pa)
-
-    # Both
-    ellip = selected_stars["ELLIPTICITY"]
-
-    stats = PsfStats(
-        FWHMCRMN=np.mean(fwhm_ratio),
-        FWHMCRSD=np.std(fwhm_ratio),
-        AWINCRMN=np.mean(awin_ratio),
-        AWINCRSD=np.std(awin_ratio),
-        # "PA_MEAN": np.mean(pa),
-        # "PA_STD": np.std(pa),
-        PA_ALIGN=pa_align,
-        ELLIPMN=np.mean(ellip),
-        ELLIPSTD=np.std(ellip),
-    )
-    return stats
 
 
 ###############################################################################
