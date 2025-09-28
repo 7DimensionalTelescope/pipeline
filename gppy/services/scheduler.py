@@ -43,7 +43,6 @@ class Scheduler:
 
     def __init__(self, dependent_configs={}, independent_configs=[], preprocess_only=False, **kwargs):
 
-
         # Initialize master queue and status tracking
         masters = list(dependent_configs.keys())
         self.master_queue = deque(masters)
@@ -76,6 +75,10 @@ class Scheduler:
         self.device_id = kwargs.get("device_id", 0)
         self.max_devices = kwargs.get("max_devices", 2)  # Default to 2 GPUs
         self.preprocess_only = preprocess_only
+
+        if not self.master_status:  # enqueue independents immediately if no masters
+            while self.independents:
+                self.task_queue.append(self.independents.popleft())
 
     def _key_from_path(self, path):
         """
