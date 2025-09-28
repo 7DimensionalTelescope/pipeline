@@ -32,6 +32,7 @@ from ..const import PIXSCALE, MEDIUM_FILTERS, BROAD_FILTERS, ALL_FILTERS, Pipeli
 from ..services.setup import BaseSetup
 from ..tools.table import match_two_catalogs, build_condition_mask
 from ..path.path import PathHandler
+from ..header import update_padded_header
 
 
 class Photometry(BaseSetup):
@@ -272,53 +273,59 @@ class PhotometrySingle:
 
         Times the complete process and performs memory cleanup after completion.
         """
-        start_time = time.time()
-        self.logger.info(f"Start 'PhotometrySingle' for the image {self.name} [{self._id}]")
-        self.logger.debug(f"{'=' * 13} {os.path.basename(self.input_image)} {'=' * 13}")
+        try:
+            start_time = time.time()
+            self.logger.info(f"Start 'PhotometrySingle' for the image {self.name} [{self._id}]")
+            self.logger.debug(f"{'=' * 13} {os.path.basename(self.input_image)} {'=' * 13}")
 
-        self.calculate_seeing()
-        obs_src_table = self.photometry_with_sextractor()
+            self.calculate_seeing()
+            obs_src_table = self.photometry_with_sextractor()
 
-        if self.check_filter:
-            filters_to_check = get_key(self.config.photometry, "filters_to_check") or ALL_FILTERS
-            obs_src_table = self.add_matched_reference_catalog(obs_src_table, filters=filters_to_check)
-            zp_src_table = self.get_zp_src_table(obs_src_table)
-            temp_results = {}
-            self.logger.debug(f"Starting filter check for {filters_to_check}")
-            for i, filt in enumerate(filters_to_check):
-                zp_dict, aper_dict, cols = self.calculate_zp(zp_src_table, obs_src_table, filt=filt, save_plots=False)
-                temp_results[filt] = (zp_dict, aper_dict, cols)
-                self.logger.debug(f"Filter check for {filt} is completed")
+            if self.check_filter:
+                filters_to_check = get_key(self.config.photometry, "filters_to_check") or ALL_FILTERS
+                obs_src_table = self.add_matched_reference_catalog(obs_src_table, filters=filters_to_check)
+                zp_src_table = self.get_zp_src_table(obs_src_table)
+                temp_results = {}
+                self.logger.debug(f"Starting filter check for {filters_to_check}")
+                for i, filt in enumerate(filters_to_check):
+                    zp_dict, aper_dict, cols = self.calculate_zp(
+                        zp_src_table, obs_src_table, filt=filt, save_plots=False
+                    )
+                    temp_results[filt] = (zp_dict, aper_dict, cols)
+                    self.logger.debug(f"Filter check for {filt} is completed")
 
-            # save the photometry result for the alledged filter as default
-            zp_dict, aper_dict, cols = self.calculate_zp(zp_src_table, obs_src_table)
-            self.add_reference_columns(obs_src_table, cols)
-            self.update_image_header(zp_dict, aper_dict)
-
-            dicts = {f: (zp, ap) for f, (zp, ap, _) in temp_results.items()}
-            inferred_filter = self.determine_filter(dicts)
-            if inferred_filter != self.image_info.filter:
-                self.logger.info(f"Saving {inferred_filter} photometry to catalog too")
-                phot_utils.update_padded_header(self.input_image, {"INF_FILT": inferred_filter})
-                _, _, cols = temp_results[inferred_filter]
+                # save the photometry result for the alledged filter as default
+                zp_dict, aper_dict, cols = self.calculate_zp(zp_src_table, obs_src_table)
                 self.add_reference_columns(obs_src_table, cols)
-                # self.update_image_header(*dicts[inferred_filter])
-            self.write_catalog(obs_src_table)
+                self.update_image_header(zp_dict, aper_dict)
 
-        else:
-            self.logger.info("Skipping filter check")
-            zp_src_table = self.get_zp_src_table(obs_src_table)
-            obs_src_table = self.add_matched_reference_catalog(zp_src_table)
-            zp_dict, aper_dict, cols = self.calculate_zp(zp_src_table, obs_src_table)
-            self.add_reference_columns(obs_src_table, cols)
-            self.update_image_header(zp_dict, aper_dict)
-            self.write_catalog(obs_src_table)
+                dicts = {f: (zp, ap) for f, (zp, ap, _) in temp_results.items()}
+                inferred_filter = self.determine_filter(dicts)
+                if inferred_filter != self.image_info.filter:
+                    self.logger.info(f"Saving {inferred_filter} photometry to catalog too")
+                    update_padded_header(self.input_image, {"INF_FILT": inferred_filter})
+                    _, _, cols = temp_results[inferred_filter]
+                    self.add_reference_columns(obs_src_table, cols)
+                    # self.update_image_header(*dicts[inferred_filter])
+                self.write_catalog(obs_src_table)
 
-        self.logger.debug(MemoryMonitor.log_memory_usage)
-        self.logger.info(
-            f"'PhotometrySingle' is completed for the image [{self._id}]"
-            f" in {time_diff_in_seconds(start_time)} seconds"
-        )
+            else:
+                self.logger.info("Skipping filter check")
+                zp_src_table = self.get_zp_src_table(obs_src_table)
+                obs_src_table = self.add_matched_reference_catalog(zp_src_table)
+                zp_dict, aper_dict, cols = self.calculate_zp(zp_src_table, obs_src_table)
+                self.add_reference_columns(obs_src_table, cols)
+                self.update_image_header(zp_dict, aper_dict)
+                self.write_catalog(obs_src_table)
+
+            self.logger.debug(MemoryMonitor.log_memory_usage)
+            self.logger.info(
+                f"'PhotometrySingle' is completed for the image [{self._id}]"
+                f" in {time_diff_in_seconds(start_time)} seconds"
+            )
+        except Exception as e:
+            self.logger.critical(f"PhotometrySingle failed for the image [{self._id}]: {str(e)}", exc_info=True)
+            raise
 
     def calculate_seeing(self, use_header_seeing=False) -> None:
         """
@@ -342,8 +349,8 @@ class PhotometrySingle:
             self.logger.debug(f"ELLIPTICITY: {self.phot_header.ellipticity:.3f}")
             return
 
-        config_seeing = get_key(self.config.config.qa, "seeing")
-        config_ellipticity = get_key(self.config.config.qa, "ellipticity")
+        config_seeing = get_key(self.config.qa, "seeing")
+        config_ellipticity = get_key(self.config.qa, "ellipticity")
         if config_seeing and config_ellipticity:
             self.logger.debug(f"Using seeing, ellipticity, and pa from the config")
             self.phot_header.seeing = config_seeing
@@ -516,7 +523,6 @@ class PhotometrySingle:
         obs_src_table = self._run_sextractor(
             se_preset="main",
             sex_args=sex_args,
-            return_sex_output=True,
         )
 
         # add snr columns
@@ -553,19 +559,17 @@ class PhotometrySingle:
 
         self.logger.debug(f"PhotometrySingle _run_sextractor output catalog: {output}")
 
-        outcome = external.sextractor(
+        _, outcome = external.sextractor(
             self.input_image,
             outcat=output,
             se_preset=se_preset,
             logger=self.logger,
             sex_args=sex_args,
+            return_sex_output=True,
             **kwargs,
         )
 
         if se_preset == "main":
-            # print(f"1st outcome: {outcome}")
-            _, outcome = outcome
-            # print(f"2nd outcome: {outcome}")
             outcome = [s for s in outcome.split("\n") if "RMS" in s][0]
             self.phot_header.skymed = float(outcome.split("Background:")[1].split("RMS:")[0])
             self.phot_header.skysig = float(outcome.split("RMS:")[1].split("/")[0])
@@ -896,7 +900,7 @@ class PhotometrySingle:
         header_to_add.update(self.phot_header.dict)
         header_to_add.update(aper_dict)
         header_to_add.update(zp_dict)
-        phot_utils.update_padded_header(self.input_image, header_to_add)
+        update_padded_header(self.input_image, header_to_add)
         self.logger.info(f"Image header has been updated with photometry information (aperture, zero point, ...).")
 
     def write_catalog(self, obs_src_table) -> None:

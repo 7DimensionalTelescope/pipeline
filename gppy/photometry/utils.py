@@ -300,7 +300,8 @@ def get_sex_args(
     sex_config["SEEING_FWHM"] = "2.0"
 
     for key in phot_conf.sex_vars.keys():
-        sex_config[key] = phot_conf.sex_vars[key]
+        if phot_conf.sex_vars[key] is not None:
+            sex_config[key] = phot_conf.sex_vars[key]
 
     # 	Add Weight Map from SWarp
     weightim = image.replace("com", "weight")

@@ -408,7 +408,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             self.logger.warning(f"[Group {self._current_group+1}] Master {dtype} generated but failed quality check")
             self.logger.debug(f"[Group {self._current_group+1}] FITS Written: {getattr(self, f'{dtype}_output')}")
             self.logger.warning(
-                f"[Group {self._current_group+1}] Make a plot for the current {dtype} and fetch a new one with better quality"
+                f"[Group {self._current_group+1}] Making a plot for the current {dtype} and fetching a new one with better quality"
             )
             self.make_plot(getattr(self, f"{dtype}_output"), dtype, self._current_group)
             self.add_error()

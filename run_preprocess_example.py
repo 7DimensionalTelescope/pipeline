@@ -21,7 +21,7 @@ reprocess_dates = [r[0].strftime("%Y-%m-%d") for r in rows]
 queue = QueueManager(max_workers=5)
 skip = True
 for date in reprocess_dates[::-1]:  # processing backwards for mframe selection
-    if date == "2024-11-17":  # start date (inclusive)
+    if date == "2024-11-15":  # start date (inclusive)
         skip = False
 
     if skip:

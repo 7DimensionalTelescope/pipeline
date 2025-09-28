@@ -87,7 +87,7 @@ photometry:
   satur_margin: 0.99  # factor multiplied to the propagated hardware upper limit
   sex_vars:
     PHOT_APERTURES:
-    PHOT_AUTOPARAMS: 
+    PHOT_AUTOPARAMS:
     DETECT_MINAREA: 5
     DETECT_THRESH: 3.0
     DEBLEND_NTHRESH: 64

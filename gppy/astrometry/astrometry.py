@@ -33,6 +33,7 @@ from .utils import (
     strip_wcs,
 )
 from .evaluation import evaluate_single_wcs, evaluate_joint_wcs
+from .generate_refcat_gaia import get_refcat_gaia
 
 
 class Astrometry(BaseSetup):
@@ -277,7 +278,14 @@ class Astrometry(BaseSetup):
         for image_info in self.images_info:
             image_info.logger = self.logger  # pass the logger
 
-        self.config.astrometry.local_astref = self.path.astrometry.astrefcat  # None if no local astrefcat
+        local_astref = self.path.astrometry.astrefcat  # None if no local astrefcat
+        if not os.path.exists(local_astref):
+            try:
+                raise PipelineError(f"Local astrefcat {local_astref} does not exist")
+                get_refcat_gaia(self.input_images[0])
+            except:
+                local_astref = None
+        self.config.astrometry.local_astref = local_astref
 
     def inject_wcs_guess(
         self, input_images: List[str], wcs_list: List[WCS | fits.Header] = None, reset_image_header: bool = True

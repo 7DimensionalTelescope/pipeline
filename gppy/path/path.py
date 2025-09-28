@@ -1025,15 +1025,18 @@ class PathAstrometry(AutoMkdirMixin):
 
     @property
     def astrefcat(self):
-        import re
+        # import re
 
-        # use local astrefcat if tile obs
         obj = collapse(self._parent.name.obj, raise_error=True)  # error in case of inhomogeneous objects
-        match = re.search(r"T\d{5}", obj)
-        if match:
-            astrefcat = os.path.join(self.ref_ris_dir, f"{match.group()}.fits")
-        else:
-            astrefcat = None
+        # # use local astrefcat if tile obs
+        # match = re.search(r"T\d{5}", obj)
+        # if match:
+        #     astrefcat = os.path.join(self.ref_ris_dir, f"{match.group()}.fits")
+        # else:
+        #     astrefcat = None
+
+        # make refcat path anyway, and use it if exists
+        astrefcat = os.path.join(self.ref_ris_dir, f"{obj}.fits")
         return astrefcat
 
     @cached_property
