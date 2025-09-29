@@ -428,7 +428,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             self.logger.error(
                 f"[Group {self._current_group+1}] No pre-existing master {dtype} found in place of {template} within {max_offset} days"
             )
-            raise 
+            raise PipelineError
         else:
             self.logger.info(
                 f"[Group {self._current_group+1}] Found pre-existing nominal master {dtype} at {os.path.basename(existing_mframe_file)}"
