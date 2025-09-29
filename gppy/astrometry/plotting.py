@@ -19,7 +19,7 @@ from PIL import Image, ImageEnhance
 
 
 from ..utils import lupton_asinh
-from .utils import get_3x3_stars, find_id_rows
+from .utils import get_3x3_stars, find_id_rows, resolve_rows_by_id
 from .plotting_helpers import cutout, adaptive_ra_spacing, draw_ellipse, HandlerEllipse
 
 
@@ -73,7 +73,12 @@ def wcs_check_plot(
     )
 
     # Highlight psf inspected sources, preserving order
-    inspected = find_id_rows(matched, matched_ids)
+    if matched_ids is not None:
+        rows = resolve_rows_by_id(matched, matched_ids)
+        hi_ra = [float(r["ALPHA_J2000"]) for r in rows if r is not None]
+        hi_dec = [float(r["DELTA_J2000"]) for r in rows if r is not None]
+    else:
+        hi_ra, hi_dec = None, None
 
     # Plot FOV scatter plot
     wcs_check_scatter_plot(
@@ -82,8 +87,8 @@ def wcs_check_plot(
         tbl[:num_plot],
         fov_ra=fov_ra,
         fov_dec=fov_dec,
-        highlight_ra=inspected["ALPHA_J2000"],
-        highlight_dec=inspected["DELTA_J2000"],
+        highlight_ra=hi_ra,
+        highlight_dec=hi_dec,
     )
 
     # file path title
@@ -253,7 +258,7 @@ def wcs_check_psf_plot(
     image: str,
     matched_catalog: Table,
     wcs: WCS,
-    matched_ids: list[int] = None,
+    matched_ids: list[int | None] = None,
     cutout_size: int = 30,
     stretch_type: str = "Lupton Asinh",
     centroid_legend_idx: int = 2,
@@ -276,20 +281,25 @@ def wcs_check_psf_plot(
             return
         selected_idx = get_3x3_stars(matched_catalog, H, W, cutout_size, return_id=False)
         selected_stars = matched_catalog[selected_idx]
+        rows = [selected_stars[i] if i is not None else None for i in selected_idx]
     else:
         # print(f"matched_ids in psf_plot {matched_ids}")
-        selected_stars = find_id_rows(matched_catalog, matched_ids)
+        # selected_stars = find_id_rows(matched_catalog, matched_ids)
+        rows = resolve_rows_by_id(matched_catalog, matched_ids)  # list of Table row or None
 
     # centers in 0-based pixel coords (SExtractor is 1-based)
-    x_img = selected_stars["X_IMAGE"].astype(float) - 1.0
-    y_img = selected_stars["Y_IMAGE"].astype(float) - 1.0
+    # x_img = selected_stars["X_IMAGE"].astype(float) - 1.0
+    # y_img = selected_stars["Y_IMAGE"].astype(float) - 1.0
 
-    for idx, (id, ax) in enumerate(zip(matched_ids, axes)):
-        # ax = fig.add_subplot(3, 3, k + 1)
+    # for idx, (id, ax) in enumerate(zip(matched_ids, axes)):
+    for idx, (id_, ax) in enumerate(zip(matched_ids, axes)):
+        row = rows[idx] if idx < len(rows) else None
+
         ax.set_xticks([])
         ax.set_yticks([])
 
-        if id is None:
+        # if id is None:
+        if (id_ is None) or (row is None):
             ax.text(0.5, 0.5, "No source", ha="center", va="center", transform=ax.transAxes)
             continue
 
@@ -297,24 +307,24 @@ def wcs_check_psf_plot(
         ax.text(0, 27, str(idx + 1), fontsize=18, color="white")
 
         # add source stats
-        if "ELLIPTICITY" in selected_stars.colnames:
-            ax.text(30, 3, f"Ellipticity: {selected_stars[idx]['ELLIPTICITY']:.2f}", fontsize=9, ha="right", color="w")
+        if "ELLIPTICITY" in row.colnames:
+            ax.text(30, 3, f"Ellipticity: {row['ELLIPTICITY']:.2f}", fontsize=9, ha="right", color="w")
         text = f"FWHM: "
-        if "FWHM_WORLD" in selected_stars.colnames:
-            text = text + f"{selected_stars[idx]['FWHM_WORLD']*3600:.1f}\""
-        if "FWHM_IMAGE" in selected_stars.colnames:
-            text = text + f", {selected_stars[idx]['FWHM_IMAGE']:.1f}pix"
+        if "FWHM_WORLD" in row.colnames:
+            text = text + f"{row['FWHM_WORLD']*3600:.1f}\""
+        if "FWHM_IMAGE" in row.colnames:
+            text = text + f", {row['FWHM_IMAGE']:.1f}pix"
         if len(text) > 10:
             ax.text(30, 0.5, text, fontsize=9, ha="right", color="white")
 
         # science centroid
-        xc = x_img[idx]
-        yc = y_img[idx]
+        xc = float(row["X_IMAGE"]) - 1.0
+        yc = float(row["Y_IMAGE"]) - 1.0
 
         # reference coordinates in pixel coords
         xr, yr = wcs.all_world2pix(
-            selected_stars["ra"][idx : idx + 1],
-            selected_stars["dec"][idx : idx + 1],
+            [row["ra"]],
+            [row["dec"]],
             0,  # origin=0 because we converted to 0-based
         )
         xr = float(xr[0])
@@ -367,9 +377,9 @@ def wcs_check_psf_plot(
             ax,
             x_cen=float(sci_shifted[0]),
             y_cen=float(sci_shifted[1]),
-            a_image=float(selected_stars[idx]["A_IMAGE"]),
-            b_image=float(selected_stars[idx]["B_IMAGE"]),
-            theta_image=float(selected_stars[idx]["THETA_IMAGE"]),
+            a_image=float(row["A_IMAGE"]),
+            b_image=float(row["B_IMAGE"]),
+            theta_image=float(row["THETA_IMAGE"]),
             edgecolor="yellow",
             linewidth=1.5,
             label="RMS Ellipse (A_IMAGE)" if idx == ellipse_legend_idx else None,  # legend once
@@ -380,9 +390,9 @@ def wcs_check_psf_plot(
             ax,
             x_cen=float(sci_shifted[0]),
             y_cen=float(sci_shifted[1]),
-            a_image=float(selected_stars[idx]["AWIN_IMAGE"]),
-            b_image=float(selected_stars[idx]["BWIN_IMAGE"]),
-            theta_image=float(selected_stars[idx]["THETA_IMAGE"]),
+            a_image=float(row["AWIN_IMAGE"]),
+            b_image=float(row["BWIN_IMAGE"]),
+            theta_image=float(row["THETA_IMAGE"]),
             edgecolor="orange",
             linewidth=1.5,
             label="Windowed Ellipse (AWIN_IMAGE)" if idx == ellipse_legend_idx else None,  # legend once
@@ -393,9 +403,9 @@ def wcs_check_psf_plot(
             ax,
             x_cen=float(sci_shifted[0]),
             y_cen=float(sci_shifted[1]),
-            a_image=float(selected_stars[idx]["FWHM_IMAGE"]) / 2,
-            b_image=float(selected_stars[idx]["FWHM_IMAGE"] * (1 - selected_stars[idx]["ELLIPTICITY"])) / 2,
-            theta_image=float(selected_stars[idx]["THETA_IMAGE"]),
+            a_image=float(row["FWHM_IMAGE"]) / 2,
+            b_image=float(row["FWHM_IMAGE"] * (1 - row["ELLIPTICITY"])) / 2,
+            theta_image=float(row["THETA_IMAGE"]),
             edgecolor="green",
             linewidth=1.5,
             label="FWHM Ellipse" if idx == ellipse_legend_idx else None,  # legend once
@@ -405,9 +415,9 @@ def wcs_check_psf_plot(
         ax.set_title(f"matched id: {id}", fontsize=8)
 
         # overlay reference star magnitude
-        if "phot_g_mean_mag" in selected_stars.colnames:
+        if "phot_g_mean_mag" in row.colnames:
             ax.annotate(
-                rf"mag$_g$: {selected_stars['phot_g_mean_mag'][idx]:.2f}",
+                rf"mag$_g$: {row['phot_g_mean_mag'][idx]:.2f}",
                 (ref_shifted[0] - 1, ref_shifted[1] - 4),
                 fontsize=9,
                 color="r",
@@ -415,9 +425,9 @@ def wcs_check_psf_plot(
             )
 
         # overlay separation labels optionally
-        if "separation" in selected_stars.colnames:
+        if "separation" in row.colnames:
             ax.annotate(
-                f"Sep: {selected_stars['separation'][idx]:.2f}\"",
+                f"Sep: {row['separation'][idx]:.2f}\"",
                 (sci_shifted[0], sci_shifted[1] + 3),
                 fontsize=9,
                 color="magenta",

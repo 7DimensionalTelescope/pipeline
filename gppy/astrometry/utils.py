@@ -394,11 +394,25 @@ def get_3x3_stars(
 
 
 def find_id_rows(matched_catalog: Table, matched_ids: list[int], id_col: str = "id") -> Table:
+    """This can't handle None in matched_ids"""
     order = np.array(matched_ids)  # Make an indexer array that preserves order
     mask = np.in1d(order, matched_catalog[id_col])
     order = order[mask]
     id_to_idx = {id_: i for i, id_ in enumerate(matched_catalog[id_col])}
     return matched_catalog[[id_to_idx[_id] for _id in order]]
+
+
+def resolve_rows_by_id(matched_catalog: Table, matched_ids: list[int], id_col: str = "id") -> list[Table | None]:
+    """This can handle None in matched_ids"""
+    # map id -> row once
+    id_to_row = {int(row[id_col]): row for row in matched_catalog}  # cast if needed
+    resolved = []
+    for _id in matched_ids:
+        if _id is None:
+            resolved.append(None)
+        else:
+            resolved.append(id_to_row.get(int(_id)))
+    return resolved
 
 
 def _select_3x3_by_nearest(cand_xy, targets):

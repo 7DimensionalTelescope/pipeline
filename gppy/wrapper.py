@@ -336,7 +336,8 @@ class ScienceGroup:
         sci_yml = PathHandler(self.image_files).sciproc_output_yml
         if os.path.exists(sci_yml) and not overwrite:
             # If the config file already exists, load it
-            c = SciProcConfiguration.from_config(sci_yml, write=True)
+            c = SciProcConfiguration.from_config(sci_yml, write=True)  # 5 ms
+            # c = SciProcConfiguration(sci_yml, write=True)  # 36 ms
         else:
             c = SciProcConfiguration(self.image_files)
         self._config = c.config_file

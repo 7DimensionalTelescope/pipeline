@@ -42,6 +42,12 @@ class BaseConfig(ABC):
 
     @classmethod
     def from_config(cls, input: str, write=True, **kwargs):
+        """
+        Currently only used in wrapper.py
+        Much faster (4.8 ms) than SciProcConfiguration(input, write=write) (36 ms)
+        as it defines PathHandler with only the first file, and skips writing
+        to disk during initialization.
+        """
         # return cls(input, write=write, **kwargs)
         self = cls.__new__(cls)
         self._load_config(config_source=input)
