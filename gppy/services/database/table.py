@@ -4,7 +4,6 @@ from dataclasses import dataclass, asdict
 import json
 from .utils import generate_id
 
-
 @dataclass
 class PipelineData:
     """Data class for pipeline data records"""

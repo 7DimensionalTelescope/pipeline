@@ -28,6 +28,7 @@ from .checker import Checker
 from ..services.database import QAData
 from ..services.database.handler import DatabaseHandler
 from ..header import add_padding
+from ..const import PipelineError
 
 pp = pprint.PrettyPrinter(indent=2)  # , width=120)
 
@@ -313,6 +314,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_output: {output_file}")
                 self.add_warning()
 
+            
             self.write_qa_data(
                 dtype=dtype,
                 raw_groups=self._original_raw_groups,
@@ -426,7 +428,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             self.logger.error(
                 f"[Group {self._current_group+1}] No pre-existing master {dtype} found in place of {template} within {max_offset} days"
             )
-            raise FileNotFoundError
+            raise 
         else:
             self.logger.info(
                 f"[Group {self._current_group+1}] Found pre-existing nominal master {dtype} at {os.path.basename(existing_mframe_file)}"

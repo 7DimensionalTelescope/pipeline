@@ -3,7 +3,7 @@ from astropy.io import fits
 from .process import ProcessDB, ProcessDBError
 from .qa import QADB, QADBError
 from .table import PipelineData, QAData
-
+import os
 
 class DatabaseHandler:
     """
@@ -172,45 +172,65 @@ class DatabaseHandler:
             return False
 
     # ==================== QA DATA MANAGEMENT ====================
-
-    def create_qa_data(self, dtype: str, header, output_file: str, current_group: int) -> Optional[int]:
+    def write_qa_data(
+        self, dtype: str, raw_groups: list, current_group: int, key_to_index: dict, output_file: str, logger
+    ) -> None:
         """
-        Create QA data record for a specific data type.
+        Write QA data to database for a specific data type.
 
         Args:
             dtype: Data type (bias, dark, flat)
-            header: FITS header
-            output_file: Output file path
+            raw_groups: Raw groups data
             current_group: Current group index
-
-        Returns:
-            QA ID if successful, None otherwise
+            key_to_index: Mapping of data types to indices
+            output_file: Output file path for the data type
+            logger: Logger instance
         """
-        if self.pipeline_id is None or self.qa_db is None:
-            return None
+        if not self.is_connected:
+            return
 
         try:
-            self._log_info(f"[Group {current_group+1}] Creating QA data for {dtype} (PID: {self.pipeline_id})")
+            header = fits.getheader(raw_groups[current_group][1][key_to_index[dtype]])
+        except:
+            return
 
+        try:
             qa_data = QAData.from_header(
                 header,
                 "masterframe",
                 f"{dtype}",
                 self.pipeline_id,
-                output_file,
+                os.path.basename(output_file),
             )
 
+            trimmed = qa_data.trimmed
             # Create QA data record
             qa_id = self.qa_db.create_qa_data(qa_data)
-            self._log_debug(f"[Group {current_group+1}] Created QA record with ID: {qa_id}")
-            return qa_id
-
         except Exception as e:
             self._log_error(
                 f"[Group {current_group+1}] Failed to create QA data for {dtype} (PID: {self.pipeline_id}): {e}"
             )
             self.add_error()
-            return None
+
+        if trimmed:
+            self._log_error(
+                f"[Group {current_group+1}] {dtype} masterframe is trimmed, a set of masterframes can be trimmed."
+            )
+            self.add_error()
+
+            with fits.open(raw_groups[current_group][1][key_to_index["bias"]], mode="update") as hdul:
+                hdul[0].header["TRIMMED"] = (True, "Non-positive values in the middle of the image")
+                hdul[0].header["SANITY"] = (False, "Sanity flag")
+                hdul.flush()
+
+            self.update_qa_data("bias", current_group, trimmed=True, sanity=False)
+
+            with fits.open(raw_groups[current_group][1][key_to_index["dark"]], mode="update") as hdul:
+                hdul[0].header["TRIMMED"] = (True, "Non-positive values in the middle of the image")
+                hdul[0].header["SANITY"] = (False, "Sanity flag")
+                hdul.flush()
+
+            self.update_qa_data("dark", current_group, trimmed=True, sanity=False)
 
     def update_qa_data(self, dtype: str, current_group: int, **kwargs) -> bool:
         """
@@ -244,66 +264,6 @@ class DatabaseHandler:
         except Exception as e:
             self._log_warning(f"Failed to update QA data for {dtype}: {e}")
             return False
-
-    def write_qa_data(
-        self, dtype: str, raw_groups: list, current_group: int, key_to_index: dict, output_file: str, logger
-    ) -> None:
-        """
-        Write QA data to database for a specific data type.
-
-        Args:
-            dtype: Data type (bias, dark, flat)
-            raw_groups: Raw groups data
-            current_group: Current group index
-            key_to_index: Mapping of data types to indices
-            output_file: Output file path for the data type
-            logger: Logger instance
-        """
-        if not self.is_connected:
-            return
-
-        try:
-            header = fits.getheader(raw_groups[current_group][1][key_to_index[dtype]])
-        except:
-            return
-
-        try:
-            qa_data = QAData.from_header(
-                header,
-                "masterframe",
-                f"{dtype}",
-                self.pipeline_id,
-                output_file,
-            )
-
-            trimmed = qa_data.trimmed
-            # Create QA data record
-            qa_id = self.create_qa_data(dtype, header, output_file, current_group)
-        except Exception as e:
-            self._log_error(
-                f"[Group {current_group+1}] Failed to create QA data for {dtype} (PID: {self.pipeline_id}): {e}"
-            )
-            self.add_error()
-
-        if trimmed:
-            self._log_error(
-                f"[Group {current_group+1}] {dtype} masterframe is trimmed, a set of masterframes can be trimmed."
-            )
-            self.add_error()
-
-            with fits.open(raw_groups[current_group][1][key_to_index["bias"]], mode="update") as hdul:
-                hdul[0].header["TRIMMED"] = (True, "Non-positive values in the middle of the image")
-                hdul[0].header["SANITY"] = (False, "Sanity flag")
-                hdul.flush()
-
-            self.update_qa_data("bias", current_group, trimmed=True, sanity=False)
-
-            with fits.open(raw_groups[current_group][1][key_to_index["dark"]], mode="update") as hdul:
-                hdul[0].header["TRIMMED"] = (True, "Non-positive values in the middle of the image")
-                hdul[0].header["SANITY"] = (False, "Sanity flag")
-                hdul.flush()
-
-            self.update_qa_data("dark", current_group, trimmed=True, sanity=False)
 
     @property
     def is_connected(self) -> bool:

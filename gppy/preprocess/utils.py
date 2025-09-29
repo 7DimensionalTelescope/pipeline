@@ -117,11 +117,21 @@ def search_with_date_offsets(template, max_offset=300, future=False):
                     if len(matches) == 1:
                         if Checker().sanity_check(matches[0]):
                             return matches[0]
+                        else:
+                            continue
                     else:
-                        return PathHandler(matches).get_minimum("exptime")
+                        minimum = PathHandler(matches).get_minimum("exptime")
+                        if Checker().sanity_check(minimum):
+                            return minimum
+                        else:
+                            continue
             else:
                 if os.path.exists(modified_path):
-                    return modified_path
+                    if Checker().sanity_check(modified_path):
+                        return modified_path
+                    else:
+                        continue
+                    
 
     # If no file is found, return None
     return None

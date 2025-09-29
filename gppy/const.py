@@ -6,9 +6,9 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 # Bashrc-defined system paths
 RAWDATA_DIR = os.environ.get("RAWDATA_DIR")  # , "/lyman/data1/obsdata/")
-FACTORY_DIR = "/home/pipeline/factory_debug" or os.environ.get("FACTORY_DIR")
-MASTER_FRAME_DIR = "/home/pipeline/master_frame_debug" or os.environ.get("MASTER_FRAME_DIR")
-PROCESSED_DIR = "/home/pipeline/processed_debug" or os.environ.get("PROCESSED_DIR")
+FACTORY_DIR = os.environ.get("FACTORY_DIR")
+MASTER_FRAME_DIR = os.environ.get("MASTER_FRAME_DIR")
+PROCESSED_DIR = os.environ.get("PROCESSED_DIR")
 STACKED_DIR = os.environ.get("STACKED_DIR")
 SLACK_TOKEN = os.environ.get("SLACK_TOKEN", None)
 INSTRUM_STATUS_DICT = os.environ.get("INSTRUM_STATUS_DICT")
