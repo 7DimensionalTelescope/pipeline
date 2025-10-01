@@ -1,8 +1,10 @@
+import os
 import gc
 from time import time
 from tqdm import tqdm
 from glob import glob
 from pathlib import Path
+from functools import lru_cache
 
 
 import numpy as np
@@ -18,16 +20,20 @@ from spherical_geometry.polygon import SphericalPolygon
 
 from ..io.cfitsldac import write_ldac
 from .utils import build_wcs
+from ..const import GAIA_ROOT_DIR
 
 # import dhutil as dh
 
 # only for astro zoom
 # import ligo.skymap.plot
 
-# %%
 
-GAIA_ROOT_DIR = "/lyman/data1/factory/catalog/gaia_source_dr3/healpix_nside64"
-GAIA_HEALPIX_FILES = sorted(glob(f"{GAIA_ROOT_DIR}/tile_*.csv"))  # avoid multiple glob calls
+@lru_cache(maxsize=1)
+def _get_gaia_healpix_files():
+    return sorted(glob(f"{GAIA_ROOT_DIR}/tile_*.csv"))
+
+
+# GAIA_HEALPIX_FILES = sorted(glob(f"{GAIA_ROOT_DIR}/tile_*.csv"))  # avoid multiple glob calls
 
 
 def get_refcat_gaia(image: str):
@@ -133,7 +139,7 @@ def find_healpix_tiles(ra_center, dec_center, matching_r):
     # load healpix ids
     # GAIA_ROOT_DIR = "/lyman/data1/factory/catalog/gaia_source_dr3/healpix_nside64"
     # files = sorted(glob(f"{GAIA_ROOT_DIR}/tile_*.csv"))
-    files = GAIA_HEALPIX_FILES
+    files = _get_gaia_healpix_files()  #GAIA_HEALPIX_FILES
     # ipix_list = [s.split('_')[-1].replace('.csv', '') for s in files]
     ipix_list = [int(Path(s).stem.split("_")[1]) for s in files]
     radec = np.array([hp.pix2ang(64, ipix, nest=True, lonlat=True) for ipix in ipix_list])

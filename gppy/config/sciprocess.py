@@ -60,16 +60,16 @@ class SciProcConfiguration(BaseConfig):
     #     return config
 
     @classmethod
-    def base_config(cls, input_images=None, working_dir=None, write=True, logger=None, verbose=True, **kwargs):
+    def base_config(cls, input_images=None, working_dir=None, config_file=None, write=True, logger=None, verbose=True, **kwargs):
         # self = cls.__new__(cls)
 
         # input_files = atleast1d(input_images)
         path = PathHandler(input_images, working_dir=working_dir or os.getcwd())
         self = cls.from_config(path.sciproc_base_yml)
         self.path = path
-        self.config_file = self.path.sciproc_output_yml
+        self.config_file = config_file or self.path.sciproc_output_yml
         if isinstance(self.config_file, list):
-            raise PipelineError("Inhomogeneous input images; config not uniquely defined")
+            raise PipelineError("Inhomogeneous input images; config name is not uniquely defined")
 
         # config_source = self.path.sciproc_base_yml
         # super().__init__(self, config_source=config_source, write=write, **kwargs)
@@ -91,14 +91,16 @@ class SciProcConfiguration(BaseConfig):
 
         self.config.input.calibrated_images = atleast_1d(input_images)
         # self.config.name = "user-input"
-        self.config.name = self.config.name or self.name
+        self.config.name = self.name
         self.config.settings.is_pipeline = False
         self.config._initialized = True
         return self
 
     @property
     def name(self):
-        if hasattr(self, "path"):
+        if hasattr(self, "config_file") and self.config_file is not None:
+            return os.path.splitext(os.path.basename(self.config_file))[0]
+        elif hasattr(self, "path"):
             return os.path.basename(self.path.sciproc_output_yml).replace(".yml", "")
         elif hasattr(self.config, "name"):
             return self.config.name
@@ -107,21 +109,22 @@ class SciProcConfiguration(BaseConfig):
 
     def _handle_input(self, input, logger, verbose, **kwargs):
         if isinstance(input, list) or (isinstance(input, str) and input.endswith(".fits")):  # list of science images
-            self.input_files = sorted(input)
-            self.path = PathHandler(input)
-            config_source = self.path.sciproc_base_yml
-            self.logger = self._setup_logger(
-                logger,
-                name=self.name,
-                log_file=self.path.sciproc_output_log,
-                verbose=verbose,
-                overwrite=self.write,
-            )
-            self.logger.info("Generating 'SciProcConfiguration' from the 'base' configuration")
-            self.logger.debug(f"Configuration source: {config_source}")
-            super().__init__(config_source=config_source, write=self.write, **kwargs)
-            self.config.info.file = config_source
-            self.config.logging.file = self.path.sciproc_output_log
+            # self.input_files = sorted(input)
+            # self.path = PathHandler(input)
+            # config_source = self.path.sciproc_base_yml
+            # self.logger = self._setup_logger(
+            #     logger,
+            #     name=self.name,
+            #     log_file=self.path.sciproc_output_log,
+            #     verbose=verbose,
+            #     overwrite=self.write,
+            # )
+            # self.logger.info("Generating 'SciProcConfiguration' from the 'base' configuration")
+            # self.logger.debug(f"Configuration source: {config_source}")
+            # super().__init__(config_source=config_source, write=self.write, **kwargs)
+            # self.config.info.file = config_source
+            # self.config.logging.file = self.path.sciproc_output_log
+            raise PipelineError("Initializing 'SciProcConfiguration' from a list of images is not supported anymore. Please use 'SciProcConfiguration.base_config' instead.")
 
         elif isinstance(input, str | dict):  # path of a config file
             config_source = input
@@ -183,44 +186,50 @@ class SciProcConfiguration(BaseConfig):
     def _add_metadata(self):
         """make an ecsv file that the pipeline webpage refers to"""
 
-        # metadata_path = os.path.join(self._processed_dir, name, "metadata.ecsv")
-        metadata_file = os.path.join(self.path.metadata_dir, "metadata.ecsv")
-        if not os.path.exists(metadata_file):
-            with open(metadata_file, "w") as f:
-                f.write("# %ECSV 1.0\n")
-                f.write("# ---\n")
-                f.write("# datatype:\n")
-                f.write("# - {name: obj, datatype: string}\n")
-                f.write("# - {name: filter, datatype: string}\n")
-                f.write("# - {name: unit, datatype: string}\n")
-                f.write("# - {name: n_binning, datatype: int64}\n")
-                f.write("# - {name: gain, datatype: int64}\n")
-                f.write("# meta: !!omap\n")
-                f.write("# - {created: " + datetime.now().isoformat() + "}\n")
-                f.write("# schema: astropy-2.0\n")
-                f.write("object unit filter n_binning gain\n")
+        try:
+            # metadata_path = os.path.join(self._processed_dir, name, "metadata.ecsv")
+            metadata_file = os.path.join(self.path.metadata_dir, "metadata.ecsv")
+            if not os.path.exists(metadata_file):
+                with open(metadata_file, "w") as f:
+                    f.write("# %ECSV 1.0\n")
+                    f.write("# ---\n")
+                    f.write("# datatype:\n")
+                    f.write("# - {name: obj, datatype: string}\n")
+                    f.write("# - {name: filter, datatype: string}\n")
+                    f.write("# - {name: unit, datatype: string}\n")
+                    f.write("# - {name: n_binning, datatype: int64}\n")
+                    f.write("# - {name: gain, datatype: int64}\n")
+                    f.write("# meta: !!omap\n")
+                    f.write("# - {created: " + datetime.now().isoformat() + "}\n")
+                    f.write("# schema: astropy-2.0\n")
+                    f.write("object unit filter n_binning gain\n")
 
-        # observation_data = [
-        #     str(self.config.obs.obj),
-        #     str(self.config.obs.unit),
-        #     str(self.config.obs.filter),
-        #     str(self.config.obs.n_binning),
-        #     str(self.config.obs.gain),
-        # ]
-        # new_line = f"{' '.join(observation_data)}\n"
-        # with open(metadata_path, "a") as f:
-        #     f.write(new_line)
+            # observation_data = [
+            #     str(self.config.obs.obj),
+            #     str(self.config.obs.unit),
+            #     str(self.config.obs.filter),
+            #     str(self.config.obs.n_binning),
+            #     str(self.config.obs.gain),
+            # ]
+            # new_line = f"{' '.join(observation_data)}\n"
+            # with open(metadata_path, "a") as f:
+            #     f.write(new_line)
+        except Exception as e:
+            self.logger.warning(f"Failed to add metadata: {e}")
 
     def _define_settings(self, input_file):
         # use local astrometric reference catalog for tile observations
         # self.config.settings.local_astref = bool(re.fullmatch(r"T\d{5}", self.config.obs.obj))
 
-        # skip single frame combine for Deep mode
-        raw_header_sample = get_header(input_file)
         try:
-            obsmode = raw_header_sample["OBSMODE"]
-        except KeyError:
-            self.logger.warning("OBSMODE keyword not found in the header. Defaulting to 'spec'.")
-            obsmode = "spec"
-        # self.config.obs.obsmode = obsmode
-        self.config.settings.daily_stack = False if obsmode.lower() == "deep" else True
+            # skip single frame combine for Deep mode
+            raw_header_sample = get_header(input_file)
+            try:
+                obsmode = raw_header_sample["OBSMODE"]
+            except KeyError:
+                self.logger.warning("OBSMODE keyword not found in the header. Defaulting to 'spec'.")
+                obsmode = "spec"
+            # self.config.obs.obsmode = obsmode
+            self.config.settings.daily_stack = False if obsmode.lower() == "deep" else True
+        except Exception as e:
+            self.logger.warning(f"Failed to define settings: {e}")

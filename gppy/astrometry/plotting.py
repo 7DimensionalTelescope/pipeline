@@ -412,12 +412,12 @@ def wcs_check_psf_plot(
         )
 
         # add matched id as title
-        ax.set_title(f"matched id: {id}", fontsize=8)
+        ax.set_title(f"matched id: {id_}", fontsize=8)
 
         # overlay reference star magnitude
         if "phot_g_mean_mag" in row.colnames:
             ax.annotate(
-                rf"mag$_g$: {row['phot_g_mean_mag'][idx]:.2f}",
+                rf"mag$_g$: {row['phot_g_mean_mag']:.2f}",
                 (ref_shifted[0] - 1, ref_shifted[1] - 4),
                 fontsize=9,
                 color="r",
@@ -427,7 +427,7 @@ def wcs_check_psf_plot(
         # overlay separation labels optionally
         if "separation" in row.colnames:
             ax.annotate(
-                f"Sep: {row['separation'][idx]:.2f}\"",
+                f"Sep: {row['separation']:.2f}\"",
                 (sci_shifted[0], sci_shifted[1] + 3),
                 fontsize=9,
                 color="magenta",

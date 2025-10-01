@@ -6,16 +6,17 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 # Bashrc-defined system paths
 RAWDATA_DIR = os.environ.get("RAWDATA_DIR")  # , "/lyman/data1/obsdata/")
-FACTORY_DIR = os.environ.get("FACTORY_DIR")
-MASTER_FRAME_DIR = os.environ.get("MASTER_FRAME_DIR")
-PROCESSED_DIR = os.environ.get("PROCESSED_DIR")
+FACTORY_DIR = "/home/pipeline/factory_debug" or os.environ.get("FACTORY_DIR")
+MASTER_FRAME_DIR = "/home/pipeline/master_frame_debug" or os.environ.get("MASTER_FRAME_DIR")
+PROCESSED_DIR = "/home/pipeline/processed_debug" or os.environ.get("PROCESSED_DIR")
 STACKED_DIR = os.environ.get("STACKED_DIR")
 SLACK_TOKEN = os.environ.get("SLACK_TOKEN", None)
 INSTRUM_STATUS_DICT = os.environ.get("INSTRUM_STATUS_DICT")
 
 # Paths to pre-generated data
 ASTRM_REF_DIR = "/lyman/data2/factory/ref_scamp/gaia_dr3_7DT"  #  "/lyman/data1/factory/catalog/gaia_dr3_7DT"
-SCAMP_QUERY_DIR = "/lyman/data1/factory/ref_scamp"  # "/lyman/data1/factory/catalog/gaia_dr3_7DT"
+GAIA_ROOT_DIR = "/lyman/data1/factory/catalog/gaia_source_dr3/healpix_nside64"  # for dynamic refcat generation.
+SCAMP_QUERY_DIR = "/lyman/data1/factory/ref_scamp" 
 PHOT_REF_DIR = "/lyman/data1/factory/ref_cat"  # divided by RIS tiles
 GAIA_REF_DIR = "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile"
 REF_IMAGE_DIR = "/lyman/data1/factory/ref_frame"
