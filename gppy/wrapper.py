@@ -270,7 +270,7 @@ class MasterframeGroup:
         c = PreprocConfiguration(self.image_files, overwrite=overwrite)
         self._config = c.config_file
 
-    def get_task(self, device_id=None, only_with_sci=False, make_plots=True, priority=Priority.PREPROCESS, **kwargs):
+    def get_task(self, device_id=None, make_plots=True, priority=Priority.PREPROCESS, **kwargs):
         from .run import run_preprocess
 
         prep_task = Task(
@@ -278,7 +278,6 @@ class MasterframeGroup:
             kwargs={
                 "config": self.config,
                 "make_plots": make_plots,
-                "only_with_sci": only_with_sci,
                 "device_id": device_id,
             },
             priority=priority,
@@ -339,7 +338,9 @@ class ScienceGroup:
             c = SciProcConfiguration.from_config(sci_yml, write=True)  # 5 ms
             # c = SciProcConfiguration(sci_yml, write=True)  # 36 ms
         else:
-            c = SciProcConfiguration.base_config(input_images=self.image_files, config_file=sci_yml, logger=True)
+            c = SciProcConfiguration(self.image_files)
+            # c = SciProcConfiguration.base_config(input_images=self.image_files, config_file=sci_yml, logger=True)
+            # c = SciProcConfiguration.from_list(self.image_files)
         self._config = c.config_file
 
     def get_task(self, priority=Priority.MEDIUM, **kwargs):

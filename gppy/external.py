@@ -278,6 +278,7 @@ def sextractor(
     log_file: str = None,
     fits_ldac: bool = False,
     sex_args: list = [],
+    overwrite=False,
     config=None,  # supply config.config
     logger=None,
     return_sex_output=False,
@@ -297,11 +298,24 @@ def sextractor(
         postfix = ["sex", "param", "conv", "nnw"]
         return [os.path.join(ref_path, f"{preset}.{pf}") for pf in postfix]
 
-    def chatter(message):
-        if logger:
-            logger.debug(message)
+    # def chatter(message):
+    #     if logger:
+    #         logger.debug(message)
+    #     else:
+    #         print(message)
+    def chatter(msg: str, level: str = "debug"):
+        if logger is not None:
+            return getattr(logger, level)(msg)
         else:
-            print(message)
+            print(f"[sextractor:{level.upper()}] {msg}")
+
+    default_outcat = (
+        add_suffix(add_suffix(inim, se_preset), "cat") if fits_ldac else swap_ext(add_suffix(inim, se_preset), "cat")
+    )
+    outcat = outcat or default_outcat  # default is ascii.sextractor
+    if os.path.exists(outcat) and not overwrite:
+        chatter(f"Sextractor output catalog already exists: {outcat}, skipping...", "info")
+        return
 
     if config:
         chatter("Using Configuration Class")
@@ -312,10 +326,6 @@ def sextractor(
     else:
         sex, param, conv, nnw = get_sex_config(se_preset)
 
-    default_outcat = (
-        add_suffix(add_suffix(inim, se_preset), "cat") if fits_ldac else swap_ext(add_suffix(inim, se_preset), "cat")
-    )
-    outcat = outcat or default_outcat  # default is ascii.sextractor
     log_file = log_file or swap_ext(add_suffix(outcat, "sextractor"), "log")
 
     sexcom = [

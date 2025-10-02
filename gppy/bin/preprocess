@@ -9,7 +9,7 @@ import signal
 import glob
 
 
-def run_preprocess(config, device_id=None, only_with_sci=False, make_plots=True, overwrite=False, **kwargs):
+def run_preprocess(config, device_id=None, make_plots=True, overwrite=False, **kwargs):
     """
     Generate master calibration frames for a specific observation set.
 
@@ -21,7 +21,7 @@ def run_preprocess(config, device_id=None, only_with_sci=False, make_plots=True,
 
         prep = Preprocess(config, use_gpu=True, overwrite=False, master_frame_only=False)
 
-        prep.run(device_id=device_id, make_plots=make_plots, only_with_sci=only_with_sci)
+        prep.run(device_id=device_id, make_plots=make_plots)
         del config, prep
     except Exception as e:
         raise e
@@ -44,9 +44,6 @@ if __name__ == "__main__":
     )
     parser.add_argument("-config", type=str, required=True, help="Path to the preprocessing configuration file")
     parser.add_argument("-device_id", type=str, help="Device to use: 'CPU' or GPU device index (e.g., 0, 1)")
-    parser.add_argument(
-        "-only_with_sci", action="store_true", help="Process only if corresponding science images are present"
-    )
     parser.add_argument("-make_plots", action="store_true", help="Generate diagnostic plots during preprocessing")
     parser.add_argument("-overwrite", action="store_true", help="Overwrite existing results")
     args = parser.parse_args()
@@ -62,7 +59,6 @@ if __name__ == "__main__":
         run_preprocess(
             args.config,
             device_id=device_id,
-            only_with_sci=args.only_with_sci,
             make_plots=args.make_plots,
             overwrite=args.overwrite,
         )

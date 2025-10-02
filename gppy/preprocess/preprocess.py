@@ -139,7 +139,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         if self.is_connected:
             self.pipeline_id = self.create_pipeline_record(self.config, self.raw_groups, self.overwrite)
 
-    def run(self, device_id=None, make_plots=True, use_gpu=True, only_with_sci=False):
+    def run(self, device_id=None, make_plots=True, use_gpu=True):
         self._use_gpu = all([use_gpu, self._use_gpu])
 
         st = time.time()
@@ -156,9 +156,6 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             self.logger.debug(f"[Group {i+1}] [filter: exptime] {PathHandler.get_group_info(self.raw_groups[i])}")
             # self.logger.info(f"Start processing group {i+1} / {self._n_groups}")
             self.logger.debug("\n" + "#" * 100 + f"\n{' '*30}Start processing group {i+1} / {self._n_groups}\n" + "#" * 100)  # fmt: skip
-            if only_with_sci and len(self.sci_input) == 0:
-                self.logger.info(f"[Group {i+1}] No science images for this masterframe. Skipping...")
-                continue
             self.load_masterframe(device_id=device_id)
 
             if not self.master_frame_only:
@@ -392,15 +389,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), header)
 
         header = prep_utils.add_image_id(header)
-        header = record_statistics(getattr(self, f"{dtype}_output"), header, dtype=dtype)
-
-        flag, header = self.apply_criteria(header=header, dtype=dtype)
-
-        if dtype == "dark":
-            hotpix = self.update_bpmask(sanity=flag)
-            header["NHOTPIX"] = (hotpix, "Number of hot pixels")
-
-        prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
+        
+        flag = self._quality_assessment(header=header, dtype=dtype)
 
         if flag:
             self.logger.info(f"[Group {self._current_group+1}] Nominal master {dtype} generated successfully in {time_diff_in_seconds(st)} seconds")  # fmt: skip
@@ -415,6 +405,19 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             self.make_plot(getattr(self, f"{dtype}_output"), dtype, self._current_group)
             self.add_error()
             return False
+
+    def _quality_assessment(self, header, dtype):
+        header = record_statistics(getattr(self, f"{dtype}_output"), header, dtype=dtype)
+
+        flag, header = self.apply_criteria(header=header, dtype=dtype)
+        
+        if dtype == "dark":
+            hotpix = self.update_bpmask(sanity=flag)
+            header["NHOTPIX"] = (hotpix, "Number of hot pixels")
+
+        prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
+
+        return flag
 
     def _fetch_masterframe(self, template, dtype):
         self.logger.info(f"[Group {self._current_group+1}] Fetching a nominal master {dtype}")

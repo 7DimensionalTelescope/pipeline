@@ -213,4 +213,4 @@ class MemoryMonitor:
         cpu_utilization = psutil.cpu_percent(interval=None)
         gpu_summary = [f"{device}: {percent:.2f}%" for device, percent in enumerate(cls.current_gpu_memory_percent)]
         gpu_info = f", GPU [{', '.join(gpu_summary)}]"
-        return f"System [virtual: {cls.current_memory_percent:.2f}%, cgroup: {cls.current_memory['cg_percent']}%], CPU util [{cpu_utilization:.2f}%]{gpu_info}"
+        return f"System [virtual: {cls.current_memory_percent:.2f}%, cgroup: {cls.current_memory['cg_percent']:.2f}%], CPU util [{cpu_utilization:.2f}%]{gpu_info}"

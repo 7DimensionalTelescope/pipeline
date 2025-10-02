@@ -86,7 +86,7 @@ class Checker:
                     return sanity
             except:
                 pass
-            return self.apply_criteria(file_path, dtype)[0]
+            return self.apply_criteria(file_path=file_path, dtype=dtype)[0]
         elif header is not None:
             pass
         else:

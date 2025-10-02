@@ -101,6 +101,7 @@ class Astrometry(BaseSetup):
         use_threading: bool = False,
         # processes=["sextractor", "scamp", "header_update"],
         # use_gpu: bool = False,
+        overwrite=False,
     ) -> None:
         """Execute the complete astrometry pipeline.
 
@@ -120,7 +121,7 @@ class Astrometry(BaseSetup):
 
             self.inject_wcs_guess(self.input_images)
             # Source Extractor
-            self.run_sextractor(self.soft_links_to_input_images, se_preset=se_preset)
+            self.run_sextractor(self.soft_links_to_input_images, se_preset=se_preset, overwrite=overwrite)
 
             # run initial solve: scamp or solve-field
             try:
@@ -377,7 +378,7 @@ class Astrometry(BaseSetup):
         self.update_catalog(self.prep_cats, self.solved_heads)
 
     def run_sextractor(
-        self, input_images: List[str], output_catalogs: List[str] = None, se_preset: str = "prep"
+        self, input_images: List[str], output_catalogs: List[str] = None, se_preset: str = "prep", overwrite=False,
     ) -> List[str]:
         """Run Source Extractor on solved images.
 
@@ -404,6 +405,7 @@ class Astrometry(BaseSetup):
                 prefix=se_preset,
                 logger=self.logger,
                 fits_ldac=True,
+                overwrite=overwrite,
             )
         else:
             for i, (solved_image, prep_cat) in enumerate(zip(input_images, output_catalogs)):
@@ -413,6 +415,7 @@ class Astrometry(BaseSetup):
                     se_preset=se_preset,
                     logger=self.logger,
                     fits_ldac=True,
+                    overwrite=overwrite,
                 )
                 self.logger.info(f"Completed sextractor (prep) [{i+1}/{len(input_images)}]")
                 self.logger.debug(f"{solved_image}")
@@ -526,7 +529,7 @@ class Astrometry(BaseSetup):
                     self.logger.error(f"No PV1_0 in {solved_head} - solution invalid")
                     # raise PipelineError(f"No PV1_0 in {solved_head} - solution invalid")
 
-        self.logger.info(f"Completed scamp in {time_diff_in_seconds(st)} seconds")
+        self.logger.info(f"Completed {scamp_preset} scamp in {time_diff_in_seconds(st)} seconds")
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
         if apply_wcs_to_catalog:

@@ -70,7 +70,6 @@ class SciProcConfiguration(BaseConfig):
         self.config_file = config_file or self.path.sciproc_output_yml
         if isinstance(self.config_file, list):
             raise PipelineError("Inhomogeneous input images; config name is not uniquely defined")
-
         # config_source = self.path.sciproc_base_yml
         # super().__init__(self, config_source=config_source, write=write, **kwargs)
         # self.initialize(is_pipeline=False)
@@ -84,6 +83,7 @@ class SciProcConfiguration(BaseConfig):
                 overwrite=write,
                 **kwargs,
             )
+
         elif logger:
             self.logger = logger
         else:
@@ -94,6 +94,31 @@ class SciProcConfiguration(BaseConfig):
         self.config.name = self.name
         self.config.settings.is_pipeline = False
         self.config._initialized = True
+        return self
+
+    @classmethod
+    def from_list(cls, input_images, working_dir=None, **kwargs):
+        # self.input_files = sorted(input)
+        # self.path = PathHandler(input)
+        # config_source = self.path.sciproc_base_yml
+        # self.logger = self._setup_logger(
+        #     logger,
+        #     name=self.name,
+        #     log_file=self.path.sciproc_output_log,
+        #     verbose=verbose,
+        #     overwrite=self.write,
+        # )
+        # self.logger.info("Generating 'SciProcConfiguration' from the 'base' configuration")
+        # self.logger.debug(f"Configuration source: {config_source}")
+        # super().__init__(config_source=config_source, write=self.write, **kwargs)
+        # self.config.info.file = config_source
+        # self.config.logging.file = self.path.sciproc_output_log
+
+        self = cls.base_config(input_images=input_images, working_dir=working_dir, logger=True, **kwargs)
+        # emulate constructor’s initialize path
+        self._initialized = False
+        self.input_files = atleast_1d(input_images)
+        self.initialize(is_pipeline=True)
         return self
 
     @property
@@ -109,22 +134,22 @@ class SciProcConfiguration(BaseConfig):
 
     def _handle_input(self, input, logger, verbose, **kwargs):
         if isinstance(input, list) or (isinstance(input, str) and input.endswith(".fits")):  # list of science images
-            # self.input_files = sorted(input)
-            # self.path = PathHandler(input)
-            # config_source = self.path.sciproc_base_yml
-            # self.logger = self._setup_logger(
-            #     logger,
-            #     name=self.name,
-            #     log_file=self.path.sciproc_output_log,
-            #     verbose=verbose,
-            #     overwrite=self.write,
-            # )
-            # self.logger.info("Generating 'SciProcConfiguration' from the 'base' configuration")
-            # self.logger.debug(f"Configuration source: {config_source}")
-            # super().__init__(config_source=config_source, write=self.write, **kwargs)
-            # self.config.info.file = config_source
-            # self.config.logging.file = self.path.sciproc_output_log
-            raise PipelineError("Initializing 'SciProcConfiguration' from a list of images is not supported anymore. Please use 'SciProcConfiguration.base_config' instead.")
+            self.input_files = sorted(input)
+            self.path = PathHandler(input)
+            config_source = self.path.sciproc_base_yml
+            self.logger = self._setup_logger(
+                logger,
+                name=self.name,
+                log_file=self.path.sciproc_output_log,
+                verbose=verbose,
+                overwrite=self.write,
+            )
+            self.logger.info("Generating 'SciProcConfiguration' from the 'base' configuration")
+            self.logger.debug(f"Configuration source: {config_source}")
+            super().__init__(config_source=config_source, write=self.write, **kwargs)
+            self.config.info.file = config_source
+            self.config.logging.file = self.path.sciproc_output_log
+            # raise PipelineError("Initializing 'SciProcConfiguration' from a list of images is not supported anymore. Please use 'SciProcConfiguration.base_config' instead.")
 
         elif isinstance(input, str | dict):  # path of a config file
             config_source = input

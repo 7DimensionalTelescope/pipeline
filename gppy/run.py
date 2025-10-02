@@ -5,13 +5,13 @@ from pathlib import Path
 
 from .config import PreprocConfiguration, SciProcConfiguration
 from .preprocess import Preprocess
-#from .astrometry import Astrometry
+from .astrometry import Astrometry
 from .photometry import Photometry
 from .imstack import ImStack
 from .subtract import ImSubtract
 
 
-def run_preprocess(config, device_id=None, only_with_sci=False, make_plots=True, **kwargs):
+def run_preprocess(config, device_id=None, make_plots=True, **kwargs):
     """
     Generate master calibration frames for a specific observation set.
 
@@ -22,7 +22,7 @@ def run_preprocess(config, device_id=None, only_with_sci=False, make_plots=True,
     try:
         config = PreprocConfiguration.from_config(config)
         prep = Preprocess(config, use_gpu=True if device_id is not None else False)
-        prep.run(device_id=device_id, make_plots=make_plots, only_with_sci=only_with_sci)
+        prep.run(device_id=device_id, make_plots=make_plots)
         del config, prep
     except Exception as e:
         raise e
