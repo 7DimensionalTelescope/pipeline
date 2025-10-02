@@ -202,45 +202,11 @@ class SciProcConfiguration(BaseConfig):
         # self.check_masterframe_status()
 
         if is_pipeline:
-            self._add_metadata()
             self.config.settings.is_pipeline = True
         self._define_settings(self.input_files[0])
         self.input_files = self.config.input.calibrated_images
         self._initialized = True
 
-    def _add_metadata(self):
-        """make an ecsv file that the pipeline webpage refers to"""
-
-        try:
-            # metadata_path = os.path.join(self._processed_dir, name, "metadata.ecsv")
-            metadata_file = os.path.join(self.path.metadata_dir, "metadata.ecsv")
-            if not os.path.exists(metadata_file):
-                with open(metadata_file, "w") as f:
-                    f.write("# %ECSV 1.0\n")
-                    f.write("# ---\n")
-                    f.write("# datatype:\n")
-                    f.write("# - {name: obj, datatype: string}\n")
-                    f.write("# - {name: filter, datatype: string}\n")
-                    f.write("# - {name: unit, datatype: string}\n")
-                    f.write("# - {name: n_binning, datatype: int64}\n")
-                    f.write("# - {name: gain, datatype: int64}\n")
-                    f.write("# meta: !!omap\n")
-                    f.write("# - {created: " + datetime.now().isoformat() + "}\n")
-                    f.write("# schema: astropy-2.0\n")
-                    f.write("object unit filter n_binning gain\n")
-
-            # observation_data = [
-            #     str(self.config.obs.obj),
-            #     str(self.config.obs.unit),
-            #     str(self.config.obs.filter),
-            #     str(self.config.obs.n_binning),
-            #     str(self.config.obs.gain),
-            # ]
-            # new_line = f"{' '.join(observation_data)}\n"
-            # with open(metadata_path, "a") as f:
-            #     f.write(new_line)
-        except Exception as e:
-            self.logger.warning(f"Failed to add metadata: {e}")
 
     def _define_settings(self, input_file):
         # use local astrometric reference catalog for tile observations

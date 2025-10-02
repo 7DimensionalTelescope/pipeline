@@ -179,7 +179,7 @@ class NameHandler:
             gains.append(gain)
             cameras.append(camera)
 
-            # override date if nightdate available
+            # override date if nightdate available; vice versa. (some nightdates have multiple dates by TCSpy error)
             if nightdate:
                 date = add_half_day(nightdate)
             else:

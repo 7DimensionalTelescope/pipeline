@@ -32,14 +32,16 @@ class PreprocConfiguration(BaseConfig):
             self.logger.info(f"Writing configuration to file")
             self.logger.debug(f"Configuration file: {self.config_file}")
 
-        if overwrite:
-            self.logger.info("Deleting the factory directory to overwrite")
-            factory_dir = self.path.factory_dir
-            if not isinstance(factory_dir, str):
-                raise ValueError(f"Multiple directories; aborting cleaning: {factory_dir}")
-            clean_up_folder(factory_dir)
-            # clean_up_folder(self.path.masterframe_dir)
-            # clean_up_folder(self.path.preproc_output_dir)
+        # Cleaning Factory is only for SciProcConfiguration
+        # if overwrite:
+        #     self.logger.info("Deleting the factory directory to overwrite")
+        #     factory_dir = self.path.factory_dir
+        #     self.logger.debug(f"Factory directory: {factory_dir}")
+        #     if not isinstance(factory_dir, str):
+        #         raise ValueError(f"Multiple directories; aborting cleaning: {factory_dir}")
+        #     clean_up_folder(factory_dir)
+        #     # clean_up_folder(self.path.masterframe_dir)
+        #     # clean_up_folder(self.path.preproc_output_dir)
 
         self.write_config()
         self.logger.info("Completed to load configuration")
@@ -82,9 +84,13 @@ class PreprocConfiguration(BaseConfig):
             if len(input) < 1:
                 self.logger.warning("No input images")
                 sys.exit(0)
-            sci_images = PathHandler(input).pick_type("science")
-            self.path = PathHandler(sorted(sci_images)[-1])  # in case of multiple dates, use the later date
+            # sci_images = PathHandler(input).pick_type("science")
+            # print(sci_images)
+            # self.path = PathHandler(sorted(sci_images)[-1])  # in case of multiple dates, use the later date
+            self.path = PathHandler(input)  # in case of multiple dates, use the later date
             config_source = self.path.preproc_base_yml
+            if not isinstance(config_source, str):
+                raise ValueError(f"PreprocConfiguration ill-defined: {config_source}")
             self.logger = self._setup_logger(
                 logger,
                 name=self.name,
