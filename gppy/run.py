@@ -62,12 +62,15 @@ def run_scidata_reduction(config, processes=["astrometry", "photometry", "combin
         raise e
 
 
-def query_observations(input_params, use_db=True, **kwargs):
+def query_observations(input_params, use_db=True, master_frame_only=False, **kwargs):
     from .services.database import RawImageQuery, query_observations_manually
 
     if use_db:
         try:
-            list_of_images = RawImageQuery(input_params).image_files(divide_by_img_type=False)
+            if master_frame_only:
+                list_of_images = RawImageQuery(input_params).of_types(["bias", "dark", "flat"]).image_files(divide_by_img_type=False)
+            else:
+                list_of_images = RawImageQuery(input_params).image_files(divide_by_img_type=False)
         except Exception as e:
             print(f"Error querying database: {e}")
             print("Falling back to globbing files from filesystem.")

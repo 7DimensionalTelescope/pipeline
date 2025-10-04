@@ -231,3 +231,46 @@ def write_header(filename, header):
         filename = filename.replace(".fits", ".header")
 
     write_header_file(filename, header)
+
+
+def ensure_mjd_in_header(header, logger=None):
+    """
+    Ensure the FITS header has MJD. If missing but DATE-OBS exists,
+    compute MJD from DATE-OBS (UTC) and write it into the header.
+
+    Parameters
+    ----------
+    header : astropy.io.fits.Header
+        FITS header object to update.
+    logger : logging.Logger, optional
+        Logger instance to record messages. If None, falls back to print.
+
+    Returns
+    -------
+    header : astropy.io.fits.Header
+        Updated header with MJD included.
+    """
+
+    def chatter(msg: str, level: str = "debug"):
+        """Internal logging helper."""
+        if logger is not None:
+            return getattr(logger, level)(msg)
+        else:
+            print(f"[ensure_mjd_in_header:{level.upper()}] {msg}")
+
+    if "MJD" not in header:
+        if "DATE-OBS" in header:
+            try:
+                from astropy.time import Time
+                mjd = Time(header["DATE-OBS"], format="isot", scale="utc").mjd
+                header["MJD"] = (mjd, "Modified Julian Date derived from DATE-OBS")
+                chatter(f"Added MJD={mjd:.5f} (from DATE-OBS={header['DATE-OBS']})")
+            except Exception as e:
+                chatter(f"Failed to convert DATE-OBS='{header.get('DATE-OBS')}' to MJD: {e}", "error")
+        else:
+            chatter("Header missing both MJD and DATE-OBS; cannot compute MJD.", "error")
+    else:
+        # chatter("Header already contains MJD; no action taken.", "debug")
+        pass
+
+    return header

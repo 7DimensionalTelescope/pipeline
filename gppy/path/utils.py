@@ -332,6 +332,7 @@ def get_nightdate(fpath):
 
 
 def get_gain(fpath):
+    
     key = HEADER_KEY_MAP["gain"]
 
     def parse_from_path(path: str) -> int:
@@ -340,9 +341,11 @@ def get_gain(fpath):
             return None
         else:
             return int(m.group(1))
-
-    return parse_from_path(fpath) or get_header(fpath, force_return=True).get(key, None)
-
+    gain = parse_from_path(fpath)
+    if gain is not None:
+        return gain
+    else:
+        return get_header(fpath, force_return=True).get(key, None)
 
 def find_raw_path(unit, nightdate, n_binning, gain):
     """

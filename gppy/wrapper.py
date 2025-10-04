@@ -69,7 +69,7 @@ class SortedGroupDict(UserDict):
 class DataReduction:
     """overwrite=True to rewrite configs"""
 
-    def __init__(self, input_params=None, list_of_images=None, use_db=False, ignore_mult_date=False, **kwargs):
+    def __init__(self, input_params=None, list_of_images=None, use_db=False, ignore_mult_date=False, master_frame_only=False, **kwargs):
         self.groups = SortedGroupDict()
 
         self._unified_key_list = None  # Will be populated after initialization
@@ -82,7 +82,7 @@ class DataReduction:
 
         if list_of_images is None:
             assert input_params is not None
-            self.list_of_images = query_observations(input_params, use_db=use_db, **kwargs)
+            self.list_of_images = query_observations(input_params, use_db=use_db, master_frame_only=master_frame_only, **kwargs)
         else:
             self.list_of_images = list_of_images
 
@@ -184,6 +184,7 @@ class DataReduction:
                 continue
 
             dependent_configs.setdefault(group.config, [])
+
             for scikey in group.sci_keys:
                 sci_group = self.groups[scikey]
                 if not (sci_group.multi_units):
@@ -215,6 +216,7 @@ class DataReduction:
             queue = QueueManager()
 
         configs = self.config_list()
+        
         sc = Scheduler(*configs, processes=processes, overwrite=overwrite, preprocess_only=preprocess_only)
         queue.add_scheduler(sc)
         queue.wait_until_task_complete("all")

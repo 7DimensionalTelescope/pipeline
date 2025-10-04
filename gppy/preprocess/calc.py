@@ -6,9 +6,8 @@ from astropy.io import fits
 from numba import njit, prange
 from ..const import SCRIPT_DIR
 from scipy.stats import variation
-from multiprocessing import Pool, cpu_count
-from functools import partial
 
+TIMEOUT = 10
 
 def read_fits_image(path):
     return fits.getdata(path).astype(np.float32)
@@ -28,6 +27,7 @@ def combine_images_with_subprocess_gpu(
 ):
     """
     Combine images using a subprocess call to a CUDA-accelerated script.
+    If the process times out (10 seconds per image), falls back to CPU processing.
     """
     cmd = [
         "python",
@@ -53,12 +53,31 @@ def combine_images_with_subprocess_gpu(
         cmd.extend(["-bpmask", make_bpmask])
         cmd.extend(["-bpmask_sigma", str(bpmask_sigma)])
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
-
-    if result.returncode != 0:
-        raise RuntimeError(f"Error combining images: {result.stderr}")
-
-    return None
+    # Calculate timeout: 10 seconds per image
+    timeout = TIMEOUT * len(images)
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        
+        if result.returncode != 0:
+            raise RuntimeError(f"Error combining images: {result.stderr}")
+            
+        return None
+        
+    except subprocess.TimeoutExpired:
+        print(f"GPU processing timed out after {timeout} seconds, falling back to CPU processing")
+        # Fall back to CPU processing
+        return combine_images_with_cpu(
+            images=images,
+            output=output,
+            sig_output=sig_output,
+            subtract=subtract,
+            scale=scale,
+            norm=norm,
+            make_bpmask=make_bpmask,
+            bpmask_sigma=bpmask_sigma,
+            **kwargs
+        )
 
 
 def combine_images_with_cpu(
@@ -102,7 +121,10 @@ def combine_images_with_cpu(
 
 
 def process_image_with_subprocess_gpu(image_paths, bias, dark, flat, device_id=0, output_paths=None, **kwargs):
-
+    """
+    Process images using a subprocess call to a CUDA-accelerated script.
+    If the process times out (10 seconds per image), falls back to CPU processing.
+    """
     gc.collect()
 
     # if len(image_paths) > 20:
@@ -127,11 +149,28 @@ def process_image_with_subprocess_gpu(image_paths, bias, dark, flat, device_id=0
         str(device_id),
     ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
-
-    if result.returncode != 0:
-        raise RuntimeError(f"Error processing images: {result.stderr}")
-    return None
+    # Calculate timeout: 10 seconds per image
+    timeout = TIMEOUT * len(image_paths)
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        
+        if result.returncode != 0:
+            raise RuntimeError(f"Error processing images: {result.stderr}")
+            
+        return None
+        
+    except subprocess.TimeoutExpired:
+        print(f"GPU processing timed out after {timeout} seconds, falling back to CPU processing")
+        # Fall back to CPU processing
+        return process_image_with_cpu(
+            image_paths=image_paths,
+            bias=bias,
+            dark=dark,
+            flat=flat,
+            output_paths=output_paths,
+            **kwargs
+        )
 
 
 def process_image_with_cpu(
@@ -140,11 +179,10 @@ def process_image_with_cpu(
     dark: str,
     flat: str,
     output_paths: list = None,
-    n_workers: int = None,
     **kwargs,
 ):
     """
-    Process images using CPU with optional parallelization.
+    Process images using CPU sequentially.
 
     Args:
         image_paths: List of input image paths
@@ -152,33 +190,13 @@ def process_image_with_cpu(
         dark: Dark frame path
         flat: Flat frame path
         output_paths: List of output image paths
-        n_workers: Number of parallel workers (default: cpu_count())
     """
-    if n_workers is None:
-        n_workers = 1
-
-    # If only one image or one worker, use sequential processing
-    if len(image_paths) == 1 or n_workers == 1:
-        return _process_image_with_cpu_sequential(image_paths, bias, dark, flat, output_paths)
-
-    # Use parallel processing for multiple images
-    return _process_image_with_cpu_parallel(image_paths, bias, dark, flat, output_paths, n_workers)
-
-
-def _process_image_with_cpu_sequential(
-    image_paths: str,
-    bias: str,
-    dark: str,
-    flat: str,
-    output_paths: list = None,
-):
-    """Sequential processing using the shared core function"""
     # Load calibration frames once
     bias_data = read_fits_image(bias)
     dark_data = read_fits_image(dark)
     flat_data = read_fits_image(flat)
 
-    # Process each image sequentially using the shared function
+    # Process each image sequentially
     for image_path, output_path in zip(image_paths, output_paths):
         _process_single_image(image_path, output_path, bias_data, dark_data, flat_data)
 
@@ -188,34 +206,6 @@ def _process_image_with_cpu_sequential(
     return None
 
 
-def _process_image_with_cpu_parallel(
-    image_paths: str,
-    bias: str,
-    dark: str,
-    flat: str,
-    output_paths: list = None,
-    n_workers: int = None,
-):
-    """Parallel processing using multiprocessing"""
-    # Load calibration frames once
-    bias_data = read_fits_image(bias)
-    dark_data = read_fits_image(dark)
-    flat_data = read_fits_image(flat)
-
-    # Create worker function with calibration data pre-loaded
-    worker_func = partial(_process_single_image, bias_data=bias_data, dark_data=dark_data, flat_data=flat_data)
-
-    # Prepare arguments for each worker
-    worker_args = list(zip(image_paths, output_paths))
-
-    # Process images in parallel
-    with Pool(processes=n_workers) as pool:
-        pool.starmap(worker_func, worker_args)
-
-    # Clean up
-    del bias_data, dark_data, flat_data
-    gc.collect()
-    return None
 
 
 def _process_single_image(

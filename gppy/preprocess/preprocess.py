@@ -140,46 +140,50 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             self.pipeline_id = self.create_pipeline_record(self.config, self.raw_groups, self.overwrite)
 
     def run(self, device_id=None, make_plots=True, use_gpu=True):
-        self._use_gpu = all([use_gpu, self._use_gpu])
+        try:
+            self._use_gpu = all([use_gpu, self._use_gpu])
 
-        st = time.time()
+            st = time.time()
 
-        # Update pipeline status to running
-        self.update_pipeline_progress(0, "running")
+            # Update pipeline status to running
+            self.update_pipeline_progress(0, "running")
 
-        threads_for_making_plots = []
-        for i in range(self._n_groups):
-            # Calculate progress percentage
-            progress = int((i / self._n_groups) * 100)
-            self.update_pipeline_progress(progress)
+            threads_for_making_plots = []
+            for i in range(self._n_groups):
+                # Calculate progress percentage
+                progress = int((i / self._n_groups) * 100)
+                self.update_pipeline_progress(progress)
 
-            self.logger.debug(f"[Group {i+1}] [filter: exptime] {PathHandler.get_group_info(self.raw_groups[i])}")
-            # self.logger.info(f"Start processing group {i+1} / {self._n_groups}")
-            self.logger.debug("\n" + "#" * 100 + f"\n{' '*30}Start processing group {i+1} / {self._n_groups}\n" + "#" * 100)  # fmt: skip
-            self.load_masterframe(device_id=device_id)
+                self.logger.debug(f"[Group {i+1}] [filter: exptime] {PathHandler.get_group_info(self.raw_groups[i])}")
+                # self.logger.info(f"Start processing group {i+1} / {self._n_groups}")
+                self.logger.debug("\n" + "#" * 100 + f"\n{' '*30}Start processing group {i+1} / {self._n_groups}\n" + "#" * 100)  # fmt: skip
+                self.load_masterframe(device_id=device_id)
 
-            if not self.master_frame_only:
-                self.prepare_header()
-                self.data_reduction(device_id=device_id)
+                if not self.master_frame_only:
+                    self.prepare_header()
+                    self.data_reduction(device_id=device_id)
+
+                if make_plots:
+                    t = threading.Thread(
+                        target=self.make_plots, kwargs={"group_index": i, "skip_flag": self.skip_plotting_flags}
+                    )
+                    t.start()
+                    threads_for_making_plots.append(t)
+
+                if i < self._n_groups - 1:
+                    self.proceed_to_next_group()
 
             if make_plots:
-                t = threading.Thread(
-                    target=self.make_plots, kwargs={"group_index": i, "skip_flag": self.skip_plotting_flags}
-                )
-                t.start()
-                threads_for_making_plots.append(t)
+                for t in threads_for_making_plots:
+                    t.join()
 
-            if i < self._n_groups - 1:
-                self.proceed_to_next_group()
+            # Update pipeline status to completed
+            self.update_pipeline_progress(100, "completed")
 
-        if make_plots:
-            for t in threads_for_making_plots:
-                t.join()
-
-        # Update pipeline status to completed
-        self.update_pipeline_progress(100, "completed")
-
-        self.logger.info(f"Preprocessing completed in {time_diff_in_seconds(st)} seconds")
+            self.logger.info(f"Preprocessing completed in {time_diff_in_seconds(st)} seconds")
+        except Exception as e:
+            self.logger.error(f"Error during preprocessing: {str(e)}", exc_info=True)
+            raise
 
     def proceed_to_next_group(self):
         self._current_group += 1
@@ -369,7 +373,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                     bpmask_sigma=self.config.preprocess.n_sigma,
                 )
                 # for flatdark
-                self.flatdark_output = self.dark_output  # named output for consistency, but not written to disk
+                self.flatdark_output = self.dark_output  # named _output for consistency, but not written to disk
                 self.dark_exptime = header[HEADER_KEY_MAP["exptime"]]
 
             elif dtype == "flat":
@@ -431,7 +435,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             self.logger.error(
                 f"[Group {self._current_group+1}] No pre-existing master {dtype} found in place of {template} within {max_offset} days"
             )
-            raise PipelineError
+            raise PipelineError(f"No pre-existing master {dtype} found in place of {template} within {max_offset} days")
         else:
             self.logger.info(
                 f"[Group {self._current_group+1}] Found pre-existing nominal master {dtype} at {os.path.basename(existing_mframe_file)}"
@@ -446,9 +450,14 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             flatdark_template = path.preprocess.masterframe
             existing_mframe_file = prep_utils.search_with_date_offsets(
                 flatdark_template, max_offset=max_offset, future=True
-            )
-            setattr(self, "flatdark_output", existing_mframe_file)  # mdark for mflat
-            self.dark_exptime = get_header(existing_mframe_file)[HEADER_KEY_MAP["exptime"]]
+            )  # search closest date first, minimum exptime if multiple found
+            if existing_mframe_file:
+                setattr(self, "flatdark_output", existing_mframe_file)  # mdark for mflat
+                self.dark_exptime = get_header(existing_mframe_file)[HEADER_KEY_MAP["exptime"]]
+            else:
+                self.logger.error(f"[Group {self._current_group+1}] No pre-existing master flatdark found in place of {flatdark_template} within {max_offset} days")
+                self.add_error()
+                raise PipelineError(f"No pre-existing master flatdark found in place of {flatdark_template} within {max_offset} days")
 
     def data_reduction(self, device_id=None, use_gpu: bool = True):
         self._use_gpu = all([use_gpu, self._use_gpu])
@@ -536,6 +545,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             header["SATURATE"] = prep_utils.get_saturation_level(header, bias, dark, flat)
             header = prep_utils.write_IMCMB_to_header(header, [bias, dark, flat, raw_file])
             header = add_padding(header, n_head_blocks, copy_header=True)
+            header = prep_utils.ensure_mjd_in_header(header, logger=self.logger)
             prep_utils.write_header(processed_file, header)
 
     def make_plot(self, file_path: str, dtype: str, group_index: int):
@@ -673,7 +683,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 "XBINNING",
                 "YBINNING",
             ]:
-                newhdu.header[key] = header[key]
+                if key in header:
+                    newhdu.header[key] = header[key]
             newhdu.header["COMMENT"] = "Header inherited from first dark frame"
         newhdu.header["NHOTPIX"] = (np.sum(hot_mask), "Number of hot pixels.")
         newhdu.header["SIGMAC"] = (self.config.preprocess.n_sigma, "HP threshold in clipped sigma")
