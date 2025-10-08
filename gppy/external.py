@@ -1,19 +1,20 @@
 import os
 import subprocess
+import numpy as np
 from astropy.io import fits
 from .const import REF_DIR
 from .utils import add_suffix, force_symlink, swap_ext, read_text_file, collapse, ansi_clean
+from .header import fitsrec_to_header
 
 
 def solve_field(
     input_image=None,
-    input_catalog=None,
+    input_catalog=None,  # FITS_LDAC
     output_image=None,
     dump_dir=None,
     get_command=False,
     pixscale=0.505,
     radius=1.0,
-    sexcat=None,  # path to SExtractor catalog
     xcol="X_IMAGE",  # column name for X (pixels)
     ycol="Y_IMAGE",  # column name for Y (pixels)
     sortcol=None,  # optional column to sort by
@@ -39,6 +40,12 @@ def solve_field(
             Approximate pixel scale of the image in arcseconds per pixel. Defaults to 0.505 arcsec/pixel.
         radius (float, optional):
             Search radius for the solution in degrees. Defaults to 1.0 degree.
+        xcol (str, optional):
+            Column name for X (pixels). Defaults to "X_IMAGE". Needed for catalog input.
+        ycol (str, optional):
+            Column name for Y (pixels). Defaults to "Y_IMAGE". Needed for catalog input.
+        sortcol (str, optional):
+            Column name to sort by. Defaults to None.
 
     Returns:
         str:
@@ -55,6 +62,11 @@ def solve_field(
         solved_file = solve_field("image.fits")
         print(f"Solved FITS file: {solved_file}")
         ```
+        If you have a sextractor catalog:
+        ```python
+        solved_file = solve_field(input_catalog="catalog.fits")
+        print(f"Solved FITS file: {solved_file}")
+        ```
 
         Get the command without executing it:
         ```python
@@ -63,70 +75,101 @@ def solve_field(
         ```
     """
 
-    input_image = os.path.abspath(input_image)
-    img_dir = os.path.dirname(input_image)
-    working_dir = dump_dir or os.path.join(img_dir, "tmp_solvefield")
-    working_dir = os.path.abspath(working_dir)
-    os.makedirs(working_dir, exist_ok=True)
+    def set_input_output(input_image):
+        nonlocal output_image
+        input_image = os.path.abspath(input_image)
+        img_dir = os.path.dirname(input_image)
+        working_dir = dump_dir or os.path.join(img_dir, "tmp_solvefield")
+        working_dir = os.path.abspath(working_dir)
+        os.makedirs(working_dir, exist_ok=True)
 
-    # soft link inside working_dir
-    fname = os.path.basename(input_image)
-    soft_link = os.path.join(working_dir, fname)
-    force_symlink(input_image, soft_link)
+        # soft link inside working_dir
+        fname = os.path.basename(input_image)
+        soft_link = os.path.join(working_dir, fname)
+        force_symlink(input_image, soft_link)
 
-    # outname = os.path.join(working_dir, f"{Path(inim).stem}_solved.fits")
-    output_image = output_image or os.path.join(os.path.splitext(soft_link)[0] + "_solved.fits")
+        # outname = os.path.join(working_dir, f"{Path(inim).stem}_solved.fits")
+        output_image = output_image or os.path.join(os.path.splitext(soft_link)[0] + "_solved.fits")
+        return soft_link, output_image
+
+    def convert_ldac_to_xyls(infile, outfile=None, center=True):
+        outfile = outfile or swap_ext(infile, ".xyls")
+
+        with fits.open(infile) as hdul:
+            data = hdul["LDAC_OBJECTS"].data  # or hdul[2]
+            if center:
+                image_header = fitsrec_to_header(hdul["LDAC_IMHEAD"].data)
+        # data = Table.read(infile, format="ascii.sextractor")
+
+        cols = [
+            fits.Column(name=xcol, format="E", array=data[xcol].astype(np.float32)),
+            fits.Column(name=ycol, format="E", array=data[ycol].astype(np.float32)),
+        ]
+
+        hdu = fits.BinTableHDU.from_columns(cols)
+        hdu.writeto(outfile, overwrite=True)
+        if center:
+            return outfile, image_header.get("RA", None), image_header.get("DEC", None)
+        return outfile
 
     # Solve-field using the soft link
-    # e.g., solve-field calib_7DT11_T00139_20250102_014643_m425_100s.fits --crpix-center --scale-unit arcsecperpix --scale-low '0.4949' --scale-high '0.5151' --no-plots --new-fits solved.fits --overwrite --use-source-extractor --cpulimit 30
-    if input_catalog:
-        solvecom = "solve-field sources.xyls   --fields 1   --x-column X_IMAGE --y-column Y_IMAGE   --width 9576 --height 6388   --scale-unit arcsecperpix --scale-low 0.49 --scale-high 0.52 --crpix-center"
+    if input_catalog:  # If user provided a Source Extractor catalog, use it instead of extracting sources
+        soft_link, output_image = set_input_output(input_catalog)
+        soft_link, ra, dec = convert_ldac_to_xyls(soft_link, center=True)  # not a soft link anymore
+        solvecom = [
+            "solve-field", soft_link,  # "sources.xyls",
+            "--x-column", xcol,
+            "--y-column", ycol,
+            "--width", "9576",  # we have LDAC_IMHEAD
+            "--height", "6388",
+            "--fields", "1",  # the extension to process. should point to IDAC_OBJECTS
+            "--scale-unit", "arcsecperpix",
+            "--scale-low", "0.49",
+            "--scale-high", "0.52",
+            "--crpix-center",
+            "--no-plots",
+        ]  # fmt: skip
+        if ra and dec:
+            solvecom += ["--ra", f"{ra:.4f}", "--dec", f"{dec:.4f}", "--radius", f"{radius:.1f}"]
+        if sortcol:
+            solvecom += ["--sort-column", sortcol]
+        # IMPORTANT: omit --use-source-extractor if we're providing a catalog
 
     elif input_image:
-        if sexcat is None:
-            solvecom = [
-                "solve-field", f"{soft_link}",  # this file is not changed by solve-field
-                "--new-fits", output_image,  # you can give 'none'
-                # "--config", f"{path_cfg}",
-                # "--source-extractor-config", f"{path_sex_cfg}",
-                # "--no-fits2fits",  # Do not create output FITS file
-                "--overwrite",
-                "--crpix-center",
-                "--scale-unit", "arcsecperpix",
-                "--scale-low", f"{pixscale*0.98}",
-                "--scale-high", f"{pixscale*1.02}",
-                "--use-source-extractor",  # Crucial speed boost. 30 s -> 5 s
-                "--cpulimit", f"{30}",  # This is not about CORES. 
-                "--no-plots",  # MASSIVE speed boost. 2 min -> 5 sec
-                # "--no-tweak",  # Skip SIP distortion correction. 0.3 seconds boost.
-                # "--downsample", "4",  # not much difference
-            ]  # fmt: skip
-
-        # If user provided a Source Extractor catalog, use it instead of extracting sources
-        else:
-            sexcat = os.path.abspath(sexcat)
-            # Common SExtractor outputs work: FITS_LDAC (.cat), FITS table, or ASCII.
-            # We point solve-field at it and specify which columns to read.
-            solvecom += [
-                "solve-field", sexcat,
-                # "--x-column", xcol,
-                # "--y-column", ycol,
-            ]  # fmt: skip
-
-            if sortcol:
-                solvecom += ["--sort-column", sortcol]
-            # IMPORTANT: omit --use-source-extractor if we're providing a catalog
-
-    try:
-        ra = fits.getval(input_image, "ra")
-        dec = fits.getval(input_image, "dec")
-        solvecom = solvecom + [
-            "--ra", f"{ra:.4f}",
-            "--dec", f"{dec:.4f}",
-            "--radius", f"{radius:.1f}",
+        soft_link, output_image = set_input_output(input_image)
+        # e.g., solve-field calib_7DT11_T00139_20250102_014643_m425_100s.fits --crpix-center --scale-unit arcsecperpix --scale-low '0.4949' --scale-high '0.5151' --no-plots --new-fits solved.fits --overwrite --use-source-extractor --cpulimit 30
+        solvecom = [
+            "solve-field", f"{soft_link}",  # this file is not changed by solve-field
+            "--new-fits", output_image,  # you can give 'none'
+            # "--config", f"{path_cfg}",
+            # "--source-extractor-config", f"{path_sex_cfg}",
+            # "--no-fits2fits",  # Do not create output FITS file
+            "--overwrite",
+            "--crpix-center",
+            "--scale-unit", "arcsecperpix",
+            "--scale-low", f"{pixscale*0.98}",
+            "--scale-high", f"{pixscale*1.02}",
+            "--use-source-extractor",  # Crucial speed boost. 30 s -> 5 s
+            "--cpulimit", f"{30}",  # This is not about CORES. 
+            "--no-plots",  # MASSIVE speed boost. 2 min -> 5 sec
+            # "--no-tweak",  # Skip SIP distortion correction. 0.3 seconds boost.
+            # "--downsample", "4",  # not much difference
         ]  # fmt: skip
-    except:
-        print("Couldn't get RA Dec from header. Solving blindly")
+
+        # give prior info on center
+        try:
+            ra = fits.getval(soft_link, "ra")
+            dec = fits.getval(soft_link, "dec")
+            solvecom = solvecom + [
+                "--ra", f"{ra:.4f}",
+                "--dec", f"{dec:.4f}",
+                "--radius", f"{radius:.1f}",
+            ]  # fmt: skip
+        except:
+            print("[WARNING] solve-field couldn't get RA Dec from header. Solving blindly")
+
+    else:
+        raise ValueError("Either input_image or input_catalog must be provided")
 
     if get_command:
         return " ".join(solvecom)
