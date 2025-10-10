@@ -4,7 +4,10 @@ import numpy as np
 import cupy as cp
 import os
 
-def interpolate_masked_pixels(images, mask, window=1, method=None, badpix=None, output_paths=None, weight: bool = True, device=None):
+
+def interpolate_masked_pixels(
+    images, mask, window=1, method=None, badpix=None, output_paths=None, weight: bool = True, device=None
+):
     data = []
     data_weight = []
 
@@ -18,16 +21,17 @@ def interpolate_masked_pixels(images, mask, window=1, method=None, badpix=None, 
         cmask = cp.asarray(mask)
 
         for i, subdata in enumerate(data):
-            
+
             cdata = cp.asarray(subdata, dtype=cp.float32)
-            
+
             if weight:
                 cdata_weight = cp.asarray(data_weight[i], dtype=cp.float32)
             else:
                 cdata_weight = None
-            
+
             cdata, cdata_weight = interpolate_masked_pixels_gpu_vectorized_weight(
-                cdata, cmask, window=window, method=method, badpix=badpix, weight=cdata_weight, device=device)
+                cdata, cmask, window=window, method=method, badpix=badpix, weight=cdata_weight, device=device
+            )
 
             data[i][:] = cp.asnumpy(cdata)
 
@@ -58,13 +62,7 @@ def interpolate_masked_pixels(images, mask, window=1, method=None, badpix=None, 
 
 
 def interpolate_masked_pixels_gpu_vectorized_weight(
-    image,
-    mask,
-    weight=None,
-    window=1,
-    method="median",
-    badpix=1,
-    device=0
+    image, mask, weight=None, window=1, method="median", badpix=1, device=0
 ):
 
     H, W = image.shape
@@ -119,19 +117,42 @@ def interpolate_masked_pixels_gpu_vectorized_weight(
             interp_weights = weight_total  # assuming weight = 1/var
 
         elif method == "median":
-            # Compute median and MAD
+            # Compute median
             interp_vals = cp.nanmedian(patch_vals, axis=1)
 
-            # Handle NaNs safely by using cp.isclose (for float stability)
-            mask = cp.isclose(patch_vals, interp_vals[:, None], equal_nan=True)
+            # Handle weights properly for median
+            def median_weight_per_row(vals, weights):
+                """Compute median weights handling both odd and even counts"""
+                # Sort values and weights together
+                n_rows, n_cols = vals.shape
+                interp_weights = cp.zeros(n_rows, dtype=weights.dtype)
 
-            # For multiple matches per row, take first match
-            def first_match_per_row(data, mask):
-                idx = cp.argmax(mask, axis=1)  # index of first True in each row
-                row_idx = cp.arange(mask.shape[0])
-                return data[row_idx, idx]
+                for i in range(n_rows):
+                    # Get valid (non-NaN) values and their weights
+                    valid_mask = ~cp.isnan(vals[i])
+                    if cp.sum(valid_mask) == 0:
+                        interp_weights[i] = 0.0
+                        continue
 
-            interp_weights = first_match_per_row(patch_weights, mask)
+                    valid_vals = vals[i][valid_mask]
+                    valid_weights = weights[i][valid_mask]
+
+                    # Sort by values
+                    sort_idx = cp.argsort(valid_vals)
+                    sorted_vals = valid_vals[sort_idx]
+                    sorted_weights = valid_weights[sort_idx]
+
+                    n_valid = len(sorted_vals)
+                    if n_valid == 0:
+                        interp_weights[i] = 0.0
+                    elif n_valid % 2 == 1:  # Odd number
+                        interp_weights[i] = sorted_weights[n_valid // 2]
+                    else:  # Even number - average weights of two middle values
+                        interp_weights[i] = 0.5 * (sorted_weights[n_valid // 2 - 1] + sorted_weights[n_valid // 2])
+
+                return interp_weights
+
+            interp_weights = median_weight_per_row(patch_vals, patch_weights)
 
         # Fill interpolated values and weights
         result[ys, xs] = interp_vals
@@ -151,6 +172,7 @@ def add_bpx_method(header, method):
     header["INTERP"] = (method.upper(), "Method for bad pixel interpolation")
     return header
 
+
 def add_suffix(filename: str | list[str], suffix):
     if isinstance(filename, list):
         return [add_suffix(f, suffix) for f in filename]
@@ -158,65 +180,29 @@ def add_suffix(filename: str | list[str], suffix):
     suffix = suffix if suffix.startswith("_") else f"_{suffix}"
     return f"{base}{suffix}{ext}"
 
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Interpolate masked pixels in FITS images (and optional weight maps) using CuPy GPU acceleration."
     )
-    parser.add_argument(
-        '-input', 
-        nargs='+',
-        required=True,
-        help='Paths to input science FITS files'
-    )
+    parser.add_argument("-input", nargs="+", required=True, help="Paths to input science FITS files")
 
-    parser.add_argument(
-        '-mask',
-        required=True,
-        help='Path to binary mask FITS file'
-    )
-    
-    parser.add_argument(
-        '-output',
-        nargs='+',
-        required=True,
-        help='Paths for output science FITS files'
-    )
+    parser.add_argument("-mask", required=True, help="Path to binary mask FITS file")
 
-    parser.add_argument(
-        '-window',
-        type=int,
-        default=1,
-        help='Radius of square window for interpolation'
-    )
-    parser.add_argument(
-        '-method',
-        choices=['inverse_variance', 'median'],
-        default='median',
-        help='Interpolation method'
-    )
-    parser.add_argument(
-        '-badpix',
-        type=int,
-        default=1,
-        help='Value in mask indicating bad pixels'
-    )
+    parser.add_argument("-output", nargs="+", required=True, help="Paths for output science FITS files")
 
+    parser.add_argument("-window", type=int, default=1, help="Radius of square window for interpolation")
     parser.add_argument(
-        '-device',
-        type=int,
-        default=0,
-        help='GPU device ID'
+        "-method", choices=["inverse_variance", "median"], default="median", help="Interpolation method"
     )
-    parser.add_argument(
-        '-no-weight',
-        dest='weight',
-        action='store_false',
-        help='Disable weight map processing'
-    )
+    parser.add_argument("-badpix", type=int, default=1, help="Value in mask indicating bad pixels")
+
+    parser.add_argument("-device", type=int, default=0, help="GPU device ID")
+    parser.add_argument("-no-weight", dest="weight", action="store_false", help="Disable weight map processing")
     return parser.parse_args()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     args = parse_args()
     # build tuples
     if args.weight:
@@ -238,7 +224,5 @@ if __name__ == '__main__':
         badpix=args.badpix,
         output_paths=output_paths,
         weight=args.weight,
-        device=args.device
+        device=args.device,
     )
-
- 

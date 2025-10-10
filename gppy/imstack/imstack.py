@@ -156,13 +156,16 @@ class ImStack(BaseSetup):
         self.n_stack = len(self.input_images)
 
         header_list = [fits.getheader(f) for f in self.input_images]
+        self.header_list = header_list
 
         self.total_exptime = np.sum([hdr["EXPTIME"] for hdr in header_list])  # sec
         self.zpvalues = [hdr[self.zpkey] for hdr in header_list]
         self.skyvalues = [hdr["SKYVAL"] for hdr in header_list]
         self.mjd_stacked = np.mean([hdr["MJD"] for hdr in header_list])
-        self.satur_level = np.min([hdr["SATURATE"] * hdr["FLXSCALE"] for hdr in header_list])
-        self.coadd_egain = np.sum([hdr["EGAIN"] / hdr["FLXSCALE"] for hdr in header_list])
+        # self.satur_level = np.min([hdr["SATURATE"] * hdr["FLXSCALE"] for hdr in header_list])  # this is before FLSCALE def
+        # self.coadd_egain = np.sum([hdr["EGAIN"] / hdr["FLXSCALE"] for hdr in header_list])
+        self.satur_level_list = [hdr["SATURATE"] for hdr in header_list]
+        self.coadd_egain_list = [hdr["EGAIN"] for hdr in header_list]
 
         objs = list(set([hdr["OBJECT"] for hdr in header_list]))
         filters = list(set([hdr["FILTER"] for hdr in header_list]))
@@ -485,8 +488,10 @@ class ImStack(BaseSetup):
         The headers of the last processed images are modified.
         """
         st = time.time()
+        self.flxscale_list = []
         for file, zp in zip(self.images_to_stack, self.zpvalues):
             flxscale = 10 ** (0.4 * (self.zp_base - zp))
+            self.flxscale_list.append(flxscale)
             with fits.open(file, mode="update") as hdul:
                 hdul[0].header["FLXSCALE"] = (
                     flxscale,
@@ -756,6 +761,10 @@ class ImStack(BaseSetup):
         # dateloc_stacked = calc_mean_dateloc(dateloclist)
         # alt_stacked = np.mean(altlist)
         # az_stacked = np.mean(azlist)
+        coadd_satur_level = np.min(
+            [satur * flxscale for satur, flxscale in zip(self.satur_level_list, self.flxscale_list)]
+        )
+        coadd_egain = np.sum([egain / flxscale for egain, flxscale in zip(self.coadd_egain_list, self.flxscale_list)])
 
         # datestr, timestr = extract_date_and_time(dateobs_stacked)
         # comim = f"{self.path_save}/calib_{self.config.unit}_{self.obj}_{datestr}_{timestr}_{self.filte}_{exptime_stacked:g}.com.fits"
@@ -783,9 +792,9 @@ class ImStack(BaseSetup):
             "MJD": (mjd_stacked, "Modified Julian Date at start of observations for combined image"),
             "JD": (jd_stacked, "Julian Date at start of observations for combined image"),
             "SKYVAL": (0, "SKY MEDIAN VALUE (Subtracted)"),
-            "EGAIN": (self.coadd_egain, "Effective EGAIN for combined image (e-/ADU)"),  # swarp calculates it as GAIN, but irreproducible.
+            "EGAIN": (coadd_egain, "Effective EGAIN for combined image (e-/ADU)"),  # swarp calculates it as GAIN, but irreproducible.
             "GAIN": (self.camera_gain, "Gain from the camera configuration"),
-            "SATURATE": (self.satur_level, "Conservative saturation level for combined image"),  # let swarp handle this
+            "SATURATE": (coadd_satur_level, "Conservative saturation level for combined image"),  # let swarp handle this
         }  # fmt: skip
 
         # 	Update Header

@@ -564,8 +564,17 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
         return PathImsubtract(self, self._config)
 
     @property
+    def _raw_dir(self, i):
+        unit = self._get_name_property_at_index("unit", i)
+        nightdate = self._get_name_property_at_index("nightdate", i)
+        n_binning = self._get_name_property_at_index("n_binning", i)
+        gain = self._get_name_property_at_index("gain", i)
+        root = find_raw_path(unit, nightdate, n_binning, gain)
+        return root
+
+    @property
     def conjugate(self) -> str | list[str]:
-        """None signals nonexistent file(s)"""
+        """Doesn't raise error on unfound; suitable for external users. None or '*' signals nonexistent file(s)"""
         paths = []
         for i, input in enumerate(self._input_files):
             typ = self._get_name_property_at_index("type", i)
@@ -577,11 +586,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
                 paths.append(os.path.join(root, basename))
             elif "calibrated" in typ[0]:
                 # original was processed → conjugate is raw
-                unit = self._get_name_property_at_index("unit", i)
-                nightdate = self._get_name_property_at_index("nightdate", i)
-                n_binning = self._get_name_property_at_index("n_binning", i)
-                gain = self._get_name_property_at_index("gain", i)
-                root = find_raw_path(unit, nightdate, n_binning, gain)
+                root = self._raw_dir(i)
                 paths.append(os.path.join(root, basename))
             else:
                 paths.append(input)
@@ -591,15 +596,12 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
 
     @property
     def raw_images(self):
+        """fails if not found. suitable for pipeline"""
         # return [i if "raw" in typ[0] else c for typ, i, c in zip(self.name.type, self._input_files, self.conjugate)]
         paths = []
-        for i, input in enumerate(self._input_files):
+        for i in range(len(self._input_files)):
             basename = self._get_name_property_at_index("raw_basename", i)
-            unit = self._get_name_property_at_index("unit", i)
-            nightdate = self._get_name_property_at_index("nightdate", i)
-            n_binning = self._get_name_property_at_index("n_binning", i)
-            gain = self._get_name_property_at_index("gain", i)
-            root = find_raw_path(unit, nightdate, n_binning, gain)
+            root = self._raw_dir(i)
             raw_image_template = os.path.join(root, basename)
             globbed = glob(raw_image_template)
             if len(globbed) == 0:
@@ -1024,6 +1026,10 @@ class PathAstrometry(AutoMkdirMixin):
         return os.path.join(self._parent.factory_dir, "astrometry")
 
     @property
+    def figure_dir(self):
+        return os.path.join(self._parent.figure_dir, "astrometry")
+
+    @property
     def astrefcat(self):
         # import re
 
@@ -1082,6 +1088,10 @@ class PathPhotometry(AutoMkdirMixin, AutoCollapseMixin):
         return os.path.join(self._parent.factory_dir, "photometry")
 
     @property
+    def figure_dir(self):
+        return os.path.join(self._parent.figure_dir, "photometry")
+
+    @property
     def prep_catalog(self):
         input = self._parent.name.basename
         return bjoin(self.tmp_dir, add_suffix(add_suffix(input, "prep"), "cat"))
@@ -1118,6 +1128,10 @@ class PathImstack(AutoMkdirMixin):
     @property
     def tmp_dir(self):
         return os.path.join(self._parent.factory_dir, "imstack")
+
+    @property
+    def figure_dir(self):
+        return os.path.join(self._parent.figure_dir, "imstack")
 
     @property
     def stacked_image_basename(self):
@@ -1161,6 +1175,10 @@ class PathImsubtract(AutoMkdirMixin, AutoCollapseMixin):
     @property
     def tmp_dir(self):
         return os.path.join(self._parent.factory_dir, "imsubtract")
+
+    @property
+    def figure_dir(self):
+        return os.path.join(self._parent.figure_dir, "imsubtract")
 
     @property
     def diffim(self):

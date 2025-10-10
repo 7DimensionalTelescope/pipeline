@@ -213,6 +213,7 @@ def evaluate_single_wcs(
     chatter(f"evaluate_single_wcs: psf_stats {psf_stats}")
 
     if plot_save_path is not None and unmatched_fraction < 1.0:
+        chatter(f"evaluate_single_wcs: plotting to {plot_save_path}")
         wcs_check_plot(
             ref_cat,
             tbl,

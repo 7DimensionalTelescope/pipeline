@@ -234,6 +234,9 @@ def strip_binning(binning_string):
 
 
 def format_binning(n_binning: int | str):
+    if n_binning is None:
+        return "*"
+
     n = str(n_binning)
     return f"{n}x{n}"
 
@@ -253,6 +256,9 @@ def format_exptime(exptime: float, type="raw"):
     """type=='raw' is .1f float, others are rounded"""
     if exptime == "*":  # put wildcard through
         return exptime
+
+    if exptime is None:
+        return "*"
 
     if not exptime:  # when the input is not expected to have proper exptime
         return "UndefExptime"  # indicates a bug in a regular pipeline output
@@ -332,7 +338,7 @@ def get_nightdate(fpath):
 
 
 def get_gain(fpath):
-    
+
     key = HEADER_KEY_MAP["gain"]
 
     def parse_from_path(path: str) -> int:
@@ -341,11 +347,13 @@ def get_gain(fpath):
             return None
         else:
             return int(m.group(1))
+
     gain = parse_from_path(fpath)
     if gain is not None:
         return gain
     else:
         return get_header(fpath, force_return=True).get(key, None)
+
 
 def find_raw_path(unit, nightdate, n_binning, gain):
     """

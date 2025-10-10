@@ -33,6 +33,7 @@ from .utils import (
     strip_wcs,
 )
 from .evaluation import evaluate_single_wcs, evaluate_joint_wcs
+
 # from .generate_refcat_gaia import get_refcat_gaia
 
 
@@ -123,44 +124,43 @@ class Astrometry(BaseSetup):
             # Source Extractor
             self.run_sextractor(self.soft_links_to_input_images, se_preset=se_preset, overwrite=overwrite)
 
-            # run initial solve: scamp or solve-field
-            try:
-                if force_solve_field:
-                    raise Exception("Force solve field")
-                self.run_scamp(self.prep_cats, scamp_preset="prep", joint=False)
-                if evaluate_prep_sol:
-                    self.evaluate_solution(suffix="prepwcs", use_threading=use_threading, export_eval_cards=True)
-            except Exception as e:
-                if evaluate_prep_sol:
-                    self.evaluate_solution(suffix="prepwcs", use_threading=use_threading, export_eval_cards=True)
-                self.logger.warning(e)
-                raise e  # solve-field incomplete yet
-                self.run_solve_field(self.soft_links_to_input_images, self.solved_images)
-                if evaluate_prep_sol:
-                    self.evaluate_solution(suffix="solvefieldwcs", use_threading=use_threading, export_eval_cards=True)
-
             # flexibly iterate to refine
             for image_info, prep_cat in zip(self.images_info, self.prep_cats):
-                for _ in range(max_scamp):
-                    self.run_scamp([prep_cat], scamp_preset="main", joint=False)
+                try:
+                    raise Exception("test")
+                    # run initial solve: scamp or solve-field
+                    self.run_scamp(prep_cat, scamp_preset="prep", joint=False, overwrite=overwrite)
+                    if evaluate_prep_sol:
+                        self.evaluate_solution(suffix="prepwcs", use_threading=use_threading, export_eval_cards=True)
+
+                    # main scamp iteration
+                    self._iterate_scamp(
+                        prep_cat, image_info, evaluate_prep_sol, use_threading, max_scamp, overwrite=overwrite
+                    )
+
+                    if image_info.bad:
+                        self.logger.debug(
+                            f"Unmatched fraction {image_info.rsep_stats.unmatched_fraction} "
+                            f"after {max_scamp} iterations for {image_info.image_path}"
+                        )
+                        raise Exception(f"Unmatched fraction too high. {image_info.rsep_stats.unmatched_fraction}")
+
+                except Exception as e:
+                    # if evaluate_prep_sol:
+                    #     self.evaluate_solution(suffix="prepwcs", use_threading=use_threading, export_eval_cards=True)
+                    self.logger.warning(e)
+
+                    # self.run_solve_field(input_catalogs=self.prep_cats, output_images=self.solved_images)
+                    self.run_solve_field(input_catalogs=prep_cat, output_images=None)
                     if evaluate_prep_sol:
                         self.evaluate_solution(
-                            input_images=image_info.image_path,
-                            images_info=image_info,
-                            prep_cats=prep_cat,
-                            suffix="iterwcs",
-                            plot=False,
-                            isep=False,
-                            use_threading=use_threading,
-                            export_eval_cards=True,
+                            suffix="solvefieldwcs", use_threading=use_threading, export_eval_cards=True
                         )
-                        self.logger.debug(f"SEP_P95: {image_info.reference_sep_p95} for {image_info.image_path}")
-                        if image_info.reference_sep_p95 < PIXSCALE:
-                            self.logger.debug(f"Stop iterating at {_}")
-                            break
+                    self._iterate_scamp(
+                        prep_cat, image_info, evaluate_prep_sol, use_threading, max_scamp, overwrite=overwrite
+                    )
 
-            # run main scamp
-            # self.run_scamp(self.prep_cats, scamp_preset="main", joint=joint_scamp)
+            # evaluate main scamp
             self.evaluate_solution(suffix="wcs", isep=True, use_threading=use_threading, scamp_preset="main")
 
             # update the input image
@@ -176,6 +176,26 @@ class Astrometry(BaseSetup):
         except Exception as e:
             self.logger.error(f"Error during astrometry processing: {str(e)}", exc_info=True)
             raise
+
+    def _iterate_scamp(self, prep_cat, image_info, evaluate_prep_sol, use_threading, max_scamp, overwrite=True):
+        """main scamp iteration"""
+        for _ in range(max_scamp):
+            self.run_scamp([prep_cat], scamp_preset="main", joint=False, overwrite=(_ == max_scamp - 1 or overwrite))
+            if evaluate_prep_sol:
+                self.evaluate_solution(
+                    input_images=image_info.image_path,
+                    images_info=image_info,
+                    prep_cats=prep_cat,
+                    suffix="iterwcs",
+                    plot=False,
+                    isep=False,
+                    use_threading=use_threading,
+                    export_eval_cards=True,
+                )
+                self.logger.debug(f"SEP_P95: {image_info.reference_sep_p95} for {image_info.image_path}")
+                if image_info.good:
+                    self.logger.debug(f"Stop iterating at {_}")
+                    break
 
     # deprecated
     def _run_joint(
@@ -279,7 +299,9 @@ class Astrometry(BaseSetup):
         for image_info in self.images_info:
             image_info.logger = self.logger  # pass the logger
 
-        local_astref = self.config.astrometry.local_astref or self.path.astrometry.astrefcat  # None if no local astrefcat
+        local_astref = (
+            self.config.astrometry.local_astref or self.path.astrometry.astrefcat
+        )  # None if no local astrefcat
         if not os.path.exists(local_astref):
             try:
                 raise PipelineError(f"Local astrefcat {local_astref} does not exist")
@@ -327,58 +349,92 @@ class Astrometry(BaseSetup):
             self.logger.debug(f"Resetting header of {image}")
             reset_header(image)
 
-    # not working now
-    def run_solve_field(self, input_images: List[str], output_images: List[str]) -> None:
-        """Run astrometric plate-solving on input images.
-
-        Uses astrometry.net's solve-field to determine WCS solution for each image.
-        Supports parallel processing through queue system if enabled.
-
-        Args:
-            inputs: Paths to input FITS files
-            outputs: Paths where solved FITS files will be written
-        """
-        # parallelize if queue=True
+    def run_solve_field(
+        self,
+        input_catalogs: str | List[str] = None,
+        input_images: str | List[str] = None,
+        output_images: str | List[str] = None,  # only for input_images
+        overwrite: bool = False,
+    ) -> None:
+        """Runs astrometry.net's solve-field to determine WCS solution for each image."""
         self.logger.info(f"Start solve-field")
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
-        solved_flag_files = [swap_ext(input, ".solved") for input in input_images]
-        filtered_data = [
-            (inp, out)
-            for inp, out, solved_flag_file in zip(input_images, output_images, solved_flag_files)
-            if not os.path.exists(solved_flag_file)
-        ]
+        input_catalogs = atleast_1d(input_catalogs) if input_catalogs is not None else input_catalogs  # priority
+        input_images = atleast_1d(input_images) if input_images is not None else input_images
+        output_images = atleast_1d(output_images) if output_images is not None else output_images
+        self.logger.debug(f"input_catalogs: {input_catalogs}")
+        self.logger.debug(f"input_images: {input_images}")
+        self.logger.debug(f"output_images: {output_images}")
 
-        if not filtered_data:
-            self.logger.info("All input images have already been solved. Exiting solve-field.")
-            return
+        if not input_catalogs and not input_images:
+            raise ValueError("Either input_catalogs or input_images must be provided for run_solve_field")
 
-        input_images, output_images = zip(*filtered_data)
+        # solved_flag_files = [swap_ext(input, ".solved") for input in input_catalogs or input_images]
 
-        if self.queue:
-            self._submit_task(
-                external.solve_field,
-                zip(input_images, output_images),
-                # dump_dir=self.path_astrometry,
-                pixscale=self.path.pixscale,  # PathHandler brings pixscale from NameHandler
-            )
-        else:
-            for i, (slink, sfile, pixscale) in enumerate(zip(input_images, output_images, self.path.pixscale)):
+        # filtered_data = [
+        #     (inp, out)
+        #     for inp, out, solved_flag_file in zip(input_images, output_images, solved_flag_files)
+        #     if not os.path.exists(solved_flag_file)
+        # ]
+
+        # if not filtered_data:
+        #     self.logger.info("All input images have already been solved. Exiting solve-field.")
+        #     return
+
+        # input_images, output_images = zip(*filtered_data)
+
+        # if self.queue:
+        #     self._submit_task(
+        #         external.solve_field,
+        #         input_image=input_images,
+        #         output_image=output_images,
+        #         # dump_dir=self.path_astrometry,
+        #         pixscale=self.path.pixscale,  # PathHandler brings pixscale from NameHandler
+        #     )
+        # else:
+        if input_catalogs:
+            for i, (slink, pixscale) in enumerate(zip(input_catalogs, self.path.pixscale)):
+                if os.path.exists(swap_ext(slink, ".solved")):
+                    self.logger.info(f"Solve-field already run: {swap_ext(slink, '.solved')}. Skipping...")
+                    continue
                 external.solve_field(
-                    slink,
-                    outim=sfile,
+                    input_catalog=slink,
                     # dump_dir=self.path_astrometry,
                     pixscale=pixscale,
+                    overwrite=overwrite,
                 )
                 self.logger.info(f"Completed solve-field [{i+1}/{len(input_images)}]")
                 self.logger.debug(f"Solve-field input: {slink}, output: {sfile}")
+
+        elif input_images:
+            assert len(input_images) == len(output_images)
+            for i, (slink, sfile, pixscale) in enumerate(zip(input_images, output_images, self.path.pixscale)):
+                if os.path.exists(swap_ext(slink, ".solved")):
+                    self.logger.info(f"Solve-field already run: {swap_ext(slink, '.solved')}. Skipping...")
+                    continue
+                external.solve_field(
+                    input_image=slink,
+                    output_image=sfile,
+                    # dump_dir=self.path_astrometry,
+                    pixscale=pixscale,
+                    overwrite=overwrite,
+                )
+                self.logger.info(f"Completed solve-field [{i+1}/{len(input_images)}]")
+                self.logger.debug(f"Solve-field input: {slink}, output: {sfile}")
+        else:
+            pass
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
         self.update_catalog(self.prep_cats, self.solved_heads)
 
     def run_sextractor(
-        self, input_images: List[str], output_catalogs: List[str] = None, se_preset: str = "prep", overwrite=False,
+        self,
+        input_images: List[str],
+        output_catalogs: List[str] = None,
+        se_preset: str = "prep",
+        overwrite=False,
     ) -> List[str]:
         """Run Source Extractor on solved images.
 
@@ -434,6 +490,7 @@ class Astrometry(BaseSetup):
         scamp_preset: str = "prep",
         scamp_args: str = None,
         apply_wcs_to_catalog: bool = True,
+        overwrite=False,
     ) -> None:
         """Run SCAMP for astrometric calibration.
 
@@ -451,7 +508,7 @@ class Astrometry(BaseSetup):
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
         # presex_cats = [os.path.splitext(s)[0] + f".{prefix}.cat" for s in files]
-        input_catalogs = input_catalogs or self.prep_cats
+        input_catalogs = atleast_1d(input_catalogs or self.prep_cats)
         self.logger.debug(f"Scamp input catalogs: {input_catalogs}")
 
         # path for scamp refcat download
@@ -612,7 +669,9 @@ class Astrometry(BaseSetup):
             prep_cat = prep_cats[idx]
 
             bname = os.path.basename(input_image)
-            plot_path = unique_filename(os.path.join(self.path.figure_dir, swap_ext(add_suffix(bname, suffix), "jpg")))
+            plot_path = unique_filename(
+                os.path.join(self.path.astrometry.figure_dir, swap_ext(add_suffix(bname, suffix), "jpg"))
+            )
 
             eval_result = evaluate_single_wcs(
                 image=input_image,
@@ -1066,3 +1125,14 @@ class ImageInfo:
     @property
     def ellipticity_error(self) -> float:
         return np.ma.std(self.matched_catalog["ELLIPTICITY"])
+
+    @property
+    def good(self) -> bool:
+        """iteration condition"""
+        # not checking unmatched fraction as it's better to exit _iterate_scamp quickly and go to solve-field
+        return self.reference_sep_p95 < PIXSCALE
+
+    @property
+    def bad(self) -> bool:
+        """iteration condition"""
+        return self.rsep_stats.unmatched_fraction > 0.5 or self.reference_sep_p95 > 2 * PIXSCALE

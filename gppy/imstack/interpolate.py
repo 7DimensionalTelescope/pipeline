@@ -101,11 +101,7 @@ def interpolate_masked_pixels_cpu_numba(
     weight_result = np.zeros_like(image)
 
     # Collect masked coords
-    count = 0
-    for i in range(H):
-        for j in range(W):
-            if mask[i, j]:
-                count += 1
+    count = np.sum(mask)
 
     rows = np.empty(count, dtype=np.int32)
     cols = np.empty(count, dtype=np.int32)
@@ -164,19 +160,18 @@ def interpolate_masked_pixels_cpu_numba(
             # pick median value
             if (n & 1) == 1:
                 med = tmp[n // 2]
+                # Find weight of the median value
+                sel = 0.0
+                for i in range(n):
+                    if vals[i] == med:
+                        sel = wts[i]
+                        break
             else:
                 med = 0.5 * (tmp[n // 2 - 1] + tmp[n // 2])
+                # Average weights of the two middle values
+                sel = 0.5 * (wts[n // 2 - 1] + wts[n // 2])
 
             result[r, c] = med
-
-            # for “median” method we report the first-matching weight;
-            # if you truly want an unweighted median, then your weight array is all ones.
-            sel = 0.0
-            for i in range(n):
-                if vals[i] == med:
-                    sel = wts[i]
-                    break
-
             weight_result[r, c] = sel
 
         else:
@@ -204,11 +199,7 @@ def interpolate_masked_pixels_cpu_numba_no_weight(image, mask, window=1):
     result = image.copy()
 
     # Flatten index lookup of masked pixels
-    count = 0
-    for i in range(H):
-        for j in range(W):
-            if mask[i, j] == 1:
-                count += 1
+    count = np.sum(mask)
 
     rows = np.empty(count, dtype=np.int32)
     cols = np.empty(count, dtype=np.int32)

@@ -12,12 +12,13 @@ def solve_field(
     input_catalog=None,  # FITS_LDAC
     output_image=None,
     dump_dir=None,
+    overwrite=False,
     get_command=False,
     pixscale=0.505,
     radius=1.0,
     xcol="X_IMAGE",  # column name for X (pixels)
     ycol="Y_IMAGE",  # column name for Y (pixels)
-    sortcol=None,  # optional column to sort by
+    sortcol="MAG_AUTO",  # optional column to sort by
 ):
     """
     Runs Astrometry.net's `solve-field` to compute the World Coordinate System (WCS) for an input FITS image.
@@ -45,7 +46,7 @@ def solve_field(
         ycol (str, optional):
             Column name for Y (pixels). Defaults to "Y_IMAGE". Needed for catalog input.
         sortcol (str, optional):
-            Column name to sort by. Defaults to None.
+            Column name to sort by. Defaults to "MAG_AUTO".
 
     Returns:
         str:
@@ -90,9 +91,11 @@ def solve_field(
 
         # outname = os.path.join(working_dir, f"{Path(inim).stem}_solved.fits")
         output_image = output_image or os.path.join(os.path.splitext(soft_link)[0] + "_solved.fits")
+        if os.path.exists(swap_ext(soft_link, ".solved")) and not overwrite:
+            print(f"Solve-field already run: {swap_ext(soft_link, '.solved')} Skipping...")
         return soft_link, output_image
 
-    def convert_ldac_to_xyls(infile, outfile=None, center=True):
+    def convert_ldac_to_xyls(infile, outfile=None, center=True, sortcol=None, all_columns=True):
         outfile = outfile or swap_ext(infile, ".xyls")
 
         with fits.open(infile) as hdul:
@@ -101,12 +104,17 @@ def solve_field(
                 image_header = fitsrec_to_header(hdul["LDAC_IMHEAD"].data)
         # data = Table.read(infile, format="ascii.sextractor")
 
-        cols = [
-            fits.Column(name=xcol, format="E", array=data[xcol].astype(np.float32)),
-            fits.Column(name=ycol, format="E", array=data[ycol].astype(np.float32)),
-        ]
+        if all_columns:
+            hdu = fits.BinTableHDU(data=data)
+        else:
+            cols = [
+                fits.Column(name=xcol, format="E", array=data[xcol].astype(np.float32)),
+                fits.Column(name=ycol, format="E", array=data[ycol].astype(np.float32)),
+            ]
+            if sortcol:
+                cols.append(fits.Column(name=sortcol, format="E", array=data[sortcol].astype(np.float32)))
 
-        hdu = fits.BinTableHDU.from_columns(cols)
+            hdu = fits.BinTableHDU.from_columns(cols)
         hdu.writeto(outfile, overwrite=True)
         if center:
             return outfile, image_header.get("RA", None), image_header.get("DEC", None)
@@ -115,7 +123,7 @@ def solve_field(
     # Solve-field using the soft link
     if input_catalog:  # If user provided a Source Extractor catalog, use it instead of extracting sources
         soft_link, output_image = set_input_output(input_catalog)
-        soft_link, ra, dec = convert_ldac_to_xyls(soft_link, center=True)  # not a soft link anymore
+        soft_link, ra, dec = convert_ldac_to_xyls(soft_link, center=True, sortcol=sortcol)  # not a soft link anymore
         solvecom = [
             "solve-field", soft_link,  # "sources.xyls",
             "--x-column", xcol,
@@ -207,6 +215,7 @@ def scamp(
     input,
     scampconfig=None,
     scamp_preset="prep",
+    overwrite=True,
     ahead=None,
     path_ref_scamp=None,
     local_astref=None,
@@ -322,7 +331,7 @@ def sextractor(
     fits_ldac: bool = False,
     sex_args: list = [],
     overwrite=False,
-    config=None,  # supply config.config
+    sex_config=None,
     logger=None,
     return_sex_output=False,
     clean_log=True,
@@ -360,14 +369,7 @@ def sextractor(
         chatter(f"Sextractor output catalog already exists: {outcat}, skipping...", "info")
         return
 
-    if config:
-        chatter("Using Configuration Class")
-        sex = config.sex.sex
-        param = config.sex.param
-        nnw = config.sex.nnw
-        conv = config.sex.conv
-    else:
-        sex, param, conv, nnw = get_sex_config(se_preset)
+    sex, param, conv, nnw = sex_config or get_sex_config(se_preset)
 
     log_file = log_file or swap_ext(add_suffix(outcat, "sextractor"), "log")
 
