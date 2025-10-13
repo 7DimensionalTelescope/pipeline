@@ -419,6 +419,7 @@ class QueueManager:
                     continue
 
                 try:
+                    print(cmd)
                     proc = subprocess.Popen(cmd)
 
                     # Extract config path from command for tracking

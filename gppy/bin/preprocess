@@ -8,6 +8,8 @@ import sys
 import signal
 import glob
 
+import gppy
+print(gppy.__path__)
 
 def run_preprocess(config, device_id=None, make_plots=True, overwrite=False, **kwargs):
     """
@@ -20,7 +22,7 @@ def run_preprocess(config, device_id=None, make_plots=True, overwrite=False, **k
         config = PreprocConfiguration.from_config(config)
 
         prep = Preprocess(config, use_gpu=True, overwrite=False, master_frame_only=False)
-
+        print(prep.sci_output)
         prep.run(device_id=device_id, make_plots=make_plots)
         del config, prep
     except Exception as e:

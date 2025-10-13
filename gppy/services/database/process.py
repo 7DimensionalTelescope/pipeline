@@ -20,6 +20,7 @@ class ProcessDBError(Exception):
 class ProcessDB:
     """Database class for managing pipeline process data"""
 
+    _connection = True
     def __init__(self, db_params: Optional[Dict[str, Any]] = None):
         """Initialize with database parameters"""
         self.db_params = db_params or DB_PARAMS
@@ -29,12 +30,14 @@ class ProcessDB:
         """Context manager for database connections"""
         conn = None
         try:
-            conn = psycopg.connect(**self.db_params)
-            yield conn
+            if self._connection:
+                conn = psycopg.connect(**self.db_params)
+                yield conn
+            else:
+                return None
         except Exception as e:
-            if conn:
-                conn.rollback()
-            raise ProcessDBError(f"Database operation failed: {e}")
+            self._connection = False
+            return None
         finally:
             if conn:
                 conn.close()

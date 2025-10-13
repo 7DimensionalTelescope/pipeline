@@ -288,9 +288,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 self.logger.debug(f"[Group {self._current_group+1}] flatdark_output: {self.flatdark_output}")
 
             if os.path.exists(output_file):
-                with fits.open(output_file) as hdul:
-                    if not QAData.check_header(hdul[0].header, dtype):
-                        self.overwrite = True
+                header = fits.getheader(output_file)
+                if not QAData.check_header(header, dtype):
+                    self.overwrite = True
 
             if (
                 input_file
@@ -302,13 +302,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                     self._fetch_masterframe(output_file, dtype)
                 self._generated_masterframes.append(output_file)
             elif isinstance(output_file, str) and len(output_file) != 0:
-                self.logger.warning(
-                    f"[Group {self._current_group+1}] No {dtype} masterframe found for the current group of inputs."
-                )
-                self.add_warning()
                 self._fetch_masterframe(output_file, dtype)
                 self.skip_plotting_flags[dtype] = True
-
             else:
                 self.logger.warning(f"[Group {self._current_group+1}] {dtype} has no input or output data (to fetch)")
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_input: {input_file}")

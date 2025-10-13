@@ -228,6 +228,7 @@ class NameHandler:
         """
         types = ()
 
+        
         # raw/master/processed
         if stem.startswith(("7DT", "BIAS", "DARK", "FLAT", "LIGHT")):
             types += ("raw",)

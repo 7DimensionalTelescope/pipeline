@@ -18,6 +18,8 @@ class QADBError(Exception):
 class QADB:
     """Database class for managing image QA data"""
 
+    _connection = True
+
     def __init__(self, db_params: Optional[Dict[str, Any]] = None):
         """Initialize with database parameters"""
         self.db_params = db_params or DB_PARAMS
@@ -27,12 +29,15 @@ class QADB:
         """Context manager for database connections"""
         conn = None
         try:
-            conn = psycopg.connect(**self.db_params)
+            if self._connection:
+                conn = psycopg.connect(**self.db_params)
+                yield conn
+            else:
+                return None
             yield conn
         except Exception as e:
-            if conn:
-                conn.rollback()
-            raise QADBError(f"Database operation failed: {e}")
+            self._connection = False
+            return None
         finally:
             if conn:
                 conn.close()

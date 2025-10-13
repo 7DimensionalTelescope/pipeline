@@ -87,6 +87,7 @@ class DataReduction:
             self.list_of_images = list_of_images
 
         print(f"Found {len(self.list_of_images)} images.")
+        
         if len(self.list_of_images) == 0:
             print("No images found")
             return
@@ -281,6 +282,7 @@ class MasterframeGroup:
                 "config": self.config,
                 "make_plots": make_plots,
                 "device_id": device_id,
+                "add_database": False,  # Disable database for DataReduction
             },
             priority=priority,
         )

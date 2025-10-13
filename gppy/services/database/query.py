@@ -12,23 +12,28 @@ from ...utils import atleast_1d
 from .const import DB_PARAMS, TABLES, ALIASES
 
 
-# Connection pool
-dsn = " ".join(f"{k}={v}" for k, v in DB_PARAMS.items())
-POOL = ConnectionPool(
-    dsn,
-    min_size=1,  # Keep 1 connection ready
-    max_size=10,  # Adjust based on concurrency needs
-    max_idle=60,  # Close idle connections after 60s
-)
+def get_pool():
+    # Connection pool
+    try:
+        dsn = " ".join(f"{k}={v}" for k, v in DB_PARAMS.items())
+        POOL = ConnectionPool(
+            dsn,
+            min_size=1,  # Keep 1 connection ready
+            max_size=10,  # Adjust based on concurrency needs
+            max_idle=60,  # Close idle connections after 60s
+        )
 
-# all column names and data types in a table
-query_example = """
-        SELECT column_name, data_type
-        FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name   = 'survey_scienceframe';
-    """
-
+        # all column names and data types in a table
+        query_example = """
+                SELECT column_name, data_type
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                AND table_name   = 'survey_scienceframe';
+            """
+    except Exception as e:
+        print(f"Error initializing database connection: {e}")
+        POOL = None
+    return POOL
 
 # sql injection risk. dev only
 # def free_query(query: str, params: Optional[List[Any]] = None) -> List[Tuple]:
@@ -48,6 +53,9 @@ def free_query(query: str, params: Optional[List[Any]] = None) -> List[Tuple]:
     Execute a free-form query and return the results.
     Uses the global connection pool.
     """
+    POOL = get_pool()
+    if POOL is None:
+        raise Exception("Database connection pool not available")
     with POOL.connection() as conn:
         with conn.cursor() as cur:
             cur.execute(query, params)
@@ -100,6 +108,10 @@ def get_image_files(
         types = normalize_types(image_types)
 
     tables = {t: TABLES[t] for t in types}
+
+    POOL = get_pool()
+    if POOL is None:
+        raise Exception("Database connection pool not available")
 
     with POOL.connection() as conn:
         with conn.cursor() as cur:
