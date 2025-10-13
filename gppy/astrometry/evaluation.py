@@ -11,7 +11,7 @@ from ..tools.table import match_two_catalogs, add_id_column, match_multi_catalog
 from ..utils import add_suffix, swap_ext
 from .plotting import wcs_check_plot
 from ..subtract.utils import create_ds9_region_file
-from .utils import inside_quad_spherical, get_3x3_stars
+from .utils import inside_quad_spherical, get_3x3_stars, get_fov_quad
 from .evaluation_helpers import compute_psf_stats, compute_rms_stats, well_matchedness_stats, PsfStats
 
 
@@ -88,6 +88,13 @@ def evaluate_single_wcs(
     if H is None or W is None:
         chatter(f"H and W are not provided. Loading from {image}", "info")
         H, W = fits.getdata(image).shape
+
+    if fov_ra is None or fov_dec is None:
+        try:
+            fov_ra, fov_dec = get_fov_quad(wcs, W, H)
+            chatter(f"Updated FOV polygon. RA: {fov_ra}, Dec: {fov_dec}")
+        except Exception as e:
+            chatter(f"Failed to update FOV polygon for {image}: {e}")
 
     # # update the source catalog with the WCS
     # if head is not None:
@@ -207,7 +214,11 @@ def evaluate_single_wcs(
 
     # 2D PSF stats
     matched_ids = get_3x3_stars(matched, H, W, cutout_size)
-    psf_stats = compute_psf_stats(matched, matched_ids)
+    try:
+        psf_stats = compute_psf_stats(matched, matched_ids)
+    except Exception as e:
+        chatter(f"evaluate_single_wcs: psf_stats {e}")
+        psf_stats = None
 
     chatter(f"evaluate_single_wcs: matched_ids {matched_ids}")
     chatter(f"evaluate_single_wcs: psf_stats {psf_stats}")

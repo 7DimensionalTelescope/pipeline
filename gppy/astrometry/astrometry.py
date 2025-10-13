@@ -104,6 +104,7 @@ class Astrometry(BaseSetup):
         # processes=["sextractor", "scamp", "header_update"],
         # use_gpu: bool = False,
         overwrite=False,
+        solvefield_args=[],
     ) -> None:
         """Execute the complete astrometry pipeline.
 
@@ -126,18 +127,29 @@ class Astrometry(BaseSetup):
             self.run_sextractor(self.soft_links_to_input_images, se_preset=se_preset, overwrite=overwrite)
 
             # flexibly iterate to refine
-            for image_info, prep_cat in zip(self.images_info, self.prep_cats):
+            for i, (image_info, prep_cat) in enumerate(zip(self.images_info, self.prep_cats)):
                 try:
-                    raise Exception("test")
+                    if force_solve_field:
+                        raise Exception("force_solve_field")
                     # run initial solve: scamp or solve-field
                     self.run_scamp(prep_cat, scamp_preset="prep", joint=False, overwrite=overwrite)
                     if evaluate_prep_sol:
-                        self.evaluate_solution(suffix="prepwcs", use_threading=use_threading, export_eval_cards=True)
+                        self.evaluate_solution(
+                            input_images=image_info.image_path,
+                            images_info=image_info,
+                            prep_cats=prep_cat,
+                            suffix="prepwcs",
+                            use_threading=use_threading,
+                            export_eval_cards=True,
+                        )
 
+                    self.logger.info(f"Running main scamp iteration [{i+1}/{len(self.prep_cats)}] for {prep_cat}")
                     # main scamp iteration
                     self._iterate_scamp(
                         prep_cat, image_info, evaluate_prep_sol, use_threading, max_scamp, overwrite=overwrite
                     )
+
+                    self.logger.info(f"Scamp iteration completed [{i+1}/{len(self.prep_cats)}] for {prep_cat}")
 
                     if image_info.bad:
                         self.logger.debug(
@@ -147,12 +159,13 @@ class Astrometry(BaseSetup):
                         raise Exception(f"Unmatched fraction too high. {image_info.rsep_stats.unmatched_fraction}")
 
                 except Exception as e:
+                    raise Exception("stop")
                     # if evaluate_prep_sol:
                     #     self.evaluate_solution(suffix="prepwcs", use_threading=use_threading, export_eval_cards=True)
                     self.logger.warning(e)
 
                     # self.run_solve_field(input_catalogs=self.prep_cats, output_images=self.solved_images)
-                    self.run_solve_field(input_catalogs=prep_cat, output_images=None)
+                    self.run_solve_field(input_catalogs=prep_cat, output_images=None, solvefield_args=solvefield_args)
                     if evaluate_prep_sol:
                         self.evaluate_solution(
                             suffix="solvefieldwcs", use_threading=use_threading, export_eval_cards=True
@@ -188,7 +201,7 @@ class Astrometry(BaseSetup):
                     images_info=image_info,
                     prep_cats=prep_cat,
                     suffix="iterwcs",
-                    plot=False,
+                    plot=True,
                     isep=False,
                     use_threading=use_threading,
                     export_eval_cards=True,
@@ -296,8 +309,9 @@ class Astrometry(BaseSetup):
         self.solved_images = [add_suffix(s, "solved") for s in soft_links]  # solve-field output
         self.solved_heads = [swap_ext(s, "head") for s in self.prep_cats]  # scamp output
         self.images_info = [ImageInfo.parse_image_header_info(image) for image in self.input_images]
-        for image_info in self.images_info:
+        for i, image_info in enumerate(self.images_info):
             image_info.logger = self.logger  # pass the logger
+            image_info.head = self.solved_heads[i]
 
         local_astref = (
             self.config.astrometry.local_astref or self.path.astrometry.astrefcat
@@ -355,6 +369,7 @@ class Astrometry(BaseSetup):
         input_images: str | List[str] = None,
         output_images: str | List[str] = None,  # only for input_images
         overwrite: bool = False,
+        solvefield_args: list = [],
     ) -> None:
         """Runs astrometry.net's solve-field to determine WCS solution for each image."""
         self.logger.info(f"Start solve-field")
@@ -393,6 +408,7 @@ class Astrometry(BaseSetup):
         #         pixscale=self.path.pixscale,  # PathHandler brings pixscale from NameHandler
         #     )
         # else:
+        solvefield_wcs_list = []
         if input_catalogs:
             for i, (slink, pixscale) in enumerate(zip(input_catalogs, self.path.pixscale)):
                 if os.path.exists(swap_ext(slink, ".solved")):
@@ -403,11 +419,13 @@ class Astrometry(BaseSetup):
                     # dump_dir=self.path_astrometry,
                     pixscale=pixscale,
                     overwrite=overwrite,
+                    solvefield_args=solvefield_args,
                 )
-                self.logger.info(f"Completed solve-field [{i+1}/{len(input_images)}]")
+                self.logger.info(f"Completed solve-field [{i+1}/{len(input_catalogs)}]")
                 self.logger.debug(f"Solve-field input: {slink}, output: {wcs_file}")
 
                 self.images_info[i].sip_wcs = wcs_file
+                solvefield_wcs_list.append(wcs_file)
 
         elif input_images:  # this is deprecated. just for code reuse.
             assert len(input_images) == len(output_images)
@@ -421,6 +439,7 @@ class Astrometry(BaseSetup):
                     # dump_dir=self.path_astrometry,
                     pixscale=pixscale,
                     overwrite=overwrite,
+                    solvefield_args=solvefield_args,
                 )
                 self.logger.info(f"Completed solve-field [{i+1}/{len(input_images)}]")
                 self.logger.debug(f"Solve-field input: {slink}, output: {sfile}")
@@ -429,7 +448,7 @@ class Astrometry(BaseSetup):
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
-        self.update_catalog(self.prep_cats, self.solved_heads)
+        self.update_catalog(input_catalogs, solvefield_wcs_list)
 
     def run_sextractor(
         self,
@@ -569,20 +588,24 @@ class Astrometry(BaseSetup):
                     scamp_preset=scamp_preset,
                 )
                 solved_heads.extend(solved_head)
-                self.logger.info(f"Completed scamp for {precat}")  # fmt:skip
-                self.logger.debug(f"{precat}")  # fmt:skip
+                self.logger.debug(f"Completed scamp for {precat}")
             self.logger.debug(f"Individual run solved_heads: {solved_heads}")
 
+        # back up prep solutions in a different name. The original name must be accessible by ImageInfo.head
         if scamp_preset != "main":
-            for head in solved_heads:
+            for i, head in enumerate(solved_heads):
                 backup_head = unique_filename(add_suffix(head, "prep"))
                 shutil.copy(head, backup_head)
+                # solved_heads[i] = backup_head
                 self.logger.debug(f"Backed up prep head {head} to {backup_head}")
 
         # update WCS in ImageInfo
-        for image_info, solved_head in zip(self.images_info, solved_heads):
-            image_info.head = solved_head
-            self.logger.debug(f"Updated WCS in ImageInfo {image_info.head}")
+        for solved_head, input_catalog in zip(solved_heads, input_catalogs):
+            # finding the right image_info is difficult
+            # idx = self.input_images.index(self.images_info[2].image_path)
+            # image_info.head = solved_head
+            # self.logger.debug(f"Updated WCS in ImageInfo {image_info.head}")
+            # self.logger.debug(f"ImageInfo of {image_info.image_path} is updated")
             with open(solved_head, "r") as f:
                 if scamp_preset == "main" and not any("PV1_0" in line for line in f):
                     self.logger.error(f"No PV1_0 in {solved_head} - solution invalid")
@@ -645,22 +668,12 @@ class Astrometry(BaseSetup):
         scamp_preset="prep",  # for determining error
     ) -> None:
         """Evaluate the solution. This was developed in lack of latest scamp version."""
-        self.logger.info("Evaluating the solution")
+        self.logger.debug("Start evaluate_solution")
 
         input_images = atleast_1d(input_images or self.input_images)
         images_info = atleast_1d(images_info or self.images_info)
         prep_cats = atleast_1d(prep_cats or self.prep_cats)
         suffix = suffix or "wcs"
-
-        # update FOV polygon to ImageInfo. It will be cached and put into final image header later
-        for image_info in images_info:
-            try:
-                image_info.fov_ra, image_info.fov_dec = get_fov_quad(
-                    image_info.wcs, image_info.naxis1, image_info.naxis2
-                )
-                self.logger.debug(f"Updated FOV polygon. RA: {image_info.fov_ra}, Dec: {image_info.fov_dec}")
-            except Exception as e:
-                self.logger.error(f"Failed to update FOV polygon for {image_info.image_path}: {e}")
 
         refcat = Table.read(self.config.astrometry.local_astref, hdu=2)
 
@@ -674,6 +687,15 @@ class Astrometry(BaseSetup):
             plot_path = unique_filename(
                 os.path.join(self.path.astrometry.figure_dir, swap_ext(add_suffix(bname, suffix), "jpg"))
             )
+
+            # update FOV polygon to ImageInfo. It will be cached and put into final image header later
+            try:
+                image_info.fov_ra, image_info.fov_dec = get_fov_quad(
+                    image_info.wcs, image_info.naxis1, image_info.naxis2
+                )
+                self.logger.debug(f"Updated FOV polygon. RA: {image_info.fov_ra}, Dec: {image_info.fov_dec}")
+            except Exception as e:
+                self.logger.error(f"Failed to update FOV polygon for {image_info.image_path}: {e}")
 
             eval_result = evaluate_single_wcs(
                 image=input_image,
@@ -730,27 +752,32 @@ class Astrometry(BaseSetup):
                 for fut in as_completed(futures):
                     yield fut.result()
 
-        # Single evaluation (external rms)
-        producer = _produce_parallel if use_threading else _produce_sequential
-        for idx, bundle in producer():
-            _apply(idx, bundle)
+        try:
+            # Single evaluation (external rms)
+            producer = _produce_parallel if use_threading else _produce_sequential
+            for idx, bundle in producer():
+                _apply(idx, bundle)
 
-        # Optional joint evaluation (internal rms)
-        if len(input_images) > 1 and isep:
-            isep_stats_list, match_stat_list = evaluate_joint_wcs(images_info)
-            for image_info, internal_sep_stats, match_stats in zip(images_info, isep_stats_list, match_stat_list):
-                image_info.set_internal_sep_stats(internal_sep_stats)
-                image_info.set_internal_match_stats(match_stats)
+            # Optional joint evaluation (internal rms)
+            if len(input_images) > 1 and isep:
+                isep_stats_list, match_stat_list = evaluate_joint_wcs(images_info)
+                for image_info, internal_sep_stats, match_stats in zip(images_info, isep_stats_list, match_stat_list):
+                    image_info.set_internal_sep_stats(internal_sep_stats)
+                    image_info.set_internal_match_stats(match_stats)
 
-        self.logger.debug(f"Evaluated solution for all images")
+            if export_eval_cards:
+                for image_info, prep_cat in zip(images_info, prep_cats):
+                    cards = image_info.wcs_eval_cards
+                    text_path = unique_filename(swap_ext(add_suffix(prep_cat, f"{suffix}_eval_cards"), "txt"))
+                    with open(text_path, "w") as f:
+                        f.write(fits.Header(cards).tostring(sep="\n"))
+
+        except Exception as e:
+            self.logger.error(f"Failed to evaluate solution: {e}")
+            # don't raise error
+
+        self.logger.debug(f"Completed evaluate_solution")
         self.logger.debug(MemoryMonitor.log_memory_usage)
-
-        if export_eval_cards:
-            for image_info, prep_cat in zip(images_info, prep_cats):
-                cards = image_info.wcs_eval_cards
-                text_path = unique_filename(swap_ext(add_suffix(prep_cat, f"{suffix}_eval_cards"), "txt"))
-                with open(text_path, "w") as f:
-                    f.write(fits.Header(cards).tostring(sep="\n"))
 
     def update_qa_config(self) -> None:
         """Update the QA configuration."""
@@ -1104,16 +1131,18 @@ class ImageInfo:
     @property
     def wcs(self) -> WCS:
         """Updated every time run_scamp is completed"""
-        if self.head:
+        if os.path.exists(self.head):
 
             wcs_header = read_scamp_header(self.head)
             return WCS(wcs_header)
+
+        raise Exception("debug: no head in ImageInfo")
 
         if self.sip_wcs:
             return WCS(read_text_header(self.sip_wcs))
 
         # raise PipelineError("No self.head in ImageInfo")
-        print("[WARNING] No self.head in ImageInfo. Using coarse_wcs")
+        self._log("No self.head in ImageInfo. Using coarse_wcs", level="warning")
         return self.coarse_wcs
 
     @property

@@ -60,10 +60,12 @@ class SciProcConfiguration(BaseConfig):
     #     return config
 
     @classmethod
-    def base_config(cls, input_images=None, working_dir=None, config_file=None, write=True, logger=None, verbose=True, **kwargs):
+    def base_config(
+        cls, input_images=None, working_dir=None, config_file=None, write=True, logger=None, verbose=True, **kwargs
+    ):
         # self = cls.__new__(cls)
 
-        # input_files = atleast1d(input_images)
+        input_images = [os.path.abspath(image) for image in atleast_1d(input_images)]
         path = PathHandler(input_images, working_dir=working_dir or os.getcwd())
         self = cls.from_config(path.sciproc_base_yml)
         self.path = path
@@ -206,7 +208,6 @@ class SciProcConfiguration(BaseConfig):
         self._define_settings(self.input_files[0])
         self.input_files = self.config.input.calibrated_images
         self._initialized = True
-
 
     def _define_settings(self, input_file):
         # use local astrometric reference catalog for tile observations

@@ -3,7 +3,7 @@ import subprocess
 import numpy as np
 from astropy.io import fits
 from .const import REF_DIR
-from .utils import add_suffix, force_symlink, swap_ext, read_text_file, collapse, ansi_clean
+from .utils import add_suffix, force_symlink, swap_ext, read_text_file, ansi_clean, atleast_1d
 from .header import fitsrec_to_header
 
 
@@ -13,9 +13,10 @@ def solve_field(
     output_image=None,
     dump_dir=None,
     overwrite=False,
+    solvefield_args: list = [],
     get_command=False,
     pixscale=0.505,
-    radius=1.0,
+    radius=0.2,
     xcol="X_IMAGE",  # column name for X (pixels)
     ycol="Y_IMAGE",  # column name for Y (pixels)
     sortcol="MAG_AUTO",  # optional column to sort by
@@ -179,6 +180,9 @@ def solve_field(
     else:
         raise ValueError("Either input_image or input_catalog must be provided")
 
+    # custom arguments
+    solvecom += solvefield_args
+
     if get_command:
         return " ".join(solvecom)
 
@@ -251,6 +255,8 @@ def scamp(
     else:
         input_cat_list = [input]
 
+    output_list = [swap_ext(input_cat, "head") for input_cat in input_cat_list]
+
     # scampcom = f’scamp {catname} -c {os.path.join(path_cfg, “kmtnet.scamp”)} -ASTREF_CATALOG FILE -ASTREFCAT_NAME {gaialdac} -POSITION_MAXERR 20.0 -CROSSID_RADIUS 5.0 -DISTORT_DEGREES 3 -PROJECTION_TYPE TPV -AHEADER_GLOBAL {ahead} -STABILITY_TYPE INSTRUMENT’
     scampcom = f"scamp -c {scampconfig} {input}"
 
@@ -300,14 +306,11 @@ def scamp(
     # except subprocess.CalledProcessError as e:
     #     print(f"Command failed with error code {e.returncode}")
     #     print(f"stderr output: {e.stderr.decode()}")
-    solved_heads = []
-    for input_cat in input_cat_list:
-        solved_head = swap_ext(input_cat, "head")
+    for solved_head in output_list:
         if not os.path.exists(solved_head):
             raise FileNotFoundError(f"SCAMP output (.head) does not exist: {solved_head}\nCheck Log file: {log_file}")
-        solved_heads.append(solved_head)
 
-    return solved_heads
+    return output_list
 
 
 def missfits(inim):

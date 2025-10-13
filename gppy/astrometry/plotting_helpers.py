@@ -5,7 +5,7 @@ from matplotlib.legend_handler import HandlerPatch
 from matplotlib.patches import Ellipse
 
 
-def adaptive_ra_spacing(base_arcmin=15, dec=None, min_cos=0.15):
+def adaptive_ra_spacing(base_arcmin=15, dec=None, min_cos=0.2):
     """Return an Angle for RA tick spacing that keeps roughly-constant on-sky separation.
 
     base_arcmin: desired *on-sky* spacing (arcmin) at equator.
@@ -23,31 +23,23 @@ def adaptive_ra_spacing(base_arcmin=15, dec=None, min_cos=0.15):
 
 def _round_to_nice_angle(angle_deg, base_arcmin=15):
     """
-    Round an angle (Quantity in deg) to a 'nice' value acceptable by WCSAxes
-    tick locator (multiples of 1, 2, 3, 5 x 10^n).
+    Round an angle (Quantity in deg) to a 'nice' value that is a multiple of
+    base_arcmin arcminutes (default: 15 arcmin = 0.25 deg). This avoids warning
+    in the plotting.
     """
     import numpy as np
     from astropy import units as u
 
-    # convert to degrees
+    # Convert base arcmin to degrees
+    base_deg = (base_arcmin * u.arcmin).to(u.deg).value
+
+    # Convert input to degrees
     val = angle_deg.to(u.deg).value
 
-    # find power of 10
-    exp = np.floor(np.log10(val))
-    frac = val / 10**exp
+    # Round to nearest multiple of base_deg
+    rounded_val = np.round(val / base_deg) * base_deg
 
-    # snap fraction to 1, 2, 3, or 5
-    if frac < 1.5:
-        nice = 1
-    elif frac < 3.5:
-        nice = 2
-    elif frac < 7.5:
-        nice = 5
-    else:
-        nice = 10
-
-    rounded = nice * 10**exp
-    return rounded * u.deg
+    return rounded_val * u.deg
 
 
 def cutout(data: np.array, coords: List[Tuple[float]], x: float, y: float, size: int = 30):

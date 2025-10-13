@@ -43,7 +43,7 @@ def create_ds9_region_file(
     dec=None,
     x=None,
     y=None,
-    radius=10,
+    radius: float | list = 10,
     filename="ds9_regions.reg",
     color="green",
     shape="circle",
@@ -97,8 +97,8 @@ def create_ds9_region_file(
             raise ValueError("ra and dec must have the same length.")
         coord_system_line = "fk5"
         # DS9 expects arcseconds with a double-quote suffix for fk5
-        radius_str = f'{radius}"'
-        coords_iter = zip(ra, dec)
+        radius_str = [f"{v}" for v in radius] if hasattr(radius, "__iter__") else [f'{radius}"'] * len(ra)
+        coords_iter = zip(ra, dec, radius_str)
     elif using_image:
         if x is None or y is None:
             raise ValueError("Both x and y must be provided for image mode.")
@@ -106,8 +106,8 @@ def create_ds9_region_file(
             raise ValueError("x and y must have the same length.")
         coord_system_line = "image"
         # DS9 pixels use 'p' suffix (explicit & unambiguous)
-        radius_str = f"{radius}p"
-        coords_iter = zip(x, y)
+        radius_str = [f"{v}p" for v in radius] if hasattr(radius, "__iter__") else [f"{radius}p"] * len(x)
+        coords_iter = zip(x, y, radius_str)
     else:
         raise ValueError("You must provide either RA/Dec or X/Y arrays.")
 
@@ -124,7 +124,7 @@ def create_ds9_region_file(
         f.write(header + "\n")
         f.write(coord_system_line + "\n")
 
-        for x, y in coords_iter:
+        for x, y, radius_str in coords_iter:
             # DS9 wants decimals; no extra spaces
             f.write(f"{shape}({x},{y},{radius_str})\n")
 

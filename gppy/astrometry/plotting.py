@@ -102,10 +102,13 @@ def wcs_check_plot(
             text = f"Superarcsec Frac: {1 - subsecond_fraction:.3f}, " + text
         if subpixel_fraction is not None:
             text = f"Subpixel Frac: {subpixel_fraction:.2f}, " + text
-        text = f"[{np.sum(~matched['separation'].mask)} Matched Sources]  " + text
+        text = (
+            f"[{np.sum(~matched['separation'].mask)} Matched Sources {np.sum(~matched['separation'].mask)/len(matched)*100:.1f}%]  "
+            + text
+        )
 
         # fig.text(0.5, 0.62, text, ha="center", va="center", fontsize=8)
-        ax_spacer.text(0.5, 0.9, text, ha="center", va="center", fontsize=8, transform=ax_spacer.transAxes)
+        ax_spacer.text(0.47, 0.9, text, ha="center", va="center", fontsize=8, transform=ax_spacer.transAxes)
 
     if plot_save_path:
         # canvas.print_figure(plot_save_path, bbox_inches="tight", dpi=150)
@@ -194,7 +197,8 @@ def wcs_check_scatter_plot(
 
     # --- Major ticks at your chosen spacing ---
     spacing = tick_spacing_arcmin * u.arcmin
-    lon_spacing = adaptive_ra_spacing(base_arcmin=tick_spacing_arcmin, dec=np.mean(fov_dec))
+    dec_center = np.mean(fov_dec) if fov_dec is not None else np.mean(tbl["DELTA_J2000"])
+    lon_spacing = adaptive_ra_spacing(base_arcmin=tick_spacing_arcmin, dec=dec_center)
     lon.set_ticks(spacing=lon_spacing)
     lat.set_ticks(spacing=spacing)
     lon.set_ticklabel(size=8)
@@ -215,7 +219,7 @@ def wcs_check_scatter_plot(
     lon_top = overlay[0]
     lon_top.set_format_unit(u.deg)
     lon_top.set_major_formatter("d.dd")
-    lon_top.set_ticks(spacing=lon_spacing)  # reduce text overlap
+    lon_top.set_ticks(spacing=2 * lon_spacing)  # reduce text overlap
     lon_top.set_ticklabel(size=8)
 
     # Move labels/ticks to the top
@@ -287,9 +291,36 @@ def wcs_check_psf_plot(
         # selected_stars = find_id_rows(matched_catalog, matched_ids)
         rows = resolve_rows_by_id(matched_catalog, matched_ids)  # list of Table row or None
 
+    if all(row is None for row in rows):
+        print("[ERROR] No sources found in the matched catalog")
+        return
+
     # centers in 0-based pixel coords (SExtractor is 1-based)
     # x_img = selected_stars["X_IMAGE"].astype(float) - 1.0
     # y_img = selected_stars["Y_IMAGE"].astype(float) - 1.0
+
+    # get a row for colname check
+    for row in rows:
+        if row is not None:
+            break
+
+    if all(col in row.colnames for col in ("A_IMAGE", "B_IMAGE", "THETA_IMAGE")):
+        has_a_image = True
+    else:
+        has_a_image = False
+        print("A_IMAGE, B_IMAGE, THETA_IMAGE not found")
+
+    if all(col in row.colnames for col in ("AWIN_IMAGE", "BWIN_IMAGE", "THETA_IMAGE")):
+        has_awin_image = True
+    else:
+        has_awin_image = False
+        print("AWIN_IMAGE, BWIN_IMAGE, THETA_IMAGE not found")
+
+    if all(col in row.colnames for col in ("FWHM_IMAGE", "ELLIPTICITY", "THETA_IMAGE")):
+        has_fwhm_image = True
+    else:
+        has_fwhm_image = False
+        print("FWHM_IMAGE, ELLIPTICITY, THETA_IMAGE not found")
 
     # for idx, (id, ax) in enumerate(zip(matched_ids, axes)):
     for idx, (id_, ax) in enumerate(zip(matched_ids, axes)):
@@ -373,43 +404,46 @@ def wcs_check_psf_plot(
         ax.add_patch(ref_rect)
 
         # add RMS (flux second moment) ellipses
-        draw_ellipse(
-            ax,
-            x_cen=float(sci_shifted[0]),
-            y_cen=float(sci_shifted[1]),
-            a_image=float(row["A_IMAGE"]),
-            b_image=float(row["B_IMAGE"]),
-            theta_image=float(row["THETA_IMAGE"]),
-            edgecolor="yellow",
-            linewidth=1.5,
-            label="RMS Ellipse (A_IMAGE)" if idx == ellipse_legend_idx else None,  # legend once
-        )
+        if has_a_image:
+            draw_ellipse(
+                ax,
+                x_cen=float(sci_shifted[0]),
+                y_cen=float(sci_shifted[1]),
+                a_image=float(row["A_IMAGE"]),
+                b_image=float(row["B_IMAGE"]),
+                theta_image=float(row["THETA_IMAGE"]),
+                edgecolor="yellow",
+                linewidth=1.5,
+                label="RMS Ellipse (A_IMAGE)" if idx == ellipse_legend_idx else None,  # legend once
+            )
 
         # add windowed (2" gaussian) RMS ellipses
-        draw_ellipse(
-            ax,
-            x_cen=float(sci_shifted[0]),
-            y_cen=float(sci_shifted[1]),
-            a_image=float(row["AWIN_IMAGE"]),
-            b_image=float(row["BWIN_IMAGE"]),
-            theta_image=float(row["THETA_IMAGE"]),
-            edgecolor="orange",
-            linewidth=1.5,
-            label="Windowed Ellipse (AWIN_IMAGE)" if idx == ellipse_legend_idx else None,  # legend once
-        )
+        if has_awin_image:
+            draw_ellipse(
+                ax,
+                x_cen=float(sci_shifted[0]),
+                y_cen=float(sci_shifted[1]),
+                a_image=float(row["AWIN_IMAGE"]),
+                b_image=float(row["BWIN_IMAGE"]),
+                theta_image=float(row["THETA_IMAGE"]),
+                edgecolor="orange",
+                linewidth=1.5,
+                label="Windowed Ellipse (AWIN_IMAGE)" if idx == ellipse_legend_idx else None,  # legend once
+            )
 
         # add FWHM ellipses
-        draw_ellipse(
-            ax,
-            x_cen=float(sci_shifted[0]),
-            y_cen=float(sci_shifted[1]),
-            a_image=float(row["FWHM_IMAGE"]) / 2,
-            b_image=float(row["FWHM_IMAGE"] * (1 - row["ELLIPTICITY"])) / 2,
-            theta_image=float(row["THETA_IMAGE"]),
-            edgecolor="green",
-            linewidth=1.5,
-            label="FWHM Ellipse" if idx == ellipse_legend_idx else None,  # legend once
-        )
+        if has_fwhm_image:
+            draw_ellipse(
+                ax,
+                x_cen=float(sci_shifted[0]),
+                y_cen=float(sci_shifted[1]),
+                a_image=float(row["FWHM_IMAGE"]) / 2,
+                b_image=float(row["FWHM_IMAGE"] * (1 - row["ELLIPTICITY"])) / 2,
+                theta_image=float(row["THETA_IMAGE"]),
+                edgecolor="green",
+                linewidth=1.5,
+                label="FWHM Ellipse" if idx == ellipse_legend_idx else None,  # legend once
+            )
 
         # add matched id as title
         ax.set_title(f"matched id: {id_}", fontsize=8)
