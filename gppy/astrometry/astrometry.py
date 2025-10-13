@@ -31,6 +31,7 @@ from .utils import (
     polygon_info_header,
     get_fov_quad,
     strip_wcs,
+    read_text_header,
 )
 from .evaluation import evaluate_single_wcs, evaluate_joint_wcs
 
@@ -241,7 +242,6 @@ class Astrometry(BaseSetup):
                 if evaluate_prep_sol:
                     self.evaluate_solution(suffix="prepwcs", use_threading=use_threading, export_eval_cards=True)
                 self.logger.warning(e)
-                raise e  # solve-field incomplete yet
                 self.run_solve_field(self.soft_links_to_input_images, self.solved_images)
                 if evaluate_prep_sol:
                     self.evaluate_solution(suffix="solvefieldwcs", use_threading=use_threading, export_eval_cards=True)
@@ -398,16 +398,18 @@ class Astrometry(BaseSetup):
                 if os.path.exists(swap_ext(slink, ".solved")):
                     self.logger.info(f"Solve-field already run: {swap_ext(slink, '.solved')}. Skipping...")
                     continue
-                external.solve_field(
+                wcs_file = external.solve_field(
                     input_catalog=slink,
                     # dump_dir=self.path_astrometry,
                     pixscale=pixscale,
                     overwrite=overwrite,
                 )
                 self.logger.info(f"Completed solve-field [{i+1}/{len(input_images)}]")
-                self.logger.debug(f"Solve-field input: {slink}, output: {sfile}")
+                self.logger.debug(f"Solve-field input: {slink}, output: {wcs_file}")
 
-        elif input_images:
+                self.images_info[i].sip_wcs = wcs_file
+
+        elif input_images:  # this is deprecated. just for code reuse.
             assert len(input_images) == len(output_images)
             for i, (slink, sfile, pixscale) in enumerate(zip(input_images, output_images, self.path.pixscale)):
                 if os.path.exists(swap_ext(slink, ".solved")):
@@ -857,7 +859,8 @@ class ImageInfo:
     pixscale: float  # Pixel scale [arcsec/pix]
 
     # WCS solution
-    head: Optional[fits.Header] = field(default=None)
+    head: Optional[str] = field(default=None)
+    sip_wcs: Optional[str] = field(default=None)
 
     # FOV polygon
     fov_ra: list = field(default=None)
@@ -1101,13 +1104,17 @@ class ImageInfo:
     @property
     def wcs(self) -> WCS:
         """Updated every time run_scamp is completed"""
-        if not self.head:
-            # raise PipelineError("No self.head in ImageInfo")
-            print("[WARNING] No self.head in ImageInfo. Using coarse_wcs")
-            return self.coarse_wcs
+        if self.head:
 
-        wcs_header = read_scamp_header(self.head)
-        return WCS(wcs_header)
+            wcs_header = read_scamp_header(self.head)
+            return WCS(wcs_header)
+
+        if self.sip_wcs:
+            return WCS(read_text_header(self.sip_wcs))
+
+        # raise PipelineError("No self.head in ImageInfo")
+        print("[WARNING] No self.head in ImageInfo. Using coarse_wcs")
+        return self.coarse_wcs
 
     @property
     def seeing(self) -> float:

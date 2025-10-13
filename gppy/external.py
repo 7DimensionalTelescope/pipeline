@@ -208,6 +208,8 @@ def solve_field(
         f.write(solveout)
     if not os.path.exists(swap_ext(soft_link, ".solved")):
         raise FileNotFoundError(f"Solve-field failed: {swap_ext(soft_link, '.solved')} not found")
+    if input_catalog:
+        return swap_ext(soft_link, ".wcs")
     return output_image
 
 
