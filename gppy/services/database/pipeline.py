@@ -11,97 +11,82 @@ import pandas as pd
 from .table import PipelineData
 from .const import DB_PARAMS
 from .utils import generate_id
+from .base import BaseDatabase, DatabaseError
 
 
-class ProcessDBError(Exception):
+class PipelineDBError(DatabaseError):
     pass
 
 
-class ProcessDB:
+class PipelineDB(BaseDatabase):
     """Database class for managing pipeline process data"""
 
-    _connection = True
     def __init__(self, db_params: Optional[Dict[str, Any]] = None):
         """Initialize with database parameters"""
-        self.db_params = db_params or DB_PARAMS
-
-    @contextmanager
-    def get_connection(self):
-        """Context manager for database connections"""
-        conn = None
-        try:
-            if self._connection:
-                conn = psycopg.connect(**self.db_params)
-                yield conn
-            else:
-                return None
-        except Exception as e:
-            self._connection = False
-            return None
-        finally:
-            if conn:
-                conn.close()
+        super().__init__(db_params)
 
     # ==================== PIPELINE DATA MANAGEMENT ====================
 
     def create_pipeline_data(self, pipeline_data: PipelineData) -> int:
         """Create a new pipeline data record or update existing one"""
-        try:
-            with self.get_connection() as conn:
-                # Check if pipeline data already exists
-                existing_pipeline = self._find_existing_pipeline_record(
-                    pipeline_data.run_date, pipeline_data.data_type, pipeline_data.unit, pipeline_data.config_file
-                )
 
-                if existing_pipeline:
-                    # Update existing record
-                    pipeline_id = existing_pipeline
-                    self.update_pipeline_data(pipeline_id, **pipeline_data.to_dict())
-                    return pipeline_id
-                else:
-                    # Create new record
-                    # Prepare parameters
-                    params = pipeline_data.to_dict()
+        with self.get_connection() as conn:
 
-                    # Map fields to database columns and convert to JSON
-                    if "run_date" in params:
-                        params["date"] = params.pop("run_date")
-                    if "bias" in params:
-                        params["bias"] = params.pop("bias")
-                    if "dark" in params:
-                        params["dark"] = json.dumps(params.pop("dark") or [])
-                    if "flat" in params:
-                        params["flat"] = json.dumps(params.pop("flat") or [])
+            # Check if pipeline data already exists
+            existing_pipeline = self._find_existing_pipeline_record(
+                pipeline_data.run_date,
+                pipeline_data.data_type,
+                pipeline_data.unit,
+                pipeline_data.obj,
+                pipeline_data.filt,
+                pipeline_data.config_file,
+            )
 
-                    # Build query dynamically
-                    columns = list(params.keys())
-                    placeholders = [f"%({col})s" for col in columns]
+            if existing_pipeline:
+                # Update existing record
+                pipeline_id = existing_pipeline
+                self.update_pipeline_data(pipeline_id, **pipeline_data.to_dict())
+                return pipeline_id
+            else:
+                # Create new record
+                # Prepare parameters
+                params = pipeline_data.to_dict()
 
-                    # Add timestamp columns
-                    columns.append("created_at")
-                    columns.append("updated_at")
-                    placeholders.append("CURRENT_TIMESTAMP")
-                    placeholders.append("CURRENT_TIMESTAMP")
+                # Map fields to database columns and convert to JSON
+                if "run_date" in params:
+                    params["date"] = params.pop("run_date")
+                if "bias" in params:
+                    params["bias"] = params.pop("bias")
+                if "dark" in params:
+                    params["dark"] = json.dumps(params.pop("dark") or [])
+                if "flat" in params:
+                    params["flat"] = json.dumps(params.pop("flat") or [])
 
-                    query = f"""
-                        INSERT INTO pipeline_process 
-                        ({', '.join(columns)})
-                        VALUES ({', '.join(placeholders)})
-                        RETURNING id;
-                    """
+                # Build query dynamically
+                columns = list(params.keys())
+                placeholders = [f"%({col})s" for col in columns]
 
-                    with conn.cursor() as cur:
-                        cur.execute(query, params)
-                        result = cur.fetchone()
-                        conn.commit()
+                # Add timestamp columns
+                columns.append("created_at")
+                columns.append("updated_at")
+                placeholders.append("CURRENT_TIMESTAMP")
+                placeholders.append("CURRENT_TIMESTAMP")
 
-                        if result:
-                            return result[0]
-                        else:
-                            raise ProcessDBError("Failed to get ID of created record")
+                query = f"""
+                    INSERT INTO pipeline_process 
+                    ({', '.join(columns)})
+                    VALUES ({', '.join(placeholders)})
+                    RETURNING id;
+                """
 
-        except Exception as e:
-            raise ProcessDBError(f"Failed to create pipeline data: {e}")
+                with conn.cursor() as cur:
+                    cur.execute(query, params)
+                    result = cur.fetchone()
+                    conn.commit()
+                    if result:
+                        return result[0]
+                    else:
+                        raise PipelineDBError("Failed to get ID of created record")
 
     def read_pipeline_data(
         self,
@@ -111,13 +96,15 @@ class ProcessDB:
         data_type: Optional[str] = None,
         unit: Optional[str] = None,
         status: Optional[str] = None,
+        obj: Optional[str] = None,
+        filt: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> Union[Optional[PipelineData], List[PipelineData]]:
         """Read pipeline data records with optional filters"""
         try:
             with self.get_connection() as conn:
-                # Build WHERE clause
+                # Build WHERE clause manually to handle run_date -> date mapping
                 where_clauses = []
                 params = {}
 
@@ -131,13 +118,35 @@ class ProcessDB:
 
                 if run_date:
                     # Handle date comparison more robustly
-                    # Use a more flexible date comparison that handles different formats
-                    where_clauses.append("date::date = %(run_date)s::date")
-                    params["run_date"] = run_date
+                    if isinstance(run_date, str):
+                        try:
+                            from datetime import datetime
+
+                            if len(run_date) == 10 and run_date.count("-") == 2:
+                                parsed_date = datetime.strptime(run_date, "%Y-%m-%d").date()
+                                where_clauses.append("date = %(run_date)s")
+                                params["run_date"] = parsed_date
+                            else:
+                                where_clauses.append("date::text = %(run_date)s")
+                                params["run_date"] = run_date
+                        except ValueError:
+                            where_clauses.append("date::text = %(run_date)s")
+                            params["run_date"] = run_date
+                    else:
+                        where_clauses.append("date = %(run_date)s")
+                        params["run_date"] = run_date
 
                 if data_type:
                     where_clauses.append("data_type = %(data_type)s")
                     params["data_type"] = data_type
+
+                if obj:
+                    where_clauses.append("obj = %(obj)s")
+                    params["obj"] = obj
+
+                if filt:
+                    where_clauses.append("filt = %(filt)s")
+                    params["filt"] = filt
 
                 if unit:
                     where_clauses.append("unit = %(unit)s")
@@ -164,39 +173,39 @@ class ProcessDB:
                 # If specific ID is requested, return single record
                 if pipeline_id is not None:
                     query += " LIMIT 1"
-                    with conn.cursor() as cur:
-                        cur.execute(query, params)
-                        row = cur.fetchone()
+                    row = (
+                        self._execute_query(conn, query, params)[0]
+                        if self._execute_query(conn, query, params)
+                        else None
+                    )
 
-                        if not row:
-                            return None
+                    if not row:
+                        return None
 
-                        # Create PipelineData object from row
-                        pipeline_data = PipelineData.from_row(row)
-                        return pipeline_data
+                    # Create PipelineData object from row
+                    pipeline_data = PipelineData.from_row(row)
+                    return pipeline_data
                 else:
                     # Return list of records
                     query += " ORDER BY date DESC, created_at DESC LIMIT %(limit)s OFFSET %(offset)s"
                     params["limit"] = limit
                     params["offset"] = offset
 
-                    with conn.cursor() as cur:
-                        cur.execute(query, params)
-                        rows = cur.fetchall()
+                    rows = self._execute_query(conn, query, params)
 
-                        # Convert to PipelineData objects using from_row
-                        result = [PipelineData.from_row(row) for row in rows]
-                        return result
+                    # Convert to PipelineData objects using from_row
+                    result = [PipelineData.from_row(row) for row in rows]
+                    return result
 
         except Exception as e:
-            raise ProcessDBError(f"Failed to read pipeline data: {e}")
+            raise PipelineDBError(f"Failed to read pipeline data: {e}")
 
     def update_pipeline_data(self, pipeline_id: int, **kwargs) -> bool:
         """Update pipeline data record"""
         try:
             with self.get_connection() as conn:
                 if not kwargs:
-                    raise ProcessDBError("No fields to update")
+                    raise PipelineDBError("No fields to update")
 
                 # Build SET clause
                 set_clauses = []
@@ -205,13 +214,13 @@ class ProcessDB:
                 for key, value in kwargs.items():
                     # Map Python field names to database column names
                     if key == "bias":
-                        set_clauses.append("bias_exists = %(bias)s")
+                        set_clauses.append("bias = %(bias)s")
                         params["bias"] = value
                     elif key == "dark":
-                        set_clauses.append("dark_filters = %(dark)s")
+                        set_clauses.append("dark = %(dark)s")
                         params["dark"] = json.dumps(value) if isinstance(value, list) else json.dumps([])
                     elif key == "flat":
-                        set_clauses.append("flat_filters = %(flat)s")
+                        set_clauses.append("flat = %(flat)s")
                         params["flat"] = json.dumps(value) if isinstance(value, list) else json.dumps([])
                     elif key == "run_date":
                         set_clauses.append("date = %(run_date)s")
@@ -235,12 +244,12 @@ class ProcessDB:
                     conn.commit()
 
                     if rows_affected == 0:
-                        raise ProcessDBError(f"No pipeline record found with ID {pipeline_id}")
+                        raise PipelineDBError(f"No pipeline record found with ID {pipeline_id}")
 
                     return True
 
         except Exception as e:
-            raise ProcessDBError(f"Failed to update pipeline data: {e}")
+            raise PipelineDBError(f"Failed to update pipeline data: {e}")
 
     def delete_pipeline_data(self, pipeline_id: int) -> bool:
         """Delete a pipeline data record"""
@@ -254,20 +263,22 @@ class ProcessDB:
                     conn.commit()
 
                     if rows_affected == 0:
-                        raise ProcessDBError(f"No pipeline record found with ID {pipeline_id}")
+                        raise PipelineDBError(f"No pipeline record found with ID {pipeline_id}")
 
                     return True
 
         except Exception as e:
-            raise ProcessDBError(f"Failed to delete pipeline data: {e}")
+            raise PipelineDBError(f"Failed to delete pipeline data: {e}")
 
     def _find_existing_pipeline_record(
-        self, run_date: str, data_type: str, unit: str, config_file: Optional[str] = None
+        self, run_date: str, data_type: str, unit: str, obj: str, filt: str, config_file: Optional[str] = None
     ) -> Optional[int]:
         """Find existing pipeline record by configuration parameters"""
         try:
             # Use the updated read_pipeline_data method with filters
-            pipeline_records = self.read_pipeline_data(run_date=run_date, data_type=data_type, unit=unit, limit=1)
+            pipeline_records = self.read_pipeline_data(
+                data_type=data_type, run_date=run_date, unit=unit, obj=obj, filt=filt, limit=1
+            )
 
             if isinstance(pipeline_records, list) and pipeline_records:
                 # Filter by config_file if specified
@@ -282,7 +293,7 @@ class ProcessDB:
                 return None
 
         except Exception as e:
-            raise ProcessDBError(f"Failed to find existing pipeline record: {e}")
+            raise PipelineDBError(f"Failed to find existing pipeline record: {e}")
 
     def add_warning(self, pipeline_id: int, count: int = 1) -> bool:
         """Add warning count to pipeline data record"""
@@ -300,12 +311,12 @@ class ProcessDB:
                     conn.commit()
 
                     if rows_affected == 0:
-                        raise ProcessDBError(f"No pipeline record found with ID {pipeline_id}")
+                        raise PipelineDBError(f"No pipeline record found with ID {pipeline_id}")
 
                     return True
 
         except Exception as e:
-            raise ProcessDBError(f"Failed to add warning: {e}")
+            raise PipelineDBError(f"Failed to add warning: {e}")
 
     def add_error(self, pipeline_id: int, count: int = 1) -> bool:
         """Add error count to pipeline data record"""
@@ -323,12 +334,12 @@ class ProcessDB:
                     conn.commit()
 
                     if rows_affected == 0:
-                        raise ProcessDBError(f"No pipeline record found with ID {pipeline_id}")
+                        raise PipelineDBError(f"No pipeline record found with ID {pipeline_id}")
 
                     return True
 
         except Exception as e:
-            raise ProcessDBError(f"Failed to add error: {e}")
+            raise PipelineDBError(f"Failed to add error: {e}")
 
     def delete_pipeline_cascade(self, pipeline_id: int) -> bool:
         """Delete pipeline data (QA data should be handled separately)"""
@@ -337,75 +348,20 @@ class ProcessDB:
             return self.delete_pipeline_data(pipeline_id)
 
         except Exception as e:
-            raise ProcessDBError(f"Failed to delete pipeline: {e}")
+            raise PipelineDBError(f"Failed to delete pipeline: {e}")
 
     # ==================== EXPORT OPERATIONS ====================
 
     def export_pipeline_data_to_table(self) -> pd.DataFrame:
         """Export pipeline data to pandas DataFrame"""
-        try:
-            with self.get_connection() as conn:
-                # Get all pipeline data
-                query = """
-                    SELECT 
-                        id, tag_id, date, data_type, obj, filt, unit, status, progress,
-                        bias, dark, flat, warnings, errors, comments,
-                        config_file, log_file, debug_file, comments_file, 
-                        output_combined_frame_id, created_at, updated_at,
-                        filename, param2, param3, param4, param5, param6, param7, param8, param9, param10
-                    FROM pipeline_process
-                    ORDER BY date DESC, created_at DESC
-                """
-
-                with conn.cursor() as cur:
-                    cur.execute(query)
-                    rows = cur.fetchall()
-
-                    if not rows:
-                        print(f"No pipeline data found to export")
-                        return pd.DataFrame()
-
-                    # Get column names
-                    columns = [desc[0] for desc in cur.description]
-
-                    # Create pandas DataFrame
-                    df = pd.DataFrame(rows, columns=columns)
-                    return df
-        except Exception as e:
-            raise ProcessDBError(f"Failed to export pipeline data to table: {e}")
+        return self.export_to_table("pipeline_process", "date DESC, created_at DESC")
 
     def export_pipeline_data_to_csv(self, filename: str) -> bool:
         """Export pipeline data to CSV file"""
-        try:
-            # Get pipeline data using the table function
-            df = self.export_pipeline_data_to_table()
-
-            if df.empty:
-                print(f"No pipeline data found to export")
-                return False
-
-            # Write to CSV file using pandas
-            df.to_csv(filename, index=False)
-
-            print(f"Exported {len(df)} pipeline records to {filename}")
-            return True
-
-        except Exception as e:
-            raise ProcessDBError(f"Failed to export pipeline data: {e}")
+        return self.export_to_csv("pipeline_process", filename, "date DESC, created_at DESC")
 
     # ==================== CLEANUP OPERATIONS ====================
 
     def clear_pipeline_data(self) -> bool:
         """Clear all pipeline data"""
-        try:
-            with self.get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("DELETE FROM pipeline_process")
-                    pipeline_deleted = cur.rowcount
-                    conn.commit()
-
-                    print(f"Cleared {pipeline_deleted} pipeline records")
-                    return True
-
-        except Exception as e:
-            raise ProcessDBError(f"Failed to clear pipeline data: {e}")
+        return self.clear_table("pipeline_process")

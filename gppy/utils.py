@@ -80,7 +80,7 @@ def clean_up_factory():
     clean_up_folder(FACTORY_DIR)
 
 
-def clean_up_sciproduct(root_dir: str | Path, suffixes=(".log", "_cat.fits", ".png")) -> None:
+def clean_up_sciproduct(root_dir: str | Path, suffixes=(".log", "_cat.fits", "jpg", ".png")) -> None:
     root = Path(root_dir)
     for path in root.rglob("*"):
         if path.is_file() and any(path.name.endswith(s) for s in suffixes):

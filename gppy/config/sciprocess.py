@@ -16,7 +16,7 @@ class SciProcConfiguration(BaseConfig):
         input: list[str] | str | dict = None,
         logger=None,
         write=True,  # False for PhotometrySingle
-        overwrite=False,
+        clear_dirs=False,  # clear factory_dir and output_dir
         verbose=True,
         **kwargs,
     ):
@@ -32,7 +32,7 @@ class SciProcConfiguration(BaseConfig):
             self.logger.info(f"Writing configuration to file: {os.path.basename(self.config_file)}")
             self.logger.debug(f"Full path to the configuration file: {self.config_file}")
 
-        if overwrite:
+        if clear_dirs:
             self.logger.info("Overwriting factory_dir first")
             clean_up_folder(self.path.factory_dir)
             clean_up_sciproduct(self.path.output_dir)
@@ -63,6 +63,7 @@ class SciProcConfiguration(BaseConfig):
     def base_config(
         cls, input_images=None, working_dir=None, config_file=None, write=True, logger=None, verbose=True, **kwargs
     ):
+        """Base configuration for user-input. Mind config.settings.is_pipeline is set to False"""
         # self = cls.__new__(cls)
 
         input_images = [os.path.abspath(image) for image in atleast_1d(input_images)]
@@ -156,7 +157,8 @@ class SciProcConfiguration(BaseConfig):
         elif isinstance(input, str | dict):  # path of a config file
             config_source = input
             super().__init__(config_source=config_source, write=self.write, **kwargs)
-            self.path = self._set_pathhandler_from_config()
+            # working_dir = os.path.dirname(config_source) if isinstance(config_source, str) else None
+            self.path = self._set_pathhandler_from_config()  # working_dir=working_dir)
             self.config.logging.file = self.path.sciproc_output_log
             self.logger = self._setup_logger(
                 logger,
@@ -175,18 +177,18 @@ class SciProcConfiguration(BaseConfig):
         self.config_file = self.path.sciproc_output_yml  # used by write_config
         return
 
-    def _set_pathhandler_from_config(self):
+    def _set_pathhandler_from_config(self, working_dir=None):
         # mind the check order
         if hasattr(self.config, "input"):
             if hasattr(self.config.input, "calibrated_images") and self.config.input.calibrated_images:
-                return PathHandler(self.config.input.calibrated_images)
+                return PathHandler(self.config.input.calibrated_images, working_dir=working_dir)
 
             if hasattr(self.config.input, "processed_dir") and self.config.input.processed_dir:
                 f = os.path.join(self.config.input.processed_dir, "**.fits")
-                return PathHandler(sorted(glob.glob(f)))
+                return PathHandler(sorted(glob.glob(f)), working_dir=working_dir)
 
             if hasattr(self.config.input, "stacked_image") and self.config.input.stacked_image:
-                return PathHandler(self.config.input.stacked_image)
+                return PathHandler(self.config.input.stacked_image, working_dir=working_dir)
 
         raise ValueError("Configuration does not contain valid input files or directories to create PathHandler.")
 

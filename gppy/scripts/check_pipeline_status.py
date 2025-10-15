@@ -33,9 +33,9 @@ def get_all_pipeline_records():
                         unit,
                         status,
                         progress,
-                        bias_exists,
-                        dark_filters,
-                        flat_filters,
+                        bias,
+                        dark,
+                        flat,
                         warnings,
                         errors,
                         comments,
@@ -70,7 +70,7 @@ def save_to_ecsv(columns, records, output_file):
                 value = record[i]
 
                 # Handle JSON fields
-                if col in ["dark_filters", "flat_filters"] and value:
+                if col in ["dark", "flat"] and value:
                     try:
                         import json
 
@@ -79,7 +79,7 @@ def save_to_ecsv(columns, records, output_file):
                         value = str(value)
 
                 # Handle boolean fields
-                elif col == "bias_exists":
+                elif col == "bias":
                     value = bool(value) if value is not None else False
 
                 # Handle numeric fields

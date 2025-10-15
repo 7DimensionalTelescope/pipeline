@@ -6,12 +6,10 @@ from gppy.preprocess import Preprocess
 import argparse
 import sys
 import signal
-import glob
-
-import gppy
+import json
 
 
-def run_preprocess(config, device_id=None, make_plots=True, overwrite=False, **kwargs):
+def run_preprocess(config, device_id=None, make_plots=True, overwrite=False, preprocess_kwargs: str = None):
     """
     Generate master calibration frames for a specific observation set.
 
@@ -20,8 +18,13 @@ def run_preprocess(config, device_id=None, make_plots=True, overwrite=False, **k
     """
     try:
         config = PreprocConfiguration.from_config(config)
-        prep = Preprocess(config, use_gpu=True, overwrite=False, master_frame_only=False)
-        prep.run(device_id=device_id, make_plots=make_plots)
+
+        kwargs = {}
+        if preprocess_kwargs:
+            kwargs = json.loads(preprocess_kwargs)
+
+        prep = Preprocess(config, use_gpu=True, overwrite=overwrite, master_frame_only=False, **kwargs)
+        prep.run(device_id=device_id, make_plots=make_plots, **kwargs)
         del config, prep
     except Exception as e:
         raise e
@@ -46,6 +49,9 @@ if __name__ == "__main__":
     parser.add_argument("-device_id", type=str, help="Device to use: 'CPU' or GPU device index (e.g., 0, 1)")
     parser.add_argument("-make_plots", action="store_true", help="Generate diagnostic plots during preprocessing")
     parser.add_argument("-overwrite", action="store_true", help="Overwrite existing results")
+    parser.add_argument(
+        "--preprocess_kwargs", type=str, default=None, help="JSON dict of kwargs forwarded to Preprocess.__init__"
+    )
     args = parser.parse_args()
 
     try:
@@ -61,6 +67,7 @@ if __name__ == "__main__":
             device_id=device_id,
             make_plots=args.make_plots,
             overwrite=args.overwrite,
+            preprocess_kwargs=args.preprocess_kwargs,  # dict encoded as json string
         )
     except Exception as e:
         print(f"\nError: {e}")

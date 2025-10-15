@@ -3,6 +3,8 @@ from typing import List, Dict, Optional, Union, Any
 from dataclasses import dataclass, asdict
 import json
 from .utils import generate_id
+from astropy.io.fits.header import Header
+
 
 @dataclass
 class PipelineData:
@@ -19,7 +21,7 @@ class PipelineData:
     comments: int
 
     # Optional fields
-    bias: Optional[bool] = None
+    bias: Optional[bool] = False
     dark: Optional[List[str]] = None
     flat: Optional[List[str]] = None
 
@@ -54,7 +56,18 @@ class PipelineData:
     def __post_init__(self):
         """Convert date string to date object if needed"""
         if isinstance(self.run_date, str):
-            self.run_date = date.fromisoformat(self.run_date)
+            try:
+                from datetime import datetime
+
+                # Handle YYYY-MM-DD format (most common from config names)
+                if len(self.run_date) == 10 and self.run_date.count("-") == 2:
+                    self.run_date = datetime.strptime(self.run_date, "%Y-%m-%d").date()
+                else:
+                    # Try ISO format for other cases
+                    self.run_date = date.fromisoformat(self.run_date)
+            except ValueError:
+                # If date parsing fails, keep as string
+                pass
 
         # Ensure filter lists are lists
         if not isinstance(self.dark, list):
@@ -129,6 +142,26 @@ class PipelineData:
                 run_date=run_date,
                 data_type=data_type,
                 unit=unit_name,
+                status="pending",
+                progress=0,
+                warnings=0,
+                errors=0,
+                comments=0,
+                config_file=config.name,
+                log_file=config.logging.file,
+                debug_file=config.logging.file.replace(".log", "_debug.log"),
+                comments_file=config.logging.file.replace(".log", "_comments.txt"),
+                output_combined_frame_id=None,
+            )
+        elif data_type == "science":
+            obj, filt, run_date = config.name.split("_")
+            pipeline_data = cls(
+                tag_id=process_id,
+                run_date=run_date,
+                data_type=data_type,
+                obj=obj,
+                filt=filt,
+                unit=None,
                 status="pending",
                 progress=0,
                 warnings=0,
@@ -252,6 +285,12 @@ class QAData:
 
     @classmethod
     def from_header(cls, header, imagetyp, qa_type, pipeline_id, filename):
+
+        if not isinstance(header, Header):
+            from astropy.io import fits
+
+            header = fits.getheader(header)
+
         qa_id = generate_id()
 
         qa_data = cls(
@@ -262,14 +301,13 @@ class QAData:
         )
 
         if qa_data.imagetyp == "masterframe":
-            qa_data.exptime = header["EXPTIME"]
-            qa_data.filter = header["FILTER"]
-            qa_data.clipmed = header["CLIPMED"]
-            qa_data.clipstd = header["CLIPSTD"]
-            qa_data.clipmin = header["CLIPMIN"]
-            qa_data.clipmax = header["CLIPMAX"]
+            keywords = ["EXPTIME", "FILTER", "CLIPMED", "CLIPSTD", "CLIPMIN", "CLIPMAX", "SANITY"]
+
+            for keyword in keywords:
+                if keyword in header:
+                    setattr(qa_data, keyword.lower(), header[keyword])
+
             qa_data.filename = filename
-            qa_data.sanity = header["SANITY"]
             if qa_data.qa_type == "dark":
                 qa_data.nhotpix = header["NHOTPIX"]
                 qa_data.ntotpix = header["NTOTPIX"]
@@ -279,36 +317,44 @@ class QAData:
                 qa_data.edgevar = header["EDGEVAR"]
                 qa_data.trimmed = header["TRIMMED"]
 
+        elif qa_data.imagetyp == "science":
+            keywords = [
+                "FILTER",
+                "SEEING",
+                "ELLIPTICITY",
+                "ROTANG1",
+                "ASTROMETRIC_OFFSET",
+                "SKYVAL",
+                "SKYSIG",
+                "ZP_AUTO",
+                "EZP_AUTO",
+                "UL5_5",
+                "STDNUMB",
+                "EXPTIME",
+                "SANITY",
+            ]
+
+            for keyword in keywords:
+                if keyword in header:
+                    setattr(qa_data, keyword.lower(), header[keyword])
+
+            qa_data.filename = filename
+
         return qa_data
-    
+
     @classmethod
     def check_header(cls, header, qa_type):
-        if "EXPTIME" not in header:
-            return False
-        if "FILTER" not in header:
-            return False
-        if "CLIPMED" not in header:
-            return False
-        if "CLIPSTD" not in header:
-            return False
-        if "CLIPMIN" not in header:
-            return False
-        if "CLIPMAX" not in header:
-            return False
-        if "SANITY" not in header:
-            return False
-        if qa_type == "dark":
-            if "NHOTPIX" not in header:
+        if qa_type.startswith("bias") or qa_type.startswith("dark") or qa_type.startswith("flat"):
+            keywords = ["EXPTIME", "FILTER", "CLIPMED", "CLIPSTD", "CLIPMIN", "CLIPMAX", "SANITY"]
+            if qa_type == "dark":
+                keywords.extend(["NHOTPIX", "NTOTPIX", "UNIFORM"])
+            elif qa_type == "flat":
+                keywords.extend(["SIGMEAN", "EDGEVAR", "TRIMMED"])
+        elif qa_type == "science":
+            keywords = ["FILTER"]
+
+        for keyword in keywords:
+            if keyword not in header:
                 return False
-            if "NTOTPIX" not in header:
-                return False
-            if "UNIFORM" not in header:
-                return False
-        if qa_type == "flat":
-            if "SIGMEAN" not in header:
-                return False
-            if "EDGEVAR" not in header:
-                return False
-            if "TRIMMED" not in header:
-                return False
+
         return True

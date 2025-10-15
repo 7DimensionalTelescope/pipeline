@@ -1,3 +1,4 @@
+import json
 from collections import deque
 from ..const import SCRIPT_DIR
 
@@ -42,6 +43,7 @@ class Scheduler:
     """
 
     def __init__(self, dependent_configs={}, independent_configs=[], preprocess_only=False, **kwargs):
+        self.preprocess_kwargs = kwargs.get("preprocess_kwargs", {})
 
         # Initialize master queue and status tracking
         masters = list(dependent_configs.keys())
@@ -111,21 +113,22 @@ class Scheduler:
         if task_type == "Masterframe":
             cmd = [
                 f"{SCRIPT_DIR}/bin/preprocess",
-                "-config",
-                config,
-                "-device",
-                str(int(self.device_id % self.max_devices)),
+                "-config", config,
+                "-device", str(int(self.device_id % self.max_devices)),
                 "-make_plots",
-            ]
+            ]  # fmt: skip
             if self.overwrite:
                 cmd.append("-overwrite")
+
+            if self.preprocess_kwargs:
+                cmd.extend(["--preprocess_kwargs", json.dumps(self.preprocess_kwargs)])
+
             self.device_id += 1
         else:  # ScienceImage
             cmd = [
                 f"{SCRIPT_DIR}/bin/data_reduction",
-                "-config",
-                config,
-            ]
+                "-config", config,
+            ]  # fmt: skip
             # Add processes as individual arguments
             cmd.append("-processes")
             cmd.extend(self.processes)

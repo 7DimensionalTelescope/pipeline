@@ -20,6 +20,7 @@ def solve_field(
     xcol="X_IMAGE",  # column name for X (pixels)
     ycol="Y_IMAGE",  # column name for Y (pixels)
     sortcol="MAG_AUTO",  # optional column to sort by
+    timeout=60,  # subprocess timeout in seconds
 ):
     """
     Runs Astrometry.net's `solve-field` to compute the World Coordinate System (WCS) for an input FITS image.
@@ -186,30 +187,31 @@ def solve_field(
     if get_command:
         return " ".join(solvecom)
 
-    # # Use Popen for real-time output
-    # process = subprocess.Popen(
-    #     solvecom,
-    #     cwd=working_dir,
-    #     stdout=subprocess.PIPE,
-    #     stderr=subprocess.STDOUT,
-    #     text=True,
-    # )
-
-    # # Also print messages to shell: should be captured by logger
-    # for line in process.stdout:
-    #     print(line, end="")
-    # process.wait()  # Ensure the process completes
-
     # solvecom = f"{' '.join(solvecom)} > {log_file} 2>&1"
     # subprocess.run(solvecom, cwd=working_dir, shell=True)
 
     log_file = swap_ext(add_suffix(output_image, "solvefield"), "log")
     solvecom = " ".join(solvecom)
-    solveout = subprocess.getoutput(solvecom)
+    # solveout = subprocess.getoutput(solvecom)
+    process = subprocess.Popen(
+        solvecom,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,  # merge stdout and stderr
+        text=True,
+        bufsize=1,
+    )
+
+    # real-time output
     with open(log_file, "w") as f:
-        f.write(solvecom)
-        f.write("\n" * 3)
-        f.write(solveout)
+        f.write(solvecom + "\n" * 3)
+        f.flush()
+        for line in process.stdout:
+            f.write(line)
+            f.flush()
+
+    process.wait(timeout=timeout)
+
     if not os.path.exists(swap_ext(soft_link, ".solved")):
         raise FileNotFoundError(f"Solve-field failed: {swap_ext(soft_link, '.solved')} not found")
     if input_catalog:

@@ -5,18 +5,18 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"), override=True
 
 
 # Bashrc-defined system paths
-RAWDATA_DIR = os.environ.get("RAWDATA_DIR")  # , "/lyman/data1/obsdata/")
-FACTORY_DIR = os.environ.get("FACTORY_DIR")
-MASTER_FRAME_DIR = os.environ.get("MASTER_FRAME_DIR")
-PROCESSED_DIR = os.environ.get("PROCESSED_DIR")
-STACKED_DIR = os.environ.get("STACKED_DIR")
+RAWDATA_DIR = os.environ.get("RAWDATA_DIR") or "/lyman/data1/obsdata"  # , "/lyman/data1/obsdata/")
+FACTORY_DIR = os.environ.get("FACTORY_DIR") or "/lyman/data2/factory"
+MASTER_FRAME_DIR = os.environ.get("MASTER_FRAME_DIR") or "/lyman/data2/master_frame"
+PROCESSED_DIR = os.environ.get("PROCESSED_DIR") or "/lyman/data2/processed"
+STACKED_DIR = os.environ.get("STACKED_DIR") or "/lyman/data2/stacked"
 SLACK_TOKEN = os.environ.get("SLACK_TOKEN", None)
-INSTRUM_STATUS_DICT = os.environ.get("INSTRUM_STATUS_DICT")
+INSTRUM_STATUS_DICT = os.environ.get("INSTRUM_STATUS_DICT") or "/home/7dt/7dt_too/backend/data/7dt/multitelescopes.dict"
 
 # Paths to pre-generated data
 ASTRM_REF_DIR = "/lyman/data2/factory/ref_scamp/gaia_dr3_7DT"  #  "/lyman/data1/factory/catalog/gaia_dr3_7DT"
 GAIA_ROOT_DIR = "/lyman/data1/factory/catalog/gaia_source_dr3/healpix_nside64"  # for dynamic refcat generation.
-SCAMP_QUERY_DIR = "/lyman/data1/factory/ref_scamp" 
+SCAMP_QUERY_DIR = "/lyman/data1/factory/ref_scamp"
 PHOT_REF_DIR = "/lyman/data1/factory/ref_cat"  # divided by RIS tiles
 GAIA_REF_DIR = "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile"
 REF_IMAGE_DIR = "/lyman/data1/factory/ref_frame"

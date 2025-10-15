@@ -9,40 +9,21 @@ import pandas as pd
 # Import data classes
 from .table import QAData
 from .const import DB_PARAMS
+from .base import BaseDatabase, DatabaseError
 
 
-class QADBError(Exception):
+class QADBError(DatabaseError):
     pass
 
 
-class QADB:
+class QADB(BaseDatabase):
     """Database class for managing image QA data"""
-
-    _connection = True
 
     def __init__(self, db_params: Optional[Dict[str, Any]] = None):
         """Initialize with database parameters"""
-        self.db_params = db_params or DB_PARAMS
+        super().__init__(db_params)
 
-    @contextmanager
-    def get_connection(self):
-        """Context manager for database connections"""
-        conn = None
-        try:
-            if self._connection:
-                conn = psycopg.connect(**self.db_params)
-                yield conn
-            else:
-                return None
-            yield conn
-        except Exception as e:
-            self._connection = False
-            return None
-        finally:
-            if conn:
-                conn.close()
-
-    def create_qa_data(self, qa_data: QAData) -> int:
+    def create_qa_data(self, qa_data: QAData) -> str:
         """Create a new QA data record or update existing one"""
         try:
             with self.get_connection() as conn:
@@ -52,7 +33,9 @@ class QADB:
                 if existing_qa:
                     # Update existing record
                     qa_id = existing_qa
-                    self.update_qa_data(qa_id, **qa_data.to_dict())
+                    qa_dict = qa_data.to_dict()
+                    qa_dict["qa_id"] = qa_id
+                    self.update_qa_data(**qa_dict)
                     return qa_id
                 else:
                     # Create new record
@@ -73,7 +56,7 @@ class QADB:
                         INSERT INTO pipeline_qa 
                         ({', '.join(columns)})
                         VALUES ({', '.join(placeholders)})
-                        RETURNING id;
+                        RETURNING qa_id;
                     """
 
                     with conn.cursor() as cur:
@@ -84,7 +67,7 @@ class QADB:
                         if result:
                             return result[0]
                         else:
-                            raise QADBError("Failed to get ID of created QA record")
+                            raise QADBError("Failed to get qa_id of created QA record")
 
         except Exception as e:
             raise QADBError(f"Failed to create QA data: {e}")
@@ -92,9 +75,9 @@ class QADB:
     def read_qa_data(
         self,
         qa_id: Optional[str] = None,
-        pipeline_id_id: Optional[int] = None,
+        pipeline_id: Optional[int] = None,
         qa_type: Optional[str] = None,
-        filter_name: Optional[str] = None,
+        filt: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> Union[Optional[QAData], List[QAData]]:
@@ -109,17 +92,17 @@ class QADB:
                     where_clauses.append("qa_id = %(qa_id)s")
                     params["qa_id"] = qa_id
 
-                if pipeline_id_id is not None:
-                    where_clauses.append("pipeline_id_id = %(pipeline_id_id)s")
-                    params["pipeline_id_id"] = pipeline_id_id
+                if pipeline_id is not None:
+                    where_clauses.append("pipeline_id = %(pipeline_id)s")
+                    params["pipeline_id"] = pipeline_id
 
                 if qa_type:
                     where_clauses.append("qa_type = %(qa_type)s")
                     params["qa_type"] = qa_type
 
-                if filter_name:
-                    where_clauses.append("filter = %(filter_name)s")
-                    params["filter"] = filter_name
+                if filt:
+                    where_clauses.append("filter = %(filt)s")
+                    params["filt"] = filt
 
                 # Build query
                 query = """
@@ -247,9 +230,9 @@ class QADB:
                     where_clauses.append("qa_type = %(qa_type)s")
                     params["qa_type"] = qa_data.qa_type
 
-                if qa_data.filter_name:
-                    where_clauses.append("filter = %(filter_name)s")
-                    params["filter"] = qa_data.filter_name
+                if qa_data.filter:
+                    where_clauses.append("filter = %(filter)s")
+                    params["filter"] = qa_data.filter
 
                 if qa_data.imagetyp:
                     where_clauses.append("imagetyp = %(imagetyp)s")
@@ -284,7 +267,7 @@ class QADB:
     def get_qa_summary_for_pipeline(self, pipeline_id: int) -> Dict[str, Any]:
         """Get QA summary statistics for a specific pipeline"""
         try:
-            qa_data = self.read_qa_data(pipeline_id_id=pipeline_id)
+            qa_data = self.read_qa_data(pipeline_id=pipeline_id)
             if not isinstance(qa_data, list):
                 qa_data = [qa_data] if qa_data else []
 
@@ -330,67 +313,12 @@ class QADB:
 
     def export_qa_data_to_table(self) -> pd.DataFrame:
         """Export QA data to pandas DataFrame"""
-        try:
-            with self.get_connection() as conn:
-                # Get all QA data
-                query = """
-                    SELECT 
-                        id, qa_id, pipeline_id_id, qa_type, imagetyp, filter, clipmed, clipstd,
-                        clipmin, clipmax, nhotpix, ntotpix, seeing, ellipticity,
-                        rotang1, astrometric_offset, skyval, skysig, zp_auto, ezp_auto,
-                        ul5_5, stdnumb, created_at, updated_at, pipeline_id_id,
-                        uniform, sigmean, edgevar, trimmed, exptime, qa6, qa7, qa8, filename, sanity
-                    FROM pipeline_qa
-                    ORDER BY created_at DESC
-                """
-
-                with conn.cursor() as cur:
-                    cur.execute(query)
-                    rows = cur.fetchall()
-
-                    if not rows:
-                        print(f"No QA data found to export")
-                        return pd.DataFrame()
-
-                    # Get column names
-                    columns = [desc[0] for desc in cur.description]
-
-                    # Create pandas DataFrame
-                    df = pd.DataFrame(rows, columns=columns)
-                    return df
-        except Exception as e:
-            raise QADBError(f"Failed to export QA data to table: {e}")
+        return self.export_to_table("pipeline_qa", "created_at DESC")
 
     def export_qa_data_to_csv(self, filename: str) -> bool:
         """Export QA data to CSV file"""
-        try:
-            # Get QA data using the table function
-            df = self.export_qa_data_to_table()
-
-            if df.empty:
-                print(f"No QA data found to export")
-                return False
-
-            # Write to CSV file using pandas
-            df.to_csv(filename, index=False)
-
-            print(f"Exported {len(df)} QA records to {filename}")
-            return True
-
-        except Exception as e:
-            raise QADBError(f"Failed to export QA data: {e}")
+        return self.export_to_csv("pipeline_qa", filename, "created_at DESC")
 
     def clear_qa_data(self) -> bool:
         """Clear all QA data"""
-        try:
-            with self.get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("DELETE FROM pipeline_qa")
-                    qa_deleted = cur.rowcount
-                    conn.commit()
-
-                    print(f"Cleared {qa_deleted} QA records")
-                    return True
-
-        except Exception as e:
-            raise QADBError(f"Failed to clear QA data: {e}")
+        return self.clear_table("pipeline_qa")

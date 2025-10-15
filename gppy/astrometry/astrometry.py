@@ -35,10 +35,13 @@ from .utils import (
 )
 from .evaluation import evaluate_single_wcs, evaluate_joint_wcs
 
+from ..services.database.handler import DatabaseHandler
+from ..services.database.table import QAData
+
 # from .generate_refcat_gaia import get_refcat_gaia
 
 
-class Astrometry(BaseSetup):
+class Astrometry(BaseSetup, DatabaseHandler):
     """A class to handle astrometric solutions for astronomical images.
 
     This class manages the complete astrometric pipeline including plate solving,
@@ -78,6 +81,21 @@ class Astrometry(BaseSetup):
         self.start_time = time.time()
         self.define_paths()
 
+        self.qa_ids = []
+        DatabaseHandler.__init__(self, add_database=self.config.settings.is_pipeline)
+
+        if self.is_connected:
+            self.set_logger(logger)
+            self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
+            self.pipeline_id = self.create_pipeline_data(self.config)
+            if self.pipeline_id is not None:
+                self.update_pipeline_progress(0, "configured")
+                for image in self.input_images:
+                    qa_id = self.create_qa_data("science", image=image, output_file=image)
+                    self.qa_ids.append(qa_id)
+            else:
+                self.logger.warning("Pipeline record creation failed, skipping QA data creation")
+
     @classmethod
     def from_list(cls, images, working_dir=None):
         images = [os.path.abspath(image) for image in sorted(images)]  # this is critical for soft links
@@ -105,6 +123,7 @@ class Astrometry(BaseSetup):
         # use_gpu: bool = False,
         overwrite=False,
         solvefield_args=[],
+        tolerate_unmatch=False,
     ) -> None:
         """Execute the complete astrometry pipeline.
 
@@ -120,6 +139,7 @@ class Astrometry(BaseSetup):
         """
         try:
             self.start_time = time.time()
+
             self.logger.info(f"Start 'Astrometry'")
 
             self.inject_wcs_guess(self.input_images)
@@ -133,6 +153,8 @@ class Astrometry(BaseSetup):
                         raise Exception("force_solve_field")
                     # run initial solve: scamp or solve-field
                     self.run_scamp(prep_cat, scamp_preset="prep", joint=False, overwrite=overwrite)
+                    self.update_pipeline_progress(5, "astrometry-scamp-prep")
+
                     if evaluate_prep_sol:
                         self.evaluate_solution(
                             input_images=image_info.image_path,
@@ -149,6 +171,7 @@ class Astrometry(BaseSetup):
                         prep_cat, image_info, evaluate_prep_sol, use_threading, max_scamp, overwrite=overwrite
                     )
 
+                    self.update_pipeline_progress(10, "astrometry-scamp-main")
                     self.logger.info(f"Scamp iteration completed [{i+1}/{len(self.prep_cats)}] for {prep_cat}")
 
                     if image_info.bad:
@@ -156,13 +179,14 @@ class Astrometry(BaseSetup):
                             f"Unmatched fraction {image_info.rsep_stats.unmatched_fraction} "
                             f"after {max_scamp} iterations for {image_info.image_path}"
                         )
-                        raise Exception(f"Unmatched fraction too high. {image_info.rsep_stats.unmatched_fraction}")
+                        if not tolerate_unmatch:
+                            raise Exception(f"Unmatched fraction too high. {image_info.rsep_stats.unmatched_fraction}")
 
                 except Exception as e:
-                    raise Exception("stop")
                     # if evaluate_prep_sol:
                     #     self.evaluate_solution(suffix="prepwcs", use_threading=use_threading, export_eval_cards=True)
                     self.logger.warning(e)
+                    self.logger.warning(f"Solve-field triggered, better solution not guaranteed for {prep_cat}")
 
                     # self.run_solve_field(input_catalogs=self.prep_cats, output_images=self.solved_images)
                     self.run_solve_field(input_catalogs=prep_cat, output_images=None, solvefield_args=solvefield_args)
@@ -176,9 +200,18 @@ class Astrometry(BaseSetup):
 
             # evaluate main scamp
             self.evaluate_solution(suffix="wcs", isep=True, use_threading=use_threading, scamp_preset="main")
-
+            self.update_pipeline_progress(15, "astrometry-scamp-main-eval")
             # update the input image
             self.update_header()
+            self.update_pipeline_progress(20, "astrometry")
+
+            for image, qa_id in zip(self.input_images, self.qa_ids):
+                qa_data = QAData.from_header(
+                    fits.getheader(image), "science", "science", self.pipeline_id, os.path.basename(image)
+                )
+                qa_dict = qa_data.to_dict()
+                qa_dict["qa_id"] = qa_id
+                qa_id = self.qa_db.update_qa_data(**qa_dict)
 
             self.config.flag.astrometry = True
 
@@ -1051,7 +1084,7 @@ class ImageInfo:
         # Clean invalid values
         for i, (k, v, c) in enumerate(cards):
             if np.isnan(v):
-                self._log(f"WCS statistics contains nan for {k}", level="warning")
+                self._log(f"WCS statistics contains nan for {k}", level="error")
                 cards[i] = (k, None, c)
             elif not isinstance(v, (float, int, str, np.float32, np.int32)):  # sometimes the value can be masked
                 self._log(f"WCS statistics contains type {type(v)} {v} for {k}")
@@ -1136,8 +1169,6 @@ class ImageInfo:
             wcs_header = read_scamp_header(self.head)
             return WCS(wcs_header)
 
-        raise Exception("debug: no head in ImageInfo")
-
         if self.sip_wcs:
             return WCS(read_text_header(self.sip_wcs))
 
@@ -1171,4 +1202,4 @@ class ImageInfo:
     @property
     def bad(self) -> bool:
         """iteration condition"""
-        return self.rsep_stats.unmatched_fraction > 0.5 or self.reference_sep_p95 > 2 * PIXSCALE
+        return self.rsep_stats.unmatched_fraction > 0.9 or self.reference_sep_p95 > 2 * PIXSCALE

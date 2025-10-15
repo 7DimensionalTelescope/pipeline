@@ -1,15 +1,16 @@
 from typing import Optional, Dict, Any, List, Union
 from astropy.io import fits
-from .process import ProcessDB, ProcessDBError
+from .pipeline import PipelineDB, PipelineDBError
 from .qa import QADB, QADBError
 from .table import PipelineData, QAData
 import os
+
 
 class DatabaseHandler:
     """
     High-level database handler that provides a simplified interface
     for database operations used in the preprocessing pipeline.
-    Manages both ProcessDB and QADB operations independently.
+    Manages both PipelineDB and QADB operations independently.
     """
 
     def __init__(self, db_params: Optional[Dict[str, Any]] = None, add_database: bool = True):
@@ -20,7 +21,7 @@ class DatabaseHandler:
             db_params: Database connection parameters
             add_database: Whether to initialize database connection
         """
-        self.process_db = ProcessDB(db_params) if add_database else None
+        self.pipeline_db = PipelineDB(db_params) if add_database else None
         self.qa_db = QADB(db_params) if add_database else None
         self.pipeline_id = None
         self._logger = None
@@ -51,9 +52,9 @@ class DatabaseHandler:
 
     # ==================== PIPELINE MANAGEMENT ====================
 
-    def create_pipeline_record(self, config, raw_groups, overwrite: bool = False) -> Optional[int]:
+    def create_pipeline_data(self, config, raw_groups=None, overwrite: bool = False) -> Optional[int]:
         """
-        Create a pipeline record in the database and return pipeline ID.
+        Create a pipeline data in the database and return pipeline ID.
 
         Args:
             config: Configuration object
@@ -63,17 +64,32 @@ class DatabaseHandler:
         Returns:
             Pipeline ID if successful, None otherwise
         """
-        if self.process_db is None:
+        if self.pipeline_db is None:
             return None
 
         try:
-            run_date, unit_name = config.name.split("_")
+            indicators = config.name.split("_")
+            if len(indicators) == 3:
+                pipe_type = "science"
+                obj, filt, run_date = indicators
+                unit_name = None
+            elif len(indicators) == 2:
+                pipe_type = "masterframe"
+                run_date, unit_name = indicators
+                obj = None
+                filt = None
+                if raw_groups is None:
+                    raise ValueError(f"Raw groups are required for config name: {config.name}")
+            else:
+                raise ValueError(f"Invalid config name: {config.name}")
 
             # Find existing pipeline
-            existing_pipeline_id = self.process_db._find_existing_pipeline_record(
+            existing_pipeline_id = self.pipeline_db._find_existing_pipeline_record(
                 run_date=run_date,
-                data_type="masterframe",
+                data_type=pipe_type,
                 unit=unit_name,
+                obj=obj,
+                filt=filt,
                 config_file=config.config_file if hasattr(config, "config_file") else None,
             )
 
@@ -81,7 +97,7 @@ class DatabaseHandler:
                 self._log_info(f"Found existing pipeline db record (PID: {existing_pipeline_id})")
                 if overwrite:
                     # Use cascade delete to properly handle foreign key constraints
-                    self.process_db.delete_pipeline_cascade(existing_pipeline_id)
+                    self.pipeline_db.delete_pipeline_cascade(existing_pipeline_id)
                     self._log_info(f"Overwriting existing pipeline db record (PID: {existing_pipeline_id})")
                 else:
                     self.pipeline_id = existing_pipeline_id
@@ -89,35 +105,42 @@ class DatabaseHandler:
                     self._log_info(f"Using existing pipeline db record (PID: {existing_pipeline_id})")
                     return self.pipeline_id
 
-            # Extract dark and flat info from raw groups
-            dark_info = set([])
-            flat_info = set([])
+            if pipe_type == "masterframe":
+                # Extract dark and flat info from raw groups
+                dark_info = set([])
+                flat_info = set([])
 
-            from ...path.path import PathHandler
+                from ...path.path import PathHandler
 
-            for i, group in enumerate(raw_groups):
-                try:
-                    group_info = PathHandler.get_group_info(group)
-                    if ":" in group_info:
-                        filt, exptime = group_info.split(":", 1)
-                        filt = filt.strip()
-                        exptime = exptime.strip()
-                        if group[0][1]:
-                            dark_info.add(exptime)
-                        if group[0][2]:
-                            flat_info.add(filt)
-                except Exception as e:
-                    self._log_debug(f"Could not parse group {i} info: {e}")
+                for i, group in enumerate(raw_groups):
+                    try:
+                        group_info = PathHandler.get_group_info(group)
+                        if ":" in group_info:
+                            filt, exptime = group_info.split(":", 1)
+                            filt = filt.strip()
+                            exptime = exptime.strip()
+                            if group[0][1]:
+                                dark_info.add(exptime)
+                            if group[0][2]:
+                                flat_info.add(filt)
+                    except Exception as e:
+                        self._log_debug(f"Could not parse group {i} info: {e}")
 
-            # Create pipeline data
-            pipeline_data = PipelineData.from_config(config, "masterframe")
-            pipeline_data.bias = True if hasattr(config, "bias_input") and config.bias_input else False
-            pipeline_data.dark = list(dark_info)
-            pipeline_data.flat = list(flat_info)
+                # Create pipeline data
+                pipeline_data = PipelineData.from_config(config, "masterframe")
+                pipeline_data.bias = True if hasattr(config, "bias_input") and config.bias_input else False
+                pipeline_data.dark = list(dark_info)
+                pipeline_data.flat = list(flat_info)
 
-            # Create pipeline record
-            self.pipeline_id = self.process_db.create_pipeline_data(pipeline_data)
-            self._log_info(f"Created pipeline record with PID: {self.pipeline_id}")
+                # Create pipeline record
+                self.pipeline_id = self.pipeline_db.create_pipeline_data(pipeline_data)
+                self._log_info(f"Created pipeline record with PID: {self.pipeline_id}")
+            elif pipe_type == "science":
+                pipeline_data = PipelineData.from_config(config, "science")
+                self.pipeline_id = self.pipeline_db.create_pipeline_data(pipeline_data)
+                self._log_info(f"Created pipeline record with PID: {self.pipeline_id}")
+            else:
+                raise ValueError(f"Invalid pipe type: {pipe_type}")
             return self.pipeline_id
 
         except Exception as e:
@@ -136,14 +159,14 @@ class DatabaseHandler:
         Returns:
             True if successful, False otherwise
         """
-        if self.pipeline_id is None or self.process_db is None:
+        if self.pipeline_id is None or self.pipeline_db is None:
             return False
 
         try:
             if status:
-                self.process_db.update_pipeline_data(self.pipeline_id, progress=progress, status=status)
+                self.pipeline_db.update_pipeline_data(self.pipeline_id, progress=progress, status=status)
             else:
-                self.process_db.update_pipeline_data(self.pipeline_id, progress=progress)
+                self.pipeline_db.update_pipeline_data(self.pipeline_id, progress=progress)
             return True
         except Exception as e:
             self._log_warning(f"Failed to update pipeline progress: {e}")
@@ -151,68 +174,77 @@ class DatabaseHandler:
 
     def add_warning(self, count: int = 1) -> bool:
         """Add warning count to pipeline record"""
-        if self.pipeline_id is None or self.process_db is None:
+        if self.pipeline_id is None or self.pipeline_db is None:
             return False
 
         try:
-            return self.process_db.add_warning(self.pipeline_id, count)
+            return self.pipeline_db.add_warning(self.pipeline_id, count)
         except Exception as e:
             self._log_warning(f"Failed to add warning: {e}")
             return False
 
     def add_error(self, count: int = 1) -> bool:
         """Add error count to pipeline record"""
-        if self.pipeline_id is None or self.process_db is None:
+        if self.pipeline_id is None or self.pipeline_db is None:
             return False
 
         try:
-            return self.process_db.add_error(self.pipeline_id, count)
+            return self.pipeline_db.add_error(self.pipeline_id, count)
         except Exception as e:
             self._log_warning(f"Failed to add error: {e}")
             return False
 
     # ==================== QA DATA MANAGEMENT ====================
-    def write_qa_data(
-        self, dtype: str, raw_groups: list, current_group: int, key_to_index: dict, output_file: str, logger
+    def create_qa_data(
+        self,
+        dtype: str,
+        image: str = None,
+        raw_groups: list = None,
+        current_group: int = None,
+        key_to_index: dict = None,
+        output_file: str = None,
     ) -> None:
         """
-        Write QA data to database for a specific data type.
+        Create QA data in database for a specific data type.
 
         Args:
             dtype: Data type (bias, dark, flat)
+            image: Image file path
             raw_groups: Raw groups data
             current_group: Current group index
             key_to_index: Mapping of data types to indices
             output_file: Output file path for the data type
-            logger: Logger instance
         """
         if not self.is_connected:
             return
 
-        try:
+        if dtype == "science":
+            header = fits.getheader(image)
+            pipe_type = "science"
+            output_file = os.path.basename(image)
+        elif dtype in ["bias", "dark", "flat"]:
             header = fits.getheader(raw_groups[current_group][1][key_to_index[dtype]])
-        except:
+            pipe_type = "masterframe"
+        else:
             return
 
-        try:
-            qa_data = QAData.from_header(
-                header,
-                "masterframe",
-                f"{dtype}",
-                self.pipeline_id,
-                os.path.basename(output_file),
-            )
+        qa_data = QAData.from_header(
+            header,
+            pipe_type,
+            f"{dtype}",
+            self.pipeline_id,
+            os.path.basename(output_file),
+        )
 
+        if dtype == "flat":
             trimmed = qa_data.trimmed
-            # Create QA data record
-            qa_id = self.qa_db.create_qa_data(qa_data)
-        except Exception as e:
-            self._log_error(
-                f"[Group {current_group+1}] Failed to create QA data for {dtype} (PID: {self.pipeline_id}): {e}"
-            )
-            self.add_error()
+        else:
+            trimmed = False
+        # Create QA data record
 
-        if trimmed:
+        qa_id = self.qa_db.create_qa_data(qa_data)
+
+        if pipe_type == "masterframe" and trimmed:
             self._log_error(
                 f"[Group {current_group+1}] {dtype} masterframe is trimmed, a set of masterframes can be trimmed."
             )
@@ -231,13 +263,14 @@ class DatabaseHandler:
                 hdul.flush()
 
             self.update_qa_data("dark", current_group, trimmed=True, sanity=False)
+        return qa_id
 
-    def update_qa_data(self, dtype: str, current_group: int, **kwargs) -> bool:
+    def update_qa_data(self, dtype: str, current_group: int = None, obj: str = None, **kwargs) -> bool:
         """
         Update QA data record.
 
         Args:
-            dtype: Data type (bias, dark, flat)
+            dtype: Data type
             current_group: Current group index
             **kwargs: Fields to update
 
@@ -249,10 +282,17 @@ class DatabaseHandler:
 
         try:
             # Find the QA record by pipeline_id and dtype
-            qa_data = self.qa_db.read_qa_data(pipeline_id_id=self.pipeline_id, qa_type=f"{dtype}_{current_group}")
+            if dtype == "science":
+                qa_type = f"{dtype}_{obj}"
+                qa_data = self.qa_db.read_qa_data(pipeline_id=self.pipeline_id, qa_type=qa_type)
+            elif dtype in ["bias", "dark", "flat"]:
+                qa_type = f"{dtype}_{current_group}"
+                qa_data = self.qa_db.read_qa_data(pipeline_id=self.pipeline_id, qa_type=qa_type)
+            else:
+                raise ValueError(f"Invalid data type: {dtype}")
 
             if not qa_data:
-                self._log_warning(f"No QA data found for {dtype}_{current_group}")
+                self._log_warning(f"No QA data found for {dtype}")
                 return False
 
             # If it's a list, take the first one
@@ -268,7 +308,7 @@ class DatabaseHandler:
     @property
     def is_connected(self) -> bool:
         """Check if database is connected"""
-        return self.process_db is not None and self.qa_db is not None
+        return self.pipeline_db is not None and self.qa_db is not None
 
     @property
     def has_pipeline_id(self) -> bool:
@@ -281,12 +321,12 @@ class DatabaseHandler:
         """Get pipeline data with associated QA data"""
         try:
             # Get pipeline data
-            pipeline_record = self.process_db.read_pipeline_data(pipeline_id=pipeline_id)
+            pipeline_record = self.pipeline_db.read_pipeline_data(pipeline_id=pipeline_id)
             if not pipeline_record:
                 return None
 
             # Get associated QA data
-            qa_data = self.qa_db.read_qa_data(pipeline_id_id=pipeline_id)
+            qa_data = self.qa_db.read_qa_data(pipeline_id=pipeline_id)
             if isinstance(qa_data, list):
                 qa_list = qa_data
             else:
@@ -302,13 +342,13 @@ class DatabaseHandler:
         """Delete pipeline data and all associated QA data"""
         try:
             # Delete QA data first (due to foreign key constraints)
-            qa_data = self.qa_db.read_qa_data(pipeline_id_id=pipeline_id)
+            qa_data = self.qa_db.read_qa_data(pipeline_id=pipeline_id)
             if isinstance(qa_data, list):
                 for qa in qa_data:
                     self.qa_db.delete_qa_data(qa.qa_id)
 
             # Delete pipeline data
-            return self.process_db.delete_pipeline_cascade(pipeline_id)
+            return self.pipeline_db.delete_pipeline_cascade(pipeline_id)
 
         except Exception as e:
             self._log_error(f"Failed to delete pipeline cascade: {e}")
@@ -321,7 +361,7 @@ class DatabaseHandler:
             qa_deleted = self.qa_db.clear_qa_data()
 
             # Clear pipeline data
-            pipeline_deleted = self.process_db.clear_pipeline_data()
+            pipeline_deleted = self.pipeline_db.clear_pipeline_data()
 
             self._log_info(f"Cleared {qa_deleted} QA records and {pipeline_deleted} pipeline records")
             return True
@@ -357,7 +397,7 @@ class DatabaseHandler:
                 qa_filename = f"{base_filename}_qa.csv"
 
             # Export pipeline data
-            pipeline_data = self.process_db.export_pipeline_data_to_csv(pipeline_filename)
+            pipeline_data = self.pipeline_db.export_pipeline_data_to_csv(pipeline_filename)
 
             # Export QA data
             qa_data = self.qa_db.export_qa_data_to_csv(qa_filename)

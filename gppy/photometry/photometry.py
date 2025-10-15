@@ -22,7 +22,7 @@ from astropy.stats import sigma_clip
 # gppy modules
 from . import utils as phot_utils
 from ..config.utils import get_key
-from ..utils import time_diff_in_seconds, get_header_key
+from ..utils import time_diff_in_seconds, get_header_key, force_symlink
 from ..config import SciProcConfiguration
 from ..config.base import ConfigurationInstance
 from ..services.memory import MemoryMonitor
@@ -359,6 +359,12 @@ class PhotometrySingle:
 
         else:
             prep_cat = self.path.photometry.prep_catalog
+
+            # load astrometry prep cat if it exists
+            astrometry_prep_cat = self.path.astrometry.prep_catalog
+            if os.path.exists(astrometry_prep_cat):
+                force_symlink(astrometry_prep_cat, prep_cat)
+
             if os.path.exists(prep_cat):
                 self.logger.info("Calculating seeing from a pre-existing 'prep' catalog")
                 obs_src_table = Table.read(prep_cat, format="ascii.sextractor")

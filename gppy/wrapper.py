@@ -3,6 +3,8 @@ from concurrent.futures import ThreadPoolExecutor
 from collections import UserDict
 import time
 
+import numpy as np
+
 from .utils import flatten
 from .path import PathHandler
 from .run import query_observations
@@ -69,31 +71,75 @@ class SortedGroupDict(UserDict):
 class DataReduction:
     """overwrite=True to rewrite configs"""
 
-    def __init__(self, input_params=None, list_of_images=None, use_db=False, ignore_mult_date=False, master_frame_only=False, **kwargs):
+    def __init__(
+        self,
+        input_params=None,
+        list_of_images=None,
+        use_db=False,
+        ignore_mult_date=False,
+        master_frame_only=False,
+        **kwargs,
+    ):
         self.groups = SortedGroupDict()
 
         self._unified_key_list = None  # Will be populated after initialization
         self._key_usage_map = None  # Will track which keys are used in which groups
 
-        self._multi_unit_config = set()
+        self.dependent_configs = dict()
+        self.independent_configs = set()
 
-        self.input_params = input_params
-        print("Globbing images with parameters:", input_params)
+        self._ready4process = False
 
-        if list_of_images is None:
-            assert input_params is not None
-            self.list_of_images = query_observations(input_params, use_db=use_db, master_frame_only=master_frame_only, **kwargs)
-        else:
-            self.list_of_images = list_of_images
+        if input_params is not None or list_of_images is not None:
+            self.input_params = input_params
 
-        print(f"Found {len(self.list_of_images)} images.")
-        
-        if len(self.list_of_images) == 0:
-            print("No images found")
-            return
-        print("Grouping images...")
-        self.initialize(ignore_mult_date=ignore_mult_date)
+            if list_of_images is None:
+                assert input_params is not None
+                print("Globbing images with parameters:", input_params)
+                self.list_of_images = query_observations(
+                    input_params, use_db=use_db, master_frame_only=master_frame_only, **kwargs
+                )
+            else:
+                self.list_of_images = list_of_images
+
+            print(f"Found {len(self.list_of_images)} images.")
+
+            if len(self.list_of_images) == 0:
+                print("No images found")
+                return
+            print("Grouping images...")
+            self.initialize(ignore_mult_date=ignore_mult_date)
+
         print("Blueprint initialized.")
+
+    @property
+    def config_list(self):
+        return self.dependent_configs, self.independent_configs
+
+    @classmethod
+    def from_config(cls, config_list):
+        config_list = np.atleast_1d(config_list)
+        cls = cls.__new__(cls)
+
+        dependent_configs = dict()
+        independent_configs = set()
+
+        for config in config_list:
+            if os.path.exists(config):
+                keywords = os.path.basename(config).split("_")
+                if len(keywords) == 2:
+                    dependent_configs.setdefault(config, [])
+                    dependent_configs[config].append(config)
+                elif len(keywords) == 3:
+                    independent_configs.add(config)
+                else:
+                    raise ValueError(f"Invalid config file: {config}")
+            else:
+                raise ValueError(f"Config file does not exist: {config}")
+        cls.dependent_configs = dependent_configs
+        cls.independent_configs = independent_configs
+        cls._ready4process = True
+        return cls
 
     @classmethod
     def from_list(cls, list_of_images: list[str], ignore_mult_date=False, **kwargs):
@@ -177,9 +223,8 @@ class DataReduction:
             for f in futures:
                 f.result()
 
-    def config_list(self):
         dependent_configs = dict()
-        multiunit_config = set()
+        independent_configs = set()
         for _, group in self.groups.items():
             if isinstance(group, ScienceGroup):
                 continue
@@ -191,9 +236,11 @@ class DataReduction:
                 if not (sci_group.multi_units):
                     dependent_configs[group.config].append(sci_group.config)
                 else:
-                    multiunit_config.add(sci_group.config)
+                    independent_configs.add(sci_group.config)
 
-        return dependent_configs, multiunit_config
+        self.dependent_configs, self.independent_configs = dependent_configs, independent_configs
+
+        self._ready4process = True
 
     def cleanup(self):
         import gc
@@ -210,15 +257,26 @@ class DataReduction:
         overwrite=True,
         processes=["astrometry", "photometry", "combine", "subtract"],
         queue=None,
+        preprocess_kwargs=None,
     ):
+        """
+        preprocess_only: if True, speed up by skipping sciprocconfig generation
+        """
         if queue is None:
             from .services.queue import QueueManager
 
             queue = QueueManager()
 
-        configs = self.config_list()
-        
-        sc = Scheduler(*configs, processes=processes, overwrite=overwrite, preprocess_only=preprocess_only)
+        if not self._ready4process:
+            raise ValueError("DataReduction is not ready to process. Call create_config() first.")
+
+        sc = Scheduler(
+            *self.config_list,
+            processes=processes,
+            overwrite=overwrite,
+            preprocess_only=preprocess_only,
+            preprocess_kwargs=preprocess_kwargs,
+        )
         queue.add_scheduler(sc)
         queue.wait_until_task_complete("all")
 
