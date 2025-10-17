@@ -1,5 +1,4 @@
 astropy==7.0.0
-ccdproc==2.4.2
 ipykernel==6.19.2
 matplotlib==3.10.0
 numba==0.57.0
@@ -9,9 +8,14 @@ python-dotenv==1.0.1
 requests==2.31.0
 tqdm==4.67.1
 watchdog==6.0.0
+pandas==2.3.1
+psycopg==3.2.9
+psycopg-pool==3.2.6
 
 # cupy
 cupy-cuda12x
 
+# no longer needed
+# ccdproc==2.4.2
 # eclaire
-git+https://github.com/7DimensionalTelescope/Eclaire
+# git+https://github.com/7DimensionalTelescope/Eclaire
