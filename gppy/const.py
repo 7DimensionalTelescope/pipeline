@@ -13,6 +13,7 @@ STACKED_DIR = os.environ.get("STACKED_DIR") or "/lyman/data2/stacked"
 SLACK_TOKEN = os.environ.get("SLACK_TOKEN", None)
 INSTRUM_STATUS_DICT = os.environ.get("INSTRUM_STATUS_DICT") or "/home/7dt/7dt_too/backend/data/7dt/multitelescopes.dict"
 
+
 # Paths to pre-generated data
 ASTRM_REF_DIR = "/lyman/data2/factory/ref_scamp/gaia_dr3_7DT"  #  "/lyman/data1/factory/catalog/gaia_dr3_7DT"
 GAIA_ROOT_DIR = "/lyman/data1/factory/catalog/gaia_source_dr3/healpix_nside64"  # for dynamic refcat generation.
@@ -21,10 +22,12 @@ PHOT_REF_DIR = "/lyman/data1/factory/ref_cat"  # divided by RIS tiles
 GAIA_REF_DIR = "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile"
 REF_IMAGE_DIR = "/lyman/data1/factory/ref_frame"
 
+
 # Internal paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REF_DIR = os.path.join(SCRIPT_DIR, "ref")
 PIPELINE_DIRS = {RAWDATA_DIR, FACTORY_DIR, MASTER_FRAME_DIR, PROCESSED_DIR, STACKED_DIR}
+
 
 # Image grouping structure
 INSTRUM_GROUP_KEYS = ["unit", "n_binning", "gain", "camera"]
@@ -59,6 +62,11 @@ HEADER_KEY_MAP = {
     "ra": "OBJCTRA",  # intended pointing, not the actual mount position
     "dec": "OBJCTDEC",
 }
+
+
+# Computing Hardware
+NUM_GPUS = 2  # maximum number of GPUs to use
+MAX_WORKERS = 128
 
 
 class PipelineError(Exception):

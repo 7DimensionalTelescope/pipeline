@@ -1,6 +1,6 @@
 import json
 from collections import deque
-from ..const import SCRIPT_DIR
+from ..const import SCRIPT_DIR, NUM_GPUS
 
 
 class Scheduler:
@@ -43,7 +43,6 @@ class Scheduler:
     """
 
     def __init__(self, dependent_configs={}, independent_configs=[], preprocess_only=False, **kwargs):
-        self.preprocess_kwargs = kwargs.get("preprocess_kwargs", {})
 
         # Initialize master queue and status tracking
         masters = list(dependent_configs.keys())
@@ -69,13 +68,12 @@ class Scheduler:
         self.skipped_tasks = set()
 
         # Configuration options
-        processes = kwargs.get("processes", ["astrometry", "photometry", "combine", "subtract"])
-
-        self.processes = processes
+        self.preprocess_kwargs = kwargs.get("preprocess_kwargs", {})
+        self.processes = kwargs.get("processes", ["astrometry", "photometry", "combine", "subtract"])
 
         self.overwrite = kwargs.get("overwrite", False)
         self.device_id = kwargs.get("device_id", 0)
-        self.max_devices = kwargs.get("max_devices", 2)  # Default to 2 GPUs
+        self.max_devices = kwargs.get("max_devices", NUM_GPUS)  # default to maximum number of GPUs
         self.preprocess_only = preprocess_only
 
         if not self.master_status:  # enqueue independents immediately if no masters

@@ -198,10 +198,10 @@ class QAData:
     clipmax: Optional[float] = None
     nhotpix: Optional[int] = None
     ntotpix: Optional[int] = None
-    uniform: Optional[str] = None  # qa1
-    sigmean: Optional[str] = None  # qa2
-    edgevar: Optional[str] = None  # qa3
-    trimmed: Optional[str] = None  # qa4
+    uniform: Optional[str] = None  
+    sigmean: Optional[str] = None  
+    edgevar: Optional[str] = None  
+    trimmed: Optional[str] = None  
 
     # QA for science (when qa_type="science")
     filter: Optional[str] = None
@@ -218,9 +218,13 @@ class QAData:
 
     # Additional QA parameters
     exptime: Optional[str] = None
-    qa6: Optional[str] = None
-    qa7: Optional[str] = None
-    qa8: Optional[str] = None
+    unmatch: Optional[str] = None
+    rsep_rms: Optional[str] = None
+    rsep_q2: Optional[str] = None
+    rsep_p95: Optional[str] = None
+    awincrmn: Optional[str] = None
+    ellipmn: Optional[str] = None
+    pa_align: Optional[str] = None
 
     # filename
     filename: Optional[str] = None
@@ -235,8 +239,8 @@ class QAData:
     def from_row(cls, row: tuple) -> "QAData":
         """Create QAData from database row"""
         # Add bounds checking to prevent index errors
-        if len(row) < 34:
-            raise ValueError(f"Expected at least 34 columns, got {len(row)}. Row: {row}")
+        if len(row) < 38:
+            raise ValueError(f"Expected at least 38 columns, got {len(row)}. Row: {row}")
 
         return cls(
             id=row[0],
@@ -263,16 +267,20 @@ class QAData:
             created_at=row[21],
             updated_at=row[22],
             pipeline_id_id=row[23],
-            uniform=row[24],
-            sigmean=row[25],
-            edgevar=row[26],
-            trimmed=row[27],
-            exptime=row[28],  # Map qa5 column to exptime field
-            qa6=row[29],
-            qa7=row[30],
-            qa8=row[31],
-            filename=row[32],
-            sanity=row[33],
+            edgevar=row[24],
+            exptime=row[25],
+            filename=row[26],
+            sanity=row[27],
+            sigmean=row[28],
+            trimmed=row[29],
+            unmatch=row[30],
+            rsep_rms=row[31],
+            rsep_q2=row[32],
+            uniform=row[33],
+            awincrmn=row[34],
+            ellipmn=row[35],
+            rsep_p95=row[36],
+            pa_align=row[37],
         )
 
     def to_dict(self) -> Dict[str, Any]:

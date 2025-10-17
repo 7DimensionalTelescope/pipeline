@@ -111,7 +111,8 @@ class QADB(BaseDatabase):
                         clipmin, clipmax, nhotpix, ntotpix, seeing, ellipticity,
                         rotang1, astrometric_offset, skyval, skysig, zp_auto, ezp_auto,
                         ul5_5, stdnumb, created_at, updated_at, pipeline_id_id,
-                        uniform, sigmean, edgevar, trimmed, exptime, qa6, qa7, qa8, filename, sanity
+                        edgevar, exptime, filename, sanity, sigmean, trimmed, unmatch,
+                        rsep_rms, rsep_q2, uniform, awincrmn, ellipmn, rsep_p95, pa_align
                     FROM pipeline_qa
                 """
 

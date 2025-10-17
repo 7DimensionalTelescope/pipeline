@@ -37,7 +37,8 @@ class SciProcConfiguration(BaseConfig):
             clean_up_folder(self.path.factory_dir)
             clean_up_sciproduct(self.path.output_dir)
 
-        self.write_config()
+        if os.path.exists(self.config_file):
+            self.write_config()
         self.logger.info("Completed to load configuration")
 
     # @classmethod
@@ -66,7 +67,7 @@ class SciProcConfiguration(BaseConfig):
         """Base configuration for user-input. Mind config.settings.is_pipeline is set to False"""
         # self = cls.__new__(cls)
 
-        input_images = [os.path.abspath(image) for image in atleast_1d(input_images)]
+        input_images = sorted([os.path.abspath(image) for image in atleast_1d(input_images)])
         path = PathHandler(input_images, working_dir=working_dir or os.getcwd())
         self = cls.from_config(path.sciproc_base_yml)
         self.path = path

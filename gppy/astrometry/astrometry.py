@@ -123,7 +123,7 @@ class Astrometry(BaseSetup, DatabaseHandler):
         # use_gpu: bool = False,
         overwrite=False,
         solvefield_args=[],
-        tolerate_unmatch=False,
+        avoid_solvefield=True,
     ) -> None:
         """Execute the complete astrometry pipeline.
 
@@ -175,12 +175,13 @@ class Astrometry(BaseSetup, DatabaseHandler):
                     self.logger.info(f"Scamp iteration completed [{i+1}/{len(self.prep_cats)}] for {prep_cat}")
 
                     if image_info.bad:
-                        self.logger.debug(
-                            f"Unmatched fraction {image_info.rsep_stats.unmatched_fraction} "
+                        self.logger.warning(
+                            f"Bad solution. UNMATCH: {image_info.rsep_stats.unmatched_fraction}, "
+                            f"RSEP_P95: {image_info.reference_sep_p95}"
                             f"after {max_scamp} iterations for {image_info.image_path}"
                         )
-                        if not tolerate_unmatch:
-                            raise Exception(f"Unmatched fraction too high. {image_info.rsep_stats.unmatched_fraction}")
+                        if not avoid_solvefield:
+                            raise Exception(f"Bad solution")
 
                 except Exception as e:
                     # if evaluate_prep_sol:
@@ -338,7 +339,7 @@ class Astrometry(BaseSetup, DatabaseHandler):
             self.logger.debug(f"Soft link created: {inim} -> {soft_link}")
         self.soft_links_to_input_images = soft_links
 
-        self.prep_cats = self.path.astrometry.catalog  # fits_ldac sextractor output
+        self.prep_cats = atleast_1d(self.path.astrometry.catalog)  # fits_ldac sextractor output
         self.solved_images = [add_suffix(s, "solved") for s in soft_links]  # solve-field output
         self.solved_heads = [swap_ext(s, "head") for s in self.prep_cats]  # scamp output
         self.images_info = [ImageInfo.parse_image_header_info(image) for image in self.input_images]

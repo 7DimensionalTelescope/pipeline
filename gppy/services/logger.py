@@ -75,6 +75,19 @@ class Logger:
         if redirect_stdout or redirect_stderr:
             sys.excepthook = self._handle_exception
 
+    def __del__(self):
+        """Destructor to properly close all handlers and release file descriptors."""
+        self.cleanup()
+
+    def cleanup(self, logger=None):
+        """Properly close all handlers and release file descriptors."""
+        if logger is None:
+            logger = self.logger
+        for handler in logger.handlers[:]:
+            handler.close()
+            logger.removeHandler(handler)
+        logger.handlers.clear()
+
     @property
     def name(self) -> str:
         """
@@ -154,20 +167,22 @@ class Logger:
         # Create logger instance
         logger = logging.getLogger(self.name)
         logger.setLevel(logging.DEBUG)  # Set to DEBUG to catch all messages
-        
+
         # Prevent propagation to avoid duplicate logging
         logger.propagate = False
 
         # Clear existing handlers to prevent duplicates
-        logger.handlers.clear()
+        self.cleanup(logger)
 
         # Add console handler for INFO and WARNING only
         console_handler = self._create_handler("console", level=logging.INFO)
         console_handler.name = "console"
+
         # Create a filter to exclude ERROR and CRITICAL from console handler
         class ConsoleFilter(logging.Filter):
             def filter(self, record):
                 return record.levelno < logging.ERROR
+
         console_handler.addFilter(ConsoleFilter())
         logger.addHandler(console_handler)
 
@@ -234,7 +249,7 @@ class Logger:
             **kwargs: Additional keyword arguments for logging
         """
         self.logger.info(msg, **kwargs)
-        #self.send_slack(msg, "INFO")
+        # self.send_slack(msg, "INFO")
 
     def warning(self, msg: str, **kwargs) -> None:
         """
@@ -245,7 +260,7 @@ class Logger:
             **kwargs: Additional keyword arguments for logging
         """
         self.logger.warning(msg, **kwargs)
-        #self.send_slack(msg, "WARNING")
+        # self.send_slack(msg, "WARNING")
 
     def error(self, msg: str, **kwargs) -> None:
         """
@@ -256,10 +271,10 @@ class Logger:
             **kwargs: Additional keyword arguments for logging
         """
         # Only use exc_info if explicitly requested or if there's an exception
-        if 'exc_info' not in kwargs:
-            kwargs['exc_info'] = False
+        if "exc_info" not in kwargs:
+            kwargs["exc_info"] = False
         self.logger.error(msg, **kwargs)
-        #self.send_slack(msg, "ERROR")
+        # self.send_slack(msg, "ERROR")
 
     def critical(self, msg: str, **kwargs) -> None:
         """
@@ -270,10 +285,10 @@ class Logger:
             **kwargs: Additional keyword arguments for logging
         """
         # Only use exc_info if explicitly requested or if there's an exception
-        if 'exc_info' not in kwargs:
-            kwargs['exc_info'] = False
+        if "exc_info" not in kwargs:
+            kwargs["exc_info"] = False
         self.logger.critical(msg, **kwargs)
-        #self.send_slack(msg, "CRITICAL")
+        # self.send_slack(msg, "CRITICAL")
 
     def send_slack(self, msg: str, level: str) -> None:
         """
@@ -391,7 +406,7 @@ class Logger:
                 if not handler.baseFilename.endswith("_debug.log"):
                     handler.setLevel(log_level)
                 # Debug handler always stays at DEBUG level
-            elif hasattr(handler, 'name'):
+            elif hasattr(handler, "name"):
                 # Console handlers - keep console at INFO, console_err at ERROR
                 if handler.name == "console":
                     handler.setLevel(logging.INFO)

@@ -361,7 +361,7 @@ class PhotometrySingle:
             prep_cat = self.path.photometry.prep_catalog
 
             # load astrometry prep cat if it exists
-            astrometry_prep_cat = self.path.astrometry.prep_catalog
+            astrometry_prep_cat = self.path.astrometry.catalog
             if os.path.exists(astrometry_prep_cat):
                 force_symlink(astrometry_prep_cat, prep_cat)
 

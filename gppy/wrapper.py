@@ -1,16 +1,14 @@
 import os
 from concurrent.futures import ThreadPoolExecutor
 from collections import UserDict
-import time
-
+import gc
 import numpy as np
+
 
 from .utils import flatten
 from .path import PathHandler
 from .run import query_observations
-from .config import PreprocConfiguration, SciProcConfiguration
 
-from .services.queue import QueueManager
 
 from itertools import chain
 from .services.task import Task, Priority
@@ -216,12 +214,14 @@ class DataReduction:
                 self.groups[mfg_key].add_images(flattened_images)
                 self.groups[mfg_key].add_sci_keys(key)
 
-    def create_config(self, overwrite=False):
+    def create_config(self, overwrite=False, max_workers=50):
         kwargs = {"overwrite": overwrite}
-        with ThreadPoolExecutor(max_workers=50) as executor:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(group.create_config, **kwargs) for group in self.groups.values()]
             for f in futures:
                 f.result()
+        del futures
+        gc.collect()
 
         dependent_configs = dict()
         independent_configs = set()
@@ -254,7 +254,7 @@ class DataReduction:
     def process_all(
         self,
         preprocess_only=False,
-        overwrite=True,
+        overwrite=False,
         processes=["astrometry", "photometry", "combine", "subtract"],
         queue=None,
         preprocess_kwargs=None,
@@ -328,8 +328,19 @@ class MasterframeGroup:
         self.sci_keys.append(keys)
 
     def create_config(self, overwrite=False):
+        import resource
+        from .config import PreprocConfiguration
+
+        print(
+            f"MasterframeGroup {self.key} creating config with {len(self.image_files)} images; "
+            f"{len(os.listdir(f'/proc/{os.getpid()}/fd'))} FDs under limit of {resource.getrlimit(resource.RLIMIT_NOFILE)} FDs"
+        )
         c = PreprocConfiguration(self.image_files, overwrite=overwrite)
+
         self._config = c.config_file
+
+        del c
+        gc.collect()
 
     def get_task(self, device_id=None, make_plots=True, priority=Priority.PREPROCESS, **kwargs):
         from .run import run_preprocess
@@ -394,16 +405,29 @@ class ScienceGroup:
             raise ValueError("Invalid filepath type")
 
     def create_config(self, overwrite=False):
+        import resource
+
+        from .config import SciProcConfiguration
+
+        print(
+            f"MasterframeGroup {self.key} creating config with {len(self.image_files)} images; "
+            f"{len(os.listdir(f'/proc/{os.getpid()}/fd'))} FDs under limit of {resource.getrlimit(resource.RLIMIT_NOFILE)} FDs"
+        )
+
         sci_yml = PathHandler(self.image_files).sciproc_output_yml
         if os.path.exists(sci_yml) and not overwrite:
             # If the config file already exists, load it
             c = SciProcConfiguration.from_config(sci_yml, write=True)  # 5 ms
             # c = SciProcConfiguration(sci_yml, write=True)  # 36 ms
         else:
-            c = SciProcConfiguration(self.image_files)
+            c = SciProcConfiguration(self.image_filesㅇ)
             # c = SciProcConfiguration.base_config(input_images=self.image_files, config_file=sci_yml, logger=True)
             # c = SciProcConfiguration.from_list(self.image_files)
+
         self._config = c.config_file
+
+        del c
+        gc.collect()
 
     def get_task(self, priority=Priority.MEDIUM, **kwargs):
         from .run import run_scidata_reduction

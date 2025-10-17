@@ -14,7 +14,9 @@ import signal
 def run_scidata_reduction(config, processes=["astrometry", "photometry", "combine", "subtract"], overwrite=False):
 
     try:
-        config = SciProcConfiguration.from_config(config)
+        # config = SciProcConfiguration.from_config(config)
+        config = SciProcConfiguration(config)
+
         if "astrometry" in processes and (not config.config.flag.astrometry or overwrite):
             astr = Astrometry(config)
             astr.run()

@@ -228,7 +228,6 @@ class NameHandler:
         """
         types = ()
 
-        
         # raw/master/processed
         if stem.startswith(("7DT", "BIAS", "DARK", "FLAT", "LIGHT")):
             types += ("raw",)
@@ -939,7 +938,7 @@ class NameHandler:
 
         # On-date calib frames
         for key, val in sci.items():
-            key_sci = dict(key[1])
+            key_sci = dict(key[1])  # key is a tuple of (type, obs_param)
             sci_files.append(val)
 
             # On-date calibration collection with group tracking

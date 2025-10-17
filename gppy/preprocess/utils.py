@@ -95,43 +95,48 @@ def search_with_date_offsets(template, max_offset=300, future=False):
 
     # Iterate through offsets - try all combinations of date offsets
     for offset_night in offsets:
-        for offset_utc in offsets:
-            # Adjust dates independently
-            adjusted_date_night_dt = date_night_dt + timedelta(days=offset_night)
-            adjusted_date_utc_dt = date_utc_dt + timedelta(days=offset_utc)
+        adjusted_date_night_dt = date_night_dt + timedelta(days=offset_night)
+        adjusted_date_night = adjusted_date_night_dt.strftime(date_night_format)
+        # Calculate UTC date properly using datetime arithmetic instead of string manipulation
+        adjusted_date_utc_dt = date_utc_dt + timedelta(days=offset_night)
+        adjusted_date_utc = adjusted_date_utc_dt.strftime(date_utc_format)
+        modified_path = template.replace(date_night, adjusted_date_night).replace(date_utc, adjusted_date_utc)
+        # for offset_utc in offsets:
+        #     # Adjust dates independently
+        #     adjusted_date_night_dt = date_night_dt + timedelta(days=offset_night)
+        #     adjusted_date_utc_dt = date_utc_dt + timedelta(days=offset_utc)
 
-            # Format the adjusted dates
-            adjusted_date_night = adjusted_date_night_dt.strftime(date_night_format)
-            adjusted_date_utc = adjusted_date_utc_dt.strftime(date_utc_format)
+        #     # Format the adjusted dates
+        #     adjusted_date_night = adjusted_date_night_dt.strftime(date_night_format)
+        #     adjusted_date_utc = adjusted_date_utc_dt.strftime(date_utc_format)
 
-            # Replace both dates in the template
-            modified_path = template.replace(date_night, adjusted_date_night).replace(date_utc, adjusted_date_utc)
+        #     # Replace both dates in the template
+        #     modified_path = template.replace(date_night, adjusted_date_night).replace(date_utc, adjusted_date_utc)
 
-            # Check if the modified path exists
-            # if os.path.exists(modified_path):
-            #     return modified_path
-            if "*" in template:
-                # If there's a *, glob for all matches
-                matches = glob(modified_path)
-                if matches:
-                    if len(matches) == 1:
-                        if Checker().sanity_check(matches[0]):
-                            return matches[0]
-                        else:
-                            continue
-                    else:
-                        minimum = PathHandler(matches).get_minimum("exptime")
-                        if Checker().sanity_check(minimum):
-                            return minimum
-                        else:
-                            continue
-            else:
-                if os.path.exists(modified_path):
-                    if Checker().sanity_check(modified_path):
-                        return modified_path
+        # Check if the modified path exists
+        # if os.path.exists(modified_path):
+        #     return modified_path
+        if "*" in template:
+            # If there's a *, glob for all matches
+            matches = glob(modified_path)
+            if matches:
+                if len(matches) == 1:
+                    if Checker().sanity_check(matches[0]):
+                        return matches[0]
                     else:
                         continue
-                    
+                else:
+                    minimum = PathHandler(matches).get_minimum("exptime")
+                    if Checker().sanity_check(minimum):
+                        return minimum
+                    else:
+                        continue
+        else:
+            if os.path.exists(modified_path):
+                if Checker().sanity_check(modified_path):
+                    return modified_path
+                else:
+                    continue
 
     # If no file is found, return None
     return None
@@ -262,6 +267,7 @@ def ensure_mjd_in_header(header, logger=None):
         if "DATE-OBS" in header:
             try:
                 from astropy.time import Time
+
                 mjd = Time(header["DATE-OBS"], format="isot", scale="utc").mjd
                 header["MJD"] = (mjd, "Modified Julian Date derived from DATE-OBS")
                 chatter(f"Added MJD={mjd:.5f} (from DATE-OBS={header['DATE-OBS']})")

@@ -1,7 +1,7 @@
 import os
 from glob import glob
 from pathlib import Path
-from typing import Union
+from typing import Union, List, Tuple
 import numpy as np
 from functools import cached_property
 
@@ -271,24 +271,99 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, C
     # def __repr__(self):
     #     return "\n".join(f"{k}: {v}" for k, v in sorted(self.__dict__.items()) if not k.startswith("_"))
 
+    # def __repr__(self):
+    #     lines = []
+    #     for k, v in sorted(self.__dict__.items()):
+    #         if not k.startswith("_"):
+    #             try:
+    #                 v = collapse(v)
+    #             except:
+    #                 pass
+    #             lines.append(f"{k}: {v}")
+
+    #         # if k.startswith("_") and not k.startswith("__"):
+    #         #     public_name = k[1:]
+    #         #     # if public_name not in self.__dict__:
+    #         #     try:
+    #         #         collapsed = collapse(v)
+    #         #         lines.append(f"{public_name}: {collapsed}")
+    #         #     except Exception:
+    #         #         pass  # Skip if collapse fails
+    #     return "\n".join(lines)
+
+    # def __repr__(self):
+    #     """
+    #     Improved __repr__ with cached_property support.
+    #     """
+    #     lines = []
+
+    #     # public instance attrs
+    #     for k, v in sorted(self.__dict__.items()):
+    #         if not k.startswith("_"):
+    #             lines.append(f"{k}: {collapse(v)}")
+
+    #     cls = type(self)
+    #     public = {k for k in self.__dict__ if not k.startswith("_")}
+    #     prop_names = set()
+    #     cached_names = set()
+
+    #     # read raw descriptors; don't call getattr
+    #     for base in cls.__mro__:
+    #         for name, obj in base.__dict__.items():
+    #             if name.startswith("_"):
+    #                 continue
+    #             if isinstance(obj, property):
+    #                 prop_names.add(name)
+    #             elif obj.__class__.__name__ == "cached_property":  # stdlib/Django/Werkzeug lookalike
+    #                 cached_names.add(name)
+
+    #     for name in sorted(prop_names - public):
+    #         lines.append(f"{name}: <property>")
+    #     for name in sorted(cached_names - public):
+    #         lines.append(f"{name}: <cached_property>")
+
+    #     return "\n".join(lines)
+
     def __repr__(self):
         lines = []
-        for k, v in sorted(self.__dict__.items()):
+
+        # 1) Public instance attributes (already-realized values)
+        for k in sorted(self.__dict__):
             if not k.startswith("_"):
+                v = self.__dict__[k]
                 try:
                     v = collapse(v)
-                except:
+                except Exception:
                     pass
                 lines.append(f"{k}: {v}")
 
-            # if k.startswith("_") and not k.startswith("__"):
-            #     public_name = k[1:]
-            #     # if public_name not in self.__dict__:
-            #     try:
-            #         collapsed = collapse(v)
-            #         lines.append(f"{public_name}: {collapsed}")
-            #     except Exception:
-            #         pass  # Skip if collapse fails
+        # 2) Collect property and cached_property names from raw descriptors
+        cls = type(self)
+        prop_names = set()
+        cached_names = set()
+
+        for base in cls.__mro__:
+            for name, obj in getattr(base, "__dict__", {}).items():
+                if name.startswith("_"):
+                    continue
+                if isinstance(obj, property):
+                    prop_names.add(name)
+                else:
+                    # Detect stdlib/Django/Werkzeug cached_property by class name, no imports
+                    cname = obj.__class__.__name__
+                    if cname in ("cached_property", "CachedProperty"):
+                        cached_names.add(name)
+
+        public = {k for k in self.__dict__ if not k.startswith("_")}
+
+        # 3) Add properties not already present as public attrs (don’t evaluate)
+        for name in sorted(prop_names - public):
+            lines.append(f"{name}: <property>")
+
+        # 4) Add cached_properties only if not cached yet; cached ones are already shown
+        for name in sorted(cached_names - public):
+            lines.append(f"{name}: <cached_property (not cached)>")
+
         return "\n".join(lines)
 
     def is_present(self, path):
@@ -1003,11 +1078,12 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
         # return bjoin(self._parent.masterframe_dir, self._parent.name.masterframe_basename)
 
 
-class PathAstrometry(AutoMkdirMixin):
+class PathAstrometry(AutoMkdirMixin, AutoCollapseMixin):
     _mkdir_exclude = {"ref_ris_dir", "ref_query_dir"}
 
     def __init__(self, parent: PathHandler, config=None):
         self._parent = parent
+        self._input_files = atleast_1d(self._parent.processed_images)
 
         # Default values
         self.ref_ris_dir = const.ASTRM_REF_DIR
@@ -1045,12 +1121,6 @@ class PathAstrometry(AutoMkdirMixin):
         astrefcat = os.path.join(self.ref_ris_dir, f"{obj}.fits")
         return astrefcat
 
-    @cached_property
-    def input_files(self):
-        """This better be a property.
-        Whole PathAstrometry is always triggered using PathHandler, and processed_images involves AutoMkdirMixin"""
-        return atleast_1d(self._parent.processed_images)
-
     # @property
     # def solvefield_outputs(self):
     #     exts = ["solved", "axy", "corr", "match", "rdls", "wcs"]  # -indx.xyls?
@@ -1058,12 +1128,12 @@ class PathAstrometry(AutoMkdirMixin):
 
     @cached_property
     def soft_link(self):
-        return [os.path.join(self.tmp_dir, os.path.basename(s)) for s in self.input_files]
+        return [os.path.join(self.tmp_dir, os.path.basename(s)) for s in atleast_1d(self._input_files)]
 
     @property
-    def catalog(self):
+    def catalog(self) -> List[str]:
         # return (add_suffix(add_suffix(inim, 'prep'), "cat") for inim in self.input_files)
-        return [add_suffix(inim, "cat") for inim in self.soft_link]
+        return [add_suffix(inim, "cat") for inim in atleast_1d(self.soft_link)]
 
 
 class PathPhotometry(AutoMkdirMixin, AutoCollapseMixin):
@@ -1113,7 +1183,7 @@ class PathPhotometry(AutoMkdirMixin, AutoCollapseMixin):
     #     pass
 
 
-class PathImstack(AutoMkdirMixin):
+class PathImstack(AutoMkdirMixin, AutoCollapseMixin):
     def __init__(self, parent: PathHandler, config=None):
         self._parent = parent
 
