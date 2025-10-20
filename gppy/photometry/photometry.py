@@ -367,7 +367,12 @@ class PhotometrySingle:
 
             if os.path.exists(prep_cat):
                 self.logger.info("Calculating seeing from a pre-existing 'prep' catalog")
-                obs_src_table = Table.read(prep_cat, format="ascii.sextractor")
+                if prep_cat.endswith(".fits"):
+                    obs_src_table = Table.read(prep_cat, hdu=2)
+                elif prep_cat.endswith(".cat"):
+                    obs_src_table = Table.read(prep_cat, format="ascii.sextractor")
+                else:
+                    raise ValueError(f"Invalid catalog format: {prep_cat}")
             else:
                 obs_src_table = self._run_sextractor(se_preset="prep")
 
@@ -472,8 +477,8 @@ class PhotometrySingle:
         post_match_table = table.copy()
 
         post_match_table["within_ellipse"] = phot_utils.is_within_ellipse(
-            post_match_table["X_IMAGE"],
-            post_match_table["Y_IMAGE"],
+            np.array(post_match_table["X_IMAGE"], dtype=np.float32),
+            np.array(post_match_table["Y_IMAGE"], dtype=np.float32),
             self.image_info.xcent,
             self.image_info.ycent,
             self.phot_conf.photfraction * self.image_info.naxis1 / 2,
@@ -802,7 +807,7 @@ class PhotometrySingle:
         plt.tight_layout()
 
         img_stem = os.path.splitext(os.path.basename(self.input_image))[0]
-        f = os.path.join(self.path.figure_dir, f"{img_stem}_filtercheck.png")
+        f = os.path.join(self.path.photometry.figure_dir, f"{img_stem}_filtercheck.png")
         plt.savefig(f, dpi=100)
         plt.close()
         return
@@ -881,7 +886,9 @@ class PhotometrySingle:
         plt.tight_layout()
 
         img_stem = os.path.splitext(os.path.basename(self.input_image))[0]
-        fpath = os.path.join(self.path.figure_dir, f"{img_stem}_{mag_key}{'' if filt is None else '_' + filt}.png")
+        fpath = os.path.join(
+            self.path.photometry.figure_dir, f"{img_stem}_{mag_key}{'' if filt is None else '_' + filt}.png"
+        )
         plt.savefig(fpath, dpi=100)
         plt.close()
 

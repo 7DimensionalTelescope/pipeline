@@ -97,8 +97,8 @@ class Astrometry(BaseSetup, DatabaseHandler):
                 self.logger.warning("Pipeline record creation failed, skipping QA data creation")
 
     @classmethod
-    def from_list(cls, images, working_dir=None):
-        images = [os.path.abspath(image) for image in sorted(images)]  # this is critical for soft links
+    def from_list(cls, images: List[str], working_dir: str = None):
+        images = [os.path.abspath(image) for image in sorted(atleast_1d(images))]  # this is critical for soft links
         for image in images:
             if not os.path.exists(image):
                 raise FileNotFoundError(f"File does not exist: {image}")
@@ -333,7 +333,7 @@ class Astrometry(BaseSetup, DatabaseHandler):
         self.input_images = inims
 
         # soft_links = [os.path.join(self.path_astrometry, os.path.basename(s)) for s in inims]
-        soft_links = self.path.astrometry.soft_link
+        soft_links = atleast_1d(self.path.astrometry.soft_link)
         for inim, soft_link in zip(inims, soft_links):
             force_symlink(inim, soft_link)
             self.logger.debug(f"Soft link created: {inim} -> {soft_link}")
@@ -404,6 +404,7 @@ class Astrometry(BaseSetup, DatabaseHandler):
         output_images: str | List[str] = None,  # only for input_images
         overwrite: bool = False,
         solvefield_args: list = [],
+        timeout=None,
     ) -> None:
         """Runs astrometry.net's solve-field to determine WCS solution for each image."""
         self.logger.info(f"Start solve-field")
@@ -415,6 +416,8 @@ class Astrometry(BaseSetup, DatabaseHandler):
         self.logger.debug(f"input_catalogs: {input_catalogs}")
         self.logger.debug(f"input_images: {input_images}")
         self.logger.debug(f"output_images: {output_images}")
+
+        timeout = timeout or self.config.astrometry.solvefield_timeout
 
         if not input_catalogs and not input_images:
             raise ValueError("Either input_catalogs or input_images must be provided for run_solve_field")
@@ -454,6 +457,7 @@ class Astrometry(BaseSetup, DatabaseHandler):
                     pixscale=pixscale,
                     overwrite=overwrite,
                     solvefield_args=solvefield_args,
+                    timeout=timeout,
                 )
                 self.logger.info(f"Completed solve-field [{i+1}/{len(input_catalogs)}]")
                 self.logger.debug(f"Solve-field input: {slink}, output: {wcs_file}")
@@ -474,6 +478,7 @@ class Astrometry(BaseSetup, DatabaseHandler):
                     pixscale=pixscale,
                     overwrite=overwrite,
                     solvefield_args=solvefield_args,
+                    timeout=timeout,
                 )
                 self.logger.info(f"Completed solve-field [{i+1}/{len(input_images)}]")
                 self.logger.debug(f"Solve-field input: {slink}, output: {sfile}")
@@ -546,6 +551,7 @@ class Astrometry(BaseSetup, DatabaseHandler):
         scamp_args: str = None,
         apply_wcs_to_catalog: bool = True,
         overwrite=False,
+        timeout=None,
     ) -> None:
         """Run SCAMP for astrometric calibration.
 
@@ -561,6 +567,8 @@ class Astrometry(BaseSetup, DatabaseHandler):
         st = time.time()
         self.logger.info(f"Start {'joint' if joint else 'individual'} scamp")
         self.logger.debug(MemoryMonitor.log_memory_usage)
+
+        timeout = timeout or self.config.astrometry.scamp_timeout
 
         # presex_cats = [os.path.splitext(s)[0] + f".{prefix}.cat" for s in files]
         input_catalogs = atleast_1d(input_catalogs or self.prep_cats)
@@ -592,6 +600,7 @@ class Astrometry(BaseSetup, DatabaseHandler):
                 scampconfig=scampconfig,
                 scamp_args=scamp_args,
                 scamp_preset=scamp_preset,
+                timeout=timeout,
             )
             self.logger.debug(f"Joint run solved_heads: {solved_heads}")
 
@@ -605,6 +614,7 @@ class Astrometry(BaseSetup, DatabaseHandler):
                 scampconfig=scampconfig,
                 scamp_args=scamp_args,
                 scamp_preset=scamp_preset,
+                timeout=timeout,
             )
             solved_heads = self.queue.results[0]
             self.logger.debug(f"Parallel run solved_heads: {solved_heads}")
@@ -620,6 +630,7 @@ class Astrometry(BaseSetup, DatabaseHandler):
                     scampconfig=scampconfig,
                     scamp_args=scamp_args,
                     scamp_preset=scamp_preset,
+                    timeout=timeout,
                 )
                 solved_heads.extend(solved_head)
                 self.logger.debug(f"Completed scamp for {precat}")

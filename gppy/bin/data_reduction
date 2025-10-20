@@ -21,19 +21,35 @@ def run_scidata_reduction(config, processes=["astrometry", "photometry", "combin
             astr = Astrometry(config)
             astr.run()
             del astr
-        if "photometry" in processes and (not config.config.flag.single_photometry or overwrite):
+        if (
+            "photometry" in processes
+            and (not config.config.flag.single_photometry or overwrite)
+            and config.config.flag.astrometry
+        ):
             phot = Photometry(config)
             phot.run()
             del phot
-        if "combine" in processes and (not config.config.flag.combine or overwrite):
+        if (
+            "combine" in processes
+            and (not config.config.flag.combine or overwrite)
+            and (config.config.flag.astrometry and config.config.flag.single_photometry)
+        ):
             stk = ImStack(config)
             stk.run()
             del stk
-        if "photometry" in processes and (not config.config.flag.combined_photometry or overwrite):
+        if (
+            "photometry" in processes
+            and (not config.config.flag.combined_photometry or overwrite)
+            and config.config.flag.combine
+        ):
             phot = Photometry(config)
             phot.run()
             del phot
-        if "subtract" in processes and (not config.config.flag.subtraction or overwrite):
+        if (
+            "subtract" in processes
+            and (not config.config.flag.subtraction or overwrite)
+            and (config.config.flag.combine and config.config.flag.combined_photometry)
+        ):
             subt = ImSubtract(config)
             subt.run()
             del subt

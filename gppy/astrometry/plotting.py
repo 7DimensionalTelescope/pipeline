@@ -338,6 +338,7 @@ def wcs_check_psf_plot(
         ax.text(0, 27, str(idx + 1), fontsize=18, color="white")
 
         # add source stats
+        ax.text(30, 28.5, f"{row['X_IMAGE']:.0f}, {row['Y_IMAGE']:.0f}", fontsize=9, ha="right", color="w")
         if "ELLIPTICITY" in row.colnames:
             ax.text(30, 3, f"Ellipticity: {row['ELLIPTICITY']:.2f}", fontsize=9, ha="right", color="w")
         text = f"FWHM: "

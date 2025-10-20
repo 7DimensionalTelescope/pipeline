@@ -293,7 +293,8 @@ def collapse(seq: list | dict[list], keys=ALL_GROUP_KEYS, raise_error=False, for
 
 def get_header(filename: str | Path, force_return=False) -> dict | fits.Header:
     """
-    Get the header of a FITS file.
+    Get the header of a FITS file. Avoid FITS I/O by reading the header from a
+    text file if it exists.
 
     Args:
         filename (str | Path): Path to the FITS file or a .head file
@@ -302,19 +303,24 @@ def get_header(filename: str | Path, force_return=False) -> dict | fits.Header:
         dict | fits.Header: Header of the FITS file
     """
     filename = str(filename)
-    imhead_file = swap_ext(filename, "head")
 
-    if os.path.exists(imhead_file):
+    processed_header_file = swap_ext(filename, "header")
+    if os.path.exists(processed_header_file):
+        return read_header_file(processed_header_file)
+
+    raw_head_file = swap_ext(filename, "head")
+    if os.path.exists(raw_head_file):
         # Read the header from the text file
-        return read_header_file(imhead_file)
-    elif os.path.exists(filename):
+        return read_header_file(raw_head_file)
+
+    if os.path.exists(filename):
         from astropy.io import fits
 
         return fits.getheader(swap_ext(filename, "fits"))
-    else:
-        if force_return:
-            return {}
-        raise FileNotFoundError(f"File not found: {filename}")
+
+    if force_return:
+        return {}
+    raise FileNotFoundError(f"File not found: {filename}")
 
 
 def get_header_key(header_file, key, default=None):

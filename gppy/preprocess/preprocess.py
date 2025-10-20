@@ -24,7 +24,7 @@ from ..config.utils import get_key
 from ..services.setup import BaseSetup
 from ..const import HEADER_KEY_MAP
 from ..services.utils import acquire_available_gpu
-from .checker import Checker
+from ..services.checker import Checker
 from ..services.database import QAData
 from ..services.database.handler import DatabaseHandler
 from ..header import add_padding
@@ -161,6 +161,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
                 self.logger.debug("\n" + "#" * 100 + f"\n{' '*30}Start processing group {i+1} / {self._n_groups}\n" + "#" * 100)  # fmt: skip
                 self.logger.debug(f"[Group {i+1}] [filter: exptime] {PathHandler.get_group_info(self.raw_groups[i])}")
+                
                 self.load_masterframe(device_id=device_id)
 
                 if not self.master_frame_only:
@@ -296,6 +297,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             if dtype == "dark":
                 self.logger.debug(f"[Group {self._current_group+1}] flatdark_output: {self.flatdark_output}")
 
+            print(output_file)
             if os.path.exists(output_file):
                 header = fits.getheader(output_file)
                 if not QAData.check_header(header, dtype):
@@ -434,7 +436,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         self.logger.info(f"[Group {self._current_group+1}] Fetching a nominal master {dtype}")
         # existing_data can be either on-date or off-date
         max_offset = self.config.preprocess.max_offset
-        self.logger.debug(f"[Group {self._current_group+1}] Masterframe Search Template: {template}")
+        self.logger.debug(f"[Group {self._current_group+1}] Masterframe Search ({dtype}) Template: {template}")
         existing_mframe_file = prep_utils.search_with_date_offsets(template, max_offset=max_offset, future=True)
 
         if not existing_mframe_file:
@@ -452,6 +454,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
         # for flatdark
         if dtype == "dark":
+            self.logger.debug(f"[Group {self._current_group+1}] Masterframe Search (flatdark) Template: {template}")
             path = PathHandler(template)
             path.name.exptime = "*"
             flatdark_template = path.preprocess.masterframe

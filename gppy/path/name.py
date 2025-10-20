@@ -181,7 +181,8 @@ class NameHandler:
 
             # override date if nightdate available; vice versa. (some nightdates have multiple dates by TCSpy error)
             if nightdate:
-                date = add_half_day(nightdate)
+                pass
+                # date = add_half_day(nightdate)  # this can mutate the true date crossing midnight
             else:
                 nightdate = subtract_half_day(date)
                 self.nightdate[i] = nightdate
@@ -547,6 +548,9 @@ class NameHandler:
         Builds a string of the form
         "<typ>_<quality>_<unit>_<date>_<bin>_gain<gain>_<camera>.fits",
         skipping any None fields.
+
+        **Note**: date is nightdate + 1, not self.date, which usually is
+        nightdate + 1 but can be the same as the nightdate.
         """
         bin_str = format_binning(nbin)
         gain_str = f"gain{gain}"
@@ -603,12 +607,17 @@ class NameHandler:
 
     @property
     def mbias_basename(self):
+        """use nightdate + 1 instead of date, which can be either nightdate or nightdate + 1"""
         if getattr(self, "_single", False):
-            return self._format_masterframe("bias", None, self.unit, self.date, self.n_binning, self.gain, self.camera)
+            return self._format_masterframe(
+                "bias", None, self.unit, add_half_day(self.nightdate), self.n_binning, self.gain, self.camera
+            )
         else:
             return [
-                self._format_masterframe("bias", None, unit, date, nbin, gain, camera)
-                for unit, date, nbin, gain, camera in zip(self.unit, self.date, self.n_binning, self.gain, self.camera)
+                self._format_masterframe("bias", None, unit, add_half_day(nightdate), nbin, gain, camera)
+                for unit, nightdate, nbin, gain, camera in zip(
+                    self.unit, self.nightdate, self.n_binning, self.gain, self.camera
+                )
             ]
 
     @property
@@ -616,13 +625,15 @@ class NameHandler:
         if getattr(self, "_single", False):
             quality = format_exptime(self.exptime, type="dark")
             return self._format_masterframe(
-                "dark", quality, self.unit, self.date, self.n_binning, self.gain, self.camera
+                "dark", quality, self.unit, add_half_day(self.nightdate), self.n_binning, self.gain, self.camera
             )
         else:
             return [
-                self._format_masterframe("dark", format_exptime(exptime, type="dark"), unit, date, nbin, gain, camera)
-                for exptime, unit, date, nbin, gain, camera in zip(
-                    self.exptime, self.unit, self.date, self.n_binning, self.gain, self.camera
+                self._format_masterframe(
+                    "dark", format_exptime(exptime, type="dark"), unit, add_half_day(nightdate), nbin, gain, camera
+                )
+                for exptime, unit, nightdate, nbin, gain, camera in zip(
+                    self.exptime, self.unit, self.nightdate, self.n_binning, self.gain, self.camera
                 )
             ]
 
@@ -630,13 +641,13 @@ class NameHandler:
     def mflat_basename(self):
         if getattr(self, "_single", False):
             return self._format_masterframe(
-                "flat", self.filter, self.unit, self.date, self.n_binning, self.gain, self.camera
+                "flat", self.filter, self.unit, add_half_day(self.nightdate), self.n_binning, self.gain, self.camera
             )
         else:
             return [
-                self._format_masterframe("flat", filter, unit, date, nbin, gain, camera)
-                for filter, unit, date, nbin, gain, camera in zip(
-                    self.filter, self.unit, self.date, self.n_binning, self.gain, self.camera
+                self._format_masterframe("flat", filter, unit, add_half_day(nightdate), nbin, gain, camera)
+                for filter, unit, nightdate, nbin, gain, camera in zip(
+                    self.filter, self.unit, self.nightdate, self.n_binning, self.gain, self.camera
                 )
             ]
 

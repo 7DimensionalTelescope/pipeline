@@ -354,16 +354,19 @@ class DatabaseHandler:
             self._log_error(f"Failed to delete pipeline cascade: {e}")
             return False
 
-    def clear_database(self) -> bool:
+    def clear_database(self, passkey=None) -> bool:
         """Clear all data from both pipeline and QA tables"""
         try:
             # Clear QA data first (due to foreign key constraints)
-            qa_deleted = self.qa_db.clear_qa_data()
+            if passkey == "WANT TO DELETE ALL":
+                qa_deleted = self.qa_db.clear_qa_data()
 
-            # Clear pipeline data
-            pipeline_deleted = self.pipeline_db.clear_pipeline_data()
+                # Clear pipeline data
+                pipeline_deleted = self.pipeline_db.clear_pipeline_data()
 
-            self._log_info(f"Cleared {qa_deleted} QA records and {pipeline_deleted} pipeline records")
+                self._log_info(f"Cleared {qa_deleted} QA records and {pipeline_deleted} pipeline records")
+            else:
+                self._log_info(f"Enter a correct passkey in order to clean up database.")
             return True
 
         except Exception as e:

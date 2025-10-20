@@ -68,6 +68,8 @@ astrometry:
     ref_query_dir: "/lyman/data1/factory/ref_scamp"
   ahead_file: "/data/pipeline_reform/dhhyun_lab/scamptest/ahead/calib_7DT11_T07304_20250115_050155_g_60_nocrval.ahead"
   local_astref: 
+  scamp_timeout: 30
+  solvefield_timeout: 60
 
 photometry:
   input_images:

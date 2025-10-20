@@ -420,7 +420,7 @@ class ScienceGroup:
             c = SciProcConfiguration.from_config(sci_yml, write=True)  # 5 ms
             # c = SciProcConfiguration(sci_yml, write=True)  # 36 ms
         else:
-            c = SciProcConfiguration(self.image_filesㅇ)
+            c = SciProcConfiguration(self.image_files)
             # c = SciProcConfiguration.base_config(input_images=self.image_files, config_file=sci_yml, logger=True)
             # c = SciProcConfiguration.from_list(self.image_files)
 

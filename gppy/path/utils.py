@@ -284,18 +284,23 @@ def format_camera(serial: str | int):
 # Functions moved from main utils.py that are only used in path modules
 
 
-def add_half_day(timestr: str) -> str:
+def add_half_day(timestr: str, delta_hours: int = 15) -> str:
+    """nightdate to (masterframe) date"""
     dt = datetime.strptime(timestr, "%Y-%m-%d")
-    new_dt = dt + timedelta(days=1)
+    # new_dt = dt + timedelta(days=1)
+    new_dt = dt + timedelta(hours=delta_hours)
     return new_dt.strftime("%Y%m%d")
 
 
-def subtract_half_day(timestr: str) -> str:
+def subtract_half_day(timestr: str, delta_hours: int = 15) -> str:
+    """
+    delta_hours = 15 is from TCSpy convention; usually just a day shift
+    nightdate in folder name = UTC - 15 h"""
     if len(timestr) == 8:
         dt = datetime.strptime(timestr, "%Y%m%d")
     else:
         dt = datetime.strptime(timestr, "%Y%m%d_%H%M%S")
-    new_dt = dt - timedelta(hours=15)  # following TCSpy convention, but actually just a day
+    new_dt = dt - timedelta(hours=delta_hours)
     return new_dt.strftime("%Y-%m-%d")
 
 
@@ -325,7 +330,7 @@ def to_datetime_string(datetime_str, date_only=False):
         return dt.strftime("%Y%m%d_%H%M%S")
 
 
-def get_nightdate(fpath):
+def get_nightdate(fpath: str) -> str | None:
     dirname = os.path.dirname(fpath)
 
     date_regex = re.compile(r"(?P<nightdate>\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))")

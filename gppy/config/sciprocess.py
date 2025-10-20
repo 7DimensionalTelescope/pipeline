@@ -37,7 +37,7 @@ class SciProcConfiguration(BaseConfig):
             clean_up_folder(self.path.factory_dir)
             clean_up_sciproduct(self.path.output_dir)
 
-        if os.path.exists(self.config_file):
+        if not os.path.exists(self.config_file):
             self.write_config()
         self.logger.info("Completed to load configuration")
 

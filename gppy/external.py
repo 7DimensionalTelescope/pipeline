@@ -1,7 +1,11 @@
 import os
+import threading
+import signal
 import subprocess
 import numpy as np
 from astropy.io import fits
+from typing import List
+
 from .const import REF_DIR
 from .utils import add_suffix, force_symlink, swap_ext, read_text_file, ansi_clean, atleast_1d
 from .header import fitsrec_to_header
@@ -206,11 +210,27 @@ def solve_field(
     with open(log_file, "w") as f:
         f.write(solvecom + "\n" * 3)
         f.flush()
-        for line in process.stdout:
-            f.write(line)
-            f.flush()
 
-    process.wait(timeout=timeout)
+        try:
+            for line in process.stdout:
+                f.write(line)
+                f.flush()
+            # wait for process to finish within timeout
+            process.wait(timeout=timeout)
+
+        except subprocess.TimeoutExpired:
+            print(f"Timeout reached ({timeout}s), terminating solve-field...")
+            process.terminate()
+            try:
+                process.wait(5)  # give it a chance to terminate gracefully
+            except subprocess.TimeoutExpired:
+                print("solve-field did not terminate, killing...")
+                process.kill()
+            raise subprocess.TimeoutExpired(f"solve-field timed out after {timeout}s")
+        # except subprocess.CalledProcessError as e:
+        #     print(f"solve-field failed: {e.returncode}")
+        #     print(f"stderr output: {e.stderr.decode()}")
+        #     raise e
 
     if not os.path.exists(swap_ext(soft_link, ".solved")):
         raise FileNotFoundError(f"Solve-field failed: {swap_ext(soft_link, '.solved')} not found")
@@ -223,14 +243,15 @@ def scamp(
     input,
     scampconfig=None,
     scamp_preset="prep",
-    overwrite=True,
+    overwrite=True,  # regardlessly always overwrite
     ahead=None,
     path_ref_scamp=None,
     local_astref=None,
     get_command=False,
     clean_log=True,
     scamp_args: str = None,
-) -> list[str]:
+    timeout=30,
+) -> List[str]:
     """
     Input is a fits-ldac catalog or a text file of those catalogs.
     Supply a text file of catalog filenames to run multiple catalogs jointly.
@@ -243,6 +264,7 @@ def scamp(
     get_command: bool = False
     clean_log: bool = True
     scamp_args: str = None
+    timeout: int = 30  # based on the extremely dense field test of ~26 seconds
     """
     scampconfig = scampconfig or os.path.join(REF_DIR, f"scamp_7dt_{scamp_preset}.config")
     # "/data/pipeline_reform/dhhyun_lab/scamptest/7dt.scamp"
@@ -281,8 +303,7 @@ def scamp(
     if scamp_args:
         scampcom = f"{scampcom} {scamp_args}"
 
-    scampcom = f"{scampcom} >> {log_file} 2>&1"
-    # print(scampcom)
+    # scampcom = f"{scampcom} >> {log_file} 2>&1"
 
     if get_command:
         return scampcom
@@ -295,19 +316,61 @@ def scamp(
         f.write(scampcom)
         f.write("\n" * 3)
 
-    os.system(scampcom)
-    # scampcom = f"scamp -c {scampconfig} {outcat} -REFOUT_CATPATH {path_ref_scamp} -AHEADER_NAME {ahead_file}"
-    # subprocess.run(f"{scampcom} > {log_file} 2>&1", shell=True, text=True)
+    # old way
+    # os.system(scampcom)
 
-    # astrefcat = f"{path_ref_scamp}/{obj}.fits" if 'path_astrefcat' not in upaths or upaths['path_astrefcat'] == '' else upaths['path_astrefcat']
-    # scamp_addcom = f"-ASTREF_CATALOG FILE -ASTREFCAT_NAME {astrefcat}"
-    # scamp_addcom = f"-REFOUT_CATPATH {path_ref_scamp}"
-    # try:
-    #     result = subprocess.run(scampcom, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    #     print(result.stdout.decode())
-    # except subprocess.CalledProcessError as e:
-    #     print(f"Command failed with error code {e.returncode}")
-    #     print(f"stderr output: {e.stderr.decode()}")
+    # # scampcom = f"scamp -c {scampconfig} {outcat} -REFOUT_CATPATH {path_ref_scamp} -AHEADER_NAME {ahead_file}"
+    # # subprocess.run(f"{scampcom} > {log_file} 2>&1", shell=True, text=True)
+
+    # # astrefcat = f"{path_ref_scamp}/{obj}.fits" if 'path_astrefcat' not in upaths or upaths['path_astrefcat'] == '' else upaths['path_astrefcat']
+    # # scamp_addcom = f"-ASTREF_CATALOG FILE -ASTREFCAT_NAME {astrefcat}"
+    # # scamp_addcom = f"-REFOUT_CATPATH {path_ref_scamp}"
+    # # try:
+    # #     result = subprocess.run(scampcom, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # #     print(result.stdout.decode())
+    # # except subprocess.CalledProcessError as e:
+    # #     print(f"Command failed with error code {e.returncode}")
+    # #     print(f"stderr output: {e.stderr.decode()}")
+
+    proc = subprocess.Popen(
+        scampcom,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,  # merged, preserves order
+        text=True,
+        bufsize=1,
+        preexec_fn=os.setsid,  # <-- new group so we can kill all children
+    )
+
+    # stream output concurrently so wait(timeout=...) can actually fire
+    def pump():
+        with open(log_file, "a", encoding="utf-8", errors="replace") as f:
+            for line in iter(proc.stdout.readline, ""):
+                f.write(line)
+                f.flush()
+        proc.stdout.close()
+
+    t = threading.Thread(target=pump, daemon=True)
+    t.start()
+
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        # kill the whole process group, not just the parent
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        finally:
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(proc.pid, signal.SIGKILL)
+        with open(log_file, "a", encoding="utf-8", errors="replace") as f:
+            f.write(f"\n[timed out after {timeout}s]\n")
+        raise TimeoutError(f"SCAMP timed out after {timeout}s. See log: {log_file}") from e
+
+    finally:
+        t.join(timeout=5)
+
     for solved_head in output_list:
         if not os.path.exists(solved_head):
             raise FileNotFoundError(f"SCAMP output (.head) does not exist: {solved_head}\nCheck Log file: {log_file}")

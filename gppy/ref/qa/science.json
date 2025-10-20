@@ -1,0 +1,9 @@
+{
+    "SCIENCE": {
+        "TEST": {
+            "value": [1, 514],
+            "criteria": "within",
+            "description": "Median clipping value must be ≥ 512"
+        }
+    }
+} 

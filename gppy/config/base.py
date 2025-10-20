@@ -1,8 +1,9 @@
+import os
 import yaml
 from datetime import datetime
 from abc import ABC, abstractmethod
 from .. import __version__
-from .utils import merge_dicts
+from .utils import merge_dicts, merge_missing
 from ..path.path import PathHandler
 
 
@@ -190,6 +191,35 @@ class BaseConfig(ABC):
 
         # return BaseConfig(config_source=config_dict, write=False)
         return SciProcConfiguration.from_dict(config_dict)
+
+    def fill_missing_from_yaml(self, base_yaml: str = None, exclude_top_level=None):
+        """
+        Add ONLY missing keys to the current config from a YAML file of defaults.
+        Returns a list of dotted-key paths that were added.
+        """
+
+        if exclude_top_level is None:
+            exclude_top_level = {"name", "process_id", "info", "input", "logging"}
+
+        base_yaml = base_yaml or getattr(self.path, "sciproc_base_yml", None)
+        if not base_yaml or not os.path.exists(base_yaml):
+            return []
+
+        with open(base_yaml, "r") as f:
+            base_defaults = yaml.load(f, Loader=yaml.FullLoader) or {}
+
+        # mutate backing dict in place
+        merge_missing(self._config_in_dict, base_defaults, exclude_top_level=exclude_top_level)
+
+        # Rebuild instances once without spamming writes
+        was_initialized = getattr(self, "_initialized", False)
+        try:
+            self._initialized = False
+            self._make_instance()
+        finally:
+            self._initialized = was_initialized
+
+        return
 
 
 class ConfigurationInstance:
