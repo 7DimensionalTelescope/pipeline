@@ -284,11 +284,10 @@ def format_camera(serial: str | int):
 # Functions moved from main utils.py that are only used in path modules
 
 
-def add_half_day(timestr: str, delta_hours: int = 15) -> str:
+def add_half_day(timestr: str) -> str:
     """nightdate to (masterframe) date"""
     dt = datetime.strptime(timestr, "%Y-%m-%d")
-    # new_dt = dt + timedelta(days=1)
-    new_dt = dt + timedelta(hours=delta_hours)
+    new_dt = dt + timedelta(days=1)
     return new_dt.strftime("%Y%m%d")
 
 
