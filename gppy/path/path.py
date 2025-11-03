@@ -11,152 +11,11 @@ from ..utils import add_suffix, swap_ext, collapse, atleast_1d
 from .name import NameHandler
 from .utils import format_exptime
 from .utils import broadcast_join_pure as bjoin
-
-
-class SingletonUnpackMixin:
-    """Automatically unpacks singleton lists when _single is True"""
-
-    def __getattribute__(self, name):
-        if name.startswith("_"):
-            return object.__getattribute__(self, name)
-
-        value = object.__getattribute__(self, name)
-
-        # Unpack singleton lists if _single is True
-        if (
-            "_single" in self.__dict__
-            and object.__getattribute__(self, "_single")
-            and isinstance(value, list)
-            and len(value) == 1
-        ):
-            value = value[0]
-
-        return value
-
-
-class AutoCollapseMixin:
-    """Automatically collapses the output when it is a list of uniformly
-    releated elemements"""
-
-    # Define which attributes should be collapsed
-    _collapse_exclude = {}  # "output_name", "name", "preprocess"}
-    _collapse_include = {"masterframe"}  # "output_dir", "image_dir", "factory_dir", "stacked_dir"}
-
-    def __getattribute__(self, name):
-        # if name.startswith("_"):
-        #     return object.__getattribute__(self, name)
-
-        # value = object.__getattribute__(self, name)
-        value = super().__getattribute__(name)
-
-        if name.startswith("_"):
-            return value
-
-        # print("collapse", name, value)
-
-        # Collapse if explicitly included or path-like list
-        if name not in self._collapse_exclude and (
-            name in self._collapse_include
-            or (isinstance(value, list) and all(isinstance(v, (str, Path)) for v in value))
-        ):
-            # print("being collapsed", name, value)
-            return collapse(value)
-
-        return value
-
-    # def __getattribute__(self, name):
-    #     if name.startswith("_"):
-    #         return object.__getattribute__(self, name)
-
-    #     value = object.__getattribute__(self, name)
-    #     # Only collapse specific attributes or path-like lists
-    #     should_collapse = (
-    #         (name in getattr(self, "_collapse_include", set()) and name not in self._collapse_exclude)
-    #         or (isinstance(value, list) and all(isinstance(p, (str, Path)) for p in value))
-    #         or (isinstance(value, list) and "_yml" in name)
-    #         or (isinstance(value, list) and "_dir" in name)
-    #         or (isinstance(value, list) and "_log" in name)
-    #     )
-
-    #     if should_collapse:
-    #         return collapse(value)
-
-    #     return value
-
-
-class AutoMkdirMixin:
-    """This makes sure accessed dirs exist. Prepend _ to variables to prevent mkdir"""
-
-    _mkdir_exclude = {"output_name", "config_stem", "name", "changelog_dir"}  # subclasses can override this
-
-    def __init_subclass__(cls):
-        # Ensure subclasses have their own created-directory cache
-        cls._created_dirs_cache = set()
-
-    def __getattribute__(self, name):
-        """CAVEAT: This runs every time attr is accessed. Keep it short."""
-        # if name.startswith("_"):  # Bypass all custom logic for private attributes
-        #     return object.__getattribute__(self, name)
-
-        # value = object.__getattribute__(self, name)
-
-        value = super().__getattribute__(name)
-
-        if name.startswith("_"):
-            return value
-
-        # print("mkdir", name)
-
-        # Skip excluded attributes
-        if name in object.__getattribute__(self, "_mkdir_exclude"):
-            return value
-
-        # Handle vectorized paths
-        if isinstance(value, list) and all(isinstance(p, (str, Path)) for p in value):
-            for p in value:
-                self._mkdir(p)
-        elif isinstance(value, (str, Path)):
-            self._mkdir(value)
-
-        # # DEBUG
-        # for key in ["BIAS", "DARK", "FLAT"]:
-        #     if isinstance(value, str) and key in os.path.dirname(value):
-        #         print(f"AutoMkdirMixin _mkdir {name} {value}")
-        #         raise RuntimeError(f"AutoMkdirMixin _mkdir {name} {value}")
-
-        return value
-
-    # def __getattr__(self, name):
-    #     if name.startswith("_"):  # Bypass all custom logic for private attributes
-    #         return object.__getattribute__(self, name)
-
-    #     value = object.__getattribute__(self, name)
-
-    #     if name in object.__getattribute__(self, "_mkdir_exclude"):
-    #         return value
-
-    #     if isinstance(value, list) and all(isinstance(p, (str, Path)) for p in value):
-    #         for p in value:
-    #             self._mkdir(p)
-    #     elif isinstance(value, (str, Path)):
-    #         self._mkdir(value)
-
-    #     return value
-
-    def _mkdir(self, value):
-        p = Path(value).expanduser()  # understands ~/
-        d = p.parent if p.suffix else p  # ensure directory
-
-        # Use mixin's own per-instance cache
-        created_dirs = object.__getattribute__(self, "_created_dirs_cache")
-
-        if d not in created_dirs and not d.exists():  # check cache first for performance
-            d.mkdir(parents=True, exist_ok=True)
-            created_dirs.add(d)
+from .mixin import AutoMkdirMixin, AutoCollapseMixin
 
 
 # AutoMkdirMixin super() allows AutoCollapseMixin to run first.
-class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # SingletonUnpackMixin, Check MRO: PathHandler.mro()
+class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.mro()
     """
     A comprehensive path handler for 7DT pipeline.
     It defines source and destination file paths in all stages of the pipeline
@@ -1054,7 +913,9 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
     @property
     def masterframe(self):
         """
-        Deletages NameHandler.masterframe_basename to make a full absolute path
+        * This relies on const.MASTER_FRAME_DIR being set in .env
+
+        Delegates NameHandler.masterframe_basename to make a full absolute path
         tuple(z, d, f) if science, just list[str] | str if calib
         """
 

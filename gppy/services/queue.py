@@ -73,6 +73,7 @@ class QueueManager:
         logger: Optional[Logger] = None,
         save_result: bool = False,
         auto_start: bool = False,
+        process_timeout: int = 7200,  # 2 hours default timeout
         **kwargs,
     ):
         # Initialize logging
@@ -98,7 +99,7 @@ class QueueManager:
 
         # Optional: Jupyter notebook interrupt handling
         try:
-            get_ipython  # Check if running in Jupyter
+            get_ipython()  # Check if running in Jupyter
             from ipykernel.kernelbase import Kernel
 
             Kernel.raw_interrupt_handler = self._jupyter_interrupt_handler
@@ -113,6 +114,7 @@ class QueueManager:
             self.ptype = None
 
         self.save_result = save_result
+        self.process_timeout = process_timeout
         self.logger.debug("QueueManager Initialization complete")
 
     def _start_workers(self, process_type="scheduler"):
@@ -153,6 +155,9 @@ class QueueManager:
             self.processing_thread.start()
             self.completion_thread = threading.Thread(target=self._scheduler_completion_worker, daemon=True)
             self.completion_thread.start()
+            # Start health monitoring thread
+            self.health_thread = threading.Thread(target=self._monitor_process_health, daemon=True)
+            self.health_thread.start()
             self.ptype = "scheduler"
         else:
             self.ptype = None
@@ -392,6 +397,39 @@ class QueueManager:
                 time.sleep(0.2)
                 continue
 
+    def _create_subprocess(self, cmd):
+        """
+        Create subprocess with proper configuration and error handling.
+
+        Args:
+            cmd (list): Command to execute
+
+        Returns:
+            subprocess.Popen: Configured subprocess instance
+
+        Raises:
+            RuntimeError: If process fails to start
+        """
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                start_new_session=True,  # Ensure clean process group
+            )
+
+            # Verify process actually started
+            time.sleep(0.1)
+            if proc.poll() is not None:
+                # Process died immediately
+                stdout, stderr = proc.communicate()
+                error_msg = stderr.decode() if stderr else "Unknown error"
+                raise RuntimeError(f"Process failed to start: {error_msg}")
+
+            return proc
+
+        except Exception as e:
+            self.logger.error(f"Failed to create subprocess for {cmd}: {e}")
+            raise
+
     def _scheduler_worker(self):
         """
         Worker thread for subprocess scheduling.
@@ -404,9 +442,10 @@ class QueueManager:
             try:
                 self._check_abrupt_stop()
 
-                if len(self._active_processes) > self.total_cpu_worker:
-                    time.sleep(1)
-                    continue
+                with self.lock:  # Thread-safe access to active processes
+                    if len(self._active_processes) > self.total_cpu_worker:
+                        time.sleep(1)
+                        continue
 
                 try:
                     cmd = self.scheduler.get_next_task()
@@ -419,11 +458,14 @@ class QueueManager:
                     continue
 
                 try:
-                    proc = subprocess.Popen(cmd)
+                    proc = self._create_subprocess(cmd)
 
                     # Extract config path from command for tracking
                     config = cmd[cmd.index("-config") + 1] if "-config" in cmd else "unknown"
-                    self._active_processes.append([config, proc])
+
+                    with self.lock:  # Thread-safe modification
+                        self._active_processes.append([config, proc, time.time()])
+
                     self.logger.info(f"Process with {os.path.basename(config)} (PID = {proc.pid}) submitted.")
                     time.sleep(0.5)
 
@@ -433,7 +475,8 @@ class QueueManager:
                     self.logger.error(f"Error in processing worker: {e}")
                     time.sleep(0.5)
                     traceback.print_exc()
-                    raise
+                    # Don't raise - continue processing other tasks
+                    continue
 
             except AbruptStopException:
                 self.logger.info(f"Processing worker stopped.")
@@ -442,37 +485,154 @@ class QueueManager:
             except Exception as e:
                 self.logger.error(f"Error in processing worker: {e}")
                 time.sleep(0.5)
-                raise
+                # Don't raise - continue processing
+                continue
 
     def _scheduler_completion_worker(self):
         """
         Worker thread for monitoring subprocess completion.
 
         Continuously checks the status of active subprocesses and updates
-        the scheduler when processes complete.
+        the scheduler when processes complete. Includes timeout handling
+        and proper cleanup of failed processes.
         """
         while not self._stop_event.is_set():
             try:
-                for process in list(self._active_processes):  # (config_path, proc)
-                    config, proc = process
-                    if proc.poll() is not None:  # Process finished
-                        pid = proc.pid
-                        success = proc.returncode == 0
+                current_time = time.time()
+                processes_to_remove = []
 
-                        if success:
-                            self.logger.info(f"Process with {config} (PID = {pid}) completed.")
-                        else:
-                            self.logger.error(
-                                f"Process with {os.path.basename(config)} (PID = {pid}) failed with return code {proc.returncode}."
-                            )
+                with self.lock:  # Thread-safe access
+                    for process in list(self._active_processes):  # (config_path, proc, start_time)
+                        config, proc, start_time = process
 
-                        self.scheduler.mark_done(config, success=success)
+                        if proc.poll() is not None:  # Process finished
+                            pid = proc.pid
+                            success = proc.returncode == 0
+
+                            # Get process output for logging
+                            try:
+                                stdout, stderr = proc.communicate(timeout=1)
+                                stdout_str = stdout.decode() if stdout else ""
+                                stderr_str = stderr.decode() if stderr else ""
+                            except subprocess.TimeoutExpired:
+                                stdout_str = stderr_str = "Output collection timed out"
+                            except Exception:
+                                stdout_str = stderr_str = "Could not collect output"
+
+                            if success:
+                                self.logger.info(f"Process with {config} (PID = {pid}) completed successfully.")
+                                if stdout_str.strip():
+                                    self.logger.debug(f"Process {config} stdout: {stdout_str[:500]}...")
+                            else:
+                                self.logger.error(
+                                    f"Process with {os.path.basename(config)} (PID = {pid}) failed with return code {proc.returncode}."
+                                )
+                                if stderr_str.strip():
+                                    self.logger.error(f"Process {config} stderr: {stderr_str[:500]}...")
+
+                            self.scheduler.mark_done(config, success=success)
+                            processes_to_remove.append(process)
+
+                        else:  # Process still running
+                            # Check for timeout (default: 2 hours)
+                            timeout_seconds = getattr(self, "process_timeout", 7200)  # 2 hours default
+                            if current_time - start_time > timeout_seconds:
+                                pid = proc.pid
+                                self.logger.warning(
+                                    f"Process with {os.path.basename(config)} (PID = {pid}) timed out after {timeout_seconds} seconds. Killing..."
+                                )
+
+                                try:
+                                    # Try graceful termination first
+                                    proc.terminate()
+                                    try:
+                                        proc.wait(timeout=10)  # Wait 10 seconds for graceful exit
+                                    except subprocess.TimeoutExpired:
+                                        # Force kill if graceful termination fails
+                                        self.logger.warning(f"Force killing process {pid}")
+                                        proc.kill()
+                                        proc.wait()  # Wait for kill to complete
+
+                                    self.logger.error(f"Process {config} (PID = {pid}) killed due to timeout.")
+                                    self.scheduler.mark_done(config, success=False)
+                                    processes_to_remove.append(process)
+
+                                except Exception as kill_error:
+                                    self.logger.error(f"Failed to kill timed out process {pid}: {kill_error}")
+                                    # Still mark as failed even if we can't kill it
+                                    self.scheduler.mark_done(config, success=False)
+                                    processes_to_remove.append(process)
+
+                # Remove completed/timed out processes
+                for process in processes_to_remove:
+                    if process in self._active_processes:
                         self._active_processes.remove(process)
 
                 time.sleep(0.5)
             except Exception as e:
                 self.logger.error(f"Error in completion worker: {e}")
                 time.sleep(0.2)
+
+    def _monitor_process_health(self):
+        """
+        Monitor processes for health issues and resource consumption.
+
+        This method runs in a separate thread to monitor active processes
+        for potential issues like excessive memory usage or unresponsive behavior.
+        """
+        while not self._stop_event.is_set():
+            try:
+                if not hasattr(self, "_active_processes") or not self._active_processes:
+                    time.sleep(300)  # Check every minute if no processes
+                    continue
+
+                current_time = time.time()
+                processes_to_check = []
+
+                with self.lock:
+                    processes_to_check = list(self._active_processes)
+
+                for process in processes_to_check:
+                    config, proc, start_time = process
+
+                    if proc.poll() is not None:
+                        continue  # Process already finished
+
+                    runtime = current_time - start_time
+
+                    # Check for long-running processes
+                    if runtime > 3600:  # 1 hour
+                        self.logger.warning(f"Process {config} has been running for {runtime/3600:.1f} hours")
+
+                    # Check for excessive memory usage (if psutil is available)
+                    try:
+                        import psutil
+
+                        try:
+                            process_info = psutil.Process(proc.pid)
+                            memory_mb = process_info.memory_info().rss / 1024 / 1024
+
+                            if memory_mb > 8192:  # 8GB
+                                self.logger.warning(f"Process {config} using {memory_mb:.0f}MB of memory")
+
+                            # Check CPU usage over last 5 seconds
+                            cpu_percent = process_info.cpu_percent(interval=1)
+                            if cpu_percent > 400:  # Very high CPU usage
+                                self.logger.warning(f"Process {config} using {cpu_percent:.1f}% CPU")
+
+                        except psutil.NoSuchProcess:
+                            # Process died between checks
+                            continue
+
+                    except ImportError:
+                        # psutil not available, skip resource monitoring
+                        pass
+
+                time.sleep(60)  # Check every minute
+
+            except Exception as e:
+                self.logger.error(f"Error in process health monitoring: {e}")
+                time.sleep(60)
 
     def stop_processing(self, *args):
         """
@@ -553,6 +713,8 @@ class QueueManager:
             # Wait for all threads to finish
             self.processing_thread.join(timeout=2.0)
             self.completion_thread.join(timeout=2.0)
+            if hasattr(self, "health_thread"):
+                self.health_thread.join(timeout=2.0)
 
             # Log shutdown details
             self.logger.info("All task processing stopped")
@@ -672,3 +834,52 @@ class QueueManager:
         self.logger.warning("Jupyter notebook interrupt detected. Initiating abrupt stop...")
         self.abrupt_stop()
         raise KeyboardInterrupt()
+
+    def get_process_status(self):
+        """
+        Get current status of all active processes.
+
+        Returns:
+            dict: Dictionary containing process status information
+        """
+        if not hasattr(self, "_active_processes"):
+            return {"active_processes": 0, "processes": []}
+
+        with self.lock:
+            processes_info = []
+            current_time = time.time()
+
+            for process in self._active_processes:
+                config, proc, start_time = process
+                runtime = current_time - start_time
+
+                process_info = {
+                    "config": config,
+                    "pid": proc.pid,
+                    "start_time": start_time,
+                    "runtime_seconds": runtime,
+                    "runtime_hours": runtime / 3600,
+                    "status": "running" if proc.poll() is None else "finished",
+                }
+
+                # Add resource usage if psutil is available
+                try:
+                    import psutil
+
+                    try:
+                        process_obj = psutil.Process(proc.pid)
+                        process_info["memory_mb"] = process_obj.memory_info().rss / 1024 / 1024
+                        process_info["cpu_percent"] = process_obj.cpu_percent()
+                    except psutil.NoSuchProcess:
+                        process_info["status"] = "finished"
+                except ImportError:
+                    pass
+
+                processes_info.append(process_info)
+
+        return {
+            "active_processes": len(processes_info),
+            "processes": processes_info,
+            "max_workers": self.total_cpu_worker,
+            "process_timeout": getattr(self, "process_timeout", 7200),
+        }

@@ -13,9 +13,9 @@
     },
     "DARK": {
         "UNIFORM": {
-            "value": -2.15,
-            "criteria": "lte",
-            "description": "Uniformity measure must be ≤ -2.15"
+            "value": 2.15,
+            "criteria": "gte",
+            "description": "Uniformity measure must be ≥ 2.15"
         }
     },
     "FLAT": {

@@ -127,7 +127,6 @@ def search_with_date_offsets(template, max_offset=300, future=False):
                         continue
                 else:
                     minimum = PathHandler(matches).get_minimum("exptime")
-                    print(minimum)
                     if Checker().sanity_check(minimum):
                         return minimum
                     else:

@@ -2,7 +2,7 @@ import os
 from typing import List, Tuple
 from collections import defaultdict
 from pathlib import Path
-from .utils import subtract_half_day, get_gain, get_nightdate, add_half_day
+from .utils import subtract_half_day, get_gain, get_nightdate, add_a_day
 from ..utils import equal_on_keys, collapse, get_header
 from .. import const
 from .utils import strip_binning, format_binning, strip_exptime, format_exptime, strip_gain, format_camera
@@ -610,11 +610,11 @@ class NameHandler:
         """use nightdate + 1 instead of date, which can be either nightdate or nightdate + 1"""
         if getattr(self, "_single", False):
             return self._format_masterframe(
-                "bias", None, self.unit, add_half_day(self.nightdate), self.n_binning, self.gain, self.camera
+                "bias", None, self.unit, add_a_day(self.nightdate), self.n_binning, self.gain, self.camera
             )
         else:
             return [
-                self._format_masterframe("bias", None, unit, add_half_day(nightdate), nbin, gain, camera)
+                self._format_masterframe("bias", None, unit, add_a_day(nightdate), nbin, gain, camera)
                 for unit, nightdate, nbin, gain, camera in zip(
                     self.unit, self.nightdate, self.n_binning, self.gain, self.camera
                 )
@@ -625,12 +625,12 @@ class NameHandler:
         if getattr(self, "_single", False):
             quality = format_exptime(self.exptime, type="dark")
             return self._format_masterframe(
-                "dark", quality, self.unit, add_half_day(self.nightdate), self.n_binning, self.gain, self.camera
+                "dark", quality, self.unit, add_a_day(self.nightdate), self.n_binning, self.gain, self.camera
             )
         else:
             return [
                 self._format_masterframe(
-                    "dark", format_exptime(exptime, type="dark"), unit, add_half_day(nightdate), nbin, gain, camera
+                    "dark", format_exptime(exptime, type="dark"), unit, add_a_day(nightdate), nbin, gain, camera
                 )
                 for exptime, unit, nightdate, nbin, gain, camera in zip(
                     self.exptime, self.unit, self.nightdate, self.n_binning, self.gain, self.camera
@@ -641,11 +641,11 @@ class NameHandler:
     def mflat_basename(self):
         if getattr(self, "_single", False):
             return self._format_masterframe(
-                "flat", self.filter, self.unit, add_half_day(self.nightdate), self.n_binning, self.gain, self.camera
+                "flat", self.filter, self.unit, add_a_day(self.nightdate), self.n_binning, self.gain, self.camera
             )
         else:
             return [
-                self._format_masterframe("flat", filter, unit, add_half_day(nightdate), nbin, gain, camera)
+                self._format_masterframe("flat", filter, unit, add_a_day(nightdate), nbin, gain, camera)
                 for filter, unit, nightdate, nbin, gain, camera in zip(
                     self.filter, self.unit, self.nightdate, self.n_binning, self.gain, self.camera
                 )

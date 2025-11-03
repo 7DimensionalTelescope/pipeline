@@ -7,7 +7,7 @@ import os
 import pandas as pd
 
 # Import data classes
-from .table import QAData
+from .table import QAData, PipelineData
 from .const import DB_PARAMS
 from .base import BaseDatabase, DatabaseError
 
@@ -93,8 +93,8 @@ class QADB(BaseDatabase):
                     params["qa_id"] = qa_id
 
                 if pipeline_id is not None:
-                    where_clauses.append("pipeline_id = %(pipeline_id)s")
-                    params["pipeline_id"] = pipeline_id
+                    where_clauses.append("pipeline_id_id = %(pipeline_id)s")
+                    params["pipeline_id_id"] = pipeline_id
 
                 if qa_type:
                     where_clauses.append("qa_type = %(qa_type)s")
@@ -107,12 +107,13 @@ class QADB(BaseDatabase):
                 # Build query
                 query = """
                     SELECT 
-                        id, qa_id, qa_type, imagetyp, filter, clipmed, clipstd,
-                        clipmin, clipmax, nhotpix, ntotpix, seeing, ellipticity,
-                        rotang1, astrometric_offset, skyval, skysig, zp_auto, ezp_auto,
+                        id, qa_id, qa_type, imagetyp, filter, date_obs, clipmed, clipstd,
+                        clipmin, clipmax, nhotpix, ntotpix, seeing, rotang,
+                        peeing, ptnoff, visible, skyval, skysig, zp_auto, ezp_auto,
                         ul5_5, stdnumb, created_at, updated_at, pipeline_id_id,
                         edgevar, exptime, filename, sanity, sigmean, trimmed, unmatch,
-                        rsep_rms, rsep_q2, uniform, awincrmn, ellipmn, rsep_p95, pa_align
+                        rsep_rms, rsep_q2, uniform, awincrmn, ellipmn, rsep_p95, pa_align,
+                        q_desc, eye_insp
                     FROM pipeline_qa
                 """
 
@@ -211,17 +212,44 @@ class QADB(BaseDatabase):
         except Exception as e:
             raise QADBError(f"Failed to delete QA data: {e}")
 
+    def delete_qa_data_by_pipeline_id(self, pipeline_id: int) -> bool:
+        """Delete all QA data records for a specific pipeline ID"""
+        try:
+            with self.get_connection() as conn:
+                query = "DELETE FROM pipeline_qa WHERE pipeline_id_id = %s"
+
+                with conn.cursor() as cur:
+                    cur.execute(query, (pipeline_id,))
+                    rows_affected = cur.rowcount
+                    conn.commit()
+
+                    return True
+
+        except Exception as e:
+            raise QADBError(f"Failed to delete QA data by pipeline ID: {e}")
+
     def _find_existing_qa_data(self, qa_data: QAData) -> Optional[str]:
-        """Find existing QA data record by key fields"""
+        """Find existing QA data record by key fields including filename"""
         try:
             with self.get_connection() as conn:
                 # Build WHERE clause based on key identifying fields
+                # Priority: Check by filename first (most specific), then by other fields
                 where_clauses = []
                 params = {}
 
+                # Priority: Check by filename first (most specific identifier to prevent duplicates)
+                # Don't check by qa_id when looking for existing records (qa_id is generated new each time)
+                # Only use qa_id if explicitly looking for a specific record
+
                 if qa_data.qa_id:
+                    # If qa_id is provided and we're looking for a specific record, use it
                     where_clauses.append("qa_id = %(qa_id)s")
                     params["qa_id"] = qa_data.qa_id
+
+                # Always check by filename if provided (primary duplicate prevention)
+                if qa_data.filename:
+                    where_clauses.append("filename = %(filename)s")
+                    params["filename"] = qa_data.filename
 
                 if qa_data.pipeline_id_id is not None:
                     where_clauses.append("pipeline_id_id = %(pipeline_id_id)s")
@@ -239,9 +267,23 @@ class QADB(BaseDatabase):
                     where_clauses.append("imagetyp = %(imagetyp)s")
                     params["imagetyp"] = qa_data.imagetyp
 
-                # Need at least some identifying fields to find existing record
-                if not where_clauses:
-                    return None
+                # If filename is provided, require pipeline_id, qa_type, imagetyp for a match
+                # This ensures we find the correct existing record by filename
+                if qa_data.filename:
+                    # Require pipeline_id, qa_type, and imagetyp along with filename
+                    # Don't require qa_id (it's generated new each time)
+                    if qa_data.pipeline_id_id is None or not qa_data.qa_type or not qa_data.imagetyp:
+                        # Not enough info to find existing record by filename
+                        return None
+                    # Remove qa_id from the check when filename is provided (to find existing records)
+                    # Keep only filename, pipeline_id, qa_type, imagetyp
+                    where_clauses = [clause for clause in where_clauses if not clause.startswith("qa_id =")]
+                    if "qa_id" in params:
+                        del params["qa_id"]
+                else:
+                    # Without filename, need at least some identifying fields
+                    if not where_clauses:
+                        return None
 
                 where_clause = " AND ".join(where_clauses)
 
@@ -265,53 +307,6 @@ class QADB(BaseDatabase):
             # If there's an error finding existing record, return None to create new
             return None
 
-    def get_qa_summary_for_pipeline(self, pipeline_id: int) -> Dict[str, Any]:
-        """Get QA summary statistics for a specific pipeline"""
-        try:
-            qa_data = self.read_qa_data(pipeline_id=pipeline_id)
-            if not isinstance(qa_data, list):
-                qa_data = [qa_data] if qa_data else []
-
-            if not qa_data:
-                return {"total_count": 0, "types": [], "by_type": {}, "quality_metrics": {}}
-
-            # Group by type and calculate metrics
-            qa_by_type = {}
-            quality_metrics = {"total_seeing": 0, "total_ellipticity": 0, "total_skyval": 0, "valid_metrics": 0}
-
-            for qa in qa_data:
-                qa_type = qa.qa_type or "unknown"
-                if qa_type not in qa_by_type:
-                    qa_by_type[qa_type] = []
-                qa_by_type[qa_type].append(qa)
-
-                # Aggregate quality metrics
-                if qa.seeing is not None:
-                    quality_metrics["total_seeing"] += qa.seeing
-                    quality_metrics["valid_metrics"] += 1
-                if qa.ellipticity is not None:
-                    quality_metrics["total_ellipticity"] += qa.ellipticity
-                if qa.skyval is not None:
-                    quality_metrics["total_skyval"] += qa.skyval
-
-            # Calculate averages
-            if quality_metrics["valid_metrics"] > 0:
-                quality_metrics["avg_seeing"] = quality_metrics["total_seeing"] / quality_metrics["valid_metrics"]
-                quality_metrics["avg_ellipticity"] = (
-                    quality_metrics["total_ellipticity"] / quality_metrics["valid_metrics"]
-                )
-                quality_metrics["avg_skyval"] = quality_metrics["total_skyval"] / quality_metrics["valid_metrics"]
-
-            return {
-                "total_count": len(qa_data),
-                "types": list(qa_by_type.keys()),
-                "by_type": {k: len(v) for k, v in qa_by_type.items()},
-                "quality_metrics": quality_metrics,
-            }
-
-        except Exception as e:
-            return {"total_count": 0, "types": [], "by_type": {}, "quality_metrics": {}, "error": str(e)}
-
     def export_qa_data_to_table(self) -> pd.DataFrame:
         """Export QA data to pandas DataFrame"""
         return self.export_to_table("pipeline_qa", "created_at DESC")
@@ -323,3 +318,210 @@ class QADB(BaseDatabase):
     def clear_qa_data(self) -> bool:
         """Clear all QA data"""
         return self.clear_table("pipeline_qa")
+
+    def get_enhanced_qa_records(self, qa_type: str, param: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Get QA records enhanced with pipeline properties in a single query.
+        Much faster than the for loop approach.
+
+        Args:
+            qa_type: QA type to filter by ('bias', 'dark', 'flat', 'science')
+            param: Optional parameter name to filter (only return this parameter)
+
+        Returns:
+            List of dictionaries with QA data enhanced with pipeline properties
+        """
+        try:
+            # Validate qa_type
+            valid_types = {"bias", "dark", "flat", "science"}
+            if qa_type not in valid_types:
+                return []
+
+            with self.get_connection() as conn:
+                # Base columns always needed for filtering/grouping
+                base_columns = [
+                    "qa.qa_type",
+                    "qa.created_at",
+                    "qa.date_obs",
+                    "p.unit",
+                    "p.filt",
+                    "p.obj",
+                    "p.date as run_date",
+                ]
+
+                # If param is specified, only select that parameter column
+                if param:
+                    # Map parameter names to database column names
+                    param_to_column = {
+                        "clipmed": "qa.clipmed",
+                        "clipstd": "qa.clipstd",
+                        "clipmin": "qa.clipmin",
+                        "clipmax": "qa.clipmax",
+                        "nhotpix": "qa.nhotpix",
+                        "ntotpix": "qa.ntotpix",
+                        "seeing": "qa.seeing",
+                        "rotang": "qa.rotang",
+                        "peeing": "qa.peeing",
+                        "ptnoff": "qa.ptnoff",
+                        "visible": "qa.visible",
+                        "skyval": "qa.skyval",
+                        "skysig": "qa.skysig",
+                        "zp_auto": "qa.zp_auto",
+                        "ezp_auto": "qa.ezp_auto",
+                        "ul5_5": "qa.ul5_5",
+                        "stdnumb": "qa.stdnumb",
+                        "edgevar": "qa.edgevar",
+                        "exptime": "qa.exptime",
+                        "sigmean": "qa.sigmean",
+                        "unmatch": "qa.unmatch",
+                        "rsep_rms": "qa.rsep_rms",
+                        "rsep_q2": "qa.rsep_q2",
+                        "uniform": "qa.uniform",
+                        "awincrmn": "qa.awincrmn",
+                        "ellipmn": "qa.ellipmn",
+                        "rsep_p95": "qa.rsep_p95",
+                        "pa_align": "qa.pa_align",
+                    }
+
+                    # Check if param exists in mapping
+                    if param in param_to_column:
+                        selected_columns = base_columns + [param_to_column[param]]
+                    else:
+                        # If param not found, return empty (invalid parameter)
+                        return []
+                else:
+                    # Select all columns if param not specified
+                    selected_columns = [
+                        "qa.id",
+                        "qa.qa_id",
+                        "qa.qa_type",
+                        "qa.imagetyp",
+                        "qa.filter",
+                        "qa.date_obs",
+                        "qa.clipmed",
+                        "qa.clipstd",
+                        "qa.clipmin",
+                        "qa.clipmax",
+                        "qa.nhotpix",
+                        "qa.ntotpix",
+                        "qa.seeing",
+                        "qa.rotang",
+                        "qa.peeing",
+                        "qa.ptnoff",
+                        "qa.visible",
+                        "qa.skyval",
+                        "qa.skysig",
+                        "qa.zp_auto",
+                        "qa.ezp_auto",
+                        "qa.ul5_5",
+                        "qa.stdnumb",
+                        "qa.created_at",
+                        "qa.updated_at",
+                        "qa.pipeline_id_id",
+                        "qa.edgevar",
+                        "qa.exptime",
+                        "qa.filename",
+                        "qa.sanity",
+                        "qa.sigmean",
+                        "qa.trimmed",
+                        "qa.unmatch",
+                        "qa.rsep_rms",
+                        "qa.rsep_q2",
+                        "qa.uniform",
+                        "qa.awincrmn",
+                        "qa.ellipmn",
+                        "qa.rsep_p95",
+                        "qa.pa_align",
+                        "qa.q_desc",
+                        "qa.eye_insp",
+                        "p.unit",
+                        "p.filt",
+                        "p.obj",
+                        "p.date as run_date",
+                    ]
+
+                query = f"""
+                    SELECT 
+                        {', '.join(selected_columns)}
+                    FROM pipeline_qa qa
+                    LEFT JOIN pipeline_process p ON qa.pipeline_id_id = p.id
+                    WHERE qa.qa_type = %s
+                    ORDER BY qa.created_at DESC
+                """
+
+                with conn.cursor() as cur:
+                    cur.execute(query, (qa_type,))
+                    rows = cur.fetchall()
+
+                    enhanced_records = []
+                    for row in rows:
+                        if param:
+                            # When param is specified, only return essential fields + the parameter
+                            record_dict = {
+                                "qa_type": row[0],
+                                "created_at": row[1],
+                                "date_obs": row[2],
+                                "unit": row[3],
+                                "filter": row[4],
+                                "object": row[5],
+                                "run_date": row[6],
+                                param: row[7] if len(row) > 7 else None,
+                            }
+                        else:
+                            # Create full enhanced record dictionary
+                            record_dict = {
+                                "id": row[0],
+                                "qa_id": row[1],
+                                "qa_type": row[2],
+                                "imagetyp": row[3],
+                                "filter": row[4],
+                                "date_obs": row[5],
+                                "clipmed": row[6],
+                                "clipstd": row[7],
+                                "clipmin": row[8],
+                                "clipmax": row[9],
+                                "nhotpix": row[10],
+                                "ntotpix": row[11],
+                                "seeing": row[12],
+                                "rotang": row[13],
+                                "peeing": row[14],
+                                "ptnoff": row[15],
+                                "visible": row[16],
+                                "skyval": row[17],
+                                "skysig": row[18],
+                                "zp_auto": row[19],
+                                "ezp_auto": row[20],
+                                "ul5_5": row[21],
+                                "stdnumb": row[22],
+                                "created_at": row[23],
+                                "updated_at": row[24],
+                                "pipeline_id_id": row[25],
+                                "edgevar": row[26],
+                                "exptime": row[27],
+                                "filename": row[28],
+                                "sanity": row[29],
+                                "sigmean": row[30],
+                                "trimmed": row[31],
+                                "unmatch": row[32],
+                                "rsep_rms": row[33],
+                                "rsep_q2": row[34],
+                                "uniform": row[35],
+                                "awincrmn": row[36],
+                                "ellipmn": row[37],
+                                "rsep_p95": row[38],
+                                "pa_align": row[39],
+                                "q_desc": row[40],
+                                "eye_insp": row[41],
+                                # Enhanced with pipeline properties
+                                "unit": row[42],
+                                "filter": row[43]
+                                or row[4],  # This will override the QA filter if pipeline filter exists
+                                "object": row[44],
+                                "run_date": row[45],
+                            }
+                        enhanced_records.append(record_dict)
+
+                    return enhanced_records
+
+        except Exception as e:
+            raise QADBError(f"Failed to get enhanced QA records: {e}")

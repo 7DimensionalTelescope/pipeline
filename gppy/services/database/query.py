@@ -12,28 +12,56 @@ from ...utils import atleast_1d
 from .const import DB_PARAMS, TABLES, ALIASES
 
 
+# Global connection pool instance (singleton pattern)
+_global_pool = None
+
+
 def get_pool():
-    # Connection pool
+    """Get or create the global connection pool (singleton pattern)"""
+    global _global_pool
+
+    # Return existing pool if it exists and is not closed
+    if _global_pool is not None:
+        try:
+            # Check if pool is still open by trying to get a connection
+            with _global_pool.connection() as conn:
+                pass
+            return _global_pool
+        except Exception:
+            # Pool is closed or invalid, create a new one
+            _global_pool = None
+
+    # Create new pool
     try:
         dsn = " ".join(f"{k}={v}" for k, v in DB_PARAMS.items())
-        POOL = ConnectionPool(
+        _global_pool = ConnectionPool(
             dsn,
             min_size=1,  # Keep 1 connection ready
             max_size=10,  # Adjust based on concurrency needs
             max_idle=60,  # Close idle connections after 60s
         )
-
-        # all column names and data types in a table
-        query_example = """
-                SELECT column_name, data_type
-                FROM information_schema.columns
-                WHERE table_schema = 'public'
-                AND table_name   = 'survey_scienceframe';
-            """
     except Exception as e:
         print(f"Error initializing database connection: {e}")
-        POOL = None
-    return POOL
+        _global_pool = None
+
+    return _global_pool
+
+
+def close_pool():
+    """Close the global connection pool"""
+    global _global_pool
+    if _global_pool is not None:
+        try:
+            if hasattr(_global_pool, "wait"):
+                _global_pool.wait(timeout=2.0)
+        except Exception:
+            pass
+        try:
+            _global_pool.close()
+        except Exception:
+            pass
+        _global_pool = None
+
 
 # sql injection risk. dev only
 # def free_query(query: str, params: Optional[List[Any]] = None) -> List[Tuple]:

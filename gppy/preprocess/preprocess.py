@@ -93,7 +93,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
 
         self.initialize()
-        self._generated_masterframes = []
+        self._generated_masterframes = []  # this is to avoid re-generating masterframes when overwrite=True is given
 
     @classmethod
     def from_list(cls, images: list, **kwargs):
@@ -161,7 +161,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
                 self.logger.debug("\n" + "#" * 100 + f"\n{' '*30}Start processing group {i+1} / {self._n_groups}\n" + "#" * 100)  # fmt: skip
                 self.logger.debug(f"[Group {i+1}] [filter: exptime] {PathHandler.get_group_info(self.raw_groups[i])}")
-                
+
                 self.load_masterframe(device_id=device_id)
 
                 if not self.master_frame_only:
@@ -297,15 +297,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             if dtype == "dark":
                 self.logger.debug(f"[Group {self._current_group+1}] flatdark_output: {self.flatdark_output}")
 
-            print(output_file)
-            if os.path.exists(output_file):
-                header = fits.getheader(output_file)
-                if not QAData.check_header(header, dtype):
-                    self.overwrite = True  # regenerate if not properly made
-
             if (
                 input_file
-                and (not os.path.exists(output_file) or self.overwrite)
+                and (not os.path.exists(output_file))  # or self.overwrite) #skip for now.
                 and (output_file not in self._generated_masterframes)
             ):
                 norminal = self._generate_masterframe(dtype, device_id)
@@ -320,6 +314,18 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_input: {input_file}")
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_output: {output_file}")
                 self.add_warning()
+
+            if input_file:
+
+                qa_id = self.create_qa_data(
+                    dtype=dtype,
+                    raw_groups=self._original_raw_groups,
+                    current_group=self._current_group,
+                    key_to_index=self._key_to_index,
+                    output_file=getattr(self, f"{dtype}_output"),
+                )
+
+                self.logger.info(f"[Group {self._current_group+1}] Created QA data for {dtype} with ID: {qa_id}")
 
         self.logger.info(f"[Group {self._current_group+1}] Generation/Loading of masterframes completed in {time_diff_in_seconds(st)} seconds")  # fmt: skip
 
@@ -405,13 +411,6 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             self.make_masterframe_plots(getattr(self, f"{dtype}_output"), dtype, self._current_group)
             self.add_error()
 
-        self.create_qa_data(
-            dtype=dtype,
-            raw_groups=self._original_raw_groups,
-            current_group=self._current_group,
-            key_to_index=self._key_to_index,
-            output_file=getattr(self, f"{dtype}_output"),
-        )
         return False
 
     def _quality_assessment(self, header, dtype):
@@ -424,7 +423,6 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             header["NHOTPIX"] = (hotpix, "Number of hot pixels")
 
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
-
         return flag
 
     def _fetch_masterframe(self, template, dtype):
@@ -446,8 +444,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             )
             raise PipelineError(f"No pre-existing master {dtype} found in place of {template} within {max_offset} days")
         else:
+            sanity_check = fits.getval(existing_mframe_file, "SANITY")
             self.logger.info(
-                f"[Group {self._current_group+1}] Found pre-existing nominal master {dtype} at {os.path.basename(existing_mframe_file)}"
+                f"[Group {self._current_group+1}] Found pre-existing nominal (sanity: {sanity_check}) master {dtype} at {os.path.basename(existing_mframe_file)}"
             )
         # update the output names in raw_groups
         self.raw_groups[self._current_group][1][self._key_to_index[dtype]] = existing_mframe_file
@@ -462,8 +461,12 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 flatdark_template, max_offset=max_offset, future=True
             )  # search closest date first, minimum exptime if multiple found
             if existing_mframe_file:
+                sanity_check = fits.getval(existing_mframe_file, "SANITY")
                 setattr(self, "flatdark_output", existing_mframe_file)  # mdark for mflat
                 self.dark_exptime = get_header(existing_mframe_file)[HEADER_KEY_MAP["exptime"]]
+                self.logger.info(
+                    f"[Group {self._current_group+1}] Found pre-existing nominal (sanity: {sanity_check}) flatdark at {os.path.basename(existing_mframe_file)}"
+                )
             else:
                 self.logger.error(
                     f"[Group {self._current_group+1}] No pre-existing master flatdark found in place of {flatdark_template} within {max_offset} days"
@@ -477,7 +480,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         self._use_gpu = all([use_gpu, self._use_gpu])
 
         if not self.sci_input:
-            self.logger.info(f"No science frames found in group {self._current_group + 1}, skipping data reduction.")
+            self.logger.info(f"[Group {self._current_group+1}] No science frames found, skipping data reduction.")
             self.all_results = None
             for attr in ("bias_data", "dark_data", "flat_data"):
                 if attr in self.__dict__:
@@ -486,13 +489,17 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             return
 
         flag = [os.path.exists(file) for file in self.sci_output]
-        # flag = [list((Path(file).parent.parent / "figures").glob("*.jpg")) for file in self.sci_output]
-        # flag = [len(f) > 0 for f in flag]
 
-        if all(flag):  # and not self.overwrite:
-            self.logger.info(f"All images in group {self._current_group+1} are already processed")
+        if all(flag) and not (self.overwrite):
+            self.logger.info(f"[Group {self._current_group+1}] All images are already processed")
             self.skip_plotting_flags["sci"] = True
             return
+        elif self.overwrite:
+            input_files = self.sci_input
+            output_files = self.sci_output
+        else:
+            input_files = [file for file in self.sci_input if not os.path.exists(file)]
+            output_files = [file for file in self.sci_output if not os.path.exists(file)]
 
         st = time.time()
         device_id = device_id if self._use_gpu else "CPU"
@@ -502,12 +509,12 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 from .calc import process_image_with_cpu
 
                 process_kernel = process_image_with_cpu
-                self.logger.info(f"[Group {self._current_group+1}] Processing {len(self.sci_input)} images on CPU")
+                self.logger.info(f"[Group {self._current_group+1}] Processing {len(input_files)} images on CPU")
             else:
                 from .calc import process_image_with_subprocess_gpu
 
                 process_kernel = process_image_with_subprocess_gpu
-                self.logger.info(f"[Group {self._current_group+1}] Processing {len(self.sci_input)} images on GPU device(s): {device_id} ")  # fmt: skip
+                self.logger.info(f"[Group {self._current_group+1}] Processing {len(input_files)} images on GPU device(s): {device_id} ")  # fmt: skip
 
             # Determine number of workers for CPU processing
             n_workers = None
@@ -519,11 +526,11 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             #     )
 
             process_kernel(
-                self.sci_input,
+                input_files,
                 self.bias_output,
                 self.dark_output,
                 self.flat_output,
-                output_paths=self.sci_output,
+                output_paths=output_files,
                 device_id=device_id,
                 use_gpu=self._use_gpu,
                 n_workers=n_workers,
@@ -604,7 +611,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 if os.path.exists(bias_file):
                     plot_bias(bias_file)
                 else:
-                    self.logger.warning(f"Bias image does not exist. Skipping bias plot.")
+                    self.logger.warning(f"[Group {group_index+1}] Bias image does not exist. Skipping bias plot.")
                     self.add_warning()
             else:
                 self.logger.info(f"[Group {group_index+1}] Skipping bias plot")
@@ -617,14 +624,14 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                         plot_bpmask(bpmask_file)
                     badpix = fits.getval(bpmask_file, "BADPIX", ext=1)
                     if badpix is None:
-                        self.logger.warning("Header missing BADPIX; using 1")
+                        self.logger.warning(f"[Group {group_index+1}] Header missing BADPIX; using 1")
                         self.add_warning()
                         badpix = 1
 
                     mask = fits.getdata(bpmask_file, ext=1) != badpix
                     fmask = mask.ravel()
                 else:
-                    self.logger.warning(f"BPMask image does not exist. Skipping bpmask plot.")
+                    self.logger.warning(f"[Group {group_index+1}] BPMask image does not exist. Skipping bpmask plot.")
                     self.add_warning()
                     fmask = None
             else:
@@ -636,7 +643,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 if os.path.exists(dark_file):
                     plot_dark(dark_file, fmask)
                 else:
-                    self.logger.warning(f"Dark image does not exist. Skipping dark plot.")
+                    self.logger.warning(f"[Group {group_index+1}] Dark image does not exist. Skipping dark plot.")
                     self.add_warning()
             else:
                 self.logger.info(f"[Group {group_index+1}] Skipping dark plot")
@@ -647,7 +654,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 if os.path.exists(flat_file):
                     plot_flat(flat_file, fmask)
                 else:
-                    self.logger.warning(f"Flat image does not exist. Skipping flat plot.")
+                    self.logger.warning(f"[Group {group_index+1}] Flat image does not exist. Skipping flat plot.")
                     self.add_warning()
             else:
                 self.logger.info(f"[Group {group_index+1}] Skipping flat plot")
@@ -684,7 +691,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             else:
                 self.logger.info(f"[Group {group_index+1}] Skipping science plot")
         except Exception as e:
-            self.logger.error(f"Error making plots: {e}")
+            self.logger.error(f"[Group {group_index+1}] Error making plots: {e}")
             self.add_warning()
 
     def update_bpmask(self, sanity=True):

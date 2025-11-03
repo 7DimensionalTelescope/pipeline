@@ -43,14 +43,12 @@ class Checker:
             self.load_criteria(dtype=dtype)
 
         criteria = self.criteria[dtype.upper()]
-        print(file_path)
 
         flag = True
 
         if header is None:
             if file_path is not None:
                 header = fits.getheader(file_path)
-                print(header)
             else:
                 raise ValueError("Either file_path or header must be provided")
 

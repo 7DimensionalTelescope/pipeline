@@ -342,9 +342,15 @@ class PipelineDB(BaseDatabase):
             raise PipelineDBError(f"Failed to add error: {e}")
 
     def delete_pipeline_cascade(self, pipeline_id: int) -> bool:
-        """Delete pipeline data (QA data should be handled separately)"""
+        """Delete pipeline data and associated QA data"""
         try:
-            # Only delete pipeline data - QA data should be handled by ImageDB
+            # First delete associated QA data
+            from .qa import QADB
+
+            qa_db = QADB(self.db_params)
+            qa_db.delete_qa_data_by_pipeline_id(pipeline_id)
+
+            # Then delete pipeline data
             return self.delete_pipeline_data(pipeline_id)
 
         except Exception as e:

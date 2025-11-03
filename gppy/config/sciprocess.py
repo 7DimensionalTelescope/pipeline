@@ -18,6 +18,7 @@ class SciProcConfiguration(BaseConfig):
         write=True,  # False for PhotometrySingle
         clear_dirs=False,  # clear factory_dir and output_dir
         verbose=True,
+        overwrite=False,
         **kwargs,
     ):
         st = time.time()
@@ -37,7 +38,7 @@ class SciProcConfiguration(BaseConfig):
             clean_up_folder(self.path.factory_dir)
             clean_up_sciproduct(self.path.output_dir)
 
-        if not os.path.exists(self.config_file):
+        if not os.path.exists(self.config_file) or overwrite:
             self.write_config()
         self.logger.info("Completed to load configuration")
 

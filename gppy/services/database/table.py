@@ -137,6 +137,19 @@ class PipelineData:
         if data_type == "masterframe":
             run_date, unit_name = config.name.split("_")
 
+            # Get log file path - handle case where logging might not be initialized
+            if hasattr(config, "logging") and hasattr(config.logging, "file"):
+                log_file = config.logging.file
+            elif (
+                hasattr(config, "config")
+                and hasattr(config.config, "logging")
+                and hasattr(config.config.logging, "file")
+            ):
+                log_file = config.config.logging.file
+            else:
+                # Default log file path if logging is not available
+                log_file = f"/tmp/{config.name}.log"
+
             pipeline_data = cls(
                 tag_id=process_id,
                 run_date=run_date,
@@ -148,13 +161,26 @@ class PipelineData:
                 errors=0,
                 comments=0,
                 config_file=config.name,
-                log_file=config.logging.file,
-                debug_file=config.logging.file.replace(".log", "_debug.log"),
-                comments_file=config.logging.file.replace(".log", "_comments.txt"),
+                log_file=log_file,
+                debug_file=log_file.replace(".log", "_debug.log"),
+                comments_file=log_file.replace(".log", "_comments.txt"),
                 output_combined_frame_id=None,
             )
         elif data_type == "science":
             obj, filt, run_date = config.name.split("_")
+            # Get log file path - handle case where logging might not be initialized
+            if hasattr(config, "logging") and hasattr(config.logging, "file"):
+                log_file = config.logging.file
+            elif (
+                hasattr(config, "config")
+                and hasattr(config.config, "logging")
+                and hasattr(config.config.logging, "file")
+            ):
+                log_file = config.config.logging.file
+            else:
+                # Default log file path if logging is not available
+                log_file = f"/tmp/{config.name}.log"
+
             pipeline_data = cls(
                 tag_id=process_id,
                 run_date=run_date,
@@ -168,9 +194,9 @@ class PipelineData:
                 errors=0,
                 comments=0,
                 config_file=config.name,
-                log_file=config.logging.file,
-                debug_file=config.logging.file.replace(".log", "_debug.log"),
-                comments_file=config.logging.file.replace(".log", "_comments.txt"),
+                log_file=log_file,
+                debug_file=log_file.replace(".log", "_debug.log"),
+                comments_file=log_file.replace(".log", "_comments.txt"),
                 output_combined_frame_id=None,
             )
 
@@ -185,11 +211,14 @@ class QAData:
     qa_id: str
     imagetyp: str  # "masterframe" or "science"
     pipeline_id_id: int
-
+    date_obs: Optional[str] = None
     # Optional fields
     qa_type: Optional[str] = None  # "bias", "dark", "flat" for masterframe; "science" for science
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+    filter: Optional[str] = None
+    exptime: Optional[str] = None
 
     # QA for masterframe (when qa_type="masterframe")
     clipmed: Optional[float] = None
@@ -198,26 +227,17 @@ class QAData:
     clipmax: Optional[float] = None
     nhotpix: Optional[int] = None
     ntotpix: Optional[int] = None
-    uniform: Optional[str] = None  
-    sigmean: Optional[str] = None  
-    edgevar: Optional[str] = None  
-    trimmed: Optional[str] = None  
+    uniform: Optional[str] = None
+    sigmean: Optional[str] = None
+    edgevar: Optional[str] = None
+    trimmed: Optional[str] = None
 
     # QA for science (when qa_type="science")
-    filter: Optional[str] = None
-    seeing: Optional[float] = None
-    ellipticity: Optional[float] = None
-    rotang1: Optional[float] = None
-    astrometric_offset: Optional[float] = None
-    skyval: Optional[float] = None
-    skysig: Optional[float] = None
-    zp_auto: Optional[float] = None
-    ezp_auto: Optional[float] = None
-    ul5_5: Optional[float] = None
-    stdnumb: Optional[int] = None
 
-    # Additional QA parameters
-    exptime: Optional[str] = None
+    visible: Optional[float] = None
+
+    # Astrometry QA
+    rotang: Optional[float] = None
     unmatch: Optional[str] = None
     rsep_rms: Optional[str] = None
     rsep_q2: Optional[str] = None
@@ -225,12 +245,25 @@ class QAData:
     awincrmn: Optional[str] = None
     ellipmn: Optional[str] = None
     pa_align: Optional[str] = None
+    ptnoff: Optional[float] = None
+
+    # Photomtry QA
+    seeing: Optional[float] = None
+    peeing: Optional[float] = None
+    skyval: Optional[float] = None
+    skysig: Optional[float] = None
+    zp_auto: Optional[float] = None
+    ezp_auto: Optional[float] = None
+    ul5_5: Optional[float] = None
+    stdnumb: Optional[int] = None
 
     # filename
     filename: Optional[str] = None
 
     # sanity flag
     sanity: Optional[str] = None
+    q_desc: Optional[str] = None
+    eye_insp: Optional[str] = None
 
     # Internal field (not stored in DB)
     id: Optional[int] = None
@@ -239,48 +272,52 @@ class QAData:
     def from_row(cls, row: tuple) -> "QAData":
         """Create QAData from database row"""
         # Add bounds checking to prevent index errors
-        if len(row) < 38:
-            raise ValueError(f"Expected at least 38 columns, got {len(row)}. Row: {row}")
+        if len(row) < 24:
+            raise ValueError(f"Expected at least 24 columns, got {len(row)}. Row: {row}")
 
         return cls(
             id=row[0],
             qa_id=row[1],
             qa_type=row[2],
             imagetyp=row[3],
-            filter=row[4],
-            clipmed=row[5],
-            clipstd=row[6],
-            clipmin=row[7],
-            clipmax=row[8],
-            nhotpix=row[9],
-            ntotpix=row[10],
-            seeing=row[11],
-            ellipticity=row[12],
-            rotang1=row[13],
-            astrometric_offset=row[14],
-            skyval=row[15],
-            skysig=row[16],
-            zp_auto=row[17],
-            ezp_auto=row[18],
-            ul5_5=row[19],
-            stdnumb=row[20],
-            created_at=row[21],
-            updated_at=row[22],
-            pipeline_id_id=row[23],
-            edgevar=row[24],
-            exptime=row[25],
-            filename=row[26],
-            sanity=row[27],
-            sigmean=row[28],
-            trimmed=row[29],
-            unmatch=row[30],
-            rsep_rms=row[31],
-            rsep_q2=row[32],
-            uniform=row[33],
-            awincrmn=row[34],
-            ellipmn=row[35],
-            rsep_p95=row[36],
-            pa_align=row[37],
+            filter=row[4] if len(row) > 4 else None,
+            date_obs=row[5] if len(row) > 5 else None,
+            clipmed=row[6] if len(row) > 6 else None,
+            clipstd=row[7] if len(row) > 7 else None,
+            clipmin=row[8] if len(row) > 8 else None,
+            clipmax=row[9] if len(row) > 9 else None,
+            nhotpix=row[10] if len(row) > 10 else None,
+            ntotpix=row[11] if len(row) > 11 else None,
+            seeing=row[12] if len(row) > 12 else None,
+            rotang=row[13] if len(row) > 13 else None,
+            peeing=row[14] if len(row) > 14 else None,
+            ptnoff=row[15] if len(row) > 15 else None,
+            visible=row[16] if len(row) > 16 else None,
+            skyval=row[17] if len(row) > 17 else None,
+            skysig=row[18] if len(row) > 18 else None,
+            zp_auto=row[19] if len(row) > 19 else None,
+            ezp_auto=row[20] if len(row) > 20 else None,
+            ul5_5=row[21] if len(row) > 21 else None,
+            stdnumb=row[22] if len(row) > 22 else None,
+            created_at=row[23] if len(row) > 23 else None,
+            updated_at=row[24] if len(row) > 24 else None,
+            pipeline_id_id=row[25] if len(row) > 25 else None,
+            edgevar=row[26] if len(row) > 26 else None,
+            exptime=row[27] if len(row) > 27 else None,
+            filename=row[28] if len(row) > 28 else None,
+            sanity=row[29] if len(row) > 29 else None,
+            sigmean=row[30] if len(row) > 30 else None,
+            trimmed=row[31] if len(row) > 31 else None,
+            unmatch=row[32] if len(row) > 32 else None,
+            rsep_rms=row[33] if len(row) > 33 else None,
+            rsep_q2=row[34] if len(row) > 34 else None,
+            uniform=row[35] if len(row) > 35 else None,
+            awincrmn=row[36] if len(row) > 36 else None,
+            ellipmn=row[37] if len(row) > 37 else None,
+            rsep_p95=row[38] if len(row) > 38 else None,
+            pa_align=row[39] if len(row) > 39 else None,
+            q_desc=row[40] if len(row) > 40 else None,
+            eye_insp=row[41] if len(row) > 41 else None,
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -308,6 +345,9 @@ class QAData:
             pipeline_id_id=pipeline_id,
         )
 
+        if "DATE-OBS" in header:
+            qa_data.date_obs = header["DATE-OBS"]
+
         if qa_data.imagetyp == "masterframe":
             keywords = ["EXPTIME", "FILTER", "CLIPMED", "CLIPSTD", "CLIPMIN", "CLIPMAX", "SANITY"]
 
@@ -317,9 +357,10 @@ class QAData:
 
             qa_data.filename = filename
             if qa_data.qa_type == "dark":
-                qa_data.nhotpix = header["NHOTPIX"]
                 qa_data.ntotpix = header["NTOTPIX"]
                 qa_data.uniform = header["UNIFORM"]
+                if "NHOTPIX" in header:
+                    qa_data.nhotpix = header["NHOTPIX"]
             elif qa_data.qa_type == "flat":
                 qa_data.sigmean = header["SIGMEAN"]
                 qa_data.edgevar = header["EDGEVAR"]
@@ -328,18 +369,31 @@ class QAData:
         elif qa_data.imagetyp == "science":
             keywords = [
                 "FILTER",
+                "EXPTIME",
+                "VISIBLE",
+                # Astrometry QA
+                "UNMATCH",
+                "RSEP_RMS",
+                "RSEP_Q2",
+                "RSEP_P95",
+                "AWINCRMN",
+                "ELLIPMN",
+                "PA_ALIGN",
+                # Photomtry QA
                 "SEEING",
-                "ELLIPTICITY",
-                "ROTANG1",
-                "ASTROMETRIC_OFFSET",
+                "PEEING",
+                "ROTANG",
+                "PTNOFF",
                 "SKYVAL",
                 "SKYSIG",
                 "ZP_AUTO",
                 "EZP_AUTO",
                 "UL5_5",
                 "STDNUMB",
-                "EXPTIME",
+                # Quality Control QA
                 "SANITY",
+                "EYE_INSP",
+                "Q_DESC",
             ]
 
             for keyword in keywords:
@@ -359,7 +413,32 @@ class QAData:
             elif qa_type == "flat":
                 keywords.extend(["SIGMEAN", "EDGEVAR", "TRIMMED"])
         elif qa_type == "science":
-            keywords = ["FILTER"]
+            keywords = [
+                "FILTER",
+                "SEEING",
+                "PEEING",
+                "ROTANG",
+                "PTNOFF",
+                "VISIBLE",
+                "SKYVAL",
+                "SKYSIG",
+                "ZP_AUTO",
+                "EZP_AUTO",
+                "UL5_5",
+                "STDNUMB",
+                "EXPTIME",
+                "SANITY",
+                "EYE_INSP",
+                "Q_DESC",
+                # Astrometry QA
+                "UNMATCH",
+                "RSEP_RMS",
+                "RSEP_Q2",
+                "RSEP_P95",
+                "AWINCRMN",
+                "ELLIPMN",
+                "PA_ALIGN",
+            ]
 
         for keyword in keywords:
             if keyword not in header:

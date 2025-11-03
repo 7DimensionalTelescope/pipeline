@@ -107,30 +107,50 @@ class DatabaseHandler:
 
             if pipe_type == "masterframe":
                 # Extract dark and flat info from raw groups
+                # group structure: group[0] = [bias_files_list, dark_files_list, flat_files_list]
                 dark_info = set([])
                 flat_info = set([])
+                bias_exists = False
 
                 from ...path.path import PathHandler
 
                 for i, group in enumerate(raw_groups):
                     try:
+                        # Check if bias exists in this group
+                        # group[0][0] = list of bias files
+                        if group and len(group) > 0 and isinstance(group[0], (list, tuple)) and len(group[0]) > 0:
+                            if group[0][0]:  # bias files list exists and is non-empty
+                                bias_exists = True
+
                         group_info = PathHandler.get_group_info(group)
                         if ":" in group_info:
                             filt, exptime = group_info.split(":", 1)
                             filt = filt.strip()
                             exptime = exptime.strip()
-                            if group[0][1]:
-                                dark_info.add(exptime)
-                            if group[0][2]:
-                                flat_info.add(filt)
+
+                            # Check dark files: group[0][1] = list of dark files
+                            if group and len(group) > 0 and isinstance(group[0], (list, tuple)) and len(group[0]) > 1:
+                                if group[0][1]:  # dark files list exists and is non-empty
+                                    # Ensure exptime has 's' suffix
+                                    if exptime and not exptime.endswith("s"):
+                                        exptime = f"{exptime}s"
+                                    dark_info.add(exptime)
+
+                            # Check flat files: group[0][2] = list of flat files
+                            if group and len(group) > 0 and isinstance(group[0], (list, tuple)) and len(group[0]) > 2:
+                                if group[0][2]:  # flat files list exists and is non-empty
+                                    flat_info.add(filt)
                     except Exception as e:
                         self._log_debug(f"Could not parse group {i} info: {e}")
 
                 # Create pipeline data
                 pipeline_data = PipelineData.from_config(config, "masterframe")
-                pipeline_data.bias = True if hasattr(config, "bias_input") and config.bias_input else False
-                pipeline_data.dark = list(dark_info)
-                pipeline_data.flat = list(flat_info)
+                # Set bias to True if bias exists, otherwise False
+                pipeline_data.bias = bias_exists
+                # Set dark as list of exposure times (strings like "10s", "30s", etc.)
+                pipeline_data.dark = sorted(list(dark_info)) if dark_info else []
+                # Set flat as list of filters (strings like "g", "r", "i", etc.)
+                pipeline_data.flat = sorted(list(flat_info)) if flat_info else []
 
                 # Create pipeline record
                 self.pipeline_id = self.pipeline_db.create_pipeline_data(pipeline_data)
@@ -144,7 +164,8 @@ class DatabaseHandler:
             return self.pipeline_id
 
         except Exception as e:
-            self._log_warning(f"Failed to create pipeline record: {e}")
+            self._log_warning(f"Failed to create pipeline record: {e}", exc_info=True)
+            self._log_error(f"Failed to create pipeline record: {e}")  # Also log as error for visibility
             self.pipeline_id = None
             return None
 
@@ -216,6 +237,11 @@ class DatabaseHandler:
             output_file: Output file path for the data type
         """
         if not self.is_connected:
+            return
+
+        # Skip QA data creation if pipeline_id is not set
+        if self.pipeline_id is None:
+            self._log_warning(f"Skipping QA data creation for {dtype}: pipeline_id is not set")
             return
 
         if dtype == "science":

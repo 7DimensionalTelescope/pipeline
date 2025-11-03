@@ -225,7 +225,9 @@ class Astrometry(BaseSetup, DatabaseHandler):
             self.logger.error(f"Error during astrometry processing: {str(e)}", exc_info=True)
             raise
 
-    def _iterate_scamp(self, prep_cat, image_info, evaluate_prep_sol, use_threading, max_scamp, overwrite=True):
+    def _iterate_scamp(
+        self, prep_cat, image_info: "ImageInfo", evaluate_prep_sol, use_threading, max_scamp, overwrite=True
+    ):
         """main scamp iteration"""
         for _ in range(max_scamp):
             self.run_scamp([prep_cat], scamp_preset="main", joint=False, overwrite=(_ == max_scamp - 1 or overwrite))

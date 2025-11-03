@@ -485,7 +485,7 @@ def uniformity_statistical(fits_path, bpmask_path=None, grid_size=32):
     # Apply log10 for easier interpretation
     log_uniformity_score = np.log10(uniformity_score + 1e-10)
 
-    return float(log_uniformity_score)
+    return abs(float(log_uniformity_score))
 
 
 def record_statistics(filename, header, device_id=0, cropsize=500, dtype=None):
