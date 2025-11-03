@@ -1,25 +1,9 @@
-# This is the base configuration for the daily processing with daily stacks
-# Also user-inputs use this by default
+# sciproc_base.yml template for ToO operations. Lobotomized gpu support and high-demand calculations.
+# swap this file with sciproc_base.yml for ToO operations.
 
 name: 
 
 process_id:
-
-# obs:
-#   # OBS Info should be updated from header
-#   coherent_input:
-#   pixscale: 0.505  # arcsec/pix
-#   n_binning: 
-#   gain: 
-#   unit: 
-#   camera: 
-#   filter:
-#   obj:
-#   nightdate:  # date of datetime - 12h. dirname of obsdata
-#   obstime:  # UTC
-#   ra:
-#   dec:
-#   exptime:
 
 input: 
   calibrated_images: 
@@ -27,8 +11,6 @@ input:
   stacked_image:
 
 flag:
-  # configuration: false
-  # preprocess: false
   astrometry: false
   single_photometry: false
   combine: false
@@ -53,7 +35,7 @@ settings:
   obsmode:  # Deep Spec Color Search Single
   header_pad: 7  # assuming final header is 5 * 2880 bytes long. 6 to include polygon info
   combine:
-  gpu_enabled: True
+  gpu_enabled: False
   verbose_gpu: True  # use logger later
   
 logging:
@@ -106,7 +88,7 @@ imstack:
   # path:
   #   ref_image_dir: "/lyman/data1/factory/ref_frame"
   stacked_image:  # output stacked image
-  gpu: True
+  gpu: False
   device: 0
   zp_key: 'ZP_AUTO'
   # images_to_combine:
@@ -114,7 +96,7 @@ imstack:
   weight_map: true
   joint_wcs: False
   apply_bpmask: False
-  interp_type: 'median'
+  interp_type: 
   convolve: 
   target_seeing:  # auto if it's empty or smaller than max seeing
   propagate_mask: False

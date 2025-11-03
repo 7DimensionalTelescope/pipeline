@@ -13,10 +13,11 @@ import warnings
 
 from ..const import REF_DIR, PipelineError
 from ..config import SciProcConfiguration
-from ..path.path import PathHandler
+from ..path.path import PathHandler, NameHandler
 from ..services.setup import BaseSetup
 from ..services.utils import acquire_available_gpu
 from ..utils import collapse, get_header, add_suffix, time_diff_in_seconds, get_basename, atleast_1d, swap_ext
+from ..preprocess.utils import get_zdf_from_header_IMCMB
 from ..preprocess.plotting import save_fits_as_figures
 from .. import external
 
@@ -90,7 +91,8 @@ class ImStack(BaseSetup):
                 self.calculate_weight_map(device_id=device_id)
 
             # replace hot pixels
-            self.apply_bpmask(device_id=device_id)
+            if self.config.imstack.apply_bpmask:
+                self.apply_bpmask(device_id=device_id)
 
             # re-registration
             if self.config.imstack.joint_wcs:
@@ -315,11 +317,7 @@ class ImStack(BaseSetup):
         # construct zdf bundles for dict keys
         calibs = []
         for image in input_images:
-            header = get_header(image)
-            zdf = [v for k, v in header.items() if "IMCMB" in k]  # [z, d, f]
-            if len(zdf) != 3:
-                raise ValueError(f"zdf not correctly found from header IMCMB of {image}")
-            calibs.append(zdf)
+            calibs.append(get_zdf_from_header_IMCMB(image))
 
         # make a dict of zdf bundles and their corresponding input and output images
         groups = dict()
@@ -347,14 +345,12 @@ class ImStack(BaseSetup):
         self.config.imstack.bkgsub_weight_images = []
 
         groups = self._group_IMCMB(bkgsub_images)
-        self.logger.debug(f"{len(groups)} groups for weight map calculation.")
-        self.logger.debug(f"{groups}")
+        self.logger.info(f"{len(groups)} groups for weight map calculation.")
+        self.logger.debug(f"calculate_weight_map groups: {groups}")
 
         for i, ((z_m_file, d_m_file, f_m_file), input_images) in enumerate(groups.items()):
             st_loop = time.time()
-
-            header = fits.getheader(input_images[0])  # same cailb in a group
-            calibs = [v for k, v in header.items() if "IMCMB" in k]  # must be ordered mbias, mdark, mflat
+            calibs = get_zdf_from_header_IMCMB(input_images[0])  # trust the grouping and use the first image for calibs
             self.logger.debug(f"Group {i} calibs: {calibs}")
             d_m_file, f_m_file, sig_z_file, sig_f_file = PathHandler.weight_map_input(calibs)
 
@@ -446,6 +442,8 @@ class ImStack(BaseSetup):
             self.logger.info("No images to interpolate. Skipping")
         else:
             groups = self._group_IMCMB(uncalculated_images, calculated_outputs)
+            self.logger.info(f"{len(groups)} groups for bad pixel interpolation.")
+            self.logger.debug(f"apply_bpmask groups: {groups}")
 
             for group_id, ((z, d, f), [input_images, output_images]) in enumerate(groups.items()):
                 mask_file, badpix = self._get_bpmask(input_images[0])
@@ -594,7 +592,7 @@ class ImStack(BaseSetup):
             self.logger.info("Undefined convolution method. Skipping seeing match")
 
     def run_convolution(self, device_id=None, use_gpu: bool = True, weight=False):
-        from .convolve import convolve_fft, get_edge_mask
+        # from .convolve import convolve_fft, get_edge_mask
 
         st = time.time()
         method = self.conv_method
@@ -626,7 +624,7 @@ class ImStack(BaseSetup):
                 device=device_id,
                 apply_edge_mask=weight,
                 method=method,
-                peeing=delta_peeing_list,
+                delta_peeing=delta_peeing_list,
             )
 
             if weight:
@@ -648,7 +646,7 @@ class ImStack(BaseSetup):
                     device=device_id,
                     apply_edge_mask=weight,
                     method=method,
-                    peeing=delta_peeing_list,
+                    delta_peeing=delta_peeing_list,
                 )
 
         self.logger.info(
@@ -806,7 +804,7 @@ class ImStack(BaseSetup):
 
             # 	Names of stacked single images
             for nn, inim in enumerate(self.input_images):
-                header[f"IMG{nn:0>5}"] = (get_basename(inim), "")
+                header[f"IMG{nn:0>5}"] = (get_basename(inim), "single exposures")
 
             hdul.flush()
 

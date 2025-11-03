@@ -123,6 +123,7 @@ class Astrometry(BaseSetup, DatabaseHandler):
         # use_gpu: bool = False,
         overwrite=False,
         solvefield_args=[],
+        sex_args=[],
         avoid_solvefield=True,
     ) -> None:
         """Execute the complete astrometry pipeline.
@@ -144,7 +145,9 @@ class Astrometry(BaseSetup, DatabaseHandler):
 
             self.inject_wcs_guess(self.input_images)
             # Source Extractor
-            self.run_sextractor(self.soft_links_to_input_images, se_preset=se_preset, overwrite=overwrite)
+            self.run_sextractor(
+                self.soft_links_to_input_images, se_preset=se_preset, sex_args=sex_args, overwrite=overwrite
+            )
 
             # flexibly iterate to refine
             for i, (image_info, prep_cat) in enumerate(zip(self.images_info, self.prep_cats)):
@@ -496,6 +499,7 @@ class Astrometry(BaseSetup, DatabaseHandler):
         input_images: List[str],
         output_catalogs: List[str] = None,
         se_preset: str = "prep",
+        sex_args: list = [],
         overwrite=False,
     ) -> List[str]:
         """Run Source Extractor on solved images.
@@ -521,6 +525,7 @@ class Astrometry(BaseSetup, DatabaseHandler):
                 input_images,
                 outcat=output_catalogs,
                 prefix=se_preset,
+                sex_args=sex_args,
                 logger=self.logger,
                 fits_ldac=True,
                 overwrite=overwrite,
@@ -532,6 +537,7 @@ class Astrometry(BaseSetup, DatabaseHandler):
                     outcat=prep_cat,
                     se_preset=se_preset,
                     logger=self.logger,
+                    sex_args=sex_args,
                     fits_ldac=True,
                     overwrite=overwrite,
                 )

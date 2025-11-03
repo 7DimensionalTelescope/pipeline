@@ -1,5 +1,5 @@
-# This is the base configuration for the daily processing with daily stacks
-# Also user-inputs use this by default
+# This is the base configuration for a multi-epoch processing for a comprehensive survey
+# notably stack convolution is on
 
 name: 
 
@@ -113,9 +113,9 @@ imstack:
   bkgsub_type: 'Dynamic'
   weight_map: true
   joint_wcs: False
-  apply_bpmask: False
+  apply_bpmask: True
   interp_type: 'median'
-  convolve: 
+  convolve: 'Gaussian'
   target_seeing:  # auto if it's empty or smaller than max seeing
   propagate_mask: False
 

@@ -8,8 +8,10 @@ from watchdog.events import FileSystemEventHandler
 import uuid
 
 from ..path.path import PathHandler
+from ..path.name import NameHandler
 from ..services.checker import Checker
 from ..header import write_header_file
+from ..utils import get_header
 
 
 class FileCreationHandler(FileSystemEventHandler):
@@ -183,6 +185,20 @@ def write_IMCMB_to_header(header, inputlist, full_path=False):
         for i, f in enumerate(inputlist, 1):
             header[key.format(i)] = f if full_path else os.path.basename(f)
     return header
+
+
+def get_zdf_from_header_IMCMB(image):
+    header = get_header(image)
+    zdf_candidates = [v for k, v in header.items() if "IMCMB" in k]  # [z, d, f]
+    zdf = []
+    for master_frame_type in ["bias", "dark", "flat"]:
+        for i, typ in enumerate(NameHandler(zdf_candidates).type):
+            if typ[0] in "master" and typ[1] == master_frame_type:
+                zdf.append(zdf_candidates[i])
+                break
+        else:
+            raise ValueError(f"{master_frame_type} not correctly found from header IMCMB of {image}")
+    return zdf
 
 
 def add_image_id(header, key="IMAGEID"):

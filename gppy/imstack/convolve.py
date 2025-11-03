@@ -2,10 +2,12 @@ import numpy as np
 from astropy.io import fits
 import subprocess
 
+from ..const import SCRIPT_DIR
+
 
 def convolve_fft_subprocess(
     images,
-    outout,
+    output,
     kernels=None,
     mode="same",
     normalize_kernel=False,

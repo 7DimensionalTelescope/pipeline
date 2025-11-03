@@ -5,7 +5,7 @@ from datetime import datetime
 
 from .. import __version__
 from ..const import PipelineError
-from ..utils import clean_up_folder, clean_up_sciproduct, get_header, atleast_1d, time_diff_in_seconds
+from ..utils import clean_up_folder, clean_up_sciproduct, get_header, atleast_1d, time_diff_in_seconds, collapse
 from ..path.path import PathHandler
 from .base import BaseConfig
 
@@ -63,7 +63,15 @@ class SciProcConfiguration(BaseConfig):
 
     @classmethod
     def base_config(
-        cls, input_images=None, working_dir=None, config_file=None, write=True, logger=None, verbose=True, **kwargs
+        cls,
+        input_images=None,
+        working_dir=None,
+        config_file=None,
+        write=True,
+        logger=None,
+        verbose=True,
+        force_creation=False,
+        **kwargs,
     ):
         """Base configuration for user-input. Mind config.settings.is_pipeline is set to False"""
         # self = cls.__new__(cls)
@@ -74,13 +82,23 @@ class SciProcConfiguration(BaseConfig):
         self.path = path
         self.config_file = config_file or self.path.sciproc_output_yml
         if isinstance(self.config_file, list):
-            raise PipelineError("Inhomogeneous input images; config name is not uniquely defined")
+            if force_creation:
+                print(f"[WARNING] config name is not uniquely defined. Using the last one.")
+                self.config_file = collapse(sorted(self.path.sciproc_output_yml)[::-1], force=True)
+            else:
+                raise PipelineError(
+                    "Inhomogeneous input images; config name is not uniquely defined. Use force_creation=True to use the last one."
+                )
         # config_source = self.path.sciproc_base_yml
         # super().__init__(self, config_source=config_source, write=write, **kwargs)
         # self.initialize(is_pipeline=False)
 
         if logger is True:
-            self.config.logging.file = self.path.sciproc_output_log
+            log_file = self.path.sciproc_output_log
+            if isinstance(log_file, list):
+                print(f"[WARNING] log filename is not uniquely defined. Using the last one.")
+                log_file = collapse(sorted(log_file)[::-1], force=True)
+            self.config.logging.file = log_file
             self.logger = cls._setup_logger(
                 name=self.name,
                 log_file=self.config.logging.file,
@@ -102,7 +120,7 @@ class SciProcConfiguration(BaseConfig):
         return self
 
     @classmethod
-    def from_list(cls, input_images, working_dir=None, **kwargs):
+    def from_list(cls, input_images, working_dir=None, is_pipeline=False, **kwargs):
         # self.input_files = sorted(input)
         # self.path = PathHandler(input)
         # config_source = self.path.sciproc_base_yml
@@ -123,7 +141,7 @@ class SciProcConfiguration(BaseConfig):
         # emulate constructor’s initialize path
         self._initialized = False
         self.input_files = atleast_1d(input_images)
-        self.initialize(is_pipeline=True)
+        self.initialize(is_pipeline=is_pipeline)
         return self
 
     @property
