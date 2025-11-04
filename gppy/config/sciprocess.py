@@ -38,6 +38,9 @@ class SciProcConfiguration(BaseConfig):
             clean_up_folder(self.path.factory_dir)
             clean_up_sciproduct(self.path.output_dir)
 
+        # fill in missing keys
+        self.fill_missing_from_yaml()
+
         if not os.path.exists(self.config_file) or overwrite:
             self.write_config()
         self.logger.info("Completed to load configuration")
@@ -116,6 +119,7 @@ class SciProcConfiguration(BaseConfig):
         # self.config.name = "user-input"
         self.config.name = self.name
         self.config.settings.is_pipeline = False
+        self.fill_missing_from_yaml()
         self.config._initialized = True
         return self
 
@@ -229,6 +233,9 @@ class SciProcConfiguration(BaseConfig):
             self.config.settings.is_pipeline = True
         self._define_settings(self.input_files[0])
         self.input_files = self.config.input.calibrated_images
+
+        self.fill_missing_from_yaml()
+
         self._initialized = True
 
     def _define_settings(self, input_file):

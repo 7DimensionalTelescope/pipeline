@@ -221,6 +221,10 @@ class BaseConfig(ABC):
 
         return
 
+    def override_from_yaml(self, override_yaml: str = None):
+
+        return
+
 
 class ConfigurationInstance:
     def __init__(self, parent_config=None, section=None):
