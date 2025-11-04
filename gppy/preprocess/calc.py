@@ -9,6 +9,7 @@ from scipy.stats import variation
 
 TIMEOUT = 10
 
+
 def read_fits_image(path):
     return fits.getdata(path).astype(np.float32)
 
@@ -55,15 +56,15 @@ def combine_images_with_subprocess_gpu(
 
     # Calculate timeout: 10 seconds per image
     timeout = TIMEOUT * len(images)
-    
+
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        
+
         if result.returncode != 0:
             raise RuntimeError(f"Error combining images: {result.stderr}")
-            
+
         return None
-        
+
     except subprocess.TimeoutExpired:
         print(f"GPU processing timed out after {timeout} seconds, falling back to CPU processing")
         # Fall back to CPU processing
@@ -76,7 +77,7 @@ def combine_images_with_subprocess_gpu(
             norm=norm,
             make_bpmask=make_bpmask,
             bpmask_sigma=bpmask_sigma,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -151,25 +152,20 @@ def process_image_with_subprocess_gpu(image_paths, bias, dark, flat, device_id=0
 
     # Calculate timeout: 10 seconds per image
     timeout = TIMEOUT * len(image_paths)
-    
+
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        
+
         if result.returncode != 0:
             raise RuntimeError(f"Error processing images: {result.stderr}")
-            
+
         return None
-        
+
     except subprocess.TimeoutExpired:
         print(f"GPU processing timed out after {timeout} seconds, falling back to CPU processing")
         # Fall back to CPU processing
         return process_image_with_cpu(
-            image_paths=image_paths,
-            bias=bias,
-            dark=dark,
-            flat=flat,
-            output_paths=output_paths,
-            **kwargs
+            image_paths=image_paths, bias=bias, dark=dark, flat=flat, output_paths=output_paths, **kwargs
         )
 
 
@@ -204,8 +200,6 @@ def process_image_with_cpu(
     del bias_data, dark_data, flat_data
     gc.collect()
     return None
-
-
 
 
 def _process_single_image(
@@ -485,7 +479,7 @@ def uniformity_statistical(fits_path, bpmask_path=None, grid_size=32):
     # Apply log10 for easier interpretation
     log_uniformity_score = np.log10(uniformity_score + 1e-10)
 
-    return abs(float(log_uniformity_score))
+    return float(-1 * log_uniformity_score)
 
 
 def record_statistics(filename, header, device_id=0, cropsize=500, dtype=None):

@@ -57,6 +57,33 @@ def wait_for_masterframe(file_path, timeout=1800):
         observer.join()
 
 
+def tolerant_search(template, dtype, max_offset=300, future=False):
+
+    searched = search_with_date_offsets(template, max_offset=max_offset, future=future)
+    # if found right away
+    if searched:
+        return searched
+
+    # if dark, try other units (still same camera serial)
+    if dtype == "dark":
+        path = PathHandler(template)
+        path.name.unit = "*"
+        new_template = path.preprocess.masterframe
+        searched = search_with_date_offsets(new_template, max_offset=max_offset, future=future)
+        if searched:
+            return searched
+
+        # # try other exptimes. this requires scaling; NYI
+        # path.name.exptime = "*"
+        # new_template = path.preprocess.masterframe
+        # searched = search_with_date_offsets(new_template, max_offset=max_offset, future=future)
+        # if searched:
+        #     return searched
+
+    # still not found
+    return None
+
+
 def search_with_date_offsets(template, max_offset=300, future=False):
     """
     Search for files based on a template, modifying embedded dates with offsets.

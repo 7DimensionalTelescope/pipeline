@@ -435,7 +435,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         # existing_data can be either on-date or off-date
         max_offset = self.config.preprocess.max_offset
         self.logger.debug(f"[Group {self._current_group+1}] Masterframe Search ({dtype}) Template: {template}")
-        existing_mframe_file = prep_utils.search_with_date_offsets(template, max_offset=max_offset, future=True)
+        existing_mframe_file = prep_utils.tolerant_search(template, dtype, max_offset=max_offset, future=True)
 
         if not existing_mframe_file:
             self.add_error()
@@ -457,8 +457,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             path = PathHandler(template)
             path.name.exptime = "*"
             flatdark_template = path.preprocess.masterframe
-            existing_mframe_file = prep_utils.search_with_date_offsets(
-                flatdark_template, max_offset=max_offset, future=True
+            existing_mframe_file = prep_utils.tolerant_search(
+                flatdark_template, "dark", max_offset=max_offset, future=True
             )  # search closest date first, minimum exptime if multiple found
             if existing_mframe_file:
                 sanity_check = fits.getval(existing_mframe_file, "SANITY")
