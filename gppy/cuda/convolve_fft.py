@@ -1,4 +1,5 @@
 import argparse
+import numpy as np
 import cupy as cp
 from cupyx.scipy.signal import fftconvolve
 from cupyx.scipy.ndimage import binary_dilation
@@ -23,18 +24,24 @@ def convolve_fft(
 
     for i in range(n):
         img_file = images[i]
-        kern_file = kernels[i]
         out_file = outputs[i]
         delta = delta_peeing[i] if delta_peeing is not None else None
 
-        # Load data on host
-        data = fits.getdata(img_file).astype(cp.float32)
-        if kern_file:
-            kernel_np = fits.getdata(img_file).astype(cp.float32)
+        if kernels is not None:
+            kern_file = kernels[i]
         else:
-            kernel_np = Gaussian2DKernel(x_stddev=delta / (np.sqrt(8 * np.log(2))))
+            kern_file = None
+
+        data = fits.getdata(img_file).astype(np.float32)
+
+        if kern_file:
+            kernel_np = fits.getdata(kern_file).astype(np.float32)
+        else:
+            kernel_np = Gaussian2DKernel(x_stddev=delta / (np.sqrt(8 * np.log(2)))).array.astype(np.float32)
 
         with cp.cuda.Device(device):
+            # Load data on host
+
             cdata = cp.asarray(data)
             kernel_array = cp.asarray(kernel_np)
             if normalize_kernel:
@@ -44,22 +51,21 @@ def convolve_fft(
             cp.nan_to_num(cdata, copy=False, nan=0.0)
 
             # perform convolution
-            result = fftconvolve(cdata, kernel_array, mode=mode)
+            cdata[:] = fftconvolve(cdata, kernel_array, mode=mode)
 
             # optionally mask edges
             if apply_edge_mask:
-                mask = result != 0
-                struct = cp.ones(kernel_array.shape, dtype=bool)
-                dilated = binary_dilation(mask, structure=struct)
-                result[~dilated] = 0
+                mask = cdata != 0
+                mask[:] = binary_dilation(mask, structure=cp.ones(kernel_array.shape, dtype=bool))
+                cdata[~mask] = 0
 
             # bring back to host
-            output_data = cp.asnumpy(result.astype(cp.float32))
+            data[:] = cp.asnumpy(cdata)
 
         # prepare header
         header = add_conv_header(fits.getheader(img_file), delta, method)
         # write result
-        fits.writeto(out_file, data=output_data, header=header, overwrite=True)
+        fits.writeto(out_file, data=data, header=header, overwrite=True)
 
 
 def add_conv_header(header, delta_peeing, method):
@@ -89,7 +95,7 @@ if __name__ == "__main__":
     parser.add_argument("-delta-peeing", nargs="+", type=float, help="Kernel FWHM values (pixels) for header")
     parser.add_argument("-device", type=int, default=0, help="GPU device ID (default: 0)")
     args = parser.parse_args()
-
+    print(args)
     convolve_fft(
         args.input,
         args.output,

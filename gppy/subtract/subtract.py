@@ -11,10 +11,13 @@ from ..utils import add_suffix, swap_ext, collapse, time_diff_in_seconds
 from ..tools.table import match_two_catalogs
 from ..path import PathHandler
 
+from ..services.database.handler import DatabaseHandler
+from ..services.database.table import QAData
+
 from .utils import create_ds9_region_file, select_sources
 
 
-class ImSubtract(BaseSetup):
+class ImSubtract(BaseSetup, DatabaseHandler):
     def __init__(
         self,
         config=None,
@@ -27,6 +30,16 @@ class ImSubtract(BaseSetup):
         self._flag_name = "subtract"
         self.overwrite = overwrite
         self.name = self.config.name
+
+        self.qa_id = None
+        DatabaseHandler.__init__(self, add_database=self.config.settings.is_pipeline)
+
+        if self.is_connected:
+            self.set_logger(logger)
+            self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
+            self.pipeline_id = self.create_pipeline_data(self.config)
+            if self.pipeline_id is not None:
+                self.update_pipeline_progress(80, "imsubtract-configured")
 
     @classmethod
     def from_list(cls, input_images):
@@ -60,17 +73,45 @@ class ImSubtract(BaseSetup):
                 self.logger.warning(f"No reference image found for {self.name}; Skipping transient search.")
                 self.config.flag.subtraction = True
                 self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")
+                self.update_pipeline_progress(100, "imsubtract-completed")
                 return
 
             self.define_paths()
+            self.update_pipeline_progress(82, "imsubtract-define-paths-completed")
 
             self.create_substamps()
+            self.update_pipeline_progress(84, "imsubtract-create-substamps-completed")
 
             self.create_masks()
+            self.update_pipeline_progress(86, "imsubtract-create-masks-completed")
 
             self.run_hotpants()
+            self.update_pipeline_progress(88, "imsubtract-run-hotpants-completed")
 
             self.mask_unsubtracted()
+
+            # Create QA data for subtracted image if database is connected
+            if self.is_connected and self.pipeline_id is not None:
+                subt_image = self.subt_image_file
+                if subt_image and os.path.exists(subt_image):
+                    self.qa_id = self.create_qa_data("science", image=subt_image, output_file=subt_image)
+
+            # Update QA data from header if database is connected
+            if self.is_connected and self.qa_id is not None:
+                subt_image = self.subt_image_file
+                if subt_image and os.path.exists(subt_image):
+                    qa_data = QAData.from_header(
+                        fits.getheader(subt_image),
+                        "science",
+                        "science",
+                        self.pipeline_id,
+                        os.path.basename(subt_image),
+                    )
+                    qa_dict = qa_data.to_dict()
+                    qa_dict["qa_id"] = self.qa_id
+                    self.qa_db.update_qa_data(**qa_dict)
+
+            self.update_pipeline_progress(90, "imsubtract-completed")
 
             self.config.flag.subtraction = True
             self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")
@@ -119,7 +160,7 @@ class ImSubtract(BaseSetup):
         # Select substamp sources
         selected_sci_table = select_sources(sci_source_table)
         self.logger.info(
-            f"{len(selected_sci_table)} selected for substamp from" f"{len(sci_source_table)} science catalog sources"
+            f"{len(selected_sci_table)} selected for substamp from {len(sci_source_table)} science catalog sources"
         )
 
         # Match two catalogs

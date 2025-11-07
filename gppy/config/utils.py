@@ -1,4 +1,22 @@
 from functools import reduce
+from ..const import PROCESSED_DIR
+import os
+
+
+def find_config(config: str) -> dict:
+    config = "T19154_m875_2025-10-13"
+    config.replace(".yml", "")
+    args = config.split("_")
+    if len(args) == 3:
+        obj, filt, date = args
+        full_path = f"{PROCESSED_DIR}/{date}/{obj}/{filt}/{config}.yml"
+    elif len(args) == 2:
+        date, unit = args
+        full_path = f"{PROCESSED_DIR}/{date}/{config}.yml"
+    if os.path.exists(full_path):
+        return full_path
+    else:
+        raise FileNotFoundError(f"Config file not found: {full_path}")
 
 
 def merge_dicts(base: dict, updates: dict) -> dict:

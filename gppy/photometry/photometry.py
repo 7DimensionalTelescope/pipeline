@@ -34,8 +34,11 @@ from ..tools.table import match_two_catalogs, build_condition_mask
 from ..path.path import PathHandler
 from ..header import update_padded_header
 
+from ..services.database.handler import DatabaseHandler
+from ..services.database.table import QAData
 
-class Photometry(BaseSetup):
+
+class Photometry(BaseSetup, DatabaseHandler):
     """
     A class to perform photometric analysis on astronomical images.
 
@@ -56,6 +59,7 @@ class Photometry(BaseSetup):
         logger: Any = None,
         queue: Union[bool, QueueManager] = False,
         images: Optional[List[str]] = None,
+        photometry_mode: Optional[str] = None,
         ref_catalog: Optional[str] = None,
     ) -> None:
         """
@@ -66,6 +70,7 @@ class Photometry(BaseSetup):
             logger: Logger instance for output messaging
             queue: Queue manager for parallel processing or boolean to create one
             images: List of image files to process
+            photometry_mode: None, single_photometry, combined_photometry, difference_photometry
             ref_catalog: Name of reference catalog to use
         """
         # Load Configuration
@@ -74,20 +79,53 @@ class Photometry(BaseSetup):
 
         self.ref_catalog = ref_catalog or self.config.photometry.refcatname
 
-        self.run_single_photometry = (
-            True if not self.config.flag.single_photometry and not self.config.flag.combined_photometry else False
-        )
-
-        if self.run_single_photometry:
+        if photometry_mode == "single_photometry" or not self.config.flag.single_photometry:
             self.config.photometry.input_images = images or self.config.input.calibrated_images
             self.input_images = self.config.photometry.input_images
             self.logger.debug("Running single photometry")
-            self._flag_name = "single_photometry"
-        else:
+            self._photometry_mode = "single_photometry"
+        elif photometry_mode == "combined_photometry" or (
+            self.config.flag.single_photometry and not self.config.flag.combined_photometry
+        ):
             self.config.photometry.input_images = images or [self.config.input.stacked_image]
             self.input_images = self.config.photometry.input_images
             self.logger.debug("Running combined photometry")
-            self._flag_name = "combined_photometry"
+            self._photometry_mode = "combined_photometry"
+        elif photometry_mode == "difference_photometry" or (
+            self.config.flag.single_photometry
+            and self.config.flag.combined_photometry
+            and not self.config.flag.difference_photometry
+        ):
+            self.config.photometry.input_images = images or [self.config.input.stacked_image]
+            self.input_images = self.config.photometry.input_images
+            self.logger.debug("Running difference photometry")
+            self._photometry_mode = "difference_photometry"
+
+        else:
+            raise PipelineError(
+                "Unexpected photometry mode: check if flags are sequentially turned on for single_photometry, combined_photometry, and difference_photometry"
+            )
+
+        self.qa_ids = []
+        DatabaseHandler.__init__(self, add_database=self.config.settings.is_pipeline)
+
+        if self.is_connected:
+            self.set_logger(logger)
+            self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
+            self.pipeline_id = self.create_pipeline_data(self.config)
+            if self.pipeline_id is not None:
+                self.update_pipeline_progress(self._progress_by_mode[0], f"{self._photometry_mode}-configured")
+
+    @property
+    def _progress_by_mode(self):
+        if self._photometry_mode == "single_photometry":
+            return 40, 20
+        elif self._photometry_mode == "combined_photometry":
+            return 70, 10
+        elif self._photometry_mode == "difference_photometry":
+            return 90, 10
+        else:
+            raise PipelineError(f"Undefined photometry mode: {self._photometry_mode}")
 
     @classmethod
     def from_list(cls, images: List[str], working_dir=None) -> Optional["Photometry"]:
@@ -127,10 +165,25 @@ class Photometry(BaseSetup):
             else:
                 self._run_sequential()
 
-            if self.run_single_photometry:
+            if self._photometry_mode == "single_photometry":
                 self.config.flag.single_photometry = True
-            else:
+            elif self._photometry_mode == "combined_photometry":
                 self.config.flag.combined_photometry = True
+            elif self._photometry_mode == "difference_photometry":
+                self.config.flag.difference_photometry = True
+            else:
+                raise PipelineError(f"Undefined photometry mode: {self._photometry_mode}")
+
+            if self.is_connected:
+                for image, qa_id in zip(self.input_images, self.qa_ids):
+                    qa_data = QAData.from_header(
+                        fits.getheader(image), "science", "science", self.pipeline_id, os.path.basename(image)
+                    )
+                    qa_dict = qa_data.to_dict()
+                    qa_dict["qa_id"] = qa_id
+                    qa_id = self.qa_db.update_qa_data(**qa_dict)
+
+            self.update_pipeline_progress(sum(self._progress_by_mode), f"{self._photometry_mode}-completed")
 
             self.logger.info(f"'Photometry' is Completed in {time_diff_in_seconds(st)} seconds")
             self.logger.debug(MemoryMonitor.log_memory_usage)
@@ -172,6 +225,11 @@ class Photometry(BaseSetup):
                 ref_catalog=self.ref_catalog,
                 total_image=len(self.input_images),
             ).run()
+
+            self.update_pipeline_progress(
+                self._progress_by_mode[0] + (self._progress_by_mode[1] / len(self.input_images)) * (i + 1),
+                f"{self._photometry_mode}-{i}/{len(self.input_images)}",
+            )
 
 
 class PhotometrySingle:
@@ -367,6 +425,7 @@ class PhotometrySingle:
 
             if os.path.exists(prep_cat):
                 self.logger.info("Calculating seeing from a pre-existing 'prep' catalog")
+                print(prep_cat)
                 if prep_cat.endswith(".fits"):
                     obs_src_table = Table.read(prep_cat, hdu=2)
                 elif prep_cat.endswith(".cat"):

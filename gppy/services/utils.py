@@ -437,6 +437,7 @@ def acquire_available_gpu(device_id=None, gpu_threshold=400, blocking=True, time
 
     Args:
         device_id (int or None): Specific GPU ID to try; if None, try all available GPUs.
+            If -1, force GPU usage (bypasses availability check and tries all GPUs).
         gpu_threshold (int): Maximum GPU memory usage (in MB) to consider a GPU available.
         blocking (bool): Whether to block when attempting to acquire the lock.
         timeout (int | float): Total time (in seconds) to spend trying all GPUs.
@@ -449,8 +450,31 @@ def acquire_available_gpu(device_id=None, gpu_threshold=400, blocking=True, time
         yield None
         return
 
+    # Force GPU mode: if device_id == -1, try all GPUs regardless of availability
+    force_gpu = device_id == -1
+    if force_gpu:
+        device_id = None  # Try all GPUs
+        # Increase timeout for forced GPU mode
+        timeout = max(timeout, 10)
+
     # Get list of GPUs whose memory usage is below the threshold
     available_gpus = check_gpu_activity(device_id=device_id, gpu_threshold=gpu_threshold)
+
+    # If forcing GPU and no GPUs available initially, try all GPUs with higher threshold
+    if force_gpu and not available_gpus:
+        # Try with a much higher threshold to find any GPU
+        available_gpus = check_gpu_activity(device_id=None, gpu_threshold=10000)
+
+    # If still no GPUs and forcing, try to get any GPU by checking all devices
+    if force_gpu and not available_gpus:
+        # Get all GPU devices regardless of activity
+        import cupy as cp
+
+        try:
+            available_gpus = list(range(cp.cuda.runtime.getDeviceCount()))
+        except:
+            available_gpus = []
+
     if not available_gpus:
         yield None
         return
@@ -475,19 +499,26 @@ def acquire_available_gpu(device_id=None, gpu_threshold=400, blocking=True, time
             continue
 
         try:
-            # Use non-blocking lock to avoid futex waits
-            # This eliminates the futex_wait_queue_me bottleneck
-            flag = fcntl.LOCK_EX | fcntl.LOCK_NB
-
-            try:
-                fcntl.flock(lock_file, flag)
+            # Use blocking lock if forcing GPU usage, otherwise non-blocking
+            if force_gpu and blocking:
+                # Use blocking lock - will wait until GPU is available
+                fcntl.flock(lock_file, fcntl.LOCK_EX)
                 # Success: yield the GPU ID
                 yield gpu_id
                 return
-            except BlockingIOError:
-                # GPU is busy, try next one immediately
-                # No futex wait - fail fast and move on
-                continue
+            else:
+                # Use non-blocking lock to avoid futex waits
+                # This eliminates the futex_wait_queue_me bottleneck
+                flag = fcntl.LOCK_EX | fcntl.LOCK_NB
+                try:
+                    fcntl.flock(lock_file, flag)
+                    # Success: yield the GPU ID
+                    yield gpu_id
+                    return
+                except BlockingIOError:
+                    # GPU is busy, try next one immediately
+                    # No futex wait - fail fast and move on
+                    continue
 
         finally:
             # Always release and close the lock file

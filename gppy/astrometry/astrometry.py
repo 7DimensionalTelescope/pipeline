@@ -89,7 +89,7 @@ class Astrometry(BaseSetup, DatabaseHandler):
             self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
             self.pipeline_id = self.create_pipeline_data(self.config)
             if self.pipeline_id is not None:
-                self.update_pipeline_progress(0, "configured")
+                self.update_pipeline_progress(0, "astrometry-configured")
                 for image in self.input_images:
                     qa_id = self.create_qa_data("science", image=image, output_file=image)
                     self.qa_ids.append(qa_id)
@@ -209,13 +209,14 @@ class Astrometry(BaseSetup, DatabaseHandler):
             self.update_header()
             self.update_pipeline_progress(20, "astrometry")
 
-            for image, qa_id in zip(self.input_images, self.qa_ids):
-                qa_data = QAData.from_header(
-                    fits.getheader(image), "science", "science", self.pipeline_id, os.path.basename(image)
-                )
-                qa_dict = qa_data.to_dict()
-                qa_dict["qa_id"] = qa_id
-                qa_id = self.qa_db.update_qa_data(**qa_dict)
+            if self.is_connected:
+                for image, qa_id in zip(self.input_images, self.qa_ids):
+                    qa_data = QAData.from_header(
+                        fits.getheader(image), "science", "science", self.pipeline_id, os.path.basename(image)
+                    )
+                    qa_dict = qa_data.to_dict()
+                    qa_dict["qa_id"] = qa_id
+                    qa_id = self.qa_db.update_qa_data(**qa_dict)
 
             self.config.flag.astrometry = True
 

@@ -25,21 +25,32 @@ def convolve_fft_subprocess(
         *images,
         "-output",
         *output,
-        "-kernels",
-        None,
-        "-mode",
-        str(mode),
-        "-normalize_kernel",
-        normalize_kernel,
-        "-apply_edge_mask",
-        str(apply_edge_mask),
-        "=method",
-        method,
-        "-delta_peeing",
-        delta_peeing,
-        "-device",
-        str(device),
     ]
+
+    # Add mode
+    cmd.extend(["-mode", str(mode)])
+
+    # Add normalize_kernel flag if True
+    if normalize_kernel:
+        cmd.append("-normalize-kernel")
+
+    # Add apply_edge_mask flag if True
+    if apply_edge_mask:
+        cmd.append("-apply-edge-mask")
+
+    # Add method if provided
+    if method:
+        cmd.extend(["-method", method])
+
+    # Add delta_peeing if provided (handle both list and single value)
+    if delta_peeing is not None:
+        if isinstance(delta_peeing, (list, tuple)):
+            cmd.extend(["-delta-peeing"] + [str(d) for d in delta_peeing])
+        else:
+            cmd.extend(["-delta-peeing", str(delta_peeing)])
+
+    # Add device
+    cmd.extend(["-device", str(device)])
 
     result = subprocess.run(cmd, capture_output=True, text=True)
 
@@ -49,10 +60,15 @@ def convolve_fft_subprocess(
     return None
 
 
+import time
+
+from astropy.convolution import Gaussian2DKernel
+
+
 def convolve_fft_cpu(
     images,
     output,
-    kernels,
+    kernels=None,
     mode="same",
     normalize_kernel=False,
     device=None,
@@ -62,20 +78,23 @@ def convolve_fft_cpu(
 ):
     h, w = fits.getdata(images[0]).shape
     cpu_buffer = np.empty((h, w))
+    st = time.time()
 
     for i, (image, kernel) in enumerate(zip(images, kernels)):
-        cpu_buffer[:] = fits.getdata(image)
 
-        cpu_buffer[:] = convolve_fft_with_astropy(cpu_buffer, kernel, normalize_kernel=normalize_kernel)
-
+        if method == "gaussian":
+            sigma = kernel / (np.sqrt(8 * np.log(2)))
+            kernel = Gaussian2DKernel(x_stddev=sigma).array.astype(np.float32, copy=False)
+        cpu_buffer = fits.getdata(image)
+        cpu_buffer_conv = convolve_fft_with_astropy(cpu_buffer, kernel, normalize_kernel=normalize_kernel)
         if apply_edge_mask:
-            edge_mask = get_edge_mask_cpu(cpu_buffer, kernel)
-            cpu_buffer[~edge_mask] = 0
+            edge_mask = get_edge_mask_cpu(cpu_buffer_conv, kernel)
+            cpu_buffer_conv[~edge_mask] = 0
 
         header = add_conv_header(fits.getheader(image), delta_peeing[i], method)
         fits.writeto(
             output[i],
-            data=cpu_buffer.copy(),
+            data=cpu_buffer_conv.copy(),
             header=header,
             overwrite=True,
         )
@@ -84,7 +103,14 @@ def convolve_fft_cpu(
 def convolve_fft_with_astropy(image, kernel, normalize_kernel=False):
     from astropy.convolution import convolve_fft
 
-    return convolve_fft(image, kernel, normalize_kernel=normalize_kernel)
+    return convolve_fft(
+        image,
+        kernel,
+        normalize_kernel=normalize_kernel,
+        nan_treatment="fill",  # cheaper than 'interpolate' if you can allow it
+        boundary="fill",  # try 'wrap' if physically valid; can be faster
+        fill_value=0.0,
+    )
 
 
 def get_edge_mask(weight_image, kernel, device_id=None):
@@ -107,5 +133,5 @@ def get_edge_mask_cpu(weight_image, kernel):
 
 def add_conv_header(header, delta_peeing, method):
     header["CONV"] = (method.upper(), "Method for seeing-match convolution")
-    header['CONVSIZE"'] = (delta_peeing, "Convolution kernel FWHM in pixels")
+    header["CONVSIZE"] = (delta_peeing, "Convolution kernel FWHM in pixels")
     return header

@@ -21,6 +21,9 @@ from ..preprocess.utils import get_zdf_from_header_IMCMB
 from ..preprocess.plotting import save_fits_as_figures
 from .. import external
 
+from ..services.database.handler import DatabaseHandler
+from ..services.database.table import QAData
+
 from .utils import move_file  # inputlist_parser, move_file
 from .const import ZP_KEY, IC_KEYS, CORE_KEYS
 
@@ -28,7 +31,7 @@ from .const import ZP_KEY, IC_KEYS, CORE_KEYS
 warnings.filterwarnings("ignore")
 
 
-class ImStack(BaseSetup):
+class ImStack(BaseSetup, DatabaseHandler):
     def __init__(
         self,
         config=None,
@@ -46,6 +49,16 @@ class ImStack(BaseSetup):
 
         if self.config.settings.is_pipeline:
             self.config.imstack.convolve = False
+
+        self.qa_id = None
+        DatabaseHandler.__init__(self, add_database=self.config.settings.is_pipeline)
+
+        if self.is_connected:
+            self.set_logger(logger)
+            self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
+            self.pipeline_id = self.create_pipeline_data(self.config)
+            if self.pipeline_id is not None:
+                self.update_pipeline_progress(60, "imstack-configured")
 
     @classmethod
     def from_list(cls, input_images, working_dir=None):
@@ -83,30 +96,60 @@ class ImStack(BaseSetup):
 
             # background subtraction
             self.bkgsub()
+            self.update_pipeline_progress(61, "imstack-bkgsub-completed")
 
             # zero point scaling
             self.zpscale()
+            self.update_pipeline_progress(62, "imstack-zpscale-completed")
 
             if self.config.imstack.weight_map:
                 self.calculate_weight_map(device_id=device_id)
+                self.update_pipeline_progress(63, "imstack-calculate-weight-map-completed")
 
             # replace hot pixels
             if self.config.imstack.apply_bpmask:
                 self.apply_bpmask(device_id=device_id)
+                self.update_pipeline_progress(64, "imstack-apply-bpmask-completed")
 
             # re-registration
             if self.config.imstack.joint_wcs:
                 self.joint_registration()
+                self.update_pipeline_progress(65, "imstack-joint-registration-completed")
 
             # seeing convolution
             if self.config.imstack.convolve:
                 self.prepare_convolution()
                 self.run_convolution(device_id=device_id)
+                self.update_pipeline_progress(66, "imstack-run-convolution-completed")
 
             # swarp imcombine
             self.stack_with_swarp()
+            self.update_pipeline_progress(68, "imstack-stack-with-swarp-completed")
 
             self.plot_stacked_image()
+            self.update_pipeline_progress(69, "imstack-plot-stacked-image-completed")
+
+            if self.is_connected and self.pipeline_id is not None:
+                stacked_image = self.config.imstack.stacked_image
+                if stacked_image and os.path.exists(stacked_image):
+                    self.qa_id = self.create_qa_data("science", image=stacked_image, output_file=stacked_image)
+
+            # Update QA data from header if database is connected
+            if self.is_connected and self.qa_id is not None:
+                stacked_image = self.config.imstack.stacked_image
+                if stacked_image and os.path.exists(stacked_image):
+                    qa_data = QAData.from_header(
+                        fits.getheader(stacked_image),
+                        "science",
+                        "science",
+                        self.pipeline_id,
+                        os.path.basename(stacked_image),
+                    )
+                    qa_dict = qa_data.to_dict()
+                    qa_dict["qa_id"] = self.qa_id
+                    self.qa_db.update_qa_data(**qa_dict)
+
+            self.update_pipeline_progress(70, "imstack-completed")
 
             self.config.flag.combine = True
             self.logger.info(f"'ImStack' is Completed in {time_diff_in_seconds(self._st)} seconds")
@@ -550,7 +593,6 @@ class ImStack(BaseSetup):
         self.kernels = []
 
         if method == "gaussian":
-            from astropy.convolution import Gaussian2DKernel
             from ..utils import force_symlink
 
             # Define output path
@@ -584,9 +626,7 @@ class ImStack(BaseSetup):
                         )
                     self.kernels.append(None)
                 else:
-                    self.kernels.append(
-                        Gaussian2DKernel(x_stddev=delta_peeing / (np.sqrt(8 * np.log(2))))
-                    )  # 8*sig + 1 sized
+                    self.kernels.append(delta_peeing)  # 8*sig + 1 sized
 
         else:
             self.logger.info("Undefined convolution method. Skipping seeing match")
@@ -606,12 +646,14 @@ class ImStack(BaseSetup):
         delta_peeing_list = [v for v, k in zip(self.delta_peeings, self.kernels) if k is not None]
 
         with acquire_available_gpu(device_id=device_id) as device_id:
+
             if device_id is None:
                 from .convolve import convolve_fft_cpu
 
                 convolve_fft = convolve_fft_cpu
                 self.logger.info(f"Convolution with CPU")
             else:
+
                 from .convolve import convolve_fft_subprocess
 
                 convolve_fft = convolve_fft_subprocess
