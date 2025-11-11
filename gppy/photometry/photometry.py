@@ -380,9 +380,7 @@ class PhotometrySingle:
                 self.logger.info("Skipping filter check")
                 # zp_src_table = self.get_zp_src_table(obs_src_table)
                 # obs_src_table = self.add_matched_reference_catalog(zp_src_table)
-                if self._trust_header_zp:
-                    pass  # TODO: implement
-                else:
+                if not self._trust_header_zp:
                     obs_src_table = self.add_matched_reference_catalog(obs_src_table)
                     zp_src_table = self.get_zp_src_table(obs_src_table)
                     self.calculate_zp(zp_src_table)
@@ -647,6 +645,7 @@ class PhotometrySingle:
         self.logger.info(f"Run source extractor (sextractor) ({se_preset})")
 
         if output is None:
+            # new PathHandler for single
             output = getattr(PathHandler(self.input_image).photometry, f"{se_preset}_catalog")
 
         self.logger.debug(f"PhotometrySingle _run_sextractor input image: {self.input_image}")

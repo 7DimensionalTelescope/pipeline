@@ -68,6 +68,9 @@ HEADER_KEY_MAP = {
 NUM_GPUS = 2  # maximum number of GPUs to use
 MAX_WORKERS = 128
 
+# Storage Configuration
+DISK_CHANGE_DATE = "20260101"
+
 
 class PipelineError(Exception):
     pass

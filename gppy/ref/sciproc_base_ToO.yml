@@ -104,5 +104,3 @@ imstack:
 imsubtract:
   input_images:
   reference_image:
-  input_mask:
-  template_mask:

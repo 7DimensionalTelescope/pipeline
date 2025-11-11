@@ -150,7 +150,7 @@ class ImSubtract(BaseSetup, DatabaseHandler):
         self.sci_source_table_file = PathHandler(self.sci_image_file).catalog
 
         self.ref_image_file = self.config.imsubtract.reference_image or self.reference_images[0]
-        self.config.imstack.reference_image = self.ref_image_file
+        self.config.imsubtract.reference_image = self.ref_image_file  # sync
         self.ref_source_table_file = swap_ext(self.ref_image_file, "phot.cat")
 
         # self.subt_image_file = get_derived_product_path(self.sci_image_file, "transient", "subt.fits")

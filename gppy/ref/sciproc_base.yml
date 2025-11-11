@@ -124,5 +124,5 @@ imstack:
 imsubtract:
   input_image:
   reference_image:
-  input_mask:
-  template_mask:
+  # input_mask:
+  # template_mask:
