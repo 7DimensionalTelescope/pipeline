@@ -57,7 +57,7 @@ def wait_for_masterframe(file_path, timeout=1800):
         observer.join()
 
 
-def tolerant_search(template, dtype, max_offset=300, future=False):
+def tolerant_search(template, dtype, max_offset=30, future=False):
 
     searched = search_with_date_offsets(template, max_offset=max_offset, future=future)
     # if found right away
@@ -84,7 +84,7 @@ def tolerant_search(template, dtype, max_offset=300, future=False):
     return None
 
 
-def search_with_date_offsets(template, max_offset=300, future=False):
+def search_with_date_offsets(template, max_offset=30, future=False):
     """
     Search for files based on a template, modifying embedded dates with offsets.
     future=False includes the current date
@@ -92,6 +92,7 @@ def search_with_date_offsets(template, max_offset=300, future=False):
     Args:
         template (str): Template string with embedded dates (e.g., "/path/.../2025-01-01/.../20250102/...").
         max_offset (int, optional): Maximum number of days to offset (both positive and negative). Defaults to 2.
+            originally 300 for early 7DT flat, later 30 days.
 
     Returns:
         str: A path to a closest existing master calibration frame file.
