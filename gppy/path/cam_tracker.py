@@ -13,6 +13,8 @@ def get_cam_events(unit: int, swap_only: bool = False):
     """
     Caution: the logs are in KST, telescopes are in CLST.
     This function returns in CLST.
+
+    Assumes logging (KST) happened half a day later than the actual event (CLST).
     """
     changelog = os.path.join(REF_DIR, f"InstrumEvent/changelog_unit{unit}.txt")
     tbl = Table.read(changelog, format="ascii.tab")
@@ -29,7 +31,8 @@ def get_cam_events(unit: int, swap_only: bool = False):
     # KST
     date_kst = [datetime.strptime(str(s), "%y%m%d") for s in filtered_tbl["date"]]
     # CLST
-    cam_event_tbl["nightdate"] = [s - timedelta(days=1) for s in date_kst]
+    cam_event_tbl["nightdate"] = [s - timedelta(days=0) for s in date_kst]  # always +-1 day uncertainty in the log.
+    # cam_event_tbl["nightdate"] = [s - timedelta(days=1) for s in date_kst]
     # camswap_tbl["serial"] = [s.split(":")[-1].split(">")[-1] for s in filtered_tbl["comment"]]
     cam_event_tbl["serial"] = filtered_tbl["comment"]
     if swap_only:
@@ -49,7 +52,10 @@ def get_current_camera_serial(unit: int) -> str:
 
 
 def get_camera_serial(unit: int, query_date: str):
-    """WARNING: assumes C3 if serial unavailable"""
+    """
+    query_date MUST BE nightdate
+    WARNING: assumes C3 if serial unavailable
+    """
     # 1) load camswap history
     cam_swap_tbl = get_cam_events(unit, swap_only=True)
     dates = list(cam_swap_tbl["nightdate"])
@@ -57,7 +63,7 @@ def get_camera_serial(unit: int, query_date: str):
     # serials = list(swaps_tbl["serial"])
 
     # 2) parse query_date ("YYYY-MM-DD" or "YYYYMMDD")
-    fmt = "%Y-%m-%d" if "-" in query_date else "%Y%m%d"
+    fmt = "%Y-%m-%d"  # if "-" in query_date else "%Y%m%d"
     qdate = datetime.strptime(query_date, fmt)
 
     # 3) if qdate <= last nightdate, pick the most recent past event
