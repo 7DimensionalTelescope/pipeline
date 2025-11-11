@@ -369,11 +369,13 @@ class NameHandler:
             return self._camera
 
         # mind the remote date offset. date = nightdate + 1
+        # use nightdate
         if getattr(self, "_single", False):
-            return format_camera(get_camera_serial(unit=int(self.unit[3:]), query_date=self.date))
+            return format_camera(get_camera_serial(unit=int(self.unit[3:]), query_date=self.nightdate))
         else:
             return [
-                format_camera(get_camera_serial(unit=int(u[3:]), query_date=d)) for u, d in zip(self.unit, self.date)
+                format_camera(get_camera_serial(unit=int(u[3:]), query_date=d))
+                for u, d in zip(self.unit, self.nightdate)
             ]
 
     @property
