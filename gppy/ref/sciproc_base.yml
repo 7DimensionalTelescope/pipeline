@@ -25,6 +25,7 @@ input:
   calibrated_images: 
   processed_dir:
   stacked_image:
+  difference_image:
 
 flag:
   # configuration: false
@@ -35,6 +36,7 @@ flag:
   # combined_astrometry: false
   combined_photometry: false
   subtraction: false
+  difference_photometry: false
 
 qa:
   pa:
@@ -120,7 +122,7 @@ imstack:
   propagate_mask: False
 
 imsubtract:
-  input_images:
+  input_image:
   reference_image:
   input_mask:
   template_mask:

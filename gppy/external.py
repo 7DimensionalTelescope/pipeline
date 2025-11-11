@@ -435,13 +435,19 @@ def sextractor(
         add_suffix(add_suffix(inim, se_preset), "cat") if fits_ldac else swap_ext(add_suffix(inim, se_preset), "cat")
     )
     outcat = outcat or default_outcat  # default is ascii.sextractor
+    log_file = log_file or swap_ext(add_suffix(outcat, "sextractor"), "log")
+
     if os.path.exists(outcat) and not overwrite:
         chatter(f"Sextractor output catalog already exists: {outcat}, skipping...", "info")
-        return
+        if return_sex_output:
+            # take sexout from .log
+            with open(log_file, "r") as f:
+                lines = f.readlines()
+                sexout = "\n".join(lines[1:])  # the first line is the command, not sexout
+            return outcat, sexout
+        return outcat
 
     sex, param, conv, nnw = sex_config or get_sex_config(se_preset)
-
-    log_file = log_file or swap_ext(add_suffix(outcat, "sextractor"), "log")
 
     sexcom = [
         "source-extractor", f"{inim}",

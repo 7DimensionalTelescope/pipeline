@@ -9,6 +9,7 @@ from .. import external
 from ..services.setup import BaseSetup
 from ..utils import add_suffix, swap_ext, collapse, time_diff_in_seconds
 from ..tools.table import match_two_catalogs
+from ..config.utils import get_key
 from ..path import PathHandler
 
 from ..services.database.handler import DatabaseHandler
@@ -120,6 +121,7 @@ class ImSubtract(BaseSetup, DatabaseHandler):
             raise
 
     def find_reference_image(self):
+        """comes first to quit quickly if no reference image is found"""
         # obj = self.config.obs.object
         # filte = self.config.obs.filter
         obj = collapse(self.path.name.obj, raise_error=True)  # assume same sci group: same obj, filter
@@ -134,7 +136,15 @@ class ImSubtract(BaseSetup, DatabaseHandler):
         # return True if len(ref_imgs) > 0 else False
 
     def define_paths(self):
-        self.sci_image_file = self.config.input.stacked_image  # self.path.imstack.stacked_image
+        # always consider a single stacked image as input, not a list of images
+        local_inim = get_key(self.config, "imsubtract.input_image")
+        if local_inim is not None:
+            inim = local_inim
+        else:  # set from the common input if not set locally
+            inim = self.config.input.stacked_image
+            self.config.imsubtract.input_image = inim
+
+        self.sci_image_file = inim  # self.path.imstack.stacked_image
         # self.sci_source_table_file = get_derived_product_path(self.sci_image_file)
         # self.sci_source_table_file = add_suffix(self.sci_image_file, "cat")
         self.sci_source_table_file = PathHandler(self.sci_image_file).catalog
@@ -145,6 +155,7 @@ class ImSubtract(BaseSetup, DatabaseHandler):
 
         # self.subt_image_file = get_derived_product_path(self.sci_image_file, "transient", "subt.fits")
         self.subt_image_file = PathHandler(self.sci_image_file).imsubtract.diffim
+        self.config.input.difference_image = self.subt_image_file
         # transient_dir = os.path.dirname(self.subt_image_file)
         # if not os.path.exists(transient_dir):
         #     os.makedirs(transient_dir)

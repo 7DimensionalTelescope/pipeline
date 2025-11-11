@@ -104,7 +104,7 @@ def limitmag(n_sigma: np.ndarray, zp: float, aper: float, skysigma: float) -> np
 
 
 @njit
-def apply_zp(mag: np.ndarray, mag_err: np.ndarray, zp: float, zperr: float) -> tuple:
+def apply_zp(mag: np.ndarray, mag_err: np.ndarray, zp: float, zperr: float) -> tuple[np.ndarray]:
     """
     Apply zero point correction to magnitudes.
 
@@ -124,6 +124,25 @@ def apply_zp(mag: np.ndarray, mag_err: np.ndarray, zp: float, zperr: float) -> t
     flux_err = 0.4 * np.log(10) * flux * mag_err
     snr = flux / flux_err
     return mag, mag_err, flux, flux_err, snr
+
+
+def keyset(mag_key: str, filter: str) -> tuple[str]:
+    """
+    bundle mag, magerr, flux, fluxerr, snr keys for a given filter.
+
+    Args:
+        mag_key: Base magnitude key
+        filter: Filter name
+
+    Returns:
+        Tuple of keys for magnitude, error, flux, flux error, and SNR
+    """
+    _magkey = f"{mag_key}_{filter}"
+    _magerrkey = _magkey.replace("MAG", "MAGERR")
+    _fluxkey = _magkey.replace("MAG", "FLUX")
+    _fluxerrkey = _magerrkey.replace("MAG", "FLUX")
+    _snrkey = _magkey.replace("MAG", "SNR")
+    return _magkey, _magerrkey, _fluxkey, _fluxerrkey, _snrkey
 
 
 def aggregate_gaia_catalogs(target_coord, path_calibration_field, matching_radius=1.0):
@@ -222,25 +241,6 @@ def filter_table(table: Table, key: str, value: Any, method: str = "equal") -> T
         raise ValueError("method must be 'equal', 'lower', or 'upper'")
 
 
-def keyset(mag_key: str, filter: str) -> list:
-    """
-    Generate photometry key names for a given filter.
-
-    Args:
-        mag_key: Base magnitude key
-        filter: Filter name
-
-    Returns:
-        List of keys for magnitude, error, flux, flux error, and SNR
-    """
-    _magkey = f"{mag_key}_{filter}"
-    _magerrkey = _magkey.replace("MAG", "MAGERR")
-    _fluxkey = _magkey.replace("MAG", "FLUX")
-    _fluxerrkey = _magerrkey.replace("MAG", "FLUX")
-    _snrkey = _magkey.replace("MAG", "SNR")
-    return [_magkey, _magerrkey, _fluxkey, _fluxerrkey, _snrkey]
-
-
 def get_aperture_dict(peeing: float, pixscale: float) -> dict:
     """
     Generate dictionary of aperture configurations.
@@ -253,15 +253,29 @@ def get_aperture_dict(peeing: float, pixscale: float) -> dict:
         Dictionary of aperture configurations
     """
     aperture_dict = {
-        "MAG_AUTO": (0.0, "MAG_AUTO DIAMETER [pix]"),
-        "MAG_APER": (2 * 0.6731 * peeing, "BEST GAUSSIAN APERTURE DIAMETER [pix]"),
-        "MAG_APER_1": (2 * peeing, "2*SEEING APERTURE DIAMETER [pix]"),
-        "MAG_APER_2": (3 * peeing, "3*SEEING APERTURE DIAMETER [pix]"),
-        "MAG_APER_3": (3 / pixscale, """FIXED 3" APERTURE DIAMETER [pix]"""),
-        "MAG_APER_4": (5 / pixscale, """FIXED 5" APERTURE DIAMETER [pix]"""),
-        "MAG_APER_5": (10 / pixscale, """FIXED 10" APERTURE DIAMETER [pix]"""),
+        "AUTO": (0.0, "SExtractor AUTO DIAMETER [pix]"),
+        "APER": (2 * 0.6731 * peeing, "BEST GAUSSIAN APERTURE DIAMETER [pix]"),
+        "APER_1": (2 * peeing, "2*SEEING APERTURE DIAMETER [pix]"),
+        "APER_2": (3 * peeing, "3*SEEING APERTURE DIAMETER [pix]"),
+        "APER_3": (3 / pixscale, """FIXED 3" APERTURE DIAMETER [pix]"""),
+        "APER_4": (5 / pixscale, """FIXED 5" APERTURE DIAMETER [pix]"""),
+        "APER_5": (10 / pixscale, """FIXED 10" APERTURE DIAMETER [pix]"""),
     }
     return aperture_dict
+
+
+def get_aperture_suffix(aperture_key: str) -> str:
+    """
+    Such that
+    APER -> 0, APER_1 -> 1
+    """
+    return aperture_key.replace("APER", "0").replace("0_", "")
+
+
+def get_mag_key(aperture_key: str) -> tuple:
+    mag_key = f"MAG_{aperture_key}"
+    magerr_key = f"MAGERR_{aperture_key}"
+    return (mag_key, magerr_key)
 
 
 def get_sex_args(
@@ -297,7 +311,7 @@ def get_sex_args(
     sex_config["SATUR_LEVEL"] = str(satur_level)
     sex_config["GAIN"] = str(egain)
     sex_config["PIXEL_SCALE"] = str(pixscale)
-    sex_config["SEEING_FWHM"] = "2.0"
+    # sex_config["SEEING_FWHM"] = "2.0"  # only adds to confusion. defined in main.sex
 
     for key in phot_conf.sex_vars.keys():
         if phot_conf.sex_vars[key] is not None:

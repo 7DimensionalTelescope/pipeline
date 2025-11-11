@@ -47,7 +47,7 @@ PIXEL_SCALE      0.505           # 0.4629, size of pixel in arcsec (0=use FITS W
  
 #------------------------- Star/Galaxy Separation ----------------------------
  
-SEEING_FWHM      3            # stellar FWHM in arcsec
+SEEING_FWHM      2            # stellar FWHM in arcsec
 STARNNW_NAME     ../../targetphot.nnw    # Neural-Network_Weight table filename
  
 #------------------------------ Background -----------------------------------
