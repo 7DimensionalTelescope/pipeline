@@ -29,15 +29,15 @@ conda env create -f environment.yml
 This command will create a new environment named `pipeline` with all required packages listed in `environment.yml`. Activate this environment by running `conda activate pipeline`. Additionally, you will need to install external packages from [astromatic.net](https://www.astromatic.net/software/): `MissFITs`, `SCAMP`, `SWarp`, `SExtractor`, etc.
 
 ## History and Development
-Development of gpPy began in 2018 by Gregory Peak. The first stable release was published on September 1, 2023. The package underwent significant renovation in February 2025 to integrate with the 7DT pipeline system.
+Development of gpPy began in 2018 by Gregory Paek. The first stable release was published on September 1, 2023. The package underwent significant renovation in February 2025 to integrate with the 7DT pipeline system.
 
 ## Development Team
-- **Original Developer**: Gregory Peak
+- **Original Developer**: Gregory Paek
 - **Current Maintainers/Developers**: 
   - Donghwan Hyun
   - WonHyeong Lee
 - **Core Contributors**:
-  - Gregory Peak
+  - Gregory Paek
   - Donggeun Tak
   
 ## Version History
