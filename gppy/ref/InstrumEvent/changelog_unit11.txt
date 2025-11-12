@@ -3,4 +3,4 @@ date	parts	comment
 240207	fw	222446322
 240917	cam	31232
 240927	filt_config	g, r, i, m850, m425, m625, m400
-251107  focuser repair
+251107	focuser	repair

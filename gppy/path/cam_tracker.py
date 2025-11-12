@@ -9,6 +9,22 @@ from datetime import datetime, timedelta
 from ..const import REF_DIR, INSTRUM_STATUS_DICT
 
 
+def log_date_to_nightdate(log_date: str) -> datetime:
+    """
+    InstrumEvent log has ~1 day uncertainty, as the logging sometimes happen
+    real-time, sometimes after the event.
+
+    Assuming half-day delay, an event happens on nightdate = log date - 1 day.
+    The result of the instrumental event usually takes effect the next day.
+    """
+    # KST
+    date_kst = datetime.strptime(str(log_date), "%y%m%d")
+    # CLST
+    nightdate = date_kst - timedelta(days=0)  # always +-1 day uncertainty in the log.
+    # it ways day=1 with date as input, not nightdate
+    return nightdate
+
+
 def get_cam_events(unit: int, swap_only: bool = False):
     """
     Caution: the logs are in KST, telescopes are in CLST.
@@ -17,7 +33,8 @@ def get_cam_events(unit: int, swap_only: bool = False):
     Assumes logging (KST) happened half a day later than the actual event (CLST).
     """
     changelog = os.path.join(REF_DIR, f"InstrumEvent/changelog_unit{unit}.txt")
-    tbl = Table.read(changelog, format="ascii.tab")
+    tbl = Table.read(changelog, format="ascii.tab", guess=False, fast_reader=False)
+    # tbl = Table.read(changelog, format="ascii.basic", guess=False, fast_reader=False)
 
     is_cam = tbl["parts"] == "cam"
     # is_install = np.char.startswith(comments, "install:")
@@ -28,11 +45,7 @@ def get_cam_events(unit: int, swap_only: bool = False):
     mask = is_cam  # & (is_install | is_uninstall | is_swap)
     filtered_tbl = tbl[mask]
     cam_event_tbl = Table()
-    # KST
-    date_kst = [datetime.strptime(str(s), "%y%m%d") for s in filtered_tbl["date"]]
-    # CLST
-    cam_event_tbl["nightdate"] = [s - timedelta(days=0) for s in date_kst]  # always +-1 day uncertainty in the log.
-    # cam_event_tbl["nightdate"] = [s - timedelta(days=1) for s in date_kst]
+    cam_event_tbl["nightdate"] = [log_date_to_nightdate(s) for s in filtered_tbl["date"]]
     # camswap_tbl["serial"] = [s.split(":")[-1].split(">")[-1] for s in filtered_tbl["comment"]]
     cam_event_tbl["serial"] = filtered_tbl["comment"]
     if swap_only:
@@ -87,7 +100,7 @@ def get_camera_serial(unit: int, query_date: str):
         return serials[-1]
     else:
         raise ValueError(
-            f"Current serial ({current_serial}) does not match the last "
+            f"Current serial ({current_serial}) of unit{unit} does not match the last "
             f"reported serial ({serials[-1]}) on {last_date.date()}\n"
             f"Update ref/InstrumEvent/changelog_unit?.txt or check {INSTRUM_STATUS_DICT}"
         )

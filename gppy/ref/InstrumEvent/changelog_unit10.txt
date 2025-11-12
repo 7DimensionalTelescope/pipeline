@@ -1,7 +1,7 @@
 date	parts	comment
 240129	cam	31164
 240129	fw	22446323
-240506	mount   motor_tuning
+240506	mount	motor_tuning
 240629	cam	PA
 240730	cam	cooling
 240822	cam	31241

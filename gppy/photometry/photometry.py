@@ -1018,6 +1018,7 @@ class PhotometryHeader:
 
     # a dict of all information accompanying each aperture
     aperture_info: Dict = None
+    # e.g.,
     # {
     #     "APER_1": {
     #         "value": ,
