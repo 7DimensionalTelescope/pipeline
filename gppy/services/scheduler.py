@@ -43,6 +43,9 @@ class Scheduler:
     """
 
     def __init__(self, dependent_configs={}, independent_configs=[], preprocess_only=False, **kwargs):
+        """
+        kwargs can have preprocess_kwargs, processes, overwrite, device_id, max_devices
+        """
 
         # Initialize master queue and status tracking
         masters = list(dependent_configs.keys())

@@ -144,6 +144,7 @@ class ImSubtract(BaseSetup, DatabaseHandler):
             inim = self.config.input.stacked_image
             self.config.imsubtract.input_image = inim
 
+        self.logger.debug(f"ImSubtract inim: {inim}")
         self.sci_image_file = inim  # self.path.imstack.stacked_image
         # self.sci_source_table_file = get_derived_product_path(self.sci_image_file)
         # self.sci_source_table_file = add_suffix(self.sci_image_file, "cat")
@@ -156,6 +157,8 @@ class ImSubtract(BaseSetup, DatabaseHandler):
         # self.subt_image_file = get_derived_product_path(self.sci_image_file, "transient", "subt.fits")
         self.subt_image_file = PathHandler(self.sci_image_file).imsubtract.diffim
         self.config.input.difference_image = self.subt_image_file
+        self.logger.debug(f"subt_image_file: {self.subt_image_file}")
+        self.logger.debug(f"config.input.difference_image: {self.config.input.difference_image}")
         # transient_dir = os.path.dirname(self.subt_image_file)
         # if not os.path.exists(transient_dir):
         #     os.makedirs(transient_dir)

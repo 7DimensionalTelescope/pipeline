@@ -83,7 +83,7 @@ class Photometry(BaseSetup, DatabaseHandler):
 
         if photometry_mode == "single_photometry" or (
             not self.config.flag.single_photometry
-            and (not self.config.input.stacked_image and not self.config.input.difference_image)
+            # and (not self.config.input.stacked_image and not self.config.input.difference_image)  # hassle when rerunning
         ):
             self.config.photometry.input_images = images or self.config.input.calibrated_images
             self.input_images = self.config.photometry.input_images
@@ -91,15 +91,13 @@ class Photometry(BaseSetup, DatabaseHandler):
             self._photometry_mode = "single_photometry"
         elif photometry_mode == "combined_photometry" or (
             not self.config.flag.combined_photometry
-            and (self.config.input.stacked_image and not self.config.input.difference_image)
+            # and (self.config.input.stacked_image and not self.config.input.difference_image)
         ):
             self.config.photometry.input_images = images or [self.config.input.stacked_image]
             self.input_images = self.config.photometry.input_images
             self.logger.debug("Running combined photometry")
             self._photometry_mode = "combined_photometry"
-        elif photometry_mode == "difference_photometry" or (
-            self.config.input.difference_image and not self.config.flag.difference_photometry
-        ):
+        elif photometry_mode == "difference_photometry" or self.config.flag.difference_photometry:
             self.config.photometry.input_images = images or [self.config.input.difference_image]
             self.input_images = self.config.photometry.input_images
             self.logger.debug("Running difference photometry")
@@ -165,6 +163,10 @@ class Photometry(BaseSetup, DatabaseHandler):
         """
         st = time.time()
         self.logger.info(f"Start 'Photometry'")
+        self.logger.debug(f"input_images: {self.input_images}")
+        if not self.input_images:  # exception for when input.difference_image is not set.
+            self.logger.info("No input images found. Skipping photometry.")
+            return
         try:
             if self.queue:
                 self._run_parallel()
@@ -194,7 +196,7 @@ class Photometry(BaseSetup, DatabaseHandler):
             self.logger.info(f"'Photometry' is Completed in {time_diff_in_seconds(st)} seconds")
             self.logger.debug(MemoryMonitor.log_memory_usage)
         except Exception as e:
-            self.logger.critical(f"Photometry failed: {str(e)}")
+            self.logger.critical(f"Photometry failed: {str(e)}", exc_info=True)
             raise
 
     def _run_parallel(self) -> None:
@@ -413,10 +415,11 @@ class PhotometrySingle:
         """
 
         if use_header_seeing:
-            self.phot_header.SEEING = fits.getval(self.input_image, "SEEING")
-            self.phot_header.PEEING = fits.getval(self.input_image, "PEEING")
-            self.phot_header.ELLIP = fits.getval(self.input_image, "ELLIP")
-            self.phot_header.ELONG = fits.getval(self.input_image, "ELONG")
+            hdr = fits.getheader(self.input_image)
+            self.phot_header.SEEING = hdr["SEEING"]
+            self.phot_header.PEEING = hdr["PEEING"]
+            self.phot_header.ELLIP = hdr["ELLIP"]
+            self.phot_header.ELONG = hdr["ELONG"]
             self.logger.debug(f"Trusting seeing/peeing from the header")
             self.logger.debug(f"SEEING     : {self.phot_header.SEEING:.3f} arcsec")
             self.logger.debug(f"PEEING     : {self.phot_header.PEEING:.3f} pixel")
@@ -432,10 +435,13 @@ class PhotometrySingle:
 
         else:
             prep_cat = self.path.photometry.prep_catalog
+            self.logger.debug(f"(photometry) prep_cat: {prep_cat}")
 
             # load astrometry prep cat if it exists
             astrometry_prep_cat = self.path.astrometry.catalog
+            self.logger.debug(f"astrometry_prep_cat: {astrometry_prep_cat}")
             if os.path.exists(astrometry_prep_cat):
+                self.logger.debug(f"Creating symlink: {astrometry_prep_cat} -> {prep_cat}")
                 force_symlink(astrometry_prep_cat, prep_cat)
 
             if os.path.exists(prep_cat):
@@ -448,7 +454,7 @@ class PhotometrySingle:
                 else:
                     raise ValueError(f"Invalid catalog format: {prep_cat}")
             else:
-                obs_src_table = self._run_sextractor(se_preset="prep")
+                obs_src_table = self._run_sextractor(se_preset="prep", fits_ldac=True)
 
             post_match_table = self.add_matched_reference_catalog(obs_src_table)
             post_match_table = self.filter_catalog(post_match_table, snr_cut=False, low_mag_cut=11.75)
@@ -628,6 +634,7 @@ class PhotometrySingle:
         se_preset: str = "prep",
         sex_args: Optional[Dict] = None,
         output: str = None,
+        fits_ldac: bool = False,
         **kwargs,
     ) -> Table:
         """
@@ -660,6 +667,7 @@ class PhotometrySingle:
             logger=self.logger,
             sex_args=sex_args,
             return_sex_output=True,
+            fits_ldac=fits_ldac,
             **kwargs,
         )
 
@@ -668,6 +676,8 @@ class PhotometrySingle:
             self.phot_header.SKYMED = float(outcome.split("Background:")[1].split("RMS:")[0])
             self.phot_header.SKYSIG = float(outcome.split("RMS:")[1].split("/")[0])
 
+        if fits_ldac:
+            return Table.read(output, hdu=2)
         return Table.read(output, format="ascii.sextractor")
 
     def get_zp_src_table(self, obs_src_table: Table) -> Table:

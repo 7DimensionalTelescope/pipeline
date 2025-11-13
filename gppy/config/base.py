@@ -199,7 +199,7 @@ class BaseConfig(ABC):
         """
 
         if exclude_top_level is None:
-            exclude_top_level = {"name", "process_id", "info", "input", "logging"}
+            exclude_top_level = {"name", "process_id", "info", "logging"}
 
         base_yaml = base_yaml or getattr(self.path, "sciproc_base_yml", None)
         if not base_yaml or not os.path.exists(base_yaml):
