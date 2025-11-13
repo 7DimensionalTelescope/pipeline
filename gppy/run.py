@@ -28,37 +28,42 @@ def run_preprocess(config, device_id=None, make_plots=True, **kwargs):
         raise e
 
 
-def run_scidata_reduction(config, processes=["astrometry", "photometry", "combine", "subtract"], overwrite=False):
+def run_scidata_reduction(
+    config: SciProcConfiguration | str,
+    processes: list[str] = ["astrometry", "photometry", "combine", "subtract"],
+    overwrite: bool = False,
+):
     try:
         if isinstance(config, SciProcConfiguration):
             pass
         elif isinstance(config, str) and config.endswith(".yml"):
-            config = SciProcConfiguration.from_config(config)
+            # config = SciProcConfiguration.from_config(config)
+            config = SciProcConfiguration(config)
         else:
             raise ValueError("Invalid configuration type. Expected SciProcConfiguration or path to .yml file.")
 
         if "astrometry" in processes and (not config.config.flag.astrometry or overwrite):
             astr = Astrometry(config)
-            astr.run()
+            astr.run(overwrite=overwrite)
             del astr
         if "photometry" in processes and (not config.config.flag.single_photometry or overwrite):
-            phot = Photometry(config)
+            phot = Photometry(config, photometry_mode="single_photometry")
             phot.run()
             del phot
         if "combine" in processes and (not config.config.flag.combine or overwrite):
-            stk = ImStack(config)
+            stk = ImStack(config, overwrite=overwrite)
             stk.run()
             del stk
         if "photometry" in processes and (not config.config.flag.combined_photometry or overwrite):
-            phot = Photometry(config)
+            phot = Photometry(config, photometry_mode="combined_photometry")
             phot.run()
             del phot
         if "subtract" in processes and (not config.config.flag.subtraction or overwrite):
-            subt = ImSubtract(config)
+            subt = ImSubtract(config, overwrite=overwrite)
             subt.run()
             del subt
         if "photometry" in processes and (not config.config.flag.difference_photometry or overwrite):
-            phot = Photometry(config)
+            phot = Photometry(config, photometry_mode="difference_photometry")
             phot.run()
             del phot
         del config

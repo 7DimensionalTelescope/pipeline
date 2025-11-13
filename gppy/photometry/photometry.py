@@ -67,6 +67,10 @@ class Photometry(BaseSetup, DatabaseHandler):
         """
         Initialize the Photometry class.
 
+        Photometry will know its mode based on self.config.flag., but it is
+        safer to explicitly set the mode when re-running scidata reduction,
+        where the flags can be out of sync.
+
         Args:
             config: Configuration object or path to config yaml
             logger: Logger instance for output messaging
@@ -93,17 +97,18 @@ class Photometry(BaseSetup, DatabaseHandler):
             not self.config.flag.combined_photometry
             # and (self.config.input.stacked_image and not self.config.input.difference_image)
         ):
-            self.config.photometry.input_images = images or [self.config.input.stacked_image]
+            self.config.photometry.input_images = images or [x] if (x := self.config.input.stacked_image) else None
             self.input_images = self.config.photometry.input_images
             self.logger.debug("Running combined photometry")
             self._photometry_mode = "combined_photometry"
-        elif photometry_mode == "difference_photometry" or self.config.flag.difference_photometry:
-            self.config.photometry.input_images = images or [self.config.input.difference_image]
+        elif photometry_mode == "difference_photometry" or not self.config.flag.difference_photometry:
+            self.config.photometry.input_images = images or [x] if (x := self.config.input.difference_image) else None
             self.input_images = self.config.photometry.input_images
             self.logger.debug("Running difference photometry")
             self._photometry_mode = "difference_photometry"
 
         else:
+            self.logger.debug(f"photometry mode undefined: {photometry_mode}")
             raise PipelineError(
                 "Unexpected photometry mode: check if flags are sequentially turned on for single_photometry, combined_photometry, and difference_photometry"
             )
@@ -163,9 +168,9 @@ class Photometry(BaseSetup, DatabaseHandler):
         """
         st = time.time()
         self.logger.info(f"Start 'Photometry'")
-        self.logger.debug(f"input_images: {self.input_images}")
         if not self.input_images:  # exception for when input.difference_image is not set.
-            self.logger.info("No input images found. Skipping photometry.")
+            self.logger.debug(f"input_images: {self.input_images}")
+            self.logger.info(f"No input images found. Skipping {self._photometry_mode}.")
             return
         try:
             if self.queue:
@@ -291,6 +296,8 @@ class PhotometrySingle:
         # self.input_image = image
         self.phot_conf = self.config.photometry
         self.input_image = collapse(self.phot_conf.input_images, raise_error=True)
+        self.logger.debug(f"input_image: {self.input_image}")
+        self.logger.debug(f"=" * 100)
         self.image_info = ImageInfo.parse_image_header_info(self.input_image)
         self.name = name or os.path.basename(self.input_image)
         self.logger.debug(f"{self.name}: ImageInfo: {self.image_info}")

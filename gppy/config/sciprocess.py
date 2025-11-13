@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 import glob
 import time
@@ -67,13 +68,13 @@ class SciProcConfiguration(BaseConfig):
     @classmethod
     def base_config(
         cls,
-        input_images=None,
-        working_dir=None,
-        config_file=None,
-        write=True,
-        logger=None,
-        verbose=True,
-        force_creation=False,
+        input_images: list[str] | str = None,
+        working_dir: str = None,
+        config_file: str = None,
+        write: bool = True,
+        logger: bool | "Logger" = None,
+        verbose: bool = True,
+        force_creation: bool = False,
         **kwargs,
     ):
         """Base configuration for user-input. Mind config.settings.is_pipeline is set to False"""
