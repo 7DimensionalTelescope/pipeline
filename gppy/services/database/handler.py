@@ -215,6 +215,17 @@ class DatabaseHandler:
             self._log_warning(f"Failed to add error: {e}")
             return False
 
+    def reset_errors_warnings(self) -> bool:
+        """Reset error and warning counts to 0 for pipeline record"""
+        if self.pipeline_id is None or self.pipeline_db is None:
+            return False
+
+        try:
+            return self.pipeline_db.update_pipeline_data(self.pipeline_id, errors=0, warnings=0)
+        except Exception as e:
+            self._log_warning(f"Failed to reset errors and warnings: {e}")
+            return False
+
     # ==================== QA DATA MANAGEMENT ====================
     def create_qa_data(
         self,

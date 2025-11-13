@@ -12,7 +12,7 @@ PROCESSED_DIR = os.environ.get("PROCESSED_DIR") or "/lyman/data2/processed"
 STACKED_DIR = os.environ.get("STACKED_DIR") or "/lyman/data2/stacked"
 SLACK_TOKEN = os.environ.get("SLACK_TOKEN", None)
 INSTRUM_STATUS_DICT = os.environ.get("INSTRUM_STATUS_DICT") or "/home/7dt/7dt_too/backend/data/7dt/multitelescopes.dict"
-
+SEXTRACTOR_COMMAND = os.environ.get("SEXTRACTOR_COMMAND") or "source-extractor"
 
 # Paths to pre-generated data
 ASTRM_REF_DIR = "/lyman/data2/factory/ref_scamp/gaia_dr3_7DT"  #  "/lyman/data1/factory/catalog/gaia_dr3_7DT"

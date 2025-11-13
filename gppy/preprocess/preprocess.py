@@ -150,6 +150,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
             st = time.time()
 
+            # Reset errors and warnings at the start of processing
+            self.reset_errors_warnings()
+
             # Update pipeline status to running
             self.update_pipeline_progress(0, "running")
 
@@ -498,8 +501,12 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             input_files = self.sci_input
             output_files = self.sci_output
         else:
-            input_files = [file for file in self.sci_input if not os.path.exists(file)]
-            output_files = [file for file in self.sci_output if not os.path.exists(file)]
+            input_files = []
+            output_files = []
+            for infile, outfile in zip(self.sci_input, self.sci_output):
+                if not os.path.exists(outfile):
+                    input_files.append(infile)
+                    output_files.append(outfile)
 
         st = time.time()
         device_id = device_id if self._use_gpu else "CPU"
@@ -509,12 +516,12 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 from .calc import process_image_with_cpu
 
                 process_kernel = process_image_with_cpu
-                self.logger.info(f"[Group {self._current_group+1}] Processing {len(input_files)} images on CPU")
+                self.logger.info(f"[Group {self._current_group+1}] Processing {len(output_files)} images on CPU")
             else:
                 from .calc import process_image_with_subprocess_gpu
 
                 process_kernel = process_image_with_subprocess_gpu
-                self.logger.info(f"[Group {self._current_group+1}] Processing {len(input_files)} images on GPU device(s): {device_id} ")  # fmt: skip
+                self.logger.info(f"[Group {self._current_group+1}] Processing {len(output_files)} images on GPU device(s): {device_id} ")  # fmt: skip
 
             # Determine number of workers for CPU processing
             n_workers = None

@@ -6,7 +6,7 @@ import numpy as np
 from astropy.io import fits
 from typing import List
 
-from .const import REF_DIR
+from .const import REF_DIR, SEXTRACTOR_COMMAND
 from .utils import add_suffix, force_symlink, swap_ext, read_text_file, ansi_clean, atleast_1d
 from .header import fitsrec_to_header
 
@@ -450,7 +450,7 @@ def sextractor(
     sex, param, conv, nnw = sex_config or get_sex_config(se_preset)
 
     sexcom = [
-        "source-extractor", f"{inim}",
+        SEXTRACTOR_COMMAND, f"{inim}",
         "-c", f"{sex}",
         "-CATALOG_NAME", f"{outcat}",
         # "-catalog_type", "fits_ldac",  # this is for scamp presex
