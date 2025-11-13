@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 import getpass
 from reprlib import recursive_repr
@@ -357,33 +358,36 @@ class PhotometrySingle:
             self.calculate_seeing(use_header_seeing=self._trust_header_seeing)
             obs_src_table = self.photometry_with_sextractor()
 
-            if False and self._check_filter:  # TODO: re-enable filter check
+            if self._check_filter:
+                self.logger.info("Performing filter check")
                 filters_to_check = get_key(self.config.photometry, "filters_to_check") or ALL_FILTERS
                 obs_src_table = self.add_matched_reference_catalog(obs_src_table, filters=filters_to_check)
                 zp_src_table = self.get_zp_src_table(obs_src_table)
-                temp_results = {}
+
+                temp_headers = {}
                 self.logger.debug(f"Starting filter check for {filters_to_check}")
                 for i, filt in enumerate(filters_to_check):
-                    # zp_dict, aper_dict, cols = self.calculate_zp(
-                    cols = self.calculate_zp(zp_src_table, obs_src_table, filt=filt, save_plots=False)
-                    temp_results[filt] = (zp_dict, aper_dict, cols)
-                    self.logger.debug(f"Filter check for {filt} is completed")
+                    phot_header = PhotometryHeader()  # just a container of aperture_info;
+                    # can't save alternative photometry result to image header anyway due to namespace collision
+                    # PhotometryHeader(self.image_info) if you want to save to image header
+
+                    phot_header = self.calculate_zp(zp_src_table, filt=filt, phot_header=phot_header, save_plots=False)
+                    temp_headers[filt] = phot_header
+                    self.logger.debug(f"Filter check photometry for {filt} is completed")
 
                 # save the photometry result for the filename filter as default
-                zp_dict, aper_dict, cols = self.calculate_zp(zp_src_table, obs_src_table)
-                self.add_reference_columns(obs_src_table, cols)
-                self.update_image_header(zp_dict, aper_dict)
+                # placed after filter inference because in the future this will be the main photometry
+                phot_header = self.calculate_zp(zp_src_table)
+                self.add_calibrated_columns(obs_src_table, phot_header=phot_header)
+                self.update_image_header(phot_header)
 
                 # if inferred filter is different, save it to header and catalog, too
-                dicts = {f: (zp, ap) for f, (zp, ap, _) in temp_results.items()}
-                inferred_filter = self.determine_filter(dicts)
+                inferred_filter = self.determine_filter(temp_headers)
                 if inferred_filter != self.image_info.filter:
                     self.logger.info(f"Saving {inferred_filter} photometry to catalog too")
-                    update_padded_header(self.input_image, {"INF_FILT": inferred_filter})
-                    _, _, cols = temp_results[inferred_filter]
-                    self.add_reference_columns(obs_src_table, cols)
-                    # self.update_image_header(*dicts[inferred_filter])
-                self.write_catalog(obs_src_table)
+                    inferred_phot_header = temp_headers[inferred_filter]
+                    self.add_calibrated_columns(obs_src_table, filt=inferred_filter, phot_header=inferred_phot_header)
+                    # self.update_image_header(inferred_phot_header)  # you can't save it too due to namespace collision
 
             else:
                 self.logger.info("Skipping filter check")
@@ -399,7 +403,7 @@ class PhotometrySingle:
                 if not self._trust_header_zp:
                     self.update_image_header()
 
-                self.write_catalog(obs_src_table)
+            self.write_catalog(obs_src_table)
 
             self.logger.debug(MemoryMonitor.log_memory_usage)
             self.logger.info(
@@ -695,20 +699,22 @@ class PhotometrySingle:
         self.logger.info(f"Calculating zero points with {len(zp_src_table)} sources")
         return zp_src_table
 
-    def calculate_zp(self, zp_src_table: Table, filt: str = None, save_plots: bool = True) -> Tuple[Dict]:
+    def calculate_zp(
+        self, zp_src_table: Table, filt: str = None, phot_header: PhotometryHeader = None, save_plots: bool = True
+    ) -> Tuple[Dict]:
         """
-        Updates self.phot_header.aperture_info with zero point and aperture information.
+        Updates header.aperture_info in-place with zero point and aperture information.
+        If header is not provided, uses self.phot_header.
+        """
 
-        Computes zero points and their errors for different apertures,
-        creates diagnostic plots, and calculates limiting magnitudes.
-        """
+        phot_header = phot_header or self.phot_header
 
         if filt:
             ref_mag_key = f"mag_{filt}"  # column name in the reference catalog
         else:
             ref_mag_key = self.image_info.ref_mag_key
 
-        aperture_dict = phot_utils.get_aperture_dict(self.phot_header.PEEING, self.image_info.pixscale)
+        aperture_dict = phot_utils.get_aperture_dict(phot_header.PEEING, self.image_info.pixscale)
 
         for aperture_key in aperture_dict.keys():
             mag_key, magerr_key = phot_utils.get_mag_key(aperture_key)
@@ -721,19 +727,16 @@ class PhotometrySingle:
             mask = sigma_clip(zps, sigma=2.0).mask
 
             zp, zperr = phot_utils.compute_median_nmad(np.array(zps[~mask].value), normalize=True)
-            # keys = phot_utils.keyset(mag_key, keyset_filt)
-            # values = phot_utils.apply_zp(obs_src_table[mag_key], obs_src_table[magerr_key], zp, zperr)
-
-            # # stash the results for later
-            # for key, val in zip(keys, values):
-            #     column_data[key] = val
 
             if mag_key == "MAG_AUTO":
                 ul_3sig, ul_5sig = 0.0, 0.0
             else:
-                ul_3sig, ul_5sig = phot_utils.limitmag(np.array([3, 5]), zp, aperture_dict[aperture_key][0], self.phot_header.SKYSIG)  # fmt:skip
+                aperture_size, _ = aperture_dict[aperture_key]
+                ul_3sig, ul_5sig = phot_utils.limitmag(np.array([3, 5]), zp, aperture_size, phot_header.SKYSIG)
+                self.logger.debug(f"filter: {ref_mag_key}, aper: {aperture_size}, SKYSIG: {phot_header.SKYSIG}")
+                self.logger.debug(f"filter: {ref_mag_key}, ul_3sig: {ul_3sig}, ul_5sig: {ul_5sig}")
 
-            self.phot_header.aperture_info[aperture_key] = {
+            phot_header.aperture_info[aperture_key] = {
                 "value": aperture_dict[aperture_key][0],
                 "COMMENT": aperture_dict[aperture_key][1],
                 "suffix": phot_utils.get_aperture_suffix(aperture_key),
@@ -745,21 +748,26 @@ class PhotometrySingle:
 
             if save_plots:
                 plot_zp(self, mag_key, zp_src_table, zps, zperrs, zp, zperr, mask, filt=filt)
+        return phot_header
 
-    def add_calibrated_columns(self, obs_src_table: Table, filt: str = None) -> None:
+    def add_calibrated_columns(
+        self, obs_src_table: Table, filt: str = None, phot_header: PhotometryHeader = None
+    ) -> None:
         """
         *implicit mutation & no return
 
         Adds columns of calibrated magnitudes, errors, fluxes, flux errors, and SNRs to the observation source table.
         """
-        aperture_dict = self.phot_header.aperture_dict
+        keyset_filter = filt or self.image_info.filter
+        phot_header = phot_header or self.phot_header
+        aperture_dict = phot_header.aperture_dict
+        aperture_info = phot_header.aperture_info
 
         for aperture_key in aperture_dict.keys():
             mag_key, magerr_key = phot_utils.get_mag_key(aperture_key)
-            keyset_filter = filt or self.image_info.filter
 
-            zp = self.phot_header.aperture_info[aperture_key]["ZP"]
-            zperr = self.phot_header.aperture_info[aperture_key]["ZPERR"]
+            zp = aperture_info[aperture_key]["ZP"]
+            zperr = aperture_info[aperture_key]["ZPERR"]
 
             keys = phot_utils.keyset(mag_key, keyset_filter)
             columns = phot_utils.apply_zp(obs_src_table[mag_key], obs_src_table[magerr_key], zp, zperr)
@@ -779,12 +787,16 @@ class PhotometrySingle:
     #         obs_src_table[key].format = ".3f"
     #     return
 
-    def determine_filter(self, dicts: dict, save_plot=True):
+    def determine_filter(self, phot_headers: Dict[str, PhotometryHeader], save_plot=True):
         zp_cut = 27.2  # 26.8
         alleged_filter = self.image_info.filter
-        filters_checked = [k for k in dicts.keys()]
+        filters_checked = [k for k in phot_headers.keys()]
+        dicts = {filt: (header.zp_dict, header.aperture_dict) for filt, header in phot_headers.items()}
         dicts_for_plotting = dicts.copy()
         test_dicts = dicts.copy()
+
+        self.logger.debug(f"filters_checked: {filters_checked}")
+        # self.logger.debug(f"dicts: {dicts}")  # too long
 
         # (1) rule out filters that were not present at the time
         active_filters = self.get_active_filters()
@@ -854,16 +866,18 @@ class PhotometrySingle:
             self.logger.debug(f"Fetched active filters {active_filters}")
             return active_filters
         except:
-            self.logger.info("Fetching active filters failed. Using all default filters")
+            self.logger.warning("Fetching active filters failed. Using all default filters")
             return ALL_FILTERS
 
     def update_image_header(
         self,
+        phot_header: PhotometryHeader,
     ) -> None:
         """
         Update the input fits image's header with photometry information.
         """
-        update_padded_header(self.input_image, self.phot_header.dict)
+        phot_header = phot_header or self.phot_header
+        update_padded_header(self.input_image, phot_header.dict)
         self.logger.info(f"Image header has been updated with photometry information (aperture, zero point, ...).")
 
     def write_catalog(self, obs_src_table) -> None:
@@ -1051,10 +1065,10 @@ class PhotometryHeader:
 
     def __init__(self, image_info: ImageInfo = None):
         """If photometry result already exists, load it from the image header"""
-        self.PHOTIME = datetime.date.today().isoformat()
         self.aperture_info = {}  # set here to avoid sharing between instances
 
         if image_info is not None:
+            self.PHOTIME = datetime.date.today().isoformat()
             self.image_info = image_info
 
             for f in fields(self):
