@@ -511,7 +511,6 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
     def imsubtract(self):
         return PathImsubtract(self, self._config)
 
-    @property
     def _raw_dir(self, i):
         unit = self._get_name_property_at_index("unit", i)
         nightdate = self._get_name_property_at_index("nightdate", i)
