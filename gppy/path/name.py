@@ -5,7 +5,7 @@ from pathlib import Path
 from .utils import subtract_half_day, get_gain, get_nightdate, add_a_day
 from ..utils import equal_on_keys, collapse, get_header
 from .. import const
-from .utils import strip_binning, format_binning, strip_exptime, format_exptime, strip_gain, format_camera
+from .utils import strip_binning, format_binning, strip_exptime, format_exptime, strip_gain, format_camera, format_gain
 from .cam_tracker import get_camera_serial
 
 
@@ -795,6 +795,14 @@ class NameHandler:
 
         # multi-file: each attribute is a list; zip them to rows of dicts
         return [dict(zip(keys, row)) for row in zip(*values)]
+
+    @property
+    def groupname(self):
+        obs_params = self.to_dict()
+        if isinstance(obs_params, list):
+            raise ValueError("NameHandler.groupname is only supported for a single file input")
+
+        return f"{self.obj}_{self.filter}_{self.nightdate}_{format_exptime(self.exptime, type='processed')}_{format_binning(self.n_binning)}_{format_gain(self.gain)}_{self.camera}"
 
     def get_grouped_files(self, keys=None):
         """

@@ -521,7 +521,10 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
 
     @property
     def conjugate(self) -> str | list[str]:
-        """Doesn't raise error on unfound; suitable for external users. None or '*' signals nonexistent file(s)"""
+        """
+        Can return glob templates, not actual paths.
+        Doesn't raise error on unfound; suitable for external users. None or '*' signals nonexistent file(s)
+        """
         paths = []
         for i, input in enumerate(self._input_files):
             typ = self._get_name_property_at_index("type", i)

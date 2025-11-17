@@ -74,6 +74,7 @@ class QueueManager:
         save_result: bool = False,
         auto_start: bool = False,
         process_timeout: int = 7200,  # 2 hours default timeout
+        monitor: bool = False,
         **kwargs,
     ):
         # Initialize logging
@@ -81,9 +82,14 @@ class QueueManager:
             self.logger = logger
         else:
             self.logger = Logger("QueueManager")
-            self.logger.set_output_file(
-                f"/var/log/pipeline/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_{os.getpid()}.log"
-            )
+            if monitor:
+                self.logger.set_output_file(
+                    f"/var/log/pipeline/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_monitor_{os.getpid()}.log"
+                )
+            else:
+                self.logger.set_output_file(
+                    f"/var/log/pipeline/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_{os.getpid()}.log"
+                )
 
         self.logger.debug(f"Initialize QueueManager.")
 

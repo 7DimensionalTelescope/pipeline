@@ -241,12 +241,13 @@ class DatabaseHandler:
             return False
 
         try:
-            # Get pipeline data and determine target_pipeline_id
+            # Get config_file from database if pipeline_id is provided
             if pipeline_id is not None:
                 pipeline_data = self.pipeline_db.read_pipeline_data(pipeline_id=pipeline_id)
-                if not pipeline_data:
-                    self._log_warning(f"No pipeline record found for pipeline_id {pipeline_id}")
+                if not pipeline_data or not pipeline_data.config_file:
+                    self._log_warning(f"No config_file found for pipeline_id {pipeline_id}")
                     return False
+                config_file = pipeline_data.config_file
                 target_pipeline_id = pipeline_id
             elif config_file:
                 # Find pipeline_id from config_file
@@ -263,75 +264,52 @@ class DatabaseHandler:
                     self._log_warning("No config_file or pipeline_id provided")
                     return False
                 pipeline_data = self.pipeline_db.read_pipeline_data(pipeline_id=self.pipeline_id)
-                if not pipeline_data:
-                    self._log_warning(f"No pipeline record found for pipeline_id {self.pipeline_id}")
+                if not pipeline_data or not pipeline_data.config_file:
+                    self._log_warning(f"No config_file found for pipeline_id {self.pipeline_id}")
                     return False
+                config_file = pipeline_data.config_file
                 target_pipeline_id = self.pipeline_id
 
-            # First, check if log_file is already stored in the database
-            log_file = None
-            if pipeline_data.log_file and os.path.exists(pipeline_data.log_file):
-                log_file = pipeline_data.log_file
-                self._log_debug(f"Using log_file from database: {log_file}")
+            # Derive log file path from config file path
+            # Handle both full paths and just filenames
+            if os.path.isabs(config_file) or os.path.sep in config_file:
+                # Full path provided
+                if config_file.endswith(".yml"):
+                    log_file = config_file.replace(".yml", ".log")
+                elif config_file.endswith(".yaml"):
+                    log_file = config_file.replace(".yaml", ".log")
+                else:
+                    self._log_warning(f"Config file {config_file} does not have .yml or .yaml extension")
+                    return False
             else:
-                # Derive log file path from config file path
-                config_file = pipeline_data.config_file
-                if not config_file:
-                    self._log_warning(f"No config_file found for pipeline_id {target_pipeline_id}")
+                # Just filename provided - try to find it in common locations
+                # Extract base name without extension
+                base_name = config_file.replace(".yml", "").replace(".yaml", "")
+                log_file = None
+
+                # Try common processed data directories
+                possible_dirs = [
+                    "/lyman/data2/processed",
+                    "/home/pipeline/processed_debug",
+                    os.path.dirname(os.path.abspath(config_file)) if config_file else None,
+                ]
+
+                for base_dir in possible_dirs:
+                    if base_dir is None:
+                        continue
+                    # Try to find date directory (format: YYYY-MM-DD)
+                    if len(base_name) >= 10 and base_name[4] == "-" and base_name[7] == "-":
+                        date_part = base_name[:10]
+                        potential_log = os.path.join(base_dir, date_part, f"{base_name}.log")
+                        if os.path.exists(potential_log):
+                            log_file = potential_log
+                            break
+
+                if log_file is None:
+                    self._log_warning(f"Could not find log file for config_file: {config_file}")
                     return False
 
-                # Handle both full paths and just filenames
-                if os.path.isabs(config_file) or os.path.sep in config_file:
-                    # Full path provided
-                    if config_file.endswith(".yml"):
-                        log_file = config_file.replace(".yml", ".log")
-                    elif config_file.endswith(".yaml"):
-                        log_file = config_file.replace(".yaml", ".log")
-                    else:
-                        self._log_warning(f"Config file {config_file} does not have .yml or .yaml extension")
-                        return False
-                else:
-                    # Just filename provided - try to find it in common locations
-                    # Extract base name without extension
-                    base_name = config_file.replace(".yml", "").replace(".yaml", "")
-
-                    # Try common processed data directories
-                    possible_dirs = [
-                        "/lyman/data2/processed",
-                        "/home/pipeline/processed_debug",
-                    ]
-
-                    for base_dir in possible_dirs:
-                        if not os.path.exists(base_dir):
-                            continue
-                        # Try to find date directory (format: YYYY-MM-DD)
-                        if len(base_name) >= 10 and base_name[4] == "-" and base_name[7] == "-":
-                            date_part = base_name[:10]
-                            potential_log = os.path.join(base_dir, date_part, f"{base_name}.log")
-                            if os.path.exists(potential_log):
-                                log_file = potential_log
-                                break
-
-                    # If still not found, try searching in subdirectories
-                    if log_file is None:
-                        for base_dir in possible_dirs:
-                            if not os.path.exists(base_dir):
-                                continue
-                            # Search recursively for the log file
-                            for root, dirs, files in os.walk(base_dir):
-                                if f"{base_name}.log" in files:
-                                    log_file = os.path.join(root, f"{base_name}.log")
-                                    break
-                            if log_file:
-                                break
-
             # Check if log file exists
-            if log_file is None:
-                self._log_warning(
-                    f"Could not find log file for pipeline_id {target_pipeline_id} (config_file: {config_file})"
-                )
-                return False
-
             if not os.path.exists(log_file):
                 self._log_warning(f"Log file not found: {log_file}")
                 return False
@@ -595,112 +573,3 @@ def update_errors_warnings_from_log_file(config_file: str, db_params: Optional[D
     """
     handler = DatabaseHandler(db_params=db_params, add_database=True)
     return handler.update_errors_warnings_from_log(config_file=config_file)
-
-
-def update_all_errors_warnings_from_logs(
-    db_params: Optional[Dict[str, Any]] = None, limit: Optional[int] = None, verbose: bool = True
-) -> Dict[str, Any]:
-    """
-    Update error and warning counts from log files for all pipeline records in the database.
-
-    Args:
-        db_params: Optional database connection parameters
-        limit: Optional limit on number of records to process (None = all)
-        verbose: Whether to print progress messages
-
-    Returns:
-        Dictionary with statistics:
-        {
-            'total': total records processed,
-            'successful': number of successful updates,
-            'failed': number of failed updates,
-            'no_log_file': number of records where log file was not found,
-            'no_config_file': number of records without config_file
-        }
-
-    Example:
-        >>> stats = update_all_errors_warnings_from_logs()
-        >>> print(f"Updated {stats['successful']} out of {stats['total']} records")
-    """
-    handler = DatabaseHandler(db_params=db_params, add_database=True)
-    if not handler.is_connected:
-        if verbose:
-            print("✗ Database not connected")
-        return {
-            "total": 0,
-            "successful": 0,
-            "failed": 0,
-            "no_log_file": 0,
-            "no_config_file": 0,
-        }
-
-    # Get all pipeline records
-    pipeline_records = handler.pipeline_db.read_pipeline_data(limit=limit or 1000000)
-    if not pipeline_records:
-        if verbose:
-            print("No pipeline records found")
-        return {
-            "total": 0,
-            "successful": 0,
-            "failed": 0,
-            "no_log_file": 0,
-            "no_config_file": 0,
-        }
-
-    if not isinstance(pipeline_records, list):
-        pipeline_records = [pipeline_records]
-
-    stats = {
-        "total": len(pipeline_records),
-        "successful": 0,
-        "failed": 0,
-        "no_log_file": 0,
-        "no_config_file": 0,
-    }
-
-    if verbose:
-        print(f"Processing {stats['total']} pipeline records...")
-        print("=" * 80)
-
-    for i, record in enumerate(pipeline_records, 1):
-        if verbose and i % 10 == 0:
-            print(f"Progress: {i}/{stats['total']} ({100*i//stats['total']}%)")
-
-        if not record.config_file:
-            stats["no_config_file"] += 1
-            if verbose:
-                print(f"  [{i}] Pipeline ID {record.id}: No config_file")
-            continue
-
-        # Try to update
-        try:
-            result = handler.update_errors_warnings_from_log(pipeline_id=record.id)
-            if result:
-                stats["successful"] += 1
-                if verbose:
-                    # Get updated values to show
-                    updated = handler.pipeline_db.read_pipeline_data(pipeline_id=record.id)
-                    if updated:
-                        print(
-                            f"  [{i}] Pipeline ID {record.id}: Updated - Errors: {updated.errors}, Warnings: {updated.warnings}"
-                        )
-            else:
-                # Check if it's because log file wasn't found
-                # The function logs warnings, so we'll count as failed
-                stats["failed"] += 1
-                if verbose:
-                    print(f"  [{i}] Pipeline ID {record.id}: Failed to update")
-        except Exception as e:
-            stats["failed"] += 1
-            if verbose:
-                print(f"  [{i}] Pipeline ID {record.id}: Error - {e}")
-
-    if verbose:
-        print("=" * 80)
-        print("Summary:")
-        print(f"  Total records: {stats['total']}")
-        print(f"  Successful: {stats['successful']}")
-        print(f"  Failed: {stats['failed']}")
-        print(f"  No config_file: {stats['no_config_file']}")
-
-    return stats

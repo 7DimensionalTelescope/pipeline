@@ -98,7 +98,6 @@ class PipelineDB(BaseDatabase):
         status: Optional[str] = None,
         obj: Optional[str] = None,
         filt: Optional[str] = None,
-        config_file: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> Union[Optional[PipelineData], List[PipelineData]]:
@@ -156,10 +155,6 @@ class PipelineDB(BaseDatabase):
                 if status:
                     where_clauses.append("status = %(status)s")
                     params["status"] = status
-
-                if config_file:
-                    where_clauses.append("config_file = %(config_file)s")
-                    params["config_file"] = config_file
 
                 # Build query
                 query = """

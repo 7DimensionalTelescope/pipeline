@@ -8,7 +8,6 @@ import pandas as pd
 
 # Import data classes
 from .table import QAData, PipelineData
-from .const import DB_PARAMS
 from .base import BaseDatabase, DatabaseError
 
 

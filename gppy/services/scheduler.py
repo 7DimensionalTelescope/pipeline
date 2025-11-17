@@ -77,7 +77,6 @@ class Scheduler:
         self.overwrite = kwargs.get("overwrite", False)
         self.device_id = kwargs.get("device_id", 0)
         self.max_devices = kwargs.get("max_devices", NUM_GPUS)  # default to maximum number of GPUs
-        self.preprocess_only = preprocess_only
 
         if not self.master_status:  # enqueue independents immediately if no masters
             while self.independents:

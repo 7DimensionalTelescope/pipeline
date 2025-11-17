@@ -11,12 +11,30 @@ import logging
 from pathlib import Path
 from gppy.services.monitor import Monitor
 from gppy.wrapper import DataReduction
+from gppy.services.queue import QueueManager
 
-# Set up logging
+# Set up logging with rotation
+from logging.handlers import RotatingFileHandler
+
+# Create rotating file handler (max 10MB per file, keep 5 backup files = 50MB total)
+file_handler = RotatingFileHandler(
+    "/var/log/pipeline-trigger.log",
+    maxBytes=10 * 1024 * 1024,  # 10MB
+    backupCount=5,  # Keep 5 backup files
+)
+
+file_handler.setLevel(logging.INFO)
+file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+
+# Console handler
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+
+# Configure root logger
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler("/var/log/pipeline-trigger.log"), logging.StreamHandler()],
+    handlers=[file_handler, console_handler],
 )
 logger = logging.getLogger(__name__)
 
@@ -24,22 +42,86 @@ logger = logging.getLogger(__name__)
 def process_new_images(image_paths):
     """
     Process new images using the existing pipeline infrastructure.
-    This is the same function used in the original start_monitoring.
+    Each image set runs in its own tmux session for isolation and monitoring.
     """
     try:
-        logger.info(f"Processing {len(image_paths)} new images")
-        dr = DataReduction.from_list(image_paths)
-        dr.create_config()
-        dr.process_all()
-        logger.info(f"Successfully processed {len(image_paths)} images")
+        import subprocess
+        import uuid
+        from datetime import datetime
+
+        # Create a unique identifier for this processing job
+        job_id = str(uuid.uuid4())[:8]
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        session_name = f"monitor_{job_id}"
+
+        logger.info(f"Processing {len(image_paths)} new images (job_id: {job_id}, session: {session_name})")
+
+        # Create a script to run the processing
+        # The session will auto-delete after 1 hour
+        script_content = f"""#!/bin/bash
+cd /tmp/pipeline
+source ~/.bashrc
+export PYTHONPATH=/home/pipeline/pipeline
+export CONDA_PREFIX=/home/pipeline/.conda/envs/pipeline
+export CONDA_DEFAULT_ENV=pipeline
+
+echo "Starting processing of {len(image_paths)} images..."
+echo "Session: {session_name}"
+echo "Job ID: {job_id}"
+echo ""
+
+/home/pipeline/.conda/envs/pipeline/bin/python -c "
+from gppy.wrapper import DataReduction
+from gppy.services.queue import QueueManager
+import sys
+
+image_paths = {repr(image_paths)}
+dr = DataReduction.from_list(image_paths)
+dr.create_config()
+queue = QueueManager(monitor=True)
+dr.process_all(queue=queue)
+print(f'Successfully processed {{len(image_paths)}} images')
+"
+
+echo ""
+echo "Processing completed. Session will auto-close in 1 hour."
+echo "You can attach with: tmux attach -t {session_name}"
+echo "Or close manually with: tmux kill-session -t {session_name}"
+
+# Wait 1 hour then kill the session (in background)
+(sleep 3600 && tmux kill-session -t {session_name} 2>/dev/null) &
+
+# Keep the session alive until it's killed
+wait
+"""
+
+        # Create temporary script file
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
+            f.write(script_content)
+            script_path = f.name
+
+        import os
+
+        os.chmod(script_path, 0o755)
+
+        # Create new tmux session and run the processing script
+        subprocess.Popen(["tmux", "new-session", "-d", "-s", session_name, script_path])
+
+        logger.info(f"Started processing in tmux session: {session_name}")
+        logger.info(f"Attach with: tmux attach -t {session_name}")
+        logger.info(f"Session will auto-close after 1 hour")
+
     except Exception as e:
-        logger.error(f"Error processing images: {e}")
+        logger.error(f"Error processing images: {e}", exc_info=True)
 
 
 def start_trigger_monitoring():
     """Start the trigger monitoring service using the existing Monitor class."""
     from gppy.const import RAWDATA_DIR
 
+    # RAWDATA_DIR = "/lyman/data2/obsdata/"
     # Create the monitor using the existing codebase
     monitor = Monitor(base_path=Path(RAWDATA_DIR))
     monitor.add_callback(process_new_images)

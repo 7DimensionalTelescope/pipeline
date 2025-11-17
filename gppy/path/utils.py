@@ -277,11 +277,16 @@ def strip_gain(gain_string):
     return int(gain_string[4:])
 
 
+def format_gain(gain: int | str):
+    if gain is None:
+        return "*"
+    return f"gain{gain}"
+
+
 def format_camera(serial: str | int):
+    if serial is None:
+        return "*"
     return "C" + str(serial)
-
-
-# Functions moved from main utils.py that are only used in path modules
 
 
 def add_a_day(timestr: str) -> str:

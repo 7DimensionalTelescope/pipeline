@@ -29,6 +29,7 @@ from ..services.database import QAData
 from ..services.database.handler import DatabaseHandler
 from ..header import add_padding
 from ..const import PipelineError
+from ..path import PathHandler, NameHandler
 
 pp = pprint.PrettyPrinter(indent=2)  # , width=120)
 
@@ -112,7 +113,6 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         return tasks
 
     def initialize(self):
-        from ..path import PathHandler
 
         self.logger.info("Initializing Preprocess")
 
@@ -129,7 +129,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
         self._n_groups = len(self.raw_groups)
         self._original_raw_groups = copy.deepcopy(self.raw_groups)
-        self._current_group = 0
+        self._current_group = 0  # Do not manipulate it directly; use proceed_to_next_group and so on
+        self.log_group_manifest()
         self.load_criteria()
 
         self.logger.info(f"{self._n_groups} groups are found")
@@ -138,6 +139,17 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         # Create pipeline record in database
         if self.is_connected:
             self.pipeline_id = self.create_pipeline_data(self.config, self.raw_groups, self.overwrite)
+
+    def log_group_manifest(self):
+        for i, group in enumerate(self.raw_groups):
+            if sci := self._parse_sci_list(i, "input"):
+                groupname = NameHandler(sci[0]).groupname
+            else:
+                for dtype in self.calib_types[::-1]:  # flat is most important
+                    if calib := self._get_raw_group(f"{dtype}_input", i):
+                        groupname = NameHandler(calib[0]).groupname
+                        break
+            self.logger.info(f"[Group {i+1}] {groupname}")
 
     def run(self, device_id=None, make_plots=True, use_gpu=True, override_skip_plotting_flags=None):
         """
@@ -165,26 +177,36 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 self.logger.debug("\n" + "#" * 100 + f"\n{' '*30}Start processing group {i+1} / {self._n_groups}\n" + "#" * 100)  # fmt: skip
                 self.logger.debug(f"[Group {i+1}] [filter: exptime] {PathHandler.get_group_info(self.raw_groups[i])}")
 
-                self.load_masterframe(device_id=device_id)
+                # ---- group-level work ----
+                try:
+                    self.load_masterframe(device_id=device_id)
 
-                if not self.master_frame_only:
-                    self.prepare_header()
-                    self.data_reduction(device_id=device_id)
+                    if not self.master_frame_only:
+                        self.prepare_header()
+                        self.data_reduction(device_id=device_id)
 
-                if make_plots:
-                    t = threading.Thread(
-                        target=self.make_plots,
-                        kwargs={
-                            "group_index": i,
-                            "skip_flags": self.skip_plotting_flags,
-                            "override_skip_flags": override_skip_plotting_flags,
-                        },
+                    if make_plots:
+                        t = threading.Thread(
+                            target=self.make_plots,
+                            kwargs={
+                                "group_index": i,
+                                "skip_flags": self.skip_plotting_flags,
+                                "override_skip_flags": override_skip_plotting_flags,
+                            },
+                        )
+                        t.start()
+                        threads_for_making_plots.append(t)
+
+                except Exception as e:
+                    self.logger.error(
+                        f"[Group {i+1}] Error during masterframe generation or data reduction: {str(e)}", exc_info=False
                     )
-                    t.start()
-                    threads_for_making_plots.append(t)
+                    self.add_error()
+                    self.logger.info(f"[Group {i+1}] Skipping to next group")
 
-                if i < self._n_groups - 1:
-                    self.proceed_to_next_group()
+                finally:
+                    if i < self._n_groups - 1:
+                        self.proceed_to_next_group()
 
             if make_plots:
                 for t in threads_for_making_plots:
@@ -246,7 +268,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                     return self.raw_groups[group_index][1][self._key_to_index[key]]
         raise AttributeError(f"Attribute {name} not found")
 
-    def _parse_sci_list(self, group_index, dtype="input"):
+    def _parse_sci_list(self, group_index, dtype="input") -> list[str]:
         l = []
         for value in self.raw_groups[group_index][2].values():
             if dtype == "input":

@@ -37,11 +37,12 @@ from .evaluation import evaluate_single_wcs, evaluate_joint_wcs
 
 from ..services.database.handler import DatabaseHandler
 from ..services.database.table import QAData
+from ..services.checker import Checker
 
 # from .generate_refcat_gaia import get_refcat_gaia
 
 
-class Astrometry(BaseSetup, DatabaseHandler):
+class Astrometry(BaseSetup, DatabaseHandler, Checker):
     """A class to handle astrometric solutions for astronomical images.
 
     This class manages the complete astrometric pipeline including plate solving,
