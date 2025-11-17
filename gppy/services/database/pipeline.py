@@ -1,16 +1,15 @@
-import psycopg
+# import psycopg
 from datetime import date, datetime
 from typing import List, Dict, Optional, Union, Any
 import json
-from contextlib import contextmanager
-import os
-from astropy.table import Table
+
+# from contextlib import contextmanager
 import pandas as pd
 
 # Import data classes
 from .table import PipelineData
-from .const import DB_PARAMS
-from .utils import generate_id
+
+# from .utils import generate_id
 from .base import BaseDatabase, DatabaseError
 
 

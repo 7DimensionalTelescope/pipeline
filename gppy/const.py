@@ -11,7 +11,9 @@ MASTER_FRAME_DIR = os.environ.get("MASTER_FRAME_DIR") or "/lyman/data2/master_fr
 PROCESSED_DIR = os.environ.get("PROCESSED_DIR") or "/lyman/data2/processed"
 STACKED_DIR = os.environ.get("STACKED_DIR") or "/lyman/data2/stacked"
 SLACK_TOKEN = os.environ.get("SLACK_TOKEN", None)
-INSTRUM_STATUS_DICT = os.environ.get("INSTRUM_STATUS_DICT") or "/home/7dt/7dt_too/backend/data/7dt/multitelescopes.dict"
+INSTRUM_STATUS_DICT = os.environ.get("INSTRUM_STATUS_DICT") or (
+    x if os.path.exists(x := "/home/7dt/7dt_too/backend/data/7dt/multitelescopes.dict") else None
+)
 SEXTRACTOR_COMMAND = os.environ.get("SEXTRACTOR_COMMAND") or "source-extractor"
 
 # Paths to pre-generated data

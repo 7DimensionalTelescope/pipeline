@@ -4,11 +4,11 @@ from dotenv import load_dotenv
 env_file = os.path.join(os.path.dirname(__file__), "../../../.env")
 load_dotenv(env_file)
 
-dbname = os.environ["DBNAME"]
-user = os.environ["DBUSER"]
-host = os.environ["DBHOST"]
-port = os.environ["DBPORT"]
-password = os.environ["DBPASSWORD"]
+dbname = os.environ.get("DBNAME")
+user = os.environ.get("DBUSER")
+host = os.environ.get("DBHOST")
+port = os.environ.get("DBPORT")
+password = os.environ.get("DBPASSWORD")
 
 DB_PARAMS = {
     "dbname": dbname,

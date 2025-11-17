@@ -4,7 +4,8 @@ import glob
 from datetime import date
 from typing import List, Dict, Optional, Union, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import psycopg
+
+# import psycopg
 from psycopg_pool import ConnectionPool
 
 from ...const import RAWDATA_DIR, CalibType
