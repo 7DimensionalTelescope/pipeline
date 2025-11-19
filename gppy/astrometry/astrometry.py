@@ -1,9 +1,10 @@
+from __future__ import annotations  # for ImageInfo
 import os
 import re
 import time
 import shutil
 import numpy as np
-from typing import Any, List, Tuple, Union, Any, Optional
+from typing import Any, List, Tuple, Union, Any, Optional, Self
 from dataclasses import dataclass, field
 from astropy.io import fits
 from astropy.time import Time
@@ -16,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 from .. import external
-from ..const import PIXSCALE, PipelineError
+from ..const import PIXSCALE, PipelineError, REF_DIR
 from ..utils import swap_ext, add_suffix, force_symlink, time_diff_in_seconds, unique_filename, atleast_1d
 from ..header import update_padded_header, reset_header, fitsrec_to_header
 from ..services.memory import MemoryMonitor
@@ -32,6 +33,7 @@ from .utils import (
     get_fov_quad,
     strip_wcs,
     read_text_header,
+    get_source_num_frac,
 )
 from .evaluation import evaluate_single_wcs, evaluate_joint_wcs
 
@@ -82,6 +84,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         self.start_time = time.time()
         self.define_paths()
 
+        self.load_criteria(dtype="science")
         self.qa_ids = []
         DatabaseHandler.__init__(self, add_database=self.config.settings.is_pipeline)
 
@@ -158,6 +161,18 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     # run initial solve: scamp or solve-field
                     self.run_scamp(prep_cat, scamp_preset="prep", joint=False, overwrite=overwrite)
                     self.update_pipeline_progress(5, "astrometry-scamp-prep")
+
+                    image_info.set_early_qa_stats(sci_cat=prep_cat, ref_cat=self.config.astrometry.local_astref)
+                    flag, _ = self.apply_criteria(image_info.early_qa_cards)
+                    image_info.SANITY = flag
+                    if not image_info.SANITY:
+                        self.logger.info(
+                            f"Early QA rejected {os.path.basename(image_info.image_path)}! "
+                            f"Skipping all subsequent processing, including Astrometry and Photometry."
+                        )
+                        # TODO: head is not file, but imageinfo.qa_cards
+                        # self.update_header(inims=[image_info.image_path], heads=[prep_cat], add_polygon_info=False)
+                        continue
 
                     if evaluate_prep_sol:
                         self.evaluate_solution(
@@ -337,7 +352,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             inims = self.config.input.calibrated_images
             self.config.astrometry.input_images = inims
 
-        self.input_images = inims
+        self.input_images = inims  # must be in sync with self.images_info
 
         # soft_links = [os.path.join(self.path_astrometry, os.path.basename(s)) for s in inims]
         soft_links = atleast_1d(self.path.astrometry.soft_link)
@@ -359,7 +374,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         )  # None if no local astrefcat
         if not os.path.exists(local_astref):
             try:
-                raise PipelineError(f"Local astrefcat {local_astref} does not exist")
+                raise PipelineError(f"Local astrefcat {local_astref} does not exist")  # TODO
                 get_refcat_gaia(self.input_images[0])
             except:
                 local_astref = None
@@ -700,7 +715,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             tbl["ALPHA_J2000"] = ra
             tbl["DELTA_J2000"] = dec
 
-            if update_fwhm:
+            if update_fwhm:  # TODO
+                self.logger.debug("Updating FWHM_WORLD is under development. Skipping...")
                 # tbl["FWHM_WORLD"] = something
                 pass
 
@@ -860,9 +876,11 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             use_missfits: Whether to use missfits for updates
         """
 
-        heads = heads or self.solved_heads
-        inims = inims or self.input_images
+        # exclude images rejected by early QA
+        heads = heads or [s for s, ii in zip(self.solved_heads, self.images_info) if ii.SANITY]
+        inims = inims or [ii.image_path for ii in self.images_info if ii.SANITY]
         self.logger.info(f"Updating WCS to header(s) of {len(heads)} image(s)")
+        assert len(heads) == len(inims)
 
         for image_info, solved_head, target_fits in zip(self.images_info, heads, inims):
             solved_header = read_scamp_header(solved_head)
@@ -939,6 +957,7 @@ class ImageInfo:
     ycent: float  # Y coordinate of image center
     n_binning: int  # Binning factor
     pixscale: float  # Pixel scale [arcsec/pix]
+    filter: str  # Filter
 
     # WCS solution
     head: Optional[str] = field(default=None)
@@ -987,7 +1006,13 @@ class ImageInfo:
     # dependency logger
     logger: Any = None
 
-    _joint_cards_up_to_date = False  # prevent single and joint eval cards coming from different solutions
+    _joint_cards_are_up_to_date = False  # prevent single and joint eval cards coming from different solutions
+
+    # early qa
+    num_frac: Optional[float] = field(default=None)
+    SANITY: Optional[bool] = field(default=None)
+    # late qa
+    # UNMATCH, PA_ALIGN, ELLIPMN, ELLIPSTD
 
     def _log(self, msg: str, level: str = "error", *args, **kwargs):
         """Log or fallback to print/raise if logger missing."""
@@ -1010,13 +1035,12 @@ class ImageInfo:
         return getattr(self, key, default)
 
     @classmethod
-    def parse_image_header_info(cls, image_path: str) -> "ImageInfo":
+    def parse_image_header_info(cls, image_path: str) -> ImageInfo:
         """Parses image information from a FITS header."""
 
         hdr = fits.getheader(image_path)
 
         x, y = hdr["NAXIS1"], hdr["NAXIS2"]
-
         # Center coord for reference catalog query
         xcent = (x + 1) / 2.0
         ycent = (y + 1) / 2.0
@@ -1024,19 +1048,10 @@ class ImageInfo:
         assert n_binning == hdr["YBINNING"]
         pixscale = n_binning * PIXSCALE
 
-        # racent, decent = hdr["OBJCTRA"], hdr["OBJCTDEC"]  # desired pointing
-        racent, decent = hdr["RA"], hdr["DEC"]  # actual pointing
-        # racent = Angle(racent, unit="hourangle").deg
-        racent = Angle(racent, unit="deg").deg
-        decent = Angle(decent, unit="deg").deg
-
         # wcs = WCS(image_path)
         # racent, decent = wcs.all_pix2world(xcent, ycent, 1)
         # racent = float(racent)
         # decent = float(decent)
-
-        # time_obj = Time(hdr["DATE-OBS"], format="isot")
-        time_obj = hdr["DATE-OBS"]
 
         # if solved
         # if "CTYPE1" not in hdr.keys():
@@ -1044,15 +1059,16 @@ class ImageInfo:
 
         return cls(
             image_path=image_path,
-            dateobs=time_obj,  # hdr["DATE-OBS"],
+            dateobs=hdr["DATE-OBS"],  # Time(hdr["DATE-OBS"], format="isot")
             naxis1=x,
             naxis2=y,
-            racent=racent,
-            decent=decent,
+            racent=Angle(hdr["RA"], unit="deg").deg,  # mount-reported RA. Desired RA is OBJCTRA.
+            decent=Angle(hdr["DEC"], unit="deg").deg,
             xcent=xcent,
             ycent=ycent,
             n_binning=n_binning,
             pixscale=pixscale,
+            filter=hdr["FILTER"],
         )
 
     @property
@@ -1061,7 +1077,7 @@ class ImageInfo:
         return build_wcs(self.racent, self.decent, self.xcent, self.ycent, self.pixscale, pa, flip=True)
 
     def set_reference_sep_stats(self, sep_stats: dict) -> None:
-        self._joint_cards_up_to_date = False
+        self._joint_cards_are_up_to_date = False
         self.reference_sep_min = sep_stats["min"]
         self.reference_sep_max = sep_stats["max"]
         self.reference_sep_rms = sep_stats["rms"]
@@ -1072,7 +1088,7 @@ class ImageInfo:
         self.reference_sep_p99 = sep_stats["p99"]
 
     def set_internal_sep_stats(self, sep_stats: dict) -> None:
-        self._joint_cards_up_to_date = True
+        self._joint_cards_are_up_to_date = True
         self.internal_sep_rms_x = sep_stats["rms_x"]
         self.internal_sep_rms_y = sep_stats["rms_y"]
         self.internal_sep_rms = sep_stats["rms"]
@@ -1088,6 +1104,30 @@ class ImageInfo:
         self.internal_match_counts = match_stats["counts_by_group_size"]  # ex) {2: 70, 3: 180, 1: 16}
         self.internal_match_recall = match_stats["recall"]
 
+    def set_early_qa_stats(self, sci_cat: str, ref_cat: str):
+        if not ref_cat:
+            self._log("No refcat to perform early QA. Skipping...", level="warning")
+            return
+        import json
+
+        with open(os.path.join(REF_DIR, "zeropoints.json"), "r") as f:
+            zp_per_filter = json.load(f)
+        with open(os.path.join(REF_DIR, "depths.json"), "r") as f:
+            depths_per_filter = json.load(f)
+        zp = zp_per_filter[self.filter]
+        depth = depths_per_filter[self.filter]
+
+        self.num_frac = get_source_num_frac(sci_cat, ref_cat, zp=zp, depth=depth - 0.5)
+        self._log(f"Early QA: NUMFRAC = {self.num_frac}", level="info")
+        return
+
+    @property
+    def early_qa_cards(self) -> List[Tuple[str, float]]:
+        cards = [
+            (f"NUMFRAC", self.num_frac, "Source number fraction again the expected from Gaia"),
+        ]
+        return cards
+
     @property
     def wcs_evaluated(self) -> bool:
         """only checks the existence of reference separation statistics.
@@ -1100,7 +1140,7 @@ class ImageInfo:
 
         cards = (
             self._single_wcs_eval_cards + self._joint_wcs_eval_cards
-            if self._joint_cards_up_to_date
+            if self._joint_cards_are_up_to_date
             else self._single_wcs_eval_cards
         )
         # Clean invalid values

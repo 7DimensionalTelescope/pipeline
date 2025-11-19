@@ -4,6 +4,10 @@ from .. import const
 
 
 class Checker:
+    """
+    This class generates and reads the hard-coded "SANITY" key in image headers.
+    """
+
     def __init__(self, dtype=None):
         self.dtype = dtype
         self.criteria = self.load_criteria()
@@ -26,6 +30,10 @@ class Checker:
             raise RuntimeError(f"Failed to load criteria: {e}")
 
     def apply_criteria(self, file_path: str = None, header: dict = None, dtype: str = None):
+        """
+        Generate a sanity flag based on the criteria. Returns the flag and the updated header.
+        Tolerates missing header keys if dtype is "science"
+        """
         if dtype is None:
             if self.dtype is not None:
                 dtype = self.dtype
@@ -90,6 +98,9 @@ class Checker:
         return flag, header
 
     def sanity_check(self, file_path: str = None, header: dict = None, dtype: str = None):
+        """
+        For checking sanity when loading a file from disk.
+        """
 
         if file_path is not None:
             try:

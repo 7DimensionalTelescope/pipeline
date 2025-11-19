@@ -12,17 +12,17 @@ PARAMETERS_NAME  simple.param   # name of the file containing catalog contents
 #------------------------------- Extraction ----------------------------------
  
 DETECT_TYPE      CCD            # CCD (linear) or PHOTO (with gamma correction)
-DETECT_MINAREA   5              # min. # of pixels above threshold
-DETECT_THRESH    3              # 10  # <sigmas> or <threshold>,<ZP> in mag.arcsec-2
+DETECT_MINAREA   15#5              # min. # of pixels above threshold
+DETECT_THRESH    1.5#3              # 10  # <sigmas> or <threshold>,<ZP> in mag.arcsec-2
 ANALYSIS_THRESH  1.5            # <sigmas> or <threshold>,<ZP> in mag.arcsec-2
  
-FILTER           N              # apply filter for detection (Y or N)?
+FILTER           Y#N              # apply filter for detection (Y or N)?
 FILTER_NAME      simple.conv    # name of the file containing the filter
  
 DEBLEND_NTHRESH  64             # Number of deblending sub-thresholds
 DEBLEND_MINCONT  0.0001          # Minimum contrast parameter for deblending
  
-CLEAN            Y              # Clean spurious detections? (Y or N)?
+CLEAN            Y#N              # Clean spurious detections? (Y or N)?
 CLEAN_PARAM      1.0            # Cleaning efficiency
  
 MASK_TYPE        CORRECT        # type of detection MASKing: can be one of
@@ -30,7 +30,7 @@ MASK_TYPE        CORRECT        # type of detection MASKing: can be one of
  
 #------------------------------ Photometry -----------------------------------
  
-PHOT_APERTURES   3,5,7          # MAG_APER aperture diameter(s) in pixels, 3", 5", 7"
+PHOT_APERTURES   5#3,5,7          # MAG_APER aperture diameter(s) in pixels, 3", 5", 7"
 PHOT_AUTOPARAMS  2.5, 3.5       # MAG_AUTO parameters: <Kron_fact>,<min_radius>
 PHOT_PETROPARAMS 2.0, 3.5       # MAG_PETRO parameters: <Petrosian_fact>,
                                 # <min_radius>

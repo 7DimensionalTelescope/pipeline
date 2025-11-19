@@ -434,7 +434,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 f"[Group {self._current_group+1}] Making a plot for the current {dtype} and fetching a new one with better quality"
             )
             self.make_masterframe_plots(getattr(self, f"{dtype}_output"), dtype, self._current_group)
-            self.add_error()
+            self.add_warning()
 
         return False
 

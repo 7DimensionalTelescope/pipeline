@@ -1,9 +1,9 @@
 {
     "SCIENCE": {
-        "TEST": {
-            "value": [1, 514],
-            "criteria": "within",
-            "description": "Median clipping value must be ≥ 512"
+        "NUMFRAC": {
+            "value": 0.01,
+            "criteria": "gt",
+            "description": "Source number fraction against reference catalog must be > 0.01"
         }
     }
-} 
+}

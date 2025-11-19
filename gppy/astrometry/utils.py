@@ -9,7 +9,7 @@ from astropy.wcs import WCS
 from astropy.coordinates import SkyCoord, SkyOffsetFrame
 
 
-def read_text_header(file, sep="\n"):
+def read_text_header(file: str, sep="\n"):
     with open(file, "r", encoding="utf-8") as f:
         content = f.read()
 
@@ -19,7 +19,7 @@ def read_text_header(file, sep="\n"):
     return hdr
 
 
-def read_scamp_header(file, return_wcs=False):
+def read_scamp_header(file: str, return_wcs=False):
     """
     Read a SCAMP output HEAD file, normalizing unicode and correcting WCS types.
 
@@ -472,3 +472,24 @@ def _select_3x3_by_nearest(cand_xy, targets):
                     break
 
     return selected
+
+
+def get_num_sources(catalog: str | Table, depth: float = 17.0, zp: float = 0, mag_key: str = "phot_g_mean_mag") -> int:
+    """
+    Get the number of sources in a catalog.
+    Use any depth shallower than the image's expected depth.
+    """
+    if isinstance(catalog, str):
+        catalog = Table.read(catalog, hdu=2)
+    catalog = catalog[catalog[mag_key] + zp < depth]
+    return len(catalog)
+
+
+def get_source_num_frac(sci_cat: str, local_astref: str, zp: float, depth: float = 17.0):
+    """hard-coded"""
+    SCI_TO_REF_AREA_RATIO = 0.5  # Science image area / Reference image area
+
+    sci_num_sources = get_num_sources(sci_cat, zp=zp, depth=depth, mag_key="MAG_AUTO")
+    ref_num_sources = get_num_sources(local_astref, depth=depth, mag_key="phot_g_mean_mag")
+
+    return sci_num_sources / (SCI_TO_REF_AREA_RATIO * ref_num_sources)

@@ -322,6 +322,7 @@ class QADB(BaseDatabase):
         """
         Get QA records enhanced with pipeline properties in a single query.
         Much faster than the for loop approach.
+        Only selects necessary columns to optimize query performance.
 
         Args:
             qa_type: QA type to filter by ('bias', 'dark', 'flat', 'science')
@@ -348,7 +349,7 @@ class QADB(BaseDatabase):
                     "p.date as run_date",
                 ]
 
-                # If param is specified, only select that parameter column
+                # If param is specified, only select that parameter column (optimized query)
                 if param:
                     # Map parameter names to database column names
                     param_to_column = {
@@ -384,12 +385,13 @@ class QADB(BaseDatabase):
 
                     # Check if param exists in mapping
                     if param in param_to_column:
+                        # Only select base columns + the requested parameter (optimized)
                         selected_columns = base_columns + [param_to_column[param]]
                     else:
                         # If param not found, return empty (invalid parameter)
                         return []
                 else:
-                    # Select all columns if param not specified
+                    # When param is not specified, select all columns (full data)
                     selected_columns = [
                         "qa.id",
                         "qa.qa_id",
@@ -439,6 +441,7 @@ class QADB(BaseDatabase):
                         "p.date as run_date",
                     ]
 
+                # Query only necessary columns (no LIMIT - fetch all matching records)
                 query = f"""
                     SELECT 
                         {', '.join(selected_columns)}
