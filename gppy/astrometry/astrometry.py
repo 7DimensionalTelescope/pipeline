@@ -157,13 +157,11 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             for i, (image_info, prep_cat) in enumerate(zip(self.images_info, self.prep_cats)):
                 try:
                     if force_solve_field:
-                        raise Exception("force_solve_field")
-                    # run initial solve: scamp or solve-field
-                    self.run_scamp(prep_cat, scamp_preset="prep", joint=False, overwrite=overwrite)
-                    self.update_pipeline_progress(5, "astrometry-scamp-prep")
+                        raise PipelineError("force_solve_field")
 
+                    # early QA
                     image_info.set_early_qa_stats(sci_cat=prep_cat, ref_cat=self.config.astrometry.local_astref)
-                    flag, _ = self.apply_criteria(image_info.early_qa_cards)
+                    flag, _ = self.apply_criteria(header=fits.Header(image_info.early_qa_cards), dtype="science")
                     image_info.SANITY = flag
                     if not image_info.SANITY:
                         self.logger.info(
@@ -173,6 +171,10 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                         # TODO: head is not file, but imageinfo.qa_cards
                         # self.update_header(inims=[image_info.image_path], heads=[prep_cat], add_polygon_info=False)
                         continue
+
+                    # run initial solve: scamp or solve-field
+                    self.run_scamp(prep_cat, scamp_preset="prep", joint=False, overwrite=overwrite)
+                    self.update_pipeline_progress(5, "astrometry-scamp-prep")
 
                     if evaluate_prep_sol:
                         self.evaluate_solution(
@@ -200,9 +202,9 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                             f"after {max_scamp} iterations for {image_info.image_path}"
                         )
                         if not avoid_solvefield:
-                            raise Exception(f"Bad solution")
+                            raise PipelineError(f"Bad solution")
 
-                except Exception as e:
+                except PipelineError as e:
                     # if evaluate_prep_sol:
                     #     self.evaluate_solution(suffix="prepwcs", use_threading=use_threading, export_eval_cards=True)
                     self.logger.warning(e)
@@ -217,6 +219,10 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     self._iterate_scamp(
                         prep_cat, image_info, evaluate_prep_sol, use_threading, max_scamp, overwrite=overwrite
                     )
+
+                except Exception as e:
+                    self.logger.error(f"Error during astrometry processing: {str(e)}", exc_info=True)
+                    raise Exception(f"Error during astrometry processing: {str(e)}")
 
             # evaluate main scamp
             self.evaluate_solution(suffix="wcs", isep=True, use_threading=use_threading, scamp_preset="main")

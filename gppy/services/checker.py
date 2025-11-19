@@ -8,6 +8,8 @@ class Checker:
     This class generates and reads the hard-coded "SANITY" key in image headers.
     """
 
+    dtype = None
+
     def __init__(self, dtype=None):
         self.dtype = dtype
         self.criteria = self.load_criteria()
@@ -35,6 +37,7 @@ class Checker:
         Tolerates missing header keys if dtype is "science"
         """
         if dtype is None:
+            print(f"debug: {self.dtype}")
             if self.dtype is not None:
                 dtype = self.dtype
             else:
@@ -45,6 +48,7 @@ class Checker:
                 elif "flat" in file_path:
                     dtype = "FLAT"
                 else:
+                    print("debug")
                     dtype = "SCIENCE"
 
         if not (hasattr(self, "criteria")):
