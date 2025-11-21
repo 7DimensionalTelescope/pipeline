@@ -125,6 +125,7 @@ class MemoryMonitor:
     def current_gpu_memory(cls) -> Dict:
         """
         Get GPU memory statistics for all available devices.
+        Early exit if no GPU is present.
 
         Returns:
             Dict: Memory usage details for each GPU device
@@ -134,14 +135,27 @@ class MemoryMonitor:
         gpu_stats = {}
 
         try:
-            pynvml.nvmlInit()
-            device_count = pynvml.nvmlDeviceGetCount()
+            # Try initializing NVML; fail fast if no GPU or NVML isn't present
+            try:
+                pynvml.nvmlInit()
+            except Exception:
+                return {}  # No GPU available → exit gracefully
 
+            # Get device count
+            try:
+                device_count = pynvml.nvmlDeviceGetCount()
+            except Exception:
+                return {}  # NVML available but no devices detected
+
+            if device_count == 0:
+                return {}  # Graceful exit if zero GPUs
+
+            # Collect stats from all devices
             for device in range(device_count):
                 handle = pynvml.nvmlDeviceGetHandleByIndex(device)
                 mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
 
-                total = mem_info.total / 1024 / 1024  # in MB
+                total = mem_info.total / 1024 / 1024  # MB
                 used = mem_info.used / 1024 / 1024
                 free = mem_info.free / 1024 / 1024
 
@@ -149,11 +163,15 @@ class MemoryMonitor:
                     "total": total,
                     "used": used,
                     "free": free,
-                    "percent": (used / total) * 100,
+                    "percent": (used / total) * 100 if total > 0 else 0,
                 }
 
         finally:
-            pynvml.nvmlShutdown()
+            # If NVML initialized successfully, shutdown safely
+            try:
+                pynvml.nvmlShutdown()
+            except Exception:
+                pass
 
         return gpu_stats
 

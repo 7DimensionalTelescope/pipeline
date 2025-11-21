@@ -22,3 +22,6 @@ dependencies:
     - pynvml
     - multiprocess
     - scipy
+    - psycopg[binary]==3.2.12     
+    - psycopg-pool==3.2.7         
+    - pandas==2.3.3        

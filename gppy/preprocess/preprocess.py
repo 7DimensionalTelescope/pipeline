@@ -324,7 +324,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
             if (
                 input_file
-                and (not os.path.exists(output_file))  # or self.overwrite) #skip for now.
+                and (not os.path.exists(output_file) or self.overwrite)
                 and (output_file not in self._generated_masterframes)
             ):
                 norminal = self._generate_masterframe(dtype, device_id)

@@ -318,7 +318,9 @@ class QADB(BaseDatabase):
         """Clear all QA data"""
         return self.clear_table("pipeline_qa")
 
-    def get_enhanced_qa_records(self, qa_type: str, param: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_enhanced_qa_records(
+        self, qa_type: str, param: Optional[str] = None, date_min: Optional[str] = None, date_max: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """
         Get QA records enhanced with pipeline properties in a single query.
         Much faster than the for loop approach.
@@ -327,6 +329,8 @@ class QADB(BaseDatabase):
         Args:
             qa_type: QA type to filter by ('bias', 'dark', 'flat', 'science')
             param: Optional parameter name to filter (only return this parameter)
+            date_min: Optional minimum date filter (YYYY-MM-DD)
+            date_max: Optional maximum date filter (YYYY-MM-DD)
 
         Returns:
             List of dictionaries with QA data enhanced with pipeline properties
@@ -441,18 +445,30 @@ class QADB(BaseDatabase):
                         "p.date as run_date",
                     ]
 
+                # Build WHERE clause with date filters
+                where_clauses = ["qa.qa_type = %s"]
+                params = [qa_type]
+
+                if date_min:
+                    where_clauses.append("DATE(qa.created_at) >= %s")
+                    params.append(date_min)
+
+                if date_max:
+                    where_clauses.append("DATE(qa.created_at) <= %s")
+                    params.append(date_max)
+
                 # Query only necessary columns (no LIMIT - fetch all matching records)
                 query = f"""
                     SELECT 
                         {', '.join(selected_columns)}
                     FROM pipeline_qa qa
                     LEFT JOIN pipeline_process p ON qa.pipeline_id_id = p.id
-                    WHERE qa.qa_type = %s
+                    WHERE {' AND '.join(where_clauses)}
                     ORDER BY qa.created_at DESC
                 """
 
                 with conn.cursor() as cur:
-                    cur.execute(query, (qa_type,))
+                    cur.execute(query, tuple(params))
                     rows = cur.fetchall()
 
                     enhanced_records = []
