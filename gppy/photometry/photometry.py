@@ -859,6 +859,8 @@ class PhotometrySingle:
 
         try:
             f = PathHandler(self.input_image).conjugate
+            if not os.path.exists(f):
+                raise PipelineError(f"During get_active_filters, no conjugate image found for {f}")
             flist = glob(os.path.join(os.path.dirname(f), "*.fits"))
             flats = NameHandler(flist).pick_type("raw_flat")
             scis = NameHandler(flist).pick_type("raw_science")

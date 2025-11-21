@@ -391,6 +391,9 @@ class QADB(BaseDatabase):
                     if param in param_to_column:
                         # Only select base columns + the requested parameter (optimized)
                         selected_columns = base_columns + [param_to_column[param]]
+                        # For dark type, also include exptime
+                        if qa_type == "dark" and param != "exptime":
+                            selected_columns.append("qa.exptime")
                     else:
                         # If param not found, return empty (invalid parameter)
                         return []
@@ -485,6 +488,9 @@ class QADB(BaseDatabase):
                                 "run_date": row[6],
                                 param: row[7] if len(row) > 7 else None,
                             }
+                            # For dark type, also include exptime if it was selected
+                            if qa_type == "dark" and len(row) > 8:
+                                record_dict["exptime"] = row[8] if row[8] is not None else None
                         else:
                             # Create full enhanced record dictionary
                             record_dict = {
