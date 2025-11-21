@@ -228,7 +228,35 @@ class MemoryMonitor:
         Returns:
             str: Formatted string with CPU memory usage, CPU utilization, and GPU memory usage percentages
         """
-        cpu_utilization = psutil.cpu_percent(interval=None)
-        gpu_summary = [f"{device}: {percent:.2f}%" for device, percent in enumerate(cls.current_gpu_memory_percent)]
-        gpu_info = f", GPU [{', '.join(gpu_summary)}]"
-        return f"System [virtual: {cls.current_memory_percent:.2f}%, cgroup: {cls.current_memory['cg_percent']:.2f}%], CPU util [{cpu_utilization:.2f}%]{gpu_info}"
+        cpu_utilization = psutil.cpu_percent(interval=None) or 0.0
+
+        # Virtual memory is always a float from psutil
+        virtual = cls.current_memory_percent
+        virtual_str = f"{virtual:.2f}%" if virtual is not None else "N/A"
+
+        # cgroup percent may be None if memory.max == "max"
+        cg_percent = cls.current_memory.get("cg_percent")
+        if cg_percent is None:
+            cg_str = "unlimited"
+        else:
+            cg_str = f"{cg_percent:.2f}%"
+
+        # GPU info (unchanged, but make it robust too if you want)
+        gpu_percentages = cls.current_gpu_memory_percent
+        if not gpu_percentages:
+            gpu_info = ", GPU [N/A]"
+        else:
+            gpu_summary = []
+            for device, percent in enumerate(gpu_percentages):
+                if percent is None:
+                    gpu_summary.append(f"{device}: N/A")
+                else:
+                    gpu_summary.append(f"{device}: {percent:.2f}%")
+            gpu_info = f", GPU [{', '.join(gpu_summary)}]"
+
+        return f"System [virtual: {virtual_str}, cgroup: {cg_str}], " f"CPU util [{cpu_utilization:.2f}%]{gpu_info}"
+
+        # cpu_utilization = psutil.cpu_percent(interval=None)
+        # gpu_summary = [f"{device}: {percent:.2f}%" for device, percent in enumerate(cls.current_gpu_memory_percent)]
+        # gpu_info = f", GPU [{', '.join(gpu_summary)}]"
+        # return f"System [virtual: {cls.current_memory_percent:.2f}%, cgroup: {cls.current_memory['cg_percent']:.2f}%], CPU util [{cpu_utilization:.2f}%]{gpu_info}"
