@@ -8,8 +8,9 @@ from typing import Callable, Any, Optional, List, Dict, Union
 from datetime import datetime
 import itertools
 import subprocess
-from .memory import MemoryMonitor
+from functools import partial
 
+from .memory import MemoryMonitor
 from .logger import Logger
 from .task import Task, Priority
 from ..utils import time_diff_in_seconds
@@ -121,6 +122,7 @@ class QueueManager:
 
         self.save_result = save_result
         self.process_timeout = process_timeout
+        self._pq_counter = itertools.count()  # tie-breaker for priority queue
         self.logger.debug("QueueManager Initialization complete")
 
     def _start_workers(self, process_type="scheduler"):
@@ -259,7 +261,7 @@ class QueueManager:
             # Process synchronously
             self.tasks.append(task)
 
-        self.processing_queue.put((task.priority, task))
+        self.processing_queue.put((task.priority, next(self._pq_counter), task))
 
         self.logger.info(f"Added task {task.task_name} (id: {task_id}) with priority {priority}")
         time.sleep(0.1)
@@ -329,8 +331,8 @@ class QueueManager:
 
                 # First check high priority queue
                 try:
-                    # Unpack the priority queue item (priority, task)
-                    _, task = self.processing_queue.get(timeout=0.2)
+                    # Unpack the priority queue item (priority, tie-breaker, task)
+                    _, _, task = self.processing_queue.get(timeout=0.2)
                 except queue.Empty:
                     task = None
 
@@ -343,7 +345,10 @@ class QueueManager:
 
                 try:
                     async_result = self.pool.apply_async(
-                        task_wrapper, args=(task,), callback=callback, error_callback=errback
+                        task_wrapper,
+                        args=(task,),
+                        callback=callback,
+                        error_callback=partial(errback, task),
                     )
                 except Exception as e:
                     import traceback
@@ -670,7 +675,7 @@ class QueueManager:
                 self._stop_event.set()
             self._abrupt_stop_requested.set()
 
-            if self.ptype == "schedule":
+            if self.ptype == "scheduler":
                 self.logger.info("Stopping all active subprocesses...")
                 for pid, proc in list(self._active_processes.items()):
                     try:

@@ -240,10 +240,10 @@ def solve_field(
 
 
 def scamp(
-    input,
+    input: str,
     scampconfig=None,
     scamp_preset="prep",
-    overwrite=True,  # regardlessly always overwrite
+    overwrite=True,
     ahead=None,
     path_ref_scamp=None,
     local_astref=None,
@@ -251,6 +251,7 @@ def scamp(
     clean_log=True,
     scamp_args: str = None,
     timeout=30,
+    logger=None,
 ) -> List[str]:
     """
     Input is a fits-ldac catalog or a text file of those catalogs.
@@ -266,6 +267,13 @@ def scamp(
     scamp_args: str = None
     timeout: int = 30  # based on the extremely dense field test of ~26 seconds
     """
+
+    def chatter(msg: str, level: str = "debug"):
+        if logger is not None:
+            return getattr(logger, level)(msg)
+        else:
+            print(f"[scamp:{level.upper()}] {msg}")
+
     scampconfig = scampconfig or os.path.join(REF_DIR, f"scamp_7dt_{scamp_preset}.config")
     # "/data/pipeline_reform/dhhyun_lab/scamptest/7dt.scamp"
 
@@ -280,6 +288,9 @@ def scamp(
         input_cat_list = [input]
 
     output_list = [swap_ext(input_cat, "head") for input_cat in input_cat_list]
+    if all([os.path.exists(head) for head in output_list]) and not overwrite:
+        chatter(f"SCAMP output (.head) already exists: {output_list}\nSkipping...")
+        return output_list
 
     # scampcom = f’scamp {catname} -c {os.path.join(path_cfg, “kmtnet.scamp”)} -ASTREF_CATALOG FILE -ASTREFCAT_NAME {gaialdac} -POSITION_MAXERR 20.0 -CROSSID_RADIUS 5.0 -DISTORT_DEGREES 3 -PROJECTION_TYPE TPV -AHEADER_GLOBAL {ahead} -STABILITY_TYPE INSTRUMENT’
     scampcom = f"scamp -c {scampconfig} {input}"

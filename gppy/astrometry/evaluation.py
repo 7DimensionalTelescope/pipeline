@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 from typing import Optional, TypedDict, List, Union
 import numpy as np
@@ -38,10 +39,23 @@ class RSEPSStats:
 
 
 @dataclass(frozen=True)
+class ImageStats:
+    PEEINGMN: float
+    PEEINGSD: float
+    SEEINGMN: float
+    SEEINGSD: float
+    PAWINMN: float
+    PAWINSD: float
+    ELLIPMN: float
+    ELLIPSD: float
+
+
+@dataclass(frozen=True)
 class EvaluationResult:
     matched: Table
     rsep_stats: RSEPSStats
     psf_stats: Optional[PsfStats]
+    image_stats: ImageStats
 
 
 def evaluate_single_wcs(
@@ -63,6 +77,7 @@ def evaluate_single_wcs(
     ds9_region=True,
     cutout_size=30,
     logger=None,
+    overwrite=True,
 ):
     """Ensure num_plot <= num_sci, num_ref"""
 
@@ -71,6 +86,166 @@ def evaluate_single_wcs(
             return getattr(logger, level)(msg)
         else:
             print(f"[evaluate_single_wcs:{level.upper()}] {msg}")
+
+    matched_catalog_path = add_suffix(source_cat, "matched")
+
+    # Failed attempt to skip if matched catalog already exists
+    # if os.path.exists(matched_catalog_path) and not overwrite:
+    #     chatter(f"Matched catalog already exists: {matched_catalog_path}, skipping...", "info")
+    #     matched = Table.read(matched_catalog_path)
+    #     return EvaluationResult(
+    #         matched=Table.read(matched_catalog_path),
+    #         rsep_stats=None,
+    #         psf_stats=None,
+    #         image_stats=None,
+    #     )
+
+    matched, tbl, (REF_MAX_MAG, SCI_MAX_MAG, NUM_REF) = prepare_matched_catalog(
+        chatter,
+        image=image,
+        ref_cat=ref_cat,
+        source_cat=source_cat,
+        date_obs=date_obs,
+        wcs=wcs,
+        H=H,
+        W=W,
+        match_radius=match_radius,
+        fov_ra=fov_ra,
+        fov_dec=fov_dec,
+        write_matched_catalog=write_matched_catalog,
+        num_sci=num_sci,
+        num_ref=num_ref,
+        ds9_region=ds9_region,
+        overwrite=overwrite,
+        matched_catalog_path=matched_catalog_path,
+    )
+
+    # compute separation statistics
+    sep = matched["separation"]
+    n_valid = sep.count()
+    sep_sci = sep.compressed()  # unmasked
+    if n_valid > 0:
+        # Fractions
+        unmatched_fraction = sep.mask.sum() / sep.size
+        subpixel_fraction = float(np.ma.mean(sep < PIXSCALE))
+        subsecond_fraction = float(np.ma.mean(sep < 1.0))
+
+        separation_stats = SeparationStats(
+            rms=np.sqrt(np.mean(sep_sci**2)),
+            min=np.min(sep_sci),
+            max=np.max(sep_sci),
+            q1=np.percentile(sep_sci, 25),
+            q2=np.percentile(sep_sci, 50),
+            q3=np.percentile(sep_sci, 75),
+            p95=np.percentile(sep_sci, 95),
+            p99=np.percentile(sep_sci, 99),
+        )
+    else:
+        unmatched_fraction = 1.0  # no NaN. fits requires values
+        subpixel_fraction = 0
+        subsecond_fraction = 0
+        separation_stats = SeparationStats(
+            rms=0.0,
+            min=0.0,
+            max=0.0,
+            q1=0.0,
+            q2=0.0,
+            q3=0.0,
+            p95=0.0,
+            p99=0.0,
+        )
+
+    # if unmatched_fraction == 1.0:
+    #     raise PipelineError(f"Unmatched fraction is 1.0 for {image}")
+
+    rsep_stats = RSEPSStats(
+        ref_max_mag=REF_MAX_MAG,
+        sci_max_mag=SCI_MAX_MAG,
+        num_ref_sources=NUM_REF,
+        unmatched_fraction=unmatched_fraction,
+        subpixel_fraction=subpixel_fraction,
+        subsecond_fraction=subsecond_fraction,
+        separation_stats=separation_stats,
+    )
+
+    # 2D PSF stats
+    matched_ids = get_3x3_stars(matched, H, W, cutout_size)
+    try:
+        psf_stats = compute_psf_stats(matched, matched_ids)
+    except Exception as e:
+        chatter(f"evaluate_single_wcs: psf_stats {e}")
+        psf_stats = None
+
+    chatter(f"evaluate_single_wcs: matched_ids {matched_ids}")
+    chatter(f"evaluate_single_wcs: psf_stats {psf_stats}")
+
+    # overall image stats
+    PEEINGMN = matched["FWHM_IMAGE"].mean()
+    PEEINGSD = matched["FWHM_IMAGE"].std()
+    SEEINGMN = PEEINGMN * PIXSCALE
+    SEEINGSD = PEEINGSD * PIXSCALE
+    PAWINMN = matched["AWIN_IMAGE"].mean()
+    PAWINSD = matched["AWIN_IMAGE"].std()
+    ELLIPMN = matched["ELLIPTICITY"].mean()
+    ELLIPSD = matched["ELLIPTICITY"].std()
+
+    image_stats = ImageStats(
+        PEEINGMN=PEEINGMN,
+        PEEINGSD=PEEINGSD,
+        SEEINGMN=SEEINGMN,
+        SEEINGSD=SEEINGSD,
+        PAWINMN=PAWINMN,
+        PAWINSD=PAWINSD,
+        ELLIPMN=ELLIPMN,
+        ELLIPSD=ELLIPSD,
+    )
+
+    if plot_save_path is not None and unmatched_fraction < 1.0:
+        chatter(f"evaluate_single_wcs: plotting to {plot_save_path}")
+        wcs_check_plot(
+            ref_cat,
+            tbl,
+            matched,
+            wcs,
+            image,
+            plot_save_path,
+            fov_ra=fov_ra,
+            fov_dec=fov_dec,
+            num_plot=num_plot,
+            sep_stats=separation_stats,
+            subpixel_fraction=subpixel_fraction,
+            subsecond_fraction=subsecond_fraction,
+            matched_ids=matched_ids,
+            cutout_size=cutout_size,
+        )
+
+    return EvaluationResult(
+        matched=matched,
+        rsep_stats=rsep_stats,
+        psf_stats=psf_stats,
+        image_stats=image_stats,
+    )
+
+
+def prepare_matched_catalog(
+    chatter: callable,
+    image: str,
+    ref_cat: Table,
+    source_cat: str | Table,
+    date_obs: str,
+    wcs: WCS = None,
+    H: int = None,
+    W: int = None,
+    match_radius=10,
+    fov_ra=None,
+    fov_dec=None,
+    write_matched_catalog=True,
+    num_sci=100,
+    num_ref=100,
+    ds9_region=True,
+    overwrite=True,
+    matched_catalog_path=None,
+):
 
     # load the source catalog
     if isinstance(source_cat, str):
@@ -162,102 +337,9 @@ def evaluate_single_wcs(
     )  # right join: preserve all ref sources
     matched = add_id_column(matched)  # id needed to plot selected 9 stars
     if write_matched_catalog:
-        matched.write(add_suffix(source_cat, "matched"), overwrite=True)
+        matched.write(matched_catalog_path, overwrite=True)
 
-    # compute separation statistics
-    sep = matched["separation"]
-    n_valid = sep.count()
-    sep_sci = sep.compressed()  # unmasked
-    if n_valid > 0:
-        # Fractions
-        unmatched_fraction = sep.mask.sum() / sep.size
-        subpixel_fraction = float(np.ma.mean(sep < PIXSCALE))
-        subsecond_fraction = float(np.ma.mean(sep < 1.0))
-
-        separation_stats = SeparationStats(
-            rms=np.sqrt(np.mean(sep_sci**2)),
-            min=np.min(sep_sci),
-            max=np.max(sep_sci),
-            q1=np.percentile(sep_sci, 25),
-            q2=np.percentile(sep_sci, 50),
-            q3=np.percentile(sep_sci, 75),
-            p95=np.percentile(sep_sci, 95),
-            p99=np.percentile(sep_sci, 99),
-        )
-    else:
-        unmatched_fraction = 1.0  # no NaN. fits requires values
-        subpixel_fraction = 0
-        subsecond_fraction = 0
-        separation_stats = SeparationStats(
-            rms=0.0,
-            min=0.0,
-            max=0.0,
-            q1=0.0,
-            q2=0.0,
-            q3=0.0,
-            p95=0.0,
-            p99=0.0,
-        )
-
-    # if unmatched_fraction == 1.0:
-    #     raise PipelineError(f"Unmatched fraction is 1.0 for {image}")
-
-    rsep_stats = RSEPSStats(
-        ref_max_mag=REF_MAX_MAG,
-        sci_max_mag=SCI_MAX_MAG,
-        num_ref_sources=NUM_REF,
-        unmatched_fraction=unmatched_fraction,
-        subpixel_fraction=subpixel_fraction,
-        subsecond_fraction=subsecond_fraction,
-        separation_stats=separation_stats,
-    )
-
-    # 2D PSF stats
-    matched_ids = get_3x3_stars(matched, H, W, cutout_size)
-    try:
-        psf_stats = compute_psf_stats(matched, matched_ids)
-    except Exception as e:
-        chatter(f"evaluate_single_wcs: psf_stats {e}")
-        psf_stats = None
-
-    chatter(f"evaluate_single_wcs: matched_ids {matched_ids}")
-    chatter(f"evaluate_single_wcs: psf_stats {psf_stats}")
-
-    if plot_save_path is not None and unmatched_fraction < 1.0:
-        chatter(f"evaluate_single_wcs: plotting to {plot_save_path}")
-        wcs_check_plot(
-            ref_cat,
-            tbl,
-            matched,
-            wcs,
-            image,
-            plot_save_path,
-            fov_ra=fov_ra,
-            fov_dec=fov_dec,
-            num_plot=num_plot,
-            sep_stats=separation_stats,
-            subpixel_fraction=subpixel_fraction,
-            subsecond_fraction=subsecond_fraction,
-            matched_ids=matched_ids,
-            cutout_size=cutout_size,
-        )
-
-    return EvaluationResult(
-        matched=matched,
-        rsep_stats=rsep_stats,
-        psf_stats=psf_stats,
-    )
-
-    # return (
-    #     matched,
-    #     REF_MAX_MAG,
-    #     SCI_MAX_MAG,
-    #     NUM_REF,
-    #     unmatched_fraction,
-    #     subpixel_fraction,
-    #     subsecond_fraction,
-    #     separation_stats,
-    # )
+    return matched, tbl, (REF_MAX_MAG, SCI_MAX_MAG, NUM_REF)
 
 
 ###############################################################################

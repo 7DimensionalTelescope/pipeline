@@ -198,9 +198,11 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                         threads_for_making_plots.append(t)
 
                 except Exception as e:
+                    import traceback
                     self.logger.error(
                         f"[Group {i+1}] Error during masterframe generation or data reduction: {str(e)}", exc_info=False
                     )
+                    self.logger.debug(traceback.format_exc())
                     self.add_error()
                     self.logger.info(f"[Group {i+1}] Skipping to next group")
 

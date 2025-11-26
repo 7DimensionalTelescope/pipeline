@@ -2,6 +2,7 @@ from datetime import date, datetime
 from typing import List, Dict, Optional, Union, Any
 from dataclasses import dataclass, asdict
 import json
+import re
 from .utils import generate_id
 from astropy.io.fits.header import Header
 
@@ -260,10 +261,18 @@ class QAData:
     # filename
     filename: Optional[str] = None
 
+    # unit
+    unit: Optional[str] = None
+
     # sanity flag
     sanity: Optional[str] = None
     q_desc: Optional[str] = None
     eye_insp: Optional[str] = None
+
+    # Telescope pointing
+    alt: Optional[float] = None
+    az: Optional[float] = None
+    seeingmn: Optional[float] = None
 
     # Internal field (not stored in DB)
     id: Optional[int] = None
@@ -281,43 +290,47 @@ class QAData:
             qa_type=row[2],
             imagetyp=row[3],
             filter=row[4] if len(row) > 4 else None,
-            date_obs=row[5] if len(row) > 5 else None,
-            clipmed=row[6] if len(row) > 6 else None,
-            clipstd=row[7] if len(row) > 7 else None,
-            clipmin=row[8] if len(row) > 8 else None,
-            clipmax=row[9] if len(row) > 9 else None,
-            nhotpix=row[10] if len(row) > 10 else None,
-            ntotpix=row[11] if len(row) > 11 else None,
-            seeing=row[12] if len(row) > 12 else None,
-            rotang=row[13] if len(row) > 13 else None,
-            peeing=row[14] if len(row) > 14 else None,
-            ptnoff=row[15] if len(row) > 15 else None,
-            visible=row[16] if len(row) > 16 else None,
-            skyval=row[17] if len(row) > 17 else None,
-            skysig=row[18] if len(row) > 18 else None,
-            zp_auto=row[19] if len(row) > 19 else None,
-            ezp_auto=row[20] if len(row) > 20 else None,
-            ul5_5=row[21] if len(row) > 21 else None,
-            stdnumb=row[22] if len(row) > 22 else None,
-            created_at=row[23] if len(row) > 23 else None,
-            updated_at=row[24] if len(row) > 24 else None,
-            pipeline_id_id=row[25] if len(row) > 25 else None,
-            edgevar=row[26] if len(row) > 26 else None,
-            exptime=row[27] if len(row) > 27 else None,
-            filename=row[28] if len(row) > 28 else None,
-            sanity=row[29] if len(row) > 29 else None,
-            sigmean=row[30] if len(row) > 30 else None,
-            trimmed=row[31] if len(row) > 31 else None,
-            unmatch=row[32] if len(row) > 32 else None,
-            rsep_rms=row[33] if len(row) > 33 else None,
-            rsep_q2=row[34] if len(row) > 34 else None,
-            uniform=row[35] if len(row) > 35 else None,
-            awincrmn=row[36] if len(row) > 36 else None,
-            ellipmn=row[37] if len(row) > 37 else None,
-            rsep_p95=row[38] if len(row) > 38 else None,
-            pa_align=row[39] if len(row) > 39 else None,
-            q_desc=row[40] if len(row) > 40 else None,
-            eye_insp=row[41] if len(row) > 41 else None,
+            clipmed=row[5] if len(row) > 5 else None,
+            clipstd=row[6] if len(row) > 6 else None,
+            clipmin=row[7] if len(row) > 7 else None,
+            clipmax=row[8] if len(row) > 8 else None,
+            nhotpix=row[9] if len(row) > 9 else None,
+            ntotpix=row[10] if len(row) > 10 else None,
+            seeing=row[11] if len(row) > 11 else None,
+            rotang=row[12] if len(row) > 12 else None,
+            ptnoff=row[13] if len(row) > 13 else None,
+            skyval=row[14] if len(row) > 14 else None,
+            skysig=row[15] if len(row) > 15 else None,
+            zp_auto=row[16] if len(row) > 16 else None,
+            ezp_auto=row[17] if len(row) > 17 else None,
+            ul5_5=row[18] if len(row) > 18 else None,
+            stdnumb=row[19] if len(row) > 19 else None,
+            created_at=row[20] if len(row) > 20 else None,
+            updated_at=row[21] if len(row) > 21 else None,
+            pipeline_id_id=row[22] if len(row) > 22 else None,
+            edgevar=row[23] if len(row) > 23 else None,
+            exptime=row[24] if len(row) > 24 else None,
+            filename=row[25] if len(row) > 25 else None,
+            sanity=row[26] if len(row) > 26 else None,
+            sigmean=row[27] if len(row) > 27 else None,
+            trimmed=row[28] if len(row) > 28 else None,
+            unmatch=row[29] if len(row) > 29 else None,
+            rsep_rms=row[30] if len(row) > 30 else None,
+            rsep_q2=row[31] if len(row) > 31 else None,
+            uniform=row[32] if len(row) > 32 else None,
+            awincrmn=row[33] if len(row) > 33 else None,
+            ellipmn=row[34] if len(row) > 34 else None,
+            rsep_p95=row[35] if len(row) > 35 else None,
+            pa_align=row[36] if len(row) > 36 else None,
+            eye_insp=row[37] if len(row) > 37 else None,
+            peeing=row[38] if len(row) > 38 else None,
+            q_desc=row[39] if len(row) > 39 else None,
+            visible=row[40] if len(row) > 40 else None,
+            date_obs=row[41] if len(row) > 41 else None,
+            unit=row[42] if len(row) > 42 else None,
+            alt=row[43] if len(row) > 43 else None,
+            az=row[44] if len(row) > 44 else None,
+            seeingmn=row[45] if len(row) > 45 else None,
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -346,7 +359,27 @@ class QAData:
         )
 
         if "DATE-OBS" in header:
-            qa_data.date_obs = header["DATE-OBS"]
+            # DATE-OBS in FITS is UTC (as per FITS standard and header comments)
+            # Parse as UTC, then convert to KST (Korea Standard Time, UTC+9) for storage
+            from datetime import datetime
+            import pytz
+
+            date_obs_str = str(header["DATE-OBS"])
+            try:
+                # Parse the date string (format: "2025-11-17T01:50:24.000" or "2025-11-17 01:50:24.000")
+                if "T" in date_obs_str:
+                    date_obs_dt = datetime.fromisoformat(date_obs_str.replace("T", " ").split(".")[0])
+                else:
+                    date_obs_dt = datetime.strptime(date_obs_str.split(".")[0], "%Y-%m-%d %H:%M:%S")
+
+                # Localize as UTC (DATE-OBS is always UTC in FITS), then convert to KST
+                date_obs_utc = pytz.UTC.localize(date_obs_dt)
+                kst = pytz.timezone("Asia/Seoul")  # KST is same as Asia/Seoul (UTC+9)
+                date_obs_kst = date_obs_utc.astimezone(kst)
+                qa_data.date_obs = date_obs_kst
+            except Exception:
+                # Fallback to original string if parsing fails
+                qa_data.date_obs = date_obs_str
 
         if qa_data.imagetyp == "masterframe":
             keywords = ["EXPTIME", "FILTER", "CLIPMED", "CLIPSTD", "CLIPMIN", "CLIPMAX", "SANITY"]
@@ -356,6 +389,23 @@ class QAData:
                     setattr(qa_data, keyword.lower(), header[keyword])
 
             qa_data.filename = filename
+            # Extract unit from TELESCOP header keyword
+            if "TELESCOP" in header:
+                telescope = str(header["TELESCOP"])
+                # Extract unit pattern (e.g., "7DT01", "7DT16") from TELESCOP value
+                match = re.search(r"7DT\d{2}", telescope)
+                if match:
+                    qa_data.unit = match.group(0)
+            elif "UNIT" in header:
+                # Fallback to UNIT keyword if TELESCOP doesn't contain unit pattern
+                qa_data.unit = header["UNIT"]
+
+            # Extract telescope pointing information (available for all image types)
+            if "ALTITUDE" in header:
+                qa_data.alt = float(header["ALTITUDE"])
+            if "AZIMUTH" in header:
+                qa_data.az = float(header["AZIMUTH"])
+
             if qa_data.qa_type == "dark":
                 qa_data.ntotpix = header["NTOTPIX"]
                 qa_data.uniform = header["UNIFORM"]
@@ -401,6 +451,29 @@ class QAData:
                     setattr(qa_data, keyword.lower(), header[keyword])
 
             qa_data.filename = filename
+            # Extract unit from TELESCOP header keyword
+            if "TELESCOP" in header:
+                telescope = str(header["TELESCOP"])
+                # Extract unit pattern (e.g., "7DT01", "7DT16") from TELESCOP value
+                match = re.search(r"7DT\d{2}", telescope)
+                if match:
+                    qa_data.unit = match.group(0)
+            elif "UNIT" in header:
+                # Fallback to UNIT keyword if TELESCOP doesn't contain unit pattern
+                qa_data.unit = header["UNIT"]
+
+            # Extract telescope pointing information
+            if "ALTITUDE" in header:
+                qa_data.alt = float(header["ALTITUDE"])
+            if "AZIMUTH" in header:
+                qa_data.az = float(header["AZIMUTH"])
+            
+            # Extract seeingmn if available (might be SEEINGMN or calculated from SEEING)
+            if "SEEINGMN" in header:
+                qa_data.seeingmn = float(header["SEEINGMN"])
+            elif "SEEING" in header and qa_data.seeingmn is None:
+                # If SEEINGMN not available, use SEEING as seeingmn (mean seeing)
+                qa_data.seeingmn = float(header["SEEING"])
 
         return qa_data
 

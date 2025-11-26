@@ -25,6 +25,10 @@ class QADB(BaseDatabase):
     def create_qa_data(self, qa_data: QAData) -> str:
         """Create a new QA data record or update existing one"""
         try:
+            # Require pipeline_id for QA data creation
+            if qa_data.pipeline_id_id is None:
+                raise QADBError("pipeline_id is required for QA data creation")
+
             with self.get_connection() as conn:
                 # Check if QA data already exists
                 existing_qa = self._find_existing_qa_data(qa_data)
@@ -103,16 +107,16 @@ class QADB(BaseDatabase):
                     where_clauses.append("filter = %(filt)s")
                     params["filt"] = filt
 
-                # Build query
+                # Build query - columns must match database order for from_row() to work correctly
                 query = """
                     SELECT 
-                        id, qa_id, qa_type, imagetyp, filter, date_obs, clipmed, clipstd,
+                        id, qa_id, qa_type, imagetyp, filter, clipmed, clipstd,
                         clipmin, clipmax, nhotpix, ntotpix, seeing, rotang,
-                        peeing, ptnoff, visible, skyval, skysig, zp_auto, ezp_auto,
+                        ptnoff, skyval, skysig, zp_auto, ezp_auto,
                         ul5_5, stdnumb, created_at, updated_at, pipeline_id_id,
                         edgevar, exptime, filename, sanity, sigmean, trimmed, unmatch,
                         rsep_rms, rsep_q2, uniform, awincrmn, ellipmn, rsep_p95, pa_align,
-                        q_desc, eye_insp
+                        eye_insp, peeing, q_desc, visible, date_obs, unit, alt, az, seeingmn
                     FROM pipeline_qa
                 """
 
@@ -250,9 +254,12 @@ class QADB(BaseDatabase):
                     where_clauses.append("filename = %(filename)s")
                     params["filename"] = qa_data.filename
 
-                if qa_data.pipeline_id_id is not None:
-                    where_clauses.append("pipeline_id_id = %(pipeline_id_id)s")
-                    params["pipeline_id_id"] = qa_data.pipeline_id_id
+                # pipeline_id is always required
+                if qa_data.pipeline_id_id is None:
+                    raise QADBError("pipeline_id is required for finding existing QA data")
+
+                where_clauses.append("pipeline_id_id = %(pipeline_id_id)s")
+                params["pipeline_id_id"] = qa_data.pipeline_id_id
 
                 if qa_data.qa_type:
                     where_clauses.append("qa_type = %(qa_type)s")
@@ -442,6 +449,10 @@ class QADB(BaseDatabase):
                         "qa.pa_align",
                         "qa.q_desc",
                         "qa.eye_insp",
+                        "qa.unit",
+                        "qa.alt",
+                        "qa.az",
+                        "qa.seeingmn",
                         "p.unit",
                         "p.filt",
                         "p.obj",
@@ -453,11 +464,11 @@ class QADB(BaseDatabase):
                 params = [qa_type]
 
                 if date_min:
-                    where_clauses.append("DATE(qa.created_at) >= %s")
+                    where_clauses.append("DATE(qa.date_obs) >= %s")
                     params.append(date_min)
 
                 if date_max:
-                    where_clauses.append("DATE(qa.created_at) <= %s")
+                    where_clauses.append("DATE(qa.date_obs) <= %s")
                     params.append(date_max)
 
                 # Query only necessary columns (no LIMIT - fetch all matching records)
@@ -493,55 +504,57 @@ class QADB(BaseDatabase):
                                 record_dict["exptime"] = row[8] if row[8] is not None else None
                         else:
                             # Create full enhanced record dictionary
+                            # Note: selected_columns order determines row indices
                             record_dict = {
                                 "id": row[0],
                                 "qa_id": row[1],
                                 "qa_type": row[2],
                                 "imagetyp": row[3],
-                                "filter": row[4],
-                                "date_obs": row[5],
-                                "clipmed": row[6],
-                                "clipstd": row[7],
-                                "clipmin": row[8],
-                                "clipmax": row[9],
-                                "nhotpix": row[10],
-                                "ntotpix": row[11],
-                                "seeing": row[12],
-                                "rotang": row[13],
-                                "peeing": row[14],
-                                "ptnoff": row[15],
-                                "visible": row[16],
-                                "skyval": row[17],
-                                "skysig": row[18],
-                                "zp_auto": row[19],
-                                "ezp_auto": row[20],
-                                "ul5_5": row[21],
-                                "stdnumb": row[22],
-                                "created_at": row[23],
-                                "updated_at": row[24],
-                                "pipeline_id_id": row[25],
-                                "edgevar": row[26],
-                                "exptime": row[27],
-                                "filename": row[28],
-                                "sanity": row[29],
-                                "sigmean": row[30],
-                                "trimmed": row[31],
-                                "unmatch": row[32],
-                                "rsep_rms": row[33],
-                                "rsep_q2": row[34],
-                                "uniform": row[35],
-                                "awincrmn": row[36],
-                                "ellipmn": row[37],
-                                "rsep_p95": row[38],
-                                "pa_align": row[39],
-                                "q_desc": row[40],
-                                "eye_insp": row[41],
+                                "filter": row[47] or row[4] if len(row) > 47 else row[4],  # Pipeline filter overrides QA filter
+                                "date_obs": row[5] if len(row) > 5 else None,
+                                "clipmed": row[6] if len(row) > 6 else None,
+                                "clipstd": row[7] if len(row) > 7 else None,
+                                "clipmin": row[8] if len(row) > 8 else None,
+                                "clipmax": row[9] if len(row) > 9 else None,
+                                "nhotpix": row[10] if len(row) > 10 else None,
+                                "ntotpix": row[11] if len(row) > 11 else None,
+                                "seeing": row[12] if len(row) > 12 else None,
+                                "rotang": row[13] if len(row) > 13 else None,
+                                "peeing": row[14] if len(row) > 14 else None,
+                                "ptnoff": row[15] if len(row) > 15 else None,
+                                "visible": row[16] if len(row) > 16 else None,
+                                "skyval": row[17] if len(row) > 17 else None,
+                                "skysig": row[18] if len(row) > 18 else None,
+                                "zp_auto": row[19] if len(row) > 19 else None,
+                                "ezp_auto": row[20] if len(row) > 20 else None,
+                                "ul5_5": row[21] if len(row) > 21 else None,
+                                "stdnumb": row[22] if len(row) > 22 else None,
+                                "created_at": row[23] if len(row) > 23 else None,
+                                "updated_at": row[24] if len(row) > 24 else None,
+                                "pipeline_id_id": row[25] if len(row) > 25 else None,
+                                "edgevar": row[26] if len(row) > 26 else None,
+                                "exptime": row[27] if len(row) > 27 else None,
+                                "filename": row[28] if len(row) > 28 else None,
+                                "sanity": row[29] if len(row) > 29 else None,
+                                "sigmean": row[30] if len(row) > 30 else None,
+                                "trimmed": row[31] if len(row) > 31 else None,
+                                "unmatch": row[32] if len(row) > 32 else None,
+                                "rsep_rms": row[33] if len(row) > 33 else None,
+                                "rsep_q2": row[34] if len(row) > 34 else None,
+                                "uniform": row[35] if len(row) > 35 else None,
+                                "awincrmn": row[36] if len(row) > 36 else None,
+                                "ellipmn": row[37] if len(row) > 37 else None,
+                                "rsep_p95": row[38] if len(row) > 38 else None,
+                                "pa_align": row[39] if len(row) > 39 else None,
+                                "q_desc": row[40] if len(row) > 40 else None,
+                                "eye_insp": row[41] if len(row) > 41 else None,
+                                "unit": row[42] if len(row) > 42 else None,
+                                "alt": row[43] if len(row) > 43 else None,
+                                "az": row[44] if len(row) > 44 else None,
+                                "seeingmn": row[45] if len(row) > 45 else None,
                                 # Enhanced with pipeline properties
-                                "unit": row[42],
-                                "filter": row[43]
-                                or row[4],  # This will override the QA filter if pipeline filter exists
-                                "object": row[44],
-                                "run_date": row[45],
+                                "object": row[48] if len(row) > 48 else None,
+                                "run_date": row[49] if len(row) > 49 else None,
                             }
                         enhanced_records.append(record_dict)
 

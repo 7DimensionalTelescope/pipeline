@@ -6,6 +6,7 @@ import numpy as np
 from functools import cached_property
 
 from .. import const
+from ..const import PipelineError
 from .utils import find_raw_path
 from ..utils import add_suffix, swap_ext, collapse, atleast_1d
 from .name import NameHandler
@@ -78,7 +79,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
             try:
                 self.name = NameHandler(input)
             except Exception as e:
-                raise ValueError(f"NameHandler failure: not pipeline file.\n{input!r}:\n{e}")
+                raise PipelineError(f"NameHandler failure: not pipeline file.\n{input!r}:\n{e}")
         self._single = self.name._single
 
     def __getattr__(self, name):

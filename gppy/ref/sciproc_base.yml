@@ -53,7 +53,7 @@ settings:
   ToO: False
   is_pipeline: false
   obsmode:  # Deep Spec Color Search Single
-  header_pad: 7  # assuming final header is 5 * 2880 bytes long. 6 to include polygon info
+  header_pad: 8  # assuming final header is 8 * 2880 bytes long.
   combine:
   gpu_enabled: True
   verbose_gpu: True  # use logger later
@@ -73,7 +73,7 @@ astrometry:
     ref_query_dir: "/lyman/data1/factory/ref_scamp"
   ahead_file: "/data/pipeline_reform/dhhyun_lab/scamptest/ahead/calib_7DT11_T07304_20250115_050155_g_60_nocrval.ahead"
   local_astref: 
-  scamp_timeout: 30
+  scamp_timeout: 60  #30
   solvefield_timeout: 60
 
 photometry:

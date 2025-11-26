@@ -97,8 +97,21 @@ class DatabaseHandler:
                 self._log_info(f"Found existing pipeline db record (PID: {existing_pipeline_id})")
                 if overwrite:
                     # Use cascade delete to properly handle foreign key constraints
-                    self.pipeline_db.delete_pipeline_cascade(existing_pipeline_id)
-                    self._log_info(f"Overwriting existing pipeline db record (PID: {existing_pipeline_id})")
+                    try:
+                        deleted = self.pipeline_db.delete_pipeline_cascade(existing_pipeline_id)
+                        if not deleted:
+                            self._log_error(
+                                f"Failed to delete existing pipeline db record (PID: {existing_pipeline_id})"
+                            )
+                            raise ValueError(f"Failed to delete existing pipeline record for overwrite")
+                        self._log_info(
+                            f"Deleted existing pipeline db record (PID: {existing_pipeline_id}) for overwrite"
+                        )
+                    except Exception as e:
+                        self._log_error(
+                            f"Error deleting existing pipeline db record (PID: {existing_pipeline_id}): {e}"
+                        )
+                        raise
                 else:
                     self.pipeline_id = existing_pipeline_id
                     config.process_id = existing_pipeline_id
@@ -343,6 +356,7 @@ class DatabaseHandler:
         current_group: int = None,
         key_to_index: dict = None,
         output_file: str = None,
+        pipeline_id: int = None,
     ) -> None:
         """
         Create QA data in database for a specific data type.
@@ -380,6 +394,12 @@ class DatabaseHandler:
             self.pipeline_id,
             os.path.basename(output_file),
         )
+        
+        # If unit is not in header, get it from pipeline record
+        if qa_data.unit is None and self.pipeline_id is not None:
+            pipeline_record = self.pipeline_db.read_pipeline_data(pipeline_id=self.pipeline_id)
+            if pipeline_record and pipeline_record.unit:
+                qa_data.unit = pipeline_record.unit
 
         if dtype == "flat":
             trimmed = qa_data.trimmed

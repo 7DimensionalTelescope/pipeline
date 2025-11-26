@@ -160,24 +160,30 @@ class Photometry(BaseSetup, DatabaseHandler):
         """[(number, name, use_gpu), ...]"""
         return [(1, "run", False)]
 
-    def run(self) -> None:
+    def run(self, overwrite=True) -> None:
         """
         Run photometry on all configured images.
 
         Processes images either sequentially or in parallel depending on queue configuration.
         Updates configuration flags and performs memory cleanup after completion.
+
+        Overwrite does nothing for now. Overwrite all by default
         """
         st = time.time()
         self.logger.info(f"Start 'Photometry'")
         if not self.input_images:  # exception for when input.difference_image is not set.
-            self.logger.debug(f"input_images: {self.input_images}")
-            self.logger.info(f"No input images found. Skipping {self._photometry_mode}.")
-            return
+            if self._photometry_mode == "difference_photometry":
+                self.update_pipeline_progress(100, f"{self._photometry_mode}-completed")
+                return
+            else:
+                self.logger.debug(f"input_images: {self.input_images}")
+                self.logger.info(f"No input images found. Skipping {self._photometry_mode}.")
+                return
         try:
             if self.queue:
-                self._run_parallel()
+                self._run_parallel(overwrite=overwrite)
             else:
-                self._run_sequential()
+                self._run_sequential(overwrite=overwrite)
 
             if self._photometry_mode == "single_photometry":
                 self.config.flag.single_photometry = True
@@ -205,7 +211,7 @@ class Photometry(BaseSetup, DatabaseHandler):
             self.logger.critical(f"Photometry failed: {str(e)}", exc_info=True)
             raise
 
-    def _run_parallel(self) -> None:
+    def _run_parallel(self, overwrite=True) -> None:
         """Process images in parallel using queue system."""
         task_ids = []
         for i, image in enumerate(self.input_images):
@@ -221,7 +227,7 @@ class Photometry(BaseSetup, DatabaseHandler):
             )
             task_id = self.queue.add_task(
                 phot_single.run,
-                kwargs={"name": process_name, "difference_photometry": diff_phot},
+                kwargs={"name": process_name, "difference_photometry": diff_phot, "overwrite": overwrite},
                 priority=Priority.MEDIUM,
                 gpu=False,
                 task_name=process_name,
@@ -229,7 +235,7 @@ class Photometry(BaseSetup, DatabaseHandler):
             task_ids.append(task_id)
         self.queue.wait_until_task_complete(task_ids)
 
-    def _run_sequential(self) -> None:
+    def _run_sequential(self, overwrite=True) -> None:
         """Process images sequentially."""
         for i, image in enumerate(self.input_images):
             single_config = self.config.extract_single_image_config(i)
@@ -241,7 +247,7 @@ class Photometry(BaseSetup, DatabaseHandler):
                 ref_catalog=self.ref_catalog,
                 total_image=len(self.input_images),
                 difference_photometry=diff_phot,
-            ).run()
+            ).run(overwrite=overwrite)
 
             self.update_pipeline_progress(
                 self._progress_by_mode[0] + (self._progress_by_mode[1] / len(self.input_images)) * (i + 1),
@@ -335,7 +341,7 @@ class PhotometrySingle:
     #     image = path.parts[-1]
     #     return cls(image, config, name="user-input")
 
-    def run(self) -> None:
+    def run(self, overwrite=True) -> None:
         """
         Execute complete photometry pipeline for single image.
 
@@ -578,7 +584,7 @@ class PhotometrySingle:
             self.image_info.xcent,
             self.image_info.ycent,
             self.phot_conf.photfraction * self.image_info.naxis1 / 2,
-            self.phot_conf.photfraction * self.image_info.naxis2 / 2,
+            self.phot_conf.photfraction * self.image_info.naxis1 / 2,  # originally naxis2, changed to circle
         )
 
         post_match_table = phot_utils.filter_table(post_match_table, "FLAGS", 0)
@@ -726,7 +732,12 @@ class PhotometrySingle:
 
             mask = sigma_clip(zps, sigma=2.0).mask
 
-            zp, zperr = phot_utils.compute_median_nmad(np.array(zps[~mask].value), normalize=True)
+            input_arr = np.array(zps[~mask].value)
+            if len(input_arr) == 0:
+                self.logger.error(f"No valid zero point sources found for {mag_key}. Skipping.")
+                self.logger.debug(f"input_arr: {input_arr}")
+                continue
+            zp, zperr = phot_utils.compute_median_nmad(input_arr, normalize=True)
 
             if mag_key == "MAG_AUTO":
                 ul_3sig, ul_5sig = 0.0, 0.0
@@ -859,6 +870,7 @@ class PhotometrySingle:
 
         try:
             f = PathHandler(self.input_image).conjugate
+            self.logger.debug(f"Filter check conjugate: {f}")
             if not os.path.exists(f):
                 raise PipelineError(f"During get_active_filters, no conjugate image found for {f}")
             flist = glob(os.path.join(os.path.dirname(f), "*.fits"))
@@ -867,8 +879,13 @@ class PhotometrySingle:
             active_filters = set(NameHandler(flats + scis).filter)
             self.logger.debug(f"Fetched active filters {active_filters}")
             return active_filters
-        except:
-            self.logger.warning("Fetching active filters failed. Using all default filters")
+        except PipelineError as e:
+            self.logger.warning(
+                f"Unable to fetch active filters from on-date inventory. Using all default filters: {e}"
+            )
+            return ALL_FILTERS
+        except Exception as e:
+            self.logger.error(f"Fetching active filters failed. Using all default filters: {e}", exc_info=True)
             return ALL_FILTERS
 
     def update_image_header(
