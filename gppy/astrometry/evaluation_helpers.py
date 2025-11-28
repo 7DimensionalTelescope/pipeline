@@ -14,6 +14,7 @@ class PsfStats:
     FWHMCRSD: float
     AWINCRMN: float
     AWINCRSD: float
+    AWINCRMX: float
     PA_ALIGN: float
     ELLIPMN: float
     ELLIPSTD: float
@@ -58,6 +59,7 @@ def compute_psf_stats(matched_catalog, matched_ids):
         FWHMCRSD=np.std(fwhm_ratio),
         AWINCRMN=np.mean(awin_ratio),
         AWINCRSD=np.std(awin_ratio),
+        AWINCRMX=np.max(awin_ratio),
         # "PA_MEAN": np.mean(pa),
         # "PA_STD": np.std(pa),
         PA_ALIGN=pa_align,

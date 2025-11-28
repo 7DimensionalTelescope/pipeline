@@ -184,6 +184,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                             f"Skipping all subsequent processing, including Astrometry and Photometry."
                         )
                         # TODO: head is not file, but imageinfo.qa_cards
+                        update_padded_header(image_info.image_path, image_info.early_qa_cards)
                         # self.update_header(inims=[image_info.image_path], heads=[prep_cat], add_polygon_info=False)
                         continue
 
@@ -925,7 +926,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
             if image_info.wcs_evaluated:
                 # solved_header.update(image_info.wcs_eval_cards)  # this removes duplicate COMMENT cards
-                solved_header.extend(image_info.wcs_eval_cards)
+                solved_header.extend(image_info.cards)
                 self.logger.debug(f"WCS evaluation is added to {target_fits}")
             else:
                 self.logger.debug(f"WCS evaluation is missing for {target_fits}")
@@ -934,6 +935,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                 polygon_header = polygon_info_header(image_info)
                 # solved_header.update(polygon_header)
                 solved_header.extend(polygon_header)
+
+            # TODO: add sanity card
 
             # update the header, consuming the COMMENT padding
             update_padded_header(target_fits, solved_header)
@@ -1176,9 +1179,14 @@ class ImageInfo:
         return
 
     @property
+    def cards(self) -> List[Tuple[str, float]]:
+        return self.early_qa_cards + self.wcs_eval_cards
+
+    @property
     def early_qa_cards(self) -> List[Tuple[str, float]]:
         cards = [
             (f"NUMFRAC", self.num_frac, "Source number fraction again the expected from Gaia"),
+            (f"SANITY", self.SANITY, "Sanity flag for SCIPROCESS"),
         ]
         return cards
 
@@ -1204,6 +1212,7 @@ class ImageInfo:
                 cards[i] = (k, None, c)
             elif not isinstance(v, (float, int, str, np.float32, np.int32)):  # sometimes the value can be masked
                 self._log(f"WCS statistics contains type {type(v)} {v} for {k}")
+
         return cards
 
     @property
@@ -1266,6 +1275,7 @@ class ImageInfo:
                 (f"FWHMCRSD", self.psf_stats.FWHMCRSD, "STD of corner/center FWHM ratio (9 PSFs)"),
                 (f"AWINCRMN", self.psf_stats.AWINCRMN, "Mean corner/center AWIN ratio (9 PSFs)"),
                 (f"AWINCRSD", self.psf_stats.AWINCRSD, "STD of corner/center AWIN ratio (9 PSFs)"),
+                (f"AWINCRMX", self.psf_stats.AWINCRMX, "MAX corner/center AWIN ratio (9 PSFs)"),
                 (f"PA_ALIGN", self.psf_stats.PA_ALIGN, "PA alignment score of 3x3 selected PSFs"),
                 # (f"ELLIPMN", self.psf_stats.ELLIPMN, "Mean ellipticity of the 9 PSFs"),
                 # (f"ELLIPSTD", self.psf_stats.ELLIPSTD, "STD of ellipticities of the 9 PSFs"),
