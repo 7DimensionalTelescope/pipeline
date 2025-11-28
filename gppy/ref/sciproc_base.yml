@@ -68,6 +68,7 @@ logging:
 
 astrometry:
   input_images:
+  eval_match_radius: 5.0  # 10.0
   path:
     ref_ris_dir: "/lyman/data1/factory/catalog/gaia_dr3_7DT"
     ref_query_dir: "/lyman/data1/factory/ref_scamp"

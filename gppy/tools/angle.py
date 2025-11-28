@@ -28,6 +28,8 @@ def pa_alignment(theta_deg, weights=None):
     c2 = np.cos(2 * theta)
     s2 = np.sin(2 * theta)
 
+    # Q_stokes ~ R * cos(2 * theta_axis)
+    # U_stokes ~ R * sin(2 * theta_axis)
     C = np.sum(w * c2) / wsum
     S = np.sum(w * s2) / wsum
 
@@ -47,3 +49,78 @@ def pa_alignment(theta_deg, weights=None):
     Q = 0.5 * np.array([[C, S], [S, -C]])
 
     return R, theta_axis_deg, V, sd_deg, Q
+
+
+def azimuth_deg_from_center(x, y, x_center, y_center):
+    """
+    Compute azimuthal angle (in degrees) of positions (x, y) with respect
+    to an image center (x_center, y_center).
+
+    x, y, x_center, y_center can be scalars or arrays; broadcasting rules apply.
+
+    Returns:
+        phi_deg : array-like of azimuths in degrees, range (-180, 180]
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    dx = x - x_center
+    dy = y - y_center
+
+    phi = np.arctan2(dy, dx)  # radians, (-π, π]
+    phi_deg = np.rad2deg(phi)  # degrees
+    return phi_deg
+
+
+def pa_quadrupole_alignment(theta_deg, phi_deg, weights=None):
+    """
+    Quadrupolar (position-dependent) nematic alignment.
+
+    theta_deg : array-like
+        Directionless position angles of the stars, e.g. [-90, 90] degrees.
+    phi_deg   : array-like
+        Azimuthal angles of the star positions (e.g. from azimuth_deg_from_center),
+        in degrees, same shape as theta_deg.
+    weights   : optional nonnegative weights, same shape as theta_deg
+
+    Returns:
+      Q_amp             quadrupolar alignment score in [0, 1]
+      rel_axis_deg      mean *relative* axis (theta - phi), degrees in [-90, 90)
+      V                 circular variance for the relative axis (1 - Q_amp)
+      sd_deg            circular stdev of relative axis (approx), degrees
+      Q_rel_tensor      2x2 nematic tensor in the relative frame (diagnostics)
+    """
+    theta = np.deg2rad(np.asarray(theta_deg))
+    phi = np.deg2rad(np.asarray(phi_deg))
+    assert theta.shape == phi.shape, "theta_deg and phi_deg must have same shape"
+
+    if weights is None:
+        w = np.ones_like(theta, dtype=float)
+    else:
+        w = np.asarray(weights, dtype=float)
+    wsum = w.sum()
+    assert wsum > 0, "Sum of weights must be > 0"
+
+    # Relative angle in the local (position-dependent) frame
+    alpha = theta - phi
+
+    # Spin-2 trick on the relative angle
+    c2 = np.cos(2 * alpha)
+    s2 = np.sin(2 * alpha)
+
+    C = np.sum(w * c2) / wsum
+    S = np.sum(w * s2) / wsum
+
+    Q_amp = np.hypot(C, S)  # quadrupole order parameter in [0,1]
+    rel_axis = 0.5 * np.arctan2(S, C)  # mean *relative* axis (radians)
+    rel_axis_deg = np.rad2deg(rel_axis)  # in [-90, 90)
+
+    V = 1.0 - Q_amp
+
+    # Same approximation for circular stdev, now applied to Q_amp
+    sd_rad = 0.5 * np.sqrt(max(0.0, -2.0 * np.log(max(Q_amp, 1e-12))))
+    sd_deg = np.rad2deg(sd_rad)
+
+    # Nematic tensor in the relative frame
+    Q_rel_tensor = 0.5 * np.array([[C, S], [S, -C]])
+
+    return Q_amp, rel_axis_deg, V, sd_deg, Q_rel_tensor

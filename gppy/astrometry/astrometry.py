@@ -814,6 +814,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                 plot_save_path=plot_path if plot else None,
                 num_sci=num_sci,
                 num_ref=num_ref,
+                match_radius=self.config.astrometry.eval_match_radius,
                 cutout_size=30,
                 logger=self.logger,
                 overwrite=overwrite,
@@ -1185,7 +1186,7 @@ class ImageInfo:
     @property
     def early_qa_cards(self) -> List[Tuple[str, float]]:
         cards = [
-            (f"NUMFRAC", self.num_frac, "Source number fraction again the expected from Gaia"),
+            (f"NUMFRAC", self.num_frac, "Source number fraction vs Gaia expected"),
             (f"SANITY", self.SANITY, "Sanity flag for SCIPROCESS"),
         ]
         return cards
@@ -1271,14 +1272,14 @@ class ImageInfo:
 
         psf_stats_cards = (
             [
-                (f"FWHMCRMN", self.psf_stats.FWHMCRMN, "Mean corner/center FWHM ratio (9 PSFs)"),
-                (f"FWHMCRSD", self.psf_stats.FWHMCRSD, "STD of corner/center FWHM ratio (9 PSFs)"),
-                (f"AWINCRMN", self.psf_stats.AWINCRMN, "Mean corner/center AWIN ratio (9 PSFs)"),
-                (f"AWINCRSD", self.psf_stats.AWINCRSD, "STD of corner/center AWIN ratio (9 PSFs)"),
-                (f"AWINCRMX", self.psf_stats.AWINCRMX, "MAX corner/center AWIN ratio (9 PSFs)"),
-                (f"PA_ALIGN", self.psf_stats.PA_ALIGN, "PA alignment score of 3x3 selected PSFs"),
-                # (f"ELLIPMN", self.psf_stats.ELLIPMN, "Mean ellipticity of the 9 PSFs"),
-                # (f"ELLIPSTD", self.psf_stats.ELLIPSTD, "STD of ellipticities of the 9 PSFs"),
+                (f"FWHMCRMN", self.psf_stats.FWHMCRMN, "Mean corner/center FWHM ratio (4 corner PSFs)"),
+                (f"FWHMCRMX", self.psf_stats.FWHMCRMX, "MAX corner/center FWHM ratio (4 corner PSFs)"),
+                # (f"FWHMCRSD", self.psf_stats.FWHMCRSD, "STD of corner/center FWHM ratio (4 corner PSFs)"),
+                (f"AWINCRMN", self.psf_stats.AWINCRMN, "Mean corner/center AWIN ratio (4 corner PSFs)"),
+                # (f"AWINCRSD", self.psf_stats.AWINCRSD, "STD of corner/center AWIN ratio (4 corner PSFs)"),
+                (f"AWINCRMX", self.psf_stats.AWINCRMX, "MAX corner/center AWIN ratio (4 corner PSFs)"),
+                (f"PA_ALIGN", self.psf_stats.PA_ALIGN, "PA alignment score of 4 corner PSFs"),
+                (f"PA_QUAD", self.psf_stats.PA_QUAD, "PA quadrupole alignment score of 4 corner PSFs"),
             ]
             if self.psf_stats is not None
             else []

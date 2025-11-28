@@ -100,7 +100,7 @@ def evaluate_single_wcs(
     #         image_stats=None,
     #     )
 
-    matched, tbl, (REF_MAX_MAG, SCI_MAX_MAG, NUM_REF) = prepare_matched_catalog(
+    matched, tbl, ref_cat, (REF_MAX_MAG, SCI_MAX_MAG, NUM_REF) = prepare_matched_catalog(
         chatter,
         image=image,
         ref_cat=ref_cat,
@@ -339,7 +339,7 @@ def prepare_matched_catalog(
     if write_matched_catalog:
         matched.write(matched_catalog_path, overwrite=True)
 
-    return matched, tbl, (REF_MAX_MAG, SCI_MAX_MAG, NUM_REF)
+    return matched, tbl, ref_cat, (REF_MAX_MAG, SCI_MAX_MAG, NUM_REF)
 
 
 ###############################################################################

@@ -4,69 +4,102 @@ import astropy.units as u
 from astropy.table import Table
 from collections import Counter
 
-from ..tools.angle import pa_alignment
+from ..tools.angle import pa_alignment, azimuth_deg_from_center, pa_quadrupole_alignment
 from .utils import find_id_rows
 
 
 @dataclass(frozen=True)
 class PsfStats:
     FWHMCRMN: float
-    FWHMCRSD: float
+    FWHMCRMX: float
     AWINCRMN: float
-    AWINCRSD: float
     AWINCRMX: float
+    # AWINCRSD: float
     PA_ALIGN: float
-    ELLIPMN: float
-    ELLIPSTD: float
+    PA_QUAD: float
 
 
-def compute_psf_stats(matched_catalog, matched_ids):
-    selected_stars = find_id_rows(matched_catalog, matched_ids)
+def compute_psf_stats(matched_catalog: Table, matched_ids: list[int]) -> PsfStats:
+    """Use only corner 4 stars and the center star given 3x3 stars"""
+    selected_stars = find_id_rows(matched_catalog, matched_ids)  # 3x3 = 9 stars
     if len(selected_stars) == 0:
         stats = PsfStats(
             FWHMCRMN=np.nan,
-            FWHMCRSD=np.nan,
+            FWHMCRMX=np.nan,
             AWINCRMN=np.nan,
-            AWINCRSD=np.nan,
+            AWINCRMX=np.nan,
             PA_ALIGN=np.nan,
-            ELLIPMN=np.nan,
-            ELLIPSTD=np.nan,
         )
         return stats
 
+    # assume 3x3 grid of stars
     assert len(matched_ids) == 9
 
-    matched_ids = [i for i in matched_ids if i is not None]  # clean potential Nones
+    # indices: 0, 2, 6, 8 = corners; 4 = center
+    corner_idx = np.array([0, 2, 6, 8])
+    center_idx = 4
+    corner_stars = selected_stars[corner_idx]
+    center_star = selected_stars[center_idx]
+    # filter out potential None rows
+    corner_stars = corner_stars[[True if v is not None else False for v in corner_stars["X_IMAGE"]]]
 
-    # 2D PSF Variation
-    fwhm_in_pix = selected_stars["FWHM_IMAGE"]
-    fwhm_ratio = fwhm_in_pix / fwhm_in_pix[4]
-    awin_in_pix = selected_stars["AWIN_IMAGE"]
-    awin_ratio = awin_in_pix / awin_in_pix[4]
-    # rms_in_pix = selected_stars["A_IMAGE"]
-    # rms_ratio = rms_in_pix / rms_in_pix[4]
-
-    # Tracking Issue
-    pa = selected_stars["THETA_IMAGE"]  # [-90, 90]
-
+    # --- Tracking Issue & Astigmatism ---
+    pa = corner_stars["THETA_IMAGE"]  # [-90, 90]
     pa_align, _, _, _, _ = pa_alignment(pa)
+    phi_deg = azimuth_deg_from_center(
+        corner_stars["X_IMAGE"], corner_stars["Y_IMAGE"], center_star["X_IMAGE"], center_star["Y_IMAGE"]
+    )
+    pa_quadrupole, _, _, _, _ = pa_quadrupole_alignment(pa, phi_deg)
 
-    # Both
-    ellip = selected_stars["ELLIPTICITY"]
+    # --- 2D PSF Variation: corner / center ---
+    fwhm_ratio = corner_stars["FWHM_IMAGE"] / center_star["FWHM_IMAGE"]
+    awin_ratio = corner_stars["AWIN_IMAGE"] / center_star["AWIN_IMAGE"]
 
     stats = PsfStats(
         FWHMCRMN=np.mean(fwhm_ratio),
-        FWHMCRSD=np.std(fwhm_ratio),
+        FWHMCRMX=np.max(fwhm_ratio),
+        # FWHMCRSD=np.std(fwhm_ratio),
         AWINCRMN=np.mean(awin_ratio),
-        AWINCRSD=np.std(awin_ratio),
+        # AWINCRSD=np.std(awin_ratio),
         AWINCRMX=np.max(awin_ratio),
-        # "PA_MEAN": np.mean(pa),
-        # "PA_STD": np.std(pa),
         PA_ALIGN=pa_align,
-        ELLIPMN=np.mean(ellip),
-        ELLIPSTD=np.std(ellip),
+        PA_QUAD=pa_quadrupole,
+        # ELLIPMN=np.mean(ellip),  # we have it in image_stats
+        # ELLIPSTD=np.std(ellip),
     )
     return stats
+
+    # matched_ids = [i for i in matched_ids if i is not None]  # clean potential Nones
+
+    # # 2D PSF Variation
+    # fwhm_in_pix = selected_stars["FWHM_IMAGE"]
+    # fwhm_ratio = fwhm_in_pix / fwhm_in_pix[4]
+    # awin_in_pix = selected_stars["AWIN_IMAGE"]
+    # awin_ratio = awin_in_pix / awin_in_pix[4]
+    # # rms_in_pix = selected_stars["A_IMAGE"]
+    # # rms_ratio = rms_in_pix / rms_in_pix[4]
+
+    # # Tracking Issue
+    # pa = selected_stars["THETA_IMAGE"]  # [-90, 90]
+
+    # pa_align, _, _, _, _ = pa_alignment(pa)
+
+    # # Both
+    # ellip = selected_stars["ELLIPTICITY"]
+
+    # stats = PsfStats(
+    #     FWHMCRMN=np.mean(fwhm_ratio),
+    #     FWHMCRSD=np.std(fwhm_ratio),
+    #     AWINCRMN=np.mean(awin_ratio),
+    #     AWINCRSD=np.std(awin_ratio),
+    #     AWINCRMX=np.max(awin_ratio),
+    #     # "PA_MEAN": np.mean(pa),
+    #     # "PA_STD": np.std(pa),
+    #     PA_ALIGN=pa_align,
+    #     ELLIPMN=np.mean(ellip),
+    #     ELLIPSTD=np.std(ellip),
+    # )
+    # return stats
 
 
 def compute_rms_stats(out: Table, cat_names, unit: u.Quantity | str = u.arcsec):
