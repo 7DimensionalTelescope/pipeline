@@ -81,7 +81,7 @@ class QADB(BaseDatabase):
         pipeline_id: Optional[int] = None,
         qa_type: Optional[str] = None,
         filt: Optional[str] = None,
-        limit: int = 100,
+        limit: Optional[int] = 100,
         offset: int = 0,
     ) -> Union[Optional[QAData], List[QAData]]:
         """Read QA data records with optional filters"""
@@ -138,9 +138,13 @@ class QADB(BaseDatabase):
                         return qa_data
                 else:
                     # Return list of records
-                    query += " ORDER BY created_at DESC LIMIT %(limit)s OFFSET %(offset)s"
-                    params["limit"] = limit
-                    params["offset"] = offset
+                    query += " ORDER BY created_at DESC"
+                    if limit is not None:
+                        query += " LIMIT %(limit)s"
+                        params["limit"] = limit
+                    if offset > 0:
+                        query += " OFFSET %(offset)s"
+                        params["offset"] = offset
 
                     with conn.cursor() as cur:
                         cur.execute(query, params)
@@ -354,7 +358,7 @@ class QADB(BaseDatabase):
                     "qa.qa_type",
                     "qa.created_at",
                     "qa.date_obs",
-                    "p.unit",
+                    "qa.unit",  # Use qa.unit instead of p.unit (p.unit is NULL in pipeline_process)
                     "p.filt",
                     "p.obj",
                     "p.date as run_date",
@@ -371,6 +375,7 @@ class QADB(BaseDatabase):
                         "nhotpix": "qa.nhotpix",
                         "ntotpix": "qa.ntotpix",
                         "seeing": "qa.seeing",
+                        "seeingmn": "qa.seeingmn",
                         "rotang": "qa.rotang",
                         "peeing": "qa.peeing",
                         "ptnoff": "qa.ptnoff",
@@ -510,7 +515,9 @@ class QADB(BaseDatabase):
                                 "qa_id": row[1],
                                 "qa_type": row[2],
                                 "imagetyp": row[3],
-                                "filter": row[47] or row[4] if len(row) > 47 else row[4],  # Pipeline filter overrides QA filter
+                                "filter": (
+                                    row[47] or row[4] if len(row) > 47 else row[4]
+                                ),  # Pipeline filter overrides QA filter
                                 "date_obs": row[5] if len(row) > 5 else None,
                                 "clipmed": row[6] if len(row) > 6 else None,
                                 "clipstd": row[7] if len(row) > 7 else None,

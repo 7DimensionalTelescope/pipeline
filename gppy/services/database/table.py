@@ -444,6 +444,7 @@ class QAData:
                 "SANITY",
                 "EYE_INSP",
                 "Q_DESC",
+                "SEEINGMN",
             ]
 
             for keyword in keywords:
@@ -467,7 +468,7 @@ class QAData:
                 qa_data.alt = float(header["ALTITUDE"])
             if "AZIMUTH" in header:
                 qa_data.az = float(header["AZIMUTH"])
-            
+
             # Extract seeingmn if available (might be SEEINGMN or calculated from SEEING)
             if "SEEINGMN" in header:
                 qa_data.seeingmn = float(header["SEEINGMN"])
@@ -511,6 +512,7 @@ class QAData:
                 "AWINCRMN",
                 "ELLIPMN",
                 "PA_ALIGN",
+                "SEEINGMN",
             ]
 
         for keyword in keywords:

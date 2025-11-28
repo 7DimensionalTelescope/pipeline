@@ -1,3 +1,9 @@
+from __future__ import annotations
+import warnings
+
+from .version import __version__
+from .config_integrity import verify_config_hashes
+
 """
 gpPy: Automated Pipeline for Astronomical Image Processing
 
@@ -16,17 +22,29 @@ Contact: gregorypaek94_at_g_mail
 """
 
 __package__ = "gppy"
-from .version import __version__
-
-import warnings
-
-import numpy as np
-import matplotlib.pyplot as plt
-
-# from dotenv import load_dotenv
-# load_dotenv()
 
 # Ignore common warnings that are not harmful
 warnings.filterwarnings("ignore", message=".*datfix.*")
 warnings.filterwarnings("ignore", message=".*pmsafe.*")
 warnings.filterwarnings("ignore", message=".*partition.*")
+
+
+# config version check
+
+
+def _run_config_check_once() -> None:
+    """Run the config hash check exactly once per process."""
+    # Using a module-level flag to ensure this only runs once.
+    global _CONFIG_CHECK_DONE
+    if _CONFIG_CHECK_DONE:
+        return
+
+    verify_config_hashes()
+    _CONFIG_CHECK_DONE = True
+
+
+# initialize the guard flag
+_CONFIG_CHECK_DONE = False
+
+# run once on import time
+_run_config_check_once()
