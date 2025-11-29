@@ -53,7 +53,7 @@ class RSEPStats:
             (f"NUM_REF", self.num_ref_sources, "Number of reference sources selected"),
             (f"UNMATCH", self.unmatched_fraction, "Fraction of unmatched reference sources"),
             (f"SUBPIXEL", self.subpixel_fraction, "Fraction of matched with sep < PIXSCALE"),
-            (f"SUBSEC", self.subsecond_fraction, "Fraction of matched with sep < 1"),
+            (f"SUBSEC", self.subsecond_fraction, "Fraction of matched with sep < 1 arcsec"),
         ]
 
 
