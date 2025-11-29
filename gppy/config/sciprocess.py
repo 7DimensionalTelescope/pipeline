@@ -121,6 +121,7 @@ class SciProcConfiguration(BaseConfig):
         self.config.name = self.name
         self.config.settings.is_pipeline = False
         self.fill_missing_from_yaml()
+        self.config.info.version = __version__
         self.config._initialized = True
         return self
 
@@ -185,6 +186,8 @@ class SciProcConfiguration(BaseConfig):
             # working_dir = os.path.dirname(config_source) if isinstance(config_source, str) else None
             self.path = self._set_pathhandler_from_config()  # working_dir=working_dir)
             self.config.logging.file = self.path.sciproc_output_log
+            if isinstance(config_source, str):
+                self.config_file = config_source  # use the filename as is
             self.logger = self._setup_logger(
                 logger,
                 name=self.name,
@@ -198,8 +201,10 @@ class SciProcConfiguration(BaseConfig):
 
         else:
             raise ValueError("Input must be a list of image files, a configuration file path, or a configuration dictionary.")  # fmt: skip
+
         # used by write_config
-        self.config_file = self.path.sciproc_output_yml  # used by write_config
+        if not hasattr(self, "config_file"):
+            self.config_file = self.path.sciproc_output_yml  # used by write_config
         return
 
     def _set_pathhandler_from_config(self, working_dir=None):

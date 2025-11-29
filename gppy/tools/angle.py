@@ -1,13 +1,15 @@
 import numpy as np
 
 
-def pa_alignment(theta_deg, weights=None):
+def pa_alignment(theta_deg, weights=None, normalize=True):
     """
     Computes the degree of alignment of a set of directionless angles like the
     position angle (PA) of ellipses.
 
     theta_deg: array-like of angles in degrees, e.g. [-90, 90] range is fine
-    weights:   optional nonnegative weights (same shape as theta_deg)
+    weights: optional nonnegative weights (same shape as theta_deg). e.g., elongation = a/b >= 1
+
+    if normalize=False: the sum of weighted directionless vectors are divided by their number, not the sum of weights
 
     Returns:
       R               alignment score in [0,1]
@@ -21,7 +23,10 @@ def pa_alignment(theta_deg, weights=None):
         w = np.ones_like(theta, dtype=float)
     else:
         w = np.asarray(weights, dtype=float)
-    wsum = w.sum()
+    if normalize:
+        wsum = w.sum()
+    else:
+        wsum = len(w)
     assert wsum > 0, "Sum of weights must be > 0"
 
     # double-angle trick
@@ -56,6 +61,8 @@ def azimuth_deg_from_center(x, y, x_center, y_center):
     Compute azimuthal angle (in degrees) of positions (x, y) with respect
     to an image center (x_center, y_center).
 
+    phi_deg counts counterclockwise from the positive x-axis
+
     x, y, x_center, y_center can be scalars or arrays; broadcasting rules apply.
 
     Returns:
@@ -71,7 +78,7 @@ def azimuth_deg_from_center(x, y, x_center, y_center):
     return phi_deg
 
 
-def pa_quadrupole_alignment(theta_deg, phi_deg, weights=None):
+def pa_quadrupole_alignment(theta_deg, phi_deg, weights=None, normalize=True):
     """
     Quadrupolar (position-dependent) nematic alignment.
 
@@ -97,7 +104,10 @@ def pa_quadrupole_alignment(theta_deg, phi_deg, weights=None):
         w = np.ones_like(theta, dtype=float)
     else:
         w = np.asarray(weights, dtype=float)
-    wsum = w.sum()
+    if normalize:
+        wsum = w.sum()
+    else:
+        wsum = len(w)
     assert wsum > 0, "Sum of weights must be > 0"
 
     # Relative angle in the local (position-dependent) frame

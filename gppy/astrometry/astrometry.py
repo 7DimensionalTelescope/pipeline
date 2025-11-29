@@ -4,7 +4,7 @@ import re
 import time
 import shutil
 import numpy as np
-from typing import Any, List, Tuple, Union, Any, Optional, Self
+from typing import Any, List, Tuple, Union, Any, Optional
 from dataclasses import dataclass, field
 from astropy.io import fits
 from astropy.time import Time
@@ -15,7 +15,6 @@ import astropy.units as u
 from functools import cached_property
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-
 from .. import external
 from ..const import PIXSCALE, PipelineError, REF_DIR
 from ..utils import swap_ext, add_suffix, force_symlink, time_diff_in_seconds, unique_filename, atleast_1d
@@ -25,6 +24,9 @@ from ..config import SciProcConfiguration
 from ..config.utils import get_key
 from ..services.setup import BaseSetup
 from ..io.cfitsldac import write_ldac
+from ..services.database.handler import DatabaseHandler
+from ..services.database.table import QAData
+from ..services.checker import Checker
 from .utils import (
     polygon_info_header,
     read_scamp_header,
@@ -35,11 +37,16 @@ from .utils import (
     read_text_header,
     get_source_num_frac,
 )
-from .evaluation import evaluate_single_wcs, evaluate_joint_wcs
+from .evaluation import (
+    evaluate_single_wcs,
+    evaluate_joint_wcs,
+    EvaluationResult,
+    CornerStats,
+    ImageStats,
+    RSEPStats,
+    RadialStats,
+)
 
-from ..services.database.handler import DatabaseHandler
-from ..services.database.table import QAData
-from ..services.checker import Checker
 
 # from .generate_refcat_gaia import get_refcat_gaia
 
@@ -140,6 +147,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         overwrite=False,
         solvefield_args=[],
         sex_args=[],
+        debug_plot: bool = False,
         avoid_solvefield=True,
     ) -> None:
         """Execute the complete astrometry pipeline.
@@ -201,6 +209,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                             use_threading=use_threading,
                             export_eval_cards=True,
                             overwrite=overwrite,
+                            plot=debug_plot,
                         )
 
                     self.logger.info(f"Running main scamp iteration [{i+1}/{len(self.prep_cats)}] for {prep_cat}")
@@ -215,7 +224,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     if image_info.bad:
                         self.logger.warning(
                             f"Bad solution. UNMATCH: {image_info.rsep_stats.unmatched_fraction}, "
-                            f"RSEP_P95: {image_info.reference_sep_p95}"
+                            f"RSEP_P95: {image_info.rsep_stats.separation_stats.P95}"
                             f"after {max_scamp} iterations for {image_info.image_path}"
                         )
                         if not avoid_solvefield:
@@ -232,12 +241,19 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     if evaluate_prep_sol:
                         self.evaluate_solution(
                             suffix="solvefieldwcs",
+                            plot=debug_plot,
                             use_threading=use_threading,
                             export_eval_cards=True,
                             overwrite=overwrite,
                         )
                     self._iterate_scamp(
-                        prep_cat, image_info, evaluate_prep_sol, use_threading, max_scamp, overwrite=overwrite
+                        prep_cat,
+                        image_info,
+                        evaluate_prep_sol,
+                        use_threading,
+                        max_scamp,
+                        overwrite=overwrite,
+                        plot=debug_plot,
                     )
 
                 except Exception as e:
@@ -274,7 +290,14 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             raise
 
     def _iterate_scamp(
-        self, prep_cat, image_info: "ImageInfo", evaluate_prep_sol, use_threading, max_scamp, overwrite=True
+        self,
+        prep_cat,
+        image_info: ImageInfo,
+        evaluate_prep_sol,
+        use_threading,
+        max_scamp,
+        overwrite=True,
+        plot=False,
     ):
         """main scamp iteration"""
         for _ in range(max_scamp):
@@ -285,13 +308,13 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     images_info=image_info,
                     prep_cats=prep_cat,
                     suffix="iterwcs",
-                    plot=True,
+                    plot=plot,
                     isep=False,
                     use_threading=use_threading,
                     export_eval_cards=True,
                     overwrite=overwrite,
                 )
-                self.logger.debug(f"SEP_P95: {image_info.reference_sep_p95} for {image_info.image_path}")
+                self.logger.debug(f"SEP_P95: {image_info.rsep_stats.separation_stats.P95} for {image_info.image_path}")
                 if image_info.good:
                     self.logger.debug(f"Stop iterating at {_}")
                     break
@@ -445,7 +468,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         """Reset header of input images."""
         input_images = input_images or self.input_images
         for image in input_images:
-            self.logger.debug(f"Resetting header of {image}")
+            self.logger.info(f"Resetting header of {image}")
             reset_header(image)
 
     def run_solve_field(
@@ -763,7 +786,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         prep_cats: List[str] = None,
         plot=True,
         isep=True,
-        suffix=None,
+        suffix: str = "wcs",
         num_sci=200,
         num_ref=200,
         use_threading=True,
@@ -777,7 +800,6 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         input_images = atleast_1d(input_images or self.input_images)
         images_info = atleast_1d(images_info or self.images_info)
         prep_cats = atleast_1d(prep_cats or self.prep_cats)
-        suffix = suffix or "wcs"
 
         refcat = Table.read(self.config.astrometry.local_astref, hdu=2)
 
@@ -799,34 +821,39 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                 )
                 self.logger.debug(f"Updated FOV polygon. RA: {image_info.fov_ra}, Dec: {image_info.fov_dec}")
             except Exception as e:
-                self.logger.error(f"Failed to update FOV polygon for {image_info.image_path}: {e}")
+                self.logger.error(f"Failed to update FOV polygon for {image_info.image_path}: {e}", exc_info=True)
 
-            eval_result = evaluate_single_wcs(
-                image=input_image,
-                ref_cat=refcat,
-                source_cat=prep_cat,
-                date_obs=image_info.dateobs,
-                wcs=image_info.wcs,
-                H=image_info.naxis2,
-                W=image_info.naxis1,
-                fov_ra=image_info.fov_ra,
-                fov_dec=image_info.fov_dec,
-                plot_save_path=plot_path if plot else None,
-                num_sci=num_sci,
-                num_ref=num_ref,
-                match_radius=self.config.astrometry.eval_match_radius,
-                cutout_size=30,
-                logger=self.logger,
-                overwrite=overwrite,
-            )
+            try:
+                eval_result = evaluate_single_wcs(
+                    image=input_image,
+                    ref_cat=refcat,
+                    source_cat=prep_cat,
+                    date_obs=image_info.dateobs,
+                    wcs=image_info.wcs,
+                    H=image_info.naxis2,
+                    W=image_info.naxis1,
+                    fov_ra=image_info.fov_ra,
+                    fov_dec=image_info.fov_dec,
+                    plot_save_path=plot_path if plot else None,
+                    num_sci=num_sci,
+                    num_ref=num_ref,
+                    match_radius=self.config.astrometry.eval_match_radius,
+                    cutout_size=30,
+                    logger=self.logger,
+                    overwrite=overwrite,
+                )
+            except Exception as e:
+                self.logger.error(f"Failed to evaluate solution for {input_image}: {e}", exc_info=True)
+                raise
             return idx, eval_result
 
-        def _apply(idx: int, eval_result):
+        def _apply(idx: int, eval_result: EvaluationResult):
             """apply helper to avoid code duplication"""
             matched = eval_result.matched
             rsep_stats = eval_result.rsep_stats
-            psf_stats = eval_result.psf_stats
+            corner_stats = eval_result.corner_stats
             image_stats = eval_result.image_stats
+            radial_stats = eval_result.radial_stats
 
             if scamp_preset == "main" and rsep_stats.unmatched_fraction == 1.0:
                 self.logger.error(
@@ -843,9 +870,9 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             # info.unmatched_fraction = rsep_stats.unmatched_fraction
             # info.subpixel_fraction = rsep_stats.subpixel_fraction
             # info.subsecond_fraction = rsep_stats.subsecond_fraction
-            info.set_reference_sep_stats(rsep_stats.separation_stats)
-            info.set_psf_stats(psf_stats)
-            info.set_image_stats(image_stats)
+            info.corner_stats = corner_stats
+            info.image_stats = image_stats
+            info.radial_stats = radial_stats
             self.logger.debug(f"Evaluated solution for {input_images[idx]}")
             return
 
@@ -868,7 +895,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
             # Optional joint evaluation (internal rms)
             if len(input_images) > 1 and isep:
-                isep_stats_list, match_stat_list = evaluate_joint_wcs(images_info)
+                isep_stats_list, match_stat_list = evaluate_joint_wcs([ii.matched_catalog for ii in self.images_info])
                 for image_info, internal_sep_stats, match_stats in zip(images_info, isep_stats_list, match_stat_list):
                     image_info.set_internal_sep_stats(internal_sep_stats)
                     image_info.set_internal_match_stats(match_stats)
@@ -881,7 +908,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                         f.write(fits.Header(cards).tostring(sep="\n"))
 
         except Exception as e:
-            self.logger.error(f"Failed to evaluate solution: {e}")
+            self.logger.error(f"Failed to evaluate solution: {e}", exc_info=True)
             # don't raise error
 
         self.logger.debug(f"Completed evaluate_solution")
@@ -927,6 +954,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
             if image_info.wcs_evaluated:
                 # solved_header.update(image_info.wcs_eval_cards)  # this removes duplicate COMMENT cards
+                self.logger.debug(f"WCS evaluation cards: {image_info.cards}")
                 solved_header.extend(image_info.cards)
                 self.logger.debug(f"WCS evaluation is added to {target_fits}")
             else:
@@ -1014,23 +1042,14 @@ class ImageInfo:
     # subpixel_fraction: Optional[float] = field(default=None)
     # subsecond_fraction: Optional[float] = field(default=None)
 
-    rsep_stats: Optional["RSEPSStats"] = field(default=None)
     # matched catalog itself
     matched_catalog: Optional[Table] = field(default=None)
 
-    # separation statistics from reference catalog
-    reference_sep_min: Optional[float] = field(default=None)
-    reference_sep_max: Optional[float] = field(default=None)
-    reference_sep_rms: Optional[float] = field(default=None)
-    reference_sep_q1: Optional[float] = field(default=None)
-    reference_sep_q2: Optional[float] = field(default=None)
-    reference_sep_q3: Optional[float] = field(default=None)
-    # sep_mean: Optional[float] = field(default=None)
-    # sep_median: Optional[float] = field(default=None)
-    # sep_std: Optional[float] = field(default=None)
-
-    # psf qa statistics
-    psf_stats: Optional["PsfStats"] = field(default=None)
+    # evaluation results
+    rsep_stats: Optional[RSEPStats] = field(default=None)
+    corner_stats: Optional[CornerStats] = field(default=None)
+    image_stats: Optional[ImageStats] = field(default=None)
+    radial_stats: Optional[RadialStats] = field(default=None)
 
     # Internal separation statistics (between multiple images)
     internal_sep_min: Optional[float] = field(default=None)
@@ -1115,36 +1134,6 @@ class ImageInfo:
         pa = 0
         return build_wcs(self.racent, self.decent, self.xcent, self.ycent, self.pixscale, pa, flip=True)
 
-    def set_psf_stats(self, psf_stats: "PsfStats") -> None:
-        if psf_stats is None:
-            # dummy_stats = PsfStats(
-            #     FWHMCRMN=np.nan,
-            #     FWHMCRSD=np.nan,
-            #     AWINCRMN=np.nan,
-            #     AWINCRSD=np.nan,
-            #     PA_ALIGN=np.nan,
-            #     ELLIPMN=np.nan,
-            #     ELLIPSTD=np.nan,
-            # )
-            # self.psf_stats = dummy_stats
-            self.psf_stats = None
-        else:
-            self.psf_stats = psf_stats
-
-    def set_image_stats(self, image_stats: "ImageStats") -> None:
-        self.image_stats = image_stats
-
-    def set_reference_sep_stats(self, sep_stats: dict) -> None:
-        self._joint_cards_are_up_to_date = False
-        self.reference_sep_min = sep_stats["min"]
-        self.reference_sep_max = sep_stats["max"]
-        self.reference_sep_rms = sep_stats["rms"]
-        self.reference_sep_q1 = sep_stats["q1"]
-        self.reference_sep_q2 = sep_stats["q2"]
-        self.reference_sep_q3 = sep_stats["q3"]
-        self.reference_sep_p95 = sep_stats["p95"]
-        self.reference_sep_p99 = sep_stats["p99"]
-
     def set_internal_sep_stats(self, sep_stats: dict) -> None:
         self._joint_cards_are_up_to_date = True
         self.internal_sep_rms_x = sep_stats["rms_x"]
@@ -1186,17 +1175,14 @@ class ImageInfo:
     @property
     def early_qa_cards(self) -> List[Tuple[str, float]]:
         cards = [
-            (f"NUMFRAC", self.num_frac, "Source number fraction vs Gaia expected"),
             (f"SANITY", self.SANITY, "Sanity flag for SCIPROCESS"),
+            (f"NUMFRAC", self.num_frac, "Source number fraction vs Gaia expected"),
         ]
         return cards
 
     @property
     def wcs_evaluated(self) -> bool:
-        """only checks the existence of reference separation statistics.
-        Ensures that all the keys are updated by set_sep_stats."""
-        sep_keys = [k for k in self.__dict__.keys() if k.startswith("sep_")]
-        return all(getattr(self, k) is not None for k in sep_keys)
+        return self.rsep_stats is not None
 
     @property
     def wcs_eval_cards(self) -> List[Tuple[str, float]]:
@@ -1219,75 +1205,27 @@ class ImageInfo:
     @property
     def _single_wcs_eval_cards(self) -> List[Tuple[str, float]]:
 
-        rsep_stats_cards = (
-            [
-                (f"REFMXMAG", self.rsep_stats.ref_max_mag, "Highest g mag of selected reference sources"),
-                (f"SCIMXMAG", self.rsep_stats.sci_max_mag, "Highest inst mag of selected science sources"),
-                (f"NUM_REF", self.rsep_stats.num_ref_sources, "Number of reference sources selected"),
-                (f"UNMATCH", self.rsep_stats.unmatched_fraction, "Fraction of unmatched reference sources"),
-                (f"SUBPIXEL", self.rsep_stats.subpixel_fraction, "Fraction of matched with sep < PIXSCALE"),
-                (f"SUBSEC", self.rsep_stats.subsecond_fraction, "Fraction of matched with sep < 1"),
-            ]
-            if self.rsep_stats is not None
-            else []
-        )
+        rsep_stats_cards = self.rsep_stats.fits_header_cards_for_metadata
         if not rsep_stats_cards:
-            self._log("No rsep_stats ", level="error")
+            self._log("No RSEPStats metadata ", level="error")
 
-        ref_sep_cards = (
-            [
-                (f"RSEP_MIN", self.reference_sep_min, "Min separation from reference catalog [arcsec]"),
-                (f"RSEP_MAX", self.reference_sep_max, "Max separation from reference catalog [arcsec]"),
-                (f"RSEP_RMS", self.reference_sep_rms, "RMS separation from reference catalog [arcsec]"),
-                (f"RSEP_Q1", self.reference_sep_q1, "Q1 separation from ref catalog [arcsec]"),
-                (f"RSEP_Q2", self.reference_sep_q2, "Q2 separation from ref catalog [arcsec]"),
-                (f"RSEP_Q3", self.reference_sep_q3, "Q3 separation from ref catalog [arcsec]"),
-                (f"RSEP_P95", self.reference_sep_p95, "95 percentile sep from ref catalog [arcsec]"),
-                (f"RSEP_P99", self.reference_sep_p99, "99 percentile sep from ref catalog [arcsec]"),
-                # (f"RSEP_MED", self.sep_median, "Median separation from ref catalog [arcsec]"),
-                # (f"RSEP_STD", self.sep_std, "STD of separation from ref catalog [arcsec]"),
-            ]
-            if self.reference_sep_min is not None
-            else []
-        )
+        ref_sep_cards = self.rsep_stats.separation_stats.fits_header_cards
         if not ref_sep_cards:
             self._log("No reference_sep ", level="error")
 
-        image_stats_cards = (
-            [
-                (f"PEEINGMN", self.image_stats.PEEINGMN, "Mean FWHM of ref matched sources [pix]"),
-                (f"PEEINGSD", self.image_stats.PEEINGSD, "STD of FWHM of ref matched sources [pix]"),
-                (f"SEEINGMN", self.image_stats.SEEINGMN, "Mean seeing of ref matched sources [arcsec]"),
-                (f"SEEINGSD", self.image_stats.SEEINGSD, "STD of seeing of ref matched sources [arcsec]"),
-                (f"PAWINMN", self.image_stats.PAWINMN, "Mean AWIN of ref matched sources [pix]"),
-                (f"PAWINSD", self.image_stats.PAWINSD, "STD of AWIN of ref matched sources [pix]"),
-                (f"ELLIPMN", self.image_stats.ELLIPMN, "Mean ellipticity of ref matched sources"),
-                (f"ELLIPSD", self.image_stats.ELLIPSD, "STD of ellipticity of ref matched sources"),
-            ]
-            if self.image_stats is not None
-            else []
-        )
+        image_stats_cards = self.image_stats.fits_header_cards
         if not image_stats_cards:
             self._log("No image_stats ", level="error")
 
-        psf_stats_cards = (
-            [
-                (f"FWHMCRMN", self.psf_stats.FWHMCRMN, "Mean corner/center FWHM ratio (4 corner PSFs)"),
-                (f"FWHMCRMX", self.psf_stats.FWHMCRMX, "MAX corner/center FWHM ratio (4 corner PSFs)"),
-                # (f"FWHMCRSD", self.psf_stats.FWHMCRSD, "STD of corner/center FWHM ratio (4 corner PSFs)"),
-                (f"AWINCRMN", self.psf_stats.AWINCRMN, "Mean corner/center AWIN ratio (4 corner PSFs)"),
-                # (f"AWINCRSD", self.psf_stats.AWINCRSD, "STD of corner/center AWIN ratio (4 corner PSFs)"),
-                (f"AWINCRMX", self.psf_stats.AWINCRMX, "MAX corner/center AWIN ratio (4 corner PSFs)"),
-                (f"PA_ALIGN", self.psf_stats.PA_ALIGN, "PA alignment score of 4 corner PSFs"),
-                (f"PA_QUAD", self.psf_stats.PA_QUAD, "PA quadrupole alignment score of 4 corner PSFs"),
-            ]
-            if self.psf_stats is not None
-            else []
-        )
-        if not psf_stats_cards:
-            self._log("No psf_stats ", level="error")
+        corner_stats_cards = self.corner_stats.fits_header_cards
+        if not corner_stats_cards:
+            self._log("No corner_stats ", level="error")
 
-        return rsep_stats_cards + ref_sep_cards + image_stats_cards + psf_stats_cards
+        radial_stats_cards = self.radial_stats.fits_header_cards
+        if not radial_stats_cards:
+            self._log("No radial_stats ", level="error")
+
+        return rsep_stats_cards + ref_sep_cards + image_stats_cards + corner_stats_cards + radial_stats_cards
 
     @property
     def _joint_wcs_eval_cards(self) -> List[Tuple[str, float]]:
@@ -1367,9 +1305,9 @@ class ImageInfo:
     def good(self) -> bool:
         """iteration condition"""
         # not checking unmatched fraction as it's better to exit _iterate_scamp quickly and go to solve-field
-        return self.reference_sep_p95 < PIXSCALE
+        return self.rsep_stats.separation_stats.P95 < PIXSCALE
 
     @property
     def bad(self) -> bool:
         """iteration condition"""
-        return self.rsep_stats.unmatched_fraction > 0.9 or self.reference_sep_p95 > 2 * PIXSCALE
+        return self.rsep_stats.unmatched_fraction > 0.9 or self.rsep_stats.separation_stats.P95 > 2 * PIXSCALE

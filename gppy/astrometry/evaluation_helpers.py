@@ -1,4 +1,6 @@
-from dataclasses import dataclass
+from __future__ import annotations
+from dataclasses import dataclass, field, fields
+from typing import Optional, TypedDict, List, Tuple
 import numpy as np
 import astropy.units as u
 from astropy.table import Table
@@ -9,97 +11,216 @@ from .utils import find_id_rows
 
 
 @dataclass(frozen=True)
-class PsfStats:
-    FWHMCRMN: float
-    FWHMCRMX: float
-    AWINCRMN: float
-    AWINCRMX: float
-    # AWINCRSD: float
-    PA_ALIGN: float
-    PA_QUAD: float
+class SeparationStats:
+    """
+    separation statistics. reminiscent of scamp ASTRRMS
+    No generating classmethod; flexibly choose which keys to include
+    """
+
+    # fits keys and comments
+    N: Optional[int] = field(default=None, metadata={"COMMENT": "Number of sources used" + " " * 47})  # max 47 chars
+    RMS: Optional[float] = field(default=None, metadata={"COMMENT": f"RMS separation"})
+    MIN: Optional[float] = field(default=None, metadata={"COMMENT": f"Min separation"})
+    MAX: Optional[float] = field(default=None, metadata={"COMMENT": f"Max separation"})
+    Q1: Optional[float] = field(default=None, metadata={"COMMENT": f"1st quartile sep"})
+    Q2: Optional[float] = field(default=None, metadata={"COMMENT": f"Median separation"})
+    Q3: Optional[float] = field(default=None, metadata={"COMMENT": f"3rd quartile sep"})
+    P95: Optional[float] = field(default=None, metadata={"COMMENT": f"95 percentile sep"})
+    P99: Optional[float] = field(default=None, metadata={"COMMENT": f"99 percentile sep"})
+    MAD: Optional[float] = field(default=None, metadata={"COMMENT": f"0-centered MAD sep"})
+
+    # decomposed
+    RMSX: Optional[float] = field(default=None, metadata={"COMMENT": "RMS in x"})  # actually RA
+    RMSY: Optional[float] = field(default=None, metadata={"COMMENT": "RMS in y"})  # actually Dec
+    MADX: Optional[float] = field(default=None, metadata={"COMMENT": "0-centered MAD in x"})
+    MADY: Optional[float] = field(default=None, metadata={"COMMENT": "0-centered MAD in y"})
+    MADR: Optional[float] = field(default=None, metadata={"COMMENT": "0-centered MAD in radial direction [arcsec]" + " " * 47})  # fmt: skip
+    MADT: Optional[float] = field(default=None, metadata={"COMMENT": "0-centered MAD in tangential direction [arcsec]" + " " * 47})  # fmt: skip
+
+    # Keyword differentiator
+    prefix: str = "RSEP_"  # or "ISEP_" TODO make isep use this too, not dict
+    description: str = "from reference catalog [arcsec]"
+
+    @property
+    def fits_header_cards(self) -> List[Tuple[str, float, str]]:
+        """list of (KEY, VALUE, COMMENT) tuples for astropy.io.fits.Header"""
+        # len(KEY) max is 8; len(COMMENT) max is 47
+        return [
+            (self.prefix[: (8 - len(f.name))] + f.name, v, f"{f.metadata.get('COMMENT', '')} {self.description}"[:47])
+            for f in fields(self)
+            if (f.name != "prefix" and f.name != "description" and (v := getattr(self, f.name)) is not None)
+        ]
 
 
-def compute_psf_stats(matched_catalog: Table, matched_ids: list[int]) -> PsfStats:
-    """Use only corner 4 stars and the center star given 3x3 stars"""
-    selected_stars = find_id_rows(matched_catalog, matched_ids)  # 3x3 = 9 stars
-    if len(selected_stars) == 0:
-        stats = PsfStats(
-            FWHMCRMN=np.nan,
-            FWHMCRMX=np.nan,
-            AWINCRMN=np.nan,
-            AWINCRMX=np.nan,
-            PA_ALIGN=np.nan,
+@dataclass(frozen=True)
+class PSFStats:
+    """
+    PSF statistics like FWHM and ellipticity
+    No generating classmethod; flexibly choose which keys to include
+    """
+
+    FWHM: float = field(metadata={"COMMENT": "Median FWHM [pix]"})
+    ELLIP: float = field(metadata={"COMMENT": "Median ellipticity"})
+
+    # Keyword differentiator
+    prefix: str = "RSEP_"  # or "ISEP_" TODO
+    description: str = "from reference catalog [arcsec]"
+
+    @property
+    def fits_header_cards(self) -> List[Tuple[str, float, str]]:
+        return [
+            ((self.prefix + f.name)[:8], v, f"{f.metadata.get('COMMENT', '')} {self.description}"[:47])
+            for f in fields(self)
+            if (f.name != "prefix" and f.name != "description" and (v := getattr(self, f.name)) is not None)
+        ]
+
+
+@dataclass(frozen=True)
+class CornerStats:
+    FWHMCRMN: float = field(metadata={"COMMENT": "Mean corner/center FWHM ratio (4 corner PSFs)"})
+    FWHMCRMX: float = field(metadata={"COMMENT": "MAX corner/center FWHM ratio (4 corner PSFs)"})
+    # FWHMCRSD: float # (f"FWHMCRSD", self.corner_stats.FWHMCRSD, "STD of corner/center FWHM ratio (4 corner PSFs)"),
+    AWINCRMN: float = field(metadata={"COMMENT": "Mean corner/center AWIN ratio (4 corner PSFs)"})
+    AWINCRMX: float = field(metadata={"COMMENT": "MAX corner/center AWIN ratio (4 corner PSFs)"})
+    # AWINCRSD: float # (f"AWINCRSD", self.corner_stats.AWINCRSD, "STD of corner/center AWIN ratio (4 corner PSFs)"),
+    PA_ALIGN: float = field(metadata={"COMMENT": "PA alignment score of 4 corner PSFs"})
+    PA_QUAD: float = field(metadata={"COMMENT": "PA quadrupole alignment score of 4 corner PSFs"})
+
+    @property
+    def fits_header_cards(self) -> List[Tuple[str, float, str]]:
+        return [
+            (f.name, v, f"{f.metadata.get('COMMENT', '')}"[:47])
+            for f in fields(self)
+            if (v := getattr(self, f.name)) is not None
+        ]
+
+    @classmethod
+    def from_matched_catalog(cls, matched_catalog: Table, matched_ids: list[int]) -> CornerStats:
+        """Use only corner 4 stars and the center star given 3x3 stars"""
+        selected_stars = find_id_rows(matched_catalog, matched_ids)  # 3x3 = 9 stars
+        if len(selected_stars) == 0:
+            return cls(FWHMCRMN=None, FWHMCRMX=None, AWINCRMN=None, AWINCRMX=None, PA_ALIGN=None, PA_QUAD=None)
+
+        # assume 3x3 grid of stars
+        assert len(matched_ids) == 9  # can contain None
+
+        # indices: 0, 2, 6, 8 = corners; 4 = center
+        corner_idx = np.array([0, 2, 6, 8])
+        center_idx = 4
+        corner_stars = selected_stars[corner_idx]
+        center_star = selected_stars[center_idx]
+        # filter out potential None rows
+        corner_stars = corner_stars[[True if v is not None else False for v in corner_stars["X_IMAGE"]]]
+
+        # --- Tracking Issue & Astigmatism ---
+        pa = corner_stars["THETA_IMAGE"]  # [-90, 90]
+        elon = corner_stars["ELONGATION"]  # or 1/(1 - ellip)
+        pa_align, _, _, _, _ = pa_alignment(pa, weights=elon, normalize=False)  # no normalization to get the magnitude
+        phi_deg = azimuth_deg_from_center(
+            corner_stars["X_IMAGE"], corner_stars["Y_IMAGE"], center_star["X_IMAGE"], center_star["Y_IMAGE"]
         )
-        return stats
+        pa_quadrupole, _, _, _, _ = pa_quadrupole_alignment(pa, phi_deg, weights=elon, normalize=False)
 
-    # assume 3x3 grid of stars
-    assert len(matched_ids) == 9
+        # --- 2D PSF Variation: corner / center ---
+        fwhm_ratio = corner_stars["FWHM_IMAGE"] / center_star["FWHM_IMAGE"]
+        awin_ratio = corner_stars["AWIN_IMAGE"] / center_star["AWIN_IMAGE"]
 
-    # indices: 0, 2, 6, 8 = corners; 4 = center
-    corner_idx = np.array([0, 2, 6, 8])
-    center_idx = 4
-    corner_stars = selected_stars[corner_idx]
-    center_star = selected_stars[center_idx]
-    # filter out potential None rows
-    corner_stars = corner_stars[[True if v is not None else False for v in corner_stars["X_IMAGE"]]]
+        return cls(
+            FWHMCRMN=np.mean(fwhm_ratio),
+            FWHMCRMX=np.max(fwhm_ratio),
+            # FWHMCRSD=np.std(fwhm_ratio),
+            AWINCRMN=np.mean(awin_ratio),
+            # AWINCRSD=np.std(awin_ratio),
+            AWINCRMX=np.max(awin_ratio),
+            PA_ALIGN=pa_align,
+            PA_QUAD=pa_quadrupole,
+            # ELLIPMN=np.mean(ellip),  # we have it in image_stats
+            # ELLIPSTD=np.std(ellip),
+        )
 
-    # --- Tracking Issue & Astigmatism ---
-    pa = corner_stars["THETA_IMAGE"]  # [-90, 90]
-    pa_align, _, _, _, _ = pa_alignment(pa)
-    phi_deg = azimuth_deg_from_center(
-        corner_stars["X_IMAGE"], corner_stars["Y_IMAGE"], center_star["X_IMAGE"], center_star["Y_IMAGE"]
-    )
-    pa_quadrupole, _, _, _, _ = pa_quadrupole_alignment(pa, phi_deg)
 
-    # --- 2D PSF Variation: corner / center ---
-    fwhm_ratio = corner_stars["FWHM_IMAGE"] / center_star["FWHM_IMAGE"]
-    awin_ratio = corner_stars["AWIN_IMAGE"] / center_star["AWIN_IMAGE"]
+@dataclass(frozen=True)
+class BinStats:
+    sep_stats: SeparationStats
+    psf_stats: PSFStats
 
-    stats = PsfStats(
-        FWHMCRMN=np.mean(fwhm_ratio),
-        FWHMCRMX=np.max(fwhm_ratio),
-        # FWHMCRSD=np.std(fwhm_ratio),
-        AWINCRMN=np.mean(awin_ratio),
-        # AWINCRSD=np.std(awin_ratio),
-        AWINCRMX=np.max(awin_ratio),
-        PA_ALIGN=pa_align,
-        PA_QUAD=pa_quadrupole,
-        # ELLIPMN=np.mean(ellip),  # we have it in image_stats
-        # ELLIPSTD=np.std(ellip),
-    )
-    return stats
+    @property
+    def fits_header_cards(self) -> List[Tuple[str, float, str]]:
+        return self.sep_stats.fits_header_cards + self.psf_stats.fits_header_cards
 
-    # matched_ids = [i for i in matched_ids if i is not None]  # clean potential Nones
+    @classmethod
+    def from_binned_catalog(cls, binned_catalog: Table) -> BinStats:
 
-    # # 2D PSF Variation
-    # fwhm_in_pix = selected_stars["FWHM_IMAGE"]
-    # fwhm_ratio = fwhm_in_pix / fwhm_in_pix[4]
-    # awin_in_pix = selected_stars["AWIN_IMAGE"]
-    # awin_ratio = awin_in_pix / awin_in_pix[4]
-    # # rms_in_pix = selected_stars["A_IMAGE"]
-    # # rms_ratio = rms_in_pix / rms_in_pix[4]
+        bin_idx = binned_catalog["RADIAL_BIN"][0]  # 0, 1, 2
+        binned_catalog = binned_catalog[~binned_catalog["separation"].mask]  # filter out ref-only rows
 
-    # # Tracking Issue
-    # pa = selected_stars["THETA_IMAGE"]  # [-90, 90]
+        if len(binned_catalog) == 0:
+            return cls(
+                sep_stats=SeparationStats(prefix=f"BIN{bin_idx}"),
+                psf_stats=PSFStats(prefix=f"BIN{bin_idx}"),
+            )
 
-    # pa_align, _, _, _, _ = pa_alignment(pa)
+        sep = binned_catalog["separation"]
+        sep_stats = SeparationStats(
+            prefix=f"BIN{bin_idx}",
+            description=f"in BIN{bin_idx} from reference [arcsec]",
+            MAD=np.median(np.abs(sep - 0)),  # it's 0-centered MAD, not median-centered
+        )
 
-    # # Both
-    # ellip = selected_stars["ELLIPTICITY"]
+        fwhm = binned_catalog["FWHM_IMAGE"].compressed()  # unmask
+        ellip = binned_catalog["ELLIPTICITY"].compressed()
+        psf_stats = PSFStats(
+            prefix=f"BIN{bin_idx}",
+            description=f"in BIN{bin_idx} from reference [pix]",
+            FWHM=np.median(fwhm),
+            ELLIP=np.median(ellip),
+        )
 
-    # stats = PsfStats(
-    #     FWHMCRMN=np.mean(fwhm_ratio),
-    #     FWHMCRSD=np.std(fwhm_ratio),
-    #     AWINCRMN=np.mean(awin_ratio),
-    #     AWINCRSD=np.std(awin_ratio),
-    #     AWINCRMX=np.max(awin_ratio),
-    #     # "PA_MEAN": np.mean(pa),
-    #     # "PA_STD": np.std(pa),
-    #     PA_ALIGN=pa_align,
-    #     ELLIPMN=np.mean(ellip),
-    #     ELLIPSTD=np.std(ellip),
-    # )
-    # return stats
+        return cls(
+            sep_stats=sep_stats,
+            psf_stats=psf_stats,
+        )
+
+
+@dataclass(frozen=True)
+class RadialStats:
+    """Radially-varying statistics"""
+
+    BIN0: BinStats
+    BIN1: BinStats
+    BIN2: BinStats
+
+    @property
+    def fits_header_cards(self) -> List[Tuple[str, float, str]]:
+        return self.BIN0.fits_header_cards + self.BIN1.fits_header_cards + self.BIN2.fits_header_cards
+
+    @classmethod
+    def from_matched_catalog(cls, matched_catalog: Table, naxis1: int, naxis2: int) -> RadialStats:
+        """Use only corner 4 stars and the center star given 3x3 stars"""
+        # if len(matched_catalog) == 0 or not all(c in matched_catalog.colnames for c in ["dra_cosdec", "ddec"]):
+        #     return RadialStats(
+        #         RSEP0P95=np.nan,
+        #     )
+
+        x = matched_catalog["X_IMAGE"]
+        y = matched_catalog["Y_IMAGE"]
+        x0 = (naxis1 + 1) / 2.0  # match sextractor convention (1-starting index)
+        y0 = (naxis2 + 1) / 2.0
+        r = np.hypot(x - x0, y - y0)  # radial distance in pixels
+
+        r_max = max(naxis1, naxis2) / 2
+        r_edges = r_max * np.sqrt(np.linspace(0, 1, 4))  # square equal spacing for 2nd order aberrations
+        radial_bin = np.digitize(r, r_edges[1:-1])  # use inner edges for splitting
+        matched_catalog["RADIAL_BIN"] = radial_bin  # 0, 1, 2
+
+        return RadialStats(
+            BIN0=BinStats.from_binned_catalog(matched_catalog[radial_bin == 0]),
+            BIN1=BinStats.from_binned_catalog(matched_catalog[radial_bin == 1]),
+            BIN2=BinStats.from_binned_catalog(matched_catalog[radial_bin == 2]),
+        )
+
+
+# ---------------------------- Internal RMS stats ----------------------------
 
 
 def compute_rms_stats(out: Table, cat_names, unit: u.Quantity | str = u.arcsec):

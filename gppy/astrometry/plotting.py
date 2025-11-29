@@ -21,6 +21,7 @@ from PIL import Image, ImageEnhance
 from ..utils import lupton_asinh
 from .utils import get_3x3_stars, find_id_rows, resolve_rows_by_id
 from .plotting_helpers import cutout, adaptive_ra_spacing, draw_ellipse, HandlerEllipse
+from .evaluation_helpers import SeparationStats
 
 
 def wcs_check_plot(
@@ -33,7 +34,7 @@ def wcs_check_plot(
     fov_ra=None,
     fov_dec=None,
     num_plot=50,
-    sep_stats=None,
+    sep_stats: SeparationStats = None,
     subpixel_fraction=None,
     subsecond_fraction=None,
     matched_ids=None,  # row index of matched catalog
@@ -97,7 +98,7 @@ def wcs_check_plot(
 
     # # Separation statistics (centered between blocks)
     if sep_stats is not None:
-        text = f"Sep Stats: RMS={sep_stats['rms']:.2f}\", Q1={sep_stats['q1']:.2f}\", Q3={sep_stats['q3']:.2f}\""
+        text = f'Sep Stats: RMS={sep_stats.RMS:.2f}", Q1={sep_stats.Q1:.2f}", Q3={sep_stats.Q3:.2f}"'
         if subsecond_fraction is not None:
             text = f"Superarcsec Frac: {1 - subsecond_fraction:.3f}, " + text
         if subpixel_fraction is not None:

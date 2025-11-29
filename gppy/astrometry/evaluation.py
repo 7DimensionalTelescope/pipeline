@@ -1,7 +1,8 @@
+from __future__ import annotations
 import os
-from dataclasses import dataclass
-from typing import Optional, TypedDict, List, Union
 import numpy as np
+from dataclasses import dataclass, field, fields
+from typing import Optional, TypedDict, List, Tuple
 from astropy.table import Table
 from astropy.time import Time
 from astropy.wcs import WCS
@@ -9,26 +10,32 @@ import astropy.io.fits as fits
 
 from ..const import PIXSCALE
 from ..tools.table import match_two_catalogs, add_id_column, match_multi_catalogs
+from ..tools.angle import azimuth_deg_from_center
 from ..utils import add_suffix, swap_ext
 from .plotting import wcs_check_plot
 from ..subtract.utils import create_ds9_region_file
 from .utils import inside_quad_spherical, get_3x3_stars, get_fov_quad
-from .evaluation_helpers import compute_psf_stats, compute_rms_stats, well_matchedness_stats, PsfStats
+from .evaluation_helpers import (
+    compute_rms_stats,
+    well_matchedness_stats,
+    CornerStats,
+    SeparationStats,
+    RadialStats,
+)
 
 
-class SeparationStats(TypedDict):
-    rms: float
-    min: float
-    max: float
-    q1: float
-    q2: float
-    q3: float
-    p95: float
-    p99: float
+def table_has_nan(tbl: Table) -> bool:
+    for col in tbl.itercols():
+        if col.dtype.kind == "f":  # floating types
+            if np.isnan(col).any():
+                return True
+    return False
 
 
 @dataclass(frozen=True)
-class RSEPSStats:
+class RSEPStats:
+    """SeparationStats + metadata"""
+
     ref_max_mag: float
     sci_max_mag: float
     num_ref_sources: int
@@ -37,25 +44,59 @@ class RSEPSStats:
     subsecond_fraction: float
     separation_stats: SeparationStats
 
+    @property
+    def fits_header_cards_for_metadata(self) -> List[Tuple[str, float, str]]:
+        """not the entire header cards, just the metadata"""
+        return [
+            (f"REFMXMAG", self.ref_max_mag, "Highest g mag of selected reference sources"),
+            (f"SCIMXMAG", self.sci_max_mag, "Highest inst mag of selected science sources"),
+            (f"NUM_REF", self.num_ref_sources, "Number of reference sources selected"),
+            (f"UNMATCH", self.unmatched_fraction, "Fraction of unmatched reference sources"),
+            (f"SUBPIXEL", self.subpixel_fraction, "Fraction of matched with sep < PIXSCALE"),
+            (f"SUBSEC", self.subsecond_fraction, "Fraction of matched with sep < 1"),
+        ]
+
 
 @dataclass(frozen=True)
 class ImageStats:
-    PEEINGMN: float
-    PEEINGSD: float
-    SEEINGMN: float
-    SEEINGSD: float
-    PAWINMN: float
-    PAWINSD: float
-    ELLIPMN: float
-    ELLIPSD: float
+    """Overall PSF characteristics"""
+
+    PEEINGMN: float = field(metadata={"COMMENT": "Mean FWHM of all ref matched sources [pix]"})
+    PEEINGSD: float = field(metadata={"COMMENT": "STD of FWHM of all ref matched sources [pix]"})
+    SEEINGMN: float = field(metadata={"COMMENT": "Mean seeing of all ref matched srcs [arcsec]"})
+    SEEINGSD: float = field(metadata={"COMMENT": "STD of seeing of all ref matched srcs [arcsec]"})
+    PAWINMN: float = field(metadata={"COMMENT": "Mean AWIN of ref matched sources [pix]"})
+    PAWINSD: float = field(metadata={"COMMENT": "STD of AWIN of ref matched sources [pix]"})
+    ELLIPMN: float = field(metadata={"COMMENT": "Mean ellipticity of ref matched sources"})
+    ELLIPSD: float = field(metadata={"COMMENT": "STD of ellipticity of ref matched sources"})
+
+    @classmethod
+    def from_matched_catalog(cls, matched: Table) -> ImageStats:
+        PEEINGMN = matched["FWHM_IMAGE"].mean()
+        PEEINGSD = matched["FWHM_IMAGE"].std()
+        return cls(
+            PEEINGMN=PEEINGMN,
+            PEEINGSD=PEEINGSD,
+            SEEINGMN=PEEINGMN * PIXSCALE,
+            SEEINGSD=PEEINGSD * PIXSCALE,
+            PAWINMN=matched["AWIN_IMAGE"].mean(),
+            PAWINSD=matched["AWIN_IMAGE"].std(),
+            ELLIPMN=matched["ELLIPTICITY"].mean(),
+            ELLIPSD=matched["ELLIPTICITY"].std(),
+        )
+
+    @property
+    def fits_header_cards(self) -> List[Tuple[str, float, str]]:
+        return [(f.name, getattr(self, f.name), f.metadata.get("COMMENT", "")) for f in fields(self)]
 
 
 @dataclass(frozen=True)
 class EvaluationResult:
     matched: Table
-    rsep_stats: RSEPSStats
-    psf_stats: Optional[PsfStats]
+    rsep_stats: RSEPStats
+    corner_stats: CornerStats
     image_stats: ImageStats
+    radial_stats: RadialStats
 
 
 def evaluate_single_wcs(
@@ -78,7 +119,7 @@ def evaluate_single_wcs(
     cutout_size=30,
     logger=None,
     overwrite=True,
-):
+) -> EvaluationResult:
     """Ensure num_plot <= num_sci, num_ref"""
 
     def chatter(msg: str, level: str = "debug"):
@@ -122,43 +163,46 @@ def evaluate_single_wcs(
 
     # compute separation statistics
     sep = matched["separation"]
+    unmatched_fraction = sep.mask.sum() / sep.size
     n_valid = sep.count()
-    sep_sci = sep.compressed()  # unmasked
+    matched_cleaned = matched[~sep.mask]
+
     if n_valid > 0:
         # Fractions
-        unmatched_fraction = sep.mask.sum() / sep.size
         subpixel_fraction = float(np.ma.mean(sep < PIXSCALE))
         subsecond_fraction = float(np.ma.mean(sep < 1.0))
 
+        # compute
+        sep_sci = matched_cleaned["separation"]
+        sep_x_sci = matched_cleaned["dra_cosdec"]
+        sep_y_sci = matched_cleaned["ddec"]
+        phi_deg = azimuth_deg_from_center(
+            matched_cleaned["X_IMAGE"], matched_cleaned["Y_IMAGE"], (W + 1) / 2, (H + 1) / 2
+        )
+        sep_dr = np.cos(np.deg2rad(phi_deg)) * sep_x_sci + np.sin(np.deg2rad(phi_deg)) * sep_y_sci
+        sep_r_dphi = np.sin(np.deg2rad(phi_deg)) * sep_x_sci - np.cos(np.deg2rad(phi_deg)) * sep_y_sci
+
         separation_stats = SeparationStats(
-            rms=np.sqrt(np.mean(sep_sci**2)),
-            min=np.min(sep_sci),
-            max=np.max(sep_sci),
-            q1=np.percentile(sep_sci, 25),
-            q2=np.percentile(sep_sci, 50),
-            q3=np.percentile(sep_sci, 75),
-            p95=np.percentile(sep_sci, 95),
-            p99=np.percentile(sep_sci, 99),
+            RMS=np.sqrt(np.mean(sep_sci**2)),
+            MADX=np.median(np.abs(sep_x_sci)),
+            MADY=np.median(np.abs(sep_y_sci)),
+            MADR=np.median(np.abs(sep_dr)),
+            MADT=np.median(np.abs(sep_r_dphi)),
+            MIN=np.min(sep_sci),
+            MAX=np.max(sep_sci),
+            Q1=np.percentile(sep_sci, 25),
+            Q2=np.percentile(sep_sci, 50),
+            Q3=np.percentile(sep_sci, 75),
+            P95=np.percentile(sep_sci, 95),
+            P99=np.percentile(sep_sci, 99),
         )
     else:
         unmatched_fraction = 1.0  # no NaN. fits requires values
         subpixel_fraction = 0
         subsecond_fraction = 0
-        separation_stats = SeparationStats(
-            rms=0.0,
-            min=0.0,
-            max=0.0,
-            q1=0.0,
-            q2=0.0,
-            q3=0.0,
-            p95=0.0,
-            p99=0.0,
-        )
+        separation_stats = SeparationStats()  # empty
 
-    # if unmatched_fraction == 1.0:
-    #     raise PipelineError(f"Unmatched fraction is 1.0 for {image}")
-
-    rsep_stats = RSEPSStats(
+    rsep_stats = RSEPStats(
         ref_max_mag=REF_MAX_MAG,
         sci_max_mag=SCI_MAX_MAG,
         num_ref_sources=NUM_REF,
@@ -169,43 +213,29 @@ def evaluate_single_wcs(
     )
 
     # 2D PSF stats
-    matched_ids = get_3x3_stars(matched, H, W, cutout_size)
+    matched_ids = get_3x3_stars(matched_cleaned, H, W, cutout_size)
     try:
-        psf_stats = compute_psf_stats(matched, matched_ids)
+        corner_stats = CornerStats.from_matched_catalog(matched_cleaned, matched_ids)
     except Exception as e:
-        chatter(f"evaluate_single_wcs: psf_stats {e}")
-        psf_stats = None
+        chatter(f"evaluate_single_wcs: failed to compute corner_stats: {e}")
+        corner_stats = None
 
+    chatter(f"evaluate_single_wcs: rsep_stats {rsep_stats}")
     chatter(f"evaluate_single_wcs: matched_ids {matched_ids}")
-    chatter(f"evaluate_single_wcs: psf_stats {psf_stats}")
+    chatter(f"evaluate_single_wcs: corner_stats {corner_stats}")
 
     # overall image stats
-    PEEINGMN = matched["FWHM_IMAGE"].mean()
-    PEEINGSD = matched["FWHM_IMAGE"].std()
-    SEEINGMN = PEEINGMN * PIXSCALE
-    SEEINGSD = PEEINGSD * PIXSCALE
-    PAWINMN = matched["AWIN_IMAGE"].mean()
-    PAWINSD = matched["AWIN_IMAGE"].std()
-    ELLIPMN = matched["ELLIPTICITY"].mean()
-    ELLIPSD = matched["ELLIPTICITY"].std()
+    image_stats = ImageStats.from_matched_catalog(matched_cleaned)
 
-    image_stats = ImageStats(
-        PEEINGMN=PEEINGMN,
-        PEEINGSD=PEEINGSD,
-        SEEINGMN=SEEINGMN,
-        SEEINGSD=SEEINGSD,
-        PAWINMN=PAWINMN,
-        PAWINSD=PAWINSD,
-        ELLIPMN=ELLIPMN,
-        ELLIPSD=ELLIPSD,
-    )
+    # radial stats
+    radial_stats = RadialStats.from_matched_catalog(matched_cleaned, W, H)
 
     if plot_save_path is not None and unmatched_fraction < 1.0:
         chatter(f"evaluate_single_wcs: plotting to {plot_save_path}")
         wcs_check_plot(
             ref_cat,
             tbl,
-            matched,
+            matched_cleaned,
             wcs,
             image,
             plot_save_path,
@@ -218,12 +248,14 @@ def evaluate_single_wcs(
             matched_ids=matched_ids,
             cutout_size=cutout_size,
         )
+        chatter(f"evaluate_single_wcs: plot saved to {plot_save_path}")
 
     return EvaluationResult(
-        matched=matched,
+        matched=matched_cleaned,  # this has to be cleaned of ref-only rows for joint evaluation
         rsep_stats=rsep_stats,
-        psf_stats=psf_stats,
+        corner_stats=corner_stats,
         image_stats=image_stats,
+        radial_stats=radial_stats,
     )
 
 
@@ -322,22 +354,29 @@ def prepare_matched_catalog(
     NUM_REF = len(ref_cat)
 
     # match source tbl with refcat
-    pm_keys = dict(pmra="pmra", pmdec="pmdec", parallax=None, ref_epoch=2016.0)
-    matched = match_two_catalogs(
-        tbl,
-        ref_cat,
-        x1="ra",
-        y1="dec",
-        join="right",
-        sep_components=True,
-        radius=match_radius,
-        correct_pm=True,
-        obs_time=Time(date_obs),
-        pm_keys=pm_keys,
-    )  # right join: preserve all ref sources
-    matched = add_id_column(matched)  # id needed to plot selected 9 stars
+    if os.path.exists(matched_catalog_path) and not overwrite:
+        matched = Table.read(matched_catalog_path)
+        write_matched_catalog = False
+        chatter(f"Matched catalog already exists: {matched_catalog_path}, skipping...", "info")
+    else:
+
+        pm_keys = dict(pmra="pmra", pmdec="pmdec", parallax=None, ref_epoch=2016.0)
+        matched = match_two_catalogs(
+            tbl,
+            ref_cat,
+            x1="ra",
+            y1="dec",
+            join="right",
+            sep_components=True,
+            radius=match_radius,
+            correct_pm=True,
+            obs_time=Time(date_obs),
+            pm_keys=pm_keys,
+        )  # right join: preserve all ref sources
+        matched = add_id_column(matched)  # id needed to plot selected 9 stars
+
     if write_matched_catalog:
-        matched.write(matched_catalog_path, overwrite=True)
+        matched.write(matched_catalog_path, overwrite=overwrite)
 
     return matched, tbl, ref_cat, (REF_MAX_MAG, SCI_MAX_MAG, NUM_REF)
 
@@ -345,14 +384,12 @@ def prepare_matched_catalog(
 ###############################################################################
 
 
-def evaluate_joint_wcs(images_info: List["ImageInfo"]):
+def evaluate_joint_wcs(matched_cats: List[Table]):
     """
     Uses the matched cats from the previous step as it helps point source selection,
     but it hurts completeness as the gaia reference is trimmed to num_ref sources.
     You may want to refine the logic to use the original sextractor catalogs instead.
     """
-
-    matched_cats = [image_info.matched_catalog for image_info in images_info]
     matched_all = match_multi_catalogs(matched_cats, radius=3, join="outer", sep_components=True, suffix_first=True)
 
     rms_stats = compute_rms_stats(matched_all, [f"cat{i}" for i in range(len(matched_cats))])
