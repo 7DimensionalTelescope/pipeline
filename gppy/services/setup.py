@@ -8,26 +8,27 @@ from .queue import QueueManager
 import warnings
 import logging
 
+
 class BaseSetup(ABC):
     """
     Abstract base class for pipeline setup and configuration management.
-    
+
     This class provides a unified interface for setting up pipeline components
     including path handling, configuration management, logging, and queue processing.
     It serves as the foundation for both preprocessing and science processing modules.
-    
+
     Features:
     - Flexible configuration handling (file paths, config objects)
     - Automatic logger setup with file locking
     - Optional queue manager integration
     - Path handler initialization
     - Context manager support for cleanup
-    
+
     Args:
         config: Configuration object, file path, or ConfigurationInstance
         logger: Custom logger instance (optional)
         queue: QueueManager instance or boolean to enable parallel processing
-    
+
     Example:
         >>> setup = BaseSetup(
         ...     config="path/to/config.yml",
@@ -35,12 +36,13 @@ class BaseSetup(ABC):
         ...     queue=True
         ... )
     """
-    
+
     def __init__(
         self,
         config: Union[str, PreprocConfiguration, SciProcConfiguration] = None,
         logger: Logger = None,
         queue: Union[bool, Any] = False,
+        is_too: bool = False,
     ) -> None:
         """Initialize the pipeline setup module.
 
@@ -50,63 +52,66 @@ class BaseSetup(ABC):
             queue: QueueManager instance or boolean to enable parallel processing
         """
         # Setup PathHandler
-        self.path = self._setup_path(config)
+        self.path = self._setup_path(config, is_too=is_too)
 
         # Setup Configuration
-        self.config = self._setup_config(config)
+        self.config = self._setup_config(config, is_too=is_too)
 
         # Setup log
-        self._logger = self._setup_logger(logger, self.config)
+        self._logger = self._setup_logger(logger, self.config, is_too=is_too)
 
         # Setup queue
         self.queue = self._setup_queue(queue)
 
-    def __getstate__(self): return self.__dict__
-    def __setstate__(self, d): self.__dict__.update(d)
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, d):
+        self.__dict__.update(d)
 
     @property
     def logger(self):
         """
         Get the configured logger instance.
-        
+
         Returns:
             Logger: The configured logger with proper file handling
         """
         return self._setup_logger(self._logger, self.config)
 
-    def _setup_path(self, config):
+    def _setup_path(self, config, is_too=False):
         """
         Initialize the path handler based on configuration.
-        
+
         Args:
             config: Configuration object or file path
-            
+
         Returns:
             PathHandler: Configured path handler instance
-            
+
         Raises:
             ValueError: If no valid configuration information is provided
         """
         if isinstance(config, PreprocConfiguration | SciProcConfiguration):
             return config.path
         elif isinstance(config, ConfigurationInstance):
-            return PathHandler(config)
+            return PathHandler(config, is_too=is_too)
         elif isinstance(config, str):
             warnings.warn("String path is deprecated. Assume SciProcConfiguration.")
-            return PathHandler(SciProcConfiguration(config_source=config))
+            return PathHandler(SciProcConfiguration(config_source=config, is_too=is_too))
         else:
             raise ValueError("No information to initialize PathHandler")
 
-    def _setup_config(self, config):
+    def _setup_config(self, config, is_too=False):
         """
         Initialize the configuration object.
-        
+
         Args:
             config: Configuration object or file path
-            
+
         Returns:
             ConfigurationInstance: The configuration instance
-            
+
         Raises:
             ValueError: If invalid configuration object is provided
         """
@@ -114,28 +119,30 @@ class BaseSetup(ABC):
             return config.config
         elif isinstance(config, str):
             warnings.warn("String path is deprecated. Assume SciProcConfiguration.")
-            return SciProcConfiguration(config_source=config).config
+            return SciProcConfiguration(config_source=config, is_too=is_too).config
         elif isinstance(config, ConfigurationInstance):
             return config
         else:
             raise ValueError("Invalid configuration object")
 
-    def _setup_logger(self, logger, config):
+    def _setup_logger(self, logger, config, is_too=False):
         """
         Initialize the logger with proper file handling.
-        
+
         Creates or reuses a logger with LockingFileHandler to ensure
         thread-safe logging to files.
-        
+
         Args:
             logger: Existing logger instance or None
             config: Configuration instance containing logging settings
-            
+
         Returns:
             Logger: Configured logger instance
         """
-        
-        if isinstance(logger, Logger) and any(isinstance(handler, LockingFileHandler) for handler in logger.logger.handlers):
+
+        if isinstance(logger, Logger) and any(
+            isinstance(handler, LockingFileHandler) for handler in logger.logger.handlers
+        ):
             logger.set_output_file(config.logging.file, overwrite=False)
             self._logger = logger
             return logger
@@ -156,10 +163,10 @@ class BaseSetup(ABC):
     def _setup_queue(self, queue):
         """
         Initialize the queue manager for parallel processing.
-        
+
         Args:
             queue: QueueManager instance, boolean, or None
-            
+
         Returns:
             QueueManager or None: Configured queue manager or None if disabled
         """
@@ -176,7 +183,7 @@ class BaseSetup(ABC):
     def from_list(self):
         """
         Abstract method for creating setup from a list of inputs.
-        
+
         Must be implemented by subclasses to handle specific input types.
         """
         pass
@@ -185,10 +192,10 @@ class BaseSetup(ABC):
     def from_text_file(cls, image):
         """
         Create setup from a single text file.
-        
+
         Args:
             image (str): Path to text file containing input list
-            
+
         Returns:
             BaseSetup: Configured setup instance
         """
@@ -198,10 +205,10 @@ class BaseSetup(ABC):
     def from_dir(cls, dir_path):
         """
         Create setup from all FITS files in a directory.
-        
+
         Args:
             dir_path (str): Directory path containing FITS files
-            
+
         Returns:
             BaseSetup: Configured setup instance
         """

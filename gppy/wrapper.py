@@ -140,7 +140,7 @@ class DataReduction:
         return cls
 
     @classmethod
-    def from_list(cls, list_of_images: list[str], ignore_mult_date=False, **kwargs):
+    def from_list(cls, list_of_images: list[str], ignore_mult_date=False, is_too=False, **kwargs):
         # if not all(f.endswith(".fits") for f in list_of_images):
         #     raise ValueError("Non-fits images in input")
         if not list_of_images:
@@ -149,7 +149,7 @@ class DataReduction:
         if not all(isinstance(f, str) and f.endswith(".fits") for f in list_of_images):
             raise ValueError("Non-fits images in input")
 
-        return cls(list_of_images=list_of_images, ignore_mult_date=ignore_mult_date, **kwargs)
+        return cls(list_of_images=list_of_images, ignore_mult_date=ignore_mult_date, is_too=is_too, **kwargs)
         # # Bypass __init__ but reproduce its initialization
         # self = cls.__new__(cls)
 
@@ -214,8 +214,8 @@ class DataReduction:
                 self.groups[mfg_key].add_images(flattened_images)
                 self.groups[mfg_key].add_sci_keys(key)
 
-    def create_config(self, overwrite=False, max_workers=50):
-        kwargs = {"overwrite": overwrite}
+    def create_config(self, overwrite=False, max_workers=50, is_too=False):
+        kwargs = {"overwrite": overwrite, "is_too": is_too}
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(group.create_config, **kwargs) for group in self.groups.values()]
             for f in futures:
@@ -253,11 +253,13 @@ class DataReduction:
 
     def process_all(
         self,
-        preprocess_only=False,
         overwrite=False,
         processes=["astrometry", "photometry", "combine", "subtract"],
         queue=None,
         preprocess_kwargs=None,
+        is_too=False,
+        preprocess_only=False,
+        skip_preprocess=False,
     ):
         """
         preprocess_only: if True, speed up by skipping sciprocconfig generation
@@ -274,9 +276,30 @@ class DataReduction:
             *self.config_list,
             processes=processes,
             overwrite=overwrite,
-            preprocess_only=preprocess_only,
             preprocess_kwargs=preprocess_kwargs,
+            is_too=is_too,
         )
+
+        if preprocess_only:
+            from collections import deque
+
+            masters = list(self.config_list[0].keys())
+
+            sc.dependents = {}
+            sc.independents = deque()
+            sc.original_independents = set()
+            sc.task_status = {sc._key_from_path(p): None for p in masters}
+
+        elif skip_preprocess:
+            from collections import deque
+
+            masters = list(self.config_list[0].keys())
+            sc.master_queue = deque()
+            sc.master_status = {sc._key_from_path(p): True for p in masters}
+            sc.task_status = {sc._key_from_path(p): True for p in masters}
+
+            sc.update_queue()
+
         queue.add_scheduler(sc)
         queue.wait_until_task_complete("all")
 
@@ -327,7 +350,7 @@ class MasterframeGroup:
     def add_sci_keys(self, keys):
         self.sci_keys.append(keys)
 
-    def create_config(self, overwrite=False):
+    def create_config(self, overwrite=False, is_too=False):
         import resource
         from .config import PreprocConfiguration
 
@@ -335,7 +358,7 @@ class MasterframeGroup:
         #     f"MasterframeGroup {self.key} creating config with {len(self.image_files)} images; "
         #     f"{len(os.listdir(f'/proc/{os.getpid()}/fd'))} FDs under limit of {resource.getrlimit(resource.RLIMIT_NOFILE)} FDs"
         # )
-        c = PreprocConfiguration(self.image_files, overwrite=overwrite)
+        c = PreprocConfiguration(self.image_files, overwrite=overwrite, is_too=is_too)
 
         self._config = c.config_file
 
@@ -404,7 +427,7 @@ class ScienceGroup:
         else:
             raise ValueError("Invalid filepath type")
 
-    def create_config(self, overwrite=False):
+    def create_config(self, overwrite=False, is_too=False):
         import resource
 
         from .config import SciProcConfiguration
@@ -414,13 +437,13 @@ class ScienceGroup:
         #     f"{len(os.listdir(f'/proc/{os.getpid()}/fd'))} FDs under limit of {resource.getrlimit(resource.RLIMIT_NOFILE)} FDs"
         # )
 
-        sci_yml = PathHandler(self.image_files).sciproc_output_yml
+        sci_yml = PathHandler(self.image_files, is_too=is_too).sciproc_output_yml
         if os.path.exists(sci_yml) and not overwrite:
             # If the config file already exists, load it
-            c = SciProcConfiguration.from_config(sci_yml, write=True)  # 5 ms
+            c = SciProcConfiguration(sci_yml, write=True, is_too=is_too)  # 5 ms
             # c = SciProcConfiguration(sci_yml, write=True)  # 36 ms
         else:
-            c = SciProcConfiguration(self.image_files, overwrite=overwrite)
+            c = SciProcConfiguration(self.image_files, overwrite=overwrite, is_too=is_too)
             # c = SciProcConfiguration.base_config(input_images=self.image_files, config_file=sci_yml, logger=True)
             # c = SciProcConfiguration.from_list(self.image_files)
 

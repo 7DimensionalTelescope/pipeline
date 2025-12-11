@@ -11,11 +11,15 @@ from ..utils import add_suffix, swap_ext, collapse, time_diff_in_seconds
 from ..tools.table import match_two_catalogs
 from ..config.utils import get_key
 from ..path import PathHandler
+from ..preprocess.plotting import save_fits_as_figures
 
 from ..services.database.handler import DatabaseHandler
 from ..services.database.table import QAData
 
 from .utils import create_ds9_region_file, select_sources
+
+from datetime import datetime, timedelta
+from ..services.database.query import RawImageQuery
 
 
 class ImSubtract(BaseSetup, DatabaseHandler):
@@ -31,16 +35,17 @@ class ImSubtract(BaseSetup, DatabaseHandler):
         self._flag_name = "subtract"
         self.overwrite = overwrite
         self.name = self.config.name
+        self.reference_images = None
 
         self.qa_id = None
-        DatabaseHandler.__init__(self, add_database=self.config.settings.is_pipeline)
+        self.is_too = self.config.settings.is_too
+        DatabaseHandler.__init__(self, add_database=self.config.settings.is_pipeline, is_too=self.is_too)
 
         if self.is_connected:
             self.set_logger(logger)
             self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
             self.pipeline_id = self.create_pipeline_data(self.config)
-            if self.pipeline_id is not None:
-                self.update_pipeline_progress(80, "imsubtract-configured")
+            self.update_pipeline_progress(80, "imsubtract-configured")
 
     @classmethod
     def from_list(cls, input_images):
@@ -65,13 +70,13 @@ class ImSubtract(BaseSetup, DatabaseHandler):
         """[(number, name, use_gpu), ...]"""
         return [(1, "run", False)]
 
-    def run(self):
+    def run(self, overwrite=False):
         st = time.time()
         self.logger.info(f"Start 'ImSubtract'")
         try:
             self.find_reference_image()
-            if not self.reference_images:  # if not found, do not run
-                self.logger.warning(f"No reference image found for {self.name}; Skipping transient search.")
+            if self.reference_images is None:  # if not found, do not run
+                self.logger.info(f"No reference image found for {self.name}; Skipping transient search.")
                 self.config.flag.subtraction = True
                 self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")
                 self.update_pipeline_progress(100, "imsubtract-completed")
@@ -79,6 +84,13 @@ class ImSubtract(BaseSetup, DatabaseHandler):
 
             self.define_paths()
             self.update_pipeline_progress(82, "imsubtract-define-paths-completed")
+
+            if not overwrite and os.path.exists(self.subt_image_file):
+                self.logger.info(f"Subtracted image already exists: {self.subt_image_file}; Skipping subtraction.")
+                self.config.flag.subtraction = True
+                self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")
+                self.update_pipeline_progress(100, "imsubtract-completed")
+                return
 
             self.create_substamps()
             self.update_pipeline_progress(84, "imsubtract-create-substamps-completed")
@@ -112,28 +124,67 @@ class ImSubtract(BaseSetup, DatabaseHandler):
                     qa_dict["qa_id"] = self.qa_id
                     self.qa_db.update_qa_data(**qa_dict)
 
+            self.plot_subtracted_image()
+
             self.update_pipeline_progress(90, "imsubtract-completed")
 
             self.config.flag.subtraction = True
             self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")
+
         except Exception as e:
+            self.add_error()
             self.logger.error(f"Error during imsubtract processing: {str(e)}")
             raise
 
     def find_reference_image(self):
-        """comes first to quit quickly if no reference image is found"""
-        # obj = self.config.obs.object
-        # filte = self.config.obs.filter
-        obj = collapse(self.path.name.obj, raise_error=True)  # assume same sci group: same obj, filter
-        filte = collapse(self.path.name.filter, raise_error=True)
-        refim_dir = os.path.join(self.path.imsubtract.ref_image_dir, filte)
 
-        ref_imgs_ps1 = glob(f"{refim_dir}/ref_PS1_{obj}_*_*_{filte}_0.fits")
-        ref_imgs_7dt = glob(f"{refim_dir}/ref_7DT_{obj}_*_*_{filte}_*.fits")
-        ref_imgs = ref_imgs_7dt + ref_imgs_ps1
-        ref_imgs = [ref for ref in ref_imgs if "mask" not in ref]
-        self.reference_images = ref_imgs
-        # return True if len(ref_imgs) > 0 else False
+        obs, filt, date = self.path.name.obj[0], self.path.name.filter[0], self.path.name.date[0]
+        image_list = RawImageQuery().for_target(obs).with_filter(filt).fetch()["sci"]
+
+        self.logger.debug(f"Image list: {len(image_list)} images")
+        available_dates = list(set([img["obstime"].date().strftime("%Y%m%d") for img in image_list]))
+        self.logger.debug(f"Full dates: {available_dates}")
+
+        if date in available_dates:
+            available_dates.remove(date)
+
+        if available_dates:
+            self.logger.debug(f"Available dates: {available_dates}")
+            # Convert input date to datetime
+            input_date = datetime.strptime(date, "%Y%m%d")
+
+            # Find the date that is farthest from the input date
+            farthest_date = max(available_dates, key=lambda d: abs((datetime.strptime(d, "%Y%m%d") - input_date).days))
+            farthest_date_dt = datetime.strptime(farthest_date, "%Y%m%d")
+
+            # Check farthest date and +/- 5 day
+            for i in range(5):
+                search_dates = [
+                    farthest_date_dt - timedelta(days=i),
+                    farthest_date_dt + timedelta(days=i),
+                ]
+
+            # Search in both processed and too directories
+            base_paths = ["/lyman/data2/processed", "/lyman/data2/too"]
+            ref_image = None
+
+            for search_date in search_dates:
+                date_formatted = search_date.strftime("%Y-%m-%d")
+                for base_path in base_paths:
+                    ref_pattern = f"{base_path}/{date_formatted}/{obs}/{filt}/stacked/*coadd.fits"
+                    ref_images = glob(ref_pattern)
+                    if ref_images:
+                        ref_image = ref_images[0]
+                        self.logger.info(f"Reference image found: {ref_image}")
+                        break
+                if ref_image:
+                    break
+
+            if not ref_image:
+                self.add_warning()
+                self.logger.warning(
+                    f"The reference images are likely to exist but they have not been processed yet. Check observation dates: {available_dates} for {obs}/{filt}"
+                )
 
     def define_paths(self):
         # always consider a single stacked image as input, not a list of images
@@ -148,14 +199,15 @@ class ImSubtract(BaseSetup, DatabaseHandler):
         self.sci_image_file = inim  # self.path.imstack.stacked_image
         # self.sci_source_table_file = get_derived_product_path(self.sci_image_file)
         # self.sci_source_table_file = add_suffix(self.sci_image_file, "cat")
-        self.sci_source_table_file = PathHandler(self.sci_image_file).catalog
+        self.sci_source_table_file = PathHandler(self.sci_image_file, is_too=self.is_too).catalog
 
         self.ref_image_file = self.config.imsubtract.reference_image or self.reference_images[0]
         self.config.imsubtract.reference_image = self.ref_image_file  # sync
-        self.ref_source_table_file = swap_ext(self.ref_image_file, "phot.cat")
+        self.ref_source_table_file = self.ref_image_file.replace(".fits", "_cat.fits")
+        # self.ref_source_table_file = swap_ext(self.ref_image_file, "phot.cat")
 
         # self.subt_image_file = get_derived_product_path(self.sci_image_file, "transient", "subt.fits")
-        self.subt_image_file = PathHandler(self.sci_image_file).imsubtract.diffim
+        self.subt_image_file = PathHandler(self.sci_image_file, is_too=self.is_too).imsubtract.diffim
         self.config.input.difference_image = self.subt_image_file
         self.logger.debug(f"subt_image_file: {self.subt_image_file}")
         self.logger.debug(f"config.input.difference_image: {self.config.input.difference_image}")
@@ -169,7 +221,8 @@ class ImSubtract(BaseSetup, DatabaseHandler):
 
     def create_substamps(self, ds9_region=True):
         sci_source_table = Table.read(self.sci_source_table_file)
-        ref_source_table = Table.read(self.ref_source_table_file, format="ascii")
+        ref_source_table = Table.read(self.ref_source_table_file)
+        # ref_source_table = Table.read(self.ref_source_table_file, format="ascii")
 
         # Select substamp sources
         selected_sci_table = select_sources(sci_source_table)
@@ -254,3 +307,9 @@ class ImSubtract(BaseSetup, DatabaseHandler):
         # hcdata, hchdr = fits.getdata(self.ref_image_file, header=True)
         # new_hcdata = hcdata * (~mask + 2)
         # fits.writeto(out_conv_im, new_hcdata, header=hchdr, overwrite=True)
+
+    def plot_subtracted_image(self):
+        subt_img = self.subt_image_file
+        basename = os.path.basename(subt_img)
+        save_fits_as_figures(fits.getdata(subt_img), self.path.figure_dir_to_path / swap_ext(basename, "png"))
+        return

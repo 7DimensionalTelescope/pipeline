@@ -377,14 +377,14 @@ def plot_bpmask(file, ext=1, badpix=1):
     # plt.close()
 
 
-def plot_sci(input_img, output_img):
+def plot_sci(input_img, output_img, is_too=False):
     if not (isinstance(input_img, str)):
         print("An image path (input_img) is not properly defined.")
         return
     if not (isinstance(output_img, str)):
         print("An image path (output_img) is not properly defined.")
         return
-    path = PathHandler(output_img)
+    path = PathHandler(output_img, is_too=is_too)
 
     save_fits_as_figures(fits.getdata(input_img), path.figure_dir_to_path / f"{path.stem[0]}_raw.jpg")
     save_fits_as_figures(fits.getdata(output_img), path.figure_dir_to_path / f"{path.stem[0]}.jpg")

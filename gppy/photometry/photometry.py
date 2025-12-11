@@ -40,6 +40,8 @@ from ..services.database.table import QAData
 from . import utils as phot_utils
 from .plotting import plot_zp, plot_filter_check
 
+from ..too.plotting import make_too_output
+
 
 class Photometry(BaseSetup, DatabaseHandler):
     """
@@ -117,14 +119,15 @@ class Photometry(BaseSetup, DatabaseHandler):
         self.logger.info(f"Photometry mode: {self._photometry_mode}")
 
         self.qa_ids = []
-        DatabaseHandler.__init__(self, add_database=self.config.settings.is_pipeline)
+        DatabaseHandler.__init__(
+            self, add_database=self.config.settings.is_pipeline, is_too=self.config.settings.is_too
+        )
 
-        if self.is_connected:
+        if self.is_connected or self.too_id is not None:
             self.set_logger(logger)
             self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
             self.pipeline_id = self.create_pipeline_data(self.config)
-            if self.pipeline_id is not None:
-                self.update_pipeline_progress(self._progress_by_mode[0], f"{self._photometry_mode}-configured")
+            self.update_pipeline_progress(self._progress_by_mode[0], f"{self._photometry_mode}-configured")
 
     @property
     def _progress_by_mode(self):
@@ -174,6 +177,19 @@ class Photometry(BaseSetup, DatabaseHandler):
         if not self.input_images:  # exception for when input.difference_image is not set.
             if self._photometry_mode == "difference_photometry":
                 self.update_pipeline_progress(100, f"{self._photometry_mode}-completed")
+                if self.is_too and self.too_id is not None:
+                    sed_data = make_too_output(self.too_id, image_type="stacked")
+                    self.logger.info(f"ToO output are created.")
+
+                    interim_notice = self.too_db.read_too_data_by_id(self.too_id).get("interim_notice")
+
+                    if interim_notice == 0:
+                        self.too_db.send_interim_notice_email(self.too_id, sed_data=sed_data, dtype="stacked")
+
+                    self.too_db.mark_completed(self.too_id)
+
+                    self.too_db.send_final_notice_email(self.too_id, sed_data=sed_data)
+
                 return
             else:
                 self.logger.debug(f"input_images: {self.input_images}")
@@ -205,6 +221,18 @@ class Photometry(BaseSetup, DatabaseHandler):
 
             self.update_pipeline_progress(sum(self._progress_by_mode), f"{self._photometry_mode}-completed")
 
+            if self.is_too and self.too_id is not None and self._photometry_mode == "difference_photometry":
+                sed_data = make_too_output(self.too_id, image_type="difference")
+                self.logger.info(f"ToO output are created.")
+                interim_notice = self.too_db.read_too_data_by_id(self.too_id).get("interim_notice")
+
+                if interim_notice == 0:
+                    self.too_db.send_interim_notice_email(self.too_id, sed_data=sed_data, dtype="difference")
+
+                self.too_db.mark_completed(self.too_id)
+
+                self.too_db.send_final_notice_email(self.too_id, sed_data=sed_data)
+
             self.logger.info(f"'Photometry' is Completed in {time_diff_in_seconds(st)} seconds")
             self.logger.debug(MemoryMonitor.log_memory_usage)
         except Exception as e:
@@ -224,6 +252,7 @@ class Photometry(BaseSetup, DatabaseHandler):
                 single_config,  # self.config,
                 self.logger,
                 ref_catalog=self.ref_catalog,
+                reset_count=i == 0,
             )
             task_id = self.queue.add_task(
                 phot_single.run,
@@ -247,6 +276,7 @@ class Photometry(BaseSetup, DatabaseHandler):
                 ref_catalog=self.ref_catalog,
                 total_image=len(self.input_images),
                 difference_photometry=diff_phot,
+                reset_count=i == 0,
             ).run(overwrite=overwrite)
 
             self.update_pipeline_progress(
@@ -290,8 +320,12 @@ class PhotometrySingle:
         total_image: int = 1,
         check_filter=True,
         difference_photometry=False,
+        reset_count=False,
     ) -> None:
         """Initialize PhotometrySingle instance."""
+
+        if reset_count:
+            self._id_counter = itertools.count(1)
 
         if hasattr(config, "config"):
             config = config.config
@@ -465,7 +499,7 @@ class PhotometrySingle:
                 self.logger.info("Calculating seeing from a pre-existing 'prep' catalog")
                 self.logger.debug(f"Loading prep catalog: {prep_cat}")
                 if prep_cat.endswith(".fits"):
-                    obs_src_table = Table.read(prep_cat, hdu=2)
+                    obs_src_table = Table.read(prep_cat, hdu=2, format="fits")
                 elif prep_cat.endswith(".cat"):
                     obs_src_table = Table.read(prep_cat, format="ascii.sextractor")
                 else:
@@ -734,6 +768,7 @@ class PhotometrySingle:
 
             input_arr = np.array(zps[~mask].value)
             if len(input_arr) == 0:
+                self.add_error()
                 self.logger.error(f"No valid zero point sources found for {mag_key}. Skipping.")
                 self.logger.debug(f"input_arr: {input_arr}")
                 continue
@@ -843,6 +878,7 @@ class PhotometrySingle:
 
             if len(test_dicts) == 0:
                 zp, zperr = phot_utils.get_zp_from_dict(dicts, alleged_filter)
+
                 self.logger.warning(
                     f"Filter determination process eliminated all candidates. Falling back to header filter '{alleged_filter}' (zp = {zp:.2f}±{zperr:.2f})"
                 )
@@ -854,8 +890,9 @@ class PhotometrySingle:
             plot_filter_check(self, alleged_filter, inferred_filter, narrowed_filters, filters_checked, zps, zperrs)
 
         if alleged_filter != inferred_filter:
+
             self.logger.warning(f"The filter in header ({alleged_filter}) is not the best matching ({inferred_filter})")
-            self.logger.warning(f"The best-matching filter is {inferred_filter} with zp = {zp}+/-{zperr}")
+            self.logger.warning(f"The best-matching filter is {inferred_filter} with zp = {zp:.2f}±{zperr:.2f}")
             orig_zp, orig_zperr = phot_utils.get_zp_from_dict(dicts, alleged_filter)
             self.logger.warning(f"The original filter is {alleged_filter} with zp = {orig_zp:.2f}±{orig_zperr:.2f}")
         else:
@@ -885,6 +922,7 @@ class PhotometrySingle:
             )
             return ALL_FILTERS
         except Exception as e:
+            self.add_error()
             self.logger.error(f"Fetching active filters failed. Using all default filters: {e}", exc_info=True)
             return ALL_FILTERS
 

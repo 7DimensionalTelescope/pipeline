@@ -42,7 +42,7 @@ class BaseConfig(ABC):
         return self
 
     @classmethod
-    def from_config(cls, input: str, write=True, **kwargs):
+    def from_config(cls, input: str, write=True, is_too=False, **kwargs):
         """
         Currently only used in wrapper.py
         Much faster (4.8 ms) than SciProcConfiguration(input, write=write) (36 ms)
@@ -50,13 +50,16 @@ class BaseConfig(ABC):
         to disk during initialization.
         """
         # return cls(input, write=write, **kwargs)
-        self = cls.__new__(cls)
-        self._load_config(config_source=input)
+        self = cls.__new__(
+            cls,
+            is_too=is_too,
+        )
+        self._load_config(config_source=input, is_too=is_too)
         self.config_file = input
         # initialize PathHandler with the first group of input images
         input_dict = self.config.input.to_dict()
         input_images = next(iter(input_dict.values())) or None  # if empty, use None
-        self.path = PathHandler(input_images)
+        self.path = PathHandler(input_images, is_too=is_too)
         self.write = write
         self._initialized = True
         return self

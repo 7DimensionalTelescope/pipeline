@@ -10,11 +10,12 @@ import itertools
 import subprocess
 from functools import partial
 
+from ..utils import time_diff_in_seconds
+
 from .memory import MemoryMonitor
 from .logger import Logger
 from .task import Task, Priority
-from ..utils import time_diff_in_seconds
-
+from .scheduler import Scheduler
 
 signal.signal(signal.SIGINT, signal.SIG_IGN)
 mp.set_start_method("spawn", force=True)
@@ -95,7 +96,7 @@ class QueueManager:
         self.logger.debug(f"Initialize QueueManager.")
 
         # Default CPU allocation
-        self.total_cpu_worker = max_workers or 10
+        self.total_cpu_worker = max_workers or 40
 
         self.lock = threading.Lock()
 
@@ -124,6 +125,9 @@ class QueueManager:
         self.process_timeout = process_timeout
         self._pq_counter = itertools.count()  # tie-breaker for priority queue
         self.logger.debug("QueueManager Initialization complete")
+        self.scheduler_default_worker_cost = kwargs.get("scheduler_default_worker_cost", 1)
+        self.scheduler_preprocess_worker_cost = kwargs.get("scheduler_preprocess_worker_cost", 4)
+        self.scheduler_preprocess_identifier = kwargs.get("scheduler_preprocess_identifier", "preprocess")
 
     def _start_workers(self, process_type="scheduler"):
         """
@@ -268,7 +272,7 @@ class QueueManager:
 
         return task_id
 
-    def add_scheduler(self, scheduler):
+    def add_scheduler(self, scheduler: Scheduler):
         """
         Add a scheduler for subprocess management.
 
@@ -279,6 +283,33 @@ class QueueManager:
         self._active_processes = []
         if not (hasattr(self, "processing_thread")):
             self._start_workers(process_type="scheduler")
+
+    def _determine_worker_cost(self, cmd: Optional[List[str]]) -> int:
+        """
+        Determine how many worker slots a command should consume.
+        """
+        if not cmd:
+            return self.scheduler_default_worker_cost
+
+        if self.scheduler_preprocess_identifier in cmd:
+            return self.scheduler_preprocess_worker_cost
+
+        return self.scheduler_default_worker_cost
+
+    def _calculate_active_worker_usage(self) -> int:
+        """
+        Calculate the number of worker slots currently in use.
+        """
+        if not hasattr(self, "_active_processes"):
+            return 0
+
+        usage = 0
+        for process in self._active_processes:
+            if len(process) >= 4:
+                usage += process[3]
+            else:
+                usage += self.scheduler_default_worker_cost
+        return usage
 
     ######### Task processing #########
     def _task_worker(self):
@@ -408,7 +439,7 @@ class QueueManager:
                 time.sleep(0.2)
                 continue
 
-    def _create_subprocess(self, cmd):
+    def _create_subprocess(self, cmd, priority="normal"):
         """
         Create subprocess with proper configuration and error handling.
 
@@ -422,6 +453,11 @@ class QueueManager:
             RuntimeError: If process fails to start
         """
         try:
+            if priority == "high":
+                cmd = ["nice", "-n", "-10"] + cmd
+            elif priority == "low":
+                cmd = ["nice", "-n", "10"] + cmd
+
             proc = subprocess.Popen(
                 cmd,
                 start_new_session=True,  # Ensure clean process group
@@ -449,36 +485,47 @@ class QueueManager:
         from the scheduler and launching them as separate processes.
         """
 
+        pending_task = None
+
         while not self._abrupt_stop_requested.is_set():
             try:
                 self._check_abrupt_stop()
 
-                with self.lock:  # Thread-safe access to active processes
-                    if len(self._active_processes) > self.total_cpu_worker:
+                if pending_task is None:
+                    try:
+                        cmd, priority = self.scheduler.get_next_task()
+                    except Exception:
                         time.sleep(1)
                         continue
 
-                try:
-                    cmd = self.scheduler.get_next_task()
-                except:
-                    time.sleep(1)
+                    if cmd is None:
+                        time.sleep(1)
+                        continue
+
+                    worker_cost = self._determine_worker_cost(cmd)
+                    pending_task = (cmd, priority, worker_cost)
+
+                cmd, priority, worker_cost = pending_task
+
+                with self.lock:
+                    current_usage = self._calculate_active_worker_usage()
+
+                if current_usage + worker_cost > self.total_cpu_worker:
+                    time.sleep(0.5)
                     continue
 
-                if cmd is None:
-                    time.sleep(1)
-                    continue
-
                 try:
-                    proc = self._create_subprocess(cmd)
+                    proc = self._create_subprocess(cmd, priority=priority)
 
                     # Extract config path from command for tracking
                     config = cmd[cmd.index("-config") + 1] if "-config" in cmd else "unknown"
 
                     with self.lock:  # Thread-safe modification
-                        self._active_processes.append([config, proc, time.time()])
+                        self._active_processes.append([config, proc, time.time(), worker_cost])
 
                     self.logger.info(f"Process with {os.path.basename(config)} (PID = {proc.pid}) submitted.")
                     time.sleep(0.5)
+                    pending_task = None
 
                 except Exception as e:
                     import traceback
@@ -513,8 +560,8 @@ class QueueManager:
                 processes_to_remove = []
 
                 with self.lock:  # Thread-safe access
-                    for process in list(self._active_processes):  # (config_path, proc, start_time)
-                        config, proc, start_time = process
+                    for process in list(self._active_processes):  # (config_path, proc, start_time, cost)
+                        config, proc, start_time = process[:3]
 
                         if proc.poll() is not None:  # Process finished
                             pid = proc.pid
@@ -604,7 +651,7 @@ class QueueManager:
                     processes_to_check = list(self._active_processes)
 
                 for process in processes_to_check:
-                    config, proc, start_time = process
+                    config, proc, start_time = process[:3]
 
                     if proc.poll() is not None:
                         continue  # Process already finished
@@ -627,7 +674,7 @@ class QueueManager:
                                 self.logger.warning(f"Process {config} using {memory_mb:.0f}MB of memory")
 
                             # Check CPU usage over last 5 seconds
-                            cpu_percent = process_info.cpu_percent(interval=1)
+                            cpu_percent = process_info.cpu_percent(interval=0)
                             if cpu_percent > 400:  # Very high CPU usage
                                 self.logger.warning(f"Process {config} using {cpu_percent:.1f}% CPU")
 
@@ -677,7 +724,12 @@ class QueueManager:
 
             if self.ptype == "scheduler":
                 self.logger.info("Stopping all active subprocesses...")
-                for pid, proc in list(self._active_processes.items()):
+                with self.lock:
+                    active_processes = list(self._active_processes)
+
+                for process in active_processes:
+                    _, proc = process[:2]
+                    pid = proc.pid
                     try:
                         if proc.poll() is None:  # Still running
                             self.logger.info(f"Terminating process PID {pid}")
@@ -693,7 +745,9 @@ class QueueManager:
                     except Exception as e:
                         self.logger.error(f"Failed to stop PID {pid}: {e}")
                     finally:
-                        del self._active_processes[pid]
+                        with self.lock:
+                            if process in self._active_processes:
+                                self._active_processes.remove(process)
 
             elif self.ptype == "task":
                 # Clear queues
@@ -791,6 +845,12 @@ class QueueManager:
                     self.logger.info(MemoryMonitor.log_memory_usage)
                     time.sleep(60)
                 i += 1
+            from .utils import cleanup_memory
+
+            self.logger.info("All tasks completed")
+            self.logger.info(self.scheduler.report_number_of_tasks())
+            self.logger.info(MemoryMonitor.log_memory_usage)
+            cleanup_memory()
 
         elif self.ptype == "task":
 
@@ -861,7 +921,7 @@ class QueueManager:
             current_time = time.time()
 
             for process in self._active_processes:
-                config, proc, start_time = process
+                config, proc, start_time = process[:3]
                 runtime = current_time - start_time
 
                 process_info = {

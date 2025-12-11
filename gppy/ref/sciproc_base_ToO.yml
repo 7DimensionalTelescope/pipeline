@@ -1,22 +1,42 @@
-# sciproc_base.yml template for ToO operations. Lobotomized gpu support and high-demand calculations.
-# swap this file with sciproc_base.yml for ToO operations.
+# This is the base configuration for the daily processing with daily stacks
+# Also user-inputs use this by default
 
 name: 
 
 process_id:
 
+# obs:
+#   # OBS Info should be updated from header
+#   coherent_input:
+#   pixscale: 0.505  # arcsec/pix
+#   n_binning: 
+#   gain: 
+#   unit: 
+#   camera: 
+#   filter:
+#   obj:
+#   nightdate:  # date of datetime - 12h. dirname of obsdata
+#   obstime:  # UTC
+#   ra:
+#   dec:
+#   exptime:
+
 input: 
   calibrated_images: 
   processed_dir:
   stacked_image:
+  difference_image:
 
 flag:
+  # configuration: false
+  # preprocess: false
   astrometry: false
   single_photometry: false
   combine: false
   # combined_astrometry: false
   combined_photometry: false
   subtraction: false
+  difference_photometry: false
 
 qa:
   pa:
@@ -24,18 +44,18 @@ qa:
   seeing:
 
 info:
-  version: '2.0'  # legacy gppy-gpu is 1.0
+  version: '1.0.0'  # version up with ANY change in scientific config. e.g., prep.sex
   project: 7DT/7DS
   creation_datetime:
   last_update_datetime:
 
 settings:
-  ToO: False
+  is_too: true
   is_pipeline: false
   obsmode:  # Deep Spec Color Search Single
-  header_pad: 7  # assuming final header is 5 * 2880 bytes long. 6 to include polygon info
+  header_pad: 9  # assuming final header is 8 * 2880 bytes long.
   combine:
-  gpu_enabled: False
+  gpu_enabled: True
   verbose_gpu: True  # use logger later
   
 logging:
@@ -48,12 +68,13 @@ logging:
 
 astrometry:
   input_images:
+  eval_match_radius: 5.0  # 10.0
   path:
     ref_ris_dir: "/lyman/data1/factory/catalog/gaia_dr3_7DT"
     ref_query_dir: "/lyman/data1/factory/ref_scamp"
   ahead_file: "/data/pipeline_reform/dhhyun_lab/scamptest/ahead/calib_7DT11_T07304_20250115_050155_g_60_nocrval.ahead"
   local_astref: 
-  scamp_timeout: 30
+  scamp_timeout: 60  #30
   solvefield_timeout: 60
 
 photometry:
@@ -88,7 +109,7 @@ imstack:
   # path:
   #   ref_image_dir: "/lyman/data1/factory/ref_frame"
   stacked_image:  # output stacked image
-  gpu: False
+  gpu: True
   device: 0
   zp_key: 'ZP_AUTO'
   # images_to_combine:
@@ -96,11 +117,13 @@ imstack:
   weight_map: true
   joint_wcs: False
   apply_bpmask: False
-  interp_type: 
+  interp_type: 'median'
   convolve: 
   target_seeing:  # auto if it's empty or smaller than max seeing
   propagate_mask: False
 
 imsubtract:
-  input_images:
+  input_image:
   reference_image:
+  # input_mask:
+  # template_mask:

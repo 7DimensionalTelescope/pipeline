@@ -45,11 +45,18 @@ class SeparationStats:
     def fits_header_cards(self) -> List[Tuple[str, float, str]]:
         """list of (KEY, VALUE, COMMENT) tuples for astropy.io.fits.Header"""
         # len(KEY) max is 8; len(COMMENT) max is 47
-        return [
-            (self.prefix[: (8 - len(f.name))] + f.name, v, f"{f.metadata.get('COMMENT', '')} {self.description}"[:47])
-            for f in fields(self)
-            if (f.name != "prefix" and f.name != "description" and (v := getattr(self, f.name)) is not None)
-        ]
+        if self is None:
+            return []
+        else:
+            return [
+                (
+                    self.prefix[: (8 - len(f.name))] + f.name,
+                    v,
+                    f"{f.metadata.get('COMMENT', '')} {self.description}"[:47],
+                )
+                for f in fields(self)
+                if (f.name != "prefix" and f.name != "description" and (v := getattr(self, f.name)) is not None)
+            ]
 
 
 @dataclass(frozen=True)
@@ -68,11 +75,14 @@ class PSFStats:
 
     @property
     def fits_header_cards(self) -> List[Tuple[str, float, str]]:
-        return [
-            ((self.prefix + f.name)[:8], v, f"{f.metadata.get('COMMENT', '')} {self.description}"[:47])
-            for f in fields(self)
-            if (f.name != "prefix" and f.name != "description" and (v := getattr(self, f.name)) is not None)
-        ]
+        if self is None:
+            return []
+        else:
+            return [
+                ((self.prefix + f.name)[:8], v, f"{f.metadata.get('COMMENT', '')} {self.description}"[:47])
+                for f in fields(self)
+                if (f.name != "prefix" and f.name != "description" and (v := getattr(self, f.name)) is not None)
+            ]
 
 
 @dataclass(frozen=True)
@@ -88,11 +98,14 @@ class CornerStats:
 
     @property
     def fits_header_cards(self) -> List[Tuple[str, float, str]]:
-        return [
-            (f.name, v, f"{f.metadata.get('COMMENT', '')}"[:47])
-            for f in fields(self)
-            if (v := getattr(self, f.name)) is not None
-        ]
+        if self is None:
+            return []
+        else:
+            return [
+                (f.name, v, f"{f.metadata.get('COMMENT', '')}"[:47])
+                for f in fields(self)
+                if (v := getattr(self, f.name)) is not None
+            ]
 
     @classmethod
     def from_matched_catalog(cls, matched_catalog: Table, matched_ids: list[int]) -> CornerStats:
@@ -141,24 +154,38 @@ class CornerStats:
 
 @dataclass(frozen=True)
 class BinStats:
+    N: int
     sep_stats: SeparationStats
     psf_stats: PSFStats
 
     @property
     def fits_header_cards(self) -> List[Tuple[str, float, str]]:
-        return self.sep_stats.fits_header_cards + self.psf_stats.fits_header_cards
+        if self is None:
+            return []
+        else:
+            return self.sep_stats.fits_header_cards + self.psf_stats.fits_header_cards
 
     @classmethod
-    def from_binned_catalog(cls, binned_catalog: Table) -> BinStats:
+    def from_binned_catalog(cls, binned_catalog: Table, bin_idx: int = None) -> BinStats:
 
-        bin_idx = binned_catalog["RADIAL_BIN"][0]  # 0, 1, 2
-        binned_catalog = binned_catalog[~binned_catalog["separation"].mask]  # filter out ref-only rows
+        if bin_idx is None:
+            bin_idx = binned_catalog["RADIAL_BIN"][0]  # 0, 1, 2
 
-        if len(binned_catalog) == 0:
+        cls.N = len(binned_catalog)
+
+        if cls.N == 0:
             return cls(
+                N=cls.N,
                 sep_stats=SeparationStats(prefix=f"BIN{bin_idx}"),
-                psf_stats=PSFStats(prefix=f"BIN{bin_idx}"),
+                psf_stats=PSFStats(
+                    prefix=f"BIN{bin_idx}",
+                    description=f"in BIN{bin_idx} from reference [pix]",
+                    FWHM=None,
+                    ELLIP=None,
+                ),
             )
+
+        binned_catalog = binned_catalog[~binned_catalog["separation"].mask]  # filter out ref-only rows
 
         sep = binned_catalog["separation"]
         sep_stats = SeparationStats(
@@ -177,6 +204,7 @@ class BinStats:
         )
 
         return cls(
+            N=len(fwhm),
             sep_stats=sep_stats,
             psf_stats=psf_stats,
         )
@@ -192,7 +220,10 @@ class RadialStats:
 
     @property
     def fits_header_cards(self) -> List[Tuple[str, float, str]]:
-        return self.BIN0.fits_header_cards + self.BIN1.fits_header_cards + self.BIN2.fits_header_cards
+        if self is None:
+            return []
+        else:
+            return self.BIN0.fits_header_cards + self.BIN1.fits_header_cards + self.BIN2.fits_header_cards
 
     @classmethod
     def from_matched_catalog(cls, matched_catalog: Table, naxis1: int, naxis2: int) -> RadialStats:
@@ -201,22 +232,20 @@ class RadialStats:
         #     return RadialStats(
         #         RSEP0P95=np.nan,
         #     )
-
         x = matched_catalog["X_IMAGE"]
         y = matched_catalog["Y_IMAGE"]
         x0 = (naxis1 + 1) / 2.0  # match sextractor convention (1-starting index)
         y0 = (naxis2 + 1) / 2.0
         r = np.hypot(x - x0, y - y0)  # radial distance in pixels
-
         r_max = max(naxis1, naxis2) / 2
         r_edges = r_max * np.sqrt(np.linspace(0, 1, 4))  # square equal spacing for 2nd order aberrations
         radial_bin = np.digitize(r, r_edges[1:-1])  # use inner edges for splitting
         matched_catalog["RADIAL_BIN"] = radial_bin  # 0, 1, 2
 
         return RadialStats(
-            BIN0=BinStats.from_binned_catalog(matched_catalog[radial_bin == 0]),
-            BIN1=BinStats.from_binned_catalog(matched_catalog[radial_bin == 1]),
-            BIN2=BinStats.from_binned_catalog(matched_catalog[radial_bin == 2]),
+            BIN0=BinStats.from_binned_catalog(matched_catalog[radial_bin == 0], bin_idx=0),
+            BIN1=BinStats.from_binned_catalog(matched_catalog[radial_bin == 1], bin_idx=1),
+            BIN2=BinStats.from_binned_catalog(matched_catalog[radial_bin == 2], bin_idx=2),
         )
 
 

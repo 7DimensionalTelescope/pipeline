@@ -2,6 +2,7 @@ from typing import Optional, Dict, Any, List, Union
 from astropy.io import fits
 from .pipeline import PipelineDB, PipelineDBError
 from .qa import QADB, QADBError
+from .too import TooDB, TooDBError
 from .table import PipelineData, QAData
 import os
 
@@ -13,7 +14,7 @@ class DatabaseHandler:
     Manages both PipelineDB and QADB operations independently.
     """
 
-    def __init__(self, db_params: Optional[Dict[str, Any]] = None, add_database: bool = True):
+    def __init__(self, db_params: Optional[Dict[str, Any]] = None, add_database: bool = True, is_too: bool = False):
         """
         Initialize the database handler.
 
@@ -21,10 +22,18 @@ class DatabaseHandler:
             db_params: Database connection parameters
             add_database: Whether to initialize database connection
         """
-        self.pipeline_db = PipelineDB(db_params) if add_database else None
-        self.qa_db = QADB(db_params) if add_database else None
-        self.pipeline_id = None
-        self._logger = None
+        self.is_too = is_too
+        if is_too:
+            self.pipeline_db = None
+            self.qa_db = None
+            self.pipeline_id = None
+            self._logger = None
+            self.too_db = TooDB() if add_database else None
+        else:
+            self.pipeline_db = PipelineDB(db_params) if add_database else None
+            self.qa_db = QADB(db_params) if add_database else None
+            self.pipeline_id = None
+            self._logger = None
 
     def set_logger(self, logger):
         """Set logger for database operations"""
@@ -64,7 +73,11 @@ class DatabaseHandler:
         Returns:
             Pipeline ID if successful, None otherwise
         """
-        if self.pipeline_db is None:
+        if self.is_too and self.too_db is not None:
+            self.too_db.read_too_data(config.name)
+            self.too_id = self.too_db.too_id
+            return None
+        elif self.pipeline_db is None:
             return None
 
         try:
@@ -193,7 +206,14 @@ class DatabaseHandler:
         Returns:
             True if successful, False otherwise
         """
-        if self.pipeline_id is None or self.pipeline_db is None:
+        if self.is_too and self.too_db is not None:
+            try:
+                self.too_db.update_too_progress(self.too_id, progress, status)
+                return True
+            except Exception as e:
+                self._log_warning(f"Failed to update ToO progress: {e}")
+                return False
+        elif self.pipeline_id is None or self.pipeline_db is None:
             return False
 
         try:
@@ -394,7 +414,7 @@ class DatabaseHandler:
             self.pipeline_id,
             os.path.basename(output_file),
         )
-        
+
         # If unit is not in header, get it from pipeline record
         if qa_data.unit is None and self.pipeline_id is not None:
             pipeline_record = self.pipeline_db.read_pipeline_data(pipeline_id=self.pipeline_id)
@@ -473,7 +493,10 @@ class DatabaseHandler:
     @property
     def is_connected(self) -> bool:
         """Check if database is connected"""
-        return self.pipeline_db is not None and self.qa_db is not None
+        if self.is_too:
+            return True
+        else:
+            return self.pipeline_db is not None and self.qa_db is not None
 
     @property
     def has_pipeline_id(self) -> bool:

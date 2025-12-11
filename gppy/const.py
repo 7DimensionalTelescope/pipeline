@@ -9,6 +9,9 @@ RAWDATA_DIR = os.environ.get("RAWDATA_DIR") or "/lyman/data1/obsdata"  # , "/lym
 FACTORY_DIR = os.environ.get("FACTORY_DIR") or "/lyman/data2/factory"
 MASTER_FRAME_DIR = os.environ.get("MASTER_FRAME_DIR") or "/lyman/data2/master_frame"
 PROCESSED_DIR = os.environ.get("PROCESSED_DIR") or "/lyman/data2/processed"
+TOO_DIR = os.environ.get("TOO_DIR") or "/lyman/data2/too"
+TOO_FACTORY_DIR = os.environ.get("TOO_FACTORY_DIR") or "/lyman/data2/too_factory"
+
 STACKED_DIR = os.environ.get("STACKED_DIR") or "/lyman/data2/stacked"
 SLACK_TOKEN = os.environ.get("SLACK_TOKEN", None)
 INSTRUM_STATUS_DICT = os.environ.get("INSTRUM_STATUS_DICT") or (
@@ -28,7 +31,7 @@ REF_IMAGE_DIR = "/lyman/data1/factory/ref_frame"
 # Internal paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REF_DIR = os.path.join(SCRIPT_DIR, "ref")
-PIPELINE_DIRS = {RAWDATA_DIR, FACTORY_DIR, MASTER_FRAME_DIR, PROCESSED_DIR, STACKED_DIR}
+PIPELINE_DIRS = {RAWDATA_DIR, FACTORY_DIR, MASTER_FRAME_DIR, PROCESSED_DIR, STACKED_DIR, TOO_DIR, TOO_FACTORY_DIR}
 
 
 # Image grouping structure
@@ -72,6 +75,11 @@ MAX_WORKERS = 128
 
 # Storage Configuration
 DISK_CHANGE_DATE = "20260101"
+
+EMAIL_USER = os.environ.get("EMAIL_USER")
+EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
+
+DEFAULT_RECIPIENT = os.environ.get("DEFAULT_RECIPIENT")
 
 
 class PipelineError(Exception):

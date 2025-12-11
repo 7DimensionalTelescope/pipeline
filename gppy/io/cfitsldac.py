@@ -5,8 +5,37 @@ from astropy.io import fits
 from astropy.table import Table
 
 # 1) Load the shared library
+# Set library path to ensure cfitsio can be found
+cfitsio_paths = [
+    "/usr/local/cfitsio/lib",
+    "/usr/lib/x86_64-linux-gnu",
+]
+for path in cfitsio_paths:
+    if os.path.exists(path):
+        os.environ.setdefault("LD_LIBRARY_PATH", "")
+        if path not in os.environ["LD_LIBRARY_PATH"]:
+            os.environ["LD_LIBRARY_PATH"] = f"{path}:{os.environ['LD_LIBRARY_PATH']}"
+
 libname = os.path.join(os.path.dirname(__file__), "libwrite_ldac.so")
-lib = ctypes.CDLL(libname)
+try:
+    lib = ctypes.CDLL(libname)
+except OSError as e:
+    # If loading fails, try with explicit library path
+    import ctypes.util
+    # Try to find cfitsio library
+    cfitsio_lib = None
+    for path in cfitsio_paths:
+        cfitsio_candidate = os.path.join(path, "libcfitsio.so.10")
+        if os.path.exists(cfitsio_candidate):
+            cfitsio_lib = cfitsio_candidate
+            break
+    
+    if cfitsio_lib:
+        # Preload cfitsio to satisfy dependencies
+        ctypes.CDLL(cfitsio_lib, mode=ctypes.RTLD_GLOBAL)
+        lib = ctypes.CDLL(libname)
+    else:
+        raise OSError(f"Failed to load {libname}: {e}. Also could not find libcfitsio.so.10")
 
 # 2) Declare arg/return types
 # int write_ldac_from_arrays(const char *cards80, long ncards,

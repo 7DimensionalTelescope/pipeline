@@ -574,7 +574,12 @@ class LockingFileHandler(logging.FileHandler):
             self.stream.write(msg + self.terminator)
             self.flush()
             if self.stream and not self.stream.closed:
-                os.fsync(self.stream.fileno())
+                try:
+                    os.fsync(self.stream.fileno())
+                except (OSError, IOError) as e:
+                    # Ignore fsync errors (can happen with network filesystems or disk issues)
+                    # The data has already been flushed, so logging can continue
+                    pass
 
         except Exception as e:
             self.handleError(record)

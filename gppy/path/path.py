@@ -41,7 +41,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
     Currently lacks masterframe support
     """
 
-    def __init__(self, input: Union[str, Path, list[str | Path]] = None, *, working_dir=None):
+    def __init__(self, input: Union[str, Path, list[str | Path]] = None, *, working_dir=None, is_too=False):
         self._name_cache = {}  # Cache for NameHandler properties
         self._file_indep_initialized = False
         self._file_dep_initialized = False
@@ -50,9 +50,9 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         self._input_files: list[str] = None
 
         self._handle_input(input)
-        self.select_output_dir(working_dir=working_dir)
+        self.select_output_dir(working_dir=working_dir, is_too=is_too)
 
-        self.define_file_independent_paths()
+        self.define_file_independent_paths(is_too=is_too)
 
         if not self._file_dep_initialized and self._input_files:
             self.define_file_dependent_paths()
@@ -244,7 +244,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         else:
             return Path(path).exists()
 
-    def select_output_dir(self, working_dir=None):
+    def select_output_dir(self, working_dir=None, is_too=False):
         """
         Vectorized output directory selection
         CWD if user-input. Assume pipeline paths otherwise.
@@ -264,6 +264,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
 
             for i, input_file in enumerate(self._input_files):
                 file_dir = str(Path(input_file).absolute().parent)
+                
                 not_pipeline_dir = not any(s in file_dir for s in const.PIPELINE_DIRS)
 
                 if working_dir or not_pipeline_dir:
@@ -271,6 +272,9 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
                     # ad hoc for diffim input only
                     if os.path.basename(output_parent_dir) == DIFFIM_DIRNAME:
                         output_parent_dir = os.path.dirname(output_parent_dir)
+                    if output_parent_dir.endswith("singles"):
+                        output_parent_dir = str(Path(output_parent_dir).parent)
+
                     self._output_parent_dir.append(output_parent_dir)
                     self._factory_parent_dir.append(os.path.join(output_parent_dir, TMP_DIRNAME))
                     self._is_pipeline.append(False)
@@ -284,10 +288,16 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
                         current_nightdate = nightdate or date.today().strftime("%Y%m%d")
 
                     if current_nightdate < const.DISK_CHANGE_DATE:
-                        output_parent_dir = const.PROCESSED_DIR
-                        self._output_parent_dir.append(output_parent_dir)
-                        self._factory_parent_dir.append(const.FACTORY_DIR)
-                        self._is_pipeline.append(True)
+                        if is_too:
+                            output_parent_dir = const.TOO_DIR
+                            self._output_parent_dir.append(output_parent_dir)
+                            self._factory_parent_dir.append(const.TOO_FACTORY_DIR)
+                            self._is_pipeline.append(True)
+                        else:
+                            output_parent_dir = const.PROCESSED_DIR
+                            self._output_parent_dir.append(output_parent_dir)
+                            self._factory_parent_dir.append(const.FACTORY_DIR)
+                            self._is_pipeline.append(True)
                     else:
                         raise ValueError(
                             f"nightdate cap reached for file {input_file}: consider moving to another disk."
@@ -350,11 +360,16 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         """Safe from AutoMkdirMixin as it's a bool."""
         return self._file_dep_initialized
 
-    def define_file_independent_paths(self):
+    def define_file_independent_paths(self, is_too=False):
         self.ref_sex_dir = os.path.join(const.REF_DIR, "srcExt")
 
-        self.sciproc_base_yml = os.path.join(const.REF_DIR, "sciproc_base.yml")
-        self.preproc_base_yml = os.path.join(const.REF_DIR, "preproc_base.yml")
+        if is_too:
+            self.preproc_base_yml = os.path.join(const.REF_DIR, "preproc_base_ToO.yml")
+            self.sciproc_base_yml = os.path.join(const.REF_DIR, "sciproc_base_ToO.yml")
+        else:
+            self.preproc_base_yml = os.path.join(const.REF_DIR, "preproc_base.yml")
+            self.sciproc_base_yml = os.path.join(const.REF_DIR, "sciproc_base.yml")
+
         self.changelog_dir = os.path.join(const.REF_DIR, "InstrumEvent")
         # self.instrum_status_dict = const.INSTRUM_STATUS_DICT
 
@@ -634,14 +649,17 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
     #     return result
 
     @classmethod
-    def take_raw_inventory(cls, files: list[str], lone_calib=True, ignore_mult_date=False):
+    def take_raw_inventory(cls, files: list[str], lone_calib=True, ignore_mult_date=False, is_too=False):
         return cls.build_preproc_input(
-            *NameHandler.find_calib_for_sci(files), lone_calib=lone_calib, ignore_mult_date=ignore_mult_date
+            *NameHandler.find_calib_for_sci(files),
+            lone_calib=lone_calib,
+            ignore_mult_date=ignore_mult_date,
+            is_too=is_too,
         )
 
     @classmethod
     def build_preproc_input(
-        cls, sci_files, on_date_calib, off_date_calib=None, lone_calib=True, ignore_mult_date=False
+        cls, sci_files, on_date_calib, off_date_calib=None, lone_calib=True, ignore_mult_date=False, is_too=False
     ):
         """
         Group science files by their associated on-date calibration sets.
@@ -722,7 +740,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
             for sci_group in entry["sci"]:
                 sci_group = sorted(sci_group)
                 key = get_dict_key(sci_group)
-                sci_dict[key] = (sci_group, atleast_1d(cls(sci_group).conjugate))
+                sci_dict[key] = (sci_group, atleast_1d(cls(sci_group, is_too=is_too).conjugate))
 
             raw_bias = entry["bias"]
             raw_dark = entry["dark"]

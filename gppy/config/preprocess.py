@@ -19,11 +19,12 @@ class PreprocConfiguration(BaseConfig):
         write=True,
         overwrite=False,
         verbose=True,
+        is_too=False,
         **kwargs,
     ):
         st = time.time()
         self.write = write
-        self._handle_input(input, logger, verbose, **kwargs)
+        self._handle_input(input, logger, verbose, is_too=is_too, **kwargs)
 
         if not self._initialized:
             self.logger.info("Initializing configuration")
@@ -78,7 +79,7 @@ class PreprocConfiguration(BaseConfig):
         self.config.input.raw_dir = self.input_dir
         self._initialized = True
 
-    def _handle_input(self, input, logger, verbose, **kwargs):
+    def _handle_input(self, input, logger, verbose, is_too=False, **kwargs):
 
         if isinstance(input, list):  # List of FITS files
             if len(input) < 1:
@@ -87,7 +88,7 @@ class PreprocConfiguration(BaseConfig):
             # sci_images = PathHandler(input).pick_type("science")
             # print(sci_images)
             # self.path = PathHandler(sorted(sci_images)[-1])  # in case of multiple dates, use the later date
-            self.path = PathHandler(input)  # in case of multiple dates, use the later date
+            self.path = PathHandler(input, is_too=is_too)  # in case of multiple dates, use the later date
             config_source = self.path.preproc_base_yml
             if not isinstance(config_source, str):
                 raise ValueError(f"PreprocConfiguration ill-defined: {config_source}")

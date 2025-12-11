@@ -27,11 +27,40 @@ sig_rp_squared_kernel = cp.ElementwiseKernel(
     name="sig_rp_squared_kernel",
 )
 
+# Combined kernel that does everything in one pass (most efficient)
+weight_combined_kernel = cp.ElementwiseKernel(
+    in_params="T sci, T flat, T dark, T gain, T sig_z, T sig_zm, T sig_dm_squared, T f_m, T sig_fm, T sig_b_squared, bool weight",
+    out_params="T out",
+    operation="""
+    // Step 1: compute sig_r_squared
+    T corrected_signal = sci * flat + dark;
+    T clipped_signal = corrected_signal > 0 ? corrected_signal : 0;
+    T sig_r_squared = clipped_signal / gain + sig_z * sig_z;
+    
+    // Step 2: compute sig_rp_squared
+    T f_m_sq = f_m * f_m;
+    T sig_zm_sq = sig_zm * sig_zm;
+    T sig_fm_sq = sig_fm * sig_fm;
+    T r_p_sq = sci * sci;
+    T sig_rp_squared = (sig_r_squared + sig_zm_sq + sig_dm_squared) / f_m_sq
+                      + r_p_sq * sig_fm_sq / f_m_sq;
+    
+    // Step 3: compute final weight
+    T sum = sig_rp_squared + sig_b_squared;
+    if (weight) {
+        out = 1.0 / sum;
+    } else {
+        out = sqrt(sum);
+    }
+    """,
+    name="weight_combined_kernel",
+)
+
 
 def calc_weight(images, d_m, f_m, sig_z, sig_f, p_d, p_z, p_f, egain, weight=True, device=None):
 
     with cp.cuda.Device(device):
-        sig_b = np.empty(d_m.shape, dtype=np.float32)
+        sig_b = np.zeros(d_m.shape, dtype=np.float32)
 
         c_d_m, c_f_m = cp.asarray(d_m).astype(cp.float32), cp.asarray(f_m).astype(cp.float32)
 
@@ -41,38 +70,32 @@ def calc_weight(images, d_m, f_m, sig_z, sig_f, p_d, p_z, p_f, egain, weight=Tru
             cp.asarray(sig_f).astype(cp.float32),
         )
 
-        data = [fits.getdata(o).astype(np.float32) for o in images]
-
-        c_r_p = cp.asarray(data)
-        c_r_p = c_r_p.astype(cp.float32)
+        host_images = [fits.getdata(o).astype(np.float32) for o in images]
+        c_r_p = cp.asarray(host_images, dtype=cp.float32)
+        del host_images
 
         c_sig_zm = c_sig_z / cp.sqrt(cp.float32(p_z))
         c_sig_dm_squared = (c_d_m / egain + (1 + 1 / cp.float32(p_z)) * c_sig_z**2) / cp.float32(p_d)
         c_sig_fm = c_sig_f / cp.sqrt(cp.float32(p_f))
 
-        c_sig_r_squared = sig_r_kernel(c_r_p, c_f_m, c_d_m, egain, c_sig_z)
-        c_sig_rp_squared = sig_rp_squared_kernel(c_sig_r_squared, c_sig_zm, c_sig_dm_squared, c_f_m, c_r_p, c_sig_fm)
+        # Use optimized combined kernel (single pass, most efficient)
+        c_weight = weight_combined_kernel(
+            c_r_p, c_f_m, c_d_m, egain, c_sig_z, c_sig_zm, c_sig_dm_squared, c_f_m, c_sig_fm, c_sig_b**2, weight
+        )
 
-        if weight:
-            c_weight = 1 / (c_sig_rp_squared + c_sig_b**2)
-        else:
-            c_weight = cp.sqrt(c_sig_rp_squared + c_sig_b**2)  # named weight, but sigma
-
-        for i in range(len(data)):
-            data[i][:] = cp.asnumpy(c_weight[i])
+        weight_results = cp.asnumpy(c_weight)
 
         del c_d_m, c_f_m, c_sig_b, c_sig_z, c_sig_f, c_r_p, c_weight
         del c_sig_zm, c_sig_dm_squared, c_sig_fm
-        del c_sig_r_squared, c_sig_rp_squared
 
         cp.get_default_memory_pool().free_all_blocks()
 
     output_names = add_suffix(images, "weight")
 
     for i, o in enumerate(output_names):
-        fits.writeto(o, data[i], overwrite=True)
+        fits.writeto(o, weight_results[i], overwrite=True)
 
-    del data
+    del weight_results
 
 
 def add_suffix(filename: str | list[str], suffix):

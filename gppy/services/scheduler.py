@@ -1,5 +1,6 @@
 import json
 from collections import deque
+from ..config.utils import get_filter_from_config
 from ..const import SCRIPT_DIR, NUM_GPUS
 
 
@@ -25,7 +26,6 @@ class Scheduler:
     Args:
         dependent_configs (dict): Dictionary mapping master configs to their dependent configs
         independent_configs (list): List of independent configs that can run in parallel
-        preprocess_only (bool): If True, only run masterframe tasks (default: False)
         **kwargs: Additional configuration options including:
             - processes (list): List of processes to run (default: ["astrometry", "photometry", "combine", "subtract"])
             - overwrite (bool): Whether to overwrite existing results (default: False)
@@ -42,29 +42,38 @@ class Scheduler:
         ... )
     """
 
-    def __init__(self, dependent_configs={}, independent_configs=[], preprocess_only=False, **kwargs):
+    def __init__(self, dependent_configs={}, independent_configs=[], is_too=False, **kwargs):
         """
         kwargs can have preprocess_kwargs, processes, overwrite, device_id, max_devices
         """
 
         # Initialize master queue and status tracking
         masters = list(dependent_configs.keys())
-        self.master_queue = deque(masters)
         self.master_status = {self._key_from_path(p): None for p in masters}
 
-        if preprocess_only:
-            self.dependents = {}
-            self.independents = deque()
-            self.original_independents = set()
-            self.task_status = {self._key_from_path(p): None for p in masters}
-        else:
-            self.dependents = {self._key_from_path(k): v for k, v in dependent_configs.items()}
-            self.independents = deque(independent_configs)
-            self.original_independents = set(independent_configs)
-            dependent_paths = [p for group in dependent_configs.values() for p in group]
-            self.task_status = {
-                self._key_from_path(p): None for p in masters + dependent_paths + list(independent_configs)
-            }
+        # Sort dependents to prioritize broadband filters (not starting with "m")
+        sorted_dependents = {}
+        for k, v in dependent_configs.items():
+            sorted_deps = self._sort_configs_by_filter_priority(v)
+            sorted_dependents[self._key_from_path(k)] = sorted_deps
+
+        # Sort masters: those with broadband dependents first
+        sorted_masters = sorted(masters, key=lambda m: (not self._has_broadband_dependents(m, sorted_dependents), m))
+        self.master_queue = deque(sorted_masters)
+
+        # Rebuild dependents dictionary in the same order as sorted masters
+        ordered_dependents = {}
+        for master in sorted_masters:
+            master_key = self._key_from_path(master)
+            ordered_dependents[master_key] = sorted_dependents[master_key]
+        self.dependents = ordered_dependents
+
+        # Sort independents to prioritize broadband filters (not starting with "m")
+        sorted_independents = self._sort_configs_by_filter_priority(independent_configs)
+        self.independents = deque(sorted_independents)
+        self.original_independents = set(independent_configs)
+        dependent_paths = [p for group in dependent_configs.values() for p in group]
+        self.task_status = {self._key_from_path(p): None for p in masters + dependent_paths + list(independent_configs)}
 
         self.task_queue = deque()
         self.completed_tasks = set()
@@ -78,11 +87,48 @@ class Scheduler:
         self.device_id = kwargs.get("device_id", 0)
         self.max_devices = kwargs.get("max_devices", NUM_GPUS)  # default to maximum number of GPUs
 
+        self.is_too = is_too
+
         if not self.master_status:  # enqueue independents immediately if no masters
             while self.independents:
                 self.task_queue.append(self.independents.popleft())
 
-    def _key_from_path(self, path):
+            # Sort masters to prioritize those with broadband filter dependents
+
+    def _has_broadband_dependents(self, master_path, sorted_dependents):
+        """Check if a master has any broadband filter dependents."""
+        master_key = self._key_from_path(master_path)
+        dependents = sorted_dependents.get(master_key, [])
+        return any(self._is_broadband_filter(dep) for dep in dependents)
+
+    def _is_broadband_filter(self, config: str) -> bool:
+        """
+        Check if a config uses a broadband filter (not starting with "m").
+
+        Args:
+            config: Path to configuration file
+
+        Returns:
+            bool: True if filter is broadband (doesn't start with "m"), False otherwise
+        """
+        filter_name = get_filter_from_config(config)
+        if filter_name is None:
+            return False
+        return not filter_name.startswith("m")
+
+    def _sort_configs_by_filter_priority(self, configs):
+        """
+        Sort configs to prioritize broadband filters (not starting with "m").
+
+        Args:
+            configs: List or iterable of config paths
+
+        Returns:
+            list: Sorted list with broadband filters first
+        """
+        return sorted(configs, key=lambda config: (not self._is_broadband_filter(config), config))
+
+    def _key_from_path(self, path: str) -> str:
         """
         Extract master key like '2025-01-01_7DT11' from the full config path.
 
@@ -113,10 +159,14 @@ class Scheduler:
         if task_type == "Masterframe":
             cmd = [
                 f"{SCRIPT_DIR}/bin/preprocess",
-                "-config", config,
-                "-device", str(int(self.device_id % self.max_devices)),
+                "-config",
+                config,
+                "-device",
+                str(int(self.device_id % self.max_devices)),
                 "-make_plots",
-            ]  # fmt: skip
+            ]
+            if self.is_too: # fmt: skip
+                cmd.append("-is_too")
             if self.overwrite:
                 cmd.append("-overwrite")
 
@@ -125,10 +175,9 @@ class Scheduler:
 
             self.device_id += 1
         else:  # ScienceImage
-            cmd = [
-                f"{SCRIPT_DIR}/bin/data_reduction",
-                "-config", config,
-            ]  # fmt: skip
+            cmd = [f"{SCRIPT_DIR}/bin/data_reduction", "-config", config]
+            if self.is_too: # fmt: skip
+                cmd.append("-is_too")
             # Add processes as individual arguments
             cmd.append("-processes")
             cmd.extend(self.processes)
@@ -137,6 +186,92 @@ class Scheduler:
                 cmd.append("-overwrite")
 
         return cmd
+
+    def update_queue(self, key=None, success=True):
+        """
+        Update the task queue based on task completion.
+
+        Handles scheduling of dependent and independent tasks based on
+        master task completion status.
+
+        Args:
+            key (str, optional): The task key (extracted from task_path).
+                If None, updates queue based on current master_status.
+            success (bool): Whether the task completed successfully.
+                Only used when key is provided.
+
+        Notes:
+            - If key is provided: handles specific task completion
+            - If key is None: re-evaluates queue based on current master_status
+            - Schedules dependent tasks when master tasks succeed
+            - Marks dependent tasks as skipped when master tasks fail
+            - Marks all independents as skipped when any master fails
+            - Schedules independents only when all masters have succeeded
+        """
+        if key is None:
+            # Re-evaluate queue based on current master_status
+            all_masters_succeeded = all(v is True for v in self.master_status.values())
+            any_master_failed = any(v is False for v in self.master_status.values())
+
+            if any_master_failed:
+                # Mark all dependents of failed masters as skipped
+                for master_key, master_success in self.master_status.items():
+                    if master_success is False:
+                        for dep in self.dependents.get(master_key, []):
+                            dep_key = self._key_from_path(dep)
+                            if self.task_status.get(dep_key) is None:
+                                self.task_status[dep_key] = False
+                                self.skipped_tasks.add(dep)
+
+                # Mark all independents as skipped when any master fails
+                while self.independents:
+                    mu = self.independents.popleft()
+                    mu_key = self._key_from_path(mu)
+                    if self.task_status.get(mu_key) is None:
+                        self.task_status[mu_key] = False
+                        self.skipped_tasks.add(mu)
+
+            if all_masters_succeeded:
+                # Schedule all dependents of succeeded masters that haven't been scheduled yet
+                for master_key, master_success in self.master_status.items():
+                    if master_success is True:
+                        for dep in self.dependents.get(master_key, []):
+                            # Only add if not already in queue or completed
+                            dep_key = self._key_from_path(dep)
+                            if dep not in self.task_queue and dep_key not in self.completed_tasks:
+                                self.task_queue.append(dep)
+
+                # Schedule independents only if all masters succeeded
+                while self.independents:
+                    mu = self.independents.popleft()
+                    self.task_queue.append(mu)
+        else:
+            # Handle specific task completion
+            # Case 1: Masterframe
+            if key in self.master_status:
+                if success:
+                    # Schedule dependent tasks when master succeeds
+                    for dep in self.dependents.get(key, []):
+                        self.task_queue.append(dep)
+                else:
+                    # Mark dependent tasks as failed when master fails
+                    for dep in self.dependents.get(key, []):
+                        dep_key = self._key_from_path(dep)
+                        self.task_status[dep_key] = False
+                        self.skipped_tasks.add(dep)
+
+                    # Mark all independents as skipped when any master fails
+                    while self.independents:
+                        mu = self.independents.popleft()
+                        mu_key = self._key_from_path(mu)
+                        self.task_status[mu_key] = False
+                        self.skipped_tasks.add(mu)
+
+            # Schedule independents only if all masters succeeded
+            if all(v is True for v in self.master_status.values()):
+                while self.independents:
+                    mu = self.independents.popleft()
+                    self.task_queue.append(mu)
 
     def mark_done(self, task_path, success=True):
         """
@@ -157,32 +292,16 @@ class Scheduler:
         """
         key = self._key_from_path(task_path)
         self.task_status[key] = success
-        self.completed_tasks.add(task_path) if success else self.skipped_tasks.add(task_path)
+        if success:
+            self.completed_tasks.add(task_path)
+        else:
+            self.skipped_tasks.add(task_path)
 
-        # Case 1: Masterframe
+        # Update master status if this is a master task
         if key in self.master_status:
             self.master_status[key] = success
-            if success:
-                # Schedule dependent tasks when master succeeds (only if not preprocess_only)
-                for dep in self.dependents.get(key, []):
-                    self.task_queue.append(dep)
-            else:
-                # Mark dependent tasks as failed when master fails
-                for dep in self.dependents.get(key, []):
-                    self.task_status[self._key_from_path(dep)] = False
-                    self.skipped_tasks.add(dep)
 
-                # Mark all independents as skipped when any master fails
-                while self.independents:
-                    mu = self.independents.popleft()
-                    self.task_status[self._key_from_path(mu)] = False
-                    self.skipped_tasks.add(mu)
-
-        # Schedule independents only if all masters succeeded
-        if all(v is True for v in self.master_status.values()):
-            while self.independents:
-                mu = self.independents.popleft()
-                self.task_queue.append(mu)
+        self.update_queue(key, success)
 
     def get_next_task(self):
         """
@@ -194,15 +313,23 @@ class Scheduler:
         Returns:
             list or None: Command line arguments for the next task, or None if no tasks available
         """
+
+        if self.is_too:
+            priority = "high"
+        else:
+            priority = "normal"
+
         if self.master_queue:
             config = self.master_queue.popleft()
             cmd = self._generate_command(config, "Masterframe")
-            return cmd
+            return cmd, priority
+
         if self.task_queue:
             config = self.task_queue.popleft()
             cmd = self._generate_command(config, "ScienceImage")
-            return cmd
-        return None
+            return cmd, priority
+
+        return None, priority
 
     def is_all_done(self):
         """
@@ -211,6 +338,7 @@ class Scheduler:
         Returns:
             bool: True if all tasks are finished, False otherwise
         """
+
         return (
             not self.master_queue
             and not self.task_queue
@@ -282,3 +410,15 @@ class Scheduler:
             "master": self.master_queue,
             "dependent": self.task_queue,
         }
+
+    def get_failed_configs(self):
+        """
+        Return config identifiers that failed (status == False).
+        """
+        return [key for key, status in self.task_status.items() if status is False]
+
+    def get_failed_or_skipped_configs(self):
+        """
+        Return full paths of configs that failed or were skipped.
+        """
+        return list(self.skipped_tasks)

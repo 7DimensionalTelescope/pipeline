@@ -72,17 +72,40 @@ class ImageStats:
 
     @classmethod
     def from_matched_catalog(cls, matched: Table) -> ImageStats:
-        PEEINGMN = matched["FWHM_IMAGE"].mean()
-        PEEINGSD = matched["FWHM_IMAGE"].std()
+        import numpy.ma as ma
+
+        def safe_mean(arr):
+            """Get mean, handling masked arrays."""
+            result = arr.mean()
+            if isinstance(result, ma.core.MaskedConstant):
+                return np.nan
+            return float(result) if not np.isnan(result) else np.nan
+
+        def safe_std(arr):
+            """Get std, handling masked arrays."""
+            result = arr.std()
+            if isinstance(result, ma.core.MaskedConstant):
+                return np.nan
+            return float(result) if not np.isnan(result) else np.nan
+
+        PEEINGMN = safe_mean(matched["FWHM_IMAGE"])
+        PEEINGSD = safe_std(matched["FWHM_IMAGE"])
+        SEEINGMN = PEEINGMN * PIXSCALE if not np.isnan(PEEINGMN) else np.nan
+        SEEINGSD = PEEINGSD * PIXSCALE if not np.isnan(PEEINGSD) else np.nan
+        PAWINMN = safe_mean(matched["AWIN_IMAGE"])
+        PAWINSD = safe_std(matched["AWIN_IMAGE"])
+        ELLIPMN = safe_mean(matched["ELLIPTICITY"])
+        ELLIPSD = safe_std(matched["ELLIPTICITY"])
+
         return cls(
             PEEINGMN=PEEINGMN,
             PEEINGSD=PEEINGSD,
-            SEEINGMN=PEEINGMN * PIXSCALE,
-            SEEINGSD=PEEINGSD * PIXSCALE,
-            PAWINMN=matched["AWIN_IMAGE"].mean(),
-            PAWINSD=matched["AWIN_IMAGE"].std(),
-            ELLIPMN=matched["ELLIPTICITY"].mean(),
-            ELLIPSD=matched["ELLIPTICITY"].std(),
+            SEEINGMN=SEEINGMN,
+            SEEINGSD=SEEINGSD,
+            PAWINMN=PAWINMN,
+            PAWINSD=PAWINSD,
+            ELLIPMN=ELLIPMN,
+            ELLIPSD=ELLIPSD,
         )
 
     @property
@@ -196,7 +219,9 @@ def evaluate_single_wcs(
             P95=np.percentile(sep_sci, 95),
             P99=np.percentile(sep_sci, 99),
         )
+
     else:
+
         unmatched_fraction = 1.0  # no NaN. fits requires values
         subpixel_fraction = 0
         subsecond_fraction = 0
@@ -227,9 +252,8 @@ def evaluate_single_wcs(
     # overall image stats
     image_stats = ImageStats.from_matched_catalog(matched_cleaned)
 
-    # radial stats
+    # radial stats #TODO
     radial_stats = RadialStats.from_matched_catalog(matched_cleaned, W, H)
-
     if plot_save_path is not None and unmatched_fraction < 1.0:
         chatter(f"evaluate_single_wcs: plotting to {plot_save_path}")
         wcs_check_plot(

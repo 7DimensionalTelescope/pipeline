@@ -1,4 +1,5 @@
 import os
+import re
 import threading
 import signal
 import subprocess
@@ -252,6 +253,7 @@ def scamp(
     scamp_args: str = None,
     timeout=30,
     logger=None,
+    check_input_sanity=True,
 ) -> List[str]:
     """
     Input is a fits-ldac catalog or a text file of those catalogs.
@@ -328,11 +330,8 @@ def scamp(
         f.write("\n" * 3)
 
     # old way
-    # os.system(scampcom)
-
     # # scampcom = f"scamp -c {scampconfig} {outcat} -REFOUT_CATPATH {path_ref_scamp} -AHEADER_NAME {ahead_file}"
     # # subprocess.run(f"{scampcom} > {log_file} 2>&1", shell=True, text=True)
-
     # # astrefcat = f"{path_ref_scamp}/{obj}.fits" if 'path_astrefcat' not in upaths or upaths['path_astrefcat'] == '' else upaths['path_astrefcat']
     # # scamp_addcom = f"-ASTREF_CATALOG FILE -ASTREFCAT_NAME {astrefcat}"
     # # scamp_addcom = f"-REFOUT_CATPATH {path_ref_scamp}"
@@ -342,6 +341,8 @@ def scamp(
     # # except subprocess.CalledProcessError as e:
     # #     print(f"Command failed with error code {e.returncode}")
     # #     print(f"stderr output: {e.stderr.decode()}")
+
+    num_stars_scamp_sees = None
 
     proc = subprocess.Popen(
         scampcom,
@@ -355,10 +356,16 @@ def scamp(
 
     # stream output concurrently so wait(timeout=...) can actually fire
     def pump():
+        nonlocal num_stars_scamp_sees
         with open(log_file, "a", encoding="utf-8", errors="replace") as f:
             for line in iter(proc.stdout.readline, ""):
                 f.write(line)
                 f.flush()
+                # parse "Group  1: 26/418 detections removed" to see what scamp recognizes
+                m = re.search(r"Group\s+\d+\s*:\s*\d+\s*/\s*(\d+)\s+detections removed", line)
+                if m:
+                    # number after "/" (26/418 -> 418)
+                    num_stars_scamp_sees = int(m.group(1))
         proc.stdout.close()
 
     t = threading.Thread(target=pump, daemon=True)
@@ -381,6 +388,14 @@ def scamp(
 
     finally:
         t.join(timeout=5)
+
+    # use parsed value from log
+    if num_stars_scamp_sees is None:
+        chatter(f"Could not find 'Group  1: X/Y detections removed' line in log: {log_file}", "error")
+    if num_stars_scamp_sees == 0:
+        chatter(f"Scamp sees 0 detections to work with. See log: {log_file}", "critical")
+    if num_stars_scamp_sees < 4:
+        chatter(f"Scamp sees only {num_stars_scamp_sees} detections to work with. See log: {log_file}", "critical")
 
     for solved_head in output_list:
         if not os.path.exists(solved_head):

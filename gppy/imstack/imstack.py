@@ -51,14 +51,15 @@ class ImStack(BaseSetup, DatabaseHandler):
             self.config.imstack.convolve = False
 
         self.qa_id = None
-        DatabaseHandler.__init__(self, add_database=self.config.settings.is_pipeline)
+        DatabaseHandler.__init__(
+            self, add_database=self.config.settings.is_pipeline, is_too=self.config.settings.is_too
+        )
 
         if self.is_connected:
             self.set_logger(logger)
             self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
             self.pipeline_id = self.create_pipeline_data(self.config)
-            if self.pipeline_id is not None:
-                self.update_pipeline_progress(60, "imstack-configured")
+            self.update_pipeline_progress(60, "imstack-configured")
 
     @classmethod
     def from_list(cls, input_images, working_dir=None):
@@ -97,7 +98,6 @@ class ImStack(BaseSetup, DatabaseHandler):
             # background subtraction
             self.bkgsub()
             self.update_pipeline_progress(61, "imstack-bkgsub-completed")
-
             # zero point scaling
             self.zpscale()
             self.update_pipeline_progress(62, "imstack-zpscale-completed")
@@ -155,6 +155,7 @@ class ImStack(BaseSetup, DatabaseHandler):
             self.logger.info(f"'ImStack' is Completed in {time_diff_in_seconds(self._st)} seconds")
         except Exception as e:
             self.logger.error(f"Error during imstack processing: {str(e)}")
+            self.add_error()
             raise
         # self.logger.debug(MemoryMonitor.log_memory_usage)
 
@@ -221,14 +222,17 @@ class ImStack(BaseSetup, DatabaseHandler):
 
         if len(objs) != 1:
             self.logger.warning("Multiple OBJECT found. Using the first one.")
+            self.add_warning()
         self.filte = filters[0]
         if len(filters) != 1:
             self.logger.warning("Multiple FILTER found. Using the first one.")
+            self.add_warning()
         if len(egains) != 1:
             self.logger.warning("Multiple EGAIN found. Using the first one.")
+            self.add_warning()
         if len(camera_gains) != 1:
             self.logger.warning("Multiple GAIN found. Using the first one.")
-
+            self.add_warning()
         #   Hard coding for the UDS field
         # self.gain_default = 0.78
 
@@ -292,7 +296,9 @@ class ImStack(BaseSetup, DatabaseHandler):
             self.logger.info("Start constant background subtraction")
             self._const_bkgsub()
 
-        self.logger.info(f"Background subtraction is completed in {time_diff_in_seconds(st)} seconds")
+        self.logger.info(
+            f"Background subtraction is completed in {time_diff_in_seconds(st)} ({time_diff_in_seconds(st, return_float=True)/len(self.input_images):.1f} s/image)"
+        )
 
         self.images_to_stack = self.config.imstack.bkgsub_images
 
@@ -382,7 +388,7 @@ class ImStack(BaseSetup, DatabaseHandler):
         self._use_gpu = all([use_gpu, self.config.imstack.gpu, self._use_gpu])
         device_id = device_id if self._use_gpu else "CPU"
 
-        self.logger.info(f"Start weight-map calculation with device_id: {device_id}")
+        self.logger.info(f"Start weight-map calculation")
 
         bkgsub_images = self.config.imstack.bkgsub_images
         self.config.imstack.bkgsub_weight_images = []
@@ -417,13 +423,22 @@ class ImStack(BaseSetup, DatabaseHandler):
                         from .weight import calc_weight_with_cpu
 
                         calc_weight = calc_weight_with_cpu
-                        self.logger.info(f"Calculate weight map with CPU")
+                        self.logger.info("Calculate weight map with CPU")
+                        device_id = "CPU"
+                        calc_weight(uncalculated_images, d_m_file, f_m_file, sig_z_file, sig_f_file)
                     else:
-                        from .weight import calc_weight_with_subprocess
+                        from .weight import calc_weight_with_gpu
 
-                        calc_weight = calc_weight_with_subprocess
+                        calc_weight = calc_weight_with_gpu
                         self.logger.info(f"Calculate weight map with GPU device {device_id}")
-                    calc_weight(uncalculated_images, d_m_file, f_m_file, sig_z_file, sig_f_file, device_id=device_id)
+                        calc_weight(
+                            uncalculated_images,
+                            d_m_file,
+                            f_m_file,
+                            sig_z_file,
+                            sig_f_file,
+                            device_id=device_id,
+                        )
 
                 self.logger.debug(
                     f"Weight-map calculation (device={device_id}) for group {i} is completed in {time_diff_in_seconds(st_image)} seconds"
@@ -442,6 +457,7 @@ class ImStack(BaseSetup, DatabaseHandler):
             badpix = mask_header["BADPIX"]
             self.logger.debug(f"BADPIX found in header. Using badpix {badpix}.")
         else:
+            self.add_warning()
             self.logger.warning("BADPIX not found in header. Using default value 0.")
         return mask_file, badpix
 
@@ -679,7 +695,8 @@ class ImStack(BaseSetup, DatabaseHandler):
 
                 # compute
                 if not all([os.path.exists(f) for f in atleast_1d(weight_list)]):
-                    self.logger.error(f"Weight map not found for all images. Skipping.")
+                    self.add_warning()
+                    self.logger.warning(f"Weight map not found for all images. Skipping.")
 
                 convolve_fft(
                     weight_list,

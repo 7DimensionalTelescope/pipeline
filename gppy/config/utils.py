@@ -1,22 +1,41 @@
 from functools import reduce
-from ..const import PROCESSED_DIR
+from ..const import PROCESSED_DIR, TOO_DIR
 import os
 
 
-def find_config(config: str) -> dict:
-    config = "T19154_m875_2025-10-13"
-    config.replace(".yml", "")
+def find_config(config: str, is_too: bool = False, return_class=False) -> dict:
+    config = config.replace(".yml", "")
     args = config.split("_")
-    if len(args) == 3:
-        obj, filt, date = args
-        full_path = f"{PROCESSED_DIR}/{date}/{obj}/{filt}/{config}.yml"
+    BASE_DIR = TOO_DIR if is_too else PROCESSED_DIR
+    if len(args) >= 3:
+        obj, filt, date = args[:3]
+        full_path = f"{BASE_DIR}/{date}/{obj}/{filt}/{config}.yml"
+        if return_class:
+            from .sciprocess import SciProcConfiguration
+
+            return SciProcConfiguration.from_config(full_path, is_too=is_too)
     elif len(args) == 2:
-        date, unit = args
-        full_path = f"{PROCESSED_DIR}/{date}/{config}.yml"
+        date, unit = args[:2]
+        full_path = f"{BASE_DIR}/{date}/{config}.yml"
+        if return_class:
+            from .preprocess import PreprocConfiguration
+
+            return PreprocConfiguration.from_config(full_path, is_too=is_too)
     if os.path.exists(full_path):
         return full_path
     else:
         raise FileNotFoundError(f"Config file not found: {full_path}")
+
+
+def get_filter_from_config(config: str) -> str:
+
+    config = os.path.basename(config)
+    args = config.split("_")
+    if len(args) >= 3:
+        _, filt, _ = args[:3]
+        return filt
+    else:
+        return None
 
 
 def merge_dicts(base: dict, updates: dict) -> dict:

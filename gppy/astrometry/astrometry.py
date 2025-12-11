@@ -93,19 +93,19 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
         self.load_criteria(dtype="science")
         self.qa_ids = []
-        DatabaseHandler.__init__(self, add_database=self.config.settings.is_pipeline)
+        DatabaseHandler.__init__(
+            self, add_database=self.config.settings.is_pipeline, is_too=self.config.settings.is_too
+        )
 
         if self.is_connected:
             self.set_logger(logger)
             self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
             self.pipeline_id = self.create_pipeline_data(self.config)
+            self.update_pipeline_progress(0, "astrometry-configured")
             if self.pipeline_id is not None:
-                self.update_pipeline_progress(0, "astrometry-configured")
                 for image in self.input_images:
                     qa_id = self.create_qa_data("science", image=image, output_file=image)
                     self.qa_ids.append(qa_id)
-            else:
-                self.logger.warning("Pipeline record creation failed, skipping QA data creation")
 
     @classmethod
     def from_list(cls, images: List[str], working_dir: str = None):
@@ -179,6 +179,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             # flexibly iterate to refine
             for i, (image_info, prep_cat) in enumerate(zip(self.images_info, self.prep_cats)):
                 try:
+                    joint = joint_scamp
+
                     if force_solve_field:
                         raise PipelineError("force_solve_field")
 
@@ -222,22 +224,26 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     self.logger.info(f"Scamp iteration completed [{i+1}/{len(self.prep_cats)}] for {prep_cat}")
 
                     if image_info.bad:
+                        self.add_warning()
                         self.logger.warning(
-                            f"Bad solution. UNMATCH: {image_info.rsep_stats.unmatched_fraction}, "
-                            f"RSEP_P95: {image_info.rsep_stats.separation_stats.P95}"
+                            f"Bad solution. UNMATCH: {image_info.rsep_stats.unmatched_fraction if image_info.rsep_stats.unmatched_fraction is not None else 'None'}, "
+                            f"RSEP_P95: {image_info.rsep_stats.separation_stats.P95 if image_info.rsep_stats.separation_stats.P95 is not None else 'None'} "
                             f"after {max_scamp} iterations for {image_info.image_path}"
                         )
+
                         if not avoid_solvefield:
                             raise PipelineError(f"Bad solution")
 
                 except PipelineError as e:
                     # if evaluate_prep_sol:
                     #     self.evaluate_solution(suffix="prepwcs", use_threading=use_threading, export_eval_cards=True)
+                    self.add_warning()
                     self.logger.warning(e)
                     self.logger.warning(f"Solve-field triggered, better solution not guaranteed for {prep_cat}")
 
                     # self.run_solve_field(input_catalogs=self.prep_cats, output_images=self.solved_images)
                     self.run_solve_field(input_catalogs=prep_cat, output_images=None, solvefield_args=solvefield_args)
+
                     if evaluate_prep_sol:
                         self.evaluate_solution(
                             suffix="solvefieldwcs",
@@ -257,6 +263,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     )
 
                 except Exception as e:
+                    self.add_error()
                     self.logger.error(f"Error during astrometry processing: {str(e)}", exc_info=True)
                     raise Exception(f"Error during astrometry processing: {str(e)}")
 
@@ -298,10 +305,11 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         max_scamp,
         overwrite=True,
         plot=False,
+        joint=False,
     ):
         """main scamp iteration"""
         for _ in range(max_scamp):
-            self.run_scamp([prep_cat], scamp_preset="main", joint=False, overwrite=(_ == max_scamp - 1 or overwrite))
+            self.run_scamp([prep_cat], scamp_preset="main", joint=joint, overwrite=(_ == max_scamp - 1 or overwrite))
             if evaluate_prep_sol:
                 self.evaluate_solution(
                     input_images=image_info.image_path,
@@ -363,6 +371,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                 if evaluate_prep_sol:
                     self.evaluate_solution(suffix="prepwcs", use_threading=use_threading, export_eval_cards=True)
                 self.logger.warning(e)
+                self.add_warning()
                 self.run_solve_field(self.soft_links_to_input_images, self.solved_images)
                 if evaluate_prep_sol:
                     self.evaluate_solution(suffix="solvefieldwcs", use_threading=use_threading, export_eval_cards=True)
@@ -822,6 +831,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                 self.logger.debug(f"Updated FOV polygon. RA: {image_info.fov_ra}, Dec: {image_info.fov_dec}")
             except Exception as e:
                 self.logger.error(f"Failed to update FOV polygon for {image_info.image_path}: {e}", exc_info=True)
+                self.add_error()
 
             try:
                 eval_result = evaluate_single_wcs(
@@ -842,8 +852,10 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     logger=self.logger,
                     overwrite=overwrite,
                 )
+
             except Exception as e:
                 self.logger.error(f"Failed to evaluate solution for {input_image}: {e}", exc_info=True)
+                self.add_error()
                 raise
             return idx, eval_result
 
@@ -909,6 +921,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
         except Exception as e:
             self.logger.error(f"Failed to evaluate solution: {e}", exc_info=True)
+            self.add_error()
             # don't raise error
 
         self.logger.debug(f"Completed evaluate_solution")
@@ -1081,6 +1094,7 @@ class ImageInfo:
                 return
         # no logger available
         if level.lower() in ("error", "critical"):
+
             raise PipelineError(msg % args if args else msg)
         else:
             print(f"[ImageInfo:{level.upper()}] {msg % args if args else msg}")
@@ -1136,16 +1150,16 @@ class ImageInfo:
 
     def set_internal_sep_stats(self, sep_stats: dict) -> None:
         self._joint_cards_are_up_to_date = True
-        self.internal_sep_rms_x = sep_stats["rms_x"]
-        self.internal_sep_rms_y = sep_stats["rms_y"]
-        self.internal_sep_rms = sep_stats["rms"]
-        self.internal_sep_min = sep_stats["min"]
-        self.internal_sep_q1 = sep_stats["q1"]
-        self.internal_sep_q2 = sep_stats["q2"]
-        self.internal_sep_q3 = sep_stats["q3"]
-        self.internal_sep_p95 = sep_stats["p95"]
-        self.internal_sep_p99 = sep_stats["p99"]
-        self.internal_sep_max = sep_stats["max"]
+        self.internal_sep_rms_x = sep_stats["rms_x"] if sep_stats["rms_x"] is not None else None
+        self.internal_sep_rms_y = sep_stats["rms_y"] if sep_stats["rms_y"] is not None else None
+        self.internal_sep_rms = sep_stats["rms"] if sep_stats["rms"] is not None else None
+        self.internal_sep_min = sep_stats["min"] if sep_stats["min"] is not None else None
+        self.internal_sep_q1 = sep_stats["q1"] if sep_stats["q1"] is not None else None
+        self.internal_sep_q2 = sep_stats["q2"] if sep_stats["q2"] is not None else None
+        self.internal_sep_q3 = sep_stats["q3"] if sep_stats["q3"] is not None else None
+        self.internal_sep_p95 = sep_stats["p95"] if sep_stats["p95"] is not None else None
+        self.internal_sep_p99 = sep_stats["p99"] if sep_stats["p99"] is not None else None
+        self.internal_sep_max = sep_stats["max"] if sep_stats["max"] is not None else None
 
     def set_internal_match_stats(self, match_stats: dict) -> None:
         self.internal_match_counts = match_stats["counts_by_group_size"]  # ex) {2: 70, 3: 180, 1: 16}
@@ -1193,12 +1207,20 @@ class ImageInfo:
             else self._single_wcs_eval_cards
         )
         # Clean invalid values
+        import numpy.ma as ma
+
         for i, (k, v, c) in enumerate(cards):
-            if np.isnan(v):
+            # Handle MaskedConstant (from numpy masked arrays)
+            if isinstance(v, ma.core.MaskedConstant):
+                self._log(f"WCS statistics contains masked value for {k}, converting to None", level="error")
+                cards[i] = (k, None, c)
+            elif isinstance(v, (float, np.floating)) and np.isnan(v):
                 self._log(f"WCS statistics contains nan for {k}", level="error")
                 cards[i] = (k, None, c)
-            elif not isinstance(v, (float, int, str, np.float32, np.int32)):  # sometimes the value can be masked
-                self._log(f"WCS statistics contains type {type(v)} {v} for {k}")
+            elif not isinstance(v, (float, int, str, np.float32, np.int32, type(None))):
+                # Convert other invalid types to None
+                self._log(f"WCS statistics contains type {type(v)} {v} for {k}, converting to None", level="error")
+                cards[i] = (k, None, c)
 
         return cards
 
@@ -1217,15 +1239,26 @@ class ImageInfo:
         if not image_stats_cards:
             self._log("No image_stats ", level="error")
 
-        corner_stats_cards = self.corner_stats.fits_header_cards
-        if not corner_stats_cards:
-            self._log("No corner_stats ", level="error")
+        if self.corner_stats is not None:
+            corner_stats_cards = self.corner_stats.fits_header_cards
+            if not corner_stats_cards:
+                self._log("No corner_stats ", level="error")
+        else:
+            corner_stats_cards = []
 
-        radial_stats_cards = self.radial_stats.fits_header_cards
-        if not radial_stats_cards:
-            self._log("No radial_stats ", level="error")
+        if self.radial_stats is not None:
+            radial_stats_cards = self.radial_stats.fits_header_cards
+            if not radial_stats_cards:
+                self._log("No radial_stats ", level="error")
+        else:
+            radial_stats_cards = []
 
-        return rsep_stats_cards + ref_sep_cards + image_stats_cards + corner_stats_cards + radial_stats_cards
+        cards = rsep_stats_cards + ref_sep_cards + image_stats_cards + corner_stats_cards + radial_stats_cards
+
+        if cards is None:
+            self._log("No cards ", level="error")
+            return []
+        return cards
 
     @property
     def _joint_wcs_eval_cards(self) -> List[Tuple[str, float]]:
@@ -1305,9 +1338,13 @@ class ImageInfo:
     def good(self) -> bool:
         """iteration condition"""
         # not checking unmatched fraction as it's better to exit _iterate_scamp quickly and go to solve-field
-        return self.rsep_stats.separation_stats.P95 < PIXSCALE
+        if self.rsep_stats.separation_stats.P95 is None:
+            return False
+        else:
+            return self.rsep_stats.separation_stats.P95 < PIXSCALE
 
     @property
     def bad(self) -> bool:
         """iteration condition"""
+
         return self.rsep_stats.unmatched_fraction > 0.9 or self.rsep_stats.separation_stats.P95 > 2 * PIXSCALE

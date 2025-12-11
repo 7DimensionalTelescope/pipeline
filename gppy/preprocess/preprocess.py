@@ -65,6 +65,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         calib_types=None,
         use_gpu=True,
         add_database=True,
+        is_too=False,
         **kwargs,
     ):
         # Load Configuration
@@ -88,10 +89,16 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         self._use_gpu = use_gpu
 
         # Initialize DatabaseHandler
-        DatabaseHandler.__init__(self, add_database=add_database)
+        DatabaseHandler.__init__(
+            self,
+            add_database=add_database if not is_too else False,
+        )
+
         if self.is_connected:
             self.set_logger(logger)
             self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
+
+        self.is_too = is_too
 
         self.initialize()
         self._generated_masterframes = []  # this is to avoid re-generating masterframes when overwrite=True is given
@@ -119,11 +126,11 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         if get_key(self.config.input, "masterframe_images") or get_key(self.config.input, "science_images"):
             bdf_flattened = flatten(self.config.input.masterframe_images)
             input_files = bdf_flattened + list(self.config.input.science_images)
-            self.raw_groups = PathHandler.take_raw_inventory(input_files)
+            self.raw_groups = PathHandler.take_raw_inventory(input_files, is_too=self.is_too)
             # self.logger.debug(f"raw_groups initialized: {self.raw_groups}")
         elif self.config.input.raw_dir:
             input_files = glob.glob(os.path.join(self.config.input.raw_dir, "*.fits"))
-            self.raw_groups = PathHandler.take_raw_inventory(input_files)
+            self.raw_groups = PathHandler.take_raw_inventory(input_files, is_too=self.is_too)
         else:
             raise ValueError("No input files or directory specified")
 
@@ -185,12 +192,13 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                         self.prepare_header()
                         self.data_reduction(device_id=device_id)
 
+                    flags_for_this_group = copy.deepcopy(self.skip_plotting_flags)
                     if make_plots:
                         t = threading.Thread(
                             target=self.make_plots,
                             kwargs={
                                 "group_index": i,
-                                "skip_flags": self.skip_plotting_flags,
+                                "skip_flags": flags_for_this_group,
                                 "override_skip_flags": override_skip_plotting_flags,
                             },
                         )
@@ -199,6 +207,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
                 except Exception as e:
                     import traceback
+
                     self.logger.error(
                         f"[Group {i+1}] Error during masterframe generation or data reduction: {str(e)}", exc_info=False
                     )
@@ -704,7 +713,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                             self._get_raw_group("sci_input", group_index),
                             self._get_raw_group("sci_output", group_index),
                         ):
-                            future = executor.submit(plot_sci, input_img, output_img)
+                            future = executor.submit(plot_sci, input_img, output_img, is_too=self.is_too)
                             futures.append(future)
                         # Wait for all plots to complete
                         for future in futures:
@@ -713,7 +722,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                     for input_img, output_img in zip(
                         self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)
                     ):
-                        plot_sci(input_img, output_img)
+                        plot_sci(input_img, output_img, is_too=self.is_too)
 
                 self.logger.info(
                     f"[Group {group_index+1}] Completed plot generation for images in {time_diff_in_seconds(st)} seconds "

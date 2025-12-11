@@ -3,7 +3,7 @@ from typing import List, Tuple
 from collections import defaultdict
 from pathlib import Path
 from .utils import subtract_half_day, get_gain, get_nightdate, add_a_day
-from ..utils import equal_on_keys, collapse, get_header
+from ..utils import equal_in_keys, collapse, get_header
 from .. import const
 from .utils import strip_binning, format_binning, strip_exptime, format_exptime, strip_gain, format_camera, format_gain
 from .cam_tracker import get_camera_serial
@@ -966,17 +966,17 @@ class NameHandler:
             on_bias, on_dark, on_flat = [], [], []
 
             for k, v in bias.items():
-                if equal_on_keys(dict(k[1]), key_sci, const.BIAS_GROUP_KEYS):
+                if equal_in_keys(dict(k[1]), key_sci, const.BIAS_GROUP_KEYS):
                     on_bias.extend(v)
                     used_bias_keys.add(k)
 
             for k, v in dark.items():
-                if equal_on_keys(dict(k[1]), key_sci, const.DARK_GROUP_KEYS):
+                if equal_in_keys(dict(k[1]), key_sci, const.DARK_GROUP_KEYS):
                     on_dark.extend(v)
                     used_dark_keys.add(k)
 
             for k, v in flat.items():
-                if equal_on_keys(dict(k[1]), key_sci, const.FLAT_GROUP_KEYS):
+                if equal_in_keys(dict(k[1]), key_sci, const.FLAT_GROUP_KEYS):
                     on_flat.extend(v)
                     used_flat_keys.add(k)
 

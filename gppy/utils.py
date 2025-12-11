@@ -175,7 +175,7 @@ def time_diff_in_seconds(datetime1, datetime2=None, return_float=False):
         return f"{abs(time_diff):.2f}"
 
 
-def swap_ext(file_path: str | list[str], new_ext: str) -> str:
+def swap_ext(file_path: str | list[str], new_ext: str, keep_ext: bool = False) -> str:
     """
     Swap the file extension of a given file path.
 
@@ -188,7 +188,8 @@ def swap_ext(file_path: str | list[str], new_ext: str) -> str:
     """
     if isinstance(file_path, list):
         return [swap_ext(f, new_ext) for f in file_path]
-    stem, _ = os.path.splitext(file_path)
+    stem, ext = os.path.splitext(file_path)
+    
     new_ext = new_ext if new_ext.startswith(".") else f".{new_ext}"
     return stem + new_ext
 
@@ -253,7 +254,7 @@ def unique_filename(fpath: str):
         return fpath_new
 
 
-def equal_on_keys(d1: dict, d2: dict, keys: list):
+def equal_in_keys(d1: dict, d2: dict, keys: list):
     # return all(d1[k] == d2[k] for k in keys)
     return all(d1.get(k) == d2.get(k) for k in keys)  # None if key missing
 
