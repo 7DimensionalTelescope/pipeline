@@ -19,6 +19,10 @@ dependencies:
   - requests
   - pyyaml
   - python-dotenv
+  - seaborn
+  - astroquery
+  - shapely
+
 
   # pip-only packages
   - pip
@@ -27,5 +31,5 @@ dependencies:
       - ipykernel==6.19.2
       - psycopg[binary]==3.2.12
       - psycopg-pool==3.2.7
-      - pynvml
+      - nvidia-ml-py
       - multiprocess

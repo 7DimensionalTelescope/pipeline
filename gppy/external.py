@@ -228,10 +228,10 @@ def solve_field(
                 print("solve-field did not terminate, killing...")
                 process.kill()
             raise subprocess.TimeoutExpired(f"solve-field timed out after {timeout}s")
-        # except subprocess.CalledProcessError as e:
-        #     print(f"solve-field failed: {e.returncode}")
-        #     print(f"stderr output: {e.stderr.decode()}")
-        #     raise e
+    # except subprocess.CalledProcessError as e:
+    #     print(f"solve-field failed: {e.returncode}")
+    #     print(f"stderr output: {e.stderr.decode()}")
+    #     raise e
 
     if not os.path.exists(swap_ext(soft_link, ".solved")):
         raise FileNotFoundError(f"Solve-field failed: {swap_ext(soft_link, '.solved')} not found")
@@ -414,7 +414,14 @@ def missfits(inim):
     missfitscom = f"missfits -c {missfitsconf} {inim}"
     # missfitscom = f"missfits -c {path_config}/7dt.missfits @{path_image_missfits_list}"
 
-    os.system(missfitscom)
+    process = subprocess.Popen(
+        missfitscom,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    process.wait()
     # working_dir = "/data/pipeline_reform/dhhyun_lab/scamptest/solvefield"
     # subprocess.run(missfitscom, shell=True, cwd=working_dir)
 
@@ -500,11 +507,23 @@ def sextractor(
     if clean_log:
         sexcom = ansi_clean(sexcom)
 
-    sexout = subprocess.getoutput(sexcom)
-    # result = subprocess.run(sexcom, shell=True, capture_output=True, text=True, stderr=subprocess.STDOUT)
-    # sexout = result.stdout + result.stderr
+    process = subprocess.Popen(
+        sexcom,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        stdin=subprocess.DEVNULL,  # DEVNULL tricks SEx to think it's running non-interactively
+    )
+    stdout, _ = process.communicate()
+    sexout = stdout if stdout else ""
+
+    if process.returncode != 0:
+        raise RuntimeError(f"Sextractor failed with return code {process.returncode}: {sexout}")
+
     with open(log_file, "w") as f:
         f.write(sexcom)
+        f.write("\n" * 3)
         f.write(sexout)
         # f.write(sexerr)
 
@@ -610,8 +629,25 @@ def swarp(
     swarpcom = " ".join(swarpcom)
     chatter(f"SWarp Command: {swarpcom}")
     chatter(f"SWarp Log: {log_file}")
-    os.system(f"{swarpcom} > {log_file} 2>&1")
-    # os.system(swarpcom)
+
+    process = subprocess.Popen(
+        swarpcom,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+    with open(log_file, "w") as f:
+        f.write(swarpcom + "\n" * 3)
+        f.flush()
+        for line in process.stdout:
+            f.write(line)
+            f.flush()
+
+    process.wait()
+    if process.returncode != 0:
+        raise RuntimeError(f"SWarp failed with return code {process.returncode}. See log: {log_file}")
 
     return swarpcom
 
@@ -674,7 +710,19 @@ def hotpants(
     )
     log_file = log_file or os.path.join(os.path.dirname(out_conv_im), "hotpants.log")
 
-    hotpantsout = subprocess.getoutput(hotpantscom)
+    process = subprocess.Popen(
+        hotpantscom,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    stdout, _ = process.communicate()
+    hotpantsout = stdout if stdout else ""
+
+    if process.returncode != 0:
+        raise RuntimeError(f"Hotpants failed with return code {process.returncode}: {hotpantsout}")
+
     with open(log_file, "w") as f:
         f.write(hotpantscom)
         f.write("\n" * 3)

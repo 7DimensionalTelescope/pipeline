@@ -818,17 +818,15 @@ class TooDB:
             except (ValueError, AttributeError):
                 return dt
         if isinstance(dt, datetime):
-            # Assume UTC if datetime is naive, otherwise use its timezone
+            # Database stores datetimes in KST, so naive datetimes are already in KST
             if dt.tzinfo is None:
-                # Naive datetime - assume it's UTC
-                dt = pytz.UTC.localize(dt)
+                # Naive datetime - already in KST, just format it
+                return dt.strftime("%Y-%m-%d %H:%M:%S KST")
             else:
-                # Timezone-aware datetime - convert to UTC first if not already
-                dt = dt.astimezone(pytz.UTC)
-            # Convert to KST (Korea Standard Time)
-            kst = pytz.timezone("Asia/Seoul")
-            dt_kst = dt.astimezone(kst)
-            return dt_kst.strftime("%Y-%m-%d %H:%M:%S KST")
+                # Timezone-aware datetime - convert to KST
+                kst = pytz.timezone("Asia/Seoul")
+                dt_kst = dt.astimezone(kst)
+                return dt_kst.strftime("%Y-%m-%d %H:%M:%S KST")
         return str(dt)
 
     def _format_coord(self, coord, coord_deg):

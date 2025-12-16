@@ -422,3 +422,169 @@ class Scheduler:
         Return full paths of configs that failed or were skipped.
         """
         return list(self.skipped_tasks)
+
+
+# from astropy.table import Table, vstack
+# import numpy as np
+# from gppy.const import SCRIPT_DIR
+
+
+# class Scheduler:
+
+#     _empty_schedule = Table(
+#         dtype=[
+#             ("index", int),
+#             ("config", str),
+#             ("type", str),
+#             ("input_type", str),
+#             ("is_ready", bool),
+#             ("priority", int),
+#             ("readiness", int),
+#             ("status", str),
+#             ("dependent_idx", list),
+#         ]
+#     )
+
+#     def __init__(self, schedule=None):
+#         if schedule is not None:
+#             if isinstance(schedule, Table):
+#                 if schedule.colnames == self._empty_schedule.colnames:
+#                     self._schedule = schedule
+#                 else:
+#                     raise ValueError("Invalid schedule type")
+#             elif isinstance(schedule, Scheduler):
+#                 self._schedule = schedule.schedule
+#             else:
+#                 raise ValueError("Invalid schedule type")
+#         else:
+#             self._schedule = self._empty_schedule
+
+#     def __add__(self, other):
+#         offset = max(self.schedule["index"])
+
+#         if isinstance(other, Scheduler):
+#             other_table = other.schedule.copy()
+#         elif isinstance(other, Table):
+#             other_table = other.copy()
+#         else:
+#             raise ValueError("Invalid schedule type")
+
+#         # Adjust the index column by adding the offset
+#         other_table["index"] = other_table["index"] + offset
+
+#         # Adjust all values in dependent_idx by adding the offset to each value in the lists
+#         for i in range(len(other_table)):
+#             if other_table["dependent_idx"][i]:  # If the list is not empty
+#                 other_table["dependent_idx"][i] = [idx + offset for idx in other_table["dependent_idx"][i]]
+
+#         # Combine the tables
+#         self._schedule = vstack([self.schedule, other_table])
+#         return self._schedule
+
+#     def __getitem__(self, index):
+#         return self._schedule[self._schedule["index"] == index]
+
+#     def __repr__(self):
+#         total_jobs = len(self.schedule)
+#         in_ready = len(self.schedule[self.schedule["status"] == "Ready"])
+#         in_pending = len(self.schedule[self.schedule["status"] == "Pending"])
+#         in_processing = len(self.schedule[self.schedule["status"] == "Processing"])
+#         in_completed = len(self.schedule[self.schedule["status"] == "Completed"])
+#         is_master = len(self.schedule[self.schedule["type"] == "masterframe"])
+#         is_science = len(self.schedule[self.schedule["type"] == "science"])
+#         self.schedule.pprint_all(max_lines=10)
+#         return f"Scheduler with {total_jobs} (masterframe: {is_master} and science: {is_science}) jobs: \n {in_ready} ready, \n {in_pending} pending, \n {in_processing} processing, \n {in_completed} completed"
+
+#     def print_schedule(self):
+#         self.schedule.pprint_all()
+
+#     @property
+#     def schedule(self):
+
+#         self._schedule.sort(["is_ready", "priority", "readiness"], reverse=True)
+
+#         config = self._schedule["config"]
+#         vals, counts = np.unique(config, return_counts=True)
+
+#         dups = vals[counts > 1]
+#         if len(dups) > 0:
+#             raise ValueError(f"Duplicate configs exist in the schedule: {dups}")
+
+#         return self._schedule
+
+#     def add_schedule(self, other):
+#         self._schedule = self + other
+#         return self
+
+#     def get_next_task(self):
+#         schedule = self.schedule[self.schedule["status"] != "Completed"]
+#         return schedule[0]
+
+#     def get_next_cmd(self):
+#         job = self.get_next_task()
+#         return self._generate_command(job["index"])
+
+#     def list_of_ready_jobs(self):
+#         return self.schedule[self.schedule["is_ready"]]
+
+#     def mark_done(self, index):
+#         # Mark the current task as completed
+#         mask = self._schedule["index"] == index
+#         self._schedule["status"][mask] = "Completed"
+
+#         # Get the dependent indices for this task
+#         dependent_indices = self._schedule["dependent_idx"][mask][0]
+
+#         # For each dependent index, increment its readiness by 1
+#         for dep_idx in dependent_indices:
+#             dep_mask = self._schedule["index"] == dep_idx
+#             self._schedule["readiness"][dep_mask] += 1
+#             if self._schedule["readiness"][dep_mask] >= 100:
+#                 self._schedule["status"][dep_mask] = "Ready"
+#                 self._schedule["is_ready"][dep_mask] = True
+
+#     def is_all_done(self):
+#         return len(self.schedule[self.schedule["status"] != "Completed"]) == 0
+
+#     def clear_schedule(self, all=False):
+#         if all:
+#             self._schedule = self._empty_schedule
+
+#         else:
+#             self._schedule = self._schedule[self._schedule["status"] != "Completed"]
+
+#     def _generate_command(self, index, **kwargs):
+
+#         job = self[index]
+#         overwrite = kwargs.get("overwrite", False)
+#         config = job["config"][0]
+#         is_too = job["input_type"][0] == "too"
+
+#         if job["type"] == "masterframe":
+#             cmd = [
+#                 f"{SCRIPT_DIR}/bin/preprocess",
+#                 "-config",
+#                 config,
+#                 "-make_plots",
+#             ]
+#             if is_too:
+#                 cmd.append("-is_too")
+#             if overwrite:
+#                 cmd.append("-overwrite")
+
+#             if kwargs.get("preprocess_kwargs", None):
+#                 cmd.extend(["--preprocess_kwargs", json.dumps(kwargs["preprocess_kwargs"])])
+
+#         else:  # ScienceImage
+#             cmd = [f"{SCRIPT_DIR}/bin/data_reduction", "-config", config]
+
+#             if is_too:
+#                 cmd.append("-is_too")
+
+#             cmd.append("-processes")
+#             cmd.extend(self.processes)
+
+#             if overwrite:
+#                 cmd.append("-overwrite")
+
+#         return cmd

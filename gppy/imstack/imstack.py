@@ -332,7 +332,7 @@ class ImStack(BaseSetup, DatabaseHandler):
         ):
 
             # if result is already in factory, use that
-            if os.path.exists(outim) and os.path.exists(bkg) and os.path.exists(bkg_rms):
+            if (os.path.exists(outim) and os.path.exists(bkg) and os.path.exists(bkg_rms)) and not self.overwrite:
                 self.logger.info(f"Background subtraction result exists; skipping: {get_basename(outim)}")
                 continue
 

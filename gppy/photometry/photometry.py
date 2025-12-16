@@ -768,7 +768,6 @@ class PhotometrySingle:
 
             input_arr = np.array(zps[~mask].value)
             if len(input_arr) == 0:
-                self.add_error()
                 self.logger.error(f"No valid zero point sources found for {mag_key}. Skipping.")
                 self.logger.debug(f"input_arr: {input_arr}")
                 continue
@@ -922,7 +921,6 @@ class PhotometrySingle:
             )
             return ALL_FILTERS
         except Exception as e:
-            self.add_error()
             self.logger.error(f"Fetching active filters failed. Using all default filters: {e}", exc_info=True)
             return ALL_FILTERS
 

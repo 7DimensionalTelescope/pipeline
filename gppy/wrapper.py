@@ -15,6 +15,8 @@ from .services.task import Task, Priority
 
 from .services.scheduler import Scheduler
 
+from .config.utils import get_filter_from_config
+
 
 class SortedGroupDict(UserDict):
     """A dictionary that sorts its values when iterating."""
@@ -208,7 +210,7 @@ class DataReduction:
                 if key not in self.groups:
                     self.groups[key] = ScienceGroup(key)
                 else:
-                    self.groups[key].multi_units = True
+                    self.groups[key].multi_units += 1
                 flattened_images = flatten(images[0])
                 self.groups[key].add_images(flattened_images)
                 self.groups[mfg_key].add_images(flattened_images)
@@ -241,6 +243,75 @@ class DataReduction:
         self.dependent_configs, self.independent_configs = dependent_configs, independent_configs
 
         self._ready4process = True
+
+        self.job_table = self.create_schedule(is_too=is_too)
+
+    def create_schedule(self, is_too=False, **kwargs):
+        from astropy.table import Table
+
+        schedule = Table(
+            dtype=[
+                ("index", int),
+                ("config", str),
+                ("type", str),
+                ("input_type", str),
+                ("is_ready", bool),
+                ("priority", int),
+                ("readiness", int),
+                ("status", str),
+                ("dependent_idx", list),
+            ]
+        )
+
+        idx = 0
+
+        if is_too:
+            base_priority = 5
+            input_type = "too"
+        else:
+            base_priority = 0
+            input_type = "daily"
+
+        input_type = kwargs.get("input_type", input_type)
+
+        for group in self.groups:
+            if isinstance(group, ScienceGroup):
+                continue
+            schedule.add_row([idx, group.config, "masterframe", input_type, True, base_priority + 3, 100, "Ready", []])
+            parent_idx = idx
+            idx += 1
+
+            for scikey in group.sci_keys:
+                sci_group = self.groups[scikey]
+                if sci_group.config in schedule["config"]:
+                    continue
+
+                filter_name = get_filter_from_config(sci_group.config)
+
+                if filter_name.startswith("m"):
+                    priority = base_priority + 1
+                else:
+                    priority = base_priority + 2
+                    schedule["priority"][parent_idx] = base_priority + 4
+
+                schedule.add_row(
+                    [
+                        idx,
+                        sci_group.config,
+                        "science",
+                        input_type,
+                        False,
+                        priority,
+                        99 - sci_group.multi_units,
+                        "Pending",
+                        [],
+                    ]
+                )
+                schedule["dependent_idx"][parent_idx].append(idx)
+                idx += 1
+
+        schedule.sort(["is_ready", "priority", "readiness"], reverse=True)
+        return schedule
 
     def cleanup(self):
         import gc

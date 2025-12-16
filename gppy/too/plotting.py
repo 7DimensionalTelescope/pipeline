@@ -378,6 +378,8 @@ def plot_cutouts_and_sed(
                     if distances[nearest_idx] < 5.0:  # Within 5 pixels
                         if not use_cat_position:
                             use_cat_position = True
+                            # Update position to catalog position for consistency
+                            x, y = float(tbl["X_IMAGE"][nearest_idx]), float(tbl["Y_IMAGE"][nearest_idx])
 
                         if not use_catalog:
                             # Use specified aperture magnitude from catalog
@@ -927,13 +929,15 @@ def plot_cutouts_and_sed(
             spec_color = mcolors[i]
             filter_name = sed_item.get("filter_name", "").lower()
 
-            # Get position
+            # Get position - always use stored position from sed_data if available
+            # This ensures we use the same position that was used for flux extraction
             if "x" in sed_item and "y" in sed_item:
                 x, y = sed_item["x"], sed_item["y"]
             elif position_type == "sky":
                 # Will be handled when we open the file and get WCS
                 x, y = None, None
             else:
+                # Fallback: use original position (should not happen if image was processed)
                 x, y = position
                 x, y = float(x), float(y)
 
@@ -1128,9 +1132,11 @@ def plot_cutouts_and_sed(
                     continue
 
             # Use stored position from sed_data (may be from catalog if original was out of bounds)
+            # This ensures we use the same position that was used for flux extraction
             if "x" in sed_item and "y" in sed_item:
                 x, y = sed_item["x"], sed_item["y"]
             elif position_type == "sky":
+                # Fallback: recalculate from original position (should not happen if image was processed)
                 if isinstance(position, SkyCoord):
                     coord = position
                 else:
@@ -1139,6 +1145,7 @@ def plot_cutouts_and_sed(
                 x, y = wcs.world_to_pixel(coord)
                 x, y = float(x), float(y)
             else:
+                # Fallback: use original position (should not happen if image was processed)
                 x, y = position
                 x, y = float(x), float(y)
 
@@ -1315,7 +1322,7 @@ def make_too_output(too_id, sky_position=None, image_type="difference", verbose=
         raise ValueError(f"Too data not found for ID: {too_id}")
 
     if sky_position is None:
-        sky_position = SkyCoord(too_data["ra"], too_data["dec"], unit=("hourangle", "deg"))
+        sky_position = SkyCoord(too_data["ra_deg"], too_data["dec_deg"], unit="deg")
 
     sed_data = plot_cutouts_and_sed(
         too_data["base_path"],

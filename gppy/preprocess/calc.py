@@ -7,7 +7,7 @@ from numba import njit, prange
 from ..const import SCRIPT_DIR
 from scipy.stats import variation
 
-TIMEOUT = 10
+TIMEOUT = 20
 
 
 def read_fits_image(path):
