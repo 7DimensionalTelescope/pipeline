@@ -1,0 +1,146 @@
+#!/usr/bin/env python
+"""
+Pipeline Trigger Service
+
+This script monitors directories for new images and processes them directly.
+It uses the existing Monitor class from the pipeline codebase.
+"""
+
+import time
+import logging
+import glob
+from pathlib import Path
+from pipeline.services.monitor import Monitor
+from pipeline.services.scheduler import Scheduler
+from pipeline.services.blueprint import Blueprint
+from pipeline.const import RAWDATA_DIR
+
+
+# Set up logging with rotation
+from logging.handlers import RotatingFileHandler
+
+# Create rotating file handler (max 10MB per file, keep 5 backup files = 50MB total)
+file_handler = RotatingFileHandler(
+    "/var/log/pipeline-trigger.log",
+    maxBytes=10 * 1024 * 1024,  # 10MB
+    backupCount=5,  # Keep 5 backup files
+)
+
+file_handler.setLevel(logging.INFO)
+file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+
+# Console handler
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+
+# Configure root logger
+logging.basicConfig(
+    level=logging.INFO,
+    handlers=[file_handler, console_handler],
+)
+logger = logging.getLogger(__name__)
+
+
+def check_too(image_path):
+    file_path = Path(image_path)
+    rawdata_path = Path(RAWDATA_DIR)
+    relative_path = file_path.relative_to(rawdata_path)
+    path_parts = relative_path.parts
+    if path_parts and path_parts[0].startswith("7DT"):
+        if path_parts[1].endswith("_ToO"):
+            return True
+        else:
+            return False
+
+
+def get_too_images(image_path):
+    """
+    Get images from the corresponding ToO directory for a non-ToO image.
+    Returns list of image paths if ToO directory exists, None otherwise.
+    """
+    file_path = Path(image_path)
+    rawdata_path = Path(RAWDATA_DIR)
+    relative_path = file_path.relative_to(rawdata_path)
+    path_parts = list(relative_path.parts)
+    if path_parts and path_parts[0].startswith("7DT"):
+        if not path_parts[1].endswith("_ToO"):
+            # Construct path to corresponding ToO directory
+            too_dir_name = path_parts[1] + "_ToO"
+            too_path = rawdata_path / path_parts[0] / too_dir_name
+            if too_path.exists():
+                image_list = list(glob.glob(str(too_path / "*.fits")))
+                return image_list if image_list else None
+    return None
+
+
+def run_image_processing(image_paths, is_too=False):
+    br = Blueprint.from_list(
+        list_of_images=image_paths,
+        is_too=is_too,
+    )
+    br.create_config(is_too=is_too, overwrite=True)
+
+    sc = Scheduler(br.schedule, use_system_queue=True)
+    sc.start_system_queue()
+
+
+def process_new_images(image_paths):
+    """
+    Process new images using the existing pipeline infrastructure.
+    Each image set runs in its own tmux session for isolation and monitoring.
+
+    Logic:
+    - Images in _ToO directories: process with is_too=True
+    - Images in non-_ToO directories: add corresponding ToO images and process with is_too=False
+    """
+    try:
+        # Separate ToO and non-ToO images
+        too_image_paths = [image for image in image_paths if check_too(image)]
+        non_too_image_paths = [image for image in image_paths if not check_too(image)]
+
+        # Process ToO images with is_too=True
+        if len(too_image_paths) > 0:
+            run_image_processing(too_image_paths, is_too=True)
+
+        # Process non-ToO images: add corresponding ToO images and process with is_too=False
+        if len(non_too_image_paths) > 0:
+            # Collect all ToO images for non-ToO directories
+            all_too_images = set()
+            for image in non_too_image_paths:
+                too_images = get_too_images(image)
+                if too_images:
+                    all_too_images.update(too_images)
+
+            # Combine non-ToO images with their corresponding ToO images
+            combined_images = non_too_image_paths + list(all_too_images)
+            if len(combined_images) > 0:
+                run_image_processing(combined_images, is_too=False)
+
+    except Exception as e:
+        logger.error(f"Error processing images: {e}", exc_info=True)
+
+
+def start_trigger_monitoring():
+    """Start the trigger monitoring service using the existing Monitor class."""
+    # RAWDATA_DIR = "/lyman/data2/obsdata/"
+    # Create the monitor using the existing codebase
+    monitor = Monitor(base_path=Path(RAWDATA_DIR))
+    monitor.add_callback(process_new_images)
+    observer = monitor.start()
+
+    logger.info("Trigger service started - monitoring directories for new images")
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("Trigger service stopping...")
+        observer.stop()
+
+    observer.join()
+    logger.info("Trigger service stopped")
+
+
+if __name__ == "__main__":
+    start_trigger_monitoring()

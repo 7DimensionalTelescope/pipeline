@@ -2,14 +2,10 @@ from pathlib import Path
 from setuptools import setup, find_packages
 
 ROOT = Path(__file__).parent
-README = (
-    (ROOT / "README.md").read_text(encoding="utf-8")
-    if (ROOT / "README.md").exists()
-    else ""
-)
+README = (ROOT / "README.md").read_text(encoding="utf-8") if (ROOT / "README.md").exists() else ""
 
 setup(
-    name="gppy",
+    name="pipeline",
     version="2.0.0",
     description="Pipeline for 7-dimensional Telescope",
     long_description=README,

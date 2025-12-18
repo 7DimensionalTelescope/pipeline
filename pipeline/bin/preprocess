@@ -1,0 +1,54 @@
+#!/home/pipeline/.conda/envs/pipeline/bin/python
+
+import argparse
+import sys
+import signal
+import json
+
+from pipeline.run import run_preprocess
+
+
+def signal_handler(sig, frame):
+    print("\nTerminate process")
+    sys.exit(0)
+
+
+signal.signal(signal.SIGINT, signal_handler)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description=(
+            "Preprocess astronomical FITS images by generating master calibration frames "
+            "(bias, dark, flat) and optionally reducing science images. "
+            "Supports GPU/CPU selection and optional plot generation."
+        )
+    )
+    parser.add_argument("-config", type=str, required=True, help="Path to the preprocessing configuration file")
+    parser.add_argument("-device_id", type=str, help="Device to use: 'CPU' or GPU device index (e.g., 0, 1)")
+    parser.add_argument("-make_plots", action="store_true", help="Generate diagnostic plots during preprocessing")
+    parser.add_argument("-overwrite", action="store_true", help="Overwrite existing results")
+    parser.add_argument(
+        "--preprocess_kwargs", type=str, default=None, help="JSON dict of kwargs forwarded to Preprocess.__init__"
+    )
+    parser.add_argument("-is_too", action="store_true", help="Use TOO processing")
+    args = parser.parse_args()
+
+    try:
+        if args.device_id is None:
+            device_id = None
+        elif args.device_id == "CPU":
+            device_id = "CPU"
+        else:
+            device_id = int(args.device_id)
+
+        run_preprocess(
+            args.config,
+            device_id=device_id,
+            make_plots=args.make_plots,
+            overwrite=args.overwrite,
+            preprocess_kwargs=args.preprocess_kwargs,  # dict encoded as json string
+            is_too=args.is_too,
+        )
+    except Exception as e:
+        print(f"\nError: {e}")
+        sys.exit(1)

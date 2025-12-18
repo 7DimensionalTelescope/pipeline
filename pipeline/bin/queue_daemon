@@ -1,0 +1,58 @@
+#!/home/pipeline/.conda/envs/pipeline/bin/python
+"""
+Queue Manager Daemon
+
+Runs QueueManager in system queue mode to process jobs from the scheduler database.
+This daemon listens for jobs in the database and executes them.
+"""
+
+import sys
+import os
+import signal
+import time
+from pathlib import Path
+
+# Add pipeline to path
+pipeline_dir = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(pipeline_dir))
+
+from pipeline.services.queue import QueueManager
+from pipeline.services.scheduler import Scheduler
+from pipeline.const import SCHEDULER_DB_PATH
+
+
+def main():
+    """Main daemon entry point."""
+    if not SCHEDULER_DB_PATH:
+        print("ERROR: SCHEDULER_DB_PATH environment variable not set", file=sys.stderr)
+        sys.exit(1)
+
+    # Create QueueManager
+    queue = QueueManager(auto_start=True, monitor=True)
+    queue.logger.info("Queue Manager daemon started")
+
+    # Create Scheduler with system queue mode
+    scheduler = Scheduler(use_system_queue=True)
+    queue.add_scheduler(scheduler)
+    scheduler.start_system_queue()
+    queue.logger.info("Scheduler initialized with system queue mode")
+
+    # Keep running until interrupted
+    try:
+        while True:
+            time.sleep(60)  # Sleep and let workers do their job
+            # Log status periodically
+            if scheduler.has_schedule:
+                queue.logger.info(f"Scheduler status: {scheduler.status()}")
+    except KeyboardInterrupt:
+        queue.logger.info("Received interrupt signal, shutting down...")
+    except Exception as e:
+        queue.logger.error(f"Fatal error: {e}", exc_info=True)
+        sys.exit(1)
+    finally:
+        queue.stop_processing()
+        queue.logger.info("Queue Manager daemon stopped")
+
+
+if __name__ == "__main__":
+    main()
