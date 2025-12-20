@@ -490,15 +490,11 @@ def get_num_sources(catalog: str | Table, depth: float = 17.0, zp: float = 0, ma
     return len(catalog)
 
 
-def get_source_num_frac(sci_cat: str, local_astref: str, ref_depth: float = 17.0):
+def get_source_num_frac(sci_cat: str, local_astref: str, sci_zp, depth: float = 17.0):
     """hard-coded"""
     SCI_TO_REF_AREA_RATIO = 0.5  # Science image area / Reference image area
 
-    sci_filter = NameHandler(sci_cat).filter
-    sci_depth = json.load(open(os.path.join(REF_DIR, "depths.json")))[sci_filter]
-    sci_zp = json.load(open(os.path.join(REF_DIR, "zeropoints.json")))[sci_filter]
-
-    sci_num_sources = get_num_sources(sci_cat, zp=sci_zp, depth=sci_depth, mag_key="MAG_AUTO")
-    ref_num_sources = get_num_sources(local_astref, depth=ref_depth, mag_key="phot_g_mean_mag")
+    sci_num_sources = get_num_sources(sci_cat, zp=sci_zp, depth=depth, mag_key="MAG_AUTO")
+    ref_num_sources = get_num_sources(local_astref, depth=depth, mag_key="phot_g_mean_mag")
 
     return sci_num_sources / (SCI_TO_REF_AREA_RATIO * ref_num_sources)

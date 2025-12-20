@@ -192,7 +192,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                             f"Early QA rejected {os.path.basename(image_info.image_path)}! "
                             f"Skipping all subsequent processing, including Astrometry and Photometry."
                         )
-                        self.logger.critical(
+                        self.logger.error(
                             f"Early QA rejected {os.path.basename(image_info.image_path)}! Skipping all subsequent processing, including Astrometry and Photometry."
                         )
                         raise PipelineError(
@@ -237,9 +237,13 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                         )
 
                         if not avoid_solvefield:
-                            raise PipelineError(f"Bad solution")
+                            raise PipelineError(f"Bad SCAMP solution")
 
                 except PipelineError as e:
+                    # re-raise if not bad SCAMP error
+                    if "Bad SCAMP solution" not in str(e):
+                        raise
+
                     # if evaluate_prep_sol:
                     #     self.evaluate_solution(suffix="prepwcs", use_threading=use_threading, export_eval_cards=True)
                     self.add_warning()
@@ -268,9 +272,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     )
 
                 except Exception as e:
-                    self.add_error()
-                    self.logger.error(f"Error during astrometry processing: {str(e)}", exc_info=True)
-                    raise Exception(f"Error during astrometry processing: {str(e)}")
+                    self.logger.critical(f"Unexpected error during astrometry processing: {str(e)}", exc_info=True)
+                    raise Exception(f"Unexpected error during astrometry processing: {str(e)}")
 
             # evaluate main scamp
             self.evaluate_solution(
@@ -298,6 +301,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             )
             self.logger.debug(MemoryMonitor.log_memory_usage)
         except Exception as e:
+            self.add_error()
             self.logger.error(f"Error during astrometry processing: {str(e)}", exc_info=True)
             raise
 
@@ -1203,7 +1207,7 @@ class ImageInfo:
         zp = zp_per_filter[self.filter]
         depth = depths_per_filter[self.filter]
 
-        self.num_frac = get_source_num_frac(sci_cat, ref_cat, zp=zp, depth=depth - 0.5)
+        self.num_frac = get_source_num_frac(sci_cat, ref_cat, sci_zp=zp, depth=depth - 0.5)
         self._log(f"Early QA: NUMFRAC = {self.num_frac}", level="info")
         return
 

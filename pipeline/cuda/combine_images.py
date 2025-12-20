@@ -1,15 +1,8 @@
-from astropy.io import fits
 import argparse
 import sys
 import cupy as cp
 import numpy as np
-
-try:
-    import fitsio
-
-    FITSIO_AVAILABLE = True
-except ImportError:
-    FITSIO_AVAILABLE = False
+import fitsio
 
 
 def pinned_empty(shape, dtype=np.float32):
@@ -121,10 +114,7 @@ if __name__ == "__main__":
             print("Error: Number of subtract images and scale factors must match.", file=sys.stderr)
             sys.exit(1)
         else:
-            if FITSIO_AVAILABLE:
-                subtract = [fitsio.read(o).astype(np.float32) * args.scales[i] for i, o in enumerate(args.subtract)]
-            else:
-                subtract = [fits.getdata(o).astype(np.float32) * args.scales[i] for i, o in enumerate(args.subtract)]
+            subtract = [fitsio.read(o).astype(np.float32) * args.scales[i] for i, o in enumerate(args.subtract)]
     else:
         subtract = None
 
@@ -145,14 +135,7 @@ if __name__ == "__main__":
     )
 
     # Write output files using fitsio if available
-    if FITSIO_AVAILABLE:
-        fitsio.write(args.median_out, np_median, clobber=True)
-        fitsio.write(args.std_out, np_std, clobber=True)
-        if make_bpmask:
-            fitsio.write(args.bpmask, np_bpmask, clobber=True)
-    else:
-        # Fallback to astropy
-        fits.writeto(args.median_out, np_median, overwrite=True)
-        fits.writeto(args.std_out, np_std, overwrite=True)
-        if make_bpmask:
-            fits.writeto(args.bpmask, np_bpmask, overwrite=True)
+    fitsio.write(args.median_out, np_median, clobber=True)
+    fitsio.write(args.std_out, np_std, clobber=True)
+    if make_bpmask:
+        fitsio.write(args.bpmask, np_bpmask, clobber=True)
