@@ -127,7 +127,7 @@ class SciProcConfiguration(BaseConfig):
         self.config.input.calibrated_images = atleast_1d(input_images)
         # self.config.name = "user-input"
         self.config.name = self.name
-        self.config.settings.is_pipeline = False
+        self.config.settings.is_pipeline = is_too
         self.fill_missing_from_yaml()
         self.config.info.version = __version__
         self.config._initialized = True
@@ -334,6 +334,7 @@ class SciProcConfiguration(BaseConfig):
 
         self.config.info.version = __version__
         self.config.info.creation_datetime = datetime.now().isoformat()
+        self.config.info.file = self.config_file
         self.config.name = self.config.name or self.name
 
         self.config.input.calibrated_images = atleast_1d(PathHandler(self.input_files, is_too=is_too).processed_images)

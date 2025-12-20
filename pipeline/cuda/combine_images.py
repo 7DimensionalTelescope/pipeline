@@ -3,7 +3,6 @@ import argparse
 import sys
 import cupy as cp
 import numpy as np
-from concurrent.futures import ThreadPoolExecutor
 
 try:
     import fitsio
@@ -19,21 +18,6 @@ def pinned_empty(shape, dtype=np.float32):
     mem = cp.cuda.alloc_pinned_memory(nbytes)
     arr = np.frombuffer(mem, dtype=dtype, count=size).reshape(shape)
     return arr
-
-
-def load_and_convert_parallel(paths, max_workers=3):
-    def load_and_convert(path):
-        if FITSIO_AVAILABLE:
-            # Use fitsio for faster reading
-            return fitsio.read(path).astype(np.float32)
-        else:
-            # Fallback to astropy
-            return fits.getdata(path).astype(np.float32)
-
-    with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        data = list(ex.map(load_and_convert, paths))
-
-    return np.asarray(data)
 
 
 def combine_images_with_cupy(
@@ -149,7 +133,7 @@ if __name__ == "__main__":
     else:
         make_bpmask = False
 
-    data = load_and_convert_parallel(args.input, max_workers=3)
+    data = [fitsio.read(img).astype(np.float32) for img in args.input]
 
     np_median, np_std, np_bpmask = combine_images_with_cupy(
         data,

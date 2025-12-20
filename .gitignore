@@ -183,3 +183,6 @@ coadd.weight.fits
 **/test*.ipynb
 test/*
 test.fits
+
+# APASS/GAIA/PS1/SDSS/SMSS catalog archive
+catalog_archive/

@@ -9,12 +9,9 @@ from scipy.stats import variation
 import tempfile
 import time
 import uuid
-from .utils import read_fits_image, load_and_convert_parallel
-from concurrent.futures import ThreadPoolExecutor
+from .utils import read_fits_image, read_fits_images, write_fits_image, write_fits_images
 
-
-def read_fits_image(path):
-    return fits.getdata(path).astype(np.float32)
+import fitsio
 
 
 def combine_images_with_subprocess_gpu(
@@ -92,9 +89,7 @@ def combine_images_with_cpu(
     **kwargs,  # prevent crash if extra args are passed. e.g., device_id
 ):
 
-    data = load_and_convert_parallel(images, max_workers=3)
-
-    np_stack = np.stack(data)
+    np_stack = np.stack([read_fits_image(img) for img in images])
 
     if subtract is not None:
         sub_arr = np.zeros_like(np_stack[0], dtype=np.float32)
@@ -228,28 +223,6 @@ def process_image_with_cpu(
     max_workers = 3
     total_batches = (len(image_paths) + batch_size - 1) // batch_size
 
-    def write_output(output_path, processed_data):
-        """Write processed image to disk."""
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        header_file = output_path.replace(".fits", ".header")
-        header = None
-        if os.path.exists(header_file):
-            with open(header_file, "r") as f:
-                header = fits.Header.fromstring(f.read(), sep="\n")
-
-        # Use fitsio for faster writing if available
-        try:
-            import fitsio
-
-            if header is not None:
-                # Convert astropy header to fitsio format
-                fitsio.write(output_path, processed_data, header=dict(header), clobber=True)
-            else:
-                fitsio.write(output_path, processed_data, clobber=True)
-        except ImportError:
-            # Fallback to astropy
-            fits.writeto(output_path, processed_data, header=header, overwrite=True)
-
     for batch_idx, batch_start in enumerate(range(0, len(image_paths), batch_size), 1):
         batch_end = min(batch_start + batch_size, len(image_paths))
         batch_image_paths = image_paths[batch_start:batch_end]
@@ -257,9 +230,8 @@ def process_image_with_cpu(
         batch_num_images = len(batch_image_paths)
 
         # Load images in parallel using threading
-        # Optimize: use more workers for I/O-bound operations
-        io_workers = min(max_workers * 2, len(batch_image_paths), 16)
-        batch_data = load_and_convert_parallel(batch_image_paths, max_workers=io_workers)
+
+        batch_data, in_paths, out_paths = read_fits_images(batch_image_paths, batch_output_paths)
 
         # Process images in batch
         processed_batch = []
@@ -268,10 +240,7 @@ def process_image_with_cpu(
             processed_batch.append(processed_data)
 
         # Write outputs in parallel
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            items = list(zip(batch_output_paths, processed_batch))
-            list(ex.map(lambda item: write_output(item[0], item[1]), items))
-
+        write_fits_images(out_paths, processed_batch)
         gc.collect()
 
     # Clean up

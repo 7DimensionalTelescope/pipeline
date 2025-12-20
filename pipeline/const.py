@@ -85,6 +85,8 @@ SCHEDULER_DB_PATH = os.environ.get("SCHEDULER_DB_PATH")
 
 QUEUE_SOCKET_PATH = os.environ.get("QUEUE_SOCKET_PATH")
 
+TOO_DB_PATH = os.environ.get("TOO_DB_PATH")
+
 
 class PipelineError(Exception):
     pass

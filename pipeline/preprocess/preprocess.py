@@ -646,7 +646,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
             # generate calib plots
             self.logger.info(f"[Group {group_index+1}] Generating plots for master calibration frames")
-            use_multi_thread = self.config.preprocess.use_multi_thread
+            # use_multi_thread = self.config.preprocess.use_multi_thread
 
             # bias
             if "bias" in self.calib_types and not skip_flags["bias"]:
@@ -709,23 +709,11 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             num_sci = len(self._get_raw_group("sci_input", group_index))
             if num_sci and not skip_flags["sci"]:
                 self.logger.info(f"[Group {group_index+1}] Generating plots for science frames ({num_sci} images)")
-                if use_multi_thread:
-                    with ThreadPoolExecutor(max_workers=10) as executor:
-                        futures = []
-                        for input_img, output_img in zip(
-                            self._get_raw_group("sci_input", group_index),
-                            self._get_raw_group("sci_output", group_index),
-                        ):
-                            future = executor.submit(plot_sci, input_img, output_img, is_too=self.is_too)
-                            futures.append(future)
-                        # Wait for all plots to complete
-                        for future in futures:
-                            future.result()
-                else:
-                    for input_img, output_img in zip(
-                        self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)
-                    ):
-                        plot_sci(input_img, output_img, is_too=self.is_too)
+
+                for input_img, output_img in zip(
+                    self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)
+                ):
+                    plot_sci(input_img, output_img, is_too=self.is_too)
 
                 self.logger.info(
                     f"[Group {group_index+1}] Completed plot generation for images in {time_diff_in_seconds(st)} seconds "

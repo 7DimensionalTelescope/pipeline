@@ -188,8 +188,6 @@ class Photometry(BaseSetup, DatabaseHandler):
 
                     self.too_db.mark_completed(self.too_id)
 
-                    self.too_db.send_final_notice_email(self.too_id, sed_data=sed_data)
-
                 return
             else:
                 self.logger.debug(f"input_images: {self.input_images}")
@@ -230,8 +228,6 @@ class Photometry(BaseSetup, DatabaseHandler):
                     self.too_db.send_interim_notice_email(self.too_id, sed_data=sed_data, dtype="difference")
 
                 self.too_db.mark_completed(self.too_id)
-
-                self.too_db.send_final_notice_email(self.too_id, sed_data=sed_data)
 
             self.logger.info(f"'Photometry' is Completed in {time_diff_in_seconds(st)} seconds")
             self.logger.debug(MemoryMonitor.log_memory_usage)

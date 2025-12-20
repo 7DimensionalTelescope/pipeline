@@ -1,6 +1,6 @@
 from functools import reduce
-from ..const import PROCESSED_DIR, TOO_DIR
 import os
+from ..const import PROCESSED_DIR, TOO_DIR
 
 
 def find_config(config: str, is_too: bool = False, return_class=False) -> dict:

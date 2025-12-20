@@ -364,6 +364,14 @@ def get_gain(fpath):
         return get_header(fpath, force_return=True).get(key, None)
 
 
+
+
+def mean_datetime(dt_list: list[str]) -> str:
+    _FMT = "%Y%m%d_%H%M%S"
+    dts = [datetime.strptime(s, _FMT) for s in dt_list]
+    mean_ts = sum(d.timestamp() for d in dts) / len(dts)
+    return datetime.fromtimestamp(mean_ts).strftime(_FMT)
+
 def find_raw_path(unit, nightdate, n_binning, gain):
     """
     Locate the raw data directory for a specific observation.

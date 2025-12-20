@@ -544,7 +544,7 @@ class SortedGroupDict(UserDict):
             return super().__getitem__(key)
 
     def __iter__(self):
-        # First sort by type (MasterframeGroup first, then ScienceGroup)
+        # First sort by type (PreprocessGroup first, then ScienceGroup)
         # Then within each type, sort by their respective criteria
         return iter(self._get_sorted_values())
 
@@ -556,24 +556,24 @@ class SortedGroupDict(UserDict):
         return [(getattr(v, "key", None), v) for v in sorted_values]
 
     def _get_sorted_values(self):
-        # Separate MasterframeGroup and ScienceGroup
-        masterframe_groups = []
+        # Separate PreprocessGroup and ScienceGroup
+        preprocess_groups = []
         science_groups = []
 
         for value in self.data.values():
-            if isinstance(value, MasterframeGroup):
-                masterframe_groups.append(value)
+            if isinstance(value, PreprocessGroup):
+                preprocess_groups.append(value)
             else:
                 science_groups.append(value)
 
-        # Sort MasterframeGroup by sci_keys length (descending)
-        sorted_masterframe = sorted(masterframe_groups, key=lambda x: len(x.sci_keys), reverse=True)
+        # Sort PreprocessGroup by sci_keys length (descending)
+        sorted_preprocess = sorted(preprocess_groups, key=lambda x: len(x.sci_keys), reverse=True)
 
         # Sort ScienceGroup by image_files length (descending)
         sorted_science = sorted(science_groups, key=lambda x: len(x.image_files), reverse=True)
 
-        # Return MasterframeGroup first, then ScienceGroup
-        return sorted_masterframe + sorted_science
+        # Return PreprocessGroup first, then ScienceGroup
+        return sorted_preprocess + sorted_science
 
     def __repr__(self):
         if len(self.values()) == 0:
@@ -584,7 +584,7 @@ class SortedGroupDict(UserDict):
         return string
 
 
-class MasterframeGroup:
+class PreprocessGroup:
     def __init__(self, key):
         self.key = key
         self._image_files = []
@@ -592,12 +592,12 @@ class MasterframeGroup:
         self.sci_keys = []
 
     def __lt__(self, other):
-        if isinstance(other, MasterframeGroup):
-            # For MasterframeGroups, higher sci_keys count means higher priority
+        if isinstance(other, PreprocessGroup):
+            # For PreprocessGroups, higher sci_keys count means higher priority
             # Reverse the comparison to make higher count come first
             return len(self.sci_keys) < len(other.sci_keys)
         else:
-            # MasterframeGroup always comes before other types
+            # PreprocessGroup always comes before other types
             return False
 
     def __eq__(self, other):
@@ -634,7 +634,7 @@ class MasterframeGroup:
         from ..config import PreprocConfiguration
 
         # print(
-        #     f"MasterframeGroup {self.key} creating config with {len(self.image_files)} images; "
+        #     f"PreprocessGroup {self.key} creating config with {len(self.image_files)} images; "
         #     f"{len(os.listdir(f'/proc/{os.getpid()}/fd'))} FDs under limit of {resource.getrlimit(resource.RLIMIT_NOFILE)} FDs"
         # )
         c = PreprocConfiguration(self.image_files, overwrite=overwrite, is_too=is_too)
@@ -645,7 +645,7 @@ class MasterframeGroup:
         gc.collect()
 
     def __repr__(self):
-        return f"MasterframeGroup({self.key} used in {self.sci_keys} with {len(self.image_files)} images)"
+        return f"PreprocessGroup ({self.key} used in {self.sci_keys} with {len(self.image_files)} images)"
 
     def cleanup(self):
         self._config = None
@@ -667,8 +667,8 @@ class ScienceGroup:
         return self._config
 
     def __lt__(self, other):
-        if isinstance(other, MasterframeGroup):
-            # ScienceGroup always comes after MasterframeGroup
+        if isinstance(other, PreprocessGroup):
+            # ScienceGroup always comes after PreprocessGroup
             return False
         elif isinstance(other, ScienceGroup):
             # For ScienceGroups, higher image_files count means higher priority
@@ -696,7 +696,7 @@ class ScienceGroup:
         from ..path import PathHandler
 
         # print(
-        #     f"MasterframeGroup {self.key} creating config with {len(self.image_files)} images; "
+        #     f"PreprocessGroup {self.key} creating config with {len(self.image_files)} images; "
         #     f"{len(os.listdir(f'/proc/{os.getpid()}/fd'))} FDs under limit of {resource.getrlimit(resource.RLIMIT_NOFILE)} FDs"
         # )
 

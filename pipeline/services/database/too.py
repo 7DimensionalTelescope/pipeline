@@ -6,9 +6,8 @@ import pytz
 import numpy as np
 from typing import Optional, Dict, Any, List, Union
 from datetime import datetime, date
+from ...const import TOO_DB_PATH
 
-# Database file path
-DB_FILE = "/home/7dt/7dt_too/backend/ref/too_requested.db"
 
 # Database connection settings
 DB_TIMEOUT = 1.0  # Timeout in seconds for database operations
@@ -72,7 +71,7 @@ class TooDB:
 
     def _get_db_connection(self):
         """Create a new database connection with timeout and WAL mode"""
-        conn = sqlite3.connect(DB_FILE, check_same_thread=False, timeout=DB_TIMEOUT)
+        conn = sqlite3.connect(TOO_DB_PATH, check_same_thread=False, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
         # Enable WAL mode for better concurrency (reduces locking)
         # Note: WAL mode is persistent, so this is safe to call every time
@@ -1075,6 +1074,8 @@ Timing Information:
         """
         from ...const import DEFAULT_RECIPIENT
 
+        self.update_too_data(too_id=too_id, final_notice=1)
+
         too_data = self.read_too_data_by_id(too_id)
 
         completed = too_data.get("completed")
@@ -1123,7 +1124,6 @@ Timing Information:
             cc=cc_recipients,
         )
 
-        self.update_too_data(too_id=too_id, final_notice=1)
         return True
 
     def _build_final_email_contents(self, too_data, image_path, sed_data, base_path):

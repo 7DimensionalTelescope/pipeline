@@ -102,7 +102,7 @@ class PreprocConfiguration(BaseConfig):
             self.logger.debug(f"Configuration source: {config_source}")
             self.input_files = input
             self.input_dir = None
-            super().__init__(config_source=config_source, write=self.write, **kwargs)
+            super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
         elif isinstance(input, str) and os.path.isdir(input):  # Directory containing FITS files
             sample_file = self._has_fits_file(input)
             self.path = PathHandler(sample_file)
@@ -117,10 +117,10 @@ class PreprocConfiguration(BaseConfig):
             self.logger.debug(f"Configuration source: {config_source}")
             self.input_dir = input
             self.input_files = None
-            super().__init__(config_source=config_source, write=self.write, **kwargs)
+            super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
         elif (isinstance(input, str) and ".yml" in input) or isinstance(input, dict):  # Configuration file path
             config_source = input
-            super().__init__(config_source=config_source, write=self.write, **kwargs)
+            super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
             self.path = self._set_pathhandler_from_config()
             self.logger = self._setup_logger(
                 logger,

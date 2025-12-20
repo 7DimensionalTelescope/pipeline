@@ -9,10 +9,11 @@ from ..path.path import PathHandler
 
 class BaseConfig(ABC):
 
-    def __init__(self, config_source=None, write=True, **kwargs) -> None:
+    def __init__(self, config_source=None, write=True, is_too=False, **kwargs) -> None:
         self._initialized = False
         self.write = write
 
+        # Don't pass is_too to _load_config - it should only exist in settings.is_too, not at top level
         self._load_config(config_source, **kwargs)
 
     def __repr__(self):
@@ -54,7 +55,7 @@ class BaseConfig(ABC):
             cls,
             is_too=is_too,
         )
-        self._load_config(config_source=input, is_too=is_too)
+        self._load_config(config_source=input)
         self.config_file = input
         # initialize PathHandler with the first group of input images
         input_dict = self.config.input.to_dict()
@@ -118,6 +119,7 @@ class BaseConfig(ABC):
         self.config = ConfigurationInstance(self)
 
         self._update_with_kwargs(**kwargs)
+
         self._make_instance()
 
     def _update_with_kwargs(self, **kwargs):
@@ -320,6 +322,9 @@ class ConfigurationInstance:
             return result
 
         elif isinstance(obj, list):
+            # If list is empty, return empty list (valid configuration value)
+            if len(obj) == 0:
+                return []
             try:
                 return [obj[i]]  # pick i-th element (wrapped back in a list)
             except IndexError:

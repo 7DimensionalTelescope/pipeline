@@ -76,7 +76,7 @@ class QueueManager:
         self.logger.debug(f"Initialize QueueManager.")
 
         # Default CPU allocation
-        self.total_cpu_worker = max_workers or 40
+        self.total_cpu_worker = max_workers or 10
 
         self.lock = threading.Lock()
 
@@ -238,10 +238,14 @@ class QueueManager:
         Args:
             scheduler: Scheduler instance for managing subprocess tasks
         """
-        if self.scheduler is None:
-            self.scheduler = scheduler
-        else:
-            self.scheduler.add_schedule(scheduler)
+        try:
+            if self.scheduler is None:
+                self.scheduler = scheduler
+            else:
+                self.scheduler.add_schedule(scheduler)
+        except Exception as e:
+            self.logger.error(f"Error adding scheduler: {e}")
+            raise
 
         if not (hasattr(self, "processing_thread")):
             self._start_workers(process_type="scheduler")
@@ -324,7 +328,9 @@ class QueueManager:
                     with self.lock:  # Thread-safe modification
                         self._active_processes.append([config, proc, time.time(), job_index])
                     self.scheduler.set_pid(job_index, proc.pid)
+
                     self.logger.info(f"Process with {os.path.basename(config)} (PID = {proc.pid}) submitted.")
+                    self.logger.debug(f"Command: {cmd}")
                     time.sleep(0.5)
 
                 except Exception as e:

@@ -12,7 +12,7 @@ from .subtract import ImSubtract
 
 
 def run_preprocess(
-    config, device_id=None, make_plots=True, overwrite=False, preprocess_kwargs: str = None, is_too=False
+    config, device_id=None, make_plots=True, overwrite=False, preprocess_kwargs: str = None, is_too=False, use_gpu=True
 ):
     """
     Generate master calibration frames for a specific observation set.
@@ -27,7 +27,9 @@ def run_preprocess(
         if preprocess_kwargs:
             kwargs = json.loads(preprocess_kwargs)
 
-        prep = Preprocess(config, use_gpu=True, overwrite=overwrite, master_frame_only=False, is_too=is_too, **kwargs)
+        prep = Preprocess(
+            config, use_gpu=use_gpu, overwrite=overwrite, master_frame_only=False, is_too=is_too, **kwargs
+        )
         prep.run(device_id=device_id, make_plots=make_plots, **kwargs)
         del config, prep
     except Exception as e:
@@ -40,12 +42,13 @@ def run_scidata_reduction(
     overwrite: bool = False,
     is_too: bool = False,
 ):
+    print(config, is_too)
     try:
         if isinstance(config, SciProcConfiguration):
             pass
         elif isinstance(config, str) and config.endswith(".yml"):
             # config = SciProcConfiguration.from_config(config)
-            config = SciProcConfiguration(config, is_too=is_too)
+            config = SciProcConfiguration.from_config(config, is_too=is_too)
         else:
             raise ValueError("Invalid configuration type. Expected SciProcConfiguration or path to .yml file.")
 
@@ -81,7 +84,7 @@ def run_scidata_reduction(
             too_data = too_db.read_too_data(config.name)
 
             if too_data.get("final_notice") == 0:
-                too_db.send_final_notice_email(too_data.get("id"), force_to_send=True)
+                too_db.send_final_notice_email(too_data.get("id"))
 
         del config
 

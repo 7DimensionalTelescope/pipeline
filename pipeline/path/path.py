@@ -10,7 +10,7 @@ from ..const import PipelineError
 from .utils import find_raw_path
 from ..utils import add_suffix, swap_ext, collapse, atleast_1d
 from .name import NameHandler
-from .utils import format_exptime
+from .utils import format_exptime, mean_datetime
 from .utils import broadcast_join_pure as bjoin
 from .mixin import AutoMkdirMixin, AutoCollapseMixin
 from .const import (
@@ -1107,9 +1107,11 @@ class PathImstack(AutoMkdirMixin, AutoCollapseMixin):
         names = self._parent.name
         _ = collapse(names.type, raise_error=True)  # ensure input images are coherent
         total_exptime = np.sum(names.exptime)
+        exptime_str = format_exptime(total_exptime, type='stacked')
         # use the datetime of the last image
         unit = collapse(names.unit, force=True)
-        fname = f"{names.obj_collapse}_{names.filter_collapse}_{unit}_{names.datetime[-1]}_{format_exptime(total_exptime, type='stacked')}_coadd.fits"
+        datetime = mean_datetime(x) if isinstance(x:=names.datetime, list) else x
+        fname = f"{names.obj_collapse}_{names.filter_collapse}_{unit}_{datetime}_{exptime_str}_coadd.fits"
         return fname
 
     @property

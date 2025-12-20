@@ -4,18 +4,10 @@ import cupy as cp
 import numpy as np
 import gc
 import os
-import math
-
-from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 import time
 
-try:
-    import fitsio
-
-    FITSIO_AVAILABLE = True
-except ImportError:
-    FITSIO_AVAILABLE = False
+import fitsio
 
 # Reduction kernel
 reduction_kernel = cp.ElementwiseKernel(
@@ -34,16 +26,7 @@ def process_image_with_cupy(obs, bias, dark, flat, output, device_id):
             with open(header_file, "r") as f:
                 header = fits.Header.fromstring(f.read(), sep="\n")
 
-        if FITSIO_AVAILABLE:
-            # Use fitsio for faster writing
-            if header is not None:
-                # Convert astropy header to fitsio format
-                fitsio.write(o, data, header=dict(header), clobber=True)
-            else:
-                fitsio.write(o, data, clobber=True)
-        else:
-            # Fallback to astropy
-            fits.writeto(o, data, header=header, overwrite=True)
+        fitsio.write(o, data, header=dict(header), clobber=True)
 
     with cp.cuda.Device(device_id):
         # Load images in parallel using threading (I/O bound operation)
@@ -52,11 +35,11 @@ def process_image_with_cupy(obs, bias, dark, flat, output, device_id):
         print("Bias: ", bias)
         print("Dark: ", dark)
         print("Flat: ", flat)
-        cbias = cp.asarray(fits.getdata(bias)[None, :, :])
+        cbias = cp.asarray(fitsio.read(bias)[None, :, :])
         cbias = cbias.astype(cp.float32)
-        cdark = cp.asarray(fits.getdata(dark)[None, :, :])
+        cdark = cp.asarray(fitsio.read(dark)[None, :, :])
         cdark = cdark.astype(cp.float32)
-        cflat = cp.asarray(fits.getdata(flat)[None, :, :])
+        cflat = cp.asarray(fitsio.read(flat)[None, :, :])
         cflat = cflat.astype(cp.float32)
 
         multiplicative = 1.0 / cflat
@@ -75,73 +58,7 @@ def process_image_with_cupy(obs, bias, dark, flat, output, device_id):
             batch_output = output[batch_start:batch_end]
             batch_num_images = len(batch_obs)
 
-            # Load images in parallel using threading
-            # Optimize: increase workers for I/O-bound operations, use fitsio for faster reading
-            def load_and_convert(path):
-                if FITSIO_AVAILABLE:
-                    # Use fitsio for faster reading
-                    return fitsio.read(path).astype(np.float32)
-                else:
-                    # Fallback to astropy with memory mapping
-                    with fits.open(path, memmap=True) as hdul:
-                        return hdul[0].data.astype(np.float32)
-
-            # Timeout for loading: 1 second per image
-            load_timeout = batch_num_images
-            max_retries = 3
-
-            for retry in range(max_retries):
-                try:
-                    start_time = time.time()
-                    batch_data = []
-
-                    with ThreadPoolExecutor(max_workers=3) as ex:
-                        # Submit all tasks
-                        future_to_path = {ex.submit(load_and_convert, path): path for path in batch_obs}
-
-                        # Collect results with timeout check during loading
-                        from concurrent.futures import as_completed
-
-                        timeout_exceeded = False
-
-                        for future in as_completed(future_to_path):
-                            # Check timeout as each future completes
-                            elapsed_time = time.time() - start_time
-                            if elapsed_time > load_timeout:
-                                timeout_exceeded = True
-                                print(
-                                    f"Loading timeout ({elapsed_time:.2f}s > {load_timeout}s) after {len(batch_data)}/{batch_num_images} images, retrying from beginning (attempt {retry + 1}/{max_retries})"
-                                )
-                                # Stop collecting results - exit loop immediately
-                                # Remaining futures will complete in background but we won't wait
-                                break
-
-                            try:
-                                result = future.result()
-                                batch_data.append(result)
-                            except Exception as e:
-                                print(f"Error loading image: {e}")
-                                # On error, stop and retry
-                                batch_data = []
-                                break
-
-                        # If timeout exceeded or incomplete, retry
-                        if timeout_exceeded or len(batch_data) != batch_num_images:
-                            if retry < max_retries - 1:
-                                continue  # Retry
-                            else:
-                                raise RuntimeError(
-                                    f"Failed to load all images: got {len(batch_data)}/{batch_num_images} after {max_retries} attempts"
-                                )
-
-                    # Success - got all images within timeout
-                    break
-
-                except Exception as e:
-                    if retry < max_retries - 1:
-                        print(f"Error during loading: {e}, retrying from beginning (attempt {retry + 2}/{max_retries})")
-                    else:
-                        raise  # Re-raise on final retry
+            batch_data = [fitsio.read(path).astype(np.float32) for path in batch_obs]
 
             print(
                 f"[Batch {batch_idx}/{total_batches}] Transferring {batch_num_images} images to GPU memory (device {device_id})"
@@ -173,17 +90,10 @@ def process_image_with_cupy(obs, bias, dark, flat, output, device_id):
             print(f"Time taken to transfer processed data from GPU to host memory: {time_end - time_start:.2f} seconds")
 
             print(f"[Batch {batch_idx}/{total_batches}] Writing {batch_num_images} calibrated images to disk")
-            with ThreadPoolExecutor(max_workers=max_workers) as ex:
-                items = list(zip(batch_output, batch_data))
-                list(
-                    tqdm(
-                        ex.map(lambda item: write_one(item[0], item[1]), items),
-                        total=len(items),
-                        desc="Writing output",
-                    )
-                )
+            for i in range(batch_num_images):
+                write_one(batch_output[i], batch_data[i])
+
             print(f"[Batch {batch_idx}/{total_batches}] Batch processing completed")
-            
 
             gc.collect()
 

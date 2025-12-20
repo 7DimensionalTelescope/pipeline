@@ -11,7 +11,7 @@ from itertools import chain
 
 from ..config.utils import get_filter_from_config
 
-from .utils import SortedGroupDict, MasterframeGroup, ScienceGroup
+from .utils import SortedGroupDict, PreprocessGroup, ScienceGroup
 
 
 class Blueprint:
@@ -117,7 +117,7 @@ class Blueprint:
             if mfg_key in self.groups:
                 self.groups[mfg_key].add_images(flattened_group_0)
             else:
-                mfg = MasterframeGroup(mfg_key)
+                mfg = PreprocessGroup(mfg_key)
                 mfg.add_images(flattened_group_0)
                 self.groups[mfg_key] = mfg
 
@@ -155,17 +155,33 @@ class Blueprint:
             dtype=[
                 ("index", int),
                 ("config", str),
-                ("type", str),
-                ("input_type", str),
-                ("is_ready", bool),
-                ("priority", int),
-                ("readiness", int),
-                ("status", str),
+                ("type", str),  # Preprocess or Science
+                ("input_type", str),  # Daily or ToO
+                ("is_ready", bool),  # True if the task is ready to be processed
+                ("priority", int),  # Priority of the task
+                ("readiness", int),  # 100 if the task is ready to be processed
+                ("status", str),  # Ready, Pending, Processing, Completed
                 ("dependent_idx", list),
-                ("pid", int),
-                ("original_status", str),
+                ("pid", int),  # Process ID
+                ("original_status", str),  # Ready, Pending, Processing, Completed
+                ("process_start", str),  # ISO format timestamp when processing started
+                ("process_end", str),  # ISO format timestamp when processing ended
             ]
         )
+
+        # priority definition
+        # 0: Failed process
+
+        # 1: Daily science medium band
+        # 2: Daily preprocess medium band
+        # 3: Daily science broad band
+        # 4: Daily preprocess broad band
+
+        # 6: ToO science medium band
+        # 7: ToO preprocess medium band
+
+        # 11: ToO science broad band
+        # 12: ToO preprocess broad band
 
         idx = 0
 
@@ -186,7 +202,21 @@ class Blueprint:
             if isinstance(group, ScienceGroup):
                 continue
             schedule.add_row(
-                [idx, group.config, "masterframe", input_type, True, base_priority + 2, 100, "Ready", [], 0, "Ready"]
+                [
+                    idx,
+                    group.config,
+                    "preprocess",
+                    input_type,
+                    True,
+                    base_priority + 2,
+                    100,
+                    "Ready",
+                    [],
+                    0,
+                    "Ready",
+                    "",
+                    "",
+                ]
             )
             parent_idx = idx
             idx += 1
@@ -220,6 +250,8 @@ class Blueprint:
                         [],
                         0,
                         "Pending",
+                        "",
+                        "",
                     ]
                 )
                 schedule["dependent_idx"][parent_idx].append(idx)

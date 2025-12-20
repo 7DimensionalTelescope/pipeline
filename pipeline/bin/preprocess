@@ -31,6 +31,7 @@ if __name__ == "__main__":
         "--preprocess_kwargs", type=str, default=None, help="JSON dict of kwargs forwarded to Preprocess.__init__"
     )
     parser.add_argument("-is_too", action="store_true", help="Use TOO processing")
+    parser.add_argument("-use_gpu", action="store_true", help="Use GPU processing")
     args = parser.parse_args()
 
     try:
@@ -48,6 +49,7 @@ if __name__ == "__main__":
             overwrite=args.overwrite,
             preprocess_kwargs=args.preprocess_kwargs,  # dict encoded as json string
             is_too=args.is_too,
+            use_gpu=args.use_gpu,
         )
     except Exception as e:
         print(f"\nError: {e}")

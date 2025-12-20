@@ -496,12 +496,22 @@ class NameHandler:
 
         # Py7DT files
         else:
-            obj = "_".join(parts[0:-5])  # for objects containing "_"
-            filt = parts[-5]
-            unit = parts[-4]
-            date = parts[-3]
-            hms = parts[-2]
-            exptime = strip_exptime(parts[-1])
+            # offset in case obj contains "_"
+            def parse_with_offset(parts, offset):
+                obj = "_".join(parts[0 : 1 + offset])  # for objects containing "_"
+                filt = parts[1 + offset]
+                unit = parts[2 + offset]
+                date = parts[3 + offset]
+                hms = parts[4 + offset]
+                exptime = strip_exptime(parts[5 + offset])
+                return unit, date, hms, obj, filt, nb, exptime, gain, camera
+
+            for offset in range(0, len(parts)):
+                try:
+                    unit, date, hms, obj, filt, nb, exptime, gain, camera = parse_with_offset(parts, offset)
+                    break
+                except:
+                    continue
 
         return unit, date, hms, obj, filt, nb, exptime, gain, camera
 

@@ -353,65 +353,40 @@ def read_fits_image(path, use_memmap=False):
     return data
 
 
-def load_and_convert_parallel(paths, max_workers=3):
-    """
-    Load FITS images in parallel with timeout fallback to sequential loading.
+def read_fits_image(path):
+    data = fitsio.read(path)
+    data = data.astype(np.float32)
+    return data
 
-    Args:
-        paths: List of FITS file paths
-        max_workers: Number of parallel workers
 
-    Returns:
-        List of numpy arrays (float32)
-    """
-    # Timeout: 1 second per image
-    timeout = len(paths)
+def read_fits_images(input_paths, output_paths, max_workers=10):
+    pairs = list(zip(input_paths, output_paths))
+    pairs = sorted(pairs, key=lambda x: x[0])  # safe
 
-    try:
-        start_time = time.time()
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            # Submit all tasks
-            future_to_path = {ex.submit(read_fits_image, path): path for path in paths}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        data = list(executor.map(read_fits_image, [in_path for in_path, _ in pairs]))
 
-            # Collect results with timeout check
-            from concurrent.futures import as_completed
+    # data = [read_fits_image(in_path) for in_path, _ in pairs]
+    in_paths = [in_path for in_path, _ in pairs]
+    out_paths = [out_path for _, out_path in pairs]
+    return data, in_paths, out_paths
 
-            data = []
-            timeout_exceeded = False
 
-            for future in as_completed(future_to_path):
-                # Check timeout as each future completes
-                elapsed_time = time.time() - start_time
-                if elapsed_time > timeout:
-                    timeout_exceeded = True
-                    print(
-                        f"Parallel loading timeout ({elapsed_time:.2f}s > {timeout}s), falling back to sequential loading"
-                    )
-                    # Don't wait for remaining futures
-                    break
+def write_fits_image(output_path, processed_data):
+    """Write processed image to disk."""
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    header_file = output_path.replace(".fits", ".header")
+    header = None
+    if os.path.exists(header_file):
+        with open(header_file, "r") as f:
+            header = fits.Header.fromstring(f.read(), sep="\n")
 
-                try:
-                    result = future.result()
-                    data.append(result)
-                except Exception as e:
-                    print(f"Error loading image: {e}")
-                    timeout_exceeded = True
-                    break
+    fitsio.write(output_path, processed_data, header=dict(header), clobber=True)
 
-            # If timeout exceeded or incomplete, fall back to sequential
-            if timeout_exceeded or len(data) != len(paths):
-                print("Falling back to sequential image loading")
-                # Load remaining images sequentially
-                data = []
-                for path in paths:
-                    data.append(read_fits_image(path))
 
-        return data
+def write_fits_images(paths, data, max_workers=10):
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        list(executor.map(write_fits_image, paths, data))
 
-    except Exception as e:
-        # On any error, fall back to sequential loading
-        print(f"Error in parallel loading: {e}, falling back to sequential loading")
-        data = []
-        for path in paths:
-            data.append(read_fits_image(path))
-        return data
+    # for output_path, subdata in zip(paths, data):
+    #     write_fits_image(output_path, subdata)

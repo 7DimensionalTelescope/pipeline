@@ -249,23 +249,8 @@ class SkyCatalog:
             self.data = self._filter_sources_in_fov(formatted_data)
 
     def _save_catalog(self, data, catalog_name):
-        filename = f"{self.objname}_{catalog_name}.csv"
-        catalog_file = os.path.join(self.config["CATALOG_DIR"], self.catalog_type, filename)
-        os.makedirs(os.path.join(self.config["CATALOG_DIR"], self.catalog_type), exist_ok=True)
-        data.write(catalog_file, format="csv", overwrite=True)
-
-        try:
-            summary_tbl = ascii.read(self.catalog_summary, format="fixed_width")
-        except:
-            summary_tbl = Table(
-                names=["objname", "ra", "dec", "fov_ra", "fov_dec", "filename", "cat_type", "save_date"],
-                dtype=["U50", "f8", "f8", "f8", "f8", "U100", "U20", "U30"],
-            )
-
-        summary_tbl.add_row(
-            [self.objname, self.ra, self.dec, self.fov_ra, self.fov_dec, filename, self.catalog_type, Time.now().isot]
-        )
-        summary_tbl.write(self.catalog_summary, format="ascii.fixed_width", overwrite=True)
+        # Catalog saving disabled - do not save any catalog files
+        return
 
     def _get_GAIAXP(self, objname=None, ra=None, dec=None, fov_ra=1.3, fov_dec=0.9, verbose=False):
         def format_func(catalog):

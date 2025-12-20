@@ -179,7 +179,6 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             # flexibly iterate to refine
             for i, (image_info, prep_cat) in enumerate(zip(self.images_info, self.prep_cats)):
                 try:
-                    joint = joint_scamp
 
                     if force_solve_field:
                         raise PipelineError("force_solve_field")
@@ -193,13 +192,19 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                             f"Early QA rejected {os.path.basename(image_info.image_path)}! "
                             f"Skipping all subsequent processing, including Astrometry and Photometry."
                         )
+                        self.logger.critical(
+                            f"Early QA rejected {os.path.basename(image_info.image_path)}! Skipping all subsequent processing, including Astrometry and Photometry."
+                        )
+                        raise PipelineError(
+                            f"Early QA rejected {os.path.basename(image_info.image_path)}! Skipping all subsequent processing, including Astrometry and Photometry."
+                        )
                         # TODO: head is not file, but imageinfo.qa_cards
-                        update_padded_header(image_info.image_path, image_info.early_qa_cards)
+                        # update_padded_header(image_info.image_path, image_info.early_qa_cards)
                         # self.update_header(inims=[image_info.image_path], heads=[prep_cat], add_polygon_info=False)
                         continue
 
                     # run initial solve: scamp or solve-field
-                    self.run_scamp(prep_cat, scamp_preset="prep", joint=False, overwrite=overwrite)
+                    self.run_scamp(prep_cat, scamp_preset="prep", joint=joint_scamp, overwrite=overwrite)
                     self.update_pipeline_progress(5, "astrometry-scamp-prep")
 
                     if evaluate_prep_sol:
