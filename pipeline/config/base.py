@@ -17,8 +17,8 @@ class BaseConfig(ABC):
         self._load_config(config_source, **kwargs)
 
     def __repr__(self):
-        if hasattr(self, "config"):
-            return self.config.__repr__()
+        if hasattr(self, "node"):
+            return self.node.__repr__()
         else:
             return f"BaseConfig"
 
@@ -58,7 +58,7 @@ class BaseConfig(ABC):
         self._load_config(config_source=input)
         self.config_file = input
         # initialize PathHandler with the first group of input images
-        input_dict = self.config.input.to_dict()
+        input_dict = self.node.input.to_dict()
         input_images = next(iter(input_dict.values())) or None  # if empty, use None
         self.path = PathHandler(input_images, is_too=is_too)
         self.write = write
@@ -116,7 +116,7 @@ class BaseConfig(ABC):
 
         self._config_in_dict = input_dict
 
-        self.config = ConfigurationInstance(self)
+        self.node = ConfigNode(self)
 
         self._update_with_kwargs(**kwargs)
 
@@ -158,14 +158,14 @@ class BaseConfig(ABC):
         for key, value in self._config_in_dict.items():
             if isinstance(value, dict):
                 nested_dict = {}
-                instances = ConfigurationInstance(self, key)
+                instances = ConfigNode(self, key)
                 for subkey, subvalue in value.items():
                     nested_dict[subkey] = subvalue
                     setattr(instances, subkey, subvalue)
-                setattr(self.config, key, instances)
+                setattr(self.node, key, instances)
                 self._config_in_dict[key] = nested_dict
             else:
-                setattr(self.config, key, value)
+                setattr(self.node, key, value)
                 self._config_in_dict[key] = value
 
     @classmethod
@@ -192,7 +192,7 @@ class BaseConfig(ABC):
         config_dict = deepcopy(self.config_in_dict)
 
         # Recursively reduce all list values to i-th element
-        config_dict = self.config.select_from_lists(config_dict, i)
+        config_dict = self.node.select_from_lists(config_dict, i)
 
         # return BaseConfig(config_source=config_dict, write=False)
         return SciProcConfiguration.from_dict(config_dict)
@@ -231,7 +231,7 @@ class BaseConfig(ABC):
         return
 
 
-class ConfigurationInstance:
+class ConfigNode:
     def __init__(self, parent_config=None, section=None):
         self._parent_config = parent_config
         self._section = section
@@ -241,23 +241,34 @@ class ConfigurationInstance:
             return super().__setattr__(name, value)
 
         if self._parent_config:
-            # Update the configuration dictionary
+            # Check current value before updating
             if self._section:
                 # For nested configurations
-                if self._section not in self._parent_config.config_in_dict:
-                    self._parent_config.config_in_dict[self._section] = {}
-                self._parent_config.config_in_dict[self._section][name] = value
+                current_value = None
+                if self._section in self._parent_config.config_in_dict:
+                    current_value = self._parent_config.config_in_dict[self._section].get(name)
             else:
                 # For top-level configurations
-                self._parent_config.config_in_dict[name] = value
+                current_value = self._parent_config.config_in_dict.get(name)
 
-            # Always write config if initialized
-            if (
-                hasattr(self._parent_config, "is_initialized")
-                and self._parent_config.is_initialized
-                # and self._parent_config.is_loaded
-            ):
-                self._parent_config.write_config()
+            # Only update and write if value has changed
+            if current_value != value:
+                # Update the configuration dictionary
+                if self._section:
+                    # Ensure section exists
+                    if self._section not in self._parent_config.config_in_dict:
+                        self._parent_config.config_in_dict[self._section] = {}
+                    self._parent_config.config_in_dict[self._section][name] = value
+                else:
+                    self._parent_config.config_in_dict[name] = value
+
+                # Write config if initialized
+                if (
+                    hasattr(self._parent_config, "is_initialized")
+                    and self._parent_config.is_initialized
+                    # and self._parent_config.is_loaded
+                ):
+                    self._parent_config.write_config()
 
         super().__setattr__(name, value)
 
@@ -270,7 +281,7 @@ class ConfigurationInstance:
                 continue
 
             # Handle nested ConfigurationInstance
-            if isinstance(v, ConfigurationInstance):
+            if isinstance(v, ConfigNode):
                 repr_lines.append(f"{indent}  {k}:")
                 repr_lines.append(v.__repr__(indent_level + 1))
             elif isinstance(v, dict):
@@ -289,7 +300,7 @@ class ConfigurationInstance:
         for k, v in self.__dict__.items():
             if k.startswith("_"):
                 continue
-            if isinstance(v, ConfigurationInstance):
+            if isinstance(v, ConfigNode):
                 result[k] = v.to_dict()
             else:
                 result[k] = copy.deepcopy(v)
@@ -297,7 +308,7 @@ class ConfigurationInstance:
 
     def extract_single_image_config(self, i: int):
         """Returns ConfigurationInstance"""
-        return self._parent_config.extract_single_image_config(i).config
+        return self._parent_config.extract_single_image_config(i).node
 
     @staticmethod
     def select_from_lists(obj, i):
@@ -318,7 +329,7 @@ class ConfigurationInstance:
                 if k in exclude_keys:
                     result[k] = v
                 else:
-                    result[k] = ConfigurationInstance.select_from_lists(v, i)
+                    result[k] = ConfigNode.select_from_lists(v, i)
             return result
 
         elif isinstance(obj, list):

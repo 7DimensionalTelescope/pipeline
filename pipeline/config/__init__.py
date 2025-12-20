@@ -1,4 +1,4 @@
 from .preprocess import PreprocConfiguration
 from .sciprocess import SciProcConfiguration
-from .base import ConfigurationInstance
+from .base import ConfigNode
 from .utils import find_config

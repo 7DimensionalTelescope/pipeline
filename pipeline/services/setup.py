@@ -1,12 +1,14 @@
 from typing import Any, Union
 from abc import ABC, abstractmethod
 import glob
-from ..config import PreprocConfiguration, SciProcConfiguration, ConfigurationInstance
-from ..path.path import PathHandler
-from .logger import Logger, LockingFileHandler
-from .queue import QueueManager
 import warnings
 import logging
+
+from ..config import PreprocConfiguration, SciProcConfiguration, ConfigNode
+from ..path.path import PathHandler
+from .checker import Checker
+from .logger import Logger, LockingFileHandler
+from .queue import QueueManager
 
 
 class BaseSetup(ABC):
@@ -55,10 +57,10 @@ class BaseSetup(ABC):
         self.path = self._setup_path(config, is_too=is_too)
 
         # Setup Configuration
-        self.config = self._setup_config(config, is_too=is_too)
+        self.config_node = self._setup_config(config, is_too=is_too)
 
         # Setup log
-        self._logger = self._setup_logger(logger, self.config, is_too=is_too)
+        self._logger = self._setup_logger(logger, self.config_node, is_too=is_too)
 
         # Setup queue
         self.queue = self._setup_queue(queue)
@@ -77,7 +79,7 @@ class BaseSetup(ABC):
         Returns:
             Logger: The configured logger with proper file handling
         """
-        return self._setup_logger(self._logger, self.config)
+        return self._setup_logger(self._logger, self.config_node)
 
     def _setup_path(self, config, is_too=False):
         """
@@ -94,11 +96,11 @@ class BaseSetup(ABC):
         """
         if isinstance(config, PreprocConfiguration | SciProcConfiguration):
             return config.path
-        elif isinstance(config, ConfigurationInstance):
-            return PathHandler(config, is_too=is_too)
-        elif isinstance(config, str):
-            warnings.warn("String path is deprecated. Assume SciProcConfiguration.")
-            return PathHandler(SciProcConfiguration(config_source=config, is_too=is_too))
+        # elif isinstance(config, ConfigurationInstance):  # circular import
+        #     return PathHandler(config, is_too=is_too)
+        # elif isinstance(config, str):
+        #     warnings.warn("String path is deprecated. Assume SciProcConfiguration.")
+        #     return PathHandler(SciProcConfiguration(config_source=config, is_too=is_too))
         else:
             raise ValueError("No information to initialize PathHandler")
 
@@ -116,16 +118,16 @@ class BaseSetup(ABC):
             ValueError: If invalid configuration object is provided
         """
         if isinstance(config, PreprocConfiguration) or isinstance(config, SciProcConfiguration):
-            return config.config
+            return config.node
         elif isinstance(config, str):
             warnings.warn("String path is deprecated. Assume SciProcConfiguration.")
-            return SciProcConfiguration(config_source=config, is_too=is_too).config
-        elif isinstance(config, ConfigurationInstance):
+            return SciProcConfiguration(config_source=config, is_too=is_too).node
+        elif isinstance(config, ConfigNode):
             return config
         else:
             raise ValueError("Invalid configuration object")
 
-    def _setup_logger(self, logger, config, is_too=False):
+    def _setup_logger(self, logger, config_node, is_too=False):
         """
         Initialize the logger with proper file handling.
 
@@ -143,20 +145,20 @@ class BaseSetup(ABC):
         if isinstance(logger, Logger) and any(
             isinstance(handler, LockingFileHandler) for handler in logger.logger.handlers
         ):
-            logger.set_output_file(config.logging.file, overwrite=False)
+            logger.set_output_file(config_node.logging.file, overwrite=False)
             self._logger = logger
             return logger
         else:
             list_of_logger = logging.Logger.manager.loggerDict
-            if config.name in list_of_logger.keys():
-                tmp_logger = logging.getLogger(config.name)
+            if config_node.name in list_of_logger.keys():
+                tmp_logger = logging.getLogger(config_node.name)
                 if any(isinstance(handler, LockingFileHandler) for handler in tmp_logger.handlers):
                     self._logger = tmp_logger
                     return tmp_logger
 
-            tmp_logger = Logger(name=config.name)
-            tmp_logger.set_output_file(config.logging.file, overwrite=False)
-            tmp_logger.set_format(config.logging.format)
+            tmp_logger = Logger(name=config_node.name)
+            tmp_logger.set_output_file(config_node.logging.file, overwrite=False)
+            tmp_logger.set_format(config_node.logging.format)
             self._logger = tmp_logger
             return tmp_logger
 
@@ -187,6 +189,15 @@ class BaseSetup(ABC):
         Must be implemented by subclasses to handle specific input types.
         """
         pass
+
+    # TODO
+    # @classmethod
+    # @abstractmethod
+    # def from_config(self):
+    #     """
+    #     Abstract method for creating setup from the string path of a config
+    #     """
+    #     pass
 
     @classmethod
     def from_text_file(cls, image):
@@ -219,3 +230,16 @@ class BaseSetup(ABC):
     # def from_text_file(cls, imagelist_file):
     #     input_images = inputlist_parser(imagelist_file)
     #     cls.from_list(input_images)
+
+
+# class SciProcSetup(BaseSetup, Checker):
+#     """
+#     A class to define self.path (PathHandler) after filtering images by SANITY check.
+#     """
+
+#     def __init__(
+#         self, config: SciProcConfiguration, logger: Logger = None, queue: Union[bool, Any] = False, is_too: bool = False
+#     ) -> None:
+#         super().__init__(config, logger, queue, is_too)
+
+#         self.path = self._setup_path(config, is_too=is_too)

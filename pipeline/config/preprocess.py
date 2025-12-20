@@ -52,8 +52,8 @@ class PreprocConfiguration(BaseConfig):
         if hasattr(self, "path"):
             # return os.path.basename(self.path.preproc_output_yml).replace(".yml", "")
             return self.path.output_name
-        elif hasattr(self.config, "name"):
-            return self.config.name
+        elif hasattr(self.node, "name"):
+            return self.node.name
         else:
             return None
 
@@ -62,9 +62,9 @@ class PreprocConfiguration(BaseConfig):
         return
 
     def initialize(self):
-        self.config.info.version = __version__
-        self.config.info.creation_datetime = datetime.now().isoformat()
-        self.config.name = os.path.basename(self.path.preproc_output_yml).replace(".yml", "")
+        self.node.info.version = __version__
+        self.node.info.creation_datetime = datetime.now().isoformat()
+        self.node.name = os.path.basename(self.path.preproc_output_yml).replace(".yml", "")
         if self.input_files:
             masterframe_images = set()
             science_images = set()
@@ -74,9 +74,9 @@ class PreprocConfiguration(BaseConfig):
                 else:
                     science_images.add(file)
 
-        self.config.input.masterframe_images = list(masterframe_images)
-        self.config.input.science_images = list(science_images)
-        self.config.input.raw_dir = self.input_dir
+        self.node.input.masterframe_images = list(masterframe_images)
+        self.node.input.science_images = list(science_images)
+        self.node.input.raw_dir = self.input_dir
         self._initialized = True
 
     def _handle_input(self, input, logger, verbose, is_too=False, **kwargs):
@@ -124,7 +124,7 @@ class PreprocConfiguration(BaseConfig):
             self.path = self._set_pathhandler_from_config()
             self.logger = self._setup_logger(
                 logger,
-                name=self.config.name,
+                name=self.node.name,
                 log_file=self.path.preproc_output_log,
                 verbose=verbose,
                 overwrite=False,
@@ -135,21 +135,21 @@ class PreprocConfiguration(BaseConfig):
         else:
             raise ValueError("Input must be a list of FITS files or a directory containing FITS files")
 
-        self.config.logging.file = self.path.preproc_output_log
+        self.node.logging.file = self.path.preproc_output_log
         self.config_file = self.path.preproc_output_yml  # used by write_config
         return
 
     def _set_pathhandler_from_config(self):
         # mind the check order
-        if hasattr(self.config, "input"):
-            if hasattr(self.config.input, "science_images") and self.config.input.science_images:
-                return PathHandler(self.config.input.science_images[0])
+        if hasattr(self.node, "input"):
+            if hasattr(self.node.input, "science_images") and self.node.input.science_images:
+                return PathHandler(self.node.input.science_images[0])
 
-            elif hasattr(self.config.input, "masterframe_images") and self.config.input.masterframe_images:
-                return PathHandler(flatten(self.config.input.masterframe_images)[0])
+            elif hasattr(self.node.input, "masterframe_images") and self.node.input.masterframe_images:
+                return PathHandler(flatten(self.node.input.masterframe_images)[0])
 
-            elif hasattr(self.config.input, "raw_dir") and self.config.input.raw_dir:
-                f = os.path.join(self.config.input.raw_dir, "**.fits")
+            elif hasattr(self.node.input, "raw_dir") and self.node.input.raw_dir:
+                f = os.path.join(self.node.input.raw_dir, "**.fits")
                 return PathHandler(sorted(glob.glob(f))[0])
 
         raise ValueError("Configuration does not contain valid input files or directories to create PathHandler.")

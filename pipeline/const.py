@@ -54,6 +54,32 @@ ALL_FILTERS = WIDE_FILTERS + MEDIUM_FILTERS + BROAD_FILTERS
 PIXSCALE = 0.505  # arcsec/pixel. Default plate scale assumed prior to astrometric solving
 NUM_MIN_CALIB = 5  # 2
 
+
+FILTER_WAVELENGTHS = {
+    "m375w": 3750,
+    "m425w": 4250,
+    "u": 3500,
+    "g": 4750,
+    "r": 6250,
+    "i": 7700,
+    "z": 9000,
+}
+for w in range(400, 900, 25):
+    FILTER_WAVELENGTHS[f"m{w}"] = w * 10
+
+FILTER_WIDTHS = {
+    "m375w": 250,
+    "m425w": 250,
+    "u": 600,
+    "g": 1150,
+    "r": 1150,
+    "i": 1000,
+    "z": 1000,
+}
+for w in range(400, 900, 25):
+    FILTER_WIDTHS[f"m{w}"] = 250
+
+
 HEADER_KEY_MAP = {
     "exptime": "EXPOSURE",
     "gain": "GAIN",

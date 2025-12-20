@@ -52,27 +52,27 @@ def run_scidata_reduction(
         else:
             raise ValueError("Invalid configuration type. Expected SciProcConfiguration or path to .yml file.")
 
-        if "astrometry" in processes and (not config.config.flag.astrometry or overwrite):
+        if "astrometry" in processes and (not config.node.flag.astrometry or overwrite):
             astr = Astrometry(config)
             astr.run(overwrite=overwrite)
             del astr
-        if "photometry" in processes and (not config.config.flag.single_photometry or overwrite):
+        if "photometry" in processes and (not config.node.flag.single_photometry or overwrite):
             phot = Photometry(config, photometry_mode="single_photometry")
             phot.run()
             del phot
-        if "combine" in processes and (not config.config.flag.combine or overwrite):
+        if "combine" in processes and (not config.node.flag.combine or overwrite):
             stk = ImStack(config, overwrite=overwrite)
             stk.run()
             del stk
-        if "photometry" in processes and (not config.config.flag.combined_photometry or overwrite):
+        if "photometry" in processes and (not config.node.flag.combined_photometry or overwrite):
             phot = Photometry(config, photometry_mode="combined_photometry")
             phot.run()
             del phot
-        if "subtract" in processes and (not config.config.flag.subtraction or overwrite):
+        if "subtract" in processes and (not config.node.flag.subtraction or overwrite):
             subt = ImSubtract(config, overwrite=overwrite)
             subt.run()
             del subt
-        if "photometry" in processes and (not config.config.flag.difference_photometry or overwrite):
+        if "photometry" in processes and (not config.node.flag.difference_photometry or overwrite):
             phot = Photometry(config, photometry_mode="difference_photometry")
             phot.run()
             del phot

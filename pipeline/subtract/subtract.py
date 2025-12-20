@@ -4,6 +4,7 @@ from pathlib import Path
 from glob import glob
 from astropy.io import fits
 from astropy.table import Table
+from datetime import datetime, timedelta
 
 from .. import external
 from ..services.setup import BaseSetup
@@ -12,17 +13,15 @@ from ..tools.table import match_two_catalogs
 from ..config.utils import get_key
 from ..path import PathHandler
 from ..preprocess.plotting import save_fits_as_figures
-
 from ..services.database.handler import DatabaseHandler
 from ..services.database.table import QAData
+from ..services.checker import Checker, SanityFilterMixin
+from ..services.database.query import RawImageQuery
 
 from .utils import create_ds9_region_file, select_sources
 
-from datetime import datetime, timedelta
-from ..services.database.query import RawImageQuery
 
-
-class ImSubtract(BaseSetup, DatabaseHandler):
+class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
     def __init__(
         self,
         config=None,
@@ -34,17 +33,17 @@ class ImSubtract(BaseSetup, DatabaseHandler):
         super().__init__(config, logger, queue)
         self._flag_name = "subtract"
         self.overwrite = overwrite
-        self.name = self.config.name
+        self.name = self.config_node.name
         self.reference_images = None
 
         self.qa_id = None
-        self.is_too = self.config.settings.is_too
-        DatabaseHandler.__init__(self, add_database=self.config.settings.is_pipeline, is_too=self.is_too)
+        self.is_too = self.config_node.settings.is_too
+        DatabaseHandler.__init__(self, add_database=self.config_node.settings.is_pipeline, is_too=self.is_too)
 
         if self.is_connected:
             self.set_logger(logger)
             self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
-            self.pipeline_id = self.create_pipeline_data(self.config)
+            self.pipeline_id = self.create_pipeline_data(self.config_node)
             self.update_pipeline_progress(80, "imsubtract-configured")
 
     @classmethod
@@ -77,7 +76,7 @@ class ImSubtract(BaseSetup, DatabaseHandler):
             self.find_reference_image()
             if self.reference_images is None:  # if not found, do not run
                 self.logger.info(f"No reference image found for {self.name}; Skipping transient search.")
-                self.config.flag.subtraction = True
+                self.config_node.flag.subtraction = True
                 self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")
                 self.update_pipeline_progress(100, "imsubtract-completed")
                 return
@@ -87,7 +86,7 @@ class ImSubtract(BaseSetup, DatabaseHandler):
 
             if not overwrite and os.path.exists(self.subt_image_file):
                 self.logger.info(f"Subtracted image already exists: {self.subt_image_file}; Skipping subtraction.")
-                self.config.flag.subtraction = True
+                self.config_node.flag.subtraction = True
                 self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")
                 self.update_pipeline_progress(100, "imsubtract-completed")
                 return
@@ -128,7 +127,7 @@ class ImSubtract(BaseSetup, DatabaseHandler):
 
             self.update_pipeline_progress(90, "imsubtract-completed")
 
-            self.config.flag.subtraction = True
+            self.config_node.flag.subtraction = True
             self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")
 
         except Exception as e:
@@ -188,29 +187,29 @@ class ImSubtract(BaseSetup, DatabaseHandler):
 
     def define_paths(self):
         # always consider a single stacked image as input, not a list of images
-        local_inim = get_key(self.config, "imsubtract.input_image")
-        if local_inim is not None:
-            inim = local_inim
-        else:  # set from the common input if not set locally
-            inim = self.config.input.stacked_image
-            self.config.imsubtract.input_image = inim
+        local_input_images = get_key(self.config_node, "imsubtract.input_image")
+        # set from the common input if not set locally
+        self.input_images = [local_input_images] or [self.config_node.input.stacked_image]
+        self.apply_sanity_filter_and_report()
+        input_image = self.input_images[0]
+        self.config_node.imsubtract.input_image = input_image
 
-        self.logger.debug(f"ImSubtract inim: {inim}")
-        self.sci_image_file = inim  # self.path.imstack.stacked_image
+        self.logger.debug(f"ImSubtract inim: {input_image}")
+        self.sci_image_file = input_image  # self.path.imstack.stacked_image
         # self.sci_source_table_file = get_derived_product_path(self.sci_image_file)
         # self.sci_source_table_file = add_suffix(self.sci_image_file, "cat")
         self.sci_source_table_file = PathHandler(self.sci_image_file, is_too=self.is_too).catalog
 
-        self.ref_image_file = self.config.imsubtract.reference_image or self.reference_images[0]
-        self.config.imsubtract.reference_image = self.ref_image_file  # sync
+        self.ref_image_file = self.config_node.imsubtract.reference_image or self.reference_images[0]
+        self.config_node.imsubtract.reference_image = self.ref_image_file  # sync
         self.ref_source_table_file = self.ref_image_file.replace(".fits", "_cat.fits")
         # self.ref_source_table_file = swap_ext(self.ref_image_file, "phot.cat")
 
         # self.subt_image_file = get_derived_product_path(self.sci_image_file, "transient", "subt.fits")
         self.subt_image_file = PathHandler(self.sci_image_file, is_too=self.is_too).imsubtract.diffim
-        self.config.input.difference_image = self.subt_image_file
+        self.config_node.input.difference_image = self.subt_image_file
         self.logger.debug(f"subt_image_file: {self.subt_image_file}")
-        self.logger.debug(f"config.input.difference_image: {self.config.input.difference_image}")
+        self.logger.debug(f"config.input.difference_image: {self.config_node.input.difference_image}")
         # transient_dir = os.path.dirname(self.subt_image_file)
         # if not os.path.exists(transient_dir):
         #     os.makedirs(transient_dir)

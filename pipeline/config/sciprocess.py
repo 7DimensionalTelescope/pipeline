@@ -1,9 +1,11 @@
 from __future__ import annotations
 import os
+from pathlib import Path
 import glob
 import time
 from datetime import datetime
 from astropy.io import fits
+
 from .. import __version__
 from ..const import PipelineError
 from ..utils import clean_up_folder, clean_up_sciproduct, get_header, atleast_1d, time_diff_in_seconds, collapse
@@ -106,14 +108,14 @@ class SciProcConfiguration(BaseConfig):
             if isinstance(log_file, list):
                 print(f"[WARNING] log filename is not uniquely defined. Using the last one.")
                 log_file = collapse(sorted(log_file)[::-1], force=True)
-            self.config.logging.file = log_file
+            self.node.logging.file = log_file
             if is_too:
                 min_time = self._calculate_too_time(input_images)
                 base_name = os.path.basename(log_file).replace(".log", "")
-                self.config.logging.file = log_file.replace(base_name, f"{base_name}_too_{min_time}")
+                self.node.logging.file = log_file.replace(base_name, f"{base_name}_too_{min_time}")
             self.logger = cls._setup_logger(
                 name=self.name,
-                log_file=self.config.logging.file,
+                log_file=self.node.logging.file,
                 verbose=verbose,
                 overwrite=write,
                 **kwargs,
@@ -124,13 +126,13 @@ class SciProcConfiguration(BaseConfig):
         else:
             self.logger = None
 
-        self.config.input.calibrated_images = atleast_1d(input_images)
+        self.node.input.calibrated_images = atleast_1d(input_images)
         # self.config.name = "user-input"
-        self.config.name = self.name
-        self.config.settings.is_pipeline = is_too
+        self.node.name = self.name
+        self.node.settings.is_pipeline = is_too
         self.fill_missing_from_yaml()
-        self.config.info.version = __version__
-        self.config._initialized = True
+        self.node.info.version = __version__
+        self._initialized = True
         return self
 
     @classmethod
@@ -164,8 +166,8 @@ class SciProcConfiguration(BaseConfig):
             return os.path.splitext(os.path.basename(self.config_file))[0]
         elif hasattr(self, "path"):
             return os.path.basename(self.path.sciproc_output_yml).replace(".yml", "")
-        elif hasattr(self.config, "name"):
-            return self.config.name
+        elif hasattr(self.node, "name"):
+            return self.node.name
         else:
             return None
 
@@ -191,8 +193,8 @@ class SciProcConfiguration(BaseConfig):
             self.logger.info("Generating 'SciProcConfiguration' from the 'base' configuration")
             self.logger.debug(f"Configuration source: {config_source}")
             super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
-            self.config.info.file = config_source
-            self.config.logging.file = log_file
+            self.node.info.file = config_source
+            self.node.logging.file = log_file
             # raise PipelineError("Initializing 'SciProcConfiguration' from a list of images is not supported anymore. Please use 'SciProcConfiguration.base_config' instead.")
 
         elif isinstance(input, str | dict):  # path of a config file
@@ -200,20 +202,20 @@ class SciProcConfiguration(BaseConfig):
             super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
             # working_dir = os.path.dirname(config_source) if isinstance(config_source, str) else None
             self.path = self._set_pathhandler_from_config(is_too=is_too)  # working_dir=working_dir)
-            self.config.logging.file = self.path.sciproc_output_log
+            self.node.logging.file = self.path.sciproc_output_log
 
             if is_too:
                 log_file = self.path.sciproc_output_log
                 min_time = self._calculate_too_time(self.input_files)
                 base_name = os.path.basename(log_file).replace(".log", "")
-                self.config.logging.file = log_file.replace(base_name, f"{base_name}_too_{min_time}")
+                self.node.logging.file = log_file.replace(base_name, f"{base_name}_too_{min_time}")
 
             if isinstance(config_source, str):
                 self.config_file = config_source  # use the filename as is
             self.logger = self._setup_logger(
                 logger,
                 name=self.name,
-                log_file=self.config.logging.file,
+                log_file=self.node.logging.file,
                 verbose=verbose,
                 overwrite=False,
             )
@@ -287,8 +289,6 @@ class SciProcConfiguration(BaseConfig):
                         self.logger.debug(f"Could not parse DATE-OBS from {input_file}: {e}")
                     continue
 
-        from pathlib import Path
-
         # First, try using config_file if available
         if hasattr(self, "config_file") and self.config_file:
             # Handle case where config_file might be a list
@@ -316,45 +316,45 @@ class SciProcConfiguration(BaseConfig):
 
     def _set_pathhandler_from_config(self, working_dir=None, is_too=False):
         # mind the check order
-        if hasattr(self.config, "input"):
-            if hasattr(self.config.input, "calibrated_images") and self.config.input.calibrated_images:
-                return PathHandler(self.config.input.calibrated_images, working_dir=working_dir, is_too=is_too)
+        if hasattr(self.node, "input"):
+            if hasattr(self.node.input, "calibrated_images") and self.node.input.calibrated_images:
+                return PathHandler(self.node.input.calibrated_images, working_dir=working_dir, is_too=is_too)
 
-            if hasattr(self.config.input, "processed_dir") and self.config.input.processed_dir:
-                f = os.path.join(self.config.input.processed_dir, "**.fits")
+            if hasattr(self.node.input, "processed_dir") and self.node.input.processed_dir:
+                f = os.path.join(self.node.input.processed_dir, "**.fits")
                 return PathHandler(sorted(glob.glob(f)), working_dir=working_dir, is_too=is_too)
 
-            if hasattr(self.config.input, "stacked_image") and self.config.input.stacked_image:
-                return PathHandler(self.config.input.stacked_image, working_dir=working_dir, is_too=is_too)
+            if hasattr(self.node.input, "stacked_image") and self.node.input.stacked_image:
+                return PathHandler(self.node.input.stacked_image, working_dir=working_dir, is_too=is_too)
 
         raise ValueError("Configuration does not contain valid input files or directories to create PathHandler.")
 
     def initialize(self, is_pipeline=True, is_too=False):
         """Fill in universal info, filenames, settings."""
 
-        self.config.info.version = __version__
-        self.config.info.creation_datetime = datetime.now().isoformat()
-        self.config.info.file = self.config_file
-        self.config.name = self.config.name or self.name
+        self.node.info.version = __version__
+        self.node.info.creation_datetime = datetime.now().isoformat()
+        self.node.info.file = self.config_file
+        self.node.name = self.node.name or self.name
 
-        self.config.input.calibrated_images = atleast_1d(PathHandler(self.input_files, is_too=is_too).processed_images)
+        self.node.input.calibrated_images = atleast_1d(PathHandler(self.input_files, is_too=is_too).processed_images)
 
         if is_too:
             base_name = os.path.basename(self.config_file).replace(".yml", "").replace(".yaml", "")
             min_time = self._calculate_too_time(self.input_files)
             self.config_file = self.config_file.replace(base_name, f"{base_name}_too_{min_time}")
-            self.config.name = os.path.splitext(os.path.basename(self.config_file))[0]
+            self.node.name = os.path.splitext(os.path.basename(self.config_file))[0]
             self._update_too_times(self.input_files)
 
-        self.config.input.output_dir = self.path.output_dir
+        self.node.input.output_dir = self.path.output_dir
 
         # self.set_input_output()
         # self.check_masterframe_status()
 
         if is_pipeline:
-            self.config.settings.is_pipeline = True
+            self.node.settings.is_pipeline = True
         self._define_settings(self.input_files[0])
-        self.input_files = self.config.input.calibrated_images
+        self.input_files = self.node.input.calibrated_images
 
         self.fill_missing_from_yaml()
 
@@ -373,6 +373,6 @@ class SciProcConfiguration(BaseConfig):
                 self.logger.warning("OBSMODE keyword not found in the header. Defaulting to 'spec'.")
                 obsmode = "spec"
             # self.config.obs.obsmode = obsmode
-            self.config.settings.daily_stack = False if obsmode.lower() == "deep" else True
+            self.node.settings.daily_stack = False if obsmode.lower() == "deep" else True
         except Exception as e:
             self.logger.warning(f"Failed to define settings: {e}")

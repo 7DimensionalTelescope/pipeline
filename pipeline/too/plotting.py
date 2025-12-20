@@ -12,7 +12,7 @@ from pathlib import Path
 import os
 import warnings
 import seaborn as sns
-from ..const import PIXSCALE
+from ..const import PIXSCALE, BROAD_FILTERS, FILTER_WAVELENGTHS, FILTER_WIDTHS
 from .catalog import SkyCatalog
 
 warnings.simplefilter("ignore", category=FITSFixedWarning)
@@ -182,30 +182,7 @@ def plot_cutouts_and_sed(
         raise ValueError("No images found")
 
     # Sort images by filter
-    BROADBAND_FILTERS = ["u", "g", "r", "i", "z"]
-    FILTER_WAVELENGTHS = {
-        "m375w": 3750,
-        "m425w": 4250,
-        "u": 3500,
-        "g": 4750,
-        "r": 6250,
-        "i": 7700,
-        "z": 9000,
-    }
-    for w in range(400, 900, 25):
-        FILTER_WAVELENGTHS[f"m{w}"] = w * 10
-
-    FILTER_WIDTHS = {
-        "m375w": 250,
-        "m425w": 250,
-        "u": 600,
-        "g": 1150,
-        "r": 1150,
-        "i": 1000,
-        "z": 1000,
-    }
-    for w in range(400, 900, 25):
-        FILTER_WIDTHS[f"m{w}"] = 250
+    BROADBAND_FILTERS = BROAD_FILTERS
 
     def get_filter_sort_key(image_path):
         try:

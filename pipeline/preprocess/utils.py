@@ -161,9 +161,9 @@ def search_with_date_offsets(template, max_offset=30, future=False):
                     else:
                         continue
                 else:
-                    minimum = PathHandler(matches).get_minimum("exptime")
-                    if Checker().sanity_check(minimum):
-                        return minimum
+                    min_exptime_image = PathHandler(matches).get_minimum("exptime")
+                    if Checker().sanity_check(min_exptime_image):
+                        return min_exptime_image
                     else:
                         continue
         else:

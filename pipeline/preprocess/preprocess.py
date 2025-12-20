@@ -123,13 +123,13 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
         self.logger.info("Initializing Preprocess")
 
-        if get_key(self.config.input, "masterframe_images") or get_key(self.config.input, "science_images"):
-            bdf_flattened = flatten(self.config.input.masterframe_images)
-            input_files = bdf_flattened + list(self.config.input.science_images)
+        if get_key(self.config_node.input, "masterframe_images") or get_key(self.config_node.input, "science_images"):
+            bdf_flattened = flatten(self.config_node.input.masterframe_images)
+            input_files = bdf_flattened + list(self.config_node.input.science_images)
             self.raw_groups = PathHandler.take_raw_inventory(input_files, is_too=self.is_too)
             # self.logger.debug(f"raw_groups initialized: {self.raw_groups}")
-        elif self.config.input.raw_dir:
-            input_files = glob.glob(os.path.join(self.config.input.raw_dir, "*.fits"))
+        elif self.config_node.input.raw_dir:
+            input_files = glob.glob(os.path.join(self.config_node.input.raw_dir, "*.fits"))
             self.raw_groups = PathHandler.take_raw_inventory(input_files, is_too=self.is_too)
         else:
             raise ValueError("No input files or directory specified")
@@ -145,7 +145,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
         # Create pipeline record in database
         if self.is_connected:
-            self.pipeline_id = self.create_pipeline_data(self.config, self.raw_groups, self.overwrite)
+            self.pipeline_id = self.create_pipeline_data(self.config_node, self.raw_groups, self.overwrite)
 
     def log_group_manifest(self):
         for i, group in enumerate(self.raw_groups):
@@ -409,7 +409,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                     output=self.dark_output,
                     sig_output=self.darksig_output,
                     make_bpmask=self.bpmask_output,
-                    bpmask_sigma=self.config.preprocess.n_sigma,
+                    bpmask_sigma=self.config_node.preprocess.n_sigma,
                 )
                 # for flatdark
                 self.flatdark_output = self.dark_output  # named _output for consistency, but not written to disk
@@ -472,7 +472,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         """
         self.logger.info(f"[Group {self._current_group+1}] Fetching a nominal master {dtype}")
         # existing_data can be either on-date or off-date
-        max_offset = self.config.preprocess.max_offset
+        max_offset = self.config_node.preprocess.max_offset
         self.logger.debug(f"[Group {self._current_group+1}] Masterframe Search ({dtype}) Template: {template}")
         existing_mframe_file = prep_utils.tolerant_search(template, dtype, max_offset=max_offset, future=True)
 
@@ -602,7 +602,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
     def prepare_header(self):
         bias, dark, flat = self.bias_output, self.dark_output, self.flat_output
-        n_head_blocks = self.config.preprocess.n_head_blocks
+        n_head_blocks = self.config_node.preprocess.n_head_blocks
         for raw_file, processed_file in zip(self.sci_input, self.sci_output):
             with fits.open(raw_file) as hdul:
                 header = hdul[0].header.copy()
@@ -746,7 +746,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                     newhdu.header[key] = header[key]
             newhdu.header["COMMENT"] = "Header inherited from first dark frame"
         newhdu.header["NHOTPIX"] = (np.sum(hot_mask), "Number of hot pixels.")
-        newhdu.header["SIGMAC"] = (self.config.preprocess.n_sigma, "HP threshold in clipped sigma")
+        newhdu.header["SIGMAC"] = (self.config_node.preprocess.n_sigma, "HP threshold in clipped sigma")
         newhdu.header["BADPIX"] = (1, "Pixel Value for Bad pixels")
         newhdu.header["SANITY"] = (sanity, "Sanity flag")
         primary_hdu = fits.PrimaryHDU()

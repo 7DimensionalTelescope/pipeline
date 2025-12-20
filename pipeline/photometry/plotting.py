@@ -24,7 +24,7 @@ from . import utils as phot_utils
 from ..config.utils import get_key
 from ..utils import time_diff_in_seconds, get_header_key, force_symlink
 from ..config import SciProcConfiguration
-from ..config.base import ConfigurationInstance
+from ..config.base import ConfigNode
 from ..services.memory import MemoryMonitor
 from ..services.queue import QueueManager
 from .. import external

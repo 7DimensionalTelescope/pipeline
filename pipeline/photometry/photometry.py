@@ -24,7 +24,7 @@ from astropy.stats import sigma_clip
 from ..config.utils import get_key
 from ..utils import time_diff_in_seconds, get_header_key, force_symlink, collapse
 from ..config import SciProcConfiguration
-from ..config.base import ConfigurationInstance
+from ..config.base import ConfigNode
 from ..services.memory import MemoryMonitor
 from ..services.queue import QueueManager
 from .. import external
@@ -36,6 +36,7 @@ from ..header import update_padded_header
 
 from ..services.database.handler import DatabaseHandler
 from ..services.database.table import QAData
+from ..services.checker import Checker, SanityFilterMixin
 
 from . import utils as phot_utils
 from .plotting import plot_zp, plot_filter_check
@@ -43,7 +44,7 @@ from .plotting import plot_zp, plot_filter_check
 from ..too.plotting import make_too_output
 
 
-class Photometry(BaseSetup, DatabaseHandler):
+class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
     """
     A class to perform photometric analysis on astronomical images.
 
@@ -86,27 +87,32 @@ class Photometry(BaseSetup, DatabaseHandler):
         super().__init__(config, logger, queue)
         # self._flag_name = "photometry"
 
-        self.ref_catalog = ref_catalog or self.config.photometry.refcatname
+        self.ref_catalog = ref_catalog or self.config_node.photometry.refcatname
 
         if photometry_mode == "single_photometry" or (
-            not self.config.flag.single_photometry
+            not self.config_node.flag.single_photometry
             # and (not self.config.input.stacked_image and not self.config.input.difference_image)  # hassle when rerunning
         ):
-            self.config.photometry.input_images = images or self.config.input.calibrated_images
-            self.input_images = self.config.photometry.input_images
+            self.input_images = images or self.config_node.input.calibrated_images
+            if self.apply_sanity_filter_and_report():  # sync if changed
+                self.config_node.photometry.input_images = self.input_images
             self.logger.debug("Running single photometry")
             self._photometry_mode = "single_photometry"
         elif photometry_mode == "combined_photometry" or (
-            not self.config.flag.combined_photometry
+            not self.config_node.flag.combined_photometry
             # and (self.config.input.stacked_image and not self.config.input.difference_image)
         ):
-            self.config.photometry.input_images = images or [x] if (x := self.config.input.stacked_image) else None
-            self.input_images = self.config.photometry.input_images
+            self.config_node.photometry.input_images = (
+                images or [x] if (x := self.config_node.input.stacked_image) else None
+            )
+            self.input_images = self.config_node.photometry.input_images
             self.logger.debug("Running combined photometry")
             self._photometry_mode = "combined_photometry"
-        elif photometry_mode == "difference_photometry" or not self.config.flag.difference_photometry:
-            self.config.photometry.input_images = images or [x] if (x := self.config.input.difference_image) else None
-            self.input_images = self.config.photometry.input_images
+        elif photometry_mode == "difference_photometry" or not self.config_node.flag.difference_photometry:
+            self.config_node.photometry.input_images = (
+                images or [x] if (x := self.config_node.input.difference_image) else None
+            )
+            self.input_images = self.config_node.photometry.input_images
             self.logger.debug("Running difference photometry")
             self._photometry_mode = "difference_photometry"
 
@@ -120,13 +126,13 @@ class Photometry(BaseSetup, DatabaseHandler):
 
         self.qa_ids = []
         DatabaseHandler.__init__(
-            self, add_database=self.config.settings.is_pipeline, is_too=self.config.settings.is_too
+            self, add_database=self.config_node.settings.is_pipeline, is_too=self.config_node.settings.is_too
         )
 
         if self.is_connected or self.too_id is not None:
             self.set_logger(logger)
             self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
-            self.pipeline_id = self.create_pipeline_data(self.config)
+            self.pipeline_id = self.create_pipeline_data(self.config_node)
             self.update_pipeline_progress(self._progress_by_mode[0], f"{self._photometry_mode}-configured")
 
     @property
@@ -200,11 +206,11 @@ class Photometry(BaseSetup, DatabaseHandler):
                 self._run_sequential(overwrite=overwrite)
 
             if self._photometry_mode == "single_photometry":
-                self.config.flag.single_photometry = True
+                self.config_node.flag.single_photometry = True
             elif self._photometry_mode == "combined_photometry":
-                self.config.flag.combined_photometry = True
+                self.config_node.flag.combined_photometry = True
             elif self._photometry_mode == "difference_photometry":
-                self.config.flag.difference_photometry = True
+                self.config_node.flag.difference_photometry = True
             else:
                 raise PipelineError(f"Undefined photometry mode: {self._photometry_mode}")
 
@@ -239,8 +245,8 @@ class Photometry(BaseSetup, DatabaseHandler):
         """Process images in parallel using queue system."""
         task_ids = []
         for i, image in enumerate(self.input_images):
-            process_name = f"{self.config.name} - single photometry - {i+1} of {len(self.input_images)}"
-            single_config = self.config.extract_single_image_config(i)
+            process_name = f"{self.config_node.name} - single photometry - {i+1} of {len(self.input_images)}"
+            single_config = self.config_node.extract_single_image_config(i)
             diff_phot = self._photometry_mode == "difference_photometry"
 
             phot_single = PhotometrySingle(
@@ -262,7 +268,7 @@ class Photometry(BaseSetup, DatabaseHandler):
     def _run_sequential(self, overwrite=True) -> None:
         """Process images sequentially."""
         for i, image in enumerate(self.input_images):
-            single_config = self.config.extract_single_image_config(i)
+            single_config = self.config_node.extract_single_image_config(i)
             diff_phot = self._photometry_mode == "difference_photometry"
             PhotometrySingle(
                 # image,
@@ -308,7 +314,7 @@ class PhotometrySingle:
     def __init__(
         self,
         # image: str,
-        config: ConfigurationInstance,
+        config: ConfigNode,
         logger: Any = None,
         name: Optional[str] = None,
         ref_catalog: str = "GaiaXP",

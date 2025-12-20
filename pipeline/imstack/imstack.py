@@ -16,6 +16,7 @@ from ..config import SciProcConfiguration
 from ..path.path import PathHandler, NameHandler
 from ..services.setup import BaseSetup
 from ..services.utils import acquire_available_gpu
+from ..config.utils import get_key
 from ..utils import collapse, get_header, add_suffix, time_diff_in_seconds, get_basename, atleast_1d, swap_ext
 from ..preprocess.utils import get_zdf_from_header_IMCMB
 from ..preprocess.plotting import save_fits_as_figures
@@ -23,6 +24,7 @@ from .. import external
 
 from ..services.database.handler import DatabaseHandler
 from ..services.database.table import QAData
+from ..services.checker import Checker, SanityFilterMixin
 
 from .utils import move_file  # inputlist_parser, move_file
 from .const import ZP_KEY, IC_KEYS, CORE_KEYS
@@ -31,7 +33,7 @@ from .const import ZP_KEY, IC_KEYS, CORE_KEYS
 warnings.filterwarnings("ignore")
 
 
-class ImStack(BaseSetup, DatabaseHandler):
+class ImStack(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
     def __init__(
         self,
         config=None,
@@ -47,18 +49,18 @@ class ImStack(BaseSetup, DatabaseHandler):
         self._use_gpu = use_gpu
         self._flag_name = "combine"
 
-        if self.config.settings.is_pipeline:
-            self.config.imstack.convolve = False
+        if self.config_node.settings.is_pipeline:
+            self.config_node.imstack.convolve = False
 
         self.qa_id = None
         DatabaseHandler.__init__(
-            self, add_database=self.config.settings.is_pipeline, is_too=self.config.settings.is_too
+            self, add_database=self.config_node.settings.is_pipeline, is_too=self.config_node.settings.is_too
         )
 
         if self.is_connected:
             self.set_logger(logger)
             self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
-            self.pipeline_id = self.create_pipeline_data(self.config)
+            self.pipeline_id = self.create_pipeline_data(self.config_node)
             self.update_pipeline_progress(60, "imstack-configured")
 
     @classmethod
@@ -89,9 +91,9 @@ class ImStack(BaseSetup, DatabaseHandler):
         #     (10, "stack_with_swarp", False),
         # ]
 
-    def run(self, use_gpu: bool = True, device_id=None):
+    def run(self, use_gpu: bool = False, device_id=None):
         try:
-            self._use_gpu = all([use_gpu, self.config.imstack.gpu, self._use_gpu])
+            self._use_gpu = all([use_gpu, self.config_node.imstack.gpu, self._use_gpu])
 
             self.initialize()
 
@@ -102,22 +104,22 @@ class ImStack(BaseSetup, DatabaseHandler):
             self.zpscale()
             self.update_pipeline_progress(62, "imstack-zpscale-completed")
 
-            if self.config.imstack.weight_map:
+            if self.config_node.imstack.weight_map:
                 self.calculate_weight_map(device_id=device_id)
                 self.update_pipeline_progress(63, "imstack-calculate-weight-map-completed")
 
             # replace hot pixels
-            if self.config.imstack.apply_bpmask:
+            if self.config_node.imstack.apply_bpmask:
                 self.apply_bpmask(device_id=device_id)
                 self.update_pipeline_progress(64, "imstack-apply-bpmask-completed")
 
             # re-registration
-            if self.config.imstack.joint_wcs:
+            if self.config_node.imstack.joint_wcs:
                 self.joint_registration()
                 self.update_pipeline_progress(65, "imstack-joint-registration-completed")
 
             # seeing convolution
-            if self.config.imstack.convolve:
+            if self.config_node.imstack.convolve:
                 self.prepare_convolution()
                 self.run_convolution(device_id=device_id)
                 self.update_pipeline_progress(66, "imstack-run-convolution-completed")
@@ -130,13 +132,13 @@ class ImStack(BaseSetup, DatabaseHandler):
             self.update_pipeline_progress(69, "imstack-plot-stacked-image-completed")
 
             if self.is_connected and self.pipeline_id is not None:
-                stacked_image = self.config.imstack.stacked_image
+                stacked_image = self.config_node.imstack.stacked_image
                 if stacked_image and os.path.exists(stacked_image):
                     self.qa_id = self.create_qa_data("science", image=stacked_image, output_file=stacked_image)
 
             # Update QA data from header if database is connected
             if self.is_connected and self.qa_id is not None:
-                stacked_image = self.config.imstack.stacked_image
+                stacked_image = self.config_node.imstack.stacked_image
                 if stacked_image and os.path.exists(stacked_image):
                     qa_data = QAData.from_header(
                         fits.getheader(stacked_image),
@@ -151,7 +153,7 @@ class ImStack(BaseSetup, DatabaseHandler):
 
             self.update_pipeline_progress(70, "imstack-completed")
 
-            self.config.flag.combine = True
+            self.config_node.flag.combine = True
             self.logger.info(f"'ImStack' is Completed in {time_diff_in_seconds(self._st)} seconds")
         except Exception as e:
             self.logger.error(f"Error during imstack processing: {str(e)}")
@@ -163,14 +165,14 @@ class ImStack(BaseSetup, DatabaseHandler):
         self._st = time.time()
         self.logger.info(f"Start 'ImStack'")
         # use common input if imstack.input_files override is not set
-        if not (hasattr(self.config.imstack, "input_images") and self.config.imstack.input_images):
-            self.config.imstack.input_images = self.config.input.calibrated_images
-
-        self.input_images = self.config.imstack.input_images
+        local_input_images = get_key(self.config_node.imstack, "input_images")
+        self.input_images = local_input_images or self.config_node.input.calibrated_images
+        self.apply_sanity_filter_and_report()
+        self.config_node.imstack.input_images = self.input_images
         if not self.input_images:
             raise PipelineError("No Input for ImStack")
 
-        self.zpkey = self.config.imstack.zp_key or ZP_KEY
+        self.zpkey = self.config_node.imstack.zp_key or ZP_KEY
         # self.ic_keys = IC_KEYS
         self.keys_to_propagate = CORE_KEYS
 
@@ -181,13 +183,13 @@ class ImStack(BaseSetup, DatabaseHandler):
         self.set_metadata_without_ccdproc()
 
         # Output stacked image file name
-        self.config.imstack.stacked_image = (
+        self.config_node.imstack.stacked_image = (
             self.path.imstack.daily_stacked_image
-            if self.config.settings.is_pipeline
+            if self.config_node.settings.is_pipeline
             else self.path.imstack.stacked_image
         )
-        self.config.input.stacked_image = self.config.imstack.stacked_image
-        self.logger.debug(f"Stacked Image: {self.config.imstack.stacked_image}")
+        self.config_node.input.stacked_image = self.config_node.imstack.stacked_image
+        self.logger.debug(f"Stacked Image: {self.config_node.imstack.stacked_image}")
 
         self.logger.info(f"Initialization for ImStack is completed")
 
@@ -285,11 +287,11 @@ class ImStack(BaseSetup, DatabaseHandler):
         self.path_bkgsub = os.path.join(self.path_tmp, "bkgsub")
         os.makedirs(self.path_bkgsub, exist_ok=True)
 
-        self.config.imstack.bkgsub_images = [
+        self.config_node.imstack.bkgsub_images = [
             f"{self.path_bkgsub}/{add_suffix(get_basename(f), 'bkgsub')}" for f in self.input_images
         ]
 
-        if self.config.imstack.bkgsub_type.lower() == "dynamic":
+        if self.config_node.imstack.bkgsub_type.lower() == "dynamic":
             self.logger.info("Start dynamic background subtraction")
             self._dynamic_bkgsub()
         else:
@@ -300,11 +302,11 @@ class ImStack(BaseSetup, DatabaseHandler):
             f"Background subtraction is completed in {time_diff_in_seconds(st)} ({time_diff_in_seconds(st, return_float=True)/len(self.input_images):.1f} s/image)"
         )
 
-        self.images_to_stack = self.config.imstack.bkgsub_images
+        self.images_to_stack = self.config_node.imstack.bkgsub_images
 
     def _const_bkgsub(self):
         for ii, (inim, _bkg, outim) in enumerate(
-            zip(self.input_images, self.skyvalues, self.config.imstack.bkgsub_images)
+            zip(self.input_images, self.skyvalues, self.config_node.imstack.bkgsub_images)
         ):
             self.logger.debug(f"[{ii:>6}] {get_basename(inim)}")
             if not os.path.exists(outim) or self.overwrite:
@@ -324,11 +326,11 @@ class ImStack(BaseSetup, DatabaseHandler):
         bkg_images = [f"{self.path_bkgsub}/{add_suffix(get_basename(f), 'bkg')}" for f in self.input_images]
         bkg_rms_images = [f"{self.path_bkgsub}/{add_suffix(get_basename(f), 'bkgrms')}" for f in self.input_images]
 
-        self.config.imstack.bkg_images = bkg_images
-        self.config.imstack.bkg_rms_images = bkg_rms_images
+        self.config_node.imstack.bkg_images = bkg_images
+        self.config_node.imstack.bkg_rms_images = bkg_rms_images
 
         for inim, outim, bkg, bkg_rms in zip(
-            self.input_images, self.config.imstack.bkgsub_images, bkg_images, bkg_rms_images
+            self.input_images, self.config_node.imstack.bkgsub_images, bkg_images, bkg_rms_images
         ):
 
             # if result is already in factory, use that
@@ -385,13 +387,13 @@ class ImStack(BaseSetup, DatabaseHandler):
     def calculate_weight_map(self, device_id=None, use_gpu: bool = True, overwrite: bool = False):
         """Retains cpu support as a code template"""
         st = time.time()
-        self._use_gpu = all([use_gpu, self.config.imstack.gpu, self._use_gpu])
+        self._use_gpu = False  # all([use_gpu, self.config.imstack.gpu, self._use_gpu])
         device_id = device_id if self._use_gpu else "CPU"
 
         self.logger.info(f"Start weight-map calculation")
 
-        bkgsub_images = self.config.imstack.bkgsub_images
-        self.config.imstack.bkgsub_weight_images = []
+        bkgsub_images = self.config_node.imstack.bkgsub_images
+        self.config_node.imstack.bkgsub_weight_images = []
 
         groups = self._group_IMCMB(bkgsub_images)
         self.logger.info(f"{len(groups)} groups for weight map calculation.")
@@ -409,7 +411,7 @@ class ImStack(BaseSetup, DatabaseHandler):
 
             for img in input_images:
                 weight_image_file = add_suffix(img, "weight")
-                self.config.imstack.bkgsub_weight_images.append(weight_image_file)
+                self.config_node.imstack.bkgsub_weight_images.append(weight_image_file)
                 if os.path.exists(weight_image_file) and not self.overwrite:
                     self.logger.debug(f"Already exists; skip generating {weight_image_file}")
                     continue
@@ -464,7 +466,7 @@ class ImStack(BaseSetup, DatabaseHandler):
     def apply_bpmask(self, device_id=None, use_gpu: bool = True):
         st = time.time()
 
-        self._use_gpu = all([use_gpu, self.config.imstack.gpu, self._use_gpu])
+        self._use_gpu = all([use_gpu, self.config_node.imstack.gpu, self._use_gpu])
         device_id = device_id if self._use_gpu else "CPU"
 
         self.logger.info("Start the interpolation for bad pixels")
@@ -472,22 +474,22 @@ class ImStack(BaseSetup, DatabaseHandler):
         path_interp = os.path.join(self.path_tmp, "interp")
         os.makedirs(path_interp, exist_ok=True)
 
-        self.config.imstack.interp_images = [
+        self.config_node.imstack.interp_images = [
             os.path.join(path_interp, add_suffix(get_basename(f), "interp")) for f in self.input_images
         ]
 
         # bpmask_array, header = fits.getdata(self.config.preprocess.bpmask_file, header=True)
         # ad-hoc. Todo: group input_files for different bpmask files
 
-        method = self.config.imstack.interp_type
-        weight = self.config.imstack.weight_map  # boolean flag for generating weight map
+        method = self.config_node.imstack.interp_type
+        weight = self.config_node.imstack.weight_map  # boolean flag for generating weight map
 
         # find images that need interpolation
         uncalculated_images = []
         calculated_outputs = []
-        for i in range(len(self.config.imstack.bkgsub_images)):
-            input_image_file = self.config.imstack.bkgsub_images[i]
-            output_file = self.config.imstack.interp_images[i]
+        for i in range(len(self.config_node.imstack.bkgsub_images)):
+            input_image_file = self.config_node.imstack.bkgsub_images[i]
+            output_file = self.config_node.imstack.interp_images[i]
 
             if os.path.exists(output_file) and not self.overwrite:
                 self.logger.debug(f"Already exists; skip generating {output_file}")
@@ -536,7 +538,7 @@ class ImStack(BaseSetup, DatabaseHandler):
             )
 
         # advance the target images of interest
-        self.images_to_stack = self.config.imstack.interp_images
+        self.images_to_stack = self.config_node.imstack.interp_images
 
     def zpscale(self):
         """
@@ -602,7 +604,7 @@ class ImStack(BaseSetup, DatabaseHandler):
         advantage of uniform pixel scale.
         """
 
-        method = self.config.imstack.convolve.lower()
+        method = self.config_node.imstack.convolve.lower()
         self.conv_method = method
         self.logger.info(f"Prepare the convolution with {method} method")
 
@@ -614,7 +616,7 @@ class ImStack(BaseSetup, DatabaseHandler):
             # Define output path
             path_conv = os.path.join(self.path_tmp, "conv")
             os.makedirs(path_conv, exist_ok=True)
-            self.config.imstack.conv_files = [
+            self.config_node.imstack.conv_files = [
                 os.path.join(path_conv, add_suffix(get_basename(f), "conv")) for f in self.input_images
             ]
 
@@ -622,9 +624,9 @@ class ImStack(BaseSetup, DatabaseHandler):
             peeings = [fits.getval(inim, "PEEING") for inim in self.images_to_stack]
             # max_peeing = np.max(peeings)
             self._max_peeing = (
-                self.config.imstack.target_seeing / collapse(self.path.pixscale, raise_error=True)
-                if hasattr(self.config.imstack, "target_seeing")
-                and isinstance(self.config.imstack.target_seeing, (int, float))
+                self.config_node.imstack.target_seeing / collapse(self.path.pixscale, raise_error=True)
+                if hasattr(self.config_node.imstack, "target_seeing")
+                and isinstance(self.config_node.imstack.target_seeing, (int, float))
                 else np.max(peeings)
             )
             delta_peeings = [self._calc_delta_peeing(peeing) for peeing in peeings]
@@ -634,11 +636,11 @@ class ImStack(BaseSetup, DatabaseHandler):
             for i, delta_peeing in enumerate(delta_peeings):
                 # symlink images to conv output folder that don't need convolution
                 if delta_peeing is None:
-                    force_symlink(self.images_to_stack[i], self.config.imstack.conv_files[i])
-                    if self.config.imstack.weight_map:
+                    force_symlink(self.images_to_stack[i], self.config_node.imstack.conv_files[i])
+                    if self.config_node.imstack.weight_map:
                         force_symlink(
                             add_suffix(self.images_to_stack[i], "weight"),
-                            add_suffix(self.config.imstack.conv_files[i], "weight"),
+                            add_suffix(self.config_node.imstack.conv_files[i], "weight"),
                         )
                     self.kernels.append(None)
                 else:
@@ -652,13 +654,13 @@ class ImStack(BaseSetup, DatabaseHandler):
 
         st = time.time()
         method = self.conv_method
-        self._use_gpu = all([use_gpu, self.config.imstack.gpu, self._use_gpu])
+        self._use_gpu = all([use_gpu, self.config_node.imstack.gpu, self._use_gpu])
         device_id = device_id if self._use_gpu else "CPU"
 
         # compute
         kernels = [k for k in self.kernels if k is not None]
         image_list = [f for f, k in zip(self.images_to_stack, self.kernels) if k is not None]
-        outim_list = [f for f, k in zip(self.config.imstack.conv_files, self.kernels) if k is not None]
+        outim_list = [f for f, k in zip(self.config_node.imstack.conv_files, self.kernels) if k is not None]
         delta_peeing_list = [v for v, k in zip(self.delta_peeings, self.kernels) if k is not None]
 
         with acquire_available_gpu(device_id=device_id) as device_id:
@@ -689,7 +691,7 @@ class ImStack(BaseSetup, DatabaseHandler):
                 weight_list = [
                     f for f, k in zip(PathHandler(self.images_to_stack).weight, self.kernels) if k is not None
                 ]
-                outwim_list = [f for f, k in zip(PathHandler(self.config.imstack.conv_files).weight, self.kernels) if k is not None]  # fmt:skip
+                outwim_list = [f for f, k in zip(PathHandler(self.config_node.imstack.conv_files).weight, self.kernels) if k is not None]  # fmt:skip
                 self.logger.debug(f"weight_list {weight_list}")
                 self.logger.debug(f"outwim_list {outwim_list}")
 
@@ -733,7 +735,7 @@ class ImStack(BaseSetup, DatabaseHandler):
 
         self.logger.debug(f"Total Exptime: {self.total_exptime}")
 
-        if not self.config.imstack.weight_map:
+        if not self.config_node.imstack.weight_map:
             # if no weight map, just stack the images
             self._run_swarp("")
 
@@ -745,7 +747,7 @@ class ImStack(BaseSetup, DatabaseHandler):
             self._run_swarp("wht", args=["-RESAMPLING_TYPE", "NEAREST"])
 
             # Update/Todo: consider uncollapsed bpmask files
-            if self.config.imstack.propagate_mask:
+            if self.config_node.imstack.propagate_mask:
                 # bpmask_file = self.config.preprocess.bpmask_file
                 bpmask_file = PathHandler.get_bpmask(self.images_to_stack)
                 bpmask_inverted = 1 - fits.getdata(bpmask_file)
@@ -763,13 +765,13 @@ class ImStack(BaseSetup, DatabaseHandler):
         """Pass type='' for no weight"""
         working_dir = os.path.join(self.path_tmp, type)
         resample_dir = os.path.join(working_dir, "resamp")
-        log_file = os.path.join(working_dir, "_".join([self.config.name, type, "swarp.log"]))
+        log_file = os.path.join(working_dir, "_".join([self.config_node.name, type, "swarp.log"]))
 
         if type == "":
-            output_file = self.config.imstack.stacked_image  # output to output_dir directly
+            output_file = self.config_node.imstack.stacked_image  # output to output_dir directly
         else:
             # output to tmp dir, and then selectively move to output_dir
-            output_file = os.path.join(working_dir, get_basename(self.config.imstack.stacked_image))
+            output_file = os.path.join(working_dir, get_basename(self.config_node.imstack.stacked_image))
 
         external.swarp(
             input=self.path_imagelist,
@@ -778,22 +780,22 @@ class ImStack(BaseSetup, DatabaseHandler):
             resample_dir=resample_dir,
             log_file=log_file,
             logger=self.logger,
-            weight_map=self.config.imstack.weight_map,
+            weight_map=self.config_node.imstack.weight_map,
             swarp_args=args,
         )
 
         # move files to the final directory
         if type == "sci":
-            shutil.move(output_file, self.config.imstack.stacked_image)
+            shutil.move(output_file, self.config_node.imstack.stacked_image)
         elif type == "wht":
             shutil.move(
                 add_suffix(output_file, "weight"),
-                add_suffix(self.config.imstack.stacked_image, "weight"),
+                add_suffix(self.config_node.imstack.stacked_image, "weight"),
             )
         elif type == "bpm":
             shutil.move(
                 add_suffix(output_file, "weight"),
-                add_suffix(self.config.imstack.stacked_image, "bpmask"),
+                add_suffix(self.config_node.imstack.stacked_image, "bpmask"),
             )
 
         return
@@ -802,7 +804,7 @@ class ImStack(BaseSetup, DatabaseHandler):
         pass
 
     def plot_stacked_image(self):
-        stacked_img = self.config.imstack.stacked_image
+        stacked_img = self.config_node.imstack.stacked_image
         basename = os.path.basename(stacked_img)
         save_fits_as_figures(fits.getdata(stacked_img), self.path.figure_dir_to_path / swap_ext(basename, "png"))
         return
@@ -832,7 +834,7 @@ class ImStack(BaseSetup, DatabaseHandler):
             select_header_dict = {key: header.get(key, None) for key in self.keys_to_propagate}
 
         # 	Put them into stacked image
-        with fits.open(self.config.imstack.stacked_image) as hdulist:
+        with fits.open(self.config_node.imstack.stacked_image) as hdulist:
             header = hdulist[0].header
             for key in select_header_dict.keys():
                 header[key] = select_header_dict[key]
@@ -855,7 +857,7 @@ class ImStack(BaseSetup, DatabaseHandler):
         }  # fmt: skip
 
         # 	Update Header
-        with fits.open(self.config.imstack.stacked_image, mode="update") as hdul:
+        with fits.open(self.config_node.imstack.stacked_image, mode="update") as hdul:
             header = hdul[0].header
 
             for key, (value, comment) in keywords_to_update.items():

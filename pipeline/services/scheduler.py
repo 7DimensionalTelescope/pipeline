@@ -61,7 +61,6 @@ class Scheduler:
 
     def _connection_check(self):
         """Create scheduler table if it doesn't exist."""
-        import os
 
         with self._db_connection() as conn:
             conn.execute(

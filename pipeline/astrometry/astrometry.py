@@ -94,13 +94,13 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         self.load_criteria(dtype="science")
         self.qa_ids = []
         DatabaseHandler.__init__(
-            self, add_database=self.config.settings.is_pipeline, is_too=self.config.settings.is_too
+            self, add_database=self.config_node.settings.is_pipeline, is_too=self.config_node.settings.is_too
         )
 
         if self.is_connected:
             self.set_logger(logger)
             self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
-            self.pipeline_id = self.create_pipeline_data(self.config)
+            self.pipeline_id = self.create_pipeline_data(self.config_node)
             self.update_pipeline_progress(0, "astrometry-configured")
             if self.pipeline_id is not None:
                 for image in self.input_images:
@@ -184,7 +184,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                         raise PipelineError("force_solve_field")
 
                     # early QA
-                    image_info.set_early_qa_stats(sci_cat=prep_cat, ref_cat=self.config.astrometry.local_astref)
+                    image_info.set_early_qa_stats(sci_cat=prep_cat, ref_cat=self.config_node.astrometry.local_astref)
                     flag, _ = self.apply_criteria(header=fits.Header(image_info.early_qa_cards), dtype="science")
                     image_info.SANITY = flag
                     if not image_info.SANITY:
@@ -195,12 +195,12 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                         self.logger.error(
                             f"Early QA rejected {os.path.basename(image_info.image_path)}! Skipping all subsequent processing, including Astrometry and Photometry."
                         )
+                        # TODO: head is not file, but imageinfo.qa_cards
+                        update_padded_header(image_info.image_path, fits.Header(image_info.early_qa_cards))
+                        # self.update_header(inims=[image_info.image_path], heads=[prep_cat], add_polygon_info=False)
                         raise PipelineError(
                             f"Early QA rejected {os.path.basename(image_info.image_path)}! Skipping all subsequent processing, including Astrometry and Photometry."
                         )
-                        # TODO: head is not file, but imageinfo.qa_cards
-                        # update_padded_header(image_info.image_path, image_info.early_qa_cards)
-                        # self.update_header(inims=[image_info.image_path], heads=[prep_cat], add_polygon_info=False)
                         continue
 
                     # run initial solve: scamp or solve-field
@@ -293,7 +293,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     qa_dict["qa_id"] = qa_id
                     qa_id = self.qa_db.update_qa_data(**qa_dict)
 
-            self.config.flag.astrometry = True
+            self.config_node.flag.astrometry = True
 
             self.logger.info(
                 f"'Astrometry' is completed in {time_diff_in_seconds(self.start_time)} seconds "
@@ -398,7 +398,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             # update the input image
             self.update_header()
 
-            self.config.flag.astrometry = True
+            self.config_node.flag.astrometry = True
 
             self.logger.info(
                 f"'Astrometry' is completed in {time_diff_in_seconds(start_time)} seconds "
@@ -414,13 +414,13 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         # self.path_astrometry = self.path.astrometry.tmp_dir
 
         # override if astrometry.input_images is set
-        local_inim = get_key(self.config, "astrometry.input_images")
+        local_inim = get_key(self.config_node, "astrometry.input_images")
         if local_inim is not None:
             inims = local_inim
         # otherwise use the common input
         else:
-            inims = self.config.input.calibrated_images
-            self.config.astrometry.input_images = inims
+            inims = self.config_node.input.calibrated_images
+            self.config_node.astrometry.input_images = inims
 
         self.input_images = inims  # must be in sync with self.images_info
 
@@ -440,7 +440,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             image_info.head = self.solved_heads[i]
 
         local_astref = (
-            self.config.astrometry.local_astref or self.path.astrometry.astrefcat
+            self.config_node.astrometry.local_astref or self.path.astrometry.astrefcat
         )  # None if no local astrefcat
         if not os.path.exists(local_astref):
             try:
@@ -448,7 +448,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                 get_refcat_gaia(self.input_images[0])
             except:
                 local_astref = None
-        self.config.astrometry.local_astref = local_astref
+        self.config_node.astrometry.local_astref = local_astref
 
     def inject_wcs_guess(
         self, input_images: List[str], wcs_list: List[WCS | fits.Header] = None, reset_image_header: bool = True
@@ -509,7 +509,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         self.logger.debug(f"input_images: {input_images}")
         self.logger.debug(f"output_images: {output_images}")
 
-        timeout = timeout or self.config.astrometry.solvefield_timeout
+        timeout = timeout or self.config_node.astrometry.solvefield_timeout
 
         if not input_catalogs and not input_images:
             raise ValueError("Either input_catalogs or input_images must be provided for run_solve_field")
@@ -683,7 +683,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         self.logger.info(f"Start {'joint' if joint else 'individual'} scamp")
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
-        timeout = timeout or self.config.astrometry.scamp_timeout
+        timeout = timeout or self.config_node.astrometry.scamp_timeout
 
         # presex_cats = [os.path.splitext(s)[0] + f".{prefix}.cat" for s in files]
         input_catalogs = atleast_1d(input_catalogs or self.prep_cats)
@@ -697,7 +697,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             path_ref_scamp = path_ref_scamp or self.path.astrometry.ref_query_dir
 
         # use local astrefcat if tile obs
-        astrefcat = astrefcat or self.config.astrometry.local_astref
+        astrefcat = astrefcat or self.config_node.astrometry.local_astref
         self.logger.debug(f"Using astrefcat: {astrefcat}")
 
         # joint scamp
@@ -839,7 +839,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         images_info = atleast_1d(images_info or self.images_info)
         prep_cats = atleast_1d(prep_cats or self.prep_cats)
 
-        refcat = Table.read(self.config.astrometry.local_astref, hdu=2)
+        refcat = Table.read(self.config_node.astrometry.local_astref, hdu=2)
 
         def _eval_one(idx: int):
             "threading helper"
@@ -876,7 +876,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     plot_save_path=plot_path if plot else None,
                     num_sci=num_sci,
                     num_ref=num_ref,
-                    match_radius=self.config.astrometry.eval_match_radius,
+                    match_radius=self.config_node.astrometry.eval_match_radius,
                     cutout_size=30,
                     logger=self.logger,
                     overwrite=overwrite,
@@ -958,12 +958,12 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
     def update_qa_config(self) -> None:
         """Update the QA configuration."""
-        self.config.qa.ellipticity = [image_info.ellipticity for image_info in self.images_info]
-        self.config.qa.seeing = [image_info.seeing for image_info in self.images_info]
-        self.config.qa.pa = [fits.getheader(img)["ROTANG"] for img in self.input_images]
-        self.logger.debug(f"SEEING     : {self.config.qa.seeing:.3f} arcsec")
-        self.logger.debug(f"ELLIPTICITY: {self.config.qa.ellipticity:.3f}")
-        self.logger.debug(f"PA         : {self.config.qa.pa:.3f} deg")
+        self.config_node.qa.ellipticity = [image_info.ellipticity for image_info in self.images_info]
+        self.config_node.qa.seeing = [image_info.seeing for image_info in self.images_info]
+        self.config_node.qa.pa = [fits.getheader(img)["ROTANG"] for img in self.input_images]
+        self.logger.debug(f"SEEING     : {self.config_node.qa.seeing:.3f} arcsec")
+        self.logger.debug(f"ELLIPTICITY: {self.config_node.qa.ellipticity:.3f}")
+        self.logger.debug(f"PA         : {self.config_node.qa.pa:.3f} deg")
 
     def update_header(
         self,
