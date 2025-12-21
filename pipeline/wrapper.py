@@ -37,6 +37,8 @@ class DataReduction:
         overwrite=False,
         overwrite_config=False,
         overwrite_data=False,
+        overwrite_preprocess=False,
+        overwrite_science=False,
         max_workers=50,
         processes=["astrometry", "photometry", "combine", "subtract"],
         queue=None,
@@ -61,6 +63,8 @@ class DataReduction:
             preprocess_kwargs=preprocess_kwargs,
             is_too=is_too,
             use_system_queue=use_system_queue,
+            overwrite_preprocess=overwrite_preprocess,
+            overwrite_science=overwrite_science,
         )
         if use_system_queue:
             sc.start_system_queue()

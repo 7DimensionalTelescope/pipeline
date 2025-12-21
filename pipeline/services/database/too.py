@@ -823,6 +823,7 @@ class TooDB:
                 return dt.strftime("%Y-%m-%d %H:%M:%S KST")
             else:
                 # Timezone-aware datetime - convert to KST
+                # Note: astimezone is safe to call even if already in KST (from sciprocess.py)
                 kst = pytz.timezone("Asia/Seoul")
                 dt_kst = dt.astimezone(kst)
                 return dt_kst.strftime("%Y-%m-%d %H:%M:%S KST")

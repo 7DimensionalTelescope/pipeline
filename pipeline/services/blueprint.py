@@ -222,8 +222,11 @@ class Blueprint:
             idx += 1
 
             for scikey in group.sci_keys:
+
                 sci_group = self.groups[scikey]
                 if sci_group.config in schedule["config"]:
+                    existing_idx = schedule["index"][schedule["config"] == sci_group.config][0]
+                    schedule["dependent_idx"][parent_idx].append(existing_idx)
                     continue
 
                 filter_name = get_filter_from_config(sci_group.config)

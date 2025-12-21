@@ -17,17 +17,45 @@ class Checker:
 
     def __init__(self, dtype=None):
         self.dtype = dtype
-        self.criteria = self.load_criteria()
+        self.criteria = None
+        self.loaded_dtype = None
+        self.load_criteria()
+
+    def _determine_dtype(self, dtype=None, file_path=None):
+        """
+        Determine the dtype from the provided dtype, self.dtype, or infer from file_path.
+        Returns the specific dtype string (BIAS, DARK, FLAT, SCIENCE).
+        """
+        if dtype is not None:
+            return dtype.upper()
+        if self.dtype is not None:
+            return self.dtype.upper()
+        if file_path:
+            file_path_lower = file_path.lower()
+            if "bias" in file_path_lower:
+                return "bias"
+            elif "dark" in file_path_lower:
+                return "dark"
+            elif "flat" in file_path_lower:
+                return "flat"
+        return "science"
+
+    def _normalize_dtype(self, dtype):
+        """Normalize dtype to either 'masterframe' or 'science'."""
+        if dtype is None:
+            return "masterframe"
+        if dtype.lower() in ["bias", "dark", "flat", "masterframe"]:
+            return "masterframe"
+        else:
+            return "science"
 
     def load_criteria(self, dtype="masterframe"):
         try:
-            if dtype.upper() in ["BIAS", "DARK", "FLAT", "MASTERFRAME"]:
-                dtype = "masterframe"
-            else:
-                dtype = "science"
-            criteria_file = os.path.join(const.REF_DIR, "qa", f"{dtype.lower()}.json")
+            normalized_dtype = self._normalize_dtype(dtype)
+            criteria_file = os.path.join(const.REF_DIR, "qa", f"{normalized_dtype.lower()}.json")
             with open(criteria_file, "r") as f:
                 self.criteria = json.load(f)
+                self.loaded_dtype = normalized_dtype
                 return self.criteria
         except FileNotFoundError:
             raise RuntimeError(f"Criteria file not found: {criteria_file}")
@@ -36,27 +64,17 @@ class Checker:
         except Exception as e:
             raise RuntimeError(f"Failed to load criteria: {e}")
 
-    def apply_criteria(self, file_path: str = None, header: dict = None, dtype: str = None):
+    def apply_criteria(self, file_path: str = None, header: fits.Header = None, dtype: str = None):
         """
         Generate a sanity flag based on the criteria. Returns the flag and the updated header.
         Tolerates missing header keys if dtype is "science"
 
         `dtype` in Preprocess can be directly passed on to this method.
         """
-        if dtype is None:
-            if self.dtype is not None:
-                dtype = self.dtype
-            else:
-                if "bias" in file_path:
-                    dtype = "BIAS"
-                elif "dark" in file_path:
-                    dtype = "DARK"
-                elif "flat" in file_path:
-                    dtype = "FLAT"
-                else:
-                    dtype = "SCIENCE"
+        dtype = self._determine_dtype(dtype=dtype, file_path=file_path)
+        normalized_dtype = self._normalize_dtype(dtype)
 
-        if not (hasattr(self, "criteria")):
+        if not hasattr(self, "criteria") or self.criteria is None or self.loaded_dtype != normalized_dtype:
             self.load_criteria(dtype=dtype)
 
         criteria = self.criteria[dtype.upper()]
@@ -71,6 +89,10 @@ class Checker:
 
         for key, value in criteria.items():
             if key not in header and dtype.upper() == "SCIENCE":
+                continue
+
+            # ignores null keys
+            if header.get(key) is None:
                 continue
 
             if value["criteria"] == "neq":
@@ -102,7 +124,7 @@ class Checker:
                     flag = False
                     break
 
-        header["SANITY"] = (flag, "Sanity flag")
+        header["SANITY"] = (flag, "Pipeline image sanity flag")
 
         return flag, header
 

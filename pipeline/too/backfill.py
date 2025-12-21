@@ -3,8 +3,6 @@ from ..services.database.query import RawImageQuery
 import datetime
 from ..services.blueprint import Blueprint
 from ..services.scheduler import Scheduler
-import os
-from ..run import query_observations
 
 
 def backfill_too(i, overwrite=False):

@@ -20,9 +20,10 @@ INSTRUM_STATUS_DICT = os.environ.get("INSTRUM_STATUS_DICT") or (
 SEXTRACTOR_COMMAND = os.environ.get("SEXTRACTOR_COMMAND") or "source-extractor"
 
 # Paths to pre-generated data
-ASTRM_REF_DIR = "/lyman/data2/factory/ref_scamp/gaia_dr3_7DT"  #  "/lyman/data1/factory/catalog/gaia_dr3_7DT"
+ASTRM_TILE_REF_DIR = "/lyman/data2/py7dt_requisites/ref_scamp/gaia_dr3_7DS"  # fmt: skip # "/lyman/data1/factory/catalog/gaia_dr3_7DT"
+ASTRM_CUSTOM_REF_DIR = "/lyman/data2/py7dt_requisites/ref_scamp/gaia_dr3_custom"
 GAIA_ROOT_DIR = "/lyman/data1/factory/catalog/gaia_source_dr3/healpix_nside64"  # for dynamic refcat generation.
-SCAMP_QUERY_DIR = "/lyman/data1/factory/ref_scamp"
+SCAMP_QUERY_DIR = "/lyman/data2/py7dt_requisites/ref_scamp/queried"  # "/lyman/data1/factory/ref_scamp"
 PHOT_REF_DIR = "/lyman/data1/factory/ref_cat"  # divided by RIS tiles
 GAIA_REF_DIR = "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile"
 REF_IMAGE_DIR = "/lyman/data1/factory/ref_frame"

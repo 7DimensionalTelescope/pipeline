@@ -264,7 +264,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
 
             for i, input_file in enumerate(self._input_files):
                 file_dir = str(Path(input_file).absolute().parent)
-                
+
                 not_pipeline_dir = not any(s in file_dir for s in const.PIPELINE_DIRS)
 
                 if working_dir or not_pipeline_dir:
@@ -975,14 +975,15 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
 
 
 class PathAstrometry(AutoMkdirMixin, AutoCollapseMixin):
-    _mkdir_exclude = {"ref_ris_dir", "ref_query_dir"}
+    _mkdir_exclude = {"ref_ris_dir", "ref_custom_dir", "ref_query_dir"}
 
     def __init__(self, parent: PathHandler, config=None):
         self._parent = parent
         self._input_files = atleast_1d(self._parent.processed_images)
 
         # Default values
-        self.ref_ris_dir = const.ASTRM_REF_DIR
+        self.ref_ris_dir = const.ASTRM_TILE_REF_DIR
+        self.ref_custom_dir = const.ASTRM_CUSTOM_REF_DIR
         self.ref_query_dir = const.SCAMP_QUERY_DIR
 
         # Apply config overrides if provided
@@ -1107,10 +1108,10 @@ class PathImstack(AutoMkdirMixin, AutoCollapseMixin):
         names = self._parent.name
         _ = collapse(names.type, raise_error=True)  # ensure input images are coherent
         total_exptime = np.sum(names.exptime)
-        exptime_str = format_exptime(total_exptime, type='stacked')
+        exptime_str = format_exptime(total_exptime, type="stacked")
         # use the datetime of the last image
         unit = collapse(names.unit, force=True)
-        datetime = mean_datetime(x) if isinstance(x:=names.datetime, list) else x
+        datetime = mean_datetime(x) if isinstance(x := names.datetime, list) else x
         fname = f"{names.obj_collapse}_{names.filter_collapse}_{unit}_{datetime}_{exptime_str}_coadd.fits"
         return fname
 

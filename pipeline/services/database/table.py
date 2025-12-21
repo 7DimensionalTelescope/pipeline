@@ -1,3 +1,4 @@
+from __future__ import annotations
 from datetime import date, datetime
 from typing import List, Dict, Optional, Union, Any
 from dataclasses import dataclass, asdict
@@ -77,7 +78,7 @@ class PipelineData:
             self.flat = []
 
     @classmethod
-    def from_row(cls, row: tuple) -> "PipelineData":
+    def from_row(cls, row: tuple) -> PipelineData:
         """Create PipelineData from database row"""
         # Add bounds checking to prevent index errors
         if len(row) < 32:
@@ -278,7 +279,7 @@ class QAData:
     id: Optional[int] = None
 
     @classmethod
-    def from_row(cls, row: tuple) -> "QAData":
+    def from_row(cls, row: tuple) -> QAData:
         """Create QAData from database row"""
         # Add bounds checking to prevent index errors
         if len(row) < 24:
@@ -342,7 +343,7 @@ class QAData:
         return data
 
     @classmethod
-    def from_header(cls, header, imagetyp, qa_type, pipeline_id, filename):
+    def from_header(cls, header: str | Header, imagetyp, qa_type, pipeline_id, filename):
 
         if not isinstance(header, Header):
             from astropy.io import fits

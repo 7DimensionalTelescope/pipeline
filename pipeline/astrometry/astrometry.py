@@ -1,6 +1,7 @@
 from __future__ import annotations  # for ImageInfo
 import os
 import re
+import json
 import time
 import shutil
 import numpy as np
@@ -186,7 +187,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     # early QA
                     image_info.set_early_qa_stats(sci_cat=prep_cat, ref_cat=self.config_node.astrometry.local_astref)
                     flag, _ = self.apply_criteria(header=fits.Header(image_info.early_qa_cards), dtype="science")
-                    image_info.SANITY = flag
+                    image_info.SANITY = flag  # true if nothing to check
                     if not image_info.SANITY:
                         self.logger.info(
                             f"Early QA rejected {os.path.basename(image_info.image_path)}! "
@@ -195,12 +196,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                         self.logger.error(
                             f"Early QA rejected {os.path.basename(image_info.image_path)}! Skipping all subsequent processing, including Astrometry and Photometry."
                         )
-                        # TODO: head is not file, but imageinfo.qa_cards
                         update_padded_header(image_info.image_path, fits.Header(image_info.early_qa_cards))
-                        # self.update_header(inims=[image_info.image_path], heads=[prep_cat], add_polygon_info=False)
-                        raise PipelineError(
-                            f"Early QA rejected {os.path.basename(image_info.image_path)}! Skipping all subsequent processing, including Astrometry and Photometry."
-                        )
                         continue
 
                     # run initial solve: scamp or solve-field
@@ -251,7 +247,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     self.logger.warning(f"Solve-field triggered, better solution not guaranteed for {prep_cat}")
 
                     # self.run_solve_field(input_catalogs=self.prep_cats, output_images=self.solved_images)
-                    self.run_solve_field(input_catalogs=prep_cat, output_images=None, solvefield_args=solvefield_args)
+                    self.run_solve_field(input_catalogs=prep_cat, output_images=[None], solvefield_args=solvefield_args)
 
                     if evaluate_prep_sol:
                         self.evaluate_solution(
@@ -467,12 +463,13 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         assert len(input_images) == len(wcs_list)
 
         self.injected_wcs = []
-        for image, wcs in zip(input_images, wcs_list):
+
+        def _update_header(image, wcs, reset_image_header):
             self.logger.debug(f"Injecting WCS into {image}")
             self.injected_wcs.append(wcs)
 
             if reset_image_header:
-                reset_header(image)
+                self.reset_headers(image)
 
             with fits.open(image, mode="update") as hdul:
                 if isinstance(wcs, fits.Header):
@@ -482,11 +479,20 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                 else:
                     raise ValueError(f"Invalid WCS type: {type(wcs)}")
 
-    def reset_header(self, input_images: List[str] = None) -> None:
+        with ThreadPoolExecutor(max_workers=min(len(input_images), 10)) as executor:
+            futures = {
+                executor.submit(_update_header, image, wcs, reset_image_header): (image, wcs, reset_image_header)
+                for image, wcs in zip(input_images, wcs_list)
+            }
+            for future in as_completed(futures):
+                image, wcs, reset_image_header = futures[future]
+                future.result()
+
+    def reset_headers(self, input_images: str | List[str] = None) -> None:
         """Reset header of input images."""
-        input_images = input_images or self.input_images
+        input_images = atleast_1d(input_images or self.input_images)
         for image in input_images:
-            self.logger.info(f"Resetting header of {image}")
+            self.logger.debug(f"Resetting header of {image}")
             reset_header(image)
 
     def run_solve_field(
@@ -502,9 +508,21 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         self.logger.info(f"Start solve-field")
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
-        input_catalogs = atleast_1d(input_catalogs) if input_catalogs is not None else input_catalogs  # priority
-        input_images = atleast_1d(input_images) if input_images is not None else input_images
-        output_images = atleast_1d(output_images) if output_images is not None else output_images
+        input_catalogs = (
+            atleast_1d(input_catalogs)
+            if input_catalogs is not None
+            else [s for s, ii in zip(self.prep_cats, self.images_info) if ii.sane]
+        )  # priority
+        input_images = (
+            atleast_1d(input_images)
+            if input_images is not None
+            else [ii.image_path for ii in self.images_info if ii.sane]
+        )
+        output_images = (
+            atleast_1d(output_images)
+            if output_images is not None
+            else [s for s, ii in zip(self.solved_images, self.images_info) if ii.sane]
+        )
         self.logger.debug(f"input_catalogs: {input_catalogs}")
         self.logger.debug(f"input_images: {input_images}")
         self.logger.debug(f"output_images: {output_images}")
@@ -603,53 +621,53 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         # parallelize if queue=True
         self.logger.info("Start pre-sextractor")
         self.logger.debug(MemoryMonitor.log_memory_usage)
+        output_catalogs = output_catalogs or [s for s, ii in zip(self.prep_cats, self.images_info) if ii.sane]
 
-        output_catalogs = output_catalogs or self.prep_cats
+        # if self.queue:
+        #     self._submit_task(
+        #         external.sextractor,
+        #         input_images,
+        #         outcat=output_catalogs,
+        #         prefix=se_preset,
+        #         sex_args=sex_args,
+        #         logger=self.logger,
+        #         fits_ldac=True,
+        #         overwrite=overwrite,
+        #     )
+        # else:
+        # Run sextractor in parallel using threading
+        # Run sextractor in parallel using threading
+        def _run_sextractor(solved_image, prep_cat, index):
+            """Helper function to run sextractor for a single image"""
+            try:
+                external.sextractor(
+                    solved_image,
+                    outcat=prep_cat,
+                    se_preset=se_preset,
+                    logger=self.logger,
+                    sex_args=sex_args,
+                    fits_ldac=True,
+                    overwrite=overwrite,
+                )
+                self.logger.info(f"Completed sextractor (prep) [{index+1}/{len(input_images)}]")
+                self.logger.debug(f"{solved_image}")
+                return (index, solved_image, prep_cat, None)
+            except Exception as e:
+                self.logger.error(f"Failed sextractor for {solved_image}: {e}")
+                return (index, solved_image, prep_cat, e)
 
-        if self.queue:
-            self._submit_task(
-                external.sextractor,
-                input_images,
-                outcat=output_catalogs,
-                prefix=se_preset,
-                sex_args=sex_args,
-                logger=self.logger,
-                fits_ldac=True,
-                overwrite=overwrite,
-            )
-        else:
-            # Run sextractor in parallel using threading
-            def run_sextractor(solved_image, prep_cat, index):
-                """Helper function to run sextractor for a single image"""
-                try:
-                    external.sextractor(
-                        solved_image,
-                        outcat=prep_cat,
-                        se_preset=se_preset,
-                        logger=self.logger,
-                        sex_args=sex_args,
-                        fits_ldac=True,
-                        overwrite=overwrite,
-                    )
-                    self.logger.info(f"Completed sextractor (prep) [{index+1}/{len(input_images)}]")
-                    self.logger.debug(f"{solved_image}")
-                    return (index, solved_image, prep_cat, None)
-                except Exception as e:
-                    self.logger.error(f"Failed sextractor for {solved_image}: {e}")
-                    return (index, solved_image, prep_cat, e)
+        # Submit all tasks to thread pool
+        with ThreadPoolExecutor(max_workers=min(len(input_images), 10)) as executor:
+            futures = {
+                executor.submit(_run_sextractor, solved_image, prep_cat, i): (i, solved_image, prep_cat)
+                for i, (solved_image, prep_cat) in enumerate(zip(input_images, output_catalogs))
+            }
 
-            # Submit all tasks to thread pool
-            with ThreadPoolExecutor(max_workers=min(len(input_images), 10)) as executor:
-                futures = {
-                    executor.submit(run_sextractor, solved_image, prep_cat, i): (i, solved_image, prep_cat)
-                    for i, (solved_image, prep_cat) in enumerate(zip(input_images, output_catalogs))
-                }
-
-                # Wait for all tasks to complete and collect results
-                for future in as_completed(futures):
-                    index, solved_image, prep_cat, error = future.result()
-                    if error:
-                        raise RuntimeError(f"Sextractor failed for {solved_image}: {error}") from error
+            # Wait for all tasks to complete and collect results
+            for future in as_completed(futures):
+                index, solved_image, prep_cat, error = future.result()
+                if error:
+                    raise RuntimeError(f"Sextractor failed for {solved_image}: {error}") from error
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
@@ -686,7 +704,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         timeout = timeout or self.config_node.astrometry.scamp_timeout
 
         # presex_cats = [os.path.splitext(s)[0] + f".{prefix}.cat" for s in files]
-        input_catalogs = atleast_1d(input_catalogs or self.prep_cats)
+        input_catalogs = atleast_1d(input_catalogs or [s for s, ii in zip(self.prep_cats, self.images_info) if ii.sane])
         self.logger.debug(f"Scamp input catalogs: {input_catalogs}")
 
         # path for scamp refcat download
@@ -787,8 +805,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         Currently only updates RA/Dec.
         FWHM_WORLD not updated.
         """
-        input_catalogs = input_catalogs or self.prep_cats
-        solved_heads = solved_heads or self.solved_heads
+        input_catalogs = input_catalogs or [s for s, ii in zip(self.prep_cats, self.images_info) if ii.sane]
+        solved_heads = solved_heads or [s for s, ii in zip(self.solved_heads, self.images_info) if ii.sane]
         assert len(input_catalogs) == len(solved_heads)
 
         for input_catalog, solved_head in zip(input_catalogs, solved_heads):
@@ -835,9 +853,9 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         """Evaluate the solution. This was developed in lack of latest scamp version."""
         self.logger.debug("Start evaluate_solution")
 
-        input_images = atleast_1d(input_images or self.input_images)
-        images_info = atleast_1d(images_info or self.images_info)
-        prep_cats = atleast_1d(prep_cats or self.prep_cats)
+        input_images = atleast_1d(input_images or [ii.image_path for ii in self.images_info if ii.sane])
+        images_info = atleast_1d(images_info or [ii for ii in self.images_info if ii.sane])
+        prep_cats = atleast_1d(prep_cats or [s for s, ii in zip(self.prep_cats, self.images_info) if ii.sane])
 
         refcat = Table.read(self.config_node.astrometry.local_astref, hdu=2)
 
@@ -956,14 +974,14 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         self.logger.debug(f"Completed evaluate_solution")
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
-    def update_qa_config(self) -> None:
-        """Update the QA configuration."""
-        self.config_node.qa.ellipticity = [image_info.ellipticity for image_info in self.images_info]
-        self.config_node.qa.seeing = [image_info.seeing for image_info in self.images_info]
-        self.config_node.qa.pa = [fits.getheader(img)["ROTANG"] for img in self.input_images]
-        self.logger.debug(f"SEEING     : {self.config_node.qa.seeing:.3f} arcsec")
-        self.logger.debug(f"ELLIPTICITY: {self.config_node.qa.ellipticity:.3f}")
-        self.logger.debug(f"PA         : {self.config_node.qa.pa:.3f} deg")
+    # def update_qa_config(self) -> None:
+    #     """Update the QA configuration."""
+    #     self.config_node.qa.ellipticity = [image_info.ellipticity for image_info in self.images_info]
+    #     self.config_node.qa.seeing = [image_info.seeing for image_info in self.images_info]
+    #     self.config_node.qa.pa = [fits.getheader(img)["ROTANG"] for img in self.input_images]
+    #     self.logger.debug(f"SEEING     : {self.config_node.qa.seeing:.3f} arcsec")
+    #     self.logger.debug(f"ELLIPTICITY: {self.config_node.qa.ellipticity:.3f}")
+    #     self.logger.debug(f"PA         : {self.config_node.qa.pa:.3f} deg")
 
     def update_header(
         self,
@@ -983,8 +1001,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         """
 
         # exclude images rejected by early QA
-        heads = heads or [s for s, ii in zip(self.solved_heads, self.images_info) if ii.SANITY]
-        inims = inims or [ii.image_path for ii in self.images_info if ii.SANITY]
+        heads = heads or [s for s, ii in zip(self.solved_heads, self.images_info) if ii.sane]
+        inims = inims or [ii.image_path for ii in self.images_info if ii.sane]
         self.logger.info(f"Updating WCS to header(s) of {len(heads)} image(s)")
         assert len(heads) == len(inims)
 
@@ -992,13 +1010,13 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             solved_header = read_scamp_header(solved_head)
 
             if reset_image_header:
-                reset_header(target_fits)
+                self.reset_headers(target_fits)
 
             if image_info.wcs_evaluated:
                 # solved_header.update(image_info.wcs_eval_cards)  # this removes duplicate COMMENT cards
                 self.logger.debug(f"WCS evaluation cards: {image_info.cards}")
                 solved_header.extend(image_info.cards)
-                self.logger.debug(f"WCS evaluation is added to {target_fits}")
+                self.logger.debug(f"WCS evaluation has been added to {target_fits}")
             else:
                 self.logger.debug(f"WCS evaluation is missing for {target_fits}")
 
@@ -1006,8 +1024,6 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                 polygon_header = polygon_info_header(image_info)
                 # solved_header.update(polygon_header)
                 solved_header.extend(polygon_header)
-
-            # TODO: add sanity card
 
             # update the header, consuming the COMMENT padding
             update_padded_header(target_fits, solved_header)
@@ -1110,7 +1126,7 @@ class ImageInfo:
 
     # early qa
     num_frac: Optional[float] = field(default=None)
-    SANITY: Optional[bool] = field(default=None)
+    SANITY: Optional[bool] = field(default=True)
     # late qa
     # UNMATCH, PA_ALIGN, ELLIPMN, ELLIPSTD
 
@@ -1195,10 +1211,13 @@ class ImageInfo:
         self.internal_match_recall = match_stats["recall"]
 
     def set_early_qa_stats(self, sci_cat: str, ref_cat: str):
+        """sets self.early_qa_cards"""
         if not ref_cat:
-            self._log("No refcat to perform early QA. Skipping...", level="warning")
+            self._log("No refcat to perform early QA. Skipping...", level="error")
             return
-        import json
+        if not os.path.exists(ref_cat):
+            self._log(f"Refcat {ref_cat} not found. Skipping early QA...", level="error")
+            return
 
         with open(os.path.join(REF_DIR, "zeropoints.json"), "r") as f:
             zp_per_filter = json.load(f)
@@ -1377,3 +1396,8 @@ class ImageInfo:
         """iteration condition"""
 
         return self.rsep_stats.unmatched_fraction > 0.9 or self.rsep_stats.separation_stats.P95 > 2 * PIXSCALE
+
+    @property
+    def sane(self) -> bool:
+        """whether or not to process the image judging by early QA"""
+        return self.SANITY is None or self.SANITY

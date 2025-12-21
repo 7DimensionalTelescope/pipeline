@@ -193,7 +193,6 @@ class SciProcConfiguration(BaseConfig):
             self.logger.info("Generating 'SciProcConfiguration' from the 'base' configuration")
             self.logger.debug(f"Configuration source: {config_source}")
             super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
-            self.node.info.file = config_source
             self.node.logging.file = log_file
             # raise PipelineError("Initializing 'SciProcConfiguration' from a list of images is not supported anymore. Please use 'SciProcConfiguration.base_config' instead.")
 

@@ -187,7 +187,7 @@ def update_padded_header(target_fits, header_new: dict | fits.Header, append=Tru
 #                 insert_pos += 1  # shift insertion point forward
 
 
-def add_padding(header, n, copy_header=False):
+def add_padding(header: fits.Header, n: int, copy_header=False) -> fits.Header:
     """
     Add empty COMMENT entries to a FITS header to ensure specific block sizes.
 

@@ -36,9 +36,17 @@ class Scheduler:
     MAX_PREPROCESS = 3
     HIGH_PRIORITY_THRESHOLD = 10
 
-    def __init__(self, schedule=None, use_system_queue=False, **kwargs):
+    def __init__(
+        self, schedule=None, use_system_queue=False, overwrite_preprocess=False, overwrite_science=False, **kwargs
+    ):
         self._kwargs = kwargs
         self.use_system_queue = use_system_queue and SCHEDULER_DB_PATH is not None
+
+        self._kwargs = {
+            "overwrite_preprocess": overwrite_preprocess,
+            "overwrite_science": overwrite_science,
+            **kwargs,
+        }
 
         if self.use_system_queue:
             self._schedule = None
@@ -438,6 +446,7 @@ class Scheduler:
                 # First failure - set priority to 0 and status to Pending for retry
                 self._schedule["status"][mask] = "Ready"
                 self._schedule["priority"][mask] = 0
+                self._schedule["process_start"][mask] = ""
 
     def list_of_ready_jobs(self):
         if self.use_system_queue:
@@ -497,8 +506,8 @@ class Scheduler:
                     else:
                         # First failure - set priority to 0 and status to Ready for retry
                         cursor.execute(
-                            'UPDATE scheduler SET status = ?, priority = ?, pid = 0 WHERE "index" = ?',
-                            ("Ready", 0, index),
+                            'UPDATE scheduler SET status = ?, priority = ?, pid = 0, process_start = ? WHERE "index" = ?',
+                            ("Ready", 0, "", index),
                         )
 
                 # Only increment readiness for dependent jobs if the job completed successfully
@@ -702,13 +711,16 @@ class Scheduler:
 
         is_too = input_type.lower() == "too"
         overwrite = kwargs.get("overwrite", False)
+        overwrite_preprocess = kwargs.get("overwrite_preprocess", False)
+        overwrite_science = kwargs.get("overwrite_science", False)
+
         processes = kwargs.get("processes", ["astrometry", "photometry", "combine", "subtract"])
 
         if job_type == "preprocess":
             cmd = [f"{SCRIPT_DIR}/bin/preprocess", "-config", config, "-make_plots"]
             if is_too:
                 cmd.append("-is_too")
-            if overwrite:
+            if overwrite or overwrite_preprocess:
                 cmd.append("-overwrite")
             if kwargs.get("preprocess_kwargs", None):
                 cmd.extend(["--preprocess_kwargs", json.dumps(kwargs["preprocess_kwargs"])])
@@ -718,7 +730,7 @@ class Scheduler:
                 cmd.append("-is_too")
             cmd.append("-processes")
             cmd.extend(processes)
-            if overwrite:
+            if overwrite or overwrite_science:
                 cmd.append("-overwrite")
 
         return cmd
