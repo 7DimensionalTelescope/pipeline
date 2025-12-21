@@ -1,10 +1,13 @@
 import os
 import gc
+import fcntl
+import time as time_module
 from time import time
 from tqdm import tqdm
 from glob import glob
 from pathlib import Path
 from functools import lru_cache
+from contextlib import contextmanager
 
 
 import numpy as np
@@ -20,7 +23,7 @@ from spherical_geometry.polygon import SphericalPolygon
 
 from ..io.cfitsldac import write_ldac
 from .utils import build_wcs
-from ..const import GAIA_ROOT_DIR
+from ..const import GAIA_ROOT_DIR, ASTRM_CUSTOM_REF_DIR
 
 # import dhutil as dh
 
@@ -28,18 +31,220 @@ from ..const import GAIA_ROOT_DIR
 # import ligo.skymap.plot
 
 
-@lru_cache(maxsize=1)
-def _get_gaia_healpix_files():
-    return sorted(glob(f"{GAIA_ROOT_DIR}/tile_*.csv"))
+# Removed _get_gaia_healpix_files() - no longer needed, using in-memory healpix queries
 
 
-# GAIA_HEALPIX_FILES = sorted(glob(f"{GAIA_ROOT_DIR}/tile_*.csv"))  # avoid multiple glob calls
+@contextmanager
+def _file_lock(lock_path, timeout=300, poll_interval=0.1):
+    """
+    Context manager for file-based locking with timeout.
+
+    Parameters:
+    -----------
+    lock_path : str
+        Path to the lock file
+    timeout : float
+        Maximum time to wait for lock acquisition (seconds)
+    poll_interval : float
+        Time between lock acquisition attempts (seconds)
+    """
+    lock_file = None
+    lock_acquired = False
+    start_time = time_module.time()
+
+    try:
+        # Create lock file directory if needed
+        os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+
+        # Try to acquire lock with timeout
+        while time_module.time() - start_time < timeout:
+            try:
+                lock_file = open(lock_path, "w")
+                # Non-blocking lock attempt
+                fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                # Write PID to lock file for debugging
+                lock_file.write(f"{os.getpid()}\n")
+                lock_file.flush()
+                os.fsync(lock_file.fileno())
+                lock_acquired = True
+                break
+            except BlockingIOError:
+                # Lock is held by another process, wait and retry
+                if lock_file:
+                    lock_file.close()
+                    lock_file = None
+                time_module.sleep(poll_interval)
+            except FileNotFoundError:
+                # Directory might not exist yet, retry
+                if lock_file:
+                    lock_file.close()
+                    lock_file = None
+                time_module.sleep(poll_interval)
+
+        if not lock_acquired:
+            raise TimeoutError(f"Could not acquire lock {lock_path} within {timeout} seconds")
+
+        yield
+
+    finally:
+        # Release lock
+        if lock_file and lock_acquired:
+            try:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+            except Exception:
+                pass
+            lock_file.close()
+            # Remove lock file (best effort)
+            try:
+                os.remove(lock_path)
+            except Exception:
+                pass
 
 
-def get_refcat_gaia(image: str):
-    header = fits.getheader(image)
-    ra, dec = header["RA"], header["DEC"]
-    return
+def _wait_for_file(file_path, timeout=300, poll_interval=0.5):
+    """
+    Wait for a file to appear, with timeout.
+
+    Parameters:
+    -----------
+    file_path : str
+        Path to the file to wait for
+    timeout : float
+        Maximum time to wait (seconds)
+    poll_interval : float
+        Time between checks (seconds)
+    """
+    start_time = time_module.time()
+    while time_module.time() - start_time < timeout:
+        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+            return True
+        time_module.sleep(poll_interval)
+    return False
+
+
+def get_refcat_gaia(
+    output_path: str,
+    ra: float,
+    dec: float,
+    naxis1: int,
+    naxis2: int,
+    pixscale: float,
+):
+    """
+    Generate a GAIA reference catalog by:
+    1. Finding relevant GAIA healpix catalogs based on center coordinates
+    2. Loading and aggregating the catalogs
+    3. Selecting sources within an elliptical region
+    4. Saving the result as a FITS LDAC file
+
+    This function is thread-safe and process-safe. If multiple processes try to generate
+    the same catalog simultaneously, only one will do the work while others wait.
+
+    Parameters:
+    -----------
+    output_path : str
+        Full path where the reference catalog should be saved
+    ra : float
+        Right ascension of center point in degrees
+    dec : float
+        Declination of center point in degrees
+    naxis1 : int
+        Image width in pixels
+    naxis2 : int
+        Image height in pixels
+    pixscale : float
+        Pixel scale in arcseconds per pixel
+
+    Returns:
+    --------
+    str
+        Path to the generated reference catalog file
+    """
+    # Ensure output directory exists
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    lock_path = f"{output_path}.lock"
+
+    # Fast path: if file already exists, return immediately (before any expensive computation)
+    if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+        return output_path
+
+    # Try to acquire lock to generate the catalog
+    try:
+        with _file_lock(lock_path, timeout=300):
+            # Double-check: another process might have created it while we waited for lock
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                return output_path
+
+            # We have the lock, now do the expensive computation
+            # Calculate center pixel coordinates
+            xcent = (naxis1 + 1) / 2.0
+            ycent = (naxis2 + 1) / 2.0
+
+            # Find relevant healpix tiles (matching_r in degrees)
+            matching_r = 2.0
+            fpaths = find_healpix_tiles(ra, dec, matching_r)
+
+            # Load all healpix catalogs
+            dfs = []
+            for f in fpaths:
+                df = read_healpix_gaia(f)
+                dfs.append(df)
+            if not dfs:
+                raise ValueError(f"No GAIA healpix catalogs found for RA={ra}, DEC={dec}")
+            df = pd.concat(dfs, ignore_index=True)
+            del dfs
+            gc.collect()
+
+            # Create SkyCoord center
+            center = SkyCoord(ra=ra, dec=dec, unit="deg")
+
+            # Select sources in ellipse (same parameters as ref_cat_generator2.py)
+            semi_major = 0.98  # degrees
+            semi_minor = 0.82  # degrees
+            position_angle = 0  # degrees
+            df_sel = select_sources_in_ellipse(df, center, semi_major, semi_minor, position_angle)
+            del df
+            gc.collect()
+
+            # Convert errors from mas to deg
+            df_sel.loc[:, "ra_error"] = df_sel["ra_error"] / (3600 * 10**3)
+            df_sel.loc[:, "dec_error"] = df_sel["dec_error"] / (3600 * 10**3)
+
+            # Clean the dataframe
+            df_sel = clean_refcat_df(df_sel)
+
+            # Convert to astropy Table
+            outbl = Table.from_pandas(df_sel)
+            del df_sel
+            gc.collect()
+
+            # Build WCS header
+            wcs = build_wcs(ra, dec, xcent, ycent, pixscale, pa_deg=0, flip=True)
+            wcs_header = wcs.to_header()
+
+            # Create a minimal FITS header
+            header_out = fits.Header()
+            header_out["SIMPLE"] = (True, "conforms to FITS standard")
+            header_out["BITPIX"] = (-32, "array data type")
+            header_out["NAXIS"] = (2, "number of array dimensions")
+            header_out["NAXIS1"] = naxis1
+            header_out["NAXIS2"] = naxis2
+            header_out.update(wcs_header)
+
+            # Generate the catalog (we have the lock, so safe to write)
+            write_ldac(header_out, outbl, output_path)
+            return output_path
+
+    except TimeoutError:
+        # Lock acquisition timed out - another process is generating it
+        # Wait for the file to appear
+        if _wait_for_file(output_path, timeout=300):
+            return output_path
+        else:
+            raise RuntimeError(
+                f"Timeout waiting for reference catalog to be generated: {output_path}. "
+                "Another process may be generating it, or the process may have crashed."
+            )
 
 
 def is_point_in_tile(point, tile_vertices):
@@ -135,26 +340,44 @@ def read_healpix_gaia(fpath, extract=True):
 
 
 def find_healpix_tiles(ra_center, dec_center, matching_r):
+    """
+    Find healpix tile files that overlap with the search region using in-memory calculations.
+    No I/O operations - constructs file paths directly from healpix pixel indices.
 
-    # load healpix ids
-    # GAIA_ROOT_DIR = "/lyman/data1/factory/catalog/gaia_source_dr3/healpix_nside64"
-    # files = sorted(glob(f"{GAIA_ROOT_DIR}/tile_*.csv"))
-    files = _get_gaia_healpix_files()  #GAIA_HEALPIX_FILES
-    # ipix_list = [s.split('_')[-1].replace('.csv', '') for s in files]
-    ipix_list = [int(Path(s).stem.split("_")[1]) for s in files]
-    radec = np.array([hp.pix2ang(64, ipix, nest=True, lonlat=True) for ipix in ipix_list])
-    heal_ra = radec[:, 0]
-    heal_dec = radec[:, 1]
+    Parameters:
+    -----------
+    ra_center : float
+        Right ascension of center point in degrees
+    dec_center : float
+        Declination of center point in degrees
+    matching_r : float
+        Search radius in degrees
 
-    # Get center of 7DT tile and set matching radius
+    Returns:
+    --------
+    list of str
+        List of file paths to healpix tile CSV files
+    """
+    nside = 64  # healpix nside parameter
 
-    # find healpix tiles
-    reference_coord = SkyCoord(ra=ra_center * u.deg, dec=dec_center * u.deg, frame="icrs")
-    heal_coords = SkyCoord(ra=heal_ra * u.deg, dec=heal_dec * u.deg, frame="icrs")
-    distances = reference_coord.separation(heal_coords)
-    matched_files = np.array(files)[distances < matching_r * u.deg]
+    # Convert RA/DEC to healpix pixel index
+    # healpy uses (theta, phi) in radians, where theta is colatitude (0 at north pole)
+    # and phi is longitude (0 at RA=0)
+    theta = np.pi / 2 - np.deg2rad(dec_center)  # colatitude
+    phi = np.deg2rad(ra_center)  # longitude (RA)
 
-    return matched_files
+    # Convert matching radius from degrees to radians
+    radius_rad = np.deg2rad(matching_r)
+
+    # Find all healpix pixels within the disc using query_disc
+    # query_disc returns pixel indices within the disc
+    vec = hp.ang2vec(theta, phi)  # unit vector pointing to center
+    ipix_list = hp.query_disc(nside, vec, radius_rad, nest=True)
+
+    # Construct file paths directly from pixel indices (no globbing)
+    file_paths = [os.path.join(GAIA_ROOT_DIR, f"tile_{ipix}.csv") for ipix in ipix_list]
+
+    return file_paths
 
 
 # def get_abpa_from_mvee(center, radii, rotation):

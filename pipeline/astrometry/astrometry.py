@@ -49,7 +49,7 @@ from .evaluation import (
 )
 
 
-# from .generate_refcat_gaia import get_refcat_gaia
+from .generate_refcat_gaia import get_refcat_gaia
 
 
 class Astrometry(BaseSetup, DatabaseHandler, Checker):
@@ -410,19 +410,19 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         # self.path_astrometry = self.path.astrometry.tmp_dir
 
         # override if astrometry.input_images is set
-        local_inim = get_key(self.config_node, "astrometry.input_images")
-        if local_inim is not None:
-            inims = local_inim
+        local_input_images = get_key(self.config_node, "astrometry.input_images")
+        if local_input_images is not None:
+            input_images = local_input_images
         # otherwise use the common input
         else:
-            inims = self.config_node.input.calibrated_images
-            self.config_node.astrometry.input_images = inims
+            input_images = self.config_node.input.calibrated_images
+            self.config_node.astrometry.input_images = input_images
 
-        self.input_images = inims  # must be in sync with self.images_info
+        self.input_images = input_images  # must be in sync with self.images_info
 
         # soft_links = [os.path.join(self.path_astrometry, os.path.basename(s)) for s in inims]
         soft_links = atleast_1d(self.path.astrometry.soft_link)
-        for inim, soft_link in zip(inims, soft_links):
+        for inim, soft_link in zip(input_images, soft_links):
             force_symlink(inim, soft_link)
             self.logger.debug(f"Soft link created: {inim} -> {soft_link}")
         self.soft_links_to_input_images = soft_links
@@ -437,12 +437,24 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
         local_astref = (
             self.config_node.astrometry.local_astref or self.path.astrometry.astrefcat
-        )  # None if no local astrefcat
-        if not os.path.exists(local_astref):
+        )  # Always a string path, but existence not guaranteed
+        if local_astref and not os.path.exists(local_astref):
+            # Try to generate the reference catalog automatically
             try:
-                raise PipelineError(f"Local astrefcat {local_astref} does not exist")  # TODO
-                get_refcat_gaia(self.input_images[0])
-            except:
+                self.logger.info(f"Local astrefcat {local_astref} does not exist. Generating from image...")
+                # Extract necessary info from first image
+                image_info = self.images_info[0]
+                get_refcat_gaia(
+                    output_path=local_astref,
+                    ra=image_info.racent,
+                    dec=image_info.decent,
+                    naxis1=image_info.naxis1,
+                    naxis2=image_info.naxis2,
+                    pixscale=image_info.pixscale,
+                )
+                self.logger.info(f"Generated reference catalog: {local_astref}")
+            except Exception as e:
+                self.logger.error(f"Failed to generate reference catalog: {e}. Proceeding without local astrefcat.")
                 local_astref = None
         self.config_node.astrometry.local_astref = local_astref
 

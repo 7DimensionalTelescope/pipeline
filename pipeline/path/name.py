@@ -509,7 +509,8 @@ class NameHandler:
             for offset in range(0, len(parts)):
                 try:
                     unit, date, hms, obj, filt, nb, exptime, gain, camera = parse_with_offset(parts, offset)
-                    break
+                    if unit.startswith("7DT"):
+                        break
                 except:
                     continue
 
