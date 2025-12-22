@@ -167,7 +167,7 @@ class Scheduler:
             data["process_start"].append(row[11] if len(row) > 11 and row[11] is not None else None)
             data["process_end"].append(row[12] if len(row) > 12 and row[12] is not None else None)
 
-        return Table(data)
+        return Table(data, dtype = self._empty_schedule.dtype)
 
     def _check_duplicates(self):
         """Check for duplicate configs in database. Logs warning but doesn't raise error."""
