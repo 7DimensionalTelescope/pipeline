@@ -364,15 +364,14 @@ def get_gain(fpath):
         return get_header(fpath, force_return=True).get(key, None)
 
 
-
-
 def mean_datetime(dt_list: list[str]) -> str:
     _FMT = "%Y%m%d_%H%M%S"
     dts = [datetime.strptime(s, _FMT) for s in dt_list]
     mean_ts = sum(d.timestamp() for d in dts) / len(dts)
     return datetime.fromtimestamp(mean_ts).strftime(_FMT)
 
-def find_raw_path(unit, nightdate, n_binning, gain):
+
+def find_raw_path(unit, nightdate, n_binning, gain, is_too=False):
     """
     Locate the raw data directory for a specific observation.
 
@@ -396,14 +395,26 @@ def find_raw_path(unit, nightdate, n_binning, gain):
     from ..const import RAWDATA_DIR
     import glob
 
-    raw_data_folder = glob.glob(f"{RAWDATA_DIR}/{unit}/{nightdate}*")
+    def _search(unit, nightdate, n_binning, gain, is_too=False):
+        template = f"{RAWDATA_DIR}/{unit}/{nightdate}*" + ("_ToO" if is_too else "")
+        raw_data_folders = glob.glob(template)
 
-    if len(raw_data_folder) > 1:
-        raw_data_folder = glob.glob(f"{RAWDATA_DIR}/{unit}/{nightdate}*_gain{gain}*")
-        if len(raw_data_folder) > 1:
-            raw_data_folder = glob.glob(f"{RAWDATA_DIR}/{unit}/{nightdate}_{n_binning}x{n_binning}_gain{gain}*")
+        if len(raw_data_folders) > 1:
+            raw_data_folders = glob.glob(f"{RAWDATA_DIR}/{unit}/{nightdate}*_gain{gain}*" + ("_ToO" if is_too else ""))
+            if len(raw_data_folders) > 1:
+                raw_data_folders = glob.glob(
+                    f"{RAWDATA_DIR}/{unit}/{nightdate}_{n_binning}x{n_binning}_gain{gain}*" + ("_ToO" if is_too else "")
+                )
 
-    elif len(raw_data_folder) == 0:
-        raise ValueError("No data folder found")
+        elif len(raw_data_folders) == 0:
+            raise FileNotFoundError("No raw data folder found")
 
-    return raw_data_folder[0]
+        return raw_data_folders[0]
+
+    if is_too:
+        try:
+            return _search(unit, nightdate, n_binning, gain, is_too=True)
+        except FileNotFoundError:
+            return _search(unit, nightdate, n_binning, gain, is_too=False)
+
+    return _search(unit, nightdate, n_binning, gain, is_too=False)

@@ -26,7 +26,7 @@ def process_image_with_cupy(obs, bias, dark, flat, output, device_id):
             with open(header_file, "r") as f:
                 header = fits.Header.fromstring(f.read(), sep="\n")
 
-        fitsio.write(o, data, header=dict(header), clobber=True)
+        fitsio.write(o, data, header=list(header.cards), clobber=True)
 
     with cp.cuda.Device(device_id):
         # Load images in parallel using threading (I/O bound operation)

@@ -3,57 +3,21 @@ from numba import njit, prange
 from ..utils import add_suffix
 import numpy as np
 import fitsio
-
-# Try to import C++ implementation, fallback to Numba if not available
-_HAS_CPP = False
-try:
-    import importlib.util
-    from pathlib import Path
-    import glob
-
-    # The C++ module is in the weight/ subdirectory
-    weight_dir = Path(__file__).parent / "weight"
-    # Search for weight_cpp*.so or weight_cpp*.pyd (handles platform-specific suffixes)
-    pattern = str(weight_dir / "weight_cpp*.so")
-    matches = glob.glob(pattern)
-    if not matches:
-        pattern = str(weight_dir / "weight_cpp*.pyd")
-        matches = glob.glob(pattern)
-
-    if matches:
-        cpp_module_path = Path(matches[0])
-        spec = importlib.util.spec_from_file_location("weight_cpp", cpp_module_path)
-        weight_cpp = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(weight_cpp)
-        _compute_sig_r_cpp = weight_cpp.compute_sig_r
-        _compute_sig_rp_cpp = weight_cpp.compute_sig_rp
-        _compute_final_weight_cpp = weight_cpp.compute_final_weight
-        _compute_weight_combined_cpp = weight_cpp.compute_weight_combined
-        _HAS_CPP = True
-except (ImportError, FileNotFoundError, AttributeError, ValueError):
-    _HAS_CPP = False
-
+from ..cuda.weight_map import calc_weight as gpu_calc_weight
 
 def _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file):
     """
     Load calibration arrays and metadata shared by CPU and GPU paths.
     """
-    mfg_data = []
-    n_images = []
-    egain = None
-    for file in [sig_z_file, d_m_file, f_m_file]:
-        data, header = fits.getdata(file, header=True)
-        mfg_data.append(data.astype(np.float32))
-        n_images.append(np.float32(header["NFRAMES"]))
-        if file == d_m_file:
-            egain = np.float32(header["EGAIN"])
 
-    if egain is None:
-        raise ValueError(f"Gain information missing from {d_m_file}")
-
-    sig_z, d_m, f_m = mfg_data
-    p_z, p_d, p_f = n_images
-    sig_f = fits.getdata(sig_f_file).astype(np.float32)
+    sig_z = fitsio.read(sig_z_file).astype(np.float32)
+    d_m = fitsio.read(d_m_file).astype(np.float32)
+    f_m = fitsio.read(f_m_file).astype(np.float32)
+    sig_f = fitsio.read(sig_f_file).astype(np.float32)
+    p_z = np.float32(fits.getval(sig_z_file, "NFRAMES"))
+    p_d = np.float32(fits.getval(d_m_file, "NFRAMES"))
+    p_f = np.float32(fits.getval(f_m_file, "NFRAMES"))
+    egain = np.float32(fits.getval(d_m_file, "EGAIN"))
 
     return sig_z, d_m, f_m, sig_f, p_z, p_d, p_f, egain
 
@@ -89,7 +53,7 @@ def calc_weight_with_cpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, wei
     for fname, outname in zip(images, out_names):
         image = fitsio.read(fname).astype(np.float32)
         out = optimized_parallel(image, *output)
-        fits.writeto(outname, out.astype(np.float32), overwrite=True)
+        fitsio.write(outname, out.astype(np.float32), clobber=True)
 
 
 @njit(parallel=True)

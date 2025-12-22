@@ -272,14 +272,25 @@ def update_header_by_overwriting(filename, header, bitpix=-32):
 #     fits.writeto(filename, data, header=header, overwrite=True)
 
 
-def write_header(filename, header):
+def sanitize_header(header: fits.Header) -> fits.Header:
     for key in ["BZERO", "BSCALE"]:
         try:
             del header[key]
-        except:
+        except Exception:
             continue
 
     header["BITPIX"] = -32
+    return header
+
+
+def write_header(filename, header):
+    # for key in ["BZERO", "BSCALE"]:
+    #     try:
+    #         del header[key]
+    #     except:
+    #         continue
+
+    # header["BITPIX"] = -32
 
     if filename.endswith(".fits"):
         filename = filename.replace(".fits", ".header")
@@ -373,7 +384,7 @@ def read_fits_images(input_paths, output_paths, max_workers=10):
 
 
 def write_fits_image(output_path, processed_data):
-    """Write processed image to disk."""
+    """Write processed image to disk using the header pre-generated on disk."""
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     header_file = output_path.replace(".fits", ".header")
     header = None
@@ -381,7 +392,8 @@ def write_fits_image(output_path, processed_data):
         with open(header_file, "r") as f:
             header = fits.Header.fromstring(f.read(), sep="\n")
 
-    fitsio.write(output_path, processed_data, header=dict(header), clobber=True)
+    fits.writeto(output_path, processed_data, header=header, overwrite=True)
+    # fitsio.write(output_path, processed_data, header=list(header.cards), clobber=True)
 
 
 def write_fits_images(paths, data, max_workers=10):

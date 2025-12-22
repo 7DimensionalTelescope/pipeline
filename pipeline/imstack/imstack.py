@@ -59,8 +59,13 @@ class ImStack(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
 
         if self.is_connected:
             self.set_logger(logger)
-            self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
             self.pipeline_id = self.create_pipeline_data(self.config_node)
+            if self.too_id is not None:
+                self.logger.debug(f"Initialized DatabaseHandler for ToO data management, ToO ID: {self.too_id}")
+            else:
+                self.logger.debug(
+                    f"Initialized DatabaseHandler for pipeline and QA data management, Pipeline ID: {self.pipeline_id}"
+                )
             self.update_pipeline_progress(60, "imstack-configured")
 
     @classmethod

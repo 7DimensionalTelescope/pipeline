@@ -130,10 +130,15 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             self, add_database=self.config_node.settings.is_pipeline, is_too=self.config_node.settings.is_too
         )
 
-        if self.is_connected or self.too_id is not None:
+        if self.is_connected:
             self.set_logger(logger)
-            self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
             self.pipeline_id = self.create_pipeline_data(self.config_node)
+            if self.too_id is not None:
+                self.logger.debug(f"Initialized DatabaseHandler for ToO data management, ToO ID: {self.too_id}")
+            else:
+                self.logger.debug(
+                    f"Initialized DatabaseHandler for pipeline and QA data management, Pipeline ID: {self.pipeline_id}"
+                )
             self.update_pipeline_progress(self._progress_by_mode[0], f"{self._photometry_mode}-configured")
 
     @property
@@ -186,7 +191,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
                 self.update_pipeline_progress(100, f"{self._photometry_mode}-completed")
                 if self.is_too and self.too_id is not None:
                     sed_data = make_too_output(self.too_id, image_type="stacked")
-                    self.logger.info(f"ToO output are created.")
+                    self.logger.info(f"Cutoff images and SED data are created.")
 
                     interim_notice = self.too_db.read_too_data_by_id(self.too_id).get("interim_notice")
 
@@ -901,13 +906,14 @@ class PhotometrySingle:
 
         return inferred_filter
 
+    # TODO
     def get_active_filters(self) -> set:
         """ad-hoc before DB integration"""
         from glob import glob
         from ..path import NameHandler
 
         try:
-            f = PathHandler(self.input_image).conjugate
+            f = PathHandler(self.input_image, is_too=self.config_node.settings.is_too).conjugate
             self.logger.debug(f"Filter check conjugate: {f}")
             if not os.path.exists(f):
                 raise PipelineError(f"During get_active_filters, no conjugate image found for {f}")

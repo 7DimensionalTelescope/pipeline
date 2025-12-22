@@ -1301,17 +1301,44 @@ def make_too_output(too_id, sky_position=None, image_type="difference", verbose=
     if sky_position is None:
         sky_position = SkyCoord(too_data["ra_deg"], too_data["dec_deg"], unit="deg")
 
-    sed_data = plot_cutouts_and_sed(
-        too_data["base_path"],
-        position=sky_position,
-        image_type=image_type,
-        mark_catalog_sources=True,
-        query_all_catalogs=True,
-        catalog_type="GAIAXP",
-        catalog_mag_range=(10, 20),
-        verbose=verbose,
-        **kwargs,
-    )
+    if image_type == "difference":
+        try:
+            sed_data = plot_cutouts_and_sed(
+                too_data["base_path"],
+                position=sky_position,
+                image_type=image_type,
+                mark_catalog_sources=True,
+                query_all_catalogs=True,
+                catalog_type="GAIAXP",
+                catalog_mag_range=(10, 20),
+                verbose=verbose,
+                **kwargs,
+            )
+        except:
+            print("Difference image not found, using stacked image instead")
+            sed_data = plot_cutouts_and_sed(
+                too_data["base_path"],
+                position=sky_position,
+                image_type="stacked",
+                mark_catalog_sources=True,
+                query_all_catalogs=True,
+                catalog_type="GAIAXP",
+                catalog_mag_range=(10, 20),
+                verbose=verbose,
+                **kwargs,
+            )
+    else:
+        sed_data = plot_cutouts_and_sed(
+            too_data["base_path"],
+            position=sky_position,
+            image_type=image_type,
+            mark_catalog_sources=True,
+            query_all_catalogs=True,
+            catalog_type="GAIAXP",
+            catalog_mag_range=(10, 20),
+            verbose=verbose,
+            **kwargs,
+        )
 
     files = file_list(too_data["base_path"])
     too_db.update_too_data(too_id, file_list=files)

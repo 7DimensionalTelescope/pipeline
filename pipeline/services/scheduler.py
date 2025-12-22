@@ -14,18 +14,18 @@ class Scheduler:
     _empty_schedule = Table(
         dtype=[
             ("index", int),
-            ("config", str),
-            ("type", str),
-            ("input_type", str),
+            ("config", object),
+            ("type", object),
+            ("input_type", object),
             ("is_ready", bool),
             ("priority", int),
             ("readiness", int),
-            ("status", str),
+            ("status", object),
             ("dependent_idx", list),
             ("pid", int),
-            ("original_status", str),
-            ("process_start", str),
-            ("process_end", str),
+            ("original_status", object),
+            ("process_start", object),
+            ("process_end", object),
         ]
     )
 
@@ -370,13 +370,14 @@ class Scheduler:
             too_processing = (
                 len(
                     self.schedule[
-                        (self.schedule["status"] == "Processing") & (self.schedule["input_type"].str.lower() == "too")
+                        (self.schedule["status"] == "Processing")
+                        & (np.char.lower(self.schedule["input_type"].astype(str)) == "too")
                     ]
                 )
                 > 0
             )
             if too_processing:
-                ready_jobs = ready_jobs[ready_jobs["input_type"].str.lower() == "too"]
+                ready_jobs = ready_jobs[np.char.lower(ready_jobs["input_type"].astype(str)) == "too"]
 
         if len(ready_jobs) == 0:
             return None, None
@@ -387,6 +388,7 @@ class Scheduler:
 
         # Mark as Processing and set process_start
         mask = self._schedule["index"] == job_index
+
         self._schedule["status"][mask] = "Processing"
         self._schedule["process_start"][mask] = datetime.now().isoformat()
 
@@ -626,7 +628,6 @@ class Scheduler:
         try:
             # Create directory if it doesn't exist
             db_dir = "/var/db"
-            os.makedirs(db_dir, exist_ok=True)
 
             # Get current date in YYYY-MM-DD format
             date_str = datetime.now().strftime("%Y-%m-%d")
@@ -634,54 +635,17 @@ class Scheduler:
 
             # Check if file already exists
             if os.path.exists(file_path):
-                try:
-                    # Load existing table
-                    loaded_data = np.load(file_path, allow_pickle=True)
+                existing_table = Table(np.load(file_path, allow_pickle=True))
 
-                    # Handle different load scenarios
-                    # If it's already a Table, use it directly
-                    # If it's a numpy array (item() if it's a 0-d array), extract it
-                    if isinstance(loaded_data, np.ndarray) and loaded_data.ndim == 0:
-                        existing_table = loaded_data.item()
-                    else:
-                        existing_table = loaded_data
+                # Combine tables using vstack
+                # Handle case where columns might differ
+                if len(existing_table) > 0:
+                    combined_table = vstack([existing_table, table])
+                else:
+                    combined_table = table
 
-                    # Ensure we have an astropy Table
-                    if not isinstance(existing_table, Table):
-                        # If it's not a Table, try to convert or create new
-                        print(f"Warning: Loaded data is not a Table (type: {type(existing_table)}), overwriting")
-                        np.save(file_path, table, allow_pickle=True)
-                        return
-
-                    # Combine tables using vstack
-                    # Handle case where columns might differ
-                    if len(existing_table) > 0 and len(table) > 0:
-                        # Ensure both tables have the same columns
-                        all_cols = set(existing_table.colnames) | set(table.colnames)
-
-                        # Add missing columns to existing table
-                        for col in all_cols:
-                            if col not in existing_table.colnames:
-                                existing_table[col] = [None] * len(existing_table)
-
-                        # Add missing columns to new table
-                        for col in all_cols:
-                            if col not in table.colnames:
-                                table[col] = [None] * len(table)
-
-                        # Combine tables
-                        combined_table = vstack([existing_table, table])
-                    elif len(existing_table) > 0:
-                        combined_table = existing_table
-                    else:
-                        combined_table = table
-
-                    # Save combined table
-                    np.save(file_path, combined_table, allow_pickle=True)
-                except Exception as load_error:
-                    # If loading fails, save new table (overwrite corrupted file)
-                    print(f"Warning: Failed to load existing file, overwriting: {load_error}")
-                    np.save(file_path, table, allow_pickle=True)
+                # Save combined table
+                np.save(file_path, combined_table, allow_pickle=True)
             else:
                 # File doesn't exist, save new table
                 np.save(file_path, table, allow_pickle=True)
@@ -709,7 +673,7 @@ class Scheduler:
             job_type = self._schedule["type"][mask][0]
             input_type = self._schedule["input_type"][mask][0]
 
-        is_too = input_type.lower() == "too"
+        is_too = str(input_type).lower() == "too"
         overwrite = kwargs.get("overwrite", False)
         overwrite_preprocess = kwargs.get("overwrite_preprocess", False)
         overwrite_science = kwargs.get("overwrite_science", False)

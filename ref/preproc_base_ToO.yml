@@ -26,7 +26,7 @@ preprocess:
   masterframe: default # closest, custom
   max_offset: 300
   n_sigma: 5  # bad pixel mask criterion
-  n_head_blocks: 5
+  n_head_blocks: 8
   use_multi_device: False
   use_multi_thread: False
   device: 

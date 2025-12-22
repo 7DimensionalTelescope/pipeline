@@ -97,11 +97,17 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         DatabaseHandler.__init__(
             self, add_database=self.config_node.settings.is_pipeline, is_too=self.config_node.settings.is_too
         )
+        print(self.config_node.settings.is_too)
 
         if self.is_connected:
             self.set_logger(logger)
-            self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
             self.pipeline_id = self.create_pipeline_data(self.config_node)
+            if self.too_id is not None:
+                self.logger.debug(f"Initialized DatabaseHandler for ToO data management, ToO ID: {self.too_id}")
+            else:
+                self.logger.debug(
+                    f"Initialized DatabaseHandler for pipeline and QA data management, Pipeline ID: {self.pipeline_id}"
+                )
             self.update_pipeline_progress(0, "astrometry-configured")
             if self.pipeline_id is not None:
                 for image in self.input_images:
@@ -358,7 +364,9 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         """
         try:
             start_time = self.start_time or time.time()
+            
             self.logger.info(f"Start 'Astrometry'")
+
             self.define_paths()
 
             self.inject_wcs_guess(self.input_images)

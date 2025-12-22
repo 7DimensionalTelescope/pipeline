@@ -1180,13 +1180,14 @@ The data processing for the ToO observation is complete. The results are as foll
         from ...const import DEFAULT_RECIPIENT
 
         too_data = self.read_too_data_by_id(too_id)
+        
+        if too_data.get("num_filters") == 0:
+            self._count_num_filters(too_id)
 
         if too_data.get("interim_notice") == 1:
             return True
         else:
             self.update_too_data(too_id=too_id, interim_notice=1)
-
-        self._count_num_filters(too_id)
 
         # Extract information
         objname = too_data.get("objname", "Unknown")

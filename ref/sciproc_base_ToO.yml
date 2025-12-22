@@ -53,7 +53,6 @@ settings:
   is_too: true
   is_pipeline: false
   obsmode:  # Deep Spec Color Search Single
-  header_pad: 9  # assuming final header is 8 * 2880 bytes long.
   combine:
   gpu_enabled: True
   verbose_gpu: True  # use logger later

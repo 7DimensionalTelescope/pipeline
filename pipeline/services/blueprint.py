@@ -154,18 +154,18 @@ class Blueprint:
         schedule = Table(
             dtype=[
                 ("index", int),
-                ("config", str),
-                ("type", str),  # Preprocess or Science
-                ("input_type", str),  # Daily or ToO
+                ("config", object),
+                ("type", object),  # Preprocess or Science
+                ("input_type", object),  # Daily or ToO
                 ("is_ready", bool),  # True if the task is ready to be processed
                 ("priority", int),  # Priority of the task
                 ("readiness", int),  # 100 if the task is ready to be processed
-                ("status", str),  # Ready, Pending, Processing, Completed
+                ("status", object),  # Ready, Pending, Processing, Completed
                 ("dependent_idx", list),
                 ("pid", int),  # Process ID
-                ("original_status", str),  # Ready, Pending, Processing, Completed
-                ("process_start", str),  # ISO format timestamp when processing started
-                ("process_end", str),  # ISO format timestamp when processing ended
+                ("original_status", object),  # Ready, Pending, Processing, Completed
+                ("process_start", object),  # ISO format timestamp when processing started
+                ("process_end", object),  # ISO format timestamp when processing ended
             ]
         )
 

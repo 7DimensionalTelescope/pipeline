@@ -48,6 +48,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         self._config = None
         self._config = None
         self._input_files: list[str] = None
+        self._is_too = is_too
 
         self._handle_input(input)
         self.select_output_dir(working_dir=working_dir, is_too=is_too)
@@ -289,7 +290,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
 
                     if current_nightdate < const.DISK_CHANGE_DATE:
                         if is_too:
-                            output_parent_dir = const.TOO_DIR
+                            output_parent_dir = const.TOO_PROCESSED_DIR
                             self._output_parent_dir.append(output_parent_dir)
                             self._factory_parent_dir.append(const.TOO_FACTORY_DIR)
                             self._is_pipeline.append(True)
@@ -532,7 +533,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         nightdate = self._get_name_property_at_index("nightdate", i)
         n_binning = self._get_name_property_at_index("n_binning", i)
         gain = self._get_name_property_at_index("gain", i)
-        root = find_raw_path(unit, nightdate, n_binning, gain)
+        root = find_raw_path(unit, nightdate, n_binning, gain, is_too=self._is_too)
         return root
 
     @property

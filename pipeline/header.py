@@ -1,4 +1,5 @@
 import re
+import warnings
 import numpy as np
 from astropy.io import fits
 from astropy.io.fits.fitsrec import FITS_rec
@@ -265,7 +266,6 @@ def reset_header(target_image: str, override_header: str | dict | fits.Header = 
             Defaults to None, which means the header file with the same name as the target image,
             but with a .header extension, will be used.
     """
-    structural = ["SIMPLE", "BITPIX", "NAXIS", "NAXIS1", "NAXIS2"]
 
     if override_header is None:
         override_header = target_image.replace(".fits", ".header")
@@ -275,36 +275,46 @@ def reset_header(target_image: str, override_header: str | dict | fits.Header = 
         override_header = fits.Header(override_header)
 
     with fits.open(target_image, mode="update") as hdul:
-        header = hdul[0].header
-        if len(override_header) >= len(header):
-            n_tail = len(override_header) - len(header)
-            n_body = len(header)
-            more_to_write = True
-        else:
-            n_tail = len(header) - len(override_header)
-            n_body = len(override_header.cards)
-            more_to_write = False
+        # Suppress unnecessary duplicate keyword warnings during header replacement.
+        # Many of them can appear due to a shift in header keys
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*already exists in this header.*")
+            header = hdul[0].header
+            _reset_header_core(header, override_header)
 
-        # swap keys for the length of the shorter header
-        for i in range(n_body):
-            original_card = header.cards[i]
-            if original_card.keyword in structural:
-                continue
+
+def _reset_header_core(header, override_header):
+    structural = ["SIMPLE", "BITPIX", "NAXIS", "NAXIS1", "NAXIS2"]
+
+    if len(override_header) >= len(header):
+        n_tail = len(override_header) - len(header)
+        n_body = len(header)
+        more_to_write = True
+    else:
+        n_tail = len(header) - len(override_header)
+        n_body = len(override_header.cards)
+        more_to_write = False
+
+    # swap keys for the length of the shorter header
+    for i in range(n_body):
+        original_card = header.cards[i]
+        if original_card.keyword in structural:
+            continue
+        card = override_header.cards[i]
+        # print(f"swapping {original_card.keyword} at {i} with {card}")
+        del header[i]
+        header.insert(i, card)
+
+    # if there's more to write, keep appending
+    if more_to_write:
+        for i in range(n_body, n_body + n_tail):
             card = override_header.cards[i]
-            # print(f"swapping {original_card.keyword} at {i} with {card}")
+            header.append(card, end=True)
+
+    # if the original header has something left, delete them
+    else:
+        for i in range(n_body + n_tail - 1, n_body - 1, -1):
             del header[i]
-            header.insert(i, card)
-
-        # if there's more to write, keep appending
-        if more_to_write:
-            for i in range(n_body, n_body + n_tail):
-                card = override_header.cards[i]
-                header.append(card, end=True)
-
-        # if the original header has something left, delete them
-        else:
-            for i in range(n_body + n_tail - 1, n_body - 1, -1):
-                del header[i]
 
 
 def write_header_file(filename: str, header: fits.Header):

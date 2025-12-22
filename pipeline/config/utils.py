@@ -1,13 +1,13 @@
 from functools import reduce
 import os
-from ..const import PROCESSED_DIR, TOO_DIR
+from ..const import PROCESSED_DIR, TOO_PROCESSED_DIR
 
 
 def find_config(config: str, is_too: bool = False, return_class=False) -> dict:
     import re
 
     config = config.replace(".yml", "")
-    BASE_DIR = TOO_DIR if is_too else PROCESSED_DIR
+    BASE_DIR = TOO_PROCESSED_DIR if is_too else PROCESSED_DIR
 
     # Find date pattern (YYYY-MM-DD)
     date_pattern = r"\d{4}-\d{2}-\d{2}"

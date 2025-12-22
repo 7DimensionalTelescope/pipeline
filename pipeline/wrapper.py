@@ -14,11 +14,11 @@ class DataReduction:
 
         self.blueprint = Blueprint(
             input_params,
-            list_of_images,
+            list_of_images=list_of_images,
             use_db=use_db,
             ignore_mult_date=ignore_mult_date,
             master_frame_only=master_frame_only,
-            **kwargs
+            **kwargs,
         )
         self._created_config = False
 
@@ -34,6 +34,7 @@ class DataReduction:
 
     def run(
         self,
+        *,
         overwrite=False,
         overwrite_config=False,
         overwrite_data=False,

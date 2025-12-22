@@ -98,6 +98,18 @@ def calc_weight(images, d_m, f_m, sig_z, sig_f, p_d, p_z, p_f, egain, weight=Tru
     del weight_results
 
 
+def _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file):
+    sig_z = fitsio.read(sig_z_file).astype(np.float32)
+    d_m = fitsio.read(d_m_file).astype(np.float32)
+    f_m = fitsio.read(f_m_file).astype(np.float32)
+    sig_f = fitsio.read(sig_f_file).astype(np.float32)
+    p_z = np.float32(fits.getval(sig_z_file, "NFRAMES"))
+    p_d = np.float32(fits.getval(d_m_file, "NFRAMES"))
+    p_f = np.float32(fits.getval(f_m_file, "NFRAMES"))
+    egain = np.float32(fits.getval(d_m_file, "EGAIN"))
+    return sig_z, d_m, f_m, sig_f, p_z, p_d, p_f, egain
+
+
 def add_suffix(filename: str | list[str], suffix):
     if isinstance(filename, list):
         return [add_suffix(f, suffix) for f in filename]
@@ -117,20 +129,9 @@ if __name__ == "__main__":
 
     args = p.parse_args()
     uncalculated_images = args.input
-    sig_z_file, d_m_file, sig_f_file, f_m_file = args.sig_z_file, args.d_m_file, args.sig_f_file, args.f_m_file
-
-    mfg_data = []
-    n_images = []
-    for file in [sig_z_file, d_m_file, f_m_file]:
-        data, header = fits.getdata(file, header=True)
-        mfg_data.append(data.astype(np.float32))
-        n_images.append(header["NFRAMES"])
-        if file == d_m_file:
-            egain = header["EGAIN"]  # e-/ADU
-
-    sig_z, d_m, f_m = mfg_data
-    p_z, p_d, p_f = n_images
-    sig_f = fits.getdata(sig_f_file).astype(np.float32)
+    sig_z, d_m, f_m, sig_f, p_z, p_d, p_f, egain = _load_calibration_data(
+        args.sig_z_file, args.d_m_file, args.sig_f_file, args.f_m_file
+    )
 
     # Run weight‐map calculation
     calc_weight(uncalculated_images, d_m, f_m, sig_z, sig_f, p_d, p_z, p_f, egain, weight=True, device=args.device)

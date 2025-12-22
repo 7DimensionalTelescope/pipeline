@@ -609,6 +609,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             header["SATURATE"] = prep_utils.get_saturation_level(header, bias, dark, flat)
             header = prep_utils.write_IMCMB_to_header(header, [bias, dark, flat, raw_file])
             header = prep_utils.ensure_mjd_in_header(header, logger=self.logger)
+            header = prep_utils.sanitize_header(header)
             header = add_padding(header, n_head_blocks, copy_header=True)
             self.logger.debug(
                 f"Header size: {(x := len(header.tostring()))} bytes, {x//2880} blocks + {(x%2880)/80} lines"
