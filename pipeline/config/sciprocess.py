@@ -181,7 +181,7 @@ class SciProcConfiguration(BaseConfig):
             if is_too:
                 min_time = self._calculate_too_time(self.input_files)
                 base_name = os.path.basename(log_file).replace(".log", "")
-                log_file = log_file.replace(base_name, f"{base_name}_too_{min_time}")
+                log_file = log_file.replace(base_name, f"{base_name}_ToO_{min_time}")
 
             self.logger = self._setup_logger(
                 logger,

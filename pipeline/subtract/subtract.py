@@ -191,7 +191,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         # set from the common input if not set locally
         self.input_images = [local_input_images] or [self.config_node.input.stacked_image]
         self.apply_sanity_filter_and_report()
-        input_image = self.input_images[0]
+        input_image = collapse(self.input_images, raise_error=True)
         self.config_node.imsubtract.input_image = input_image
 
         self.logger.debug(f"ImSubtract inim: {input_image}")

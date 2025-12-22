@@ -610,7 +610,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             header = prep_utils.write_IMCMB_to_header(header, [bias, dark, flat, raw_file])
             header = prep_utils.ensure_mjd_in_header(header, logger=self.logger)
             header = add_padding(header, n_head_blocks, copy_header=True)
-            self.logger.debug(f"Header size: {x:=len(header.tostring())} bytes, {x//2880} blocks + {(x%2880)/80} lines")
+            self.logger.debug(
+                f"Header size: {(x := len(header.tostring()))} bytes, {x//2880} blocks + {(x%2880)/80} lines"
+            )
             prep_utils.write_header(processed_file, header)
 
     def make_masterframe_plots(self, file_path: str, dtype: str, group_index: int):

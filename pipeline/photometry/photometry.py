@@ -94,8 +94,9 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             # and (not self.config.input.stacked_image and not self.config.input.difference_image)  # hassle when rerunning
         ):
             self.input_images = images or self.config_node.input.calibrated_images
-            if self.apply_sanity_filter_and_report():  # sync if changed
-                self.config_node.photometry.input_images = self.input_images
+            self.apply_sanity_filter_and_report()  # sync if changed
+            self.config_node.photometry.input_images = self.input_images
+
             self.logger.debug("Running single photometry")
             self._photometry_mode = "single_photometry"
         elif photometry_mode == "combined_photometry" or (
