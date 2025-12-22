@@ -418,8 +418,8 @@ class TooDB:
         Read ToO data record from config file.
 
         Args:
-            config_file: Config file path (e.g., "T02252_i_2025-11-19_ToO_2025-11-19_123123.yml" or
-                         "AT2024hfx_i_2025-11-19_ToO_2025-11-19_123123.yml")
+            config_file: Config file path (e.g., "T02252_i_2025-11-19_too_2025-11-19_123123.yml" or
+                         "AT2024hfx_i_2025-11-19_too_2025-11-19_123123.yml")
                          Will parse filename to extract tile/objname, date, and timestamp, then query database
                          for records where trigger_time <= observation_time (from parsed date/timestamp)
 
