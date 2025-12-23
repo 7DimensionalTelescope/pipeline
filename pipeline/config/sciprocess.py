@@ -109,10 +109,6 @@ class SciProcConfiguration(BaseConfig):
                 print(f"[WARNING] log filename is not uniquely defined. Using the last one.")
                 log_file = collapse(sorted(log_file)[::-1], force=True)
             self.node.logging.file = log_file
-            if is_too:
-                min_time = self._calculate_too_time(input_images)
-                base_name = os.path.basename(log_file).replace(".log", "")
-                self.node.logging.file = log_file.replace(base_name, f"{base_name}_too_{min_time}")
             self.logger = cls._setup_logger(
                 name=self.name,
                 log_file=self.node.logging.file,
@@ -178,11 +174,6 @@ class SciProcConfiguration(BaseConfig):
             config_source = self.path.sciproc_base_yml
             log_file = self.path.sciproc_output_log
 
-            if is_too:
-                min_time = self._calculate_too_time(self.input_files)
-                base_name = os.path.basename(log_file).replace(".log", "")
-                log_file = log_file.replace(base_name, f"{base_name}_too_{min_time}")
-
             self.logger = self._setup_logger(
                 logger,
                 name=self.name,
@@ -202,12 +193,6 @@ class SciProcConfiguration(BaseConfig):
             # working_dir = os.path.dirname(config_source) if isinstance(config_source, str) else None
             self.path = self._set_pathhandler_from_config(is_too=is_too)  # working_dir=working_dir)
             self.node.logging.file = self.path.sciproc_output_log
-
-            if is_too:
-                log_file = self.path.sciproc_output_log
-                min_time = self._calculate_too_time(self.input_files)
-                base_name = os.path.basename(log_file).replace(".log", "")
-                self.node.logging.file = log_file.replace(base_name, f"{base_name}_too_{min_time}")
 
             if isinstance(config_source, str):
                 self.config_file = config_source  # use the filename as is
@@ -230,17 +215,6 @@ class SciProcConfiguration(BaseConfig):
             self.config_file = self.path.sciproc_output_yml  # used by write_config
 
         return
-
-    def _calculate_too_time(self, input_files):
-        min_time = "99999999_999999"
-
-        for input_file in input_files:
-            datetime_obs = NameHandler(input_file).datetime
-            if datetime_obs < min_time:
-                min_time = datetime_obs
-
-        # Return as 10-digit string with leading zeros (e.g., "0000000000")
-        return min_time
 
     def _update_too_times(self, input_file):
         """Update ToO database with transfer_time from input file creation time."""
@@ -339,10 +313,10 @@ class SciProcConfiguration(BaseConfig):
         self.node.input.calibrated_images = atleast_1d(PathHandler(self.input_files, is_too=is_too).processed_images)
 
         if is_too:
-            base_name = os.path.basename(self.config_file).replace(".yml", "").replace(".yaml", "")
-            min_time = self._calculate_too_time(self.input_files)
-            self.config_file = self.config_file.replace(base_name, f"{base_name}_too_{min_time}")
-            self.node.name = os.path.splitext(os.path.basename(self.config_file))[0]
+            # base_name = os.path.basename(self.config_file).replace(".yml", "").replace(".yaml", "")
+            # min_time = NameHandler.calculate_too_time(self.input_files)
+            # self.config_file = self.config_file.replace(base_name, f"{base_name}_ToO_{min_time}")
+            # self.node.name = os.path.splitext(os.path.basename(self.config_file))[0]
             self._update_too_times(self.input_files)
 
         self.node.input.output_dir = self.path.output_dir

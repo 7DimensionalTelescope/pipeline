@@ -1044,3 +1044,15 @@ class NameHandler:
         #     on_date_calib.append((on_date_bias, on_date_dark, on_date_flat))
 
         return sci_files, on_date_calib, off_date_calib
+
+    @classmethod
+    def calculate_too_time(cls, input_files: list[str]) -> str:
+        min_time = "99999999_999999"
+
+        for input_file in input_files:
+            datetime_obs = cls(input_file).datetime
+            if datetime_obs < min_time:
+                min_time = datetime_obs
+
+        # Return as 10-digit string with leading zeros (e.g., "0000000000")
+        return min_time

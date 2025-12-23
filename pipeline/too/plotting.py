@@ -337,7 +337,7 @@ def plot_cutouts_and_sed(
             flux = data[y_int, x_int]
             aperture_area = 1.0
 
-        UL3 = header.get("UL3_5", None)
+        UL5 = header.get("UL5_5", None)
 
         if ZP is None:
             continue
@@ -414,16 +414,16 @@ def plot_cutouts_and_sed(
             else:
                 mag = mag_calc
 
-            is_ul = UL3 is not None and UL3 > 0 and mag > UL3
+            is_ul = UL5 is not None and UL5 > 0 and mag > UL5
             if is_ul:
-                mag = UL3
+                mag = UL5
         else:
-            if UL3 is not None and UL3 > 0:
-                mag = UL3
+            if UL5 is not None and UL5 > 0:
+                mag = UL5
             else:
                 sky_sig = header.get("SKYSIG", np.std(data))
                 noise = sky_sig * np.sqrt(aperture_area) if aperture_radius is not None else sky_sig
-                flux_ul = 3.0 * noise
+                flux_ul = 5.0 * noise
                 if flux_ul > 0:
                     mag = -2.5 * np.log10(flux_ul) + ZP
                 else:
@@ -674,7 +674,7 @@ def plot_cutouts_and_sed(
                 marker="v",
                 s=100,
                 color=c,
-                label="Upper Limit (3σ)" if i == 0 else None,
+                label="Upper Limit (5σ)" if i == 0 else None,
                 zorder=2,
                 edgecolors="#333333",
                 linewidths=1,

@@ -346,7 +346,11 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         return self._name_cache[prop_name]
 
     def _get_name_property_at_index(self, prop_name: str, index: int):
-        """Get cached NameHandler property value at specific index. Can handle single input case"""
+        """
+        Use this instead of direct getattr to ensure proper caching and indexing.
+        Get cached NameHandler property value at specific index.
+        Can handle single input case
+        """
         cached_prop = self._get_cached_namehandler_property(prop_name)
 
         if cached_prop is None:
@@ -395,10 +399,22 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
 
     @property
     def sciproc_output_yml(self):
+        """
+        Due to is_too handling, this is no longer truely vectorized. You must
+        put in purely non-ToO images or all ToO images at once for too time
+        to be correctly defined.
+        """
         # yml_basenames = [
         #     "_".join([obj, filte, unit, date]) + ".yml"
         #     for obj, filte, unit, date in zip(self.name.obj, self.name.filter, self.name.unit, self.name.date)
         # ]
+
+        if self._is_too:
+            # assumes self._input_files includes all ToO images
+            too_time = NameHandler.calculate_too_time(self._input_files)
+        else:
+            too_time = None
+
         if self._input_files:
             yml_basenames = []
             for i in range(len(self._input_files)):
@@ -408,17 +424,19 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
                 # date = self._get_property_at_index("date", i)
                 nightdate = self._get_name_property_at_index("nightdate", i)
 
-                yml_basenames.append("_".join([obj, filte, nightdate]) + ".yml")
+                yml_stem = "_".join([obj, filte, nightdate])
+                if too_time:
+                    yml_basename = f"{yml_stem}_ToO_{too_time}.yml"
+                else:
+                    yml_basename = yml_stem + ".yml"
+                yml_basenames.append(yml_basename)
 
             return bjoin(self._output_dir, yml_basenames)
         return bjoin(self.output_parent_dir, "sciproc_config.yml")
 
     @property
     def sciproc_output_log(self):
-        if isinstance(self.sciproc_output_yml, str):
-            return swap_ext(self.sciproc_output_yml, "log")
-        else:
-            return [swap_ext(s, "log") for s in self.sciproc_output_yml]
+        return swap_ext(self.sciproc_output_yml, "log")
 
     @property
     def output_name(self) -> str:
