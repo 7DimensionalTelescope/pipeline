@@ -1,16 +1,12 @@
 import os
-import glob
+import numpy as np
 import time
 import shutil
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 from astropy.io import fits
-from collections import Counter
-from collections.abc import Iterable
 
 from .const import FACTORY_DIR, ALL_GROUP_KEYS
-import numpy as np
-
 from .header import read_header_file
 
 
@@ -461,3 +457,4 @@ def lupton_asinh(img: np.array, sky: float, noise: float, hi_clip=None, k_soft=3
     den = np.arcsinh((hi_clip - sky) / soft)
     scaled = num / den
     return np.clip(scaled, 0, 1)
+

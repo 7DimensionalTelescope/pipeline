@@ -85,6 +85,9 @@ class AutoMkdirMixin:
         if name in object.__getattribute__(self, "_mkdir_exclude"):
             return value
 
+        
+        # print(f"AutoMkdirMixin debug: {name} {value}")
+
         # Handle vectorized paths
         if isinstance(value, list) and all(isinstance(p, (str, Path)) for p in value):
             for p in value:
@@ -125,6 +128,7 @@ class AutoMkdirMixin:
         created_dirs = object.__getattribute__(self, "_created_dirs_cache")
 
         if d not in created_dirs and not d.exists():  # check cache first for performance
+            # print(f"AutoMkdirMixin _mkdir creating directory: {d}")
             d.mkdir(parents=True, exist_ok=True)
             created_dirs.add(d)
 

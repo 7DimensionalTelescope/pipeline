@@ -730,6 +730,8 @@ class PhotometrySingle:
             **kwargs,
         )
 
+        self.logger.debug(f"sextractor outcome: {outcome}")
+
         if se_preset == "main":
             outcome = [s for s in outcome.split("\n") if "RMS" in s][0]
             self.phot_header.SKYMED = float(outcome.split("Background:")[1].split("RMS:")[0])

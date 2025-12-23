@@ -1,5 +1,6 @@
 import os
 from dotenv import load_dotenv
+from .umask import set_umask
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"), override=True)
 
@@ -127,3 +128,12 @@ TOO_DB_PATH = os.environ.get("TOO_DB_PATH")
 
 class PipelineError(Exception):
     pass
+
+
+
+# set umask 0022 -> 0002
+# TODO: This can leak and cause unwanted behavior. Find ways to separate this 
+# when the pipeline is used as a library
+UMASK = os.environ.get("UMASK", None)
+if UMASK:
+    set_umask(UMASK)
