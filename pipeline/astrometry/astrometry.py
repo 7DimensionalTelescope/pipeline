@@ -1016,7 +1016,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
             if image_info.wcs_evaluated:
                 # solved_header.update(image_info.wcs_eval_cards)  # this removes duplicate COMMENT cards
-                self.logger.debug(f"WCS evaluation cards:\n{"WCS evaluation cards:\n\t" + fits.Header(image_info.cards).tostring(sep="\n\t")}")
+                self.logger.debug(f"WCS evaluation cards:\n{'WCS evaluation cards:\n\t' + fits.Header(image_info.cards).tostring(sep='\n\t')}")
                 solved_header.extend(image_info.cards)
                 self.logger.debug(f"WCS evaluation has been added to {target_fits}")
             else:
