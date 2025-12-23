@@ -67,6 +67,35 @@ class Scheduler:
             else:
                 self.processing_preprocess = 0
 
+    @classmethod
+    def from_list(cls, list_of_configs, base_priority=1, **kwargs):
+        """Create a scheduler from a list of configs."""
+        import re
+
+        sc = cls(**kwargs)
+
+        for idx, config in enumerate(list_of_configs):
+            if not (os.path.exists(config)):
+                print(f"Warning: Config file {config} does not exist")
+                continue
+
+            basename = os.path.basename(config)
+
+            discriminator = basename.split("_")[0]
+
+            if bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", discriminator)):
+                ctype = "preprocess"
+                priority = base_priority + 1
+            else:
+                ctype = "science"
+                priority = base_priority
+
+            sc._schedule.add_row(
+                [idx, config, ctype, "user-input", True, priority, 100, "Ready", [], 0, "Ready", "", ""]
+            )
+
+        return sc
+
     def _connection_check(self):
         """Create scheduler table if it doesn't exist."""
 
@@ -167,7 +196,7 @@ class Scheduler:
             data["process_start"].append(row[11] if len(row) > 11 and row[11] is not None else None)
             data["process_end"].append(row[12] if len(row) > 12 and row[12] is not None else None)
 
-        return Table(data, dtype = self._empty_schedule.dtype)
+        return Table(data, dtype=self._empty_schedule.dtype)
 
     def _check_duplicates(self):
         """Check for duplicate configs in database. Logs warning but doesn't raise error."""

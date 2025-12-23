@@ -1,21 +1,20 @@
 import gc
 import re
-import numpy as np
 import time
 import psutil
 import threading
 from contextlib import contextmanager
 from datetime import datetime
 from astropy.table import Table
-
 from typing import Optional
-
 import fcntl
 from contextlib import contextmanager
 import pynvml
 import os
 import getpass
 from collections import UserDict
+
+from ..const import SERVICES_TMP_DIR
 
 
 _cached_cg_path = None  # cache for resolved cgroup path
@@ -483,7 +482,7 @@ def acquire_available_gpu(device_id=None, gpu_threshold=400, blocking=True, time
 
     # Prepare a per-user directory for lock files
     username = getpass.getuser()
-    lock_dir = f"/tmp/gpu_locks_{username}"
+    lock_dir = os.path.join(SERVICES_TMP_DIR, f"gpu_locks_{username}")
     os.makedirs(lock_dir, exist_ok=True)
 
     start_time = time.time()

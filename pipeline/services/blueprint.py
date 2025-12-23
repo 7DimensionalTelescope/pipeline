@@ -56,31 +56,6 @@ class Blueprint:
         self._config_generated = False
 
     @classmethod
-    def from_config(cls, config_list):
-        config_list = np.atleast_1d(config_list)
-        cls = cls.__new__(cls)
-
-        dependent_configs = dict()
-        independent_configs = set()
-
-        for config in config_list:
-            if os.path.exists(config):
-                keywords = os.path.basename(config).split("_")
-                if len(keywords) == 2:
-                    dependent_configs.setdefault(config, [])
-                    dependent_configs[config].append(config)
-                elif len(keywords) == 3:
-                    independent_configs.add(config)
-                else:
-                    raise ValueError(f"Invalid config file: {config}")
-            else:
-                raise ValueError(f"Config file does not exist: {config}")
-        cls.dependent_configs = dependent_configs
-        cls.independent_configs = independent_configs
-
-        return cls
-
-    @classmethod
     def from_list(cls, list_of_images: list[str], ignore_mult_date=False, is_too=False, **kwargs):
         # if not all(f.endswith(".fits") for f in list_of_images):
         #     raise ValueError("Non-fits images in input")
@@ -142,7 +117,7 @@ class Blueprint:
 
         self._config_generated = True
 
-    def create_schedule(self, is_too=False, priority=None, **kwargs):
+    def create_schedule(self, is_too=False, base_priority=None, **kwargs):
 
         if not self._config_generated:
             self.create_config(
@@ -185,15 +160,15 @@ class Blueprint:
 
         idx = 0
 
-        if priority is None:
+        if base_priority is None:
             if is_too:
-                base_priority = 5
+                base_priority = 6
                 input_type = "ToO"
             else:
-                base_priority = 0
+                base_priority = 3
                 input_type = "Daily"
         else:
-            base_priority = priority
+            base_priority = base_priority
             input_type = "User-input"
 
         input_type = kwargs.get("input_type", input_type)
@@ -208,7 +183,7 @@ class Blueprint:
                     "preprocess",
                     input_type,
                     True,
-                    base_priority + 2,
+                    base_priority + 1,
                     100,
                     "Ready",
                     [],
@@ -232,13 +207,10 @@ class Blueprint:
                 filter_name = get_filter_from_config(sci_group.config)
 
                 if filter_name.startswith("m"):
-                    priority = base_priority + 1
+                    priority = base_priority
                 elif is_too:
                     priority = 11
                     schedule["priority"][parent_idx] = 12
-                else:
-                    priority = base_priority + 3
-                    schedule["priority"][parent_idx] = base_priority + 4
 
                 schedule.add_row(
                     [

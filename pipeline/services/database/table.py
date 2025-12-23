@@ -4,8 +4,11 @@ from typing import List, Dict, Optional, Union, Any
 from dataclasses import dataclass, asdict
 import json
 import re
-from .utils import generate_id
+import os
 from astropy.io.fits.header import Header
+
+from .utils import generate_id
+from ...const import SERVICES_TMP_DIR
 
 
 @dataclass
@@ -150,7 +153,7 @@ class PipelineData:
                 log_file = config.config.logging.file
             else:
                 # Default log file path if logging is not available
-                log_file = f"/tmp/{config.name}.log"
+                log_file = os.path.join(SERVICES_TMP_DIR, f"{config.name}.log")
 
             pipeline_data = cls(
                 tag_id=process_id,
@@ -181,7 +184,7 @@ class PipelineData:
                 log_file = config.config.logging.file
             else:
                 # Default log file path if logging is not available
-                log_file = f"/tmp/{config.name}.log"
+                log_file = os.path.join(SERVICES_TMP_DIR, f"{config.name}.log")
 
             pipeline_data = cls(
                 tag_id=process_id,

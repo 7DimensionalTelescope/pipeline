@@ -4,14 +4,14 @@ import subprocess
 import numpy as np
 from astropy.io import fits
 from numba import njit, prange
-from ..const import SCRIPT_DIR
 from scipy.stats import variation
 import tempfile
 import time
 import uuid
-from .utils import read_fits_image, read_fits_images, write_fits_image, write_fits_images
-
 import fitsio
+
+from .utils import read_fits_image, read_fits_images, write_fits_image, write_fits_images
+from ..const import SCRIPT_DIR, SERVICES_TMP_DIR
 
 
 def combine_images_with_subprocess_gpu(
@@ -125,8 +125,8 @@ def process_image_with_subprocess_gpu(image_paths, bias, dark, flat, device_id=0
     """
     gc.collect()
 
-    # Create /tmp/pipeline/imlist directory if it doesn't exist
-    imlist_dir = "/tmp/pipeline/imlist"
+    # Create SERVICES_TMP_DIR/imlist directory if it doesn't exist
+    imlist_dir = os.path.join(SERVICES_TMP_DIR, "imlist")
     os.makedirs(imlist_dir, exist_ok=True)
 
     # Generate a common identifier to associate input, output, and log files
