@@ -23,6 +23,7 @@ dependencies:
   - astroquery
   - shapely
   - fitsio
+  - healpy
 
 
   # pip-only packages
