@@ -3,6 +3,7 @@ _legacy
 
 # Test files
 test*.ipynb
+test*.py
 test/
 
 # Byte-compiled / optimized / DLL files

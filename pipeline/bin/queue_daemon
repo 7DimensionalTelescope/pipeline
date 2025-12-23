@@ -1,4 +1,4 @@
-#!/home/pipeline/.conda/envs/pipeline/bin/python
+#!/home/pipeline-stable/.conda/envs/pipeline/bin/python
 """
 Queue Manager Daemon
 
