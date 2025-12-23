@@ -119,7 +119,7 @@ def plot_cutouts_and_sed(
     dpi=200,
     verbose=True,
     mark_catalog_sources=False,
-    catalog_type="GAIAXP",
+    catalog_type="GAIA",
     catalog_mag_range=(10, 20),
     query_all_catalogs=False,
 ):
@@ -156,7 +156,7 @@ def plot_cutouts_and_sed(
     mark_catalog_sources : bool, optional
         If True, mark catalog sources (GAIA, APASS, etc.) on cutout images
     catalog_type : str, optional
-        Catalog type to use for marking sources (GAIAXP, GAIA, APASS, PS1, SDSS, SMSS)
+        Catalog type to use for marking sources (GAIA, APASS, PS1, SDSS, SMSS)
     catalog_mag_range : tuple, optional
         Magnitude range for catalog sources to mark (min, max)
     query_all_catalogs : bool, optional
@@ -503,7 +503,7 @@ def plot_cutouts_and_sed(
 
         # Determine which catalogs to query
         if query_all_catalogs:
-            catalogs_to_query = ["GAIAXP", "GAIA", "APASS", "PS1", "SDSS", "SMSS"]
+            catalogs_to_query = ["GAIA", "APASS", "PS1", "SDSS", "SMSS"]
         else:
             catalogs_to_query = [catalog_type]
 
@@ -1309,7 +1309,7 @@ def make_too_output(too_id, sky_position=None, image_type="difference", verbose=
                 image_type=image_type,
                 mark_catalog_sources=True,
                 query_all_catalogs=True,
-                catalog_type="GAIAXP",
+                catalog_type="GAIA",
                 catalog_mag_range=(10, 20),
                 verbose=verbose,
                 **kwargs,
@@ -1322,7 +1322,7 @@ def make_too_output(too_id, sky_position=None, image_type="difference", verbose=
                 image_type="stacked",
                 mark_catalog_sources=True,
                 query_all_catalogs=True,
-                catalog_type="GAIAXP",
+                catalog_type="GAIA",
                 catalog_mag_range=(10, 20),
                 verbose=verbose,
                 **kwargs,
@@ -1334,7 +1334,7 @@ def make_too_output(too_id, sky_position=None, image_type="difference", verbose=
             image_type=image_type,
             mark_catalog_sources=True,
             query_all_catalogs=True,
-            catalog_type="GAIAXP",
+            catalog_type="GAIA",
             catalog_mag_range=(10, 20),
             verbose=verbose,
             **kwargs,

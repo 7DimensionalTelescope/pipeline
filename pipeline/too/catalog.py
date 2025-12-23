@@ -1,16 +1,11 @@
 import astropy.units as u
 import numpy as np
-import os
-from shapely.geometry import Polygon
 from astropy.coordinates import SkyCoord
-from astropy.io import ascii
-from astropy.time import Time
-from astropy.table import Table, vstack
 from astroquery.vizier import Vizier
 
 
 class SkyCatalogHistory:
-    HISTORY_FIELDS = ["objname", "ra", "dec", "fov_ra", "fov_dec", "filename", "cat_type", "save_date"]
+    HISTORY_FIELDS = ["objname", "ra", "dec", "fov_ra", "fov_dec", "cat_type"]
 
     def __init__(self, **kwargs):
         self.history = {step: None for step in self.HISTORY_FIELDS}
@@ -110,8 +105,6 @@ class SkyCatalog:
     ):
         if catalog_type not in ["GAIAXP", "GAIA", "APASS", "PS1", "SDSS", "SMSS"]:
             raise ValueError(f"Invalid catalog type: {catalog_type}")
-        catalog_dir = os.environ.get("CATALOG_DIR", os.path.join(os.getcwd(), "catalog_archive"))
-        self.config = {"CATALOG_DIR": catalog_dir}
         self.verbose = verbose
         self.objname = objname
         self.ra = ra
@@ -120,8 +113,6 @@ class SkyCatalog:
         self.fov_dec = fov_dec
         self.catalog_type = catalog_type
         self.overlapped_fraction = overlapped_fraction
-        self.filename = None
-        self.save_date = None
         self.data = None
 
         self._register_objinfo(
@@ -192,10 +183,6 @@ class SkyCatalog:
                 ref_sources = ref_sources[(ref_sources[key] > value[0]) & (ref_sources[key] < value[1])]
         return ref_sources, applied_kwargs
 
-    @property
-    def catalog_summary(self):
-        return os.path.join(self.config["CATALOG_DIR"], "summary.ascii_fixed_width")
-
     def _get_catalog(self, catalog_type: str, verbose: bool = True):
         method_map = {
             "GAIAXP": self._get_GAIAXP,
@@ -212,175 +199,20 @@ class SkyCatalog:
         )
 
     def _load_and_format_catalog(self, catalog_name, format_func, verbose):
-        # Check for catalog-specific filename in archive
-        expected_filename = f"{self.objname}_{catalog_name}.csv"
-        catalog_file = os.path.join(self.config["CATALOG_DIR"], catalog_name, expected_filename)
-
-        if os.path.exists(catalog_file):
-            if verbose:
-                print(f"Catalog file found in archive: {expected_filename}")
-            data = self._get_catalog_from_archive(catalog_name=catalog_name, filename=expected_filename)
-        else:
-            # Don't overwrite existing objinfo - use current values
-            self._register_objinfo(
-                objname=self.objname,
-                ra=self.ra,
-                dec=self.dec,
-                fov_ra=self.fov_ra,
-                fov_dec=self.fov_dec,
-                catalog_type=catalog_name,
-            )
-
-            # Check if _register_objinfo found a file for this catalog type
-            if self.filename and catalog_name in self.filename:
-                if verbose:
-                    print(f"Catalog file found in archive: {self.filename}")
-                data = self._get_catalog_from_archive(catalog_name=catalog_name, filename=self.filename)
-            else:
-                try:
-                    data = self._query(catalog_name=catalog_name, verbose=verbose)
-                    self._save_catalog(data, catalog_name)
-                except Exception:
-                    raise ValueError(f"{self.objname} does not exist in {catalog_name} catalog")
+        try:
+            data = self._query(catalog_name=catalog_name, verbose=verbose)
+        except Exception:
+            raise ValueError(f"{self.objname} does not exist in {catalog_name} catalog")
 
         self.data = None
         if data:
             formatted_data = format_func(data)
             self.data = self._filter_sources_in_fov(formatted_data)
 
-    def _save_catalog(self, data, catalog_name):
-        # Catalog saving disabled - do not save any catalog files
-        return
-
     def _get_GAIAXP(self, objname=None, ra=None, dec=None, fov_ra=1.3, fov_dec=0.9, verbose=False):
-        def format_func(catalog):
-            original = (
-                "source_id",
-                "ra",
-                "dec",
-                "parallax",
-                "pmra",
-                "pmdec",
-                "phot_g_mean_mag",
-                "bp_rp",
-                "mag_u",
-                "mag_g",
-                "mag_r",
-                "mag_i",
-                "mag_z",
-                "mag_m375w",
-                "mag_m400",
-                "mag_m412",
-                "mag_m425",
-                "mag_m425w",
-                "mag_m437",
-                "mag_m450",
-                "mag_m462",
-                "mag_m475",
-                "mag_m487",
-                "mag_m500",
-                "mag_m512",
-                "mag_m525",
-                "mag_m537",
-                "mag_m550",
-                "mag_m562",
-                "mag_m575",
-                "mag_m587",
-                "mag_m600",
-                "mag_m612",
-                "mag_m625",
-                "mag_m637",
-                "mag_m650",
-                "mag_m662",
-                "mag_m675",
-                "mag_m687",
-                "mag_m700",
-                "mag_m712",
-                "mag_m725",
-                "mag_m737",
-                "mag_m750",
-                "mag_m762",
-                "mag_m775",
-                "mag_m787",
-                "mag_m800",
-                "mag_m812",
-                "mag_m825",
-                "mag_m837",
-                "mag_m850",
-                "mag_m862",
-                "mag_m875",
-                "mag_m887",
-            )
-            format_ = (
-                "id",
-                "ra",
-                "dec",
-                "parallax",
-                "pmra",
-                "pmdec",
-                "g_mean",
-                "bp-rp",
-                "u_mag",
-                "g_mag",
-                "r_mag",
-                "i_mag",
-                "z_mag",
-                "m375w_mag",
-                "m400_mag",
-                "m412_mag",
-                "m425_mag",
-                "m425w_mag",
-                "m437_mag",
-                "m450_mag",
-                "m462_mag",
-                "m475_mag",
-                "m487_mag",
-                "m500_mag",
-                "m512_mag",
-                "m525_mag",
-                "m537_mag",
-                "m550_mag",
-                "m562_mag",
-                "m575_mag",
-                "m587_mag",
-                "m600_mag",
-                "m612_mag",
-                "m625_mag",
-                "m637_mag",
-                "m650_mag",
-                "m662_mag",
-                "m675_mag",
-                "m687_mag",
-                "m700_mag",
-                "m712_mag",
-                "m725_mag",
-                "m737_mag",
-                "m750_mag",
-                "m762_mag",
-                "m775_mag",
-                "m787_mag",
-                "m800_mag",
-                "m812_mag",
-                "m825_mag",
-                "m837_mag",
-                "m850_mag",
-                "m862_mag",
-                "m875_mag",
-                "m887_mag",
-            )
-            catalog.rename_columns(original, format_)
-            return self._match_digit_tbl(catalog)
-
-        if self.filename:
-            if verbose:
-                print(f"Catalog file found in archive: {self.filename}")
-            data = self._get_catalog_from_archive(catalog_name="GAIAXP", filename=self.filename)
-        else:
-            raise ValueError(f"{self.objname} does not exist in GAIAXP catalog")
-
-        self.data = None
-        if data:
-            self.data = self._filter_sources_in_fov(format_func(data))
+        raise ValueError(
+            "GAIAXP catalog must be queried from external source. Use GAIA, APASS, PS1, SDSS, or SMSS instead."
+        )
 
     def _get_GAIA(self, objname=None, ra=None, dec=None, fov_ra=1.3, fov_dec=0.9, verbose=True):
         def format_func(catalog):
@@ -687,83 +519,6 @@ class SkyCatalog:
                 tbl[column].format = "{:.5f}"
         return tbl
 
-    def _get_catalog_from_archive(self, catalog_name: str, filename: str):
-        catalog_file = os.path.join(self.config["CATALOG_DIR"], catalog_name, filename)
-        if os.path.exists(catalog_file):
-            return ascii.read(catalog_file, format="csv")
-        return None
-
-    def _get_cataloginfo_by_coord(
-        self,
-        coord: SkyCoord,
-        fov_ra: float = 1.5,
-        fov_dec: float = 1.5,
-        overlapped_fraction: float = 0.9,
-        verbose: bool = False,
-    ) -> Table:
-        try:
-            catalog_summary_tbl = ascii.read(self.catalog_summary, format="fixed_width")
-            ra_min, ra_max = coord.ra.deg - 5, coord.ra.deg + 5
-            dec_min, dec_max = coord.dec.deg - 5, coord.dec.deg + 5
-            cut_tiles_mask = (
-                (catalog_summary_tbl["ra"] >= ra_min)
-                & (catalog_summary_tbl["ra"] <= ra_max)
-                & (catalog_summary_tbl["dec"] >= dec_min)
-                & (catalog_summary_tbl["dec"] <= dec_max)
-            )
-            catalog_summary_tbl = catalog_summary_tbl[cut_tiles_mask]
-
-            overlap_catalogs = []
-            for idx, (cat_ra, cat_dec, cat_fov_ra, cat_fov_dec) in enumerate(
-                zip(
-                    catalog_summary_tbl["ra"],
-                    catalog_summary_tbl["dec"],
-                    catalog_summary_tbl["fov_ra"],
-                    catalog_summary_tbl["fov_dec"],
-                )
-            ):
-                target_polygon = Polygon(
-                    [
-                        (coord.ra.deg - fov_ra / 2, coord.dec.deg - fov_dec / 2),
-                        (coord.ra.deg + fov_ra / 2, coord.dec.deg - fov_dec / 2),
-                        (coord.ra.deg + fov_ra / 2, coord.dec.deg + fov_dec / 2),
-                        (coord.ra.deg - fov_ra / 2, coord.dec.deg + fov_dec / 2),
-                    ]
-                )
-                tile_polygon = Polygon(
-                    [
-                        (cat_ra - cat_fov_ra / 2, cat_dec - cat_fov_dec / 2),
-                        (cat_ra + cat_fov_ra / 2, cat_dec - cat_fov_dec / 2),
-                        (cat_ra + cat_fov_ra / 2, cat_dec + cat_fov_dec / 2),
-                        (cat_ra - cat_fov_ra / 2, cat_dec + cat_fov_dec / 2),
-                    ]
-                )
-                if target_polygon.intersects(tile_polygon):
-                    intersection = target_polygon.intersection(tile_polygon)
-                    target_area = fov_ra * fov_dec
-                    fraction_overlap = intersection.area / target_area
-                    if fraction_overlap >= overlapped_fraction:
-                        overlap_catalogs.append(catalog_summary_tbl[idx])
-
-            if overlap_catalogs:
-                return vstack(overlap_catalogs)
-            raise ValueError("No catalog found with sufficient overlap.")
-        except Exception as e:
-            raise RuntimeError(f"Failed to access catalog summary: {e}")
-
-    def _get_cataloginfo_by_objname(self, objname, catalog_type, fov_ra, fov_dec):
-        catalog_summary_file = os.path.join(self.config["CATALOG_DIR"], "catalog_summary.ascii_fixed_width")
-        catalog_summary_tbl = ascii.read(catalog_summary_file, format="fixed_width")
-        idx = (
-            (catalog_summary_tbl["objname"] == objname)
-            & (catalog_summary_tbl["cat_type"] == catalog_type)
-            & (catalog_summary_tbl["fov_ra"] * 1.1 > fov_ra)
-            & (catalog_summary_tbl["fov_dec"] * 1.1 > fov_dec)
-        )
-        if np.sum(idx) > 0:
-            return catalog_summary_tbl[idx]
-        raise ValueError(f"{objname} not found in catalog_summary")
-
     def _update_history(self):
         self.history = SkyCatalogHistory(
             objname=self.objname,
@@ -771,9 +526,7 @@ class SkyCatalog:
             dec=self.dec,
             fov_ra=self.fov_ra,
             fov_dec=self.fov_dec,
-            filename=self.filename,
             cat_type=self.catalog_type,
-            save_date=self.save_date,
         )
 
     def _register_objinfo(self, objname, ra, dec, fov_ra, fov_dec, catalog_type):
@@ -789,40 +542,17 @@ class SkyCatalog:
 
         if objname is not None and (ra is None or dec is None):
             try:
-                catinfo = self._get_cataloginfo_by_objname(
-                    objname=objname, catalog_type=catalog_type, fov_ra=fov_ra, fov_dec=fov_dec
-                )
-                self.ra = catinfo["ra"][0]
-                self.dec = catinfo["dec"][0]
-                self.fov_ra = catinfo["fov_ra"][0]
-                self.fov_dec = catinfo["fov_dec"][0]
-                self.filename = catinfo["filename"][0]
-                self.save_date = catinfo["save_date"][0]
+                coord = self._query_coord_from_objname(objname=objname)
+                self.ra = coord.ra.deg
+                self.dec = coord.dec.deg
             except:
-                try:
-                    coord = self._query_coord_from_objname(objname=objname)
-                    self.ra = coord.ra.deg
-                    self.dec = coord.dec.deg
-                except:
-                    raise ValueError(f"Failed to query coordinates for {objname}")
+                raise ValueError(f"Failed to query coordinates for {objname}")
 
         if objname is None and ra is not None and dec is not None:
             coord = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
-            try:
-                catinfo = self._get_cataloginfo_by_coord(
-                    coord=coord, fov_ra=fov_ra, fov_dec=fov_dec, overlapped_fraction=self.overlapped_fraction
-                )
-                self.objname = catinfo["objname"][0]
-                self.ra = catinfo["ra"][0]
-                self.dec = catinfo["dec"][0]
-                self.fov_ra = catinfo["fov_ra"][0]
-                self.fov_dec = catinfo["fov_dec"][0]
-                self.filename = catinfo["filename"][0]
-                self.save_date = catinfo["save_date"][0]
-            except:
-                ra_hms = coord.ra.hms
-                dec_dms = coord.dec.dms
-                self.objname = f"J{int(ra_hms.h):02}{int(ra_hms.m):02}{ra_hms.s:05.2f}{int(dec_dms.d):+03}{int(abs(dec_dms.m)):02}{abs(dec_dms.s):04.1f}"
+            ra_hms = coord.ra.hms
+            dec_dms = coord.dec.dms
+            self.objname = f"J{int(ra_hms.h):02}{int(ra_hms.m):02}{ra_hms.s:05.2f}{int(dec_dms.d):+03}{int(abs(dec_dms.m)):02}{abs(dec_dms.s):04.1f}"
 
         if (self.objname is None) or (self.ra is None) or (self.dec is None):
             raise ValueError("objname, ra, and dec must be provided")
@@ -846,4 +576,5 @@ class SkyCatalog:
 if __name__ == "__main__":
     ra = 10.68458
     dec = -41.26917
-    catalog = SkyCatalog(ra=ra, dec=dec, catalog_type="GAIAXP", fov_ra=1.3, fov_dec=0.9)
+    catalog = SkyCatalog(ra=ra, dec=dec, catalog_type="GAIA", fov_ra=1.3, fov_dec=0.9)
+    print(catalog)
