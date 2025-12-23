@@ -175,7 +175,7 @@ def process_image_with_subprocess_gpu(image_paths, bias, dark, flat, device_id=0
             return None
 
         except Exception as e:
-            print(f"GPU processing is failed, falling back to CPU processing. Check log file: {log_file_path}")
+            print(f"GPU processing failed, falling back to CPU processing. See log file: {log_file_path}")
             print(f"Error: {e}")
             # Fall back to CPU processing
             success = False

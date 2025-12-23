@@ -63,7 +63,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         overwrite=False,
         master_frame_only=False,
         calib_types=None,
-        use_gpu=True,
+        use_gpu=False,
         add_database=True,
         is_too=False,
         **kwargs,
