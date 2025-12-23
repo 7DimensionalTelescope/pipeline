@@ -4,6 +4,7 @@ SED table formatting utilities for ToO output.
 This module provides functions to format SED (Spectral Energy Distribution) data
 as tables for both text files and email content.
 """
+
 import numpy as np
 
 BROADBAND_FILTERS = ["u", "g", "r", "i", "z"]
@@ -23,6 +24,7 @@ def sort_sed_data(sed_data):
     list of dict
         Sorted SED data
     """
+
     def get_txt_sort_key(item):
         filter_name = item.get("filter_name", "")
         is_broadband = filter_name in BROADBAND_FILTERS
@@ -116,7 +118,7 @@ def format_sed_table_string(sed_data, title="Magnitude Measurements"):
 
     table += "-" * 100 + "\n"
     if ul_exists:
-        table += "* Upper limits (marked with '>') are 3-sigma limits\n"
+        table += "* Upper limits (marked with '>') are 5-sigma limits\n"
 
     return table
 
@@ -168,8 +170,7 @@ def write_sed_table_file(sed_data, output_path, verbose=True):
             f.write(f"{filter_name:<12} {mag_str:<12} {mag_err_str:<12} {exposure:<15} {date_obs:<30}\n")
         f.write("-" * 100 + "\n")
         if ul_exists:
-            f.write("* Upper limits (marked with '>') are 3-sigma limits\n")
+            f.write("* Upper limits (marked with '>') are 5-sigma limits\n")
 
     if verbose:
         print(f"Magnitude data saved to: {output_path}")
-

@@ -3,6 +3,7 @@ from astropy.io import fits
 import numpy as np
 import cupy as cp
 import os
+import fitsio
 
 # Reduction kernel
 sig_r_kernel = cp.ElementwiseKernel(
@@ -98,6 +99,7 @@ def calc_weight(images, d_m, f_m, sig_z, sig_f, p_d, p_z, p_f, egain, weight=Tru
     del weight_results
 
 
+# duplicate to avoid circular import
 def _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file):
     sig_z = fitsio.read(sig_z_file).astype(np.float32)
     d_m = fitsio.read(d_m_file).astype(np.float32)

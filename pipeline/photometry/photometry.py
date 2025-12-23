@@ -320,7 +320,7 @@ class PhotometrySingle:
     def __init__(
         self,
         # image: str,
-        config: ConfigNode,
+        config_node: ConfigNode,
         logger: Any = None,
         name: Optional[str] = None,
         ref_catalog: str = "GaiaXP",
@@ -334,15 +334,16 @@ class PhotometrySingle:
         if reset_count:
             self._id_counter = itertools.count(1)
 
-        if hasattr(config, "config"):
-            config = config.config
+        # if config_node is a SciProcConfiguration
+        if hasattr(config_node, "node"):
+            config_node = config_node.node
 
-        self.config = config
-        self.logger = logger or self._setup_logger(config)
+        self.config_node = config_node
+        self.logger = logger or self._setup_logger(config_node)
         self.ref_catalog = ref_catalog
         # self.image = os.path.join(self.config.path.path_processed, image)
         # self.input_image = image
-        self.phot_conf = self.config.photometry
+        self.phot_conf = self.config_node.photometry
         self.input_image = collapse(self.phot_conf.input_images, raise_error=True)
         self.logger.debug(f"input_image: {self.input_image}")
         self.logger.debug(f"=" * 100)
@@ -407,7 +408,7 @@ class PhotometrySingle:
 
             if self._check_filter:
                 self.logger.info("Performing filter check")
-                filters_to_check = get_key(self.config.photometry, "filters_to_check") or ALL_FILTERS
+                filters_to_check = get_key(self.config_node.photometry, "filters_to_check") or ALL_FILTERS
                 obs_src_table = self.add_matched_reference_catalog(obs_src_table, filters=filters_to_check)
                 zp_src_table = self.get_zp_src_table(obs_src_table)
 
@@ -536,7 +537,7 @@ class PhotometrySingle:
         Handles both standard and corrected GaiaXP catalogs.
         Creates new catalog if it doesn't exist by parsing Gaia data.
         """
-        ref_ris_dir = get_key(self.config.photometry, "path.ref_ris_dir") or self.path.photometry.ref_ris_dir
+        ref_ris_dir = get_key(self.config_node.photometry, "path.ref_ris_dir") or self.path.photometry.ref_ris_dir
         if self.ref_catalog == "GaiaXP_cor":
             ref_cat = f"{ref_ris_dir}/cor_gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
         elif self.ref_catalog == "GaiaXP":
@@ -545,7 +546,7 @@ class PhotometrySingle:
             raise ValueError(f"Invalid reference catalog: {self.ref_catalog}. It should be 'GaiaXP' or 'GaiaXP_cor'")
 
         # generate the missing ref_cat and save on disk
-        ref_gaia_dir = get_key(self.config.photometry, "path.ref_gaia_dir") or self.path.photometry.ref_gaia_dir
+        ref_gaia_dir = get_key(self.config_node.photometry, "path.ref_gaia_dir") or self.path.photometry.ref_gaia_dir
         if not os.path.exists(ref_cat):  # and "gaia" in self.ref_catalog:
             ref_src_table = phot_utils.aggregate_gaia_catalogs(
                 target_coord=SkyCoord(self.image_info.racent, self.image_info.decent, unit="deg"),
@@ -906,9 +907,8 @@ class PhotometrySingle:
 
         return inferred_filter
 
-    # TODO
     def get_active_filters(self) -> set:
-        """ad-hoc before DB integration"""
+        """TODO: ad-hoc before DB integration"""
         from glob import glob
         from ..path import NameHandler
 

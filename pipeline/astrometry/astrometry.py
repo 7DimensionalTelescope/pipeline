@@ -364,7 +364,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         """
         try:
             start_time = self.start_time or time.time()
-            
+
             self.logger.info(f"Start 'Astrometry'")
 
             self.define_paths()
@@ -655,10 +655,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         #         overwrite=overwrite,
         #     )
         # else:
-        # Run sextractor in parallel using threading
-        # Run sextractor in parallel using threading
-        def _run_sextractor(solved_image, prep_cat, index):
-            """Helper function to run sextractor for a single image"""
+        # Run sextractor sequentially
+        for i, (solved_image, prep_cat) in enumerate(zip(input_images, output_catalogs)):
             try:
                 external.sextractor(
                     solved_image,
@@ -669,25 +667,11 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     fits_ldac=True,
                     overwrite=overwrite,
                 )
-                self.logger.info(f"Completed sextractor (prep) [{index+1}/{len(input_images)}]")
+                self.logger.info(f"Completed sextractor (prep) [{i+1}/{len(input_images)}]")
                 self.logger.debug(f"{solved_image}")
-                return (index, solved_image, prep_cat, None)
             except Exception as e:
                 self.logger.error(f"Failed sextractor for {solved_image}: {e}")
-                return (index, solved_image, prep_cat, e)
-
-        # Submit all tasks to thread pool
-        with ThreadPoolExecutor(max_workers=min(len(input_images), 10)) as executor:
-            futures = {
-                executor.submit(_run_sextractor, solved_image, prep_cat, i): (i, solved_image, prep_cat)
-                for i, (solved_image, prep_cat) in enumerate(zip(input_images, output_catalogs))
-            }
-
-            # Wait for all tasks to complete and collect results
-            for future in as_completed(futures):
-                index, solved_image, prep_cat, error = future.result()
-                if error:
-                    raise RuntimeError(f"Sextractor failed for {solved_image}: {error}") from error
+                raise RuntimeError(f"Sextractor failed for {solved_image}: {e}") from e
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
