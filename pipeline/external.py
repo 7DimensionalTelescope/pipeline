@@ -464,6 +464,11 @@ def sextractor(
         else:
             print(f"[sextractor:{level.upper()}] {msg}")
 
+    # chatter("whoami", "info")
+    # os.system("whoami")
+    # os.system("echo $SHELL")
+    # os.system("echo $TERM")
+
     default_outcat = (
         add_suffix(add_suffix(inim, se_preset), "cat") if fits_ldac else swap_ext(add_suffix(inim, se_preset), "cat")
     )

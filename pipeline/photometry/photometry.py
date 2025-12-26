@@ -348,6 +348,7 @@ class PhotometrySingle:
         self.name = name or os.path.basename(self.input_image)
         self.logger.debug(f"{self.name}: ImageInfo: {self.image_info}")
         self.phot_header = PhotometryHeader(self.image_info)
+        self.logger.debug(f"{self.name}: PhotometryHeader: {self.phot_header}")
         self.phot_header.AUTHOR = getpass.getuser()
 
         self._id = str(next(self._id_counter)) + "/" + str(total_image)

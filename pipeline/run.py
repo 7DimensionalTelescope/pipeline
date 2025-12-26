@@ -42,7 +42,7 @@ def run_scidata_reduction(
     overwrite: bool = False,
     is_too: bool = False,
 ):
-    print(config, is_too)
+    # print(config, is_too)
     try:
         if isinstance(config, SciProcConfiguration):
             pass
