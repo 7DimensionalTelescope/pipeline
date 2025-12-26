@@ -26,7 +26,7 @@ class Blueprint:
         is_too=False,
         **kwargs,
     ):
-        self.groups = SortedGroupDict()
+        self.groups: SortedGroupDict = SortedGroupDict()
 
         self.is_too = is_too
 
