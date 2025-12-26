@@ -335,9 +335,6 @@ class SciProcConfiguration(BaseConfig):
         self._initialized = True
 
     def _define_settings(self, input_file):
-        # use local astrometric reference catalog for tile observations
-        # self.config.settings.local_astref = bool(re.fullmatch(r"T\d{5}", self.config.obs.obj))
-
         try:
             # skip single frame combine for Deep mode
             raw_header_sample = get_header(input_file)

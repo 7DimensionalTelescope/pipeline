@@ -2,15 +2,16 @@ import os
 from glob import glob
 from pathlib import Path
 from typing import Union, List, Tuple
-import numpy as np
 from functools import cached_property
+import numpy as np
 
 from .. import const
 from ..const import PipelineError
-from .utils import find_raw_path
+from ..tile import find_ris_tile
 from ..utils import add_suffix, swap_ext, collapse, atleast_1d
+
 from .name import NameHandler
-from .utils import format_exptime, mean_datetime
+from .utils import find_raw_path, format_exptime, mean_datetime
 from .utils import broadcast_join_pure as bjoin
 from .mixin import AutoMkdirMixin, AutoCollapseMixin
 from .const import (
@@ -1023,13 +1024,11 @@ class PathAstrometry(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def astrefcat(self):
-        import re
-
         obj = collapse(self._parent.name.obj, raise_error=True)  # error in case of inhomogeneous objects
         # use local astrefcat if tile obs
-        match = re.search(r"T\d{5}", obj)
-        if match:
-            astrefcat = os.path.join(self.ref_ris_dir, f"{match.group()}.fits")
+        tile = find_ris_tile(obj)
+        if tile:
+            astrefcat = os.path.join(self.ref_ris_dir, f"{tile}.fits")
         else:
             astrefcat = os.path.join(self.ref_custom_dir, f"{obj}.fits")
 
@@ -1066,6 +1065,17 @@ class PathPhotometry(AutoMkdirMixin, AutoCollapseMixin):
 
     def __repr__(self):
         return "\n".join(f"{k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
+
+    def get_ref_cat(self, obj: str, ref_cat_type: str = "GaiaXP"):
+
+        if ref_cat_type == "GaiaXP_cor":
+            ref_cat = os.path.join(self.ref_ris_dir, f"cor_gaiaxp_dr3_synphot_{obj}.csv")
+        elif ref_cat_type == "GaiaXP":
+            ref_cat = os.path.join(self.ref_ris_dir, f"gaiaxp_dr3_synphot_{obj}.csv")
+        else:
+            raise ValueError(f"Invalid reference catalog type: {ref_cat_type}. It should be 'GaiaXP' or 'GaiaXP_cor'")
+
+        return ref_cat
 
     @property
     def tmp_dir(self):

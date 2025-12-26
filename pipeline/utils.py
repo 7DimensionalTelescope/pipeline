@@ -457,4 +457,3 @@ def lupton_asinh(img: np.array, sky: float, noise: float, hi_clip=None, k_soft=3
     den = np.arcsinh((hi_clip - sky) / soft)
     scaled = num / den
     return np.clip(scaled, 0, 1)
-

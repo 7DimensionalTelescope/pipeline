@@ -6,6 +6,8 @@ from astropy.coordinates import SkyCoord
 from typing import Any, Tuple, Optional, Dict, Union
 from astropy.io import fits
 
+from ..const import GAIA_REF_DIR
+
 
 @njit
 def rss(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -145,7 +147,7 @@ def keyset(mag_key: str, filter: str) -> tuple[str]:
     return _magkey, _magerrkey, _fluxkey, _fluxerrkey, _snrkey
 
 
-def aggregate_gaia_catalogs(target_coord, path_calibration_field, matching_radius=1.0):
+def aggregate_gaia_catalogs(target_coord, path_calibration_field=None, query_radius=1.0):
     """
     Return a merged Gaia DR3 source catalog near the specified coordinates.
 
@@ -159,12 +161,14 @@ def aggregate_gaia_catalogs(target_coord, path_calibration_field, matching_radiu
         astropy.table.Table: Combined reference catalog table
     """
 
-    grid_table = Table.read(f"{path_calibration_field}/grid.csv")
+    path_calibration_field = path_calibration_field or GAIA_REF_DIR
+
+    grid_table = Table.read(os.path.join(path_calibration_field, "grid.csv"))
     c_grid = SkyCoord(grid_table["center_ra"], grid_table["center_dec"], unit="deg")
 
     sep_arr = target_coord.separation(c_grid).deg
-    indx_match = np.where(sep_arr < matching_radius)
-    matched_grid_table = grid_table[indx_match]
+    idx_match = np.where(sep_arr < query_radius)
+    matched_grid_table = grid_table[idx_match]
 
     all_filters = [
         "u", "g", "r", "i", "z",
@@ -176,7 +180,7 @@ def aggregate_gaia_catalogs(target_coord, path_calibration_field, matching_radiu
         "m812", "m825", "m837", "m850", "m862", "m875", "m887",
     ]  # fmt:skip
 
-    gaia_general_keys = [
+    gaia_column_keys = [
         "source_id",
         "ra",
         "dec",
@@ -193,18 +197,18 @@ def aggregate_gaia_catalogs(target_coord, path_calibration_field, matching_radiu
     all_tablelist = []
     for prefix in matched_grid_table["prefix"]:
         tablelist = []
-        for ff, filte in enumerate(all_filters):
-            _tablename = f"{path_calibration_field}/{prefix}/{filte}.fits"
-            _reftbl = Table.read(_tablename)
-            if ff == 0:
-                _table = Table()
-                for gaia_key in gaia_general_keys:
-                    _table[gaia_key] = _reftbl[gaia_key]
+        for i, filt in enumerate(all_filters):
+            f = os.path.join(path_calibration_field, prefix, f"{filt}.fits")
+            reftbl = Table.read(f)
+            if i == 0:
+                tbl = Table()
+                for colname in gaia_column_keys:
+                    tbl[colname] = reftbl[colname]
             # 	Mag & SNR Keys
-            filter_magkey = f"mag_{filte}"
-            filter_snrkey = f"snr_{filte}"
-            _table[filter_magkey] = _reftbl[filter_magkey]
-        tablelist.append(_table)
+            mag_key = f"mag_{filt}"
+            snr_key = f"snr_{filt}"
+            tbl[mag_key] = reftbl[mag_key]
+        tablelist.append(tbl)
         all_tablelist.append(hstack(tablelist))
 
     all_reftbl = vstack(all_tablelist)

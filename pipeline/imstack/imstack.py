@@ -1,15 +1,12 @@
 import os
-import sys
-import re
 import time
 import shutil
-import subprocess
-from pathlib import Path
+import warnings
 import numpy as np
 from astropy.io import fits
 from astropy.time import Time
-from typing import Any, List, Dict, Tuple, Optional, Union
-import warnings
+from astropy.table import Table
+from astropy.coordinates import Angle
 
 from ..const import REF_DIR, PipelineError
 from ..config import SciProcConfiguration
@@ -21,6 +18,7 @@ from ..utils import collapse, get_header, add_suffix, time_diff_in_seconds, get_
 from ..preprocess.utils import get_zdf_from_header_IMCMB
 from ..preprocess.plotting import save_fits_as_figures
 from .. import external
+from ..tile import is_ris_tile, find_ris_tile
 
 from ..services.database.handler import DatabaseHandler
 from ..services.database.table import QAData
@@ -247,18 +245,16 @@ class ImStack(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
 
         # Determine Deprojection Center
         # 	Tile object (e.g. T01026)
-        if bool(re.match(r"T\d{5}", self.obj)):
+        if is_ris_tile(self.obj):
             self.logger.info(f"Using predefined deprojection center for {self.obj}.")
-            from astropy.table import Table
-            from astropy.coordinates import Angle
 
-            skygrid_table = Table.read(f"{REF_DIR}/skygrid.fits")
-            indx_skygrid = skygrid_table["tile"] == self.obj
+            skygrid_table = Table.read(os.path.join(REF_DIR, "skygrid.fits"))
+            idx_tile = skygrid_table["tile"] == find_ris_tile(self.obj)
 
-            ra = Angle(skygrid_table["ra"][indx_skygrid][0], unit="deg")
+            ra = Angle(skygrid_table["ra"][idx_tile][0], unit="deg")
             objra = ra.to_string(unit="hourangle", sep=":", pad=True)
 
-            dec = Angle(skygrid_table["dec"][indx_skygrid][0], unit="deg")
+            dec = Angle(skygrid_table["dec"][idx_tile][0], unit="deg")
             objdec = dec.to_string(unit="degree", sep=":", pad=True, alwayssign=True)
 
         # 	Non-Tile object
