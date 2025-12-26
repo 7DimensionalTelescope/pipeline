@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import gc
 import re
 import time
@@ -6,13 +8,14 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime
 from astropy.table import Table
-from typing import Optional
+from typing import Optional, Iterator, overload
 import fcntl
 from contextlib import contextmanager
 import pynvml
 import os
 import getpass
 from collections import UserDict
+from itertools import chain
 
 from ..const import SERVICES_TMP_DIR
 
@@ -536,25 +539,31 @@ def acquire_available_gpu(device_id=None, gpu_threshold=400, blocking=True, time
 class SortedGroupDict(UserDict):
     """A dictionary that sorts its values when iterating."""
 
-    def __getitem__(self, key):
+    @overload
+    def __getitem__(self, key: int) -> PreprocessGroup | ScienceGroup: ...
+
+    @overload
+    def __getitem__(self, key: str) -> PreprocessGroup | ScienceGroup: ...
+
+    def __getitem__(self, key: int | str) -> PreprocessGroup | ScienceGroup:
         if type(key) == int:
             return self.values()[key]
         else:
             return super().__getitem__(key)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[PreprocessGroup | ScienceGroup]:
         # First sort by type (PreprocessGroup first, then ScienceGroup)
         # Then within each type, sort by their respective criteria
         return iter(self._get_sorted_values())
 
-    def values(self):
+    def values(self) -> list[PreprocessGroup | ScienceGroup]:
         return self._get_sorted_values()
 
-    def items(self):
+    def items(self) -> list[tuple[str | None, PreprocessGroup | ScienceGroup]]:
         sorted_values = self._get_sorted_values()
         return [(getattr(v, "key", None), v) for v in sorted_values]
 
-    def _get_sorted_values(self):
+    def _get_sorted_values(self) -> list[PreprocessGroup | ScienceGroup]:
         # Separate PreprocessGroup and ScienceGroup
         preprocess_groups = []
         science_groups = []

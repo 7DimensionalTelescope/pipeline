@@ -95,7 +95,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         DatabaseHandler.__init__(
             self, add_database=self.config_node.settings.is_pipeline, is_too=self.config_node.settings.is_too
         )
-        print(self.config_node.settings.is_too)
+        
 
         if self.is_connected:
             self.set_logger(logger)

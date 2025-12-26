@@ -22,12 +22,11 @@ class Blueprint:
         input_params=None,
         list_of_images=None,
         use_db=False,
-        ignore_mult_date=False,
         master_frame_only=False,
         is_too=False,
         **kwargs,
     ):
-        self.groups = SortedGroupDict()
+        self.groups: SortedGroupDict = SortedGroupDict()
 
         self.is_too = is_too
 
@@ -52,14 +51,14 @@ class Blueprint:
                 return
 
             print("Grouping images...")
-            self.initialize(ignore_mult_date=ignore_mult_date)
+            self.initialize()
 
         print("Blueprint initialized.")
 
         self._config_generated = False
 
     @classmethod
-    def from_list(cls, list_of_images: list[str], ignore_mult_date=False, is_too=False, **kwargs):
+    def from_list(cls, list_of_images: list[str], is_too=False, **kwargs):
         # if not all(f.endswith(".fits") for f in list_of_images):
         #     raise ValueError("Non-fits images in input")
         if not list_of_images:
@@ -68,11 +67,11 @@ class Blueprint:
         if not all(isinstance(f, str) and f.endswith(".fits") for f in list_of_images):
             raise ValueError("Non-fits images in input")
 
-        return cls(list_of_images=list_of_images, ignore_mult_date=ignore_mult_date, is_too=is_too, **kwargs)
+        return cls(list_of_images=list_of_images, is_too=is_too, **kwargs)
 
-    def initialize(self, ignore_mult_date=False):
+    def initialize(self):
         # [raw bdf, mframes, sci_dict]
-        image_inventory = PathHandler.take_raw_inventory(self.list_of_images, ignore_mult_date=ignore_mult_date)
+        image_inventory = PathHandler.take_raw_inventory(self.list_of_images)
 
         if len(image_inventory) == 0:
             self.logger.warning(f"No group for wrapper out of {self.list_of_images}\nPossibly due to NUM_MIN_CALIB")

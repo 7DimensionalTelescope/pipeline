@@ -79,9 +79,10 @@ astrometry:
 photometry:
   input_images:
   path:  # can be specified manually
-    ref_ris_dir:  # for RIS tiles
-    ref_gaia_dir:  # Gaia tiles
-  match_radius: 1.0
+    ref_cat:  # for RIS tiles
+    ref_gaia_dir:  # raw Gaia catalog directory
+  query_radius: 1.0  # deg
+  match_radius: 1.0  # arcsec
   photfraction: 0.75
   refcatname: GaiaXP
   refqueryradius: 0.9

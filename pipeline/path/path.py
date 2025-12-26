@@ -2,15 +2,16 @@ import os
 from glob import glob
 from pathlib import Path
 from typing import Union, List, Tuple
-import numpy as np
 from functools import cached_property
+import numpy as np
 
 from .. import const
 from ..const import PipelineError
-from .utils import find_raw_path
+from ..tile import find_ris_tile
 from ..utils import add_suffix, swap_ext, collapse, atleast_1d
+
 from .name import NameHandler
-from .utils import format_exptime, mean_datetime
+from .utils import find_raw_path, format_exptime, mean_datetime
 from .utils import broadcast_join_pure as bjoin
 from .mixin import AutoMkdirMixin, AutoCollapseMixin
 from .const import (
@@ -668,18 +669,15 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
     #     return result
 
     @classmethod
-    def take_raw_inventory(cls, files: list[str], lone_calib=True, ignore_mult_date=False, is_too=False):
+    def take_raw_inventory(cls, files: list[str], lone_calib=True, is_too=False):
         return cls.build_preproc_input(
             *NameHandler.find_calib_for_sci(files),
             lone_calib=lone_calib,
-            ignore_mult_date=ignore_mult_date,
             is_too=is_too,
         )
 
     @classmethod
-    def build_preproc_input(
-        cls, sci_files, on_date_calib, off_date_calib=None, lone_calib=True, ignore_mult_date=False, is_too=False
-    ):
+    def build_preproc_input(cls, sci_files, on_date_calib, off_date_calib=None, lone_calib=True, is_too=False):
         """
         Group science files by their associated on-date calibration sets.
 
@@ -790,7 +788,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
                 if len(off_date_bias_group) < const.NUM_MIN_CALIB:
                     continue
 
-                mbias = cls.ensure_unique(cls(off_date_bias_group).preprocess.masterframe, off=not ignore_mult_date)
+                mbias = cls(off_date_bias_group).preprocess.masterframe
                 # preprocess.mbias works too
                 result.append([[sorted(off_date_bias_group), [], []], [mbias, "", ""], dict()])
 
@@ -798,10 +796,8 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
                 if len(off_date_dark_group) < const.NUM_MIN_CALIB:
                     continue
 
-                mdark = cls.ensure_unique(cls(off_date_dark_group).preprocess.masterframe, off=not ignore_mult_date)
-                mbias = cls.ensure_unique(
-                    cls(off_date_dark_group).preprocess.mbias, off=not ignore_mult_date
-                )  # mbias needed for mdark generation
+                mdark = cls(off_date_dark_group).preprocess.masterframe
+                mbias = cls(off_date_dark_group).preprocess.mbias  # mbias needed for mdark generation
 
                 # use pre-generated mbias saved to disk, even if on-date
                 result.append([[[], sorted(off_date_dark_group), []], [mbias, mdark, ""], dict()])
@@ -810,32 +806,14 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
                 if len(off_date_flat_group) < const.NUM_MIN_CALIB:
                     continue
 
-                mflat = cls.ensure_unique(cls(off_date_flat_group).preprocess.masterframe, off=not ignore_mult_date)
+                mflat = cls(off_date_flat_group).preprocess.masterframe
                 self = cls(off_date_flat_group)
                 self.name.exptime = ["*"] * len(off_date_flat_group)  # * is a glob wildcard
-                mdark = cls.ensure_unique(self.preprocess.mdark, off=not ignore_mult_date)
-                mbias = cls.ensure_unique(cls(off_date_flat_group).preprocess.mbias, off=not ignore_mult_date)
+                mdark = self.preprocess.mdark
+                mbias = cls(off_date_flat_group).preprocess.mbias
                 result.append([[[], [], sorted(off_date_flat_group)], [mbias, mdark, mflat], dict()])
 
         return result
-
-    @staticmethod
-    def ensure_unique(mframe, off=False):
-        """
-        CAVEAT: this is ad-hoc.
-        Using this relies on that the inputs are properly grouped by nightdate,
-        and only date of files are erroneous.
-
-        You may turn it off for future data as of 2025-07-15.
-        """
-        if off:
-            return mframe
-
-        if isinstance(mframe, list):
-            mframe_selected = sorted(mframe)[-1]
-            print(f"[WARNING] Degenerate output filenames: {mframe};\nUsing the last: {mframe_selected}")
-            return mframe_selected
-        return mframe
 
     @classmethod
     def get_group_info(cls, raw_group):
@@ -1023,13 +1001,11 @@ class PathAstrometry(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def astrefcat(self):
-        import re
-
         obj = collapse(self._parent.name.obj, raise_error=True)  # error in case of inhomogeneous objects
         # use local astrefcat if tile obs
-        match = re.search(r"T\d{5}", obj)
-        if match:
-            astrefcat = os.path.join(self.ref_ris_dir, f"{match.group()}.fits")
+        tile = find_ris_tile(obj)
+        if tile:
+            astrefcat = os.path.join(self.ref_ris_dir, f"{tile}.fits")
         else:
             astrefcat = os.path.join(self.ref_custom_dir, f"{obj}.fits")
 
@@ -1066,6 +1042,17 @@ class PathPhotometry(AutoMkdirMixin, AutoCollapseMixin):
 
     def __repr__(self):
         return "\n".join(f"{k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
+
+    def get_ref_cat(self, obj: str, ref_cat_type: str = "GaiaXP"):
+
+        if ref_cat_type == "GaiaXP_cor":
+            ref_cat = os.path.join(self.ref_ris_dir, f"cor_gaiaxp_dr3_synphot_{obj}.csv")
+        elif ref_cat_type == "GaiaXP":
+            ref_cat = os.path.join(self.ref_ris_dir, f"gaiaxp_dr3_synphot_{obj}.csv")
+        else:
+            raise ValueError(f"Invalid reference catalog type: {ref_cat_type}. It should be 'GaiaXP' or 'GaiaXP_cor'")
+
+        return ref_cat
 
     @property
     def tmp_dir(self):

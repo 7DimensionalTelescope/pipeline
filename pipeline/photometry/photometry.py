@@ -5,10 +5,8 @@ from reprlib import recursive_repr
 from typing import Any, List, Dict, Tuple, Optional, Union
 import datetime
 import numpy as np
-import matplotlib.pyplot as plt
 import itertools
 import time
-from pathlib import Path
 from dataclasses import dataclass, fields
 
 # astropy
@@ -20,28 +18,27 @@ from astropy import units as u
 from astropy.coordinates import SkyCoord
 from astropy.stats import sigma_clip
 
-# gppy modules
+from ..services.memory import MemoryMonitor
+from ..services.queue import QueueManager
+from ..services.database.handler import DatabaseHandler
+from ..services.database.table import QAData
+from ..services.checker import Checker, SanityFilterMixin
+
 from ..config.utils import get_key
 from ..utils import time_diff_in_seconds, get_header_key, force_symlink, collapse
 from ..config import SciProcConfiguration
 from ..config.base import ConfigNode
-from ..services.memory import MemoryMonitor
-from ..services.queue import QueueManager
 from .. import external
 from ..const import PIXSCALE, MEDIUM_FILTERS, BROAD_FILTERS, ALL_FILTERS, PipelineError
 from ..services.setup import BaseSetup
 from ..tools.table import match_two_catalogs, build_condition_mask
 from ..path.path import PathHandler
 from ..header import update_padded_header
-
-from ..services.database.handler import DatabaseHandler
-from ..services.database.table import QAData
-from ..services.checker import Checker, SanityFilterMixin
+from ..too.plotting import make_too_output
+from ..tile import is_ris_tile
 
 from . import utils as phot_utils
 from .plotting import plot_zp, plot_filter_check
-
-from ..too.plotting import make_too_output
 
 
 class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
@@ -259,7 +256,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
                 image,
                 single_config,  # self.config,
                 self.logger,
-                ref_catalog=self.ref_catalog,
+                ref_cat_type=self.ref_catalog,
                 reset_count=i == 0,
             )
             task_id = self.queue.add_task(
@@ -280,7 +277,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
                 # image,
                 single_config,  # self.config,
                 logger=self.logger,
-                ref_catalog=self.ref_catalog,
+                ref_cat_type=self.ref_catalog,
                 total_image=len(self.input_images),
                 difference_photometry=diff_phot,
                 reset_count=i == 0,
@@ -323,7 +320,7 @@ class PhotometrySingle:
         config_node: ConfigNode,
         logger: Any = None,
         name: Optional[str] = None,
-        ref_catalog: str = "GaiaXP",
+        ref_cat_type: str = "GaiaXP",
         total_image: int = 1,
         check_filter=True,
         difference_photometry=False,
@@ -340,7 +337,7 @@ class PhotometrySingle:
 
         self.config_node = config_node
         self.logger = logger or self._setup_logger(config_node)
-        self.ref_catalog = ref_catalog
+        self.ref_cat_type = ref_cat_type
         # self.image = os.path.join(self.config.path.path_processed, image)
         # self.input_image = image
         self.phot_conf = self.config_node.photometry
@@ -519,6 +516,10 @@ class PhotometrySingle:
             post_match_table = self.add_matched_reference_catalog(obs_src_table)
             post_match_table = self.filter_catalog(post_match_table, snr_cut=False, low_mag_cut=11.75)
 
+            if len(post_match_table) == 0:
+                self.logger.error(f"No star-like sources found. Skipping photometry. Check the catalog: {prep_cat}")
+                return
+
             self.phot_header.SEEING = np.median(post_match_table["FWHM_WORLD"] * 3600)
             self.phot_header.PEEING = self.phot_header.SEEING / self.image_info.pixscale
             self.phot_header.ELLIP = round(np.median(post_match_table["ELLIPTICITY"]), 3)
@@ -538,27 +539,31 @@ class PhotometrySingle:
         Handles both standard and corrected GaiaXP catalogs.
         Creates new catalog if it doesn't exist by parsing Gaia data.
         """
-        ref_ris_dir = get_key(self.config_node.photometry, "path.ref_ris_dir") or self.path.photometry.ref_ris_dir
-        if self.ref_catalog == "GaiaXP_cor":
-            ref_cat = f"{ref_ris_dir}/cor_gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
-        elif self.ref_catalog == "GaiaXP":
-            ref_cat = f"{ref_ris_dir}/gaiaxp_dr3_synphot_{self.image_info.obj}.csv"
-        else:
-            raise ValueError(f"Invalid reference catalog: {self.ref_catalog}. It should be 'GaiaXP' or 'GaiaXP_cor'")
+        # ref_ris_dir = get_key(self.config_node.photometry, "path.ref_ris_dir") or self.path.photometry.get_ref_cat(self.ref_catalog)
 
-        # generate the missing ref_cat and save on disk
-        ref_gaia_dir = get_key(self.config_node.photometry, "path.ref_gaia_dir") or self.path.photometry.ref_gaia_dir
-        if not os.path.exists(ref_cat):  # and "gaia" in self.ref_catalog:
+        predefined_ref_cat = get_key(self.config_node.photometry, "path.ref_cat")
+        if predefined_ref_cat:
+            ref_cat = predefined_ref_cat
+        else:
+            ref_cat = self.path.photometry.get_ref_cat(self.image_info.obj, ref_cat_type=self.ref_cat_type)
+
+        self.logger.debug(f"Using photometric reference catalog: {ref_cat}")
+
+        if is_ris_tile(self.image_info.obj) and os.path.exists(ref_cat):
+            ref_src_table = Table.read(ref_cat)
+        else:  # generate the ref_cat on the fly
+            self.logger.info(f"Generating Gaia reference catalog on the fly for {self.image_info.obj}")
             ref_src_table = phot_utils.aggregate_gaia_catalogs(
                 target_coord=SkyCoord(self.image_info.racent, self.image_info.decent, unit="deg"),
-                path_calibration_field=ref_gaia_dir,
-                matching_radius=self.phot_conf.match_radius * 1.5,
-                path_save=ref_cat,
+                query_radius=self.phot_conf.query_radius,
             )
-            ref_src_table.write(ref_cat, overwrite=True)
+            self.logger.debug(f"ref_src_table[:5]:\n{ref_src_table[:5].pprint(max_width=150)}")
 
-        else:
-            ref_src_table = Table.read(ref_cat)
+            # ref_src_table.write(ref_cat, overwrite=True)  # let's not do this.
+            # 1) creates confusion for moving targets
+            # 2) needs lock files under parallelization
+            # 3) better not modify the requisite dir in runtime
+            # TODO: maybe save it in factory (tmp_dir) for debug?
 
         filters = filters or [self.image_info.filter]
         synthetic_mag_keys = [f"mag_{filt}" for filt in filters]
@@ -585,9 +590,10 @@ class PhotometrySingle:
         ref_src_table = self._load_ref_catalog(filters=filters)
 
         self.logger.debug("Matching sources with reference catalog.")
-        post_match_table = match_two_catalogs(obs_src_table, ref_src_table, x1="ra", y1="dec", join="left")
+        r = self.phot_conf.match_radius * u.arcsec
+        post_match_table = match_two_catalogs(obs_src_table, ref_src_table, x1="ra", y1="dec", radius=r, join="left")
 
-        self.logger.info(f"Matched sources: {len(post_match_table)} (r = {self.phot_conf.match_radius:.3f} arcsec)")
+        self.logger.info(f"Matched sources: {len(post_match_table)} (r = {r.to_value(u.arcsec):.3f} arcsec)")
         if len(post_match_table) == 0:
             self.logger.critical("There is no matched source for photometry. It will cause a problem in the next step.")
 
