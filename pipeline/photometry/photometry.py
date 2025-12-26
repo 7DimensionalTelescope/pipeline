@@ -356,7 +356,7 @@ class PhotometrySingle:
 
         self._id = str(next(self._id_counter)) + "/" + str(total_image)
 
-        self.path = PathHandler(self.input_image)
+        self.path = PathHandler(self.input_image, is_too=self.config_node.settings.is_too)
         self.path_tmp = self.path.photometry.tmp_dir
 
         self._trust_header_seeing = difference_photometry
@@ -713,7 +713,10 @@ class PhotometrySingle:
 
         if output is None:
             # new PathHandler for single
-            output = getattr(PathHandler(self.input_image).photometry, f"{se_preset}_catalog")
+            output = getattr(
+                PathHandler(self.input_image, is_too=self.config_node.settings.is_too).photometry,
+                f"{se_preset}_catalog",
+            )
 
         self.logger.debug(f"PhotometrySingle _run_sextractor input image: {self.input_image}")
         self.logger.debug(f"PhotometrySingle _run_sextractor output catalog: {output}")

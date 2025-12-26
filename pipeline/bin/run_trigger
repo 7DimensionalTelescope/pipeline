@@ -80,7 +80,7 @@ def run_image_processing(image_paths, is_too=False):
         is_too=is_too,
     )
     br.create_config(is_too=is_too, overwrite=True)
-    br.create_schedule()
+    br.create_schedule(is_too=is_too)
     sc = Scheduler(br.schedule, use_system_queue=True)
     sc.start_system_queue()
 
