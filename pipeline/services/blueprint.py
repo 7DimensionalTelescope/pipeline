@@ -24,9 +24,12 @@ class Blueprint:
         use_db=False,
         ignore_mult_date=False,
         master_frame_only=False,
+        is_too=False,
         **kwargs,
     ):
         self.groups = SortedGroupDict()
+
+        self.is_too = is_too
 
         if input_params is not None or list_of_images is not None:
             self.input_params = input_params
@@ -107,6 +110,9 @@ class Blueprint:
                 self.groups[mfg_key].add_sci_keys(key)
 
     def create_config(self, overwrite=False, max_workers=50, is_too=False, priority=None):
+
+        is_too = is_too or self.is_too
+
         kwargs = {"overwrite": overwrite, "is_too": is_too}
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(group.create_config, **kwargs) for group in self.groups.values()]
@@ -118,6 +124,8 @@ class Blueprint:
         self._config_generated = True
 
     def create_schedule(self, is_too=False, base_priority=None, **kwargs):
+
+        is_too = is_too or self.is_too
 
         if not self._config_generated:
             self.create_config(
