@@ -7,7 +7,6 @@ class DataReduction:
 
     def __init__(self, input_params=None, list_of_images=None, use_db=False, overwrite=False, **kwargs):
 
-        ignore_mult_date = kwargs.get("ignore_mult_date", False)
         master_frame_only = kwargs.get("master_frame_only", False)
         self.is_too = kwargs.get("is_too", False)
         use_db = kwargs.get("use_db", True)
@@ -16,7 +15,6 @@ class DataReduction:
             input_params,
             list_of_images=list_of_images,
             use_db=use_db,
-            ignore_mult_date=ignore_mult_date,
             master_frame_only=master_frame_only,
             **kwargs,
         )
