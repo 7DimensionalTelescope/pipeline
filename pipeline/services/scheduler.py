@@ -574,6 +574,40 @@ class Scheduler:
                 return cursor.fetchone()[0] == 0
         return len(self.schedule[self.schedule["status"] != "Completed"]) == 0
 
+    def rerun_failed_jobs(self):
+        """
+        Rerun all failed jobs by changing their status to Ready with priority 1 and readiness 100.
+
+        Returns:
+            int: Number of jobs that were updated
+        """
+        if self.use_system_queue:
+            with self._db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """UPDATE scheduler 
+                       SET status = ?, priority = ?, readiness = ?, is_ready = ?, pid = 0, 
+                           process_start = ?, process_end = ?, input_type = ? 
+                       WHERE status = ?""",
+                    ("Ready", 1, 100, 1, "", "", "user-input", "Failed"),
+                )
+                conn.commit()
+                return cursor.rowcount
+        else:
+            # Handle in-memory schedule
+            mask = self._schedule["status"] == "Failed"
+            count = np.sum(mask)
+            if count > 0:
+                self._schedule["status"][mask] = "Ready"
+                self._schedule["priority"][mask] = 1
+                self._schedule["readiness"][mask] = 100
+                self._schedule["is_ready"][mask] = True
+                self._schedule["pid"][mask] = 0
+                self._schedule["process_start"][mask] = ""
+                self._schedule["process_end"][mask] = ""
+                self._schedule["input_type"][mask] = "user-input"
+            return count
+
     def clear_schedule(self, all=False):
         import signal
 

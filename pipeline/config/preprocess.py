@@ -28,7 +28,7 @@ class PreprocConfiguration(BaseConfig):
 
         if not self._initialized:
             self.logger.info("Initializing configuration")
-            self.initialize()
+            self.initialize(is_too=is_too)
             self.logger.info(f"'PreprocConfiguration' initialized in {time_diff_in_seconds(st)} seconds")
             self.logger.info(f"Writing configuration to file")
             self.logger.debug(f"Configuration file: {self.config_file}")
@@ -49,11 +49,11 @@ class PreprocConfiguration(BaseConfig):
 
     @property
     def name(self):
-        if hasattr(self, "path"):
+        if hasattr(self, "node") and hasattr(self.node, "name"):
+            return self.node.name
+        elif hasattr(self, "path"):
             # return os.path.basename(self.path.preproc_output_yml).replace(".yml", "")
             return self.path.output_name
-        elif hasattr(self.node, "name"):
-            return self.node.name
         else:
             return None
 
@@ -61,11 +61,17 @@ class PreprocConfiguration(BaseConfig):
     def base_config(cls):
         return
 
-    def initialize(self):
+    def initialize(self, is_too=False):
         self.node.info.version = __version__
         self.node.info.creation_datetime = datetime.now().isoformat()
-        self.node.name = os.path.basename(self.path.preproc_output_yml).replace(".yml", "")
+        if is_too and self.input_files:
+            obj_name = PathHandler(self.input_files[0]).obs_params["obj"]
+            self.node.name = os.path.basename(self.path.preproc_output_yml).replace(".yml", f"_{obj_name}")
+        else:
+            self.node.name = os.path.basename(self.path.preproc_output_yml).replace(".yml", "")
+
         if self.input_files:
+
             masterframe_images = set()
             science_images = set()
             for file in self.input_files:
@@ -90,12 +96,20 @@ class PreprocConfiguration(BaseConfig):
             # self.path = PathHandler(sorted(sci_images)[-1])  # in case of multiple dates, use the later date
             self.path = PathHandler(input, is_too=is_too)  # in case of multiple dates, use the later date
             config_source = self.path.preproc_base_yml
+            if is_too:
+                obj_name = PathHandler(input[0]).obs_params["obj"]
+                config_output = self.path.preproc_output_yml.replace(".yml", f"_{obj_name}.yml")
+                log_source = self.path.preproc_output_log.replace(".log", f"_{obj_name}.log")
+            else:
+                config_output = self.path.preproc_output_yml
+                log_source = self.path.preproc_output_log
+
             if not isinstance(config_source, str):
                 raise ValueError(f"PreprocConfiguration ill-defined: {config_source}")
             self.logger = self._setup_logger(
                 logger,
                 name=self.name,
-                log_file=self.path.preproc_output_log,
+                log_file=log_source,
                 verbose=verbose,
             )
             self.logger.info("Generating 'PreprocConfiguration' from the 'base' configuration")
@@ -105,12 +119,22 @@ class PreprocConfiguration(BaseConfig):
             super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
         elif isinstance(input, str) and os.path.isdir(input):  # Directory containing FITS files
             sample_file = self._has_fits_file(input)
+
             self.path = PathHandler(sample_file)
             config_source = self.path.preproc_base_yml
+
+            if is_too:
+                obj_name = self.path.obs_params["obj"]
+                config_output = self.path.preproc_output_yml.replace(".yml", f"_{obj_name}.yml")
+                log_source = self.path.preproc_output_log.replace(".log", f"_{obj_name}.log")
+            else:
+                config_output = self.path.preproc_output_yml
+                log_source = self.path.preproc_output_log
+
             self.logger = self._setup_logger(
                 logger,
                 name=self.name,
-                log_file=self.path.preproc_output_log,
+                log_file=log_source,
                 verbose=verbose,
             )
             self.logger.info("Loading 'PreprocConfiguration' from an exisiting file or dictionary")
@@ -122,10 +146,19 @@ class PreprocConfiguration(BaseConfig):
             config_source = input
             super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
             self.path = self._set_pathhandler_from_config()
+
+            if is_too:
+                obj_name = PathHandler(self.node.input.science_images[0]).obs_params["obj"]
+                config_output = self.path.preproc_output_yml.replace(".yml", f"_{obj_name}.yml")
+                log_source = self.path.preproc_output_log.replace(".log", f"_{obj_name}.log")
+            else:
+                config_output = self.path.preproc_output_yml
+                log_source = self.path.preproc_output_log
+
             self.logger = self._setup_logger(
                 logger,
                 name=self.node.name,
-                log_file=self.path.preproc_output_log,
+                log_file=log_source,
                 verbose=verbose,
                 overwrite=False,
             )
@@ -135,8 +168,8 @@ class PreprocConfiguration(BaseConfig):
         else:
             raise ValueError("Input must be a list of FITS files or a directory containing FITS files")
 
-        self.node.logging.file = self.path.preproc_output_log
-        self.config_file = self.path.preproc_output_yml  # used by write_config
+        self.node.logging.file = log_source
+        self.config_file = config_output  # used by write_config
         return
 
     def _set_pathhandler_from_config(self):
