@@ -874,3 +874,84 @@ class Scheduler:
                     raise  # Re-raise to see what's wrong
 
             conn.commit()
+
+    def update_process_status(self):
+
+        if self.use_system_queue:
+            return self._update_process_status_db()
+        else:
+            return self._update_process_status_memory()
+
+    def _update_process_status_db(self):
+        """Check and revert killed processes for database mode."""
+        reverted_count = 0
+        with self._db_connection() as conn:
+            cursor = conn.cursor()
+            # Get all jobs with PIDs that are in Processing status
+            cursor.execute(
+                'SELECT "index", pid, type FROM scheduler WHERE status = ? AND pid IS NOT NULL AND pid != 0',
+                ("Processing",)
+            )
+            processing_jobs = cursor.fetchall()
+            
+            for job_index, pid, job_type in processing_jobs:
+                # Check if process is still alive
+                if not self._is_process_alive(pid):
+                    # Process is dead, revert to Ready state
+                    cursor.execute(
+                        'UPDATE scheduler SET status = ?, pid = 0, process_start = ? WHERE "index" = ?',
+                        ("Ready", "", job_index)
+                    )
+                    reverted_count += 1
+                    
+            conn.commit()
+        return reverted_count
+
+    def _update_process_status_memory(self):
+        """Check and revert killed processes for in-memory mode."""
+        reverted_count = 0
+        # Get all jobs with PIDs that are in Processing status
+        processing_mask = (self._schedule["status"] == "Processing") & (
+            (self._schedule["pid"] != 0) & (self._schedule["pid"] != None)
+        )
+        processing_jobs = self._schedule[processing_mask]
+        
+        for job in processing_jobs:
+            pid = job["pid"]
+            job_index = job["index"]
+            job_type = job["type"]
+            
+            # Check if process is still alive
+            if not self._is_process_alive(pid):
+                # Process is dead, revert to Ready state
+                mask = self._schedule["index"] == job_index
+                self._schedule["status"][mask] = "Ready"
+                self._schedule["pid"][mask] = 0
+                self._schedule["process_start"][mask] = ""
+                reverted_count += 1
+                
+        return reverted_count
+
+    def _is_process_alive(self, pid):
+        """
+        Check if a process with the given PID is still alive.
+        
+        Args:
+            pid: Process ID to check
+            
+        Returns:
+            bool: True if process is alive, False otherwise
+        """
+        if pid is None or pid == 0:
+            return False
+        
+        try:
+            # Signal 0 doesn't actually send a signal, it just checks if process exists
+            os.kill(int(pid), 0)
+            return True
+        except (ProcessLookupError, OSError):
+            # Process doesn't exist or permission denied
+            return False
+        except (ValueError, TypeError):
+            # Invalid PID
+            return False
