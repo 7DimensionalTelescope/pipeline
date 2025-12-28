@@ -34,6 +34,7 @@ class DatabaseHandler:
             self.qa_db = QADB(db_params) if add_database else None
             self.pipeline_id = None
             self._logger = None
+            self.too_id = None
 
     def set_logger(self, logger):
         """Set logger for database operations"""

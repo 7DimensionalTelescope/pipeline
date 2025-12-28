@@ -83,6 +83,8 @@ def run_image_processing(image_paths, is_too=False):
     br.create_schedule(is_too=is_too)
     sc = Scheduler(br.schedule, use_system_queue=True)
     sc.start_system_queue()
+    sc.update_process_status()
+    sc.rerun_failed_jobs()
 
 
 def process_new_images(image_paths):

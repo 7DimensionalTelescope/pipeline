@@ -49,7 +49,9 @@ class PreprocConfiguration(BaseConfig):
 
     @property
     def name(self):
-        if hasattr(self, "node") and hasattr(self.node, "name"):
+        if hasattr(self, "_name"):
+            return self._name
+        elif hasattr(self, "node") and hasattr(self.node, "name"):
             return self.node.name
         elif hasattr(self, "path"):
             # return os.path.basename(self.path.preproc_output_yml).replace(".yml", "")
@@ -100,6 +102,7 @@ class PreprocConfiguration(BaseConfig):
                 obj_name = PathHandler(input[0]).obs_params["obj"]
                 config_output = self.path.preproc_output_yml.replace(".yml", f"_{obj_name}.yml")
                 log_source = self.path.preproc_output_log.replace(".log", f"_{obj_name}.log")
+                self._name = os.path.basename(config_output).replace(".yml", "")
             else:
                 config_output = self.path.preproc_output_yml
                 log_source = self.path.preproc_output_log
@@ -127,6 +130,7 @@ class PreprocConfiguration(BaseConfig):
                 obj_name = self.path.obs_params["obj"]
                 config_output = self.path.preproc_output_yml.replace(".yml", f"_{obj_name}.yml")
                 log_source = self.path.preproc_output_log.replace(".log", f"_{obj_name}.log")
+                self._name = os.path.basename(config_output).replace(".yml", "")
             else:
                 config_output = self.path.preproc_output_yml
                 log_source = self.path.preproc_output_log
@@ -151,6 +155,7 @@ class PreprocConfiguration(BaseConfig):
                 obj_name = PathHandler(self.node.input.science_images[0]).obs_params["obj"]
                 config_output = self.path.preproc_output_yml.replace(".yml", f"_{obj_name}.yml")
                 log_source = self.path.preproc_output_log.replace(".log", f"_{obj_name}.log")
+                self._name = os.path.basename(config_output).replace(".yml", "")
             else:
                 config_output = self.path.preproc_output_yml
                 log_source = self.path.preproc_output_log
