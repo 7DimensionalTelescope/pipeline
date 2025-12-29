@@ -95,7 +95,6 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         DatabaseHandler.__init__(
             self, add_database=self.config_node.settings.is_pipeline, is_too=self.config_node.settings.is_too
         )
-        
 
         if self.is_connected:
             self.set_logger(logger)
@@ -925,12 +924,6 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             info = images_info[idx]
             info.matched_catalog = matched
             info.rsep_stats = rsep_stats
-            # info.ref_max_mag = rsep_stats.ref_max_mag
-            # info.sci_max_mag = rsep_stats.sci_max_mag
-            # info.num_ref_sources = rsep_stats.num_ref
-            # info.unmatched_fraction = rsep_stats.unmatched_fraction
-            # info.subpixel_fraction = rsep_stats.subpixel_fraction
-            # info.subsecond_fraction = rsep_stats.subsecond_fraction
             info.corner_stats = corner_stats
             info.image_stats = image_stats
             info.radial_stats = radial_stats

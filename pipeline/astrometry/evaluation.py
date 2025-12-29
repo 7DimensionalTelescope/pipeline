@@ -283,6 +283,7 @@ def evaluate_single_wcs(
     )
 
 
+# TODO: see if we can skip more if matched already exists
 def prepare_matched_catalog(
     chatter: callable,
     image: str,
@@ -384,7 +385,7 @@ def prepare_matched_catalog(
     if os.path.exists(matched_catalog_path) and not overwrite:
         matched = Table.read(matched_catalog_path)
         write_matched_catalog = False
-        chatter(f"Matched catalog already exists: {matched_catalog_path}, skipping...", "info")
+        chatter(f"Matched catalog already exists: {matched_catalog_path}, skipping...", "debug")
     else:
 
         pm_keys = dict(pmra="pmra", pmdec="pmdec", parallax=None, ref_epoch=2016.0)
