@@ -552,10 +552,16 @@ class PhotometrySingle:
         if is_ris_tile(self.image_info.obj) and os.path.exists(ref_cat):
             ref_src_table = Table.read(ref_cat)
         else:  # generate the ref_cat on the fly
+            
+            if hasattr(self.phot_conf, "query_radius"):
+                query_radius = self.phot_conf.query_radius
+            else:
+                query_radius = 1.0
+
             self.logger.info(f"Generating Gaia reference catalog on the fly for {self.image_info.obj}")
             ref_src_table = phot_utils.aggregate_gaia_catalogs(
                 target_coord=SkyCoord(self.image_info.racent, self.image_info.decent, unit="deg"),
-                query_radius=self.phot_conf.query_radius,
+                query_radius=query_radius,
             )
             self.logger.debug(f"ref_src_table[:5]:\n{ref_src_table[:5].pprint(max_width=150)}")
 
