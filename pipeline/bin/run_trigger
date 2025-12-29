@@ -27,12 +27,12 @@ file_handler = RotatingFileHandler(
 )
 
 file_handler.setLevel(logging.INFO)
-file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+file_handler.setFormatter(logging.Formatter("%(asctime)s - Monitor - %(levelname)s - %(message)s"))
 
 # Console handler
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
-console_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+console_handler.setFormatter(logging.Formatter("%(asctime)s - Monitor - %(levelname)s - %(message)s"))
 
 # Configure root logger
 logging.basicConfig(
@@ -83,9 +83,6 @@ def run_image_processing(image_paths, is_too=False):
     br.create_schedule(is_too=is_too)
     sc = Scheduler(br.schedule, use_system_queue=True)
     sc.start_system_queue()
-    sc.update_process_status()
-    sc.rerun_failed_jobs()
-
 
 def process_new_images(image_paths):
     """
@@ -97,16 +94,14 @@ def process_new_images(image_paths):
     - Images in non-_ToO directories: add corresponding ToO images and process with is_too=False
     """
     try:
+        logger.info(f"New images detected: {len(image_paths)} images")
         # Separate ToO and non-ToO images
         too_image_paths = [image for image in image_paths if check_too(image)]
         non_too_image_paths = [image for image in image_paths if not check_too(image)]
 
-        # Process ToO images with is_too=True
-        if len(too_image_paths) > 0:
-            run_image_processing(too_image_paths, is_too=True)
-
         # Process non-ToO images: add corresponding ToO images and process with is_too=False
         if len(non_too_image_paths) > 0:
+            logger.info(f"Non-ToO images detected. A daily image processing will be triggered.")
             # Collect all ToO images for non-ToO directories
             all_too_images = set()
             for image in non_too_image_paths:
@@ -117,7 +112,12 @@ def process_new_images(image_paths):
             # Combine non-ToO images with their corresponding ToO images
             combined_images = non_too_image_paths + list(all_too_images)
             if len(combined_images) > 0:
+                logger.info(f"Processed {len(combined_images)} daily images")
                 run_image_processing(combined_images, is_too=False)
+        elif len(too_image_paths) > 0:
+            logger.info(f"ToO images detected. A ToO image processing will be triggered.")
+            logger.info(f"Processed {len(too_image_paths)} ToO images")
+            run_image_processing(too_image_paths, is_too=True)
 
     except Exception as e:
         logger.error(f"Error processing images: {e}", exc_info=True)
@@ -127,9 +127,15 @@ def start_trigger_monitoring():
     """Start the trigger monitoring service using the existing Monitor class."""
     # RAWDATA_DIR = "/lyman/data2/obsdata/"
     # Create the monitor using the existing codebase
+
+    sc = Scheduler(use_system_queue=True)
+    sc.rerun_failed_jobs()
+    sc.update_process_status()
+
     monitor = Monitor(base_path=Path(RAWDATA_DIR))
     monitor.add_callback(process_new_images)
     observer = monitor.start()
+
 
     logger.info("Trigger service started - monitoring directories for new images")
 
