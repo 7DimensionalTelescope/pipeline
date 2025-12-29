@@ -368,7 +368,7 @@ class Scheduler:
         if row is None:
             return None, None
 
-        overwrite = kwargs.get("overwrite", True)
+        overwrite = kwargs.get("overwrite", False)
         return row, self._generate_command(row["index"], overwrite=overwrite, **kwargs)
 
     def _get_next_task_memory(self, **kwargs):
@@ -424,7 +424,7 @@ class Scheduler:
         if row_dict.get("type") == "preprocess":
             self.processing_preprocess += 1
 
-        overwrite = kwargs.get("overwrite", True)
+        overwrite = kwargs.get("overwrite", False)
         return row_dict, self._generate_command(job_index, overwrite=overwrite, **kwargs)
 
     def _mark_done_memory(self, job_index, success=True):
