@@ -84,8 +84,10 @@ def run_image_processing(image_paths, is_too=False):
     sc = Scheduler(br.schedule, use_system_queue=True)
     sc.start_system_queue()
 
+
 def get_fits_files(image_paths):
     return [image for image in image_paths if image.endswith(".fits")]
+
 
 def process_new_images(image_paths):
     """
@@ -116,7 +118,9 @@ def process_new_images(image_paths):
             # Combine non-ToO images with their corresponding ToO images
             combined_images = non_too_image_paths + list(all_too_images)
             if len(combined_images) > 0:
-                logger.info(f"Processed {len(combined_images)} daily images, including {len(all_too_images)} ToO images observed on the same day")
+                logger.info(
+                    f"Processed {len(combined_images)} daily images, including {len(all_too_images)} ToO images observed on the same day"
+                )
                 run_image_processing(combined_images, is_too=False)
         elif len(too_image_paths) > 0:
             logger.info(f"ToO images detected. A ToO image processing will be triggered.")
@@ -139,7 +143,6 @@ def start_trigger_monitoring():
     monitor = Monitor(base_path=Path(RAWDATA_DIR))
     monitor.add_callback(process_new_images)
     observer = monitor.start()
-
 
     logger.info("Trigger service started - monitoring directories for new images")
 
