@@ -740,7 +740,7 @@ class PhotometrySingle:
             **kwargs,
         )
 
-        self.logger.debug(f"sextractor outcome: {outcome}")
+        # self.logger.debug(f"sextractor outcome: {outcome}")  # too long
 
         if se_preset == "main":
             outcome = [s for s in outcome.split("\n") if "RMS" in s][0]
