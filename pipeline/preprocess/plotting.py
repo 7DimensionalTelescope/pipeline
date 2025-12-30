@@ -1,13 +1,14 @@
 import os
 import numpy as np
 from pathlib import Path
+import fitsio
 from astropy.io import fits
 from astropy.visualization import ZScaleInterval
+from PIL import Image, ImageEnhance
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas  # thread-safe, but savefig only.
 import matplotlib.colors as mcolors
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
-from PIL import Image, ImageEnhance
 
 from ..path import PathHandler
 
@@ -21,7 +22,7 @@ def save_fits_as_figures(image_data, output_path, stretch=True, log_scale=False,
         return
 
     if isinstance(image_data, str):
-        image_data = fits.getdata(image_data)
+        image_data = fitsio.read(image_data)
 
     image_data = np.nan_to_num(image_data, nan=0.0, posinf=0.0, neginf=0.0)
 
@@ -57,7 +58,7 @@ def save_fits_as_figures(image_data, output_path, stretch=True, log_scale=False,
 def save_fits_with_contrast(image_data, output_path, max_width=1000):
     # Open the FITS file
 
-    data = fits.getdata(image_data)
+    data = fitsio.read(image_data)
 
     # Get clipping parameters from header
     clipmed = fits.getval(image_data, "CLIPMED")
@@ -105,9 +106,9 @@ def plot_bias(file, overwrite=False):
     # if output_path.exists() and not overwrite:
     #     return
 
-    with fits.open(file, memmap=True) as hdul:
-        data = hdul[0].data
-        header = hdul[0].header
+    data = fitsio.read(file)
+    header = fits.getheader(file)
+
     fdata = data.ravel()
     clipmin = int(header["CLIPMIN"])
     clipmax = int(header["CLIPMAX"])
@@ -165,7 +166,7 @@ def plot_dark(file, flattened_mask=None):
     # if output_path.exists():
     #     return
 
-    data = fits.getdata(file)
+    data = fitsio.read(file)
     header = fits.getheader(file)
     fdata = data.ravel()
 
@@ -292,7 +293,7 @@ def plot_flat(file, fmask=None):
     # if output_path.exists():
     #     return
 
-    data = fits.getdata(file)
+    data = fitsio.read(file)
     header = fits.getheader(file)
 
     fig = Figure(figsize=(10, 6))
@@ -348,7 +349,7 @@ def plot_bpmask(file, ext=1, badpix=1):
     path = Path(file)
     os.makedirs(path.parent / "figures", exist_ok=True)
     output_path = path.parent / "figures" / f"{path.stem}.jpg"
-    data = fits.getdata(file, ext=ext)
+    data = fitsio.read(file, ext=ext)
     # if output_path.exists():
     #     return
 
