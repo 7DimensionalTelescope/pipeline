@@ -60,7 +60,7 @@ TRANSIENT_SCIENCE_GROUP_KEYS = ["nightdate"] + SURVEY_SCIENCE_GROUP_KEYS  # used
 # OBS-related
 CalibType = ["BIAS", "DARK", "FLAT"]
 available_7dt_units = [f"7DT0{unit}" if unit < 10 else f"7DT{unit}" for unit in range(1, 20)]
-WIDE_FILTERS = ["m375w", "m425w", "m466w", "m692w", "m710w"]
+WIDE_FILTERS = ["m375w", "m425w"]  # , "m466w", "m692w", "m710w"]
 MEDIUM_FILTERS = [f"m{s}" for s in range(400, 900, 25)]
 BROAD_FILTERS = ["u", "g", "r", "i", "z"]
 ALL_FILTERS = WIDE_FILTERS + MEDIUM_FILTERS + BROAD_FILTERS

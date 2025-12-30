@@ -552,7 +552,7 @@ class PhotometrySingle:
         if is_ris_tile(self.image_info.obj) and os.path.exists(ref_cat):
             ref_src_table = Table.read(ref_cat)
         else:  # generate the ref_cat on the fly
-            
+
             if hasattr(self.phot_conf, "query_radius"):
                 query_radius = self.phot_conf.query_radius
             else:
@@ -767,7 +767,7 @@ class PhotometrySingle:
 
     def calculate_zp(
         self, zp_src_table: Table, filt: str = None, phot_header: PhotometryHeader = None, save_plots: bool = True
-    ) -> Tuple[Dict]:
+    ) -> PhotometryHeader | None:
         """
         Updates header.aperture_info in-place with zero point and aperture information.
         If header is not provided, uses self.phot_header.
@@ -779,6 +779,10 @@ class PhotometrySingle:
             ref_mag_key = f"mag_{filt}"  # column name in the reference catalog
         else:
             ref_mag_key = self.image_info.ref_mag_key
+
+        if ref_mag_key not in zp_src_table.keys():
+            self.logger.error(f"Reference magnitude key {ref_mag_key} not found in the source table. Skipping.")
+            return None
 
         aperture_dict = phot_utils.get_aperture_dict(phot_header.PEEING, self.image_info.pixscale)
 
@@ -862,7 +866,10 @@ class PhotometrySingle:
         zp_cut = 27.2  # 26.8
         alleged_filter = self.image_info.filter
         filters_checked = [k for k in phot_headers.keys()]
-        dicts = {filt: (header.zp_dict, header.aperture_dict) for filt, header in phot_headers.items()}
+        # filter out when phot_headers[filt] is None
+        dicts = {
+            filt: (header.zp_dict, header.aperture_dict) for filt, header in phot_headers.items() if header is not None
+        }
         dicts_for_plotting = dicts.copy()
         test_dicts = dicts.copy()
 
