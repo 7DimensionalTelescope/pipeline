@@ -25,6 +25,7 @@ dependencies:
   - shapely
   - fitsio
   - healpy
+  - yagmail
 
 
   # pip-only packages

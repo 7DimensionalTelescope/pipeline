@@ -706,15 +706,15 @@ class Scheduler:
                     combined_table = vstack([existing_table, table])
                 else:
                     combined_table = table
-
-                # Save combined table
-                np.save(file_path, combined_table, allow_pickle=True)
             else:
-                # File doesn't exist, save new table
-                np.save(file_path, table, allow_pickle=True)
+                combined_table=table
+
+            np.save(file_path, combined_table, allow_pickle=True)
+
         except Exception as e:
             # Log error but don't fail the clear operation
             print(f"Warning: Failed to save completed jobs to file: {e}")
+            np.save(file_path.replace(".npy", "_error.npy"), table, allow_pickle=True)
 
     def _generate_command(self, index, **kwargs):
         kwargs = {**self._kwargs, **kwargs}

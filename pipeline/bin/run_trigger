@@ -84,6 +84,9 @@ def run_image_processing(image_paths, is_too=False):
     sc = Scheduler(br.schedule, use_system_queue=True)
     sc.start_system_queue()
 
+def get_fits_files(image_paths):
+    return [image for image in image_paths if image.endswith(".fits")]
+
 def process_new_images(image_paths):
     """
     Process new images using the existing pipeline infrastructure.
@@ -95,6 +98,7 @@ def process_new_images(image_paths):
     """
     try:
         logger.info(f"New images detected: {len(image_paths)} images")
+        image_paths = get_fits_files(image_paths)
         # Separate ToO and non-ToO images
         too_image_paths = [image for image in image_paths if check_too(image)]
         non_too_image_paths = [image for image in image_paths if not check_too(image)]
@@ -112,7 +116,7 @@ def process_new_images(image_paths):
             # Combine non-ToO images with their corresponding ToO images
             combined_images = non_too_image_paths + list(all_too_images)
             if len(combined_images) > 0:
-                logger.info(f"Processed {len(combined_images)} daily images")
+                logger.info(f"Processed {len(combined_images)} daily images, including {len(all_too_images)} ToO images observed on the same day")
                 run_image_processing(combined_images, is_too=False)
         elif len(too_image_paths) > 0:
             logger.info(f"ToO images detected. A ToO image processing will be triggered.")
