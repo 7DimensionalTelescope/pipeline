@@ -12,6 +12,7 @@ watchdog==6.0.0
 pandas==2.3.1
 psycopg==3.2.9
 psycopg-pool==3.2.6
+yagmail
 
 # cupy
 cupy-cuda12x
