@@ -1066,7 +1066,13 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
 @dataclass
 class ImageInfo:
-    """Stores information needed for astrometry. Mostly extracted from the FITS image header."""
+    """
+    Stores information needed for astrometry.
+    Pristine image header + derived information in Astrometry.
+
+    The goal is to load all required header information once and keep it frozen.
+    It helps generate new header cards to be added to the images' headers.
+    """
 
     image_path: str
 

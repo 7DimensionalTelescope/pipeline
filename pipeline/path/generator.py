@@ -2,7 +2,7 @@ import os
 from glob import glob
 from typing import Iterator
 
-from ..const import PROCESSED_DIR
+from ..const import PROCESSED_DIR, MASTER_FRAME_DIR
 from .name import NameHandler
 
 
@@ -97,3 +97,46 @@ def iter_processed(
                 # 4) files
                 for path in sorted(glob(os.path.join(search_dir, filename_pattern))):
                     yield path
+
+
+def iter_masterframe(
+    date_pattern: str = "*",  # e.g. "2025-12-11", "2025-12-*", "2025-*"
+    unit_pattern: str = "*",  # e.g. "7DT03"
+    type_pattern: str = "*",  # e.g. "biassig", "dark_100s", "flat_g", "bpmask_100s"
+    base: str = MASTER_FRAME_DIR,
+) -> Iterator[str]:
+    """
+    Lazily yield master frame FITS files matching:
+        <base>/<date_pattern>/<unit_pattern>/<type_pattern*.fits>
+
+    Directory layout is assumed to be consistent with:
+        /lyman/data2/master_frame/2025-12-11/7DT03/<files>
+
+    `type_pattern` can be either:
+      - A prefix like "biassig", "dark_100s", "flat_g" (we append "*.fits")
+      - A glob like "flat_*_gain2750*.fits" (used as-is)
+      - A filename ending with ".fits" (used as-is)
+    """
+
+    def _to_filename_glob(p: str) -> str:
+        # If user already provided a glob or explicit filename, use it as-is.
+        if any(ch in p for ch in ["*", "?", "["]) or p.endswith(".fits"):
+            return p
+        # Otherwise treat it as a prefix.
+        return f"{p}*.fits"
+
+    filename_glob = _to_filename_glob(type_pattern)
+
+    # 1) dates: /.../2025-12-*
+    for date_dir in sorted(glob(os.path.join(base, date_pattern))):
+        if not os.path.isdir(date_dir):
+            continue
+
+        # 2) units: /.../<date>/7DT03
+        for unit_dir in sorted(glob(os.path.join(date_dir, unit_pattern))):
+            if not os.path.isdir(unit_dir):
+                continue
+
+            # 3) files
+            for path in sorted(glob(os.path.join(unit_dir, filename_glob))):
+                yield path

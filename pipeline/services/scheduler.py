@@ -709,8 +709,11 @@ class Scheduler:
             else:
                 combined_table=table
 
-            np.save(file_path, combined_table, allow_pickle=True)
-
+                # Save combined table
+                np.save(file_path, combined_table)
+            else:
+                # File doesn't exist, save new table
+                np.save(file_path, Table)
         except Exception as e:
             # Log error but don't fail the clear operation
             print(f"Warning: Failed to save completed jobs to file: {e}")
@@ -890,20 +893,20 @@ class Scheduler:
             # Get all jobs with PIDs that are in Processing status
             cursor.execute(
                 'SELECT "index", pid, type FROM scheduler WHERE status = ? AND pid IS NOT NULL AND pid != 0',
-                ("Processing",)
+                ("Processing",),
             )
             processing_jobs = cursor.fetchall()
-            
+
             for job_index, pid, job_type in processing_jobs:
                 # Check if process is still alive
                 if not self._is_process_alive(pid):
                     # Process is dead, revert to Ready state
                     cursor.execute(
                         'UPDATE scheduler SET status = ?, pid = 0, process_start = ? WHERE "index" = ?',
-                        ("Ready", "", job_index)
+                        ("Ready", "", job_index),
                     )
                     reverted_count += 1
-                    
+
             conn.commit()
         return reverted_count
 
@@ -915,12 +918,12 @@ class Scheduler:
             (self._schedule["pid"] != 0) & (self._schedule["pid"] != None)
         )
         processing_jobs = self._schedule[processing_mask]
-        
+
         for job in processing_jobs:
             pid = job["pid"]
             job_index = job["index"]
             job_type = job["type"]
-            
+
             # Check if process is still alive
             if not self._is_process_alive(pid):
                 # Process is dead, revert to Ready state
@@ -929,22 +932,22 @@ class Scheduler:
                 self._schedule["pid"][mask] = 0
                 self._schedule["process_start"][mask] = ""
                 reverted_count += 1
-                
+
         return reverted_count
 
     def _is_process_alive(self, pid):
         """
         Check if a process with the given PID is still alive.
-        
+
         Args:
             pid: Process ID to check
-            
+
         Returns:
             bool: True if process is alive, False otherwise
         """
         if pid is None or pid == 0:
             return False
-        
+
         try:
             # Signal 0 doesn't actually send a signal, it just checks if process exists
             os.kill(int(pid), 0)
