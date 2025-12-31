@@ -1,8 +1,8 @@
 from __future__ import annotations
 import os
-from pathlib import Path
 import glob
 import time
+from pathlib import Path
 from datetime import datetime
 from astropy.io import fits
 
@@ -12,7 +12,7 @@ from ..utils import clean_up_folder, clean_up_sciproduct, get_header, atleast_1d
 from ..path.path import PathHandler
 from .base import BaseConfig
 from ..services.database.too import TooDB
-from ..path.name import NameHandler
+from ..services.logger import Logger
 from .utils import get_key
 
 
@@ -78,13 +78,20 @@ class SciProcConfiguration(BaseConfig):
         working_dir: str = None,
         config_file: str = None,
         write: bool = True,
-        logger: bool | "Logger" = None,
+        logger: bool | Logger = None,
         verbose: bool = True,
         force_creation: bool = False,
+        is_pipeline: bool = False,
         is_too: bool = False,
         **kwargs,
     ):
-        """Base configuration for user-input. Mind config.settings.is_pipeline is set to False"""
+        """
+        Base configuration for user-input.
+        Usually you want to specify logger=True.
+
+        self.node.settings.is_pipeline is False by default.
+        self.node.settings.is_too is False by default.
+        """
         # self = cls.__new__(cls)
 
         input_images = sorted([os.path.abspath(image) for image in atleast_1d(input_images)])
@@ -126,14 +133,15 @@ class SciProcConfiguration(BaseConfig):
         self.node.input.calibrated_images = atleast_1d(input_images)
         # self.config.name = "user-input"
         self.node.name = self.name
-        self.node.settings.is_pipeline = is_too
+        self.node.settings.is_pipeline = is_pipeline
+        self.node.settings.is_too = is_too
         self.fill_missing_from_yaml()
         self.node.info.version = __version__
         self._initialized = True
         return self
 
     @classmethod
-    def from_list(cls, input_images, working_dir=None, is_pipeline=False, **kwargs):
+    def from_list(cls, input_images, working_dir=None, is_pipeline=False, is_too=False, **kwargs):
         # self.input_files = sorted(input)
         # self.path = PathHandler(input)
         # config_source = self.path.sciproc_base_yml
@@ -150,11 +158,18 @@ class SciProcConfiguration(BaseConfig):
         # self.config.info.file = config_source
         # self.config.logging.file = self.path.sciproc_output_log
 
-        self = cls.base_config(input_images=input_images, working_dir=working_dir, logger=True, **kwargs)
+        self = cls.base_config(
+            input_images=input_images,
+            working_dir=working_dir,
+            logger=True,
+            is_pipeline=is_pipeline,
+            is_too=is_too,
+            **kwargs,
+        )
         # emulate constructor’s initialize path
         self._initialized = False
         self.input_files = atleast_1d(input_images)
-        self.initialize(is_pipeline=is_pipeline)
+        self.initialize(is_pipeline=is_pipeline, is_too=is_too)
         return self
 
     @property

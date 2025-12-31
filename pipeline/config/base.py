@@ -2,6 +2,7 @@ import os
 import yaml
 from datetime import datetime
 from abc import ABC, abstractmethod
+from typing import Self
 
 from .. import __version__
 from .utils import merge_dicts, merge_missing
@@ -44,7 +45,7 @@ class BaseConfig(ABC):
         return self
 
     @classmethod
-    def from_config(cls, input: str, write=True, is_too=False, **kwargs):
+    def from_config(cls, input: str, write=True, is_too=False, **kwargs) -> Self:
         """
         Currently only used in wrapper.py
         Much faster (4.8 ms) than SciProcConfiguration(input, write=write) (36 ms)

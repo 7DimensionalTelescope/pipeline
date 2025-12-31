@@ -93,7 +93,9 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         self.load_criteria(dtype="science")
         self.qa_ids = []
         DatabaseHandler.__init__(
-            self, add_database=self.config_node.settings.is_pipeline, is_too=self.config_node.settings.is_too
+            self,
+            add_database=self.config_node.settings.is_pipeline,
+            is_too=get_key(self.config_node.settings, "is_too", False),
         )
 
         if self.is_connected:
