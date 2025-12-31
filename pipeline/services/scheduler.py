@@ -707,13 +707,10 @@ class Scheduler:
                 else:
                     combined_table = table
             else:
-                combined_table=table
+                combined_table = table
 
                 # Save combined table
                 np.save(file_path, combined_table)
-            else:
-                # File doesn't exist, save new table
-                np.save(file_path, Table)
         except Exception as e:
             # Log error but don't fail the clear operation
             print(f"Warning: Failed to save completed jobs to file: {e}")
