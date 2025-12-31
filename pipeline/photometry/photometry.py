@@ -928,7 +928,7 @@ class PhotometrySingle:
             orig_zp, orig_zperr = phot_utils.get_zp_from_dict(dicts, alleged_filter)
             self.logger.warning(f"The original filter is {alleged_filter} with zp = {orig_zp:.2f}±{orig_zperr:.2f}")
         else:
-            self.logger.info(f"The inferred filter is matched to the original filter, '{alleged_filter}'")
+            self.logger.info(f"The inferred filter matches the original filter, '{alleged_filter}'")
 
         return inferred_filter
 
