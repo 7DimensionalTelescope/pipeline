@@ -2,12 +2,13 @@ import os
 import sys
 from datetime import datetime
 import glob
-from .. import __version__
-from ..utils import clean_up_folder, flatten, time_diff_in_seconds
-from ..path.path import PathHandler
-from .base import BaseConfig
 import time
+
+from .. import __version__
+from ..utils import clean_up_folder, flatten, time_diff_in_seconds, collapse
+from ..path.path import PathHandler
 from ..const import CalibType
+from .base import BaseConfig
 
 
 class PreprocConfiguration(BaseConfig):
@@ -49,12 +50,9 @@ class PreprocConfiguration(BaseConfig):
 
     @property
     def name(self):
-        if hasattr(self, "_name"):
-            return self._name
-        elif hasattr(self, "node") and hasattr(self.node, "name"):
+        if hasattr(self, "node") and hasattr(self.node, "name"):
             return self.node.name
         elif hasattr(self, "path"):
-            # return os.path.basename(self.path.preproc_output_yml).replace(".yml", "")
             return self.path.output_name
         else:
             return None
@@ -66,14 +64,9 @@ class PreprocConfiguration(BaseConfig):
     def initialize(self, is_too=False):
         self.node.info.version = __version__
         self.node.info.creation_datetime = datetime.now().isoformat()
-        if is_too and self.input_files:
-            obj_name = PathHandler(self.input_files[0]).obs_params["obj"]
-            self.node.name = os.path.basename(self.path.preproc_output_yml).replace(".yml", f"_{obj_name}")
-        else:
-            self.node.name = os.path.basename(self.path.preproc_output_yml).replace(".yml", "")
+        self.node.name = self.path.output_name
 
         if self.input_files:
-
             masterframe_images = set()
             science_images = set()
             for file in self.input_files:
@@ -89,7 +82,8 @@ class PreprocConfiguration(BaseConfig):
 
     def _handle_input(self, input, logger, verbose, is_too=False, **kwargs):
 
-        if isinstance(input, list):  # List of FITS files
+        # List of FITS files
+        if isinstance(input, list):
             if len(input) < 1:
                 self.logger.warning("No input images")
                 sys.exit(0)
@@ -98,14 +92,8 @@ class PreprocConfiguration(BaseConfig):
             # self.path = PathHandler(sorted(sci_images)[-1])  # in case of multiple dates, use the later date
             self.path = PathHandler(input, is_too=is_too)  # in case of multiple dates, use the later date
             config_source = self.path.preproc_base_yml
-            if is_too:
-                obj_name = PathHandler(input[0]).obs_params["obj"]
-                config_output = self.path.preproc_output_yml.replace(".yml", f"_{obj_name}.yml")
-                log_source = self.path.preproc_output_log.replace(".log", f"_{obj_name}.log")
-                self._name = os.path.basename(config_output).replace(".yml", "")
-            else:
-                config_output = self.path.preproc_output_yml
-                log_source = self.path.preproc_output_log
+            config_output = self.path.preproc_output_yml
+            log_source = self.path.preproc_output_log
 
             if not isinstance(config_source, str):
                 raise ValueError(f"PreprocConfiguration ill-defined: {config_source}")
@@ -120,20 +108,15 @@ class PreprocConfiguration(BaseConfig):
             self.input_files = input
             self.input_dir = None
             super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
-        elif isinstance(input, str) and os.path.isdir(input):  # Directory containing FITS files
+
+        # Directory containing FITS files
+        elif isinstance(input, str) and os.path.isdir(input):
             sample_file = self._has_fits_file(input)
 
             self.path = PathHandler(sample_file)
             config_source = self.path.preproc_base_yml
-
-            if is_too:
-                obj_name = self.path.obs_params["obj"]
-                config_output = self.path.preproc_output_yml.replace(".yml", f"_{obj_name}.yml")
-                log_source = self.path.preproc_output_log.replace(".log", f"_{obj_name}.log")
-                self._name = os.path.basename(config_output).replace(".yml", "")
-            else:
-                config_output = self.path.preproc_output_yml
-                log_source = self.path.preproc_output_log
+            config_output = self.path.preproc_output_yml
+            log_source = self.path.preproc_output_log
 
             self.logger = self._setup_logger(
                 logger,
@@ -146,19 +129,15 @@ class PreprocConfiguration(BaseConfig):
             self.input_dir = input
             self.input_files = None
             super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
-        elif (isinstance(input, str) and ".yml" in input) or isinstance(input, dict):  # Configuration file path
+
+        # Configuration file path
+        elif (isinstance(input, str) and ".yml" in input) or isinstance(input, dict):
             config_source = input
             super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
             self.path = self._set_pathhandler_from_config()
 
-            if is_too:
-                obj_name = PathHandler(self.node.input.science_images[0]).obs_params["obj"]
-                config_output = self.path.preproc_output_yml.replace(".yml", f"_{obj_name}.yml")
-                log_source = self.path.preproc_output_log.replace(".log", f"_{obj_name}.log")
-                self._name = os.path.basename(config_output).replace(".yml", "")
-            else:
-                config_output = self.path.preproc_output_yml
-                log_source = self.path.preproc_output_log
+            config_output = self.path.preproc_output_yml
+            log_source = self.path.preproc_output_log
 
             self.logger = self._setup_logger(
                 logger,

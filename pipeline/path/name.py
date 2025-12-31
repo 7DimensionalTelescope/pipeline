@@ -765,17 +765,6 @@ class NameHandler:
         hms = None
         return unit, date, hms, obj, filt, nb, exptime, gain, camera
 
-    @property
-    def config_stem(self):
-        def make(obj, filte, unit, date):
-            return f"{obj}_{filte}_{unit}_{date}"
-
-        if getattr(self, "_single", False):
-            return make(self.obj, self.filter, self.unit, self.date)
-
-        return [
-            make(obj, filte, unit, date) for obj, filte, unit, date, in zip(self.obj, self.filter, self.unit, self.date)
-        ]
 
     @property
     def conjugate_basename(self):

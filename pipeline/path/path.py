@@ -385,18 +385,27 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         return os.path.join(self.changelog_dir, f"changelog_unit{unit}.txt")
 
     @property
-    def preproc_output_yml(self) -> str:
-        config_stems = self.config_stem if hasattr(self, "config_stem") and self.config_stem else "preproc_config"
-        # return [os.path.join(d, f"{s}.yml") for d, s in zip(self._preproc_output_dir, config_stems)]
-        return bjoin(self._preproc_output_dir, [f"{s}.yml" for s in atleast_1d(config_stems)])
+    def preproc_config_stem(self) -> str | list[str]:
+        """
+        sciproc configs use the stem of sciproc_output_yml
+        """
+        preproc_config_stems = (
+            self._preproc_config_stem
+            if hasattr(self, "_preproc_config_stem") and self._preproc_config_stem
+            else "preproc_config"
+        )
+        if self._is_too:
+            return add_suffix(preproc_config_stems, self.name.obj)
+        else:
+            return preproc_config_stems
+
+    @property
+    def preproc_output_yml(self) -> str | List[str]:
+        return bjoin(self._preproc_output_dir, swap_ext(self.preproc_config_stem, "yml"))
 
     @property
     def preproc_output_log(self):
         return swap_ext(self.preproc_output_yml, "log")
-        # if isinstance(self.preproc_output_yml, str):
-        #     return swap_ext(self.preproc_output_yml, "log")
-        # else:
-        #     return [swap_ext(s, "log") for s in self.preproc_output_yml]
 
     @property
     def sciproc_output_yml(self):
@@ -441,7 +450,9 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
 
     @property
     def output_name(self) -> str:
-        return collapse(self._config_stem)
+        """Ensures string. This becomes 'config.node.name' of preproc configs."""
+
+        return collapse(self.preproc_config_stem, raise_error=True)
 
     def add_fits(self, files: str | Path | list):
         if isinstance(files, list):
@@ -453,7 +464,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         self._output_dir = []
         self._factory_dir = []
         self._single_dir = []
-        self._config_stem = []
+        self._preproc_config_stem = []
         # raw_images = []
         # processed_images = []
         self._masterframe_dir = []
@@ -476,7 +487,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
             self._masterframe_dir.append(masterframe_dir)
 
             config_stem = "_".join([nightdate, unit])  # for preproc config
-            self._config_stem.append(config_stem)
+            self._preproc_config_stem.append(config_stem)
 
             if "calibrated" in typ or "raw" in typ:
                 if self._is_pipeline[i]:
@@ -507,13 +518,12 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
             else:
                 raise ValueError("Unrecognized type for PathHandling")
 
-        # Store all as lists without collapsing
+        # Public attrs are collapsed
         self.output_dir = collapse(self._output_dir)
         self.factory_dir = collapse(self._factory_dir)
         self.single_dir = collapse(self._single_dir)
         self.figure_dir = collapse(self._figure_dir)
         self.masterframe_dir = collapse(self._masterframe_dir)
-        self.config_stem = collapse(self._config_stem)
 
         if self._daily_stacked_dir:
             self.daily_stacked_dir = self._daily_stacked_dir

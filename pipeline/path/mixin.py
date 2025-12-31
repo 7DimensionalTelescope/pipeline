@@ -61,7 +61,8 @@ class AutoCollapseMixin:
 class AutoMkdirMixin:
     """This makes sure accessed dirs exist. Prepend _ to variables to prevent mkdir"""
 
-    _mkdir_exclude = {"output_name", "config_stem", "name", "changelog_dir"}  # subclasses can override this
+    # attrs to skip mkdir; subclasses can modify this set
+    _mkdir_exclude = {"output_name", "config_stem", "preproc_config_stem", "name", "changelog_dir"}
 
     def __init_subclass__(cls):
         # Ensure subclasses have their own created-directory cache
@@ -85,7 +86,6 @@ class AutoMkdirMixin:
         if name in object.__getattribute__(self, "_mkdir_exclude"):
             return value
 
-        
         # print(f"AutoMkdirMixin debug: {name} {value}")
 
         # Handle vectorized paths

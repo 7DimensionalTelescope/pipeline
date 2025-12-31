@@ -175,7 +175,7 @@ def time_diff_in_seconds(datetime1, datetime2=None, return_float=False):
         return f"{abs(time_diff):.2f}"
 
 
-def swap_ext(file_path: str | list[str], new_ext: str, keep_ext: bool = False) -> str:
+def swap_ext(file_path: str | list[str], new_ext: str) -> str:
     """
     Swap the file extension of a given file path.
 
@@ -194,17 +194,32 @@ def swap_ext(file_path: str | list[str], new_ext: str, keep_ext: bool = False) -
     return stem + new_ext
 
 
-def add_suffix(filename: str | list[str], suffix):
+def add_suffix(filename: str | list[str], suffix: str | list[str]) -> str | list[str]:
     """
     Add a suffix to the filename before the extension.
+    Both filename and suffix can be strings or lists of strings.
 
     Args:
-        filename (str): The original filename.
-        suffix (str): The suffix to add.
+        filename (str | list[str]): The original filename(s).
+        suffix (str | list[str]): The suffix to add.
 
     Returns:
-        str: The modified filename with the suffix added.
+        str | list[str]: The modified filename(s) with the suffix added.
     """
+    if isinstance(suffix, list):
+        if len(suffix) == 1:
+            suffix = suffix[0]
+        else:
+            assert len(filename) == len(suffix), "Filename and suffix must have the same length"
+            return [add_suffix(f, s) for f, s in zip(filename, suffix)]
+
+    if isinstance(suffix, str):
+        return _add_suffix(filename, suffix)
+
+    raise ValueError(f"Invalid suffix type: {type(suffix)}")
+
+
+def _add_suffix(filename: str | list[str], suffix: str) -> str | list[str]:
     if isinstance(filename, list):
         return [add_suffix(f, suffix) for f in filename]
     stem, ext = os.path.splitext(filename)
@@ -274,6 +289,7 @@ def collapse(seq: list | dict[list], keys=ALL_GROUP_KEYS, raise_error=False, for
     elif isinstance(seq, dict):
         return {k: collapse(v) if isinstance(v, list) else v for k, v in seq.items()}
     else:
+        # nothing to collapse
         return seq
 
     # list[dict]

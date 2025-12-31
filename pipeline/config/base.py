@@ -228,6 +228,27 @@ class BaseConfig(ABC):
         return
 
     def override_from_yaml(self, override_yaml: str = None):
+        """
+        Override existing keys in the current config from a YAML file.
+        Unlike fill_missing_from_yaml, this will override existing values.
+        """
+
+        if not override_yaml or not os.path.exists(override_yaml):
+            return
+
+        with open(override_yaml, "r") as f:
+            override_dict = yaml.load(f, Loader=yaml.FullLoader) or {}
+
+        # mutate backing dict in place
+        merge_dicts(self._config_in_dict, override_dict)
+
+        # Rebuild instances once without spamming writes
+        was_initialized = getattr(self, "_initialized", False)
+        try:
+            self._initialized = False
+            self._make_instance()
+        finally:
+            self._initialized = was_initialized
 
         return
 

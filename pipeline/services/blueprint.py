@@ -1,14 +1,10 @@
-import os
-from concurrent.futures import ThreadPoolExecutor
 import gc
-import numpy as np
+from typing import List
+from itertools import chain
+from concurrent.futures import ThreadPoolExecutor
 
 from ..utils import flatten
 from ..path import PathHandler
-
-
-from itertools import chain
-
 from ..config.utils import get_filter_from_config
 
 from .utils import SortedGroupDict, PreprocessGroup, ScienceGroup
@@ -19,11 +15,11 @@ class Blueprint:
 
     def __init__(
         self,
-        input_params=None,
-        list_of_images=None,
-        use_db=False,
-        master_frame_only=False,
-        is_too=False,
+        input_params: List[str] = None,
+        list_of_images: List[str] = None,
+        use_db: bool = False,
+        master_frame_only: bool = False,
+        is_too: bool = False,
         **kwargs,
     ):
         self.groups: SortedGroupDict = SortedGroupDict()
@@ -78,14 +74,13 @@ class Blueprint:
 
         for i, group in enumerate(image_inventory):
             try:
-                # mfg_key = PathHandler(group[0][2][0]).config_stem
                 sci_dict = group[2]
                 flattened_group_0 = flatten(group[0])
                 if sci_dict:
                     sample_file = flatten(next(iter(sci_dict.values())))[0]
                 else:
                     sample_file = flattened_group_0[0]
-                mfg_key = PathHandler(sample_file).config_stem
+                mfg_key = PathHandler(sample_file).output_name
 
             except:
                 mfg_key = f"mfg_{i}"
@@ -244,8 +239,6 @@ class Blueprint:
         self.schedule = schedule
 
     def cleanup(self):
-        import gc
-
         for group in self.groups.values():
             group.cleanup()
             del group

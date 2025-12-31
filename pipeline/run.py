@@ -1,7 +1,6 @@
 __package__ = "pipeline"
 
-import time
-from pathlib import Path
+from typing import List
 
 from .config import PreprocConfiguration, SciProcConfiguration
 from .preprocess import Preprocess
@@ -92,7 +91,7 @@ def run_scidata_reduction(
         raise e
 
 
-def query_observations(input_params, use_db=True, master_frame_only=False, **kwargs):
+def query_observations(input_params: List[str], use_db=True, master_frame_only=False, **kwargs):
     if use_db:
         try:
             from .services.database import RawImageQuery

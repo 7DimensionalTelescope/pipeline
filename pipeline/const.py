@@ -60,7 +60,7 @@ TRANSIENT_SCIENCE_GROUP_KEYS = ["nightdate"] + SURVEY_SCIENCE_GROUP_KEYS  # used
 # OBS-related
 CalibType = ["BIAS", "DARK", "FLAT"]
 available_7dt_units = [f"7DT0{unit}" if unit < 10 else f"7DT{unit}" for unit in range(1, 20)]
-WIDE_FILTERS = ["m375w", "m425w"]  # , "m466w", "m692w", "m710w"]
+WIDE_FILTERS = ["m375w", "m425w", "m466w", "m692w", "m710w"]
 MEDIUM_FILTERS = [f"m{s}" for s in range(400, 900, 25)]
 BROAD_FILTERS = ["u", "g", "r", "i", "z"]
 ALL_FILTERS = WIDE_FILTERS + MEDIUM_FILTERS + BROAD_FILTERS
@@ -81,8 +81,23 @@ for w in range(400, 900, 25):
     FILTER_WAVELENGTHS[f"m{w}"] = w * 10
 
 FILTER_WIDTHS = {
-    "m375w": 250,
-    "m425w": 250,
+    "m375w": 450,  # TODO: check accurate number
+    "m425w": 450,  # TODO: check accurate number
+    "m386": 270,
+    "m438": 280,
+    "m466w": 450,
+    "m483": 360,
+    "m512": 300,
+    "m534": 250,
+    "m561": 210,
+    "m586": 260,
+    "m612": 260,
+    "m640": 200,
+    "m661": 260,
+    "m692w": 470,
+    "m710w": 470,
+    "m769w": 480,
+    "m832w": 450,
     "u": 600,
     "g": 1150,
     "r": 1150,
