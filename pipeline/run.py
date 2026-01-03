@@ -1,5 +1,6 @@
 __package__ = "pipeline"
 
+import json
 from typing import List
 
 from .config import PreprocConfiguration, SciProcConfiguration
@@ -19,8 +20,9 @@ def run_preprocess(
     Master frames are combined calibration images (like dark, flat, bias) that
     help in reducing systematic errors in scientific observations.
     """
+
     try:
-        config = PreprocConfiguration.from_config(config, is_too=is_too)
+        config = PreprocConfiguration(config, is_too=is_too)
 
         kwargs = {}
         if preprocess_kwargs:
@@ -46,10 +48,13 @@ def run_scidata_reduction(
         if isinstance(config, SciProcConfiguration):
             pass
         elif isinstance(config, str) and config.endswith(".yml"):
-            # config = SciProcConfiguration.from_config(config)
-            config = SciProcConfiguration.from_config(config, is_too=is_too)
+            config = SciProcConfiguration(config, is_too=is_too)
         else:
             raise ValueError("Invalid configuration type. Expected SciProcConfiguration or path to .yml file.")
+
+        if config.node.settings.is_too != is_too:
+            print(f"[ERROR] is_too mismatch: node.settings.is_too={config.node.settings.is_too} != is_too={is_too}")
+            raise ValueError("is_too mismatch")
 
         if "astrometry" in processes and (not config.node.flag.astrometry or overwrite):
             astr = Astrometry(config)
