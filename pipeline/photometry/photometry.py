@@ -416,10 +416,10 @@ class PhotometrySingle:
                     phot_header = PhotometryHeader()  # just a container of aperture_info;
                     # can't save alternative photometry result to image header anyway due to namespace collision
                     # PhotometryHeader(self.image_info) if you want to save to image header
-
                     phot_header = self.calculate_zp(zp_src_table, filt=filt, phot_header=phot_header, save_plots=False)
-                    temp_headers[filt] = phot_header
-                    self.logger.debug(f"Filter check photometry for {filt} is completed")
+                    if phot_header is not None:
+                        temp_headers[filt] = phot_header
+                        self.logger.debug(f"Filter check photometry for {filt} is completed")
 
                 # save the photometry result for the filename filter as default
                 # placed after filter inference because in the future this will be the main photometry
@@ -572,9 +572,20 @@ class PhotometrySingle:
             # TODO: maybe save it in factory (tmp_dir) for debug?
 
         filters = filters or [self.image_info.filter]
-        synthetic_mag_keys = [f"mag_{filt}" for filt in filters]
+        synthetic_ref_mag_keys = [f"mag_{filt}" for filt in filters]
 
-        self.gaia_columns = ["source_id", "ra", "dec", "bp_rp", "phot_g_mean_mag"] + synthetic_mag_keys
+        self.gaia_columns = ["source_id", "ra", "dec", "bp_rp", "phot_g_mean_mag"]
+
+        for col in synthetic_ref_mag_keys:
+            if col not in ref_src_table.colnames:
+                if col == self.image_info.filter:
+                    self.logger.error(f"Column {col} not found in reference catalog")
+                else:
+                    self.logger.warning(f"Column {col} not found in reference catalog")
+                self.logger.debug(f"Reference catalog: {ref_src_table.colnames}")
+            else:
+                self.gaia_columns.append(col)
+
         return ref_src_table[self.gaia_columns]
 
     def add_matched_reference_catalog(
@@ -781,7 +792,9 @@ class PhotometrySingle:
             ref_mag_key = self.image_info.ref_mag_key
 
         if ref_mag_key not in zp_src_table.keys():
-            self.logger.error(f"Reference magnitude key {ref_mag_key} not found in the source table. Skipping.")
+            self.logger.warning(
+                f"Reference magnitude key {ref_mag_key} not found in the source table; consider adding it. Skipping for now..."
+            )
             return None
 
         aperture_dict = phot_utils.get_aperture_dict(phot_header.PEEING, self.image_info.pixscale)
@@ -881,8 +894,9 @@ class PhotometrySingle:
         self.logger.debug(f"Active filters: {active_filters}")
 
         for filt in list(set(filters_checked) - set(active_filters)):
-            test_dicts.pop(filt)
-            self.logger.debug(f"Filter {filt} is not active. Removing from viable filters.")
+            if filt in test_dicts:
+                test_dicts.pop(filt)
+                self.logger.debug(f"Filter {filt} is not active. Removing from checklist.")
 
         # self.logger.debug(f"Filtered dicts: {test_dicts}")  # too long
 
@@ -936,7 +950,25 @@ class PhotometrySingle:
         """TODO: ad-hoc before DB integration"""
         from glob import glob
         from ..path import NameHandler
+        from ..services.database.query import RawImageQuery
 
+        query = RawImageQuery()
+        # Django-postresql main image db
+        if query.is_connected():
+            name = NameHandler(self.input_image)
+            all_filter_files = (
+                query.on_date(name.nightdate).by_units([name.unit]).of_types(["flat", "sci"]).image_files()
+            )
+            active_filters = set(NameHandler(all_filter_files).filter)
+            self.logger.debug(f"Fetched active filters from Django-PostgreSQL raw image DB: {active_filters}")
+            return active_filters
+
+        # sqlite pipeline db
+        # TODO
+        if False:
+            self.logger.debug(f"Fetched active filters from sqlite filter inventory: {active_filters}")
+
+        # fallback to local filesystem
         try:
             f = PathHandler(self.input_image, is_too=self.config_node.settings.is_too).conjugate
             self.logger.debug(f"Filter check conjugate: {f}")
@@ -946,7 +978,7 @@ class PhotometrySingle:
             flats = NameHandler(flist).pick_type("raw_flat")
             scis = NameHandler(flist).pick_type("raw_science")
             active_filters = set(NameHandler(flats + scis).filter)
-            self.logger.debug(f"Fetched active filters {active_filters}")
+            self.logger.debug(f"Fetched active filters from local filesystem: {active_filters}")
             return active_filters
         except PipelineError as e:
             self.logger.warning(
@@ -990,6 +1022,7 @@ class PhotometrySingle:
                 "separation"
             ]  # e.g. ["source_id", "bp_rp", f"mag_{self.image_info.filter}"]
             other_cols = [c for c in obs_src_table.colnames if c not in gaia_cols]
+
             obs_src_table = obs_src_table[other_cols + gaia_cols]
 
         # save
