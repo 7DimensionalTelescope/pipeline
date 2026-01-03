@@ -34,8 +34,9 @@ REF_IMAGE_DIR = "/lyman/data1/factory/ref_frame"
 
 
 # Internal paths
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-REF_DIR = os.path.join(SCRIPT_DIR, "..", "ref")
+SOURCE_DIR = os.path.dirname(os.path.abspath(__file__))
+REF_DIR = os.path.join(SOURCE_DIR, "..", "ref")
+SCRIPTS_DIR = os.path.join(SOURCE_DIR, "bin")  # "scripts"
 PIPELINE_DIRS = {
     RAWDATA_DIR,
     FACTORY_DIR,

@@ -3,7 +3,6 @@
 import argparse
 import sys
 import signal
-import json
 
 from pipeline.run import run_preprocess
 

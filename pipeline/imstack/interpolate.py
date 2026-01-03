@@ -3,7 +3,7 @@ from numba import njit, prange
 import numpy as np
 from astropy.io import fits
 import subprocess
-from ..const import SCRIPT_DIR
+from ..const import SOURCE_DIR
 
 
 def interpolate_masked_pixels_subprocess(
@@ -19,7 +19,7 @@ def interpolate_masked_pixels_subprocess(
     # base command
     cmd = [
         "python",
-        f"{SCRIPT_DIR}/cuda/interpolate_masked_pixels.py",
+        f"{SOURCE_DIR}/cuda/interpolate_masked_pixels.py",
         "-input",
         *images,
         "-output",

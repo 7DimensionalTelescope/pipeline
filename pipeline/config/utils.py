@@ -36,7 +36,7 @@ def find_config(config: str, is_too: bool = False, return_class=False) -> dict:
                 if return_class:
                     from .sciprocess import SciProcConfiguration
 
-                    return SciProcConfiguration.from_config(full_path, is_too=is_too)
+                    return SciProcConfiguration(full_path, is_too=is_too)
             else:
                 # Only one part before date - treat as filter, no object
                 filt = before_parts[0]
@@ -44,7 +44,7 @@ def find_config(config: str, is_too: bool = False, return_class=False) -> dict:
                 if return_class:
                     from .sciprocess import SciProcConfiguration
 
-                    return SciProcConfiguration.from_config(full_path, is_too=is_too)
+                    return SciProcConfiguration(full_path, is_too=is_too)
         else:
             # Format: {date}_{unit} - date is first
             if after_date:
@@ -57,7 +57,7 @@ def find_config(config: str, is_too: bool = False, return_class=False) -> dict:
             if return_class:
                 from .preprocess import PreprocConfiguration
 
-                return PreprocConfiguration.from_config(full_path, is_too=is_too)
+                return PreprocConfiguration(full_path, is_too=is_too)
     else:
         # No date pattern found - fall back to old logic
         args = config.split("_")
@@ -67,14 +67,14 @@ def find_config(config: str, is_too: bool = False, return_class=False) -> dict:
             if return_class:
                 from .sciprocess import SciProcConfiguration
 
-                return SciProcConfiguration.from_config(full_path, is_too=is_too)
+                return SciProcConfiguration(full_path, is_too=is_too)
         elif len(args) == 2:
             date, unit = args[:2]
             full_path = f"{BASE_DIR}/{date}/{config}.yml"
             if return_class:
                 from .preprocess import PreprocConfiguration
 
-                return PreprocConfiguration.from_config(full_path, is_too=is_too)
+                return PreprocConfiguration(full_path, is_too=is_too)
         else:
             raise ValueError(f"Invalid config format: {config}")
 

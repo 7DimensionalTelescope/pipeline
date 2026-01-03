@@ -64,6 +64,34 @@ def close_pool():
         _global_pool = None
 
 
+def check_db_connection() -> bool:
+    """
+    Check if database connection is available.
+
+    Returns:
+        bool: True if database connection is available, False otherwise
+
+    Example:
+        >>> from pipeline.services.database.query import check_db_connection
+        >>> if check_db_connection():
+        ...     print("Database is connected!")
+        ... else:
+        ...     print("Database connection failed")
+    """
+    pool = get_pool()
+    if pool is None:
+        return False
+    try:
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+        return True
+    except Exception as e:
+        print(f"Database connection check failed: {e}")
+        return False
+
+
 # sql injection risk. dev only
 # def free_query(query: str, params: Optional[List[Any]] = None) -> List[Tuple]:
 #     """
@@ -308,9 +336,30 @@ class RawImageQuery:
         if param_list:
             self.classify_parameters(param_list)
 
+    def is_connected(self) -> bool:
+        """
+        Check if database connection is available.
+
+        Returns:
+            bool: True if database connection is available, False otherwise
+        """
+        pool = get_pool()
+        if pool is None:
+            return False
+        try:
+            with pool.connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    cur.fetchone()
+            return True
+        except Exception as e:
+            print(f"Database connection check failed: {e}")
+            return False
+
     ####################### Fluent Custom Query ###############################
 
     def on_date(self, d: Union[str, date, List[Union[str, date]]]):
+        """nightdate, not date"""
         self._params["target_date"] = d
         return self
 

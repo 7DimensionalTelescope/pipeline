@@ -11,7 +11,7 @@ import uuid
 import fitsio
 
 from .utils import read_fits_image, read_fits_images, write_fits_image, write_fits_images
-from ..const import SCRIPT_DIR, SERVICES_TMP_DIR
+from ..const import SOURCE_DIR, SERVICES_TMP_DIR
 
 
 def combine_images_with_subprocess_gpu(
@@ -32,8 +32,7 @@ def combine_images_with_subprocess_gpu(
     """
     cmd = [
         "python",
-        f"{SCRIPT_DIR}/cuda/combine_images.py",
-        # f"{SCRIPT_DIR}/cuda/combine_images",
+        f"{SOURCE_DIR}/cuda/combine_images.py",
         "-input",
         *images,
         "-device",
@@ -146,7 +145,7 @@ def process_image_with_subprocess_gpu(image_paths, bias, dark, flat, device_id=0
     try:
         cmd = [
             "python",
-            f"{SCRIPT_DIR}/cuda/process_image.py",
+            f"{SOURCE_DIR}/cuda/process_image.py",
             "-bias",
             bias,
             "-dark",

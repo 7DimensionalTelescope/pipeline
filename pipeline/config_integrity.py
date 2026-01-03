@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from .const import PipelineError, REF_DIR, SCRIPT_DIR
+from .const import PipelineError, REF_DIR, SOURCE_DIR
 
 
 configs_to_check = [
@@ -67,7 +67,7 @@ def verify_config_hashes(
       - a file is missing
       - a hash mismatch is detected
     """
-    project_root = Path(SCRIPT_DIR)
+    project_root = Path(SOURCE_DIR)
 
     known_hashes = load_known_hashes(hash_file)
 
@@ -118,7 +118,7 @@ def write_config_hashes(
     - If the file already exists and overwrite=False -> raise PipelineError.
     - Returns the Path to the written hash file.
     """
-    project_root = Path(SCRIPT_DIR)
+    project_root = Path(SOURCE_DIR)
 
     ref_dir = Path(REF_DIR)
     ref_dir.mkdir(parents=True, exist_ok=True)

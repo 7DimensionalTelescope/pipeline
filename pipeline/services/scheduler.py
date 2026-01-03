@@ -4,7 +4,7 @@ import socket
 import os
 from contextlib import contextmanager
 from datetime import datetime
-from ..const import SCRIPT_DIR, NUM_GPUS, SCHEDULER_DB_PATH, QUEUE_SOCKET_PATH
+from ..const import SOURCE_DIR, NUM_GPUS, SCHEDULER_DB_PATH, QUEUE_SOCKET_PATH
 from astropy.table import Table, vstack
 import numpy as np
 
@@ -744,7 +744,7 @@ class Scheduler:
         processes = kwargs.get("processes", ["astrometry", "photometry", "combine", "subtract"])
 
         if job_type == "preprocess":
-            cmd = [f"{SCRIPT_DIR}/bin/preprocess", "-config", config, "-make_plots"]
+            cmd = [f"{SOURCE_DIR}/bin/preprocess", "-config", config, "-make_plots"]
             if is_too:
                 cmd.append("-is_too")
             if overwrite or overwrite_preprocess:
@@ -752,7 +752,7 @@ class Scheduler:
             if kwargs.get("preprocess_kwargs", None):
                 cmd.extend(["--preprocess_kwargs", json.dumps(kwargs["preprocess_kwargs"])])
         else:  # ScienceImage
-            cmd = [f"{SCRIPT_DIR}/bin/data_reduction", "-config", config]
+            cmd = [f"{SOURCE_DIR}/bin/data_reduction", "-config", config]
             if is_too:
                 cmd.append("-is_too")
             cmd.append("-processes")

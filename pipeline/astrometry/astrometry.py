@@ -481,30 +481,28 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             wcs_list = [image_info.coarse_wcs for image_info in self.images_info]
         assert len(input_images) == len(wcs_list)
 
-        self.injected_wcs = []
-
         def _update_header(image, wcs, reset_image_header):
             self.logger.debug(f"Injecting WCS into {image}")
-            self.injected_wcs.append(wcs)
 
             if reset_image_header:
                 self.reset_headers(image)
 
+            if isinstance(wcs, fits.Header):
+                wcs_header = wcs
+            elif isinstance(wcs, WCS):
+                wcs_header = wcs.to_header(relax=True)
+            else:
+                raise ValueError(f"Invalid WCS type: {type(wcs)}")
+
             with fits.open(image, mode="update") as hdul:
-                if isinstance(wcs, fits.Header):
-                    hdul[0].header.update(wcs)
-                elif isinstance(wcs, WCS):
-                    hdul[0].header.update(wcs.to_header(relax=True))
-                else:
-                    raise ValueError(f"Invalid WCS type: {type(wcs)}")
+                hdul[0].header.update(wcs_header)
 
         with ThreadPoolExecutor(max_workers=min(len(input_images), 10)) as executor:
-            futures = {
-                executor.submit(_update_header, image, wcs, reset_image_header): (image, wcs, reset_image_header)
+            futures = [
+                executor.submit(_update_header, image, wcs, reset_image_header)
                 for image, wcs in zip(input_images, wcs_list)
-            }
+            ]
             for future in as_completed(futures):
-                image, wcs, reset_image_header = futures[future]
                 future.result()
 
     def reset_headers(self, input_images: str | List[str] = None) -> None:

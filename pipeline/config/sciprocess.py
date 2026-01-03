@@ -96,6 +96,7 @@ class SciProcConfiguration(BaseConfig):
 
         input_images = sorted([os.path.abspath(image) for image in atleast_1d(input_images)])
         path = PathHandler(input_images, working_dir=working_dir or os.getcwd(), is_too=is_too)
+        # self = cls(path.sciproc_base_yml, is_too=is_too)
         self = cls.from_config(path.sciproc_base_yml, is_too=is_too)
         self.path = path
         self.config_file = config_file or self.path.sciproc_output_yml
