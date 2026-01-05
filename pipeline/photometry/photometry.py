@@ -349,6 +349,7 @@ class PhotometrySingle:
         self.logger.debug(f"{self.name}: ImageInfo: {self.image_info}")
         self.phot_header = PhotometryHeader(self.image_info)  # mind its update structure
         self.phot_header.AUTHOR = getpass.getuser()
+        self.phot_header.REFCAT = self.ref_cat_type
         self.logger.debug(f"{self.name}: self.phot_header at PhotometrySingle.__init__(): {self.phot_header}")
 
         self._id = str(next(self._id_counter)) + "/" + str(total_image)
