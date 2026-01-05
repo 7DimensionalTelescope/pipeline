@@ -15,8 +15,8 @@ def backfill_too(i, overwrite=False, **kwargs):
         trigger_time = dt["trigger_time"]
         image_list = []
 
-        for j in range(10):
-            trig = trigger_time.date() + datetime.timedelta(days=-1 + j)
+        for j in range(100):
+            trig = trigger_time.date() + datetime.timedelta(hours=-24 + j)
             trig = trig.strftime("%Y-%m-%d")
 
             try:

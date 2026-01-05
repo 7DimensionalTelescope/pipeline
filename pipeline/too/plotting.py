@@ -172,7 +172,9 @@ def plot_cutouts_and_sed(
         raise ImportError("photutils is required. Install with: pip install photutils")
 
     if image_type == "stacked":
+        print(os.path.join(base_dir, "**", image_type, "*_coadd.fits"))
         image_paths = glob(os.path.join(base_dir, "**", image_type, "*_coadd.fits"))
+        print(image_paths)
     elif image_type == "difference":
         image_paths = glob(os.path.join(base_dir, "**", image_type, "*_diff.fits"))
     else:
