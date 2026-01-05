@@ -65,11 +65,12 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         calib_types=None,
         use_gpu=False,
         add_database=True,
-        is_too=False,
         **kwargs,
     ):
         # Load Configuration
         super().__init__(config, logger, queue)
+
+        is_too = get_key(self.config_node.settings, "is_too", False)
 
         self.overwrite = overwrite
         self.master_frame_only = master_frame_only

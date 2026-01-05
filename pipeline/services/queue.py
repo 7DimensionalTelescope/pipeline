@@ -373,8 +373,8 @@ class QueueManager:
                             # Get process output for logging
                             try:
                                 stdout, stderr = proc.communicate(timeout=1)
-                                stdout_str = stdout.decode() if stdout else ""
-                                stderr_str = stderr.decode() if stderr else ""
+                                stdout_str = stdout.decode(errors='replace') if stdout else ""
+                                stderr_str = stderr.decode(errors='replace') if stderr else ""
                             except subprocess.TimeoutExpired:
                                 stdout_str = stderr_str = "Output collection timed out"
                             except Exception:
@@ -384,13 +384,13 @@ class QueueManager:
                                 self.logger.info(
                                     f"Process with {config} (PID = {pid}) completed successfully in {time_diff_in_seconds(start_time)} seconds."
                                 )
-                                if stdout_str.strip():
+                                if stdout_str and stdout_str.strip():
                                     self.logger.debug(f"Process {config} stdout: {stdout_str[:500]}...")
                             else:
                                 self.logger.error(
                                     f"Process with {os.path.basename(config)} (PID = {pid}) failed with return code {proc.returncode}."
                                 )
-                                if stderr_str.strip():
+                                if stderr_str and stderr_str.strip():
                                     self.logger.error(f"Process {config} stderr: {stderr_str[:500]}...")
 
                             # Mark job as done using index

@@ -49,7 +49,7 @@ def run_scidata_reduction(
         if isinstance(config, SciProcConfiguration):
             pass
         elif isinstance(config, str) and config.endswith(".yml"):
-            config = SciProcConfiguration(config, is_too=is_too)
+            config = SciProcConfiguration(config, is_too=is_too, overwrite=overwrite)
         else:
             raise ValueError("Invalid configuration type. Expected SciProcConfiguration or path to .yml file.")
 

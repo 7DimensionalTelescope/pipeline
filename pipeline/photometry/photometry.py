@@ -208,15 +208,6 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             else:
                 self._run_sequential(overwrite=overwrite)
 
-            if self._photometry_mode == "single_photometry":
-                self.config_node.flag.single_photometry = True
-            elif self._photometry_mode == "combined_photometry":
-                self.config_node.flag.combined_photometry = True
-            elif self._photometry_mode == "difference_photometry":
-                self.config_node.flag.difference_photometry = True
-            else:
-                raise PipelineError(f"Undefined photometry mode: {self._photometry_mode}")
-
             if self.is_connected:
                 for image, qa_id in zip(self.input_images, self.qa_ids):
                     qa_data = QAData.from_header(
@@ -237,6 +228,15 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
                     self.too_db.send_interim_notice_email(self.too_id, sed_data=sed_data, dtype="difference")
 
                 self.too_db.mark_completed(self.too_id)
+            
+            if self._photometry_mode == "single_photometry":
+                self.config_node.flag.single_photometry = True
+            elif self._photometry_mode == "combined_photometry":
+                self.config_node.flag.combined_photometry = True
+            elif self._photometry_mode == "difference_photometry":
+                self.config_node.flag.difference_photometry = True
+            else:
+                raise PipelineError(f"Undefined photometry mode: {self._photometry_mode}")
 
             self.logger.info(f"'Photometry' is Completed in {time_diff_in_seconds(st)} seconds")
             self.logger.debug(MemoryMonitor.log_memory_usage)

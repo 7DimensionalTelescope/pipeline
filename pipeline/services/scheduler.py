@@ -368,7 +368,8 @@ class Scheduler:
         if row is None:
             return None, None
 
-        overwrite = kwargs.get("overwrite", False)
+        overwrite = kwargs.get("overwrite", False) or row["priority"] == 0
+
         return row, self._generate_command(row["index"], overwrite=overwrite, **kwargs)
 
     def _get_next_task_memory(self, **kwargs):
@@ -424,7 +425,7 @@ class Scheduler:
         if row_dict.get("type") == "preprocess":
             self.processing_preprocess += 1
 
-        overwrite = kwargs.get("overwrite", False)
+        overwrite = kwargs.get("overwrite", False) or row_dict["priority"] == 0
         return row_dict, self._generate_command(job_index, overwrite=overwrite, **kwargs)
 
     def _mark_done_memory(self, job_index, success=True):
@@ -589,7 +590,7 @@ class Scheduler:
                        SET status = ?, priority = ?, readiness = ?, is_ready = ?, pid = 0, 
                            process_start = ?, process_end = ?, input_type = ? 
                        WHERE status = ?""",
-                    ("Ready", 1, 100, 1, "", "", "user-input", "Failed"),
+                    ("Ready", 0, 100, 1, "", "", "user-input", "Failed"),
                 )
                 conn.commit()
                 return cursor.rowcount
@@ -689,30 +690,33 @@ class Scheduler:
         """Save completed jobs table to /var/db/{date}.npy as astropy Table.
         If file exists, combine/append with existing data."""
         try:
-            # Create directory if it doesn't exist
-            db_dir = "/var/db"
-
-            # Get current date in YYYY-MM-DD format
+            db_dir = os.path.dirname(SCHEDULER_DB_PATH)
             date_str = datetime.now().strftime("%Y-%m-%d")
             file_path = os.path.join(db_dir, f"{date_str}.npy")
 
-            # Check if file already exists
-            if os.path.exists(file_path):
-                existing_table = Table(np.load(file_path, allow_pickle=True))
+            # Normalize dependent_idx column to 1D object array for vstack compatibility
+            def normalize_dependent_idx(tbl):
+                if 'dependent_idx' in tbl.colnames:
+                    dep_idx_vals = tbl['dependent_idx']
+                    tbl.remove_column('dependent_idx')
+                    dep_idx = [list(val.flatten()) if isinstance(val, np.ndarray) and val.ndim > 1 
+                              else (list(val) if isinstance(val, (list, np.ndarray)) and len(val) > 0 else [])
+                              for val in dep_idx_vals]
+                    dep_idx_arr = np.empty(len(dep_idx), dtype=object)
+                    dep_idx_arr[:] = dep_idx
+                    tbl['dependent_idx'] = dep_idx_arr
+                return tbl
 
-                # Combine tables using vstack
-                # Handle case where columns might differ
-                if len(existing_table) > 0:
-                    combined_table = vstack([existing_table, table])
-                else:
-                    combined_table = table
+            table = normalize_dependent_idx(table.copy())
+
+            if os.path.exists(file_path):
+                existing_table = normalize_dependent_idx(Table(np.load(file_path, allow_pickle=True)))
+                combined_table = vstack([existing_table, table]) if len(existing_table) > 0 else table
             else:
                 combined_table = table
 
-                # Save combined table
-                np.save(file_path, combined_table)
+            np.save(file_path, combined_table)
         except Exception as e:
-            # Log error but don't fail the clear operation
             print(f"Warning: Failed to save completed jobs to file: {e}")
             np.save(file_path.replace(".npy", "_error.npy"), table, allow_pickle=True)
 
