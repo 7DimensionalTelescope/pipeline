@@ -12,12 +12,20 @@ configs_to_check = [
     "srcExt/main.param",
     "srcExt/prep.conv",
     "srcExt/main.conv",
+    "scamp_7dt_prep.config",
+    "scamp_7dt_main.config",
     "7dt.swarp",
     # "7dt.missfits",
     "qa/masterframe.json",
     "qa/science.json",
     "zeropoints.json",
     "depths.json",
+    # base yml
+    "preproc_base.yml",
+    "sciproc_base.yml",
+    "preproc_base_ToO.yml",
+    "sciproc_base_ToO.yml",
+    "sciproc_base_multiEpoch.yml",
 ]
 
 configs_to_check = [Path(REF_DIR, f) for f in configs_to_check]
@@ -94,7 +102,9 @@ def verify_config_hashes(
         if actual.lower() != expected:
             errors.append(
                 f"{rel} hash mismatch: expected {expected}, got {actual}. "
-                "Config changed: bump version before running the pipeline."
+                "Config changed: bump up the version in pipeline/version.py and run \n"
+                "from pipeline.config_integrity import write_config_hashes; write_config_hashes(overwrite=True)"
+                "before running the pipeline."
             )
 
     if errors:
@@ -107,7 +117,7 @@ def verify_config_hashes(
 def write_config_hashes(
     overwrite: bool = False,
     hash_file: Path = hash_file,
-) -> None:
+) -> str:
     """
     Compute SHA256 hashes for the given config files and write them to
     os.path.join(REF_DIR, filename).
@@ -144,4 +154,4 @@ def write_config_hashes(
         lines.append(f"{rel.as_posix()} {digest}\n")
 
     hash_file.write_text("".join(lines))
-    return hash_file
+    return str(hash_file)
