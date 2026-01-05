@@ -22,6 +22,7 @@ def run_preprocess(
     """
 
     try:
+        # TODO: remove from_config, but for now __init__ causes undefined config_file error
         config = PreprocConfiguration.from_config(config, is_too=is_too)
 
         kwargs = {}
