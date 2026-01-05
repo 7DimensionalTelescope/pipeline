@@ -61,15 +61,32 @@ def main():
         sys.exit(1)
 
     # Determine which coordinate columns are available
-    has_radec = "ALPHA_J2000" in table.colnames and "DELTA_J2000" in table.colnames
+    # Try ALPHA_J2000/DELTA_J2000 first, then ra/dec, then X_IMAGE/Y_IMAGE
+    has_alpha_delta = "ALPHA_J2000" in table.colnames and "DELTA_J2000" in table.colnames
+    has_ra_dec = "ra" in table.colnames and "dec" in table.colnames
     has_xy = "X_IMAGE" in table.colnames and "Y_IMAGE" in table.colnames
 
-    if not has_radec and not has_xy:
+    if not has_alpha_delta and not has_ra_dec and not has_xy:
         print(
-            "Error: Catalog must contain either (ALPHA_J2000, DELTA_J2000) " "or (X_IMAGE, Y_IMAGE) columns",
+            "Error: Catalog must contain either (ALPHA_J2000, DELTA_J2000), (ra, dec), "
+            "or (X_IMAGE, Y_IMAGE) columns",
             file=sys.stderr,
         )
         sys.exit(1)
+
+    # Determine which RA/Dec columns to use (prefer ALPHA_J2000/DELTA_J2000 over ra/dec)
+    ra_col = None
+    dec_col = None
+    if has_alpha_delta:
+        ra_col = "ALPHA_J2000"
+        dec_col = "DELTA_J2000"
+        has_radec = True
+    elif has_ra_dec:
+        ra_col = "ra"
+        dec_col = "dec"
+        has_radec = True
+    else:
+        has_radec = False
 
     # Sort table by specified column (ascending order - smaller values first)
     if args.sort_column in table.colnames:
@@ -95,9 +112,7 @@ def main():
     # Create DS9 region file
     try:
         if has_radec:
-            create_ds9_region_file(
-                ra=table["ALPHA_J2000"], dec=table["DELTA_J2000"], radius=args.radius, filename=output_file
-            )
+            create_ds9_region_file(ra=table[ra_col], dec=table[dec_col], radius=args.radius, filename=output_file)
         else:
             create_ds9_region_file(x=table["X_IMAGE"], y=table["Y_IMAGE"], radius=args.radius, filename=output_file)
         print(f"DS9 region file created: {output_file} ({num_sources} sources)")

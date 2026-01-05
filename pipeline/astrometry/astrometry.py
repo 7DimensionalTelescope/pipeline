@@ -442,13 +442,11 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             image_info.logger = self.logger  # pass the logger
             image_info.head = self.solved_heads[i]
 
-        local_astref = (
-            self.config_node.astrometry.local_astref or self.path.astrometry.astrefcat
-        )  # Always a string path, but existence not guaranteed
+        local_astref = self.config_node.astrometry.local_astref or self.path.astrometry.astrefcat
         if local_astref and not os.path.exists(local_astref):
             # Try to generate the reference catalog automatically
             try:
-                self.logger.info(f"Local astrefcat {local_astref} does not exist. Generating from image...")
+                self.logger.info(f"Local astrefcat {local_astref} does not exist. Generating from image header...")
                 # Extract necessary info from first image
                 image_info = self.images_info[0]
                 get_refcat_gaia(

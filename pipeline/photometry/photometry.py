@@ -63,7 +63,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         queue: Union[bool, QueueManager] = False,
         images: Optional[List[str]] = None,
         photometry_mode: Optional[str] = None,
-        ref_catalog: Optional[str] = None,
+        ref_cat_type: Optional[str] = None,
     ) -> None:
         """
         Initialize the Photometry class.
@@ -84,7 +84,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         super().__init__(config, logger, queue)
         # self._flag_name = "photometry"
 
-        self.ref_catalog = ref_catalog or self.config_node.photometry.refcatname
+        self.ref_cat_type = ref_cat_type or self.config_node.photometry.refcatname
 
         if photometry_mode == "single_photometry" or (
             not self.config_node.flag.single_photometry
@@ -256,7 +256,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
                 image,
                 single_config,  # self.config,
                 self.logger,
-                ref_cat_type=self.ref_catalog,
+                ref_cat_type=self.ref_cat_type,
                 reset_count=i == 0,
             )
             task_id = self.queue.add_task(
@@ -277,7 +277,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
                 # image,
                 single_config,  # self.config,
                 logger=self.logger,
-                ref_cat_type=self.ref_catalog,
+                ref_cat_type=self.ref_cat_type,
                 total_image=len(self.input_images),
                 difference_photometry=diff_phot,
                 reset_count=i == 0,
@@ -640,6 +640,8 @@ class PhotometrySingle:
         )
         low_mag_cut = low_mag_cut or self.phot_conf.ref_mag_lower
         high_mag_cut = high_mag_cut or self.phot_conf.ref_mag_upper
+        self.phot_header.MAGLOW = low_mag_cut
+        self.phot_header.MAGUP = high_mag_cut
 
         # Copy the original table to avoid mutation
         post_match_table = table.copy()
@@ -761,7 +763,7 @@ class PhotometrySingle:
 
         if se_preset == "main":
             outcome = [s for s in outcome.split("\n") if "RMS" in s][0]
-            self.phot_header.SKYMED = float(outcome.split("Background:")[1].split("RMS:")[0])
+            self.phot_header.SKYVAL = float(outcome.split("Background:")[1].split("RMS:")[0])
             self.phot_header.SKYSIG = float(outcome.split("RMS:")[1].split("/")[0])
 
         if fits_ldac:
@@ -991,7 +993,7 @@ class PhotometrySingle:
 
     def update_image_header(
         self,
-        phot_header: PhotometryHeader,
+        phot_header: PhotometryHeader = None,
     ) -> None:
         """
         Update the input fits image's header with photometry information.
@@ -1080,7 +1082,7 @@ class ImageInfo:
         }
 
     @classmethod
-    def parse_image_header_info(cls, image_path: str) -> "ImageInfo":
+    def parse_image_header_info(cls, image_path: str) -> ImageInfo:
         """Parses image information from a FITS header."""
 
         hdr = fits.getheader(image_path)
@@ -1155,18 +1157,18 @@ class PhotometryHeader:
     # must match the actual header keys
     AUTHOR: str = "pipeline"
     PHOTIME: str = None
-    JD: float = 0.0
-    MJD: float = 0.0
-    SEEING: float = 0.0
-    PEEING: float = 0.0
-    ELLIP: float = 0.0
-    ELONG: float = 0.0
-    SKYSIG: float = 0.0
-    SKYMED: float = 0.0
-    REFCAT: str = "GaiaXP"
-    MAGLOW: float = 0.0
-    MAGUP: float = 0.0
-    STDNUMB: int = 0
+    JD: float = None
+    MJD: float = None
+    SEEING: float = None
+    PEEING: float = None
+    ELLIP: float = None
+    ELONG: float = None
+    SKYSIG: float = None
+    SKYVAL: float = None
+    REFCAT: str = None  # "GaiaXP"
+    MAGLOW: float = None
+    MAGUP: float = None
+    STDNUMB: int = None
 
     # a dict of all information accompanying each aperture
     aperture_info: Dict = None
@@ -1195,9 +1197,10 @@ class PhotometryHeader:
             for f in fields(self):
                 key = f.name
 
-                # skip these fields
-                if key in ["AUTHOR", "PHOTIME"]:
-                    continue
+                # don't skip. overridden anyway.
+                # # skip these fields
+                # if key in ["AUTHOR", "PHOTIME"]:
+                #     continue
 
                 if key in image_info.phot_header_keys:
                     # try:
@@ -1208,12 +1211,11 @@ class PhotometryHeader:
                 if "ZP_AUTO" in image_info.phot_header_keys:
                     self._set_aperture_info_from_header(image_info.phot_header_keys)
 
-    def __repr__(self) -> str:
-        """Returns a string representation of the ImageHeader."""
-        return ",\n".join(f"  {k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
-
     def _set_aperture_info_from_header(self, phot_header_keys: dict) -> None:
-        """Sets aperture information from the image header."""
+        """
+        Sets aperture information from the image header.
+        Relies on ImageInfo.phot_header_keys.
+        """
 
         aperture_dict = phot_utils.get_aperture_dict(self.PEEING, self.image_info.pixscale)
 
@@ -1264,6 +1266,9 @@ class PhotometryHeader:
             )
         return temp
 
+    def __repr__(self) -> str:
+        return ",\n".join(f"  {k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
+
     @property
     def dict(self) -> Dict[str, Tuple[Any, str]]:
         """This is updated to the image header"""
@@ -1280,8 +1285,8 @@ class PhotometryHeader:
             "ELLIP": (round(self.ELLIP, 3), "ELLIPTICITY 1-B/A [0-1]"),
             "ELONG": (round(self.ELONG, 3), "ELONGATION A/B [1-]"),
             "SKYSIG": (round(self.SKYSIG, 3), "SKY SIGMA VALUE"),
-            "SKYVAL": (round(self.SKYMED, 3), "SKY MEDIAN VALUE"),
-            "REFCAT": (self.REFCAT, "REFERENCE CATALOG NAME"),
+            "SKYVAL": (round(self.SKYVAL, 3), "SKY MEDIAN VALUE"),
+            "REFCAT": (self.REFCAT, "REFERENCE CATALOG TYPE"),
             "MAGLOW": (self.MAGLOW, "REF MAG RANGE, LOWER LIMIT"),
             "MAGUP": (self.MAGUP, "REF MAG RANGE, UPPER LIMIT"),
             "STDNUMB": (self.STDNUMB, "# OF STD STARS TO CALIBRATE ZP"),
@@ -1292,7 +1297,8 @@ class PhotometryHeader:
         phot_header_dict.update({k: (round(v[0], 3), v[1]) for k, v in self.aperture_dict.items()})
         phot_header_dict.update({k: (round(v[0], 3), v[1]) for k, v in self.zp_dict.items()})
 
-        return phot_header_dict
+        # Filter out entries where the value is None
+        return {k: v for k, v in phot_header_dict.items() if v[0] is not None}
 
 
 # @dataclass
