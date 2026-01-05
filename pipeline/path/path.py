@@ -1010,7 +1010,9 @@ class PathAstrometry(AutoMkdirMixin, AutoCollapseMixin):
         return os.path.join(self._parent.figure_dir, ASTRM_DIRNAME)
 
     @property
-    def astrefcat(self):
+    def astrefcat(self) -> str:
+        """Always a string path, but existence not guaranteed"""
+
         obj = collapse(self._parent.name.obj, raise_error=True)  # error in case of inhomogeneous objects
         # use local astrefcat if tile obs
         tile = find_ris_tile(obj)

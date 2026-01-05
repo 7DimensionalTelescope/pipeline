@@ -1,6 +1,7 @@
 import re
 import warnings
 import numpy as np
+from typing import List, Tuple
 from astropy.io import fits
 from astropy.io.fits.fitsrec import FITS_rec
 
@@ -88,7 +89,7 @@ def header_to_dict(file_path) -> dict:
 
 
 # blindly appending ver.
-def update_padded_header(target_fits, header_new: dict | fits.Header, append=True):
+def update_padded_header(target_fits, header_new: dict | List[Tuple] | fits.Header, append=True):
     """
     Update a FITS file's header with header_new (scamp or photometry output).
     header_new can be either astropy.io.fits.Header or dict.
@@ -114,8 +115,15 @@ def update_padded_header(target_fits, header_new: dict | fits.Header, append=Tru
             cardpack = [
                 (key, *value) if isinstance(value, tuple) else (key, value) for key, value in header_new.items()
             ]
+        elif isinstance(header_new, list):
+            if all(isinstance(card, tuple) and len(card) == 3 for card in header_new):
+                cardpack = header_new
+            else:
+                raise ValueError("update_padded_header: cardpack must be a list of 3-tuples (keyword, value, comment)")
         else:
-            raise ValueError("Unsupported Header format for updating padded Header")
+            raise ValueError(
+                "update_padded_header: Unsupported Header format. Must be fits.Header, dict, or list of 3-tuples."
+            )
 
         # i is the last non-comment idx
         for i in range(len(cards) - 1, -1, -1):
