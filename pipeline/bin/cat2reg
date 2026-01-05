@@ -1,0 +1,110 @@
+#!/home/pipeline-stable/.conda/envs/pipeline/bin/python
+
+import argparse
+import sys
+from astropy.table import Table
+from pipeline.subtract.utils import create_ds9_region_file
+from pipeline.utils import swap_ext
+
+
+def main():
+    """
+    sudo ln -s /home/pipeline/pipeline/pipeline/bin/cat2reg /usr/local/bin/cat2reg
+
+
+    # Generate region file with all sources (default, sorted by MAG_AUTO)
+    cat2reg a_fits_catalog_file.fits
+
+    # Generate region file with first 100 brightest sources (sorted by MAG_AUTO)
+    cat2reg a_fits_catalog_file.fits -n 100
+
+    # Generate region file with custom radius
+    cat2reg a_fits_catalog_file.fits -r 15.0
+
+    # Combine options
+    cat2reg a_fits_catalog_file.fits -n 50 -r 20.0
+
+    # Sort by a different column
+    cat2reg a_fits_catalog_file.fits -n 100 -s MAG_APER
+    """
+    parser = argparse.ArgumentParser(description="Generate a DS9 region file from a FITS catalog file")
+    parser.add_argument("catalog_file", type=str, help="Path to the FITS catalog file")
+    parser.add_argument(
+        "-n",
+        "--num_sources",
+        type=int,
+        default=None,
+        help="Number of sources to include in the region file (default: all)",
+    )
+    parser.add_argument(
+        "-r",
+        "--radius",
+        type=float,
+        default=10.0,
+        help="Radius for regions in arcseconds (for RA/Dec) or pixels (for X/Y). Default: 10.0",
+    )
+    parser.add_argument(
+        "-s",
+        "--sort_column",
+        type=str,
+        default="MAG_AUTO",
+        help="Column name to sort by (ascending order). Smaller values are prioritized. Default: MAG_AUTO",
+    )
+
+    args = parser.parse_args()
+
+    # Read the FITS catalog
+    try:
+        table = Table.read(args.catalog_file, hdu=2)  # hdu=2 for LDAC catalog
+    except Exception as e:
+        print(f"Error reading FITS catalog file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Determine which coordinate columns are available
+    has_radec = "ALPHA_J2000" in table.colnames and "DELTA_J2000" in table.colnames
+    has_xy = "X_IMAGE" in table.colnames and "Y_IMAGE" in table.colnames
+
+    if not has_radec and not has_xy:
+        print(
+            "Error: Catalog must contain either (ALPHA_J2000, DELTA_J2000) " "or (X_IMAGE, Y_IMAGE) columns",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Sort table by specified column (ascending order - smaller values first)
+    if args.sort_column in table.colnames:
+        table.sort(args.sort_column)
+    else:
+        print(
+            f"Warning: Sort column '{args.sort_column}' not found in catalog. Available columns: {', '.join(table.colnames[:10])}{'...' if len(table.colnames) > 10 else ''}",
+            file=sys.stderr,
+        )
+        print("Proceeding without sorting.", file=sys.stderr)
+
+    # Select number of sources
+    num_sources = args.num_sources if args.num_sources is not None else len(table)
+    if num_sources > len(table):
+        num_sources = len(table)
+        print(f"Warning: Requested {args.num_sources} sources but only {len(table)} available", file=sys.stderr)
+
+    table = table[:num_sources]
+
+    # Generate output filename
+    output_file = swap_ext(args.catalog_file, ".reg")
+
+    # Create DS9 region file
+    try:
+        if has_radec:
+            create_ds9_region_file(
+                ra=table["ALPHA_J2000"], dec=table["DELTA_J2000"], radius=args.radius, filename=output_file
+            )
+        else:
+            create_ds9_region_file(x=table["X_IMAGE"], y=table["Y_IMAGE"], radius=args.radius, filename=output_file)
+        print(f"DS9 region file created: {output_file} ({num_sources} sources)")
+    except Exception as e:
+        print(f"Error creating DS9 region file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
