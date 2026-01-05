@@ -1017,7 +1017,8 @@ class PathAstrometry(AutoMkdirMixin, AutoCollapseMixin):
         if tile:
             astrefcat = os.path.join(self.ref_ris_dir, f"{tile}.fits")
         else:
-            astrefcat = os.path.join(self.ref_custom_dir, f"{obj}.fits")
+            nightdate = collapse(self._parent.name.nightdate, raise_error=True)
+            astrefcat = os.path.join(self.ref_custom_dir, f"{obj}_{nightdate}.fits")
 
         return astrefcat
 
