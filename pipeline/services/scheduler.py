@@ -736,7 +736,7 @@ class Scheduler:
             job_type = self._schedule["type"][mask][0]
             input_type = self._schedule["input_type"][mask][0]
 
-        is_too = str(input_type).lower() == "too"
+        is_too = str(input_type).lower() == "too" or "_ToO_" in config
         overwrite = kwargs.get("overwrite", False)
         overwrite_preprocess = kwargs.get("overwrite_preprocess", False)
         overwrite_science = kwargs.get("overwrite_science", False)
