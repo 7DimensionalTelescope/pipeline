@@ -9,6 +9,7 @@ class DataReduction:
 
         master_frame_only = kwargs.get("master_frame_only", False)
         self.is_too = kwargs.get("is_too", False)
+        self.base_priority = kwargs.get("base_priority", None)
         use_db = kwargs.get("use_db", True)
 
         self.blueprint = Blueprint(
@@ -28,7 +29,7 @@ class DataReduction:
         if not self._created_config:
             self.blueprint.create_config(overwrite=overwrite, max_workers=max_workers, is_too=is_too)
             self._created_config = True
-            self.blueprint.create_schedule(is_too=is_too)
+            self.blueprint.create_schedule(is_too=is_too, base_priority=self.base_priority)
 
     def run(
         self,

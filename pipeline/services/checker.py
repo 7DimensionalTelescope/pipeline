@@ -219,7 +219,7 @@ class SanityFilterMixin:
         dtype: str = "science",  # Type of images for sanity check
     ) -> bool:
         """
-        Apply SANITY filtering to self.input_images and recreate path.
+        Applies SANITY filtering to `self.input_images` and overrides it.
 
         This is the main method to call in __init__ after setting input_images.
         Only filters self.input_images and updates self.path - does not modify config.
