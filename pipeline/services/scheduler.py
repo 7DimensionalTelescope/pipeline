@@ -368,7 +368,8 @@ class Scheduler:
         if row is None:
             return None, None
 
-        overwrite = kwargs.get("overwrite", False)
+        overwrite = kwargs.get("overwrite", False) or row["priority"] == 0
+
         return row, self._generate_command(row["index"], overwrite=overwrite, **kwargs)
 
     def _get_next_task_memory(self, **kwargs):
@@ -424,7 +425,7 @@ class Scheduler:
         if row_dict.get("type") == "preprocess":
             self.processing_preprocess += 1
 
-        overwrite = kwargs.get("overwrite", False)
+        overwrite = kwargs.get("overwrite", False) or row_dict["priority"] == 0
         return row_dict, self._generate_command(job_index, overwrite=overwrite, **kwargs)
 
     def _mark_done_memory(self, job_index, success=True):
@@ -589,7 +590,7 @@ class Scheduler:
                        SET status = ?, priority = ?, readiness = ?, is_ready = ?, pid = 0, 
                            process_start = ?, process_end = ?, input_type = ? 
                        WHERE status = ?""",
-                    ("Ready", 1, 100, 1, "", "", "user-input", "Failed"),
+                    ("Ready", 0, 100, 1, "", "", "user-input", "Failed"),
                 )
                 conn.commit()
                 return cursor.rowcount
@@ -736,7 +737,7 @@ class Scheduler:
             job_type = self._schedule["type"][mask][0]
             input_type = self._schedule["input_type"][mask][0]
 
-        is_too = str(input_type).lower() == "too"
+        is_too = str(input_type).lower() == "too" or "_ToO_" in config
         overwrite = kwargs.get("overwrite", False)
         overwrite_preprocess = kwargs.get("overwrite_preprocess", False)
         overwrite_science = kwargs.get("overwrite_science", False)

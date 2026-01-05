@@ -12,7 +12,7 @@ from .subtract import ImSubtract
 
 
 def run_preprocess(
-    config, device_id=None, make_plots=True, overwrite=False, preprocess_kwargs: str = None, is_too=False, use_gpu=True
+    config, device_id=None, make_plots=True, overwrite=False, preprocess_kwargs: str = None, is_too=False, use_gpu=False
 ):
     """
     Generate master calibration frames for a specific observation set.
@@ -22,7 +22,7 @@ def run_preprocess(
     """
 
     try:
-        config = PreprocConfiguration(config, is_too=is_too)
+        config = PreprocConfiguration.from_config(config, is_too=is_too)
 
         kwargs = {}
         if preprocess_kwargs:
@@ -48,7 +48,7 @@ def run_scidata_reduction(
         if isinstance(config, SciProcConfiguration):
             pass
         elif isinstance(config, str) and config.endswith(".yml"):
-            config = SciProcConfiguration(config, is_too=is_too)
+            config = SciProcConfiguration(config, is_too=is_too, overwrite=overwrite)
         else:
             raise ValueError("Invalid configuration type. Expected SciProcConfiguration or path to .yml file.")
 

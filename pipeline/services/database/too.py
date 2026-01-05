@@ -1182,7 +1182,10 @@ The data processing for the ToO observation is complete. The results are as foll
         too_data = self.read_too_data_by_id(too_id)
         
         if too_data.get("num_filters") == 0:
-            self._count_num_filters(too_id)
+            num_filters = self._count_num_filters(too_id)
+        else:
+            num_filters = too_data.get("num_filters")
+            
 
         if too_data.get("interim_notice") == 1:
             return True
@@ -1243,6 +1246,7 @@ The data processing for the ToO observation is complete. The results are as foll
             mag=mag,
             mag_error=mag_error,
             is_upper_limit=is_upper_limit,
+            num_filters=num_filters,
         )
 
         # Handle test mode
@@ -1260,7 +1264,7 @@ The data processing for the ToO observation is complete. The results are as foll
         return True
 
     def _build_interim_notice_contents(
-        self, too_data, sed_data, dtype="difference", is_detected=None, mag=None, mag_error=None, is_upper_limit=False
+        self, too_data, sed_data, dtype="difference", is_detected=None, mag=None, mag_error=None, is_upper_limit=False, num_filters=None
     ):
         """Build email contents for interim notice."""
         contents = """
@@ -1317,7 +1321,7 @@ Interim Processing Result:
             contents += "the detection threshold, outside the field of view, or has faded.\n"
 
         contents += "\n"
-        contents += f"Further data processing is ongoing for {too_data.get('num_filters')} filters.\n"
+        contents += f"Further data processing is ongoing for {num_filters} filters.\n"
 
         contents += "\nA final notification will be sent once processing for all filters is complete.\n\n"
 

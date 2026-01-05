@@ -57,7 +57,7 @@ def find_config(config: str, is_too: bool = False, return_class=False) -> dict:
             if return_class:
                 from .preprocess import PreprocConfiguration
 
-                return PreprocConfiguration(full_path, is_too=is_too)
+                return PreprocConfiguration.from_config(full_path, is_too=is_too)
     else:
         # No date pattern found - fall back to old logic
         args = config.split("_")
@@ -74,7 +74,7 @@ def find_config(config: str, is_too: bool = False, return_class=False) -> dict:
             if return_class:
                 from .preprocess import PreprocConfiguration
 
-                return PreprocConfiguration(full_path, is_too=is_too)
+                return PreprocConfiguration.from_config(full_path, is_too=is_too)
         else:
             raise ValueError(f"Invalid config format: {config}")
 

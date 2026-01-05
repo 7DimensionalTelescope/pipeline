@@ -28,6 +28,9 @@ if __name__ == "__main__":
     parser.add_argument("-is_too", action="store_true", help="Use TOO processing")
     args = parser.parse_args()
 
+    if args.processes is None:
+        args.processes = ["astrometry", "photometry", "combine", "subtract"]
+
     try:
         run_scidata_reduction(args.config, processes=args.processes, overwrite=args.overwrite, is_too=args.is_too)
     except Exception as e:
