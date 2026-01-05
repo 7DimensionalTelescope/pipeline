@@ -347,9 +347,9 @@ class PhotometrySingle:
         self.image_info = ImageInfo.parse_image_header_info(self.input_image)
         self.name = name or os.path.basename(self.input_image)
         self.logger.debug(f"{self.name}: ImageInfo: {self.image_info}")
-        self.phot_header = PhotometryHeader(self.image_info)
-        self.logger.debug(f"{self.name}: PhotometryHeader: {self.phot_header}")
+        self.phot_header = PhotometryHeader(self.image_info)  # mind its update structure
         self.phot_header.AUTHOR = getpass.getuser()
+        self.logger.debug(f"{self.name}: self.phot_header at PhotometrySingle.__init__(): {self.phot_header}")
 
         self._id = str(next(self._id_counter)) + "/" + str(total_image)
 
@@ -413,19 +413,18 @@ class PhotometrySingle:
                 temp_headers = {}
                 self.logger.debug(f"Starting filter check for {filters_to_check}")
                 for i, filt in enumerate(filters_to_check):
-                    phot_header = PhotometryHeader()  # just a container of aperture_info;
-                    # can't save alternative photometry result to image header anyway due to namespace collision
-                    # PhotometryHeader(self.image_info) if you want to save to image header
-                    phot_header = self.calculate_zp(zp_src_table, filt=filt, phot_header=phot_header, save_plots=False)
-                    if phot_header is not None:
-                        temp_headers[filt] = phot_header
+                    temp_phot_header = PhotometryHeader()
+                    temp_phot_header = self.calculate_zp(
+                        zp_src_table, filt=filt, phot_header=temp_phot_header, save_plots=False
+                    )
+                    if temp_phot_header is not None:
+                        temp_headers[filt] = temp_phot_header
                         self.logger.debug(f"Filter check photometry for {filt} is completed")
 
                 # save the photometry result for the filename filter as default
-                # placed after filter inference because in the future this will be the main photometry
-                phot_header = self.calculate_zp(zp_src_table)
-                self.add_calibrated_columns(obs_src_table, phot_header=phot_header)
-                self.update_image_header(phot_header)
+                self.calculate_zp(zp_src_table)  # uses self.phot_header below
+                self.add_calibrated_columns(obs_src_table)
+                self.update_image_header()
 
                 # if inferred filter is different, save it to header and catalog, too
                 inferred_filter = self.determine_filter(temp_headers)
@@ -433,7 +432,7 @@ class PhotometrySingle:
                     self.logger.info(f"Saving {inferred_filter} photometry to catalog too")
                     inferred_phot_header = temp_headers[inferred_filter]
                     self.add_calibrated_columns(obs_src_table, filt=inferred_filter, phot_header=inferred_phot_header)
-                    # self.update_image_header(inferred_phot_header)  # you can't save it too due to namespace collision
+                    # self.update_image_header(inferred_phot_header)  # namespace collision
 
             else:
                 self.logger.info("Skipping filter check")
@@ -460,7 +459,7 @@ class PhotometrySingle:
             self.logger.critical(f"PhotometrySingle failed for the image [{self._id}]: {str(e)}", exc_info=True)
             raise
 
-    def calculate_seeing(self, use_header_seeing: bool = False) -> None:
+    def calculate_seeing(self, phot_header: PhotometryHeader = None, use_header_seeing: bool = False) -> None:
         """
         Calculate seeing conditions from stellar sources in the image.
 
@@ -471,24 +470,26 @@ class PhotometrySingle:
             low_mag_cut: Lower magnitude limit for star selection
         """
 
+        phot_header = phot_header or self.phot_header
+
         if use_header_seeing:
             hdr = fits.getheader(self.input_image)
-            self.phot_header.SEEING = hdr["SEEING"]
-            self.phot_header.PEEING = hdr["PEEING"]
-            self.phot_header.ELLIP = hdr["ELLIP"]
-            self.phot_header.ELONG = hdr["ELONG"]
+            phot_header.SEEING = hdr["SEEING"]
+            phot_header.PEEING = hdr["PEEING"]
+            phot_header.ELLIP = hdr["ELLIP"]
+            phot_header.ELONG = hdr["ELONG"]
             self.logger.debug(f"Trusting seeing/peeing from the header")
-            self.logger.debug(f"SEEING     : {self.phot_header.SEEING:.3f} arcsec")
-            self.logger.debug(f"PEEING     : {self.phot_header.PEEING:.3f} pixel")
+            self.logger.debug(f"SEEING     : {phot_header.SEEING:.3f} arcsec")
+            self.logger.debug(f"PEEING     : {phot_header.PEEING:.3f} pixel")
             return
 
         # config_seeing = get_key(self.config.qa, "seeing")
         # config_ellipticity = get_key(self.config.qa, "ellipticity")
         # if config_seeing and config_ellipticity:
         #     self.logger.debug(f"Using seeing, ellipticity, and pa from the config")
-        #     self.phot_header.seeing = config_seeing
-        #     self.phot_header.ellipticity = config_ellipticity  # 1 - b/a
-        #     self.phot_header.elongation = 1 / (1 - config_ellipticity)  # a/b
+        #     phot_header.seeing = config_seeing
+        #     phot_header.ellipticity = config_ellipticity  # 1 - b/a
+        #     phot_header.elongation = 1 / (1 - config_ellipticity)  # a/b
 
         else:
             prep_cat = self.path.photometry.prep_catalog
@@ -520,15 +521,15 @@ class PhotometrySingle:
                 self.logger.error(f"No star-like sources found. Skipping photometry. Check the catalog: {prep_cat}")
                 return
 
-            self.phot_header.SEEING = np.median(post_match_table["FWHM_WORLD"] * 3600)
-            self.phot_header.PEEING = self.phot_header.SEEING / self.image_info.pixscale
-            self.phot_header.ELLIP = round(np.median(post_match_table["ELLIPTICITY"]), 3)
-            self.phot_header.ELONG = round(np.median(post_match_table["ELONGATION"]), 3)
+            phot_header.SEEING = np.median(post_match_table["FWHM_WORLD"] * 3600)
+            phot_header.PEEING = phot_header.SEEING / self.image_info.pixscale
+            phot_header.ELLIP = round(np.median(post_match_table["ELLIPTICITY"]), 3)
+            phot_header.ELONG = round(np.median(post_match_table["ELONGATION"]), 3)
 
         self.logger.debug(f"{len(post_match_table)} Star-like Sources Found")
-        self.logger.debug(f"SEEING     : {self.phot_header.SEEING:.3f} arcsec")
-        self.logger.debug(f"ELONGATION : {self.phot_header.ELONG:.3f}")
-        self.logger.debug(f"ELLIPTICITY: {self.phot_header.ELLIP:.3f}")
+        self.logger.debug(f"SEEING     : {phot_header.SEEING:.3f} arcsec")
+        self.logger.debug(f"ELONGATION : {phot_header.ELONG:.3f}")
+        self.logger.debug(f"ELLIPTICITY: {phot_header.ELLIP:.3f}")
 
         return
 
@@ -622,6 +623,7 @@ class PhotometrySingle:
         snr_cut: Union[float, bool] = 20,
         low_mag_cut: Union[float, bool] = None,
         high_mag_cut: Union[float, bool] = None,
+        phot_header: PhotometryHeader = None,
     ):
         """
         Filters matches based on separation, signal-to-noise, and magnitude limits.
@@ -640,8 +642,11 @@ class PhotometrySingle:
         )
         low_mag_cut = low_mag_cut or self.phot_conf.ref_mag_lower
         high_mag_cut = high_mag_cut or self.phot_conf.ref_mag_upper
-        self.phot_header.MAGLOW = low_mag_cut
-        self.phot_header.MAGUP = high_mag_cut
+
+        phot_header = phot_header or self.phot_header
+
+        phot_header.MAGLOW = low_mag_cut
+        phot_header.MAGUP = high_mag_cut
 
         # Copy the original table to avoid mutation
         post_match_table = table.copy()
@@ -720,6 +725,7 @@ class PhotometrySingle:
         sex_args: Optional[Dict] = None,
         output: str = None,
         fits_ldac: bool = False,
+        phot_header: PhotometryHeader = None,
         **kwargs,
     ) -> Table:
         """
@@ -762,20 +768,23 @@ class PhotometrySingle:
         # self.logger.debug(f"sextractor outcome: {outcome}")  # too long
 
         if se_preset == "main":
+            phot_header = phot_header or self.phot_header
             outcome = [s for s in outcome.split("\n") if "RMS" in s][0]
-            self.phot_header.SKYVAL = float(outcome.split("Background:")[1].split("RMS:")[0])
-            self.phot_header.SKYSIG = float(outcome.split("RMS:")[1].split("/")[0])
+            phot_header.SKYVAL = float(outcome.split("Background:")[1].split("RMS:")[0])
+            phot_header.SKYSIG = float(outcome.split("RMS:")[1].split("/")[0])
 
         if fits_ldac:
             return Table.read(output, hdu=2)
         return Table.read(output, format="ascii.sextractor")
 
-    def get_zp_src_table(self, obs_src_table: Table) -> Table:
+    def get_zp_src_table(self, obs_src_table: Table, phot_header: PhotometryHeader = None) -> Table:
         """Returns the filtered table of image sources to be compared with the reference catalog for zp calculation"""
         self.logger.debug(f"Filtering source catalog for zp calculation")
         zp_src_table = self.filter_catalog(obs_src_table)
         self.logger.debug(f"After filtering: {len(zp_src_table)}/{len(obs_src_table)} sources")
         self.logger.info(f"Calculating zero points with {len(zp_src_table)} sources")
+        phot_header = phot_header or self.phot_header
+        phot_header.STDNUMB = len(zp_src_table)
         return zp_src_table
 
     def calculate_zp(
@@ -998,7 +1007,11 @@ class PhotometrySingle:
         """
         Update the input fits image's header with photometry information.
         """
-        phot_header = phot_header or self.phot_header
+        if phot_header is not None:
+            self.logger.debug(f"Using provided phot_header at update_image_header(): {phot_header}")
+        else:
+            phot_header = self.phot_header
+            self.logger.debug(f"Using self.phot_header at update_image_header(): {phot_header}")
         update_padded_header(self.input_image, phot_header.dict)
         self.logger.info(f"Image header has been updated with photometry information (aperture, zero point, ...).")
 
@@ -1266,9 +1279,6 @@ class PhotometryHeader:
             )
         return temp
 
-    def __repr__(self) -> str:
-        return ",\n".join(f"  {k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
-
     @property
     def dict(self) -> Dict[str, Tuple[Any, str]]:
         """This is updated to the image header"""
@@ -1299,6 +1309,10 @@ class PhotometryHeader:
 
         # Filter out entries where the value is None
         return {k: v for k, v in phot_header_dict.items() if v[0] is not None}
+
+    def __repr__(self) -> str:
+        # return ",\n".join(f"  {k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
+        return ",\n".join(f"  {k}: {v}" for k, v in self.dict.items())
 
 
 # @dataclass
