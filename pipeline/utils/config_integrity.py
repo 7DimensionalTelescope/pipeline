@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from ..const import PipelineError, REF_DIR, ROOT_DIR, SOURCE_DIR
+from ..const import PipelineError, REF_DIR, ROOT_DIR
 
 
 configs_to_check = [
@@ -129,8 +129,6 @@ def write_config_hashes(
     - Returns the Path to the written hash file.
     """
     project_root = Path(ROOT_DIR)
-
-    ref_dir = Path(REF_DIR)
 
     if hash_file.exists() and not overwrite:
         raise PipelineError(
