@@ -8,8 +8,8 @@ from astropy.io import fits
 from typing import List
 
 from .const import REF_DIR, SEXTRACTOR_COMMAND
-from .utils import add_suffix, force_symlink, swap_ext, read_text_file, ansi_clean, atleast_1d
-from .header import fitsrec_to_header
+from .utils import add_suffix, force_symlink, swap_ext, read_text_file, ansi_clean
+from .utils.header import fitsrec_to_header
 
 
 def solve_field(

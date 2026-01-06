@@ -2,9 +2,12 @@ import os
 from typing import List, Tuple
 from collections import defaultdict
 from pathlib import Path
-from .utils import subtract_half_day, get_gain, get_nightdate, add_a_day
-from ..utils import equal_in_keys, collapse, get_header
+
+from ..utils import equal_in_keys, collapse
+from ..utils.header import get_header
 from .. import const
+
+from .utils import subtract_half_day, get_gain, get_nightdate, add_a_day
 from .utils import strip_binning, format_binning, strip_exptime, format_exptime, strip_gain, format_camera, format_gain
 from .cam_tracker import get_camera_serial
 
@@ -764,7 +767,6 @@ class NameHandler:
         camera = parts[6 - offset]
         hms = None
         return unit, date, hms, obj, filt, nb, exptime, gain, camera
-
 
     @property
     def conjugate_basename(self):

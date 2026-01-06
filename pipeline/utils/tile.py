@@ -6,7 +6,7 @@ from astropy.table import Table
 from astropy.coordinates import SkyCoord, Angle
 import astropy.units as u
 
-from .const import REF_DIR
+from ..const import REF_DIR
 
 
 _RIS_TILE_RE = re.compile(r"T\d{5}")

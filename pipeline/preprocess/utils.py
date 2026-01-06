@@ -1,22 +1,18 @@
 import os
-from glob import glob
 import time
-from astropy.io import fits
+import uuid
+from glob import glob
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
-
+from astropy.io import fits
 import fitsio
-
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-import uuid
 
 from ..path.path import PathHandler
 from ..path.name import NameHandler
 from ..services.checker import Checker
-from ..header import write_header_file
-from ..utils import get_header
-
-from concurrent.futures import ThreadPoolExecutor
+from ..utils.header import write_header_file, get_header
 
 
 class FileCreationHandler(FileSystemEventHandler):

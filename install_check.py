@@ -1,5 +1,5 @@
 import os
-from .const import *
+from pipeline.const import *
 
 
 def dir_is_nonempty(path: str) -> bool:

@@ -1,12 +1,8 @@
 import os
-import getpass
 from reprlib import recursive_repr
 from typing import Any, List, Dict, Tuple, Optional, Union
-import datetime
 import numpy as np
 import matplotlib.pyplot as plt
-import itertools
-import time
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -18,24 +14,6 @@ from astropy.table import Table, hstack, MaskedColumn
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 from astropy.stats import sigma_clip
-
-# gppy modules
-from . import utils as phot_utils
-from ..config.utils import get_key
-from ..utils import time_diff_in_seconds, get_header_key, force_symlink
-from ..config import SciProcConfiguration
-from ..config.base import ConfigNode
-from ..services.memory import MemoryMonitor
-from ..services.queue import QueueManager
-from .. import external
-from ..const import PIXSCALE, MEDIUM_FILTERS, BROAD_FILTERS, ALL_FILTERS, PipelineError
-from ..services.setup import BaseSetup
-from ..tools.table import match_two_catalogs, build_condition_mask
-from ..path.path import PathHandler
-from ..header import update_padded_header
-
-from ..services.database.handler import DatabaseHandler
-from ..services.database.table import QAData
 
 
 # separated from the photometry class. sort out self later.

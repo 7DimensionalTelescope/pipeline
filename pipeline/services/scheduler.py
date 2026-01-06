@@ -2,11 +2,12 @@ import json
 import sqlite3
 import socket
 import os
+import numpy as np
 from contextlib import contextmanager
 from datetime import datetime
-from ..const import SOURCE_DIR, NUM_GPUS, SCHEDULER_DB_PATH, QUEUE_SOCKET_PATH
 from astropy.table import Table, vstack
-import numpy as np
+
+from ..const import SOURCE_DIR, NUM_GPUS, SCHEDULER_DB_PATH, QUEUE_SOCKET_PATH
 
 
 class Scheduler:
@@ -696,15 +697,20 @@ class Scheduler:
 
             # Normalize dependent_idx column to 1D object array for vstack compatibility
             def normalize_dependent_idx(tbl):
-                if 'dependent_idx' in tbl.colnames:
-                    dep_idx_vals = tbl['dependent_idx']
-                    tbl.remove_column('dependent_idx')
-                    dep_idx = [list(val.flatten()) if isinstance(val, np.ndarray) and val.ndim > 1 
-                              else (list(val) if isinstance(val, (list, np.ndarray)) and len(val) > 0 else [])
-                              for val in dep_idx_vals]
+                if "dependent_idx" in tbl.colnames:
+                    dep_idx_vals = tbl["dependent_idx"]
+                    tbl.remove_column("dependent_idx")
+                    dep_idx = [
+                        (
+                            list(val.flatten())
+                            if isinstance(val, np.ndarray) and val.ndim > 1
+                            else (list(val) if isinstance(val, (list, np.ndarray)) and len(val) > 0 else [])
+                        )
+                        for val in dep_idx_vals
+                    ]
                     dep_idx_arr = np.empty(len(dep_idx), dtype=object)
                     dep_idx_arr[:] = dep_idx
-                    tbl['dependent_idx'] = dep_idx_arr
+                    tbl["dependent_idx"] = dep_idx_arr
                 return tbl
 
             table = normalize_dependent_idx(table.copy())

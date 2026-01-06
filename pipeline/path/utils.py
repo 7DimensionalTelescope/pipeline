@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from astropy.io import fits
 
 from ..const import HEADER_KEY_MAP
-from ..utils import get_header
+from ..utils.header import get_header
 
 # def switch_raw_name_order(name):
 #     parts = name.split("_")

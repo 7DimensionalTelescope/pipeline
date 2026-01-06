@@ -10,7 +10,7 @@ import time
 import uuid
 import fitsio
 
-from .utils import read_fits_image, read_fits_images, write_fits_image, write_fits_images
+from .utils import read_fits_image, read_fits_images, write_fits_images
 from ..const import SOURCE_DIR, SERVICES_TMP_DIR
 
 

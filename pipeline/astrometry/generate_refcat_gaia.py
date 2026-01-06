@@ -23,7 +23,7 @@ from spherical_geometry.polygon import SphericalPolygon
 
 from ..io.cfitsldac import write_ldac
 from .utils import build_wcs
-from ..const import GAIA_ROOT_DIR, ASTRM_CUSTOM_REF_DIR
+from ..const import GAIA_ROOT_DIR
 
 # import dhutil as dh
 

@@ -8,11 +8,13 @@ from astropy.io import fits
 
 from .. import __version__
 from ..const import PipelineError
-from ..utils import clean_up_folder, clean_up_sciproduct, get_header, atleast_1d, time_diff_in_seconds, collapse
+from ..utils import clean_up_folder, clean_up_sciproduct, atleast_1d, time_diff_in_seconds, collapse
+from ..utils.header import get_header
 from ..path.path import PathHandler
-from .base import BaseConfig
 from ..services.database.too import TooDB
 from ..services.logger import Logger
+
+from .base import BaseConfig
 from .utils import get_key
 
 

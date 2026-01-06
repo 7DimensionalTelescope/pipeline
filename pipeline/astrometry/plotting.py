@@ -18,7 +18,7 @@ import matplotlib.patheffects as pe
 from PIL import Image, ImageEnhance
 
 
-from ..utils import lupton_asinh
+from ..tools.transform import lupton_asinh
 from .utils import get_3x3_stars, find_id_rows, resolve_rows_by_id
 from .plotting_helpers import cutout, adaptive_ra_spacing, draw_ellipse, HandlerEllipse
 from .evaluation_helpers import SeparationStats

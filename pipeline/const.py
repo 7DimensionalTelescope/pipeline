@@ -1,7 +1,7 @@
 import os
 import sys
 from dotenv import load_dotenv
-from .umask import set_umask
+from .utils.umask import set_umask
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"), override=True)
 

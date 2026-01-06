@@ -10,22 +10,21 @@ from astropy.coordinates import Angle
 
 from ..const import REF_DIR, PipelineError
 from ..config import SciProcConfiguration
-from ..path.path import PathHandler, NameHandler
+from ..path.path import PathHandler
 from ..services.setup import BaseSetup
 from ..services.utils import acquire_available_gpu
 from ..config.utils import get_key
-from ..utils import collapse, get_header, add_suffix, time_diff_in_seconds, get_basename, atleast_1d, swap_ext
+from ..utils import collapse, add_suffix, time_diff_in_seconds, get_basename, atleast_1d, swap_ext
 from ..preprocess.utils import get_zdf_from_header_IMCMB
 from ..preprocess.plotting import save_fits_as_figures
 from .. import external
-from ..tile import is_ris_tile, find_ris_tile
+from ..utils.tile import is_ris_tile, find_ris_tile
 
 from ..services.database.handler import DatabaseHandler
 from ..services.database.table import QAData
 from ..services.checker import Checker, SanityFilterMixin
 
-from .utils import move_file  # inputlist_parser, move_file
-from .const import ZP_KEY, IC_KEYS, CORE_KEYS
+from .const import ZP_KEY, CORE_KEYS
 
 
 warnings.filterwarnings("ignore")

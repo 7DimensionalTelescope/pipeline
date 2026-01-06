@@ -3,10 +3,9 @@ import numpy as np
 from numba import njit
 from astropy.table import Table, hstack, vstack, unique
 from astropy.coordinates import SkyCoord
-from typing import Any, Tuple, Optional, Dict, Union
-from astropy.io import fits
 
 from ..const import GAIA_REF_DIR
+from ..config.base import ConfigNode
 
 
 @njit
@@ -147,7 +146,7 @@ def keyset(mag_key: str, filter: str) -> tuple[str]:
     return _magkey, _magerrkey, _fluxkey, _fluxerrkey, _snrkey
 
 
-def aggregate_gaia_catalogs(target_coord, path_calibration_field=None, query_radius=1.0):
+def aggregate_gaia_catalogs(target_coord, path_calibration_field: str = None, query_radius=1.0):
     """
     Return a merged Gaia DR3 source catalog near the specified coordinates.
 
@@ -220,7 +219,7 @@ def aggregate_gaia_catalogs(target_coord, path_calibration_field=None, query_rad
     return all_reftbl
 
 
-def filter_table(table: Table, key: str, value: Any, method: str = "equal") -> Table:
+def filter_table(table: Table, key: str, value: float | int | str, method: str = "equal") -> Table:
     """
     DEPRECATED: use build_condition_mask in tool.utils
 
@@ -287,7 +286,7 @@ def get_mag_key(aperture_key: str) -> tuple:
 
 def get_sex_args(
     image: str,
-    phot_conf: Any,
+    phot_conf: ConfigNode,
     egain: float,
     peeing: float,
     pixscale: float,

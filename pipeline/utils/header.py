@@ -1,9 +1,53 @@
+import os
 import re
 import warnings
 import numpy as np
+from pathlib import Path
 from typing import List, Tuple
 from astropy.io import fits
 from astropy.io.fits.fitsrec import FITS_rec
+
+from .filesystem import swap_ext
+
+
+def get_header(filename: str | Path, force_return=False) -> dict | fits.Header:
+    """
+    Get the header of a FITS file. Avoid FITS I/O by reading the header from a
+    text file if it exists.
+
+    Args:
+        filename (str | Path): Path to the FITS file or a .head file
+
+    Returns:
+        dict | fits.Header: Header of the FITS file
+    """
+    filename = str(filename)
+
+    processed_header_file = swap_ext(filename, "header")
+    if os.path.exists(processed_header_file):
+        return read_header_file(processed_header_file)
+
+    raw_head_file = swap_ext(filename, "head")
+    if os.path.exists(raw_head_file):
+        # Read the header from the text file
+        return read_header_file(raw_head_file)
+
+    if os.path.exists(filename):
+        from astropy.io import fits
+
+        return fits.getheader(swap_ext(filename, "fits"))
+
+    if force_return:
+        return {}
+    raise FileNotFoundError(f"File not found: {filename}")
+
+
+def get_header_key(header_file, key, default=None):
+    header = get_header(header_file)
+    if hasattr(header, key):
+        return header[key]
+    else:
+        return default
 
 
 def read_header_file(file_path: str, as_dict=False) -> dict | fits.Header:

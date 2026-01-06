@@ -6,19 +6,14 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import cpu_count
 import numpy as np
-from datetime import datetime
 from astropy.io import fits
 import copy
+
 from .plotting import *
 from . import utils as prep_utils
 from .calc import record_statistics, delta_edge_center
-from ..utils import (
-    get_header,
-    flatten,
-    time_diff_in_seconds,
-    atleast_1d,
-)
 
+from ..utils import flatten, time_diff_in_seconds, atleast_1d
 from ..config import PreprocConfiguration
 from ..config.utils import get_key
 from ..services.setup import BaseSetup
@@ -27,7 +22,7 @@ from ..services.utils import acquire_available_gpu
 from ..services.checker import Checker
 from ..services.database import QAData
 from ..services.database.handler import DatabaseHandler
-from ..header import add_padding
+from ..utils.header import add_padding, get_header
 from ..const import PipelineError
 from ..path import PathHandler, NameHandler
 

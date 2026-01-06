@@ -3,9 +3,8 @@ from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from typing import List, Callable, Dict, Any, Tuple
-from .logger import Logger
 import signal
-from .queue import QueueManager
+from .logger import Logger
 
 
 class Monitor(FileSystemEventHandler):

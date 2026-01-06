@@ -5,7 +5,7 @@ import glob
 import time
 
 from .. import __version__
-from ..utils import clean_up_folder, flatten, time_diff_in_seconds, collapse
+from ..utils import clean_up_folder, flatten, time_diff_in_seconds
 from ..path.path import PathHandler
 from ..const import CalibType
 from .base import BaseConfig

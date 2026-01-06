@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from .const import PipelineError, REF_DIR, SOURCE_DIR
+from ..const import PipelineError, REF_DIR, SOURCE_DIR
 
 
 configs_to_check = [

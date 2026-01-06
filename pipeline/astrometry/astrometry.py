@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from .. import external
 from ..const import PIXSCALE, PipelineError, REF_DIR
 from ..utils import swap_ext, add_suffix, force_symlink, time_diff_in_seconds, unique_filename, atleast_1d
-from ..header import update_padded_header, reset_header, fitsrec_to_header
+from ..utils.header import update_padded_header, reset_header, fitsrec_to_header
 from ..services.memory import MemoryMonitor
 from ..config import SciProcConfiguration
 from ..config.utils import get_key
@@ -26,6 +26,7 @@ from ..io.cfitsldac import write_ldac
 from ..services.database.handler import DatabaseHandler
 from ..services.database.table import QAData
 from ..services.checker import Checker
+
 from .utils import (
     polygon_info_header,
     read_scamp_header,
@@ -45,8 +46,6 @@ from .evaluation import (
     RSEPStats,
     RadialStats,
 )
-
-
 from .generate_refcat_gaia import get_refcat_gaia
 
 

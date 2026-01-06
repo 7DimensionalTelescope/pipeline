@@ -1,7 +1,6 @@
 from __future__ import annotations
 import os
 import getpass
-from reprlib import recursive_repr
 from typing import Any, List, Dict, Tuple, Optional, Union
 import datetime
 import numpy as np
@@ -25,7 +24,7 @@ from ..services.database.table import QAData
 from ..services.checker import Checker, SanityFilterMixin
 
 from ..config.utils import get_key
-from ..utils import time_diff_in_seconds, get_header_key, force_symlink, collapse
+from ..utils import time_diff_in_seconds, force_symlink, collapse
 from ..config import SciProcConfiguration
 from ..config.base import ConfigNode
 from .. import external
@@ -33,9 +32,9 @@ from ..const import PIXSCALE, MEDIUM_FILTERS, BROAD_FILTERS, ALL_FILTERS, Pipeli
 from ..services.setup import BaseSetup
 from ..tools.table import match_two_catalogs, build_condition_mask
 from ..path.path import PathHandler
-from ..header import update_padded_header
+from ..utils.header import get_header_key, update_padded_header
 from ..too.plotting import make_too_output
-from ..tile import is_ris_tile
+from ..utils.tile import is_ris_tile
 
 from . import utils as phot_utils
 from .plotting import plot_zp, plot_filter_check
@@ -564,6 +563,7 @@ class PhotometrySingle:
             ref_src_table = phot_utils.aggregate_gaia_catalogs(
                 target_coord=SkyCoord(self.image_info.racent, self.image_info.decent, unit="deg"),
                 query_radius=query_radius,
+                path_calibration_field=self.path.photometry.ref_gaia_dir,
             )
             self.logger.debug(f"ref_src_table[:5]:\n{ref_src_table[:5].pprint(max_width=150)}")
 

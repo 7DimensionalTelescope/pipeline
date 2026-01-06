@@ -10,11 +10,11 @@ from datetime import datetime
 import subprocess
 
 from ..utils import time_diff_in_seconds
+from ..const import QUEUE_SOCKET_PATH
 
 from .memory import MemoryMonitor
 from .logger import Logger
 from .scheduler import Scheduler
-from ..const import QUEUE_SOCKET_PATH
 
 signal.signal(signal.SIGINT, signal.SIG_IGN)
 mp.set_start_method("spawn", force=True)
@@ -378,8 +378,8 @@ class QueueManager:
                             # Get process output for logging
                             try:
                                 stdout, stderr = proc.communicate(timeout=1)
-                                stdout_str = stdout.decode(errors='replace') if stdout else ""
-                                stderr_str = stderr.decode(errors='replace') if stderr else ""
+                                stdout_str = stdout.decode(errors="replace") if stdout else ""
+                                stderr_str = stderr.decode(errors="replace") if stderr else ""
                             except subprocess.TimeoutExpired:
                                 stdout_str = stderr_str = "Output collection timed out"
                             except Exception:
@@ -541,7 +541,7 @@ class QueueManager:
                     self.logger.info(MemoryMonitor.log_memory_usage)
                     time.sleep(DEFAULT_MONITOR_CHECK_INTERVAL)
                 else:
-                    time.sleep(DEFAULT_MONITOR_CHECK_INTERVAL/6.)
+                    time.sleep(DEFAULT_MONITOR_CHECK_INTERVAL / 6.0)
 
                 i += 1
             from .utils import cleanup_memory

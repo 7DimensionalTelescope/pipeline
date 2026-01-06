@@ -7,7 +7,7 @@ import numpy as np
 
 from .. import const
 from ..const import PipelineError
-from ..tile import find_ris_tile
+from ..utils.tile import find_ris_tile
 from ..utils import add_suffix, swap_ext, collapse, atleast_1d
 
 from .name import NameHandler

@@ -2,7 +2,7 @@ from __future__ import annotations
 import warnings
 
 from .version import __version__
-from .config_integrity import verify_config_hashes
+from .utils.config_integrity import verify_config_hashes
 
 """
 gpPy: Automated Pipeline for Astronomical Image Processing
