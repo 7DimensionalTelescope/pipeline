@@ -1,7 +1,14 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env"), override=True)
+# Internal paths
+SOURCE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+ROOT_DIR = os.path.abspath(os.path.join(SOURCE_DIR, ".."))
+REF_DIR = os.path.abspath(os.path.join(ROOT_DIR, "ref"))
+SCRIPTS_DIR = os.path.join(SOURCE_DIR, "bin")  # "scripts"
+
+# load environment variables from .env file
+load_dotenv(os.path.join(ROOT_DIR, ".env"), override=True)
 
 
 # Bashrc-defined system paths
@@ -31,10 +38,7 @@ GAIA_REF_DIR = "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile
 REF_IMAGE_DIR = "/lyman/data1/factory/ref_frame"
 
 
-# Internal paths
-SOURCE_DIR = os.path.dirname(os.path.abspath(__file__))
-REF_DIR = os.path.join(SOURCE_DIR, "..", "..", "ref")
-SCRIPTS_DIR = os.path.join(SOURCE_DIR, "bin")  # "scripts"
+# define pipeline directories
 PIPELINE_DIRS = {
     RAWDATA_DIR,
     FACTORY_DIR,
@@ -47,8 +51,10 @@ PIPELINE_DIRS = {
 
 
 # Storage Configuration
-DISK_CHANGE_DATE = "20260101"
+DISK_CHANGE_DATE = "20260201"
 
+
+# database access
 EMAIL_USER = os.environ.get("EMAIL_USER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
 
