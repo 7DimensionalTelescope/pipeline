@@ -19,6 +19,11 @@ from ..const import QUEUE_SOCKET_PATH
 signal.signal(signal.SIGINT, signal.SIG_IGN)
 mp.set_start_method("spawn", force=True)
 
+DEFAULT_MAX_WORKERS = 15
+DEFAULT_WORKER_SLEEP_TIME = 0.5
+DEFAULT_MONITOR_CHECK_INTERVAL = 60
+DEFAULT_SOCKET_LISTENER_TIMEOUT = 1.0
+
 
 class AbruptStopException(Exception):
     """
@@ -76,7 +81,7 @@ class QueueManager:
         self.logger.debug(f"Initialize QueueManager.")
 
         # Default CPU allocation
-        self.total_cpu_worker = max_workers or 10
+        self.total_cpu_worker = max_workers or DEFAULT_MAX_WORKERS
 
         self.lock = threading.Lock()
 
@@ -271,7 +276,7 @@ class QueueManager:
             )
 
             # Verify process actually started
-            time.sleep(0.1)
+            time.sleep(DEFAULT_WORKER_SLEEP_TIME)
             if proc.poll() is not None:
                 # Process died immediately
                 stdout, stderr = proc.communicate()
@@ -304,10 +309,10 @@ class QueueManager:
                     current_usage = len(self._active_processes)
 
                 if current_usage >= self.total_cpu_worker:
-                    time.sleep(0.5)
+                    time.sleep(DEFAULT_WORKER_SLEEP_TIME)
                     continue
                 elif self.scheduler is None or not self.scheduler.has_schedule:
-                    self._wake_event.wait(timeout=1.0)
+                    self._wake_event.wait(timeout=DEFAULT_SOCKET_LISTENER_TIMEOUT)
                     continue
                 else:
                     # Get next task and mark as Processing atomically within lock
@@ -315,7 +320,7 @@ class QueueManager:
                     if job is not None and cmd is not None:
                         job_index = job["index"]
                     else:
-                        self._wake_event.wait(timeout=1.0)
+                        self._wake_event.wait(timeout=DEFAULT_SOCKET_LISTENER_TIMEOUT)
                         continue
 
                 # Create process outside lock (this can take time)
@@ -331,13 +336,13 @@ class QueueManager:
 
                     self.logger.info(f"Process with {os.path.basename(config)} (PID = {proc.pid}) submitted.")
                     self.logger.debug(f"Command: {cmd}")
-                    time.sleep(0.5)
+                    time.sleep(DEFAULT_WORKER_SLEEP_TIME)
 
                 except Exception as e:
                     import traceback
 
                     self.logger.error(f"Error in processing worker: {e}")
-                    time.sleep(0.5)
+                    time.sleep(DEFAULT_WORKER_SLEEP_TIME)
                     traceback.print_exc()
                     # Don't raise - continue processing other tasks
                     continue
@@ -348,7 +353,7 @@ class QueueManager:
 
             except Exception as e:
                 self.logger.error(f"Error in processing worker: {e}")
-                time.sleep(0.5)
+                time.sleep(DEFAULT_WORKER_SLEEP_TIME)
                 # Don't raise - continue processing
                 continue
 
@@ -405,10 +410,10 @@ class QueueManager:
                                 if process in self._active_processes:
                                     self._active_processes.remove(process)
 
-                time.sleep(0.5)
+                time.sleep(DEFAULT_WORKER_SLEEP_TIME)
             except Exception as e:
                 self.logger.error(f"Error in completion worker: {e}")
-                time.sleep(0.2)
+                time.sleep(DEFAULT_WORKER_SLEEP_TIME)
 
     def stop_processing(self, *args):
         """
@@ -534,9 +539,10 @@ class QueueManager:
                 if i % 6 == 0:
                     self.logger.info(f"Scheduler status: {self.scheduler.status()}")
                     self.logger.info(MemoryMonitor.log_memory_usage)
-                    time.sleep(60)
+                    time.sleep(DEFAULT_MONITOR_CHECK_INTERVAL)
                 else:
-                    time.sleep(10)
+                    time.sleep(DEFAULT_MONITOR_CHECK_INTERVAL/6.)
+
                 i += 1
             from .utils import cleanup_memory
 

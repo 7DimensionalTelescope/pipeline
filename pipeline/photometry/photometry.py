@@ -1173,16 +1173,16 @@ class PhotometryHeader:
     PHOTIME: str = None
     JD: float = None
     MJD: float = None
-    SEEING: float = None
-    PEEING: float = None
-    ELLIP: float = None
-    ELONG: float = None
-    SKYSIG: float = None
-    SKYVAL: float = None
-    REFCAT: str = None  # "GaiaXP"
-    MAGLOW: float = None
-    MAGUP: float = None
-    STDNUMB: int = None
+    SEEING: float = 0.0
+    PEEING: float = 0.0
+    ELLIP: float = 0.0
+    ELONG: float = 0.0
+    SKYSIG: float = 0.0
+    SKYVAL: float = 0.0
+    REFCAT: str = "GaiaXP"  # "GaiaXP"
+    MAGLOW: float = 0.0
+    MAGUP: float = 0.0
+    STDNUMB: int = 0.0
 
     # a dict of all information accompanying each aperture
     aperture_info: Dict = None
@@ -1291,12 +1291,12 @@ class PhotometryHeader:
             "PHOTIME": (self.PHOTIME, "PHOTOMETRY TIME [KST]"),
             "JD": (self.JD, "Julian Date of the observation"),
             "MJD": (self.MJD, "Modified Julian Date of the observation"),
-            "SEEING": (round(self.SEEING, 3), "SEEING [arcsec]"),
-            "PEEING": (round(self.PEEING, 3), "SEEING [pixel]"),
-            "ELLIP": (round(self.ELLIP, 3), "ELLIPTICITY 1-B/A [0-1]"),
-            "ELONG": (round(self.ELONG, 3), "ELONGATION A/B [1-]"),
-            "SKYSIG": (round(self.SKYSIG, 3), "SKY SIGMA VALUE"),
-            "SKYVAL": (round(self.SKYVAL, 3), "SKY MEDIAN VALUE"),
+            "SEEING": (round(self.SEEING, 3) if self.SEEING is not None else 0, "SEEING [arcsec]"),
+            "PEEING": (round(self.PEEING, 3) if self.PEEING is not None else 0, "SEEING [pixel]"),
+            "ELLIP": (round(self.ELLIP, 3) if self.ELLIP is not None else 0, "ELLIPTICITY 1-B/A [0-1]"),
+            "ELONG": (round(self.ELONG, 3) if self.ELONG is not None else 0, "ELONGATION A/B [1-]"),
+            "SKYSIG": (round(self.SKYSIG, 3) if self.SKYSIG is not None else 0, "SKY SIGMA VALUE"),
+            "SKYVAL": (round(self.SKYVAL, 3) if self.SKYVAL is not None else 0, "SKY MEDIAN VALUE"),
             "REFCAT": (self.REFCAT, "REFERENCE CATALOG TYPE"),
             "MAGLOW": (self.MAGLOW, "REF MAG RANGE, LOWER LIMIT"),
             "MAGUP": (self.MAGUP, "REF MAG RANGE, UPPER LIMIT"),
