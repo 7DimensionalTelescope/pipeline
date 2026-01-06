@@ -4,9 +4,11 @@ from setuptools import setup, find_packages
 ROOT = Path(__file__).parent
 README = (ROOT / "README.md").read_text(encoding="utf-8") if (ROOT / "README.md").exists() else ""
 
+from pipeline.version import __version__
+
 setup(
     name="pipeline",
-    version="2.0.0",
+    version=__version__,
     description="Pipeline for 7-dimensional Telescope",
     long_description=README,
     long_description_content_type="text/markdown",
