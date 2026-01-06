@@ -167,10 +167,11 @@ class SciProcConfiguration(BaseConfig):
             is_too=is_too,
             **kwargs,
         )
-        # emulate constructor’s initialize path
-        self._initialized = False
-        self.input_files = atleast_1d(input_images)
-        self.initialize(is_pipeline=is_pipeline, is_too=is_too)
+        # # TODO: node.calibrated_images becomes different from input_images after initialize
+        # # emulate constructor’s initialize path
+        # self._initialized = False
+        # self.input_files = atleast_1d(input_images)
+        # self.initialize(is_pipeline=is_pipeline, is_too=is_too)
         return self
 
     @property
