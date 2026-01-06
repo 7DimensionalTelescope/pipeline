@@ -245,7 +245,7 @@ def filter_table(table: Table, key: str, value: Any, method: str = "equal") -> T
         raise ValueError("method must be 'equal', 'lower', or 'upper'")
 
 
-def get_aperture_dict(peeing: float, pixscale: float) -> dict:
+def get_aperture_dict(peeing: float | None, pixscale: float) -> dict:
     """
     Generate dictionary of aperture configurations.
 
@@ -256,6 +256,9 @@ def get_aperture_dict(peeing: float, pixscale: float) -> dict:
     Returns:
         Dictionary of aperture configurations
     """
+    if peeing is None:
+        return {"AUTO": (0.0, "SExtractor AUTO DIAMETER [pix]")}
+
     aperture_dict = {
         "AUTO": (0.0, "SExtractor AUTO DIAMETER [pix]"),
         "APER": (2 * 0.6731 * peeing, "BEST GAUSSIAN APERTURE DIAMETER [pix]"),

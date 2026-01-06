@@ -228,7 +228,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
                     self.too_db.send_interim_notice_email(self.too_id, sed_data=sed_data, dtype="difference")
 
                 self.too_db.mark_completed(self.too_id)
-            
+
             if self._photometry_mode == "single_photometry":
                 self.config_node.flag.single_photometry = True
             elif self._photometry_mode == "combined_photometry":
@@ -414,7 +414,7 @@ class PhotometrySingle:
                 temp_headers = {}
                 self.logger.debug(f"Starting filter check for {filters_to_check}")
                 for i, filt in enumerate(filters_to_check):
-                    temp_phot_header = PhotometryHeader()
+                    temp_phot_header = PhotometryHeader()  # PEEING None -> ZP_AUTO only
                     temp_phot_header = self.calculate_zp(
                         zp_src_table, filt=filt, phot_header=temp_phot_header, save_plots=False
                     )
@@ -1173,16 +1173,16 @@ class PhotometryHeader:
     PHOTIME: str = None
     JD: float = None
     MJD: float = None
-    SEEING: float = 0.0
-    PEEING: float = 0.0
-    ELLIP: float = 0.0
-    ELONG: float = 0.0
-    SKYSIG: float = 0.0
-    SKYVAL: float = 0.0
-    REFCAT: str = "GaiaXP"  # "GaiaXP"
-    MAGLOW: float = 0.0
-    MAGUP: float = 0.0
-    STDNUMB: int = 0.0
+    SEEING: float = None
+    PEEING: float = None
+    ELLIP: float = None
+    ELONG: float = None
+    SKYSIG: float = None
+    SKYVAL: float = None
+    REFCAT: str = None  # "GaiaXP"
+    MAGLOW: float = None
+    MAGUP: float = None
+    STDNUMB: int = None
 
     # a dict of all information accompanying each aperture
     aperture_info: Dict = None
