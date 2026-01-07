@@ -1175,16 +1175,16 @@ class PhotometryHeader:
     PHOTIME: str = None
     JD: float = None
     MJD: float = None
-    SEEING: float = None
-    PEEING: float = None
-    ELLIP: float = None
-    ELONG: float = None
-    SKYSIG: float = None
-    SKYVAL: float = None
-    REFCAT: str = None  # "GaiaXP"
-    MAGLOW: float = None
-    MAGUP: float = None
-    STDNUMB: int = None
+    SEEING: float = 0.0
+    PEEING: float = 0.0
+    ELLIP: float = 0.0
+    ELONG: float = 0.0
+    SKYSIG: float = 0.0
+    SKYVAL: float = 0.0
+    REFCAT: str = "GaiaXP"  # "GaiaXP"
+    MAGLOW: float = 0.0
+    MAGUP: float = 0.0
+    STDNUMB: int = 0.0
 
     # a dict of all information accompanying each aperture
     aperture_info: Dict = None

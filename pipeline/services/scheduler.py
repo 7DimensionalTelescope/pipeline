@@ -16,7 +16,7 @@ class Scheduler:
         dtype=[
             ("index", int),
             ("config", object),
-            ("type", object),
+            ("config_type", object),
             ("input_type", object),
             ("is_ready", bool),
             ("priority", int),
@@ -62,7 +62,7 @@ class Scheduler:
             if schedule is not None:
                 self.processing_preprocess = len(
                     self._schedule[
-                        (self._schedule["status"] == "Processing") & (self._schedule["type"] == "preprocess")
+                        (self._schedule["status"] == "Processing") & (self._schedule["config_type"] == "preprocess")
                     ]
                 )
             else:
@@ -106,7 +106,7 @@ class Scheduler:
                 CREATE TABLE IF NOT EXISTS scheduler (
                     "index" INTEGER PRIMARY KEY,
                     config TEXT NOT NULL,
-                    type TEXT NOT NULL,
+                    config_type TEXT NOT NULL,
                     input_type TEXT NOT NULL,
                     is_ready INTEGER NOT NULL,
                     priority INTEGER NOT NULL,
@@ -163,7 +163,7 @@ class Scheduler:
         return {
             "index": row[0],
             "config": row[1],
-            "type": row[2],
+            "config_type": row[2],
             "input_type": row[3],
             "is_ready": bool(row[4]),
             "priority": row[5],
@@ -185,7 +185,7 @@ class Scheduler:
         for row in rows:
             data["index"].append(row[0])
             data["config"].append(row[1])
-            data["type"].append(row[2])
+            data["config_type"].append(row[2])
             data["input_type"].append(row[3])
             data["is_ready"].append(bool(row[4]))
             data["priority"].append(row[5])
@@ -252,8 +252,8 @@ class Scheduler:
         in_pending = len(schedule[schedule["status"] == "Pending"])
         in_processing = len(schedule[schedule["status"] == "Processing"])
         in_completed = len(schedule[schedule["status"] == "Completed"])
-        is_preprocess = len(schedule[schedule["type"] == "preprocess"])
-        is_science = len(schedule[schedule["type"] == "science"])
+        is_preprocess = len(schedule[schedule["config_type"] == "preprocess"])
+        is_science = len(schedule[schedule["config_type"] == "science"])
         if with_table:
             schedule.pprint_all(max_lines=10)
         return f"Scheduler with {total_jobs} (preprocess: {is_preprocess} and science: {is_science}) jobs: {in_ready} ready, {in_pending} pending, {in_processing} processing, and {in_completed} completed"
@@ -305,7 +305,7 @@ class Scheduler:
             try:
                 # Check preprocess count
                 cursor.execute(
-                    "SELECT COUNT(*) FROM scheduler WHERE status = ? AND type = ?", ("Processing", "preprocess")
+                    "SELECT COUNT(*) FROM scheduler WHERE status = ? AND config_type = ?", ("Processing", "preprocess")
                 )
                 preprocess = cursor.fetchone()[0]
 
@@ -315,7 +315,7 @@ class Scheduler:
 
                 # Enforce preprocess limit
                 if preprocess >= self.MAX_PREPROCESS:
-                    query += " AND type != ?"
+                    query += " AND config_type != ?"
                     params.append("preprocess")
 
                 # Check for high priority processing
@@ -381,7 +381,7 @@ class Scheduler:
 
         # Enforce preprocess limit
         if self.processing_preprocess >= self.MAX_PREPROCESS:
-            ready_jobs = ready_jobs[ready_jobs["type"] != "preprocess"]
+            ready_jobs = ready_jobs[ready_jobs["config_type"] != "preprocess"]
 
         # Check for high priority processing
         high_priority_processing = (
@@ -423,7 +423,7 @@ class Scheduler:
         self._schedule["status"][mask] = "Processing"
         self._schedule["process_start"][mask] = datetime.now().isoformat()
 
-        if row_dict.get("type") == "preprocess":
+        if row_dict.get("config_type") == "preprocess":
             self.processing_preprocess += 1
 
         overwrite = kwargs.get("overwrite", False) or row_dict["priority"] == 0
@@ -443,10 +443,10 @@ class Scheduler:
 
         if success:
             # Get job info
-            job_type = row_dict["type"]
+            config_type = row_dict["config_type"]
             dependent_indices = row_dict["dependent_idx"]
 
-            if job_type == "preprocess":
+            if config_type == "preprocess":
                 self.processing_preprocess -= 1
                 if self.processing_preprocess < 0:
                     self.processing_preprocess = 0
@@ -503,12 +503,12 @@ class Scheduler:
             with self._db_connection() as conn:
                 cursor = conn.cursor()
                 # Check if job is already marked as done to prevent duplicate processing
-                cursor.execute('SELECT status, dependent_idx, type FROM scheduler WHERE "index" = ?', (index,))
+                cursor.execute('SELECT status, dependent_idx, config_type FROM scheduler WHERE "index" = ?', (index,))
                 row = cursor.fetchone()
                 if not row:
                     return
 
-                current_status, dependent_idx_json, job_type = row
+                current_status, dependent_idx_json, config_type = row
                 # If already marked as done, skip to prevent duplicate increments
                 if current_status == "Completed" or current_status == "Failed":
                     return
@@ -732,18 +732,18 @@ class Scheduler:
         if self.use_system_queue:
             with self._db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('SELECT config, type, input_type FROM scheduler WHERE "index" = ?', (index,))
+                cursor.execute('SELECT config, config_type, input_type FROM scheduler WHERE "index" = ?', (index,))
                 row = cursor.fetchone()
                 if not row:
                     raise ValueError(f"Job with index {index} not found")
-                config, job_type, input_type = row
+                config, config_type, input_type = row
         else:
             # Find job by index in schedule
             mask = self._schedule["index"] == index
             if len(self._schedule[mask]) == 0:
                 raise ValueError(f"Job with index {index} not found")
             config = self._schedule["config"][mask][0]
-            job_type = self._schedule["type"][mask][0]
+            config_type = self._schedule["config_type"][mask][0]
             input_type = self._schedule["input_type"][mask][0]
 
         is_too = str(input_type).lower() == "too" or "_ToO_" in config
@@ -864,12 +864,12 @@ class Scheduler:
 
                     cursor.execute(
                         """INSERT INTO scheduler 
-                           ("index", config, type, input_type, is_ready, priority, readiness, status, dependent_idx, pid, original_status, process_start, process_end)
+                           ("index", config, config_type, input_type, is_ready, priority, readiness, status, dependent_idx, pid, original_status, process_start, process_end)
                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             int(row["index"]),
                             str(row["config"]),
-                            str(row["type"]),
+                            str(row["config_type"]),
                             str(row["input_type"]),
                             1 if row["is_ready"] else 0,
                             int(row["priority"]),
@@ -903,12 +903,12 @@ class Scheduler:
             cursor = conn.cursor()
             # Get all jobs with PIDs that are in Processing status
             cursor.execute(
-                'SELECT "index", pid, type FROM scheduler WHERE status = ? AND pid IS NOT NULL AND pid != 0',
+                'SELECT "index", pid, config_type FROM scheduler WHERE status = ? AND pid IS NOT NULL AND pid != 0',
                 ("Processing",),
             )
             processing_jobs = cursor.fetchall()
 
-            for job_index, pid, job_type in processing_jobs:
+            for job_index, pid, config_type in processing_jobs:
                 # Check if process is still alive
                 if not self._is_process_alive(pid):
                     # Process is dead, revert to Ready state
@@ -933,7 +933,7 @@ class Scheduler:
         for job in processing_jobs:
             pid = job["pid"]
             job_index = job["index"]
-            job_type = job["type"]
+            config_type = job["config_type"]
 
             # Check if process is still alive
             if not self._is_process_alive(pid):
