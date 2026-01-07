@@ -92,6 +92,9 @@ def add_suffix(filename: str | list[str], suffix: str | list[str]) -> str | list
     if isinstance(suffix, str):
         return _add_suffix(filename, suffix)
 
+    if suffix is None:
+        return filename
+
     raise ValueError(f"Invalid suffix type: {type(suffix)}")
 
 

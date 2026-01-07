@@ -39,7 +39,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
     caching and lazy initialization. It also provides convenient syntactic sugar
     such as `output_dir_to_string`, `output_dir_to_path`, etc.
 
-    Currently lacks masterframe support
+    Currently lacks masterframe, config support
     """
 
     def __init__(self, input: Union[str, Path, list[str | Path]] = None, *, working_dir=None, is_too=False):
@@ -49,9 +49,8 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         self._config = None
         self._config = None
         self._input_files: list[str] = None
-        self._is_too = is_too  # TODO: global flag, not vertorized, per image flag
 
-        self._handle_input(input)
+        self._handle_input(input, is_too=is_too)
         self.select_output_dir(working_dir=working_dir, is_too=is_too)
 
         self.define_file_independent_paths(is_too=is_too)
@@ -59,7 +58,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         if not self._file_dep_initialized and self._input_files:
             self.define_file_dependent_paths()
 
-    def _handle_input(self, input):
+    def _handle_input(self, input, is_too=False):
         """init with obs_parmas and config are ad-hoc. Will be changed to always take filenames"""
 
         if input is None:
@@ -82,6 +81,18 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
                 self.name = NameHandler(input)
             except Exception as e:
                 raise PipelineError(f"NameHandler failure: not pipeline file.\n{input!r}:\n{e}")
+
+        self._is_too_vectorized = [False] * len(input) if isinstance(input, list) else [is_too]
+        for i, (input_file, typ) in enumerate(zip(self._input_files, self.name.type)):
+            if "raw" in typ:
+                if "_ToO_" in input_file:
+                    self._is_too_vectorized[i] = True
+
+            if "calibrated" in typ:
+                if const.TOO_PROCESSED_DIR in input_file:
+                    self._is_too_vectorized[i] = True
+
+            # TODO: other types are not handled yet
 
     def __getattr__(self, name):
         """
@@ -393,10 +404,8 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
             if hasattr(self, "_preproc_config_stem") and self._preproc_config_stem
             else "preproc_config"
         )
-        if self._is_too:
-            return add_suffix(preproc_config_stems, self.name.obj)
-        else:
-            return preproc_config_stems
+        suffixes = [obj if is_too else None for obj, is_too in zip(self.name.obj, self._is_too_vectorized)]
+        return add_suffix(preproc_config_stems, suffixes)
 
     @property
     def preproc_output_yml(self) -> str | List[str]:
@@ -418,30 +427,30 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         #     for obj, filte, unit, date in zip(self.name.obj, self.name.filter, self.name.unit, self.name.date)
         # ]
 
-        if self._is_too:
-            # assumes self._input_files includes all ToO images
-            too_time = NameHandler.calculate_too_time(self._input_files)
-        else:
-            too_time = None
+        # assumes is_too images are all from the same group
+        too_time = NameHandler.calculate_too_time(
+            [f for f, is_too in zip(self._input_files, self._is_too_vectorized) if is_too]
+        )
 
-        if self._input_files:
-            yml_basenames = []
-            for i in range(len(self._input_files)):
-                obj = self._get_name_property_at_index("obj", i)
-                filte = self._get_name_property_at_index("filter", i)
-                # unit = self._get_property_at_index("unit", i)
-                # date = self._get_property_at_index("date", i)
-                nightdate = self._get_name_property_at_index("nightdate", i)
+        if not self._input_files:
+            return bjoin(self.output_parent_dir, "sciproc_config.yml")
 
-                yml_stem = "_".join([obj, filte, nightdate])
-                if too_time:
-                    yml_basename = f"{yml_stem}_ToO_{too_time}.yml"
-                else:
-                    yml_basename = yml_stem + ".yml"
-                yml_basenames.append(yml_basename)
+        yml_basenames = []
+        for i in range(len(self._input_files)):
+            obj = self._get_name_property_at_index("obj", i)
+            filte = self._get_name_property_at_index("filter", i)
+            # unit = self._get_property_at_index("unit", i)
+            # date = self._get_property_at_index("date", i)
+            nightdate = self._get_name_property_at_index("nightdate", i)
 
-            return bjoin(self._output_dir, yml_basenames)
-        return bjoin(self.output_parent_dir, "sciproc_config.yml")
+            yml_stem = "_".join([obj, filte, nightdate])
+            if self._is_too_vectorized[i]:
+                yml_basename = f"{yml_stem}_ToO_{too_time}.yml"
+            else:
+                yml_basename = yml_stem + ".yml"
+            yml_basenames.append(yml_basename)
+
+        return bjoin(self._output_dir, yml_basenames)
 
     @property
     def sciproc_output_log(self):
@@ -556,12 +565,12 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
     def imsubtract(self):
         return PathImsubtract(self, self._config)
 
-    def _raw_dir(self, i):
+    def _raw_dir(self, i, is_too=False):
         unit = self._get_name_property_at_index("unit", i)
         nightdate = self._get_name_property_at_index("nightdate", i)
         n_binning = self._get_name_property_at_index("n_binning", i)
         gain = self._get_name_property_at_index("gain", i)
-        root = find_raw_path(unit, nightdate, n_binning, gain, is_too=self._is_too)
+        root = find_raw_path(unit, nightdate, n_binning, gain, is_too=is_too)
         return root
 
     @property
@@ -581,7 +590,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
                 paths.append(os.path.join(root, basename))
             elif "calibrated" in typ[0]:
                 # original was processed → conjugate is raw
-                root = self._raw_dir(i)
+                root = self._raw_dir(i, is_too=self._is_too_vectorized[i])
                 paths.append(os.path.join(root, basename))
             else:
                 paths.append(input)

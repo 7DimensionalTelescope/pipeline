@@ -23,9 +23,7 @@ dirs_to_check_existence = [
     SCAMP_QUERY_DIR,
 ]
 
-dirs_to_check_contents = [
-    ASTRM_TILE_REF_DIR,
-]
+dirs_to_check_contents = list(REQUISITE_DIRS)
 
 
 for dir in dirs_to_check_existence:
