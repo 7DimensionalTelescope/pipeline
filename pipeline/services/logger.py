@@ -67,6 +67,8 @@ class Logger:
         self._original_stderr = sys.stderr
         self._original_excepthook = sys.excepthook
 
+        self.database = None
+
         # Redirect stdout and stderr to the logger only if requested
         if redirect_stdout:
             sys.stdout = StdoutToLogger(self)
@@ -259,6 +261,10 @@ class Logger:
             msg (str): Warning message to log
             **kwargs: Additional keyword arguments for logging
         """
+        if self.database is not None:
+            code = kwargs.pop("code", 999)
+            self.database.add_exception_code(code_type="warning", code_value=code)
+
         self.logger.warning(msg, **kwargs)
         # self.send_slack(msg, "WARNING")
 
@@ -273,6 +279,10 @@ class Logger:
         # Only use exc_info if explicitly requested or if there's an exception
         if "exc_info" not in kwargs:
             kwargs["exc_info"] = False
+        if self.database is not None:
+            code = kwargs.pop("code", 999)
+            self.database.add_exception_code(code_type="error", code_value=code)
+
         self.logger.error(msg, **kwargs)
         # self.send_slack(msg, "ERROR")
 
@@ -287,6 +297,10 @@ class Logger:
         # Only use exc_info if explicitly requested or if there's an exception
         if "exc_info" not in kwargs:
             kwargs["exc_info"] = False
+        if self.database is not None:
+            code = kwargs.pop("code", 999)
+            self.database.add_exception_code(code_type="error", code_value=code)
+
         self.logger.critical(msg, **kwargs)
         # self.send_slack(msg, "CRITICAL")
 

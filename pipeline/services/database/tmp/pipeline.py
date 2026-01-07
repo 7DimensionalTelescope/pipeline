@@ -22,7 +22,7 @@ class PipelineDB(BaseDatabase):
 
     # ==================== PIPELINE DATA MANAGEMENT ====================
 
-    def create_pipeline_data(self, pipeline_data: PipelineData) -> int:
+    def create_process_data(self, pipeline_data: PipelineData) -> int:
         """Create a new pipeline data record or update existing one"""
 
         with self.get_connection() as conn:
@@ -39,9 +39,9 @@ class PipelineDB(BaseDatabase):
 
             if existing_pipeline:
                 # Update existing record
-                pipeline_id = existing_pipeline
-                self.update_pipeline_data(pipeline_id, **pipeline_data.to_dict())
-                return pipeline_id
+                process_status_id = existing_pipeline
+                self.update_pipeline_data(process_status_id, **pipeline_data.to_dict())
+                return process_status_id
             else:
                 # Create new record
                 # Prepare parameters
@@ -85,7 +85,7 @@ class PipelineDB(BaseDatabase):
 
     def read_pipeline_data(
         self,
-        pipeline_id: Optional[int] = None,
+        process_status_id: Optional[int] = None,
         tag_id: Optional[str] = None,
         run_date: Optional[str] = None,
         data_type: Optional[str] = None,
@@ -103,9 +103,9 @@ class PipelineDB(BaseDatabase):
                 where_clauses = []
                 params = {}
 
-                if pipeline_id is not None:
-                    where_clauses.append("id = %(pipeline_id)s")
-                    params["pipeline_id"] = pipeline_id
+                if process_status_id is not None:
+                    where_clauses.append("id = %(process_status_id)s")
+                    params["process_status_id"] = process_status_id
 
                 if tag_id:
                     where_clauses.append("tag_id = %(tag_id)s")
@@ -166,7 +166,7 @@ class PipelineDB(BaseDatabase):
                     query += " WHERE " + " AND ".join(where_clauses)
 
                 # If specific ID is requested, return single record
-                if pipeline_id is not None:
+                if process_status_id is not None:
                     query += " LIMIT 1"
                     row = self._execute_query(query, params)[0] if self._execute_query(query, params) else None
 
@@ -191,7 +191,7 @@ class PipelineDB(BaseDatabase):
         except Exception as e:
             raise PipelineDBError(f"Failed to read pipeline data: {e}")
 
-    def update_pipeline_data(self, pipeline_id: int, **kwargs) -> bool:
+    def update_pipeline_data(self, process_status_id: int, **kwargs) -> bool:
         """Update pipeline data record"""
         try:
             with self.get_connection() as conn:
@@ -200,7 +200,7 @@ class PipelineDB(BaseDatabase):
 
                 # Build SET clause
                 set_clauses = []
-                params = {"pipeline_id": pipeline_id}
+                params = {"process_status_id": process_status_id}
 
                 for key, value in kwargs.items():
                     # Map Python field names to database column names
@@ -226,7 +226,7 @@ class PipelineDB(BaseDatabase):
                 query = f"""
                     UPDATE pipeline_process 
                     SET {', '.join(set_clauses)}
-                    WHERE id = %(pipeline_id)s
+                    WHERE id = %(process_status_id)s
                 """
 
                 with conn.cursor() as cur:
@@ -235,26 +235,26 @@ class PipelineDB(BaseDatabase):
                     conn.commit()
 
                     if rows_affected == 0:
-                        raise PipelineDBError(f"No pipeline record found with ID {pipeline_id}")
+                        raise PipelineDBError(f"No pipeline record found with ID {process_status_id}")
 
                     return True
 
         except Exception as e:
             raise PipelineDBError(f"Failed to update pipeline data: {e}")
 
-    def delete_pipeline_data(self, pipeline_id: int) -> bool:
+    def delete_pipeline_data(self, process_status_id: int) -> bool:
         """Delete a pipeline data record"""
         try:
             with self.get_connection() as conn:
                 query = "DELETE FROM pipeline_process WHERE id = %s"
 
                 with conn.cursor() as cur:
-                    cur.execute(query, (pipeline_id,))
+                    cur.execute(query, (process_status_id,))
                     rows_affected = cur.rowcount
                     conn.commit()
 
                     if rows_affected == 0:
-                        raise PipelineDBError(f"No pipeline record found with ID {pipeline_id}")
+                        raise PipelineDBError(f"No pipeline record found with ID {process_status_id}")
 
                     return True
 
@@ -286,7 +286,7 @@ class PipelineDB(BaseDatabase):
         except Exception as e:
             raise PipelineDBError(f"Failed to find existing pipeline record: {e}")
 
-    def add_warning(self, pipeline_id: int, count: int = 1) -> bool:
+    def add_warning(self, process_status_id: int, count: int = 1) -> bool:
         """Add warning count to pipeline data record"""
         try:
             with self.get_connection() as conn:
@@ -297,19 +297,19 @@ class PipelineDB(BaseDatabase):
                 """
 
                 with conn.cursor() as cur:
-                    cur.execute(query, (count, pipeline_id))
+                    cur.execute(query, (count, process_status_id))
                     rows_affected = cur.rowcount
                     conn.commit()
 
                     if rows_affected == 0:
-                        raise PipelineDBError(f"No pipeline record found with ID {pipeline_id}")
+                        raise PipelineDBError(f"No pipeline record found with ID {process_status_id}")
 
                     return True
 
         except Exception as e:
             raise PipelineDBError(f"Failed to add warning: {e}")
 
-    def add_error(self, pipeline_id: int, count: int = 1) -> bool:
+    def add_error(self, process_status_id: int, count: int = 1) -> bool:
         """Add error count to pipeline data record"""
         try:
             with self.get_connection() as conn:
@@ -320,29 +320,29 @@ class PipelineDB(BaseDatabase):
                 """
 
                 with conn.cursor() as cur:
-                    cur.execute(query, (count, pipeline_id))
+                    cur.execute(query, (count, process_status_id))
                     rows_affected = cur.rowcount
                     conn.commit()
 
                     if rows_affected == 0:
-                        raise PipelineDBError(f"No pipeline record found with ID {pipeline_id}")
+                        raise PipelineDBError(f"No pipeline record found with ID {process_status_id}")
 
                     return True
 
         except Exception as e:
             raise PipelineDBError(f"Failed to add error: {e}")
 
-    def delete_pipeline_cascade(self, pipeline_id: int) -> bool:
+    def delete_pipeline_cascade(self, process_status_id: int) -> bool:
         """Delete pipeline data and associated QA data"""
         try:
             # First delete associated QA data
             from .qa import QADB
 
             qa_db = QADB(self.db_params)
-            qa_db.delete_qa_data_by_pipeline_id(pipeline_id)
+            qa_db.delete_qa_data_by_process_status_id(process_status_id)
 
             # Then delete pipeline data
-            return self.delete_pipeline_data(pipeline_id)
+            return self.delete_pipeline_data(process_status_id)
 
         except Exception as e:
             raise PipelineDBError(f"Failed to delete pipeline: {e}")

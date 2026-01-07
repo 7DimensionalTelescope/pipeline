@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 SOURCE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ROOT_DIR = os.path.abspath(os.path.join(SOURCE_DIR, ".."))
 REF_DIR = os.path.abspath(os.path.join(ROOT_DIR, "ref"))
-SCRIPTS_DIR = os.path.join(SOURCE_DIR, "bin")  # "scripts"
+SCRIPTS_DIR = os.path.join(SOURCE_DIR, "cli")  # "scripts"
 
 # load environment variables from .env file
 load_dotenv(os.path.join(ROOT_DIR, ".env"), override=True)
@@ -49,9 +49,19 @@ PIPELINE_DIRS = {
     TOO_FACTORY_DIR,
 }
 
+REQUISITE_DIRS = {
+    ASTRM_TILE_REF_DIR,
+    ASTRM_CUSTOM_REF_DIR,
+    GAIA_ROOT_DIR,
+    SCAMP_QUERY_DIR,
+    PHOT_REF_DIR,
+    GAIA_REF_DIR,
+    REF_IMAGE_DIR,
+}
+
 
 # Storage Configuration
-DISK_CHANGE_DATE = "20260201"
+DISK_CHANGE_NIGHTDATE = "2026-02-01"
 
 
 # database access

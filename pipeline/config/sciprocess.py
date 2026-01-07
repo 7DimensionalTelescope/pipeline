@@ -293,7 +293,7 @@ class SciProcConfiguration(BaseConfig):
 
             if config_file:
                 try:
-                    too_data = too_db.read_too_data(config_file=config_file)
+                    too_data = too_db.read_data(config_file=config_file)
                     if too_data and too_db.too_id:
                         too_db.update_too_data(
                             too_id=too_db.too_id, transfer_time=earliest_time, observation_time=observation_time

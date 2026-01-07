@@ -537,7 +537,19 @@ def acquire_available_gpu(device_id=None, gpu_threshold=400, blocking=True, time
 
 
 class SortedGroupDict(UserDict):
-    """A dictionary that sorts its values when iterating."""
+    """
+    A dictionary that has sorted PreprocessGroups and ScienceGroups for iteration.
+
+    Iterating over it gives sorted PreprocessGroups and ScienceGroups.
+    Its values() method returns a sorted list of PreprocessGroups and ScienceGroups.
+
+    The sorted order is:
+    1. PreprocessGroup items first, sorted by number of sci_keys (descending)
+    2. ScienceGroup items second, sorted by number of image_files (descending)
+
+    This ensures preprocessing groups with more science dependencies are processed first,
+    and science groups with more images are processed first within their category.
+    """
 
     @overload
     def __getitem__(self, key: int) -> PreprocessGroup | ScienceGroup: ...
@@ -552,14 +564,52 @@ class SortedGroupDict(UserDict):
             return super().__getitem__(key)
 
     def __iter__(self) -> Iterator[PreprocessGroup | ScienceGroup]:
-        # First sort by type (PreprocessGroup first, then ScienceGroup)
-        # Then within each type, sort by their respective criteria
+        """
+        Returns an iterator over groups sorted by type and priority.
+
+        Iteration order:
+        1. PreprocessGroup items first, sorted by number of sci_keys (descending)
+        2. ScienceGroup items second, sorted by number of image_files (descending)
+
+        This ensures preprocessing groups with more science dependencies are processed first,
+        and science groups with more images are processed first within their category.
+
+        Yields:
+            PreprocessGroup | ScienceGroup: Groups in sorted order.
+        """
         return iter(self._get_sorted_values())
 
     def values(self) -> list[PreprocessGroup | ScienceGroup]:
+        """
+        Returns a list of groups sorted by type and priority.
+
+        Sorting order:
+        1. PreprocessGroup items first, sorted by number of sci_keys (descending)
+        2. ScienceGroup items second, sorted by number of image_files (descending)
+
+        This ensures preprocessing groups with more science dependencies are processed first,
+        and science groups with more images are processed first within their category.
+
+        Returns:
+            list[PreprocessGroup | ScienceGroup]: Sorted list of groups.
+        """
         return self._get_sorted_values()
 
     def items(self) -> list[tuple[str | None, PreprocessGroup | ScienceGroup]]:
+        """
+        Returns a list of (key, group) tuples sorted by type and priority.
+
+        The key is a string extracted from the group's `key` attribute:
+        - For PreprocessGroup: string from PathHandler.output_name (e.g., preproc config stem)
+          or fallback format "mfg_{i}" (e.g., "mfg_0", "mfg_1")
+        - For ScienceGroup: string from sci_dict keys, typically in format
+          "nightdate_obj_filter" (e.g., "20250102_T08285_m425")
+        - Returns None if the group doesn't have a `key` attribute (unlikely in practice)
+
+        Returns:
+            list[tuple[str | None, PreprocessGroup | ScienceGroup]]: Sorted list of
+            (key, group) pairs, with PreprocessGroup items first, then ScienceGroup items.
+        """
         sorted_values = self._get_sorted_values()
         return [(getattr(v, "key", None), v) for v in sorted_values]
 
@@ -594,10 +644,21 @@ class SortedGroupDict(UserDict):
 
 class PreprocessGroup:
     def __init__(self, key):
+        """
+        Initialize a PreprocessGroup.
+
+        Args:
+            key: String identifier for this preprocessing group (e.g., from PathHandler.output_name).
+
+        Attributes:
+            sci_keys: List of strings representing ScienceGroup keys that depend on this
+                preprocessing group. Used for scheduling dependencies and priority sorting.
+                Each sci_key holds science images to be processed together.
+        """
         self.key = key
         self._image_files = []
         self._config = None
-        self.sci_keys = []
+        self.sci_keys: list[str] = []
 
     def __lt__(self, other):
         if isinstance(other, PreprocessGroup):
@@ -635,7 +696,7 @@ class PreprocessGroup:
         else:
             raise ValueError("Invalid filepath type")
 
-    def add_sci_keys(self, keys):
+    def add_sci_keys(self, keys: str):
         self.sci_keys.append(keys)
 
     def create_config(self, overwrite=False, is_too=False):

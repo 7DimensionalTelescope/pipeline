@@ -3,15 +3,13 @@ import glob
 import time
 import pprint
 import threading
-from concurrent.futures import ThreadPoolExecutor
-from multiprocessing import cpu_count
 import numpy as np
 from astropy.io import fits
 import copy
 
 from .plotting import *
 from . import utils as prep_utils
-from .calc import record_statistics, delta_edge_center
+from .calc import record_statistics
 
 from ..utils import flatten, time_diff_in_seconds, atleast_1d
 from ..config import PreprocConfiguration
@@ -20,7 +18,7 @@ from ..services.setup import BaseSetup
 from ..const import HEADER_KEY_MAP
 from ..services.utils import acquire_available_gpu
 from ..services.checker import Checker
-from ..services.database import QAData
+from ..services.database.image_qa import ImageQATable
 from ..services.database.handler import DatabaseHandler
 from ..utils.header import add_padding, get_header
 from ..const import PipelineError
@@ -85,13 +83,10 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         self._use_gpu = use_gpu
 
         # Initialize DatabaseHandler
-        DatabaseHandler.__init__(
-            self,
-            add_database=add_database if not is_too else False,
-        )
+        DatabaseHandler.__init__(self, add_database=add_database if not is_too else False, logger=self.logger)
 
         if self.is_connected:
-            self.set_logger(logger)
+            self.logger.database = self.process_status
             self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
 
         self.is_too = is_too
@@ -141,7 +136,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
         # Create pipeline record in database
         if self.is_connected:
-            self.pipeline_id = self.create_pipeline_data(self.config_node, self.raw_groups, self.overwrite)
+            self.process_status_id = self.create_process_data(self.config_node, overwrite=self.overwrite)
 
     def log_group_manifest(self):
         for i, group in enumerate(self.raw_groups):
@@ -166,16 +161,16 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             st = time.time()
 
             # Reset errors and warnings at the start of processing
-            self.reset_errors_warnings()
+            self.process_status.reset_exceptions(self.process_status_id)
 
             # Update pipeline status to running
-            self.update_pipeline_progress(0, "running")
+            self.update_progress(0, "running")
 
             threads_for_making_plots = []
             for i in range(self._n_groups):
                 # Calculate progress percentage
                 progress = int((i / self._n_groups) * 100)
-                self.update_pipeline_progress(progress)
+                self.update_progress(progress)
 
                 self.logger.debug("\n" + "#" * 100 + f"\n{' '*30}Start processing group {i+1} / {self._n_groups}\n" + "#" * 100)  # fmt: skip
                 self.logger.debug(f"[Group {i+1}] [filter: exptime] {PathHandler.get_group_info(self.raw_groups[i])}")
@@ -209,7 +204,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                         f"[Group {i+1}] Error during masterframe generation or data reduction: {str(e)}", exc_info=False
                     )
                     self.logger.debug(traceback.format_exc())
-                    self.add_error()
+
                     self.logger.info(f"[Group {i+1}] Skipping to next group")
 
                 finally:
@@ -221,7 +216,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                     t.join()
 
             # Update pipeline status to completed
-            self.update_pipeline_progress(100, "completed")
+            self.update_progress(100, "completed")
 
             self.logger.info(f"Preprocessing completed in {time_diff_in_seconds(st)} seconds")
         except Exception as e:
@@ -346,16 +341,12 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 self.logger.warning(f"[Group {self._current_group+1}] {dtype} has no input or output data (to fetch)")
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_input: {input_file}")
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_output: {output_file}")
-                self.add_warning()
 
             if input_file:
 
-                qa_id = self.create_qa_data(
-                    dtype=dtype,
-                    raw_groups=self._original_raw_groups,
-                    current_group=self._current_group,
-                    key_to_index=self._key_to_index,
-                    output_file=getattr(self, f"{dtype}_output"),
+                qa_id = self.create_image_qa_data(
+                    getattr(self, f"{dtype}_output"),
+                    self.process_status_id,
                 )
 
                 self.logger.info(f"[Group {self._current_group+1}] Created QA data for {dtype} with ID: {qa_id}")
@@ -363,11 +354,11 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         self.logger.info(f"[Group {self._current_group+1}] Generation/Loading of masterframes completed in {time_diff_in_seconds(st)} seconds")  # fmt: skip
 
         # Update pipeline progress after masterframe processing
-        if self.has_pipeline_id:
+        if self.has_process_status_id:
             masterframe_progress = int(
                 (self._current_group + 1) / self._n_groups * 50
             )  # Masterframes are 50% of total work
-            self.update_pipeline_progress(masterframe_progress)
+            self.update_progress(masterframe_progress)
 
     def _generate_masterframe(self, dtype, device_id):
         """Generate & Save masterframe and sigma image"""
@@ -444,7 +435,6 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 f"[Group {self._current_group+1}] Making a plot for the current {dtype} and fetching a new one with better quality"
             )
             self.make_masterframe_plots(getattr(self, f"{dtype}_output"), dtype, self._current_group)
-            self.add_warning()
 
         return False
 
@@ -473,7 +463,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         existing_mframe_file = prep_utils.tolerant_search(template, dtype, max_offset=max_offset, future=True)
 
         if not existing_mframe_file:
-            self.add_error()
+
             self.logger.error(
                 f"[Group {self._current_group+1}] No pre-existing master {dtype} found in place of {template} within {max_offset} days"
             )
@@ -506,7 +496,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 self.logger.error(
                     f"[Group {self._current_group+1}] No pre-existing master flatdark found in place of {flatdark_template} within {max_offset} days"
                 )
-                self.add_error()
+
                 raise PipelineError(
                     f"No pre-existing master flatdark found in place of {flatdark_template} within {max_offset} days"
                 )
@@ -582,11 +572,11 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         )
 
         # Update pipeline progress after data reduction
-        if self.has_pipeline_id:
+        if self.has_process_status_id:
             data_reduction_progress = 50 + int(
                 (self._current_group + 1) / self._n_groups * 50
             )  # Data reduction is 50-100% of total work
-            self.update_pipeline_progress(data_reduction_progress)
+            self.update_progress(data_reduction_progress)
 
         # for raw_file, processed_file in zip(self.sci_input, self.sci_output):
         #     header = fits.getheader(raw_file)
@@ -655,7 +645,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                     plot_bias(bias_file)
                 else:
                     self.logger.warning(f"[Group {group_index+1}] Bias image does not exist. Skipping bias plot.")
-                    self.add_warning()
+
             else:
                 self.logger.info(f"[Group {group_index+1}] Skipping bias plot")
 
@@ -668,14 +658,14 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                     badpix = fits.getval(bpmask_file, "BADPIX", ext=1)
                     if badpix is None:
                         self.logger.warning(f"[Group {group_index+1}] Header missing BADPIX; using 1")
-                        self.add_warning()
+
                         badpix = 1
 
                     mask = fits.getdata(bpmask_file, ext=1) != badpix
                     fmask = mask.ravel()
                 else:
                     self.logger.warning(f"[Group {group_index+1}] BPMask image does not exist. Skipping bpmask plot.")
-                    self.add_warning()
+
                     fmask = None
             else:
                 self.logger.info(f"[Group {group_index+1}] Skipping bpmask plot")
@@ -687,7 +677,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                     plot_dark(dark_file, fmask)
                 else:
                     self.logger.warning(f"[Group {group_index+1}] Dark image does not exist. Skipping dark plot.")
-                    self.add_warning()
+
             else:
                 self.logger.info(f"[Group {group_index+1}] Skipping dark plot")
 
@@ -698,7 +688,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                     plot_flat(flat_file, fmask)
                 else:
                     self.logger.warning(f"[Group {group_index+1}] Flat image does not exist. Skipping flat plot.")
-                    self.add_warning()
+
             else:
                 self.logger.info(f"[Group {group_index+1}] Skipping flat plot")
 
@@ -723,7 +713,6 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 self.logger.info(f"[Group {group_index+1}] Skipping science plot")
         except Exception as e:
             self.logger.error(f"[Group {group_index+1}] Error making plots: {e}")
-            self.add_warning()
 
     def update_bpmask(self, sanity=True):
         header = self.get_header("dark")

@@ -215,7 +215,7 @@ class QAData:
     # Required fields
     qa_id: str
     imagetyp: str  # "masterframe" or "science"
-    pipeline_id_id: int
+    process_status_id_id: int
     date_obs: Optional[str] = None
     # Optional fields
     qa_type: Optional[str] = None  # "bias", "dark", "flat" for masterframe; "science" for science
@@ -311,7 +311,7 @@ class QAData:
             stdnumb=row[19] if len(row) > 19 else None,
             created_at=row[20] if len(row) > 20 else None,
             updated_at=row[21] if len(row) > 21 else None,
-            pipeline_id_id=row[22] if len(row) > 22 else None,
+            process_status_id_id=row[22] if len(row) > 22 else None,
             edgevar=row[23] if len(row) > 23 else None,
             exptime=row[24] if len(row) > 24 else None,
             filename=row[25] if len(row) > 25 else None,
@@ -346,7 +346,7 @@ class QAData:
         return data
 
     @classmethod
-    def from_header(cls, header: str | Header, imagetyp, qa_type, pipeline_id, filename):
+    def from_header(cls, header: str | Header, imagetyp, qa_type, process_status_id, filename):
 
         if not isinstance(header, Header):
             from astropy.io import fits
@@ -359,7 +359,7 @@ class QAData:
             qa_id=qa_id,
             imagetyp=imagetyp,
             qa_type=qa_type.lower(),
-            pipeline_id_id=pipeline_id,
+            process_status_id_id=process_status_id,
         )
 
         if "DATE-OBS" in header:

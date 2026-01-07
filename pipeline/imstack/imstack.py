@@ -21,7 +21,7 @@ from .. import external
 from ..utils.tile import is_ris_tile, find_ris_tile
 
 from ..services.database.handler import DatabaseHandler
-from ..services.database.table import QAData
+from ..services.database.image_qa import ImageQATable
 from ..services.checker import Checker, SanityFilterMixin
 
 from .const import ZP_KEY, CORE_KEYS
@@ -55,15 +55,15 @@ class ImStack(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         )
 
         if self.is_connected:
-            self.set_logger(logger)
-            self.pipeline_id = self.create_pipeline_data(self.config_node)
+            self.logger.database = self.process_status
+            self.process_status_id = self.create_process_data(self.config_node)
             if self.too_id is not None:
                 self.logger.debug(f"Initialized DatabaseHandler for ToO data management, ToO ID: {self.too_id}")
             else:
                 self.logger.debug(
-                    f"Initialized DatabaseHandler for pipeline and QA data management, Pipeline ID: {self.pipeline_id}"
+                    f"Initialized DatabaseHandler for pipeline and QA data management, Pipeline ID: {self.process_status_id}"
                 )
-            self.update_pipeline_progress(60, "imstack-configured")
+            self.update_progress(60, "imstack-configured")
 
     @classmethod
     def from_list(cls, input_images, working_dir=None):
@@ -101,65 +101,60 @@ class ImStack(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
 
             # background subtraction
             self.bkgsub()
-            self.update_pipeline_progress(61, "imstack-bkgsub-completed")
+            self.update_progress(61, "imstack-bkgsub-completed")
             # zero point scaling
             self.zpscale()
-            self.update_pipeline_progress(62, "imstack-zpscale-completed")
+            self.update_progress(62, "imstack-zpscale-completed")
 
             if self.config_node.imstack.weight_map:
                 self.calculate_weight_map(device_id=device_id)
-                self.update_pipeline_progress(63, "imstack-calculate-weight-map-completed")
+                self.update_progress(63, "imstack-calculate-weight-map-completed")
 
             # replace hot pixels
             if self.config_node.imstack.apply_bpmask:
                 self.apply_bpmask(device_id=device_id)
-                self.update_pipeline_progress(64, "imstack-apply-bpmask-completed")
+                self.update_progress(64, "imstack-apply-bpmask-completed")
 
             # re-registration
             if self.config_node.imstack.joint_wcs:
                 self.joint_registration()
-                self.update_pipeline_progress(65, "imstack-joint-registration-completed")
+                self.update_progress(65, "imstack-joint-registration-completed")
 
             # seeing convolution
             if self.config_node.imstack.convolve:
                 self.prepare_convolution()
                 self.run_convolution(device_id=device_id)
-                self.update_pipeline_progress(66, "imstack-run-convolution-completed")
+                self.update_progress(66, "imstack-run-convolution-completed")
 
             # swarp imcombine
             self.stack_with_swarp()
-            self.update_pipeline_progress(68, "imstack-stack-with-swarp-completed")
+            self.update_progress(68, "imstack-stack-with-swarp-completed")
 
             self.plot_stacked_image()
-            self.update_pipeline_progress(69, "imstack-plot-stacked-image-completed")
+            self.update_progress(69, "imstack-plot-stacked-image-completed")
 
-            if self.is_connected and self.pipeline_id is not None:
+            if self.is_connected and self.process_status_id is not None:
                 stacked_image = self.config_node.imstack.stacked_image
                 if stacked_image and os.path.exists(stacked_image):
-                    self.qa_id = self.create_qa_data("science", image=stacked_image, output_file=stacked_image)
+                    self.qa_id = self.create_image_qa_data(stacked_image, process_status_id=self.process_status_id)
 
             # Update QA data from header if database is connected
             if self.is_connected and self.qa_id is not None:
                 stacked_image = self.config_node.imstack.stacked_image
                 if stacked_image and os.path.exists(stacked_image):
-                    qa_data = QAData.from_header(
-                        fits.getheader(stacked_image),
-                        "science",
-                        "science",
-                        self.pipeline_id,
-                        os.path.basename(stacked_image),
+                    qa_data = ImageQATable.from_file(
+                        stacked_image,
+                        process_status_id=self.process_status_id,
                     )
-                    qa_dict = qa_data.to_dict()
-                    qa_dict["qa_id"] = self.qa_id
-                    self.qa_db.update_qa_data(**qa_dict)
+                    self.image_qa.update_data(qa_data.id, **qa_data.to_dict())
 
-            self.update_pipeline_progress(70, "imstack-completed")
+            self.update_progress(70, "imstack-completed")
 
             self.config_node.flag.combine = True
             self.logger.info(f"'ImStack' is Completed in {time_diff_in_seconds(self._st)} seconds")
         except Exception as e:
             self.logger.error(f"Error during imstack processing: {str(e)}")
-            self.add_error()
+
             raise
         # self.logger.debug(MemoryMonitor.log_memory_usage)
 
@@ -226,17 +221,17 @@ class ImStack(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
 
         if len(objs) != 1:
             self.logger.warning("Multiple OBJECT found. Using the first one.")
-            self.add_warning()
+
         self.filte = filters[0]
         if len(filters) != 1:
             self.logger.warning("Multiple FILTER found. Using the first one.")
-            self.add_warning()
+
         if len(egains) != 1:
             self.logger.warning("Multiple EGAIN found. Using the first one.")
-            self.add_warning()
+
         if len(camera_gains) != 1:
             self.logger.warning("Multiple GAIN found. Using the first one.")
-            self.add_warning()
+
         #   Hard coding for the UDS field
         # self.gain_default = 0.78
 
@@ -459,7 +454,7 @@ class ImStack(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             badpix = mask_header["BADPIX"]
             self.logger.debug(f"BADPIX found in header. Using badpix {badpix}.")
         else:
-            self.add_warning()
+
             self.logger.warning("BADPIX not found in header. Using default value 0.")
         return mask_file, badpix
 
@@ -697,7 +692,7 @@ class ImStack(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
 
                 # compute
                 if not all([os.path.exists(f) for f in atleast_1d(weight_list)]):
-                    self.add_warning()
+
                     self.logger.warning(f"Weight map not found for all images. Skipping.")
 
                 convolve_fft(

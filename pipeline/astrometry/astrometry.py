@@ -24,7 +24,7 @@ from ..config.utils import get_key
 from ..services.setup import BaseSetup
 from ..io.cfitsldac import write_ldac
 from ..services.database.handler import DatabaseHandler
-from ..services.database.table import QAData
+from ..services.database.image_qa import ImageQATable
 from ..services.checker import Checker
 
 from .utils import (
@@ -98,18 +98,18 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         )
 
         if self.is_connected:
-            self.set_logger(logger)
-            self.pipeline_id = self.create_pipeline_data(self.config_node)
+            self.logger.database = self.process_status
+            self.process_status_id = self.create_process_data(self.config_node)
             if self.too_id is not None:
                 self.logger.debug(f"Initialized DatabaseHandler for ToO data management, ToO ID: {self.too_id}")
             else:
                 self.logger.debug(
-                    f"Initialized DatabaseHandler for pipeline and QA data management, Pipeline ID: {self.pipeline_id}"
+                    f"Initialized DatabaseHandler for pipeline and QA data management, Pipeline ID: {self.process_status_id}"
                 )
-            self.update_pipeline_progress(0, "astrometry-configured")
-            if self.pipeline_id is not None:
+            self.update_progress(0, "astrometry-configured")
+            if self.process_status_id is not None:
                 for image in self.input_images:
-                    qa_id = self.create_qa_data("science", image=image, output_file=image)
+                    qa_id = self.create_image_qa_data(image, self.process_status_id)
                     self.qa_ids.append(qa_id)
 
     @classmethod
@@ -205,7 +205,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
                     # run initial solve: scamp or solve-field
                     self.run_scamp(prep_cat, scamp_preset="prep", joint=joint_scamp, overwrite=overwrite)
-                    self.update_pipeline_progress(5, "astrometry-scamp-prep")
+                    self.update_progress(5, "astrometry-scamp-prep")
 
                     if evaluate_prep_sol:
                         self.evaluate_solution(
@@ -225,11 +225,11 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                         prep_cat, image_info, evaluate_prep_sol, use_threading, max_scamp, overwrite=overwrite
                     )
 
-                    self.update_pipeline_progress(10, "astrometry-scamp-main")
+                    self.update_progress(10, "astrometry-scamp-main")
                     self.logger.info(f"Scamp iteration completed [{i+1}/{len(self.prep_cats)}] for {prep_cat}")
 
                     if image_info.bad:
-                        self.add_warning()
+
                         self.logger.warning(
                             f"Bad solution. UNMATCH: {image_info.rsep_stats.unmatched_fraction if image_info.rsep_stats.unmatched_fraction is not None else 'None'}, "
                             f"RSEP_P95: {image_info.rsep_stats.separation_stats.P95 if image_info.rsep_stats.separation_stats.P95 is not None else 'None'} "
@@ -246,7 +246,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
                     # if evaluate_prep_sol:
                     #     self.evaluate_solution(suffix="prepwcs", use_threading=use_threading, export_eval_cards=True)
-                    self.add_warning()
+
                     self.logger.warning(e)
                     self.logger.warning(f"Solve-field triggered, better solution not guaranteed for {prep_cat}")
 
@@ -279,19 +279,16 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             self.evaluate_solution(
                 suffix="wcs", isep=True, use_threading=use_threading, scamp_preset="main", overwrite=overwrite
             )
-            self.update_pipeline_progress(15, "astrometry-scamp-main-eval")
+            self.update_progress(15, "astrometry-scamp-main-eval")
             # update the input image
             self.update_header()
-            self.update_pipeline_progress(20, "astrometry")
+            self.update_progress(20, "astrometry")
 
             if self.is_connected:
                 for image, qa_id in zip(self.input_images, self.qa_ids):
-                    qa_data = QAData.from_header(
-                        fits.getheader(image), "science", "science", self.pipeline_id, os.path.basename(image)
-                    )
-                    qa_dict = qa_data.to_dict()
-                    qa_dict["qa_id"] = qa_id
-                    qa_id = self.qa_db.update_qa_data(**qa_dict)
+                    qa_data = ImageQATable.from_file(image, process_status_id=self.process_status_id)
+                    # update_data expects (target_id, **kwargs)
+                    self.image_qa.update_data(qa_id, **qa_data.to_dict())
 
             self.config_node.flag.astrometry = True
 
@@ -301,7 +298,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             )
             self.logger.debug(MemoryMonitor.log_memory_usage)
         except Exception as e:
-            self.add_error()
+
             self.logger.error(f"Error during astrometry processing: {str(e)}", exc_info=True)
             raise
 
@@ -382,7 +379,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                 if evaluate_prep_sol:
                     self.evaluate_solution(suffix="prepwcs", use_threading=use_threading, export_eval_cards=True)
                 self.logger.warning(e)
-                self.add_warning()
+
                 self.run_solve_field(self.soft_links_to_input_images, self.solved_images)
                 if evaluate_prep_sol:
                     self.evaluate_solution(suffix="solvefieldwcs", use_threading=use_threading, export_eval_cards=True)
@@ -876,7 +873,6 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                 self.logger.debug(f"Updated FOV polygon. RA: {image_info.fov_ra}, Dec: {image_info.fov_dec}")
             except Exception as e:
                 self.logger.error(f"Failed to update FOV polygon for {image_info.image_path}: {e}", exc_info=True)
-                self.add_error()
 
             try:
                 eval_result = evaluate_single_wcs(
@@ -900,7 +896,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
             except Exception as e:
                 self.logger.error(f"Failed to evaluate solution for {input_image}: {e}", exc_info=True)
-                self.add_error()
+
                 raise
             return idx, eval_result
 
@@ -960,7 +956,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
         except Exception as e:
             self.logger.error(f"Failed to evaluate solution: {e}", exc_info=True)
-            self.add_error()
+
             # don't raise error
 
         self.logger.debug(f"Completed evaluate_solution")

@@ -86,7 +86,7 @@ def run_scidata_reduction(
             from .services.database.too import TooDB
 
             too_db = TooDB()
-            too_data = too_db.read_too_data(config.name)
+            too_data = too_db.read_data(config.name)
 
             if too_data.get("final_notice") == 0:
                 too_db.send_final_notice_email(too_data.get("id"))

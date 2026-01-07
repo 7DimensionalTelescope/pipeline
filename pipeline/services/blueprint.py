@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from ..utils import flatten
 from ..path import PathHandler
 from ..config.utils import get_filter_from_config
+from ..const.observation import BROAD_FILTERS
 
 from .utils import SortedGroupDict, PreprocessGroup, ScienceGroup
 
@@ -22,7 +23,7 @@ class Blueprint:
         is_too: bool = False,
         **kwargs,
     ):
-        self.groups: SortedGroupDict = SortedGroupDict()
+        self.groups = SortedGroupDict()
 
         self.is_too = is_too
 
@@ -176,8 +177,10 @@ class Blueprint:
         input_type = kwargs.get("input_type", input_type)
 
         for group in self.groups:
+            # group is PreprocessGroup
             if isinstance(group, ScienceGroup):
                 continue
+
             schedule.add_row(
                 [
                     idx,
@@ -198,6 +201,7 @@ class Blueprint:
             parent_idx = idx
             idx += 1
 
+            # add ScienceGroups that depend on this PreprocessGroup
             for scikey in group.sci_keys:
 
                 sci_group = self.groups[scikey]
@@ -208,11 +212,13 @@ class Blueprint:
 
                 filter_name = get_filter_from_config(sci_group.config)
 
-                if filter_name.startswith("m"):
-                    priority = base_priority
-                elif is_too:
-                    priority = 11
-                    schedule["priority"][parent_idx] = 12
+                # keep base_priority for medium-band (ToO & Daily) and Daily broadband
+                priority = base_priority
+
+                # highest priority for ToO broadband
+                if is_too and filter_name in BROAD_FILTERS:
+                    priority = 11  # sciprocess
+                    schedule["priority"][parent_idx] = 12  # preprocess
 
                 schedule.add_row(
                     [

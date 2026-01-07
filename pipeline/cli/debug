@@ -1,0 +1,10 @@
+#!/home/pipeline-stable/.conda/envs/pipeline/bin/python
+
+import os
+from pipeline.services.database import RawImageQuery
+
+query = RawImageQuery()
+
+with open("~/systemd_queue_debug.txt", "w") as f:
+    f.write("test")
+    f.write(f"is_connected: {query.is_connected()}")

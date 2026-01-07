@@ -1296,7 +1296,7 @@ def make_too_output(too_id, sky_position=None, image_type="difference", verbose=
     from ..services.database.too import TooDB
 
     too_db = TooDB()
-    too_data = too_db.read_too_data_by_id(too_id)
+    too_data = too_db.read_data_by_id(too_id)
     if too_data is None:
         raise ValueError(f"Too data not found for ID: {too_id}")
 

@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from astropy.table import Table, vstack
 
-from ..const import SOURCE_DIR, NUM_GPUS, SCHEDULER_DB_PATH, QUEUE_SOCKET_PATH
+from ..const import SCRIPTS_DIR, NUM_GPUS, SCHEDULER_DB_PATH, QUEUE_SOCKET_PATH
 
 
 class Scheduler:
@@ -82,17 +82,17 @@ class Scheduler:
 
             basename = os.path.basename(config)
 
+            # Determine job_type based on the config name
             discriminator = basename.split("_")[0]
-
             if bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", discriminator)):
-                ctype = "preprocess"
+                job_type = "preprocess"
                 priority = base_priority + 1
             else:
-                ctype = "science"
+                job_type = "science"
                 priority = base_priority
 
             sc._schedule.add_row(
-                [idx, config, ctype, "user-input", True, priority, 100, "Ready", [], 0, "Ready", "", ""]
+                [idx, config, job_type, "user-input", True, priority, 100, "Ready", [], 0, "Ready", "", ""]
             )
 
         return sc
@@ -754,21 +754,25 @@ class Scheduler:
         processes = kwargs.get("processes", ["astrometry", "photometry", "combine", "subtract"])
 
         if job_type == "preprocess":
-            cmd = [f"{SOURCE_DIR}/bin/preprocess", "-config", config, "-make_plots"]
+            cmd = [f"{SCRIPTS_DIR}/preprocess", "-config", config, "-make_plots"]
             if is_too:
                 cmd.append("-is_too")
             if overwrite or overwrite_preprocess:
                 cmd.append("-overwrite")
             if kwargs.get("preprocess_kwargs", None):
                 cmd.extend(["--preprocess_kwargs", json.dumps(kwargs["preprocess_kwargs"])])
-        else:  # ScienceImage
-            cmd = [f"{SOURCE_DIR}/bin/data_reduction", "-config", config]
+        elif job_type == "science":
+            cmd = [f"{SCRIPTS_DIR}/data_reduction", "-config", config]
             if is_too:
                 cmd.append("-is_too")
             cmd.append("-processes")
             cmd.extend(processes)
             if overwrite or overwrite_science:
                 cmd.append("-overwrite")
+        elif job_type == "debug":
+            cmd = [f"{SCRIPTS_DIR}/debug", "-config", config]
+        else:
+            raise ValueError(f"Invalid systemd queue job_type: {job_type}")
 
         return cmd
 

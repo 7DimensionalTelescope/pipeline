@@ -299,7 +299,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
                     else:
                         current_nightdate = nightdate or date.today().strftime("%Y%m%d")
 
-                    if current_nightdate < const.DISK_CHANGE_DATE:
+                    if current_nightdate < const.DISK_CHANGE_NIGHTDATE:
                         if is_too:
                             output_parent_dir = const.TOO_PROCESSED_DIR
                             self._output_parent_dir.append(output_parent_dir)
@@ -312,7 +312,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
                             self._is_pipeline.append(True)
                     else:
                         raise ValueError(
-                            f"nightdate cap reached for file {input_file}: consider moving to another disk."
+                            f"Nightdate cap ({const.DISK_CHANGE_NIGHTDATE}) reached for file {input_file}: consider moving to another disk."
                         )
 
                 preproc_output_dir = os.path.join(output_parent_dir, self._get_name_property_at_index("nightdate", i))

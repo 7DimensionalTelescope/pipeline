@@ -25,9 +25,9 @@ class QADB(BaseDatabase):
     def create_qa_data(self, qa_data: QAData) -> str:
         """Create a new QA data record or update existing one"""
         try:
-            # Require pipeline_id for QA data creation
-            if qa_data.pipeline_id_id is None:
-                raise QADBError("pipeline_id is required for QA data creation")
+            # Require process_status_id for QA data creation
+            if qa_data.process_status_id_id is None:
+                raise QADBError("process_status_id is required for QA data creation")
 
             with self.get_connection() as conn:
                 # Check if QA data already exists
@@ -78,7 +78,7 @@ class QADB(BaseDatabase):
     def read_qa_data(
         self,
         qa_id: Optional[str] = None,
-        pipeline_id: Optional[int] = None,
+        process_status_id: Optional[int] = None,
         qa_type: Optional[str] = None,
         filt: Optional[str] = None,
         limit: Optional[int] = 100,
@@ -95,9 +95,9 @@ class QADB(BaseDatabase):
                     where_clauses.append("qa_id = %(qa_id)s")
                     params["qa_id"] = qa_id
 
-                if pipeline_id is not None:
-                    where_clauses.append("pipeline_id_id = %(pipeline_id)s")
-                    params["pipeline_id_id"] = pipeline_id
+                if process_status_id is not None:
+                    where_clauses.append("process_status_id_id = %(process_status_id)s")
+                    params["process_status_id_id"] = process_status_id
 
                 if qa_type:
                     where_clauses.append("qa_type = %(qa_type)s")
@@ -113,7 +113,7 @@ class QADB(BaseDatabase):
                         id, qa_id, qa_type, imagetyp, filter, clipmed, clipstd,
                         clipmin, clipmax, nhotpix, ntotpix, seeing, rotang,
                         ptnoff, skyval, skysig, zp_auto, ezp_auto,
-                        ul5_5, stdnumb, created_at, updated_at, pipeline_id_id,
+                        ul5_5, stdnumb, created_at, updated_at, process_status_id_id,
                         edgevar, exptime, filename, sanity, sigmean, trimmed, unmatch,
                         rsep_rms, rsep_q2, uniform, awincrmn, ellipmn, rsep_p95, pa_align,
                         eye_insp, peeing, q_desc, visible, date_obs, unit, alt, az, seeingmn
@@ -219,14 +219,14 @@ class QADB(BaseDatabase):
         except Exception as e:
             raise QADBError(f"Failed to delete QA data: {e}")
 
-    def delete_qa_data_by_pipeline_id(self, pipeline_id: int) -> bool:
+    def delete_qa_data_by_process_status_id(self, process_status_id: int) -> bool:
         """Delete all QA data records for a specific pipeline ID"""
         try:
             with self.get_connection() as conn:
-                query = "DELETE FROM pipeline_qa WHERE pipeline_id_id = %s"
+                query = "DELETE FROM pipeline_qa WHERE process_status_id_id = %s"
 
                 with conn.cursor() as cur:
-                    cur.execute(query, (pipeline_id,))
+                    cur.execute(query, (process_status_id,))
                     rows_affected = cur.rowcount
                     conn.commit()
 
@@ -258,12 +258,12 @@ class QADB(BaseDatabase):
                     where_clauses.append("filename = %(filename)s")
                     params["filename"] = qa_data.filename
 
-                # pipeline_id is always required
-                if qa_data.pipeline_id_id is None:
-                    raise QADBError("pipeline_id is required for finding existing QA data")
+                # process_status_id is always required
+                if qa_data.process_status_id_id is None:
+                    raise QADBError("process_status_id is required for finding existing QA data")
 
-                where_clauses.append("pipeline_id_id = %(pipeline_id_id)s")
-                params["pipeline_id_id"] = qa_data.pipeline_id_id
+                where_clauses.append("process_status_id_id = %(process_status_id_id)s")
+                params["process_status_id_id"] = qa_data.process_status_id_id
 
                 if qa_data.qa_type:
                     where_clauses.append("qa_type = %(qa_type)s")
@@ -277,16 +277,16 @@ class QADB(BaseDatabase):
                     where_clauses.append("imagetyp = %(imagetyp)s")
                     params["imagetyp"] = qa_data.imagetyp
 
-                # If filename is provided, require pipeline_id, qa_type, imagetyp for a match
+                # If filename is provided, require process_status_id, qa_type, imagetyp for a match
                 # This ensures we find the correct existing record by filename
                 if qa_data.filename:
-                    # Require pipeline_id, qa_type, and imagetyp along with filename
+                    # Require process_status_id, qa_type, and imagetyp along with filename
                     # Don't require qa_id (it's generated new each time)
-                    if qa_data.pipeline_id_id is None or not qa_data.qa_type or not qa_data.imagetyp:
+                    if qa_data.process_status_id_id is None or not qa_data.qa_type or not qa_data.imagetyp:
                         # Not enough info to find existing record by filename
                         return None
                     # Remove qa_id from the check when filename is provided (to find existing records)
-                    # Keep only filename, pipeline_id, qa_type, imagetyp
+                    # Keep only filename, process_status_id, qa_type, imagetyp
                     where_clauses = [clause for clause in where_clauses if not clause.startswith("qa_id =")]
                     if "qa_id" in params:
                         del params["qa_id"]
@@ -437,7 +437,7 @@ class QADB(BaseDatabase):
                         "qa.stdnumb",
                         "qa.created_at",
                         "qa.updated_at",
-                        "qa.pipeline_id_id",
+                        "qa.process_status_id_id",
                         "qa.edgevar",
                         "qa.exptime",
                         "qa.filename",
@@ -481,7 +481,7 @@ class QADB(BaseDatabase):
                     SELECT 
                         {', '.join(selected_columns)}
                     FROM pipeline_qa qa
-                    LEFT JOIN pipeline_process p ON qa.pipeline_id_id = p.id
+                    LEFT JOIN pipeline_process p ON qa.process_status_id_id = p.id
                     WHERE {' AND '.join(where_clauses)}
                     ORDER BY qa.created_at DESC
                 """
@@ -538,7 +538,7 @@ class QADB(BaseDatabase):
                                 "stdnumb": row[22] if len(row) > 22 else None,
                                 "created_at": row[23] if len(row) > 23 else None,
                                 "updated_at": row[24] if len(row) > 24 else None,
-                                "pipeline_id_id": row[25] if len(row) > 25 else None,
+                                "process_status_id_id": row[25] if len(row) > 25 else None,
                                 "edgevar": row[26] if len(row) > 26 else None,
                                 "exptime": row[27] if len(row) > 27 else None,
                                 "filename": row[28] if len(row) > 28 else None,

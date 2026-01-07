@@ -44,7 +44,7 @@ qa:
   seeing:
 
 info:
-  version: '1.0.0'  # version up with ANY change in scientific config. e.g., prep.sex
+  version: 
   project: 7DT/7DS
   creation_datetime:
   last_update_datetime:

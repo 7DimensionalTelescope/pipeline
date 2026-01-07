@@ -7,7 +7,7 @@ from ..services.scheduler import Scheduler
 
 def backfill_too(i, overwrite=False, **kwargs):
     too = TooDB()
-    dt = too.read_too_data_by_id(i)
+    dt = too.read_data_by_id(i)
 
     if dt is not None:
         tile = dt["tile"]

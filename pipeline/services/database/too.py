@@ -351,7 +351,7 @@ class TooDB:
         # Convert to string format for database comparison
         return obs_time_utc.strftime("%Y-%m-%d %H:%M:%S")
 
-    def _query_too_by_date_and_time(
+    def _query_by_date_and_time(
         self, cursor, identifier: str, identifier_value: str, observation_date: str, observation_time_str: str
     ) -> Optional[Dict[str, Any]]:
         """
@@ -395,7 +395,7 @@ class TooDB:
 
     # ==================== TOO DATA MANAGEMENT ====================
 
-    def read_too_data_by_id(self, too_id: int) -> Optional[Dict[str, Any]]:
+    def read_data_by_id(self, too_id: int) -> Optional[Dict[str, Any]]:
         """
         Read ToO data record by ID.
         """
@@ -410,7 +410,7 @@ class TooDB:
         finally:
             conn.close()
 
-    def read_too_data(
+    def read_data(
         self,
         config_file: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
@@ -453,7 +453,7 @@ class TooDB:
 
             # Try most specific match first: tile/objname + same date as observation_time
             if parsed["tile"]:
-                row_dict = self._query_too_by_date_and_time(
+                row_dict = self._query_by_date_and_time(
                     cursor, "tile", parsed["tile"], observation_date, observation_time_str
                 )
                 if row_dict:
@@ -461,7 +461,7 @@ class TooDB:
                     return row_dict
 
             if parsed["objname"]:
-                row_dict = self._query_too_by_date_and_time(
+                row_dict = self._query_by_date_and_time(
                     cursor, "objname", parsed["objname"], observation_date, observation_time_str
                 )
                 if row_dict:
@@ -529,7 +529,7 @@ class TooDB:
                 too_id = self._find_row_id(tile=tile, objname=objname, reference_time=trigger_time)
             if too_id is None:
                 raise TooDBError(
-                    "Could not find ToO record. Use read_too_data() first or provide too_id/tile/objname/trigger_time"
+                    "Could not find ToO record. Use read_data() first or provide too_id/tile/objname/trigger_time"
                 )
 
             # Prepare data dictionary
@@ -740,9 +740,9 @@ class TooDB:
             if too_id is None:
                 too_id = self.too_id
             if too_id is None:
-                raise TooDBError("too_id is required. Use read_too_data() first or provide too_id")
+                raise TooDBError("too_id is required. Use read_data() first or provide too_id")
 
-            too_data = self.read_too_data_by_id(too_id)
+            too_data = self.read_data_by_id(too_id)
             if not too_data:
                 raise TooDBError(f"ToO record with ID {too_id} not found")
 
@@ -974,7 +974,7 @@ class TooDB:
         """
         from ...const import DEFAULT_RECIPIENT
 
-        too_data = self.read_too_data_by_id(too_id)
+        too_data = self.read_data_by_id(too_id)
 
         if too_data.get("init_notice") == 1:
             return True
@@ -1077,7 +1077,7 @@ Timing Information:
 
         self.update_too_data(too_id=too_id, final_notice=1)
 
-        too_data = self.read_too_data_by_id(too_id)
+        too_data = self.read_data_by_id(too_id)
 
         completed = too_data.get("completed")
 
@@ -1179,13 +1179,12 @@ The data processing for the ToO observation is complete. The results are as foll
         """
         from ...const import DEFAULT_RECIPIENT
 
-        too_data = self.read_too_data_by_id(too_id)
-        
+        too_data = self.read_data_by_id(too_id)
+
         if too_data.get("num_filters") == 0:
             num_filters = self._count_num_filters(too_id)
         else:
             num_filters = too_data.get("num_filters")
-            
 
         if too_data.get("interim_notice") == 1:
             return True
@@ -1264,7 +1263,15 @@ The data processing for the ToO observation is complete. The results are as foll
         return True
 
     def _build_interim_notice_contents(
-        self, too_data, sed_data, dtype="difference", is_detected=None, mag=None, mag_error=None, is_upper_limit=False, num_filters=None
+        self,
+        too_data,
+        sed_data,
+        dtype="difference",
+        is_detected=None,
+        mag=None,
+        mag_error=None,
+        is_upper_limit=False,
+        num_filters=None,
     ):
         """Build email contents for interim notice."""
         contents = """
@@ -1331,7 +1338,7 @@ Interim Processing Result:
 
     def _count_num_filters(self, too_id: int) -> int:
         """Count the number of filters for a given ToO request."""
-        too_data = self.read_too_data_by_id(too_id)
+        too_data = self.read_data_by_id(too_id)
         base_path = too_data.get("base_path")
 
         if not base_path or not os.path.exists(base_path):
@@ -1363,7 +1370,7 @@ Interim Processing Result:
     def mark_completed(self, too_id: int) -> bool:
         """Mark a ToO request as completed."""
 
-        too_data = self.read_too_data_by_id(too_id)
+        too_data = self.read_data_by_id(too_id)
 
         completed = too_data.get("completed")
 

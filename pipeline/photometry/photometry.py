@@ -20,7 +20,7 @@ from astropy.stats import sigma_clip
 from ..services.memory import MemoryMonitor
 from ..services.queue import QueueManager
 from ..services.database.handler import DatabaseHandler
-from ..services.database.table import QAData
+from ..services.database.image_qa import ImageQATable
 from ..services.checker import Checker, SanityFilterMixin
 
 from ..config.utils import get_key
@@ -127,15 +127,15 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         )
 
         if self.is_connected:
-            self.set_logger(logger)
-            self.pipeline_id = self.create_pipeline_data(self.config_node)
+            self.logger.database = self.process_status
+            self.process_status_id = self.create_process_data(self.config_node)
             if self.too_id is not None:
                 self.logger.debug(f"Initialized DatabaseHandler for ToO data management, ToO ID: {self.too_id}")
             else:
                 self.logger.debug(
-                    f"Initialized DatabaseHandler for pipeline and QA data management, Pipeline ID: {self.pipeline_id}"
+                    f"Initialized DatabaseHandler for pipeline and QA data management, Pipeline ID: {self.process_status_id}"
                 )
-            self.update_pipeline_progress(self._progress_by_mode[0], f"{self._photometry_mode}-configured")
+            self.update_progress(self._progress_by_mode[0], f"{self._photometry_mode}-configured")
 
     @property
     def _progress_by_mode(self):
@@ -184,12 +184,12 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         self.logger.info(f"Start 'Photometry'")
         if not self.input_images:  # exception for when input.difference_image is not set.
             if self._photometry_mode == "difference_photometry":
-                self.update_pipeline_progress(100, f"{self._photometry_mode}-completed")
+                self.update_progress(100, f"{self._photometry_mode}-completed")
                 if self.is_too and self.too_id is not None:
                     sed_data = make_too_output(self.too_id, image_type="stacked")
                     self.logger.info(f"Cutoff images and SED data are created.")
 
-                    interim_notice = self.too_db.read_too_data_by_id(self.too_id).get("interim_notice")
+                    interim_notice = self.too_db.read_data_by_id(self.too_id).get("interim_notice")
 
                     if interim_notice == 0:
                         self.too_db.send_interim_notice_email(self.too_id, sed_data=sed_data, dtype="stacked")
@@ -209,19 +209,18 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
 
             if self.is_connected:
                 for image, qa_id in zip(self.input_images, self.qa_ids):
-                    qa_data = QAData.from_header(
-                        fits.getheader(image), "science", "science", self.pipeline_id, os.path.basename(image)
+                    qa_data = ImageQATable.from_file(
+                        image,
+                        process_status_id=self.process_status_id,
                     )
-                    qa_dict = qa_data.to_dict()
-                    qa_dict["qa_id"] = qa_id
-                    qa_id = self.qa_db.update_qa_data(**qa_dict)
+                    qa_id = self.image_qa.update_data(qa_id, **qa_data.to_dict())
 
-            self.update_pipeline_progress(sum(self._progress_by_mode), f"{self._photometry_mode}-completed")
+            self.update_progress(sum(self._progress_by_mode), f"{self._photometry_mode}-completed")
 
             if self.is_too and self.too_id is not None and self._photometry_mode == "difference_photometry":
                 sed_data = make_too_output(self.too_id, image_type="difference")
                 self.logger.info(f"ToO output are created.")
-                interim_notice = self.too_db.read_too_data_by_id(self.too_id).get("interim_notice")
+                interim_notice = self.too_db.read_data_by_id(self.too_id).get("interim_notice")
 
                 if interim_notice == 0:
                     self.too_db.send_interim_notice_email(self.too_id, sed_data=sed_data, dtype="difference")
@@ -282,7 +281,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
                 reset_count=i == 0,
             ).run(overwrite=overwrite)
 
-            self.update_pipeline_progress(
+            self.update_progress(
                 self._progress_by_mode[0] + (self._progress_by_mode[1] / len(self.input_images)) * (i + 1),
                 f"{self._photometry_mode}-{i}/{len(self.input_images)}",
             )
@@ -967,6 +966,7 @@ class PhotometrySingle:
         query = RawImageQuery()
         # Django-postresql main image db
         if query.is_connected():
+            self.logger.debug(f"get_active_filters: Connected to Django-PostgreSQL raw image DB")
             name = NameHandler(self.input_image)
             all_filter_files = (
                 query.on_date(name.nightdate).by_units([name.unit]).of_types(["flat", "sci"]).image_files()
@@ -974,18 +974,20 @@ class PhotometrySingle:
             active_filters = set(NameHandler(all_filter_files).filter)
             self.logger.debug(f"Fetched active filters from Django-PostgreSQL raw image DB: {active_filters}")
             return active_filters
+        self.logger.debug(f"get_active_filters: cannot connect to Django-PostgreSQL raw image DB")
 
         # sqlite pipeline db
         # TODO
         if False:
             self.logger.debug(f"Fetched active filters from sqlite filter inventory: {active_filters}")
 
+        self.logger.debug(f"get_active_filters: DB connection failed, fallback to local filesystem")
         # fallback to local filesystem
         try:
             f = PathHandler(self.input_image, is_too=self.config_node.settings.is_too).conjugate
             self.logger.debug(f"Filter check conjugate: {f}")
-            if not os.path.exists(f):
-                raise PipelineError(f"During get_active_filters, no conjugate image found for {f}")
+            # if not os.path.exists(f):
+            #     raise PipelineError(f"During get_active_filters, no conjugate image found for {f}")
             flist = glob(os.path.join(os.path.dirname(f), "*.fits"))
             flats = NameHandler(flist).pick_type("raw_flat")
             scis = NameHandler(flist).pick_type("raw_science")

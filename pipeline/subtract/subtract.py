@@ -14,7 +14,7 @@ from ..config.utils import get_key
 from ..path import PathHandler
 from ..preprocess.plotting import save_fits_as_figures
 from ..services.database.handler import DatabaseHandler
-from ..services.database.table import QAData
+from ..services.database.image_qa import ImageQATable
 from ..services.checker import Checker, SanityFilterMixin
 from ..services.database.query import RawImageQuery
 
@@ -41,15 +41,15 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         DatabaseHandler.__init__(self, add_database=self.config_node.settings.is_pipeline, is_too=self.is_too)
 
         if self.is_connected:
-            self.set_logger(logger)
-            self.pipeline_id = self.create_pipeline_data(self.config_node)
+            self.logger.database = self.process_status
+            self.process_status_id = self.create_process_data(self.config_node)
             if self.too_id is not None:
                 self.logger.debug(f"Initialized DatabaseHandler for ToO data management, ToO ID: {self.too_id}")
             else:
                 self.logger.debug(
-                    f"Initialized DatabaseHandler for pipeline and QA data management, Pipeline ID: {self.pipeline_id}"
+                    f"Initialized DatabaseHandler for pipeline and QA data management, Pipeline ID: {self.process_status_id}"
                 )
-            self.update_pipeline_progress(80, "imsubtract-configured")
+            self.update_progress(80, "imsubtract-configured")
 
     @classmethod
     def from_list(cls, input_images):
@@ -83,32 +83,32 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
                 self.logger.info(f"No reference image found for {self.name}; Skipping transient search.")
                 self.config_node.flag.subtraction = True
                 self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")
-                self.update_pipeline_progress(100, "imsubtract-completed")
+                self.update_progress(100, "imsubtract-completed")
                 return
 
             self.define_paths()
-            self.update_pipeline_progress(82, "imsubtract-define-paths-completed")
+            self.update_progress(82, "imsubtract-define-paths-completed")
 
             if not overwrite and os.path.exists(self.subt_image_file):
                 self.logger.info(f"Subtracted image already exists: {self.subt_image_file}; Skipping subtraction.")
                 self.config_node.flag.subtraction = True
                 self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")
-                self.update_pipeline_progress(100, "imsubtract-completed")
+                self.update_progress(100, "imsubtract-completed")
                 return
 
             self.create_substamps()
-            self.update_pipeline_progress(84, "imsubtract-create-substamps-completed")
+            self.update_progress(84, "imsubtract-create-substamps-completed")
 
             self.create_masks()
-            self.update_pipeline_progress(86, "imsubtract-create-masks-completed")
+            self.update_progress(86, "imsubtract-create-masks-completed")
 
             self.run_hotpants()
-            self.update_pipeline_progress(88, "imsubtract-run-hotpants-completed")
+            self.update_progress(88, "imsubtract-run-hotpants-completed")
 
             self.mask_unsubtracted()
 
             # Create QA data for subtracted image if database is connected
-            if self.is_connected and self.pipeline_id is not None:
+            if self.is_connected and self.process_status_id is not None:
                 subt_image = self.subt_image_file
                 if subt_image and os.path.exists(subt_image):
                     self.qa_id = self.create_qa_data("science", image=subt_image, output_file=subt_image)
@@ -117,26 +117,21 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             if self.is_connected and self.qa_id is not None:
                 subt_image = self.subt_image_file
                 if subt_image and os.path.exists(subt_image):
-                    qa_data = QAData.from_header(
-                        fits.getheader(subt_image),
-                        "science",
-                        "science",
-                        self.pipeline_id,
-                        os.path.basename(subt_image),
+                    qa_data = ImageQATable.from_file(
+                        subt_image,
+                        process_status_id=self.process_status_id,
                     )
-                    qa_dict = qa_data.to_dict()
-                    qa_dict["qa_id"] = self.qa_id
-                    self.qa_db.update_qa_data(**qa_dict)
+                    self.image_qa.update_data(qa_data.id, **qa_data.to_dict())
 
             self.plot_subtracted_image()
 
-            self.update_pipeline_progress(90, "imsubtract-completed")
+            self.update_progress(90, "imsubtract-completed")
 
             self.config_node.flag.subtraction = True
             self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")
 
         except Exception as e:
-            self.add_error()
+
             self.logger.error(f"Error during imsubtract processing: {str(e)}")
             raise
 
@@ -185,7 +180,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
                     break
 
             if not ref_image:
-                self.add_warning()
+
                 self.logger.warning(
                     f"The reference images are likely to exist but they have not been processed yet. Check observation dates: {available_dates} for {obs}/{filt}"
                 )
