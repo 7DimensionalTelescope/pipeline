@@ -13,12 +13,12 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
 from ..path import PathHandler
 
 
-def save_fits_as_figures(image_data, output_path, stretch=True, log_scale=False, max_width=1000):
+def save_fits_as_figures(image_data, output_path, stretch=True, log_scale=False, max_width=1000, overwrite=False):
 
     # Handle potential NaN or inf values
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    if output_path.exists():
+    if output_path.exists() and not overwrite:
         return
 
     if isinstance(image_data, str):

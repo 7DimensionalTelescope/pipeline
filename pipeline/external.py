@@ -568,6 +568,7 @@ def swarp(
     input,
     output=None,
     center=None,
+    overwrite=False,
     dump_dir=None,
     resample_dir=None,
     log_file=None,
@@ -607,6 +608,11 @@ def swarp(
     comim = output or os.path.join(dump_dir, "coadd.fits")
     # weightim = swap_ext(comim, "weight.fits")
     weightim = add_suffix(comim, "weight")
+
+    if os.path.exists(comim) and not overwrite:
+        if not (weight_map and not os.path.exists(weightim)):
+            chatter(f"SWarp output image already exists: {comim}, skipping...", "info")
+            return
 
     # 	SWarp
     # swarpcom = f"swarp -c {path_config}/7dt.swarp @{path_imagelist} -IMAGEOUT_NAME {comim} -CENTER_TYPE MANUAL -CENTER {center} -SUBTRACT_BACK N -RESAMPLE_DIR {path_resamp} -GAIN_KEYWORD EGAIN -GAIN_DEFAULT {gain_default} -FSCALE_KEYWORD FAKE -WEIGHTOUT_NAME {weightim}"

@@ -304,13 +304,16 @@ class ImStack(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             zip(self.input_images, self.skyvalues, self.config_node.imstack.bkgsub_images)
         ):
             self.logger.debug(f"[{ii:>6}] {get_basename(inim)}")
-            if not os.path.exists(outim) or self.overwrite:
-                with fits.open(inim, memmap=True) as hdul:
-                    _data = hdul[0].data
-                    _hdr = hdul[0].header
-                    _data -= _bkg
-                    self.logger.debug(f"Using SKYVAL: {_bkg:.3f}")
-                    fits.writeto(outim, _data, header=_hdr, overwrite=True)
+            if os.path.exists(outim) and not self.overwrite:
+                self.logger.info(f"Background subtraction result exists; skipping: {get_basename(outim)}")
+                continue
+
+            with fits.open(inim, memmap=True) as hdul:
+                _data = hdul[0].data
+                _hdr = hdul[0].header
+                _data -= _bkg
+                self.logger.debug(f"Using SKYVAL: {_bkg:.3f}")
+                fits.writeto(outim, _data, header=_hdr, overwrite=True)
 
     def _dynamic_bkgsub(self):
         """
@@ -771,6 +774,7 @@ class ImStack(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         external.swarp(
             input=self.path_imagelist,
             output=output_file,
+            overwrite=self.overwrite,
             center=self.center,
             resample_dir=resample_dir,
             log_file=log_file,
@@ -863,38 +867,3 @@ class ImStack(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
                 header[f"IMG{nn:0>5}"] = (get_basename(inim), "single exposures")
 
             hdul.flush()
-
-
-#   Example
-if __name__ == "__main__":
-    image_lists = [
-        #   Broad bands
-        "/large_data/Commission/NGC0253/g/select_median.txt",
-        "/large_data/Commission/NGC0253/r/select_median.txt",
-        "/large_data/Commission/NGC0253/i/select_median.txt",
-        "/large_data/Commission/NGC0253/z/select_median.txt",
-        #   Medium bands
-        "/large_data/Commission/NGC0253/m400/select_median.txt",
-        "/large_data/Commission/NGC0253/m425/select_median.txt",
-        "/large_data/Commission/NGC0253/m450/select_median.txt",
-        "/large_data/Commission/NGC0253/m475/select_median.txt",
-        "/large_data/Commission/NGC0253/m500/select_median.txt",
-        "/large_data/Commission/NGC0253/m525/select_median.txt",
-        "/large_data/Commission/NGC0253/m550/select_median.txt",
-        "/large_data/Commission/NGC0253/m575/select_median.txt",
-        "/large_data/Commission/NGC0253/m600/select_median.txt",
-        "/large_data/Commission/NGC0253/m625/select_median.txt",
-        "/large_data/Commission/NGC0253/m650/select_median.txt",
-        "/large_data/Commission/NGC0253/m675/select_median.txt",
-        "/large_data/Commission/NGC0253/m700/select_median.txt",
-        "/large_data/Commission/NGC0253/m725/select_median.txt",
-        "/large_data/Commission/NGC0253/m750/select_median.txt",
-        "/large_data/Commission/NGC0253/m775/select_median.txt",
-        "/large_data/Commission/NGC0253/m800/select_median.txt",
-        "/large_data/Commission/NGC0253/m825/select_median.txt",
-        "/large_data/Commission/NGC0253/m850/select_median.txt",
-        "/large_data/Commission/NGC0253/m875/select_median.txt",
-    ]
-
-    for image_list in image_lists:
-        ImStack.from_text_file(image_list).run()
