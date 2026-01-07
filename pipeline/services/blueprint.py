@@ -132,7 +132,7 @@ class Blueprint:
             dtype=[
                 ("index", int),
                 ("config", object),
-                ("type", object),  # Preprocess or Science
+                ("config_type", object),  # Preprocess or Science
                 ("input_type", object),  # Daily or ToO
                 ("is_ready", bool),  # True if the task is ready to be processed
                 ("priority", int),  # Priority of the task

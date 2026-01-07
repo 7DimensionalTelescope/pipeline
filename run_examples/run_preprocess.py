@@ -1,9 +1,11 @@
+import gc
+import time
+import traceback
+
 from pipeline.wrapper import DataReduction
 from pipeline.services.database.query import RawImageQuery, free_query
 
-import gc
-import traceback
-
+"""Run like: python run_preprocess.py 2>&1 | tee 2026-01_preprocess.log"""
 
 OVERWRITE_CONFIG = False
 OVERWRITE_DATA = False
@@ -13,8 +15,8 @@ USE_SYSTEM_QUEUE = True
 query = """
     SELECT DISTINCT date
     FROM survey_night
-    WHERE date >= '2025-12-01'
-      AND date < '2026-01-01'
+    WHERE date >= '2025-11-01'
+      AND date < '2025-12-01'
     ORDER BY date;
 """
 
@@ -35,6 +37,9 @@ for date in dates:
             use_system_queue=USE_SYSTEM_QUEUE,
             processes=[],
         )
+
+        # to avoid swamping file descriptors
+        time.sleep(60)
 
     except Exception as e:
         msg = f"Error processing {date}: {e}\n"

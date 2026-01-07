@@ -191,7 +191,7 @@ class DatabaseHandler:
             return self.pipeline_id
 
         except Exception as e:
-            self._log_warning(f"Failed to create pipeline record: {e}", exc_info=True)
+            self._log_warning(f"Failed to create pipeline record: {e}")
             self._log_error(f"Failed to create pipeline record: {e}")  # Also log as error for visibility
             self.pipeline_id = None
             return None
