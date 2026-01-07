@@ -20,6 +20,7 @@ class BaseDatabase:
 
     def __init__(self, db_params: Optional[Dict[str, Any]] = None):
         """Initialize with database parameters"""
+        
         self.db_params = db_params or DB_PARAMS
 
     @contextmanager
@@ -37,125 +38,12 @@ class BaseDatabase:
             if conn:
                 conn.close()
 
-    def _build_where_clause(self, filters: Dict[str, Any]) -> tuple:
-        """
-        Build WHERE clause and parameters from filter dictionary.
-
-        Args:
-            filters: Dictionary of field names to values for filtering
-
-        Returns:
-            Tuple of (where_clauses, params) where where_clauses is a list
-            of SQL conditions and params is a dictionary of parameters
-        """
-        where_clauses = []
-        params = {}
-
-        for field, value in filters.items():
-            if value is not None:
-                if field == "run_date" and isinstance(value, str):
-                    # Handle date conversion for run_date field (maps to 'date' column)
-                    try:
-                        from datetime import datetime
-
-                        if len(value) == 10 and value.count("-") == 2:
-                            parsed_date = datetime.strptime(value, "%Y-%m-%d").date()
-                            where_clauses.append("date = %(run_date)s")
-                            params["run_date"] = parsed_date
-                        else:
-                            where_clauses.append("date::text = %(run_date)s")
-                            params["run_date"] = value
-                    except ValueError:
-                        where_clauses.append("date::text = %(run_date)s")
-                        params["run_date"] = value
-                else:
-                    where_clauses.append(f"{field} = %({field})s")
-                    params[field] = value
-
-        return where_clauses, params
-
-    def _execute_query(self, conn, query: str, params: Dict[str, Any] = None) -> List[tuple]:
+    def _execute_query(self, query: str, params: Dict[str, Any] = None) -> List[tuple]:
         """Execute a query and return results"""
-        with conn.cursor() as cur:
-            cur.execute(query, params or {})
-            return cur.fetchall()
-
-    def _execute_update(self, conn, query: str, params: Dict[str, Any] = None) -> int:
-        """Execute an update query and return number of affected rows"""
-        with conn.cursor() as cur:
-            cur.execute(query, params or {})
-            rows_affected = cur.rowcount
-            conn.commit()
-            return rows_affected
-
-    def _execute_insert(self, conn, query: str, params: Dict[str, Any] = None) -> Any:
-        """Execute an insert query and return the result"""
-        with conn.cursor() as cur:
-            cur.execute(query, params or {})
-            result = cur.fetchone()
-            conn.commit()
-            return result
-
-    def _prepare_insert_params(
-        self, data_dict: Dict[str, Any], json_fields: List[str] = None, timestamp_fields: List[str] = None
-    ) -> tuple:
-        """
-        Prepare parameters for INSERT query.
-
-        Args:
-            data_dict: Dictionary of data to insert
-            json_fields: List of field names that should be JSON encoded
-            timestamp_fields: List of field names that should use CURRENT_TIMESTAMP
-
-        Returns:
-            Tuple of (columns, placeholders, params)
-        """
-        json_fields = json_fields or []
-        timestamp_fields = timestamp_fields or []
-
-        params = data_dict.copy()
-        columns = list(params.keys())
-        placeholders = [f"%({col})s" for col in columns]
-
-        # Handle JSON fields
-        for field in json_fields:
-            if field in params:
-                params[field] = json.dumps(params[field]) if isinstance(params[field], list) else json.dumps([])
-
-        # Add timestamp fields
-        for field in timestamp_fields:
-            columns.append(field)
-            placeholders.append("CURRENT_TIMESTAMP")
-
-        return columns, placeholders, params
-
-    def _prepare_update_params(self, data_dict: Dict[str, Any], json_fields: List[str] = None) -> tuple:
-        """
-        Prepare parameters for UPDATE query.
-
-        Args:
-            data_dict: Dictionary of data to update
-            json_fields: List of field names that should be JSON encoded
-
-        Returns:
-            Tuple of (set_clauses, params)
-        """
-        json_fields = json_fields or []
-
-        set_clauses = []
-        params = {}
-
-        for key, value in data_dict.items():
-            if key in json_fields:
-                params[key] = json.dumps(value) if isinstance(value, list) else json.dumps([])
-            else:
-                params[key] = value
-            set_clauses.append(f"{key} = %({key})s")
-
-        # Add updated_at timestamp
-        set_clauses.append("updated_at = CURRENT_TIMESTAMP")
-
-        return set_clauses, params
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params or {})
+                return cur.fetchall()
 
     def export_to_table(self, table_name: str, order_by: str = "created_at DESC") -> pd.DataFrame:
         """

@@ -1,15 +1,11 @@
-# import psycopg
 from datetime import date, datetime
 from typing import List, Dict, Optional, Union, Any
 import json
 
-# from contextlib import contextmanager
 import pandas as pd
 
-# Import data classes
 from .table import PipelineData
 
-# from .utils import generate_id
 from .base import BaseDatabase, DatabaseError
 
 
@@ -172,11 +168,7 @@ class PipelineDB(BaseDatabase):
                 # If specific ID is requested, return single record
                 if pipeline_id is not None:
                     query += " LIMIT 1"
-                    row = (
-                        self._execute_query(conn, query, params)[0]
-                        if self._execute_query(conn, query, params)
-                        else None
-                    )
+                    row = self._execute_query(query, params)[0] if self._execute_query(query, params) else None
 
                     if not row:
                         return None
@@ -190,7 +182,7 @@ class PipelineDB(BaseDatabase):
                     params["limit"] = limit
                     params["offset"] = offset
 
-                    rows = self._execute_query(conn, query, params)
+                    rows = self._execute_query(query, params)
 
                     # Convert to PipelineData objects using from_row
                     result = [PipelineData.from_row(row) for row in rows]

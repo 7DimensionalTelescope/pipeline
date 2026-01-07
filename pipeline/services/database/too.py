@@ -69,7 +69,7 @@ class TooDB:
             f"Database operation failed after {DB_RETRY_MAX_ATTEMPTS} attempts: {last_exception}"
         ) from last_exception
 
-    def _get_db_connection(self):
+    def get_connection(self):
         """Create a new database connection with timeout and WAL mode"""
         conn = sqlite3.connect(TOO_DB_PATH, check_same_thread=False, timeout=DB_TIMEOUT)
         conn.row_factory = sqlite3.Row
@@ -85,7 +85,7 @@ class TooDB:
 
     def _ensure_column_exists(self, column_name: str, column_type: str = "TEXT"):
         """Ensure a column exists in the table, add it if it doesn't"""
-        conn = self._get_db_connection()
+        conn = self.get_connection()
         try:
             cursor = conn.cursor()
 
@@ -399,7 +399,7 @@ class TooDB:
         """
         Read ToO data record by ID.
         """
-        conn = self._get_db_connection()
+        conn = self.get_connection()
         try:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM too_requests WHERE id = ?", (too_id,))
@@ -447,7 +447,7 @@ class TooDB:
 
         # Query database: find records where trigger_time <= observation_time
         # Prioritize records from the same date as observation_time
-        conn = self._get_db_connection()
+        conn = self.get_connection()
         try:
             cursor = conn.cursor()
 
@@ -576,7 +576,7 @@ class TooDB:
                     self._ensure_column_exists(key)
 
             # Update the row
-            conn = self._get_db_connection()
+            conn = self.get_connection()
             try:
                 cursor = conn.cursor()
 
@@ -659,7 +659,7 @@ class TooDB:
         Returns:
             Row ID if found, None otherwise
         """
-        conn = self._get_db_connection()
+        conn = self.get_connection()
         try:
             cursor = conn.cursor()
 

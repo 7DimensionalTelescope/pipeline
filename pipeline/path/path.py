@@ -49,7 +49,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         self._config = None
         self._config = None
         self._input_files: list[str] = None
-        self._is_too = is_too
+        self._is_too = is_too  # TODO: global flag, not vertorized, per image flag
 
         self._handle_input(input)
         self.select_output_dir(working_dir=working_dir, is_too=is_too)
@@ -82,7 +82,6 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
                 self.name = NameHandler(input)
             except Exception as e:
                 raise PipelineError(f"NameHandler failure: not pipeline file.\n{input!r}:\n{e}")
-        self._single = self.name._single
 
     def __getattr__(self, name):
         """
@@ -961,7 +960,7 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
         tuple(z, d, f) if science, just list[str] | str if calib
         """
 
-        if self._parent._single:
+        if self._parent.name._single:
             typ = self._parent.name.type
             if typ[1] == "science":
                 return [os.path.join(self._masterframe_dir[0], s) for s in self._parent.name.masterframe_basename]
