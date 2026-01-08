@@ -17,6 +17,7 @@ from ..services.database.handler import DatabaseHandler
 from ..services.database.image_qa import ImageQATable
 from ..services.checker import Checker, SanityFilterMixin
 from ..services.database.query import RawImageQuery
+from ..errors import SubtractionError
 
 from .utils import create_ds9_region_file, select_sources
 
@@ -31,7 +32,8 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
     ) -> None:
 
         super().__init__(config, logger, queue)
-        self._flag_name = "subtract"
+        # self._flag_name = "subtract"
+        self.logger.process_error = SubtractionError
         self.overwrite = overwrite
         self.name = self.config_node.name
         self.reference_images = None

@@ -60,7 +60,7 @@ class BaseSetup(ABC):
         self.config_node = self._setup_config(config, is_too=is_too)
 
         # Setup log
-        self._logger = self._setup_logger(logger, self.config_node, is_too=is_too)
+        self._logger = self._setup_logger(getattr(config, "logger", logger), self.config_node, is_too=is_too)
 
         # Setup queue
         self.queue = self._setup_queue(queue)

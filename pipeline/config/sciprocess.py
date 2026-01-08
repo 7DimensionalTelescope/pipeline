@@ -7,7 +7,7 @@ from datetime import datetime
 from astropy.io import fits
 
 from .. import __version__
-from ..const import PipelineError
+from ..errors import PipelineError
 from ..utils import clean_up_folder, clean_up_sciproduct, atleast_1d, time_diff_in_seconds, collapse
 from ..utils.header import get_header
 from ..path.path import PathHandler

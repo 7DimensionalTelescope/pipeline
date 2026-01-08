@@ -17,6 +17,7 @@ from astropy import units as u
 from astropy.coordinates import SkyCoord
 from astropy.stats import sigma_clip
 
+from ..services.logger import Logger
 from ..services.memory import MemoryMonitor
 from ..services.queue import QueueManager
 from ..services.database.handler import DatabaseHandler
@@ -28,13 +29,15 @@ from ..utils import time_diff_in_seconds, force_symlink, collapse
 from ..config import SciProcConfiguration
 from ..config.base import ConfigNode
 from .. import external
-from ..const import PIXSCALE, MEDIUM_FILTERS, BROAD_FILTERS, ALL_FILTERS, PipelineError
+from ..const import PIXSCALE, MEDIUM_FILTERS, BROAD_FILTERS, ALL_FILTERS
+from ..errors import PipelineError
 from ..services.setup import BaseSetup
 from ..tools.table import match_two_catalogs, build_condition_mask
 from ..path.path import PathHandler
 from ..utils.header import get_header_key, update_padded_header
 from ..too.plotting import make_too_output
 from ..utils.tile import is_ris_tile
+from ..errors import SinglePhotometryError, CoaddedPhotometryError, DifferencePhotometryError
 
 from . import utils as phot_utils
 from .plotting import plot_zp, plot_filter_check
@@ -92,6 +95,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             self.input_images = images or self.config_node.input.calibrated_images
             self.apply_sanity_filter_and_report()  # overrides self.input_images
             self.config_node.photometry.input_images = self.input_images
+            self.logger.process_error = SinglePhotometryError
 
             self.logger.debug("Running single photometry")
             self._photometry_mode = "single_photometry"
@@ -103,6 +107,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
                 images or [x] if (x := self.config_node.input.stacked_image) else None
             )
             self.input_images = self.config_node.photometry.input_images
+            self.logger.process_error = CoaddedPhotometryError
             self.logger.debug("Running combined photometry")
             self._photometry_mode = "combined_photometry"
         elif photometry_mode == "difference_photometry" or not self.config_node.flag.difference_photometry:
@@ -110,6 +115,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
                 images or [x] if (x := self.config_node.input.difference_image) else None
             )
             self.input_images = self.config_node.photometry.input_images
+            self.logger.process_error = DifferencePhotometryError
             self.logger.debug("Running difference photometry")
             self._photometry_mode = "difference_photometry"
 
@@ -316,7 +322,7 @@ class PhotometrySingle:
         self,
         # image: str,
         config_node: ConfigNode,
-        logger: Any = None,
+        logger: Logger = None,
         name: Optional[str] = None,
         ref_cat_type: str = "GaiaXP",
         total_image: int = 1,

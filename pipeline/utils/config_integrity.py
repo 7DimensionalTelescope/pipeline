@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from ..const import PipelineError, REF_DIR, ROOT_DIR
+from ..const import REF_DIR, ROOT_DIR
+from ..errors import PipelineError
 
 
 configs_to_check = [
@@ -103,7 +104,7 @@ def verify_config_hashes(
             errors.append(
                 f"{rel} hash mismatch: expected {expected}, got {actual}. "
                 "Config changed: bump up the version in pipeline/version.py and run \n"
-                "from pipeline.config_integrity import write_config_hashes; write_config_hashes(overwrite=True)"
+                "from pipeline.utils.config_integrity import write_config_hashes; write_config_hashes(overwrite=True)"
                 "before running the pipeline."
             )
 

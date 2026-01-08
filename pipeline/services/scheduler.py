@@ -24,7 +24,7 @@ class Scheduler:
             ("status", object),
             ("dependent_idx", list),
             ("pid", int),
-            ("original_status", object),
+            ("kwargs", object),
             ("process_start", object),
             ("process_end", object),
         ]
@@ -38,16 +38,17 @@ class Scheduler:
     HIGH_PRIORITY_THRESHOLD = 10
 
     def __init__(
-        self, schedule=None, use_system_queue=False, overwrite_preprocess=False, overwrite_science=False, **kwargs
+        self,
+        schedule=None,
+        use_system_queue=False,
+        overwrite_schedule=False,
+        **kwargs,
     ):
-        self._kwargs = kwargs
         self.use_system_queue = use_system_queue and SCHEDULER_DB_PATH is not None
 
-        self._kwargs = {
-            "overwrite_preprocess": overwrite_preprocess,
-            "overwrite_science": overwrite_science,
-            **kwargs,
-        }
+        self.overwrite_schedule = overwrite_schedule
+
+        self._kwargs = kwargs
 
         if self.use_system_queue:
             self._schedule = None
@@ -114,7 +115,7 @@ class Scheduler:
                     status TEXT NOT NULL,
                     dependent_idx TEXT,
                     pid INTEGER,
-                    original_status TEXT,
+                    kwargs TEXT,
                     process_start TEXT,
                     process_end TEXT
                 )
@@ -160,6 +161,10 @@ class Scheduler:
 
     def _row_to_dict(self, row):
         """Convert database row tuple to dictionary."""
+        try:
+            kwarg = json.loads(row[10])
+        except:
+            kwarg = row[10]
         return {
             "index": row[0],
             "config": row[1],
@@ -170,10 +175,10 @@ class Scheduler:
             "readiness": row[6],
             "status": row[7],
             "dependent_idx": json.loads(row[8]) if row[8] else [],
-            "pid": row[9] if len(row) > 9 else None,
-            "original_status": row[10] if len(row) > 10 else None,
-            "process_start": row[11] if len(row) > 11 else None,
-            "process_end": row[12] if len(row) > 12 else None,
+            "pid": row[9],
+            "kwargs": kwarg,
+            "process_start": row[11],
+            "process_end": row[12],
         }
 
     def _rows_to_table(self, rows):
@@ -182,7 +187,12 @@ class Scheduler:
             return self._empty_schedule
 
         data = {col: [] for col in self._empty_schedule.colnames}
+
         for row in rows:
+            try:
+                kwarg = json.loads(row[10])
+            except:
+                kwarg = row[10]
             data["index"].append(row[0])
             data["config"].append(row[1])
             data["config_type"].append(row[2])
@@ -192,10 +202,10 @@ class Scheduler:
             data["readiness"].append(row[6])
             data["status"].append(row[7])
             data["dependent_idx"].append(json.loads(row[8]) if row[8] else [])
-            data["pid"].append(row[9] if len(row) > 9 and row[9] is not None else None)
-            data["original_status"].append(row[10] if len(row) > 10 and row[10] is not None else None)
-            data["process_start"].append(row[11] if len(row) > 11 and row[11] is not None else None)
-            data["process_end"].append(row[12] if len(row) > 12 and row[12] is not None else None)
+            data["pid"].append(row[9])
+            data["kwargs"].append(kwarg)
+            data["process_start"].append(row[11])
+            data["process_end"].append(row[12])
 
         return Table(data, dtype=self._empty_schedule.dtype)
 
@@ -224,13 +234,55 @@ class Scheduler:
         if not isinstance(other_table, Table):
             raise ValueError("Invalid schedule type")
 
-        # Adjust indices
-        other_table["index"] = other_table["index"] + offset + 1
-        for i in range(len(other_table)):
-            if other_table["dependent_idx"][i]:
-                other_table["dependent_idx"][i] = [idx + offset + 1 for idx in other_table["dependent_idx"][i]]
+        # Check for overwrite functionality
+        overwrite_schedule = self._kwargs.get("overwrite_schedule", False)
 
-        combined_table = vstack([current_table, other_table])
+        if len(current_table) > 0:
+            # Get set of existing configs to filter duplicates
+            existing_configs = set(current_table["config"])
+
+            if overwrite_schedule:
+                # Remove existing rows with duplicate configs
+                duplicate_mask = [config in existing_configs for config in other_table["config"]]
+
+                if any(duplicate_mask):
+                    duplicate_configs = [
+                        config for config, is_dup in zip(other_table["config"], duplicate_mask) if is_dup
+                    ]
+
+                    # Remove duplicate rows from current_table
+                    current_table = current_table[
+                        [config not in duplicate_configs for config in current_table["config"]]
+                    ]
+
+                    # Recalculate offset after removing duplicates
+                    offset = max(current_table["index"]) if len(current_table) > 0 else -1
+
+                    print(f"Replaced {len(duplicate_configs)} existing schedule(s) with new ones")
+            else:
+                # Filter out rows with duplicate configs (keep existing, ignore new duplicates)
+                non_duplicate_mask = [config not in existing_configs for config in other_table["config"]]
+                other_table = other_table[non_duplicate_mask] if any(non_duplicate_mask) else other_table[[]]
+
+                if len(other_table) < len(other.schedule if isinstance(other, Scheduler) else other):
+                    duplicate_count = len(other.schedule if isinstance(other, Scheduler) else other) - len(other_table)
+                    print(f"Warning: Ignoring {duplicate_count} duplicate config(s) when adding schedule")
+
+        # Adjust indices
+        if len(other_table) > 0:
+            other_table["index"] = other_table["index"] + offset + 1
+            for i in range(len(other_table)):
+                if other_table["dependent_idx"][i]:
+                    other_table["dependent_idx"][i] = [idx + offset + 1 for idx in other_table["dependent_idx"][i]]
+
+        # Combine tables
+        if len(other_table) > 0:
+            if len(current_table) > 0:
+                combined_table = vstack([current_table, other_table])
+            else:
+                combined_table = other_table
+        else:
+            combined_table = current_table
 
         if self.use_system_queue:
             self._save_table_to_db(combined_table)
@@ -287,17 +339,17 @@ class Scheduler:
                 return cursor.fetchone()[0] > 0
         return len(self.schedule[self.schedule["status"] != "Completed"]) > 0
 
-    def get_next_task(self, **kwargs):
+    def get_next_task(self):
         """Get the next task to process with priority and concurrency constraints."""
         if not self.has_schedule:
             return None
 
         if self.use_system_queue:
-            return self._get_next_task_db(**kwargs)
+            return self._get_next_task_db()
         else:
-            return self._get_next_task_memory(**kwargs)
+            return self._get_next_task_memory()
 
-    def _get_next_task_db(self, **kwargs):
+    def _get_next_task_db(self):
         """Get next task from database."""
         with self._db_connection() as conn:
             cursor = conn.cursor()
@@ -369,11 +421,12 @@ class Scheduler:
         if row is None:
             return None, None
 
-        overwrite = kwargs.get("overwrite", False) or row["priority"] == 0
+        if row["priority"] == 0 and ["-overwrite"] not in row["kwargs"]:
+            row["kwargs"].append("-overwrite")
 
-        return row, self._generate_command(row["index"], overwrite=overwrite, **kwargs)
+        return row, self._generate_command(row["index"], row["kwargs"])
 
-    def _get_next_task_memory(self, **kwargs):
+    def _get_next_task_memory(self):
         """Get next task from in-memory schedule."""
         ready_jobs = self.schedule[(self.schedule["status"] == "Ready")]
         if len(ready_jobs) == 0:
@@ -426,8 +479,85 @@ class Scheduler:
         if row_dict.get("config_type") == "preprocess":
             self.processing_preprocess += 1
 
-        overwrite = kwargs.get("overwrite", False) or row_dict["priority"] == 0
-        return row_dict, self._generate_command(job_index, overwrite=overwrite, **kwargs)
+        scheduler_kwargs = row_dict["kwargs"]
+
+        if row_dict["priority"] == 0 and ["-overwrite"] not in scheduler_kwargs:
+            scheduler_kwargs.append("-overwrite")
+
+        return row_dict, self._generate_command(job_index, scheduler_kwargs)
+
+    def mark_done(self, index, success=True):
+        if self.use_system_queue:
+            self._mark_done_db(index, success)
+        else:
+            self._mark_done_memory(index, success)
+
+    def _mark_done_db(self, index, success=True):
+        with self._db_connection() as conn:
+            cursor = conn.cursor()
+            # Check if job is already marked as done to prevent duplicate processing
+            cursor.execute('SELECT status, dependent_idx, config_type FROM scheduler WHERE "index" = ?', (index,))
+            row = cursor.fetchone()
+            if not row:
+                return
+
+            current_status, dependent_idx_json, config_type = row
+            # If already marked as done, skip to prevent duplicate increments
+            if current_status == "Completed" or current_status == "Failed":
+                return
+
+            dependent_indices = json.loads(dependent_idx_json) if dependent_idx_json else []
+
+            if success:
+                new_status = "Completed"
+                # Mark as Completed, clear PID, and set process_end
+                process_end = datetime.now().isoformat()
+                cursor.execute(
+                    'UPDATE scheduler SET status = ?, pid = 0, process_end = ? WHERE "index" = ?',
+                    (new_status, process_end, index),
+                )
+            else:
+                # Check if this is a retry (priority is already 0)
+                cursor.execute('SELECT priority FROM scheduler WHERE "index" = ?', (index,))
+                priority_row = cursor.fetchone()
+                current_priority = priority_row[0] if priority_row else None
+
+                if current_priority == 0:
+                    # This is a retry that failed again - set readiness to 0, is_ready to false, and mark as Failed
+                    process_end = datetime.now().isoformat()
+                    cursor.execute(
+                        'UPDATE scheduler SET status = ?, readiness = ?, is_ready = ?, pid = 0, process_end = ? WHERE "index" = ?',
+                        ("Failed", 0, 0, process_end, index),
+                    )
+                else:
+                    # First failure - set priority to 0 and status to Ready for retry
+                    cursor.execute(
+                        'UPDATE scheduler SET status = ?, priority = ?, pid = 0, process_start = ? WHERE "index" = ?',
+                        ("Ready", 0, "", index),
+                    )
+
+            # Only increment readiness for dependent jobs if the job completed successfully
+            if success:
+                for dep_idx in dependent_indices:
+                    cursor.execute('SELECT readiness FROM scheduler WHERE "index" = ?', (dep_idx,))
+                    dep_row = cursor.fetchone()
+                    if dep_row:
+                        new_readiness = dep_row[0] + 1
+
+                        if new_readiness > 100:
+                            new_readiness = 100
+
+                        if new_readiness == 100:
+                            cursor.execute(
+                                'UPDATE scheduler SET readiness = ?, status = ?, is_ready = ? WHERE "index" = ?',
+                                (new_readiness, "Ready", 1, dep_idx),
+                            )
+                        else:
+                            cursor.execute(
+                                'UPDATE scheduler SET readiness = ? WHERE "index" = ?', (new_readiness, dep_idx)
+                            )
+
+            conn.commit()
 
     def _mark_done_memory(self, job_index, success=True):
         mask = self._schedule["index"] == job_index
@@ -497,76 +627,6 @@ class Scheduler:
                 conn.commit()
         else:
             self._schedule["pid"][self._schedule["index"] == index] = pid
-
-    def mark_done(self, index, success=True):
-        if self.use_system_queue:
-            with self._db_connection() as conn:
-                cursor = conn.cursor()
-                # Check if job is already marked as done to prevent duplicate processing
-                cursor.execute('SELECT status, dependent_idx, config_type FROM scheduler WHERE "index" = ?', (index,))
-                row = cursor.fetchone()
-                if not row:
-                    return
-
-                current_status, dependent_idx_json, config_type = row
-                # If already marked as done, skip to prevent duplicate increments
-                if current_status == "Completed" or current_status == "Failed":
-                    return
-
-                dependent_indices = json.loads(dependent_idx_json) if dependent_idx_json else []
-
-                if success:
-                    new_status = "Completed"
-                    # Mark as Completed, clear PID, and set process_end
-                    process_end = datetime.now().isoformat()
-                    cursor.execute(
-                        'UPDATE scheduler SET status = ?, pid = 0, process_end = ? WHERE "index" = ?',
-                        (new_status, process_end, index),
-                    )
-                else:
-                    # Check if this is a retry (priority is already 0)
-                    cursor.execute('SELECT priority FROM scheduler WHERE "index" = ?', (index,))
-                    priority_row = cursor.fetchone()
-                    current_priority = priority_row[0] if priority_row else None
-
-                    if current_priority == 0:
-                        # This is a retry that failed again - set readiness to 0, is_ready to false, and mark as Failed
-                        process_end = datetime.now().isoformat()
-                        cursor.execute(
-                            'UPDATE scheduler SET status = ?, readiness = ?, is_ready = ?, pid = 0, process_end = ? WHERE "index" = ?',
-                            ("Failed", 0, 0, process_end, index),
-                        )
-                    else:
-                        # First failure - set priority to 0 and status to Ready for retry
-                        cursor.execute(
-                            'UPDATE scheduler SET status = ?, priority = ?, pid = 0, process_start = ? WHERE "index" = ?',
-                            ("Ready", 0, "", index),
-                        )
-
-                # Only increment readiness for dependent jobs if the job completed successfully
-                if success:
-                    for dep_idx in dependent_indices:
-                        cursor.execute('SELECT readiness FROM scheduler WHERE "index" = ?', (dep_idx,))
-                        dep_row = cursor.fetchone()
-                        if dep_row:
-                            new_readiness = dep_row[0] + 1
-
-                            if new_readiness > 100:
-                                new_readiness = 100
-
-                            if new_readiness == 100:
-                                cursor.execute(
-                                    'UPDATE scheduler SET readiness = ?, status = ?, is_ready = ? WHERE "index" = ?',
-                                    (new_readiness, "Ready", 1, dep_idx),
-                                )
-                            else:
-                                cursor.execute(
-                                    'UPDATE scheduler SET readiness = ? WHERE "index" = ?', (new_readiness, dep_idx)
-                                )
-
-                conn.commit()
-        else:
-            self._mark_done_memory(index, success)
 
     def is_all_done(self):
         if self.use_system_queue:
@@ -726,8 +786,7 @@ class Scheduler:
             print(f"Warning: Failed to save completed jobs to file: {e}")
             np.save(file_path.replace(".npy", "_error.npy"), table, allow_pickle=True)
 
-    def _generate_command(self, index, **kwargs):
-        kwargs = {**self._kwargs, **kwargs}
+    def _generate_command(self, index, scheduler_kwargs, **kwargs):
 
         if self.use_system_queue:
             with self._db_connection() as conn:
@@ -747,32 +806,21 @@ class Scheduler:
             input_type = self._schedule["input_type"][mask][0]
 
         is_too = str(input_type).lower() == "too" or "_ToO_" in config
-        overwrite = kwargs.get("overwrite", False)
-        overwrite_preprocess = kwargs.get("overwrite_preprocess", False)
-        overwrite_science = kwargs.get("overwrite_science", False)
 
-        processes = kwargs.get("processes", ["astrometry", "photometry", "combine", "subtract"])
-
-        if job_type == "preprocess":
+        if config_type == "preprocess":
             cmd = [f"{SCRIPTS_DIR}/preprocess", "-config", config, "-make_plots"]
             if is_too:
                 cmd.append("-is_too")
-            if overwrite or overwrite_preprocess:
-                cmd.append("-overwrite")
-            if kwargs.get("preprocess_kwargs", None):
-                cmd.extend(["--preprocess_kwargs", json.dumps(kwargs["preprocess_kwargs"])])
-        elif job_type == "science":
+            cmd.extend(scheduler_kwargs)
+        elif config_type == "science":
             cmd = [f"{SCRIPTS_DIR}/data_reduction", "-config", config]
             if is_too:
                 cmd.append("-is_too")
-            cmd.append("-processes")
-            cmd.extend(processes)
-            if overwrite or overwrite_science:
-                cmd.append("-overwrite")
-        elif job_type == "debug":
+            cmd.extend(scheduler_kwargs)
+        elif config_type == "debug":
             cmd = [f"{SCRIPTS_DIR}/debug", "-config", config]
         else:
-            raise ValueError(f"Invalid systemd queue job_type: {job_type}")
+            raise ValueError(f"Invalid systemd queue config_type: {config_type}")
 
         return cmd
 
@@ -805,16 +853,46 @@ class Scheduler:
                 existing_configs = set(existing_table["config"])
 
                 # Filter out rows with duplicate configs
+                overwrite_schedule = self._kwargs.get("overwrite_schedule", False)
+
                 new_table = table.copy()
                 # Create mask for non-duplicate rows
-                non_duplicate_mask = [config not in existing_configs for config in new_table["config"]]
-                filtered_table = (
-                    new_table[non_duplicate_mask] if any(non_duplicate_mask) else new_table[[]]
-                )  # Empty table if all duplicates
 
-                if len(filtered_table) < len(new_table):
-                    duplicate_count = len(new_table) - len(filtered_table)
-                    print(f"Warning: Ignoring {duplicate_count} duplicate config(s) when adding schedule")
+                if overwrite_schedule:
+                    duplicate_mask = [config in existing_configs for config in new_table["config"]]
+
+                    # Delete existing rows with duplicate configs from database
+                    if any(duplicate_mask):
+                        duplicate_configs = [
+                            config for config, is_dup in zip(new_table["config"], duplicate_mask) if is_dup
+                        ]
+                        cursor.execute(
+                            "DELETE FROM scheduler WHERE config IN ({})".format(
+                                ",".join(["?"] * len(duplicate_configs))
+                            ),
+                            duplicate_configs,
+                        )
+                        conn.commit()
+
+                        # Update existing_table to reflect deleted rows for index calculation
+                        existing_table = existing_table[
+                            [config not in duplicate_configs for config in existing_table["config"]]
+                        ]
+
+                        print(f"Replaced {len(duplicate_configs)} existing schedule(s) with new ones")
+
+                    # Use all new rows (replacing existing ones)
+                    filtered_table = new_table
+
+                else:
+                    non_duplicate_mask = [config not in existing_configs for config in new_table["config"]]
+                    filtered_table = (
+                        new_table[non_duplicate_mask] if any(non_duplicate_mask) else new_table[[]]
+                    )  # Empty table if all duplicates
+
+                    if len(filtered_table) < len(new_table):
+                        duplicate_count = len(new_table) - len(filtered_table)
+                        print(f"Warning: Ignoring {duplicate_count} duplicate config(s) when adding schedule")
 
                 # Adjust indices in filtered table to avoid conflicts
                 if len(existing_table) > 0 and len(filtered_table) > 0:
@@ -839,6 +917,7 @@ class Scheduler:
                 else:
                     # All rows were duplicates
                     table_to_insert = filtered_table
+
             else:
                 # No existing data, just use the new table
                 table_to_insert = table
@@ -858,13 +937,13 @@ class Scheduler:
                     dependent_idx_json = json.dumps(dependent_idx) if dependent_idx else None
 
                     pid = row.get("pid") if "pid" in row.colnames else 0
-                    original_status = row.get("original_status") if "original_status" in row.colnames else None
+                    kwargs = row.get("kwargs") if "kwargs" in row.colnames else None
                     process_start = row.get("process_start") if "process_start" in row.colnames else None
                     process_end = row.get("process_end") if "process_end" in row.colnames else None
 
                     cursor.execute(
                         """INSERT INTO scheduler 
-                           ("index", config, config_type, input_type, is_ready, priority, readiness, status, dependent_idx, pid, original_status, process_start, process_end)
+                           ("index", config, config_type, input_type, is_ready, priority, readiness, status, dependent_idx, pid, kwargs, process_start, process_end)
                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             int(row["index"]),
@@ -877,7 +956,7 @@ class Scheduler:
                             str(row["status"]),
                             dependent_idx_json,
                             int(pid) if pid is not None else 0,
-                            str(original_status) if original_status is not None else None,
+                            str(kwargs) if kwargs is not None else None,
                             str(process_start) if process_start is not None else None,
                             str(process_end) if process_end is not None else None,
                         ),

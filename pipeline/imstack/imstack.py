@@ -8,7 +8,8 @@ from astropy.time import Time
 from astropy.table import Table
 from astropy.coordinates import Angle
 
-from ..const import REF_DIR, PipelineError
+from ..const import REF_DIR
+from ..errors import PipelineError
 from ..config import SciProcConfiguration
 from ..path.path import PathHandler
 from ..services.setup import BaseSetup
@@ -19,10 +20,12 @@ from ..preprocess.utils import get_zdf_from_header_IMCMB
 from ..preprocess.plotting import save_fits_as_figures
 from .. import external
 from ..utils.tile import is_ris_tile, find_ris_tile
+from ..utils.header import update_padded_header
 
 from ..services.database.handler import DatabaseHandler
 from ..services.database.image_qa import ImageQATable
 from ..services.checker import Checker, SanityFilterMixin
+from ..errors import CoaddError
 
 from .const import ZP_KEY, CORE_KEYS
 
@@ -44,7 +47,8 @@ class ImStack(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         self.overwrite = overwrite
         self._device_id = None
         self._use_gpu = use_gpu
-        self._flag_name = "combine"
+        # self._flag_name = "combine"
+        self.logger.process_error = CoaddError
 
         if self.config_node.settings.is_pipeline:
             self.config_node.imstack.convolve = False
@@ -289,9 +293,13 @@ class ImStack(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         if self.config_node.imstack.bkgsub_type.lower() == "dynamic":
             self.logger.info("Start dynamic background subtraction")
             self._dynamic_bkgsub()
-        else:
+            # if self._bkg_qa():
+            #     self._const_bkgsub()
+        elif self.config_node.imstack.bkgsub_type.lower() == "constant":
             self.logger.info("Start constant background subtraction")
             self._const_bkgsub()
+        else:
+            raise ValueError(f"bkgsub_type: {self.config_node.imstack.bkgsub_type} is invalid")
 
         self.logger.info(
             f"Background subtraction is completed in {time_diff_in_seconds(st)} ({time_diff_in_seconds(st, return_float=True)/len(self.input_images):.1f} s/image)"
@@ -353,6 +361,28 @@ class ImStack(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
                 bkg = fits.getdata(bkg)
                 _data -= bkg
                 fits.writeto(outim, _data, header=_hdr, overwrite=True)
+
+    # TODO:
+    def _bkg_qa(self, bkgsub_type: str = "dynamic"):
+        if bkgsub_type == "dynamic":
+            # do assessment below
+            for f in self.config_node.imstack.bkg_images:
+                data = fits.getdata(f)
+                H, W = data.shape
+                stripe = np.mean(data[H // 2 - 100 : H // 2 + 100, :], axis=0)
+
+            pass
+        elif bkgsub_type == "constant":
+            # add dummy key
+            for f in self.input_images:
+                update_padded_header(f, {"BACKARTF": (False, "Dynamic bkgsub will cause artifacts")})
+        else:
+            raise ValueError(f"_bkg_qa - Invalid bkgsub_type: {bkgsub_type}")
+
+        update_padded_header(f, {"BACKARTF": (False, "Dynamic bkgsub will cause artifacts")})
+
+        recommenced_bkgsub_type = "constant"  # BACKTYPE "Recommended bkgsub type"
+        return recommenced_bkgsub_type
 
     @staticmethod
     def _group_IMCMB(

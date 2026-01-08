@@ -88,10 +88,21 @@ class ImageQATable:
     def from_row(cls, row: tuple, columns: List[str] = None):
 
         if columns is None:
-            columns = cls.__annotations__.keys()
+            columns = list(cls.__annotations__.keys())
+            # If row length doesn't match, we can't proceed without column names
+            if len(row) != len(columns):
+                raise ValueError(
+                    f"Row length ({len(row)}) doesn't match columns length ({len(columns)}). Please provide column names."
+                )
 
-        if len(row) != len(columns):
-            raise ValueError(f"Row length ({len(row)}) doesn't match columns length ({len(columns)})")
+        # Get dataclass field names
+        dataclass_fields = set(cls.__annotations__.keys())
+
+        # Create a mapping of column names to row values
+        row_dict = {}
+        for i, col_name in enumerate(columns):
+            if i < len(row) and col_name in dataclass_fields:
+                row_dict[col_name] = row[i]
 
         def parse_json_field(value):
             if value and isinstance(value, str):
@@ -102,8 +113,6 @@ class ImageQATable:
             elif value and not isinstance(value, (dict, list)):
                 return None
             return value
-
-        row_dict = dict(zip(columns, row))
 
         # Parse JSON fields
         if "warnings" in row_dict:
@@ -142,7 +151,13 @@ class ImageQATable:
                 setattr(cls, key, header[header_key])
 
         if header["IMAGETYP"] == "LIGHT":
-            cls.image_type = "science"
+            if "_coadd" in file:
+                cls.image_type = "stacked"
+            elif "_diff" in file:
+                cls.image_group = "diff"
+            else:
+                cls.image_group = "single"
+
             cls.image_group = "science"
         else:
             cls.image_type = header["IMAGETYP"].lower()

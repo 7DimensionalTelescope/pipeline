@@ -1,7 +1,6 @@
 from .environ import *
 from .observation import *
 from .system_resources import *
-from .errors import *
 
 # set umask 0022 -> 0002
 import os

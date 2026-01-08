@@ -6,7 +6,7 @@ from functools import cached_property
 import numpy as np
 
 from .. import const
-from ..const import PipelineError
+from ..errors import PipelineError
 from ..utils.tile import find_ris_tile
 from ..utils import add_suffix, swap_ext, collapse, atleast_1d
 

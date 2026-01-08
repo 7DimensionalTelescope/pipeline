@@ -25,6 +25,13 @@ class DatabaseHandler:
             self.process_status_id = None if is_too else None
             self.image_qa = None if is_too else ImageQA(db_params)
             self.image_qa_id = None if is_too else None
+        else:
+            self.too_db = None
+            self.too_id = None
+            self.process_status = None
+            self.process_status_id = None
+            self.image_qa = None
+            self.image_qa_id = None
 
     @property
     def is_connected(self) -> bool:

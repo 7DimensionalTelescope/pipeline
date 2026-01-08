@@ -21,7 +21,7 @@ from ..services.checker import Checker
 from ..services.database.image_qa import ImageQATable
 from ..services.database.handler import DatabaseHandler
 from ..utils.header import add_padding, get_header
-from ..const import PipelineError
+from ..errors import PipelineError, PreprocessError
 from ..path import PathHandler, NameHandler
 
 pp = pprint.PrettyPrinter(indent=2)  # , width=120)
@@ -62,6 +62,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
     ):
         # Load Configuration
         super().__init__(config, logger, queue)
+        self.logger.process_error = PreprocessError
 
         is_too = get_key(self.config_node.settings, "is_too", False)
 

@@ -96,7 +96,7 @@ class BaseDatabase:
         except Exception as e:
             raise DatabaseError(f"Failed to execute query: {e}")
 
-    def create_data(self, file):
+    def create_data(self, file, overwrite: bool = False):
         try:
             if isinstance(file, str):
                 data = self.pyTable.from_file(file).to_dict()
@@ -105,13 +105,33 @@ class BaseDatabase:
             else:
                 raise ValueError(f"Invalid file type: {type(file)}")
 
-            columns = ", ".join([f'"{k}"' for k in data.keys()])
-            values = ", ".join([f"'{v}'" for v in data.values()])
+            # Check if record already exists (by image_name and process_status_id)
+            existing_id = None
+            if "image_name" in data and "process_status_id" in data:
+                existing = self.read_data_by_params(
+                    image_name=data["image_name"], process_status_id=data["process_status_id"]
+                )
+                if existing:
+                    existing_id = (
+                        existing if isinstance(existing, int) else (existing[0] if isinstance(existing, list) else None)
+                    )
 
-            query = query_insert.format(table_name=self.table_name, columns=columns, values=values)
-            id = self.excute_query(query, data)
+            if overwrite:
+                self.delete_data(existing_id)
+                existing_id = None
 
-            return id
+            if existing_id:
+                # Update existing record
+                self.update_data(existing_id, **data)
+                return existing_id
+            else:
+                # Insert new record
+                columns = ", ".join([f'"{k}"' for k in data.keys()])
+                values = ", ".join([f"'{v}'" for v in data.values()])
+
+                query = query_insert.format(table_name=self.table_name, columns=columns, values=values)
+                id = self.excute_query(query, data)
+                return id
 
         except Exception as e:
             raise DatabaseError(f"Failed to add {self.table_name}: {e}")
@@ -126,13 +146,13 @@ class BaseDatabase:
             try:
                 # Format query string with table name and order_by using f-string
                 query = query_all_columns.format(table_name=self.table_name, order_by=order_by)
-                rows = self.excute_query(query, {})
+                rows, columns = self.excute_query(query, {}, return_columns=True)
 
                 if not rows:
                     return []
 
                 # Convert each row to ProcessStatusTable
-                return [self.pyTable.from_row(row) for row in rows]
+                return [self.pyTable.from_row(row, columns=columns) for row in rows]
 
             except Exception as e:
                 raise DatabaseError(f"Failed to read all {self.table_name} data: {e}")
@@ -145,12 +165,12 @@ class BaseDatabase:
             query = query_column_by_name.format(table_name=self.table_name)
             params = {"name": name}
 
-            rows = self.excute_query(query, params)
+            rows, columns = self.excute_query(query, params, return_columns=True)
 
             if not rows or len(rows) == 0:
                 return None
 
-            result = self.pyTable.from_row(rows[0])
+            result = self.pyTable.from_row(rows[0], columns=columns)
             return result
 
         except Exception as e:
@@ -164,12 +184,12 @@ class BaseDatabase:
             query = query_column_by_id.format(table_name=self.table_name)
             params = {"id": target_id}
 
-            rows = self.excute_query(query, params)
+            rows, columns = self.excute_query(query, params, return_columns=True)
 
             if not rows or len(rows) == 0:
                 return None
 
-            result = self.pyTable.from_row(rows[0])
+            result = self.pyTable.from_row(rows[0], columns=columns)
             return result
 
         except Exception as e:
@@ -181,14 +201,14 @@ class BaseDatabase:
         params_str = " AND ".join([f"{k} = %({k})s" for k in params.keys()])
         query = query_by_params.format(table_name=self.table_name, params=params_str)
 
-        rows = self.excute_query(query, params)
+        rows, columns = self.excute_query(query, params, return_columns=True)
 
         if not rows or len(rows) == 0:
             return None
         elif len(rows) == 1:
-            return self.pyTable.from_row(rows[0]).id
+            return self.pyTable.from_row(rows[0], columns=columns).id
         else:
-            return [self.pyTable.from_row(row).id for row in rows]
+            return [self.pyTable.from_row(row, columns=columns).id for row in rows]
 
     def update_data(self, target_id: int, **kwargs):
         params = {}

@@ -11,6 +11,8 @@ from ..const.observation import BROAD_FILTERS
 from .utils import SortedGroupDict, PreprocessGroup, ScienceGroup
 from .fd import log_fd_info
 
+import json
+
 
 class Blueprint:
     """overwrite=True to rewrite configs"""
@@ -128,14 +130,22 @@ class Blueprint:
 
         self._config_generated = True
 
-    def create_schedule(self, is_too=False, base_priority=None, **kwargs):
+    def create_schedule(
+        self,
+        is_too=False,
+        base_priority=None,
+        overwrite=False,
+        overwrite_preprocess=False,
+        overwrite_science=False,
+        preprocess_kwargs=None,
+        processes=["astrometry", "photometry", "combine", "subtract"],
+        **kwargs,
+    ):
 
         is_too = is_too or self.is_too
 
         if not self._config_generated:
-            self.create_config(
-                overwrite=kwargs.get("overwrite", False), max_workers=kwargs.get("max_workers", 50), is_too=is_too
-            )
+            self.create_config(overwrite=overwrite, max_workers=kwargs.get("max_workers", 50), is_too=is_too)
 
         from astropy.table import Table
 
@@ -151,7 +161,7 @@ class Blueprint:
                 ("status", object),  # Ready, Pending, Processing, Completed
                 ("dependent_idx", list),
                 ("pid", int),  # Process ID
-                ("original_status", object),  # Ready, Pending, Processing, Completed
+                ("kwargs", object),  # overwrite, ...
                 ("process_start", object),  # ISO format timestamp when processing started
                 ("process_end", object),  # ISO format timestamp when processing ended
             ]
@@ -191,6 +201,12 @@ class Blueprint:
             if isinstance(group, ScienceGroup):
                 continue
 
+            scheduler_kwargs = (
+                ["-overwrite"]
+                if overwrite or overwrite_preprocess
+                else [] + ["--preprocess_kwargs", json.dumps(preprocess_kwargs)] if preprocess_kwargs else []
+            )
+
             schedule.add_row(
                 [
                     idx,
@@ -203,7 +219,7 @@ class Blueprint:
                     "Ready",
                     [],
                     0,
-                    "Ready",
+                    scheduler_kwargs,
                     "",
                     "",
                 ]
@@ -230,6 +246,8 @@ class Blueprint:
                     priority = 11  # sciprocess
                     schedule["priority"][parent_idx] = 12  # preprocess
 
+                scheduler_kwargs = ["-overwrite"] if overwrite or overwrite_science else [] + ["-processes"] + processes
+
                 schedule.add_row(
                     [
                         idx,
@@ -242,7 +260,7 @@ class Blueprint:
                         "Pending",
                         [],
                         0,
-                        "Pending",
+                        scheduler_kwargs,
                         "",
                         "",
                     ]

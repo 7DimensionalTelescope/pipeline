@@ -15,7 +15,8 @@ import astropy.units as u
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .. import external
-from ..const import PIXSCALE, PipelineError, REF_DIR
+from ..const import PIXSCALE, REF_DIR
+from ..errors import PipelineError, AstrometryError
 from ..utils import swap_ext, add_suffix, force_symlink, time_diff_in_seconds, unique_filename, atleast_1d
 from ..utils.header import update_padded_header, reset_header, fitsrec_to_header
 from ..services.memory import MemoryMonitor
@@ -26,6 +27,7 @@ from ..io.cfitsldac import write_ldac
 from ..services.database.handler import DatabaseHandler
 from ..services.database.image_qa import ImageQATable
 from ..services.checker import Checker
+from ..services.logger import Logger
 
 from .utils import (
     polygon_info_header,
@@ -71,7 +73,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
     def __init__(
         self,
         config: Union[str, SciProcConfiguration] = None,
-        logger: Any = None,
+        logger: Logger = None,
         queue: Union[bool, Any] = False,
         use_gpu: bool = False,
     ) -> None:
@@ -84,6 +86,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         """
         super().__init__(config, logger, queue)
         self._flag_name = "astrometry"
+        self.logger.process_error = AstrometryError
         self.logger.debug(f"Astrometry Queue is '{queue}'")
 
         self.start_time = time.time()

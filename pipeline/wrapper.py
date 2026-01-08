@@ -29,7 +29,6 @@ class DataReduction:
         if not self._created_config:
             self.blueprint.create_config(overwrite=overwrite, max_workers=max_workers, is_too=is_too)
             self._created_config = True
-            self.blueprint.create_schedule(is_too=is_too, base_priority=self.base_priority)
 
     def run(
         self,
@@ -39,6 +38,7 @@ class DataReduction:
         overwrite_data=False,
         overwrite_preprocess=False,
         overwrite_science=False,
+        overwrite_schedule=False,
         max_workers=50,
         processes=["astrometry", "photometry", "combine", "subtract"],
         queue=None,
@@ -53,18 +53,28 @@ class DataReduction:
         is_too = is_too or self.is_too
 
         if not self._created_config:
-            self.create_config(overwrite=overwrite_config, max_workers=max_workers, is_too=is_too)
+            self.create_config(
+                overwrite=overwrite_config,
+                max_workers=max_workers,
+                is_too=is_too,
+            )
             self._created_config = True
+
+        self.blueprint.create_schedule(
+            is_too=is_too,
+            base_priority=self.base_priority,
+            processes=processes,
+            overwrite=overwrite_data,
+            overwrite_preprocess=overwrite_preprocess,
+            overwrite_science=overwrite_science,
+            preprocess_kwargs=preprocess_kwargs,
+        )
 
         sc = Scheduler(
             self.blueprint.schedule,
-            processes=processes,
-            overwrite=overwrite_data,
-            preprocess_kwargs=preprocess_kwargs,
             is_too=is_too,
             use_system_queue=use_system_queue,
-            overwrite_preprocess=overwrite_preprocess,
-            overwrite_science=overwrite_science,
+            overwrite_schedule=overwrite_schedule,
         )
         if use_system_queue:
             sc.start_system_queue()

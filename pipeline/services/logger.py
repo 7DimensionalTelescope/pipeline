@@ -1,11 +1,14 @@
-import logging
-import requests
+import os
 import sys
 import time
+import logging
+import requests
 import fcntl
 from typing import Optional, Union, Dict, Any
-import os
+
+from ..services.database.process_status import ProcessStatus
 from .. import const
+from ..errors import UndefinedProcessError, exception_from_code, ProcessErrorBase
 
 
 class Logger:
@@ -67,7 +70,8 @@ class Logger:
         self._original_stderr = sys.stderr
         self._original_excepthook = sys.excepthook
 
-        self.database = None
+        self.process_error: None | ProcessErrorBase = None
+        self.database: Optional[ProcessStatus] = None
 
         # Redirect stdout and stderr to the logger only if requested
         if redirect_stdout:
@@ -253,7 +257,7 @@ class Logger:
         self.logger.info(msg, **kwargs)
         # self.send_slack(msg, "INFO")
 
-    def warning(self, msg: str, **kwargs) -> None:
+    def warning(self, msg: str, exception: Optional[ProcessErrorBase] = None, **kwargs) -> None:
         """
         Log a warning message and send a Slack notification.
 
@@ -261,14 +265,20 @@ class Logger:
             msg (str): Warning message to log
             **kwargs: Additional keyword arguments for logging
         """
+
+        # prepend exception name only if explicitly provided
+        if exception is None:
+            exception = self.process_error or UndefinedProcessError
+        else:
+            msg = f"[{exception}] " + msg
+
         if self.database is not None:
-            code = kwargs.pop("code", 999)
-            self.database.add_exception_code(code_type="warning", code_value=code)
+            self.database.add_exception_code(code_type="warning", code_value=exception.error_code)
 
         self.logger.warning(msg, **kwargs)
         # self.send_slack(msg, "WARNING")
 
-    def error(self, msg: str, **kwargs) -> None:
+    def error(self, msg: str, exception: Optional[ProcessErrorBase] = None, **kwargs) -> None:
         """
         Log an error message and send a Slack notification.
 
@@ -276,17 +286,23 @@ class Logger:
             msg (str): Error message to log
             **kwargs: Additional keyword arguments for logging
         """
+        # prepend exception name only if explicitly provided
+        if exception is None:
+            exception = self.process_error or UndefinedProcessError
+        else:
+            msg = f"[{exception}] " + msg
+
+        if self.database is not None:
+            self.database.add_exception_code(code_type="error", code_value=exception.error_code)
+
         # Only use exc_info if explicitly requested or if there's an exception
         if "exc_info" not in kwargs:
             kwargs["exc_info"] = False
-        if self.database is not None:
-            code = kwargs.pop("code", 999)
-            self.database.add_exception_code(code_type="error", code_value=code)
 
         self.logger.error(msg, **kwargs)
         # self.send_slack(msg, "ERROR")
 
-    def critical(self, msg: str, **kwargs) -> None:
+    def critical(self, msg: str, exception: Optional[ProcessErrorBase] = None, **kwargs) -> None:
         """
         Log a critical message and send a Slack notification.
 
@@ -294,12 +310,18 @@ class Logger:
             msg (str): Critical message to log
             **kwargs: Additional keyword arguments for logging
         """
+        # prepend exception name only if explicitly provided
+        if exception is None:
+            exception = self.process_error or UndefinedProcessError
+        else:
+            msg = f"[{exception}] " + msg
+
+        if self.database is not None:
+            self.database.add_exception_code(code_type="error", code_value=exception.error_code)
+
         # Only use exc_info if explicitly requested or if there's an exception
         if "exc_info" not in kwargs:
             kwargs["exc_info"] = False
-        if self.database is not None:
-            code = kwargs.pop("code", 999)
-            self.database.add_exception_code(code_type="error", code_value=code)
 
         self.logger.critical(msg, **kwargs)
         # self.send_slack(msg, "CRITICAL")
