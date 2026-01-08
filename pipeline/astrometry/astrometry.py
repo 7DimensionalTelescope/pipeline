@@ -16,7 +16,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .. import external
 from ..const import PIXSCALE, REF_DIR
-from ..errors import PipelineError, AstrometryError
+from ..errors import (
+    AstrometryError,
+    AstrometryReferenceError,
+)
 from ..utils import swap_ext, add_suffix, force_symlink, time_diff_in_seconds, unique_filename, atleast_1d
 from ..utils.header import update_padded_header, reset_header, fitsrec_to_header
 from ..services.memory import MemoryMonitor
@@ -189,7 +192,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                 try:
 
                     if force_solve_field:
-                        raise PipelineError("force_solve_field")
+                        raise AstrometryError.NotImplementedError("force_solve_field")
 
                     # early QA
                     image_info.set_early_qa_stats(sci_cat=prep_cat, ref_cat=self.config_node.astrometry.local_astref)
@@ -201,7 +204,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                             f"Skipping all subsequent processing, including Astrometry and Photometry."
                         )
                         self.logger.error(
-                            f"Early QA rejected {os.path.basename(image_info.image_path)}! Skipping all subsequent processing, including Astrometry and Photometry."
+                            f"Early QA rejected {os.path.basename(image_info.image_path)}! Skipping all subsequent processing, including Astrometry and Photometry.",
+                            AstrometryError.BlankImageError,
                         )
                         update_padded_header(image_info.image_path, fits.Header(image_info.early_qa_cards))
                         continue
@@ -236,13 +240,14 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                         self.logger.warning(
                             f"Bad solution. UNMATCH: {image_info.rsep_stats.unmatched_fraction if image_info.rsep_stats.unmatched_fraction is not None else 'None'}, "
                             f"RSEP_P95: {image_info.rsep_stats.separation_stats.P95 if image_info.rsep_stats.separation_stats.P95 is not None else 'None'} "
-                            f"after {max_scamp} iterations for {image_info.image_path}"
+                            f"after {max_scamp} iterations for {image_info.image_path}",
+                            AstrometryError.BadWcsSolutionError,
                         )
 
                         if not avoid_solvefield:
-                            raise PipelineError(f"Bad SCAMP solution")
+                            raise AstrometryError.ScampError(f"Bad SCAMP solution")
 
-                except PipelineError as e:
+                except AstrometryError.ScampError as e:
                     # re-raise if not bad SCAMP error
                     if "Bad SCAMP solution" not in str(e):
                         raise
@@ -250,8 +255,10 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     # if evaluate_prep_sol:
                     #     self.evaluate_solution(suffix="prepwcs", use_threading=use_threading, export_eval_cards=True)
 
-                    self.logger.warning(e)
-                    self.logger.warning(f"Solve-field triggered, better solution not guaranteed for {prep_cat}")
+                    self.logger.warning(
+                        f"Solve-field triggered, better solution not guaranteed for {prep_cat}",
+                        AstrometryError.AlternativeSolverError,
+                    )
 
                     # self.run_solve_field(input_catalogs=self.prep_cats, output_images=self.solved_images)
                     self.run_solve_field(input_catalogs=prep_cat, output_images=[None], solvefield_args=solvefield_args)
@@ -275,8 +282,12 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     )
 
                 except Exception as e:
-                    self.logger.critical(f"Unexpected error during astrometry processing: {str(e)}", exc_info=True)
-                    raise Exception(f"Unexpected error during astrometry processing: {str(e)}")
+                    self.logger.error(
+                        f"Unexpected error during astrometry processing: {str(e)}",
+                        AstrometryError.UnknownError,
+                        exc_info=True,
+                    )
+                    raise AstrometryError.UnknownError(f"Unexpected error during astrometry processing: {str(e)}")
 
             # evaluate main scamp
             self.evaluate_solution(
@@ -301,8 +312,11 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             )
             self.logger.debug(MemoryMonitor.log_memory_usage)
         except Exception as e:
-
-            self.logger.error(f"Error during astrometry processing: {str(e)}", exc_info=True)
+            self.logger.error(
+                f"Error during astrometry processing: {str(e)}",
+                AstrometryError.UnknownError,
+                exc_info=True,
+            )
             raise
 
     def _iterate_scamp(
@@ -381,7 +395,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             except Exception as e:
                 if evaluate_prep_sol:
                     self.evaluate_solution(suffix="prepwcs", use_threading=use_threading, export_eval_cards=True)
-                self.logger.warning(e)
+                self.logger.warning(e, AstrometryError.UnknownError)
 
                 self.run_solve_field(self.soft_links_to_input_images, self.solved_images)
                 if evaluate_prep_sol:
@@ -408,7 +422,9 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             )
             self.logger.debug(MemoryMonitor.log_memory_usage)
         except Exception as e:
-            self.logger.error(f"Error during astrometry processing: {str(e)}", exc_info=True)
+            self.logger.error(
+                f"Error during astrometry processing: {str(e)}", AstrometryError.UnknownError, exc_info=True
+            )
             raise
 
     def define_paths(self) -> Tuple[List[str], List[str], List[str]]:
@@ -458,7 +474,12 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                 )
                 self.logger.info(f"Generated reference catalog: {local_astref}")
             except Exception as e:
-                self.logger.error(f"Failed to generate reference catalog: {e}. Proceeding without local astrefcat.")
+                self.logger.error(
+                    f"Failed to generate reference catalog: {e}. Proceeding without local astrefcat.",
+                    AstrometryError.AstrometryReferenceGenerationError,
+                    exc_info=True,
+                )
+
                 local_astref = None
         self.config_node.astrometry.local_astref = local_astref
 
@@ -664,8 +685,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                 self.logger.info(f"Completed sextractor (prep) [{i+1}/{len(input_images)}]")
                 self.logger.debug(f"{solved_image}")
             except Exception as e:
-                self.logger.error(f"Failed sextractor for {solved_image}: {e}")
-                raise RuntimeError(f"Sextractor failed for {solved_image}: {e}") from e
+                self.logger.error(f"Failed sextractor for {solved_image}: {e}", AstrometryError.SextractorError)
+                raise AstrometryError.SextractorError(f"Sextractor failed for {solved_image}: {e}") from e
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
@@ -787,7 +808,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             # self.logger.debug(f"ImageInfo of {image_info.image_path} is updated")
             with open(solved_head, "r") as f:
                 if scamp_preset == "main" and not any("PV1_0" in line for line in f):
-                    self.logger.error(f"No PV1_0 in {solved_head} - solution invalid")
+                    self.logger.error(f"No PV1_0 in {solved_head} - solution invalid", AstrometryError.ScampError)
                     # raise PipelineError(f"No PV1_0 in {solved_head} - solution invalid")
 
         self.logger.info(f"Completed {scamp_preset} scamp in {time_diff_in_seconds(st)} seconds")
@@ -875,7 +896,11 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                 )
                 self.logger.debug(f"Updated FOV polygon. RA: {image_info.fov_ra}, Dec: {image_info.fov_dec}")
             except Exception as e:
-                self.logger.error(f"Failed to update FOV polygon for {image_info.image_path}: {e}", exc_info=True)
+                self.logger.error(
+                    f"Failed to update FOV polygon for {image_info.image_path}: {e}",
+                    AstrometryError.UnknownError,
+                    exc_info=True,
+                )
 
             try:
                 eval_result = evaluate_single_wcs(
@@ -898,7 +923,9 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                 )
 
             except Exception as e:
-                self.logger.error(f"Failed to evaluate solution for {input_image}: {e}", exc_info=True)
+                self.logger.error(
+                    f"Failed to evaluate solution for {input_image}: {e}", AstrometryError.UnknownError, exc_info=True
+                )
 
                 raise
             return idx, eval_result
@@ -914,7 +941,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             if scamp_preset == "main" and rsep_stats.unmatched_fraction == 1.0:
                 self.logger.error(
                     f"Unmatched fraction is 1.0 for {input_images[idx]}. "
-                    f"Check the initial WCS guess or the reference catalog."
+                    f"Check the initial WCS guess or the reference catalog.",
+                    AstrometryError.BadWcsSolutionError,
                 )
 
             info = images_info[idx]
@@ -958,7 +986,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                         f.write(fits.Header(cards).tostring(sep="\n"))
 
         except Exception as e:
-            self.logger.error(f"Failed to evaluate solution: {e}", exc_info=True)
+            self.logger.error(f"Failed to evaluate solution: {e}", AstrometryError.UnknownError, exc_info=True)
 
             # don't raise error
 
@@ -1137,10 +1165,9 @@ class ImageInfo:
             if callable(log_fn):
                 log_fn(msg, *args, **kwargs)
                 return
-        # no logger available
+        # if no logger available
         if level.lower() in ("error", "critical"):
-
-            raise PipelineError(msg % args if args else msg)
+            raise AstrometryError(msg % args if args else msg)
         else:
             print(f"[ImageInfo:{level.upper()}] {msg % args if args else msg}")
 

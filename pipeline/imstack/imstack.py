@@ -9,7 +9,7 @@ from astropy.table import Table
 from astropy.coordinates import Angle
 
 from ..const import REF_DIR
-from ..errors import PipelineError
+from ..errors import PipelineError, CoaddError
 from ..config import SciProcConfiguration
 from ..path.path import PathHandler
 from ..services.setup import BaseSetup
@@ -25,7 +25,6 @@ from ..utils.header import update_padded_header
 from ..services.database.handler import DatabaseHandler
 from ..services.database.image_qa import ImageQATable
 from ..services.checker import Checker, SanityFilterMixin
-from ..errors import CoaddError
 
 from .const import ZP_KEY, CORE_KEYS
 
@@ -157,7 +156,7 @@ class ImStack(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             self.config_node.flag.combine = True
             self.logger.info(f"'ImStack' is Completed in {time_diff_in_seconds(self._st)} seconds")
         except Exception as e:
-            self.logger.error(f"Error during imstack processing: {str(e)}")
+            self.logger.error(f"Error during imstack processing: {str(e)}", CoaddError.UnknownError)
 
             raise
         # self.logger.debug(MemoryMonitor.log_memory_usage)
@@ -224,17 +223,17 @@ class ImStack(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         self.camera_gain = camera_gains[0]
 
         if len(objs) != 1:
-            self.logger.warning("Multiple OBJECT found. Using the first one.")
+            self.logger.warning("Multiple OBJECT found. Using the first one.", CoaddError.AssumptionFailedError)
 
         self.filte = filters[0]
         if len(filters) != 1:
-            self.logger.warning("Multiple FILTER found. Using the first one.")
+            self.logger.warning("Multiple FILTER found. Using the first one.", CoaddError.AssumptionFailedError)
 
         if len(egains) != 1:
-            self.logger.warning("Multiple EGAIN found. Using the first one.")
+            self.logger.warning("Multiple EGAIN found. Using the first one.", CoaddError.AssumptionFailedError)
 
         if len(camera_gains) != 1:
-            self.logger.warning("Multiple GAIN found. Using the first one.")
+            self.logger.warning("Multiple GAIN found. Using the first one.", CoaddError.AssumptionFailedError)
 
         #   Hard coding for the UDS field
         # self.gain_default = 0.78
@@ -488,7 +487,7 @@ class ImStack(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             self.logger.debug(f"BADPIX found in header. Using badpix {badpix}.")
         else:
 
-            self.logger.warning("BADPIX not found in header. Using default value 0.")
+            self.logger.warning("BADPIX not found in header. Using default value 0.", CoaddError.KeyError)
         return mask_file, badpix
 
     def apply_bpmask(self, device_id=None, use_gpu: bool = True):
@@ -723,11 +722,11 @@ class ImStack(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
                 self.logger.debug(f"weight_list {weight_list}")
                 self.logger.debug(f"outwim_list {outwim_list}")
 
-                # compute
                 if not all([os.path.exists(f) for f in atleast_1d(weight_list)]):
+                    self.logger.error(f"Weight map not found for all images.", CoaddError.FileNotFoundError)
+                    raise CoaddError.FileNotFoundError(f"Weight map not found for all images.")
 
-                    self.logger.warning(f"Weight map not found for all images. Skipping.")
-
+                # compute
                 convolve_fft(
                     weight_list,
                     outwim_list,

@@ -7,17 +7,18 @@ from astropy.table import Table
 from datetime import datetime, timedelta
 
 from .. import external
-from ..services.setup import BaseSetup
 from ..utils import add_suffix, swap_ext, collapse, time_diff_in_seconds
 from ..tools.table import match_two_catalogs
 from ..config.utils import get_key
+from ..errors import SubtractionError
 from ..path import PathHandler
 from ..preprocess.plotting import save_fits_as_figures
+
+from ..services.setup import BaseSetup
 from ..services.database.handler import DatabaseHandler
 from ..services.database.image_qa import ImageQATable
 from ..services.checker import Checker, SanityFilterMixin
 from ..services.database.query import RawImageQuery
-from ..errors import SubtractionError
 
 from .utils import create_ds9_region_file, select_sources
 
@@ -134,7 +135,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
 
         except Exception as e:
 
-            self.logger.error(f"Error during imsubtract processing: {str(e)}")
+            self.logger.error(f"Error during imsubtract processing: {str(e)}", SubtractionError.UnknownError)
             raise
 
     def find_reference_image(self):
@@ -184,7 +185,8 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             if not ref_image:
 
                 self.logger.warning(
-                    f"The reference images are likely to exist but they have not been processed yet. Check observation dates: {available_dates} for {obs}/{filt}"
+                    f"The reference images are likely to exist but they have not been processed yet. Check observation dates: {available_dates} for {obs}/{filt}",
+                    SubtractionError.ReferenceImageNotFoundError,
                 )
 
     def define_paths(self):

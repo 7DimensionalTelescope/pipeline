@@ -6,6 +6,7 @@ import threading
 import numpy as np
 from astropy.io import fits
 import copy
+import traceback
 
 from .plotting import *
 from . import utils as prep_utils
@@ -21,7 +22,7 @@ from ..services.checker import Checker
 from ..services.database.image_qa import ImageQATable
 from ..services.database.handler import DatabaseHandler
 from ..utils.header import add_padding, get_header
-from ..errors import PipelineError, PreprocessError
+from ..errors import PreprocessError, NoOnDateMasterFrameError, MasterFrameNotFoundError
 from ..path import PathHandler, NameHandler
 
 pp = pprint.PrettyPrinter(indent=2)  # , width=120)
@@ -199,10 +200,10 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                         threads_for_making_plots.append(t)
 
                 except Exception as e:
-                    import traceback
-
                     self.logger.error(
-                        f"[Group {i+1}] Error during masterframe generation or data reduction: {str(e)}", exc_info=False
+                        f"[Group {i+1}] Error during masterframe generation or data reduction: {str(e)}",
+                        PreprocessError.UnknownError,
+                        exc_info=False,
                     )
                     self.logger.debug(traceback.format_exc())
 
@@ -221,7 +222,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
             self.logger.info(f"Preprocessing completed in {time_diff_in_seconds(st)} seconds")
         except Exception as e:
-            self.logger.error(f"Error during preprocessing: {str(e)}", exc_info=True)
+            self.logger.error(f"Error during preprocessing: {str(e)}", PreprocessError.UnknownError, exc_info=True)
             raise
 
     def proceed_to_next_group(self):
@@ -339,7 +340,10 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 self._fetch_masterframe(output_file, dtype)
                 self.skip_plotting_flags[dtype] = True
             else:
-                self.logger.warning(f"[Group {self._current_group+1}] {dtype} has no input or output data (to fetch)")
+                self.logger.warning(
+                    f"[Group {self._current_group+1}] {dtype} has no input or output data (to fetch)",
+                    NoOnDateMasterFrameError,
+                )
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_input: {input_file}")
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_output: {output_file}")
 
@@ -466,9 +470,12 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         if not existing_mframe_file:
 
             self.logger.error(
-                f"[Group {self._current_group+1}] No pre-existing master {dtype} found in place of {template} within {max_offset} days"
+                f"[Group {self._current_group+1}] No pre-existing master {dtype} found in place of {template} within {max_offset} days",
+                MasterFrameNotFoundError,
             )
-            raise PipelineError(f"No pre-existing master {dtype} found in place of {template} within {max_offset} days")
+            raise MasterFrameNotFoundError(
+                f"No pre-existing master {dtype} found in place of {template} within {max_offset} days"
+            )
         else:
             sanity_check = fits.getval(existing_mframe_file, "SANITY")
             self.logger.info(
@@ -495,10 +502,11 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 )
             else:
                 self.logger.error(
-                    f"[Group {self._current_group+1}] No pre-existing master flatdark found in place of {flatdark_template} within {max_offset} days"
+                    f"[Group {self._current_group+1}] No pre-existing master flatdark found in place of {flatdark_template} within {max_offset} days",
+                    MasterFrameNotFoundError,
                 )
 
-                raise PipelineError(
+                raise MasterFrameNotFoundError(
                     f"No pre-existing master flatdark found in place of {flatdark_template} within {max_offset} days"
                 )
 
@@ -713,7 +721,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             else:
                 self.logger.info(f"[Group {group_index+1}] Skipping science plot")
         except Exception as e:
-            self.logger.error(f"[Group {group_index+1}] Error making plots: {e}")
+            self.logger.error(f"[Group {group_index+1}] Error making plots: {e}", PreprocessError.UnknownError)
+            self.logger.debug(traceback.format_exc())
 
     def update_bpmask(self, sanity=True):
         header = self.get_header("dark")

@@ -30,14 +30,24 @@ from ..config import SciProcConfiguration
 from ..config.base import ConfigNode
 from .. import external
 from ..const import PIXSCALE, MEDIUM_FILTERS, BROAD_FILTERS, ALL_FILTERS
-from ..errors import PipelineError
 from ..services.setup import BaseSetup
 from ..tools.table import match_two_catalogs, build_condition_mask
 from ..path.path import PathHandler
 from ..utils.header import get_header_key, update_padded_header
 from ..too.plotting import make_too_output
 from ..utils.tile import is_ris_tile
-from ..errors import SinglePhotometryError, CoaddedPhotometryError, DifferencePhotometryError
+from ..errors import (
+    PipelineError,
+    SystemError,
+    SinglePhotometryError,
+    CoaddedPhotometryError,
+    DifferencePhotometryError,
+    NotEnoughSourcesError,
+    NoReferenceSourceError,
+    FilterCheckError,
+    FilterInventoryError,
+    UnknownError,
+)
 
 from . import utils as phot_utils
 from .plotting import plot_zp, plot_filter_check
@@ -245,7 +255,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             self.logger.info(f"'Photometry' is Completed in {time_diff_in_seconds(st)} seconds")
             self.logger.debug(MemoryMonitor.log_memory_usage)
         except Exception as e:
-            self.logger.critical(f"Photometry failed: {str(e)}", exc_info=True)
+            self.logger.error(f"Photometry failed: {str(e)}", UnknownError, exc_info=True)
             raise
 
     def _run_parallel(self, overwrite=True) -> None:
@@ -461,7 +471,9 @@ class PhotometrySingle:
                 f" in {time_diff_in_seconds(start_time)} seconds"
             )
         except Exception as e:
-            self.logger.critical(f"PhotometrySingle failed for the image [{self._id}]: {str(e)}", exc_info=True)
+            self.logger.error(
+                f"PhotometrySingle failed for the image [{self._id}]: {str(e)}", UnknownError, exc_info=True
+            )
             raise
 
     def calculate_seeing(self, phot_header: PhotometryHeader = None, use_header_seeing: bool = False) -> None:
@@ -523,7 +535,10 @@ class PhotometrySingle:
             post_match_table = self.filter_catalog(post_match_table, snr_cut=False, low_mag_cut=11.75)
 
             if len(post_match_table) == 0:
-                self.logger.error(f"No star-like sources found. Skipping photometry. Check the catalog: {prep_cat}")
+                self.logger.error(
+                    f"No star-like sources found. Skipping photometry. Check the catalog: {prep_cat}",
+                    NotEnoughSourcesError,
+                )
                 return
 
             phot_header.SEEING = np.median(post_match_table["FWHM_WORLD"] * 3600)
@@ -586,9 +601,9 @@ class PhotometrySingle:
         for col in synthetic_ref_mag_keys:
             if col not in ref_src_table.colnames:
                 if col == self.image_info.filter:
-                    self.logger.error(f"Column {col} not found in reference catalog")
+                    self.logger.error(f"Column {col} not found in reference catalog", KeyError)
                 else:
-                    self.logger.warning(f"Column {col} not found in reference catalog")
+                    self.logger.warning(f"Column {col} not found in reference catalog", KeyError)
                 self.logger.debug(f"Reference catalog: {ref_src_table.colnames}")
             else:
                 self.gaia_columns.append(col)
@@ -619,7 +634,10 @@ class PhotometrySingle:
 
         self.logger.info(f"Matched sources: {len(post_match_table)} (r = {r.to_value(u.arcsec):.3f} arcsec)")
         if len(post_match_table) == 0:
-            self.logger.critical("There is no matched source for photometry. It will cause a problem in the next step.")
+            self.logger.error(
+                "There is no matched source for photometry. It will cause a problem in the next step.",
+                NoReferenceSourceError,
+            )
 
         return post_match_table
 
@@ -810,7 +828,8 @@ class PhotometrySingle:
 
         if ref_mag_key not in zp_src_table.keys():
             self.logger.warning(
-                f"Reference magnitude key {ref_mag_key} not found in the source table; consider adding it. Skipping for now..."
+                f"Reference magnitude key {ref_mag_key} not found in the source table; consider adding it. Skipping for now...",
+                KeyError,
             )
             return None
 
@@ -828,7 +847,7 @@ class PhotometrySingle:
 
             input_arr = np.array(zps[~mask].value)
             if len(input_arr) == 0:
-                self.logger.error(f"No valid zero point sources found for {mag_key}. Skipping.")
+                self.logger.error(f"No valid zero point sources found for {mag_key}. Skipping.", NotEnoughSourcesError)
                 self.logger.debug(f"input_arr: {input_arr}")
                 continue
             zp, zperr = phot_utils.compute_median_nmad(input_arr, normalize=True)
@@ -942,8 +961,9 @@ class PhotometrySingle:
             if len(test_dicts) == 0:
                 zp, zperr = phot_utils.get_zp_from_dict(dicts, alleged_filter)
 
-                self.logger.warning(
-                    f"Filter determination process eliminated all candidates. Falling back to header filter '{alleged_filter}' (zp = {zp:.2f}±{zperr:.2f})"
+                self.logger.error(
+                    f"Filter determination process eliminated all candidates. Falling back to header filter '{alleged_filter}' (zp = {zp:.2f}±{zperr:.2f})",
+                    FilterCheckError,
                 )
                 inferred_filter = alleged_filter
                 break
@@ -953,11 +973,13 @@ class PhotometrySingle:
             plot_filter_check(self, alleged_filter, inferred_filter, narrowed_filters, filters_checked, zps, zperrs)
 
         if alleged_filter != inferred_filter:
-
-            self.logger.warning(f"The filter in header ({alleged_filter}) is not the best matching ({inferred_filter})")
-            self.logger.warning(f"The best-matching filter is {inferred_filter} with zp = {zp:.2f}±{zperr:.2f}")
             orig_zp, orig_zperr = phot_utils.get_zp_from_dict(dicts, alleged_filter)
-            self.logger.warning(f"The original filter is {alleged_filter} with zp = {orig_zp:.2f}±{orig_zperr:.2f}")
+            self.logger.warning(
+                f"\nThe filter in header ({alleged_filter}) is not the best matching ({inferred_filter})\n"
+                f"The best-matching filter is {inferred_filter} with zp = {zp:.2f}±{zperr:.2f}\n"
+                f"The original filter is {alleged_filter} with zp = {orig_zp:.2f}±{orig_zperr:.2f}\n",
+                FilterCheckError,
+            )
         else:
             self.logger.info(f"The inferred filter matches the original filter, '{alleged_filter}'")
 
@@ -1000,13 +1022,16 @@ class PhotometrySingle:
             active_filters = set(NameHandler(flats + scis).filter)
             self.logger.debug(f"Fetched active filters from local filesystem: {active_filters}")
             return active_filters
-        except PipelineError as e:
+        except (PipelineError, SystemError) as e:
             self.logger.warning(
-                f"Unable to fetch active filters from on-date inventory. Using all default filters: {e}"
+                f"Unable to fetch active filters from on-date inventory. Using all default filters: {e}",
+                FilterInventoryError,
             )
             return ALL_FILTERS
         except Exception as e:
-            self.logger.error(f"Fetching active filters failed. Using all default filters: {e}", exc_info=True)
+            self.logger.error(
+                f"Fetching active filters failed. Using all default filters: {e}", FilterInventoryError, exc_info=True
+            )
             return ALL_FILTERS
 
     def update_image_header(

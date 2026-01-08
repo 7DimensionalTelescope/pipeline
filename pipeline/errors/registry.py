@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple, Type
+from typing import Any, Dict, Optional, Tuple, Type, Union
 
 from .errors import UnknownProcessOrKindError
 
@@ -206,6 +206,44 @@ class ProcessErrorBase(Exception, metaclass=ProcessErrorMeta):
         msg = super().__str__()
         prefix = f"[{self.error_code} {self.process_name}.{self.kind_name}]"
         return f"{prefix} {msg}".rstrip()
+
+    @classmethod
+    def exception(cls, kind: Union[str, Type[BaseException], BaseException]) -> Type[BaseException]:
+        """
+        Resolve a 'kind' into a combined exception class under this process.
+
+        Examples:
+            AstrometryError.exception(ValueError) -> AstrometryError.ValueError
+            AstrometryError.exception("ValueError") -> AstrometryError.ValueError
+            AstrometryError.exception(ValueError("x")) -> AstrometryError.ValueError
+            AstrometryError.exception(CoaddError.ValueError) -> CoaddError.ValueError
+            AstrometryError.exception(AttributeError) -> AstrometryError.UnknownError
+        """
+        # If passed an instance, use its type
+        if isinstance(kind, BaseException):
+            kind_obj = type(kind)
+        else:
+            kind_obj = kind
+
+        # If already one of our generated combined/process exception classes, return as-is
+        if isinstance(kind_obj, type) and hasattr(kind_obj, "error_code"):
+            return kind_obj  # type: ignore[return-value]
+
+        # Determine the lookup name we will try on the process class
+        if isinstance(kind_obj, str):
+            name = kind_obj
+        elif isinstance(kind_obj, type) and issubclass(kind_obj, BaseException):
+            name = kind_obj.__name__
+        else:
+            raise TypeError(f"Unsupported kind: {kind!r}")
+
+        # Try resolving to a registered kind under this process; otherwise fall back
+        try:
+            return getattr(cls, name)
+        except AttributeError:
+            # Must be registered as a kind name in your registry, e.g.
+            # registry.register_kind("UnknownError", 99, UnknownError)
+            return getattr(cls, "UnknownError")
 
 
 class ComboErrorMeta(ProcessErrorMeta):

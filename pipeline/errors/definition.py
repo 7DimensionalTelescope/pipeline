@@ -1,20 +1,7 @@
 from typing import Any, Tuple
 
 from .registry import ErrorRegistry, make_process_error
-from .errors import (
-    MasterFrameNotFoundError,
-    BlankImageError,
-    BadWcsSolutionError,
-    PointingError,
-    PositionAngleError,
-    NotEnoughSourcesError,
-    NoReferenceSourceError,
-    BackgroundArtifactError,
-    SeeingVariationError,
-    NoReferenceImageError,
-    QualityCheckFailedError,
-    UnknownError,
-)
+from .errors import *
 
 # ---------------------------
 # Setup
@@ -31,7 +18,7 @@ registry.register_process("coadd", 4)
 registry.register_process("coadded_photometry", 5)
 registry.register_process("subtraction", 6)
 registry.register_process("difference_photometry", 7)
-# errors outside specific processes (orchestrator, config, user-input, etc.)
+# errors outside specific processes (orchestrator, config, PathHandler, user-input, etc.)
 registry.register_process("system", 9)
 registry.register_process("undefined_process", 0)
 
@@ -46,6 +33,7 @@ registry.register_kind("FileNotFoundError", 6, FileNotFoundError)
 registry.register_kind("PermissionError", 7, PermissionError)
 registry.register_kind("TimeoutError", 8, TimeoutError)
 registry.register_kind("KeyboardInterrupt", 9, KeyboardInterrupt)
+registry.register_kind("NotImplementedError", 11, NotImplementedError)
 
 # Other candidates; revise the error code to use them
 
@@ -124,26 +112,44 @@ registry.register_kind("KeyboardInterrupt", 9, KeyboardInterrupt)
 # Pipeline specific errors
 # preprocess from 20
 registry.register_kind("MasterFrameNotFoundError", 20, MasterFrameNotFoundError)
+registry.register_kind("NoOnDateMasterFrameError", 21, NoOnDateMasterFrameError)
+
 
 # astrometry from 30
 registry.register_kind("BlankImageError", 30, BlankImageError)
 registry.register_kind("BadWcsSolutionError", 31, BadWcsSolutionError)
 registry.register_kind("PointingError", 32, PointingError)
 registry.register_kind("PositionAngleError", 33, PositionAngleError)
+registry.register_kind("AlternativeSolverError", 34, AlternativeSolverError)
+registry.register_kind("SolveFieldError", 35, SolveFieldError)
+registry.register_kind("ScampError", 36, ScampError)
+registry.register_kind("AstrometryReferenceGenerationError", 37, AstrometryReferenceGenerationError)
+
 
 # photometry from 50
 registry.register_kind("NotEnoughSourcesError", 50, NotEnoughSourcesError)
 registry.register_kind("NoReferenceSourceError", 51, NoReferenceSourceError)
+registry.register_kind("SextractorError", 52, SextractorError)
+registry.register_kind("FilterCheckError", 53, FilterCheckError)
+registry.register_kind("FilterInventoryError", 54, FilterInventoryError)
+registry.register_kind("PhotometryReferenceGenerationError", 57, PhotometryReferenceGenerationError)
+
 
 # imstack from 60
 registry.register_kind("BackgroundArtifactError", 60, BackgroundArtifactError)
 registry.register_kind("SeeingVariationError", 61, SeeingVariationError)
+registry.register_kind("SwarpError", 62, SwarpError)
+
 
 # subtraction from 70
 registry.register_kind("NoReferenceImageError", 70, NoReferenceImageError)
+registry.register_kind("HotpantsError", 71, HotpantsError)
+
 
 # generic from 80
 registry.register_kind("QualityCheckFailedError", 80, QualityCheckFailedError)
+registry.register_kind("AssumptionFailedError", 81, AssumptionFailedError)
+
 
 # Reserved sentinel
 registry.register_kind("UnknownError", 99, UnknownError)

@@ -4,11 +4,18 @@ import time
 import logging
 import requests
 import fcntl
-from typing import Optional, Union, Dict, Any
+from typing import Optional, Union, Dict, Any, Type, cast
 
 from ..services.database.process_status import ProcessStatus
 from .. import const
 from ..errors import UndefinedProcessError, exception_from_code, ProcessErrorBase
+
+ExceptionArg = Union[
+    None,
+    str,  # "ValueError" / "BadWcsSolution" / "BadWcsSolutionError"
+    Type[BaseException],  # ValueError / BadWcsSolutionError / AstrometryError.ValueError
+    BaseException,  # ValueError("x") / AstrometryError.ValueError("x")
+]
 
 
 class Logger:
@@ -257,67 +264,97 @@ class Logger:
         self.logger.info(msg, **kwargs)
         # self.send_slack(msg, "INFO")
 
-    def warning(self, msg: str, exception: Optional[ProcessErrorBase] = None, **kwargs) -> None:
+    def warning(self, msg: str, exception: ExceptionArg = None, **kwargs) -> None:
         """
-        Log a warning message and send a Slack notification.
+        Log an warning message.
 
         Args:
-            msg (str): Warning message to log
+            msg (str): Error message to log
+            exception (ExceptionArg): Exception to log
             **kwargs: Additional keyword arguments for logging
+
+        Behavior:
+          - If exception is None: uses current process (self.process_error) or UndefinedProcessError,
+            and DOES NOT prefix msg.
+          - If exception is provided (kind/class/instance): binds it to the current process, prefixes msg,
+            and records the bound error_code.
         """
+
+        process_cls: Type[ProcessErrorBase] = self.process_error or UndefinedProcessError
 
         # prepend exception name only if explicitly provided
         if exception is None:
-            exception = self.process_error or UndefinedProcessError
+            exception_cls: Type[BaseException] = process_cls
         else:
-            msg = f"[{exception}] " + msg
+            exception_cls: Type[BaseException] = process_cls.exception(exception)
+            msg = f"[{exception_cls}] {msg}"
 
         if self.database is not None:
-            self.database.add_exception_code(code_type="warning", code_value=exception.error_code)
+            self.database.add_exception_code(code_type="warning", code_value=exception_cls.error_code)
 
         self.logger.warning(msg, **kwargs)
         # self.send_slack(msg, "WARNING")
 
-    def error(self, msg: str, exception: Optional[ProcessErrorBase] = None, **kwargs) -> None:
+    def error(self, msg: str, exception: ExceptionArg = None, **kwargs) -> None:
         """
-        Log an error message and send a Slack notification.
+        Log an error message.
 
         Args:
             msg (str): Error message to log
+            exception (ExceptionArg): Exception to log
             **kwargs: Additional keyword arguments for logging
+
+        Behavior:
+          - If exception is None: uses current process (self.process_error) or UndefinedProcessError,
+            and DOES NOT prefix msg.
+          - If exception is provided (kind/class/instance): binds it to the current process, prefixes msg,
+            and records the bound error_code.
         """
+        process_cls: Type[ProcessErrorBase] = self.process_error or UndefinedProcessError
+
         # prepend exception name only if explicitly provided
         if exception is None:
-            exception = self.process_error or UndefinedProcessError
+            exception_cls: Type[BaseException] = process_cls
         else:
-            msg = f"[{exception}] " + msg
+            exception_cls: Type[BaseException] = process_cls.exception(exception)
+            msg = f"[{exception_cls}] {msg}"
 
         if self.database is not None:
-            self.database.add_exception_code(code_type="error", code_value=exception.error_code)
+            self.database.add_exception_code(code_type="error", code_value=exception_cls.error_code)
 
-        # Only use exc_info if explicitly requested or if there's an exception
+        # Only use exc_info if explicitly requested
         if "exc_info" not in kwargs:
             kwargs["exc_info"] = False
 
         self.logger.error(msg, **kwargs)
         # self.send_slack(msg, "ERROR")
 
-    def critical(self, msg: str, exception: Optional[ProcessErrorBase] = None, **kwargs) -> None:
+    def critical(self, msg: str, exception: ExceptionArg = None, **kwargs) -> None:
         """
-        Log a critical message and send a Slack notification.
+        Log an critical message.
 
         Args:
-            msg (str): Critical message to log
+            msg (str): Error message to log
+            exception (ExceptionArg): Exception to log
             **kwargs: Additional keyword arguments for logging
+
+        Behavior:
+          - If exception is None: uses current process (self.process_error) or UndefinedProcessError,
+            and DOES NOT prefix msg.
+          - If exception is provided (kind/class/instance): binds it to the current process, prefixes msg,
+            and records the bound error_code.
         """
+        process_cls: Type[ProcessErrorBase] = self.process_error or UndefinedProcessError
+
         # prepend exception name only if explicitly provided
         if exception is None:
-            exception = self.process_error or UndefinedProcessError
+            exception_cls: Type[BaseException] = process_cls
         else:
-            msg = f"[{exception}] " + msg
+            exception_cls: Type[BaseException] = process_cls.exception(exception)
+            msg = f"[{exception_cls}] {msg}"
 
         if self.database is not None:
-            self.database.add_exception_code(code_type="error", code_value=exception.error_code)
+            self.database.add_exception_code(code_type="error", code_value=exception_cls.error_code)
 
         # Only use exc_info if explicitly requested or if there's an exception
         if "exc_info" not in kwargs:
