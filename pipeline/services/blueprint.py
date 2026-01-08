@@ -9,6 +9,7 @@ from ..config.utils import get_filter_from_config
 from ..const.observation import BROAD_FILTERS
 
 from .utils import SortedGroupDict, PreprocessGroup, ScienceGroup
+from .fd import log_fd_info
 
 
 class Blueprint:
@@ -104,17 +105,26 @@ class Blueprint:
                 self.groups[mfg_key].add_images(flattened_images)
                 self.groups[mfg_key].add_sci_keys(key)
 
-    def create_config(self, overwrite=False, max_workers=50, is_too=False, priority=None):
+    def create_config(self, overwrite=False, max_workers=30, is_too=False, priority=None):
 
         is_too = is_too or self.is_too
+
+        # Log FD info before starting
+        log_fd_info(prefix="[create_config] Before: ")
 
         kwargs = {"overwrite": overwrite, "is_too": is_too}
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(group.create_config, **kwargs) for group in self.groups.values()]
-            for f in futures:
+            for i, f in enumerate(futures):
                 f.result()
+                # Log FD info periodically during processing
+                if (i + 1) % 10 == 0 or i == len(futures) - 1:
+                    log_fd_info(prefix=f"[create_config] After {i+1}/{len(futures)} configs: ")
         del futures
         gc.collect()
+
+        # Log FD info after completion
+        log_fd_info(prefix="[create_config] After cleanup: ")
 
         self._config_generated = True
 
