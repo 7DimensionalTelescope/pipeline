@@ -4,18 +4,11 @@ import time
 import logging
 import requests
 import fcntl
-from typing import Optional, Union, Dict, Any, Type, cast
+from typing import Optional, Union, Dict, Any, Type
 
 from ..services.database.process_status import ProcessStatus
 from .. import const
-from ..errors import UndefinedProcessError, exception_from_code, ProcessErrorBase
-
-ExceptionArg = Union[
-    None,
-    str,  # "ValueError" / "BadWcsSolution" / "BadWcsSolutionError"
-    Type[BaseException],  # ValueError / BadWcsSolutionError / AstrometryError.ValueError
-    BaseException,  # ValueError("x") / AstrometryError.ValueError("x")
-]
+from ..errors import UndefinedProcessError, exception_from_code, ProcessErrorBase, ExceptionArg
 
 
 class Logger:

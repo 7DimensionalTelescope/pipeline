@@ -16,9 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .. import external
 from ..const import PIXSCALE, REF_DIR
-from ..errors import (
-    AstrometryError,
-)
+from ..errors import AstrometryError, ExceptionArg
 from ..utils import swap_ext, add_suffix, force_symlink, time_diff_in_seconds, unique_filename, atleast_1d
 from ..utils.header import update_padded_header, reset_header, fitsrec_to_header
 from ..services.memory import MemoryMonitor
@@ -1157,12 +1155,12 @@ class ImageInfo:
     # late qa
     # UNMATCH, PA_ALIGN, ELLIPMN, ELLIPSTD
 
-    def _log(self, msg: str, level: str = "error", *args, **kwargs):
+    def _log(self, msg: str, level: str = "error", exception: ExceptionArg = None, *args, **kwargs):
         """Log or fallback to print/raise if logger missing."""
         if self.logger is not None:
             log_fn = getattr(self.logger, level, None)
             if callable(log_fn):
-                log_fn(msg, *args, **kwargs)
+                log_fn(msg, exception, *args, **kwargs)
                 return
         # if no logger available
         if level.lower() in ("error", "critical"):
@@ -1253,17 +1251,17 @@ class ImageInfo:
             zp = zp_per_filter[self.filter]
         else:
             zp = zp_per_filter["unknown"]
-            self.logger.warning(
-                f"Unknown filter {self.filter} for zero point calculation. Using default: {zp}.",
-                AstrometryError.PrerequisiteNotMetError,
+            self._log(
+                f"Filter {self.filter} not in zeropoints.json for early QA. Using default: {zp}.",
+                exception=AstrometryError.PrerequisiteNotMetError,
             )
         if self.filter in depths_per_filter:
             depth = depths_per_filter[self.filter]
         else:
             depth = depths_per_filter["unknown"]
-            self.logger.warning(
-                f"Unknown filter {self.filter} for depth calculation. Using default: {depth}.",
-                AstrometryError.PrerequisiteNotMetError,
+            self._log(
+                f"Filter {self.filter} not in depths.json for early QA. Using default: {depth}.",
+                exception=AstrometryError.PrerequisiteNotMetError,
             )
 
         self.num_frac = get_source_num_frac(sci_cat, ref_cat, sci_zp=zp, depth=depth - 0.5)

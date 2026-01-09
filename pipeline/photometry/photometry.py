@@ -539,6 +539,7 @@ class PhotometrySingle:
                     f"No star-like sources found. Skipping photometry. Check the catalog: {prep_cat}",
                     NotEnoughSourcesError,
                 )
+                raise self.logger.process_error.exception(NotEnoughSourcesError)
                 return
 
             phot_header.SEEING = np.median(post_match_table["FWHM_WORLD"] * 3600)
@@ -602,6 +603,7 @@ class PhotometrySingle:
             if col not in ref_src_table.colnames:
                 if col == self.image_info.filter:
                     self.logger.error(f"Column {col} not found in reference catalog", KeyError)
+                    raise self.logger.process_error.exception(KeyError)
                 else:
                     self.logger.warning(f"Column {col} not found in reference catalog", KeyError)
                 self.logger.debug(f"Reference catalog: {ref_src_table.colnames}")
@@ -638,6 +640,7 @@ class PhotometrySingle:
                 "There is no matched source for photometry. It will cause a problem in the next step.",
                 NoReferenceSourceError,
             )
+            raise self.logger.process_error.exception(NoReferenceSourceError)
 
         return post_match_table
 

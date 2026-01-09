@@ -330,3 +330,11 @@ def exception_class_from_code(registry: ErrorRegistry, error_code: int) -> Type[
     if p is None or k is None:
         raise UnknownProcessOrKindError(f"Unknown process/kind for code {error_code} (process={p_code}, kind={k_code})")
     return _make_combo_class(reg=registry, pinfo=p, kinfo=k)
+
+
+ExceptionArg = Union[
+    None,
+    str,  # "ValueError" / "BadWcsSolution" / "BadWcsSolutionError"
+    Type[BaseException],  # ValueError / BadWcsSolutionError / AstrometryError.ValueError
+    BaseException,  # ValueError("x") / AstrometryError.ValueError("x")
+]
