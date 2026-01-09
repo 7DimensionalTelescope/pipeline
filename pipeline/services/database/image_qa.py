@@ -31,6 +31,7 @@ class ImageQATable:
     unit: Optional[str] = None
     filter: Optional[str] = None
     object: Optional[str] = None
+    exptime: Optional[float] = None
 
     date_obs: Optional[datetime] = None
     altitude: Optional[float] = None
