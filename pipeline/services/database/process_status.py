@@ -140,3 +140,6 @@ class ProcessStatus(BaseDatabase):
     def reset_exceptions(self, process_id: int):
         # Empty lists need to be converted to JSON strings for jsonb columns
         self.update_data(process_id, warnings=[], errors=[])
+
+
+        

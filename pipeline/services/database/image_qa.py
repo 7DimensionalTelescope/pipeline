@@ -183,3 +183,45 @@ class ImageQA(BaseDatabase):
     @property
     def pyTable(self):
         return self._pyTable
+
+    def get_by_process_status_id(self, process_status_id: int) -> List[ImageQATable]:
+        """Get all image_qa rows that have the given process_status_id"""
+        try:
+            query = query_by_params.format(
+                table_name=self.table_name, params="process_status_id = %(process_status_id)s"
+            )
+            params = {"process_status_id": process_status_id}
+
+            rows, columns = self.excute_query(query, params, return_columns=True)
+
+            if not rows or len(rows) == 0:
+                return []
+
+            return [self.pyTable.from_row(row, columns=columns) for row in rows]
+
+        except Exception as e:
+            raise DatabaseError(f"Failed to read {self.table_name} by process_status_id: {e}")
+
+    def classify_images(self, images, group="masterframe") -> List[str]:
+
+        classified = {}
+
+        if group == "masterframe":
+            for image in images:
+                if image.image_type == "bias":
+                    classified.setdefault("bias", [])
+                    classified["bias"].append(image.image_name)
+                elif image.image_type == "dark":
+                    classified.setdefault("dark", [])
+                    classified["dark"].append(image.exposure)
+                elif image.image_type == "flat":
+                    classified.setdefault("flat", [])
+                    classified["flat"].append(image.filter)
+
+        elif group == "science":
+            for image in images:
+                if image.image_type == "science":
+                    classified.setdefault(image.object, [])
+                    classified[image.object].append(image.filter)
+
+        return classified

@@ -106,3 +106,12 @@ class DatabaseHandler:
     def update_image_qa_data(self, image_qa_id: int, data):
         data.pop("id", None)
         self.image_qa.update_data(image_qa_id, **data)
+
+    def get_process_status(self, nightdate):
+
+        rows = self.process_status.read_data_by_params(nightdate=nightdate)
+        if rows is None:
+            return None
+
+        dicts = [rows.to_dict() for row in rows]
+        return dicts
