@@ -142,7 +142,7 @@ registry.register_kind("SwarpError", 62, SwarpError)
 
 
 # subtraction from 70
-registry.register_kind("NoReferenceImageError", 70, NoReferenceImageError)
+registry.register_kind("NoReferenceImageError", 70, ReferenceImageNotFoundError)
 registry.register_kind("HotpantsError", 71, HotpantsError)
 
 

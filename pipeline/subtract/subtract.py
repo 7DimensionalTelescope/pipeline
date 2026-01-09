@@ -136,8 +136,11 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")
 
         except Exception as e:
-
-            self.logger.error(f"Error during imsubtract processing: {str(e)}", SubtractionError.UnknownError)
+            self.logger.error(
+                f"Error during imsubtract processing: {str(e)}",
+                SubtractionError.UnknownError,
+                exc_info=True,
+            )
             raise
 
     def find_reference_image(self):

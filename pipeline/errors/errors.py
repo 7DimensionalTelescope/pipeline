@@ -90,7 +90,7 @@ class SwarpError(Exception):
 
 
 # subtraction errors
-class NoReferenceImageError(Exception):
+class ReferenceImageNotFoundError(Exception):
     pass
 
 
