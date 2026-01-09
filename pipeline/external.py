@@ -611,7 +611,7 @@ def swarp(
 
     if os.path.exists(comim) and not overwrite:
         if not (weight_map and not os.path.exists(weightim)):
-            chatter(f"SWarp output image already exists: {comim}, skipping...", "info")
+            chatter(f"SWarp output image already exists: {comim}, skipping...")
             return
 
     # 	SWarp
