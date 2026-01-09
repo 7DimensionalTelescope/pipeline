@@ -154,9 +154,9 @@ class ImageQATable:
             if "_coadd" in file:
                 cls.image_type = "coadd"
             elif "_diff" in file:
-                cls.image_group = "diff"
+                cls.image_type = "diff"
             else:
-                cls.image_group = "single"
+                cls.image_type = "single"
 
             cls.image_group = "science"
         else:
