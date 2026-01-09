@@ -166,7 +166,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
             # Reset errors and warnings at the start of processing
             if self.is_connected:
-                self.process_status.reset_exceptions(self.process_status_id)
+                self.reset_exceptions(self.process_status_id)
 
             # Update pipeline status to running
             self.update_progress(0, "running")
