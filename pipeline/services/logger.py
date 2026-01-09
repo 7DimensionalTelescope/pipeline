@@ -236,7 +236,7 @@ class Logger:
         # Remove duplicate stdout write to prevent double logging
         # sys.__stdout__.write(msg + "\n")  # This was causing double logging
 
-    def debug(self, msg: str, **kwargs) -> None:
+    def debug(self, msg: str, exception: ExceptionArg = None, **kwargs) -> None:
         """
         Log a debug message.
 
@@ -246,7 +246,7 @@ class Logger:
         """
         self.logger.debug(msg, **kwargs)
 
-    def info(self, msg: str, **kwargs) -> None:
+    def info(self, msg: str, exception: ExceptionArg = None, **kwargs) -> None:
         """
         Log an informational message and send a Slack notification.
 
