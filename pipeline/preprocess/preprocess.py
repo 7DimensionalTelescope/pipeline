@@ -85,7 +85,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         self._use_gpu = use_gpu
 
         # Initialize DatabaseHandler
-        db_handler = DatabaseHandler.__init__(self, add_database=add_database if not is_too else False, logger=self.logger)
+        db_handler = DatabaseHandler.__init__(
+            self, add_database=add_database if not is_too else False, logger=self.logger
+        )
 
         if self.is_connected:
             self.logger.database = db_handler
@@ -163,7 +165,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             st = time.time()
 
             # Reset errors and warnings at the start of processing
-            self.process_status.reset_exceptions(self.process_status_id)
+            if self.is_connected:
+                self.process_status.reset_exceptions(self.process_status_id)
 
             # Update pipeline status to running
             self.update_progress(0, "running")

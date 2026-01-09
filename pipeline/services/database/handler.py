@@ -14,6 +14,7 @@ class DatabaseHandler:
         logger=None,
     ):
         self.is_too = is_too
+        self.add_database = add_database
 
         if not hasattr(self, "logger"):
             self.logger = logger or logging.getLogger(__name__)
@@ -35,14 +36,15 @@ class DatabaseHandler:
 
     @property
     def is_connected(self) -> bool:
-        """Check if database is connected"""
-        if self.is_too:
+
+        if not self.add_database:
+            return False
+        elif self.is_too and self.too_db is not None:
             return True
         else:
             return self.process_status is not None and self.image_qa is not None
 
     def create_process_data(self, config, overwrite: bool = False):
-
         if self.is_too and self.too_db is not None:
             self.too_db.read_data(config.name)
             self.too_id = self.too_db.too_id

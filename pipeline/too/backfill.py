@@ -5,7 +5,7 @@ from ..services.blueprint import Blueprint
 from ..services.scheduler import Scheduler
 
 
-def backfill_too(i, overwrite=False, **kwargs):
+def backfill_too(i, overwrite=False, use_system_queue=True, **kwargs):
     too = TooDB()
     dt = too.read_data_by_id(i)
 
@@ -52,8 +52,15 @@ def backfill_too(i, overwrite=False, **kwargs):
                 print(f"Empty schedule created for TOO {i}")
                 return
 
-            sc = Scheduler(bp.schedule, use_system_queue=True, overwrite=overwrite, **kwargs)
-            sc.start_system_queue()
+            sc = Scheduler(bp.schedule, use_system_queue=use_system_queue, overwrite=overwrite, **kwargs)
+            if use_system_queue:
+                sc.start_system_queue()
+            else:
+                from ..services.queue import QueueManager
+
+                queue = QueueManager()
+                queue.add_scheduler(sc)
+                queue.wait_until_task_complete()
             print(f"Successfully added schedule for TOO {i} with {len(bp.schedule)} jobs")
         except Exception as e:
             print(f"Error processing TOO {i}: {e}")
