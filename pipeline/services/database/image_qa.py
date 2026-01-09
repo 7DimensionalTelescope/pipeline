@@ -152,7 +152,7 @@ class ImageQATable:
 
         if header["IMAGETYP"] == "LIGHT":
             if "_coadd" in file:
-                cls.image_type = "stacked"
+                cls.image_type = "coadd"
             elif "_diff" in file:
                 cls.image_group = "diff"
             else:
