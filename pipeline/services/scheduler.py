@@ -42,7 +42,6 @@ class Scheduler:
         schedule=None,
         use_system_queue=False,
         overwrite_schedule=False,
-        give_second_chance=False,
         **kwargs,
     ):
         self.use_system_queue = use_system_queue and SCHEDULER_DB_PATH is not None
@@ -50,8 +49,6 @@ class Scheduler:
         self.overwrite_schedule = overwrite_schedule
 
         self._kwargs = kwargs
-
-        self.give_second_chance = give_second_chance
 
         if self.use_system_queue:
             self._schedule = None
@@ -165,6 +162,14 @@ class Scheduler:
     def _row_to_dict(self, row):
         """Convert database row tuple to dictionary."""
 
+        if isinstance(row[10], str):
+            kwargs_str = row[10].replace("'", '"')
+            kwargs = json.loads(kwargs_str)
+        elif isinstance(row[10], list):
+            kwargs = row[10]
+        else:
+            kwargs = []
+
         return {
             "index": row[0],
             "config": row[1],
@@ -176,7 +181,7 @@ class Scheduler:
             "status": row[7],
             "dependent_idx": json.loads(row[8]) if row[8] else [],
             "pid": row[9],
-            "kwargs": json.loads(row[10]) if row[10] else [],
+            "kwargs": kwargs,
             "process_start": row[11],
             "process_end": row[12],
         }
@@ -190,6 +195,14 @@ class Scheduler:
 
         for row in rows:
 
+            if isinstance(row[10], str):
+                kwargs_str = row[10].replace("'", '"')
+                kwargs = json.loads(kwargs_str)
+            elif isinstance(row[10], list):
+                kwargs = row[10]
+            else:
+                kwargs = []
+
             data["index"].append(row[0])
             data["config"].append(row[1])
             data["config_type"].append(row[2])
@@ -200,7 +213,7 @@ class Scheduler:
             data["status"].append(row[7])
             data["dependent_idx"].append(json.loads(row[8]) if row[8] else [])
             data["pid"].append(row[9])
-            data["kwargs"].append(json.loads(row[10]) if row[10] else [])
+            data["kwargs"].append(kwargs)
             data["process_start"].append(row[11])
             data["process_end"].append(row[12])
 
@@ -505,6 +518,8 @@ class Scheduler:
 
             dependent_indices = json.loads(dependent_idx_json) if dependent_idx_json else []
 
+            print(success)
+
             if success:
                 new_status = "Completed"
                 # Mark as Completed, clear PID, and set process_end
@@ -513,28 +528,6 @@ class Scheduler:
                     'UPDATE scheduler SET status = ?, pid = 0, process_end = ? WHERE "index" = ?',
                     (new_status, process_end, index),
                 )
-            else:
-                # Check if this is a retry (priority is already 0)
-                cursor.execute('SELECT priority FROM scheduler WHERE "index" = ?', (index,))
-                priority_row = cursor.fetchone()
-                current_priority = priority_row[0] if priority_row else None
-
-                if current_priority == 0 or not self.give_second_chance:
-                    # This is a retry that failed again - set readiness to 0, is_ready to false, and mark as Failed
-                    process_end = datetime.now().isoformat()
-                    cursor.execute(
-                        'UPDATE scheduler SET status = ?, readiness = ?, is_ready = ?, pid = 0, process_end = ? WHERE "index" = ?',
-                        ("Failed", 0, 0, process_end, index),
-                    )
-                else:
-                    # First failure - set priority to 0 and status to Ready for retry
-                    cursor.execute(
-                        'UPDATE scheduler SET status = ?, priority = ?, pid = 0, process_start = ? WHERE "index" = ?',
-                        ("Ready", 0, "", index),
-                    )
-
-            # Only increment readiness for dependent jobs if the job completed successfully
-            if success:
                 for dep_idx in dependent_indices:
                     cursor.execute('SELECT readiness FROM scheduler WHERE "index" = ?', (dep_idx,))
                     dep_row = cursor.fetchone()
@@ -553,6 +546,12 @@ class Scheduler:
                             cursor.execute(
                                 'UPDATE scheduler SET readiness = ? WHERE "index" = ?', (new_readiness, dep_idx)
                             )
+            else:
+                process_end = datetime.now().isoformat()
+                cursor.execute(
+                    'UPDATE scheduler SET status = ?, readiness = ?, is_ready = ?, pid = 0, process_end = ? WHERE "index" = ?',
+                    ("Failed", 0, 0, process_end, index),
+                )
 
             conn.commit()
 
@@ -593,20 +592,11 @@ class Scheduler:
 
         else:
             # Check if this is a retry (priority is already 0)
-            current_priority = self._schedule["priority"][mask][0]
             self._schedule["pid"][mask] = 0
-
-            if current_priority == 0 or not self.give_second_chance:
-                # This is a retry that failed again - set readiness to 0, is_ready to false, and mark as Failed
-                self._schedule["status"][mask] = "Failed"
-                self._schedule["readiness"][mask] = 0
-                self._schedule["is_ready"][mask] = False
-                self._schedule["process_end"][mask] = datetime.now().isoformat()
-            else:
-                # First failure - set priority to 0 and status to Pending for retry
-                self._schedule["status"][mask] = "Ready"
-                self._schedule["priority"][mask] = 0
-                self._schedule["process_start"][mask] = ""
+            self._schedule["status"][mask] = "Failed"
+            self._schedule["readiness"][mask] = 0
+            self._schedule["is_ready"][mask] = False
+            self._schedule["process_end"][mask] = datetime.now().isoformat()
 
     def list_of_ready_jobs(self):
         if self.use_system_queue:
