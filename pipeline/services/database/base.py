@@ -195,7 +195,7 @@ class BaseDatabase:
         except Exception as e:
             raise DatabaseError(f"Failed to read {self.table_name} by id: {e}")
 
-    def read_data_by_params(self, **kwargs):
+    def read_data_by_params(self, return_table=False, **kwargs):
 
         params = {k: v for k, v in kwargs.items() if v is not None}
         params_str = " AND ".join([f"{k} = %({k})s" for k in params.keys()])
@@ -206,9 +206,17 @@ class BaseDatabase:
         if not rows or len(rows) == 0:
             return None
         elif len(rows) == 1:
-            return self.pyTable.from_row(rows[0], columns=columns).id
+            table = self.pyTable.from_row(rows[0], columns=columns)
+            if return_table:
+                return table
+            else:
+                return table.id
         else:
-            return [self.pyTable.from_row(row, columns=columns).id for row in rows]
+            tables = [self.pyTable.from_row(row, columns=columns) for row in rows]
+            if return_table:
+                return tables
+            else:
+                return [table.id for table in tables]
 
     def update_data(self, target_id: int, **kwargs):
         params = {}

@@ -107,11 +107,17 @@ class DatabaseHandler:
         data.pop("id", None)
         self.image_qa.update_data(image_qa_id, **data)
 
-    def get_process_status(self, nightdate):
+    def get_process_status(self, nightdate, obj=None, filt=None):
 
-        rows = self.process_status.read_data_by_params(nightdate=nightdate)
+        kwargs = {}
+        if obj:
+            kwargs["object"] = obj
+        if filt:
+            kwargs["filter"] = filt
+
+        rows = self.process_status.read_data_by_params(return_table=True, nightdate=nightdate, **kwargs)
         if rows is None:
             return None
 
-        dicts = [rows.to_dict() for row in rows]
+        dicts = [row.to_dict() for row in rows]
         return dicts
