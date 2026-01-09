@@ -147,6 +147,8 @@ class ImageQATable:
 
         for key in keys:
             header_key = key.replace("_", "-").upper()
+            if key == "unit":
+                header_key = "TELESCOP"
             if header_key in header:
                 setattr(cls, key, header[header_key])
 

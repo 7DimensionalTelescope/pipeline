@@ -1249,8 +1249,22 @@ class ImageInfo:
             zp_per_filter = json.load(f)
         with open(os.path.join(REF_DIR, "depths.json"), "r") as f:
             depths_per_filter = json.load(f)
-        zp = zp_per_filter[self.filter]
-        depth = depths_per_filter[self.filter]
+        if self.filter in zp_per_filter:
+            zp = zp_per_filter[self.filter]
+        else:
+            zp = zp_per_filter["unknown"]
+            self.logger.warning(
+                f"Unknown filter {self.filter} for zero point calculation. Using default: {zp}.",
+                AstrometryError.PrerequisiteNotMetError,
+            )
+        if self.filter in depths_per_filter:
+            depth = depths_per_filter[self.filter]
+        else:
+            depth = depths_per_filter["unknown"]
+            self.logger.warning(
+                f"Unknown filter {self.filter} for depth calculation. Using default: {depth}.",
+                AstrometryError.PrerequisiteNotMetError,
+            )
 
         self.num_frac = get_source_num_frac(sci_cat, ref_cat, sci_zp=zp, depth=depth - 0.5)
         self._log(f"Early QA: NUMFRAC = {self.num_frac}", level="info")

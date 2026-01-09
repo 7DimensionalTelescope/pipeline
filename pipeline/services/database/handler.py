@@ -109,15 +109,24 @@ class DatabaseHandler:
 
     def get_process_status(self, nightdate, obj=None, filt=None):
 
-        kwargs = {}
-        if obj:
-            kwargs["object"] = obj
-        if filt:
-            kwargs["filter"] = filt
-
-        rows = self.process_status.read_data_by_params(return_table=True, nightdate=nightdate, **kwargs)
+        rows = self.process_status.read_data_by_params(return_table=True, nightdate=nightdate)
         if rows is None:
             return None
 
         dicts = [row.to_dict() for row in rows]
         return dicts
+
+    def get_image_qa(self, params, image_type="single", date_min=None, date_max=None):
+        import numpy as np
+
+        params = np.atleast_1d(params)
+        default_params = ["date_obs", "nightdate", "unit", "filter", "object"]
+        params = list(params) + default_params
+        rows = self.image_qa.read_data_by_params_with_date_range(
+            columns=params,
+            date_min=date_min,
+            date_max=date_max,
+            image_type=image_type,
+        )
+        rows = [dict(zip(params, row)) for row in rows]
+        return rows

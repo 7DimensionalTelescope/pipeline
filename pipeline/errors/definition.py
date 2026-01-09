@@ -149,6 +149,7 @@ registry.register_kind("HotpantsError", 71, HotpantsError)
 # generic from 80
 registry.register_kind("QualityCheckFailedError", 80, QualityCheckFailedError)
 registry.register_kind("AssumptionFailedError", 81, AssumptionFailedError)
+registry.register_kind("PrerequisiteNotMetError", 82, PrerequisiteNotMetError)
 
 
 # Reserved sentinel

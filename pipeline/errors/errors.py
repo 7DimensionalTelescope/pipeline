@@ -107,5 +107,9 @@ class AssumptionFailedError(Exception):
     pass
 
 
+class PrerequisiteNotMetError(RuntimeError):
+    pass
+
+
 class UnknownError(Exception):
     pass
