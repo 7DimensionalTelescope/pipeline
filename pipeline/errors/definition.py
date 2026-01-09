@@ -15,7 +15,7 @@ registry.register_process("preprocess", 1)
 registry.register_process("astrometry", 2)
 registry.register_process("single_photometry", 3)
 registry.register_process("coadd", 4)
-registry.register_process("coadded_photometry", 5)
+registry.register_process("coadd_photometry", 5)
 registry.register_process("subtraction", 6)
 registry.register_process("difference_photometry", 7)
 # errors outside specific processes (orchestrator, config, PathHandler, user-input, etc.)
@@ -161,7 +161,7 @@ PreprocessError = make_process_error(registry, "preprocess", class_name="Preproc
 AstrometryError = make_process_error(registry, "astrometry", class_name="AstrometryError")
 SinglePhotometryError = make_process_error(registry, "single_photometry", class_name="SinglePhotometryError")
 CoaddError = make_process_error(registry, "coadd", class_name="CoaddError")
-CoaddedPhotometryError = make_process_error(registry, "coadded_photometry", class_name="CoaddedPhotometryError")
+CoaddPhotometryError = make_process_error(registry, "coadd_photometry", class_name="CoaddPhotometryError")
 SubtractionError = make_process_error(registry, "subtraction", class_name="SubtractionError")
 DifferencePhotometryError = make_process_error(registry, "difference_photometry", class_name="DifferencePhotometryError")  # fmt: skip
 # Non-process-specific exception classes

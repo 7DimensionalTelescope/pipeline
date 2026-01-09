@@ -40,7 +40,7 @@ from ..errors import (
     PipelineError,
     SystemError,
     SinglePhotometryError,
-    CoaddedPhotometryError,
+    CoaddPhotometryError,
     DifferencePhotometryError,
     NotEnoughSourcesError,
     NoReferenceSourceError,
@@ -117,7 +117,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
                 images or [x] if (x := self.config_node.input.coadd_image) else None
             )
             self.input_images = self.config_node.photometry.input_images
-            self.logger.process_error = CoaddedPhotometryError
+            self.logger.process_error = CoaddPhotometryError
             self.logger.debug("Running combined photometry")
             self._photometry_mode = "coadd_photometry"
         elif photometry_mode == "difference_photometry" or not self.config_node.flag.difference_photometry:
