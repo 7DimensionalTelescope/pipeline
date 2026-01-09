@@ -969,12 +969,13 @@ class Scheduler:
             cursor = conn.cursor()
             # Get all jobs with PIDs that are in Processing status
             cursor.execute(
-                'SELECT "index", pid, config_type FROM scheduler WHERE status = ? AND pid IS NOT NULL AND pid != 0',
+                'SELECT "index", pid, config_type FROM scheduler WHERE status = ? AND pid IS NOT NULL',
                 ("Processing",),
             )
             processing_jobs = cursor.fetchall()
 
             for job_index, pid, config_type in processing_jobs:
+
                 # Check if process is still alive
                 if not self._is_process_alive(pid):
                     # Process is dead, revert to Ready state
