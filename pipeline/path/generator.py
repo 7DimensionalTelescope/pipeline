@@ -49,9 +49,9 @@ def iter_configs(date_pattern: str):
     return iter_processed(date_pattern=date_pattern, type_pattern="", filename_pattern="*.yml")
 
 
-def iter_stacked_images(date_pattern: str):
+def iter_coadd_images(date_pattern: str):
     """date_pattern: e.g. "2025-11*", "2025-*", etc."""
-    return iter_processed(date_pattern=date_pattern, type_pattern="stacked")
+    return iter_processed(date_pattern=date_pattern, type_pattern="coadd")
 
 
 def iter_catalogs(date_pattern: str, type_pattern: str = "singles"):

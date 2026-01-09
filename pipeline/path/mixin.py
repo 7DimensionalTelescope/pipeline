@@ -14,7 +14,7 @@ class AutoCollapseMixin:
 
     # Define which attributes should be collapsed
     _collapse_exclude = {}  # "output_name", "name", "preprocess"}
-    _collapse_include = {"masterframe"}  # "output_dir", "image_dir", "factory_dir", "stacked_dir"}
+    _collapse_include = {"masterframe"}  # "output_dir", "image_dir", "factory_dir", "coadd_dir"}
 
     def __getattribute__(self, name):
         # if name.startswith("_"):

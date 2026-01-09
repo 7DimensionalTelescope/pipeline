@@ -76,7 +76,7 @@ class PhotometryReferenceGenerationError(Exception):
     pass
 
 
-# imstack errors
+# imcoadd errors
 class BackgroundArtifactError(Exception):
     pass
 

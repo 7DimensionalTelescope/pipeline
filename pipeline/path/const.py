@@ -5,7 +5,7 @@
 #  └── singles
 #      └── *.fits
 #      └── *_cat.fits
-#  └── stacked
+#  └── coadd
 #      └── *_coadd.fits
 #      └── *_coadd_cat.fits
 #  └── *.log
@@ -19,7 +19,7 @@
 #  └── figures
 #  └── tmp
 #      └── astrometry
-#      └── imstack
+#      └── imcoadd
 #      └── imsubtract
 #      └── photometry
 #  └── *.fits

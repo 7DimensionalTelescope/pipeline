@@ -173,7 +173,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             for search_date in search_dates:
                 date_formatted = search_date.strftime("%Y-%m-%d")
                 for base_path in base_paths:
-                    ref_pattern = f"{base_path}/{date_formatted}/{obs}/{filt}/stacked/*coadd.fits"
+                    ref_pattern = f"{base_path}/{date_formatted}/{obs}/{filt}/coadd/*coadd.fits"
                     ref_images = glob(ref_pattern)
                     if ref_images:
                         ref_image = ref_images[0]
@@ -190,16 +190,16 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
                 )
 
     def define_paths(self):
-        # always consider a single stacked image as input, not a list of images
+        # always consider a single coadd image as input, not a list of images
         local_input_images = get_key(self.config_node, "imsubtract.input_image")
         # set from the common input if not set locally
-        self.input_images = [local_input_images] or [self.config_node.input.stacked_image]
+        self.input_images = [local_input_images] or [self.config_node.input.coadd_image]
         self.apply_sanity_filter_and_report()
         input_image = collapse(self.input_images, raise_error=True)
         self.config_node.imsubtract.input_image = input_image
 
         self.logger.debug(f"ImSubtract inim: {input_image}")
-        self.sci_image_file = input_image  # self.path.imstack.stacked_image
+        self.sci_image_file = input_image  # self.path.imcoadd.coadd_image
         # self.sci_source_table_file = get_derived_product_path(self.sci_image_file)
         # self.sci_source_table_file = add_suffix(self.sci_image_file, "cat")
         self.sci_source_table_file = PathHandler(self.sci_image_file, is_too=self.is_too).catalog

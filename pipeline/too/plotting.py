@@ -171,7 +171,7 @@ def plot_cutouts_and_sed(
     except ImportError:
         raise ImportError("photutils is required. Install with: pip install photutils")
 
-    if image_type == "stacked":
+    if image_type == "coadd":
         print(os.path.join(base_dir, "**", image_type, "*_coadd.fits"))
         image_paths = glob(os.path.join(base_dir, "**", image_type, "*_coadd.fits"))
         print(image_paths)
@@ -701,8 +701,8 @@ def plot_cutouts_and_sed(
     ax_sed.invert_yaxis()
     ax_sed.set_xlim(3600, 9150)
 
-    # Add warning text if using coadd (stacked) images
-    if image_type == "stacked":
+    # Add warning text if using coadd images
+    if image_type == "coadd":
         ax_sed.text(
             0.98,
             0.02,
@@ -1286,8 +1286,8 @@ def plot_cutouts_and_sed(
 
 
 def file_list(base_dir):
-    file_list = glob(os.path.join(base_dir, "**", "stacked", "*_coadd.fits"))
-    catalog_file_list = glob(os.path.join(base_dir, "**", "stacked", "*_coadd_cat.fits"))
+    file_list = glob(os.path.join(base_dir, "**", "coadd", "*_coadd.fits"))
+    catalog_file_list = glob(os.path.join(base_dir, "**", "coadd", "*_coadd_cat.fits"))
 
     return file_list + catalog_file_list
 
@@ -1317,11 +1317,11 @@ def make_too_output(too_id, sky_position=None, image_type="difference", verbose=
                 **kwargs,
             )
         except:
-            print("Difference image not found, using stacked image instead")
+            print("Difference image not found, using coadd image instead")
             sed_data = plot_cutouts_and_sed(
                 too_data["base_path"],
                 position=sky_position,
-                image_type="stacked",
+                image_type="coadd",
                 mark_catalog_sources=True,
                 query_all_catalogs=True,
                 catalog_type="GAIA",

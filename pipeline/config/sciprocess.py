@@ -318,8 +318,8 @@ class SciProcConfiguration(BaseConfig):
                 f = os.path.join(self.node.input.processed_dir, "**.fits")
                 return PathHandler(sorted(glob.glob(f)), working_dir=working_dir, is_too=is_too)
 
-            if hasattr(self.node.input, "stacked_image") and self.node.input.stacked_image:
-                return PathHandler(self.node.input.stacked_image, working_dir=working_dir, is_too=is_too)
+            if hasattr(self.node.input, "coadd_image") and self.node.input.coadd_image:
+                return PathHandler(self.node.input.coadd_image, working_dir=working_dir, is_too=is_too)
 
         raise ValueError("Configuration does not contain valid input files or directories to create PathHandler.")
 
@@ -364,6 +364,6 @@ class SciProcConfiguration(BaseConfig):
                 self.logger.warning("OBSMODE keyword not found in the header. Defaulting to 'spec'.")
                 obsmode = "spec"
             # self.config.obs.obsmode = obsmode
-            self.node.settings.daily_stack = False if obsmode.lower() == "deep" else True
+            self.node.settings.daily_coadd = False if obsmode.lower() == "deep" else True
         except Exception as e:
             self.logger.warning(f"Failed to define settings: {e}")

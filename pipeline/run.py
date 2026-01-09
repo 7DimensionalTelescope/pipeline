@@ -66,9 +66,9 @@ def run_scidata_reduction(
             phot.run()
             del phot
         if "coadd" in processes and (not config.node.flag.coadd or overwrite):
-            stk = ImCoadd(config, overwrite=overwrite)
-            stk.run()
-            del stk
+            coadd = ImCoadd(config, overwrite=overwrite)
+            coadd.run()
+            del coadd
         if "photometry" in processes and (not config.node.flag.coadd_photometry or overwrite):
             phot = Photometry(config, photometry_mode="coadd_photometry")
             phot.run()

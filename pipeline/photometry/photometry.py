@@ -100,7 +100,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
 
         if photometry_mode == "single_photometry" or (
             not self.config_node.flag.single_photometry
-            # and (not self.config.input.stacked_image and not self.config.input.difference_image)  # hassle when rerunning
+            # and (not self.config.input.coadd_image and not self.config.input.difference_image)  # hassle when rerunning
         ):
             self.input_images = images or self.config_node.input.calibrated_images
             self.apply_sanity_filter_and_report()  # overrides self.input_images
@@ -111,10 +111,10 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             self._photometry_mode = "single_photometry"
         elif photometry_mode == "coadd_photometry" or (
             not self.config_node.flag.coadd_photometry
-            # and (self.config.input.stacked_image and not self.config.input.difference_image)
+            # and (self.config.input.coadd_image and not self.config.input.difference_image)
         ):
             self.config_node.photometry.input_images = (
-                images or [x] if (x := self.config_node.input.stacked_image) else None
+                images or [x] if (x := self.config_node.input.coadd_image) else None
             )
             self.input_images = self.config_node.photometry.input_images
             self.logger.process_error = CoaddedPhotometryError
@@ -202,13 +202,13 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             if self._photometry_mode == "difference_photometry":
                 self.update_progress(100, f"{self._photometry_mode}-completed")
                 if self.is_too and self.too_id is not None:
-                    sed_data = make_too_output(self.too_id, image_type="stacked")
+                    sed_data = make_too_output(self.too_id, image_type="coadd")
                     self.logger.info(f"Cutoff images and SED data are created.")
 
                     interim_notice = self.too_db.read_data_by_id(self.too_id).get("interim_notice")
 
                     if interim_notice == 0:
-                        self.too_db.send_interim_notice_email(self.too_id, sed_data=sed_data, dtype="stacked")
+                        self.too_db.send_interim_notice_email(self.too_id, sed_data=sed_data, dtype="coadd")
 
                     self.too_db.mark_completed(self.too_id)
 
