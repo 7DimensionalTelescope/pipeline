@@ -18,7 +18,6 @@ from .. import external
 from ..const import PIXSCALE, REF_DIR
 from ..errors import (
     AstrometryError,
-    AstrometryReferenceError,
 )
 from ..utils import swap_ext, add_suffix, force_symlink, time_diff_in_seconds, unique_filename, atleast_1d
 from ..utils.header import update_padded_header, reset_header, fitsrec_to_header

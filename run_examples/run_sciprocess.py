@@ -12,13 +12,13 @@ OVERWRITE_DATA = False
 OVERWRITE_SCIENCE = False
 USE_SYSTEM_QUEUE = True
 SCIPROCESSES = ["astrometry", "photometry", "combine", "subtract"]
-error_log_file = "2025-12_sciprocess_errors.log"
+error_log_file = "2025-01to11_sciprocess_errors.log"
 
 query = """
     SELECT DISTINCT date
     FROM survey_night
-    WHERE date >= '2025-12-01'
-      AND date < '2026-01-01'
+    WHERE date >= '2025-01-01'
+      AND date < '2025-12-01'
     ORDER BY date;
 """
 
@@ -41,7 +41,7 @@ for date in dates:
         )
 
         # to avoid swamping file descriptors
-        time.sleep(60)
+        time.sleep(120)
 
     except Exception as e:
         msg = f"Error processing {date}: {e}\n"

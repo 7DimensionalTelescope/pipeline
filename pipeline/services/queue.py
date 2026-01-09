@@ -317,6 +317,9 @@ class QueueManager:
                 else:
                     # Get next task and mark as Processing atomically within lock
                     job, cmd = self.scheduler.get_next_task()
+                    self.logger.debug(f"Job: {job}")
+                    self.logger.debug(f"Command: {cmd}")
+
                     if job is not None and cmd is not None:
                         job_index = job["index"]
                     else:
@@ -335,7 +338,7 @@ class QueueManager:
                     self.scheduler.set_pid(job_index, proc.pid)
 
                     self.logger.info(f"Process with {os.path.basename(config)} (PID = {proc.pid}) submitted.")
-                    self.logger.debug(f"Command: {cmd}")
+
                     time.sleep(DEFAULT_WORKER_SLEEP_TIME)
 
                 except Exception as e:

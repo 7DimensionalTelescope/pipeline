@@ -161,10 +161,7 @@ class Scheduler:
 
     def _row_to_dict(self, row):
         """Convert database row tuple to dictionary."""
-        try:
-            kwarg = json.loads(row[10])
-        except:
-            kwarg = row[10]
+
         return {
             "index": row[0],
             "config": row[1],
@@ -176,7 +173,7 @@ class Scheduler:
             "status": row[7],
             "dependent_idx": json.loads(row[8]) if row[8] else [],
             "pid": row[9],
-            "kwargs": kwarg,
+            "kwargs": json.loads(row[10]) if row[10] else [],
             "process_start": row[11],
             "process_end": row[12],
         }
@@ -189,10 +186,7 @@ class Scheduler:
         data = {col: [] for col in self._empty_schedule.colnames}
 
         for row in rows:
-            try:
-                kwarg = json.loads(row[10])
-            except:
-                kwarg = row[10]
+
             data["index"].append(row[0])
             data["config"].append(row[1])
             data["config_type"].append(row[2])
@@ -203,7 +197,7 @@ class Scheduler:
             data["status"].append(row[7])
             data["dependent_idx"].append(json.loads(row[8]) if row[8] else [])
             data["pid"].append(row[9])
-            data["kwargs"].append(kwarg)
+            data["kwargs"].append(json.loads(row[10]) if row[10] else [])
             data["process_start"].append(row[11])
             data["process_end"].append(row[12])
 
