@@ -85,10 +85,10 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         self._use_gpu = use_gpu
 
         # Initialize DatabaseHandler
-        DatabaseHandler.__init__(self, add_database=add_database if not is_too else False, logger=self.logger)
+        db_handler = DatabaseHandler.__init__(self, add_database=add_database if not is_too else False, logger=self.logger)
 
         if self.is_connected:
-            self.logger.database = self.process_status
+            self.logger.database = db_handler
             self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
 
         self.is_too = is_too

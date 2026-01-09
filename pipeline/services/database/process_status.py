@@ -115,31 +115,3 @@ class ProcessStatus(BaseDatabase):
     @property
     def pyTable(self):
         return self._pyTable
-
-    def add_exception_code(self, process_id: int, code_type: str, code_value: int):
-        row = self.read_data_by_id(process_id)
-        if row is None:
-            raise ValueError(f"Process ID {process_id} not found")
-        if code_type == "warning":
-            if row.warnings is None:
-                row.warnings = []
-            row.warnings.append(code_value)
-
-            warnings = list(set(row.warnings))
-
-            self.update_data(process_id, warnings=json.dumps(warnings))
-        elif code_type == "error":
-            if row.errors is None:
-                row.errors = []
-            row.errors.append(code_value)
-            errors = list(set(row.errors))
-            self.update_data(process_id, errors=json.dumps(errors))
-        else:
-            raise ValueError(f"Invalid code type: {code_type}")
-
-    def reset_exceptions(self, process_id: int):
-        # Empty lists need to be converted to JSON strings for jsonb columns
-        self.update_data(process_id, warnings=[], errors=[])
-
-
-        

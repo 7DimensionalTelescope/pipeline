@@ -41,10 +41,12 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
 
         self.qa_id = None
         self.is_too = self.config_node.settings.is_too
-        DatabaseHandler.__init__(self, add_database=self.config_node.settings.is_pipeline, is_too=self.is_too)
+        db_handler = DatabaseHandler.__init__(
+            self, add_database=self.config_node.settings.is_pipeline, is_too=self.is_too
+        )
 
         if self.is_connected:
-            self.logger.database = self.process_status
+            self.logger.database = db_handler
             self.process_status_id = self.create_process_data(self.config_node)
             if self.too_id is not None:
                 self.logger.debug(f"Initialized DatabaseHandler for ToO data management, ToO ID: {self.too_id}")

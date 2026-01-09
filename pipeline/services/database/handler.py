@@ -130,3 +130,29 @@ class DatabaseHandler:
         )
         rows = [dict(zip(params, row)) for row in rows]
         return rows
+
+    def add_exception_code(self, code_type: str, code_value: int):
+
+        row = self.process_status.read_data_by_id(self.process_status_id)
+        if row is None:
+            raise ValueError(f"Process ID {self.process_status_id} not found")
+        if code_type == "warning":
+            if row.warnings is None:
+                row.warnings = []
+            row.warnings.append(code_value)
+
+            warnings = list(set(row.warnings))
+
+            self.process_status.update_data(self.process_status_id, warnings=json.dumps(warnings))
+        elif code_type == "error":
+            if row.errors is None:
+                row.errors = []
+            row.errors.append(code_value)
+            errors = list(set(row.errors))
+            self.process_status.update_data(self.process_status_id, errors=json.dumps(errors))
+        else:
+            raise ValueError(f"Invalid code type: {code_type}")
+
+    def reset_exceptions(self):
+        # Empty lists need to be converted to JSON strings for jsonb columns
+        self.process_status.update_data(self.process_status_id, warnings=[], errors=[])

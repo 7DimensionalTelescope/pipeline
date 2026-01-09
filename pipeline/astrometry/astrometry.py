@@ -94,14 +94,14 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
         self.load_criteria(dtype="science")
         self.qa_ids = []
-        DatabaseHandler.__init__(
+        db_handler = DatabaseHandler.__init__(
             self,
             add_database=self.config_node.settings.is_pipeline,
             is_too=get_key(self.config_node.settings, "is_too", False),
         )
 
         if self.is_connected:
-            self.logger.database = self.process_status
+            self.logger.database = db_handler
             self.process_status_id = self.create_process_data(self.config_node)
             if self.too_id is not None:
                 self.logger.debug(f"Initialized DatabaseHandler for ToO data management, ToO ID: {self.too_id}")
