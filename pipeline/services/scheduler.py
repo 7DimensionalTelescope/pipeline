@@ -42,7 +42,8 @@ class Scheduler:
         schedule=None,
         use_system_queue=False,
         overwrite_schedule=False,
-        give_second_chance=False**kwargs,
+        give_second_chance=False,
+        **kwargs,
     ):
         self.use_system_queue = use_system_queue and SCHEDULER_DB_PATH is not None
 
