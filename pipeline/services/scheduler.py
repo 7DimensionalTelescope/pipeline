@@ -523,8 +523,8 @@ class Scheduler:
                     # This is a retry that failed again - set readiness to 0, is_ready to false, and mark as Failed
                     process_end = datetime.now().isoformat()
                     cursor.execute(
-                        'UPDATE scheduler SET status = ?,  is_ready = ?, pid = 0, process_end = ? WHERE "index" = ?',
-                        ("Failed", 0, process_end, index),
+                        'UPDATE scheduler SET status = ?, readiness = ?, is_ready = ?, pid = 0, process_end = ? WHERE "index" = ?',
+                        ("Failed", 0, 0, process_end, index),
                     )
                 else:
                     # First failure - set priority to 0 and status to Ready for retry
@@ -599,6 +599,7 @@ class Scheduler:
             if current_priority == 0 or not self.give_second_chance:
                 # This is a retry that failed again - set readiness to 0, is_ready to false, and mark as Failed
                 self._schedule["status"][mask] = "Failed"
+                self._schedule["readiness"][mask] = 0
                 self._schedule["is_ready"][mask] = False
                 self._schedule["process_end"][mask] = datetime.now().isoformat()
             else:
@@ -644,10 +645,10 @@ class Scheduler:
                 cursor = conn.cursor()
                 cursor.execute(
                     """UPDATE scheduler 
-                       SET status = ?, priority = ?, is_ready = ?, pid = 0, 
+                       SET status = ?, priority = ?, readiness = ?, is_ready = ?, pid = 0, 
                            process_start = ?, process_end = ?, input_type = ? 
                        WHERE status = ?""",
-                    ("Ready", 0, 1, "", "", "user-input", "Failed"),
+                    ("Ready", 0, 100, 1, "", "", "user-input", "Failed"),
                 )
                 conn.commit()
                 return cursor.rowcount
@@ -658,6 +659,7 @@ class Scheduler:
             if count > 0:
                 self._schedule["status"][mask] = "Ready"
                 self._schedule["priority"][mask] = 1
+                self._schedule["readiness"][mask] = 100
                 self._schedule["is_ready"][mask] = True
                 self._schedule["pid"][mask] = 0
                 self._schedule["process_start"][mask] = ""
