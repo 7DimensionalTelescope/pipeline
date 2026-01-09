@@ -18,7 +18,7 @@ MASTER_FRAME_DIR = os.environ.get("MASTER_FRAME_DIR") or "/lyman/data2/master_fr
 PROCESSED_DIR = os.environ.get("PROCESSED_DIR") or "/lyman/data2/processed"
 TOO_PROCESSED_DIR = os.environ.get("TOO_DIR") or "/lyman/data2/too"
 TOO_FACTORY_DIR = os.environ.get("TOO_FACTORY_DIR") or "/lyman/data2/too_factory"
-STACKED_DIR = os.environ.get("STACKED_DIR") or "/lyman/data2/stacked"
+COADD_DIR = os.environ.get("COADD_DIR") or "/lyman/data2/coadd"
 
 SERVICES_TMP_DIR = os.environ.get("SERVICES_TMP_DIR") or "/tmp/pipeline"
 
@@ -44,7 +44,7 @@ PIPELINE_DIRS = {
     FACTORY_DIR,
     MASTER_FRAME_DIR,
     PROCESSED_DIR,
-    STACKED_DIR,
+    COADD_DIR,
     TOO_PROCESSED_DIR,
     TOO_FACTORY_DIR,
 }

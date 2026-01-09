@@ -31,12 +31,12 @@
 
 
 # DIRNAME for the directory names, not the full paths
-ASTRM_DIRNAME = "astrometry"
-DIFFIM_DIRNAME = "difference"
 FIGURES_DIRNAME = "figures"
-IMSTACK_DIRNAME = "imstack"
-IMSUBTRACT_DIRNAME = "subtracted"  # TODO: no longer in use. consider removing
+ASTRM_DIRNAME = "astrometry"
 PHOTOMETRY_DIRNAME = "photometry"
 SINGLES_DIRNAME = "singles"
-STACKED_DIRNAME = "stacked"
+DAILY_COADD_DIRNAME = "coadd"
+DIFFIM_DIRNAME = "difference"
 TMP_DIRNAME = "tmp"
+IMCOADD_TMP_DIRNAME = "imcoadd"
+IMSUBTRACT_TMP_DIRNAME = "imsubtract"

@@ -16,7 +16,7 @@ dirs_to_check_existence = [
     FACTORY_DIR,
     MASTER_FRAME_DIR,
     PROCESSED_DIR,
-    STACKED_DIR,
+    COADD_DIR,
     # TOO_DIR,
     # TOO_FACTORY_DIR,
     ASTRM_CUSTOM_REF_DIR,

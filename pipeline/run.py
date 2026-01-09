@@ -7,7 +7,7 @@ from .config import PreprocConfiguration, SciProcConfiguration
 from .preprocess import Preprocess
 from .astrometry import Astrometry
 from .photometry import Photometry
-from .imstack import ImStack
+from .imstack import ImCoadd
 from .subtract import ImSubtract
 
 
@@ -17,7 +17,7 @@ def run_preprocess(
     """
     Generate master calibration frames for a specific observation set.
 
-    Master frames are combined calibration images (like dark, flat, bias) that
+    Master frames are stacked calibration images (like dark, flat, bias) that
     help in reducing systematic errors in scientific observations.
     """
 
@@ -40,7 +40,7 @@ def run_preprocess(
 
 def run_scidata_reduction(
     config: SciProcConfiguration | str,
-    processes: list[str] = ["astrometry", "photometry", "combine", "subtract"],
+    processes: list[str] = ["astrometry", "photometry", "coadd", "subtract"],
     overwrite: bool = False,
     is_too: bool = False,
 ):
@@ -65,12 +65,12 @@ def run_scidata_reduction(
             phot = Photometry(config, photometry_mode="single_photometry")
             phot.run()
             del phot
-        if "combine" in processes and (not config.node.flag.combine or overwrite):
-            stk = ImStack(config, overwrite=overwrite)
+        if "coadd" in processes and (not config.node.flag.coadd or overwrite):
+            stk = ImCoadd(config, overwrite=overwrite)
             stk.run()
             del stk
-        if "photometry" in processes and (not config.node.flag.combined_photometry or overwrite):
-            phot = Photometry(config, photometry_mode="combined_photometry")
+        if "photometry" in processes and (not config.node.flag.coadd_photometry or overwrite):
+            phot = Photometry(config, photometry_mode="coadd_photometry")
             phot.run()
             del phot
         if "subtract" in processes and (not config.node.flag.subtraction or overwrite):

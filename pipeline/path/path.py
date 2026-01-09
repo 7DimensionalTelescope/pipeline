@@ -18,12 +18,12 @@ from .const import (
     ASTRM_DIRNAME,
     DIFFIM_DIRNAME,
     FIGURES_DIRNAME,
-    IMSTACK_DIRNAME,
-    IMSUBTRACT_DIRNAME,
+    IMCOADD_TMP_DIRNAME,
+    IMSUBTRACT_TMP_DIRNAME,
     PHOTOMETRY_DIRNAME,
     TMP_DIRNAME,
     SINGLES_DIRNAME,
-    STACKED_DIRNAME,
+    DAILY_COADD_DIRNAME,
 )
 
 
@@ -477,9 +477,9 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         # processed_images = []
         self._masterframe_dir = []
         self._figure_dir = []
-        self._daily_stacked_dir = []
+        self._daily_coadd_dir = []
         self._subtracted_dir = []
-        self._stacked_dir = []
+        self._coadd_dir = []
         self._metadata_dir = []
 
         for i in range(len(self._input_files)):
@@ -505,18 +505,18 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
 
                     self._factory_dir.append(os.path.join(self._factory_parent_dir[i], relative_path))
                     self._single_dir.append(os.path.join(output_dir, SINGLES_DIRNAME))
-                    self._stacked_dir.append(os.path.join(const.STACKED_DIR, obj, filte))
+                    self._coadd_dir.append(os.path.join(const.COADD_DIR, obj, filte))
                     self._metadata_dir.append(os.path.join(self._output_parent_dir[i], nightdate))
                 else:
                     # Outside pipeline
                     output_dir = self._output_parent_dir[i]
                     self._factory_dir.append(self._factory_parent_dir[i])
                     self._single_dir.append(output_dir)
-                    self._stacked_dir.append(output_dir)
+                    self._coadd_dir.append(output_dir)
 
                 self._output_dir.append(output_dir)
-                self._daily_stacked_dir.append(os.path.join(output_dir, STACKED_DIRNAME))
-                self._subtracted_dir.append(os.path.join(output_dir, IMSUBTRACT_DIRNAME))
+                self._daily_coadd_dir.append(os.path.join(output_dir, DAILY_COADD_DIRNAME))
+                self._subtracted_dir.append(os.path.join(output_dir, IMSUBTRACT_TMP_DIRNAME))
                 self._figure_dir.append(os.path.join(self._output_dir[-1], FIGURES_DIRNAME))
 
             elif "master" in typ:
@@ -533,12 +533,12 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         self.figure_dir = collapse(self._figure_dir)
         self.masterframe_dir = collapse(self._masterframe_dir)
 
-        if self._daily_stacked_dir:
-            self.daily_stacked_dir = self._daily_stacked_dir
+        if self._daily_coadd_dir:
+            self.daily_coadd_dir = self._daily_coadd_dir
         if self._subtracted_dir:  # unused
             self.subtracted_dir = self._subtracted_dir
-        if self._stacked_dir:
-            self.stacked_dir = self._stacked_dir
+        if self._coadd_dir:
+            self.coadd_dir = self._coadd_dir
         if self._metadata_dir:
             self.metadata_dir = self._metadata_dir
 
@@ -558,8 +558,8 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         return PathPhotometry(self, self._config)
 
     @cached_property
-    def imstack(self):
-        return PathImstack(self, self._config)
+    def imcoadd(self):
+        return PathImcoadd(self, self._config)
 
     @cached_property
     def imsubtract(self):
@@ -1107,13 +1107,13 @@ class PathPhotometry(AutoMkdirMixin, AutoCollapseMixin):
     #     pass
 
 
-class PathImstack(AutoMkdirMixin, AutoCollapseMixin):
+class PathImcoadd(AutoMkdirMixin, AutoCollapseMixin):
     def __init__(self, parent: PathHandler, config=None):
         self._parent = parent
 
         # Apply config overrides if provided
         if config and hasattr(config, "path"):
-            for key, val in config.imstack.path.items():
+            for key, val in config.imcoadd.path.items():
                 setattr(self, key, val)
 
     def __repr__(self):
@@ -1121,19 +1121,19 @@ class PathImstack(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def tmp_dir(self):
-        return os.path.join(self._parent.factory_dir, IMSTACK_DIRNAME)
+        return os.path.join(self._parent.factory_dir, IMCOADD_TMP_DIRNAME)
 
     @property
     def figure_dir(self):
-        return os.path.join(self._parent.figure_dir, IMSTACK_DIRNAME)
+        return os.path.join(self._parent.figure_dir, IMCOADD_TMP_DIRNAME)
 
     @property
-    def stacked_image_basename(self):
+    def coadd_image_basename(self):
         # names = NameHandler(self._parent._input_files)
         names = self._parent.name
         _ = collapse(names.type, raise_error=True)  # ensure input images are coherent
         total_exptime = np.sum(names.exptime)
-        exptime_str = format_exptime(total_exptime, type="stacked")
+        exptime_str = format_exptime(total_exptime, type="coadd")
         # use the datetime of the last image
         unit = collapse(names.unit, force=True)
         datetime = mean_datetime(x) if isinstance(x := names.datetime, list) else x
@@ -1141,15 +1141,21 @@ class PathImstack(AutoMkdirMixin, AutoCollapseMixin):
         return fname
 
     @property
-    def daily_stacked_image(self):
-        return os.path.join(self._parent.daily_stacked_dir, self.stacked_image_basename)
+    def daily_coadd_image(self):
+        return os.path.join(self._parent.daily_coadd_dir, self.coadd_image_basename)
 
     @property
-    def stacked_image(self):
-        # return os.path.join(collapse(self._parent.stacked_dir, raise_error=True), self.stacked_image_basename)
-        return bjoin(self._parent.stacked_dir, self.stacked_image_basename)
+    def coadd_image(self):
+        # return os.path.join(collapse(self._parent.coadd_dir, raise_error=True), self.coadd_image_basename)
+        return bjoin(self._parent.coadd_dir, self.coadd_image_basename)
 
-    # Todo: add weight images
+    @property
+    def daily_coadd_weight_image(self):
+        return add_suffix(self.daily_coadd_image, "weight")
+
+    @property
+    def coadd_weight_image(self):
+        return add_suffix(self.coadd_image, "weight")
 
 
 class PathImsubtract(AutoMkdirMixin, AutoCollapseMixin):
@@ -1172,14 +1178,14 @@ class PathImsubtract(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def tmp_dir(self):
-        return os.path.join(self._parent.factory_dir, IMSUBTRACT_DIRNAME)
+        return os.path.join(self._parent.factory_dir, IMSUBTRACT_TMP_DIRNAME)
 
     @property
     def figure_dir(self):
-        return os.path.join(self._parent.figure_dir, IMSUBTRACT_DIRNAME)
+        return os.path.join(self._parent.figure_dir, IMSUBTRACT_TMP_DIRNAME)
 
     @property
     def diffim(self):
         # return bjoin(self._parent.output_dir, "difference", add_suffix(self._parent._input_files, "diff"))
-        input = os.path.basename(self._parent.processed_images)  # Define a new PathHandler with stacked_image as input
+        input = os.path.basename(self._parent.processed_images)  # Define a new PathHandler with coadd_image as input
         return bjoin(self._parent.output_dir, DIFFIM_DIRNAME, add_suffix(input, "diff"))

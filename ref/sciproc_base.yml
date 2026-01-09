@@ -32,9 +32,9 @@ flag:
   # preprocess: false
   astrometry: false
   single_photometry: false
-  combine: false
-  # combined_astrometry: false
-  combined_photometry: false
+  coadd: false
+  # joint_astrometry: false
+  coadd_photometry: false
   subtraction: false
   difference_photometry: false
 
@@ -53,7 +53,7 @@ settings:
   is_too: false
   is_pipeline: false
   obsmode:  # Deep Spec Color Search Single
-  combine:
+  coadd:
   gpu_enabled: True
   verbose_gpu: True  # use logger later
   
@@ -104,11 +104,11 @@ photometry:
     BACK_FILTERSIZE: 3
     BACKPHOTO_TYPE: LOCAL
 
-imstack:
+imcoadd:
   input_images:
   # path:
   #   ref_image_dir: "/lyman/data1/factory/ref_frame"
-  stacked_image:  # output stacked image
+  coadd_image:  # output coadd image
   gpu: True
   device: 0
   zp_key: 'ZP_AUTO'

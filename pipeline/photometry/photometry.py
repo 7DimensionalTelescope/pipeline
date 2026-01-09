@@ -109,8 +109,8 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
 
             self.logger.debug("Running single photometry")
             self._photometry_mode = "single_photometry"
-        elif photometry_mode == "combined_photometry" or (
-            not self.config_node.flag.combined_photometry
+        elif photometry_mode == "coadd_photometry" or (
+            not self.config_node.flag.coadd_photometry
             # and (self.config.input.stacked_image and not self.config.input.difference_image)
         ):
             self.config_node.photometry.input_images = (
@@ -119,7 +119,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             self.input_images = self.config_node.photometry.input_images
             self.logger.process_error = CoaddedPhotometryError
             self.logger.debug("Running combined photometry")
-            self._photometry_mode = "combined_photometry"
+            self._photometry_mode = "coadd_photometry"
         elif photometry_mode == "difference_photometry" or not self.config_node.flag.difference_photometry:
             self.config_node.photometry.input_images = (
                 images or [x] if (x := self.config_node.input.difference_image) else None
@@ -157,7 +157,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
     def _progress_by_mode(self):
         if self._photometry_mode == "single_photometry":
             return 40, 20
-        elif self._photometry_mode == "combined_photometry":
+        elif self._photometry_mode == "coadd_photometry":
             return 70, 10
         elif self._photometry_mode == "difference_photometry":
             return 90, 10
@@ -245,8 +245,8 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
 
             if self._photometry_mode == "single_photometry":
                 self.config_node.flag.single_photometry = True
-            elif self._photometry_mode == "combined_photometry":
-                self.config_node.flag.combined_photometry = True
+            elif self._photometry_mode == "coadd_photometry":
+                self.config_node.flag.coadd_photometry = True
             elif self._photometry_mode == "difference_photometry":
                 self.config_node.flag.difference_photometry = True
             else:

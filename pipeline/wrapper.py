@@ -40,7 +40,7 @@ class DataReduction:
         overwrite_science=False,
         overwrite_schedule=False,
         max_workers=50,
-        processes=["astrometry", "photometry", "combine", "subtract"],
+        processes=["astrometry", "photometry", "coadd", "subtract"],
         queue=None,
         preprocess_kwargs=None,
         is_too=False,
