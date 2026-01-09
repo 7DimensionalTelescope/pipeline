@@ -636,9 +636,9 @@ class Scheduler:
                 cursor.execute(
                     """UPDATE scheduler 
                        SET status = ?, priority = ?, readiness = ?, is_ready = ?, pid = 0, 
-                           process_start = ?, process_end = ?, input_type = ? 
+                           process_start = ?, process_end = ?, input_type = ?, kwargs = ?
                        WHERE status = ?""",
-                    ("Ready", 0, 100, 1, "", "", "user-input", "Failed"),
+                    ("Ready", 0, 100, 1, "", "", "user-input", "['-overwrite']", "Failed"),
                 )
                 conn.commit()
                 return cursor.rowcount
@@ -655,6 +655,7 @@ class Scheduler:
                 self._schedule["process_start"][mask] = ""
                 self._schedule["process_end"][mask] = ""
                 self._schedule["input_type"][mask] = "user-input"
+                self._schedule["kwargs"][mask] = "['-overwrite']"
             return count
 
     def clear_schedule(self, all=False):
