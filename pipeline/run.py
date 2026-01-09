@@ -7,7 +7,7 @@ from .config import PreprocConfiguration, SciProcConfiguration
 from .preprocess import Preprocess
 from .astrometry import Astrometry
 from .photometry import Photometry
-from .imstack import ImCoadd
+from .imcoadd import ImCoadd
 from .subtract import ImSubtract
 
 

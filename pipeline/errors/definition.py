@@ -135,7 +135,7 @@ registry.register_kind("FilterInventoryError", 54, FilterInventoryError)
 registry.register_kind("PhotometryReferenceGenerationError", 57, PhotometryReferenceGenerationError)
 
 
-# imstack from 60
+# imcoadd from 60
 registry.register_kind("BackgroundArtifactError", 60, BackgroundArtifactError)
 registry.register_kind("SeeingVariationError", 61, SeeingVariationError)
 registry.register_kind("SwarpError", 62, SwarpError)
