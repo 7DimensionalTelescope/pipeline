@@ -118,8 +118,7 @@ class PreprocConfiguration(BaseConfig):
             config_source = input
             super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
             self._initialized = True
-            self.path = self._set_pathhandler_from_config()  # debug
-            # self.path = self._set_pathhandler_from_config(is_too=is_too or get_key(self.node.settings, "is_too", False))
+            self.path = self._set_pathhandler_from_config(is_too=is_too or get_key(self.node.settings, "is_too", False))
             config_output = self.path.preproc_output_yml
             log_file = self.path.preproc_output_log
             print(self.path._input_files)
