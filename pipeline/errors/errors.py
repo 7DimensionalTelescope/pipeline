@@ -111,5 +111,11 @@ class PrerequisiteNotMetError(RuntimeError):
     pass
 
 
+class GroupingError(Exception):
+    """Input image inhomogeneities that lead to undefined behavior"""
+
+    pass
+
+
 class UnknownError(Exception):
     pass

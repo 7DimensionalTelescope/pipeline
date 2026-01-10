@@ -1,0 +1,39 @@
+#!/home/pipeline-stable/.conda/envs/pipeline/bin/python
+
+import argparse
+import sys
+import signal
+
+from pipeline.services.scheduler import Scheduler
+
+
+def signal_handler(sig, frame):
+    print("\nTerminate process")
+    sys.exit(0)
+
+
+signal.signal(signal.SIGINT, signal_handler)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Run pipeline processing for one or more config files using the system queue.",
+        epilog=(
+            "Examples:\n"
+            "  %(prog)s /path/to/config1.yml\n"
+            "  %(prog)s /path/to/config1.yml /path/to/config2.yml /path/to/config3.yml"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "configs",
+        nargs="+",
+        help="Path(s) to config file(s) to process (one or more)",
+    )
+    args = parser.parse_args()
+
+    try:
+        sc = Scheduler.from_list(args.configs)
+        sc.start_system_queue()
+    except Exception as e:
+        print(f"\nError: {e}")
+        sys.exit(1)

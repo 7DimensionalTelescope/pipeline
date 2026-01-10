@@ -76,7 +76,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             if not os.path.exists(image):
                 raise FileNotFoundError(f"Input file does not exist: {image}")
 
-        config = SciProcConfiguration.base_config(input_images=input_images, working_dir=working_dir, logger=True)
+        config = SciProcConfiguration.user_config(input_images=input_images, working_dir=working_dir, logger=True)
         return cls(config=config)
 
     @property
