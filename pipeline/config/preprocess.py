@@ -64,6 +64,7 @@ class PreprocConfiguration(BaseConfig):
     def initialize(self, is_too=False):
         self.node.info.version = __version__
         self.node.info.creation_datetime = datetime.now().isoformat()
+        self.node.info.file = self.config_file
         self.node.name = self.path.output_name
 
         if self.input_files:
