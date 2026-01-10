@@ -380,7 +380,7 @@ class TooDB:
         cursor.execute(
             f"""SELECT * FROM too_requests 
                WHERE {identifier} = ? AND DATE(trigger_time) = ? 
-               ORDER BY trigger_time DESC, created_at DESC 
+               ORDER BY trigger_time DESC
                LIMIT 1""",
             (identifier_value, observation_date),
         )
@@ -392,7 +392,7 @@ class TooDB:
         cursor.execute(
             f"""SELECT * FROM too_requests 
                WHERE {identifier} = ? AND trigger_time <= ? 
-               ORDER BY trigger_time DESC, created_at DESC 
+               ORDER BY trigger_time DESC
                LIMIT 1""",
             (identifier_value, observation_time_str),
         )
