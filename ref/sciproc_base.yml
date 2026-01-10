@@ -53,7 +53,7 @@ settings:
   is_too: false
   is_pipeline: false
   obsmode:  # Deep Spec Color Search Single
-  daily_coadd:
+  coadd: True
   gpu_enabled: True
   verbose_gpu: True  # use logger later
   

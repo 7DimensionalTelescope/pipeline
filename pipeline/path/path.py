@@ -400,12 +400,23 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         """
         sciproc configs use the stem of sciproc_output_yml
         """
+
+        too_time = (
+            NameHandler.calculate_too_time(
+                [f for f, is_too in zip(self._input_files, self._is_too_vectorized) if is_too]
+            )
+            if any(self._is_too_vectorized)
+            else None
+        )
+
         preproc_config_stems = (
             self._preproc_config_stem
             if hasattr(self, "_preproc_config_stem") and self._preproc_config_stem
             else "preproc_config"
         )
-        suffixes = [obj if is_too else None for obj, is_too in zip(self.name.obj, self._is_too_vectorized)]
+        suffixes = [
+            f"{obj}_ToO_{too_time}" if is_too else obj for obj, is_too in zip(self.name.obj, self._is_too_vectorized)
+        ]
         return add_suffix(preproc_config_stems, suffixes)
 
     @property
@@ -429,8 +440,12 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         # ]
 
         # assumes is_too images are all from the same group
-        too_time = NameHandler.calculate_too_time(
-            [f for f, is_too in zip(self._input_files, self._is_too_vectorized) if is_too]
+        too_time = (
+            NameHandler.calculate_too_time(
+                [f for f, is_too in zip(self._input_files, self._is_too_vectorized) if is_too]
+            )
+            if any(self._is_too_vectorized)
+            else None
         )
 
         if not self._input_files:

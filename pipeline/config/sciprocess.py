@@ -364,6 +364,6 @@ class SciProcConfiguration(BaseConfig):
                 self.logger.warning("OBSMODE keyword not found in the header. Defaulting to 'spec'.")
                 obsmode = "spec"
             # self.config.obs.obsmode = obsmode
-            self.node.settings.daily_coadd = False if obsmode.lower() == "deep" else True
+            self.node.settings.coadd = False if obsmode.lower() == "deep" else True
         except Exception as e:
             self.logger.warning(f"Failed to define settings: {e}")
