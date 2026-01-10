@@ -82,6 +82,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
             except Exception as e:
                 raise PipelineError(f"NameHandler failure: not pipeline file.\n{input!r}:\n{e}")
 
+        # all True if the boolean flag is_too is True
         self._is_too_vectorized = [is_too] * len(input) if isinstance(input, list) else [is_too]
         for i, (input_file, typ) in enumerate(zip(self._input_files, self.name.type)):
             if "raw" in typ:
