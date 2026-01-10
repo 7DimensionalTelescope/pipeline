@@ -29,10 +29,16 @@ if __name__ == "__main__":
         nargs="+",
         help="Path(s) to config file(s) to process (one or more)",
     )
+    parser.add_argument(
+        "--priority",
+        type=int,
+        default=10,
+        help="Base priority for scheduled jobs (default: 10)",
+    )
     args = parser.parse_args()
 
     try:
-        sc = Scheduler.from_list(args.configs)
+        sc = Scheduler.from_list(args.configs, base_priority=args.priority)
         sc.start_system_queue()
     except Exception as e:
         print(f"\nError: {e}")
