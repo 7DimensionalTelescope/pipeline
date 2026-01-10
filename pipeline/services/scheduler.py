@@ -92,8 +92,25 @@ class Scheduler:
                 job_type = "science"
                 priority = base_priority
 
+            # scheduler_kwargs = ["-overwrite"] if overwrite or overwrite_science else [] + ["-processes"] + processes
+            scheduler_kwargs = []
+
             sc._schedule.add_row(
-                [idx, config, job_type, "user-input", True, priority, 100, "Ready", [], 0, "Ready", "", ""]
+                [
+                    idx,
+                    config,
+                    job_type,
+                    "user-input",
+                    True,
+                    priority,
+                    100,
+                    "Ready",
+                    [],
+                    0,
+                    scheduler_kwargs,
+                    "",
+                    "",
+                ]
             )
 
         return sc
