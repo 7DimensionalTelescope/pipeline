@@ -16,7 +16,7 @@ RAWDATA_DIR = os.environ.get("RAWDATA_DIR") or "/lyman/data1/obsdata"  # , "/lym
 FACTORY_DIR = os.environ.get("FACTORY_DIR") or "/lyman/data2/factory"
 MASTER_FRAME_DIR = os.environ.get("MASTER_FRAME_DIR") or "/lyman/data2/master_frame"
 PROCESSED_DIR = os.environ.get("PROCESSED_DIR") or "/lyman/data2/processed"
-TOO_PROCESSED_DIR = os.environ.get("TOO_DIR") or "/lyman/data2/too"
+TOO_PROCESSED_DIR = os.environ.get("TOO_PROCESSED_DIR") or "/lyman/data2/too"
 TOO_FACTORY_DIR = os.environ.get("TOO_FACTORY_DIR") or "/lyman/data2/too_factory"
 COADD_DIR = os.environ.get("COADD_DIR") or "/lyman/data2/coadd"
 
