@@ -117,5 +117,9 @@ class GroupingError(Exception):
     pass
 
 
+class ParseError(ValueError):
+    pass
+
+
 class UnknownError(Exception):
     pass
