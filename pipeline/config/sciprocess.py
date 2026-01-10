@@ -198,17 +198,17 @@ class SciProcConfiguration(BaseConfig):
             )
             self.logger.info("Generating 'SciProcConfiguration' from the 'base' configuration")
             self.logger.debug(f"Configuration source: {config_source}")
-            super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
+            super().__init__(config_source=config_source, write=self.write, **kwargs)
             self.node.logging.file = log_file
             # raise PipelineError("Initializing 'SciProcConfiguration' from a list of images is not supported anymore. Please use 'SciProcConfiguration.base_config' instead.")
 
         # path of a config file
         elif isinstance(input, str | dict):
             config_source = input
-            super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
+            super().__init__(config_source=config_source, write=self.write, **kwargs)
             # working_dir = os.path.dirname(config_source) if isinstance(config_source, str) else None
             is_too = is_too or get_key(self.node.settings, "is_too", False)
-            self.path = self._set_pathhandler_from_config(is_too=is_too or get_key(self.node.settings, "is_too", False))
+            self.path = self._set_pathhandler_from_config(is_too=is_too)
             self.node.logging.file = self.path.sciproc_output_log
 
             if isinstance(config_source, str):

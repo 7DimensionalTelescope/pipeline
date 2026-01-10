@@ -1,5 +1,3 @@
-__package__ = "pipeline"
-
 import json
 from typing import List
 
@@ -12,7 +10,13 @@ from .subtract import ImSubtract
 
 
 def run_preprocess(
-    config, device_id=None, make_plots=True, overwrite=False, preprocess_kwargs: str = None, is_too=False, use_gpu=False
+    config: str,
+    device_id=None,
+    make_plots=True,
+    overwrite=False,
+    preprocess_kwargs: str = None,
+    is_too=False,
+    use_gpu=False,
 ):
     """
     Generate master calibration frames for a specific observation set.
@@ -22,8 +26,7 @@ def run_preprocess(
     """
 
     try:
-        # TODO: remove from_config, but for now __init__ causes undefined config_file error
-        config = PreprocConfiguration.from_config(config, is_too=is_too)
+        config = PreprocConfiguration(config, is_too=is_too)
 
         kwargs = {}
         if preprocess_kwargs:
