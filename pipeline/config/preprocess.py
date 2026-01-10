@@ -9,6 +9,7 @@ from ..utils import clean_up_folder, flatten, time_diff_in_seconds
 from ..path.path import PathHandler
 from ..const import CalibType
 from .base import BaseConfig
+from .utils import get_key
 
 
 class PreprocConfiguration(BaseConfig):
@@ -33,17 +34,6 @@ class PreprocConfiguration(BaseConfig):
             self.logger.info(f"'PreprocConfiguration' initialized in {time_diff_in_seconds(st)} seconds")
             self.logger.info(f"Writing configuration to file")
             self.logger.debug(f"Configuration file: {self.config_file}")
-
-        # Cleaning Factory is only for SciProcConfiguration
-        # if overwrite:
-        #     self.logger.info("Deleting the factory directory to overwrite")
-        #     factory_dir = self.path.factory_dir
-        #     self.logger.debug(f"Factory directory: {factory_dir}")
-        #     if not isinstance(factory_dir, str):
-        #         raise ValueError(f"Multiple directories; aborting cleaning: {factory_dir}")
-        #     clean_up_folder(factory_dir)
-        #     # clean_up_folder(self.path.masterframe_dir)
-        #     # clean_up_folder(self.path.preproc_output_dir)
 
         self.write_config()
         self.logger.info("Completed to load configuration")
@@ -94,21 +84,17 @@ class PreprocConfiguration(BaseConfig):
             self.path = PathHandler(input, is_too=is_too)  # in case of multiple dates, use the later date
             config_source = self.path.preproc_base_yml
             config_output = self.path.preproc_output_yml
-            log_source = self.path.preproc_output_log
+            log_file = self.path.preproc_output_log
 
             if not isinstance(config_source, str):
                 raise ValueError(f"PreprocConfiguration ill-defined: {config_source}")
-            self.logger = self._setup_logger(
-                logger,
-                name=self.name,
-                log_file=log_source,
-                verbose=verbose,
-            )
+            self.logger = self._setup_logger(logger, name=self.name, log_file=log_file, verbose=verbose)
             self.logger.info("Generating 'PreprocConfiguration' from the 'base' configuration")
             self.logger.debug(f"Configuration source: {config_source}")
             self.input_files = input
             self.input_dir = None
             super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
+            self.node.logging.file = log_file
 
         # Directory containing FITS files
         elif isinstance(input, str) and os.path.isdir(input):
@@ -117,58 +103,50 @@ class PreprocConfiguration(BaseConfig):
             self.path = PathHandler(sample_file)
             config_source = self.path.preproc_base_yml
             config_output = self.path.preproc_output_yml
-            log_source = self.path.preproc_output_log
+            log_file = self.path.preproc_output_log
 
-            self.logger = self._setup_logger(
-                logger,
-                name=self.name,
-                log_file=log_source,
-                verbose=verbose,
-            )
+            self.logger = self._setup_logger(logger, name=self.name, log_file=log_file, verbose=verbose)
             self.logger.info("Loading 'PreprocConfiguration' from an exisiting file or dictionary")
             self.logger.debug(f"Configuration source: {config_source}")
             self.input_dir = input
             self.input_files = None
             super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
+            self.node.logging.file = log_file
 
         # Configuration file path
         elif (isinstance(input, str) and ".yml" in input) or isinstance(input, dict):
             config_source = input
             super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
-            self.path = self._set_pathhandler_from_config()
-
+            self._initialized = True
+            self.path = self._set_pathhandler_from_config()  # debug
+            # self.path = self._set_pathhandler_from_config(is_too=is_too or get_key(self.node.settings, "is_too", False))
             config_output = self.path.preproc_output_yml
-            log_source = self.path.preproc_output_log
+            log_file = self.path.preproc_output_log
+            print(self.path._input_files)
 
             self.logger = self._setup_logger(
-                logger,
-                name=self.node.name,
-                log_file=log_source,
-                verbose=verbose,
-                overwrite=False,
+                logger, name=self.node.name, log_file=log_file, verbose=verbose, overwrite=False
             )
-            self._initialized = True
             self.logger.info("Loading configuration from an exisiting file or dictionary")
             self.logger.debug(f"Configuration source: {config_source}")
         else:
             raise ValueError("Input must be a list of FITS files or a directory containing FITS files")
 
-        self.node.logging.file = log_source
         self.config_file = config_output  # used by write_config
         return
 
-    def _set_pathhandler_from_config(self):
+    def _set_pathhandler_from_config(self, is_too=False):
         # mind the check order
         if hasattr(self.node, "input"):
             if hasattr(self.node.input, "science_images") and self.node.input.science_images:
-                return PathHandler(self.node.input.science_images[0])
+                return PathHandler(self.node.input.science_images[0], is_too=is_too)
 
             elif hasattr(self.node.input, "masterframe_images") and self.node.input.masterframe_images:
-                return PathHandler(flatten(self.node.input.masterframe_images)[0])
+                return PathHandler(flatten(self.node.input.masterframe_images)[0], is_too=is_too)
 
             elif hasattr(self.node.input, "raw_dir") and self.node.input.raw_dir:
                 f = os.path.join(self.node.input.raw_dir, "**.fits")
-                return PathHandler(sorted(glob.glob(f))[0])
+                return PathHandler(sorted(glob.glob(f))[0], is_too=is_too)
 
         raise ValueError("Configuration does not contain valid input files or directories to create PathHandler.")
 

@@ -108,6 +108,10 @@ class BaseConfig(ABC):
     def base_config(cls):
         pass
 
+    @abstractmethod
+    def _set_pathhandler_from_config(self, is_too=False):
+        pass
+
     def _load_config(self, config_source, **kwargs):
         if isinstance(config_source, str):
             input_dict = self.read_config(config_source)

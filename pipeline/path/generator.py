@@ -2,17 +2,16 @@ import os
 from glob import glob
 from typing import Iterator
 
-from ..const import PROCESSED_DIR, MASTER_FRAME_DIR
+from ..const import PROCESSED_DIR, MASTER_FRAME_DIR, TOO_PROCESSED_DIR
 from .name import NameHandler
 
 
-def iter_single_images(pattern: str, cross_date: bool = True, reverse: bool = False):
+def iter_single_images(pattern: str, cross_date: bool = True, reverse: bool = False, is_too: bool = False):
     """
     pattern is either "2025-11*", "2025-*", ...,
     or a full filename like /lyman/data2/processed/2025-11-20/T15645/m825/singles/T15645_m825_7DT07_20251121_052846_100s.fits
     """
 
-    # Assume it's date_pattern if NameHandler can't parse it
     try:
         name = NameHandler(pattern)
         return iter_processed(
@@ -20,19 +19,21 @@ def iter_single_images(pattern: str, cross_date: bool = True, reverse: bool = Fa
             obj_pattern=name.obj,
             filter_pattern=name.filter,
             type_pattern="singles",
+            is_too=is_too,
         )
-
+    # Assume it's date_pattern if NameHandler can't parse it
     except (UnboundLocalError, IndexError):
         date_pattern = pattern
-        return iter_processed(date_pattern=date_pattern, type_pattern="singles", reverse=reverse)
+        return iter_processed(date_pattern=date_pattern, type_pattern="singles", reverse=reverse, is_too=is_too)
 
     except Exception as e:
         raise ValueError(f"Invalid pattern: {pattern}\n{e}")
 
 
-def iter_config(date_pattern: str, reverse: bool = False):
+def iter_config(date_pattern: str, reverse: bool = False, is_too: bool = False):
     """
-    pattern is "2025-11*", "2025-*", ...,
+    Iterate over sci configs
+    date_pattern is "2025-11*", "2025-*", ...,
     """
 
     # no namehandler support for configs yet
@@ -46,17 +47,23 @@ def iter_config(date_pattern: str, reverse: bool = False):
     #         type_pattern="singles",
     #     )
 
-    return iter_processed(date_pattern=date_pattern, type_pattern="", filename_pattern="*.yml", reverse=reverse)
-
-
-def iter_coadd_images(date_pattern: str, reverse: bool = False):
-    """date_pattern: e.g. "2025-11*", "2025-*", etc."""
-    return iter_processed(date_pattern=date_pattern, type_pattern="coadd", reverse=reverse)
-
-
-def iter_catalog(date_pattern: str, type_pattern: str = "singles", reverse: bool = False):
     return iter_processed(
-        date_pattern=date_pattern, type_pattern=type_pattern, filename_pattern="*_cat.fits", reverse=reverse
+        date_pattern=date_pattern, type_pattern="", filename_pattern="*.yml", reverse=reverse, is_too=is_too
+    )
+
+
+def iter_coadd_images(date_pattern: str, reverse: bool = False, is_too: bool = False):
+    """date_pattern: e.g. "2025-11*", "2025-*", etc."""
+    return iter_processed(date_pattern=date_pattern, type_pattern="coadd", reverse=reverse, is_too=is_too)
+
+
+def iter_catalog(date_pattern: str, type_pattern: str = "singles", reverse: bool = False, is_too: bool = False):
+    return iter_processed(
+        date_pattern=date_pattern,
+        type_pattern=type_pattern,
+        filename_pattern="*_cat.fits",
+        reverse=reverse,
+        is_too=is_too,
     )
 
 
@@ -66,8 +73,8 @@ def iter_processed(
     filter_pattern: str = "*",
     type_pattern: str = "singles",
     filename_pattern: str = "*s.fits",  # pattern for files in singles/
-    base: str = PROCESSED_DIR,
     reverse: bool = False,
+    is_too: bool = False,
 ) -> Iterator[str]:
     """
     Lazily yield FITS files matching the pattern:
@@ -77,8 +84,10 @@ def iter_processed(
     doing one huge glob over everything.
 
     Args:
-        reverse: If True, iterate in reverse order (default: False)
+        reverse: If True, iterate in reverse date order (default: False)
     """
+
+    base = TOO_PROCESSED_DIR if is_too else PROCESSED_DIR
 
     # 1) dates: /.../2025-1*
     for date_dir in sorted(glob(os.path.join(base, date_pattern)), reverse=reverse):

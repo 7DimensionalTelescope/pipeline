@@ -24,7 +24,6 @@ class SciProcConfiguration(BaseConfig):
         input: list[str] | str | dict = None,
         logger=None,
         write=True,  # False for PhotometrySingle
-        clear_dirs=False,  # clear factory_dir and output_dir
         verbose=True,
         overwrite=False,
         is_too=False,
@@ -41,11 +40,6 @@ class SciProcConfiguration(BaseConfig):
             self.logger.info(f"'SciProcConfiguration' initialized in {time_diff_in_seconds(st)} seconds")
             self.logger.info(f"Writing configuration to file: {os.path.basename(self.config_file)}")
             self.logger.debug(f"Full path to the configuration file: {self.config_file}")
-
-        if clear_dirs:
-            self.logger.info("Overwriting factory_dir first")
-            clean_up_folder(self.path.factory_dir)
-            clean_up_sciproduct(self.path.output_dir)
 
         # fill in missing keys
         self.fill_missing_from_yaml()
@@ -188,7 +182,8 @@ class SciProcConfiguration(BaseConfig):
             return None
 
     def _handle_input(self, input, logger, verbose, is_too=False, **kwargs):
-        if isinstance(input, list) or (isinstance(input, str) and input.endswith(".fits")):  # list of science images
+        # list of science images
+        if isinstance(input, list) or (isinstance(input, str) and input.endswith(".fits")):
             self.input_files = sorted(input)
             self.path = PathHandler(input, is_too=is_too)
             config_source = self.path.sciproc_base_yml
@@ -207,7 +202,8 @@ class SciProcConfiguration(BaseConfig):
             self.node.logging.file = log_file
             # raise PipelineError("Initializing 'SciProcConfiguration' from a list of images is not supported anymore. Please use 'SciProcConfiguration.base_config' instead.")
 
-        elif isinstance(input, str | dict):  # path of a config file
+        # path of a config file
+        elif isinstance(input, str | dict):
             config_source = input
             super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
             # working_dir = os.path.dirname(config_source) if isinstance(config_source, str) else None
