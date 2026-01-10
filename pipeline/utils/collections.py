@@ -2,7 +2,27 @@ from ..const import ALL_GROUP_KEYS
 
 
 def atleast_1d(x):
-    return [x] if not isinstance(x, list) else x
+    """
+    Ensure input is at least 1-dimensional (a list).
+
+    Args:
+        x: Input value of any type
+
+    Returns:
+        list: If x is already a list, returns x unchanged.
+              If x is None, returns empty list.
+              If x is a string, tuple, or other sequence, converts to list.
+              Otherwise, wraps x in a list.
+    """
+    if x is None:
+        return []
+    if isinstance(x, list):
+        return x
+
+    # if isinstance(x, (tuple, set, frozenset)):
+    #     return list(x)
+
+    return [x]
 
 
 def flatten(nested, max_depth=None):

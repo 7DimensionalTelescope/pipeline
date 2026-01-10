@@ -48,8 +48,11 @@ class PreprocConfiguration(BaseConfig):
             return None
 
     @classmethod
-    def base_config(cls):
-        return
+    def user_config(cls, **kwargs):
+        print("[WARNING] Not implemented yet. Returning base config...\n")  # TODO
+        self = cls.base_config()
+        self.node.settings.is_pipeline = False
+        return self
 
     def initialize(self):
         self.node.info.version = __version__

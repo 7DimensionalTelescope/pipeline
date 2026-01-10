@@ -48,10 +48,12 @@ class BaseConfig(ABC):
     def from_config(cls, input: str, write=True, is_too=False, **kwargs) -> Self:
         """
         Deprecated. Move away from it.
+
         Much faster (4.8 ms) than SciProcConfiguration(input, write=write) (36 ms)
         as it defines PathHandler with only the first file, and skips writing
         to disk during initialization.
         """
+        print("[DeprecationWarning] Use SciProcConfiguration(input, write=write) instead.")
         # return cls(input, write=write, **kwargs)
         self = cls.__new__(cls)
         self._load_config(config_source=input)
@@ -64,49 +66,37 @@ class BaseConfig(ABC):
         self._initialized = True
         return self
 
-    # @classmethod
-    # def from_base(cls, config_type, **kwargs):
-    #     if config_type == "preprocess":
-    #         config_file = os.path.join(const.REF_DIR, "preproc_base.yml")
-    #         return cls.from_config(config_file, **kwargs)
-    #     elif config_type == "sciprocess":
-    #         config_file = os.path.join(const.REF_DIR, "sciproc_base.yml")
-    #         return cls.from_config(config_file, **kwargs)
-    #     else:
-    #         raise ValueError(f"Invalid config_type: {config_type}")
-
-    # @classmethod
-    # def base_config(
-    #     cls, target_file=None, config_type=None, config_file=None, config_dict=None, working_dir=None, **kwargs
-    # ):
-    #     """Return the base (base.yml) ConfigurationInstance."""
-    #     working_dir = working_dir or os.getcwd()
-    #     if config_file is not None:
-    #         config_file = os.path.join(working_dir, config_file) if working_dir else config_file
-    #         if os.path.exists(config_file):
-    #             config = cls.from_config(config_file=config_file, **kwargs)
-    #         else:
-    #             raise FileNotFoundError("Provided Configuration file does not exist")
-    #     elif config_type is not None:
-    #         config = cls.from_base(config_type, **kwargs)
-    #         # if config_type == "sciprocess":
-    #         #     config.input.calibrated_images = [target_file]
-    #     elif config_dict is not None:
-    #         config = cls.from_dict(config_dict=config_dict, **kwargs)
-    #     else:
-    #         raise ValueError("Either config_file, config_type or config_dict must be provided")
-
-    #     config.name = "user-input"
-    #     config._initialized = True
-    #     return config
-
     @classmethod
+    def base_config(cls, write=False):
+        self = cls.__new__(cls)
+
+        # same as BaseConfig __init__
+        self._initialized = False
+        self.write = write
+
+        if cls.__name__ == "PreprocConfiguration":
+            self._load_config(PathHandler().preproc_base_yml)
+        elif cls.__name__ == "SciProcConfiguration":
+            self._load_config(PathHandler().sciproc_base_yml)
+        else:
+            raise ValueError(f"Invalid class name: {cls.__name__}")
+
+        # self._initialized = True
+        return self
+
     @abstractmethod
-    def base_config(cls):
-        pass
+    def user_config(cls, **kwargs):
+        raise NotImplementedError("User config is not implemented for this class")
 
     @abstractmethod
     def _set_pathhandler_from_config(self, is_too=False):
+        pass
+
+    @abstractmethod
+    def initialize(self):
+        """
+        Responsible for filling in universal info & writing for the first time.
+        """
         pass
 
     def _load_config(self, config_source, **kwargs):
@@ -123,7 +113,7 @@ class BaseConfig(ABC):
 
         self._update_with_kwargs(**kwargs)
 
-        self._make_instance()
+        self._make_nodes()
 
     def _update_with_kwargs(self, **kwargs):
         """Merge additional configuration parameters."""
@@ -136,27 +126,30 @@ class BaseConfig(ABC):
         with open(config_file, "r") as f:
             return yaml.load(f, Loader=yaml.FullLoader)
 
-    def write_config(self):
+    def write_config(self, force=False):
         """
-        Write current configuration to a YAML file.
+        Writes current configuration to a YAML file.
 
-        Generates a configuration filename using observation details:
-        - Checks if configuration is initialized
-        - Creates a filename with unit, object, datetime, filter, and exposure
-        - Writes configuration dictionary to the output path
+        Writes only if:
+        - Configuration is initialized
+        - Write is True
         """
 
-        if not self.is_initialized or not self.write:
+        if not (self.is_initialized and self.write) and not force:
             return
 
         self._config_in_dict["info"]["last_update_datetime"] = datetime.now().isoformat()
 
+        print(
+            f"Writing configuration to file: {self.config_file}, {self._config_in_dict['info']['last_update_datetime']}"
+        )
+
         with open(self.config_file, "w") as f:
             yaml.dump(self._config_in_dict, f, sort_keys=False)  # , default_flow_style=False)
 
-    def _make_instance(self):
+    def _make_nodes(self):
         """
-        Transform configuration dictionary into nested, dynamic instances.
+        Transform configuration dictionary into nested, dynamic instances of ConfigNode.
         """
         for key, value in self._config_in_dict.items():
             if isinstance(value, dict):
@@ -211,7 +204,7 @@ class BaseConfig(ABC):
 
         base_yaml = base_yaml or getattr(self.path, "sciproc_base_yml", None)
         if not base_yaml or not os.path.exists(base_yaml):
-            return []
+            return
 
         with open(base_yaml, "r") as f:
             base_defaults = yaml.load(f, Loader=yaml.FullLoader) or {}
@@ -223,7 +216,7 @@ class BaseConfig(ABC):
         was_initialized = getattr(self, "_initialized", False)
         try:
             self._initialized = False
-            self._make_instance()
+            self._make_nodes()
         finally:
             self._initialized = was_initialized
 
@@ -248,7 +241,7 @@ class BaseConfig(ABC):
         was_initialized = getattr(self, "_initialized", False)
         try:
             self._initialized = False
-            self._make_instance()
+            self._make_nodes()
         finally:
             self._initialized = was_initialized
 

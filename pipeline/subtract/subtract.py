@@ -70,7 +70,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
 
         working_dir = str(path.parent.absolute())
 
-        config = SciProcConfiguration.base_config(working_dir=working_dir)
+        config = SciProcConfiguration.user_config(working_dir=working_dir)
         config.input.calibrated_images = image_list
         return cls(config=config)
 

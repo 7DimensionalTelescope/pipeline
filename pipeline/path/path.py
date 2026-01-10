@@ -76,24 +76,25 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
             raise ValueError("Invalid PathHandler input type.")
 
         self._input_files = [os.path.abspath(img) for img in input]
+
         if input:
             try:
                 self.name = NameHandler(input)
             except Exception as e:
                 raise PipelineError(f"NameHandler failure: not pipeline file.\n{input!r}:\n{e}")
 
-        # all True if the boolean flag is_too is True
-        self._is_too_vectorized = [is_too] * len(input) if isinstance(input, list) else [is_too]
-        for i, (input_file, typ) in enumerate(zip(self._input_files, self.name.type)):
-            if "raw" in typ:
-                if "_ToO_" in input_file:
-                    self._is_too_vectorized[i] = True
+            # all True if the boolean flag is_too is True
+            self._is_too_vectorized = [is_too] * len(input) if isinstance(input, list) else [is_too]
+            for i, (input_file, typ) in enumerate(zip(self._input_files, self.name.type)):
+                if "raw" in typ:
+                    if "_ToO_" in input_file:
+                        self._is_too_vectorized[i] = True
 
-            if "calibrated" in typ:
-                if const.TOO_PROCESSED_DIR in input_file:
-                    self._is_too_vectorized[i] = True
+                if "calibrated" in typ:
+                    if const.TOO_PROCESSED_DIR in input_file:
+                        self._is_too_vectorized[i] = True
 
-            # TODO: other types are not handled yet
+                # TODO: other types are not handled yet
 
     def __getattr__(self, name):
         """
@@ -373,6 +374,14 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
             return cached_prop
 
     @property
+    def is_pipeline(self):
+        all_flag = all(self._is_pipeline)
+        or_flag = any(self._is_pipeline)
+        if not all_flag and or_flag:
+            raise ValueError("Pipeline and non-pipeline paths are mixed. Aborting...")
+        return all_flag
+
+    @property
     def file_dep_initialized(self):
         """Safe from AutoMkdirMixin as it's a bool."""
         return self._file_dep_initialized
@@ -440,6 +449,9 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         #     for obj, filte, unit, date in zip(self.name.obj, self.name.filter, self.name.unit, self.name.date)
         # ]
 
+        if not self._input_files:
+            return bjoin(self.output_parent_dir, "sciproc_config.yml")
+
         # assumes is_too images are all from the same group
         too_time = (
             NameHandler.calculate_too_time(
@@ -448,9 +460,6 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
             if any(self._is_too_vectorized)
             else None
         )
-
-        if not self._input_files:
-            return bjoin(self.output_parent_dir, "sciproc_config.yml")
 
         yml_basenames = []
         for i in range(len(self._input_files)):

@@ -62,7 +62,7 @@ class AutoMkdirMixin:
     """This makes sure accessed dirs exist. Prepend _ to variables to prevent mkdir"""
 
     # attrs to skip mkdir; subclasses can modify this set
-    _mkdir_exclude = {"output_name", "config_stem", "preproc_config_stem", "name", "changelog_dir"}
+    _mkdir_exclude = {"output_name", "is_pipeline", "preproc_config_stem", "name", "changelog_dir"}
 
     def __init_subclass__(cls):
         # Ensure subclasses have their own created-directory cache

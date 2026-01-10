@@ -122,7 +122,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             if not os.path.exists(image):
                 raise FileNotFoundError(f"File does not exist: {image}")
 
-        config = SciProcConfiguration.base_config(input_images=images, working_dir=working_dir, logger=True)
+        config = SciProcConfiguration.user_config(input_images=images, working_dir=working_dir, logger=True)
         return cls(config=config)
 
     @property

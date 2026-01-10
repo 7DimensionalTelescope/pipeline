@@ -4,14 +4,13 @@ import glob
 import time
 from pathlib import Path
 from datetime import datetime
-from astropy.io import fits
+from typing import Literal
 
 from .. import __version__
-from ..errors import PipelineError
+from ..errors import ConfigurationError
 from ..utils import clean_up_folder, clean_up_sciproduct, atleast_1d, time_diff_in_seconds, collapse
 from ..utils.header import get_header
 from ..path.path import PathHandler
-from ..services.database.too import TooDB
 from ..services.logger import Logger
 
 from .base import BaseConfig
@@ -41,134 +40,12 @@ class SciProcConfiguration(BaseConfig):
             self.logger.info(f"Writing configuration to file: {os.path.basename(self.config_file)}")
             self.logger.debug(f"Full path to the configuration file: {self.config_file}")
 
-        # fill in missing keys
+        # fill in missing keys, even though initialized
         self.fill_missing_from_yaml()
 
         if not os.path.exists(self.config_file) or overwrite:
             self.write_config()
         self.logger.info("Completed to load configuration")
-
-    # @classmethod
-    # def base_config(cls, input_images=None, config_file=None, config_dict=None, working_dir=None, **kwargs):
-    #     """Return the base (base.yml) ConfigurationInstance."""
-    #     working_dir = working_dir or os.getcwd()
-    #     if config_file is not None:
-    #         config_file = os.path.join(working_dir, config_file) if working_dir else config_file
-    #         if os.path.exists(config_file):
-    #             config = cls.from_config(config_file=config_file, **kwargs)
-    #         else:
-    #             raise FileNotFoundError("Provided Configuration file does not exist")
-    #     elif config_dict is not None:
-    #         config = cls.from_dict(config_dict=config_dict, **kwargs)
-    #     else:
-    #         raise ValueError("Either config_file, config_type or config_dict must be provided")
-
-    #     config.name = "user-input"
-    #     config._initialized = True
-    #     return config
-
-    @classmethod
-    def base_config(
-        cls,
-        input_images: list[str] | str = None,
-        working_dir: str = None,
-        config_file: str = None,
-        write: bool = True,
-        logger: bool | Logger = None,
-        verbose: bool = True,
-        force_creation: bool = False,
-        is_pipeline: bool = False,
-        is_too: bool = False,
-        **kwargs,
-    ):
-        """
-        Base configuration for user-input.
-        Usually you want to specify logger=True.
-
-        self.node.settings.is_pipeline is False by default.
-        self.node.settings.is_too is False by default.
-        """
-        # self = cls.__new__(cls)
-
-        input_images = sorted([os.path.abspath(image) for image in atleast_1d(input_images)])
-        path = PathHandler(input_images, working_dir=working_dir or os.getcwd(), is_too=is_too)
-        # self = cls(path.sciproc_base_yml, is_too=is_too)
-        self = cls.from_config(path.sciproc_base_yml, is_too=is_too)
-        self.path = path
-        self.config_file = config_file or self.path.sciproc_output_yml
-        if isinstance(self.config_file, list):
-            if force_creation:
-                print(f"[WARNING] config name is not uniquely defined. Using the last one.")
-                self.config_file = collapse(sorted(self.path.sciproc_output_yml)[::-1], force=True)
-            else:
-                raise PipelineError(
-                    "Inhomogeneous input images; config name is not uniquely defined. Use force_creation=True to use the last one."
-                )
-        # config_source = self.path.sciproc_base_yml
-        # super().__init__(self, config_source=config_source, write=write, **kwargs)
-        # self.initialize(is_pipeline=False)
-
-        if logger is True:
-            log_file = self.path.sciproc_output_log
-            if isinstance(log_file, list):
-                print(f"[WARNING] log filename is not uniquely defined. Using the last one.")
-                log_file = collapse(sorted(log_file)[::-1], force=True)
-            self.node.logging.file = log_file
-            self.logger = cls._setup_logger(
-                name=self.name,
-                log_file=self.node.logging.file,
-                verbose=verbose,
-                overwrite=write,
-                **kwargs,
-            )
-
-        elif logger:
-            self.logger = logger
-        else:
-            self.logger = None
-
-        self.node.input.calibrated_images = atleast_1d(input_images)
-        # self.config.name = "user-input"
-        self.node.name = self.name
-        self.node.settings.is_pipeline = is_pipeline
-        self.node.settings.is_too = is_too
-        self.fill_missing_from_yaml()
-        self.node.info.version = __version__
-        self._initialized = True
-        return self
-
-    @classmethod
-    def from_list(cls, input_images, working_dir=None, is_pipeline=False, is_too=False, **kwargs):
-        # self.input_files = sorted(input)
-        # self.path = PathHandler(input)
-        # config_source = self.path.sciproc_base_yml
-        # self.logger = self._setup_logger(
-        #     logger,
-        #     name=self.name,
-        #     log_file=self.path.sciproc_output_log,
-        #     verbose=verbose,
-        #     overwrite=self.write,
-        # )
-        # self.logger.info("Generating 'SciProcConfiguration' from the 'base' configuration")
-        # self.logger.debug(f"Configuration source: {config_source}")
-        # super().__init__(config_source=config_source, write=self.write, **kwargs)
-        # self.config.info.file = config_source
-        # self.config.logging.file = self.path.sciproc_output_log
-
-        self = cls.base_config(
-            input_images=input_images,
-            working_dir=working_dir,
-            logger=True,
-            is_pipeline=is_pipeline,
-            is_too=is_too,
-            **kwargs,
-        )
-        # # TODO: node.calibrated_images becomes different from input_images after initialize
-        # # emulate constructor’s initialize path
-        # self._initialized = False
-        # self.input_files = atleast_1d(input_images)
-        # self.initialize(is_pipeline=is_pipeline, is_too=is_too)
-        return self
 
     @property
     def name(self):
@@ -200,7 +77,6 @@ class SciProcConfiguration(BaseConfig):
             self.logger.debug(f"Configuration source: {config_source}")
             super().__init__(config_source=config_source, write=self.write, **kwargs)
             self.node.logging.file = log_file
-            # raise PipelineError("Initializing 'SciProcConfiguration' from a list of images is not supported anymore. Please use 'SciProcConfiguration.base_config' instead.")
 
         # path of a config file
         elif isinstance(input, str | dict):
@@ -233,77 +109,6 @@ class SciProcConfiguration(BaseConfig):
 
         return
 
-    def _update_too_times(self, input_file):
-        """Update ToO database with transfer_time from input file creation time."""
-
-        # Try to find and update the ToO record
-        too_db = TooDB()
-
-        input_files = atleast_1d(input_file)
-
-        earliest_time = None
-        observation_time = None
-        for input_file in input_files:
-            if os.path.exists(input_file):
-                file_time = datetime.fromtimestamp(os.path.getctime(input_file))
-                if earliest_time is None or file_time < earliest_time:
-                    earliest_time = file_time
-
-                # Parse DATE-OBS - handle ISO format with T separator and milliseconds
-                # DATE-OBS in FITS is UTC (as per FITS standard), convert to KST for storage
-                try:
-                    date_obs_str = fits.getval(input_file, "DATE-OBS")
-                    try:
-                        # Try ISO format first (handles 'T' separator and milliseconds)
-                        obs_time = datetime.fromisoformat(date_obs_str.replace("Z", "").replace("+00:00", ""))
-                    except ValueError:
-                        # Fall back to space-separated format
-                        try:
-                            obs_time = datetime.strptime(date_obs_str, "%Y-%m-%d %H:%M:%S")
-                        except ValueError:
-                            # Try with milliseconds
-                            obs_time = datetime.strptime(date_obs_str, "%Y-%m-%dT%H:%M:%S.%f")
-
-                    # Convert from UTC to KST (Asia/Seoul, UTC+9)
-                    import pytz
-
-                    obs_time_utc = pytz.UTC.localize(obs_time)
-                    kst = pytz.timezone("Asia/Seoul")
-                    obs_time = obs_time_utc.astimezone(kst)
-
-                    if observation_time is None or obs_time < observation_time:
-                        observation_time = obs_time
-                except (KeyError, ValueError) as e:
-                    # DATE-OBS not found or unparseable, skip
-                    if hasattr(self, "logger") and self.logger:
-                        self.logger.debug(f"Could not parse DATE-OBS from {input_file}: {e}")
-                    continue
-
-        # First, try using config_file if available
-        if hasattr(self, "config_file") and self.config_file:
-            # Handle case where config_file might be a list
-            config_file = self.config_file
-            base_path = str(Path(config_file).parent.parent)
-            if isinstance(config_file, list):
-                config_file = collapse(sorted(config_file)[::-1], force=True) if config_file else None
-
-            if config_file:
-                try:
-                    too_data = too_db.read_data(config_file=config_file)
-                    if too_data and too_db.too_id:
-                        too_db.update_too_data(
-                            too_id=too_db.too_id, transfer_time=earliest_time, observation_time=observation_time
-                        )
-                        too_db.update_too_data(too_id=too_db.too_id, base_path=base_path)
-                        if hasattr(self, "logger") and self.logger:
-                            self.logger.info(f"Updated ToO transfer_time to {earliest_time.isoformat()}")
-
-                        too_db.send_initial_notice_email(too_db.too_id)
-
-                except Exception as e:
-                    if hasattr(self, "logger") and self.logger:
-                        self.logger.warning(f"Failed to update ToO transfer_time: {e}")
-
     def _set_pathhandler_from_config(self, working_dir=None, is_too=False):
         # mind the check order
         if hasattr(self.node, "input"):
@@ -319,7 +124,7 @@ class SciProcConfiguration(BaseConfig):
 
         raise ValueError("Configuration does not contain valid input files or directories to create PathHandler.")
 
-    def initialize(self, is_pipeline=True, is_too=False):
+    def initialize(self, write=False, is_pipeline=True, is_too=False):
         """Fill in universal info, filenames, settings."""
 
         self.node.info.version = __version__
@@ -330,30 +135,23 @@ class SciProcConfiguration(BaseConfig):
         self.node.input.calibrated_images = atleast_1d(PathHandler(self.input_files, is_too=is_too).processed_images)
 
         if is_too:
-            # base_name = os.path.basename(self.config_file).replace(".yml", "").replace(".yaml", "")
-            # min_time = NameHandler.calculate_too_time(self.input_files)
-            # self.config_file = self.config_file.replace(base_name, f"{base_name}_ToO_{min_time}")
-            # self.node.name = os.path.splitext(os.path.basename(self.config_file))[0]
-            self._update_too_times(self.input_files)
+            from .toodb import update_too_times
+
+            update_too_times(self, self.input_files)
 
         self.node.input.output_dir = self.path.output_dir
 
-        # self.set_input_output()
-        # self.check_masterframe_status()
-
-        if is_pipeline:
-            self.node.settings.is_pipeline = True
+        self.node.settings.is_pipeline = is_pipeline and self.path.is_pipeline
+        self.node.settings.is_too = is_too
         self._define_settings(self.input_files[0])
-        self.input_files = self.node.input.calibrated_images
-
-        self.fill_missing_from_yaml()
+        # self.input_files = self.node.input.calibrated_images
 
         self._initialized = True
 
-    def _define_settings(self, input_file):
+    def _define_settings(self, input_file_sample):
         try:
             # skip single frame combine for Deep mode
-            raw_header_sample = get_header(input_file)
+            raw_header_sample = get_header(input_file_sample)
             try:
                 obsmode = raw_header_sample["OBSMODE"]
             except KeyError:
@@ -363,3 +161,77 @@ class SciProcConfiguration(BaseConfig):
             self.node.settings.coadd = False if obsmode.lower() == "deep" else True
         except Exception as e:
             self.logger.warning(f"Failed to define settings: {e}")
+
+    @classmethod
+    def user_config(
+        cls,
+        input_images: list[str] | str = None,
+        working_dir: str = None,
+        config_file: str = None,
+        write: bool = True,
+        logger: bool | Logger = True,
+        verbose: bool = True,
+        is_pipeline: bool = False,
+        is_too: bool = False,
+        config_name_policy: Literal["error", "last"] = "error",
+        **kwargs,
+    ):
+        """
+        SciProcConfiguration for user-input images.
+
+        Args:
+        - input_images: list of science images
+        - working_dir: PathHandler's working_dir
+        - config_file: path to save this configuration to
+        - write: write configuration to file. False to skip writing.
+        - logger: False to turn off logger, True to use default logger, or Logger instance to use custom logger
+        - verbose: verbose level
+        - is_pipeline: you want it False unless trying to modify existing pipeline product
+        - is_too: flag for ToO observations, which have a dedicated save location
+        - config_name_policy: "error" to raise an error, other options to resolve the degeneracy
+        """
+
+        logger = False if not write else logger
+        input_images = sorted([os.path.abspath(image) for image in atleast_1d(input_images)])
+        path = PathHandler(input_images, working_dir=working_dir or os.getcwd(), is_too=is_too)
+        self = cls.base_config(write=write)
+        self.input_files = input_images
+        self.path = path
+        self.config_file = config_file or self.path.sciproc_output_yml
+        if isinstance(self.config_file, list):
+            if config_name_policy == "error":
+                raise ConfigurationError.GroupingError(
+                    "Inhomogeneous input images; config name is not uniquely defined. Use force_creation=True to use the last one."
+                )
+            elif config_name_policy == "last":
+                print(f"[WARNING] config name is not uniquely defined. Using the last one.")
+                self.config_file = collapse(sorted(self.path.sciproc_output_yml)[::-1], force=True)
+            else:
+                raise ConfigurationError.ValueError(f"Invalid config name policy: {config_name_policy}")
+
+        if not self.input_files:
+            return self
+
+        if logger is True:
+            log_file = self.path.sciproc_output_log
+            if isinstance(log_file, list):
+                print(f"[WARNING] log filename is not uniquely defined. Using the last one.")
+                log_file = collapse(sorted(log_file)[::-1], force=True)
+            self.node.logging.file = log_file
+            self.logger = cls._setup_logger(
+                name=self.name,
+                log_file=self.node.logging.file,
+                verbose=verbose,
+                overwrite=write,
+                **kwargs,
+            )
+        elif isinstance(logger, Logger):
+            self.logger = logger
+        else:
+            self.logger = None
+
+        self.initialize(write=write, is_pipeline=is_pipeline, is_too=is_too)
+        if self.write:  # defined in base_config
+            self.write_config(force=True)
+
+        return self
