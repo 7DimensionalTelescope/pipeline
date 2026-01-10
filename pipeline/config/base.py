@@ -11,11 +11,11 @@ from ..path.path import PathHandler
 
 class BaseConfig(ABC):
 
-    def __init__(self, config_source=None, write=True, is_too=False, **kwargs) -> None:
+    def __init__(self, config_source=None, write=True, **kwargs) -> None:
+        # Don't pass is_too here. Child classes should handle it.
         self._initialized = False
         self.write = write
 
-        # Don't pass is_too to _load_config - it should only exist in settings.is_too, not at top level
         self._load_config(config_source, **kwargs)
 
     def __repr__(self):
@@ -47,16 +47,13 @@ class BaseConfig(ABC):
     @classmethod
     def from_config(cls, input: str, write=True, is_too=False, **kwargs) -> Self:
         """
-        Currently only used in wrapper.py
+        Deprecated. Move away from it.
         Much faster (4.8 ms) than SciProcConfiguration(input, write=write) (36 ms)
         as it defines PathHandler with only the first file, and skips writing
         to disk during initialization.
         """
         # return cls(input, write=write, **kwargs)
-        self = cls.__new__(
-            cls,
-            is_too=is_too,
-        )
+        self = cls.__new__(cls)
         self._load_config(config_source=input)
         self.config_file = input
         # initialize PathHandler with the first group of input images

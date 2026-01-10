@@ -30,7 +30,7 @@ class PreprocConfiguration(BaseConfig):
 
         if not self._initialized:
             self.logger.info("Initializing configuration")
-            self.initialize(is_too=is_too)
+            self.initialize()
             self.logger.info(f"'PreprocConfiguration' initialized in {time_diff_in_seconds(st)} seconds")
             self.logger.info(f"Writing configuration to file")
             self.logger.debug(f"Configuration file: {self.config_file}")
@@ -51,7 +51,7 @@ class PreprocConfiguration(BaseConfig):
     def base_config(cls):
         return
 
-    def initialize(self, is_too=False):
+    def initialize(self):
         self.node.info.version = __version__
         self.node.info.creation_datetime = datetime.now().isoformat()
         self.node.info.file = self.config_file
@@ -76,7 +76,7 @@ class PreprocConfiguration(BaseConfig):
         # List of FITS files
         if isinstance(input, list):
             if len(input) < 1:
-                self.logger.warning("No input images")
+                self.logger.error("No input images")
                 sys.exit(0)
             # sci_images = PathHandler(input).pick_type("science")
             # print(sci_images)
@@ -96,7 +96,24 @@ class PreprocConfiguration(BaseConfig):
             super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
             self.node.logging.file = log_file
 
+        # Configuration file path
+        elif (isinstance(input, str) and input.endswith(".yml")) or isinstance(input, dict):
+            config_source = input
+            super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
+            self._initialized = True
+            self.path = self._set_pathhandler_from_config(is_too=is_too or get_key(self.node.settings, "is_too", False))
+            config_output = self.path.preproc_output_yml
+            log_file = self.path.preproc_output_log
+            print(self.path._input_files)
+
+            self.logger = self._setup_logger(
+                logger, name=self.node.name, log_file=log_file, verbose=verbose, overwrite=False
+            )
+            self.logger.info("Loading configuration from an exisiting file or dictionary")
+            self.logger.debug(f"Configuration source: {config_source}")
+
         # Directory containing FITS files
+        # TODO: redirect it to cls
         elif isinstance(input, str) and os.path.isdir(input):
             sample_file = self._has_fits_file(input)
 
@@ -113,21 +130,6 @@ class PreprocConfiguration(BaseConfig):
             super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
             self.node.logging.file = log_file
 
-        # Configuration file path
-        elif (isinstance(input, str) and ".yml" in input) or isinstance(input, dict):
-            config_source = input
-            super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
-            self._initialized = True
-            self.path = self._set_pathhandler_from_config(is_too=is_too or get_key(self.node.settings, "is_too", False))
-            config_output = self.path.preproc_output_yml
-            log_file = self.path.preproc_output_log
-            print(self.path._input_files)
-
-            self.logger = self._setup_logger(
-                logger, name=self.node.name, log_file=log_file, verbose=verbose, overwrite=False
-            )
-            self.logger.info("Loading configuration from an exisiting file or dictionary")
-            self.logger.debug(f"Configuration source: {config_source}")
         else:
             raise ValueError("Input must be a list of FITS files or a directory containing FITS files")
 
