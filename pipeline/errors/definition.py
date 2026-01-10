@@ -87,6 +87,7 @@ registry.register_kind("QualityCheckFailedError", 80, QualityCheckFailedError)
 registry.register_kind("AssumptionFailedError", 81, AssumptionFailedError)
 registry.register_kind("PrerequisiteNotMetError", 82, PrerequisiteNotMetError)
 registry.register_kind("GroupingError", 83, GroupingError)
+registry.register_kind("ParseError", 84, ParseError)
 
 
 # Reserved sentinel

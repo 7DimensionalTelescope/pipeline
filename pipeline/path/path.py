@@ -6,7 +6,7 @@ from functools import cached_property
 import numpy as np
 
 from .. import const
-from ..errors import PipelineError
+from ..errors import PipelineError, PathHandlerError
 from ..utils.tile import find_ris_tile
 from ..utils import add_suffix, swap_ext, collapse, atleast_1d
 
@@ -81,7 +81,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
             try:
                 self.name = NameHandler(input)
             except Exception as e:
-                raise PipelineError(f"NameHandler failure: not pipeline file.\n{input!r}:\n{e}")
+                raise PathHandlerError.ParseError(f"NameHandler failure: not pipeline file.\n{input!r}:\n{e}")
 
             # all True if the boolean flag is_too is True
             self._is_too_vectorized = [is_too] * len(input) if isinstance(input, list) else [is_too]
@@ -378,7 +378,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         all_flag = all(self._is_pipeline)
         or_flag = any(self._is_pipeline)
         if not all_flag and or_flag:
-            raise ValueError("Pipeline and non-pipeline paths are mixed. Aborting...")
+            raise PathHandlerError.GroupingError("Pipeline and non-pipeline paths are mixed. Aborting...")
         return all_flag
 
     @property
