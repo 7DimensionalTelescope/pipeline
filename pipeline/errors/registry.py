@@ -211,6 +211,7 @@ class ProcessErrorBase(Exception, metaclass=ProcessErrorMeta):
     def exception(cls, kind: Union[str, Type[BaseException], BaseException]) -> Type[BaseException]:
         """
         Resolve a 'kind' into a combined exception class under this process.
+        It exists to do self.logger.process_error.exception(ValueError) in Photometry.
 
         Examples:
             AstrometryError.exception(ValueError) -> AstrometryError.ValueError

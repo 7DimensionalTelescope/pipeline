@@ -61,17 +61,20 @@ def wcs_check_plot(
     psf_axes = [fig.add_subplot(gs_psf[i, j]) for i in range(3) for j in range(3)]
 
     # Plot PSF grid
-    wcs_check_psf_plot(
-        psf_axes,
-        image,
-        matched,
-        wcs,
-        matched_ids=matched_ids,
-        cutout_size=cutout_size,
-        stretch_type=stretch_type,
-        title_ax=ax_spacer,
-        legend_ax=ax_leg,
-    )
+    try:
+        wcs_check_psf_plot(
+            psf_axes,
+            image,
+            matched,
+            wcs,
+            matched_ids=matched_ids,
+            cutout_size=cutout_size,
+            stretch_type=stretch_type,
+            title_ax=ax_spacer,
+            legend_ax=ax_leg,
+        )
+    except Exception:
+        pass  # ignore if PSF plot fails
 
     # Highlight psf inspected sources, preserving order
     if matched_ids is not None:

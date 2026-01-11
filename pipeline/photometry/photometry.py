@@ -37,15 +37,18 @@ from ..utils.header import get_header_key, update_padded_header
 from ..too.plotting import make_too_output
 from ..utils.tile import is_ris_tile
 from ..errors import (
-    PipelineError,
-    SystemError,
+    # process errors
     SinglePhotometryError,
     CoaddPhotometryError,
     DifferencePhotometryError,
+    SystemError,
+    PathHandlerError,
+    # kind errors
     NotEnoughSourcesError,
     NoReferenceSourceError,
     FilterCheckError,
     FilterInventoryError,
+    ConnectionError,
     UnknownError,
 )
 
@@ -131,7 +134,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
 
         else:
             self.logger.debug(f"photometry mode undefined: {photometry_mode}")
-            raise PipelineError(
+            raise self.logger.process_error.exception(ValueError)(
                 "Unexpected photometry mode: check if flags are sequentially turned on for single_photometry, combined_photometry, and difference_photometry"
             )
 
@@ -162,7 +165,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         elif self._photometry_mode == "difference_photometry":
             return 90, 10
         else:
-            raise PipelineError(f"Undefined photometry mode: {self._photometry_mode}")
+            raise SinglePhotometryError.ValueError(f"Undefined photometry mode: {self._photometry_mode}")
 
     @classmethod
     def from_list(cls, images: List[str], working_dir=None) -> Optional["Photometry"]:
@@ -250,7 +253,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             elif self._photometry_mode == "difference_photometry":
                 self.config_node.flag.difference_photometry = True
             else:
-                raise PipelineError(f"Undefined photometry mode: {self._photometry_mode}")
+                raise SinglePhotometryError.ValueError(f"Undefined photometry mode: {self._photometry_mode}")
 
             self.logger.info(f"'Photometry' is Completed in {time_diff_in_seconds(st)} seconds")
             self.logger.debug(MemoryMonitor.log_memory_usage)
@@ -850,7 +853,9 @@ class PhotometrySingle:
 
             input_arr = np.array(zps[~mask].value)
             if len(input_arr) == 0:
-                self.logger.error(f"No valid zero point sources found for {mag_key}. Skipping.", NotEnoughSourcesError)
+                self.logger.warning(
+                    f"No valid zero point sources found for {filt} {mag_key}. Skipping.", NotEnoughSourcesError
+                )
                 self.logger.debug(f"input_arr: {input_arr}")
                 continue
             zp, zperr = phot_utils.compute_median_nmad(input_arr, normalize=True)
@@ -918,6 +923,11 @@ class PhotometrySingle:
         zp_cut = 27.2  # 26.8
         alleged_filter = self.image_info.filter
         filters_checked = [k for k in phot_headers.keys()]
+
+        if len(phot_headers) == 0:
+            self.logger.warning(f"No phot_headers found. Using alleged filter.", FilterCheckError)
+            return alleged_filter
+
         # filter out when phot_headers[filt] is None
         dicts = {
             filt: (header.zp_dict, header.aperture_dict) for filt, header in phot_headers.items() if header is not None
@@ -1005,7 +1015,9 @@ class PhotometrySingle:
             active_filters = set(NameHandler(all_filter_files).filter)
             self.logger.debug(f"Fetched active filters from Django-PostgreSQL raw image DB: {active_filters}")
             return active_filters
-        self.logger.debug(f"get_active_filters: cannot connect to Django-PostgreSQL raw image DB")
+        self.logger.warning(
+            f"get_active_filters: cannot connect to Django-PostgreSQL main raw image DB", ConnectionError
+        )
 
         # sqlite pipeline db
         # TODO
@@ -1015,24 +1027,22 @@ class PhotometrySingle:
         self.logger.debug(f"get_active_filters: DB connection failed, fallback to local filesystem")
         # fallback to local filesystem
         try:
-            f = PathHandler(self.input_image, is_too=self.config_node.settings.is_too).conjugate
-            self.logger.debug(f"Filter check conjugate: {f}")
-            # if not os.path.exists(f):
-            #     raise PipelineError(f"During get_active_filters, no conjugate image found for {f}")
-            flist = glob(os.path.join(os.path.dirname(f), "*.fits"))
+            template = PathHandler(self.input_image, is_too=self.config_node.settings.is_too).conjugate
+            self.logger.debug(f"Filter check glob template (PathHandler.conjugate): {template}")
+            flist = glob(os.path.join(os.path.dirname(template), "*.fits"))
             flats = NameHandler(flist).pick_type("raw_flat")
             scis = NameHandler(flist).pick_type("raw_science")
             active_filters = set(NameHandler(flats + scis).filter)
             self.logger.debug(f"Fetched active filters from local filesystem: {active_filters}")
             return active_filters
-        except (PipelineError, SystemError) as e:
+        except (SystemError, PathHandlerError) as e:
             self.logger.warning(
                 f"Unable to fetch active filters from on-date inventory. Using all default filters: {e}",
                 FilterInventoryError,
             )
             return ALL_FILTERS
         except Exception as e:
-            self.logger.error(
+            self.logger.warning(
                 f"Fetching active filters failed. Using all default filters: {e}", FilterInventoryError, exc_info=True
             )
             return ALL_FILTERS
@@ -1155,7 +1165,10 @@ class ImageInfo:
             interped = True
 
         if "CTYPE1" not in hdr.keys():
-            raise PipelineError("Check Astrometry solution: no WCS information for Photometry")
+            # just single phot error. propagating the 3 kinds of photometry errors is not worth the effort.
+            raise SinglePhotometryError.PreviousStageError(
+                "Check Astrometry solution: no WCS information for Photometry"
+            )
 
         kwargs = dict(
             obj=hdr["OBJECT"],

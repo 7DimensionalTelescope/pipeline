@@ -682,7 +682,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                 self.logger.info(f"Completed sextractor (prep) [{i+1}/{len(input_images)}]")
                 self.logger.debug(f"{solved_image}")
             except Exception as e:
-                self.logger.error(f"Failed sextractor for {solved_image}: {e}", AstrometryError.SextractorError)
+                self.logger.error(f"Sextractor failed for {solved_image}: {e}", AstrometryError.SextractorError)
                 raise AstrometryError.SextractorError(f"Sextractor failed for {solved_image}: {e}") from e
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
@@ -939,8 +939,9 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                 self.logger.error(
                     f"Unmatched fraction is 1.0 for {input_images[idx]}. "
                     f"Check the initial WCS guess or the reference catalog.",
-                    AstrometryError.BadWcsSolutionError,
+                    AstrometryError.InvalidWcsSolution,
                 )
+                raise AstrometryError.InvalidWcsSolution(f"Unmatched fraction is 1.0 for {input_images[idx]}")
 
             info = images_info[idx]
             info.matched_catalog = matched
@@ -1253,7 +1254,7 @@ class ImageInfo:
             zp = zp_per_filter["unknown"]
             self._log(
                 f"Filter {self.filter} not in zeropoints.json for early QA. Using default: {zp}.",
-                exception=AstrometryError.PrerequisiteNotMetError,
+                exception=AstrometryError.PrerequisiteNotMet,
             )
         if self.filter in depths_per_filter:
             depth = depths_per_filter[self.filter]
@@ -1261,7 +1262,7 @@ class ImageInfo:
             depth = depths_per_filter["unknown"]
             self._log(
                 f"Filter {self.filter} not in depths.json for early QA. Using default: {depth}.",
-                exception=AstrometryError.PrerequisiteNotMetError,
+                exception=AstrometryError.PrerequisiteNotMet,
             )
 
         self.num_frac = get_source_num_frac(sci_cat, ref_cat, sci_zp=zp, depth=depth - 0.5)

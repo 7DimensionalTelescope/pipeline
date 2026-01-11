@@ -29,6 +29,7 @@ registry.register_process("logger", 13)
 
 # Future placeholders. Uncomment when the need arises.
 # registry.register_process("db", 20)  # You may need separate SQLiteDBError, PostgresDBError, etc.
+# registry.register_process("main_db", 21)  # Main PostgresDB image db
 # registry.register_process("queue", 30)
 
 # Error kinds (0..99) -- add new when needed
@@ -42,25 +43,27 @@ registry.register_kind("PermissionError", 7, PermissionError)
 registry.register_kind("TimeoutError", 8, TimeoutError)
 registry.register_kind("KeyboardInterrupt", 9, KeyboardInterrupt)
 registry.register_kind("NotImplementedError", 11, NotImplementedError)
+registry.register_kind("ConnectionError", 12, ConnectionError)
 
 
 # Pipeline specific errors
-# CAVEAT: these are dynamically created and not understood by IDEs. e.g., Rename Symbol won't work exhaustively.
+# CAVEAT: these are dynamically created and not understood by IDEs.
+#         e.g., Rename Symbol won't work exhaustively. Use grep -r --binary-files=without-match
 # preprocess from 20
 registry.register_kind("MasterFrameNotFoundError", 20, MasterFrameNotFoundError)
-registry.register_kind("NoOnDateMasterFrameError", 21, NoOnDateMasterFrameError)
+registry.register_kind("SameNightMasterFrameNotFoundError", 21, SameNightMasterFrameNotFoundError)
 
 
 # astrometry from 30
 registry.register_kind("BlankImageError", 30, BlankImageError)
 registry.register_kind("BadWcsSolutionError", 31, BadWcsSolutionError)
-registry.register_kind("PointingError", 32, PointingError)
-registry.register_kind("PositionAngleError", 33, PositionAngleError)
+registry.register_kind("InvalidWcsSolutionError", 31, InvalidWcsSolutionError)
 registry.register_kind("AlternativeSolverError", 34, AlternativeSolverError)
 registry.register_kind("SolveFieldError", 35, SolveFieldError)
 registry.register_kind("ScampError", 36, ScampError)
 registry.register_kind("AstrometryReferenceGenerationError", 37, AstrometryReferenceGenerationError)
-
+# registry.register_kind("PointingError", 32, PointingError)
+# registry.register_kind("PositionAngleError", 33, PositionAngleError)
 
 # photometry from 50
 registry.register_kind("NotEnoughSourcesError", 50, NotEnoughSourcesError)
@@ -88,6 +91,7 @@ registry.register_kind("AssumptionFailedError", 81, AssumptionFailedError)
 registry.register_kind("PrerequisiteNotMetError", 82, PrerequisiteNotMetError)
 registry.register_kind("GroupingError", 83, GroupingError)
 registry.register_kind("ParseError", 84, ParseError)
+registry.register_kind("PreviousStageError", 85, PreviousStageError)
 
 
 # Reserved sentinel
@@ -97,6 +101,7 @@ registry.register_kind("UnknownError", 99, UnknownError)
 # Create process exception classes
 PreprocessError = make_process_error(registry, "preprocess", class_name="PreprocessError")
 AstrometryError = make_process_error(registry, "astrometry", class_name="AstrometryError")
+# generic photometry errors default to SinglePhotometryError
 SinglePhotometryError = make_process_error(registry, "single_photometry", class_name="SinglePhotometryError")
 CoaddError = make_process_error(registry, "coadd", class_name="CoaddError")
 CoaddPhotometryError = make_process_error(registry, "coadd_photometry", class_name="CoaddPhotometryError")
@@ -108,6 +113,7 @@ SystemError = make_process_error(registry, "system", class_name="SystemError")
 PathHandlerError = make_process_error(registry, "pathhandler", class_name="PathHandlerError")
 ConfigurationError = make_process_error(registry, "config", class_name="ConfigurationError")
 LoggerError = make_process_error(registry, "logger", class_name="LoggerError")
+# MainDatabaseError = make_process_error(registry, "main_db", class_name="MainDatabaseError")
 
 
 # ------------------------------------------------------

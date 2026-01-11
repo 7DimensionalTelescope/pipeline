@@ -22,7 +22,7 @@ from ..services.checker import Checker
 from ..services.database.image_qa import ImageQATable
 from ..services.database.handler import DatabaseHandler
 from ..utils.header import add_padding, get_header
-from ..errors import PreprocessError, NoOnDateMasterFrameError, MasterFrameNotFoundError
+from ..errors import PreprocessError, SameNightMasterFrameNotFoundError, MasterFrameNotFoundError
 from ..path import PathHandler, NameHandler
 
 pp = pprint.PrettyPrinter(indent=2)  # , width=120)
@@ -345,7 +345,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             else:
                 self.logger.warning(
                     f"[Group {self._current_group+1}] {dtype} has no input or output data (to fetch)",
-                    NoOnDateMasterFrameError,
+                    SameNightMasterFrameNotFoundError,
                 )
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_input: {input_file}")
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_output: {output_file}")

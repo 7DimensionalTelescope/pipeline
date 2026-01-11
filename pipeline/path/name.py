@@ -923,17 +923,18 @@ class NameHandler:
     ) -> Tuple[List[str], List[Tuple], Tuple[List[List[str]], List[List[str]], List[List[str]]]]:
         """
         e.g., files = glob("/data/pipeline_reform/obsdata_test/7DT11/2025-01-01_gain2750/*.fits")
-        sci_files, on_date_calib = NameHandler.find_calib_for_sci(flist)
+        sci_files, associated_calib = NameHandler.find_calib_for_sci(flist)
 
         Returns
         -------
             sci_files
                 list of science image files
-            on_date_calib
-                list of tuples of (on_date_bias, on_date_dark, on_date_flat)
-                which corresponds to sci_files
-            off_date_calib
-                tuple of respectively grouped (bias, dark, flat)
+            associated_calib
+                list of tuples of (bias, dark, flat) that correspond to each
+                science image in sci_files.
+            unassociated_calib
+                tuple of unused calib frames, first grouped by (bias, dark, flat)
+                then grouped by BIAS_GROUP_KEYS, DARK_GROUP_KEYS, and FLAT_GROUP_KEYS.
         """
         if not isinstance(files, list):  # or len(files) <= 1:
             raise ValueError("Input must be a list of file paths")
@@ -954,17 +955,17 @@ class NameHandler:
                 sci[k] = v
 
         sci_files = []
-        on_date_calib = []
+        associated_calib = []
         used_bias_keys = set()
         used_dark_keys = set()
         used_flat_keys = set()
 
-        # On-date calib frames
+        # Associated calib frames
         for key, val in sci.items():
             key_sci = dict(key[1])  # key is a tuple of (type, obs_param)
             sci_files.append(val)
 
-            # On-date calibration collection with group tracking
+            # Associated calibration collection with group tracking
             on_bias, on_dark, on_flat = [], [], []
 
             for k, v in bias.items():
@@ -982,9 +983,9 @@ class NameHandler:
                     on_flat.extend(v)
                     used_flat_keys.add(k)
 
-            on_date_calib.append((on_bias, on_dark, on_flat))
+            associated_calib.append((on_bias, on_dark, on_flat))
 
-        # Off-date calib frames (not used by any on-date science images)
+        # Unassociated calib frames (not used by any same-night science images)
         unused_bias_keys = [k for k in bias.keys() if k not in used_bias_keys]  # order-preserving
         unused_dark_keys = [k for k in dark.keys() if k not in used_dark_keys]
         unused_flat_keys = [k for k in flat.keys() if k not in used_flat_keys]
@@ -1012,7 +1013,7 @@ class NameHandler:
         grouped_unused_dark = [v for v in unused_dark_dict.values()]
         grouped_unused_flat = [v for v in unused_flat_dict.values()]
 
-        off_date_calib = (grouped_unused_bias, grouped_unused_dark, grouped_unused_flat)
+        unassociated_calib = (grouped_unused_bias, grouped_unused_dark, grouped_unused_flat)
 
         # off_date_calib = []
         # for key, val in sci.items():
@@ -1034,7 +1035,7 @@ class NameHandler:
 
         #     on_date_calib.append((on_date_bias, on_date_dark, on_date_flat))
 
-        return sci_files, on_date_calib, off_date_calib
+        return sci_files, associated_calib, unassociated_calib
 
     @classmethod
     def calculate_too_time(cls, input_files: list[str]) -> str:

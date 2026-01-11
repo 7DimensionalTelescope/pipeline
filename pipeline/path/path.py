@@ -6,7 +6,7 @@ from functools import cached_property
 import numpy as np
 
 from .. import const
-from ..errors import PipelineError, PathHandlerError
+from ..errors import PathHandlerError
 from ..utils.tile import find_ris_tile
 from ..utils import add_suffix, swap_ext, collapse, atleast_1d
 
@@ -716,25 +716,32 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
     def take_raw_inventory(cls, files: list[str], lone_calib=True, is_too=False):
         return cls.build_preproc_input(
             *NameHandler.find_calib_for_sci(files),
-            lone_calib=lone_calib,
+            allow_unassociated_calib=lone_calib,
             is_too=is_too,
         )
 
     @classmethod
-    def build_preproc_input(cls, sci_files, on_date_calib, off_date_calib=None, lone_calib=True, is_too=False):
+    def build_preproc_input(
+        cls,
+        sci_files: List[str],
+        associated_calib: Tuple[List[List[str]], List[List[str]], List[List[str]]],
+        unassociated_calib: List[str] = None,
+        allow_unassociated_calib: bool = True,
+        is_too: bool = False,
+    ):
         """
-        Group science files by their associated on-date calibration sets.
+        Group science files by their associated same-night calibration sets.
 
         Parameters
         ----------
         sci_files : list
-            List of science file identifiers (e.g. file paths), parallel to `on_date_calib`.
-        on_date_calib : list of tuples
-            Each element is (on_date_flag, bias_list, dark_list, flat_list), where
-            `on_date_flag` is True if on-date calibration exists.
-        revisit : list of strings
-            Feed the list all files for the date again to pick raw calib frames
-            not paired with on-date science images.
+            List of science file identifiers (e.g. file paths), parallel to `associated_calib`.
+        associated_calib : list of tuples
+            Each element is (bias, dark, flat) that correspond to each
+            science image in sci_files.
+        unassociated_calib : list of lists of strings
+            List of unassociated calib frames, first grouped by (bias, dark, flat)
+            then grouped by BIAS_GROUP_KEYS, DARK_GROUP_KEYS, and FLAT_GROUP_KEYS.
 
         Returns
         -------
@@ -749,11 +756,11 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
                     ...
                 }
             )
-            - For on-date groups (sorted by increasing group size):
+            - For well-associated groups (sorted by increasing group size):
                 • raw_* lists are the original bias/dark/flat file paths
                 • master_* are the processed calibration frames via `PathHandler(...).preprocess.*`
                 • sci_groups is the list of science files sharing that calibration triple
-            - For off-date entries (appended last):
+            - For unassociated entries (appended last):
                 • raw_* are empty lists `([], [], [])`
                 • master_* are search templates to lookup in `masterframe_dir`
                 • sci_groups is a singleton list containing that science file
@@ -776,7 +783,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         # dict with master calib 3-tuples as keys, dict of raw bdf and sci as values
         calib_map = defaultdict(lambda: {"bias": None, "dark": None, "flat": None, "sci": []})
 
-        for (bias, dark, flat), sci in zip(on_date_calib, sci_files):
+        for (bias, dark, flat), sci in zip(associated_calib, sci_files):
             mbias, mdark, mflat = cls(sci[0]).preprocess.masterframe  # [0]: trust the grouping
 
             key = tuple((mbias, mdark, mflat))  # (tuple(bias), tuple(dark), tuple(flat))
@@ -825,9 +832,9 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
                 ]
             )
 
-        # raw calibration frames with no corresponding on-date science frames
-        if lone_calib and off_date_calib and any(l for l in off_date_calib):
-            off_date_bias_groups, off_date_dark_groups, off_date_flat_groups = off_date_calib
+        # raw calibration frames with no associated same-night science frames
+        if allow_unassociated_calib and unassociated_calib and any(l for l in unassociated_calib):
+            off_date_bias_groups, off_date_dark_groups, off_date_flat_groups = unassociated_calib
             for off_date_bias_group in off_date_bias_groups:
                 if len(off_date_bias_group) < const.NUM_MIN_CALIB:
                     continue
@@ -843,7 +850,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
                 mdark = cls(off_date_dark_group).preprocess.masterframe
                 mbias = cls(off_date_dark_group).preprocess.mbias  # mbias needed for mdark generation
 
-                # use pre-generated mbias saved to disk, even if on-date
+                # use pre-generated mbias saved to disk, even if raw available
                 result.append([[[], sorted(off_date_dark_group), []], [mbias, mdark, ""], dict()])
 
             for off_date_flat_group in off_date_flat_groups:

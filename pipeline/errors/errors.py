@@ -14,7 +14,7 @@ class MasterFrameNotFoundError(Exception):
     pass
 
 
-class NoOnDateMasterFrameError(Exception):
+class SameNightMasterFrameNotFoundError(Exception):
     pass
 
 
@@ -27,12 +27,16 @@ class BadWcsSolutionError(Exception):
     pass
 
 
-class PointingError(Exception):
+class InvalidWcsSolutionError(Exception):
     pass
 
 
-class PositionAngleError(Exception):
-    pass
+# class PointingError(Exception):
+#     pass
+
+
+# class PositionAngleError(Exception):
+#     pass
 
 
 class AlternativeSolverError(Exception):
@@ -118,6 +122,10 @@ class GroupingError(Exception):
 
 
 class ParseError(ValueError):
+    pass
+
+
+class PreviousStageError(Exception):
     pass
 
 
