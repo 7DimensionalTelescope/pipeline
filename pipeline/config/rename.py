@@ -2,6 +2,7 @@ from __future__ import annotations
 
 # This is a script to modify existing config keys in-place.
 # Not part of the routine pipeline.
+# functions are preserved for reference
 
 
 from pathlib import Path
@@ -11,6 +12,7 @@ from ..path.generator import iter_config
 
 def update_pipeline_yaml_in_place(yml_path: str | Path) -> None:
     """
+    2026-01-10
     Modify the YAML file on disk (in-place), applying these renames:
 
     Global mapping key renames:
@@ -179,6 +181,103 @@ def update_pipeline_yaml_in_place(yml_path: str | Path) -> None:
 
     with yml_path.open("w", encoding="utf-8") as f:
         yaml.dump(data, f)
+
+
+def downgrade_info_version_if_2(yml_path: str) -> bool:
+    """
+    2026-01-11
+    Change gpPy v2 configs to Py7DT 1.0.0
+    info.version: 2.0.0 -> 1.0.0
+    info.file to its absolute path
+
+
+    In-place edit:
+      - Find the 'info:' mapping block
+      - If within that block a line 'version: 2.0.0' appears, rewrite to 'version: 1.0.0'
+    Returns True if a change was made, False otherwise.
+
+    Notes:
+      - Plain text approach (no YAML parsing).
+      - Updates only the version key under the 'info:' block.
+    """
+    with open(yml_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    changed_version = False
+    in_info = False
+    info_indent = None
+
+    # Track where we changed version, and whether we saw a file line in info
+    version_line_idx = None
+    file_line_idx = None
+    file_key_prefix = None  # preserves indentation/prefix up to 'file:'
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # Enter info block
+        if not in_info:
+            if stripped == "info:":
+                in_info = True
+                info_indent = len(line) - len(line.lstrip(" "))
+            continue
+
+        # Leave info block when hitting another top-level-ish mapping key
+        if stripped != "":
+            cur_indent = len(line) - len(line.lstrip(" "))
+            if info_indent is not None and cur_indent <= info_indent and stripped.endswith(":"):
+                break  # done scanning info block
+
+        # Look for version in info block
+        if stripped.startswith("version:"):
+            key, rest = line.split("version:", 1)
+            rest_stripped = rest.lstrip(" ")
+            value_token = rest_stripped.split(None, 1)[0] if rest_stripped.strip() else ""
+            if value_token == "2.0.0":
+                remainder = rest_stripped[len(value_token) :]  # keep trailing spaces/comments
+                new_rest = " " * (len(rest) - len(rest_stripped)) + "1.0.0" + remainder
+                lines[i] = key + "version:" + new_rest
+                changed_version = True
+                version_line_idx = i
+            else:
+                version_line_idx = i  # still remember where it is (for insertion point)
+            continue
+
+        # Look for file in info block
+        if stripped.startswith("file:"):
+            file_line_idx = i
+            file_key_prefix, rest = line.split("file:", 1)
+            # keep original trailing newline style
+            newline = "\n" if line.endswith("\n") else ""
+            lines[i] = f"{file_key_prefix}file: {yml_path}{newline}"
+
+    # If we changed version, ensure info.file is set to yml_path
+    if changed_version:
+        if file_line_idx is not None:
+            # already replaced during scan
+            pass
+        else:
+            # insert file line right after version line if possible, else right after 'info:'
+            insert_at = None
+            if version_line_idx is not None:
+                insert_at = version_line_idx + 1
+                # match indentation of other keys under info (assume 2 spaces deeper than info:)
+                info_key_indent = " " * ((info_indent or 0) + 2)
+                lines.insert(insert_at, f"{info_key_indent}file: {yml_path}\n")
+            else:
+                # no version line found; fall back: insert after 'info:' line
+                for j, l in enumerate(lines):
+                    if l.strip() == "info:":
+                        info_key_indent = " " * ((len(l) - len(l.lstrip(" "))) + 2)
+                        lines.insert(j + 1, f"{info_key_indent}file: {yml_path}\n")
+                        break
+
+        with open(yml_path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+
+        return True
+
+    return False
 
 
 if __name__ == "__main__":

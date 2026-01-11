@@ -581,7 +581,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             with fits.open(file, mode="update") as hdul:
                 hdul[0].header["FLXSCALE"] = (
                     flxscale,
-                    "flux scaling factor by 7DT Pipeline (ImStack)",
+                    "flux scaling factor by 7DT Pipeline (ImCoadd)",
                 )
                 hdul.flush()
             self.logger.debug(f"{get_basename(file)} FLXSCALE: {flxscale:.3f}")
@@ -620,7 +620,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
     def joint_registration(self):
         """
         It can address cross-filter registration when given just the image paths.
-        Just give the new joint WCS to all images and let individual ImStack
+        Just give the new joint WCS to all images and let individual ImCoadd
         handle the rest of the process.
         """
         pass

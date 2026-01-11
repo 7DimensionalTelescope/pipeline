@@ -158,7 +158,7 @@ class SanityFilterMixin:
     Resets self.path with filtered images, unlike self.config.path, which
     preserves the pristine input images.
 
-    Reused by Photometry, ImStack, and ImSubtract.
+    Reused by Photometry, ImCoadd, and ImSubtract.
     Astrometry always ingest all input images regardless of SANITY check.
 
     Public API:
