@@ -156,7 +156,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             self.config_node.flag.coadd = True
             self.logger.info(f"'ImCoadd' is Completed in {time_diff_in_seconds(self._st)} seconds")
         except Exception as e:
-            self.logger.error(f"Error during imcoadd processing: {str(e)}", CoaddError.UnknownError)
+            self.logger.error(f"Error during imcoadd processing: {str(e)}", CoaddError.UnknownError, exc_info=True)
 
             raise
         # self.logger.debug(MemoryMonitor.log_memory_usage)
