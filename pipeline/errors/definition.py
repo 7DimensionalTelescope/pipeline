@@ -57,7 +57,7 @@ registry.register_kind("SameNightMasterFrameNotFoundError", 21, SameNightMasterF
 # astrometry from 30
 registry.register_kind("BlankImageError", 30, BlankImageError)
 registry.register_kind("BadWcsSolutionError", 31, BadWcsSolutionError)
-registry.register_kind("InvalidWcsSolutionError", 31, InvalidWcsSolutionError)
+registry.register_kind("InvalidWcsSolutionError", 32, InvalidWcsSolutionError)
 registry.register_kind("AlternativeSolverError", 34, AlternativeSolverError)
 registry.register_kind("SolveFieldError", 35, SolveFieldError)
 registry.register_kind("ScampError", 36, ScampError)
