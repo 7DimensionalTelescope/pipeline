@@ -131,3 +131,7 @@ class PreviousStageError(Exception):
 
 class UnknownError(Exception):
     pass
+
+
+class ConnectionError(Exception):
+    pass

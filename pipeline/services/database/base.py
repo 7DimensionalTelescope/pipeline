@@ -115,6 +115,12 @@ class BaseDatabase:
                     existing_id = (
                         existing if isinstance(existing, int) else (existing[0] if isinstance(existing, list) else None)
                     )
+            elif "name" in data:
+                existing = self.read_data(data["name"])
+                if existing:
+                    existing_id = existing.id
+                else:
+                    existing_id = None
 
             if overwrite:
                 self.delete_data(existing_id)
