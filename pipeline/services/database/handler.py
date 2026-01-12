@@ -1,7 +1,9 @@
+import json
+import logging
+
 from .too import TooDB
 from .process_status import ProcessStatus
 from .image_qa import ImageQA
-import logging
 
 
 class DatabaseHandler:
