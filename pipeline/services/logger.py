@@ -6,7 +6,7 @@ import requests
 import fcntl
 from typing import Optional, Union, Dict, Any, Type
 
-from ..services.database.process_status import ProcessStatus
+from ..services.database.handler import DatabaseHandler
 from .. import const
 from ..errors import UndefinedProcessError, exception_from_code, ProcessErrorBase, ExceptionArg
 
@@ -71,7 +71,7 @@ class Logger:
         self._original_excepthook = sys.excepthook
 
         self.process_error: None | ProcessErrorBase = None
-        self.database: Optional[ProcessStatus] = None
+        self.database: Optional[DatabaseHandler] = None
 
         # Redirect stdout and stderr to the logger only if requested
         if redirect_stdout:
