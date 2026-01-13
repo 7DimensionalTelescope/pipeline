@@ -146,7 +146,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         )
 
         if self.is_connected:
-            self.logger.database = self.add_exception_code
+            self.logger.add_exception_code = self.add_exception_code
             self.process_status_id = self.create_process_data(self.config_node)
             if self.too_id is not None:
                 self.logger.debug(f"Initialized DatabaseHandler for ToO data management, ToO ID: {self.too_id}")
@@ -419,8 +419,8 @@ class PhotometrySingle:
             self.logger.info(f"Start 'PhotometrySingle' for the image {self.name} [{self._id}]")
             self.logger.debug(f"{'=' * 13} {os.path.basename(self.input_image)} {'=' * 13}")
 
-            self.calculate_seeing(use_header_seeing=self._trust_header_seeing)
-            obs_src_table = self.photometry_with_sextractor()
+            self.calculate_seeing(use_header_seeing=self._trust_header_seeing and not overwrite, overwrite=overwrite)
+            obs_src_table = self.photometry_with_sextractor(overwrite=overwrite)
 
             if self._check_filter:
                 self.logger.info("Performing filter check")
@@ -479,7 +479,9 @@ class PhotometrySingle:
             )
             raise
 
-    def calculate_seeing(self, phot_header: PhotometryHeader = None, use_header_seeing: bool = False) -> None:
+    def calculate_seeing(
+        self, phot_header: PhotometryHeader = None, use_header_seeing: bool = False, overwrite=False
+    ) -> None:
         """
         Calculate seeing conditions from stellar sources in the image.
 
@@ -532,7 +534,7 @@ class PhotometrySingle:
                 else:
                     raise ValueError(f"Invalid catalog format: {prep_cat}")
             else:
-                obs_src_table = self._run_sextractor(se_preset="prep", fits_ldac=True)
+                obs_src_table = self._run_sextractor(se_preset="prep", fits_ldac=True, overwrite=overwrite)
 
             post_match_table = self.add_matched_reference_catalog(obs_src_table)
             post_match_table = self.filter_catalog(post_match_table, snr_cut=False, low_mag_cut=11.75)
@@ -708,7 +710,7 @@ class PhotometrySingle:
 
         return post_match_table
 
-    def photometry_with_sextractor(self) -> None:
+    def photometry_with_sextractor(self, overwrite=False) -> None:
         """
         Run source extraction on the image.
 
@@ -739,6 +741,7 @@ class PhotometrySingle:
         obs_src_table = self._run_sextractor(
             se_preset="main",
             sex_args=sex_args,
+            overwrite=overwrite,
         )
 
         # add snr columns
@@ -756,6 +759,7 @@ class PhotometrySingle:
         output: str = None,
         fits_ldac: bool = False,
         phot_header: PhotometryHeader = None,
+        overwrite=False,
         **kwargs,
     ) -> Table:
         """
@@ -792,6 +796,7 @@ class PhotometrySingle:
             sex_args=sex_args,
             return_sex_output=True,
             fits_ldac=fits_ldac,
+            overwrite=overwrite,
             **kwargs,
         )
 
