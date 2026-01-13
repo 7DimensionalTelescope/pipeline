@@ -4,13 +4,14 @@ After=network.target pipeline-trigger.service
 PartOf=pipeline-trigger.service
 
 [Service]
+UMask=0002
 Type=oneshot
-User=pipeline
+User=pipeline-stable
 Group=pipeline
-WorkingDirectory=/home/pipeline/pipeline
-Environment="PATH=/home/pipeline/.conda/envs/pipeline/bin:/usr/local/bin:/usr/bin:/bin"
-EnvironmentFile=/home/pipeline/pipeline/.env
-ExecStart=/home/pipeline/.conda/envs/pipeline/bin/python3 /home/pipeline/pipeline/pipeline/cli/clear_completed_schedules
+WorkingDirectory=/home/pipeline-stable/pipeline
+Environment="PATH=/home/pipeline-stable/.conda/envs/pipeline/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=/home/pipeline-stable/pipeline/.env
+ExecStart=/home/pipeline-stable/.conda/envs/pipeline/bin/python3 /home/pipeline-stable/pipeline/pipeline/cli/clear_completed_schedules
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=pipeline-clear-schedules

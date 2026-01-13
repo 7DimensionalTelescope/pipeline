@@ -5,16 +5,17 @@ StartLimitIntervalSec=600
 StartLimitBurst=5
 
 [Service]
+UMask=0002
 Type=simple
-ExecStart=/bin/bash -lc "source ~/.bashrc && /home/pipeline/pipeline/systemd/start_trigger_in_tmux.sh"
+ExecStart=/bin/bash -lc "source ~/.bashrc && /home/pipeline-stable/pipeline/systemd/start_trigger_in_tmux.sh"
 WorkingDirectory=/tmp/pipeline
 Restart=always
 RestartSec=10
-User=pipeline
+User=pipeline-stable
 Group=pipeline
-Environment="PATH=/home/pipeline/pipeline:/home/pipeline/.conda/envs/pipeline/bin:/usr/bin"
-Environment="PYTHONPATH=/home/pipeline/pipeline"
-Environment="CONDA_PREFIX=/home/pipeline/.conda/envs/pipeline"
+Environment="PATH=/home/pipeline-stable/pipeline:/home/pipeline-stable/.conda/envs/pipeline/bin:/usr/bin"
+Environment="PYTHONPATH=/home/pipeline-stable/pipeline"
+Environment="CONDA_PREFIX=/home/pipeline-stable/.conda/envs/pipeline"
 Environment="CONDA_DEFAULT_ENV=pipeline"
 Environment=RAWDATA_DIR=/lyman/data1/obsdata
 Environment=FACTORY_DIR=/lyman/data2/factory

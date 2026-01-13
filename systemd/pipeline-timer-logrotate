@@ -5,7 +5,7 @@
     delaycompress
     missingok
     notifempty
-    create 0644 pipeline users
+    create 0644 pipeline-stable users
     maxsize 10M
     sharedscripts
     postrotate
@@ -20,7 +20,7 @@
     delaycompress
     missingok
     notifempty
-    create 0644 pipeline users
+    create 0644 pipeline-stable users
     maxsize 10M
     sharedscripts
 }
