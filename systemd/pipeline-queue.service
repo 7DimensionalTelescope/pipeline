@@ -1,0 +1,29 @@
+[Unit]
+Description=Pipeline Queue Manager Daemon
+After=network.target pipeline-trigger.service
+PartOf=pipeline-trigger.service
+
+[Service]
+UMask=0002
+Type=simple
+User=pipeline-stable
+Group=pipeline
+WorkingDirectory=/home/pipeline-stable/pipeline
+Environment="PATH=/home/pipeline-stable/.conda/envs/pipeline/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=/home/pipeline-stable/pipeline/.env
+ExecStart=/home/pipeline-stable/.conda/envs/pipeline/bin/python3 /home/pipeline-stable/pipeline/pipeline/cli/queue_daemon
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pipeline-queue
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Resource limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

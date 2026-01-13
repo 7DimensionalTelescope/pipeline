@@ -1,0 +1,32 @@
+[Unit]
+Description=Pipeline Trigger Service - Monitors directories and processes images
+After=network.target
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+UMask=0002
+Type=simple
+ExecStart=/bin/bash -lc "source ~/.bashrc && /home/pipeline-stable/pipeline/systemd/start_trigger_in_tmux.sh"
+WorkingDirectory=/tmp/pipeline
+Restart=always
+RestartSec=10
+User=pipeline-stable
+Group=pipeline
+Environment="PATH=/home/pipeline-stable/pipeline:/home/pipeline-stable/.conda/envs/pipeline/bin:/usr/bin"
+Environment="PYTHONPATH=/home/pipeline-stable/pipeline"
+Environment="CONDA_PREFIX=/home/pipeline-stable/.conda/envs/pipeline"
+Environment="CONDA_DEFAULT_ENV=pipeline"
+Environment=RAWDATA_DIR=/lyman/data1/obsdata
+Environment=FACTORY_DIR=/lyman/data2/factory
+Environment=MASTER_FRAME_DIR=/lyman/data2/master_frame
+Environment=PROCESSED_DIR=/lyman/data2/processed
+Environment=DAILY_STACKED_DIR=/lyman/data2/daily_stacked
+Environment=STACKED_DIR=/lyman/data2/stacked
+StandardOutput=append:/var/log/pipeline-timer.log
+StandardError=inherit
+CapabilityBoundingSet=CAP_SYS_NICE
+AmbientCapabilities=CAP_SYS_NICE
+
+[Install]
+WantedBy=multi-user.target
