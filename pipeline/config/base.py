@@ -38,9 +38,10 @@ class BaseConfig(ABC):
         """No self.config_file, write is always False."""
         # return cls(input, write=write, **kwargs)
         self = cls.__new__(cls)
+        self._initialized = False
+        self.write = False
         self._load_config(config_source=input)
         self.config_file = None
-        self.write = False
         self._initialized = True
         return self
 
@@ -56,13 +57,14 @@ class BaseConfig(ABC):
         print("[DeprecationWarning] Use SciProcConfiguration(input, write=write) instead.")
         # return cls(input, write=write, **kwargs)
         self = cls.__new__(cls)
+        self._initialized = False
+        self.write = write
         self._load_config(config_source=input)
         self.config_file = input
         # initialize PathHandler with the first group of input images
         input_dict = self.node.input.to_dict()
         input_images = next(iter(input_dict.values())) or None  # if empty, use None
         self.path = PathHandler(input_images, is_too=is_too)
-        self.write = write
         self._initialized = True
         return self
 
