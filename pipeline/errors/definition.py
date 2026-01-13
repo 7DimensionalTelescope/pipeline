@@ -72,6 +72,7 @@ registry.register_kind("SextractorError", 52, SextractorError)
 registry.register_kind("FilterCheckError", 53, FilterCheckError)
 registry.register_kind("FilterInventoryError", 54, FilterInventoryError)
 registry.register_kind("PhotometryReferenceGenerationError", 57, PhotometryReferenceGenerationError)
+registry.register_kind("InferredFilterMismatchError", 58, InferredFilterMismatchError)
 
 
 # imcoadd from 60

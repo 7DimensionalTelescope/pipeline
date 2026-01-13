@@ -48,6 +48,7 @@ from ..errors import (
     NoReferenceSourceError,
     FilterCheckError,
     FilterInventoryError,
+    InferredFilterMismatchError,
     ConnectionError,
     PreviousStageError,
     UnknownError,
@@ -1001,7 +1002,7 @@ class PhotometrySingle:
                 f"\nThe filter in header ({alleged_filter}) is not the best matching ({inferred_filter})\n"
                 f"The best-matching filter is {inferred_filter} with zp = {zp:.2f}±{zperr:.2f}\n"
                 f"The original filter is {alleged_filter} with zp = {orig_zp:.2f}±{orig_zperr:.2f}\n",
-                FilterCheckError,
+                InferredFilterMismatchError,
             )
         else:
             self.logger.info(f"The inferred filter matches the original filter, '{alleged_filter}'")

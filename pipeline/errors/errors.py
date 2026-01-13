@@ -80,6 +80,10 @@ class PhotometryReferenceGenerationError(Exception):
     pass
 
 
+class InferredFilterMismatchError(Exception):
+    pass
+
+
 # imcoadd errors
 class BackgroundArtifactError(Exception):
     pass
