@@ -56,6 +56,7 @@ class PreprocConfiguration(BaseConfig):
 
     def initialize(self, is_too=False):
         if is_too:
+            self.logger.info(f"Overriding preproc base configuration with {self.path.preproc_too_override_yml}")
             self.override_from_yaml(self.path.preproc_too_override_yml)
 
         self.node.info.version = __version__
@@ -141,9 +142,6 @@ class PreprocConfiguration(BaseConfig):
 
         self.config_file = config_output  # used by write_config
 
-        if is_too:
-            self.logger.info(f"Overriding preproc base configuration with {self.path.preproc_too_override_yml}")
-            self.override_from_yaml(self.path.preproc_too_override_yml)
         return
 
     def _set_pathhandler_from_config(self, is_too=False):
