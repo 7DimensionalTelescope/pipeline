@@ -128,7 +128,7 @@ class ImageQATable:
 
         data = asdict(self)
 
-        data = {k: v for k, v in data.items() if v is not None}
+        data = {k: v for k, v in data.items()}
 
         # Convert JSON fields
         if "warnings" in data and isinstance(data["warnings"], (dict, list)):

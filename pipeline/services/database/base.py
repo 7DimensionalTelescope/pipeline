@@ -241,15 +241,15 @@ class BaseDatabase:
         params_str += "date_obs BETWEEN %(date_min)s::timestamp AND %(date_max)s::timestamp"
         query = f"SELECT {columns_str} FROM {self.table_name} WHERE {params_str}"
         rows, column_names = self.excute_query(query, params, return_columns=True)
-        
+
         return rows
 
     def update_data(self, target_id: int, **kwargs):
         params = {}
         for k, v in kwargs.items():
             if v is not None:
-                # Convert lists/dicts to JSON strings for jsonb columns (warnings, errors)
-                if k in ("warnings", "errors") and isinstance(v, (list, dict)):
+                # Convert lists/dicts to JSON strings for jsonb columns (only warnings, errors is now integer)
+                if k == "warnings" and isinstance(v, (list, dict)):
                     params[k] = json.dumps(v)
                 else:
                     params[k] = v

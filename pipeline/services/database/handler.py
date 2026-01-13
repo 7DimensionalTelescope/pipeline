@@ -88,7 +88,14 @@ class DatabaseHandler:
             return self.too_db.update_too_progress(self.too_id, progress, status)
         elif not self.is_connected:
             return False
-        return self.process_status.update_data(self.process_status_id, progress=progress, status=status)
+        else:
+            from ...version import __version__
+
+            self.process_status.update_data(
+                self.process_status_id, progress=progress, status=status, pipeline_version=__version__
+            )
+
+            return True
 
     def create_image_qa_data(self, file: str, process_status_id: int, overwrite: bool = False):
 
@@ -160,13 +167,13 @@ class DatabaseHandler:
             self.process_status.update_data(self.process_status_id, warnings=json.dumps(warnings))
         elif code_type == "error":
             if row.errors is None:
-                row.errors = []
-            row.errors.append(code_value)
-            errors = list(set(row.errors))
-            self.process_status.update_data(self.process_status_id, errors=json.dumps(errors))
+                row.errors = code_value
+                self.process_status.update_data(self.process_status_id, errors=code_value)
+            else:
+                return False
         else:
             raise ValueError(f"Invalid code type: {code_type}")
 
     def reset_exceptions(self):
         # Empty lists need to be converted to JSON strings for jsonb columns
-        self.process_status.update_data(self.process_status_id, warnings=[], errors=[])
+        self.process_status.update_data(self.process_status_id, warnings=[], errors=None)
