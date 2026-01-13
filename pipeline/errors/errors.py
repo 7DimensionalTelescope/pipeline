@@ -107,8 +107,8 @@ class HotpantsError(Exception):
 
 
 # generic errors
-class QualityCheckFailedError(Exception):
-    pass
+# class QualityCheckFailedError(Exception):
+#     pass
 
 
 class AssumptionFailedError(Exception):
@@ -130,6 +130,10 @@ class ParseError(ValueError):
 
 
 class PreviousStageError(Exception):
+    pass
+
+
+class EmptyInputError(Exception):
     pass
 
 

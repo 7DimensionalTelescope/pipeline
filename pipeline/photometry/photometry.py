@@ -107,10 +107,10 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             not self.config_node.flag.single_photometry
             # and (not self.config.input.coadd_image and not self.config.input.difference_image)  # hassle when rerunning
         ):
+            self.logger.process_error = SinglePhotometryError
             self.input_images = images or self.config_node.input.calibrated_images
             self.apply_sanity_filter_and_report()  # overrides self.input_images
             self.config_node.photometry.input_images = self.input_images
-            self.logger.process_error = SinglePhotometryError
 
             self.logger.debug("Running single photometry")
             self._photometry_mode = "single_photometry"
@@ -118,19 +118,19 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             not self.config_node.flag.coadd_photometry
             # and (self.config.input.coadd_image and not self.config.input.difference_image)
         ):
+            self.logger.process_error = CoaddPhotometryError
             self.config_node.photometry.input_images = (
                 images or [x] if (x := self.config_node.input.coadd_image) else None
             )
             self.input_images = self.config_node.photometry.input_images
-            self.logger.process_error = CoaddPhotometryError
             self.logger.debug("Running combined photometry")
             self._photometry_mode = "coadd_photometry"
         elif photometry_mode == "difference_photometry" or not self.config_node.flag.difference_photometry:
+            self.logger.process_error = DifferencePhotometryError
             self.config_node.photometry.input_images = (
                 images or [x] if (x := self.config_node.input.difference_image) else None
             )
             self.input_images = self.config_node.photometry.input_images
-            self.logger.process_error = DifferencePhotometryError
             self.logger.debug("Running difference photometry")
             self._photometry_mode = "difference_photometry"
 
@@ -203,6 +203,11 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         """
         st = time.time()
         self.logger.info(f"Start 'Photometry'")
+
+        if not self.input_images:
+            self.logger.info(f"No input images found in {self._photometry_mode}.")
+            raise SinglePhotometryError.EmptyInputError(f"No input images found in {self._photometry_mode}.")
+
         if not self.input_images:  # exception for when input.difference_image is not set.
             if self._photometry_mode == "difference_photometry":
                 self.update_progress(100, f"{self._photometry_mode}-completed")

@@ -251,10 +251,10 @@ class SanityFilterMixin:
                 self.logger.debug(f"Filtered out image: {os.path.basename(img)}")
 
             # Always recreate path with filtered images to keep it in sync
-            self._recreate_path()
+            self._recreate_pathhandler_instance()
         return input_changed
 
-    def _recreate_path(self):
+    def _recreate_pathhandler_instance(self):
         """
         Recreate self.path with filtered images to keep it in sync.
 
