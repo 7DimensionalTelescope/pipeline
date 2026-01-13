@@ -73,8 +73,13 @@ class Scheduler:
     def from_list(cls, list_of_configs, base_priority=1, **kwargs):
         """Create a scheduler from a list of configs."""
         import re
+        import copy
 
-        sc = cls(**kwargs)
+        use_system_queue = kwargs.pop("use_system_queue", False)
+
+        list_of_configs = np.atleast_1d(list_of_configs)
+
+        table = copy.deepcopy(cls._empty_schedule)
 
         for idx, config in enumerate(list_of_configs):
             if not (os.path.exists(config)):
@@ -93,9 +98,12 @@ class Scheduler:
                 priority = base_priority
 
             # scheduler_kwargs = ["-overwrite"] if overwrite or overwrite_science else [] + ["-processes"] + processes
-            scheduler_kwargs = []
+            if kwargs.pop("overwrite", False):
+                scheduler_kwargs = ["-overwrite"]
+            else:
+                scheduler_kwargs = []
 
-            sc._schedule.add_row(
+            table.add_row(
                 [
                     idx,
                     config,
@@ -113,7 +121,7 @@ class Scheduler:
                 ]
             )
 
-        return sc
+        return cls(schedule=table, use_system_queue=use_system_queue, **kwargs)
 
     def _connection_check(self):
         """Create scheduler table if it doesn't exist."""

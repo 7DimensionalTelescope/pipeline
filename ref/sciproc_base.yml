@@ -44,14 +44,16 @@ qa:
   seeing:
 
 info:
-  version: 
+  file:
+  creation_version:
+  runtime_version:
   project: 7DT/7DS
   creation_datetime:
   last_update_datetime:
 
 settings:
   is_too: false
-  is_pipeline: false
+  is_pipeline: false  # default false, true if found to be is_pipeline
   obsmode:  # Deep Spec Color Search Single
   coadd: True
   gpu_enabled: True

@@ -26,6 +26,7 @@ class SciProcConfiguration(BaseConfig):
         verbose=True,
         overwrite=False,
         is_too=False,
+        is_multi_epoch=False,
         **kwargs,
     ):
         st = time.time()
@@ -35,7 +36,7 @@ class SciProcConfiguration(BaseConfig):
 
         if not self._initialized:
             self.logger.info("Initializing configuration")
-            self.initialize(is_too=is_too, **kwargs)
+            self.initialize(is_too=is_too, is_multi_epoch=is_multi_epoch, **kwargs)
             self.logger.info(f"'SciProcConfiguration' initialized in {time_diff_in_seconds(st)} seconds")
             self.logger.info(f"Writing configuration to file: {os.path.basename(self.config_file)}")
             self.logger.debug(f"Full path to the configuration file: {self.config_file}")
@@ -124,8 +125,17 @@ class SciProcConfiguration(BaseConfig):
 
         raise ValueError("Configuration does not contain valid input files or directories to create PathHandler.")
 
-    def initialize(self, write=False, is_pipeline=True, is_too=False):
+    def initialize(self, write=False, is_pipeline=True, is_too=False, is_multi_epoch=False):
         """Fill in universal info, filenames, settings."""
+
+        if is_too:
+            override_yml = self.path.sciproc_too_override_yml
+            self.logger.info(f"Overriding base configuration with {override_yml}")
+            self.override_from_yaml(override_yml)
+        elif is_multi_epoch:
+            override_yml = self.path.sciproc_multi_epoch_override_yml
+            self.logger.info(f"Overriding base configuration with {override_yml}")
+            self.override_from_yaml(override_yml)
 
         self.node.info.version = __version__
         self.node.info.creation_datetime = datetime.now().isoformat()
@@ -134,7 +144,7 @@ class SciProcConfiguration(BaseConfig):
 
         self.node.input.calibrated_images = atleast_1d(PathHandler(self.input_files, is_too=is_too).processed_images)
 
-        if is_too:
+        if is_too and is_pipeline:
             from .toodb import update_too_times
 
             update_too_times(self, self.input_files)
@@ -173,6 +183,7 @@ class SciProcConfiguration(BaseConfig):
         verbose: bool = True,
         is_pipeline: bool = False,
         is_too: bool = False,
+        is_multi_epoch: bool = False,
         config_name_policy: Literal["error", "last"] = "error",
         **kwargs,
     ):
@@ -230,7 +241,7 @@ class SciProcConfiguration(BaseConfig):
         else:
             self.logger = None
 
-        self.initialize(write=write, is_pipeline=is_pipeline, is_too=is_too)
+        self.initialize(write=write, is_pipeline=is_pipeline, is_too=is_too, is_multi_epoch=is_multi_epoch)
         if self.write:  # defined in base_config
             self.write_config(force=True)
 

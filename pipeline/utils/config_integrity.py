@@ -24,9 +24,9 @@ configs_to_check = [
     # base yml
     "preproc_base.yml",
     "sciproc_base.yml",
-    "preproc_base_ToO.yml",
-    "sciproc_base_ToO.yml",
-    "sciproc_base_multiEpoch.yml",
+    "preproc_override_ToO.yml",
+    "sciproc_override_ToO.yml",
+    "sciproc_override_multiEpoch.yml",
 ]
 
 configs_to_check = [Path(REF_DIR, f) for f in configs_to_check]

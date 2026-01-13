@@ -9,7 +9,9 @@ input:
   raw_dir: 
 
 info:
-  version:
+  file:
+  creation_version:
+  runtime_version:
   project: 7DT/7DS
   creation_datetime:
   last_update_datetime:
@@ -33,4 +35,4 @@ preprocess:
 
 settings:
   is_too: false
-  is_pipeline: true
+  is_pipeline: true  # keep it true. preprocess is assumed to be pipeline
