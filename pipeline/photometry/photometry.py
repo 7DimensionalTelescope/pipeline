@@ -205,7 +205,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         self.logger.info(f"Start 'Photometry'")
 
         if not self.input_images:
-            self.logger.info(f"No input images found in {self._photometry_mode}.")
+            self.logger.error(f"No input images found in {self._photometry_mode}.")
             raise SinglePhotometryError.EmptyInputError(f"No input images found in {self._photometry_mode}.")
 
         if not self.input_images:  # exception for when input.difference_image is not set.
