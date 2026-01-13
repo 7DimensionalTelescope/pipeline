@@ -4,3 +4,5 @@ date	parts	comment
 241109	filt_config	g, r, I, m600, m625, m500, m775
 241115	mirror	collimation
 241206	cam	PA
+260104	fw	new_filters
+260104	mirror	optical_alignment

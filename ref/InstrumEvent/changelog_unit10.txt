@@ -9,3 +9,5 @@ date	parts	comment
 250213	cam	badcolumn_start
 250304	cam	badcolumn_end
 250311	mirror	cleaning
+260104	fw	new_filters
+260104	mirror	optical_alignment

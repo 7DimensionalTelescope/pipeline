@@ -4,3 +4,5 @@ date	parts	comment
 240917	cam	31232
 240927	filt_config	g, r, i, m850, m425, m625, m400
 251107	focuser	repair
+260104	fw	new_filters
+260104	mirror	optical_alignment

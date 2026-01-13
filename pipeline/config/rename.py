@@ -54,12 +54,6 @@ def update_pipeline_yaml_in_place(yml_path: str | Path) -> None:
         "daily_stack": "daily_coadd",
     }
 
-    def _merge_maps_fill_missing(dst: CommentedMap, src: CommentedMap) -> None:
-        """Fill keys missing in dst from src (dst wins on conflicts)."""
-        for k, v in src.items():
-            if k not in dst:
-                dst[k] = v
-
     def _rename_key_preserve(cm: CommentedMap, old: str, new: str) -> bool:
         """
         Rename a key in a CommentedMap, preserving order and key comments.
@@ -96,47 +90,6 @@ def update_pipeline_yaml_in_place(yml_path: str | Path) -> None:
 
         return True
 
-    def _resolve_imstack_imcoadd_collision(cm: CommentedMap) -> None:
-        """
-        If both 'imstack' and 'imcoadd' exist in the SAME mapping:
-        - Keep the content that is currently under 'imstack' (correct position),
-          rename it to 'imcoadd' at the SAME index.
-        - Remove the other 'imcoadd' (typically at bottom).
-        - Merge missing keys from the removed 'imcoadd' into the kept one (dst wins).
-        """
-        if "imstack" not in cm or "imcoadd" not in cm:
-            return
-
-        keys = list(cm.keys())
-        imstack_idx = keys.index("imstack")
-
-        # Preserve key comments
-        imstack_comment = None
-        imcoadd_comment = None
-        if getattr(cm, "ca", None) is not None:
-            if "imstack" in cm.ca.items:
-                imstack_comment = cm.ca.items.pop("imstack")
-            if "imcoadd" in cm.ca.items:
-                imcoadd_comment = cm.ca.items.pop("imcoadd")
-
-        imstack_val = cm.pop("imstack")
-        imcoadd_val = cm.pop("imcoadd")
-
-        kept_val = imstack_val
-
-        # Merge: fill missing keys in kept_val using the removed imcoadd_val
-        if isinstance(kept_val, CommentedMap) and isinstance(imcoadd_val, CommentedMap):
-            _merge_maps_fill_missing(kept_val, imcoadd_val)
-
-        cm.insert(imstack_idx, "imcoadd", kept_val)
-
-        # Keep comments from imstack as primary; if it had none, fall back to imcoadd's comments
-        if getattr(cm, "ca", None) is not None:
-            if imstack_comment is not None:
-                cm.ca.items["imcoadd"] = imstack_comment
-            elif imcoadd_comment is not None:
-                cm.ca.items["imcoadd"] = imcoadd_comment
-
     yaml = YAML(typ="rt")
     yaml.preserve_quotes = True
     yaml.indent(mapping=2, sequence=2, offset=0)
@@ -146,9 +99,6 @@ def update_pipeline_yaml_in_place(yml_path: str | Path) -> None:
 
     def _walk(node, path: tuple[str, ...]) -> None:
         if isinstance(node, CommentedMap):
-            # 0) Fix order-sensitive collision FIRST (so we keep the right block location)
-            _resolve_imstack_imcoadd_collision(node)
-
             # 1) Global renames
             for old, new in GLOBAL_RENAMES.items():
                 if old in node:

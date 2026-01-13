@@ -9,7 +9,7 @@ input:
   raw_dir: 
 
 info:
-  version: '2.0'  # legacy gppy-gpu is 1.0
+  version:
   project: 7DT/7DS
   creation_datetime:
   last_update_datetime:

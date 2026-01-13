@@ -11,3 +11,5 @@ date	parts	comment
 250525	mount	fans_replace
 250914	mirror	optical_alignment
 250914	cam	31166
+260104	fw	new_filters
+260104	mirror	optical_alignment

@@ -12,3 +12,5 @@ date	parts	comment
 250608	mirror	collimation
 250608	cam	PA,tilt
 250618	mount	PWI4_update
+260104	fw	new_filters
+260104	mirror	optical_alignment
