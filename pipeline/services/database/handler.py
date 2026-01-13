@@ -109,20 +109,31 @@ class DatabaseHandler:
         data.pop("id", None)
         self.image_qa.update_data(image_qa_id, **data)
 
-    def get_process_status(self, nightdate, obj=None, filt=None):
+    def get_process_status(self, nightdate, config_type="science"):
 
-        rows = self.process_status.read_data_by_params(return_table=True, nightdate=nightdate)
+        rows = self.process_status.read_data_by_params(return_table=True, nightdate=nightdate, config_type=config_type)
         if rows is None:
             return None
 
-        dicts = [row.to_dict() for row in rows]
+        if config_type == "science":
+            dicts = [row.to_dict() for row in rows]
+        else:
+            dicts = []
+            for row in rows:
+                classify_images = self.image_qa.classify_images(self.image_qa.get_by_process_status_id(row.id))
+                temp_dict = row.to_dict()
+                temp_dict["bias"] = classify_images["bias"]
+                temp_dict["dark"] = classify_images["dark"]
+                temp_dict["flat"] = classify_images["flat"]
+                dicts.append(temp_dict)
+
         return dicts
 
     def get_image_qa(self, params, image_type="single", date_min=None, date_max=None):
         import numpy as np
 
         params = np.atleast_1d(params)
-        default_params = ["date_obs", "nightdate", "unit", "filter", "object"]
+        default_params = ["date_obs", "nightdate", "unit", "filter", "object", "exptime"]
         params = list(params) + default_params
         rows = self.image_qa.read_data_by_params_with_date_range(
             columns=params,
@@ -130,7 +141,8 @@ class DatabaseHandler:
             date_max=date_max,
             image_type=image_type,
         )
-        rows = [dict(zip(params, row)) for row in rows]
+
+        rows = [dict(zip(params, row)) for row in rows if row[0] is not None]
         return rows
 
     def add_exception_code(self, code_type: str, code_value: int):

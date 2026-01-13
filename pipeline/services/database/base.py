@@ -227,14 +227,21 @@ class BaseDatabase:
     def read_data_by_params_with_date_range(self, columns, date_min, date_max, **kwargs):
         columns_str = ", ".join(columns)
         params = {k: v for k, v in kwargs.items() if v is not None}
-        params["date_min"] = date_min
-        params["date_max"] = date_max
+        if date_min is not None:
+            params["date_min"] = date_min
+        else:
+            params["date_min"] = "1900-01-01"
+        if date_max is not None:
+            params["date_max"] = date_max
+        else:
+            params["date_max"] = "2100-01-01"
         params_str = " AND ".join([f"{k} = %({k})s" for k in params.keys() if k not in ("date_min", "date_max")])
         if params_str:
             params_str += " AND "
         params_str += "date_obs BETWEEN %(date_min)s::timestamp AND %(date_max)s::timestamp"
         query = f"SELECT {columns_str} FROM {self.table_name} WHERE {params_str}"
         rows, column_names = self.excute_query(query, params, return_columns=True)
+        
         return rows
 
     def update_data(self, target_id: int, **kwargs):

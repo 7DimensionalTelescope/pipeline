@@ -128,7 +128,7 @@ class ImageQATable:
 
         data = asdict(self)
 
-        data = {k: v for k, v in data.items() if v is not None and k != "id"}
+        data = {k: v for k, v in data.items() if v is not None}
 
         # Convert JSON fields
         if "warnings" in data and isinstance(data["warnings"], (dict, list)):
@@ -210,15 +210,15 @@ class ImageQA(BaseDatabase):
         classified = {}
 
         if group == "masterframe":
+            classified["bias"] = False
+            classified["dark"] = []
+            classified["flat"] = []
             for image in images:
                 if image.image_type == "bias":
-                    classified.setdefault("bias", [])
-                    classified["bias"].append(image.image_name)
+                    classified["bias"] = True
                 elif image.image_type == "dark":
-                    classified.setdefault("dark", [])
-                    classified["dark"].append(image.exposure)
+                    classified["dark"].append(image.exptime)
                 elif image.image_type == "flat":
-                    classified.setdefault("flat", [])
                     classified["flat"].append(image.filter)
 
         elif group == "science":
