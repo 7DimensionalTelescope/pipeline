@@ -200,9 +200,9 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                             f"Early QA rejected {os.path.basename(image_info.image_path)}! "
                             f"Skipping all subsequent processing, including Astrometry and Photometry."
                         )
-                        self.logger.error(
+                        self.logger.warning(
                             f"Early QA rejected {os.path.basename(image_info.image_path)}! Skipping all subsequent processing, including Astrometry and Photometry.",
-                            AstrometryError.BlankImageError,
+                            AstrometryError.EmptyInputError,
                         )
                         update_padded_header(image_info.image_path, fits.Header(image_info.early_qa_cards))
                         continue
