@@ -1,16 +1,15 @@
 from __future__ import annotations
+from pathlib import Path
+from tqdm import tqdm
+from ..path.generator import iter_config
+
 
 # This is a script to modify existing config keys in-place.
 # Not part of the routine pipeline.
 # functions are preserved for reference
 
 
-from pathlib import Path
-from tqdm import tqdm
-from ..path.generator import iter_config
-
-
-def update_pipeline_yaml_in_place(yml_path: str | Path) -> None:
+def update_pipeline_yaml_in_place(yml_path: str | Path, additional_renames: dict[str, str] = {}) -> None:
     """
     2026-01-10
     Modify the YAML file on disk (in-place), applying these renames:
@@ -53,6 +52,7 @@ def update_pipeline_yaml_in_place(yml_path: str | Path) -> None:
         "imstack": "imcoadd",
         "daily_stack": "daily_coadd",
     }
+    GLOBAL_RENAMES.update(additional_renames)
 
     def _rename_key_preserve(cm: CommentedMap, old: str, new: str) -> bool:
         """
