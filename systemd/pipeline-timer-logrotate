@@ -1,0 +1,27 @@
+/var/log/pipeline-timer.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 pipeline users
+    maxsize 10M
+    sharedscripts
+    postrotate
+        # No need to reload - log rotation doesn't affect running process
+    endscript
+}
+
+/var/log/pipeline-trigger.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 pipeline users
+    maxsize 10M
+    sharedscripts
+}
+

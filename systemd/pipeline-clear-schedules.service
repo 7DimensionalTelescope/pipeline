@@ -1,0 +1,20 @@
+[Unit]
+Description=Pipeline Clear Completed Schedules
+After=network.target pipeline-trigger.service
+PartOf=pipeline-trigger.service
+
+[Service]
+Type=oneshot
+User=pipeline
+Group=pipeline
+WorkingDirectory=/home/pipeline/pipeline
+Environment="PATH=/home/pipeline/.conda/envs/pipeline/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=/home/pipeline/pipeline/.env
+ExecStart=/home/pipeline/.conda/envs/pipeline/bin/python3 /home/pipeline/pipeline/pipeline/cli/clear_completed_schedules
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pipeline-clear-schedules
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true

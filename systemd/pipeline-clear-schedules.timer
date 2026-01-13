@@ -1,0 +1,12 @@
+[Unit]
+Description=Timer for Pipeline Clear Completed Schedules
+Requires=pipeline-clear-schedules.service
+After=network.target pipeline-trigger.service
+PartOf=pipeline-trigger.service
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
