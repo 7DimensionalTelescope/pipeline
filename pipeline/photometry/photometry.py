@@ -49,6 +49,7 @@ from ..errors import (
     FilterCheckError,
     FilterInventoryError,
     ConnectionError,
+    PreviousStageError,
     UnknownError,
 )
 
@@ -495,15 +496,19 @@ class PhotometrySingle:
         phot_header = phot_header or self.phot_header
 
         if use_header_seeing:
-            hdr = fits.getheader(self.input_image)
-            phot_header.SEEING = hdr["SEEING"]
-            phot_header.PEEING = hdr["PEEING"]
-            phot_header.ELLIP = hdr["ELLIP"]
-            phot_header.ELONG = hdr["ELONG"]
-            self.logger.debug(f"Trusting seeing/peeing from the header")
-            self.logger.debug(f"SEEING     : {phot_header.SEEING:.3f} arcsec")
-            self.logger.debug(f"PEEING     : {phot_header.PEEING:.3f} pixel")
-            return
+            if self.image_info.has_psf_stats_from_astrometry:
+                phot_header.SEEING = self.image_info.SEEINGMN
+                phot_header.PEEING = self.image_info.PEEINGMN
+                phot_header.ELLIP = self.image_info.ELLIPMN
+                phot_header.ELONG = self.image_info.ELONGMN
+                self.logger.debug(f"Trusting seeing/peeing from the header")
+                self.logger.debug(f"SEEING     : {phot_header.SEEING:.3f} arcsec")
+                self.logger.debug(f"PEEING     : {phot_header.PEEING:.3f} pixel")
+                return
+            else:
+                self.logger.warning(
+                    "No PSF stats from astrometry. Using sextractor to calculate seeing.", PreviousStageError
+                )
 
         # config_seeing = get_key(self.config.qa, "seeing")
         # config_ellipticity = get_key(self.config.qa, "ellipticity")
@@ -1126,6 +1131,10 @@ class ImageInfo:
     pixscale: float  # Pixel scale [arcsec/pix]
     satur_level: float = 2**16 - 1  # Saturation level
     bpx_interp: bool = False  # whether bad pixels have been interpolated
+    SEEINGMN: float = None
+    PEEINGMN: float = None
+    ELLIPMN: float = None
+    ELONGMN: float = None
 
     # keys needed in PhotometryHeader
     phot_header_keys: dict = None  # don't make this dict here; can be shared by multiple instances
@@ -1145,6 +1154,15 @@ class ImageInfo:
             "JD": self.jd,
             "MJD": self.mjd,
         }
+
+    @property
+    def has_psf_stats_from_astrometry(self) -> bool:
+        return (
+            self.SEEINGMN is not None
+            and self.PEEINGMN is not None
+            and self.ELLIPMN is not None
+            and self.ELONGMN is not None
+        )
 
     @classmethod
     def parse_image_header_info(cls, image_path: str) -> ImageInfo:
@@ -1195,6 +1213,10 @@ class ImageInfo:
             pixscale=hdr["XBINNING"] * PIXSCALE,
             satur_level=get_header_key(image_path, "SATURATE", default=60000),
             bpx_interp=interped,
+            SEEINGMN=hdr["SEEINGMN"],
+            PEEINGMN=hdr["PEEINGMN"],
+            ELLIPMN=hdr["ELLIPMN"],
+            ELONGMN=(hdr["ELONGMN"] if "ELONGMN" in hdr and hdr["ELONGMN"] is not None else 1 / (1 - hdr["ELLIPMN"])),
         )
 
         # pick up header keys needed by PhotometryHeader
