@@ -243,7 +243,7 @@ class BaseConfig(ABC):
             self._initialized = False
             self._make_nodes()
         finally:
-            self._initialized = was_initialized
+            self._initialized = was_initialized  # restore original flag
 
         return
 

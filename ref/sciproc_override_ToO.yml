@@ -1,0 +1,5 @@
+# override for the sciproc base configuration for ToO processing
+
+settings:
+  is_too: true
+  

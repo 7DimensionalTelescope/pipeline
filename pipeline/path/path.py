@@ -53,7 +53,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         self._handle_input(input, is_too=is_too)
         self.select_output_dir(working_dir=working_dir, is_too=is_too)
 
-        self.define_file_independent_paths(is_too=is_too)
+        self.define_file_independent_paths()
 
         if not self._file_dep_initialized and self._input_files:
             self.define_file_dependent_paths()
@@ -386,15 +386,14 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         """Safe from AutoMkdirMixin as it's a bool."""
         return self._file_dep_initialized
 
-    def define_file_independent_paths(self, is_too=False):
+    def define_file_independent_paths(self):
         self.ref_sex_dir = os.path.join(const.REF_DIR, "srcExt")
 
-        if is_too:
-            self.preproc_base_yml = os.path.join(const.REF_DIR, "preproc_base_ToO.yml")
-            self.sciproc_base_yml = os.path.join(const.REF_DIR, "sciproc_base_ToO.yml")
-        else:
-            self.preproc_base_yml = os.path.join(const.REF_DIR, "preproc_base.yml")
-            self.sciproc_base_yml = os.path.join(const.REF_DIR, "sciproc_base.yml")
+        self.preproc_base_yml = os.path.join(const.REF_DIR, "preproc_base.yml")
+        self.preproc_too_override_yml = os.path.join(const.REF_DIR, "preproc_override_ToO.yml")
+        self.sciproc_base_yml = os.path.join(const.REF_DIR, "sciproc_base.yml")
+        self.sciproc_too_override_yml = os.path.join(const.REF_DIR, "sciproc_override_ToO.yml")
+        self.sciproc_multi_epoch_override_yml = os.path.join(const.REF_DIR, "sciproc_override_multiEpoch.yml")
 
         self.changelog_dir = os.path.join(const.REF_DIR, "InstrumEvent")
         # self.instrum_status_dict = const.INSTRUM_STATUS_DICT

@@ -1,0 +1,10 @@
+# Configuration override for a multi-epoch processing for a comprehensive survey
+# notably stack convolution is on
+
+imstack:
+  joint_wcs: true
+  apply_bpmask: True
+  interp_type: 'median'
+  convolve: 'Gaussian'
+  target_seeing:  # auto if it's empty or smaller than max seeing
+  propagate_mask: False

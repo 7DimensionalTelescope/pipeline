@@ -30,7 +30,7 @@ class PreprocConfiguration(BaseConfig):
 
         if not self._initialized:
             self.logger.info("Initializing configuration")
-            self.initialize()
+            self.initialize(is_too=is_too)
             self.logger.info(f"'PreprocConfiguration' initialized in {time_diff_in_seconds(st)} seconds")
             self.logger.info(f"Writing configuration to file")
             self.logger.debug(f"Configuration file: {self.config_file}")
@@ -54,7 +54,10 @@ class PreprocConfiguration(BaseConfig):
         self.node.settings.is_pipeline = False
         return self
 
-    def initialize(self):
+    def initialize(self, is_too=False):
+        if is_too:
+            self.override_from_yaml(self.path.preproc_too_override_yml)
+
         self.node.info.version = __version__
         self.node.info.creation_datetime = datetime.now().isoformat()
         self.node.info.file = self.config_file
@@ -137,6 +140,10 @@ class PreprocConfiguration(BaseConfig):
             raise ValueError("Input must be a list of FITS files or a directory containing FITS files")
 
         self.config_file = config_output  # used by write_config
+
+        if is_too:
+            self.logger.info(f"Overriding preproc base configuration with {self.path.preproc_too_override_yml}")
+            self.override_from_yaml(self.path.preproc_too_override_yml)
         return
 
     def _set_pathhandler_from_config(self, is_too=False):
