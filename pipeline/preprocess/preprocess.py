@@ -90,7 +90,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         )
 
         if self.is_connected:
-            self.logger.database = db_handler
+            self.logger.database = self.add_exception_code
             self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
 
         self.is_too = is_too

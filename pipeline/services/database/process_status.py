@@ -28,7 +28,7 @@ class ProcessStatusTable:
     progress: Optional[int] = 0
     status: Optional[str] = "pending"
     warnings: Optional[List[int]] = None
-    errors: Optional[List[int]] = None
+    errors: Optional[int] = None
     config_file: Optional[str] = None
     log_file: Optional[str] = None
     debug_log_file: Optional[str] = None
@@ -55,11 +55,9 @@ class ProcessStatusTable:
 
         row_dict = dict(zip(columns, row))
 
-        # Parse JSON fields
+        # Parse JSON fields (only warnings, errors is now integer)
         if "warnings" in row_dict:
             row_dict["warnings"] = parse_json_field(row_dict["warnings"])
-        if "errors" in row_dict:
-            row_dict["errors"] = parse_json_field(row_dict["errors"])
 
         # Create instance using column names (which match field names)
         return cls(**row_dict)
@@ -68,13 +66,11 @@ class ProcessStatusTable:
 
         data = asdict(self)
 
-        data = {k: v for k, v in data.items() if v is not None}
+        data = {k: v for k, v in data.items()}
 
-        # Convert JSON fields
+        # Convert JSON fields (only warnings, errors is now integer)
         if "warnings" in data and isinstance(data["warnings"], (dict, list)):
             data["warnings"] = json.dumps(data["warnings"])
-        if "errors" in data and isinstance(data["errors"], (dict, list)):
-            data["errors"] = json.dumps(data["errors"])
 
         return data
 

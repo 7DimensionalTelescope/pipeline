@@ -283,7 +283,7 @@ class Logger:
             msg = f"[{exception_cls}] {msg}"
 
         if self.database is not None:
-            self.database.add_exception_code(code_type="warning", code_value=exception_cls.error_code)
+            self.database(code_type="warning", code_value=exception_cls.error_code)
 
         self.logger.warning(msg, **kwargs)
         # self.send_slack(msg, "WARNING")
@@ -313,7 +313,7 @@ class Logger:
             msg = f"[{exception_cls}] {msg}"
 
         if self.database is not None:
-            self.database.add_exception_code(code_type="error", code_value=exception_cls.error_code)
+            self.database(code_type="error", code_value=exception_cls.error_code)
 
         # Only use exc_info if explicitly requested
         if "exc_info" not in kwargs:
@@ -347,7 +347,7 @@ class Logger:
             msg = f"[{exception_cls}] {msg}"
 
         if self.database is not None:
-            self.database.add_exception_code(code_type="error", code_value=exception_cls.error_code)
+            self.database(code_type="error", code_value=exception_cls.error_code)
 
         # Only use exc_info if explicitly requested or if there's an exception
         if "exc_info" not in kwargs:
