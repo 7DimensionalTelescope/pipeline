@@ -14,3 +14,5 @@ date	parts	comment
 250311	mirror	cleaning
 250914	cam	0
 251109	cam	31241
+260104	fw	new_filters
+260104	mirror	optical_alignment

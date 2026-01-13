@@ -7,3 +7,5 @@ date	parts	comment
 241219	mirror	collimation
 250313	cam	31090
 250313	fw	22243956
+260104	fw	new_filters
+260104	mirror	optical_alignment

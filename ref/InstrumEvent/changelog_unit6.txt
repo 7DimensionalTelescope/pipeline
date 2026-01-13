@@ -22,3 +22,5 @@ date	parts	comment
 250628	fw	22243955
 250628	mirror	collimation
 250628	cam	PA
+260104	fw	new_filters
+260104	mirror	optical_alignment

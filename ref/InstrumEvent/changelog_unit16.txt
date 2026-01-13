@@ -1,3 +1,5 @@
 date	parts	comment
 250302	cam	31102
 250302	fw	22244179
+260104	fw	new_filters
+260104	mirror	optical_alignment
