@@ -137,7 +137,7 @@ class SciProcConfiguration(BaseConfig):
             self.logger.info(f"Overriding base configuration with {override_yml}")
             self.override_from_yaml(override_yml)
 
-        self.node.info.version = __version__
+        self.node.info.creation_version = __version__
         self.node.info.creation_datetime = datetime.now().isoformat()
         self.node.info.file = self.config_file
         self.node.name = self.node.name or self.name

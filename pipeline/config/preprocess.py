@@ -59,7 +59,7 @@ class PreprocConfiguration(BaseConfig):
             self.logger.info(f"Overriding preproc base configuration with {self.path.preproc_too_override_yml}")
             self.override_from_yaml(self.path.preproc_too_override_yml)
 
-        self.node.info.version = __version__
+        self.node.info.creation_version = __version__
         self.node.info.creation_datetime = datetime.now().isoformat()
         self.node.info.file = self.config_file
         self.node.name = self.path.output_name

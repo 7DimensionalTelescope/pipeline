@@ -135,14 +135,14 @@ class BaseConfig(ABC):
         - Write is True
         """
 
-        if not (self.is_initialized and self.write) and not force:
+        if not self.write and not force:
             return
 
+        # CAVEAT: self._config_in_dict updates are not seen by ConfigNode instances. Use it sparingly.
+        self._config_in_dict["info"]["runtime_version"] = __version__
         self._config_in_dict["info"]["last_update_datetime"] = datetime.now().isoformat()
 
-        print(
-            f"Writing configuration to file: {self.config_file}, {self._config_in_dict['info']['last_update_datetime']}"
-        )
+        # print(f"Writing configuration to file: {self.config_file}")
 
         with open(self.config_file, "w") as f:
             yaml.dump(self._config_in_dict, f, sort_keys=False)  # , default_flow_style=False)
@@ -213,12 +213,11 @@ class BaseConfig(ABC):
         merge_missing(self._config_in_dict, base_defaults, exclude_top_level=exclude_top_level)
 
         # Rebuild instances once without spamming writes
-        was_initialized = getattr(self, "_initialized", False)
+        self._rebuilding = True
         try:
-            self._initialized = False
-            self._make_nodes()
+            self._make_nodes()  # make ConfigNode reflect _config_in_dict changes
         finally:
-            self._initialized = was_initialized
+            self._rebuilding = False
 
         return
 
@@ -238,19 +237,18 @@ class BaseConfig(ABC):
         merge_dicts(self._config_in_dict, override_dict)
 
         # Rebuild instances once without spamming writes
-        was_initialized = getattr(self, "_initialized", False)
+        self._rebuilding = True
         try:
-            self._initialized = False
-            self._make_nodes()
+            self._make_nodes()  # make ConfigNode reflect _config_in_dict changes
         finally:
-            self._initialized = was_initialized  # restore original flag
+            self._rebuilding = False
 
         return
 
 
 class ConfigNode:
     def __init__(self, parent_config=None, section=None):
-        self._parent_config = parent_config
+        self._parent_config: BaseConfig = parent_config
         self._section = section
 
     def __setattr__(self, name, value):
@@ -279,11 +277,11 @@ class ConfigNode:
                 else:
                     self._parent_config.config_in_dict[name] = value
 
-                # Write config if initialized
+                # Write config if initialized and not explicitly suppressed
                 if (
-                    hasattr(self._parent_config, "is_initialized")
+                    self._parent_config
                     and self._parent_config.is_initialized
-                    # and self._parent_config.is_loaded
+                    and not getattr(self._parent_config, "_rebuilding", False)
                 ):
                     self._parent_config.write_config()
 
