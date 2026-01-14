@@ -58,7 +58,14 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         )
 
         if self.is_connected:
-            self.logger.add_exception_code = self.add_exception_code
+
+            self.reset_exceptions("coadd")
+
+            if self.process_status_id is not None:
+                from ..services.database.handler import ExceptionHandler
+
+                self.logger.database = ExceptionHandler(self.process_status_id)
+
             self.process_status_id = self.create_process_data(self.config_node)
             if self.too_id is not None:
                 self.logger.debug(f"Initialized DatabaseHandler for ToO data management, ToO ID: {self.too_id}")

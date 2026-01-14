@@ -148,7 +148,19 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         )
 
         if self.is_connected:
-            self.logger.add_exception_code = self.add_exception_code
+
+            if self._photometry_mode == "single_photometry":
+                self.reset_exceptions("single_photometry")
+            elif self._photometry_mode == "coadd_photometry":
+                self.reset_exceptions("coadd_photometry")
+            elif self._photometry_mode == "difference_photometry":
+                self.reset_exceptions("difference_photometry")
+                
+
+            if self.process_status_id is not None:
+                from ..services.database.handler import ExceptionHandler
+                self.logger.database = ExceptionHandler(self.process_status_id)
+                
             self.process_status_id = self.create_process_data(self.config_node)
             if self.too_id is not None:
                 self.logger.debug(f"Initialized DatabaseHandler for ToO data management, ToO ID: {self.too_id}")

@@ -4,6 +4,7 @@ import logging
 from .too import TooDB
 from .process_status import ProcessStatus
 from .image_qa import ImageQA
+from ...errors import registry
 
 
 class DatabaseHandler:
@@ -157,7 +158,7 @@ class DatabaseHandler:
     def add_exception_code(self, code_type: str, code_value: int):
 
         row = self.process_status.read_data_by_id(self.process_status_id)
-        
+
         if row is None:
             raise ValueError(f"Process ID {self.process_status_id} not found")
 
@@ -178,6 +179,58 @@ class DatabaseHandler:
         else:
             raise ValueError(f"Invalid code type: {code_type}")
 
-    def reset_exceptions(self):
+    def reset_exceptions(self, procsss_name=None):
+        if self.process_status_id is None:
+            return
+
         # Empty lists need to be converted to JSON strings for jsonb columns
-        self.process_status.update_data(self.process_status_id, warnings=[], errors=None)
+        if procsss_name is None:
+            self.process_status.update_data(self.process_status_id, warnings=[], errors="None")
+            return True
+        else:
+
+            base_code = registry.process(procsss_name).code
+
+            warnings = self.process_status.read_data_by_id(self.process_status_id).warnings
+
+            for warning in warnings:
+                if warning // 100 == base_code:
+                    warnings.remove(warning)
+
+            if 999 in warnings:
+                warnings.remove(999)
+
+            self.process_status.update_data(self.process_status_id, warnings=json.dumps(warnings), errors="None")
+
+            return True
+
+        return False
+
+
+class ExceptionHandler:
+    def __init__(self, process_status_id: int):
+        self.process_status = ProcessStatus()
+        self.process_status_id = process_status_id
+
+    def add_exception_code(self, code_type: str, code_value: int):
+        row = self.process_status.read_data_by_id(self.process_status_id)
+
+        if row is None:
+            raise ValueError(f"Process ID {self.process_status_id} not found")
+
+        if code_type == "warning":
+            if row.warnings is None:
+                row.warnings = []
+            row.warnings.append(code_value)
+
+            warnings = list(set(row.warnings))
+
+            self.process_status.update_data(self.process_status_id, warnings=json.dumps(warnings))
+        elif code_type == "error":
+            if row.errors is None:
+                row.errors = code_value
+                self.process_status.update_data(self.process_status_id, errors=code_value)
+            else:
+                return False
+        else:
+            raise ValueError(f"Invalid code type: {code_type}")
