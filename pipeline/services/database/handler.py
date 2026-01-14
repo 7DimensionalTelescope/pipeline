@@ -157,8 +157,10 @@ class DatabaseHandler:
     def add_exception_code(self, code_type: str, code_value: int):
 
         row = self.process_status.read_data_by_id(self.process_status_id)
+        
         if row is None:
             raise ValueError(f"Process ID {self.process_status_id} not found")
+
         if code_type == "warning":
             if row.warnings is None:
                 row.warnings = []

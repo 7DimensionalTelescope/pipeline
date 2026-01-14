@@ -32,7 +32,7 @@ class SciProcConfiguration(BaseConfig):
         st = time.time()
         self.write = write
 
-        self._handle_input(input, logger, verbose, is_too=is_too, **kwargs)
+        self._handle_input(input, logger, verbose, is_too=is_too, overwrite=overwrite, **kwargs)
 
         if not self._initialized:
             self.logger.info("Initializing configuration")
@@ -43,6 +43,9 @@ class SciProcConfiguration(BaseConfig):
 
         # fill in missing keys, even though initialized
         self.fill_missing_from_yaml()
+
+        if overwrite:
+            self.reset_flags()
 
         if not os.path.exists(self.config_file) or overwrite:
             self.write_config()
@@ -59,7 +62,7 @@ class SciProcConfiguration(BaseConfig):
         else:
             return None
 
-    def _handle_input(self, input, logger, verbose, is_too=False, **kwargs):
+    def _handle_input(self, input, logger, verbose, is_too=False, overwrite=False, **kwargs):
         # list of science images
         if isinstance(input, list) or (isinstance(input, str) and input.endswith(".fits")):
             self.input_files = sorted(input)
@@ -95,7 +98,7 @@ class SciProcConfiguration(BaseConfig):
                 name=self.name,
                 log_file=self.node.logging.file,
                 verbose=verbose,
-                overwrite=False,
+                overwrite=overwrite,
             )
             self._initialized = True
             self.logger.info("Loading 'SciProcConfiguration' from an exisiting file or dictionary")
@@ -246,3 +249,8 @@ class SciProcConfiguration(BaseConfig):
             self.write_config(force=True)
 
         return self
+
+    def reset_flags(self):
+        self.logger.info("Resetting flags")
+        for key in self.node.flag.__dict__:
+            setattr(self.node.flag, key, False)
