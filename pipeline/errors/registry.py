@@ -105,6 +105,8 @@ class ErrorRegistry:
             )
         return p.name, k.name
 
+    
+
 
 # ---------------------------
 # Base mixin used by all generated exceptions

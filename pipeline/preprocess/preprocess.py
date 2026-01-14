@@ -88,7 +88,12 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         DatabaseHandler.__init__(self, add_database=add_database if not is_too else False, logger=self.logger)
 
         if self.is_connected:
-            self.logger.add_exception_code = self.add_exception_code
+
+            if self.process_status_id is not None:
+                from ..services.database.handler import ExceptionHandler
+
+                self.logger.add_exception_code = ExceptionHandler(self.process_status_id)
+
             self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
 
         self.is_too = is_too

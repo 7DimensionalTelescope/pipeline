@@ -101,8 +101,14 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         )
 
         if self.is_connected:
-            self.logger.add_exception_code = self.add_exception_code
             self.process_status_id = self.create_process_data(self.config_node)
+            self.reset_exceptions("astrometry")
+
+            if self.process_status_id is not None:
+                from ..services.database.handler import ExceptionHandler
+
+                self.logger.add_exception_code = ExceptionHandler(self.process_status_id)
+
             if self.too_id is not None:
                 self.logger.debug(f"Initialized DatabaseHandler for ToO data management, ToO ID: {self.too_id}")
             else:
@@ -1298,16 +1304,28 @@ class ImageInfo:
 
         for i, (k, v, c) in enumerate(cards):
             # Handle MaskedConstant (from numpy masked arrays)
+            error_types = [[], [], []]
             if isinstance(v, ma.core.MaskedConstant):
-                self._log(f"WCS statistics contains masked value for {k}, converting to None", level="error")
+                error_types[0].append(k)
                 cards[i] = (k, None, c)
             elif isinstance(v, (float, np.floating)) and np.isnan(v):
-                self._log(f"WCS statistics contains nan for {k}", level="error")
+                error_types[1].append(k)
                 cards[i] = (k, None, c)
             elif not isinstance(v, (float, int, str, np.float32, np.int32, type(None))):
                 # Convert other invalid types to None
-                self._log(f"WCS statistics contains type {type(v)} {v} for {k}, converting to None", level="error")
+                error_types[0].append(k)
                 cards[i] = (k, None, c)
+
+        if len(error_types[0]) > 0:
+            self._log(f"WCS statistics contains masked value for {error_types[0]}, converting to None", level="error")
+
+        if len(error_types[1]) > 0:
+            self._log(f"WCS statistics contains nan for {error_types[1]}, converting to None", level="error")
+
+        if len(error_types[2]) > 0:
+            self._log(
+                f"WCS statistics contains type {type(v)} {v} for {error_types[2]}, converting to None", level="error"
+            )
 
         return cards
 

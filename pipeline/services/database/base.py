@@ -248,11 +248,14 @@ class BaseDatabase:
         params = {}
         for k, v in kwargs.items():
             if v is not None:
+                if v is "None":
+                    v = None
                 # Convert lists/dicts to JSON strings for jsonb columns (only warnings, errors is now integer)
                 if k == "warnings" and isinstance(v, (list, dict)):
                     params[k] = json.dumps(v)
                 else:
                     params[k] = v
+
         params_str = ", ".join([f"{k} = %({k})s" for k in params.keys()])
         query = query_update.format(table_name=self.table_name, params=params_str)
         # Use return_rowcount=True for UPDATE statements (they don't return rows)
