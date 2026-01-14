@@ -5,18 +5,25 @@ from .services.queue import QueueManager
 
 class DataReduction:
 
-    def __init__(self, input_params=None, list_of_images=None, use_db=False, overwrite=False, **kwargs):
+    def __init__(
+        self,
+        input_params=None,
+        list_of_images=None,
+        use_db=True,
+        overwrite=False,
+        master_frame_only=False,
+        is_too=False,
+        **kwargs,
+    ):
 
-        master_frame_only = kwargs.get("master_frame_only", False)
-        self.is_too = kwargs.get("is_too", False)
-        self.base_priority = kwargs.get("base_priority", None)
-        use_db = kwargs.get("use_db", True)
+        self.is_too = is_too
 
         self.blueprint = Blueprint(
             input_params,
             list_of_images=list_of_images,
             use_db=use_db,
             master_frame_only=master_frame_only,
+            is_too=is_too,
             **kwargs,
         )
         self._created_config = False
@@ -40,6 +47,7 @@ class DataReduction:
         overwrite_science=False,
         overwrite_schedule=False,
         max_workers=50,
+        base_priority=None,
         processes=["astrometry", "photometry", "coadd", "subtract"],
         queue=None,
         preprocess_kwargs=None,
@@ -62,7 +70,7 @@ class DataReduction:
 
         self.blueprint.create_schedule(
             is_too=is_too,
-            base_priority=self.base_priority,
+            base_priority=base_priority,
             processes=processes,
             overwrite=overwrite_data,
             overwrite_preprocess=overwrite_preprocess,

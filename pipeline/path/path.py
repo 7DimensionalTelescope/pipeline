@@ -423,7 +423,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
             else "preproc_config"
         )
         suffixes = [
-            f"{obj}_ToO_{too_time}" if is_too else obj
+            f"{obj}_ToO_{too_time}" if is_too else None
             for obj, is_too in zip(atleast_1d(self.name.obj), self._is_too_vectorized)
         ]
         return add_suffix(preproc_config_stems, suffixes)
