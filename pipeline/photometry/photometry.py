@@ -216,11 +216,10 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         st = time.time()
         self.logger.info(f"Start 'Photometry'")
 
-        if not self.input_images:
-            self.logger.error(f"No input images found in {self._photometry_mode}.")
-            raise SinglePhotometryError.EmptyInputError(f"No input images found in {self._photometry_mode}.")
-
         if not self.input_images:  # exception for when input.difference_image is not set.
+            self.logger.debug(f"input_images: {self.input_images}")
+            self.logger.info(f"No input images found. Skipping {self._photometry_mode}.")
+
             if self._photometry_mode == "difference_photometry":
                 self.update_progress(100, f"{self._photometry_mode}-completed")
                 if self.is_too and self.too_id is not None:
@@ -233,12 +232,9 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
                         self.too_db.send_interim_notice_email(self.too_id, sed_data=sed_data, dtype="coadd")
 
                     self.too_db.mark_completed(self.too_id)
-
                 return
             else:
-                self.logger.debug(f"input_images: {self.input_images}")
-                self.logger.info(f"No input images found. Skipping {self._photometry_mode}.")
-                return
+                raise SinglePhotometryError.EmptyInputError(f"No input images found in {self._photometry_mode}.")
         try:
             if self.queue:
                 self._run_parallel(overwrite=overwrite)
