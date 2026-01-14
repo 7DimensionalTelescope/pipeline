@@ -1227,10 +1227,12 @@ class ImageInfo:
             pixscale=hdr["XBINNING"] * PIXSCALE,
             satur_level=get_header_key(image_path, "SATURATE", default=60000),
             bpx_interp=interped,
-            SEEINGMN=hdr["SEEINGMN"],
-            PEEINGMN=hdr["PEEINGMN"],
-            ELLIPMN=hdr["ELLIPMN"],
-            ELONGMN=(hdr["ELONGMN"] if "ELONGMN" in hdr and hdr["ELONGMN"] is not None else 1 / (1 - hdr["ELLIPMN"])),
+            SEEINGMN=hdr.get("SEEINGMN", None),
+            PEEINGMN=hdr.get("PEEINGMN", None),
+            ELLIPMN=hdr.get("ELLIPMN", None),
+            ELONGMN=(
+                hdr.get("ELONGMN", None) or 1 / (1 - hdr["ELLIPMN"] if hdr.get("ELLIPMN", None) is not None else None)
+            ),
         )
 
         # pick up header keys needed by PhotometryHeader

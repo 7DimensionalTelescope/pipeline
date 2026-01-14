@@ -9,6 +9,8 @@ from typing import Optional, Union, Dict, Any, Type, Callable
 from .. import const
 from ..errors import UndefinedProcessError, exception_from_code, ProcessErrorBase, ExceptionArg
 
+from logging.handlers import RotatingFileHandler
+
 
 class Logger:
     """
@@ -134,6 +136,8 @@ class Logger:
             except (IOError, OSError) as e:
                 print(f"Error creating stderr handler: {e}", file=sys.__stderr__)
                 handler = logging.StreamHandler()
+        elif handler_type == "file_debug":
+            handler = RotatingFileHandler(log_file, mode=mode, maxBytes=1024 * 1024 * 2, backupCount=5)
         else:
             handler = LockingFileHandler(log_file, mode=mode)
 
