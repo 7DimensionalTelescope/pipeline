@@ -120,6 +120,8 @@ class ImageQATable:
             row_dict["warnings"] = parse_json_field(row_dict["warnings"])
         if "errors" in row_dict:
             row_dict["errors"] = parse_json_field(row_dict["errors"])
+        if "err_msgs" in row_dict:
+            row_dict["err_msgs"] = parse_json_field(row_dict["err_msgs"])
 
         # Create instance using column names (which match field names)
         return cls(**row_dict)
@@ -135,6 +137,8 @@ class ImageQATable:
             data["warnings"] = json.dumps(data["warnings"])
         if "errors" in data and isinstance(data["errors"], (dict, list)):
             data["errors"] = json.dumps(data["errors"])
+        if "err_msgs" in data and isinstance(data["err_msgs"], (dict, list)):
+            data["err_msgs"] = json.dumps(data["err_msgs"])
 
         return data
 

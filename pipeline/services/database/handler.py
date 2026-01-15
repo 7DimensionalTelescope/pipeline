@@ -193,12 +193,17 @@ class DatabaseHandler:
 
             warnings = self.process_status.read_data_by_id(self.process_status_id).warnings
 
-            for warning in warnings:
-                if warning // 100 == base_code:
-                    warnings.remove(warning)
+            if warnings is not None:
 
-            if 999 in warnings:
-                warnings.remove(999)
+                for warning in warnings:
+                    if warning // 100 == base_code:
+                        warnings.remove(warning)
+
+                if 999 in warnings:
+                    warnings.remove(999)
+
+            else:
+                warnings = []
 
             self.process_status.update_data(self.process_status_id, warnings=json.dumps(warnings), errors="None")
 
