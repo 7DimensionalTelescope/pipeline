@@ -50,7 +50,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             if self.process_status_id is not None:
                 from ..services.database.handler import ExceptionHandler
 
-                self.logger.add_exception_code = ExceptionHandler(self.process_status_id)
+                self.logger.database = ExceptionHandler(self.process_status_id)
 
             self.process_status_id = self.create_process_data(self.config_node)
             if self.too_id is not None:

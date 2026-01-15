@@ -1,6 +1,6 @@
 date	parts	comment
-240129	cam	31167
-240129	fw	22344939
+240128	cam	31167
+240128	fw	22344939
 240618	cam	PA
 240628	mirror	collimation
 240719	mirror	collimation

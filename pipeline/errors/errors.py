@@ -19,7 +19,7 @@ class SameNightMasterFrameNotFoundError(Exception):
 
 
 # astrometry errors
-class BlankImageError(Exception):
+class EarlyQARejectionError(Exception):
     pass
 
 
@@ -43,11 +43,14 @@ class AlternativeSolverError(Exception):
     pass
 
 
-class SolveFieldError(Exception):
-    pass
+# class SolveFieldError(Exception):
+#     pass
 
 
-class ScampError(Exception):
+class ScampGenericError(Exception):
+    """Note that there's ScampError too in the ProcessError registry.
+    Mind namespace collisions"""
+
     pass
 
 
@@ -64,7 +67,7 @@ class NoReferenceSourceError(Exception):
     pass
 
 
-class SextractorError(Exception):
+class SextractorGenericError(Exception):
     pass
 
 
@@ -93,7 +96,7 @@ class SeeingVariationError(Exception):
     pass
 
 
-class SwarpError(Exception):
+class SwarpGenericError(Exception):
     pass
 
 
@@ -102,7 +105,7 @@ class ReferenceImageNotFoundError(Exception):
     pass
 
 
-class HotpantsError(Exception):
+class HotpantsGenericError(Exception):
     pass
 
 

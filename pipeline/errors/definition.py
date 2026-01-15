@@ -9,6 +9,9 @@ from .errors import *
 
 registry = ErrorRegistry()
 
+# =============================================================================
+#                             Process Errors
+# =============================================================================
 
 # Processes (1..7) - Specific pipeline processes
 registry.register_process("preprocess", 1)
@@ -27,10 +30,23 @@ registry.register_process("pathhandler", 11)
 registry.register_process("config", 12)
 registry.register_process("logger", 13)
 
+# external program wrapper errors
+# registry.register_process("sextractor", 20)
+registry.register_process("solve-field", 21)
+registry.register_process("scamp", 22)
+# registry.register_process("swarp", 23)
+# registry.register_process("hotpants", 24)
+
+
 # Future placeholders. Uncomment when the need arises.
 # registry.register_process("db", 20)  # You may need separate SQLiteDBError, PostgresDBError, etc.
 # registry.register_process("main_db", 21)  # Main PostgresDB image db
-# registry.register_process("queue", 30)
+# registry.register_kkocess("queue", 30)
+
+
+# =============================================================================
+#                               Kind Errors
+# =============================================================================
 
 # Error kinds (0..99) -- add new when needed
 registry.register_kind("ProcessError", 0, Exception)  # for raising ProcessError itself like AstrometryError
@@ -45,7 +61,6 @@ registry.register_kind("KeyboardInterrupt", 9, KeyboardInterrupt)
 registry.register_kind("NotImplementedError", 11, NotImplementedError)
 registry.register_kind("ConnectionError", 12, ConnectionError)
 
-
 # Pipeline specific errors
 # CAVEAT: these are dynamically created and not understood by IDEs.
 #         e.g., Rename Symbol won't work exhaustively. Use grep -r --binary-files=without-match
@@ -55,20 +70,20 @@ registry.register_kind("SameNightMasterFrameNotFoundError", 21, SameNightMasterF
 
 
 # astrometry from 30
-registry.register_kind("BlankImageError", 30, BlankImageError)
+registry.register_kind("EarlyQARejectionError", 30, EarlyQARejectionError)
 registry.register_kind("BadWcsSolutionError", 31, BadWcsSolutionError)
 registry.register_kind("InvalidWcsSolutionError", 32, InvalidWcsSolutionError)
-registry.register_kind("AlternativeSolverError", 34, AlternativeSolverError)
-registry.register_kind("SolveFieldError", 35, SolveFieldError)
-registry.register_kind("ScampError", 36, ScampError)
-registry.register_kind("AstrometryReferenceGenerationError", 37, AstrometryReferenceGenerationError)
 # registry.register_kind("PointingError", 32, PointingError)
 # registry.register_kind("PositionAngleError", 33, PositionAngleError)
+registry.register_kind("AlternativeSolverError", 34, AlternativeSolverError)
+# registry.register_kind("SolveFieldGenericError", 35, SolveFieldGenericError)
+registry.register_kind("ScampGenericError", 36, ScampGenericError)
+registry.register_kind("AstrometryReferenceGenerationError", 37, AstrometryReferenceGenerationError)
 
 # photometry from 50
 registry.register_kind("NotEnoughSourcesError", 50, NotEnoughSourcesError)
 registry.register_kind("NoReferenceSourceError", 51, NoReferenceSourceError)
-registry.register_kind("SextractorError", 52, SextractorError)
+registry.register_kind("SextractorError", 52, SextractorGenericError)
 registry.register_kind("FilterCheckError", 53, FilterCheckError)
 registry.register_kind("FilterInventoryError", 54, FilterInventoryError)
 registry.register_kind("PhotometryReferenceGenerationError", 57, PhotometryReferenceGenerationError)
@@ -78,12 +93,12 @@ registry.register_kind("InferredFilterMismatchError", 58, InferredFilterMismatch
 # imcoadd from 60
 registry.register_kind("BackgroundArtifactError", 60, BackgroundArtifactError)
 registry.register_kind("SeeingVariationError", 61, SeeingVariationError)
-# registry.register_kind("SwarpError", 62, SwarpError)  # maybe SwarpTimeoutError?
+# registry.register_kind("SwarpGenericError", 62, SwarpGenericError)
 
 
 # subtraction from 70
 registry.register_kind("ReferenceImageNotFoundError", 70, ReferenceImageNotFoundError)
-# registry.register_kind("HotpantsError", 71, HotpantsError)
+# registry.register_kind("HotpantsGenericError", 71, HotpantsGenericError)
 
 
 # generic from 80
@@ -116,7 +131,8 @@ PathHandlerError = make_process_error(registry, "pathhandler", class_name="PathH
 ConfigurationError = make_process_error(registry, "config", class_name="ConfigurationError")
 LoggerError = make_process_error(registry, "logger", class_name="LoggerError")
 # MainDatabaseError = make_process_error(registry, "main_db", class_name="MainDatabaseError")
-
+SolveFieldError = make_process_error(registry, "solve-field", class_name="SolveFieldError")
+ScampError = make_process_error(registry, "scamp", class_name="ScampError")
 
 # ------------------------------------------------------
 # Convenience function using default registry

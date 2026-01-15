@@ -7,423 +7,11 @@ import numpy as np
 from astropy.io import fits
 from typing import List
 
+from .errors import SolveFieldError, ScampError
+
 from .const import REF_DIR, SEXTRACTOR_COMMAND
 from .utils import add_suffix, force_symlink, swap_ext, read_text_file, ansi_clean
 from .utils.header import fitsrec_to_header
-
-
-def solve_field(
-    input_image=None,
-    input_catalog=None,  # FITS_LDAC
-    output_image=None,
-    dump_dir=None,
-    overwrite=False,
-    solvefield_args: list = [],
-    get_command=False,
-    pixscale=0.505,
-    radius=0.2,
-    xcol="X_IMAGE",  # column name for X (pixels)
-    ycol="Y_IMAGE",  # column name for Y (pixels)
-    sortcol="MAG_AUTO",  # optional column to sort by
-    timeout=60,  # subprocess timeout in seconds
-):
-    """
-    Runs Astrometry.net's `solve-field` to compute the World Coordinate System (WCS) for an input FITS image.
-
-    This function creates a temporary working directory, generates a symbolic link to the input FITS file,
-    and runs `solve-field` to solve the astrometry of the image. It supports real-time output streaming
-    and optional command retrieval.
-
-    Args:
-        inim (str):
-            Path to the input FITS image.
-        outim (str):
-            Path to the output FITS image.
-        dump_dir (str, optional):
-            Directory where intermediate results will be stored. If None, a temporary directory is created
-            inside the input image's directory.
-        get_command (bool, optional):
-            If True, returns the command as a string instead of executing it. Defaults to False.
-        pixscale (float, optional):
-            Approximate pixel scale of the image in arcseconds per pixel. Defaults to 0.505 arcsec/pixel.
-        radius (float, optional):
-            Search radius for the solution in degrees. Defaults to 1.0 degree.
-        xcol (str, optional):
-            Column name for X (pixels). Defaults to "X_IMAGE". Needed for catalog input.
-        ycol (str, optional):
-            Column name for Y (pixels). Defaults to "Y_IMAGE". Needed for catalog input.
-        sortcol (str, optional):
-            Column name to sort by. Defaults to "MAG_AUTO".
-
-    Returns:
-        str:
-            If `get_command` is False, returns the path to the solved FITS file with the WCS solution.
-            If `get_command` is True, returns the command string that would be executed.
-
-    Raises:
-        OSError: If the FITS file cannot be read.
-        KeyError: If RA and DEC cannot be retrieved from the FITS header.
-
-    Example:
-        Solve an image normally:
-        ```python
-        solved_file = solve_field("image.fits")
-        print(f"Solved FITS file: {solved_file}")
-        ```
-        If you have a sextractor catalog:
-        ```python
-        solved_file = solve_field(input_catalog="catalog.fits")
-        print(f"Solved FITS file: {solved_file}")
-        ```
-
-        Get the command without executing it:
-        ```python
-        command = solve_field("image.fits", get_command=True)
-        print(f"Command: {command}")
-        ```
-    """
-
-    def set_input_output(input_image):
-        nonlocal output_image
-        input_image = os.path.abspath(input_image)
-        img_dir = os.path.dirname(input_image)
-        working_dir = dump_dir or os.path.join(img_dir, "tmp_solvefield")
-        working_dir = os.path.abspath(working_dir)
-        os.makedirs(working_dir, exist_ok=True)
-
-        # soft link inside working_dir
-        fname = os.path.basename(input_image)
-        soft_link = os.path.join(working_dir, fname)
-        force_symlink(input_image, soft_link)
-
-        # outname = os.path.join(working_dir, f"{Path(inim).stem}_solved.fits")
-        output_image = output_image or os.path.join(os.path.splitext(soft_link)[0] + "_solved.fits")
-        if os.path.exists(swap_ext(soft_link, ".solved")) and not overwrite:
-            print(f"Solve-field already run: {swap_ext(soft_link, '.solved')} Skipping...")
-        return soft_link, output_image
-
-    def convert_ldac_to_xyls(infile, outfile=None, center=True, sortcol=None, all_columns=True):
-        outfile = outfile or swap_ext(infile, ".xyls")
-
-        with fits.open(infile) as hdul:
-            data = hdul["LDAC_OBJECTS"].data  # or hdul[2]
-            if center:
-                image_header = fitsrec_to_header(hdul["LDAC_IMHEAD"].data)
-        # data = Table.read(infile, format="ascii.sextractor")
-
-        if all_columns:
-            hdu = fits.BinTableHDU(data=data)
-        else:
-            cols = [
-                fits.Column(name=xcol, format="E", array=data[xcol].astype(np.float32)),
-                fits.Column(name=ycol, format="E", array=data[ycol].astype(np.float32)),
-            ]
-            if sortcol:
-                cols.append(fits.Column(name=sortcol, format="E", array=data[sortcol].astype(np.float32)))
-
-            hdu = fits.BinTableHDU.from_columns(cols)
-        hdu.writeto(outfile, overwrite=True)
-        if center:
-            return outfile, image_header.get("RA", None), image_header.get("DEC", None)
-        return outfile
-
-    # Solve-field using the soft link
-    if input_catalog:  # If user provided a Source Extractor catalog, use it instead of extracting sources
-        soft_link, output_image = set_input_output(input_catalog)
-        soft_link, ra, dec = convert_ldac_to_xyls(soft_link, center=True, sortcol=sortcol)  # not a soft link anymore
-        solvecom = [
-            "solve-field", soft_link,  # "sources.xyls",
-            "--x-column", xcol,
-            "--y-column", ycol,
-            "--width", "9576",  # we have LDAC_IMHEAD
-            "--height", "6388",
-            "--fields", "1",  # the extension to process. should point to IDAC_OBJECTS
-            "--scale-unit", "arcsecperpix",
-            "--scale-low", "0.49",
-            "--scale-high", "0.52",
-            "--crpix-center",
-            "--no-plots",
-        ]  # fmt: skip
-        if ra and dec:
-            solvecom += ["--ra", f"{ra:.4f}", "--dec", f"{dec:.4f}", "--radius", f"{radius:.1f}"]
-        if sortcol:
-            solvecom += ["--sort-column", sortcol]
-        # IMPORTANT: omit --use-source-extractor if we're providing a catalog
-
-    elif input_image:
-        soft_link, output_image = set_input_output(input_image)
-        # e.g., solve-field calib_7DT11_T00139_20250102_014643_m425_100s.fits --crpix-center --scale-unit arcsecperpix --scale-low '0.4949' --scale-high '0.5151' --no-plots --new-fits solved.fits --overwrite --use-source-extractor --cpulimit 30
-        solvecom = [
-            "solve-field", f"{soft_link}",  # this file is not changed by solve-field
-            "--new-fits", output_image,  # you can give 'none'
-            # "--config", f"{path_cfg}",
-            # "--source-extractor-config", f"{path_sex_cfg}",
-            # "--no-fits2fits",  # Do not create output FITS file
-            "--overwrite",
-            "--crpix-center",
-            "--scale-unit", "arcsecperpix",
-            "--scale-low", f"{pixscale*0.98}",
-            "--scale-high", f"{pixscale*1.02}",
-            "--use-source-extractor",  # Crucial speed boost. 30 s -> 5 s
-            "--cpulimit", f"{30}",  # This is not about CORES. 
-            "--no-plots",  # MASSIVE speed boost. 2 min -> 5 sec
-            # "--no-tweak",  # Skip SIP distortion correction. 0.3 seconds boost.
-            # "--downsample", "4",  # not much difference
-        ]  # fmt: skip
-
-        # give prior info on center
-        try:
-            ra = fits.getval(soft_link, "ra")
-            dec = fits.getval(soft_link, "dec")
-            solvecom = solvecom + [
-                "--ra", f"{ra:.4f}",
-                "--dec", f"{dec:.4f}",
-                "--radius", f"{radius:.1f}",
-            ]  # fmt: skip
-        except:
-            print("[WARNING] solve-field couldn't get RA Dec from header. Solving blindly")
-
-    else:
-        raise ValueError("Either input_image or input_catalog must be provided")
-
-    # custom arguments
-    solvecom += solvefield_args
-
-    if get_command:
-        return " ".join(solvecom)
-
-    # solvecom = f"{' '.join(solvecom)} > {log_file} 2>&1"
-    # subprocess.run(solvecom, cwd=working_dir, shell=True)
-
-    log_file = swap_ext(add_suffix(output_image, "solvefield"), "log")
-    solvecom = " ".join(solvecom)
-    # solveout = subprocess.getoutput(solvecom)
-    process = subprocess.Popen(
-        solvecom,
-        shell=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,  # merge stdout and stderr
-        text=True,
-        bufsize=1,
-    )
-
-    # real-time output
-    with open(log_file, "w") as f:
-        f.write(solvecom + "\n" * 3)
-        f.flush()
-
-        try:
-            for line in process.stdout:
-                f.write(line)
-                f.flush()
-            # wait for process to finish within timeout
-            process.wait(timeout=timeout)
-
-        except subprocess.TimeoutExpired:
-            print(f"Timeout reached ({timeout}s), terminating solve-field...")
-            process.terminate()
-            try:
-                process.wait(5)  # give it a chance to terminate gracefully
-            except subprocess.TimeoutExpired:
-                print("solve-field did not terminate, killing...")
-                process.kill()
-            raise subprocess.TimeoutExpired(f"solve-field timed out after {timeout}s")
-    # except subprocess.CalledProcessError as e:
-    #     print(f"solve-field failed: {e.returncode}")
-    #     print(f"stderr output: {e.stderr.decode()}")
-    #     raise e
-
-    if not os.path.exists(swap_ext(soft_link, ".solved")):
-        raise FileNotFoundError(f"Solve-field failed: {swap_ext(soft_link, '.solved')} not found")
-    if input_catalog:
-        return swap_ext(soft_link, ".wcs")
-    return output_image
-
-
-def scamp(
-    input: str,
-    scampconfig=None,
-    scamp_preset="prep",
-    overwrite=True,
-    ahead=None,
-    path_ref_scamp=None,
-    local_astref=None,
-    get_command=False,
-    clean_log=True,
-    scamp_args: str = None,
-    timeout=30,
-    logger=None,
-    check_input_sanity=True,
-) -> List[str]:
-    """
-    Input is a fits-ldac catalog or a text file of those catalogs.
-    Supply a text file of catalog filenames to run multiple catalogs jointly.
-
-    scamp_preset: str = "prep" or "main"
-    scampconfig: str = None, this overrides scamp_preset
-    ahead: str = None
-    path_ref_scamp: str = None
-    local_astref: str = None
-    get_command: bool = False
-    clean_log: bool = True
-    scamp_args: str = None
-    timeout: int = 30  # based on the extremely dense field test of ~26 seconds
-    """
-
-    def chatter(msg: str, level: str = "debug"):
-        if logger is not None:
-            return getattr(logger, level)(msg)
-        else:
-            print(f"[scamp:{level.upper()}] {msg}")
-
-    scampconfig = scampconfig or os.path.join(REF_DIR, f"scamp_7dt_{scamp_preset}.config")
-    # "/data/pipeline_reform/dhhyun_lab/scamptest/7dt.scamp"
-
-    # "/data/pipeline_reform/dhhyun_lab/scamptest"
-    log_file = os.path.splitext(input)[0] + "_scamp.log"
-
-    # assumes joint run if input is not fits
-    if os.path.splitext(input)[1] != ".fits":
-        input_cat_list = read_text_file(input)
-        input = f"@{input}"  # @ is astromatic syntax.
-    else:
-        input_cat_list = [input]
-
-    output_list = [swap_ext(input_cat, "head") for input_cat in input_cat_list]
-    if all([os.path.exists(head) for head in output_list]) and not overwrite:
-        chatter(f"SCAMP output (.head) already exists: {output_list}\nSkipping...")
-        return output_list
-
-    # scampcom = f’scamp {catname} -c {os.path.join(path_cfg, “kmtnet.scamp”)} -ASTREF_CATALOG FILE -ASTREFCAT_NAME {gaialdac} -POSITION_MAXERR 20.0 -CROSSID_RADIUS 5.0 -DISTORT_DEGREES 3 -PROJECTION_TYPE TPV -AHEADER_GLOBAL {ahead} -STABILITY_TYPE INSTRUMENT’
-    scampcom = f"scamp -c {scampconfig} {input}"
-
-    # use the supplied astrefcat
-    if local_astref and os.path.exists(local_astref):
-        scampcom = f"{scampcom} -ASTREF_CATALOG FILE -ASTREFCAT_NAME {local_astref}"
-
-    # download gaia edr3 refcat
-    else:
-        if not path_ref_scamp:
-            path_ref_scamp = os.path.join(os.getcwd(), "ref_scamp")
-            os.makedirs(path_ref_scamp, exist_ok=True)
-        scampcom = f"{scampcom} -REFOUT_CATPATH {path_ref_scamp}"
-
-    # supplied ahead file is merged to the input image header in fits_ldac hdu=1
-    if ahead:
-        # scampcom = f"{scampcom} -AHEADER_NAME {ahead}"
-        scampcom = f"{scampcom} -AHEADER_GLOBAL {ahead}"
-
-    if scamp_args:
-        scampcom = f"{scampcom} {scamp_args}"
-
-    # scampcom = f"{scampcom} >> {log_file} 2>&1"
-
-    if get_command:
-        return scampcom
-
-    if clean_log:
-        scampcom = ansi_clean(scampcom)
-
-    # Save the command to the log file too
-    with open(log_file, "w") as f:
-        f.write(scampcom)
-        f.write("\n" * 3)
-
-    # old way
-    # # scampcom = f"scamp -c {scampconfig} {outcat} -REFOUT_CATPATH {path_ref_scamp} -AHEADER_NAME {ahead_file}"
-    # # subprocess.run(f"{scampcom} > {log_file} 2>&1", shell=True, text=True)
-    # # astrefcat = f"{path_ref_scamp}/{obj}.fits" if 'path_astrefcat' not in upaths or upaths['path_astrefcat'] == '' else upaths['path_astrefcat']
-    # # scamp_addcom = f"-ASTREF_CATALOG FILE -ASTREFCAT_NAME {astrefcat}"
-    # # scamp_addcom = f"-REFOUT_CATPATH {path_ref_scamp}"
-    # # try:
-    # #     result = subprocess.run(scampcom, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    # #     print(result.stdout.decode())
-    # # except subprocess.CalledProcessError as e:
-    # #     print(f"Command failed with error code {e.returncode}")
-    # #     print(f"stderr output: {e.stderr.decode()}")
-
-    num_stars_scamp_sees = None
-
-    proc = subprocess.Popen(
-        scampcom,
-        shell=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,  # merged, preserves order
-        text=True,
-        bufsize=1,
-        preexec_fn=os.setsid,  # <-- new group so we can kill all children
-    )
-
-    # stream output concurrently so wait(timeout=...) can actually fire
-    def pump():
-        nonlocal num_stars_scamp_sees
-        with open(log_file, "a", encoding="utf-8", errors="replace") as f:
-            for line in iter(proc.stdout.readline, ""):
-                f.write(line)
-                f.flush()
-                # parse "Group  1: 26/418 detections removed" to see what scamp recognizes
-                m = re.search(r"Group\s+\d+\s*:\s*\d+\s*/\s*(\d+)\s+detections removed", line)
-                if m:
-                    # number after "/" (26/418 -> 418)
-                    num_stars_scamp_sees = int(m.group(1))
-        proc.stdout.close()
-
-    t = threading.Thread(target=pump, daemon=True)
-    t.start()
-
-    try:
-        proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        # kill the whole process group, not just the parent
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        finally:
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
-        with open(log_file, "a", encoding="utf-8", errors="replace") as f:
-            f.write(f"\n[timed out after {timeout}s]\n")
-        raise TimeoutError(f"SCAMP timed out after {timeout}s. See log: {log_file}") from e
-
-    finally:
-        t.join(timeout=5)
-
-    # use parsed value from log
-    if num_stars_scamp_sees is None:
-        chatter(f"Could not find 'Group  1: X/Y detections removed' line in log: {log_file}", "error")
-    if num_stars_scamp_sees == 0:
-        chatter(f"Scamp sees 0 detections to work with. See log: {log_file}", "critical")
-    if num_stars_scamp_sees < 4:
-        chatter(f"Scamp sees only {num_stars_scamp_sees} detections to work with. See log: {log_file}", "critical")
-
-    for solved_head in output_list:
-        if not os.path.exists(solved_head):
-            raise FileNotFoundError(f"SCAMP output (.head) does not exist: {solved_head}\nCheck Log file: {log_file}")
-
-    return output_list
-
-
-def missfits(inim):
-    """
-    Input images gets wcs updated, .back is made as a copy or the original
-    Searches .head file in the same directory and with the same stem as inim and applies it to inim
-    """
-
-    missfitsconf = f"{REF_DIR}/7dt.missfits"
-    missfitscom = f"missfits -c {missfitsconf} {inim}"
-    # missfitscom = f"missfits -c {path_config}/7dt.missfits @{path_image_missfits_list}"
-
-    process = subprocess.Popen(
-        missfitscom,
-        shell=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    process.wait()
-    # working_dir = "/data/pipeline_reform/dhhyun_lab/scamptest/solvefield"
-    # subprocess.run(missfitscom, shell=True, cwd=working_dir)
 
 
 def sextractor(
@@ -562,6 +150,443 @@ def sextractor(
         return outcat, sexout
     else:
         return outcat
+
+
+def solve_field(
+    input_image: str = None,
+    input_catalog: str = None,  # FITS_LDAC
+    output_image: str = None,
+    dump_dir: str = None,
+    overwrite=False,
+    solvefield_args: list = [],
+    get_command=False,
+    pixscale=0.505,
+    radius=0.2,
+    xcol="X_IMAGE",  # column name for X (pixels)
+    ycol="Y_IMAGE",  # column name for Y (pixels)
+    sortcol="MAG_AUTO",  # optional column to sort by
+    timeout=60,  # subprocess timeout in seconds
+    logger=None,
+):
+    """
+    Runs Astrometry.net's `solve-field` to compute the World Coordinate System (WCS) for an input FITS image.
+
+    This function creates a temporary working directory, generates a symbolic link to the input FITS file,
+    and runs `solve-field` to solve the astrometry of the image. It supports real-time output streaming
+    and optional command retrieval.
+
+    Args:
+        inim (str):
+            Path to the input FITS image.
+        outim (str):
+            Path to the output FITS image.
+        dump_dir (str, optional):
+            Directory where intermediate results will be stored. If None, a temporary directory is created
+            inside the input image's directory.
+        get_command (bool, optional):
+            If True, returns the command as a string instead of executing it. Defaults to False.
+        pixscale (float, optional):
+            Approximate pixel scale of the image in arcseconds per pixel. Defaults to 0.505 arcsec/pixel.
+        radius (float, optional):
+            Search radius for the solution in degrees. Defaults to 1.0 degree.
+        xcol (str, optional):
+            Column name for X (pixels). Defaults to "X_IMAGE". Needed for catalog input.
+        ycol (str, optional):
+            Column name for Y (pixels). Defaults to "Y_IMAGE". Needed for catalog input.
+        sortcol (str, optional):
+            Column name to sort by. Defaults to "MAG_AUTO".
+
+    Returns:
+        str:
+            If `get_command` is False, returns the path to the solved FITS file with the WCS solution.
+            If `get_command` is True, returns the command string that would be executed.
+
+    Raises:
+        OSError: If the FITS file cannot be read.
+        KeyError: If RA and DEC cannot be retrieved from the FITS header.
+
+    Example:
+        Solve an image normally:
+        ```python
+        solved_file = solve_field("image.fits")
+        print(f"Solved FITS file: {solved_file}")
+        ```
+        If you have a sextractor catalog:
+        ```python
+        solved_file = solve_field(input_catalog="catalog.fits")
+        print(f"Solved FITS file: {solved_file}")
+        ```
+
+        Get the command without executing it:
+        ```python
+        command = solve_field("image.fits", get_command=True)
+        print(f"Command: {command}")
+        ```
+    """
+
+    def chatter(msg: str, level: str = "debug"):
+        if logger is not None:
+            return getattr(logger, level)(msg)
+        else:
+            print(f"[solve_field:{level.upper()}] {msg}")
+
+    def set_input_output(input_image: str):
+        nonlocal output_image
+        input_image = os.path.abspath(input_image)
+        img_dir = os.path.dirname(input_image)
+        working_dir = dump_dir or os.path.join(img_dir, "tmp_solvefield")
+        working_dir = os.path.abspath(working_dir)
+        os.makedirs(working_dir, exist_ok=True)
+
+        # soft link inside working_dir
+        fname = os.path.basename(input_image)
+        soft_link = os.path.join(working_dir, fname)
+        force_symlink(input_image, soft_link)
+
+        # outname = os.path.join(working_dir, f"{Path(inim).stem}_solved.fits")
+        output_image = output_image or os.path.join(os.path.splitext(soft_link)[0] + "_solved.fits")
+        return soft_link, output_image
+
+    def convert_ldac_to_xyls(infile, outfile=None, center=True, sortcol=None, all_columns=True):
+        outfile = outfile or swap_ext(infile, ".xyls")
+
+        with fits.open(infile) as hdul:
+            data = hdul["LDAC_OBJECTS"].data  # or hdul[2]
+            if center:
+                image_header = fitsrec_to_header(hdul["LDAC_IMHEAD"].data)
+        # data = Table.read(infile, format="ascii.sextractor")
+
+        if all_columns:
+            hdu = fits.BinTableHDU(data=data)
+        else:
+            cols = [
+                fits.Column(name=xcol, format="E", array=data[xcol].astype(np.float32)),
+                fits.Column(name=ycol, format="E", array=data[ycol].astype(np.float32)),
+            ]
+            if sortcol:
+                cols.append(fits.Column(name=sortcol, format="E", array=data[sortcol].astype(np.float32)))
+
+            hdu = fits.BinTableHDU.from_columns(cols)
+        hdu.writeto(outfile, overwrite=True)
+        if center:
+            return outfile, image_header.get("RA", None), image_header.get("DEC", None)
+        return outfile
+
+    # Solve-field using the soft link
+    if input_catalog:  # If user provided a Source Extractor catalog, use it instead of extracting sources
+        soft_link, output_image = set_input_output(input_catalog)
+
+        if os.path.exists(swap_ext(soft_link, ".solved")) and not overwrite:
+            chatter(f"Solve-field already run: {swap_ext(soft_link, '.solved')}. Skipping...")
+            return swap_ext(soft_link, ".wcs")
+
+        soft_link, ra, dec = convert_ldac_to_xyls(soft_link, center=True, sortcol=sortcol)  # not a soft link anymore
+        solvecom = [
+            "solve-field", soft_link,  # "sources.xyls",
+            "--x-column", xcol,
+            "--y-column", ycol,
+            "--width", "9576",  # we have LDAC_IMHEAD
+            "--height", "6388",
+            "--fields", "1",  # the extension to process. should point to IDAC_OBJECTS
+            "--scale-unit", "arcsecperpix",
+            "--scale-low", "0.49",
+            "--scale-high", "0.52",
+            "--crpix-center",
+            "--no-plots",
+        ]  # fmt: skip
+        if ra and dec:
+            solvecom += ["--ra", f"{ra:.4f}", "--dec", f"{dec:.4f}", "--radius", f"{radius:.1f}"]
+        if sortcol:
+            solvecom += ["--sort-column", sortcol]
+        # IMPORTANT: omit --use-source-extractor if we're providing a catalog
+
+    elif input_image:
+        soft_link, output_image = set_input_output(input_image)
+        if os.path.exists(swap_ext(soft_link, ".solved")) and not overwrite:
+            chatter(f"Solve-field already run: {swap_ext(soft_link, '.solved')}. Skipping...")
+            return output_image
+
+        # e.g., solve-field calib_7DT11_T00139_20250102_014643_m425_100s.fits --crpix-center --scale-unit arcsecperpix --scale-low '0.4949' --scale-high '0.5151' --no-plots --new-fits solved.fits --overwrite --use-source-extractor --cpulimit 30
+        solvecom = [
+            "solve-field", f"{soft_link}",  # this file is not changed by solve-field
+            "--new-fits", output_image,  # you can give 'none'
+            # "--config", f"{path_cfg}",
+            # "--source-extractor-config", f"{path_sex_cfg}",
+            # "--no-fits2fits",  # Do not create output FITS file
+            "--overwrite",
+            "--crpix-center",
+            "--scale-unit", "arcsecperpix",
+            "--scale-low", f"{pixscale*0.98}",
+            "--scale-high", f"{pixscale*1.02}",
+            "--use-source-extractor",  # Crucial speed boost. 30 s -> 5 s
+            "--cpulimit", f"{30}",  # This is not about CORES. 
+            "--no-plots",  # MASSIVE speed boost. 2 min -> 5 sec
+            # "--no-tweak",  # Skip SIP distortion correction. 0.3 seconds boost.
+            # "--downsample", "4",  # not much difference
+        ]  # fmt: skip
+
+        # give prior info on center
+        try:
+            ra = fits.getval(soft_link, "ra")
+            dec = fits.getval(soft_link, "dec")
+            solvecom = solvecom + [
+                "--ra", f"{ra:.4f}",
+                "--dec", f"{dec:.4f}",
+                "--radius", f"{radius:.1f}",
+            ]  # fmt: skip
+        except:
+            chatter("[WARNING] solve-field couldn't get RA Dec from header. Solving blindly")
+
+    else:
+        raise SolveFieldError.EmptyInputError("Either input_image or input_catalog must be provided")
+
+    # custom arguments
+    solvecom += solvefield_args
+
+    if get_command:
+        return " ".join(solvecom)
+
+    # solvecom = f"{' '.join(solvecom)} > {log_file} 2>&1"
+    # subprocess.run(solvecom, cwd=working_dir, shell=True)
+
+    log_file = swap_ext(add_suffix(output_image, "solvefield"), "log")
+    solvecom = " ".join(solvecom)
+    # solveout = subprocess.getoutput(solvecom)
+    process = subprocess.Popen(
+        solvecom,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,  # merge stdout and stderr
+        text=True,
+        bufsize=1,
+    )
+
+    # real-time output
+    with open(log_file, "w") as f:
+        f.write(solvecom + "\n" * 3)
+        f.flush()
+
+        try:
+            for line in process.stdout:
+                f.write(line)
+                f.flush()
+            # wait for process to finish within timeout
+            process.wait(timeout=timeout)
+
+        except subprocess.TimeoutExpired:
+            chatter(f"Timeout reached ({timeout}s), terminating solve-field...")
+            process.terminate()
+            try:
+                process.wait(5)  # give it a chance to terminate gracefully
+            except subprocess.TimeoutExpired:
+                chatter("solve-field did not terminate, killing...")
+                process.kill()
+            raise SolveFieldError.TimeoutError(f"solve-field timed out after {timeout}s")
+    # except subprocess.CalledProcessError as e:
+    #     chatter(f"solve-field failed: {e.returncode}")
+    #     chatter(f"stderr output: {e.stderr.decode()}")
+    #     raise e
+
+    if not os.path.exists(swap_ext(soft_link, ".solved")):
+        raise SolveFieldError.FileNotFoundError(f"Solve-field failed: {swap_ext(soft_link, '.solved')} not found")
+
+    if input_catalog:
+        return swap_ext(soft_link, ".wcs")
+    return output_image
+
+
+def scamp(
+    input: str,
+    scampconfig=None,
+    scamp_preset="prep",
+    overwrite=True,
+    ahead=None,
+    path_ref_scamp=None,
+    local_astref=None,
+    get_command=False,
+    clean_log=True,
+    scamp_args: str = None,
+    timeout=30,
+    logger=None,
+) -> List[str]:
+    """
+    Input is a fits-ldac catalog or a text file of those catalogs.
+    Supply a text file of catalog filenames to run multiple catalogs jointly.
+
+    scamp_preset: str = "prep" or "main"
+    scampconfig: str = None, this overrides scamp_preset
+    ahead: str = None
+    path_ref_scamp: str = None
+    local_astref: str = None
+    get_command: bool = False
+    clean_log: bool = True
+    scamp_args: str = None
+    timeout: int = 30  # based on the extremely dense field test of ~26 seconds
+    """
+
+    def chatter(msg: str, level: str = "debug"):
+        if logger is not None:
+            return getattr(logger, level)(msg)
+        else:
+            print(f"[scamp:{level.upper()}] {msg}")
+
+    scampconfig = scampconfig or os.path.join(REF_DIR, f"scamp_7dt_{scamp_preset}.config")
+    # "/data/pipeline_reform/dhhyun_lab/scamptest/7dt.scamp"
+
+    # "/data/pipeline_reform/dhhyun_lab/scamptest"
+    log_file = os.path.splitext(input)[0] + "_scamp.log"
+
+    # assumes joint run if input is not fits
+    if os.path.splitext(input)[1] != ".fits":
+        input_cat_list = read_text_file(input)
+        input = f"@{input}"  # @ is astromatic syntax.
+    else:
+        input_cat_list = [input]
+
+    output_list = [swap_ext(input_cat, "head") for input_cat in input_cat_list]
+    if all([os.path.exists(head) for head in output_list]) and not overwrite:
+        chatter(f"SCAMP output (.head) already exists: {output_list}\nSkipping...")
+        return output_list
+
+    # scampcom = f’scamp {catname} -c {os.path.join(path_cfg, “kmtnet.scamp”)} -ASTREF_CATALOG FILE -ASTREFCAT_NAME {gaialdac} -POSITION_MAXERR 20.0 -CROSSID_RADIUS 5.0 -DISTORT_DEGREES 3 -PROJECTION_TYPE TPV -AHEADER_GLOBAL {ahead} -STABILITY_TYPE INSTRUMENT’
+    scampcom = f"scamp -c {scampconfig} {input}"
+
+    # use the supplied astrefcat
+    if local_astref and os.path.exists(local_astref):
+        scampcom = f"{scampcom} -ASTREF_CATALOG FILE -ASTREFCAT_NAME {local_astref}"
+
+    # download gaia edr3 refcat
+    else:
+        if not path_ref_scamp:
+            path_ref_scamp = os.path.join(os.getcwd(), "ref_scamp")
+            os.makedirs(path_ref_scamp, exist_ok=True)
+        scampcom = f"{scampcom} -REFOUT_CATPATH {path_ref_scamp}"
+
+    # supplied ahead file is merged to the input image header in fits_ldac hdu=1
+    if ahead:
+        # scampcom = f"{scampcom} -AHEADER_NAME {ahead}"
+        scampcom = f"{scampcom} -AHEADER_GLOBAL {ahead}"
+
+    if scamp_args:
+        scampcom = f"{scampcom} {scamp_args}"
+
+    # scampcom = f"{scampcom} >> {log_file} 2>&1"
+
+    if get_command:
+        return scampcom
+
+    if clean_log:
+        scampcom = ansi_clean(scampcom)
+
+    # Save the command to the log file too
+    with open(log_file, "w") as f:
+        f.write(scampcom)
+        f.write("\n" * 3)
+
+    # old way
+    # # scampcom = f"scamp -c {scampconfig} {outcat} -REFOUT_CATPATH {path_ref_scamp} -AHEADER_NAME {ahead_file}"
+    # # subprocess.run(f"{scampcom} > {log_file} 2>&1", shell=True, text=True)
+    # # astrefcat = f"{path_ref_scamp}/{obj}.fits" if 'path_astrefcat' not in upaths or upaths['path_astrefcat'] == '' else upaths['path_astrefcat']
+    # # scamp_addcom = f"-ASTREF_CATALOG FILE -ASTREFCAT_NAME {astrefcat}"
+    # # scamp_addcom = f"-REFOUT_CATPATH {path_ref_scamp}"
+    # # try:
+    # #     result = subprocess.run(scampcom, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # #     print(result.stdout.decode())
+    # # except subprocess.CalledProcessError as e:
+    # #     print(f"Command failed with error code {e.returncode}")
+    # #     print(f"stderr output: {e.stderr.decode()}")
+
+    num_stars_scamp_sees = None
+
+    proc = subprocess.Popen(
+        scampcom,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,  # merged, preserves order
+        text=True,
+        bufsize=1,
+        preexec_fn=os.setsid,  # <-- new group so we can kill all children
+    )
+
+    # stream output concurrently so wait(timeout=...) can actually fire
+    def pump():
+        nonlocal num_stars_scamp_sees
+        with open(log_file, "a", encoding="utf-8", errors="replace") as f:
+            for line in iter(proc.stdout.readline, ""):
+                f.write(line)
+                f.flush()
+                # parse "Group  1: 26/418 detections removed" to see how many stars scamp sees
+                m = re.search(r"Group\s+\d+\s*:\s*\d+\s*/\s*(\d+)\s+detections removed", line)
+                if m:
+                    # number after "/" (26/418 -> 418)
+                    num_stars_scamp_sees = int(m.group(1))
+        proc.stdout.close()
+
+    t = threading.Thread(target=pump, daemon=True)
+    t.start()
+
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        # kill the whole process group, not just the parent
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        finally:
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(proc.pid, signal.SIGKILL)
+        with open(log_file, "a", encoding="utf-8", errors="replace") as f:
+            f.write(f"\n[timed out after {timeout}s]\n")
+        raise ScampError.TimeoutError(f"SCAMP timed out after {timeout}s. See log: {log_file}") from e
+
+    finally:
+        t.join(timeout=5)
+
+    # =============== sanity check ===============
+
+    # use parsed value from log
+    if num_stars_scamp_sees is None:
+        raise ScampError.ParseError(f"Could not find 'Group  1: X/Y detections removed' line in log: {log_file}")
+    if num_stars_scamp_sees <= 5:  # more of a warning than an error, but useful in the pipeline context
+        raise ScampError.NotEnoughSourcesError(
+            f"Scamp sees {num_stars_scamp_sees} <= 5 detections to work with. See log: {log_file}"
+        )
+
+    # check if the output is valid
+    for solved_head in output_list:
+        if not os.path.exists(solved_head):
+            raise ScampError.FileNotFoundError(
+                f"SCAMP output (.head) does not exist: {solved_head}\nCheck Log file: {log_file}"
+            )
+        with open(solved_head, "r") as f:
+            no_PV_terms = not any("PV1_0" in line for line in f)
+        if no_PV_terms:
+            raise ScampError.InvalidWcsSolutionError(f"SCAMP output ({solved_head}) is invalid. See log: {log_file}")
+
+    return output_list
+
+
+def missfits(inim):
+    """
+    Input images gets wcs updated, .back is made as a copy or the original
+    Searches .head file in the same directory and with the same stem as inim and applies it to inim
+    """
+
+    missfitsconf = f"{REF_DIR}/7dt.missfits"
+    missfitscom = f"missfits -c {missfitsconf} {inim}"
+    # missfitscom = f"missfits -c {path_config}/7dt.missfits @{path_image_missfits_list}"
+
+    process = subprocess.Popen(
+        missfitscom,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    process.wait()
+    # working_dir = "/data/pipeline_reform/dhhyun_lab/scamptest/solvefield"
+    # subprocess.run(missfitscom, shell=True, cwd=working_dir)
 
 
 def swarp(
