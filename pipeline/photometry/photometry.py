@@ -1207,6 +1207,10 @@ class ImageInfo:
                 "Check Astrometry solution: no WCS information for Photometry"
             )
 
+        ELONGMN = hdr.get("ELONGMN", None)
+        if ELONGMN is None and hdr.get("ELLIPMN", None) is not None:
+            ELONGMN = 1 / (1 - hdr["ELLIPMN"])
+
         kwargs = dict(
             obj=hdr["OBJECT"],
             filter=hdr["FILTER"],
@@ -1230,9 +1234,7 @@ class ImageInfo:
             SEEINGMN=hdr.get("SEEINGMN", None),
             PEEINGMN=hdr.get("PEEINGMN", None),
             ELLIPMN=hdr.get("ELLIPMN", None),
-            ELONGMN=(
-                hdr.get("ELONGMN", None) or 1 / (1 - hdr["ELLIPMN"] if hdr.get("ELLIPMN", None) is not None else None)
-            ),
+            ELONGMN=ELONGMN,
         )
 
         # pick up header keys needed by PhotometryHeader
