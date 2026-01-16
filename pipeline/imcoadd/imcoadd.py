@@ -266,8 +266,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             self.logger.info(f"Using the center of the first image as the deprojection center.")
             objra = header_list[0]["OBJCTRA"]
             objdec = header_list[0]["OBJCTDEC"]
-            # objra = objra.replace(' ', ':')
-            # objdec = objdec.replace(' ', ':')
+            # images from <~ 2024-03 has space-separated OBJCTRA/OBJCTDEC
+            objra = objra.replace(" ", ":")
+            objdec = objdec.replace(" ", ":")
 
         self.center = f"{objra},{objdec}"
         self.logger.debug(f"Deprojection center: {self.center}")
