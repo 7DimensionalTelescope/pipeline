@@ -30,6 +30,8 @@ class Blueprint:
 
         self.is_too = is_too
 
+        self.master_frame_only = master_frame_only
+
         if input_params is not None or list_of_images is not None:
             self.input_params = input_params
 
@@ -226,6 +228,9 @@ class Blueprint:
             )
             parent_idx = idx
             idx += 1
+
+            if self.master_frame_only:
+                continue
 
             # add ScienceGroups that depend on this PreprocessGroup
             for scikey in group.sci_keys:
