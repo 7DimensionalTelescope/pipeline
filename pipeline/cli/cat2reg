@@ -2,7 +2,13 @@
 
 import argparse
 import sys
+from pathlib import Path
 from astropy.table import Table
+
+# Add pipeline-stable's python to path
+pipeline_dir = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(pipeline_dir))
+
 from pipeline.subtract.utils import create_ds9_region_file
 from pipeline.utils import swap_ext
 
@@ -26,6 +32,9 @@ def main():
 
     # Sort by a different column
     cat2reg a_fits_catalog_file.fits -n 100 -s MAG_APER
+
+    # Prefer pixel coordinates over RA/Dec when both are available
+    cat2reg a_fits_catalog_file.fits -p
     """
     parser = argparse.ArgumentParser(description="Generate a DS9 region file from a FITS catalog file")
     parser.add_argument("catalog_file", type=str, help="Path to the FITS catalog file")
@@ -50,6 +59,12 @@ def main():
         default="MAG_AUTO",
         help="Column name to sort by (ascending order). Smaller values are prioritized. Default: MAG_AUTO",
     )
+    parser.add_argument(
+        "-p",
+        "--prefer-pixels",
+        action="store_true",
+        help="Prefer pixel coordinates (X_IMAGE/Y_IMAGE) over RA/Dec when both are available",
+    )
 
     args = parser.parse_args()
 
@@ -57,8 +72,11 @@ def main():
     try:
         table = Table.read(args.catalog_file, hdu=2)  # hdu=2 for LDAC catalog
     except Exception as e:
-        print(f"Error reading FITS catalog file: {e}", file=sys.stderr)
-        sys.exit(1)
+        try:
+            table = Table.read(args.catalog_file, format="ascii.sextractor")
+        except Exception as e:
+            print(f"Error reading FITS catalog file: {e}", file=sys.stderr)
+            sys.exit(1)
 
     # Determine which coordinate columns are available
     # Try ALPHA_J2000/DELTA_J2000 first, then ra/dec, then X_IMAGE/Y_IMAGE
@@ -74,10 +92,17 @@ def main():
         )
         sys.exit(1)
 
-    # Determine which RA/Dec columns to use (prefer ALPHA_J2000/DELTA_J2000 over ra/dec)
+    # Determine which coordinate columns to use
+    # If --prefer-pixels is set and pixel coordinates are available, use them
+    # Otherwise, prefer ALPHA_J2000/DELTA_J2000 over ra/dec over X_IMAGE/Y_IMAGE
     ra_col = None
     dec_col = None
-    if has_alpha_delta:
+    has_radec = False
+
+    if args.prefer_pixels and has_xy:
+        # Use pixel coordinates when --prefer-pixels is set
+        has_radec = False
+    elif has_alpha_delta:
         ra_col = "ALPHA_J2000"
         dec_col = "DELTA_J2000"
         has_radec = True
@@ -85,7 +110,8 @@ def main():
         ra_col = "ra"
         dec_col = "dec"
         has_radec = True
-    else:
+    elif has_xy:
+        # Fall back to pixel coordinates if no RA/Dec available
         has_radec = False
 
     # Sort table by specified column (ascending order - smaller values first)
