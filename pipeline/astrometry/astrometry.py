@@ -789,7 +789,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
-        self.update_catalog(solved_input_catalogs, solvefield_wcs_list)
+        self.update_catalog(solved_input_catalogs, solvefield_wcs_list, wcs_type="solve-field")
 
     def run_scamp(
         self,
@@ -946,7 +946,13 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
         return scamp_success
 
-    def update_catalog(self, input_catalogs: List[str], solved_heads: List[str], update_fwhm: bool = False) -> None:
+    def update_catalog(
+        self,
+        input_catalogs: List[str],
+        solved_heads: List[str],
+        wcs_type: Literal["scamp", "solve-field"] = "scamp",
+        update_fwhm: bool = False,
+    ) -> None:
         """
         Update catalog with solved heads.
         Currently only updates RA/Dec.
@@ -963,12 +969,20 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                 fits.getdata(input_catalog, ext=1)
             )  # assuming LDAC_IMHED is the second extension
             image_header = strip_wcs(image_header)  # strip the previous WCS
-            wcs_header = read_scamp_header(solved_head)
+
+            if wcs_type == "scamp":
+                self.logger.debug(f"Updating catalog {input_catalog} with scamp WCS from {solved_head}")
+                wcs_header = read_scamp_header(solved_head)
+            elif wcs_type == "solve-field":
+                self.logger.debug(f"Updating catalog {input_catalog} with solve-field WCS from {solved_head}")
+                wcs_header = fits.getheader(solved_head)
+            else:
+                raise AstrometryError.ValueError(f"Invalid WCS type: {wcs_type}")
             image_header.update(wcs_header)
 
             # update coordinates in LDAC_OBJECT
             # wcs = WCS(image_header)  # not the same as the scamp header
-            wcs = read_scamp_header(solved_head, return_wcs=True)
+            wcs = WCS(wcs_header)  # wcs = read_scamp_header(solved_head, return_wcs=True)
             tbl = Table.read(input_catalog, hdu=2)  # assuming LDAC_OBJECT is the third extension
             ra, dec = wcs.all_pix2world(tbl["X_IMAGE"], tbl["Y_IMAGE"], 1)
             tbl["ALPHA_J2000"] = ra

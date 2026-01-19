@@ -167,6 +167,7 @@ def solve_field(
     xcol="X_IMAGE",  # column name for X (pixels)
     ycol="Y_IMAGE",  # column name for Y (pixels)
     sortcol="MAG_AUTO",  # optional column to sort by
+    sort_in_mag=True,  # sort in magnitude order
     timeout=60,  # subprocess timeout in seconds
     logger=None,
 ):
@@ -197,6 +198,9 @@ def solve_field(
             Column name for Y (pixels). Defaults to "Y_IMAGE". Needed for catalog input.
         sortcol (str, optional):
             Column name to sort by. Defaults to "MAG_AUTO".
+        sort_in_mag (bool, optional):
+            *Important*: the catalog must have the brightest object first. If the sorting key is in magnitude,
+            setting this to True will add --sort-ascending. Defaults to True.
 
     Returns:
         str:
@@ -306,6 +310,8 @@ def solve_field(
             solvecom += ["--ra", f"{ra:.4f}", "--dec", f"{dec:.4f}", "--radius", f"{radius:.1f}"]
         if sortcol:
             solvecom += ["--sort-column", sortcol]
+            if sort_in_mag:
+                solvecom += ["--sort-ascending"]
         # IMPORTANT: omit --use-source-extractor if we're providing a catalog
 
     elif input_image:
@@ -389,7 +395,7 @@ def solve_field(
             except subprocess.TimeoutExpired:
                 chatter("solve-field did not terminate, killing...")
                 process.kill()
-            raise SolveFieldError.TimeoutError(f"solve-field timed out after {timeout}s. See log: {log_file}")
+            raise SolveFieldError.TimeoutError(f"solve-field timed out after {timeout}s.\n\tSee log: {log_file}")
     # except subprocess.CalledProcessError as e:
     #     chatter(f"solve-field failed: {e.returncode}")
     #     chatter(f"stderr output: {e.stderr.decode()}")
@@ -397,7 +403,7 @@ def solve_field(
 
     if not os.path.exists(swap_ext(soft_link, ".solved")):
         raise SolveFieldError.FileNotFoundError(
-            f"Solve-field failed: {swap_ext(soft_link, '.solved')} not found. See log: {log_file}"
+            f"Solve-field failed: {swap_ext(soft_link, '.solved')} not found.\n\tSee log: {log_file}"
         )
 
     if input_catalog:
