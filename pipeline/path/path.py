@@ -1,9 +1,11 @@
+from __future__ import annotations
 import os
 from glob import glob
 from pathlib import Path
 from typing import Union, List, Tuple
 from functools import cached_property
 import numpy as np
+from dataclasses import dataclass, replace as dc_replaces
 
 from .. import const
 from ..errors import PathHandlerError
@@ -25,6 +27,13 @@ from .const import (
     SINGLES_DIRNAME,
     DAILY_COADD_DIRNAME,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class PathHandlerSettings:
+    working_dir: str | Path | None = None
+    is_pipeline: bool = False
+    is_too: bool = False
 
 
 # Check MRO: PathHandler.mro()
@@ -56,9 +65,15 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         self._name_cache = {}  # Cache for NameHandler properties
         self._file_indep_initialized = False
         self._file_dep_initialized = False
-        self._config = None
-        self._config = None
+        self._config = None  # unused
         self._input_files: list[str] = None
+
+        # preserve input parameters for later use; don't access them inside PathHandler
+        self.settings = PathHandlerSettings(
+            working_dir=working_dir,
+            is_pipeline=is_pipeline,
+            is_too=is_too,
+        )
 
         self._handle_input(input, is_too=is_too)
         self.select_output_dir(working_dir=working_dir, is_pipeline=is_pipeline, is_too=is_too)
@@ -67,6 +82,24 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
 
         if not self._file_dep_initialized and self._input_files:
             self.define_file_dependent_paths()
+
+    # @classmethod
+    # def from_instance(cls, instance: PathHandler, input=None):
+    #     return cls(
+    #         input=input or instance._input_files,
+    #         working_dir=instance._working_dir,
+    #         is_pipeline=instance._is_pipeline,
+    #         is_too=instance._is_too,
+    #     )
+
+    def replace(self, input=None, **setting_overrides) -> PathHandler:
+        s = dc_replaces(self.settings, **setting_overrides) if setting_overrides else self.settings
+        return type(self)(
+            input=self._input_files if input is None else input,
+            working_dir=s.working_dir,
+            is_pipeline=s.is_pipeline,
+            is_too=s.is_too,
+        )
 
     def _handle_input(self, input, is_too=False):
         """init with obs_parmas and config are ad-hoc. Will be changed to always take filenames"""
@@ -277,14 +310,14 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             self._output_parent_dir = [working_dir or os.getcwd()]
             self._preproc_output_dir = self._output_parent_dir
             self._factory_parent_dir = [os.path.join(self._output_parent_dir[0], TMP_DIRNAME)]
-            self._is_pipeline = [is_pipeline]
+            self._is_pipeline_vectorized = [is_pipeline]
 
         else:
             # Process each file independently
             self._output_parent_dir = []
             self._preproc_output_dir = []
             self._factory_parent_dir = []
-            self._is_pipeline = []
+            self._is_pipeline_vectorized = []
 
             for i, input_file in enumerate(self._input_files):
                 file_dir = str(Path(input_file).absolute().parent)
@@ -302,7 +335,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
 
                     self._output_parent_dir.append(output_parent_dir)
                     self._factory_parent_dir.append(os.path.join(output_parent_dir, TMP_DIRNAME))
-                    self._is_pipeline.append(False)
+                    self._is_pipeline_vectorized.append(False)
 
                 # pipeline_dirs found in input_file or explicitly given as pipeline
                 else:
@@ -319,12 +352,12 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                             output_parent_dir = const.TOO_PROCESSED_DIR
                             self._output_parent_dir.append(output_parent_dir)
                             self._factory_parent_dir.append(const.TOO_FACTORY_DIR)
-                            self._is_pipeline.append(True)
+                            self._is_pipeline_vectorized.append(True)
                         else:
                             output_parent_dir = const.PROCESSED_DIR
                             self._output_parent_dir.append(output_parent_dir)
                             self._factory_parent_dir.append(const.FACTORY_DIR)
-                            self._is_pipeline.append(True)
+                            self._is_pipeline_vectorized.append(True)
                     else:
                         raise ValueError(
                             f"Nightdate cap ({const.DISK_CHANGE_NIGHTDATE}) reached for file {input_file}: consider moving to another disk."
@@ -388,8 +421,8 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def is_pipeline(self):
-        all_flag = all(self._is_pipeline)
-        or_flag = any(self._is_pipeline)
+        all_flag = all(self._is_pipeline_vectorized)
+        or_flag = any(self._is_pipeline_vectorized)
         if not all_flag and or_flag:
             raise PathHandlerError.GroupingError("Pipeline and non-pipeline paths are mixed. Aborting...")
         return all_flag
@@ -536,7 +569,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             self._preproc_config_stem.append(config_stem)
 
             if "calibrated" in typ or "raw" in typ:
-                if self._is_pipeline[i]:
+                if self._is_pipeline_vectorized[i]:
                     # Within pipeline processing
                     relative_path = os.path.join(nightdate, obj, filte)
                     output_dir = os.path.join(self._output_parent_dir[i], relative_path)

@@ -284,7 +284,7 @@ def get_mag_key(aperture_key: str) -> tuple:
     return (mag_key, magerr_key)
 
 
-def get_sex_args(
+def get_sex_options(
     image: str,
     phot_conf: ConfigNode,
     egain: float,

@@ -167,9 +167,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         # self.apply_sanity_filter_and_report()  # astrometry is the starter: nothing to filter out
 
         # set ImageInfo
-        self.images_info = [ImageInfo.parse_image_header_info(image) for image in self.input_images]
-        for image_info in self.images_info:
-            image_info.logger = self.logger  # pass the logger
+        self.images_info = [ImageInfo.from_fits(image, self.path, self.logger) for image in self.input_images]
 
         # generate local astrefcat if not exists
         local_astref = self.config_node.astrometry.local_astref or self.path.astrometry.astrefcat
@@ -244,7 +242,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             self.inject_wcs_guess()
 
             # run Source Extractor to understand the images
-            self.run_sextractor(se_preset=se_preset, sex_args=sex_args, overwrite=overwrite)
+            self.run_sextractor(sex_preset=se_preset, sex_options=sex_args, overwrite=overwrite)
 
             # early QA to exclude severely faulty images
             self.perform_early_qa()
@@ -313,7 +311,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         except Exception as e:
             self.logger.error(
                 f"Error during astrometry processing: {str(e)}",
-                AstrometryError.UnknownError,
+                AstrometryError.exception(e),  # UnknownError if unregistered error
                 exc_info=True,
             )
             raise
@@ -529,7 +527,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
             self.inject_wcs_guess()
             # Source Extractor
-            self.run_sextractor(se_preset=se_preset)
+            self.run_sextractor(sex_preset=se_preset)
 
             # run initial solve: scamp or solve-field
             try:
@@ -594,6 +592,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
         def _update_header(image, wcs, reset_image_header):
             self.logger.debug(f"Injecting WCS into {image}")
+            print(f"Injecting WCS into {image}")  # duplicate logging debug
 
             if reset_image_header:
                 self.reset_headers(image)
@@ -627,8 +626,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         self,
         input_images: List[str] = None,
         output_catalogs: List[str] = None,
-        se_preset: str = "prep",
-        sex_args: list = [],
+        sex_preset: str = "prep",
+        sex_options: dict = None,
         overwrite=False,
     ) -> List[str]:
         """Run Source Extractor on solved images.
@@ -666,9 +665,9 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                 external.sextractor(
                     solved_image,
                     outcat=prep_cat,
-                    se_preset=se_preset,
+                    sex_preset=sex_preset,
                     logger=self.logger,
-                    sex_args=sex_args,
+                    sex_options=sex_options,
                     fits_ldac=True,
                     overwrite=overwrite,
                 )
@@ -745,7 +744,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         solvefield_wcs_list = []
         solved_input_catalogs = []
         if input_catalogs:
-            for i, (slink, pixscale) in enumerate(zip(input_catalogs, self.path.pixscale)):
+            for i, (slink, pixscale) in enumerate(zip(input_catalogs, self.path.name.pixscale)):
                 if os.path.exists(swap_ext(slink, ".solved")):
                     self.logger.info(f"Solve-field already run: {swap_ext(slink, '.solved')}. Skipping...")
                     continue
@@ -763,9 +762,9 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     solved_input_catalogs.append(slink)
                     self.images_info[i].sip_wcs = wcs_file
                     solvefield_wcs_list.append(wcs_file)
-                except SolveFieldError as e:
-                    self.logger.error(f"Solve-field failed: {e}", AstrometryError.SolveFieldGenericError)
-                    raise AstrometryError.SolveFieldGenericError(f"Solve-field failed: {e}")
+                except SolveFieldError as solvefield_error:
+                    self.logger.error(f"Solve-field failed: {solvefield_error}", AstrometryError.SolveFieldGenericError)
+                    raise AstrometryError.SolveFieldGenericError(f"Solve-field failed: {solvefield_error}")
 
         elif input_images:  # this is deprecated. just for code reuse.
             raise AstrometryError.NotImplementedError("input_images for run_solve_field is deprecated")
@@ -794,7 +793,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
     def run_scamp(
         self,
-        input_catalogs: List[str] = None,
+        input_catalogs: str | List[str] = None,
         joint: bool = True,
         astrefcat: str = None,
         path_ref_scamp: str = None,
@@ -811,7 +810,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         Handles parallel/joint run with default input self.images_info
         """
         start_time = time.time()
-        self.logger.info(f"Start {'joint' if joint else 'individual'} scamp")
+        self.logger.info(f"Start {'joint' if joint else 'individual'} {scamp_preset} scamp for {input_catalogs}")
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
         timeout = timeout or self.config_node.astrometry.scamp_timeout
@@ -909,10 +908,12 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     )
 
                     if scamp_preset == "main":
+                        self.logger.info(f"Setting SANITY to False for {image_info.image_path} due to scamp error")
                         image_info.SANITY = False  # still salvageable if prep
 
-            scamp_success = any(scamp_success_list)  # unsuccessful if all of the images fail
-            if not scamp_success:  # All images failed
+            # Raise error if all images fail
+            scamp_success = any(scamp_success_list)
+            if not scamp_success:
                 error_msg = f"All images' SCAMP WCS solutions are invalid"
                 if scamp_error is not None:
                     error_msg += f": {scamp_error}"
@@ -1052,7 +1053,9 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
             except Exception as e:
                 self.logger.error(
-                    f"Failed to evaluate solution for {input_image}: {e}", AstrometryError.UnknownError, exc_info=True
+                    f"Failed to evaluate solution for {input_image}: {e}",
+                    AstrometryError.SolutionEvaluationFailedError,
+                    exc_info=True,
                 )
 
                 raise
@@ -1231,6 +1234,8 @@ class ImageInfo:
 
     # paths
     image_path: str
+    path: PathHandler
+    logger: Logger
 
     # Header information
     dateobs: str  # Observation date/time
@@ -1278,9 +1283,6 @@ class ImageInfo:
     internal_match_counts: Optional[list] = field(default=None)
     internal_match_recall: Optional[list] = field(default=None)
 
-    # dependency logger
-    logger: Logger = None
-
     _joint_cards_are_up_to_date = False  # prevent single and joint eval cards coming from different solutions
 
     # early qa
@@ -1289,31 +1291,18 @@ class ImageInfo:
     # late qa
     # UNMATCH, PA_ALIGN, ELLIPMN, ELLIPSTD
 
-    def _log(self, msg: str, level: str = "error", exception: ExceptionArg = None, *args, **kwargs):
-        """Log or fallback to print/raise if logger is not set."""
-        if self.logger is not None:
-            log_fn = getattr(self.logger, level, None)
-            if callable(log_fn):
-                log_fn(msg, exception, *args, **kwargs)
-                return
-        # if no logger available
-        if level.lower() in ("error", "critical"):
-            raise AstrometryError(msg % args if args else msg)
-        else:
-            print(f"[ImageInfo:{level.upper()}] {msg % args if args else msg}")
-
     @cached_property
     def soft_link_to_input_image(self) -> str:
         """lazy creation; cached property to avoid duplicate creation"""
-        soft_link = PathHandler(self.image_path).astrometry.soft_link
+        soft_link = self.path.astrometry.soft_link
         force_symlink(self.image_path, soft_link)
-        self._log(f"Soft link created: {self.image_path} -> {soft_link}", level="debug")
+        self.logger.debug(f"Soft link created: {self.image_path} -> {soft_link}")
         return soft_link
 
     @property
     def prep_cat(self) -> str:
         """sextractor output (FITS-LDAC)"""
-        return PathHandler(self.image_path).astrometry.catalog  # relying on AutoCollapseMixin for str return
+        return self.path.astrometry.catalog  # relying on AutoCollapseMixin for str return
 
     @property
     def solved_image(self) -> str:
@@ -1333,8 +1322,16 @@ class ImageInfo:
         return getattr(self, key, default)
 
     @classmethod
-    def parse_image_header_info(cls, image_path: str) -> ImageInfo:
-        """Parses image information from a FITS header."""
+    def from_fits(cls, image_path: str, path: PathHandler = None, logger: Logger = None) -> ImageInfo:
+        """
+        Parses image information from a FITS header.
+        path is used to create a new PathHandler with the same settings but different input.
+        """
+
+        logger = logger or Logger(name="Astometry ImageInfo Logger")
+        if not path:
+            path = PathHandler(input=image_path)
+            logger.warning("ImageInfo didn't inherit parent PathHandler's settings. Using defaults...")
 
         hdr = fits.getheader(image_path)
 
@@ -1357,6 +1354,8 @@ class ImageInfo:
 
         return cls(
             image_path=image_path,
+            path=path.replace(input=image_path),
+            logger=logger,
             dateobs=hdr["DATE-OBS"],  # Time(hdr["DATE-OBS"], format="isot")
             naxis1=x,
             naxis2=y,
@@ -1394,10 +1393,10 @@ class ImageInfo:
     def set_early_qa_stats(self, sci_cat: str, ref_cat: str):
         """sets self.early_qa_cards"""
         if not ref_cat:
-            self._log("No refcat to perform early QA. Skipping...", level="error")
+            self.logger.error("No refcat to perform early QA. Skipping...")
             return
         if not os.path.exists(ref_cat):
-            self._log(f"Refcat {ref_cat} not found. Skipping early QA...", level="error")
+            self.logger.error(f"Refcat {ref_cat} not found. Skipping early QA...")
             return
 
         with open(os.path.join(REF_DIR, "zeropoints.json"), "r") as f:
@@ -1408,7 +1407,7 @@ class ImageInfo:
             zp = zp_per_filter[self.filter]
         else:
             zp = zp_per_filter["unknown"]
-            self._log(
+            self.logger.error(
                 f"Filter {self.filter} not in zeropoints.json for early QA. Using default: {zp}.",
                 exception=AstrometryError.PrerequisiteNotMet,
             )
@@ -1416,13 +1415,13 @@ class ImageInfo:
             depth = depths_per_filter[self.filter]
         else:
             depth = depths_per_filter["unknown"]
-            self._log(
+            self.logger.error(
                 f"Filter {self.filter} not in depths.json for early QA. Using default: {depth}.",
                 exception=AstrometryError.PrerequisiteNotMet,
             )
 
         self.num_frac = get_source_num_frac(sci_cat, ref_cat, sci_zp=zp, depth=depth - 0.5)
-        self._log(f"Early QA: NUMFRAC = {self.num_frac}", level="info")
+        self.logger.info(f"Early QA: NUMFRAC = {self.num_frac}")
         return
 
     @property
@@ -1467,15 +1466,13 @@ class ImageInfo:
                 cards[i] = (k, None, c)
 
         if len(error_types[0]) > 0:
-            self._log(f"WCS statistics contains masked value for {error_types[0]}, converting to None", level="error")
+            self.logger.error(f"WCS statistics contains masked value for {error_types[0]}, converting to None")
 
         if len(error_types[1]) > 0:
-            self._log(f"WCS statistics contains nan for {error_types[1]}, converting to None", level="error")
+            self.logger.error(f"WCS statistics contains nan for {error_types[1]}, converting to None")
 
         if len(error_types[2]) > 0:
-            self._log(
-                f"WCS statistics contains type {type(v)} {v} for {error_types[2]}, converting to None", level="error"
-            )
+            self.logger.error(f"WCS statistics contains type {type(v)} {v} for {error_types[2]}, converting to None")
 
         return cards
 
@@ -1484,34 +1481,34 @@ class ImageInfo:
 
         rsep_stats_cards = self.rsep_stats.fits_header_cards_for_metadata
         if not rsep_stats_cards:
-            self._log("No RSEPStats metadata ", level="error")
+            self.logger.warning(f"No RSEPStats metadata ({self.path.name.basename})")
 
         ref_sep_cards = self.rsep_stats.separation_stats.fits_header_cards
         if not ref_sep_cards:
-            self._log("No reference_sep ", level="error")
+            self.logger.warning(f"No reference_sep ({self.path.name.basename})")
 
         image_stats_cards = self.image_stats.fits_header_cards
         if not image_stats_cards:
-            self._log("No image_stats ", level="error")
+            self.logger.warning(f"No image_stats ({self.path.name.basename})")
 
         if self.corner_stats is not None:
             corner_stats_cards = self.corner_stats.fits_header_cards
             if not corner_stats_cards:
-                self._log("No corner_stats ", level="error")
+                self.logger.warning(f"No corner_stats ({self.path.name.basename})")
         else:
             corner_stats_cards = []
 
         if self.radial_stats is not None:
             radial_stats_cards = self.radial_stats.fits_header_cards
             if not radial_stats_cards:
-                self._log("No radial_stats ", level="error")
+                self.logger.warning(f"No radial_stats ({self.path.name.basename})")
         else:
             radial_stats_cards = []
 
         cards = rsep_stats_cards + ref_sep_cards + image_stats_cards + corner_stats_cards + radial_stats_cards
 
         if cards is None:
-            self._log("No cards ", level="error")
+            self.logger.warning(f"No single wcs eval cards ({self.path.name.basename})")
             return []
         return cards
 
@@ -1568,7 +1565,7 @@ class ImageInfo:
         if self.sip_wcs:
             return WCS(read_text_header(self.sip_wcs))
 
-        # self._log("Neither self.solved_head nor self.sip_wcs is found in ImageInfo. Using coarse_wcs", level="warning")
+        # self.logger.warning("Neither self.solved_head nor self.sip_wcs is found in ImageInfo. Using coarse_wcs")
         # return self.coarse_wcs
         raise AstrometryError.InvalidWcsSolutionError("Neither self.solved_head nor self.sip_wcs found in ImageInfo")
 

@@ -76,9 +76,10 @@ registry.register_kind("InvalidWcsSolutionError", 32, InvalidWcsSolutionError)
 # registry.register_kind("PointingError", 32, PointingError)
 # registry.register_kind("PositionAngleError", 33, PositionAngleError)
 registry.register_kind("AlternativeSolverError", 34, AlternativeSolverError)
-# registry.register_kind("SolveFieldGenericError", 35, SolveFieldGenericError)
+registry.register_kind("SolveFieldGenericError", 35, SolveFieldGenericError)
 registry.register_kind("ScampGenericError", 36, ScampGenericError)
 registry.register_kind("AstrometryReferenceGenerationError", 37, AstrometryReferenceGenerationError)
+registry.register_kind("SolutionEvaluationFailedError", 38, SolutionEvaluationFailedError)
 
 # photometry from 50
 registry.register_kind("NotEnoughSourcesError", 50, NotEnoughSourcesError)

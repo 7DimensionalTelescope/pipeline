@@ -5,20 +5,16 @@ from .version import __version__
 from .utils.config_integrity import verify_config_hashes
 
 """
-gpPy: Automated Pipeline for Astronomical Image Processing
+Py7DT: Automated Pipeline for Astronomical Image Processing
 
-gpPy is a multi-threaded pipeline for processing optical and near-infrared (NIR) images from
-IMSNG/GECKO and 7DT facilities. It handles data reduction, astrometric calibration, stacking, photometric
-calibration, image subtraction, and automated transient detection using GPU and CPU multiprocessing.
+Py7DT is a modern astronomical data reduction pipeline for optical images 
+from the 7-Dimensional Telescope (7DT). 
+It handles data reduction, astrometric calibration, stacking, photometric
+calibration, image subtraction, and automated transient detection.
 
-- Developed by Dr. Gregory Peak (2018)
-- First public release: September 1, 2023
-- Major renovation: February 2025 (7DT pipeline integration)
+- inherits from gpPy-GPU developed by Dr. Gregory S.H. Paek (2023)
 
-Current maintainers: Donghwan Hyun, WonHyeong Lee
-Contributors: Dr. Gregory Peak, Dr. Donggeun Tak
-
-Contact: gregorypaek94_at_g_mail
+Core Developers: Donghwan Hyun, Dr. Donggeun Tak
 """
 
 __package__ = "pipeline"

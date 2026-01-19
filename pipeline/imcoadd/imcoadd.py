@@ -350,16 +350,16 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
                 self.logger.info(f"Background subtraction result exists; skipping: {get_basename(outim)}")
                 continue
 
-            sex_args = [
-                "-CATALOG_TYPE", "NONE",  # save no source catalog
-                "-CHECKIMAGE_TYPE", "BACKGROUND,BACKGROUND_RMS",
-                "-CHECKIMAGE_NAME", f"{bkg},{bkg_rms}"
-            ]  # fmt: skip
+            sex_options = {
+                "-CATALOG_TYPE": "NONE",  # save no source catalog
+                "-CHECKIMAGE_TYPE": "BACKGROUND,BACKGROUND_RMS",
+                "-CHECKIMAGE_NAME": f"{bkg},{bkg_rms}",
+            }
             sex_log = os.path.join(
                 self.path_bkgsub,
                 os.path.splitext(get_basename(outim))[0] + "_sextractor.log",
             )
-            sextractor(inim, sex_args=sex_args, log_file=sex_log, logger=self.logger)
+            sextractor(inim, sex_options=sex_options, log_file=sex_log, logger=self.logger)
 
             with fits.open(inim, memmap=True) as hdul:
                 _data = hdul[0].data

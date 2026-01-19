@@ -5,9 +5,10 @@ import signal
 import subprocess
 import numpy as np
 from astropy.io import fits
-from typing import List
+from typing import List, Tuple, Dict
 
 from .errors import SolveFieldError, ScampError
+from .services.logger import Logger
 
 from .const import REF_DIR, SEXTRACTOR_COMMAND
 from .utils import add_suffix, force_symlink, swap_ext, read_text_file, ansi_clean
@@ -17,18 +18,17 @@ from .utils.header import fitsrec_to_header
 def sextractor(
     inim: str,
     outcat: str = None,
-    se_preset="prep",
+    sex_preset="prep",
+    sex_options: Dict[str, str] = None,
     log_file: str = None,
     fits_ldac: bool = False,
-    sex_args: list = [],
-    overwrite=False,
-    sex_config=None,
-    logger=None,
+    overwrite: bool = False,
+    logger: Logger = None,
     return_sex_output=False,
     clean_log=True,
 ):
     """
-    e.g., override default by supplying sex_args like ["-PIXEL_SCALE", f"{pixscale}"]
+    e.g., override default by supplying sex_args like {"-PIXEL_SCALE": f"{pixscale}"}.
     Sextractor log file is created in the same directory as outcat.
     No support for dual mode yet.
     """
@@ -58,7 +58,7 @@ def sextractor(
     # os.system("echo $TERM")
 
     default_outcat = (
-        add_suffix(add_suffix(inim, se_preset), "cat") if fits_ldac else swap_ext(add_suffix(inim, se_preset), "cat")
+        add_suffix(add_suffix(inim, sex_preset), "cat") if fits_ldac else swap_ext(add_suffix(inim, sex_preset), "cat")
     )
     outcat = outcat or default_outcat  # default is ascii.sextractor
     log_file = log_file or swap_ext(add_suffix(outcat, "sextractor"), "log")
@@ -73,23 +73,25 @@ def sextractor(
             return outcat, sexout
         return outcat
 
-    sex, param, conv, nnw = sex_config or get_sex_config(se_preset)
+    sex_args_master = {}
+    sex, param, conv, nnw = get_sex_config(sex_preset)
+    sex_args_required = {
+        "-c": f"{sex}",
+        "-PARAMETERS_NAME": f"{param}",
+        "-FILTER_NAME": f"{conv}",
+        "-STARNNW_NAME": f"{nnw}",
+        "-CATALOG_NAME": f"{outcat}",
+    }
 
-    sexcom = [
-        SEXTRACTOR_COMMAND, f"{inim}",
-        "-c", f"{sex}",
-        "-CATALOG_NAME", f"{outcat}",
-        # "-catalog_type", "fits_ldac",  # this is for scamp presex
-        "-PARAMETERS_NAME", f"{param}",
-        "-FILTER_NAME", f"{conv}",
-        "-STARNNW_NAME", f"{nnw}",
-    ]  # fmt: skip
+    sex_args_master.update(sex_args_required)
 
     if fits_ldac:
-        sexcom.extend(["-catalog_type", "fits_ldac"])
+        sex_args_master["-catalog_type"] = "fits_ldac"
+    if sex_options:
+        sex_args_master.update(sex_options)  # override with user options
 
-    # add additional arguments when given
-    sexcom.extend(sex_args or [])
+    options = [item for k, v in sex_args_master.items() for item in (f"-{k}" if not k.startswith("-") else k, v)]
+    sexcom = [SEXTRACTOR_COMMAND, f"{inim}"] + options
 
     chatter(f"Sextractor output catalog: {outcat}")
     chatter(f"Sextractor Log: {log_file}")
@@ -232,10 +234,16 @@ def solve_field(
 
     def set_input_output(input_image: str):
         nonlocal output_image
+        nonlocal overwrite
         input_image = os.path.abspath(input_image)
         img_dir = os.path.dirname(input_image)
         working_dir = dump_dir or os.path.join(img_dir, "tmp_solvefield")
         working_dir = os.path.abspath(working_dir)
+        if os.path.exists(working_dir) and overwrite:
+            import shutil
+
+            chatter(f"Removing working directory to overwrite: {working_dir}")
+            shutil.rmtree(working_dir)
         os.makedirs(working_dir, exist_ok=True)
 
         # soft link inside working_dir
@@ -381,14 +389,16 @@ def solve_field(
             except subprocess.TimeoutExpired:
                 chatter("solve-field did not terminate, killing...")
                 process.kill()
-            raise SolveFieldError.TimeoutError(f"solve-field timed out after {timeout}s")
+            raise SolveFieldError.TimeoutError(f"solve-field timed out after {timeout}s. See log: {log_file}")
     # except subprocess.CalledProcessError as e:
     #     chatter(f"solve-field failed: {e.returncode}")
     #     chatter(f"stderr output: {e.stderr.decode()}")
     #     raise e
 
     if not os.path.exists(swap_ext(soft_link, ".solved")):
-        raise SolveFieldError.FileNotFoundError(f"Solve-field failed: {swap_ext(soft_link, '.solved')} not found")
+        raise SolveFieldError.FileNotFoundError(
+            f"Solve-field failed: {swap_ext(soft_link, '.solved')} not found. See log: {log_file}"
+        )
 
     if input_catalog:
         return swap_ext(soft_link, ".wcs")

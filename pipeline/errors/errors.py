@@ -43,8 +43,8 @@ class AlternativeSolverError(Exception):
     pass
 
 
-# class SolveFieldError(Exception):
-#     pass
+class SolveFieldGenericError(Exception):
+    pass
 
 
 class ScampGenericError(Exception):
@@ -55,6 +55,10 @@ class ScampGenericError(Exception):
 
 
 class AstrometryReferenceGenerationError(Exception):
+    pass
+
+
+class SolutionEvaluationFailedError(Exception):
     pass
 
 
