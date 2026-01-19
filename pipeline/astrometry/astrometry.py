@@ -1140,6 +1140,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         heads: List[str] = None,
         reset_image_header: bool = True,
         add_polygon_info: bool = True,
+        add_version: bool = True,
     ) -> None:
         """
         Updates WCS solutions found by SCAMP to original FITS image files
@@ -1160,8 +1161,12 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         for image_info, solved_head, target_fits in zip(self.images_info, heads, inims):
             solved_header = read_scamp_header(solved_head)
 
-            if reset_image_header:
-                self.reset_headers(target_fits)
+            if add_version:
+                from .. import __version__
+
+                tmp_header = fits.Header([("PIPE_VER", str(__version__), "Last Run Sciproc Pipeline Version")])
+                tmp_header.update(solved_header)
+                solved_header = tmp_header
 
             if image_info.wcs_evaluated:
                 # solved_header.update(image_info.wcs_eval_cards)  # this removes duplicate COMMENT cards
@@ -1178,6 +1183,10 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                 polygon_header = polygon_info_header(image_info)
                 # solved_header.update(polygon_header)
                 solved_header.extend(polygon_header)
+
+            # reset the image header after preparing the new content
+            if reset_image_header:
+                self.reset_headers(target_fits)
 
             # update the header, consuming the COMMENT padding
             update_padded_header(target_fits, solved_header)

@@ -845,7 +845,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         save_fits_as_figures(fits.getdata(coadd_img), self.path.figure_dir_to_path / swap_ext(basename, "png"))
         return
 
-    def _update_header(self):
+    def _update_header(self, add_version: bool = True):
         # 	Get Header info
         exptime_coadd = self.total_exptime
         mjd_coadd = self.mjd_coadd
@@ -895,6 +895,11 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         # 	Update Header
         with fits.open(self.config_node.imcoadd.coadd_image, mode="update") as hdul:
             header = hdul[0].header
+
+            if add_version:
+                from .. import __version__
+
+                header["PIPE_VER"] = (str(__version__), "Last Run Sciproc Pipeline Version")
 
             for key, (value, comment) in keywords_to_update.items():
                 header[key] = (value, comment)
