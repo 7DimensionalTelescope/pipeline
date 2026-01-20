@@ -12,6 +12,8 @@ from ..utils.header import get_header
 #     parts = name.split("_")
 #     return "_".join(parts[3:5] + parts[0:1] + [format_subseconds_deprecated(parts[6])] + parts[1:3])
 
+date_regex = re.compile(r"(?P<nightdate>\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))")
+
 
 def join(*args):
     """broadcasted join"""
@@ -337,7 +339,6 @@ def to_datetime_string(datetime_str, date_only=False):
 def get_nightdate(fpath: str) -> str | None:
     dirname = os.path.dirname(fpath)
 
-    date_regex = re.compile(r"(?P<nightdate>\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))")
     m = date_regex.search(dirname)
 
     if m:

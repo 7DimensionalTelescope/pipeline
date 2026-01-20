@@ -54,7 +54,7 @@ def unified_names_from_paths(paths: list[str]) -> dict[str, str | None]:
     any_basename = any(not os.path.dirname(p) for p in paths)
 
     if not any_basename:
-        # Exact match mode
+        # Exact match mode if all inputs are full paths
         sql = f"""
         SELECT file_path, unified_filename
         FROM (

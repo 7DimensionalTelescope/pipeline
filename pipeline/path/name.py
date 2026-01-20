@@ -6,10 +6,12 @@ from pathlib import Path
 from ..utils import equal_in_keys, collapse, swap_ext
 from ..utils.header import get_header
 from .. import const
+from ..utils import lapse
 
 from .utils import subtract_half_day, get_gain, get_nightdate, add_a_day
 from .utils import strip_binning, format_binning, strip_exptime, format_exptime, strip_gain, format_camera, format_gain
 from .cam_tracker import get_camera_serial
+from .db import unified_names_from_paths
 
 
 # # class Path7DS:
@@ -135,6 +137,8 @@ class NameHandler:
     """
 
     def __init__(self, filenames: str | Path | list[str] | list[Path]):
+        # lapse("start NameHandler init", reset=True)
+
         # --- 1. Normalize input to a list of strings ---
         if isinstance(filenames, (str, Path)):
             self.input = [str(filenames)]
@@ -145,24 +149,44 @@ class NameHandler:
         else:
             raise TypeError("Input must be str, Path, or list/tuple of them")
 
+        # --- 4. Parse nightdate from the dirname if available ---
+        self.nightdate = [get_nightdate(p) for p in self.input]
+        # lapse("for nightdate construction")
+        if self.nightdate[0] and (self.nightdate[0] < "2024-02-15"):
+            use_db_unified_names = True
+        else:
+            use_db_unified_names = False
+
         # --- 2. Build the filesystem-related attributes as lists ---
         self.abspath = [os.path.abspath(f) for f in self.input]
-        self.basename = [os.path.basename(p) for p in self.abspath]
+        # lapse("for abspath construction")
+
+        if use_db_unified_names:
+            unified_basenames = unified_names_from_paths(self.abspath)
+            # lapse("for unified name construction")
+            self.basename = [u or os.path.basename(p) for u, p in zip(unified_basenames, self.abspath)]
+        else:
+            # lapse("for skipping unified name construction")
+            self.basename = [os.path.basename(p) for p in self.abspath]
+        # lapse("for basename construction")
+
         self.stem, self.ext = (list(x) for x in zip(*(os.path.splitext(b) for b in self.basename)))
+        # lapse("for stem and ext construction")
+
         # if any(ext != ".fits" for ext in self.ext):
         #     raise ValueError("One or more inputs are not FITS files")
 
         self.parts = [stem.split("_") for stem in self.stem]
-        # self.exists = [os.path.exists(p) for p in self.abspath]  # introduces performance penalty
+        # lapse("for parts construction")
 
         # --- 3. Determine raw vs processed for each input ---
         type_hints = [
             "raw" if const.RAWDATA_DIR in p else None for p in self.abspath
         ]  # this is ad-hoc for <=2024 path parsing
-        self.type = [self._detect_type(stem, type_hint) for stem, type_hint in zip(self.stem, type_hints)]
+        # lapse("for type hint construction")
 
-        # --- 4. Parse nightdate from the dirname if available ---
-        self.nightdate = [get_nightdate(p) for p in self.input]
+        self.type = [self._detect_type(stem, type_hint) for stem, type_hint in zip(self.stem, type_hints)]
+        # lapse("for type construction")
 
         # --- 5. Parse each file into its components ---
         units, dates, hmses, objs, filters, nbinnings, exptimes, gains, cameras = [], [], [], [], [], [], [], [], []
@@ -201,7 +225,7 @@ class NameHandler:
             self.ext = self.ext[0]
             self.parts = self.parts[0]
             self.type = self.type[0]
-            # self.exists = self.exists[0]
+        # lapse("for the parsing loop")
 
         # --- 5. Attach them as lists (or scalar if single) ---
         self.unit = units if not self._single else units[0]
@@ -215,6 +239,7 @@ class NameHandler:
         self._camera = cameras if not self._single else cameras[0]
         self.exptime = exptimes if not self._single else exptimes[0]
         self.exposure = self.exptime
+        # lapse("for singling")
 
     def __repr__(self):
         # when list: show first few
@@ -952,10 +977,12 @@ class NameHandler:
                 tuple of unused calib frames, first grouped by (bias, dark, flat)
                 then grouped by BIAS_GROUP_KEYS, DARK_GROUP_KEYS, and FLAT_GROUP_KEYS.
         """
+
         if not isinstance(files, list):  # or len(files) <= 1:
             raise ValueError("Input must be a list of file paths")
 
         names = cls(files)
+
         grouped_files = names.get_grouped_files()
 
         bias, dark, flat, sci = {}, {}, {}, {}
