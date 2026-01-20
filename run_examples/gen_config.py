@@ -10,6 +10,7 @@ from pipeline.services.blueprint import PreprocessGroup, ScienceGroup
 import gc
 import traceback
 
+# Run like: python gen_config.py 2>&1 | tee gen_config_tee.log
 
 OVERWRITE_CONFIG = False
 OVERWRITE_DATA = False
@@ -19,7 +20,8 @@ USE_SYSTEM_QUEUE = True
 query = """
     SELECT DISTINCT date
     FROM survey_night
-    WHERE date < '2027-01-01'
+    WHERE date >= '2023-10-18'
+      AND date < '2027-01-01'
     ORDER BY date;
 """
 
@@ -40,7 +42,7 @@ for date in dates:
             elif group.__class__ == ScienceGroup:
                 gen_id = dbh.create_process_data(SciProcConfiguration(group.config))
             generated_ids.append(gen_id)
-        print(f"Generated {len(set(generated_ids))} process data for {date}")
+        print(f"Generated {len(set(generated_ids))} process data for {date}\n\n")
 
     except Exception as e:
         msg = f"Error processing {date}: {e}\n"
