@@ -518,13 +518,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             with fits.open(image, mode="update") as hdul:
                 hdul[0].header.update(wcs_header)
 
-        with ThreadPoolExecutor(max_workers=min(len(input_images), 10)) as executor:
-            futures = [
-                executor.submit(_update_header, image, wcs, reset_image_header)
-                for image, wcs in zip(input_images, wcs_list)
-            ]
-            for future in as_completed(futures):
-                future.result()
+        for image, wcs in zip(input_images, wcs_list):
+            _update_header(image, wcs, reset_image_header)
 
     def reset_headers(self, input_images: str | List[str] = None) -> None:
         """Reset header of input images."""

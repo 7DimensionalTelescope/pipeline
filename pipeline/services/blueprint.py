@@ -141,6 +141,7 @@ class Blueprint:
         overwrite_science=False,
         preprocess_kwargs=None,
         processes=["astrometry", "photometry", "combine", "subtract"],
+        input_type=None,
         **kwargs,
     ):
 
@@ -172,10 +173,11 @@ class Blueprint:
         # priority definition
         # 0: Failed process
 
-        # 1: Daily science medium band
-        # 2: Daily preprocess medium band
-        # 3: Daily science broad band
-        # 4: Daily preprocess broad band
+        # 1: User-input / Reprocess science
+        # 2: User-input / Reprocess preprocess
+
+        # 3: Daily science
+        # 4: Daily preprocess
 
         # 6: ToO science medium band
         # 7: ToO preprocess medium band
@@ -185,16 +187,14 @@ class Blueprint:
 
         idx = 0
 
-        if base_priority is None:
+        if base_priority is None and input_type in ["Daily", "ToO"]:
             if is_too:
                 base_priority = 6
-                input_type = "ToO"
             else:
                 base_priority = 3
-                input_type = "Daily"
         else:
             base_priority = base_priority
-            input_type = "User-input"
+            input_type = input_type or "User-input"
 
         input_type = kwargs.get("input_type", input_type)
 
