@@ -88,7 +88,7 @@ class PreprocConfiguration(BaseConfig):
             # sci_images = PathHandler(input).pick_type("science")
             # print(sci_images)
             # self.path = PathHandler(sorted(sci_images)[-1])  # in case of multiple dates, use the later date
-            self.path = PathHandler(input, is_too=is_too)  # in case of multiple dates, use the later date
+            self.path = PathHandler(input, is_too=is_too, type_hint="raw")  # type_hint for <=2024 path parsing
             config_source = self.path.preproc_base_yml
             config_output = self.path.preproc_output_yml
             log_file = self.path.preproc_output_log

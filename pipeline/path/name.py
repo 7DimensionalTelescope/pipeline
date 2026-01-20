@@ -443,27 +443,30 @@ class NameHandler:
             unit, date, hms, obj, filt, nb, exptime = _parse_TCSpy_raw(parts)
 
         except:
-            # then try parsable NINA raw filename
-            if parts[1] in ["BIAS", "DARK", "FLAT", "LIGHT"]:
-                unit, date, hms, obj, filt, nb, exptime = _parse_NINA_raw(parts)
+            # don't even try
+            # # then try parsable NINA raw filename
+            # if parts[1] in ["BIAS", "DARK", "FLAT", "LIGHT"]:
+            #     unit, date, hms, obj, filt, nb, exptime = _parse_NINA_raw(parts)
 
-            # finally resort to DB
+            # # finally resort to DB
+            # else:
+
+            from .db import unified_name_from_path
+
+            file_path = "_".join(parts)
+            if not file_path.endswith(".fits"):
+                file_path = file_path + ".fits"
+            unified_filename = unified_name_from_path(file_path)
+            # print(f"Unified filename: {unified_filename}")
+
+            if unified_filename:
+                parts = unified_filename.split("_")
+
+                unit, date, hms, obj, filt, nb, exptime = _parse_TCSpy_raw(parts)
             else:
-                from .db import unified_name_from_path
-
-                file_path = "_".join(parts)
-                if not file_path.endswith(".fits"):
-                    file_path = file_path + ".fits"
-                unified_filename = unified_name_from_path(file_path)
-
-                if unified_filename:
-                    parts = unified_filename.split("_")
-
-                    unit, date, hms, obj, filt, nb, exptime = _parse_TCSpy_raw(parts)
-                else:
-                    # raise ValueError(f"Unified filename not found for {file_path}")
-                    print(f"Unified filename not found for {file_path}")
-                    unit, date, hms, obj, filt, nb, exptime, = None, None, None, None, None, None, None  # fmt: skip
+                # raise ValueError(f"Unified filename not found for {file_path}")
+                print(f"Unified filename not found for {file_path}")
+                unit, date, hms, obj, filt, nb, exptime, = None, None, None, None, None, None, None  # fmt: skip
 
         gain = None
         camera = None
