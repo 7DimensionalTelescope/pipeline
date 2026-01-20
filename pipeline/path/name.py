@@ -132,9 +132,10 @@ class NameHandler:
     value or a list of values, matching your input.
 
     CAVEAT: For NINA filenames, only raw -> processed supported
+    type_hint: exists only for images taken <=2024 with ill-defined names.
     """
 
-    def __init__(self, filenames: str | Path | list[str] | list[Path]):
+    def __init__(self, filenames: str | Path | list[str] | list[Path], type_hint: str = None):
         # --- 1. Normalize input to a list of strings ---
         if isinstance(filenames, (str, Path)):
             self.input = [str(filenames)]
@@ -156,7 +157,7 @@ class NameHandler:
         self.exists = [os.path.exists(p) for p in self.abspath]
 
         # --- 3. Determine raw vs processed for each input ---
-        self.type = [self._detect_type(stem) for stem in self.stem]
+        self.type = [self._detect_type(stem, type_hint) for stem in self.stem]
 
         # --- 4. Parse nightdate from the dirname if available ---
         self.nightdate = [get_nightdate(p) for p in self.input]
@@ -220,7 +221,7 @@ class NameHandler:
         return f"<NameHandler {self.basename}>"
 
     @staticmethod
-    def _detect_type(stem: str) -> tuple:
+    def _detect_type(stem: str, type_hint: str = None) -> tuple:
         """Classify a filename stem into a 5-component tuple.
 
         Order of components:
@@ -238,7 +239,7 @@ class NameHandler:
         elif stem.startswith(("bias", "dark", "bpmask", "flat")):
             types += ("master",)
         else:
-            types += ("calibrated",)  # processed")
+            types += (type_hint or "calibrated",)  # processed")
 
         # calib/sci
         def _calib_type(stem: str):
@@ -454,6 +455,7 @@ class NameHandler:
                 if not file_path.endswith(".fits"):
                     file_path = file_path + ".fits"
                 unified_filename = unified_name_from_path(file_path)
+
                 if unified_filename:
                     parts = unified_filename.split("_")
 
@@ -915,8 +917,8 @@ class NameHandler:
         return collapse(matches)
 
     @classmethod
-    def parse_params(cls, files, keys=None):
-        names = cls(files)
+    def parse_params(cls, files, keys=None, type_hint=None):
+        names = cls(files, type_hint=type_hint)
         return names.to_dict(keys=keys)
 
     @classmethod
@@ -941,7 +943,7 @@ class NameHandler:
         if not isinstance(files, list):  # or len(files) <= 1:
             raise ValueError("Input must be a list of file paths")
 
-        names = cls(files)
+        names = cls(files, type_hint="raw")
         grouped_files = names.get_grouped_files()
 
         bias, dark, flat, sci = {}, {}, {}, {}

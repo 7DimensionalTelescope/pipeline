@@ -64,7 +64,8 @@ def unified_names_from_paths(paths: list[str]) -> dict[str, str | None]:
         """
         rows = free_query(sql, (paths,))
         found = {fp: uf for fp, uf in rows}
-        return {p: found.get(p) for p in paths}
+        # return {p: found.get(p) for p in paths}
+        return [found.get(p) for p in paths]
 
     # Basename match mode for ALL inputs
     basenames = [os.path.basename(p) for p in paths]  # return None if not found
@@ -90,4 +91,5 @@ def unified_names_from_paths(paths: list[str]) -> dict[str, str | None]:
     for _fp, uf, base in rows:
         base_map[base] = uf
 
-    return {p: base_map.get(os.path.basename(p)) for p in paths}
+    return [base_map.get(p) for p in paths]
+    # return {p: base_map.get(os.path.basename(p)) for p in paths}

@@ -61,6 +61,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         working_dir=None,
         is_pipeline=False,
         is_too=False,
+        type_hint=None,
     ):
         self._name_cache = {}  # Cache for NameHandler properties
         self._file_indep_initialized = False
@@ -73,9 +74,10 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             working_dir=working_dir,
             is_pipeline=is_pipeline,
             is_too=is_too,
+            type_hint=type_hint,
         )
 
-        self._handle_input(input, is_too=is_too)
+        self._handle_input(input, is_too=is_too, type_hint=type_hint)
         self.select_output_dir(working_dir=working_dir, is_pipeline=is_pipeline, is_too=is_too)
 
         self.define_file_independent_paths()
@@ -99,9 +101,10 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             working_dir=s.working_dir,
             is_pipeline=s.is_pipeline,
             is_too=s.is_too,
+            type_hint=s.type_hint,
         )
 
-    def _handle_input(self, input, is_too=False):
+    def _handle_input(self, input, is_too=False, type_hint=None):
         """init with obs_parmas and config are ad-hoc. Will be changed to always take filenames"""
 
         if input is None:
@@ -122,7 +125,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
 
         if input:
             try:
-                self.name = NameHandler(input)
+                self.name = NameHandler(input, type_hint=type_hint)
             except Exception as e:
                 raise PathHandlerError.ParseError(f"NameHandler failure: not pipeline file.\n{input!r}:\n{e}")
 
@@ -818,7 +821,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                 v
                 for k, v in collapse(
                     # NameHandler.parse_params(sci_group, keys=const.SURVEY_SCIENCE_GROUP_KEYS), raise_error=True
-                    NameHandler.parse_params(sci_group, keys=const.TRANSIENT_SCIENCE_GROUP_KEYS),
+                    NameHandler.parse_params(sci_group, keys=const.TRANSIENT_SCIENCE_GROUP_KEYS, type_hint="raw"),
                     raise_error=True,
                 ).items()
             )
@@ -829,7 +832,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         calib_map = defaultdict(lambda: {"bias": None, "dark": None, "flat": None, "sci": []})
 
         for (bias, dark, flat), sci in zip(associated_calib, sci_files):
-            mbias, mdark, mflat = cls(sci[0]).preprocess.masterframe  # [0]: trust the grouping
+            mbias, mdark, mflat = cls(sci[0], type_hint="raw").preprocess.masterframe  # [0]: trust the grouping
 
             key = tuple((mbias, mdark, mflat))  # (tuple(bias), tuple(dark), tuple(flat))
             entry = calib_map[key]
@@ -853,7 +856,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             for sci_group in entry["sci"]:
                 sci_group = sorted(sci_group)
                 key = get_dict_key(sci_group)
-                sci_dict[key] = (sci_group, atleast_1d(cls(sci_group, is_too=is_too).conjugate))
+                sci_dict[key] = (sci_group, atleast_1d(cls(sci_group, is_too=is_too, type_hint="raw").conjugate))
 
             raw_bias = entry["bias"]
             raw_dark = entry["dark"]
@@ -867,7 +870,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                 raw_flat = []
 
             sample_file = next(iter(sci_dict.values()))[0][0]
-            mbias, mdark, mflat = cls(sample_file).preprocess.masterframe  # trust the grouping
+            mbias, mdark, mflat = cls(sample_file, type_hint="raw").preprocess.masterframe  # trust the grouping
 
             result.append(
                 [
@@ -879,35 +882,37 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
 
         # raw calibration frames with no associated same-night science frames
         if allow_unassociated_calib and unassociated_calib and any(l for l in unassociated_calib):
-            off_date_bias_groups, off_date_dark_groups, off_date_flat_groups = unassociated_calib
-            for off_date_bias_group in off_date_bias_groups:
-                if len(off_date_bias_group) < const.NUM_MIN_CALIB:
+            unassociated_raw_bias_groups, unassociated_raw_dark_groups, unassociated_raw_flat_groups = unassociated_calib  # fmt: skip
+            for unassociated_raw_bias_group in unassociated_raw_bias_groups:
+                if len(unassociated_raw_bias_group) < const.NUM_MIN_CALIB:
                     continue
 
-                mbias = cls(off_date_bias_group).preprocess.masterframe
+                mbias = cls(unassociated_raw_bias_group, type_hint="raw").preprocess.masterframe
                 # preprocess.mbias works too
-                result.append([[sorted(off_date_bias_group), [], []], [mbias, "", ""], dict()])
+                result.append([[sorted(unassociated_raw_bias_group), [], []], [mbias, "", ""], dict()])
 
-            for off_date_dark_group in off_date_dark_groups:
-                if len(off_date_dark_group) < const.NUM_MIN_CALIB:
+            for unassociated_raw_dark_group in unassociated_raw_dark_groups:
+                if len(unassociated_raw_dark_group) < const.NUM_MIN_CALIB:
                     continue
 
-                mdark = cls(off_date_dark_group).preprocess.masterframe
-                mbias = cls(off_date_dark_group).preprocess.mbias  # mbias needed for mdark generation
+                mdark = cls(unassociated_raw_dark_group, type_hint="raw").preprocess.masterframe
+                mbias = cls(
+                    unassociated_raw_dark_group, type_hint="raw"
+                ).preprocess.mbias  # mbias needed for mdark generation
 
                 # use pre-generated mbias saved to disk, even if raw available
-                result.append([[[], sorted(off_date_dark_group), []], [mbias, mdark, ""], dict()])
+                result.append([[[], sorted(unassociated_raw_dark_group), []], [mbias, mdark, ""], dict()])
 
-            for off_date_flat_group in off_date_flat_groups:
-                if len(off_date_flat_group) < const.NUM_MIN_CALIB:
+            for unassociated_raw_flat_group in unassociated_raw_flat_groups:
+                if len(unassociated_raw_flat_group) < const.NUM_MIN_CALIB:
                     continue
 
-                mflat = cls(off_date_flat_group).preprocess.masterframe
-                self = cls(off_date_flat_group)
-                self.name.exptime = ["*"] * len(off_date_flat_group)  # * is a glob wildcard
+                mflat = cls(unassociated_raw_flat_group, type_hint="raw").preprocess.masterframe
+                self = cls(unassociated_raw_flat_group, type_hint="raw")
+                self.name.exptime = ["*"] * len(unassociated_raw_flat_group)  # * is a glob wildcard
                 mdark = self.preprocess.mdark
-                mbias = cls(off_date_flat_group).preprocess.mbias
-                result.append([[[], [], sorted(off_date_flat_group)], [mbias, mdark, mflat], dict()])
+                mbias = cls(unassociated_raw_flat_group, type_hint="raw").preprocess.mbias
+                result.append([[[], [], sorted(unassociated_raw_flat_group)], [mbias, mdark, mflat], dict()])
 
         return result
 
