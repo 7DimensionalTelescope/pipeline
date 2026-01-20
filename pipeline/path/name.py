@@ -235,7 +235,7 @@ class NameHandler:
         # raw/master/processed
         if stem.startswith(("7DT", "BIAS", "DARK", "FLAT", "LIGHT")):
             types += ("raw",)
-        elif stem.startswith(("bias", "dark", "flat")):
+        elif stem.startswith(("bias", "dark", "bpmask", "flat")):
             types += ("master",)
         else:
             types += ("calibrated",)  # processed")
@@ -753,9 +753,9 @@ class NameHandler:
         # exptime for mdark, filter for mflat
         if not offset:
             quality = parts[1]
-            if obj == "dark":
+            if obj.startswith("dark") or obj == "bpmask":
                 exptime = strip_exptime(quality)
-            elif obj == "flat":
+            elif obj.startswith("flat"):
                 filt = quality
             else:
                 raise ValueError(f"Unexpected object type '{obj}' in masterframe basename")
