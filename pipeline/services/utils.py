@@ -770,9 +770,7 @@ class ScienceGroup:
         #     f"{len(os.listdir(f'/proc/{os.getpid()}/fd'))} FDs under limit of {resource.getrlimit(resource.RLIMIT_NOFILE)} FDs"
         # )
 
-        sci_yml = collapse(
-            PathHandler(self.image_files, is_too=is_too, type_hint="raw").sciproc_output_yml, raise_error=True
-        )
+        sci_yml = collapse(PathHandler(self.image_files, is_too=is_too).sciproc_output_yml, raise_error=True)
         if os.path.exists(sci_yml) and not overwrite:
             # If the config file already exists, load it
             c = SciProcConfiguration(sci_yml, write=True, is_too=is_too)  # 5 ms

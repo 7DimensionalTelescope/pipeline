@@ -67,7 +67,7 @@ class SciProcConfiguration(BaseConfig):
         if isinstance(input, list) or (isinstance(input, str) and input.endswith(".fits")):
             self.input_files = sorted(input)
             self.path = PathHandler(input, is_too=is_too)
-            config_source = self.path.sciproc_base_yml
+            config_source = collapse(self.path.sciproc_base_yml, raise_error=True)
             log_file = self.path.sciproc_output_log
 
             self.logger = self._setup_logger(

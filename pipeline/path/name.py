@@ -132,10 +132,9 @@ class NameHandler:
     value or a list of values, matching your input.
 
     CAVEAT: For NINA filenames, only raw -> processed supported
-    type_hint: exists only for images taken <=2024 with ill-defined names.
     """
 
-    def __init__(self, filenames: str | Path | list[str] | list[Path], type_hint: str = None):
+    def __init__(self, filenames: str | Path | list[str] | list[Path]):
         # --- 1. Normalize input to a list of strings ---
         if isinstance(filenames, (str, Path)):
             self.input = [str(filenames)]
@@ -157,7 +156,10 @@ class NameHandler:
         # self.exists = [os.path.exists(p) for p in self.abspath]  # introduces performance penalty
 
         # --- 3. Determine raw vs processed for each input ---
-        self.type = [self._detect_type(stem, type_hint) for stem in self.stem]
+        type_hints = [
+            "raw" if const.RAWDATA_DIR in p else None for p in self.abspath
+        ]  # this is ad-hoc for <=2024 path parsing
+        self.type = [self._detect_type(stem, type_hint) for stem, type_hint in zip(self.stem, type_hints)]
 
         # --- 4. Parse nightdate from the dirname if available ---
         self.nightdate = [get_nightdate(p) for p in self.input]
@@ -927,8 +929,8 @@ class NameHandler:
         return collapse(matches)
 
     @classmethod
-    def parse_params(cls, files, keys=None, type_hint=None):
-        names = cls(files, type_hint=type_hint)
+    def parse_params(cls, files, keys=None):
+        names = cls(files)
         return names.to_dict(keys=keys)
 
     @classmethod
@@ -953,7 +955,7 @@ class NameHandler:
         if not isinstance(files, list):  # or len(files) <= 1:
             raise ValueError("Input must be a list of file paths")
 
-        names = cls(files, type_hint="raw")
+        names = cls(files)
         grouped_files = names.get_grouped_files()
 
         bias, dark, flat, sci = {}, {}, {}, {}
