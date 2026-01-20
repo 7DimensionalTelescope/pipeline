@@ -154,7 +154,7 @@ class NameHandler:
         #     raise ValueError("One or more inputs are not FITS files")
 
         self.parts = [stem.split("_") for stem in self.stem]
-        self.exists = [os.path.exists(p) for p in self.abspath]
+        # self.exists = [os.path.exists(p) for p in self.abspath]  # introduces performance penalty
 
         # --- 3. Determine raw vs processed for each input ---
         self.type = [self._detect_type(stem, type_hint) for stem in self.stem]
@@ -199,7 +199,7 @@ class NameHandler:
             self.ext = self.ext[0]
             self.parts = self.parts[0]
             self.type = self.type[0]
-            self.exists = self.exists[0]
+            # self.exists = self.exists[0]
 
         # --- 5. Attach them as lists (or scalar if single) ---
         self.unit = units if not self._single else units[0]
@@ -219,6 +219,13 @@ class NameHandler:
         if hasattr(self, "_single") and not self._single:
             return f"<NameHandler of {len(self.abspath) if not self._single else 1} files>"
         return f"<NameHandler {self.basename}>"
+
+    @property
+    def exists(self):
+        if getattr(self, "_single", False):
+            return os.path.exists(self.abspath)
+        else:
+            return [os.path.exists(p) for p in self.abspath]
 
     @staticmethod
     def _detect_type(stem: str, type_hint: str = None) -> tuple:
