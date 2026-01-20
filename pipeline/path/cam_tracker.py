@@ -86,9 +86,10 @@ def get_camera_serial(unit: int, query_date: str):
         idxs = [i for i, d in enumerate(dates) if d <= qdate]
         if not idxs:
             # raise ValueError(f"No camera serial known on or before {query_date}")
-            print(f"No camera serial known on or before {query_date} for unit{unit}")
+            fallback_serial = f"3{unit:04}"
+            print(f"No camera serial known <= {query_date} for unit{unit}. Using {fallback_serial}")
             # return f"3{str(str(unit)*4)[:4]}"
-            return f"3{unit:04}"
+            return fallback_serial
         last_idx = max(idxs)
         return serials[last_idx]
 

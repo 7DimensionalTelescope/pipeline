@@ -5,7 +5,7 @@ import glob
 import time
 
 from .. import __version__
-from ..utils import clean_up_folder, flatten, time_diff_in_seconds
+from ..utils import clean_up_folder, flatten, time_diff_in_seconds, collapse
 from ..path.path import PathHandler
 from ..const import CalibType
 from .base import BaseConfig
@@ -90,7 +90,7 @@ class PreprocConfiguration(BaseConfig):
             # self.path = PathHandler(sorted(sci_images)[-1])  # in case of multiple dates, use the later date
             self.path = PathHandler(input, is_too=is_too, type_hint="raw")  # type_hint for <=2024 path parsing
             config_source = self.path.preproc_base_yml
-            config_output = self.path.preproc_output_yml
+            config_output = collapse(self.path.preproc_output_yml, raise_error=True)
             log_file = self.path.preproc_output_log
 
             if not isinstance(config_source, str):

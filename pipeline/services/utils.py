@@ -18,6 +18,7 @@ from collections import UserDict
 from itertools import chain
 
 from ..const import SERVICES_TMP_DIR
+from ..utils import collapse
 
 
 _cached_cg_path = None  # cache for resolved cgroup path
@@ -769,7 +770,9 @@ class ScienceGroup:
         #     f"{len(os.listdir(f'/proc/{os.getpid()}/fd'))} FDs under limit of {resource.getrlimit(resource.RLIMIT_NOFILE)} FDs"
         # )
 
-        sci_yml = PathHandler(self.image_files, is_too=is_too).sciproc_output_yml
+        sci_yml = collapse(
+            PathHandler(self.image_files, is_too=is_too, type_hint="raw").sciproc_output_yml, raise_error=True
+        )
         if os.path.exists(sci_yml) and not overwrite:
             # If the config file already exists, load it
             c = SciProcConfiguration(sci_yml, write=True, is_too=is_too)  # 5 ms
