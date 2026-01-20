@@ -382,7 +382,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             evaluate_prep_sol,
             use_threading_for_eval,
             max_scamp_iter,
-            overwrite=overwrite,
+            overwrite=True,
             plot=debug_plot,
             raise_error=True,
         )
@@ -469,12 +469,21 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         Wrapper of run_scamp.
         Handles scamp iteration & evaluation for main astrometry
         """
+
+        if not overwrite:
+            if os.path.exists(image_info.solved_head) and not image_info.invalid:
+                self.logger.debug(
+                    f"Skipping scamp iteration for {os.path.basename(image_info.image_path)} because it already has a valid solution"
+                )
+                return True
+
         for _ in range(max_scamp):
             self.run_scamp(
                 [prep_cat],
                 scamp_preset="main",
                 joint=joint,
-                overwrite=(_ == max_scamp - 1 or overwrite),
+                # overwrite=(_ == max_scamp - 1 or overwrite),
+                overwrite=True,
                 raise_error=raise_error,
             )
             if evaluate_prep_sol:
@@ -954,6 +963,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         FWHM_WORLD not updated.
         """
         input_catalogs = input_catalogs or [ii.prep_cat for ii in self.images_info if ii.sane]
+        # solved_head or image_info.sip_wcs
         solved_heads = solved_heads or [ii.solved_head for ii in self.images_info if ii.sane]
         self.logger.debug(f"updating_catalog - input_catalogs: {input_catalogs}, solved_heads: {solved_heads}")
         assert len(input_catalogs) == len(solved_heads)
@@ -984,6 +994,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             tbl["DELTA_J2000"] = dec
 
             if update_fwhm:  # TODO
+                raise AstrometryError.NotImplementedError("Updating FWHM_WORLD is under development. Skipping...")
                 self.logger.debug("Updating FWHM_WORLD is under development. Skipping...")
                 # tbl["FWHM_WORLD"] = something
                 pass
@@ -1581,7 +1592,7 @@ class ImageInfo:
             return WCS(wcs_header)
 
         if self.sip_wcs:
-            return WCS(read_text_header(self.sip_wcs))
+            return WCS(fits.getheader(self.sip_wcs))
 
         # self.logger.warning("Neither self.solved_head nor self.sip_wcs is found in ImageInfo. Using coarse_wcs")
         # return self.coarse_wcs

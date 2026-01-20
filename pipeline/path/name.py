@@ -3,7 +3,7 @@ from typing import List, Tuple
 from collections import defaultdict
 from pathlib import Path
 
-from ..utils import equal_in_keys, collapse
+from ..utils import equal_in_keys, collapse, swap_ext
 from ..utils.header import get_header
 from .. import const
 
@@ -450,7 +450,11 @@ class NameHandler:
             else:
                 from .db import unified_name_from_path
 
+                print(parts)
                 file_path = "_".join(parts)
+                if not file_path.endswith(".fits"):
+                    file_path = file_path + ".fits"
+                print(file_path)
                 unified_filename = unified_name_from_path(file_path)
                 if unified_filename:
                     parts = unified_filename.split("_")
