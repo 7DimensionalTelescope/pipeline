@@ -111,7 +111,6 @@ class PreprocConfiguration(BaseConfig):
             self.path = self._set_pathhandler_from_config(is_too=is_too or get_key(self.node.settings, "is_too", False))
             config_output = self.path.preproc_output_yml
             log_file = self.path.preproc_output_log
-            print(self.path._input_files)
 
             self.logger = self._setup_logger(
                 logger, name=self.node.name, log_file=log_file, verbose=verbose, overwrite=False

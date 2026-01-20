@@ -34,6 +34,7 @@ class PathHandlerSettings:
     working_dir: str | Path | None = None
     is_pipeline: bool = False
     is_too: bool = False
+    type_hint: str | None = None
 
 
 # Check MRO: PathHandler.mro()
