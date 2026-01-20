@@ -50,7 +50,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             if self.process_status_id is not None:
                 from ..services.database.handler import ExceptionHandler
 
-                self.logger.add_exception_code = ExceptionHandler(self.process_status_id)
+                self.logger.database = ExceptionHandler(self.process_status_id)
 
             self.process_status_id = self.create_process_data(self.config_node)
             if self.too_id is not None:
@@ -116,6 +116,8 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             self.update_progress(88, "imsubtract-run-hotpants-completed")
 
             self.mask_unsubtracted()
+
+            self.update_header(add_version=True)
 
             # Create QA data for subtracted image if database is connected
             if self.is_connected and self.process_status_id is not None:
@@ -320,6 +322,15 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         # hcdata, hchdr = fits.getdata(self.ref_image_file, header=True)
         # new_hcdata = hcdata * (~mask + 2)
         # fits.writeto(out_conv_im, new_hcdata, header=hchdr, overwrite=True)
+
+    def update_header(self, add_version: bool = True):
+        if add_version:
+            from .. import __version__
+
+            with fits.open(self.subt_image_file, mode="update") as hdul:
+                header = hdul[0].header
+                header["PIPE_VER"] = (str(__version__), "Last Run Sciproc Pipeline Version")
+                hdul.flush()
 
     def plot_subtracted_image(self):
         subt_img = self.subt_image_file

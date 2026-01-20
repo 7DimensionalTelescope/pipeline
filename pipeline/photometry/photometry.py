@@ -159,7 +159,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             if self.process_status_id is not None:
                 from ..services.database.handler import ExceptionHandler
 
-                self.logger.add_exception_code = ExceptionHandler(self.process_status_id)
+                self.logger.database = ExceptionHandler(self.process_status_id)
 
             self.process_status_id = self.create_process_data(self.config_node)
             if self.too_id is not None:
@@ -553,7 +553,7 @@ class PhotometrySingle:
                 else:
                     raise ValueError(f"Invalid catalog format: {prep_cat}")
             else:
-                obs_src_table = self._run_sextractor(se_preset="prep", fits_ldac=True, overwrite=overwrite)
+                obs_src_table = self._run_sextractor(sex_preset="prep", fits_ldac=True, overwrite=overwrite)
 
             post_match_table = self.add_matched_reference_catalog(obs_src_table)
             post_match_table = self.filter_catalog(post_match_table, snr_cut=False, low_mag_cut=11.75)
@@ -742,7 +742,7 @@ class PhotometrySingle:
         self.logger.debug(f"Saturation level with margin {1 - self.phot_conf.satur_margin}: {satur_level}")
 
         self.logger.debug("Setting apertures for photometry.")
-        sex_args = phot_utils.get_sex_args(
+        sex_options = phot_utils.get_sex_options(
             self.input_image,
             self.phot_conf,
             egain=self.image_info.egain,
@@ -754,12 +754,12 @@ class PhotometrySingle:
         # If hot pixels are present, do not convolve the image
         if not self.image_info.bpx_interp:
             self.logger.debug("Hot pixels present. Skip SEx conv.")
-            sex_args.extend(["-FILTER", "N"])
+            sex_options.extend(["-FILTER", "N"])
 
         # run sextractor with 'main' preset
         obs_src_table = self._run_sextractor(
-            se_preset="main",
-            sex_args=sex_args,
+            sex_preset="main",
+            sex_options=sex_options,
             overwrite=overwrite,
         )
 
@@ -773,8 +773,8 @@ class PhotometrySingle:
 
     def _run_sextractor(
         self,
-        se_preset: str = "prep",
-        sex_args: Optional[Dict] = None,
+        sex_preset: str = "prep",
+        sex_options: Optional[Dict] = None,
         output: str = None,
         fits_ldac: bool = False,
         phot_header: PhotometryHeader = None,
@@ -787,32 +787,32 @@ class PhotometrySingle:
         Args:
             output: Path for output catalog
             prefix: Prefix for temporary files
-            sex_args: Additional arguments for SExtractor
+            sex_options: Additional options for SExtractor
             **kwargs: Additional keyword arguments for SExtractor
 
         Returns:
             Sextracted Table
         """
-        self.logger.info(f"Run source extractor (sextractor) ({se_preset})")
+        self.logger.info(f"Run source extractor (sextractor) ({sex_preset})")
 
         if output is None:
             # new PathHandler for single
             output = getattr(
                 PathHandler(self.input_image, is_too=self.config_node.settings.is_too).photometry,
-                f"{se_preset}_catalog",
+                f"{sex_preset}_catalog",
             )
 
         self.logger.debug(f"PhotometrySingle _run_sextractor input image: {self.input_image}")
         self.logger.debug(f"PhotometrySingle _run_sextractor output catalog: {output}")
-        self.logger.debug(f"PhotometrySingle _run_sextractor sex_args: {sex_args}")
+        self.logger.debug(f"PhotometrySingle _run_sextractor sex_options: {sex_options}")
         self.logger.debug(f"PhotometrySingle _run_sextractor **kwargs: {kwargs}")
 
         _, outcome = external.sextractor(
             self.input_image,
             outcat=output,
-            se_preset=se_preset,
+            sex_preset=sex_preset,
             logger=self.logger,
-            sex_args=sex_args,
+            sex_options=sex_options,
             return_sex_output=True,
             fits_ldac=fits_ldac,
             overwrite=overwrite,
@@ -821,7 +821,7 @@ class PhotometrySingle:
 
         # self.logger.debug(f"sextractor outcome: {outcome}")  # too long
 
-        if se_preset == "main":
+        if sex_preset == "main":
             phot_header = phot_header or self.phot_header
             outcome = [s for s in outcome.split("\n") if "RMS" in s][0]
             phot_header.SKYVAL = float(outcome.split("Background:")[1].split("RMS:")[0])

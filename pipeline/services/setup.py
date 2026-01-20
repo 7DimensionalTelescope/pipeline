@@ -60,7 +60,7 @@ class BaseSetup(ABC):
         self.config_node = self._setup_config(config, is_too=is_too)
 
         # Setup log
-        self._logger = self._setup_logger(getattr(config, "logger", logger), self.config_node, is_too=is_too)
+        self._logger = self._setup_logger(getattr(config, "logger", logger), self.config_node)
 
         # Setup queue
         self.queue = self._setup_queue(queue)
@@ -127,7 +127,7 @@ class BaseSetup(ABC):
         else:
             raise ValueError("Invalid configuration object")
 
-    def _setup_logger(self, logger, config_node, is_too=False):
+    def _setup_logger(self, logger, config_node):
         """
         Initialize the logger with proper file handling.
 

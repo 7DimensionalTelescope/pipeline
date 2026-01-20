@@ -5,11 +5,11 @@ import logging
 import requests
 import fcntl
 from typing import Optional, Union, Dict, Any, Type, Callable
+from logging.handlers import RotatingFileHandler
 
 from .. import const
 from ..errors import UndefinedProcessError, exception_from_code, ProcessErrorBase, ExceptionArg
-
-from logging.handlers import RotatingFileHandler
+from ..services.database.handler import ExceptionHandler
 
 
 class Logger:
@@ -72,7 +72,7 @@ class Logger:
         self._original_excepthook = sys.excepthook
 
         self.process_error: None | ProcessErrorBase = None
-        self.add_exception_code: Optional[Callable[str, int]] = None  # DatabaseHandler.add_exception_code
+        self.database: Optional[ExceptionHandler] = None
 
         # Redirect stdout and stderr to the logger only if requested
         if redirect_stdout:
@@ -285,8 +285,8 @@ class Logger:
             exception_cls: Type[BaseException] = process_cls.exception(exception)
             msg = f"[{exception_cls}] {msg}"
 
-        if self.add_exception_code is not None:
-            self.add_exception_code.add_exception_code(code_type="warning", code_value=exception_cls.error_code)
+        if self.database is not None:
+            self.database.add_exception_code(code_type="warning", code_value=exception_cls.error_code)
 
         self.logger.warning(msg, **kwargs)
         # self.send_slack(msg, "WARNING")
@@ -315,8 +315,8 @@ class Logger:
             exception_cls: Type[BaseException] = process_cls.exception(exception)
             msg = f"[{exception_cls}] {msg}"
 
-        if self.add_exception_code is not None:
-            self.add_exception_code.add_exception_code(code_type="error", code_value=exception_cls.error_code)
+        if self.database is not None:
+            self.database.add_exception_code(code_type="error", code_value=exception_cls.error_code)
 
         # Only use exc_info if explicitly requested
         if "exc_info" not in kwargs:
@@ -349,8 +349,8 @@ class Logger:
             exception_cls: Type[BaseException] = process_cls.exception(exception)
             msg = f"[{exception_cls}] {msg}"
 
-        if self.add_exception_code is not None:
-            self.add_exception_code.add_exception_code(code_type="error", code_value=exception_cls.error_code)
+        if self.database is not None:
+            self.database.add_exception_code(code_type="error", code_value=exception_cls.error_code)
 
         # Only use exc_info if explicitly requested or if there's an exception
         if "exc_info" not in kwargs:

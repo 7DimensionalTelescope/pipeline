@@ -64,7 +64,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             if self.process_status_id is not None:
                 from ..services.database.handler import ExceptionHandler
 
-                self.logger.add_exception_code = ExceptionHandler(self.process_status_id)
+                self.logger.database = ExceptionHandler(self.process_status_id)
 
             self.process_status_id = self.create_process_data(self.config_node)
             if self.too_id is not None:
@@ -351,16 +351,16 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
                 self.logger.info(f"Background subtraction result exists; skipping: {get_basename(outim)}")
                 continue
 
-            sex_args = [
-                "-CATALOG_TYPE", "NONE",  # save no source catalog
-                "-CHECKIMAGE_TYPE", "BACKGROUND,BACKGROUND_RMS",
-                "-CHECKIMAGE_NAME", f"{bkg},{bkg_rms}"
-            ]  # fmt: skip
+            sex_options = {
+                "-CATALOG_TYPE": "NONE",  # save no source catalog
+                "-CHECKIMAGE_TYPE": "BACKGROUND,BACKGROUND_RMS",
+                "-CHECKIMAGE_NAME": f"{bkg},{bkg_rms}",
+            }
             sex_log = os.path.join(
                 self.path_bkgsub,
                 os.path.splitext(get_basename(outim))[0] + "_sextractor.log",
             )
-            sextractor(inim, sex_args=sex_args, log_file=sex_log, logger=self.logger)
+            sextractor(inim, sex_options=sex_options, log_file=sex_log, logger=self.logger)
 
             with fits.open(inim, memmap=True) as hdul:
                 _data = hdul[0].data
@@ -845,7 +845,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         save_fits_as_figures(fits.getdata(coadd_img), self.path.figure_dir_to_path / swap_ext(basename, "png"))
         return
 
-    def _update_header(self):
+    def _update_header(self, add_version: bool = True):
         # 	Get Header info
         exptime_coadd = self.total_exptime
         mjd_coadd = self.mjd_coadd
@@ -895,6 +895,11 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         # 	Update Header
         with fits.open(self.config_node.imcoadd.coadd_image, mode="update") as hdul:
             header = hdul[0].header
+
+            if add_version:
+                from .. import __version__
+
+                header["PIPE_VER"] = (str(__version__), "Last Run Sciproc Pipeline Version")
 
             for key, (value, comment) in keywords_to_update.items():
                 header[key] = (value, comment)

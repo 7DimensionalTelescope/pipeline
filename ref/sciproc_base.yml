@@ -69,14 +69,14 @@ logging:
 
 astrometry:
   input_images:
-  eval_match_radius: 5.0  # 10.0
+  eval_match_radius: 5.0  # 10.0  # arcsec
   path:
     ref_ris_dir: "/lyman/data1/factory/catalog/gaia_dr3_7DT"
     ref_query_dir: "/lyman/data1/factory/ref_scamp"
   ahead_file: "/data/pipeline_reform/dhhyun_lab/scamptest/ahead/calib_7DT11_T07304_20250115_050155_g_60_nocrval.ahead"
   local_astref: 
-  scamp_timeout: 60  #30
-  solvefield_timeout: 60
+  scamp_timeout: 60  #30  # seconds
+  solvefield_timeout: 60  # seconds
 
 photometry:
   input_images:

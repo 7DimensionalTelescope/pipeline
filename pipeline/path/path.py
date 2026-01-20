@@ -1,9 +1,11 @@
+from __future__ import annotations
 import os
 from glob import glob
 from pathlib import Path
 from typing import Union, List, Tuple
 from functools import cached_property
 import numpy as np
+from dataclasses import dataclass, replace as dc_replaces
 
 from .. import const
 from ..errors import PathHandlerError
@@ -27,8 +29,18 @@ from .const import (
 )
 
 
-# AutoMkdirMixin super() allows AutoCollapseMixin to run first.
-class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.mro()
+@dataclass(frozen=True, slots=True)
+class PathHandlerSettings:
+    working_dir: str | Path | None = None
+    is_pipeline: bool = False
+    is_too: bool = False
+
+
+# Check MRO: PathHandler.mro()
+# CAVEAT: __getattribute__ order is inverse MRO, because of the super() chain.
+#         Here, AutoMkdirMixin's super() allows AutoCollapseMixin to run first.
+#         Collapse first if collapsible, then generate the path or paths.
+class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
     """
     A comprehensive path handler for 7DT pipeline.
     It defines source and destination file paths in all stages of the pipeline
@@ -42,21 +54,52 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
     Currently lacks masterframe, config support
     """
 
-    def __init__(self, input: Union[str, Path, list[str | Path]] = None, *, working_dir=None, is_too=False):
+    def __init__(
+        self,
+        input: Union[str, Path, list[str | Path]] = None,
+        *,
+        working_dir=None,
+        is_pipeline=False,
+        is_too=False,
+    ):
         self._name_cache = {}  # Cache for NameHandler properties
         self._file_indep_initialized = False
         self._file_dep_initialized = False
-        self._config = None
-        self._config = None
+        self._config = None  # unused
         self._input_files: list[str] = None
 
+        # preserve input parameters for later use; don't access them inside PathHandler
+        self.settings = PathHandlerSettings(
+            working_dir=working_dir,
+            is_pipeline=is_pipeline,
+            is_too=is_too,
+        )
+
         self._handle_input(input, is_too=is_too)
-        self.select_output_dir(working_dir=working_dir, is_too=is_too)
+        self.select_output_dir(working_dir=working_dir, is_pipeline=is_pipeline, is_too=is_too)
 
         self.define_file_independent_paths()
 
         if not self._file_dep_initialized and self._input_files:
             self.define_file_dependent_paths()
+
+    # @classmethod
+    # def from_instance(cls, instance: PathHandler, input=None):
+    #     return cls(
+    #         input=input or instance._input_files,
+    #         working_dir=instance._working_dir,
+    #         is_pipeline=instance._is_pipeline,
+    #         is_too=instance._is_too,
+    #     )
+
+    def replace(self, input=None, **setting_overrides) -> PathHandler:
+        s = dc_replaces(self.settings, **setting_overrides) if setting_overrides else self.settings
+        return type(self)(
+            input=self._input_files if input is None else input,
+            working_dir=s.working_dir,
+            is_pipeline=s.is_pipeline,
+            is_too=s.is_too,
+        )
 
     def _handle_input(self, input, is_too=False):
         """init with obs_parmas and config are ad-hoc. Will be changed to always take filenames"""
@@ -258,7 +301,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
         else:
             return Path(path).exists()
 
-    def select_output_dir(self, working_dir=None, is_too=False):
+    def select_output_dir(self, working_dir=None, is_pipeline=False, is_too=False):
         """
         Vectorized output directory selection
         CWD if user-input. Assume pipeline paths otherwise.
@@ -267,21 +310,22 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
             self._output_parent_dir = [working_dir or os.getcwd()]
             self._preproc_output_dir = self._output_parent_dir
             self._factory_parent_dir = [os.path.join(self._output_parent_dir[0], TMP_DIRNAME)]
-            self._is_pipeline = [False]
+            self._is_pipeline_vectorized = [is_pipeline]
 
         else:
             # Process each file independently
             self._output_parent_dir = []
             self._preproc_output_dir = []
             self._factory_parent_dir = []
-            self._is_pipeline = []
+            self._is_pipeline_vectorized = []
 
             for i, input_file in enumerate(self._input_files):
                 file_dir = str(Path(input_file).absolute().parent)
 
                 not_pipeline_dir = not any(s in file_dir for s in const.PIPELINE_DIRS)
 
-                if working_dir or not_pipeline_dir:
+                # working_dir explicitly given or pipeline_dirs not found in input_file
+                if (working_dir or not_pipeline_dir) and not is_pipeline:
                     output_parent_dir = working_dir or os.path.dirname(input_file)
                     # ad hoc for diffim input only
                     if os.path.basename(output_parent_dir) == DIFFIM_DIRNAME:
@@ -291,7 +335,9 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
 
                     self._output_parent_dir.append(output_parent_dir)
                     self._factory_parent_dir.append(os.path.join(output_parent_dir, TMP_DIRNAME))
-                    self._is_pipeline.append(False)
+                    self._is_pipeline_vectorized.append(False)
+
+                # pipeline_dirs found in input_file or explicitly given as pipeline
                 else:
                     from datetime import date
 
@@ -306,12 +352,12 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
                             output_parent_dir = const.TOO_PROCESSED_DIR
                             self._output_parent_dir.append(output_parent_dir)
                             self._factory_parent_dir.append(const.TOO_FACTORY_DIR)
-                            self._is_pipeline.append(True)
+                            self._is_pipeline_vectorized.append(True)
                         else:
                             output_parent_dir = const.PROCESSED_DIR
                             self._output_parent_dir.append(output_parent_dir)
                             self._factory_parent_dir.append(const.FACTORY_DIR)
-                            self._is_pipeline.append(True)
+                            self._is_pipeline_vectorized.append(True)
                     else:
                         raise ValueError(
                             f"Nightdate cap ({const.DISK_CHANGE_NIGHTDATE}) reached for file {input_file}: consider moving to another disk."
@@ -375,8 +421,8 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
 
     @property
     def is_pipeline(self):
-        all_flag = all(self._is_pipeline)
-        or_flag = any(self._is_pipeline)
+        all_flag = all(self._is_pipeline_vectorized)
+        or_flag = any(self._is_pipeline_vectorized)
         if not all_flag and or_flag:
             raise PathHandlerError.GroupingError("Pipeline and non-pipeline paths are mixed. Aborting...")
         return all_flag
@@ -523,7 +569,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):  # Check MRO: PathHandler.
             self._preproc_config_stem.append(config_stem)
 
             if "calibrated" in typ or "raw" in typ:
-                if self._is_pipeline[i]:
+                if self._is_pipeline_vectorized[i]:
                     # Within pipeline processing
                     relative_path = os.path.join(nightdate, obj, filte)
                     output_dir = os.path.join(self._output_parent_dir[i], relative_path)
@@ -1042,11 +1088,11 @@ class PathAstrometry(AutoMkdirMixin, AutoCollapseMixin):
         return "\n".join(f"{k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
 
     @property
-    def tmp_dir(self):
+    def tmp_dir(self) -> str:
         return os.path.join(self._parent.factory_dir, ASTRM_DIRNAME)
 
     @property
-    def figure_dir(self):
+    def figure_dir(self) -> str:
         return os.path.join(self._parent.figure_dir, ASTRM_DIRNAME)
 
     @property
@@ -1070,11 +1116,11 @@ class PathAstrometry(AutoMkdirMixin, AutoCollapseMixin):
     #     return tuple([swap_ext(image, ext) for ext in exts] for image in self.input_files)
 
     @cached_property
-    def soft_link(self):
+    def soft_link(self) -> str | List[str]:
         return [os.path.join(self.tmp_dir, os.path.basename(s)) for s in atleast_1d(self._input_files)]
 
     @property
-    def catalog(self) -> List[str]:
+    def catalog(self) -> str | List[str]:
         # return (add_suffix(add_suffix(inim, 'prep'), "cat") for inim in self.input_files)
         return [add_suffix(inim, "cat") for inim in atleast_1d(self.soft_link)]
 

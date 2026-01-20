@@ -92,7 +92,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             if self.process_status_id is not None:
                 from ..services.database.handler import ExceptionHandler
 
-                self.logger.add_exception_code = ExceptionHandler(self.process_status_id)
+                self.logger.database = ExceptionHandler(self.process_status_id)
 
             self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
 
@@ -143,6 +143,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
         # Create pipeline record in database
         if self.is_connected:
+            self.logger.debug(f"is connected: creating pipeline record in database")
             self.process_status_id = self.create_process_data(self.config_node, overwrite=self.overwrite)
 
     def log_group_manifest(self):

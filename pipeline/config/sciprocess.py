@@ -207,7 +207,8 @@ class SciProcConfiguration(BaseConfig):
 
         logger = False if not write else logger
         input_images = sorted([os.path.abspath(image) for image in atleast_1d(input_images)])
-        path = PathHandler(input_images, working_dir=working_dir or os.getcwd(), is_too=is_too)
+        # path = PathHandler(input_images, working_dir=working_dir or os.getcwd(), is_too=is_too)
+        path = PathHandler(input_images, working_dir=working_dir, is_too=is_too)
         self = cls.base_config(write=write)
         self.input_files = input_images
         self.path = path

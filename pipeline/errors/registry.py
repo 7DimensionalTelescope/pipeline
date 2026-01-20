@@ -188,14 +188,25 @@ class ProcessErrorBase(Exception, metaclass=ProcessErrorMeta):
     def __init__(self, message: Optional[str] = None, *, cause: Optional[BaseException] = None, **data: Any) -> None:
         reg = self._registry
         pinfo = self._process_info
-        kinfo = reg.kind(self._default_kind_name)
-
-        # Stamp metadata like a normal combined error would
-        self.process_name = pinfo.name
-        self.process_code = pinfo.code
-        self.kind_name = kinfo.name
-        self.kind_code = kinfo.code
-        self.error_code = reg.encode(pinfo.code, kinfo.code)
+        
+        # Check if this is a combo class (has kind_name, kind_code, error_code as class attributes)
+        # If so, use those instead of defaulting to "ProcessError"
+        cls = type(self)
+        if hasattr(cls, 'kind_name') and hasattr(cls, 'kind_code') and hasattr(cls, 'error_code'):
+            # This is a combo class, use its predefined kind information
+            self.process_name = cls.process_name
+            self.process_code = cls.process_code
+            self.kind_name = cls.kind_name
+            self.kind_code = cls.kind_code
+            self.error_code = cls.error_code
+        else:
+            # This is the base process error class, use default "ProcessError" kind
+            kinfo = reg.kind(self._default_kind_name)
+            self.process_name = pinfo.name
+            self.process_code = pinfo.code
+            self.kind_name = kinfo.name
+            self.kind_code = kinfo.code
+            self.error_code = reg.encode(pinfo.code, kinfo.code)
 
         self.data = dict(data)
         if cause is not None:
