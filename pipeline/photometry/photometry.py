@@ -982,9 +982,10 @@ class PhotometrySingle:
             zp = zps[idx]
             zperr = zperrs[idx]
 
-            if (inferred_filter in BROAD_FILTERS and zp <= zp_cut) or (
-                inferred_filter in MEDIUM_FILTERS and zp > zp_cut
-            ):
+            # if (inferred_filter in BROAD_FILTERS and zp <= zp_cut) or (
+            #     inferred_filter in MEDIUM_FILTERS and zp > zp_cut
+            # ):
+            if inferred_filter in MEDIUM_FILTERS and zp > zp_cut:  # only this is safe. TODO: adhoc
                 self.logger.debug(
                     f"Filter {inferred_filter} is a {'broadband' if inferred_filter in BROAD_FILTERS else 'mediumband'} filter and has a zero point (zp) of {zp} which is less than the zp cut, {zp_cut}. Removing from potential filters."
                 )
