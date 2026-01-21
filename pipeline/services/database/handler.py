@@ -171,6 +171,7 @@ class DatabaseHandler:
 
             self.process_status.update_data(self.process_status_id, warnings=json.dumps(warnings))
         elif code_type == "error":
+
             if row.errors is None:
                 row.errors = code_value
                 self.process_status.update_data(self.process_status_id, errors=code_value)
@@ -180,6 +181,7 @@ class DatabaseHandler:
             raise ValueError(f"Invalid code type: {code_type}")
 
     def reset_exceptions(self, procsss_name=None):
+
         if self.process_status_id is None:
             return
 
@@ -218,8 +220,8 @@ class ExceptionHandler:
         self.process_status_id = process_status_id
 
     def add_exception_code(self, code_type: str, code_value: int):
-        row = self.process_status.read_data_by_id(self.process_status_id)
 
+        row = self.process_status.read_data_by_id(self.process_status_id)
         if row is None:
             raise ValueError(f"Process ID {self.process_status_id} not found")
 
@@ -232,10 +234,13 @@ class ExceptionHandler:
 
             self.process_status.update_data(self.process_status_id, warnings=json.dumps(warnings))
         elif code_type == "error":
-            if row.errors is None:
+            if row.errors is None or self.check_unknown_code(row.errors):
                 row.errors = code_value
                 self.process_status.update_data(self.process_status_id, errors=code_value)
             else:
                 return False
         else:
             raise ValueError(f"Invalid code type: {code_type}")
+
+    def check_unknown_code(self, code_value: int):
+        return (int(code_value) - 99) % 100 == 0

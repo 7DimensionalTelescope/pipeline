@@ -600,8 +600,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         assert len(input_images) == len(wcs_list)
 
         def _update_header(image, wcs, reset_image_header):
-            self.logger.debug(f"Injecting WCS into {image}")
-            print(f"Injecting WCS into {image}")  # duplicate logging debug
+            self.logger.debug(f"Injecting WCS into {image}")            
 
             if reset_image_header:
                 self.reset_headers(image)
