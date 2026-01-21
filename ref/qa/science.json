@@ -1,9 +1,9 @@
 {
     "SCIENCE": {
         "NUMFRAC": {
-            "value": 0.01,
+            "value": 0.05,
             "criteria": "gt",
-            "description": "Source number fraction against reference catalog must be > 0.01"
+            "description": "Source number fraction against reference catalog must be > 0.05"
         }
     }
 }
