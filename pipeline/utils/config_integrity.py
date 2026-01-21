@@ -103,8 +103,8 @@ def verify_config_hashes(
         if actual.lower() != expected:
             errors.append(
                 f"{rel} hash mismatch: expected {expected}, got {actual}. "
-                "Config changed: bump up the version in pipeline/version.py and run \n"
-                "from pipeline.utils.config_integrity import write_config_hashes; write_config_hashes(overwrite=True)\n"
+                "Config changed: bump up the version in pipeline/version.py and run \n\n"
+                "from pipeline.utils.config_integrity import write_config_hashes; write_config_hashes(overwrite=True)\n\n"
                 "before running the pipeline."
             )
 

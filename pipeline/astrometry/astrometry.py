@@ -1435,7 +1435,7 @@ class ImageInfo:
             zp = zp_per_filter[self.filter]
         else:
             zp = zp_per_filter["unknown"]
-            self.logger.error(
+            self.logger.warning(
                 f"Filter {self.filter} not in zeropoints.json for early QA. Using default: {zp}.",
                 exception=AstrometryError.PrerequisiteNotMet,
             )
@@ -1443,7 +1443,7 @@ class ImageInfo:
             depth = depths_per_filter[self.filter]
         else:
             depth = depths_per_filter["unknown"]
-            self.logger.error(
+            self.logger.warning(
                 f"Filter {self.filter} not in depths.json for early QA. Using default: {depth}.",
                 exception=AstrometryError.PrerequisiteNotMet,
             )
