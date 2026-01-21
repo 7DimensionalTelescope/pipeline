@@ -249,6 +249,10 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
             # flexibly iterate to refine
             for i, image_info in enumerate(self.images_info):
+                if not image_info.sane:
+                    self.logger.info(f"SANITY F for {os.path.basename(image_info.image_path)}. Skipping astrometry run")
+                    continue
+
                 if force_solve_field:
                     # raise AstrometryError.NotImplementedError("force_solve_field")
                     self._solve_field_suite(
@@ -600,7 +604,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         assert len(input_images) == len(wcs_list)
 
         def _update_header(image, wcs, reset_image_header):
-            self.logger.debug(f"Injecting WCS into {image}")            
+            self.logger.debug(f"Injecting WCS into {image}")
 
             if reset_image_header:
                 self.reset_headers(image)
