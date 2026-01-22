@@ -366,6 +366,13 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         evaluate_prep_sol: bool = False,
         debug_plot: bool = False,
     ):
+        self.logger.info(
+            f"{image_info.id} SCAMP stats - "
+            f"UNMATCH: {image_info.rsep_stats.unmatched_fraction if image_info.rsep_stats.unmatched_fraction is not None else 'None'}, "
+            f"SEP_P95: {image_info.rsep_stats.separation_stats.P95 if image_info.rsep_stats.separation_stats.P95 is not None else 'None'}, "
+            f"SEP_Q2: {image_info.rsep_stats.separation_stats.Q2 if image_info.rsep_stats.separation_stats.Q2 is not None else 'None'}"
+        )
+
         self.logger.warning(
             f"Solve-field triggered, better solution not guaranteed for {image_info.prep_cat} [{i+1}/{len(self.images_info)}]",
             AstrometryError.AlternativeSolver,
@@ -375,6 +382,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
         if evaluate_prep_sol:
             self.evaluate_solution(
+                images_info=image_info,
                 suffix="solvefieldwcs",
                 plot=debug_plot,
                 use_threading=use_threading_for_eval,
@@ -384,7 +392,6 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
         self.logger.info(f"Running main scamp iteration for {image_info.prep_cat} [{i+1}/{len(self.images_info)}]")
         self._iterate_scamp(
-            image_info.prep_cat,
             image_info,
             evaluate_prep_sol,
             use_threading_for_eval,
@@ -424,9 +431,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
         if evaluate_prep_sol:
             self.evaluate_solution(
-                input_images=image_info.image_path,
                 images_info=image_info,
-                prep_cats=image_info.prep_cat,
                 suffix="prepwcs",
                 use_threading=use_threading_for_eval,
                 export_eval_cards=True,
@@ -438,7 +443,6 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
         # main scamp with iterations
         main_scamp_success = self._iterate_scamp(
-            image_info.prep_cat,
             image_info,
             evaluate_prep_sol,
             use_threading_for_eval,
@@ -463,7 +467,6 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
     def _iterate_scamp(
         self,
-        prep_cat,
         image_info: ImageInfo,
         evaluate_prep_sol,
         use_threading,
@@ -474,20 +477,25 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         raise_error=True,
     ):
         """
-        Wrapper of run_scamp.
+        Wrapper of run_scamp for a `single` image.
         Handles scamp iteration & evaluation for main astrometry
         """
 
         if not overwrite:
-            if os.path.exists(image_info.solved_head) and not image_info.invalid:
+            # if not image_info.invalid:
+            self.logger.debug(
+                f"ImageInfo {image_info.id} solved_head: {image_info.solved_head}, "
+                f"rsep_stats: {type(image_info.rsep_stats)}"
+            )
+            if image_info.good:
                 self.logger.debug(
-                    f"Skipping scamp iteration for {os.path.basename(image_info.image_path)} because it already has a valid solution"
+                    f"Skipping scamp iteration for {image_info.id} because it already has a good solution"
                 )
                 return True
 
         for _ in range(max_scamp):
-            self.run_scamp(
-                [prep_cat],
+            last_scamp_success = self.run_scamp(
+                image_info.prep_cat,
                 scamp_preset="main",
                 joint=joint,
                 # overwrite=(_ == max_scamp - 1 or overwrite),
@@ -496,9 +504,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             )
             if evaluate_prep_sol:
                 self.evaluate_solution(
-                    input_images=image_info.image_path,
                     images_info=image_info,
-                    prep_cats=prep_cat,
                     suffix="iterwcs",
                     plot=plot,
                     isep=False,
@@ -506,10 +512,16 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     export_eval_cards=True,
                     overwrite=overwrite,
                 )
-                self.logger.debug(f"SEP_P95: {image_info.rsep_stats.separation_stats.P95} for {image_info.image_path}")
+                self.logger.debug(
+                    f"{image_info.id} UNMATCH: {image_info.rsep_stats.unmatched_fraction if image_info.rsep_stats.unmatched_fraction is not None else 'None'}\n"
+                    f"{image_info.id} SEP_P95: {image_info.rsep_stats.separation_stats.P95 if image_info.rsep_stats.separation_stats.P95 is not None else 'None'}\n"
+                    f"{image_info.id} SEP_Q2: {image_info.rsep_stats.separation_stats.Q2 if image_info.rsep_stats.separation_stats.Q2 is not None else 'None'}"
+                )
                 if image_info.good:
                     self.logger.debug(f"Stop iterating at {_}")
                     break
+
+        return last_scamp_success
 
     # deprecated
     def _run_joint(
@@ -1013,9 +1025,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
     def evaluate_solution(
         self,
-        input_images: List[str] = None,
-        images_info: List[ImageInfo] = None,
-        prep_cats: List[str] = None,
+        images_info: ImageInfo | List[ImageInfo] = None,
         plot: bool = True,
         isep: bool = True,
         suffix: str = "wcs",
@@ -1029,9 +1039,9 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         """Evaluate the solution. This was developed in lack of latest scamp version."""
         self.logger.debug("Start evaluate_solution")
 
-        input_images = atleast_1d(input_images or [ii.image_path for ii in self.images_info if ii.sane])
         images_info = atleast_1d(images_info or [ii for ii in self.images_info if ii.sane])
-        prep_cats = atleast_1d(prep_cats or [ii.prep_cat for ii in self.images_info if ii.sane])
+        input_images = [ii.image_path for ii in images_info]
+        prep_cats = [ii.prep_cat for ii in images_info]
 
         refcat = Table.read(self.config_node.astrometry.local_astref, hdu=2)
 
@@ -1048,6 +1058,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
             # update FOV polygon to ImageInfo. It will be cached and put into final image header later
             try:
+                self.logger.debug(f"Updating FOV polygon for {image_info.id} ({image_info.image_path})")
                 image_info.fov_ra, image_info.fov_dec = get_fov_quad(
                     image_info.wcs, image_info.naxis1, image_info.naxis2
                 )
@@ -1648,7 +1659,19 @@ class ImageInfo:
 
     @property
     def invalid(self) -> bool:
-        return
+        if not os.path.exists(self.solved_head):
+            return True
+
+        wcs_header = read_scamp_header(self.solved_head)
+        if not wcs_header:
+            return True
+
+        with open(self.solved_head, "r") as f:
+            no_PV_terms = not any("PV1_0" in line for line in f)
+        if no_PV_terms:
+            return True
+
+        return False
 
     @property
     def sane(self) -> bool:
