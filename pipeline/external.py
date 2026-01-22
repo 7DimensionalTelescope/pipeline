@@ -90,7 +90,7 @@ def sextractor(
     if sex_options:
         sex_args_master.update(sex_options)  # override with user options
 
-    options = [item for k, v in sex_args_master.items() for item in (f"-{k}" if not k.startswith("-") else k, v)]
+    options = [str(item) for k, v in sex_args_master.items() for item in (f"-{k}" if not k.startswith("-") else k, v)]
     sexcom = [SEXTRACTOR_COMMAND, f"{inim}"] + options
 
     chatter(f"Sextractor output catalog: {outcat}")
