@@ -213,7 +213,7 @@ class Blueprint:
             else:
                 base_priority = 3
         else:
-            base_priority = base_priority
+            base_priority = base_priority or 1
             input_type = input_type or "User-input"
 
         input_type = kwargs.get("input_type", input_type)

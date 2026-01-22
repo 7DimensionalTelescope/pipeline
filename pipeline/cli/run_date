@@ -1,0 +1,33 @@
+#!/home/pipeline-stable/.conda/envs/pipeline/bin/python
+
+import argparse
+import sys
+import signal
+
+from pipeline.wrapper import DataReduction
+
+
+def signal_handler(sig, frame):
+    print("\nTerminate process")
+    sys.exit(0)
+
+
+signal.signal(signal.SIGINT, signal_handler)
+
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser(
+        description="Run data reduction for a given date",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("-date", type=str, required=True, help="Date to run data reduction for")
+
+    args = parser.parse_args()
+
+    try:
+        dr = DataReduction([args.date], use_db=True)
+        dr.run()
+    except Exception as e:
+        print(f"\nError: {e}")
+        sys.exit(1)
