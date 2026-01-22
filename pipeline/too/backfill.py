@@ -44,15 +44,18 @@ def backfill_too(i, overwrite=False, use_system_queue=True, **kwargs):
             return
 
         try:
+
             bp = Blueprint.from_list(list_of_images=list_of_images, is_too=True)
             bp.create_config(overwrite=overwrite, is_too=True)
-            bp.create_schedule(is_too=True)
+            bp.create_schedule(is_too=True, input_type="ToO")
 
             if len(bp.schedule) == 0:
-                print(f"Empty schedule created for TOO {i}")
+                print(f"Empty schedule created for TOO id = {i}")
                 return
 
-            sc = Scheduler(bp.schedule, use_system_queue=use_system_queue, overwrite=overwrite, **kwargs)
+            sc = Scheduler(
+                bp.schedule, use_system_queue=use_system_queue, overwrite=overwrite, overwrite_schedule=True, **kwargs
+            )
             if use_system_queue:
                 sc.start_system_queue()
             else:
@@ -61,7 +64,7 @@ def backfill_too(i, overwrite=False, use_system_queue=True, **kwargs):
                 queue = QueueManager()
                 queue.add_scheduler(sc)
                 queue.wait_until_task_complete()
-            print(f"Successfully added schedule for TOO {i} with {len(bp.schedule)} jobs")
+            print(f"Successfully added schedule for TOO id = {i} with {len(bp.schedule)} jobs")
         except Exception as e:
             print(f"Error processing TOO {i}: {e}")
             raise

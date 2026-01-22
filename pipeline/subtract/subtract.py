@@ -1,5 +1,6 @@
 import os
 import time
+import numpy as np
 from pathlib import Path
 from glob import glob
 from astropy.io import fits
@@ -182,6 +183,10 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
 
             for search_date in search_dates:
                 date_formatted = search_date.strftime("%Y-%m-%d")
+
+                if date_formatted == date.strftime("%Y-%m-%d"):
+                    continue
+
                 for base_path in base_paths:
                     ref_pattern = f"{base_path}/{date_formatted}/{obs}/{filt}/coadd/*coadd.fits"
 
@@ -201,17 +206,12 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         # always consider a single coadd image as input, not a list of images
         local_input_images = get_key(self.config_node, "imsubtract.input_image")
         # set from the common input if not set locally
-        if local_input_images is not None:
-            self.input_images = [local_input_images]
-        else:
-            self.input_images = [self.config_node.input.coadd_image]
 
-        self.apply_sanity_filter_and_report()
-        input_image = collapse(self.input_images, raise_error=True)
-        self.config_node.imsubtract.input_image = input_image
-        self.logger.debug(f"ImSubtract inim: {input_image}")
-        self.input_images = [local_input_images] or [self.config_node.input.coadd_image]
-        print(self.input_images)
+        if any(i is None for i in np.atleast_1d(local_input_images)):
+            self.input_images = [self.config_node.input.coadd_image]
+        else:
+            self.input_images = local_input_images
+
         self.apply_sanity_filter_and_report()
         input_image = collapse(self.input_images, raise_error=True)
         self.config_node.imsubtract.input_image = input_image
@@ -225,6 +225,8 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
         self.ref_image_file = self.config_node.imsubtract.reference_image or self.reference_images[0]
         self.config_node.imsubtract.reference_image = self.ref_image_file  # sync
         self.ref_source_table_file = self.ref_image_file.replace(".fits", "_cat.fits")
+        # self.ref_source_table_file = swap_ext(self.ref_image_file, "phot.cat")
+
         # self.ref_source_table_file = swap_ext(self.ref_image_file, "phot.cat")
 
         # self.subt_image_file = get_derived_product_path(self.sci_image_file, "transient", "subt.fits")

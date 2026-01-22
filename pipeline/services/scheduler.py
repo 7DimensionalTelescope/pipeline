@@ -270,7 +270,7 @@ class Scheduler:
             raise ValueError("Invalid schedule type")
 
         # Check for overwrite functionality
-        overwrite_schedule = self._kwargs.get("overwrite_schedule", False)
+        overwrite_schedule = self.overwrite_schedule
 
         if len(current_table) > 0:
             # Get set of existing configs to filter duplicates
@@ -866,7 +866,7 @@ class Scheduler:
                 existing_configs = set(existing_table["config"])
 
                 # Filter out rows with duplicate configs
-                overwrite_schedule = self._kwargs.get("overwrite_schedule", False)
+                overwrite_schedule = self.overwrite_schedule
 
                 new_table = table.copy()
                 # Create mask for non-duplicate rows
