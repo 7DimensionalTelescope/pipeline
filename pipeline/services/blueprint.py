@@ -144,6 +144,26 @@ class Blueprint:
         input_type=None,
         **kwargs,
     ):
+        """
+        # priority definition:
+        Preprocess = base_priority + 1
+        SciProcess = base_priority
+        --------------------------------
+
+        0: Failed process
+
+        1: User-input / Reprocess science
+        2: User-input / Reprocess preprocess
+
+        3: Daily science
+        4: Daily preprocess
+
+        6: ToO science medium band
+        7: ToO preprocess medium band
+
+        11: ToO science broad band
+        12: ToO preprocess broad band
+        """
 
         is_too = is_too or self.is_too
 
@@ -209,6 +229,7 @@ class Blueprint:
                 else [] + ["--preprocess_kwargs", json.dumps(preprocess_kwargs)] if preprocess_kwargs else []
             )
 
+            # preproc gets priority +1 from base_priority
             schedule.add_row(
                 [
                     idx,

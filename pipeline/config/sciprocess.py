@@ -224,9 +224,6 @@ class SciProcConfiguration(BaseConfig):
             else:
                 raise ConfigurationError.ValueError(f"Invalid config name policy: {config_name_policy}")
 
-        if not self.input_files:
-            return self
-
         if logger is True:
             log_file = self.path.sciproc_output_log
             if isinstance(log_file, list):
@@ -245,6 +242,9 @@ class SciProcConfiguration(BaseConfig):
         else:
             self.logger = None
 
+        if not self.input_files:
+            return self
+
         self.initialize(write=write, is_pipeline=is_pipeline, is_too=is_too, is_multi_epoch=is_multi_epoch)
         if self.write:  # defined in base_config
             self.write_config(force=True)
@@ -254,4 +254,6 @@ class SciProcConfiguration(BaseConfig):
     def reset_flags(self):
         self.logger.info("Resetting flags")
         for key in self.node.flag.__dict__:
+            if key.startswith("_"):
+                continue
             setattr(self.node.flag, key, False)

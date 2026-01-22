@@ -167,7 +167,10 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         # self.apply_sanity_filter_and_report()  # astrometry is the starter: nothing to filter out
 
         # set ImageInfo
-        self.images_info = [ImageInfo.from_fits(image, self.path, self.logger) for image in self.input_images]
+        self.images_info = [
+            ImageInfo.from_fits(image, self.path, self.logger, id=f"[{i+1}/{len(self.input_images)}]")
+            for i, image in enumerate(self.input_images)
+        ]
 
         # generate local astrefcat if not exists
         local_astref = self.config_node.astrometry.local_astref or self.path.astrometry.astrefcat
@@ -450,7 +453,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         if image_info.bad:
             self.logger.warning(
                 f"Bad solution. UNMATCH: {image_info.rsep_stats.unmatched_fraction if image_info.rsep_stats.unmatched_fraction is not None else 'None'}, "
-                f"RSEP_P95: {image_info.rsep_stats.separation_stats.P95 if image_info.rsep_stats.separation_stats.P95 is not None else 'None'} "
+                # f"RSEP_P95: {image_info.rsep_stats.separation_stats.P95 if image_info.rsep_stats.separation_stats.P95 is not None else 'None'} "
+                f"RSEP_Q2: {image_info.rsep_stats.separation_stats.Q2 if image_info.rsep_stats.separation_stats.Q2 is not None else 'None'} "
                 f"after {max_scamp_iter} iterations for {image_info.image_path}",
                 AstrometryError.BadWcsSolution,
             )
@@ -768,6 +772,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     self.logger.debug(f"Solve-field input: {slink}, output: {wcs_file}")
                     solved_input_catalogs.append(slink)
                     self.images_info[i].sip_wcs = wcs_file
+                    self.logger.debug(f"Updated sip_wcs: {self.images_info[i].id}: {wcs_file}")
                     solvefield_wcs_list.append(wcs_file)
                 except SolveFieldError as solvefield_error:
                     self.logger.error(f"Solve-field failed: {solvefield_error}", AstrometryError.SolveFieldGenericError)
@@ -1046,10 +1051,12 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                 image_info.fov_ra, image_info.fov_dec = get_fov_quad(
                     image_info.wcs, image_info.naxis1, image_info.naxis2
                 )
-                self.logger.debug(f"Updated FOV polygon. RA: {image_info.fov_ra}, Dec: {image_info.fov_dec}")
+                self.logger.debug(
+                    f"Updated FOV polygon. {image_info.id}: RA: {image_info.fov_ra}, Dec: {image_info.fov_dec}"
+                )
             except Exception as e:
                 self.logger.error(
-                    f"Failed to update FOV polygon for {image_info.image_path}: {e}",
+                    f"Failed to update FOV polygon for {image_info.id} ({image_info.image_path}): {e}",
                     AstrometryError.UnknownError,
                     exc_info=True,
                 )
@@ -1072,6 +1079,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     cutout_size=30,
                     logger=self.logger,
                     overwrite=overwrite,
+                    id=image_info.id,
                 )
 
             except Exception as e:
@@ -1268,6 +1276,7 @@ class ImageInfo:
     image_path: str
     path: PathHandler
     logger: Logger
+    id: str
 
     # Header information
     dateobs: str  # Observation date/time
@@ -1354,7 +1363,7 @@ class ImageInfo:
         return getattr(self, key, default)
 
     @classmethod
-    def from_fits(cls, image_path: str, path: PathHandler = None, logger: Logger = None) -> ImageInfo:
+    def from_fits(cls, image_path: str, path: PathHandler = None, logger: Logger = None, id: str = None) -> ImageInfo:
         """
         Parses image information from a FITS header.
         path is used to create a new PathHandler with the same settings but different input.
@@ -1388,6 +1397,7 @@ class ImageInfo:
             image_path=image_path,
             path=path.replace(input=image_path),
             logger=logger,
+            id=id or "[1/?]",
             dateobs=hdr["DATE-OBS"],  # Time(hdr["DATE-OBS"], format="isot")
             naxis1=x,
             naxis2=y,
@@ -1400,7 +1410,7 @@ class ImageInfo:
             filter=hdr["FILTER"],
         )
 
-    @property
+    @cached_property
     def coarse_wcs(self):
         pa = 0
         return build_wcs(self.racent, self.decent, self.xcent, self.ycent, self.pixscale, pa, flip=True)
@@ -1599,7 +1609,9 @@ class ImageInfo:
 
         # self.logger.warning("Neither self.solved_head nor self.sip_wcs is found in ImageInfo. Using coarse_wcs")
         # return self.coarse_wcs
-        raise AstrometryError.InvalidWcsSolutionError("Neither self.solved_head nor self.sip_wcs found in ImageInfo")
+        raise AstrometryError.InvalidWcsSolutionError(
+            f"Neither self.solved_head nor self.sip_wcs found in ImageInfo: {os.path.basename(self.image_path)}"
+        )
 
     @property
     def seeing(self) -> float:
@@ -1631,7 +1643,8 @@ class ImageInfo:
     def bad(self) -> bool:
         """iteration condition"""
 
-        return self.rsep_stats.unmatched_fraction > 0.9 or self.rsep_stats.separation_stats.P95 > 2 * PIXSCALE
+        # return self.rsep_stats.unmatched_fraction > 0.9 or self.rsep_stats.separation_stats.P95 > 2 * PIXSCALE  # too tight
+        return self.rsep_stats.unmatched_fraction > 0.9 or self.rsep_stats.separation_stats.Q2 > 2 * PIXSCALE
 
     @property
     def invalid(self) -> bool:
