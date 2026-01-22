@@ -142,6 +142,7 @@ def evaluate_single_wcs(
     cutout_size=30,
     logger=None,
     overwrite=True,
+    id=None,
 ) -> EvaluationResult:
     """Ensure num_plot <= num_sci, num_ref"""
 
@@ -245,9 +246,9 @@ def evaluate_single_wcs(
         chatter(f"evaluate_single_wcs: failed to compute corner_stats: {e}")
         corner_stats = None
 
-    chatter(f"evaluate_single_wcs: rsep_stats {rsep_stats}")
-    chatter(f"evaluate_single_wcs: matched_ids {matched_ids}")
-    chatter(f"evaluate_single_wcs: corner_stats {corner_stats}")
+    chatter(f"{id} evaluate_single_wcs: rsep_stats {rsep_stats}")
+    chatter(f"{id} evaluate_single_wcs: matched_ids {matched_ids}")
+    chatter(f"{id} evaluate_single_wcs: corner_stats {corner_stats}")
 
     # overall image stats
     image_stats = ImageStats.from_matched_catalog(matched_cleaned)
