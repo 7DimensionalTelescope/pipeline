@@ -21,13 +21,18 @@ if __name__ == "__main__":
         description="Run data reduction for a given date",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("-date", type=str, required=True, help="Date to run data reduction for")
+    parser.add_argument("condition", type=str, help="Condition to run data reduction for")
 
     args = parser.parse_args()
 
+    if args.condition is None:
+        print("Error: Condition is required")
+        sys.exit(1)
+
+    args.condition = args.condition.split(",")
     try:
-        dr = DataReduction([args.date], use_db=True)
-        dr.run()
+        dr = DataReduction(args.condition, use_db=True)
+        dr.run(use_system_queue=True)
     except Exception as e:
         print(f"\nError: {e}")
         sys.exit(1)

@@ -137,7 +137,7 @@ def start_trigger_monitoring():
     # Create the monitor using the existing codebase
 
     sc = Scheduler(use_system_queue=True)
-    sc.rerun_failed_jobs()
+    # sc.rerun_failed_jobs()
     sc.update_process_status()
 
     monitor = Monitor(base_path=Path(RAWDATA_DIR))

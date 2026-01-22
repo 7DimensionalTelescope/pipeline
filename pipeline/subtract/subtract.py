@@ -172,11 +172,9 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             farthest_date_dt = datetime.strptime(farthest_date, "%Y%m%d")
 
             # Check farthest date and +/- 5 day
-            for i in range(5):
-                search_dates = [
-                    farthest_date_dt - timedelta(days=i),
-                    farthest_date_dt + timedelta(days=i),
-                ]
+            search_dates = []
+            for i in range(6):
+                search_dates.append(farthest_date_dt + timedelta(days=i - 3))
 
             # Search in both processed and too directories
             base_paths = ["/lyman/data2/processed", "/lyman/data2/too"]
@@ -186,26 +184,34 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
                 date_formatted = search_date.strftime("%Y-%m-%d")
                 for base_path in base_paths:
                     ref_pattern = f"{base_path}/{date_formatted}/{obs}/{filt}/coadd/*coadd.fits"
+
                     ref_images = glob(ref_pattern)
+
                     if ref_images:
-                        ref_image = ref_images[0]
-                        self.logger.info(f"Reference image found: {ref_image}")
-                        break
-                if ref_image:
-                    break
+                        self.reference_images = ref_images
+                        self.logger.info(f"Reference image found: {self.reference_images}")
+                        return
 
-            if not ref_image:
-
-                self.logger.warning(
-                    f"The reference images are likely to exist but they have not been processed yet. Check observation dates: {available_dates} for {obs}/{filt}",
-                    SubtractionError.ReferenceImageNotFoundError,
-                )
+            self.logger.warning(
+                f"The reference images are likely to exist but they have not been processed yet. Check observation dates: {available_dates} for {obs}/{filt}",
+                SubtractionError.ReferenceImageNotFoundError,
+            )
 
     def define_paths(self):
         # always consider a single coadd image as input, not a list of images
         local_input_images = get_key(self.config_node, "imsubtract.input_image")
         # set from the common input if not set locally
+        if local_input_images is not None:
+            self.input_images = [local_input_images]
+        else:
+            self.input_images = [self.config_node.input.coadd_image]
+
+        self.apply_sanity_filter_and_report()
+        input_image = collapse(self.input_images, raise_error=True)
+        self.config_node.imsubtract.input_image = input_image
+        self.logger.debug(f"ImSubtract inim: {input_image}")
         self.input_images = [local_input_images] or [self.config_node.input.coadd_image]
+        print(self.input_images)
         self.apply_sanity_filter_and_report()
         input_image = collapse(self.input_images, raise_error=True)
         self.config_node.imsubtract.input_image = input_image
