@@ -70,12 +70,10 @@ class Scheduler:
                 self.processing_preprocess = 0
 
     @classmethod
-    def from_list(cls, list_of_configs, base_priority=1, **kwargs):
+    def from_list(cls, list_of_configs, base_priority=1, use_system_queue=False, **kwargs):
         """Create a scheduler from a list of configs."""
         import re
         import copy
-
-        use_system_queue = kwargs.pop("use_system_queue", False)
 
         list_of_configs = np.atleast_1d(list_of_configs)
 

@@ -38,7 +38,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     try:
-        sc = Scheduler.from_list(args.configs, base_priority=args.priority)
+        sc = Scheduler.from_list(
+            args.configs,
+            base_priority=args.priority,
+            use_system_queue=True,
+        )
         sc.start_system_queue()
     except Exception as e:
         print(f"\nError: {e}")
