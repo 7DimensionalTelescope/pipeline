@@ -53,6 +53,7 @@ class DataReduction:
         preprocess_kwargs=None,
         is_too=False,
         use_system_queue=False,
+        input_type=None,
     ):
 
         overwrite_config = overwrite_config or overwrite
@@ -76,6 +77,7 @@ class DataReduction:
             overwrite_preprocess=overwrite_preprocess,
             overwrite_science=overwrite_science,
             preprocess_kwargs=preprocess_kwargs,
+            input_type=input_type,
         )
 
         sc = Scheduler(
