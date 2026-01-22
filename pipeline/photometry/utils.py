@@ -291,7 +291,7 @@ def get_sex_options(
     peeing: float,
     pixscale: float,
     satur_level: float = 65000.0,
-) -> list:
+) -> dict:
     """
     Generate SExtractor configuration arguments.
 
@@ -303,7 +303,7 @@ def get_sex_options(
         pixscale: Pixel scale in arcsec/pixel
 
     Returns:
-        List of SExtractor command line arguments
+        Dict of SExtractor options (key/value pairs)
     """
     aperture_dict = get_aperture_dict(peeing, pixscale)
 
@@ -312,34 +312,33 @@ def get_sex_options(
 
     PHOT_APERTURES = ",".join(map(str, aperlist))
 
-    sex_config = {}
-    sex_config["PHOT_APERTURES"] = PHOT_APERTURES
-    sex_config["SATUR_LEVEL"] = str(satur_level)
-    sex_config["GAIN"] = str(egain)
-    sex_config["PIXEL_SCALE"] = str(pixscale)
+    sex_options = {}
+    sex_options["-PHOT_APERTURES"] = PHOT_APERTURES
+    sex_options["-SATUR_LEVEL"] = str(satur_level)
+    sex_options["-GAIN"] = str(egain)
+    sex_options["-PIXEL_SCALE"] = str(pixscale)
     # sex_config["SEEING_FWHM"] = "2.0"  # only adds to confusion. defined in main.sex
 
     for key in phot_conf.sex_vars.keys():
         if phot_conf.sex_vars[key] is not None:
-            sex_config[key] = phot_conf.sex_vars[key]
+            key_name = key if key.startswith("-") else f"-{key}"
+            sex_options[key_name] = phot_conf.sex_vars[key]
 
     # 	Add Weight Map from SWarp
     weightim = image.replace("com", "weight")
     if "com" in image and os.path.exists(weightim):
-        sex_config["WEIGHT_TYPE"] = "MAP_WEIGHT"
-        sex_config["WEIGHT_IMAGE"] = weightim
+        sex_options["-WEIGHT_TYPE"] = "MAP_WEIGHT"
+        sex_options["-WEIGHT_IMAGE"] = weightim
 
     # 	Check Image
     head = image.replace(".fits", "")
     if phot_conf.check:
-        sex_config["CHECKIMAGE_TYPE"] = "SEGMENTATION,APERTURES,BACKGROUND,-BACKGROUND"
-        sex_config["CHECKIMAGE_NAME"] = f"{head}.seg.fits,{head}.aper.fits,{head}.bkg.fits,{head}.sub.fits"
+        sex_options["-CHECKIMAGE_TYPE"] = "SEGMENTATION,APERTURES,BACKGROUND,-BACKGROUND"
+        sex_options["-CHECKIMAGE_NAME"] = f"{head}.seg.fits,{head}.aper.fits,{head}.bkg.fits,{head}.sub.fits"
     else:
         pass
 
-    sex_args = [s for key, val in sex_config.items() for s in (f"-{key}", f"{val}")]
-
-    return sex_args
+    return sex_options
 
 
 def dicts_to_lists(dicts):

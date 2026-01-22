@@ -754,7 +754,7 @@ class PhotometrySingle:
         # If hot pixels are present, do not convolve the image
         if not self.image_info.bpx_interp:
             self.logger.debug("Hot pixels present. Skip SEx conv.")
-            sex_options.extend(["-FILTER", "N"])
+            sex_options["-FILTER"] = "N"
 
         # run sextractor with 'main' preset
         obs_src_table = self._run_sextractor(
