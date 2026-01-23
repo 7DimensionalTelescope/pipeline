@@ -184,7 +184,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
             for search_date in search_dates:
                 date_formatted = search_date.strftime("%Y-%m-%d")
 
-                if date_formatted == date.strftime("%Y-%m-%d"):
+                if date_formatted == datetime.strptime(date, "%Y%m%d").strftime("%Y-%m-%d"):
                     continue
 
                 for base_path in base_paths:

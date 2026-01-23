@@ -327,11 +327,14 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                 # working_dir explicitly given or pipeline_dirs not found in input_file
                 if (working_dir or not_pipeline_dir) and not is_pipeline:
                     output_parent_dir = working_dir or os.path.dirname(input_file)
+
                     # ad hoc for diffim input only
+                    # typ = self._get_name_property_at_index("type", i)
+                    # if typ[3] == "difference":
                     if os.path.basename(output_parent_dir) == DIFFIM_DIRNAME:
                         output_parent_dir = os.path.dirname(output_parent_dir)
-                    if output_parent_dir.endswith("singles"):
-                        output_parent_dir = str(Path(output_parent_dir).parent)
+                    # if output_parent_dir.endswith("singles"):
+                    #     output_parent_dir = str(Path(output_parent_dir).parent)
 
                     self._output_parent_dir.append(output_parent_dir)
                     self._factory_parent_dir.append(os.path.join(output_parent_dir, TMP_DIRNAME))
