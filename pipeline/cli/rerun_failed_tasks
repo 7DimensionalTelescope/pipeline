@@ -25,12 +25,12 @@ def main():
 
     try:
         scheduler = Scheduler(use_system_queue=True)
-        scheduler.rerun_failed_jobs()
-        print(f"Successfully rerun failed jobs")
+        scheduler.rerun_failed_tasks()
+        print(f"Successfully rerun failed tasks")
         sys.exit(0)
     except Exception as e:
-        print(f"ERROR: Failed to rerun failed jobs: {e}", file=sys.stderr)
-        sys.exit(1) 
+        print(f"ERROR: Failed to rerun failed tasks: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

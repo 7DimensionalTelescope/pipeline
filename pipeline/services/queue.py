@@ -301,9 +301,9 @@ class QueueManager:
             try:
                 self._check_abrupt_stop()
 
-                job = None
+                task = None
                 cmd = None
-                job_index = None
+                task_index = None
 
                 with self.lock:
                     current_usage = len(self._active_processes)
@@ -316,12 +316,12 @@ class QueueManager:
                     continue
                 else:
                     # Get next task and mark as Processing atomically within lock
-                    job, cmd = self.scheduler.get_next_task()
-                    self.logger.debug(f"Job: {job}")
+                    task, cmd = self.scheduler.get_next_task()
+                    self.logger.debug(f"Task: {task}")
                     self.logger.debug(f"Command: {cmd}")
 
-                    if job is not None and cmd is not None:
-                        job_index = job["index"]
+                    if task is not None and cmd is not None:
+                        task_index = task["index"]
                     else:
                         self._wake_event.wait(timeout=DEFAULT_SOCKET_LISTENER_TIMEOUT)
                         continue
@@ -334,8 +334,8 @@ class QueueManager:
                     config = cmd[cmd.index("-config") + 1] if "-config" in cmd else "unknown"
 
                     with self.lock:  # Thread-safe modification
-                        self._active_processes.append([config, proc, time.time(), job_index])
-                    self.scheduler.set_pid(job_index, proc.pid)
+                        self._active_processes.append([config, proc, time.time(), task_index])
+                    self.scheduler.set_pid(task_index, proc.pid)
 
                     self.logger.info(f"Process with {os.path.basename(config)} (PID = {proc.pid}) submitted.")
 
@@ -370,9 +370,9 @@ class QueueManager:
         while not self._stop_event.is_set():
             try:
                 with self.lock:  # Thread-safe access
-                    for process in list(self._active_processes):  # (config_path, proc, start_time, job_index)
+                    for process in list(self._active_processes):  # (config_path, proc, start_time, task_index)
                         config, proc, start_time = process[:3]
-                        job_index = process[3] if len(process) > 3 else None
+                        task_index = process[3] if len(process) > 3 else None
 
                         if proc.poll() is not None:  # Process finished
                             pid = proc.pid
@@ -401,13 +401,13 @@ class QueueManager:
                                 if stderr_str and stderr_str.strip():
                                     self.logger.error(f"Process {config} stderr: {stderr_str[:500]}...")
 
-                            # Mark job as done using index
+                            # Mark task as done using index
                             # Use try-finally to ensure process is removed even if mark_done fails
                             try:
-                                if job_index is not None and self.scheduler is not None:
-                                    self.scheduler.mark_done(job_index, success=success)
+                                if task_index is not None and self.scheduler is not None:
+                                    self.scheduler.mark_done(task_index, success=success)
                             except Exception as e:
-                                self.logger.error(f"Error marking job {job_index} as done: {e}", exc_info=True)
+                                self.logger.error(f"Error marking task {task_index} as done: {e}", exc_info=True)
                             finally:
                                 # Always remove process from active list, even if mark_done failed
                                 if process in self._active_processes:
@@ -586,7 +586,7 @@ def clear_completed_schedules():
     Clear completed schedules from the scheduler database.
 
     This function is designed to be called periodically (e.g., via systemd timer)
-    to clean up completed jobs from the database.
+    to clean up completed tasks from the database.
     """
     from .scheduler import Scheduler
     from .logger import Logger

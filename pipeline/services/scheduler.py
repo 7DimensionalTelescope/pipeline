@@ -7,6 +7,9 @@ from contextlib import contextmanager
 from datetime import datetime
 from astropy.table import Table, vstack
 
+
+
+
 from ..const import SCRIPTS_DIR, NUM_GPUS, SCHEDULER_DB_PATH, QUEUE_SOCKET_PATH
 
 
@@ -86,13 +89,13 @@ class Scheduler:
 
             basename = os.path.basename(config)
 
-            # Determine job_type based on the config name
+            # Determine task_type based on the config name
             discriminator = basename.split("_")[0]
             if bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", discriminator)):
-                job_type = "preprocess"
+                task_type = "preprocess"
                 priority = base_priority + 1
             else:
-                job_type = "science"
+                task_type = "science"
                 priority = base_priority
 
             # scheduler_kwargs = ["-overwrite"] if overwrite or overwrite_science else [] + ["-processes"] + processes
@@ -105,7 +108,7 @@ class Scheduler:
                 [
                     idx,
                     config,
-                    job_type,
+                    task_type,
                     "User-input",
                     True,
                     priority,
@@ -332,7 +335,7 @@ class Scheduler:
 
     def status(self, with_table=False):
         schedule = self.schedule
-        total_jobs = len(schedule)
+        total_tasks = len(schedule)
         in_ready = len(schedule[schedule["status"] == "Ready"])
         in_pending = len(schedule[schedule["status"] == "Pending"])
         in_processing = len(schedule[schedule["status"] == "Processing"])
@@ -341,7 +344,7 @@ class Scheduler:
         is_science = len(schedule[schedule["config_type"] == "science"])
         if with_table:
             schedule.pprint_all(max_lines=10)
-        return f"Scheduler with {total_jobs} (preprocess: {is_preprocess} and science: {is_science}) jobs: {in_ready} ready, {in_pending} pending, {in_processing} processing, and {in_completed} completed"
+        return f"Scheduler with {total_tasks} (preprocess: {is_preprocess} and science: {is_science}) tasks: {in_ready} ready, {in_pending} pending, {in_processing} processing, and {in_completed} completed"
 
     @property
     def schedule(self):
@@ -423,27 +426,27 @@ class Scheduler:
 
                 query += f" {self._ORDER_BY} LIMIT 1"
 
-                # Find next job
+                # Find next task
                 cursor.execute(query, tuple(params))
                 index_row = cursor.fetchone()
                 if not index_row:
                     conn.rollback()
                     return None, None
 
-                job_index = index_row[0]
+                task_index = index_row[0]
 
                 # Mark as Processing and set process_start
                 process_start = datetime.now().isoformat()
                 cursor.execute(
                     'UPDATE scheduler SET status = ?, process_start = ? WHERE "index" = ? AND status = ?',
-                    ("Processing", process_start, job_index, "Ready"),
+                    ("Processing", process_start, task_index, "Ready"),
                 )
                 if cursor.rowcount == 0:
                     conn.rollback()
                     return None, None
 
-                # Get full job data
-                cursor.execute('SELECT * FROM scheduler WHERE "index" = ?', (job_index,))
+                # Get full task data
+                cursor.execute('SELECT * FROM scheduler WHERE "index" = ?', (task_index,))
                 row = cursor.fetchone()
                 conn.commit()
             except Exception:
@@ -461,13 +464,13 @@ class Scheduler:
 
     def _get_next_task_memory(self):
         """Get next task from in-memory schedule."""
-        ready_jobs = self.schedule[(self.schedule["status"] == "Ready")]
-        if len(ready_jobs) == 0:
+        ready_tasks = self.schedule[(self.schedule["status"] == "Ready")]
+        if len(ready_tasks) == 0:
             return None, None
 
         # Enforce preprocess limit
         if self.processing_preprocess >= self.MAX_PREPROCESS:
-            ready_jobs = ready_jobs[ready_jobs["config_type"] != "preprocess"]
+            ready_tasks = ready_tasks[ready_tasks["config_type"] != "preprocess"]
 
         # Check for high priority processing
         high_priority_processing = (
@@ -481,7 +484,7 @@ class Scheduler:
         )
 
         if high_priority_processing:
-            ready_jobs = ready_jobs[ready_jobs["priority"] > self.HIGH_PRIORITY_THRESHOLD]
+            ready_tasks = ready_tasks[ready_tasks["priority"] > self.HIGH_PRIORITY_THRESHOLD]
         else:
             # Check for TOO processing
             too_processing = (
@@ -494,17 +497,17 @@ class Scheduler:
                 > 0
             )
             if too_processing:
-                ready_jobs = ready_jobs[np.char.lower(ready_jobs["input_type"].astype(str)) == "too"]
+                ready_tasks = ready_tasks[np.char.lower(ready_tasks["input_type"].astype(str)) == "too"]
 
-        if len(ready_jobs) == 0:
+        if len(ready_tasks) == 0:
             return None, None
 
-        # Get first job (already sorted by _ORDER_BY in schedule property)
-        row_dict = {col: ready_jobs[col][0] for col in ready_jobs.colnames}
-        job_index = row_dict["index"]
+        # Get first task (already sorted by _ORDER_BY in schedule property)
+        row_dict = {col: ready_tasks[col][0] for col in ready_tasks.colnames}
+        task_index = row_dict["index"]
 
         # Mark as Processing and set process_start
-        mask = self._schedule["index"] == job_index
+        mask = self._schedule["index"] == task_index
 
         self._schedule["status"][mask] = "Processing"
         self._schedule["process_start"][mask] = datetime.now().isoformat()
@@ -517,7 +520,7 @@ class Scheduler:
         if row_dict["priority"] == 0 and ["-overwrite"] not in scheduler_kwargs:
             scheduler_kwargs.append("-overwrite")
 
-        return row_dict, self._generate_command(job_index, scheduler_kwargs)
+        return row_dict, self._generate_command(task_index, scheduler_kwargs)
 
     def mark_done(self, index, success=True):
         if self.use_system_queue:
@@ -528,7 +531,7 @@ class Scheduler:
     def _mark_done_db(self, index, success=True):
         with self._db_connection() as conn:
             cursor = conn.cursor()
-            # Check if job is already marked as done to prevent duplicate processing
+            # Check if task is already marked as done to prevent duplicate processing
             cursor.execute('SELECT status, dependent_idx, config_type FROM scheduler WHERE "index" = ?', (index,))
             row = cursor.fetchone()
             if not row:
@@ -578,8 +581,8 @@ class Scheduler:
 
             conn.commit()
 
-    def _mark_done_memory(self, job_index, success=True):
-        mask = self._schedule["index"] == job_index
+    def _mark_done_memory(self, task_index, success=True):
+        mask = self._schedule["index"] == task_index
         if len(self._schedule[mask]) == 0:
             return
 
@@ -591,7 +594,7 @@ class Scheduler:
             return
 
         if success:
-            # Get job info
+            # Get task info
             config_type = row_dict["config_type"]
             dependent_indices = row_dict["dependent_idx"]
 
@@ -621,7 +624,7 @@ class Scheduler:
             self._schedule["is_ready"][mask] = False
             self._schedule["process_end"][mask] = datetime.now().isoformat()
 
-    def list_of_ready_jobs(self):
+    def list_of_ready_tasks(self):
         if self.use_system_queue:
             with self._db_connection() as conn:
                 cursor = conn.cursor()
@@ -646,12 +649,12 @@ class Scheduler:
                 return cursor.fetchone()[0] == 0
         return len(self.schedule[self.schedule["status"] != "Completed"]) == 0
 
-    def rerun_failed_jobs(self):
+    def rerun_failed_tasks(self):
         """
-        Rerun all failed jobs by changing their status to Ready with priority 1 and readiness 100.
+        Rerun all failed tasks by changing their status to Ready with priority 1 and readiness 100.
 
         Returns:
-            int: Number of jobs that were updated
+            int: Number of tasks that were updated
         """
         if self.use_system_queue:
             with self._db_connection() as conn:
@@ -687,7 +690,7 @@ class Scheduler:
         if self.use_system_queue:
             with self._db_connection() as conn:
                 cursor = conn.cursor()
-                # Get completed jobs to save before deleting
+                # Get completed tasks to save before deleting
                 if all:
                     cursor.execute("SELECT * FROM scheduler")
                 else:
@@ -695,12 +698,12 @@ class Scheduler:
 
                 completed_rows = cursor.fetchall()
 
-                # Save completed jobs to file if any exist
+                # Save completed tasks to file if any exist
                 if completed_rows:
                     completed_table = self._rows_to_table(completed_rows)
                     self._save_completed_to_file(completed_table)
 
-                # Get PIDs of jobs to be cleared before deleting
+                # Get PIDs of tasks to be cleared before deleting
                 if all:
                     cursor.execute("SELECT pid FROM scheduler WHERE pid IS NOT NULL")
                 else:
@@ -736,7 +739,7 @@ class Scheduler:
             else:
                 schedule_to_clear = self._schedule[self._schedule["status"] == "Completed"]
 
-            # Save completed jobs to file if any exist
+            # Save completed tasks to file if any exist
             if len(schedule_to_clear) > 0:
                 if all:
                     self._save_completed_to_file(self._schedule)
@@ -759,7 +762,7 @@ class Scheduler:
             self._schedule = self._empty_schedule if all else self._schedule[self._schedule["status"] != "Completed"]
 
     def _save_completed_to_file(self, table):
-        """Save completed jobs table to /var/db/{date}.npy as astropy Table.
+        """Save completed tasks table to /var/db/{date}.npy as astropy Table.
         If file exists, combine/append with existing data."""
         try:
             db_dir = os.path.dirname(SCHEDULER_DB_PATH)
@@ -794,7 +797,7 @@ class Scheduler:
 
             np.save(file_path, combined_table)
         except Exception as e:
-            print(f"Warning: Failed to save completed jobs to file: {e}")
+            print(f"Warning: Failed to save completed tasks to file: {e}")
             np.save(file_path.replace(".npy", "_error.npy"), table, allow_pickle=True)
 
     def _generate_command(self, index, scheduler_kwargs, **kwargs):
@@ -805,13 +808,13 @@ class Scheduler:
                 cursor.execute('SELECT config, config_type, input_type FROM scheduler WHERE "index" = ?', (index,))
                 row = cursor.fetchone()
                 if not row:
-                    raise ValueError(f"Job with index {index} not found")
+                    raise ValueError(f"Task with index {index} not found")
                 config, config_type, input_type = row
         else:
-            # Find job by index in schedule
+            # Find task by index in schedule
             mask = self._schedule["index"] == index
             if len(self._schedule[mask]) == 0:
-                raise ValueError(f"Job with index {index} not found")
+                raise ValueError(f"Task with index {index} not found")
             config = self._schedule["config"][mask][0]
             config_type = self._schedule["config_type"][mask][0]
             input_type = self._schedule["input_type"][mask][0]
@@ -991,21 +994,21 @@ class Scheduler:
         reverted_count = 0
         with self._db_connection() as conn:
             cursor = conn.cursor()
-            # Get all jobs with PIDs that are in Processing status
+            # Get all tasks with PIDs that are in Processing status
             cursor.execute(
                 'SELECT "index", pid, config_type FROM scheduler WHERE status = ? AND pid IS NOT NULL',
                 ("Processing",),
             )
-            processing_jobs = cursor.fetchall()
+            processing_tasks = cursor.fetchall()
 
-            for job_index, pid, config_type in processing_jobs:
+            for task_index, pid, config_type in processing_tasks:
 
                 # Check if process is still alive
                 if not self._is_process_alive(pid):
                     # Process is dead, revert to Ready state
                     cursor.execute(
                         'UPDATE scheduler SET status = ?, pid = 0, process_start = ? WHERE "index" = ?',
-                        ("Ready", "", job_index),
+                        ("Ready", "", task_index),
                     )
                     reverted_count += 1
 
@@ -1015,21 +1018,21 @@ class Scheduler:
     def _update_process_status_memory(self):
         """Check and revert killed processes for in-memory mode."""
         reverted_count = 0
-        # Get all jobs with PIDs that are in Processing status
+        # Get all tasks with PIDs that are in Processing status
         processing_mask = (self._schedule["status"] == "Processing") & (
             (self._schedule["pid"] != 0) & (self._schedule["pid"] != None)
         )
-        processing_jobs = self._schedule[processing_mask]
+        processing_tasks = self._schedule[processing_mask]
 
-        for job in processing_jobs:
-            pid = job["pid"]
-            job_index = job["index"]
-            config_type = job["config_type"]
+        for task in processing_tasks:
+            pid = task["pid"]
+            task_index = task["index"]
+            config_type = task["config_type"]
 
             # Check if process is still alive
             if not self._is_process_alive(pid):
                 # Process is dead, revert to Ready state
-                mask = self._schedule["index"] == job_index
+                mask = self._schedule["index"] == task_index
                 self._schedule["status"][mask] = "Ready"
                 self._schedule["pid"][mask] = 0
                 self._schedule["process_start"][mask] = ""
@@ -1060,3 +1063,86 @@ class Scheduler:
         except (ValueError, TypeError):
             # Invalid PID
             return False
+    
+    def rerun_task(self, index:int):
+        if self.use_system_queue:
+            return self._rerun_task_from_db(index)
+        else:
+            return self._rerun_task_from_memory(index)
+
+    def _rerun_task_from_db(self, index:int):
+        """Rerun a task in database mode."""
+        with self._db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE scheduler SET status = 'Ready' WHERE 'index' = ?", (index,))
+            conn.commit()
+            return True
+
+    def _rerun_task_from_memory(self, index:int):
+        """Rerun a task in in-memory mode."""
+        mask = self._schedule["index"] == index
+        self._schedule["status"][mask] = "Ready"
+        return True
+
+    def remove_task(self, index:int):
+        """Remove a task from the schedule."""
+        if self.use_system_queue:
+            return self._remove_task_from_db(index)
+        else:
+            return self._remove_from_memory(index)
+
+    def _remove_task_from_db(self, index:int):
+        """Remove a task from the schedule in database mode."""
+        with self._db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM scheduler WHERE 'index' = ?", (index,))
+            conn.commit()
+            return True
+
+    def _remove_task_from_memory(self, index:int):
+        """Remove a task from the schedule in in-memory mode."""
+        mask = self._schedule["index"] == index
+        self._schedule = self._schedule[~mask]
+        return True
+
+    def stash_task(self, index:int):
+        """Stash the schedule."""
+        if self.use_system_queue:
+            return self._stash_task_from_db(index)
+        else:
+            return self._stash_task_from_memory(index)
+
+    def _stash_task_from_db(self, index:int):
+        """Stash the schedule in database mode."""
+        with self._db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE scheduler SET status = 'Stashed' WHERE 'index' = ?", (index,))
+            conn.commit()
+            return True
+
+    def _stash_task_from_memory(self, index:int):
+        """Stash the schedule in in-memory mode."""
+        mask = self._schedule["index"] == index
+        self._schedule["status"][mask] = "Stashed"
+        return True
+
+    def recover_stashed_task(self, index:int):
+        """Recover a stashed task from the schedule."""
+        if self.use_system_queue:
+            return self._recover_stashed_task_from_db(index)
+        else:
+            return self._recover_stashed_task_from_memory(index)
+
+    def _recover_stashed_task_from_db(self, index:int):
+        """Recover a stashed task from the schedule in database mode."""
+        with self._db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE scheduler SET status = 'Ready' WHERE 'index' = ?", (index,))
+            conn.commit()
+            return True
+
+    def _recover_stashed_task_from_memory(self, index:int):
+        """Recover a stashed task from the schedule in in-memory mode."""
+        mask = self._schedule["index"] == index
+        self._schedule["status"][mask] = "Ready"
+        return True

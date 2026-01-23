@@ -22,7 +22,7 @@ from ..services.memory import MemoryMonitor
 from ..services.queue import QueueManager
 from ..services.database.handler import DatabaseHandler
 from ..services.database.image_qa import ImageQATable
-from ..services.checker import Checker, SanityFilterMixin
+from ..services.checker import Checker
 
 from ..config.utils import get_key
 from ..utils import time_diff_in_seconds, force_symlink, collapse
@@ -58,7 +58,7 @@ from . import utils as phot_utils
 from .plotting import plot_zp, plot_filter_check
 
 
-class Photometry(BaseSetup, DatabaseHandler, Checker, SanityFilterMixin):
+class Photometry(BaseSetup, DatabaseHandler, Checker):
     """
     A class to perform photometric analysis on astronomical images.
 

@@ -93,6 +93,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
     #     )
 
     def replace(self, input=None, **setting_overrides) -> PathHandler:
+        """A method to create a new PathHandler instance with the same settings but different input files."""
         s = dc_replaces(self.settings, **setting_overrides) if setting_overrides else self.settings
         return type(self)(
             input=self._input_files if input is None else input,

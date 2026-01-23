@@ -1,55 +1,39 @@
 import json
 import os
 from astropy.io import fits
-from typing import List
-from functools import reduce
+from typing import List, Literal
 from .. import const
-from ..path.path import PathHandler
-from ..config.utils import get_key
 
 
 class Checker:
     """
-    This class generates and reads the hard-coded "SANITY" key in image headers.
+    Mixin class that generates, reads, and filters on the "SANITY" key in image headers.
     """
 
     dtype = None
 
-    def __init__(self, dtype=None):
-        self.dtype = dtype
-        self.criteria = None
-        self.loaded_dtype = None
-        self.load_criteria()
-
-    def _determine_dtype(self, dtype=None, file_path=None):
+    def _sanitize_dtype(
+        self, dtype: Literal["bias", "dark", "flat", "masterframe", "science"] = None
+    ) -> Literal["BIAS", "DARK", "FLAT", "MASTERFRAME", "SCIENCE"]:
         """
-        Determine the dtype from the provided dtype, self.dtype, or infer from file_path.
+        Determine the dtype from the provided dtype or self.dtype.
         Returns the specific dtype string (BIAS, DARK, FLAT, SCIENCE).
         """
-        if dtype is not None:
-            return dtype.upper()
-        if self.dtype is not None:
-            return self.dtype.upper()
-        if file_path:
-            file_path_lower = file_path.lower()
-            if "bias" in file_path_lower:
-                return "bias"
-            elif "dark" in file_path_lower:
-                return "dark"
-            elif "flat" in file_path_lower:
-                return "flat"
-        return "science"
 
-    def _normalize_dtype(self, dtype):
+        resolved = dtype if dtype is not None else self.dtype
+        return resolved.upper() if resolved is not None else "science"
+
+    def _normalize_dtype(
+        self, dtype: Literal["BIAS", "DARK", "FLAT", "MASTERFRAME", "SCIENCE"] = None
+    ) -> Literal["masterframe", "science"]:
         """Normalize dtype to either 'masterframe' or 'science'."""
+
+        masterframe_types = {"BIAS", "DARK", "FLAT", "MASTERFRAME"}
         if dtype is None:
             return "masterframe"
-        if dtype.lower() in ["bias", "dark", "flat", "masterframe"]:
-            return "masterframe"
-        else:
-            return "science"
+        return "masterframe" if dtype.upper() in masterframe_types else "science"
 
-    def load_criteria(self, dtype="masterframe"):
+    def load_criteria(self, dtype: Literal["masterframe", "science"] = "masterframe"):
         try:
             normalized_dtype = self._normalize_dtype(dtype)
             criteria_file = os.path.join(const.REF_DIR, "qa", f"{normalized_dtype.lower()}.json")
@@ -64,28 +48,29 @@ class Checker:
         except Exception as e:
             raise RuntimeError(f"Failed to load criteria: {e}")
 
-    def apply_criteria(self, file_path: str = None, header: fits.Header = None, dtype: str = None):
+    def apply_criteria(
+        self,
+        header: fits.Header,
+        dtype: Literal["bias", "dark", "flat", "masterframe", "science"] = None,
+    ) -> tuple[bool, fits.Header]:
         """
         Generate a sanity flag based on the criteria. Returns the flag and the updated header.
         Tolerates missing header keys if dtype is "science"
 
         `dtype` in Preprocess can be directly passed on to this method.
         """
-        dtype = self._determine_dtype(dtype=dtype, file_path=file_path)
+        dtype = self._sanitize_dtype(dtype=dtype)
         normalized_dtype = self._normalize_dtype(dtype)
 
         if not hasattr(self, "criteria") or self.criteria is None or self.loaded_dtype != normalized_dtype:
-            self.load_criteria(dtype=dtype)
+            self.load_criteria(dtype=normalized_dtype)
 
         criteria = self.criteria[dtype.upper()]
 
         flag = True
 
         if header is None:
-            if file_path is not None:
-                header = fits.getheader(file_path)
-            else:
-                raise ValueError("Either file_path or header must be provided")
+            raise ValueError("Header must be provided")
 
         for key, value in criteria.items():
             if key not in header and dtype.upper() == "SCIENCE":
@@ -140,7 +125,8 @@ class Checker:
                     return sanity
             except:
                 pass
-            flag, _ = self.apply_criteria(file_path=file_path, dtype=dtype)
+            header = fits.getheader(file_path)
+            flag, _ = self.apply_criteria(header=header, dtype=dtype)
             return flag
 
         elif header is not None:
@@ -149,36 +135,6 @@ class Checker:
 
         else:
             raise ValueError("Either file_path or header must be provided")
-
-
-class SanityFilterMixin:
-    """
-    Mixin class that provides SANITY-based input filtering functionality.
-
-    Resets self.path with filtered images, unlike self.config.path, which
-    preserves the pristine input images.
-
-    Reused by Photometry, ImCoadd, and ImSubtract.
-    Astrometry always ingest all input images regardless of SANITY check.
-
-    Public API:
-        apply_sanity_filter(config_key, update_calibrated=False, dtype="science")
-            Main method to filter input images.
-
-    Usage:
-        class Photometry(BaseSetup, Checker, SanityFilterMixin):
-            def __init__(self, ...):
-                super().__init__(config, logger, queue)
-                # ... set self.input_images ...
-                self.apply_sanity_filter(dtype="science")
-
-    Requires:
-    - self.sanity_check() method (from Checker)
-    - self.logger attribute
-    - self.config.node attribute (ConfigNode)
-    - self.path attribute (PathHandler)
-    - self.input_images attribute (list of image paths)
-    """
 
     def _filter_by_sanity(self, images: List[str], dtype: str = "science") -> List[str]:
         """
@@ -260,5 +216,8 @@ class SanityFilterMixin:
 
         PathHandler will infer working_dir from input files if None.
         """
-        is_too = get_key(self.config.node, "settings.is_too", default=False)  # Get is_too from config settings
-        self.path = PathHandler(self.input_images, working_dir=None, is_too=is_too)
+        self.path = self.path.replace(input=self.input_images)
+
+        # config_node = self.config_node if hasattr(self, "config_node") else self.config.node
+        # is_too = get_key(config_node, "settings.is_too", default=False)  # Get is_too from config settings
+        # self.path = PathHandler(self.input_images, working_dir=None, is_too=is_too)
