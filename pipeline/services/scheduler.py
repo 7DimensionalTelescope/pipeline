@@ -8,8 +8,6 @@ from datetime import datetime
 from astropy.table import Table, vstack
 
 
-
-
 from ..const import SCRIPTS_DIR, NUM_GPUS, SCHEDULER_DB_PATH, QUEUE_SOCKET_PATH
 
 
@@ -1063,85 +1061,85 @@ class Scheduler:
         except (ValueError, TypeError):
             # Invalid PID
             return False
-    
-    def rerun_task(self, index:int):
+
+    def rerun_task(self, index: int):
         if self.use_system_queue:
             return self._rerun_task_from_db(index)
         else:
             return self._rerun_task_from_memory(index)
 
-    def _rerun_task_from_db(self, index:int):
+    def _rerun_task_from_db(self, index: int):
         """Rerun a task in database mode."""
         with self._db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE scheduler SET status = 'Ready' WHERE 'index' = ?", (index,))
+            cursor.execute("UPDATE scheduler SET status = 'Ready' WHERE \"index\" = ?", (index,))
             conn.commit()
             return True
 
-    def _rerun_task_from_memory(self, index:int):
+    def _rerun_task_from_memory(self, index: int):
         """Rerun a task in in-memory mode."""
         mask = self._schedule["index"] == index
         self._schedule["status"][mask] = "Ready"
         return True
 
-    def remove_task(self, index:int):
+    def remove_task(self, index: int):
         """Remove a task from the schedule."""
         if self.use_system_queue:
             return self._remove_task_from_db(index)
         else:
             return self._remove_from_memory(index)
 
-    def _remove_task_from_db(self, index:int):
+    def _remove_task_from_db(self, index: int):
         """Remove a task from the schedule in database mode."""
         with self._db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM scheduler WHERE 'index' = ?", (index,))
+            cursor.execute('DELETE FROM scheduler WHERE "index" = ?', (index,))
             conn.commit()
             return True
 
-    def _remove_task_from_memory(self, index:int):
+    def _remove_task_from_memory(self, index: int):
         """Remove a task from the schedule in in-memory mode."""
         mask = self._schedule["index"] == index
         self._schedule = self._schedule[~mask]
         return True
 
-    def stash_task(self, index:int):
+    def stash_task(self, index: int):
         """Stash the schedule."""
         if self.use_system_queue:
             return self._stash_task_from_db(index)
         else:
             return self._stash_task_from_memory(index)
 
-    def _stash_task_from_db(self, index:int):
+    def _stash_task_from_db(self, index: int):
         """Stash the schedule in database mode."""
         with self._db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE scheduler SET status = 'Stashed' WHERE 'index' = ?", (index,))
+            cursor.execute("UPDATE scheduler SET status = 'Stashed' WHERE \"index\" = ?", (index,))
             conn.commit()
             return True
 
-    def _stash_task_from_memory(self, index:int):
+    def _stash_task_from_memory(self, index: int):
         """Stash the schedule in in-memory mode."""
         mask = self._schedule["index"] == index
         self._schedule["status"][mask] = "Stashed"
         return True
 
-    def recover_stashed_task(self, index:int):
+    def recover_stashed_task(self, index: int):
         """Recover a stashed task from the schedule."""
         if self.use_system_queue:
             return self._recover_stashed_task_from_db(index)
         else:
             return self._recover_stashed_task_from_memory(index)
 
-    def _recover_stashed_task_from_db(self, index:int):
+    def _recover_stashed_task_from_db(self, index: int):
         """Recover a stashed task from the schedule in database mode."""
         with self._db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE scheduler SET status = 'Ready' WHERE 'index' = ?", (index,))
+            cursor.execute("UPDATE scheduler SET status = 'Ready' WHERE \"index\" = ?", (index,))
             conn.commit()
             return True
 
-    def _recover_stashed_task_from_memory(self, index:int):
+    def _recover_stashed_task_from_memory(self, index: int):
         """Recover a stashed task from the schedule in in-memory mode."""
         mask = self._schedule["index"] == index
         self._schedule["status"][mask] = "Ready"
