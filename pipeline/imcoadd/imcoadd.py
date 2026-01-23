@@ -9,7 +9,7 @@ from astropy.table import Table
 from astropy.coordinates import Angle
 
 from ..const import REF_DIR
-from ..errors import PipelineError, CoaddError
+from ..errors import CoaddError
 from ..config import SciProcConfiguration
 from ..path.path import PathHandler
 from ..services.setup import BaseSetup
@@ -177,7 +177,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker):
         self.apply_sanity_filter_and_report()
         self.config_node.imcoadd.input_images = self.input_images
         if not self.input_images:
-            raise PipelineError("No Input for ImCoadd")
+            self.logger.error("No Input for ImCoadd", CoaddError.EmptyInput)
+            raise CoaddError.EmptyInput("No Input for ImCoadd")
 
         self.zpkey = self.config_node.imcoadd.zp_key or ZP_KEY
         # self.ic_keys = IC_KEYS

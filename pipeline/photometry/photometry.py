@@ -218,9 +218,9 @@ class Photometry(BaseSetup, DatabaseHandler, Checker):
 
         if not self.input_images:  # exception for when input.difference_image is not set.
             self.logger.debug(f"input_images: {self.input_images}")
-            self.logger.info(f"No input images found. Skipping {self._photometry_mode}.")
-
             if self._photometry_mode == "difference_photometry":
+                self.logger.info(f"No input images found. Skipping {self._photometry_mode}.")
+
                 self.update_progress(100, f"{self._photometry_mode}-completed")
                 if self.is_too and self.too_id is not None:
                     sed_data = make_too_output(self.too_id, image_type="coadd")
@@ -234,6 +234,10 @@ class Photometry(BaseSetup, DatabaseHandler, Checker):
                     self.too_db.mark_completed(self.too_id)
                 return
             else:
+                self.logger.error(
+                    f"No input images found in {self._photometry_mode}.",
+                    SinglePhotometryError.EmptyInput,
+                )
                 raise SinglePhotometryError.EmptyInputError(f"No input images found in {self._photometry_mode}.")
         try:
             if self.queue:

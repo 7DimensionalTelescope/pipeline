@@ -355,6 +355,12 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         #     # rerun to redefine shrunk paths
         #     self.define_paths()
 
+        # reject if all images are rejected by early QA
+        if not any(image_info.SANITY for image_info in self.images_info):
+            self.logger.error("All images rejected by early QA.", AstrometryError.EarlyQARejectionError)
+            self.update_progress(5, "rejected-all-by-early-qa")
+            raise AstrometryError.EarlyQARejectionError("All images rejected by early QA.")
+
     def _solve_field_suite(
         self,
         i: int,

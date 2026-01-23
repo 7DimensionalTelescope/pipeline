@@ -20,6 +20,8 @@ class SameNightMasterFrameNotFoundError(Exception):
 
 # astrometry errors
 class EarlyQARejectionError(Exception):
+    """All images rejected by early QA"""
+
     pass
 
 
