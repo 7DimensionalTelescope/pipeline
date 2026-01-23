@@ -51,6 +51,7 @@ class DataReduction:
         processes=["astrometry", "photometry", "coadd", "subtract"],
         queue=None,
         preprocess_kwargs=None,
+        dry_run=False,
         is_too=False,
         use_system_queue=False,
         input_type=None,
@@ -60,6 +61,12 @@ class DataReduction:
         overwrite_data = overwrite_data or overwrite
 
         is_too = is_too or self.is_too
+
+        if dry_run:
+            if preprocess_kwargs is None:
+                preprocess_kwargs = {"dry_run": True}
+            elif isinstance(preprocess_kwargs, dict):
+                preprocess_kwargs.update({"dry_run": True})
 
         if not self._created_config:
             self.create_config(

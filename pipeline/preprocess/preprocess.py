@@ -157,10 +157,18 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                         break
             self.logger.debug(f"[Group {i+1}] {groupname}")
 
-    def run(self, device_id=None, make_plots=True, use_gpu=True, override_skip_plotting_flags=None):
+    def run(
+        self,
+        device_id=None,
+        make_plots=True,
+        use_gpu=True,
+        override_skip_plotting_flags=None,
+        dry_run: bool = False,
+    ):
         """
         override_skip_plotting_flags is for finer control over which plots to generate.
         e.g., override_skip_plotting_flags={"bias": True, "dark": True, "flat": True, "sci": False} to regenerate sci plots
+        dry_run traces execution without modifying data on disk (reads are allowed).
         """
 
         try:
@@ -169,28 +177,32 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             st = time.time()
 
             # Reset errors and warnings at the start of processing
-            if self.is_connected:
+            if self.is_connected and not dry_run:
                 self.reset_exceptions()
 
             # Update pipeline status to running
-            self.update_progress(0, "running")
+            if not dry_run:
+                self.update_progress(0, "running")
+            else:
+                self.logger.info("Pipeline run started; no files will be created or modified (DRY RUN)")
 
             threads_for_making_plots = []
             for i in range(self._n_groups):
                 # Calculate progress percentage
-                progress = int((i / self._n_groups) * 100)
-                self.update_progress(progress)
+                if not dry_run:
+                    progress = int((i / self._n_groups) * 100)
+                    self.update_progress(progress)
 
                 self.logger.debug("\n" + "#" * 100 + f"\n{' '*30}Start processing group {i+1} / {self._n_groups}\n" + "#" * 100)  # fmt: skip
                 self.logger.debug(f"[Group {i+1}] [filter: exptime] {PathHandler.get_group_info(self.raw_groups[i])}")
 
                 # ---- group-level work ----
                 try:
-                    self.load_masterframe(device_id=device_id)
+                    self.load_masterframe(device_id=device_id, dry_run=dry_run)
 
                     if not self.master_frame_only:
-                        self.prepare_header()
-                        self.data_reduction(device_id=device_id)
+                        self.prepare_header(dry_run=dry_run)
+                        self.data_reduction(device_id=device_id, dry_run=dry_run)
 
                     flags_for_this_group = copy.deepcopy(self.skip_plotting_flags)
 
@@ -201,6 +213,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                                 "group_index": i,
                                 "skip_flags": flags_for_this_group,
                                 "override_skip_flags": override_skip_plotting_flags,
+                                "dry_run": dry_run,
                             },
                         )
                         t.start()
@@ -225,7 +238,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                     t.join()
 
             # Update pipeline status to completed
-            self.update_progress(100, "completed")
+            if not dry_run:
+                self.update_progress(100, "completed")
 
             self.logger.info(f"Preprocessing completed in {time_diff_in_seconds(st)} seconds")
         except Exception as e:
@@ -309,7 +323,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         self.logger.debug(f"FLAT DARK SCALING (FLAT / DARK): {flat_exptime} / {dark_exptime}")
         return flat_exptime / dark_exptime
 
-    def load_masterframe(self, device_id=None, use_gpu: bool = True):
+    def load_masterframe(self, device_id=None, use_gpu: bool = True, dry_run: bool = False):
         """
         no raw calib -> fetch from the library of pre-generated master frames
         raw calibs exist
@@ -339,12 +353,12 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 and (not os.path.exists(output_file) or self.overwrite)
                 and (output_file not in self._generated_masterframes)
             ):
-                norminal = self._generate_masterframe(dtype, device_id)
+                norminal = self._generate_masterframe(dtype, device_id, dry_run=dry_run)
                 if not norminal:
                     self._fetch_masterframe(output_file, dtype)
                 self._generated_masterframes.append(output_file)
             elif isinstance(output_file, str) and len(output_file) != 0:
-                self._fetch_masterframe(output_file, dtype)
+                self._fetch_masterframe(output_file, dtype, dry_run=dry_run)
                 self.skip_plotting_flags[dtype] = True
             else:
                 self.logger.warning(
@@ -354,7 +368,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_input: {input_file}")
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_output: {output_file}")
 
-            if input_file:
+            if input_file and not dry_run:
 
                 qa_id = self.create_image_qa_data(
                     getattr(self, f"{dtype}_output"),
@@ -366,14 +380,23 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         self.logger.info(f"[Group {self._current_group+1}] Generation/Loading of masterframes completed in {time_diff_in_seconds(st)} seconds")  # fmt: skip
 
         # Update pipeline progress after masterframe processing
-        if self.has_process_status_id:
+        if self.has_process_status_id and not dry_run:
             masterframe_progress = int(
                 (self._current_group + 1) / self._n_groups * 50
             )  # Masterframes are 50% of total work
             self.update_progress(masterframe_progress)
 
-    def _generate_masterframe(self, dtype, device_id):
+    def _generate_masterframe(self, dtype, device_id, dry_run: bool = False):
         """Generate & Save masterframe and sigma image"""
+
+        if dry_run:
+            outputs = [getattr(self, f"{dtype}_output"), getattr(self, f"{dtype}sig_output")]
+            if dtype == "dark":
+                outputs.append(self.bpmask_output)
+            self.logger.info(f"[Group {self._current_group+1}] Would create master {dtype} files: {outputs} (DRY RUN)")
+            if dtype == "dark":
+                self.logger.info(f"[Group {self._current_group+1}] Flatdark will use current dark output (DRY RUN)")
+            return True
 
         st = time.time()
 
@@ -462,7 +485,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
         return flag
 
-    def _fetch_masterframe(self, template, dtype):
+    def _fetch_masterframe(self, template, dtype, dry_run: bool = False):
         """
         You get the Fetch log even though you only want to regenerate the plots.
         It's only finding the files in disk, not loading it. The performance
@@ -517,7 +540,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                     f"No pre-existing master flatdark found in place of {flatdark_template} within {max_offset} days"
                 )
 
-    def data_reduction(self, device_id=None, use_gpu: bool = True):
+    def data_reduction(self, device_id=None, use_gpu: bool = True, dry_run: bool = False):
         self._use_gpu = all([use_gpu, self._use_gpu])
 
         if not self.sci_input:
@@ -545,6 +568,13 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 if not os.path.exists(outfile):
                     input_files.append(infile)
                     output_files.append(outfile)
+
+        if dry_run:
+            self.logger.info(
+                f"[Group {self._current_group+1}] Would process {len(output_files)} science images (DRY RUN)"
+            )
+            self.logger.info(f"[Group {self._current_group+1}] Would create processed files: {output_files} (DRY RUN)")
+            return
 
         st = time.time()
         device_id = device_id if self._use_gpu else "CPU"
@@ -602,7 +632,13 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
         #     prep_utils.update_header_by_overwriting(processed_file, header)
 
-    def prepare_header(self):
+    def prepare_header(self, dry_run: bool = False):
+        if dry_run:
+            self.logger.info(
+                f"[Group {self._current_group+1}] Would write updated headers to processed files: {self.sci_output} (DRY RUN)"
+            )
+            return
+
         bias, dark, flat = self.bias_output, self.dark_output, self.flat_output
         n_head_blocks = self.config_node.preprocess.n_head_blocks
         for raw_file, processed_file in zip(self.sci_input, self.sci_output):
@@ -618,28 +654,29 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             )
             prep_utils.write_header(processed_file, header)
 
-    def make_masterframe_plots(self, file_path: str, dtype: str, group_index: int):
+    def make_masterframe_plots(self, file_path: str, dtype: str, group_index: int, dry_run: bool = False):
         if dtype == "bias":
-            plot_bias(file_path)
+            plot_bias(file_path, dry_run=dry_run)
         elif dtype == "dark":
             bpmask_file = file_path.replace("dark", "bpmask")
-            plot_bpmask(bpmask_file)
+            plot_bpmask(bpmask_file, dry_run=dry_run)
             badpix = fits.getval(bpmask_file, "BADPIX", ext=1) or 1
             mask = fits.getdata(bpmask_file, ext=1) != badpix
             fmask = mask.ravel()
-            plot_dark(file_path, fmask)
+            plot_dark(file_path, fmask, dry_run=dry_run)
         elif dtype == "flat":
             bpmask_file = self._get_raw_group("bpmask_output", group_index)
             badpix = fits.getval(bpmask_file, "BADPIX", ext=1) or 1
             mask = fits.getdata(bpmask_file, ext=1) != badpix
             fmask = mask.ravel()
-            plot_flat(file_path, fmask)
+            plot_flat(file_path, fmask, dry_run=dry_run)
 
     def make_plots(
         self,
         group_index: int,
         skip_flags={"bias": False, "dark": False, "flat": False, "sci": False},
         override_skip_flags=None,
+        dry_run: bool = False,
     ):
         try:
             all_flag = all(skip_flags.values())
@@ -658,7 +695,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             if "bias" in self.calib_types and not skip_flags["bias"]:
                 bias_file = self._get_raw_group("bias_output", group_index)
                 if os.path.exists(bias_file):
-                    plot_bias(bias_file)
+                    plot_bias(bias_file, dry_run=dry_run)
                 else:
                     self.logger.warning(f"[Group {group_index+1}] Bias image does not exist. Skipping bias plot.")
 
@@ -670,7 +707,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 bpmask_file = self._get_raw_group("bpmask_output", group_index)
                 if os.path.exists(bpmask_file):
                     if not skip_flags["dark"]:
-                        plot_bpmask(bpmask_file)
+                        plot_bpmask(bpmask_file, dry_run=dry_run)
                     badpix = fits.getval(bpmask_file, "BADPIX", ext=1)
                     if badpix is None:
                         self.logger.warning(f"[Group {group_index+1}] Header missing BADPIX; using 1")
@@ -690,7 +727,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             if "dark" in self.calib_types and not skip_flags["dark"]:
                 dark_file = self._get_raw_group("dark_output", group_index)
                 if os.path.exists(dark_file):
-                    plot_dark(dark_file, fmask)
+                    plot_dark(dark_file, fmask, dry_run=dry_run)
                 else:
                     self.logger.warning(f"[Group {group_index+1}] Dark image does not exist. Skipping dark plot.")
 
@@ -701,7 +738,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             if "flat" in self.calib_types and not skip_flags["flat"]:
                 flat_file = self._get_raw_group("flat_output", group_index)
                 if os.path.exists(flat_file):
-                    plot_flat(flat_file, fmask)
+                    plot_flat(flat_file, fmask, dry_run=dry_run)
                 else:
                     self.logger.warning(f"[Group {group_index+1}] Flat image does not exist. Skipping flat plot.")
 
@@ -719,7 +756,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 for input_img, output_img in zip(
                     self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)
                 ):
-                    plot_sci(input_img, output_img, is_too=self.is_too)
+                    plot_sci(input_img, output_img, is_too=self.is_too, dry_run=dry_run)
 
                 self.logger.info(
                     f"[Group {group_index+1}] Completed plot generation for images in {time_diff_in_seconds(st)} seconds "

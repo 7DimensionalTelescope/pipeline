@@ -94,12 +94,17 @@ def save_fits_with_contrast(image_data, output_path, max_width=1000):
     return enhanced_image
 
 
-def plot_bias(file, overwrite=False):
+def plot_bias(file, overwrite=False, dry_run: bool = False):
     if not (isinstance(file, str)):
         print("An image path (bias) is not properly defined.")
         return
 
     path = Path(file)
+    if dry_run:
+        print(path.parent / "figures" / f"{path.stem}_hist.jpg")
+        print(path.parent / "figures" / f"{path.stem}.jpg")
+        print(path.parent / "figures" / f"{path.stem}_contrast.jpg")
+        return
     os.makedirs(path.parent / "figures", exist_ok=True)
     output_path = path.parent / "figures" / f"{path.stem}_hist.jpg"
 
@@ -155,12 +160,17 @@ def plot_bias(file, overwrite=False):
     save_fits_with_contrast(file, path.parent / "figures" / f"{path.stem}_contrast.jpg")
 
 
-def plot_dark(file, flattened_mask=None):
+def plot_dark(file, flattened_mask=None, dry_run: bool = False):
     if not (isinstance(file, str)):
         print("An image path (dark) is not properly defined.")
         return
 
     path = Path(file)
+    if dry_run:
+        print(path.parent / "figures" / f"{path.stem}_hist.jpg")
+        print(path.parent / "figures" / f"{path.stem}.jpg")
+        print(path.parent / "figures" / f"{path.stem}_contrast.jpg")
+        return
     os.makedirs(path.parent / "figures", exist_ok=True)
     output_path = path.parent / "figures" / f"{path.stem}_hist.jpg"
     # if output_path.exists():
@@ -283,11 +293,15 @@ def plot_dark_tail_on_ax(fdata, ax, i=0, mx=None):
 #         plt.show(block=False)
 
 
-def plot_flat(file, fmask=None):
+def plot_flat(file, fmask=None, dry_run: bool = False):
     if not (isinstance(file, str)):
         print("An image path (flat) is not properly defined.")
         return
     path = Path(file)
+    if dry_run:
+        print(path.parent / "figures" / f"{path.stem}_hist.jpg")
+        print(path.parent / "figures" / f"{path.stem}.jpg")
+        return
     os.makedirs(path.parent / "figures", exist_ok=True)
     output_path = path.parent / "figures" / f"{path.stem}_hist.jpg"
     # if output_path.exists():
@@ -342,11 +356,14 @@ def plot_flat(file, fmask=None):
     save_fits_as_figures(data, path.parent / "figures" / f"{path.stem}.jpg")
 
 
-def plot_bpmask(file, ext=1, badpix=1):
+def plot_bpmask(file, ext=1, badpix=1, dry_run: bool = False):
     if not (isinstance(file, str)):
         print("An image path (bpmask) is not properly defined.")
         return
     path = Path(file)
+    if dry_run:
+        print(path.parent / "figures" / f"{path.stem}.jpg")
+        return
     os.makedirs(path.parent / "figures", exist_ok=True)
     output_path = path.parent / "figures" / f"{path.stem}.jpg"
     data = fitsio.read(file, ext=ext)
@@ -378,7 +395,7 @@ def plot_bpmask(file, ext=1, badpix=1):
     # plt.close()
 
 
-def plot_sci(input_img, output_img, is_too=False):
+def plot_sci(input_img, output_img, is_too=False, dry_run: bool = False):
     if not (isinstance(input_img, str)):
         print("An image path (input_img) is not properly defined.")
         return
@@ -386,6 +403,10 @@ def plot_sci(input_img, output_img, is_too=False):
         print("An image path (output_img) is not properly defined.")
         return
     path = PathHandler(output_img, is_too=is_too)
+    if dry_run:
+        print(path.figure_dir_to_path / f"{path.stem[0]}_raw.jpg")
+        print(path.figure_dir_to_path / f"{path.stem[0]}.jpg")
+        return
 
     save_fits_as_figures(fits.getdata(input_img), path.figure_dir_to_path / f"{path.stem[0]}_raw.jpg")
     save_fits_as_figures(fits.getdata(output_img), path.figure_dir_to_path / f"{path.stem[0]}.jpg")
