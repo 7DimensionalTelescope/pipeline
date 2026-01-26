@@ -331,7 +331,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
                 self.logger.debug(f"Using SKYVAL: {_bkg:.3f}")
                 fits.writeto(outim, _data, header=_hdr, overwrite=True)
 
-    def _dynamic_bkgsub(self):
+    def _dynamic_bkgsub(self, bkg_qa: bool = True):
         """
         Later to be refined using iterations
         """
@@ -363,34 +363,49 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
             )
             sextractor(inim, sex_options=sex_options, log_file=sex_log, logger=self.logger)
 
+            bkg_data = fits.getdata(bkg)
+
+            if bkg_qa:
+                from .bkg_step import step_background_check
+
+                h, w = bkg_data.shape
+                stripe = np.mean(bkg_data[h // 2 - 100 : h // 2 + 100, :], axis=0)  # already smooth bkg: mean is okay?
+                is_steppy, info = step_background_check(stripe)
+                if is_steppy:
+                    self.logger.warning(f"Background is steppy in {get_basename(outim)}")
+                    self.logger.debug(f"Background is steppy: {info}")
+                else:
+                    self.logger.debug(f"Background is not steppy in {get_basename(outim)}: {info}")
+
             with fits.open(inim, memmap=True) as hdul:
                 _data = hdul[0].data
                 _hdr = hdul[0].header
-                bkg = fits.getdata(bkg)
-                _data -= bkg
+                if bkg_qa:
+                    _hdr["BKG_STEP"] = (is_steppy, "Background is step-like; likely quantization artifact")
+                _data -= bkg_data
                 fits.writeto(outim, _data, header=_hdr, overwrite=True)
 
-    # TODO:
-    def _bkg_qa(self, bkgsub_type: str = "dynamic"):
-        if bkgsub_type == "dynamic":
-            # do assessment below
-            for f in self.config_node.imcoadd.bkg_images:
-                data = fits.getdata(f)
-                H, W = data.shape
-                stripe = np.mean(data[H // 2 - 100 : H // 2 + 100, :], axis=0)
+    # # TODO:
+    # def _bkg_qa(self, bkgsub_type: str = "dynamic"):
+    #     if bkgsub_type == "dynamic":
+    #         # do assessment below
+    #         for f in self.config_node.imcoadd.bkg_images:
+    #             data = fits.getdata(f)
+    #             H, W = data.shape
+    #             stripe = np.mean(data[H // 2 - 100 : H // 2 + 100, :], axis=0)
 
-            pass
-        elif bkgsub_type == "constant":
-            # add dummy key
-            for f in self.input_images:
-                update_padded_header(f, {"BACKARTF": (False, "Dynamic bkgsub will cause artifacts")})
-        else:
-            raise ValueError(f"_bkg_qa - Invalid bkgsub_type: {bkgsub_type}")
+    #         pass
+    #     elif bkgsub_type == "constant":
+    #         # add dummy key
+    #         for f in self.input_images:
+    #             update_padded_header(f, {"BACKARTF": (False, "Dynamic bkgsub will cause artifacts")})
+    #     else:
+    #         raise ValueError(f"_bkg_qa - Invalid bkgsub_type: {bkgsub_type}")
 
-        update_padded_header(f, {"BACKARTF": (False, "Dynamic bkgsub will cause artifacts")})
+    #     update_padded_header(f, {"BACKARTF": (False, "Dynamic bkgsub will cause artifacts")})
 
-        recommenced_bkgsub_type = "constant"  # BACKTYPE "Recommended bkgsub type"
-        return recommenced_bkgsub_type
+    #     recommenced_bkgsub_type = "constant"  # BACKTYPE "Recommended bkgsub type"
+    #     return recommenced_bkgsub_type
 
     @staticmethod
     def _group_IMCMB(

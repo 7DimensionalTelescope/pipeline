@@ -60,17 +60,11 @@ from .plotting import plot_zp, plot_filter_check
 
 class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
     """
-    A class to perform photometric analysis on astronomical images.
-
-    This class handles both single-image and batch photometry processing,
-    with support for parallel processing through a queue system.
-
-    Attributes:
-        config (Configuration): Configuration settings for photometry
-        logger: Logger instance for output messaging
-        queue (Optional[QueueManager]): Queue manager for parallel processing
-        ref_catalog (str): Name of reference catalog to use
-        images (List[str]): List of image files to process
+    A wrapper class of PhotometrySingle.
+    Dispatches to PhotometrySingle based on the photometry_mode:
+        - single_photometry
+        - coadd_photometry
+        - difference_photometry
     """
 
     def __init__(
@@ -88,14 +82,6 @@ class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
         Photometry will know its mode based on self.config.flag., but it is
         safer to explicitly set the mode when re-running scidata reduction,
         where the flags can be out of sync.
-
-        Args:
-            config: Configuration object or path to config yaml
-            logger: Logger instance for output messaging
-            queue: Queue manager for parallel processing or boolean to create one
-            images: List of image files to process
-            photometry_mode: None, single_photometry, combined_photometry, difference_photometry
-            ref_catalog: Name of reference catalog to use
         """
         # Load Configuration
         super().__init__(config, logger, queue)
@@ -334,18 +320,6 @@ class PhotometrySingle:
     - Reference catalog matching
     - Zero point calculation
     - Header updates
-    - Results output
-
-    Attributes:
-        config: Configuration settings
-        logger: Logger instance
-        ref_catalog (str): Reference catalog name
-        image (str): Path to image file
-        image_info (ImageInfo): Parsed image metadata
-        phot_conf: Photometry configuration settings
-        name (str): Process name for logging
-        header (ImageHeader): Header information container
-        _id (int): Unique identifier for this instance
     """
 
     _id_counter = itertools.count(1)
@@ -461,7 +435,6 @@ class PhotometrySingle:
                 # save the photometry result for the filename filter as default
                 self.calculate_zp(zp_src_table)  # uses self.phot_header below
                 self.add_calibrated_columns(obs_src_table)
-                self.update_image_header()
 
                 # if inferred filter is different, save it to header and catalog, too
                 inferred_filter = self.determine_filter(temp_headers)
@@ -470,6 +443,8 @@ class PhotometrySingle:
                     inferred_phot_header = temp_headers[inferred_filter]
                     self.add_calibrated_columns(obs_src_table, filt=inferred_filter, phot_header=inferred_phot_header)
                     # self.update_image_header(inferred_phot_header)  # namespace collision
+                # update header after filter inference so INF_FILT is persisted
+                self.update_image_header()
 
             else:
                 self.logger.info("Skipping filter check")
@@ -948,12 +923,16 @@ class PhotometrySingle:
     #     return
 
     def determine_filter(self, phot_headers: Dict[str, PhotometryHeader], save_plot=True):
+        """Updates PhotometryHeader.INF_FILT with the best-matching filter inferred by the pipeline"""
         zp_cut = 27.2  # 26.8
         alleged_filter = self.image_info.filter
         filters_checked = [k for k in phot_headers.keys()]
 
         if len(phot_headers) == 0:
             self.logger.warning(f"No phot_headers found. Using alleged filter.", FilterCheckError)
+            inferred_filter = alleged_filter
+            # Persist inferred filter via PhotometryHeader (written by update_image_header())
+            self.phot_header.INF_FILT = inferred_filter
             return alleged_filter
 
         # filter out when phot_headers[filt] is None
@@ -1024,6 +1003,8 @@ class PhotometrySingle:
             )
         else:
             self.logger.info(f"The inferred filter matches the original filter, '{alleged_filter}'")
+
+        self.phot_header.INF_FILT = inferred_filter
 
         return inferred_filter
 
@@ -1270,6 +1251,7 @@ class PhotometryHeader:
     # must match the actual header keys
     AUTHOR: str = "pipeline"
     PHOTIME: str = None
+    INF_FILT: str = None
     JD: float = None
     MJD: float = None
     SEEING: float = None
@@ -1388,6 +1370,7 @@ class PhotometryHeader:
         misc_dict = {
             "AUTHOR": (self.AUTHOR, "user who last updated photometry header"),
             "PHOTIME": (self.PHOTIME, "PHOTOMETRY TIME [KST]"),
+            "INF_FILT": (self.INF_FILT, "BEST-MATCHING FILTER INFERRED BY PIPELINE"),
             "JD": (self.JD, "Julian Date of the observation"),
             "MJD": (self.MJD, "Modified Julian Date of the observation"),
             "SEEING": (round(self.SEEING, 3) if self.SEEING is not None else 0, "SEEING [arcsec]"),

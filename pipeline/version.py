@@ -1,2 +1,2 @@
 # increase version with ANY change in scientific config. e.g., prep.sex
-__version__ = "1.7.7"
+__version__ = "1.7.8"
