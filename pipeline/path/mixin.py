@@ -141,7 +141,12 @@ class AutoMkdirMixin:
 
         if d not in created_dirs and not d.exists():  # check cache first for performance
             # print(f"AutoMkdirMixin _mkdir creating directory: {d}")
-            d.mkdir(parents=True, exist_ok=True)
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+            except PermissionError:
+                print(f"[WARNING] AutoMkdirMixin _mkdir permission error: {d}")
+            except Exception as e:
+                print(f"[ERROR] AutoMkdirMixin _mkdir error: {e}")
             created_dirs.add(d)
 
 

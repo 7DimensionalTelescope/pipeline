@@ -372,13 +372,6 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
         evaluate_prep_sol: bool = False,
         debug_plot: bool = False,
     ):
-        self.logger.info(
-            f"{image_info.id} SCAMP stats - "
-            f"UNMATCH: {image_info.rsep_stats.unmatched_fraction if image_info.rsep_stats.unmatched_fraction is not None else 'None'}, "
-            f"SEP_P95: {image_info.rsep_stats.separation_stats.P95 if image_info.rsep_stats.separation_stats.P95 is not None else 'None'}, "
-            f"SEP_Q2: {image_info.rsep_stats.separation_stats.Q2 if image_info.rsep_stats.separation_stats.Q2 is not None else 'None'}"
-        )
-
         self.logger.warning(
             f"Solve-field triggered, better solution not guaranteed for {image_info.prep_cat} [{i+1}/{len(self.images_info)}]",
             AstrometryError.AlternativeSolver,
@@ -462,11 +455,18 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
 
         if image_info.bad:
             self.logger.warning(
-                f"Bad solution. UNMATCH: {image_info.rsep_stats.unmatched_fraction if image_info.rsep_stats.unmatched_fraction is not None else 'None'}, "
+                f"{image_info.id} Bad solution. UNMATCH: {image_info.rsep_stats.unmatched_fraction if image_info.rsep_stats.unmatched_fraction is not None else 'None'}, "
                 # f"RSEP_P95: {image_info.rsep_stats.separation_stats.P95 if image_info.rsep_stats.separation_stats.P95 is not None else 'None'} "
                 f"RSEP_Q2: {image_info.rsep_stats.separation_stats.Q2 if image_info.rsep_stats.separation_stats.Q2 is not None else 'None'} "
                 f"after {max_scamp_iter} iterations for {image_info.image_path}",
                 AstrometryError.BadWcsSolution,
+            )
+        else:
+            self.logger.info(
+                f"{image_info.id} SCAMP stats - "
+                f"UNMATCH: {image_info.rsep_stats.unmatched_fraction if image_info.rsep_stats.unmatched_fraction is not None else 'None'}, "
+                f"SEP_P95: {image_info.rsep_stats.separation_stats.P95 if image_info.rsep_stats.separation_stats.P95 is not None else 'None'}, "
+                f"SEP_Q2: {image_info.rsep_stats.separation_stats.Q2 if image_info.rsep_stats.separation_stats.Q2 is not None else 'None'}"
             )
 
         return main_scamp_success or avoid_solvefield
@@ -1049,7 +1049,14 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
         input_images = [ii.image_path for ii in images_info]
         prep_cats = [ii.prep_cat for ii in images_info]
 
-        refcat = Table.read(self.config_node.astrometry.local_astref, hdu=2)
+        try:
+            refcat = Table.read(self.config_node.astrometry.local_astref, hdu=2)
+        except Exception as e:
+            self.logger.warning(
+                f"Failed to read reference catalog {self.config_node.astrometry.local_astref} for evaluation: {e}",
+                AstrometryError.FileNotFoundError,
+            )
+            refcat = None
 
         def _eval_one(idx: int):
             "threading helper"
@@ -1100,12 +1107,11 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
                 )
 
             except Exception as e:
-                self.logger.error(
-                    f"Failed to evaluate solution for {input_image}: {e}",
-                    AstrometryError.SolutionEvaluationFailedError,
+                self.logger.warning(
+                    f"{image_info.id} Failed to evaluate solution for {input_image}: {e}",
+                    AstrometryError.SolutionEvaluationFailed,
                     exc_info=True,
                 )
-
                 raise
             return idx, eval_result
 
