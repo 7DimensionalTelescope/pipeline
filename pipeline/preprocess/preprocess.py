@@ -18,7 +18,7 @@ from ..config.utils import get_key
 from ..services.setup import BaseSetup
 from ..const import HEADER_KEY_MAP
 from ..services.utils import acquire_available_gpu
-from ..services.checker import Checker
+from ..services.checker import CheckerMixin
 from ..services.database.image_qa import ImageQATable
 from ..services.database.handler import DatabaseHandler
 from ..utils.header import add_padding, get_header
@@ -28,7 +28,7 @@ from ..path import PathHandler, NameHandler
 pp = pprint.PrettyPrinter(indent=2)  # , width=120)
 
 
-class Preprocess(BaseSetup, Checker, DatabaseHandler):
+class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
     """
     Assumes homogeneous BIAS, DARK, FLAT, SCI frames as input
     taken on the same date with the same

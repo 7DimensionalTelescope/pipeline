@@ -24,7 +24,7 @@ from ..utils.header import update_padded_header
 
 from ..services.database.handler import DatabaseHandler
 from ..services.database.image_qa import ImageQATable
-from ..services.checker import Checker
+from ..services.checker import CheckerMixin
 
 from .const import ZP_KEY, CORE_KEYS
 
@@ -32,7 +32,7 @@ from .const import ZP_KEY, CORE_KEYS
 warnings.filterwarnings("ignore")
 
 
-class ImCoadd(BaseSetup, DatabaseHandler, Checker):
+class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
     def __init__(
         self,
         config=None,

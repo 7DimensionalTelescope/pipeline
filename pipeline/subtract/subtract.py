@@ -18,13 +18,13 @@ from ..preprocess.plotting import save_fits_as_figures
 from ..services.setup import BaseSetup
 from ..services.database.handler import DatabaseHandler
 from ..services.database.image_qa import ImageQATable
-from ..services.checker import Checker
+from ..services.checker import CheckerMixin
 from ..services.database.query import RawImageQuery
 
 from .utils import create_ds9_region_file, select_sources
 
 
-class ImSubtract(BaseSetup, DatabaseHandler, Checker):
+class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
     def __init__(
         self,
         config=None,

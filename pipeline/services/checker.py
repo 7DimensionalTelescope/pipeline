@@ -5,14 +5,14 @@ from typing import List, Literal
 from .. import const
 
 
-class Checker:
+class CheckerMixin:
     """
     Mixin class that generates, reads, and filters on the "SANITY" key in image headers.
     """
 
     dtype = None
 
-    def _sanitize_dtype(
+    def _resolve_dtype(
         self, dtype: Literal["bias", "dark", "flat", "masterframe", "science"] = None
     ) -> Literal["BIAS", "DARK", "FLAT", "MASTERFRAME", "SCIENCE"]:
         """
@@ -23,7 +23,7 @@ class Checker:
         resolved = dtype if dtype is not None else self.dtype
         return resolved.upper() if resolved is not None else "science"
 
-    def _normalize_dtype(
+    def _dtype_to_category(
         self, dtype: Literal["BIAS", "DARK", "FLAT", "MASTERFRAME", "SCIENCE"] = None
     ) -> Literal["masterframe", "science"]:
         """Normalize dtype to either 'masterframe' or 'science'."""
@@ -33,13 +33,13 @@ class Checker:
             return "masterframe"
         return "masterframe" if dtype.upper() in masterframe_types else "science"
 
-    def load_criteria(self, dtype: Literal["masterframe", "science"] = "masterframe"):
+    def load_criteria(self, category: Literal["masterframe", "science"] = "masterframe"):
         try:
-            normalized_dtype = self._normalize_dtype(dtype)
-            criteria_file = os.path.join(const.REF_DIR, "qa", f"{normalized_dtype.lower()}.json")
+            category = self._dtype_to_category(category)  # in case input isnot category
+            criteria_file = os.path.join(const.REF_DIR, "qa", f"{category.lower()}.json")
             with open(criteria_file, "r") as f:
                 self.criteria = json.load(f)
-                self.loaded_dtype = normalized_dtype
+                self.loaded_category = category
                 return self.criteria
         except FileNotFoundError:
             raise RuntimeError(f"Criteria file not found: {criteria_file}")
@@ -58,12 +58,15 @@ class Checker:
         Tolerates missing header keys if dtype is "science"
 
         `dtype` in Preprocess can be directly passed on to this method.
-        """
-        dtype = self._sanitize_dtype(dtype=dtype)
-        normalized_dtype = self._normalize_dtype(dtype)
 
-        if not hasattr(self, "criteria") or self.criteria is None or self.loaded_dtype != normalized_dtype:
-            self.load_criteria(dtype=normalized_dtype)
+        dtype: BIAS, DARK, FLAT, SCIENCE - top level json keys
+        category: masterframe, science - json filenames
+        """
+        dtype = self._resolve_dtype(dtype=dtype)
+        category = self._dtype_to_category(dtype)
+
+        if not hasattr(self, "criteria") or self.criteria is None or self.loaded_category != category:
+            self.load_criteria(category=category)
 
         criteria = self.criteria[dtype.upper()]
 

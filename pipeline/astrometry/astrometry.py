@@ -28,7 +28,7 @@ from ..path.path import PathHandler
 from ..io.cfitsldac import write_ldac
 from ..services.database.handler import DatabaseHandler
 from ..services.database.image_qa import ImageQATable
-from ..services.checker import Checker
+from ..services.checker import CheckerMixin
 from ..services.logger import Logger
 
 from .utils import (
@@ -53,7 +53,7 @@ from .evaluation import (
 from .generate_refcat_gaia import get_refcat_gaia
 
 
-class Astrometry(BaseSetup, DatabaseHandler, Checker):
+class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
     """A class to handle astrometric solutions for astronomical images.
 
     This class manages the complete astrometric pipeline including plate solving,
@@ -94,7 +94,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         self.start_time = time.time()
         self._handle_input()
 
-        self.load_criteria(dtype="science")
+        self.load_criteria(category="science")
         self.qa_ids = []
         DatabaseHandler.__init__(
             self,

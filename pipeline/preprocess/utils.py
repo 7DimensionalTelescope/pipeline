@@ -11,7 +11,7 @@ from watchdog.events import FileSystemEventHandler
 
 from ..path.path import PathHandler
 from ..path.name import NameHandler
-from ..services.checker import Checker
+from ..services.checker import CheckerMixin
 from ..utils.header import write_header_file, get_header
 
 
@@ -152,19 +152,19 @@ def search_with_date_offsets(template, max_offset=30, future=False):
             matches = glob(modified_path)
             if matches:
                 if len(matches) == 1:
-                    if Checker().sanity_check(matches[0]):
+                    if CheckerMixin().sanity_check(matches[0]):
                         return matches[0]
                     else:
                         continue
                 else:
                     min_exptime_image = PathHandler(matches).get_minimum("exptime")
-                    if Checker().sanity_check(min_exptime_image):
+                    if CheckerMixin().sanity_check(min_exptime_image):
                         return min_exptime_image
                     else:
                         continue
         else:
             if os.path.exists(modified_path):
-                if Checker().sanity_check(modified_path):
+                if CheckerMixin().sanity_check(modified_path):
                     return modified_path
                 else:
                     continue
