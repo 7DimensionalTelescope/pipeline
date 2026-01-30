@@ -1105,7 +1105,7 @@ class PhotometrySingle:
         return
 
 
-@dataclass(frozen=True)
+@dataclass(slots=True, frozen=True)
 class ImageInfo:
     """
     Stores information extracted from a FITS image header for photometry.
@@ -1141,7 +1141,9 @@ class ImageInfo:
 
     def __repr__(self) -> str:
         """Returns a string representation of the ImageInfo."""
-        return ",\n".join(f"  {k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
+        # no __dict__ with slots=True
+        # return ",\n".join(f"  {k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
+        return ",\n".join(f"  {f.name}: {getattr(self, f.name)}" for f in fields(self) if not f.name.startswith("_"))
 
     @property
     def metadata(self) -> Dict[str, Any]:

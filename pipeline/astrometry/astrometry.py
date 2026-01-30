@@ -87,6 +87,7 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
             queue: QueueManager instance or boolean to enable parallel processing
         """
         super().__init__(config, logger, queue)
+        self.logger.debug("Starting Astrometry.__init__")
         self._flag_name = "astrometry"
         self.logger.process_error = AstrometryError
         self.logger.debug(f"Astrometry Queue is '{queue}'")
@@ -94,7 +95,8 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
         self.start_time = time.time()
         self._handle_input()
 
-        self.load_criteria(category="science")
+        # self.load_criteria(category="science")  # changed to lazy load
+
         self.qa_ids = []
         DatabaseHandler.__init__(
             self,
@@ -122,6 +124,8 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
                 for image_info in self.images_info:
                     qa_id = self.create_image_qa_data(image_info.image_path, self.process_status_id)
                     self.qa_ids.append(qa_id)
+
+        self.logger.debug("Finished Astrometry.__init__")
 
     @classmethod
     def from_list(cls, images: List[str], working_dir: str = None):
@@ -152,6 +156,7 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
 
     def _handle_input(self):
         self.logger.info("Defining paths for astrometry")
+        self.logger.debug("Starting Astrometry._handle_input")
         # self.path_astrometry = self.path.astrometry.tmp_dir
 
         # prefer astrometry.input_images if set
@@ -198,6 +203,7 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
 
                 local_astref = None
         self.config_node.astrometry.local_astref = local_astref
+        self.logger.debug("Finished Astrometry._handle_input")
 
     def run(
         self,
@@ -229,6 +235,7 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
             self.start_time = time.time()
 
             self.logger.info(f"Start 'Astrometry'")
+            self.logger.debug(f"Starting Astrometry.run")
 
             avoid_solvefield = False
             force_solve_field = False

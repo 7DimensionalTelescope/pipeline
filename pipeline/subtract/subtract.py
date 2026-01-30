@@ -124,7 +124,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
             if self.is_connected and self.process_status_id is not None:
                 subt_image = self.subt_image_file
                 if subt_image and os.path.exists(subt_image):
-                    self.qa_id = self.create_qa_data("science", image=subt_image, output_file=subt_image)
+                    self.qa_id = self.create_image_qa_data("science", image=subt_image, output_file=subt_image)
 
             # Update QA data from header if database is connected
             if self.is_connected and self.qa_id is not None:
