@@ -121,7 +121,9 @@ class DatabaseHandler:
 
     def get_process_status(self, nightdate, config_type="science"):
 
-        rows = self.process_status.read_data_by_params(return_table=True, nightdate=nightdate, config_type=config_type)
+        rows = self.process_status.read_data_by_params(
+            return_pyTable=True, nightdate=nightdate, config_type=config_type
+        )
         if rows is None:
             return None
 

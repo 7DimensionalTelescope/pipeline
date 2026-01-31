@@ -213,7 +213,7 @@ class BaseDatabase:
         except Exception as e:
             raise DatabaseError(f"Failed to read {self.table_name} by id: {e}")
 
-    def read_data_by_params(self, return_table=False, **kwargs):
+    def read_data_by_params(self, return_pyTable=False, return_df=False, **kwargs):
 
         params = {k: v for k, v in kwargs.items() if v is not None}
         params_str = " AND ".join([f"{k} = %({k})s" for k in params.keys()])
@@ -223,15 +223,17 @@ class BaseDatabase:
 
         if not rows or len(rows) == 0:
             return None
+        elif return_df:
+            return pd.DataFrame(rows, columns=columns)
         elif len(rows) == 1:
             table = self.pyTable.from_row(rows[0], columns=columns)
-            if return_table:
+            if return_pyTable:
                 return table
             else:
                 return table.id
         else:
             tables = [self.pyTable.from_row(row, columns=columns) for row in rows]
-            if return_table:
+            if return_pyTable:
                 return tables
             else:
                 return [table.id for table in tables]

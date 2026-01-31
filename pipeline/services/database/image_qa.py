@@ -85,6 +85,9 @@ class ImageQATable:
     awincrmn: Optional[float] = None
     ellipmn: Optional[float] = None
 
+    inf_filt: Optional[str] = None
+    bkg_step: Optional[bool] = None
+
     @classmethod
     def from_row(cls, row: tuple, columns: List[str] = None):
 
