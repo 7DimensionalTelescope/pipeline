@@ -8,7 +8,7 @@ from astropy.table import Table
 from datetime import datetime, timedelta
 
 from .. import external
-from ..utils import add_suffix, swap_ext, collapse, time_diff_in_seconds
+from ..utils import add_suffix, swap_ext, collapse, time_diff_in_seconds, atleast_1d
 from ..tools.table import match_two_catalogs
 from ..config.utils import get_key
 from ..errors import SubtractionError
@@ -204,10 +204,10 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
 
     def define_paths(self):
         # always consider a single coadd image as input, not a list of images
-        local_input_images = get_key(self.config_node, "imsubtract.input_image")
+        local_input_images = atleast_1d(get_key(self.config_node, "imsubtract.input_image"))
         # set from the common input if not set locally
 
-        if any(i is None for i in np.atleast_1d(local_input_images)):
+        if any(i is None for i in local_input_images):
             self.input_images = [self.config_node.input.coadd_image]
         else:
             self.input_images = local_input_images
