@@ -959,6 +959,15 @@ class PhotometrySingle:
         # (2) apply prior knowledge of zp for broad and medium band filters
         while True:
             narrowed_filters, zps, zperrs = phot_utils.dicts_to_lists(test_dicts)
+            self.logger.debug(f"Narrowed filters: {narrowed_filters}")
+            self.logger.debug(f"ZPs: {zps}")
+            self.logger.debug(f"ZP errors: {zperrs}")
+            if not zperrs:
+                self.logger.warning(
+                    f"No valid zero point sources found. Falling back to header filter '{alleged_filter}'",
+                    FilterCheckError,
+                )
+                return
 
             idx = zperrs.index(min(zperrs))
             inferred_filter = narrowed_filters[idx]
