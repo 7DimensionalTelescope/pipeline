@@ -260,7 +260,9 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
             # flexibly iterate to refine
             for i, image_info in enumerate(self.images_info):
                 if not image_info.sane:
-                    self.logger.info(f"SANITY F for {os.path.basename(image_info.image_path)}. Skipping astrometry run")
+                    self.logger.info(
+                        f"SANITY F for {image_info.id} {os.path.basename(image_info.image_path)}. Skipping astrometry run"
+                    )
                     continue
 
                 if force_solve_field:

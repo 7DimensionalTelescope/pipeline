@@ -287,7 +287,7 @@ class QueueManager:
 
         except Exception as e:
             self.logger.error(f"Failed to create subprocess for {cmd}: {e}")
-            raise
+            return False
 
     def _scheduler_worker(self):
         """
@@ -330,6 +330,10 @@ class QueueManager:
                 try:
                     proc = self._create_process_from_command(cmd)
 
+                    if proc is False:
+                        self._active_processes.append([cmd, None, time.time(), task_index])
+                        continue
+
                     # Extract config path from command for tracking
                     config = cmd[cmd.index("-config") + 1] if "-config" in cmd else "unknown"
 
@@ -347,6 +351,9 @@ class QueueManager:
                     self.logger.error(f"Error in processing worker: {e}")
                     time.sleep(DEFAULT_WORKER_SLEEP_TIME)
                     traceback.print_exc()
+
+                    self._active_processes.append([cmd, None, time.time(), task_index])
+
                     # Don't raise - continue processing other tasks
                     continue
 
@@ -373,6 +380,10 @@ class QueueManager:
                     for process in list(self._active_processes):  # (config_path, proc, start_time, task_index)
                         config, proc, start_time = process[:3]
                         task_index = process[3] if len(process) > 3 else None
+
+                        if proc is None:
+                            self.scheduler.mark_done(task_index, success=False)
+                            continue
 
                         if proc.poll() is not None:  # Process finished
                             pid = proc.pid

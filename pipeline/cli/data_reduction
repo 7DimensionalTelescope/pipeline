@@ -31,6 +31,10 @@ if __name__ == "__main__":
     if args.processes is None:
         args.processes = ["astrometry", "photometry", "coadd", "subtract"]
 
+    if not args.config.endswith(".yml"):
+        print(f"\nError: {args.config} is not a valid configuration file")
+        sys.exit(1)
+
     try:
         run_scidata_reduction(args.config, processes=args.processes, overwrite=args.overwrite, is_too=args.is_too)
     except Exception as e:
