@@ -922,11 +922,15 @@ class PhotometrySingle:
     #         obs_src_table[key].format = ".3f"
     #     return
 
-    def determine_filter(self, phot_headers: Dict[str, PhotometryHeader], save_plot=True):
+    def determine_filter(self, phot_headers: Dict[str, PhotometryHeader], save_plot=True) -> str:
         """Updates PhotometryHeader.INF_FILT with the best-matching filter inferred by the pipeline"""
         zp_cut = 27.2  # 26.8
         alleged_filter = self.image_info.filter
         filters_checked = [k for k in phot_headers.keys()]
+
+        self.logger.debug(f"phot_headers: {phot_headers}")
+        self.logger.debug(f"alleged_filter: {alleged_filter}")
+        self.logger.debug(f"filters_checked: {filters_checked}")
 
         if len(phot_headers) == 0:
             self.logger.warning(f"No phot_headers found. Using alleged filter.", FilterCheckError)
@@ -967,7 +971,7 @@ class PhotometrySingle:
                     f"No valid zero point sources found. Falling back to header filter '{alleged_filter}'",
                     FilterCheckError,
                 )
-                return
+                return alleged_filter
 
             idx = zperrs.index(min(zperrs))
             inferred_filter = narrowed_filters[idx]
