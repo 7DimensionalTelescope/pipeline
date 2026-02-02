@@ -172,25 +172,27 @@ def plot_cutouts_and_sed(
         raise ImportError("photutils is required. Install with: pip install photutils")
 
     if image_type == "coadd":
-        print(os.path.join(base_dir, "**", image_type, "*_coadd.fits"))
-        image_paths = glob(os.path.join(base_dir, "**", image_type, "*_coadd.fits"))
-        print(image_paths)
+        path = f"{base_dir}/**/{image_type}/*_coadd.fits"
     elif image_type == "difference":
-        image_paths = glob(os.path.join(base_dir, "**", image_type, "*_diff.fits"))
+        path = f"{base_dir}/**/{image_type}/*_diff.fits"
     else:
         raise ValueError(f"Invalid image type: {image_type}")
 
+    if verbose:
+        print("finding coadd images in", path)
+    image_paths = glob(path)
+
     if not image_paths:
         raise ValueError("No images found")
-
-    # Sort images by filter
-    BROADBAND_FILTERS = BROAD_FILTERS
+    else:
+        if verbose:
+            print(f"{len(image_paths)} images are found.")
 
     def get_filter_sort_key(image_path):
         try:
             with fits.open(image_path) as hdul:
                 filter_name = hdul[0].header.get("FILTER", "").lower()
-                is_broadband = filter_name in BROADBAND_FILTERS
+                is_broadband = filter_name in BROAD_FILTERS
                 return (is_broadband, filter_name)
         except:
             return (True, "")
@@ -1302,6 +1304,8 @@ def make_too_output(too_id, sky_position=None, image_type="difference", verbose=
 
     if sky_position is None:
         sky_position = SkyCoord(too_data["ra_deg"], too_data["dec_deg"], unit="deg")
+    else:
+        sky_position = SkyCoord(sky_position[0], sky_position[1], unit="deg")
 
     if image_type == "difference":
         try:
