@@ -413,7 +413,7 @@ class PhotometrySingle:
             self.logger.info(f"Start 'PhotometrySingle' for the image {self.name} [{self._id}]")
             self.logger.debug(f"{'=' * 13} {os.path.basename(self.input_image)} {'=' * 13}")
 
-            self.calculate_seeing(use_header_seeing=self._trust_header_seeing and not overwrite, overwrite=overwrite)
+            self.calculate_seeing(use_header_seeing=(self._trust_header_seeing and not overwrite), overwrite=overwrite)
             obs_src_table = self.photometry_with_sextractor(overwrite=overwrite)
 
             if self._check_filter:
@@ -1103,7 +1103,7 @@ class PhotometrySingle:
         # ]  # this interferes with table description
 
         # reorder gaia columns to be at the end
-        if hasattr(self, "gaia_columns"):
+        if hasattr(self, "gaia_columns") and not (self._trust_header_zp):
             gaia_cols = self.gaia_columns + [
                 "separation"
             ]  # e.g. ["source_id", "bp_rp", f"mag_{self.image_info.filter}"]

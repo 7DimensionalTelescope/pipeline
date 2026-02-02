@@ -144,16 +144,34 @@ def plot_cutouts_and_sed(
     """
 
     if image_type == "coadd":
-        path = base_dir + "/**/" + image_type + "/*_coadd.fits"
+        path = f"{base_dir}/**/{image_type}/*_coadd.fits"
     elif image_type == "difference":
-        path = base_dir + "/**/" + image_type + "/*_diff.fits"
+        path = f"{base_dir}/**/{image_type}/*_diff.fits"
     else:
         raise ValueError(f"Invalid image type: {image_type}")
 
+    if verbose:
+        print("finding coadd images in", path)
     image_paths = glob(path)
 
     if not image_paths:
-        return None
+        raise ValueError("No images found")
+    else:
+        if verbose:
+            print(f"{len(image_paths)} images are found.")
+
+    def get_filter_sort_key(image_path):
+        try:
+            with fits.open(image_path) as hdul:
+                filter_name = hdul[0].header.get("FILTER", "").lower()
+                is_broadband = filter_name in BROAD_FILTERS
+                return (is_broadband, filter_name)
+        except:
+            return (True, "")
+
+    image_paths = sorted(image_paths, key=get_filter_sort_key)
+    n_images = len(image_paths)
+    k, l = find_rec(n_images)
 
     # Extract SED data - store with image paths
     sed_data = []
@@ -669,6 +687,8 @@ def make_too_output(too_id, sky_position=None, image_type="difference", verbose=
 
     if sky_position is None:
         sky_position = SkyCoord(too_data["ra_deg"], too_data["dec_deg"], unit="deg")
+    else:
+        sky_position = SkyCoord(sky_position[0], sky_position[1], unit="deg")
 
     if image_type == "difference":
 
