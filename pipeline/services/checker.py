@@ -114,6 +114,12 @@ class CheckerMixin:
 
         header["SANITY"] = (flag, "Pipeline image sanity flag")
 
+        if not flag:
+            if hasattr(self, "logger") and self.logger is not None:
+                self.logger.info(f"Rejected {header.get('FILENAME', 'image')} by key {key}: {value['description']}")
+            else:
+                print(f"Rejected {header.get('FILENAME', 'image')} by key {key}: {value['description']}")
+
         return flag, header
 
     def sanity_check(self, file_path: str = None, header: dict = None, dtype: str = None):
@@ -129,6 +135,8 @@ class CheckerMixin:
             except:
                 pass
             header = fits.getheader(file_path)
+            header["FILENAME"] = os.path.basename(file_path)  # to log the name in apply_criteria
+
             flag, _ = self.apply_criteria(header=header, dtype=dtype)
             return flag
 

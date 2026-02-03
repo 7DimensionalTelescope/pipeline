@@ -718,14 +718,10 @@ def hotpants(
     tu=None,
     nrx=None,
     nry=None,
+    savexy=None,
+    verbosity=0,
     log_file=None,
-):
-    """
-    il, iu: input image lower/upper limits
-    tl, tu: template image lower/upper limits
-    nrx, nry: number of image regions in x/y dimension.
-    ssf: substamp file
-    """
+) -> str:
 
     n_sigma = 5
     header = fits.getheader(inim)
@@ -750,13 +746,15 @@ def hotpants(
     outim = outim or add_suffix(inim, "diff")
     out_conv_im = out_conv_im or add_suffix(inim, "conv")  # convolved sci image (oci)
     ssf = ssf or swap_ext(add_suffix(inim, "ssf"), ".txt")
+    savexy = savexy or swap_ext(add_suffix(inim, "xy"), ".txt")
 
     hotpantscom = (
         f"hotpants -c t -n i "
         f"-iu {iu} -il {il} -tu {tu} -tl {tl} "
         f"-inim {inim} -tmplim {tmplim} -outim {outim} -oci {out_conv_im} "
         f"-imi {inmask} -tmi {refmask} "
-        f"-v 0 "
+        f"-savexy {savexy} "
+        f"-v {verbosity} "
         f"-nrx {nrx} -nry {nry} "
         f"-ssf {ssf}"
     )

@@ -4,6 +4,16 @@
             "value": 0.05,
             "criteria": "gt",
             "description": "Source number fraction against reference catalog must be > 0.05"
+        },
+        "ELLIPMN": {
+            "value": 0.3,
+            "criteria": "lt",
+            "description": "Ellipticity from Astrometry must be < 0.3"
+        },
+        "ELLIP": {
+            "value": 0.3,
+            "criteria": "lt",
+            "description": "Ellipticity from Photometry must be < 0.3"
         }
     }
 }
