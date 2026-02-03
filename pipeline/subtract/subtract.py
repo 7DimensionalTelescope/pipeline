@@ -220,7 +220,8 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
         self.sci_image_file = input_image  # self.path.imcoadd.coadd_image
         # self.sci_source_table_file = get_derived_product_path(self.sci_image_file)
         # self.sci_source_table_file = add_suffix(self.sci_image_file, "cat")
-        self.sci_source_table_file = PathHandler(self.sci_image_file, is_too=self.is_too).catalog
+        path_imsub = self.path.replace(input=self.sci_image_file)
+        self.sci_source_table_file = path_imsub.catalog
 
         self.ref_image_file = self.config_node.imsubtract.reference_image or self.reference_images[0]
         self.config_node.imsubtract.reference_image = self.ref_image_file  # sync
@@ -230,7 +231,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
         # self.ref_source_table_file = swap_ext(self.ref_image_file, "phot.cat")
 
         # self.subt_image_file = get_derived_product_path(self.sci_image_file, "transient", "subt.fits")
-        self.subt_image_file = PathHandler(self.sci_image_file, is_too=self.is_too).imsubtract.diffim
+        self.subt_image_file = path_imsub.imsubtract.diffim
         self.config_node.input.difference_image = self.subt_image_file
         self.logger.debug(f"subt_image_file: {self.subt_image_file}")
         self.logger.debug(f"config.input.difference_image: {self.config_node.input.difference_image}")
@@ -278,7 +279,8 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
         # Create mask for science image
 
         # weight_file = swap_ext(self.sci_image_file, "weight.fits")
-        weight_file = PathHandler(self.sci_image_file).weight
+        path_imsub = self.path.replace(input=self.sci_image_file)
+        weight_file = path_imsub.weight
 
         sci_mask = self._create_mask(weight_file if os.path.exists(weight_file) else self.sci_image_file)
         ref_mask = self._create_mask(self.ref_image_file)

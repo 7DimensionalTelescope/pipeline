@@ -25,6 +25,8 @@ class SciProcConfiguration(BaseConfig):
         write=True,  # False for PhotometrySingle
         verbose=True,
         overwrite=False,
+        working_dir=None,
+        is_pipeline=True,
         is_too=False,
         is_multi_epoch=False,
         **kwargs,
@@ -32,7 +34,15 @@ class SciProcConfiguration(BaseConfig):
         st = time.time()
         self.write = write
 
-        self._handle_input(input, logger, verbose, is_too=is_too, overwrite=overwrite, **kwargs)
+        self._handle_input(
+            input,
+            logger,
+            verbose,
+            working_dir=working_dir,
+            is_too=is_too,
+            overwrite=overwrite,
+            **kwargs,
+        )
 
         if not self._initialized:
             self.logger.info("Initializing configuration")
@@ -62,11 +72,21 @@ class SciProcConfiguration(BaseConfig):
         else:
             return None
 
-    def _handle_input(self, input, logger, verbose, is_too=False, overwrite=False, **kwargs):
+    def _handle_input(
+        self,
+        input,
+        logger,
+        verbose,
+        working_dir=None,
+        is_pipeline=True,
+        is_too=False,
+        overwrite=False,
+        **kwargs,
+    ):
         # list of science images
         if isinstance(input, list) or (isinstance(input, str) and input.endswith(".fits")):
             self.input_files = sorted(input)
-            self.path = PathHandler(input, is_too=is_too)
+            self.path = PathHandler(input, working_dir=working_dir, is_pipeline=is_pipeline, is_too=is_too)
             config_source = collapse(self.path.sciproc_base_yml, raise_error=True)
             log_file = self.path.sciproc_output_log
 
@@ -88,7 +108,7 @@ class SciProcConfiguration(BaseConfig):
             super().__init__(config_source=config_source, write=self.write, **kwargs)
             # working_dir = os.path.dirname(config_source) if isinstance(config_source, str) else None
             is_too = is_too or get_key(self.node.settings, "is_too", False)
-            self.path = self._set_pathhandler_from_config(is_too=is_too)
+            self.path = self._set_pathhandler_from_config(working_dir=working_dir, is_too=is_too)
             self.node.logging.file = self.path.sciproc_output_log
 
             if isinstance(config_source, str):

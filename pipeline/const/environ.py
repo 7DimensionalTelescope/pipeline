@@ -61,7 +61,7 @@ REQUISITE_DIRS = {
 
 
 # Storage Configuration
-DISK_CHANGE_NIGHTDATE = "2026-02-01"
+DISK_CHANGE_NIGHTDATE = "2026-05-01"
 
 
 # database access

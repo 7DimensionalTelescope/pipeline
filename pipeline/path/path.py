@@ -75,7 +75,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             is_too=is_too,
         )
 
-        self._handle_input(input, is_too=is_too)
+        self._handle_input(input, is_too=is_too, working_dir=working_dir)
         self.select_output_dir(working_dir=working_dir, is_pipeline=is_pipeline, is_too=is_too)
 
         self.define_file_independent_paths()
@@ -102,7 +102,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             is_too=s.is_too,
         )
 
-    def _handle_input(self, input, is_too=False):
+    def _handle_input(self, input, is_too=False, working_dir=None):
         """init with obs_parmas and config are ad-hoc. Will be changed to always take filenames"""
 
         if input is None:
@@ -119,7 +119,12 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         else:
             raise ValueError("Invalid PathHandler input type.")
 
-        self._input_files = [os.path.abspath(img) for img in input]
+        self._input_files = []
+        for img in input:
+            img_path = os.fspath(img)
+            if working_dir and not os.path.isabs(img_path):
+                img_path = os.path.join(working_dir, img_path)
+            self._input_files.append(os.path.abspath(img_path))
 
         if input:
             try:
