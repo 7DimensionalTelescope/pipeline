@@ -6,4 +6,4 @@ date	parts	comment
 251107	focuser	repair
 260104	fw	new_filters
 260104	mirror	optical_alignment
-260130	cam	31235
+260128	cam	31235
