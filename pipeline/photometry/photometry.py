@@ -51,6 +51,7 @@ from ..errors import (
     InferredFilterMismatchError,
     ConnectionError,
     PreviousStageError,
+    PrerequisiteNotMetError,
     UnknownError,
 )
 
@@ -922,11 +923,15 @@ class PhotometrySingle:
     #         obs_src_table[key].format = ".3f"
     #     return
 
-    def determine_filter(self, phot_headers: Dict[str, PhotometryHeader], save_plot=True):
+    def determine_filter(self, phot_headers: Dict[str, PhotometryHeader], save_plot=True) -> str:
         """Updates PhotometryHeader.INF_FILT with the best-matching filter inferred by the pipeline"""
         zp_cut = 27.2  # 26.8
         alleged_filter = self.image_info.filter
         filters_checked = [k for k in phot_headers.keys()]
+
+        self.logger.debug(f"phot_headers: {phot_headers}")
+        self.logger.debug(f"alleged_filter: {alleged_filter}")
+        self.logger.debug(f"filters_checked: {filters_checked}")
 
         if len(phot_headers) == 0:
             self.logger.warning(f"No phot_headers found. Using alleged filter.", FilterCheckError)
@@ -967,7 +972,7 @@ class PhotometrySingle:
                     f"No valid zero point sources found. Falling back to header filter '{alleged_filter}'",
                     FilterCheckError,
                 )
-                return
+                return alleged_filter
 
             idx = zperrs.index(min(zperrs))
             inferred_filter = narrowed_filters[idx]
@@ -1102,13 +1107,16 @@ class PhotometrySingle:
             gaia_cols = self.gaia_columns + [
                 "separation"
             ]  # e.g. ["source_id", "bp_rp", f"mag_{self.image_info.filter}"]
+            present_gaia_cols = [c for c in gaia_cols if c in obs_src_table.colnames]
+            missing_gaia_cols = [c for c in gaia_cols if c not in obs_src_table.colnames]
+            if missing_gaia_cols:
+                self.logger.warning(
+                    f"Some Gaia columns are missing and being omitted: {missing_gaia_cols}.",
+                    PrerequisiteNotMetError,
+                )
+
             other_cols = [c for c in obs_src_table.colnames if c not in gaia_cols]
-
-            print(other_cols, gaia_cols)
-
-            print(obs_src_table.colnames)
-
-            obs_src_table = obs_src_table[other_cols + gaia_cols]
+            obs_src_table = obs_src_table[other_cols + present_gaia_cols]
 
         # save
         output_catalog_file = self.path.photometry.final_catalog

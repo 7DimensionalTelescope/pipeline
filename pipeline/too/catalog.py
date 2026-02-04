@@ -3,7 +3,6 @@ import numpy as np
 from astropy.coordinates import SkyCoord
 from astroquery.vizier import Vizier
 
-
 class SkyCatalogHistory:
     HISTORY_FIELDS = ["objname", "ra", "dec", "fov_ra", "fov_dec", "cat_type"]
 
@@ -573,8 +572,91 @@ class SkyCatalog:
         raise ValueError("Object not found in SIMBAD.")
 
 
-if __name__ == "__main__":
-    ra = 10.68458
-    dec = -41.26917
-    catalog = SkyCatalog(ra=ra, dec=dec, catalog_type="GAIA", fov_ra=1.3, fov_dec=0.9)
-    print(catalog)
+def _get_ra_dec_columns(table):
+    """Return (ra_col, dec_col) for a table, or (None, None) if not found."""
+    ra_col = dec_col = None
+    for col in table.colnames:
+        col_lower = col.lower()
+        if ra_col is None and ("ra" in col_lower and "err" not in col_lower and "e_" not in col_lower):
+            ra_col = col
+        if (
+            dec_col is None
+            and ("dec" in col_lower or "de" in col_lower)
+            and "err" not in col_lower
+            and "e_" not in col_lower
+        ):
+            dec_col = col
+    return ra_col, dec_col
+
+
+def query_catalogs(sky_coord, size=30, unit=u.arcsec, catalogs_to_query=["GAIA"], catalog_mag_range=(10, 20)):
+    catalog_sources_list = []
+
+    fov = (size * unit).to(u.deg).value
+
+    for cat_type in catalogs_to_query:
+        try:
+            sky_catalog = SkyCatalog(
+                ra=sky_coord.ra.deg,
+                dec=sky_coord.dec.deg,
+                fov_ra=fov,
+                fov_dec=fov,
+                catalog_type=cat_type,
+            )
+
+            ref_sources, _ = sky_catalog.get_reference_sources(
+                mag_lower=catalog_mag_range[0], mag_upper=catalog_mag_range[1]
+            )
+
+            if len(ref_sources) > 0:
+                catalog_sources_list.append({"catalog": cat_type, "sources": ref_sources})
+        except Exception as e:
+            pass
+
+    # Combine and deduplicate sources from all catalogs
+    # Match sources by position (within 1 arcsec tolerance)
+    if len(catalog_sources_list) > 0:
+        from astropy.table import vstack
+
+        # Collect all sources with their RA/Dec
+        all_sources_coords = []
+        all_sources_tables = []
+
+        for cat_info in catalog_sources_list:
+            catalog_sources = cat_info["sources"]
+            ra_col, dec_col = _get_ra_dec_columns(catalog_sources)
+            if ra_col is not None and dec_col is not None:
+                coords = SkyCoord(ra=catalog_sources[ra_col], dec=catalog_sources[dec_col], unit="deg")
+                all_sources_coords.append(coords)
+                all_sources_tables.append(catalog_sources)
+
+        if len(all_sources_coords) > 0:
+            # Combine all coordinates
+            # Convert to arrays and combine
+            all_ra = []
+            all_dec = []
+            for coords in all_sources_coords:
+                all_ra.extend(coords.ra.deg)
+                all_dec.extend(coords.dec.deg)
+            combined_coords = SkyCoord(ra=all_ra, dec=all_dec, unit="deg")
+            combined_table = vstack(all_sources_tables)
+
+            # Deduplicate sources within 1 arcsec tolerance
+            tolerance = 1.0 * u.arcsec
+            unique_mask = np.ones(len(combined_coords), dtype=bool)
+
+            for i in range(len(combined_coords)):
+                if unique_mask[i]:
+                    # Find all sources within tolerance of this source
+                    sep = combined_coords[i].separation(combined_coords)
+                    matches = sep < tolerance
+                    matches[i] = False  # Exclude self
+                    if np.any(matches):
+                        # Mark duplicates as False (keep first occurrence)
+                        unique_mask[matches] = False
+
+            unique_sources = combined_table[unique_mask]
+            # Replace catalog_sources_list with a single unified list
+            catalog_sources_list = [{"catalog": "UNIFIED", "sources": unique_sources}]
+
+    return catalog_sources_list
