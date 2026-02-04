@@ -753,11 +753,13 @@ def hotpants(
         f"-iu {iu} -il {il} -tu {tu} -tl {tl} "
         f"-inim {inim} -tmplim {tmplim} -outim {outim} -oci {out_conv_im} "
         f"-imi {inmask} -tmi {refmask} "
-        f"-savexy {savexy} "
         f"-v {verbosity} "
         f"-nrx {nrx} -nry {nry} "
         f"-ssf {ssf}"
     )
+
+    if savexy:
+        hotpantscom += f" -savexy {savexy}"
     log_file = log_file or os.path.join(os.path.dirname(out_conv_im), "hotpants.log")
 
     process = subprocess.Popen(

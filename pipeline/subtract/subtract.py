@@ -212,6 +212,15 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
         else:
             self.input_images = local_input_images
 
+        # Resolve relative paths against config file directory (not CWD)
+        base_dir = os.path.dirname(get_key(self.config_node.info, "file", ""))
+        if base_dir:
+            resolved = []
+            for p in self.input_images:
+                p_str = os.fspath(p)
+                resolved.append(p_str if os.path.isabs(p_str) else os.path.join(base_dir, p_str))
+            self.input_images = resolved
+
         self.apply_sanity_filter_and_report()
         input_image = collapse(self.input_images, raise_error=True)
         self.config_node.imsubtract.input_image = input_image
@@ -220,6 +229,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
         self.sci_image_file = input_image  # self.path.imcoadd.coadd_image
         # self.sci_source_table_file = get_derived_product_path(self.sci_image_file)
         # self.sci_source_table_file = add_suffix(self.sci_image_file, "cat")
+
         path_imsub = self.path.replace(input=self.sci_image_file)
         self.sci_source_table_file = path_imsub.catalog
 
@@ -241,6 +251,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
 
         self.path_tmp = self.path.imsubtract.tmp_dir
         self.substamp_file = swap_ext(self.subt_image_file, "ssf.txt")
+        self.savexy_file = swap_ext(self.subt_image_file, "xy")
         self.ds9_file = swap_ext(self.subt_image_file, "ssf.reg")
 
     def create_substamps(self, ds9_region=True):
@@ -317,6 +328,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
             ssf=self.substamp_file,
             outim=self.subt_image_file,
             out_conv_im=out_conv_im,
+            savexy=self.savexy_file,
         )
 
     def mask_unsubtracted(self):
