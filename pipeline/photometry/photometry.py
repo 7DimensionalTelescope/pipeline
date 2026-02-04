@@ -51,6 +51,7 @@ from ..errors import (
     InferredFilterMismatchError,
     ConnectionError,
     PreviousStageError,
+    PrerequisiteNotMetError,
     UnknownError,
 )
 
@@ -1106,9 +1107,16 @@ class PhotometrySingle:
             gaia_cols = self.gaia_columns + [
                 "separation"
             ]  # e.g. ["source_id", "bp_rp", f"mag_{self.image_info.filter}"]
-            other_cols = [c for c in obs_src_table.colnames if c not in gaia_cols]
+            present_gaia_cols = [c for c in gaia_cols if c in obs_src_table.colnames]
+            missing_gaia_cols = [c for c in gaia_cols if c not in obs_src_table.colnames]
+            if missing_gaia_cols:
+                self.logger.warning(
+                    f"Some Gaia columns are missing and being omitted: {missing_gaia_cols}.",
+                    PrerequisiteNotMetError,
+                )
 
-            obs_src_table = obs_src_table[other_cols + gaia_cols]
+            other_cols = [c for c in obs_src_table.colnames if c not in gaia_cols]
+            obs_src_table = obs_src_table[other_cols + present_gaia_cols]
 
         # save
         output_catalog_file = self.path.photometry.final_catalog
