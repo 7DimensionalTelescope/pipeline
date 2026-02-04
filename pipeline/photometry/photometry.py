@@ -1036,12 +1036,17 @@ class PhotometrySingle:
             all_filter_files = (
                 query.on_date(name.nightdate).by_units([name.unit]).of_types(["flat", "sci"]).image_files()
             )
-            active_filters = set(NameHandler(all_filter_files).filter)
-            self.logger.debug(f"Fetched active filters from Django-PostgreSQL raw image DB: {active_filters}")
-            return active_filters
-        self.logger.warning(
-            f"get_active_filters: cannot connect to Django-PostgreSQL main raw image DB", ConnectionError
-        )
+            if all_filter_files:
+                active_filters = set(NameHandler(all_filter_files).filter)
+                self.logger.debug(f"Fetched active filters from Django-PostgreSQL raw image DB: {active_filters}")
+                return active_filters
+            self.logger.warning(
+                f"get_active_filters: empty DB result; falling back to local filesystem", FilterInventoryError
+            )
+        else:
+            self.logger.warning(
+                f"get_active_filters: cannot connect to Django-PostgreSQL main raw image DB", ConnectionError
+            )
 
         # sqlite pipeline db
         # TODO

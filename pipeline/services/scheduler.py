@@ -340,9 +340,10 @@ class Scheduler:
         in_completed = len(schedule[schedule["status"] == "Completed"])
         is_preprocess = len(schedule[schedule["config_type"] == "preprocess"])
         is_science = len(schedule[schedule["config_type"] == "science"])
+        is_failed = len(schedule[schedule["status"] == "Failed"])
         if with_table:
             schedule.pprint_all(max_lines=10)
-        return f"Scheduler with {total_tasks} (preprocess: {is_preprocess} and science: {is_science}) tasks: {in_ready} ready, {in_pending} pending, {in_processing} processing, and {in_completed} completed"
+        return f"Scheduler with {total_tasks} (preprocess: {is_preprocess} and science: {is_science}) tasks: {in_ready} ready, {in_pending} pending, {in_processing} processing, {is_failed} failed, and {in_completed} completed"
 
     @property
     def schedule(self):
@@ -643,9 +644,15 @@ class Scheduler:
         if self.use_system_queue:
             with self._db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*) FROM scheduler WHERE status != ?", ("Completed",))
+                cursor.execute(
+                    "SELECT COUNT(*) FROM scheduler WHERE status NOT IN (?, ?)",
+                    ("Completed", "Failed"),
+                )
                 return cursor.fetchone()[0] == 0
-        return len(self.schedule[self.schedule["status"] != "Completed"]) == 0
+        else:
+            completed = self.schedule[self.schedule["status"] == "Completed"]
+            failed = self.schedule[self.schedule["status"] == "Failed"]
+            return (len(completed) + len(failed)) == len(self.schedule)
 
     def rerun_failed_tasks(self):
         """

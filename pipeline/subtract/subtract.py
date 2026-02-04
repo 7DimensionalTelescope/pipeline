@@ -207,7 +207,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
         local_input_images = atleast_1d(get_key(self.config_node, "imsubtract.input_image"))
         # set from the common input if not set locally
 
-        if any(i is None for i in local_input_images):
+        if any(i is None for i in local_input_images) or len(local_input_images) == 0:
             self.input_images = [self.config_node.input.coadd_image]
         else:
             self.input_images = local_input_images
@@ -226,6 +226,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
         self.config_node.imsubtract.input_image = input_image
 
         self.logger.debug(f"ImSubtract inim: {input_image}")
+
         self.sci_image_file = input_image  # self.path.imcoadd.coadd_image
         # self.sci_source_table_file = get_derived_product_path(self.sci_image_file)
         # self.sci_source_table_file = add_suffix(self.sci_image_file, "cat")
