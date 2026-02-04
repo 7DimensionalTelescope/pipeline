@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily archive for multitelescopes.dict
+Requires=multitelescopes-dict-archive.service
+After=network.target
+
+[Timer]
+OnCalendar=*-*-* 03:10:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

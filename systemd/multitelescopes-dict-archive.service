@@ -1,0 +1,19 @@
+[Unit]
+Description=Archive multitelescopes.dict to sqlite
+After=network.target
+
+[Service]
+UMask=0002
+Type=oneshot
+User=pipeline-stable
+Group=pipeline
+WorkingDirectory=/home/pipeline-stable/pipeline
+Environment="PATH=/home/pipeline-stable/.conda/envs/pipeline/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/home/pipeline-stable/.conda/envs/pipeline/bin/python3 /home/pipeline-stable/pipeline/pipeline/cli/archive_multitelescopes_dict --verbose
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=multitelescopes-dict-archive
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true

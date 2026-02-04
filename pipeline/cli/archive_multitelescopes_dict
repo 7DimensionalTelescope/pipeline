@@ -1,0 +1,252 @@
+#!/home/pipeline-stable/.conda/envs/pipeline/bin/python
+"""
+Archive multitelescopes.dict into a local sqlite database.
+
+Designed to be run periodically via systemd timer.
+"""
+
+import argparse
+import ast
+import hashlib
+import json
+import sqlite3
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+DEFAULT_SOURCE_PATH = Path(
+    "/home/7dt/7dt_too/backend/data/7dt/sync/multitelescopes.dict"
+)
+DEFAULT_DB_PATH = Path("/var/db/multitelescopes_dict_archive.sqlite")
+
+
+EXCLUDED_KEYS = {"Status_update_time"}
+TELESCOPE_PREFIX = "7DT"
+
+
+def _quote_identifier(name: str) -> str:
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _table_name(telescope: str) -> str:
+    return str(telescope)
+
+
+def _ensure_table(conn: sqlite3.Connection, table_name: str) -> None:
+    quoted_table = _quote_identifier(table_name)
+    conn.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {quoted_table} (
+            date TEXT PRIMARY KEY,
+            captured_at TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            Status TEXT
+        )
+        """
+    )
+    conn.execute(
+        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_captured_at ON {quoted_table}(captured_at)"
+    )
+    conn.execute(
+        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_sha256 ON {quoted_table}(sha256)"
+    )
+
+
+def _ensure_columns(
+    conn: sqlite3.Connection, table_name: str, columns: dict[str, str]
+) -> None:
+    quoted_table = _quote_identifier(table_name)
+    existing = {
+        row[1]
+        for row in conn.execute(f"PRAGMA table_info({quoted_table})").fetchall()
+    }
+    for col_name, col_type in columns.items():
+        if col_name in existing:
+            continue
+        quoted_col = _quote_identifier(col_name)
+        conn.execute(
+            f"ALTER TABLE {quoted_table} ADD COLUMN {quoted_col} {col_type}"
+        )
+
+
+def _upsert_archive(
+    conn: sqlite3.Connection,
+    *,
+    table_name: str,
+    date_str: str,
+    captured_at: str,
+    sha256: str,
+    columns: dict[str, str],
+) -> None:
+    quoted_table = _quote_identifier(table_name)
+    column_names = ["date", "captured_at", "sha256", *columns.keys()]
+    quoted_columns = ", ".join(_quote_identifier(col) for col in column_names)
+    placeholders = ", ".join(["?"] * len(column_names))
+    update_set = ", ".join(
+        f"{_quote_identifier(col)} = excluded.{_quote_identifier(col)}"
+        for col in column_names
+        if col != "date"
+    )
+    values = [date_str, captured_at, sha256, *columns.values()]
+    conn.execute(
+        f"""
+        INSERT INTO {quoted_table} ({quoted_columns})
+        VALUES ({placeholders})
+        ON CONFLICT(date) DO UPDATE SET
+            {update_set}
+        """,
+        values,
+    )
+
+
+def _latest_sha256(conn: sqlite3.Connection, table_name: str) -> str | None:
+    quoted_table = _quote_identifier(table_name)
+    row = conn.execute(
+        f"""
+        SELECT sha256
+        FROM {quoted_table}
+        ORDER BY date DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if not row:
+        return None
+    return row[0]
+
+
+def _parse_source(source_path: Path) -> dict:
+    raw = source_path.read_text(encoding="utf-8")
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        try:
+            return ast.literal_eval(raw)
+        except (ValueError, SyntaxError) as exc:
+            raise ValueError("Source file is not valid JSON or Python dict") from exc
+
+
+def _filtered_payload(payload: dict) -> dict:
+    return {k: v for k, v in payload.items() if k not in EXCLUDED_KEYS}
+
+
+def _flatten_columns(telescope_payload: dict) -> dict[str, str]:
+    columns: dict[str, str] = {}
+    if "Status" in telescope_payload:
+        columns["Status"] = json.dumps(telescope_payload["Status"], separators=(",", ":"))
+    for key, value in telescope_payload.items():
+        if key in EXCLUDED_KEYS or key == "Status":
+            continue
+        if isinstance(value, dict):
+            for sub_key, sub_value in value.items():
+                col_name = f"{key}-{sub_key}"
+                columns[col_name] = json.dumps(sub_value, separators=(",", ":"))
+        else:
+            columns[key] = json.dumps(value, separators=(",", ":"))
+    return columns
+
+def archive_file(
+    source_path: Path, db_path: Path, skip_unchanged: bool, verbose: bool
+) -> None:
+    if not source_path.exists():
+        raise FileNotFoundError(f"Source file not found: {source_path}")
+
+    db_dir = db_path.parent
+    db_dir.mkdir(parents=True, exist_ok=True)
+
+    captured_at = datetime.now(timezone.utc).isoformat()
+    date_str = datetime.now(timezone.utc).date().isoformat()
+
+    payload = _parse_source(source_path)
+    if not isinstance(payload, dict):
+        raise ValueError("Source payload is not a dict")
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        changed_tables = []
+        for telescope, telescope_payload in payload.items():
+            if not str(telescope).startswith(TELESCOPE_PREFIX):
+                continue
+            if not isinstance(telescope_payload, dict):
+                continue
+            filtered = _filtered_payload(telescope_payload)
+            columns = _flatten_columns(filtered)
+            columns_for_hash = json.dumps(columns, sort_keys=True, separators=(",", ":"))
+            sha256 = hashlib.sha256(columns_for_hash.encode("utf-8")).hexdigest()
+            table_name = _table_name(str(telescope))
+            _ensure_table(conn, table_name)
+            _ensure_columns(
+                conn,
+                table_name,
+                {col: "TEXT" for col in columns.keys() if col != "Status"},
+            )
+            if skip_unchanged:
+                latest_sha = _latest_sha256(conn, table_name)
+                if latest_sha == sha256:
+                    continue
+            _upsert_archive(
+                conn,
+                table_name=table_name,
+                date_str=date_str,
+                captured_at=captured_at,
+                sha256=sha256,
+                columns=columns,
+            )
+            changed_tables.append(table_name)
+        conn.commit()
+    finally:
+        conn.close()
+
+    if verbose:
+        print(
+            "Archived",
+            {
+                "source": str(source_path),
+                "db": str(db_path),
+                "tables_updated": changed_tables,
+                "captured_at": captured_at,
+                "date": date_str,
+            },
+        )
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Archive multitelescopes.dict into sqlite."
+    )
+    parser.add_argument(
+        "--source",
+        default=str(DEFAULT_SOURCE_PATH),
+        help=f"Source file path (default: {DEFAULT_SOURCE_PATH})",
+    )
+    parser.add_argument(
+        "--db",
+        default=str(DEFAULT_DB_PATH),
+        help=f"SQLite database path (default: {DEFAULT_DB_PATH})",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Insert/update even when sha256 matches latest entry.",
+    )
+    parser.add_argument("--verbose", action="store_true", help="Print details.")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    try:
+        archive_file(
+            source_path=Path(args.source),
+            db_path=Path(args.db),
+            skip_unchanged=not args.force,
+            verbose=args.verbose,
+        )
+    except Exception as exc:
+        print(f"ERROR: Failed to archive multitelescopes.dict: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
