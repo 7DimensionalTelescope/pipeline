@@ -140,7 +140,7 @@ class Blueprint:
         overwrite_preprocess=False,
         overwrite_science=False,
         preprocess_kwargs=None,
-        processes=["astrometry", "photometry", "combine", "subtract"],
+        processes=["astrometry", "photometry", "coadd", "subtract"],
         input_type=None,
         **kwargs,
     ):

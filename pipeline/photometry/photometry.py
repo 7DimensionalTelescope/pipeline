@@ -110,7 +110,7 @@ class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
                 images or [x] if (x := self.config_node.input.coadd_image) else None
             )
             self.input_images = self.config_node.photometry.input_images
-            self.logger.debug("Running combined photometry")
+            self.logger.debug("Running coadd photometry")
             self._photometry_mode = "coadd_photometry"
         elif photometry_mode == "difference_photometry" or not self.config_node.flag.difference_photometry:
             self.logger.process_error = DifferencePhotometryError
