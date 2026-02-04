@@ -168,6 +168,21 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
             input_images = self.config_node.input.calibrated_images
             self.config_node.astrometry.input_images = input_images
 
+        input_images = [image for image in atleast_1d(input_images) if image]
+        if not input_images:
+            self.logger.error("No input images found for astrometry.", AstrometryError.EmptyInput)
+            raise AstrometryError.EmptyInputError("No input images found for astrometry.")
+
+        missing_images = [image for image in input_images if not os.path.exists(image)]
+        if missing_images:
+            missing_preview = ", ".join(missing_images[:3])
+            suffix = "..." if len(missing_images) > 3 else ""
+            self.logger.error(
+                f"Missing input image(s) for astrometry: {missing_preview}{suffix}",
+                AstrometryError.FileNotFound,
+            )
+            raise AstrometryError.FileNotFoundError(f"Input image does not exist: {missing_images[0]}")
+
         self.input_images = input_images
         # self.apply_sanity_filter_and_report()  # astrometry is the starter: nothing to filter out
 
@@ -260,9 +275,7 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
             # flexibly iterate to refine
             for i, image_info in enumerate(self.images_info):
                 if not image_info.sane:
-                    self.logger.info(
-                        f"SANITY F for {image_info.id}. Skipping astrometry run"
-                    )
+                    self.logger.info(f"SANITY F for {image_info.id}. Skipping astrometry run")
                     continue
 
                 if force_solve_field:
