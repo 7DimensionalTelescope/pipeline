@@ -140,9 +140,7 @@ class SkyCatalog:
             raise ValueError(f"{self.objname} does not exist in {catalog_name}")
 
         self.catalog_type = catalog_name
-        if verbose:
-            print(f"Start {catalog_name} query...")
-
+        
         config = self.CATALOG_CONFIGS[catalog_name]
         data = _vizier_query(
             ra_deg=float(self.ra),

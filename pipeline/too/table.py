@@ -6,6 +6,7 @@ as tables for both text files and email content.
 """
 
 import numpy as np
+import pandas as pd
 
 BROADBAND_FILTERS = ["u", "g", "r", "i", "z"]
 
@@ -172,5 +173,5 @@ def write_sed_table_file(sed_data, output_path, verbose=True):
         if ul_exists:
             f.write("* Upper limits (marked with '>') are 5-sigma limits\n")
 
-    if verbose:
-        print(f"Magnitude data saved to: {output_path}")
+    df = pd.DataFrame(sed_data_sorted)
+    df.to_csv(output_path.parent / (output_path.stem + ".csv"), index=False)

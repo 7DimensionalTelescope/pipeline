@@ -87,11 +87,13 @@ def run_scidata_reduction(
 
         if is_too:
             from .services.database.too import TooDB
+            from .too.plotting import make_too_output
 
             too_db = TooDB()
             too_data = too_db.read_data(config.name)
 
             if too_data.get("final_notice") == 0:
+                make_too_output(too_data.get("id"))
                 too_db.send_final_notice_email(too_data.get("id"))
 
         del config

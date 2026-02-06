@@ -721,7 +721,14 @@ def hotpants(
     savexy=None,
     verbosity=0,
     log_file=None,
+    logger=None,
 ) -> str:
+
+    def chatter(msg: str, level: str = "debug"):
+        if logger is not None:
+            return getattr(logger, level)(msg)
+        else:
+            print(f"[sextractor:{level.upper()}] {msg}")
 
     n_sigma = 5
     header = fits.getheader(inim)
@@ -761,6 +768,9 @@ def hotpants(
     if savexy:
         hotpantscom += f" -savexy {savexy}"
     log_file = log_file or os.path.join(os.path.dirname(out_conv_im), "hotpants.log")
+
+    chatter(f"Hotpants Command: {hotpantscom}")
+    chatter(f"Hotpants Log: {log_file}")
 
     process = subprocess.Popen(
         hotpantscom,

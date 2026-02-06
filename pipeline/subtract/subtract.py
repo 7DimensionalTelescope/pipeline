@@ -120,6 +120,8 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
 
             self.update_header(add_version=True)
 
+            self.plot_subtracted_image()
+
             # Create QA data for subtracted image if database is connected
             if self.is_connected and self.process_status_id is not None:
                 subt_image = self.subt_image_file
@@ -135,8 +137,6 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
                         process_status_id=self.process_status_id,
                     )
                     self.image_qa.update_data(qa_data.id, **qa_data.to_dict())
-
-            self.plot_subtracted_image()
 
             self.update_progress(90, "imsubtract-completed")
 
@@ -263,13 +263,13 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
         # Select substamp sources
         selected_sci_table = select_sources(sci_source_table)
         self.logger.info(
-            f"{len(selected_sci_table)} selected for substamp from {len(sci_source_table)} science catalog sources"
+            f"{len(selected_sci_table)} sources are selected out of {len(sci_source_table)} science catalog sources"
         )
 
         # Match two catalogs
         matched_source_table = match_two_catalogs(selected_sci_table, ref_source_table)
         self.logger.info(
-            f"{len(matched_source_table)} sources matched" f"out of {len(selected_sci_table)}, {len(ref_source_table)}"
+            f"{len(matched_source_table)} sources are matched out of science ({len(selected_sci_table)}) and reference ({len(ref_source_table)}) catalog sources"
         )
 
         # Write substamp file
@@ -288,14 +288,26 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
 
     def create_masks(self):
         """FOV masks"""
+        self.logger.info(f"Creating masks")
         # Create mask for science image
 
         # weight_file = swap_ext(self.sci_image_file, "weight.fits")
         path_imsub = self.path.replace(input=self.sci_image_file)
         weight_file = path_imsub.weight
 
-        sci_mask = self._create_mask(weight_file if os.path.exists(weight_file) else self.sci_image_file)
+        sci_mask = self._create_mask(
+            self.sci_image_file
+        )  # weight_file if os.path.exists(weight_file) else self.sci_image_file)
+        sci_mask_flatten = sci_mask.flatten()
+        self.logger.info(
+            f"In science image, {sum(sci_mask_flatten)} pixels are masked out of {len(sci_mask_flatten)} ({sum(sci_mask_flatten) / len(sci_mask_flatten) * 100:.2f}%)"
+        )
+
         ref_mask = self._create_mask(self.ref_image_file)
+        ref_mask_flatten = ref_mask.flatten()
+        self.logger.info(
+            f"In reference image, {sum(ref_mask_flatten)} pixels are masked out of {len(ref_mask_flatten)} ({sum(ref_mask_flatten) / len(ref_mask_flatten) * 100:.2f}%)"
+        )
 
         self.sci_mask_file = self._save_mask(sci_mask, self.sci_image_file)
         self.ref_mask_file = self._save_mask(ref_mask, self.ref_image_file)
@@ -305,6 +317,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
 
         self.common_mask_file = self._save_mask(common_mask, self.subt_image_file)
         self.common_mask = common_mask
+        self.logger.info(f"Masks are saved.")
 
     def _create_mask(self, file):
         data = fits.getdata(file)
@@ -317,6 +330,11 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
         return filename
 
     def run_hotpants(self):
+        st = time.time()
+        self.logger.info(
+            f"Running Hotpants for {os.path.basename(self.sci_image_file)} and {os.path.basename(self.ref_image_file)}"
+        )
+
         out_conv_im = os.path.join(
             self.path_tmp,
             swap_ext(os.path.basename(self.ref_image_file), "conv.fits"),
@@ -330,9 +348,13 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
             outim=self.subt_image_file,
             out_conv_im=out_conv_im,
             savexy=self.savexy_file,
+            logger=self.logger,
         )
 
+        self.logger.info(f"Hotpants completed in {time_diff_in_seconds(st)} seconds")
+
     def mask_unsubtracted(self):
+        self.logger.info(f"Masking unsubtracted")
         # Apply final mask on both SUBT & CONV images
         mask = fits.getdata(self.common_mask_file)
 
@@ -358,5 +380,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
     def plot_subtracted_image(self):
         subt_img = self.subt_image_file
         basename = os.path.basename(subt_img)
-        save_fits_as_figures(fits.getdata(subt_img), self.path.figure_dir_to_path / swap_ext(basename, "png"))
+        path_to_plot = self.path.figure_dir_to_path / swap_ext(basename, "jpg")
+        save_fits_as_figures(fits.getdata(subt_img), path_to_plot)
+        self.logger.info(f"Subtracted image is plotted and saved in {path_to_plot}")
         return

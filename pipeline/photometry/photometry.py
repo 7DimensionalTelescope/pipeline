@@ -34,7 +34,6 @@ from ..services.setup import BaseSetup
 from ..tools.table import match_two_catalogs, build_condition_mask
 from ..path.path import PathHandler
 from ..utils.header import get_header_key, update_padded_header
-from ..too.plotting import make_too_output
 from ..utils.tile import is_ris_tile
 from ..errors import (
     # process errors
@@ -210,9 +209,6 @@ class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
 
                 self.update_progress(100, f"{self._photometry_mode}-completed")
                 if self.is_too and self.too_id is not None:
-                    sed_data = make_too_output(self.too_id, image_type="coadd")
-                    self.logger.info(f"Cutoff images and SED data are created.")
-
                     interim_notice = self.too_db.read_data_by_id(self.too_id).get("interim_notice")
 
                     if interim_notice == 0:
@@ -243,8 +239,6 @@ class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
             self.update_progress(sum(self._progress_by_mode), f"{self._photometry_mode}-completed")
 
             if self.is_too and self.too_id is not None and self._photometry_mode == "difference_photometry":
-                sed_data = make_too_output(self.too_id, image_type="difference")
-                self.logger.info(f"ToO output are created.")
                 interim_notice = self.too_db.read_data_by_id(self.too_id).get("interim_notice")
 
                 if interim_notice == 0:
@@ -1010,9 +1004,7 @@ class PhotometrySingle:
         if alleged_filter != inferred_filter:
             orig_zp, orig_zperr = phot_utils.get_zp_from_dict(dicts, alleged_filter)
             self.logger.warning(
-                f"\nThe filter in header ({alleged_filter}) is not the best matching ({inferred_filter})\n"
-                f"The best-matching filter is {inferred_filter} with zp = {zp:.2f}±{zperr:.2f}\n"
-                f"The original filter is {alleged_filter} with zp = {orig_zp:.2f}±{orig_zperr:.2f}\n",
+                f"The filter in header ({alleged_filter}; zp = {orig_zp:.2f}±{orig_zperr:.2f}) is not the best matching ({inferred_filter}; zp = {zp:.2f}±{zperr:.2f})",
                 InferredFilterMismatchError,
             )
         else:

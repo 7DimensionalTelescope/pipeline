@@ -285,7 +285,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
         #     )
         self.logger.debug(f"Reference zero point: {self.zp_base}")
 
-    def bkgsub(self):
+    def bkgsub(self, ignore_steppy_flag: bool = False):
         # ------------------------------------------------------------
         # 	Global Background Subtraction
         # ------------------------------------------------------------
@@ -298,16 +298,42 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
             f"{self.path_bkgsub}/{add_suffix(get_basename(f), 'bkgsub')}" for f in self.input_images
         ]
 
+        bkg_images = [f"{self.path_bkgsub}/{add_suffix(get_basename(f), 'bkg')}" for f in self.input_images]
+        bkg_rms_images = [f"{self.path_bkgsub}/{add_suffix(get_basename(f), 'bkgrms')}" for f in self.input_images]
+
         if self.config_node.imcoadd.bkgsub_type.lower() == "dynamic":
             self.logger.info("Start dynamic background subtraction")
-            self._dynamic_bkgsub()
-            # if self._bkg_qa():
-            #     self._const_bkgsub()
+            bkg_func = self._dynamic_bkgsub
+            self.config_node.imcoadd.bkg_images = bkg_images
+            self.config_node.imcoadd.bkg_rms_images = bkg_rms_images
+
         elif self.config_node.imcoadd.bkgsub_type.lower() == "constant":
             self.logger.info("Start constant background subtraction")
-            self._const_bkgsub()
+            bkg_func = self._const_bkgsub
+            if get_key(self.config_node.imcoadd, "bkg_images"):
+                self.config_node.imcoadd.bkg_images = None
+            if get_key(self.config_node.imcoadd, "bkg_rms_images"):
+                self.config_node.imcoadd.bkg_rms_images = None
+
         else:
             raise ValueError(f"bkgsub_type: {self.config_node.imcoadd.bkgsub_type} is invalid")
+
+        for i, (inim, outim, bkg, bkg_rms, skyvalue) in enumerate(
+            zip(self.input_images, self.config_node.imcoadd.bkgsub_images, bkg_images, bkg_rms_images, self.skyvalues)
+        ):
+            st_loop = time.time()
+            is_steppy = bkg_func(
+                inim, outim, bkg=bkg, bkg_rms=bkg_rms, skyvalue=skyvalue, ignore_steepy_flag=ignore_steppy_flag
+            )
+
+            if is_steppy and not ignore_steppy_flag:
+                self.logger.warning(f"Background subtraction failed for {get_basename(outim)}")
+                self.logger.warning(f"Re-running background with constant value")
+                self._const_bkgsub(inim, outim, skyvalue=skyvalue)
+
+            self.logger.info(
+                f"Background subtraction completed for {get_basename(outim)} [image {i+1}/{len(self.input_images)}] in {time_diff_in_seconds(st_loop)} seconds"
+            )
 
         self.logger.info(
             f"Background subtraction is completed in {time_diff_in_seconds(st)} ({time_diff_in_seconds(st, return_float=True)/len(self.input_images):.1f} s/image)"
@@ -315,75 +341,62 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
 
         self.images_to_coadd = self.config_node.imcoadd.bkgsub_images
 
-    def _const_bkgsub(self):
-        for ii, (inim, _bkg, outim) in enumerate(
-            zip(self.input_images, self.skyvalues, self.config_node.imcoadd.bkgsub_images)
-        ):
-            self.logger.debug(f"[{ii:>6}] {get_basename(inim)}")
-            if os.path.exists(outim) and not self.overwrite:
-                self.logger.info(f"Background subtraction result exists; skipping: {get_basename(outim)}")
-                continue
+    def _const_bkgsub(self, inim, outim, skyvalue, **kwargs):
 
-            with fits.open(inim, memmap=True) as hdul:
-                _data = hdul[0].data
-                _hdr = hdul[0].header
-                _data -= _bkg
-                self.logger.debug(f"Using SKYVAL: {_bkg:.3f}")
-                fits.writeto(outim, _data, header=_hdr, overwrite=True)
+        if os.path.exists(outim) and not self.overwrite:
+            self.logger.info(f"Background subtraction result exists; skipping: {get_basename(outim)}")
+            return
 
-    def _dynamic_bkgsub(self, bkg_qa: bool = True):
+        with fits.open(inim, memmap=True) as hdul:
+            _data = hdul[0].data
+            _hdr = hdul[0].header
+            _data -= skyvalue
+            self.logger.debug(f"Using SKYVAL: {skyvalue:.3f}")
+            fits.writeto(outim, _data, header=_hdr, overwrite=True)
+
+        return False
+
+    def _dynamic_bkgsub(self, inim, outim, bkg, bkg_rms, ignore_steepy_flag=False, **kwargs):
         """
         Later to be refined using iterations
         """
         from ..external import sextractor
+        from .bkg_step import step_background_check
 
-        bkg_images = [f"{self.path_bkgsub}/{add_suffix(get_basename(f), 'bkg')}" for f in self.input_images]
-        bkg_rms_images = [f"{self.path_bkgsub}/{add_suffix(get_basename(f), 'bkgrms')}" for f in self.input_images]
+        sex_options = {
+            "-CATALOG_TYPE": "NONE",  # save no source catalog
+            "-CHECKIMAGE_TYPE": "BACKGROUND,BACKGROUND_RMS",
+            "-CHECKIMAGE_NAME": f"{bkg},{bkg_rms}",
+        }
+        sex_log = os.path.join(
+            self.path_bkgsub,
+            os.path.splitext(get_basename(outim))[0] + "_sextractor.log",
+        )
+        sextractor(inim, sex_options=sex_options, log_file=sex_log, logger=self.logger)
 
-        self.config_node.imcoadd.bkg_images = bkg_images
-        self.config_node.imcoadd.bkg_rms_images = bkg_rms_images
+        bkg_data = fits.getdata(bkg)
 
-        for inim, outim, bkg, bkg_rms in zip(
-            self.input_images, self.config_node.imcoadd.bkgsub_images, bkg_images, bkg_rms_images
-        ):
+        if ignore_steepy_flag:
+            is_steppy = False
+        else:
+            h, w = bkg_data.shape
+            stripe = np.mean(bkg_data[h // 2 - 100 : h // 2 + 100, :], axis=0)  # already smooth bkg: mean is okay?
+            is_steppy, info = step_background_check(stripe)
+            if is_steppy:
+                self.logger.warning(f"Background is steppy in {get_basename(outim)}")
+                self.logger.debug(f"Background is steppy: {info}")
+                return True
+            else:
+                self.logger.debug(f"Background is not steppy in {get_basename(outim)}: {info}")
 
-            # if result is already in factory, use that
-            if (os.path.exists(outim) and os.path.exists(bkg) and os.path.exists(bkg_rms)) and not self.overwrite:
-                self.logger.info(f"Background subtraction result exists; skipping: {get_basename(outim)}")
-                continue
+        with fits.open(inim, memmap=True) as hdul:
+            _data = hdul[0].data
+            _hdr = hdul[0].header
+            _hdr["BKG_STEP"] = (is_steppy, "Background is step-like; likely quantization artifact")
+            _data -= bkg_data
+            fits.writeto(outim, _data, header=_hdr, overwrite=True)
 
-            sex_options = {
-                "-CATALOG_TYPE": "NONE",  # save no source catalog
-                "-CHECKIMAGE_TYPE": "BACKGROUND,BACKGROUND_RMS",
-                "-CHECKIMAGE_NAME": f"{bkg},{bkg_rms}",
-            }
-            sex_log = os.path.join(
-                self.path_bkgsub,
-                os.path.splitext(get_basename(outim))[0] + "_sextractor.log",
-            )
-            sextractor(inim, sex_options=sex_options, log_file=sex_log, logger=self.logger)
-
-            bkg_data = fits.getdata(bkg)
-
-            if bkg_qa:
-                from .bkg_step import step_background_check
-
-                h, w = bkg_data.shape
-                stripe = np.mean(bkg_data[h // 2 - 100 : h // 2 + 100, :], axis=0)  # already smooth bkg: mean is okay?
-                is_steppy, info = step_background_check(stripe)
-                if is_steppy:
-                    self.logger.warning(f"Background is steppy in {get_basename(outim)}")
-                    self.logger.debug(f"Background is steppy: {info}")
-                else:
-                    self.logger.debug(f"Background is not steppy in {get_basename(outim)}: {info}")
-
-            with fits.open(inim, memmap=True) as hdul:
-                _data = hdul[0].data
-                _hdr = hdul[0].header
-                if bkg_qa:
-                    _hdr["BKG_STEP"] = (is_steppy, "Background is step-like; likely quantization artifact")
-                _data -= bkg_data
-                fits.writeto(outim, _data, header=_hdr, overwrite=True)
+        return is_steppy
 
     # # TODO:
     # def _bkg_qa(self, bkgsub_type: str = "dynamic"):
@@ -858,8 +871,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
     def plot_coadd_image(self):
         coadd_img = self.config_node.imcoadd.coadd_image
         basename = os.path.basename(coadd_img)
-        save_fits_as_figures(fits.getdata(coadd_img), self.path.figure_dir_to_path / swap_ext(basename, "png"))
-        return
+        path_to_plot = self.path.figure_dir_to_path / swap_ext(basename, "jpg")
+        save_fits_as_figures(fits.getdata(coadd_img), path_to_plot)
+        self.logger.info(f"Coadd image is plotted and saved in {path_to_plot}.")
 
     def _update_header(self, add_version: bool = True):
         # 	Get Header info
