@@ -21,7 +21,7 @@ from PIL import Image, ImageEnhance
 from ..tools.transform import lupton_asinh
 from .utils import get_3x3_stars, find_id_rows, resolve_rows_by_id
 from .plotting_helpers import cutout, adaptive_ra_spacing, draw_ellipse, HandlerEllipse
-from .evaluation_helpers import SeparationStats
+from .evaluation_helpers import SeparationStats, RSEPStats
 
 
 def wcs_check_plot(
@@ -39,6 +39,7 @@ def wcs_check_plot(
     subsecond_fraction=None,
     matched_ids=None,  # row index of matched catalog
     cutout_size=30,
+    rsep_stats: RSEPStats = None,
     stretch_type="Lupton Asinh",  # "Linear" "Log"
 ):
     fig = Figure(figsize=(7, 12))
@@ -106,10 +107,8 @@ def wcs_check_plot(
             text = f"Superarcsec Frac: {1 - subsecond_fraction:.3f}, " + text
         if subpixel_fraction is not None:
             text = f"Subpixel Frac: {subpixel_fraction:.2f}, " + text
-        text = (
-            f"[{np.sum(~matched['separation'].mask)} Matched Sources {np.sum(~matched['separation'].mask)/len(matched)*100:.1f}%]  "
-            + text
-        )
+        if rsep_stats is not None:
+            text = f"[UNMATCH: {rsep_stats.unmatched_fraction:.2f}, NUM_REF: {rsep_stats.num_ref_sources}]  " + text
 
         # fig.text(0.5, 0.62, text, ha="center", va="center", fontsize=8)
         ax_spacer.text(0.47, 0.9, text, ha="center", va="center", fontsize=8, transform=ax_spacer.transAxes)

@@ -14,6 +14,7 @@ from ..config.utils import get_key
 from ..errors import SubtractionError
 from ..path import PathHandler
 from ..preprocess.plotting import save_fits_as_figures
+from ..tools.ds9 import create_ds9_region_file
 
 from ..services.setup import BaseSetup
 from ..services.database.handler import DatabaseHandler
@@ -21,7 +22,7 @@ from ..services.database.image_qa import ImageQATable
 from ..services.checker import CheckerMixin
 from ..services.database.query import RawImageQuery
 
-from .utils import create_ds9_region_file, select_sources
+from .utils import select_sources
 
 
 class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):

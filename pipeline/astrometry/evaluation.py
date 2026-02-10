@@ -9,52 +9,21 @@ from astropy.wcs import WCS
 import astropy.io.fits as fits
 
 from ..const import PIXSCALE
+from ..utils import add_suffix, swap_ext
 from ..tools.table import match_two_catalogs, add_id_column, match_multi_catalogs
 from ..tools.angle import azimuth_deg_from_center
-from ..utils import add_suffix, swap_ext
+from ..tools.ds9 import create_ds9_region_file
+
 from .plotting import wcs_check_plot
-from ..subtract.utils import create_ds9_region_file
-from .utils import inside_quad_spherical, get_3x3_stars, get_fov_quad
+from .utils import inside_quad_spherical, get_3x3_stars, get_fov_quad, get_plateau_end
 from .evaluation_helpers import (
     compute_rms_stats,
     well_matchedness_stats,
+    RSEPStats,
     CornerStats,
     SeparationStats,
     RadialStats,
 )
-
-
-def table_has_nan(tbl: Table) -> bool:
-    for col in tbl.itercols():
-        if col.dtype.kind == "f":  # floating types
-            if np.isnan(col).any():
-                return True
-    return False
-
-
-@dataclass(frozen=True)
-class RSEPStats:
-    """SeparationStats + metadata"""
-
-    ref_max_mag: float
-    sci_max_mag: float
-    num_ref_sources: int
-    unmatched_fraction: float
-    subpixel_fraction: float
-    subsecond_fraction: float
-    separation_stats: SeparationStats
-
-    @property
-    def fits_header_cards_for_metadata(self) -> List[Tuple[str, float, str]]:
-        """not the entire header cards, just the metadata"""
-        return [
-            (f"REFMXMAG", self.ref_max_mag, "Highest g mag of selected reference sources"),
-            (f"SCIMXMAG", self.sci_max_mag, "Highest inst mag of selected science sources"),
-            (f"NUM_REF", self.num_ref_sources, "Number of reference sources selected"),
-            (f"UNMATCH", self.unmatched_fraction, "Fraction of unmatched reference sources"),
-            (f"SUBPIXEL", self.subpixel_fraction, "Fraction of matched with sep < PIXSCALE"),
-            (f"SUBSEC", self.subsecond_fraction, "Fraction of matched with sep < 1 arcsec"),
-        ]
 
 
 @dataclass(frozen=True)
@@ -165,7 +134,7 @@ def evaluate_single_wcs(
     #         image_stats=None,
     #     )
 
-    matched, tbl, ref_cat, (REF_MAX_MAG, SCI_MAX_MAG, NUM_REF) = prepare_matched_catalog(
+    matched, tbl, ref_cat, (unmatched_fraction, REF_MAX_MAG, SCI_MAX_MAG, NUM_REF) = prepare_matched_catalog(
         chatter,
         image=image,
         ref_cat=ref_cat,
@@ -187,9 +156,8 @@ def evaluate_single_wcs(
 
     # compute separation statistics
     sep = matched["separation"]
-    unmatched_fraction = sep.mask.sum() / sep.size
     n_valid = sep.count()
-    matched_cleaned = matched[~sep.mask]
+    matched_bidirectional = matched[~sep.mask]
 
     if n_valid > 0:
         # Fractions
@@ -197,11 +165,11 @@ def evaluate_single_wcs(
         subsecond_fraction = float(np.ma.mean(sep < 1.0))
 
         # compute
-        sep_sci = matched_cleaned["separation"]
-        sep_x_sci = matched_cleaned["dra_cosdec"]
-        sep_y_sci = matched_cleaned["ddec"]
+        sep_sci = matched_bidirectional["separation"]
+        sep_x_sci = matched_bidirectional["dra_cosdec"]
+        sep_y_sci = matched_bidirectional["ddec"]
         phi_deg = azimuth_deg_from_center(
-            matched_cleaned["X_IMAGE"], matched_cleaned["Y_IMAGE"], (W + 1) / 2, (H + 1) / 2
+            matched_bidirectional["X_IMAGE"], matched_bidirectional["Y_IMAGE"], (W + 1) / 2, (H + 1) / 2
         )
         sep_dr = np.cos(np.deg2rad(phi_deg)) * sep_x_sci + np.sin(np.deg2rad(phi_deg)) * sep_y_sci
         sep_r_dphi = np.sin(np.deg2rad(phi_deg)) * sep_x_sci - np.cos(np.deg2rad(phi_deg)) * sep_y_sci
@@ -222,9 +190,8 @@ def evaluate_single_wcs(
         )
 
     else:
-
-        unmatched_fraction = 1.0  # no NaN. fits requires values
-        subpixel_fraction = 0
+        # unmatched_fraction = 1.0
+        subpixel_fraction = 0  # no NaN. fits requires values
         subsecond_fraction = 0
         separation_stats = SeparationStats()  # empty
 
@@ -239,9 +206,9 @@ def evaluate_single_wcs(
     )
 
     # 2D PSF stats
-    matched_ids = get_3x3_stars(matched_cleaned, H, W, cutout_size)
+    matched_ids = get_3x3_stars(matched_bidirectional, H, W, cutout_size)
     try:
-        corner_stats = CornerStats.from_matched_catalog(matched_cleaned, matched_ids)
+        corner_stats = CornerStats.from_matched_catalog(matched_bidirectional, matched_ids)
     except Exception as e:
         chatter(f"evaluate_single_wcs: failed to compute corner_stats: {e}")
         corner_stats = None
@@ -251,16 +218,16 @@ def evaluate_single_wcs(
     chatter(f"{id} evaluate_single_wcs: corner_stats {corner_stats}")
 
     # overall image stats
-    image_stats = ImageStats.from_matched_catalog(matched_cleaned)
+    image_stats = ImageStats.from_matched_catalog(matched_bidirectional)
 
     # radial stats #TODO
-    radial_stats = RadialStats.from_matched_catalog(matched_cleaned, W, H)
+    radial_stats = RadialStats.from_matched_catalog(matched_bidirectional, W, H)
     if plot_save_path is not None and unmatched_fraction < 1.0:
         chatter(f"evaluate_single_wcs: plotting to {plot_save_path}")
         wcs_check_plot(
             ref_cat,
             tbl,
-            matched,  # this should contain unmatched reference sources to calculate unmatch
+            matched_bidirectional,
             wcs,
             image,
             plot_save_path,
@@ -272,11 +239,12 @@ def evaluate_single_wcs(
             subsecond_fraction=subsecond_fraction,
             matched_ids=matched_ids,
             cutout_size=cutout_size,
+            rsep_stats=rsep_stats,
         )
         chatter(f"evaluate_single_wcs: plot saved to {plot_save_path}")
 
     return EvaluationResult(
-        matched=matched_cleaned,  # this has to be cleaned of ref-only rows for joint evaluation
+        matched=matched_bidirectional,  # this has to be cleaned of ref-only rows for joint evaluation
         rsep_stats=rsep_stats,
         corner_stats=corner_stats,
         image_stats=image_stats,
@@ -298,14 +266,19 @@ def prepare_matched_catalog(
     fov_ra=None,
     fov_dec=None,
     write_matched_catalog=True,
-    num_sci=100,
     num_ref=100,
+    num_sci=None,
     ds9_region=True,
     overwrite=True,
     matched_catalog_path=None,
 ):
     """
     Returned matched catalog contains unmatched reference sources.
+
+    NUM_FRAC should be calculated including the saturated sources, but all
+    other stats should be calculated excluding the saturated sources.
+
+    The returned matched catalog only contains either FLAGS==0 or unmatched sources.
     """
 
     # load the source catalog
@@ -332,6 +305,8 @@ def prepare_matched_catalog(
         except Exception as e:
             chatter(f"Failed to update FOV polygon for {image}: {e}")
 
+    num_sci = num_sci or num_ref
+
     # # update the source catalog with the WCS
     # if head is not None:
     #     wcs = head or WCS(head)
@@ -346,12 +321,15 @@ def prepare_matched_catalog(
     # tbl.sort("snr", reverse=True)
 
     # sort tables by magnitude (brighter first)
-    # ref_cat.sort("phot_g_mean_mag")  # threading unsafe
-    order = np.argsort(ref_cat["phot_g_mean_mag"])
+    order = np.argsort(ref_cat["phot_g_mean_mag"])  # ref_cat.sort("phot_g_mean_mag")  # threading unsafe
     ref_cat = ref_cat[order]
     tbl.sort("MAG_AUTO")
-    tbl = tbl[tbl["FLAGS"] == 0]  # exclude saturated sources
+
+    # First match without saturation cut
+    # tbl = tbl[tbl["FLAGS"] == 0]  # exclude saturated sources
     # tbl = tbl[tbl["MAG_AUTO"] > sci_inst_mag_llim]  # exclude too bright sci sources
+    # Then get the plateau end of the flags column
+    rough_saturation_count = get_plateau_end(tbl["FLAGS"])
 
     # filter sources in REFCAT by FOV
     if fov_ra is not None and fov_dec is not None:
@@ -367,8 +345,10 @@ def prepare_matched_catalog(
         )
 
     # extract brightest num_ref/num_sci sources to calculate separation statistics
-    ref_cat = ref_cat[:num_ref]
-    tbl = tbl[:num_sci]
+    # roughly account for saturated sources in the science catalog
+    ref_cat = ref_cat[: num_ref + rough_saturation_count]
+    tbl = tbl[: num_sci + rough_saturation_count]
+
     if ds9_region:
         x, y = wcs.all_world2pix(ref_cat["ra"], ref_cat["dec"], 1)
         create_ds9_region_file(x=x, y=y, filename=add_suffix(swap_ext(source_cat, "reg"), f"ref_{num_ref}"))
@@ -407,7 +387,12 @@ def prepare_matched_catalog(
     if write_matched_catalog:
         matched.write(matched_catalog_path, overwrite=overwrite)
 
-    return matched, tbl, ref_cat, (REF_MAX_MAG, SCI_MAX_MAG, NUM_REF)
+    # clean saturated sources after deriving UNMATCH
+    sep = matched["separation"]
+    unmatched_fraction = sep.mask.sum() / sep.size
+    matched_cleaned = matched[(matched["FLAGS"] == 0) | matched["FLAGS"].mask]
+
+    return matched_cleaned, tbl, ref_cat, (unmatched_fraction, REF_MAX_MAG, SCI_MAX_MAG, NUM_REF)
 
 
 ###############################################################################

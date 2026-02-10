@@ -26,7 +26,7 @@ class SciProcConfiguration(BaseConfig):
         verbose=True,
         overwrite=False,
         working_dir=None,
-        is_pipeline=True,
+        is_pipeline=False,
         is_too=False,
         is_multi_epoch=False,
         **kwargs,
@@ -78,7 +78,7 @@ class SciProcConfiguration(BaseConfig):
         logger,
         verbose,
         working_dir=None,
-        is_pipeline=True,
+        is_pipeline=False,
         is_too=False,
         overwrite=False,
         **kwargs,
@@ -108,7 +108,11 @@ class SciProcConfiguration(BaseConfig):
             super().__init__(config_source=config_source, write=self.write, **kwargs)
             # working_dir = os.path.dirname(config_source) if isinstance(config_source, str) else None
             is_too = is_too or get_key(self.node.settings, "is_too", False)
-            self.path = self._set_pathhandler_from_config(working_dir=working_dir, is_too=is_too)
+            self.path = self._set_pathhandler_from_config(
+                working_dir=working_dir,
+                is_pipeline=is_pipeline,
+                is_too=is_too,
+            )
             self.node.logging.file = self.path.sciproc_output_log
 
             if isinstance(config_source, str):
@@ -133,22 +137,28 @@ class SciProcConfiguration(BaseConfig):
 
         return
 
-    def _set_pathhandler_from_config(self, working_dir=None, is_too=False):
+    def _set_pathhandler_from_config(self, working_dir=None, is_pipeline=False, is_too=False):
         # mind the check order
         if hasattr(self.node, "input"):
             if hasattr(self.node.input, "calibrated_images") and self.node.input.calibrated_images:
-                return PathHandler(self.node.input.calibrated_images, working_dir=working_dir, is_too=is_too)
+                return PathHandler(
+                    self.node.input.calibrated_images, working_dir=working_dir, is_pipeline=is_pipeline, is_too=is_too
+                )
 
             if hasattr(self.node.input, "processed_dir") and self.node.input.processed_dir:
                 f = os.path.join(self.node.input.processed_dir, "**.fits")
-                return PathHandler(sorted(glob.glob(f)), working_dir=working_dir, is_too=is_too)
+                return PathHandler(
+                    sorted(glob.glob(f)), working_dir=working_dir, is_pipeline=is_pipeline, is_too=is_too
+                )
 
             if hasattr(self.node.input, "coadd_image") and self.node.input.coadd_image:
-                return PathHandler(self.node.input.coadd_image, working_dir=working_dir, is_too=is_too)
+                return PathHandler(
+                    self.node.input.coadd_image, working_dir=working_dir, is_pipeline=is_pipeline, is_too=is_too
+                )
 
         raise ValueError("Configuration does not contain valid input files or directories to create PathHandler.")
 
-    def initialize(self, write=False, is_pipeline=True, is_too=False, is_multi_epoch=False):
+    def initialize(self, write=False, is_pipeline=False, is_too=False, is_multi_epoch=False):
         """Fill in universal info, filenames, settings."""
 
         if is_too:

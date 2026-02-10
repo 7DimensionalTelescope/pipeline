@@ -498,3 +498,16 @@ def get_source_num_frac(sci_cat: str, local_astref: str, sci_zp, depth: float = 
     ref_num_sources = get_num_sources(local_astref, depth=depth, mag_key="phot_g_mean_mag")
 
     return sci_num_sources / (SCI_TO_REF_AREA_RATIO * ref_num_sources)
+
+
+def get_plateau_end(flags: Table.Column, w=15, thr=0.5) -> int:
+    """flags is SExtractor FLAGS column"""
+    is_nonzero = (flags != 0).astype(float)
+
+    # running fraction of non‑zero FLAGS
+    kernel = np.ones(w) / w
+    frac_nonzero = np.convolve(is_nonzero, kernel, mode="same")
+
+    # index where the plateau of non‑zero flags ends
+    plateau_end = np.argmax(frac_nonzero < thr)
+    return plateau_end

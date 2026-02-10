@@ -11,6 +11,31 @@ from .utils import find_id_rows
 
 
 @dataclass(frozen=True)
+class RSEPStats:
+    """SeparationStats + metadata"""
+
+    ref_max_mag: float
+    sci_max_mag: float
+    num_ref_sources: int
+    unmatched_fraction: float
+    subpixel_fraction: float
+    subsecond_fraction: float
+    separation_stats: SeparationStats
+
+    @property
+    def fits_header_cards_for_metadata(self) -> List[Tuple[str, float, str]]:
+        """not the entire header cards, just the metadata"""
+        return [
+            (f"REFMXMAG", self.ref_max_mag, "Highest g mag of selected reference sources"),
+            (f"SCIMXMAG", self.sci_max_mag, "Highest inst mag of selected science sources"),
+            (f"NUM_REF", self.num_ref_sources, "Number of reference sources selected"),
+            (f"UNMATCH", self.unmatched_fraction, "Fraction of unmatched reference sources"),
+            (f"SUBPIXEL", self.subpixel_fraction, "Fraction of matched with sep < PIXSCALE"),
+            (f"SUBSEC", self.subsecond_fraction, "Fraction of matched with sep < 1 arcsec"),
+        ]
+
+
+@dataclass(frozen=True)
 class SeparationStats:
     """
     separation statistics. reminiscent of scamp ASTRRMS
