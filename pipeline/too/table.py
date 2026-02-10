@@ -55,10 +55,9 @@ def format_magnitude(mag, mag_err, is_upper_limit):
     """
     # Format magnitude
     if mag is not None and not np.isnan(mag):
-        if is_upper_limit:
-            mag_str = f">{mag:.2f}"
-        else:
-            mag_str = f"{mag:.2f}"
+        mag_str = f"{mag:.2f}"
+    elif is_upper_limit:
+        mag_str = f">{mag_err:.2f}"
     else:
         mag_str = "N/A"
 

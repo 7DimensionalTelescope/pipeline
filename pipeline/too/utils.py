@@ -146,7 +146,11 @@ def extract_flux_from_aperture(
     sigma_flux_adu = sigma_flux_electrons / EGAIN  # FIXED: Changed GAIN to EGAIN
 
     # 6. Calculate Magnitude
-    if actual_flux <= 0:
+    # Calculate SNR
+    SNR = actual_flux / sigma_flux_adu if sigma_flux_adu > 0 else 0
+    SNR_THRESHOLD = 3.0  # Standard threshold for detection significance
+
+    if actual_flux <= 0 or SNR < SNR_THRESHOLD:
         return None, UL5, 0
     else:
         mag = -2.5 * np.log10(actual_flux) + ZP

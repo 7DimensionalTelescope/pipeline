@@ -1079,7 +1079,13 @@ class Scheduler:
         """Rerun a task in database mode."""
         with self._db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE scheduler SET status = 'Ready' WHERE \"index\" = ?", (index,))
+            cursor.execute(
+                """UPDATE scheduler 
+                   SET status = ?, readiness = ?, is_ready = ?, pid = 0, 
+                       process_start = ?, process_end = ?, kwargs = ?
+                   WHERE "index" = ?""",
+                ("Ready", 100, 1, "", "", "['-overwrite']", index),
+            )
             conn.commit()
             return True
 

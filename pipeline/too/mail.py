@@ -374,7 +374,7 @@ The data processing for the ToO observation is complete. The results are as foll
 
         return format_sed_table_string(sed_data, title="Magnitude Measurements")
 
-    def send_interim_notice_email(self, too_id: int, sed_data=None, dtype="difference", test=False) -> bool:
+    def send_interim_notice_email(self, too_id: int, dtype="difference", test=False) -> bool:
         """
         Send interim email notification when one filterset is completed.
         Shows detection status, filter used, and magnitude if detected.
@@ -392,6 +392,9 @@ The data processing for the ToO observation is complete. The results are as foll
             TooDBError: If too_id cannot be found or email fails
         """
         from ..const import DEFAULT_RECIPIENT
+        from .plotting import make_too_output
+
+        sed_data = make_too_output(too_id, image_type=dtype)
 
         too_data = self.too_db.read_data_by_id(too_id)
 
@@ -515,16 +518,14 @@ Interim Processing Result:
         filter_str = filt if filt else "Unknown Filter"
         contents += f"Filter: {filter_str}\n"
 
-        if is_detected and mag is not None:
-            if is_upper_limit:
-                contents += f"Magnitude: >{mag:.3f} (3σ upper limit)\n"
-            else:
-                if mag_error is not None and not np.isnan(mag_error) and mag_error > 0:
-                    contents += f"Magnitude: {mag:.3f} ± {mag_error:.3f}\n"
-                else:
-                    contents += f"Magnitude: {mag:.3f}\n"
+
+        if mag is None and is_upper_limit:
+            contents += f"Magnitude: >{mag_err:.3f} (5σ upper limit)\n"
         else:
-            contents += "Magnitude: N/A (Not detected)\n"
+            if mag_error is not None and not np.isnan(mag_error) and mag_error > 0:
+                contents += f"Magnitude: {mag:.3f} ± {mag_error:.3f}\n"
+            else:
+                contents += f"Magnitude: {mag:.3f}\n"
 
         contents += "\n"
         if is_detected:

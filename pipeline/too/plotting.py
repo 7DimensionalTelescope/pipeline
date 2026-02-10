@@ -59,7 +59,7 @@ def make_too_output(too_id, sky_position=None, image_type="difference", verbose=
     sed_data = plot_cutouts_and_sed(
         too_data["base_path"],
         sky_position=sky_position,
-        image_type=image_type,
+        image_type="coadd",
         mark_catalog_sources=True,
         **kwargs,
     )
@@ -189,7 +189,8 @@ def plot_cutouts_and_sed(
     image_paths = glob(path)
 
     if not image_paths:
-        raise ValueError("No images found")
+        print(f"No images found for {image_type} in {base_dir}")
+        return None
 
     image_paths = sorted(image_paths, key=get_filter_sort_key)
 

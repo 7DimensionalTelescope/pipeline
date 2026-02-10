@@ -640,7 +640,11 @@ class TooDB:
             if float(progress) >= 100:
                 update_data["v2"] = True
 
-            self.check_v1_images(too_id=too_id)
+            try:
+                self.check_v1_images(too_id=too_id)
+            except Exception as e:
+                print(f"Failed to check v1 images: {e}")
+                pass
 
             # Update the row using update_too_data
             return self.update_too_data(too_id=too_id, **update_data)
@@ -820,9 +824,9 @@ class TooDB:
 
         return self.mail.send_final_notice_email(too_id, sed_data=sed_data, test=test, force_to_send=force_to_send)
 
-    def send_interim_notice_email(self, too_id: int, sed_data=None, dtype="difference", test=False) -> bool:
+    def send_interim_notice_email(self, too_id: int, dtype="difference", test=False) -> bool:
 
-        return self.mail.send_interim_notice_email(too_id, sed_data=sed_data, dtype=dtype, test=test)
+        return self.mail.send_interim_notice_email(too_id, dtype=dtype, test=test)
 
     def mark_completed(self, too_id: int) -> bool:
         """Mark a ToO request as completed."""

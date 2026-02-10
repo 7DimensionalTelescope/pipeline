@@ -212,7 +212,7 @@ class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
                     interim_notice = self.too_db.read_data_by_id(self.too_id).get("interim_notice")
 
                     if interim_notice == 0:
-                        self.too_db.send_interim_notice_email(self.too_id, sed_data=sed_data, dtype="coadd")
+                        self.too_db.send_interim_notice_email(self.too_id, dtype="coadd")
 
                     self.too_db.mark_completed(self.too_id)
                 return
@@ -242,7 +242,7 @@ class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
                 interim_notice = self.too_db.read_data_by_id(self.too_id).get("interim_notice")
 
                 if interim_notice == 0:
-                    self.too_db.send_interim_notice_email(self.too_id, sed_data=sed_data, dtype="difference")
+                    self.too_db.send_interim_notice_email(self.too_id, dtype="difference")
 
                 self.too_db.mark_completed(self.too_id)
 

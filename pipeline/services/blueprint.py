@@ -210,8 +210,10 @@ class Blueprint:
         if base_priority is None and input_type in ["Daily", "ToO"]:
             if is_too:
                 base_priority = 6
+                input_type = "ToO"
             else:
                 base_priority = 3
+                input_type = "Daily"
         else:
             base_priority = base_priority or 1
             input_type = input_type or "User-input"

@@ -85,6 +85,19 @@ class ImageQATable:
     awincrmn: Optional[float] = None
     ellipmn: Optional[float] = None
 
+    zp_5: Optional[float] = None
+    ezp_5: Optional[float] = None
+    seeing: Optional[float] = None
+    peeing: Optional[float] = None
+    rotang: Optional[float] = None
+    skyval: Optional[float] = None
+    skysig: Optional[float] = None
+    zp_auto: Optional[float] = None
+    ezp_auto: Optional[float] = None
+    ul5_5: Optional[float] = None
+    stdnumb: Optional[float] = None
+    err_msgs: Optional[List[str]] = None
+
     inf_filt: Optional[str] = None
     bkg_step: Optional[bool] = None
 
@@ -154,11 +167,12 @@ class ImageQATable:
         keys = list(cls.__annotations__.keys())
 
         for key in keys:
-            header_key = key.replace("_", "-").upper()
-            if key == "unit":
-                header_key = "TELESCOP"
-            if header_key in header:
-                setattr(cls, key, header[header_key])
+            possible_keys = [key.replace("_", "-").upper(), key.upper()]
+            for header_key in possible_keys:
+                if key == "unit":
+                    header_key = "TELESCOP"
+                if header_key in header:
+                    setattr(cls, key, header[header_key])
 
         if header["IMAGETYP"] == "LIGHT":
             if "_coadd" in file:
