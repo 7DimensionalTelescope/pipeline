@@ -93,7 +93,6 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
             self.find_reference_image()
             if self.reference_images is None:  # if not found, do not run
                 self.logger.info(f"No reference image found for {self.name}; Skipping transient search.")
-                self.config_node.flag.subtraction = True
                 self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")
                 self.update_progress(100, "imsubtract-completed")
                 return
@@ -103,7 +102,6 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
 
             if not overwrite and os.path.exists(self.subt_image_file):
                 self.logger.info(f"Subtracted image already exists: {self.subt_image_file}; Skipping subtraction.")
-                self.config_node.flag.subtraction = True
                 self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")
                 self.update_progress(100, "imsubtract-completed")
                 return
