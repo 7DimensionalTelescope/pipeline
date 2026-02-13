@@ -437,8 +437,8 @@ class Scheduler:
                 # Mark as Processing and set process_start
                 process_start = datetime.now().isoformat()
                 cursor.execute(
-                    'UPDATE scheduler SET status = ?, process_start = ? WHERE "index" = ? AND status = ?',
-                    ("Processing", process_start, task_index, "Ready"),
+                    'UPDATE scheduler SET status = ?, process_start = ?, process_end = ? WHERE "index" = ? AND status = ?',
+                    ("Processing", process_start, "", task_index, "Ready"),
                 )
                 if cursor.rowcount == 0:
                     conn.rollback()
@@ -510,6 +510,7 @@ class Scheduler:
 
         self._schedule["status"][mask] = "Processing"
         self._schedule["process_start"][mask] = datetime.now().isoformat()
+        self._schedule["process_end"][mask] = ""
 
         if row_dict.get("config_type") == "preprocess":
             self.processing_preprocess += 1
@@ -542,8 +543,6 @@ class Scheduler:
                 return
 
             dependent_indices = json.loads(dependent_idx_json) if dependent_idx_json else []
-
-            print(success)
 
             if success:
                 new_status = "Completed"

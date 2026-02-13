@@ -145,7 +145,7 @@ class DatabaseHandler:
         import numpy as np
 
         params = np.atleast_1d(params)
-        default_params = ["date_obs", "nightdate", "unit", "filter", "object", "exptime"]
+        default_params = ["date_obs", "nightdate", "unit", "filter", "object", "exptime", "image_name"]
         params = list(params) + default_params
         rows = self.image_qa.read_data_by_params_with_date_range(
             columns=params,
