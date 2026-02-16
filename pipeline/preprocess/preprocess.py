@@ -88,12 +88,6 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
         DatabaseHandler.__init__(self, add_database=add_database if not is_too else False, logger=self.logger)
 
         if self.is_connected:
-
-            if self.process_status_id is not None:
-                from ..services.database.handler import ExceptionHandler
-
-                self.logger.database = ExceptionHandler(self.process_status_id)
-
             self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")
 
         self.is_too = is_too
@@ -145,6 +139,11 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
         if self.is_connected:
             self.logger.debug(f"is connected: creating pipeline record in database")
             self.process_status_id = self.create_process_data(self.config_node, overwrite=self.overwrite)
+
+            if self.process_status_id is not None:
+                from ..services.database.handler import ExceptionHandler
+
+                self.logger.database = ExceptionHandler(self.process_status_id)
 
     def log_group_manifest(self):
         for i, group in enumerate(self.raw_groups):
@@ -222,7 +221,7 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
                 except Exception as e:
                     self.logger.error(
                         f"[Group {i+1}] Error during masterframe generation or data reduction: {str(e)}",
-                        PreprocessError.UnknownError,
+                        e,
                         exc_info=False,
                     )
                     self.logger.debug(traceback.format_exc())
