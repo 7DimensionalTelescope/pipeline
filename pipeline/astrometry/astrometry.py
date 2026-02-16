@@ -1181,7 +1181,7 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
 
             # Optional joint evaluation (internal rms)
             if len(input_images) > 1 and isep:
-                isep_stats_list, match_stat_list = evaluate_joint_wcs([ii.matched_catalog for ii in self.images_info])
+                isep_stats_list, match_stat_list = evaluate_joint_wcs([ii.matched_catalog for ii in images_info])
                 for image_info, internal_sep_stats, match_stats in zip(images_info, isep_stats_list, match_stat_list):
                     image_info.set_internal_sep_stats(internal_sep_stats)
                     image_info.set_internal_match_stats(match_stats)
@@ -1234,7 +1234,8 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
         self.logger.info(f"Updating WCS to header(s) of {len(heads)} image(s)")
         assert len(heads) == len(inims)
 
-        for image_info, solved_head, target_fits in zip(self.images_info, heads, inims):
+        sane_images_info = [ii for ii in self.images_info if ii.sane]
+        for image_info, solved_head, target_fits in zip(sane_images_info, heads, inims):
             solved_header = read_scamp_header(solved_head)
 
             if add_version:
