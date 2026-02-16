@@ -15,6 +15,10 @@ class DataReduction:
         is_too=False,
         **kwargs,
     ):
+        """
+        master_frame_only: if True, 1) globs only bias, dark, flat images, 2) skips SciProcGroup creation
+                            if given list_of_images, 1) is negated.
+        """
 
         self.is_too = is_too
 

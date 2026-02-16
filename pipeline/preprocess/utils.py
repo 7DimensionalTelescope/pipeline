@@ -58,19 +58,22 @@ def wait_for_masterframe(file_path, timeout=1800):
         observer.join()
 
 
-def tolerant_search(template, dtype, max_offset=30, future=False):
+def tolerant_search(template, dtype, max_offset=30, future=False, ignore_sanity_if_no_match=False):
+    kw = dict(max_offset=max_offset, future=future)
 
-    searched = search_with_date_offsets(template, max_offset=max_offset, future=future)
-    # if found right away
+    searched = search_with_date_offsets(template, **kw, ignore_sanity_if_no_match=False)
+    if not searched and ignore_sanity_if_no_match:
+        searched = search_with_date_offsets(template, **kw, ignore_sanity_if_no_match=True)
     if searched:
         return searched
 
-    # if dark, try other units (still same camera serial)
     if dtype == "dark":
         path = PathHandler(template)
         path.name.unit = "*"
         new_template = path.preprocess.masterframe
-        searched = search_with_date_offsets(new_template, max_offset=max_offset, future=future)
+        searched = search_with_date_offsets(new_template, **kw, ignore_sanity_if_no_match=False)
+        if not searched and ignore_sanity_if_no_match:
+            searched = search_with_date_offsets(new_template, **kw, ignore_sanity_if_no_match=True)
         if searched:
             return searched
 
@@ -82,10 +85,11 @@ def tolerant_search(template, dtype, max_offset=30, future=False):
         #     return searched
 
     # still not found
+
     return None
 
 
-def search_with_date_offsets(template, max_offset=30, future=False):
+def search_with_date_offsets(template, max_offset=30, future=False, ignore_sanity_if_no_match=False):
     """
     Search for files based on a template, modifying embedded dates with offsets.
     future=False includes the current date
@@ -94,6 +98,8 @@ def search_with_date_offsets(template, max_offset=30, future=False):
         template (str): Template string with embedded dates (e.g., "/path/.../2025-01-01/.../20250102/...").
         max_offset (int, optional): Maximum number of days to offset (both positive and negative). Defaults to 2.
             originally 300 for early 7DT flat, later 30 days.
+        ignore_sanity_if_no_match (bool, optional): If True, skip sanity check and return the first existing path.
+            Defaults to False.
 
     Returns:
         str: A path to a closest existing master calibration frame file.
@@ -148,28 +154,22 @@ def search_with_date_offsets(template, max_offset=30, future=False):
         # if os.path.exists(modified_path):
         #     return modified_path
         if "*" in template:
-            # If there's a *, glob for all matches
             matches = glob(modified_path)
             if matches:
                 if len(matches) == 1:
-                    if CheckerMixin().sanity_check(matches[0]):
+                    if ignore_sanity_if_no_match or CheckerMixin().sanity_check(matches[0]):
                         return matches[0]
-                    else:
-                        continue
-                else:
-                    min_exptime_image = PathHandler(matches).get_minimum("exptime")
-                    if CheckerMixin().sanity_check(min_exptime_image):
-                        return min_exptime_image
-                    else:
-                        continue
+                    continue
+                min_exptime_image = PathHandler(matches).get_minimum("exptime")
+                if ignore_sanity_if_no_match or CheckerMixin().sanity_check(min_exptime_image):
+                    return min_exptime_image
+                continue
         else:
             if os.path.exists(modified_path):
-                if CheckerMixin().sanity_check(modified_path):
+                if ignore_sanity_if_no_match or CheckerMixin().sanity_check(modified_path):
                     return modified_path
-                else:
-                    continue
+                continue
 
-    # If no file is found, return None
     return None
 
 
