@@ -71,7 +71,7 @@ class Scheduler:
                 self.processing_preprocess = 0
 
     @classmethod
-    def from_list(cls, list_of_configs, base_priority=1, use_system_queue=False, **kwargs):
+    def from_list(cls, list_of_configs, base_priority=1, use_system_queue=False, overwrite_schedule=False, **kwargs):
         """Create a scheduler from a list of configs."""
         import re
         import copy
@@ -120,7 +120,7 @@ class Scheduler:
                 ]
             )
 
-        return cls(schedule=table, use_system_queue=use_system_queue, **kwargs)
+        return cls(schedule=table, use_system_queue=use_system_queue, overwrite_schedule=overwrite_schedule, **kwargs)
 
     def _connection_check(self):
         """Create scheduler table if it doesn't exist."""
