@@ -334,7 +334,7 @@ class PhotometrySingle:
         """Initialize PhotometrySingle instance."""
 
         if reset_count:
-            self._id_counter = itertools.count(1)
+            type(self)._id_counter = itertools.count(1)
 
         # if config_node is a SciProcConfiguration
         if hasattr(config_node, "node"):
@@ -357,7 +357,7 @@ class PhotometrySingle:
         self.phot_header.REFCAT = self.ref_cat_type
         self.logger.debug(f"{self.name}: self.phot_header at PhotometrySingle.__init__(): {self.phot_header}")
 
-        self._id = str(next(self._id_counter)) + "/" + str(total_image)
+        self._id = f"{next(type(self)._id_counter)}/{total_image}"
 
         self.path = PathHandler(self.input_image, is_too=self.config_node.settings.is_too)
         self.path_tmp = self.path.photometry.tmp_dir
