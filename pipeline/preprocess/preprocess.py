@@ -11,6 +11,7 @@ import traceback
 from .plotting import *
 from . import utils as prep_utils
 from .calc import record_statistics
+from . import ppflag
 
 from ..utils import flatten, time_diff_in_seconds, atleast_1d
 from ..config import PreprocConfiguration
@@ -335,6 +336,7 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
         self._use_gpu = all([use_gpu, self._use_gpu])
 
         st = time.time()
+        self._ppflag = {}  # PPFLAG per dtype for current group; also _flatdark_ppflag for flat
 
         for dtype in self.calib_types:
 
@@ -354,7 +356,7 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
             ):
                 norminal = self._generate_masterframe(dtype, device_id, dry_run=dry_run)
                 if not norminal:
-                    self._fetch_masterframe(output_file, dtype)
+                    self._fetch_masterframe(output_file, dtype, dry_run=dry_run)
                 self._generated_masterframes.append(output_file)
             elif isinstance(output_file, str) and len(output_file) != 0:
                 self._fetch_masterframe(output_file, dtype, dry_run=dry_run)
@@ -454,7 +456,21 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
 
         header = prep_utils.add_image_id(header)
 
-        flag = self._quality_assessment(header=header, dtype=dtype)
+        # PPFLAG: propagate from dependencies (bias=0, dark=bias, flat=bias|flatdark)
+        if dtype == "bias":
+            ppflag_val = 0
+        elif dtype == "dark":
+            ppflag_val = self._ppflag.get("bias", 0)
+            self._flatdark_ppflag = ppflag_val  # flatdark = dark when generated
+        elif dtype == "flat":
+            ppflag_val = ppflag.propagate_ppflag(
+                self._ppflag.get("bias", 0), getattr(self, "_flatdark_ppflag", 0)
+            )
+        else:
+            ppflag_val = 0
+        self._ppflag[dtype] = ppflag_val
+
+        flag = self._quality_assessment(header=header, dtype=dtype, ppflag_val=ppflag_val)
 
         if flag:
             self.logger.info(f"[Group {self._current_group+1}] Nominal master {dtype} generated successfully in {time_diff_in_seconds(st)} seconds")  # fmt: skip
@@ -472,10 +488,12 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
 
         return False
 
-    def _quality_assessment(self, header, dtype):
+    def _quality_assessment(self, header, dtype, ppflag_val: int = 0):
         header = record_statistics(getattr(self, f"{dtype}_output"), header, dtype=dtype)
 
         flag, header = self.apply_criteria(header=header, dtype=dtype)
+
+        ppflag.set_ppflag_in_header(header, ppflag_val)
 
         if dtype == "dark":
             hotpix = self.update_bpmask(sanity=flag)
@@ -493,8 +511,11 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
         self.logger.info(f"[Group {self._current_group+1}] Fetching a nominal master {dtype}")
         # existing_data can be either on-date or off-date
         max_offset = self.config_node.preprocess.max_offset
+        ignore_sanity = get_key(self.config_node.preprocess, "ignore_sanity_if_no_match", False)
         self.logger.debug(f"[Group {self._current_group+1}] Masterframe Search ({dtype}) Template: {template}")
-        existing_mframe_file = prep_utils.tolerant_search(template, dtype, max_offset=max_offset, future=True)
+        existing_mframe_file = prep_utils.tolerant_search(
+            template, dtype, max_offset=max_offset, future=True, ignore_sanity_if_no_match=ignore_sanity
+        )
 
         if not existing_mframe_file:
 
@@ -510,6 +531,15 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
             self.logger.info(
                 f"[Group {self._current_group+1}] Found pre-existing nominal (sanity: {sanity_check}) master {dtype} at {os.path.basename(existing_mframe_file)}"
             )
+
+        # PPFLAG: fetched frame gets 1 (different date) and/or 4 (sanity F) as appropriate
+        ppflag_val = ppflag.compute_fetch_ppflag(existing_mframe_file, template, sanity_check)
+        self._ppflag[dtype] = ppflag_val
+        if not dry_run:
+            with fits.open(existing_mframe_file, mode="update") as hdul:
+                ppflag.set_ppflag_in_header(hdul[0].header, ppflag_val)
+                hdul.flush()
+
         # update the output names in raw_groups
         self.raw_groups[self._current_group][1][self._key_to_index[dtype]] = existing_mframe_file
 
@@ -519,15 +549,20 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
             path = PathHandler(template)
             path.name.exptime = "*"
             flatdark_template = path.preprocess.masterframe
-            existing_mframe_file = prep_utils.tolerant_search(
-                flatdark_template, "dark", max_offset=max_offset, future=True
+            existing_flatdark_file = prep_utils.tolerant_search(
+                flatdark_template, "dark", max_offset=max_offset, future=True, ignore_sanity_if_no_match=ignore_sanity
             )  # search closest date first, minimum exptime if multiple found
-            if existing_mframe_file:
-                sanity_check = fits.getval(existing_mframe_file, "SANITY")
-                setattr(self, "flatdark_output", existing_mframe_file)  # mdark for mflat
-                self.dark_exptime = get_header(existing_mframe_file)[HEADER_KEY_MAP["exptime"]]
+            if existing_flatdark_file:
+                flatdark_sanity = fits.getval(existing_flatdark_file, "SANITY")
+                setattr(self, "flatdark_output", existing_flatdark_file)  # mdark for mflat
+                self.dark_exptime = get_header(existing_flatdark_file)[HEADER_KEY_MAP["exptime"]]
                 self.logger.info(
-                    f"[Group {self._current_group+1}] Found pre-existing nominal (sanity: {sanity_check}) flatdark at {os.path.basename(existing_mframe_file)}"
+                    f"[Group {self._current_group+1}] Found pre-existing nominal (sanity: {flatdark_sanity}) flatdark at {os.path.basename(existing_flatdark_file)}"
+                )
+                # Flatdark: PPFLAG 0 if same nightdate as target (user requirement)
+                flatdark_same_night = ppflag.is_same_nightdate(existing_flatdark_file, flatdark_template)
+                self._flatdark_ppflag = ppflag.compute_fetch_ppflag(
+                    existing_flatdark_file, flatdark_template, flatdark_sanity, flatdark_same_nightdate=flatdark_same_night
                 )
             else:
                 self.logger.error(
@@ -640,11 +675,17 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
 
         bias, dark, flat = self.bias_output, self.dark_output, self.flat_output
         n_head_blocks = self.config_node.preprocess.n_head_blocks
+        sci_ppflag = ppflag.propagate_ppflag(
+            ppflag.get_ppflag_from_header(bias),
+            ppflag.get_ppflag_from_header(dark),
+            ppflag.get_ppflag_from_header(flat),
+        )
         for raw_file, processed_file in zip(self.sci_input, self.sci_output):
             with fits.open(raw_file) as hdul:
                 header = hdul[0].header.copy()
             header["SATURATE"] = prep_utils.get_saturation_level(header, bias, dark, flat)
             header = prep_utils.write_IMCMB_to_header(header, [bias, dark, flat, raw_file])
+            ppflag.set_ppflag_in_header(header, sci_ppflag)
             header = prep_utils.ensure_mjd_in_header(header, logger=self.logger)
             header = prep_utils.sanitize_header(header)
             header = add_padding(header, n_head_blocks, copy_header=True)
