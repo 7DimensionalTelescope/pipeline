@@ -147,7 +147,9 @@ class CheckerMixin:
         else:
             raise ValueError("Either file_path or header must be provided")
 
-    def _filter_by_sanity(self, images: List[str], dtype: str = "science") -> tuple[List[str], dict[str, tuple[fits.Header, bool]]]:
+    def _filter_by_sanity(
+        self, images: List[str], dtype: str = "science"
+    ) -> tuple[List[str], dict[str, tuple[fits.Header, bool]]]:
         """
         Filter images based on SANITY check from Checker.
 
@@ -172,16 +174,23 @@ class CheckerMixin:
                 # Read header once and check sanity
                 header = fits.getheader(image)
                 original_sanity = header.get("SANITY")
-                original_sanity_was_false = (original_sanity is False)
-                
+                original_sanity_was_false = original_sanity is False
+
+                # Reject if SANITY is False (e.g. Early QA - header keys can't reproduce early qa)
+                if "SANITY" in header and header["SANITY"] is False:
+                    self.logger.debug(f"Filtered out image due to SANITY=False: {os.path.basename(image)}")
+                    rejected_info[image] = (header, original_sanity_was_false)
+                    continue
+
                 header["FILENAME"] = os.path.basename(image)  # to log the name in apply_criteria
                 flag, updated_header = self.apply_criteria(header=header, dtype=dtype)
-                
+
                 if flag:
                     filtered_images.append(image)
                 else:
                     self.logger.debug(f"Filtered out image due to SANITY=False: {os.path.basename(image)}")
                     rejected_info[image] = (updated_header, original_sanity_was_false)
+
             except Exception as e:
                 # If sanity check fails, log warning but include image to avoid breaking pipeline
                 self.logger.warning(
@@ -237,9 +246,7 @@ class CheckerMixin:
                                 hdul.flush()
                                 self.logger.debug(f"Updated SANITY header to False for {os.path.basename(img)}")
                         except Exception as e:
-                            self.logger.warning(
-                                f"Failed to update SANITY header for {os.path.basename(img)}: {e}"
-                            )
+                            self.logger.warning(f"Failed to update SANITY header for {os.path.basename(img)}: {e}")
 
             # Always recreate path with filtered images to keep it in sync
             self._recreate_pathhandler_instance()

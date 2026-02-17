@@ -1274,5 +1274,6 @@ class PathImsubtract(AutoMkdirMixin, AutoCollapseMixin):
     @property
     def diffim(self):
         # return bjoin(self._parent.output_dir, "difference", add_suffix(self._parent._input_files, "diff"))
-        input = os.path.basename(self._parent.processed_images)  # Define a new PathHandler with coadd_image as input
+        processed = atleast_1d(self._parent.processed_images)
+        input = [os.path.basename(p) for p in processed]
         return bjoin(self._parent.output_dir, DIFFIM_DIRNAME, add_suffix(input, "diff"))
