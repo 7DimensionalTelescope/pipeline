@@ -286,7 +286,11 @@ class Logger:
             msg = f"[{exception_cls}] {msg}"
 
         if self.database is not None:
-            self.database.add_exception_code(code_type="warning", code_value=exception_cls.error_code)
+            try:
+                self.database.add_exception_code(code_type="warning", code_value=exception_cls.error_code)
+            except Exception as e:
+                # Log the database error but don't fail the logging operation
+                self.logger.warning(f"Failed to record warning code {exception_cls.error_code} to database: {e}", exc_info=True)
 
         self.logger.warning(msg, **kwargs)
         # self.send_slack(msg, "WARNING")
@@ -316,7 +320,11 @@ class Logger:
             msg = f"[{exception_cls}] {msg}"
 
         if self.database is not None:
-            self.database.add_exception_code(code_type="error", code_value=exception_cls.error_code)
+            try:
+                self.database.add_exception_code(code_type="error", code_value=exception_cls.error_code)
+            except Exception as e:
+                # Log the database error but don't fail the logging operation
+                self.logger.error(f"Failed to record error code {exception_cls.error_code} to database: {e}", exc_info=True)
 
         # Only use exc_info if explicitly requested
         if "exc_info" not in kwargs:
@@ -350,7 +358,11 @@ class Logger:
             msg = f"[{exception_cls}] {msg}"
 
         if self.database is not None:
-            self.database.add_exception_code(code_type="error", code_value=exception_cls.error_code)
+            try:
+                self.database.add_exception_code(code_type="error", code_value=exception_cls.error_code)
+            except Exception as e:
+                # Log the database error but don't fail the logging operation
+                self.logger.error(f"Failed to record error code {exception_cls.error_code} to database: {e}", exc_info=True)
 
         # Only use exc_info if explicitly requested or if there's an exception
         if "exc_info" not in kwargs:

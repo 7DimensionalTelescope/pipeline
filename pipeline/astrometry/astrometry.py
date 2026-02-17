@@ -93,9 +93,6 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
         self.logger.debug(f"Astrometry Queue is '{queue}'")
 
         self.start_time = time.time()
-        self._handle_input()
-
-        # self.load_criteria(category="science")  # changed to lazy load
 
         self.qa_ids = []
         DatabaseHandler.__init__(
@@ -113,6 +110,11 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
 
                 self.logger.database = ExceptionHandler(self.process_status_id)
 
+        self._handle_input()
+
+        # self.load_criteria(category="science")  # changed to lazy load
+
+        if self.is_connected:
             if self.too_id is not None:
                 self.logger.debug(f"Initialized DatabaseHandler for ToO data management, ToO ID: {self.too_id}")
             else:
@@ -860,12 +862,12 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
         """
         Wrapper of external.scamp.
         Handles parallel/joint run with default input self.images_info
-        
+
         Args:
             images_info: Single ImageInfo or list of ImageInfo objects. If None, uses all sane images.
         """
         start_time = time.time()
-        
+
         timeout = timeout or self.config_node.astrometry.scamp_timeout
 
         # Convert to list and filter to sane images
@@ -874,9 +876,11 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
         else:
             images_info = atleast_1d(images_info)
             images_info = [ii for ii in images_info if ii.sane]
-        
+
         input_catalogs = [ii.prep_cat for ii in images_info]
-        self.logger.info(f"Start {'joint' if joint else 'individual'} {scamp_preset} scamp for {len(input_catalogs)} catalog(s)")
+        self.logger.info(
+            f"Start {'joint' if joint else 'individual'} {scamp_preset} scamp for {len(input_catalogs)} catalog(s)"
+        )
         self.logger.debug(f"Scamp input catalogs: {input_catalogs}")
         self.logger.debug(MemoryMonitor.log_memory_usage)
 

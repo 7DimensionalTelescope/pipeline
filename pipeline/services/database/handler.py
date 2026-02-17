@@ -235,10 +235,14 @@ class ExceptionHandler:
             warnings = list(set(row.warnings))
 
             self.process_status.update_data(self.process_status_id, warnings=json.dumps(warnings))
+            return True
         elif code_type == "error":
+            # overwrite if this is the first error or existing is UnknownError
+            # first non-unknown error takes precedence
             if row.errors is None or self.check_unknown_code(row.errors):
                 row.errors = code_value
                 self.process_status.update_data(self.process_status_id, errors=code_value)
+                return True
             else:
                 return False
         else:
