@@ -442,7 +442,7 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
 
         # initial solve with prep scamp
         self.run_scamp(
-            image_info.prep_cat,
+            image_info,
             scamp_preset="prep",
             joint=joint_scamp,
             overwrite=overwrite,
@@ -523,7 +523,7 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
 
         for _ in range(max_scamp):
             last_scamp_success = self.run_scamp(
-                image_info.prep_cat,
+                image_info,
                 scamp_preset="main",
                 joint=joint,
                 # overwrite=(_ == max_scamp - 1 or overwrite),
@@ -845,7 +845,7 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
 
     def run_scamp(
         self,
-        input_catalogs: str | List[str] = None,
+        images_info: ImageInfo | List[ImageInfo] = None,
         joint: bool = True,
         astrefcat: str = None,
         path_ref_scamp: str = None,
@@ -860,17 +860,25 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
         """
         Wrapper of external.scamp.
         Handles parallel/joint run with default input self.images_info
+        
+        Args:
+            images_info: Single ImageInfo or list of ImageInfo objects. If None, uses all sane images.
         """
         start_time = time.time()
-        self.logger.info(f"Start {'joint' if joint else 'individual'} {scamp_preset} scamp for {input_catalogs}")
-        self.logger.debug(MemoryMonitor.log_memory_usage)
-
+        
         timeout = timeout or self.config_node.astrometry.scamp_timeout
 
-        # presex_cats = [os.path.splitext(s)[0] + f".{prefix}.cat" for s in files]
-        images_info = [ii for ii in self.images_info if ii.sane]
-        input_catalogs = atleast_1d(input_catalogs or [ii.prep_cat for ii in images_info])
+        # Convert to list and filter to sane images
+        if images_info is None:
+            images_info = [ii for ii in self.images_info if ii.sane]
+        else:
+            images_info = atleast_1d(images_info)
+            images_info = [ii for ii in images_info if ii.sane]
+        
+        input_catalogs = [ii.prep_cat for ii in images_info]
+        self.logger.info(f"Start {'joint' if joint else 'individual'} {scamp_preset} scamp for {len(input_catalogs)} catalog(s)")
         self.logger.debug(f"Scamp input catalogs: {input_catalogs}")
+        self.logger.debug(MemoryMonitor.log_memory_usage)
 
         # path for scamp refcat download
         path_ref_scamp = path_ref_scamp or self.path.astrometry.ref_query_dir
@@ -880,6 +888,8 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
         self.logger.debug(f"Using astrefcat: {astrefcat}")
 
         scamp_success = True
+        solved_input_catalogs = []
+        solved_heads = []
 
         # joint scamp
         if joint:
@@ -902,6 +912,7 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
                     overwrite=overwrite,
                 )
                 self.logger.debug(f"Joint run solved_heads: {solved_heads}")
+                solved_input_catalogs = input_catalogs
             except ScampError as scamp_error:
                 scamp_success = False
                 self.logger.warning(f"Error during joint scamp: {scamp_error}", AstrometryError.ScampGenericError)
@@ -956,11 +967,14 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
                 except ScampError as scamp_error:
                     scamp_success_list[i] = False
                     self.logger.warning(
-                        f"Error during individual scamp: {scamp_error}", AstrometryError.ScampGenericError
+                        f"Error during individual scamp for {image_info.id} ({os.path.basename(image_info.image_path)}): {scamp_error}",
+                        AstrometryError.ScampGenericError,
                     )
 
                     if scamp_preset == "main":
-                        self.logger.info(f"Setting SANITY to False for {image_info.image_path} due to scamp error")
+                        self.logger.info(
+                            f"Setting SANITY to False for {image_info.id} ({os.path.basename(image_info.image_path)}) due to scamp error"
+                        )
                         image_info.SANITY = False  # still salvageable if prep
 
             # Raise error if all images fail
@@ -989,9 +1003,21 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
                 # solved_heads[i] = backup_head
                 self.logger.debug(f"Backed up prep head {head} to {backup_head}")
 
-        if apply_wcs_to_catalog:
-            self.update_catalog(solved_input_catalogs, solved_heads)
-            self.logger.info(f"Updated catalogs with solved heads")
+        if apply_wcs_to_catalog and solved_input_catalogs:
+            # Only update catalogs for images that are still sane (filter out any that became sanity=False during scamp)
+            filtered_catalogs = []
+            filtered_heads = []
+            for cat, head in zip(solved_input_catalogs, solved_heads):
+                # Find the corresponding image_info from the images_info list we're processing
+                for ii in images_info:
+                    if ii.prep_cat == cat:
+                        if ii.sane:
+                            filtered_catalogs.append(cat)
+                            filtered_heads.append(head)
+                        break
+            if filtered_catalogs:
+                self.update_catalog(filtered_catalogs, filtered_heads)
+                self.logger.info(f"Updated catalogs with solved heads")
 
         self.logger.info(f"Completed {scamp_preset} scamp in {time_diff_in_seconds(start_time)} seconds")
         self.logger.debug(MemoryMonitor.log_memory_usage)
@@ -1509,7 +1535,7 @@ class ImageInfo:
             )
 
         self.num_frac = get_source_num_frac(sci_cat, ref_cat, sci_zp=zp, depth=depth - 0.5)
-        self.logger.info(f"Early QA: NUMFRAC = {self.num_frac}")
+        self.logger.info(f"{self.id}: Early QA: NUMFRAC = {self.num_frac}")
         return
 
     @property
