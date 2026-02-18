@@ -61,9 +61,9 @@ def wait_for_masterframe(file_path, timeout=1800):
 def tolerant_search(template, dtype, max_offset=30, future=False, ignore_sanity_if_no_match=False):
     kw = dict(max_offset=max_offset, future=future)
 
-    searched = search_with_date_offsets(template, **kw, ignore_sanity_if_no_match=False)
+    searched = search_with_date_offsets(template, **kw, ignore_sanity=False)
     if not searched and ignore_sanity_if_no_match:
-        searched = search_with_date_offsets(template, **kw, ignore_sanity_if_no_match=True)
+        searched = search_with_date_offsets(template, **kw, ignore_sanity=True)
     if searched:
         return searched
 
@@ -71,9 +71,9 @@ def tolerant_search(template, dtype, max_offset=30, future=False, ignore_sanity_
         path = PathHandler(template)
         path.name.unit = "*"
         new_template = path.preprocess.masterframe
-        searched = search_with_date_offsets(new_template, **kw, ignore_sanity_if_no_match=False)
+        searched = search_with_date_offsets(new_template, **kw, ignore_sanity=False)
         if not searched and ignore_sanity_if_no_match:
-            searched = search_with_date_offsets(new_template, **kw, ignore_sanity_if_no_match=True)
+            searched = search_with_date_offsets(new_template, **kw, ignore_sanity=True)
         if searched:
             return searched
 
@@ -89,7 +89,7 @@ def tolerant_search(template, dtype, max_offset=30, future=False, ignore_sanity_
     return None
 
 
-def search_with_date_offsets(template, max_offset=30, future=False, ignore_sanity_if_no_match=False):
+def search_with_date_offsets(template, max_offset=30, future=False, ignore_sanity=False):
     """
     Search for files based on a template, modifying embedded dates with offsets.
     future=False includes the current date
@@ -157,16 +157,16 @@ def search_with_date_offsets(template, max_offset=30, future=False, ignore_sanit
             matches = glob(modified_path)
             if matches:
                 if len(matches) == 1:
-                    if ignore_sanity_if_no_match or CheckerMixin().sanity_check(matches[0]):
+                    if ignore_sanity or CheckerMixin().sanity_check(matches[0]):
                         return matches[0]
                     continue
                 min_exptime_image = PathHandler(matches).get_minimum("exptime")
-                if ignore_sanity_if_no_match or CheckerMixin().sanity_check(min_exptime_image):
+                if ignore_sanity or CheckerMixin().sanity_check(min_exptime_image):
                     return min_exptime_image
                 continue
         else:
             if os.path.exists(modified_path):
-                if ignore_sanity_if_no_match or CheckerMixin().sanity_check(modified_path):
+                if ignore_sanity or CheckerMixin().sanity_check(modified_path):
                     return modified_path
                 continue
 

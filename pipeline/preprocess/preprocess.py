@@ -463,9 +463,7 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
             ppflag_val = self._ppflag.get("bias", 0)
             self._flatdark_ppflag = ppflag_val  # flatdark = dark when generated
         elif dtype == "flat":
-            ppflag_val = ppflag.propagate_ppflag(
-                self._ppflag.get("bias", 0), getattr(self, "_flatdark_ppflag", 0)
-            )
+            ppflag_val = ppflag.propagate_ppflag(self._ppflag.get("bias", 0), getattr(self, "_flatdark_ppflag", 0))
         else:
             ppflag_val = 0
         self._ppflag[dtype] = ppflag_val
@@ -513,6 +511,7 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
         max_offset = self.config_node.preprocess.max_offset
         ignore_sanity = get_key(self.config_node.preprocess, "ignore_sanity_if_no_match", False)
         self.logger.debug(f"[Group {self._current_group+1}] Masterframe Search ({dtype}) Template: {template}")
+        self.logger.debug(f"ignore_sanity_if_no_match: {ignore_sanity}")
         existing_mframe_file = prep_utils.tolerant_search(
             template, dtype, max_offset=max_offset, future=True, ignore_sanity_if_no_match=ignore_sanity
         )
@@ -562,7 +561,10 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
                 # Flatdark: PPFLAG 0 if same nightdate as target (user requirement)
                 flatdark_same_night = ppflag.is_same_nightdate(existing_flatdark_file, flatdark_template)
                 self._flatdark_ppflag = ppflag.compute_fetch_ppflag(
-                    existing_flatdark_file, flatdark_template, flatdark_sanity, flatdark_same_nightdate=flatdark_same_night
+                    existing_flatdark_file,
+                    flatdark_template,
+                    flatdark_sanity,
+                    flatdark_same_nightdate=flatdark_same_night,
                 )
             else:
                 self.logger.error(
