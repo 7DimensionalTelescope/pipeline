@@ -32,7 +32,7 @@ preprocess:
   use_multi_device: False
   use_multi_thread: False
   device: 
-  ignore_sanity_if_no_match: false
+  ignore_sanity_if_no_match: true
 
 settings:
   is_too: false
