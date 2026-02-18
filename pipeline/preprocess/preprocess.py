@@ -362,12 +362,14 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
                 self._fetch_masterframe(output_file, dtype, dry_run=dry_run)
                 self.skip_plotting_flags[dtype] = True
             else:
-                self.logger.warning(
-                    f"[Group {self._current_group+1}] {dtype} has no input or output data (to fetch)",
-                    SameNightMasterFrameNotFoundError,
+                msg = (
+                    f"[Group {self._current_group+1}] {dtype} has no input or output data (to fetch). "
+                    f"Master frame cannot be loaded."
                 )
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_input: {input_file}")
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_output: {output_file}")
+                self.logger.error(msg, MasterFrameNotFoundError)
+                raise MasterFrameNotFoundError(msg)
 
             if input_file and not dry_run:
 
@@ -510,10 +512,15 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
         # existing_data can be either on-date or off-date
         max_offset = self.config_node.preprocess.max_offset
         ignore_sanity = get_key(self.config_node.preprocess, "ignore_sanity_if_no_match", False)
+        ignore_lenient = get_key(self.config_node.preprocess, "ignore_lenient_keys_if_no_match", False)
         self.logger.debug(f"[Group {self._current_group+1}] Masterframe Search ({dtype}) Template: {template}")
-        self.logger.debug(f"ignore_sanity_if_no_match: {ignore_sanity}")
-        existing_mframe_file = prep_utils.tolerant_search(
-            template, dtype, max_offset=max_offset, future=True, ignore_sanity_if_no_match=ignore_sanity
+        existing_mframe_file, ignored_lenient = prep_utils.tolerant_search(
+            template,
+            dtype,
+            max_offset=max_offset,
+            future=True,
+            ignore_sanity_if_no_match=ignore_sanity,
+            ignore_lenient_keys_if_no_match=ignore_lenient,
         )
 
         if not existing_mframe_file:
@@ -531,8 +538,13 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
                 f"[Group {self._current_group+1}] Found pre-existing nominal (sanity: {sanity_check}) master {dtype} at {os.path.basename(existing_mframe_file)}"
             )
 
-        # PPFLAG: fetched frame gets 1 (different date) and/or 4 (sanity F) as appropriate
-        ppflag_val = ppflag.compute_fetch_ppflag(existing_mframe_file, template, sanity_check)
+        # PPFLAG: fetched frame gets 1 (different date), 4 (sanity F), 8 (lenient keys) as appropriate
+        ppflag_val = ppflag.compute_fetch_ppflag(
+            existing_mframe_file,
+            template,
+            sanity_check,
+            ignored_lenient_keys=ignored_lenient,
+        )
         self._ppflag[dtype] = ppflag_val
         if not dry_run:
             with fits.open(existing_mframe_file, mode="update") as hdul:
@@ -548,8 +560,13 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
             path = PathHandler(template)
             path.name.exptime = "*"
             flatdark_template = path.preprocess.masterframe
-            existing_flatdark_file = prep_utils.tolerant_search(
-                flatdark_template, "dark", max_offset=max_offset, future=True, ignore_sanity_if_no_match=ignore_sanity
+            existing_flatdark_file, flatdark_ignored_lenient = prep_utils.tolerant_search(
+                flatdark_template,
+                "dark",
+                max_offset=max_offset,
+                future=True,
+                ignore_sanity_if_no_match=ignore_sanity,
+                ignore_lenient_keys_if_no_match=ignore_lenient,
             )  # search closest date first, minimum exptime if multiple found
             if existing_flatdark_file:
                 flatdark_sanity = fits.getval(existing_flatdark_file, "SANITY")
@@ -565,6 +582,7 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
                     flatdark_template,
                     flatdark_sanity,
                     flatdark_same_nightdate=flatdark_same_night,
+                    ignored_lenient_keys=flatdark_ignored_lenient,
                 )
             else:
                 self.logger.error(
@@ -678,9 +696,9 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
         bias, dark, flat = self.bias_output, self.dark_output, self.flat_output
         n_head_blocks = self.config_node.preprocess.n_head_blocks
         sci_ppflag = ppflag.propagate_ppflag(
-            ppflag.get_ppflag_from_header(bias),
-            ppflag.get_ppflag_from_header(dark),
-            ppflag.get_ppflag_from_header(flat),
+            ppflag.get_ppflag_from_header(bias, raise_if_missing=True),
+            ppflag.get_ppflag_from_header(dark, raise_if_missing=True),
+            ppflag.get_ppflag_from_header(flat, raise_if_missing=True),
         )
         for raw_file, processed_file in zip(self.sci_input, self.sci_output):
             with fits.open(raw_file) as hdul:

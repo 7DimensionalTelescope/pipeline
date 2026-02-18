@@ -58,35 +58,68 @@ def wait_for_masterframe(file_path, timeout=1800):
         observer.join()
 
 
-def tolerant_search(template, dtype, max_offset=30, future=False, ignore_sanity_if_no_match=False):
+def _build_lenient_template(template, dtype):
+    """Build a template with lenient keys set to '*' for the given dtype."""
+    from ..const.observation import (
+        BIAS_GROUP_LENIENT_KEYS,
+        DARK_GROUP_LENIENT_KEYS,
+        FLAT_GROUP_LENIENT_KEYS,
+    )
+
+    if dtype == "bias":
+        lenient_keys = BIAS_GROUP_LENIENT_KEYS
+    elif dtype == "dark":
+        lenient_keys = DARK_GROUP_LENIENT_KEYS
+    elif dtype == "flat":
+        lenient_keys = FLAT_GROUP_LENIENT_KEYS
+    else:
+        return None
+
+    path = PathHandler(template)
+    for key in lenient_keys:
+        if hasattr(path.name, key):
+            setattr(path.name, key, "*")
+    return path.preprocess.masterframe
+
+
+def tolerant_search(
+    template,
+    dtype,
+    max_offset=30,
+    future=False,
+    ignore_sanity_if_no_match=False,
+    ignore_lenient_keys_if_no_match=False,
+):
+    """
+    Search for a master frame matching the template.
+
+    Returns:
+        tuple: (path_or_none, ignored_lenient_keys).
+        ignored_lenient_keys is True if the match was found by relaxing lenient keys (bit 8 in PPFLAG).
+    """
     kw = dict(max_offset=max_offset, future=future)
 
-    searched = search_with_date_offsets(template, **kw, ignore_sanity=False)
+    def _search(tpl, ignore_sanity):
+        return search_with_date_offsets(tpl, **kw, ignore_sanity=ignore_sanity)
+
+    # 1. Strict search
+    searched = _search(template, ignore_sanity=False)
     if not searched and ignore_sanity_if_no_match:
-        searched = search_with_date_offsets(template, **kw, ignore_sanity=True)
+        searched = _search(template, ignore_sanity=True)
     if searched:
-        return searched
+        return searched, False
 
-    if dtype == "dark":
-        path = PathHandler(template)
-        path.name.unit = "*"
-        new_template = path.preprocess.masterframe
-        searched = search_with_date_offsets(new_template, **kw, ignore_sanity=False)
-        if not searched and ignore_sanity_if_no_match:
-            searched = search_with_date_offsets(new_template, **kw, ignore_sanity=True)
-        if searched:
-            return searched
+    # 2. Lenient search (relax dtype-specific keys) if enabled
+    if ignore_lenient_keys_if_no_match:
+        lenient_template = _build_lenient_template(template, dtype)
+        if lenient_template is not None:
+            searched = _search(lenient_template, ignore_sanity=False)
+            if not searched and ignore_sanity_if_no_match:
+                searched = _search(lenient_template, ignore_sanity=True)
+            if searched:
+                return searched, True
 
-        # # try other exptimes. this requires scaling; NYI
-        # path.name.exptime = "*"
-        # new_template = path.preprocess.masterframe
-        # searched = search_with_date_offsets(new_template, max_offset=max_offset, future=future)
-        # if searched:
-        #     return searched
-
-    # still not found
-
-    return None
+    return None, False
 
 
 def search_with_date_offsets(template, max_offset=30, future=False, ignore_sanity=False):

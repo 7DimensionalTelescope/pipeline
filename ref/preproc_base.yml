@@ -33,6 +33,8 @@ preprocess:
   use_multi_thread: False
   device: 
   ignore_sanity_if_no_match: true
+  ignore_lenient_keys_if_no_match: true
+
 
 settings:
   is_too: false

@@ -4,10 +4,11 @@ Update PPFLAG in preprocessed science images and master frames
 (including those processed with older pipeline versions).
 
 PPFLAG is computed from dependencies in IMCMB:
-  - Science: bias | dark | flat
+  - Science: bias | dark | flat (propagated)
   - Master bias: 0 (no master dependencies)
   - Master dark: bias
   - Master flat: bias | flatdark
+  - Bit 8: ignored lenient keys when match was found (set by pipeline fetch, not this script)
 
 Usage:
     # Science frames
@@ -40,10 +41,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from astropy.io import fits
 
-from pipeline.preprocess.utils import get_zdf_from_header_IMCMB
 from pipeline.preprocess import ppflag
 from pipeline.utils.header import get_header, write_header_file
-from pipeline.utils.filesystem import swap_ext
 from pipeline.path import PathHandler
 
 
@@ -158,8 +157,9 @@ def _get_all_master_dependencies(path: str) -> list[str]:
 def update_ppflag(path: str, dry_run: bool = False) -> int | None:
     """
     Compute and optionally write PPFLAG for any image (master frame or science).
-    Resolves all master frame dependencies from IMCMB, gets their PPFLAGs,
-    checks nightdates to add PPFLAG_DIFFERENT_DATE if needed, and bitwise ORs them.
+    Resolves all master frame dependencies from IMCMB and propagates their PPFLAGs
+    via bitwise OR. Masters already carry bits 0–4 and 8 from pipeline fetch; this
+    script just propagates.
 
     Returns the computed PPFLAG, or None on error.
     """
@@ -173,22 +173,10 @@ def update_ppflag(path: str, dry_run: bool = False) -> int | None:
         # No master dependencies means this is a master bias (PPFLAG = 0)
         val = 0
     else:
-        # Get PPFLAG from each master and check nightdates + SANITY using compute_fetch_ppflag
-        ppflags = []
-        for master_path in master_paths:
-            # Get master's existing PPFLAG (from its own dependencies)
-            master_ppflag = ppflag.get_ppflag_from_header(master_path)
-            # Compute additional flags (different date + sanity) using compute_fetch_ppflag
-            try:
-                sanity_value = fits.getval(master_path, "SANITY")
-            except (KeyError, OSError):
-                sanity_value = True  # Default to True if SANITY not present
-            additional_flags = ppflag.compute_fetch_ppflag(master_path, path, sanity_value)
-            # Combine master's PPFLAG with additional flags
-            combined_ppflag = master_ppflag | additional_flags
-            ppflags.append(combined_ppflag)
-        # Bitwise OR all PPFLAGs
-        val = ppflag.propagate_ppflag(*ppflags)
+        # Propagate PPFLAG from each master (raise if any ingredient lacks PPFLAG)
+        val = ppflag.propagate_ppflag(
+            *[ppflag.get_ppflag_from_header(p, raise_if_missing=True) for p in master_paths]
+        )
 
     if dry_run:
         print(f"  [dry-run] {path} -> PPFLAG={val}")

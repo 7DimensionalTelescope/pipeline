@@ -7,6 +7,10 @@ FLAT_GROUP_KEYS = BIAS_GROUP_KEYS + ["filter"]  # flats have different exptimes
 SURVEY_SCIENCE_GROUP_KEYS = ["obj", "filter"]  # , "n_binning", "unit"]
 TRANSIENT_SCIENCE_GROUP_KEYS = ["nightdate"] + SURVEY_SCIENCE_GROUP_KEYS  # used for processed image directory structure
 
+# nightdate is the most lenient; separate logic for it
+BIAS_GROUP_LENIENT_KEYS = ["unit"]
+DARK_GROUP_LENIENT_KEYS = ["unit"]  # exptime scaling is NYI
+FLAT_GROUP_LENIENT_KEYS = ["gain", "camera"]
 
 # OBS-related
 CalibType = ["BIAS", "DARK", "FLAT"]

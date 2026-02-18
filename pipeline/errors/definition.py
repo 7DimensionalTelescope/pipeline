@@ -66,7 +66,11 @@ registry.register_kind("ConnectionError", 12, ConnectionError)
 #         e.g., Rename Symbol won't work exhaustively. Use grep -r --binary-files=without-match
 # preprocess from 20
 registry.register_kind("MasterFrameNotFoundError", 20, MasterFrameNotFoundError)
-registry.register_kind("SameNightMasterFrameNotFoundError", 21, SameNightMasterFrameNotFoundError)
+# registry.register_kind("SameNightMasterFrameNotFoundError", 21, SameNightMasterFrameNotFoundError)
+# registry.register_kind("SanityIgnoredError", 22, SanityIgnoredError)
+# registry.register_kind("LenientKeysIgnoredError", 23, LenientKeysIgnoredError)
+# registry.register_kind("HardKeysIgnoredError", 24, HardKeysIgnoredError)
+registry.register_kind("PpflagNotFoundError", 25, PpflagNotFoundError)
 
 
 # astrometry from 30

@@ -14,7 +14,7 @@ class MasterFrameNotFoundError(Exception):
     pass
 
 
-class SameNightMasterFrameNotFoundError(Exception):
+class PpflagNotFoundError(Exception):
     pass
 
 
