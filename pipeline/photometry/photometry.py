@@ -688,15 +688,18 @@ class PhotometrySingle:
         post_match_table = phot_utils.filter_table(post_match_table, "FLAGS", 0)
         post_match_table = phot_utils.filter_table(post_match_table, "within_ellipse", True)
 
-        if low_mag_cut:
-            post_match_table = phot_utils.filter_table(
-                post_match_table, self.image_info.ref_mag_key, low_mag_cut, method="lower"
+        ref_mag_key = self.image_info.ref_mag_key
+        if ref_mag_key not in post_match_table.colnames:
+            raise self.logger.process_error.PrerequisiteNotMetError(
+                f"Required column '{ref_mag_key}' not found in table (prerequisite not met). "
+                f"Available columns: {list(post_match_table.colnames)}."
             )
 
+        if low_mag_cut:
+            post_match_table = phot_utils.filter_table(post_match_table, ref_mag_key, low_mag_cut, method="lower")
+
         if high_mag_cut:
-            post_match_table = phot_utils.filter_table(
-                post_match_table, self.image_info.ref_mag_key, high_mag_cut, method="upper"
-            )
+            post_match_table = phot_utils.filter_table(post_match_table, ref_mag_key, high_mag_cut, method="upper")
 
         if snr_cut:
             post_match_table = phot_utils.filter_table(post_match_table, "SNR_AUTO", snr_cut, method="lower")
