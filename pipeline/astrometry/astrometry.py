@@ -894,6 +894,7 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
         scamp_success = True
         solved_input_catalogs = []
         solved_heads = []
+        scamp_error = None  # Initialize to track errors
 
         # joint scamp
         if joint:
@@ -950,7 +951,6 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
             solved_heads = []
             solved_input_catalogs = []
             scamp_success_list = [True] * len(images_info)
-            scamp_error = None  # Initialize to track the last error
             for i, (image_info, precat) in enumerate(zip(images_info, input_catalogs)):
                 try:
                     solved_head = external.scamp(
