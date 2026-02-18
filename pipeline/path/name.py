@@ -387,19 +387,29 @@ class NameHandler:
     @property
     def gain(self):
         """
-        returns None if inexistent
-        self._gain is [None, None, ...]
+        Returns parsed _gain when available (e.g. from masterframe basename), else from header.
         """
+        if (self._single and self._gain is not None) or (
+            not self._single and all(g is not None for g in self._gain)
+        ):
+            return self._gain
+
         if getattr(self, "_single", False):
             return get_gain(self.abspath)
         else:
             return [get_gain(p) for p in self.abspath]
 
+    @gain.setter
+    def gain(self, value):
+        if getattr(self, "_single", False):
+            self._gain = value
+        else:
+            self._gain = [value] * len(self._gain)
+
     @property
     def camera(self):
         """
-        returns None if inexistent
-        self._camera is [None, None, ...]
+        Returns parsed _camera when available, else from cam_tracker.
         """
         if (self._single and self._camera is not None) or (
             not self._single and all(c is not None for c in self._camera)
@@ -415,6 +425,13 @@ class NameHandler:
                 format_camera(get_camera_serial(unit=int(u[3:]), query_date=d))
                 for u, d in zip(self.unit, self.nightdate)
             ]
+
+    @camera.setter
+    def camera(self, value):
+        if getattr(self, "_single", False):
+            self._camera = value
+        else:
+            self._camera = [value] * len(self._camera)
 
     @property
     def pixscale(self):
