@@ -23,7 +23,7 @@ from ..services.checker import CheckerMixin
 from ..services.database.image_qa import ImageQATable
 from ..services.database.handler import DatabaseHandler
 from ..utils.header import add_padding, get_header
-from ..errors import PreprocessError, SameNightMasterFrameNotFoundError, MasterFrameNotFoundError
+from ..errors import PreprocessError, MasterFrameNotFoundError
 from ..path import PathHandler, NameHandler
 
 pp = pprint.PrettyPrinter(indent=2)  # , width=120)
@@ -513,6 +513,8 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
         max_offset = self.config_node.preprocess.max_offset
         ignore_sanity = get_key(self.config_node.preprocess, "ignore_sanity_if_no_match", False)
         ignore_lenient = get_key(self.config_node.preprocess, "ignore_lenient_keys_if_no_match", False)
+        self.logger.debug(f"[Group {self._current_group+1}] ignore_sanity: {ignore_sanity}")
+        self.logger.debug(f"[Group {self._current_group+1}] ignore_lenient: {ignore_lenient}")
         self.logger.debug(f"[Group {self._current_group+1}] Masterframe Search ({dtype}) Template: {template}")
         existing_mframe_file, ignored_lenient = prep_utils.tolerant_search(
             template,
@@ -524,7 +526,6 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
         )
 
         if not existing_mframe_file:
-
             self.logger.error(
                 f"[Group {self._current_group+1}] No pre-existing master {dtype} found in place of {template} within {max_offset} days",
                 MasterFrameNotFoundError,
