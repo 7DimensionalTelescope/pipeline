@@ -328,7 +328,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
 
             if is_steppy and not ignore_steppy_flag:
                 self.logger.warning(f"Background subtraction failed for {get_basename(outim)}")
-                self.logger.warning(f"Re-running background with constant value")
+                self.logger.warning(f"Re-running background subtraction with constant value")
                 self._const_bkgsub(inim, outim, skyvalue=skyvalue)
 
             self.logger.info(

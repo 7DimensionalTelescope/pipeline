@@ -951,6 +951,7 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
             solved_heads = []
             solved_input_catalogs = []
             scamp_success_list = [True] * len(images_info)
+            scamp_error = None
             for i, (image_info, precat) in enumerate(zip(images_info, input_catalogs)):
                 try:
                     solved_head = external.scamp(
