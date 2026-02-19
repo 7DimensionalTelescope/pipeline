@@ -190,7 +190,7 @@ class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
         """[(number, name, use_gpu), ...]"""
         return [(1, "run", False)]
 
-    def run(self, overwrite=True) -> None:
+    def run(self, overwrite=False) -> None:
         """
         Run photometry on all configured images.
 

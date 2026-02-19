@@ -214,7 +214,7 @@ class NameHandler:
                 pass
                 # date = add_half_day(nightdate)  # this can mutate the true date crossing midnight
             else:
-                nightdate = subtract_half_day(date + "_" + hms)
+                nightdate = subtract_half_day(date + "_" + hms if hms is not None else date)  # hms None for masters
                 self.nightdate[i] = nightdate
             dates.append(date)
 
