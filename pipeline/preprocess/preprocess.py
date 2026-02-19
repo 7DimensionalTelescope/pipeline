@@ -362,14 +362,12 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
                 self._fetch_masterframe(output_file, dtype, dry_run=dry_run)
                 self.skip_plotting_flags[dtype] = True
             else:
-                msg = (
-                    f"[Group {self._current_group+1}] {dtype} has no input or output data (to fetch). "
-                    f"Master frame cannot be loaded."
-                )
+                # cases like lone bias, where no dark_, flat_output exist
+                self.logger.debug(f"[Group {self._current_group+1}] {dtype} has no input or output data to fetch.")
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_input: {input_file}")
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_output: {output_file}")
-                self.logger.error(msg, MasterFrameNotFoundError)
-                raise MasterFrameNotFoundError(msg)
+                # self.logger.error(msg, MasterFrameNotFoundError)
+                # raise MasterFrameNotFoundError(msg)
 
             if input_file and not dry_run:
 
