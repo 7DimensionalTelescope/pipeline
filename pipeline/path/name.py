@@ -214,7 +214,7 @@ class NameHandler:
                 pass
                 # date = add_half_day(nightdate)  # this can mutate the true date crossing midnight
             else:
-                nightdate = subtract_half_day(date)
+                nightdate = subtract_half_day(date + "_" + hms)
                 self.nightdate[i] = nightdate
             dates.append(date)
 
@@ -389,9 +389,7 @@ class NameHandler:
         """
         Returns parsed _gain when available (e.g. from masterframe basename), else from header.
         """
-        if (self._single and self._gain is not None) or (
-            not self._single and all(g is not None for g in self._gain)
-        ):
+        if (self._single and self._gain is not None) or (not self._single and all(g is not None for g in self._gain)):
             return self._gain
 
         if getattr(self, "_single", False):
