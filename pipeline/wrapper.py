@@ -13,14 +13,20 @@ class DataReduction:
         overwrite=False,
         master_frame_only=False,
         is_too=False,
+        is_pipeline=True,
+        is_multi_epoch=False,
         **kwargs,
     ):
         """
         master_frame_only: if True, 1) globs only bias, dark, flat images, 2) skips SciProcGroup creation
                             if given list_of_images, 1) is negated.
+        is_pipeline: True for normal pipeline runs (configs get settings.is_pipeline=True). Set False for ad-hoc/reprocess.
+        is_multi_epoch: True for multi-epoch override (configs get settings.is_multi_epoch=True).
         """
 
         self.is_too = is_too
+        self.is_pipeline = is_pipeline
+        self.is_multi_epoch = is_multi_epoch
 
         self.blueprint = Blueprint(
             input_params,
@@ -36,9 +42,17 @@ class DataReduction:
     def schedule(self):
         return self.blueprint.schedule
 
-    def create_config(self, overwrite=False, max_workers=50, is_too=False):
+    def create_config(self, overwrite=False, max_workers=50, is_too=False, is_pipeline=None, is_multi_epoch=None):
         if not self._created_config:
-            self.blueprint.create_config(overwrite=overwrite, max_workers=max_workers, is_too=is_too)
+            is_pipeline = self.is_pipeline if is_pipeline is None else is_pipeline
+            is_multi_epoch = self.is_multi_epoch if is_multi_epoch is None else is_multi_epoch
+            self.blueprint.create_config(
+                overwrite=overwrite,
+                max_workers=max_workers,
+                is_too=is_too,
+                is_pipeline=is_pipeline,
+                is_multi_epoch=is_multi_epoch,
+            )
             self._created_config = True
 
     def run(
@@ -77,6 +91,8 @@ class DataReduction:
                 overwrite=overwrite_config,
                 max_workers=max_workers,
                 is_too=is_too,
+                is_pipeline=self.is_pipeline,
+                is_multi_epoch=self.is_multi_epoch,
             )
             self._created_config = True
 

@@ -700,7 +700,7 @@ class PreprocessGroup:
     def add_sci_keys(self, keys: str):
         self.sci_keys.append(keys)
 
-    def create_config(self, overwrite=False, is_too=False):
+    def create_config(self, overwrite=False, is_too=False, **kwargs):
         from ..config import PreprocConfiguration
 
         # print(
@@ -760,7 +760,7 @@ class ScienceGroup:
         else:
             raise ValueError("Invalid filepath type")
 
-    def create_config(self, overwrite=False, is_too=False):
+    def create_config(self, overwrite=False, is_too=False, is_pipeline=True, is_multi_epoch=False):
 
         from ..config import SciProcConfiguration
         from ..path import PathHandler
@@ -776,7 +776,13 @@ class ScienceGroup:
             c = SciProcConfiguration(sci_yml, write=True, is_too=is_too)  # 5 ms
             # c = SciProcConfiguration(sci_yml, write=True)  # 36 ms
         else:
-            c = SciProcConfiguration(self.image_files, overwrite=overwrite, is_too=is_too)
+            c = SciProcConfiguration(
+                self.image_files,
+                overwrite=overwrite,
+                is_too=is_too,
+                is_pipeline=is_pipeline,
+                is_multi_epoch=is_multi_epoch,
+            )
             # c = SciProcConfiguration.base_config(input_images=self.image_files, config_file=sci_yml, logger=True)
             # c = SciProcConfiguration.from_list(self.image_files)
 

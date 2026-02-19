@@ -53,7 +53,8 @@ info:
 
 settings:
   is_too: false
-  is_pipeline: false  # default false, true if found to be is_pipeline
+  is_pipeline: false
+  is_multi_epoch: false
   obsmode:  # Deep Spec Color Search Single
   coadd: True
   gpu_enabled: True

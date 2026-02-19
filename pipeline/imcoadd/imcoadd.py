@@ -193,7 +193,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
         # Output coadd image file name
         self.config_node.imcoadd.coadd_image = (
             self.path.imcoadd.daily_coadd_image
-            if self.config_node.settings.is_pipeline
+            if not get_key(self.config_node.settings, "is_multi_epoch", default=False)
             else self.path.imcoadd.coadd_image
         )
         self.config_node.input.coadd_image = self.config_node.imcoadd.coadd_image

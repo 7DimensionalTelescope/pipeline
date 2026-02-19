@@ -46,7 +46,7 @@ class SciProcConfiguration(BaseConfig):
 
         if not self._initialized:
             self.logger.info("Initializing configuration")
-            self.initialize(is_too=is_too, is_multi_epoch=is_multi_epoch, **kwargs)
+            self.initialize(is_too=is_too, is_multi_epoch=is_multi_epoch, is_pipeline=is_pipeline, **kwargs)
             self.logger.info(f"'SciProcConfiguration' initialized in {time_diff_in_seconds(st)} seconds")
             self.logger.info(f"Writing configuration to file: {os.path.basename(self.config_file)}")
             self.logger.debug(f"Full path to the configuration file: {self.config_file}")
@@ -184,8 +184,9 @@ class SciProcConfiguration(BaseConfig):
 
         self.node.input.output_dir = self.path.output_dir
 
-        self.node.settings.is_pipeline = is_pipeline and self.path.is_pipeline
+        self.node.settings.is_pipeline = is_pipeline
         self.node.settings.is_too = is_too
+        self.node.settings.is_multi_epoch = is_multi_epoch
         self._define_settings(self.input_files[0])
         # self.input_files = self.node.input.calibrated_images
 

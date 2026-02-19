@@ -109,14 +109,29 @@ class Blueprint:
                 self.groups[mfg_key].add_images(flattened_images)
                 self.groups[mfg_key].add_sci_keys(key)
 
-    def create_config(self, overwrite=False, max_workers=30, is_too=False, priority=None):
-
+    def create_config(
+        self,
+        overwrite=False,
+        max_workers=30,
+        is_too=False,
+        is_pipeline=True,
+        is_multi_epoch=False,
+        priority=None,
+    ):
+        """
+        Create configs for all groups. is_pipeline=True for normal pipeline runs (DataReduction / from_list).
+        """
         is_too = is_too or self.is_too
 
         # Log FD info before starting
         log_fd_info(prefix="[create_config] Before: ")
 
-        kwargs = {"overwrite": overwrite, "is_too": is_too}
+        kwargs = {
+            "overwrite": overwrite,
+            "is_too": is_too,
+            "is_pipeline": is_pipeline,
+            "is_multi_epoch": is_multi_epoch,
+        }
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(group.create_config, **kwargs) for group in self.groups.values()]
             for i, f in enumerate(futures):
