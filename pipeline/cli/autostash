@@ -3,6 +3,7 @@
 import sqlite3
 from pathlib import Path
 import sys
+import argparse
 
 from pipeline.services.database.handler import DatabaseHandler
 
@@ -12,10 +13,43 @@ from pipeline.services.database.handler import DatabaseHandler
 pipeline_dir = Path(__file__).parents[2]
 sys.path.insert(0, str(pipeline_dir))
 
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Autostash failed scheduler entries")
+    parser.add_argument("--grep-status", type=str, default="Failed", help="Status to filter for (default: Failed)")
+    parser.add_argument(
+        "--whitelist-error",
+        type=str,
+        nargs="*",
+        default=[382],
+        help="List of error codes to whitelist (default: [382])",
+    )
+    parser.add_argument(
+        "--whitelist-obj", type=str, nargs="*", default=[], help="List of objects to whitelist (default: [])"
+    )
+    parser.add_argument(
+        "--blacklist-object",
+        type=str,
+        nargs="*",
+        default=["UDS"],
+        help="List of objects to blacklist (default: ['UDS'])",
+    )
+    return parser.parse_args()
+
+
+args = parse_args()
+
 DB_PATH = "/var/db/scheduler.db"
-WHITELIST_ERROR = ["206"]
-WHITELIST_OBJ = []  # "T00000"]
-BLACKLIST_OBJECT = ["UDS"]
+GREP_STATUS = args.grep_status
+WHITELIST_ERROR = args.whitelist_error
+WHITELIST_OBJ = args.whitelist_obj
+BLACKLIST_OBJECT = args.blacklist_object
+
+print(f"DB_PATH: {DB_PATH}")
+print(f"GREP_STATUS: {GREP_STATUS}")
+print(f"WHITELIST_ERROR: {WHITELIST_ERROR}")
+print(f"WHITELIST_OBJ: {WHITELIST_OBJ}")
+print(f"BLACKLIST_OBJECT: {BLACKLIST_OBJECT}")
 
 # Connect to scheduler database
 con = sqlite3.connect(DB_PATH)
@@ -23,7 +57,7 @@ con.row_factory = sqlite3.Row
 cur = con.cursor()
 
 # Get all failed rows first
-failed_rows = cur.execute("SELECT \"index\", status, config FROM scheduler WHERE status = 'Failed'").fetchall()
+failed_rows = cur.execute(f"SELECT \"index\", status, config FROM scheduler WHERE status = '{GREP_STATUS}'").fetchall()
 print(f"Found {len(failed_rows)} rows with status 'Failed'")
 
 if len(failed_rows) == 0:
