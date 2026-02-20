@@ -545,7 +545,8 @@ class PhotometrySingle:
             phot_header.ELLIP = round(np.median(post_match_table["ELLIPTICITY"]), 3)
             phot_header.ELONG = round(np.median(post_match_table["ELONGATION"]), 3)
 
-        self.logger.debug(f"{len(post_match_table)} Star-like Sources Found")
+            self.logger.debug(f"{len(post_match_table)} Star-like Sources Found")
+
         self.logger.debug(f"SEEING     : {phot_header.SEEING:.3f} arcsec")
         self.logger.debug(f"ELONGATION : {phot_header.ELONG:.3f}")
         self.logger.debug(f"ELLIPTICITY: {phot_header.ELLIP:.3f}")

@@ -1,5 +1,5 @@
 import gc
-from typing import List
+from typing import List, Literal
 from itertools import chain
 from concurrent.futures import ThreadPoolExecutor
 
@@ -156,7 +156,7 @@ class Blueprint:
         overwrite_science=False,
         preprocess_kwargs=None,
         processes=["astrometry", "photometry", "coadd", "subtract"],
-        input_type=None,
+        input_type: Literal["Daily", "ToO", "Reprocess", "User-input"] = None,
         **kwargs,
     ):
         """
@@ -192,7 +192,7 @@ class Blueprint:
                 ("index", int),
                 ("config", object),
                 ("config_type", object),  # Preprocess or Science
-                ("input_type", object),  # Daily or ToO
+                ("input_type", object),  # Daily / ToO / Reprocess / User-input
                 ("is_ready", bool),  # True if the task is ready to be processed
                 ("priority", int),  # Priority of the task
                 ("readiness", int),  # 100 if the task is ready to be processed
