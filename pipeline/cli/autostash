@@ -19,10 +19,10 @@ def parse_args():
     parser.add_argument("--grep-status", type=str, default="Failed", help="Status to filter for (default: Failed)")
     parser.add_argument(
         "--whitelist-error",
-        type=str,
+        type=int,
         nargs="*",
         default=[382],
-        help="List of error codes to whitelist (default: [382])",
+        help="List of error codes to whitelist (default: 382). Usage: --whitelist-error 399 400",
     )
     parser.add_argument(
         "--whitelist-obj", type=str, nargs="*", default=[], help="List of objects to whitelist (default: [])"
@@ -90,14 +90,14 @@ else:
         error = process_status_data.errors
         obj = process_status_data.object
 
-        # Check if error is None and convert to string for comparison
-        error_str = str(error) if error is not None else None
+        # Check if error is None and convert to int for comparison
+        error_int = int(error) if error is not None else None
 
-        if (error_str in WHITELIST_ERROR or obj in WHITELIST_OBJ) and obj not in BLACKLIST_OBJECT:
+        if (error_int in WHITELIST_ERROR or obj in WHITELIST_OBJ) and obj not in BLACKLIST_OBJECT:
             cur.execute("UPDATE scheduler SET status = 'Stashed' WHERE \"index\" = ?", (row["index"],))
             updated_count += 1
         else:
-            print(f"Skipping {obj} (error: {error_str})")
+            print(f"Skipping {obj} (error: {error_int})")
             skipped_count += 1
 
     # Commit the changes

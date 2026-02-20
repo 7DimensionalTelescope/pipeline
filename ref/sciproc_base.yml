@@ -21,12 +21,6 @@ process_id:
 #   dec:
 #   exptime:
 
-input: 
-  calibrated_images: 
-  processed_dir:
-  coadd_image:
-  difference_image:
-
 flag:
   # configuration: false
   # preprocess: false
@@ -37,11 +31,6 @@ flag:
   coadd_photometry: false
   subtraction: false
   difference_photometry: false
-
-qa:
-  pa:
-  ellipticity:
-  seeing:
 
 info:
   file:
@@ -67,6 +56,17 @@ logging:
   handlers:
     - console
     - file
+
+# qa:
+#   pa:
+#   ellipticity:
+#   seeing:
+
+input: 
+  calibrated_images: 
+  processed_dir:
+  coadd_image:
+  difference_image:
 
 astrometry:
   input_images:
