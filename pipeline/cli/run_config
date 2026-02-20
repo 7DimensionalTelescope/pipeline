@@ -35,6 +35,31 @@ if __name__ == "__main__":
         default=10,
         help="Base priority for scheduled jobs (default: 10)",
     )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite all outputs (preprocess and science)",
+    )
+    parser.add_argument(
+        "--overwrite-data",
+        action="store_true",
+        help="Overwrite pipeline data outputs (same as --overwrite for from_list)",
+    )
+    parser.add_argument(
+        "--overwrite-preprocess",
+        action="store_true",
+        help="Overwrite preprocess outputs only",
+    )
+    parser.add_argument(
+        "--overwrite-science",
+        action="store_true",
+        help="Overwrite science outputs only",
+    )
+    parser.add_argument(
+        "--overwrite-schedule",
+        action="store_true",
+        help="Overwrite existing schedule in the database",
+    )
     args = parser.parse_args()
 
     try:
@@ -42,6 +67,11 @@ if __name__ == "__main__":
             args.configs,
             base_priority=args.priority,
             use_system_queue=True,
+            overwrite_schedule=args.overwrite_schedule,
+            overwrite=args.overwrite,
+            overwrite_data=args.overwrite_data,
+            overwrite_preprocess=args.overwrite_preprocess,
+            overwrite_science=args.overwrite_science,
         )
         sc.start_system_queue()
     except Exception as e:

@@ -71,7 +71,18 @@ class Scheduler:
                 self.processing_preprocess = 0
 
     @classmethod
-    def from_list(cls, list_of_configs, base_priority=1, use_system_queue=False, overwrite_schedule=False, **kwargs):
+    def from_list(
+        cls,
+        list_of_configs,
+        base_priority=1,
+        use_system_queue=False,
+        overwrite_schedule=False,
+        overwrite=False,
+        overwrite_data=False,
+        overwrite_preprocess=False,
+        overwrite_science=False,
+        **kwargs,
+    ):
         """Create a scheduler from a list of configs."""
         import re
         import copy
@@ -96,11 +107,10 @@ class Scheduler:
                 task_type = "science"
                 priority = base_priority
 
-            # scheduler_kwargs = ["-overwrite"] if overwrite or overwrite_science else [] + ["-processes"] + processes
-            if kwargs.pop("overwrite", False):
-                scheduler_kwargs = ["-overwrite"]
+            if task_type == "preprocess":
+                scheduler_kwargs = ["-overwrite"] if (overwrite or overwrite_data or overwrite_preprocess) else []
             else:
-                scheduler_kwargs = []
+                scheduler_kwargs = ["-overwrite"] if (overwrite or overwrite_data or overwrite_science) else []
 
             table.add_row(
                 [

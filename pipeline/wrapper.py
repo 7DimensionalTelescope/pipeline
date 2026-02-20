@@ -74,6 +74,17 @@ class DataReduction:
         use_system_queue=False,
         input_type=None,
     ):
+        """
+        Overwrite keys differentiate between config, data, and schedule:
+
+        overwrite: Master switch
+        overwrite_config: Overwrite existing YAML config files.
+            Careful: the regenerated preproc config can have different input images
+        overwrite_data: Overwrite images and other products (passed to schedule as "['-overwrite']").
+        overwrite_preprocess: Add -overwrite for preprocess tasks only
+        overwrite_science: Add -overwrite for science tasks only (astrometry, photometry, coadd, subtract).
+        overwrite_schedule: Harmless; overwrites stale entries in scheduler DB
+        """
 
         overwrite_config = overwrite_config or overwrite
         overwrite_data = overwrite_data or overwrite
