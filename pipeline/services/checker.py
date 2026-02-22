@@ -8,6 +8,8 @@ from .. import const
 class CheckerMixin:
     """
     Mixin class that generates, reads, and filters on the "SANITY" key in image headers.
+
+    Sanity is unidirectional: it can only be set to False, not True.
     """
 
     dtype = None
@@ -70,7 +72,7 @@ class CheckerMixin:
 
         criteria = self.criteria[dtype.upper()]
 
-        flag = True
+        sanity = True
 
         if header is None:
             raise ValueError("Header must be provided")
@@ -85,42 +87,42 @@ class CheckerMixin:
 
             if value["criteria"] == "neq":
                 if header[key] == value["value"]:
-                    flag = False
+                    sanity = False
                     break
             elif value["criteria"] == "eq":
                 if header[key] != value["value"]:
-                    flag = False
+                    sanity = False
                     break
             elif value["criteria"] == "gte":
                 if header[key] < value["value"]:
-                    flag = False
+                    sanity = False
                     break
             elif value["criteria"] == "gt":
                 if header[key] <= value["value"]:
-                    flag = False
+                    sanity = False
                     break
             elif value["criteria"] == "lte":
                 if header[key] > value["value"]:
-                    flag = False
+                    sanity = False
                     break
             elif value["criteria"] == "lt":
                 if header[key] >= value["value"]:
-                    flag = False
+                    sanity = False
                     break
             elif value["criteria"] == "within":
                 if header[key] < value["value"][0] or header[key] > value["value"][1]:
-                    flag = False
+                    sanity = False
                     break
 
-        header["SANITY"] = (flag, "Pipeline image sanity flag")
+        header["SANITY"] = (sanity, "Pipeline image sanity flag")
 
-        if not flag:
+        if not sanity:
             if hasattr(self, "logger") and self.logger is not None:
                 self.logger.info(f"Rejected {header.get('FILENAME', 'image')} by key {key}: {value['description']}")
             else:
                 print(f"Rejected {header.get('FILENAME', 'image')} by key {key}: {value['description']}")
 
-        return flag, header
+        return sanity, header
 
     def sanity_check(self, file_path: str = None, header: dict = None, dtype: str = None):
         """
@@ -153,43 +155,49 @@ class CheckerMixin:
         """
         Filter images based on SANITY check from Checker.
 
+        If SANITY is False in the header, reject the image immediately.
+        If SANITY is True or missing, recompute the SANITY from criteria.
+        If INSPCOMM is present in the header, trust the SANITY as is and do not recompute from criteria.
+
         Args:
             images: List of image file paths to filter
             dtype: Type of images for sanity check ("science", "masterframe", etc.)
 
         Returns:
-            Tuple of (filtered_images, rejected_info) where:
+            Tuple of (filtered_images, needs_sanity_update) where:
             - filtered_images: List of image paths that pass SANITY check
-            - rejected_info: Dict mapping rejected image paths to (header, original_sanity_was_false)
+            - needs_sanity_update: Set of rejected image paths that need SANITY=False written to header
         """
         if not images:
-            return images, {}
+            return images, set()
         if not isinstance(images, list):
             images = [images]
 
         filtered_images = []
-        rejected_info = {}
+        needs_sanity_update = set()
         for image in images:
             try:
                 # Read header once and check sanity
                 header = fits.getheader(image)
-                original_sanity = header.get("SANITY")
-                original_sanity_was_false = original_sanity is False
 
-                # Reject if SANITY is False (e.g. Early QA - header keys can't reproduce early qa)
+                # Reject if SANITY is False (e.g. for Early QA - header keys may not reproduce early QA)
                 if "SANITY" in header and header["SANITY"] is False:
                     self.logger.debug(f"Filtered out image due to SANITY=False: {os.path.basename(image)}")
-                    rejected_info[image] = (header, original_sanity_was_false)
+                    continue
+
+                # Trust SANITY as is for images with INSPCOMM (don't recompute from criteria)
+                if "INSPCOMM" in header:
+                    filtered_images.append(image)
                     continue
 
                 header["FILENAME"] = os.path.basename(image)  # to log the name in apply_criteria
-                flag, updated_header = self.apply_criteria(header=header, dtype=dtype)
+                computed_sanity, updated_header = self.apply_criteria(header=header, dtype=dtype)
 
-                if flag:
+                if computed_sanity:
                     filtered_images.append(image)
                 else:
                     self.logger.debug(f"Filtered out image due to SANITY=False: {os.path.basename(image)}")
-                    rejected_info[image] = (updated_header, original_sanity_was_false)
+                    needs_sanity_update.add(image)
 
             except Exception as e:
                 # If sanity check fails, log warning but include image to avoid breaking pipeline
@@ -198,7 +206,7 @@ class CheckerMixin:
                 )
                 filtered_images.append(image)
 
-        return filtered_images, rejected_info
+        return filtered_images, needs_sanity_update
 
     def apply_sanity_filter_and_report(
         self,
@@ -221,35 +229,32 @@ class CheckerMixin:
 
         original_count = len(self.input_images)
         original_images = self.input_images.copy()
-        self.input_images, rejected_info = self._filter_by_sanity(self.input_images, dtype=dtype)
+        self.input_images, needs_sanity_update = self._filter_by_sanity(self.input_images, dtype=dtype)
 
         filtered_count = len(self.input_images)
         input_changed = filtered_count != original_count
+
         if input_changed:
-            # Track which images were filtered out
             filtered_out = [img for img in original_images if img not in self.input_images]
             self.logger.info(
                 f"Filtered {original_count - filtered_count} images based on SANITY check "
                 f"({filtered_count}/{original_count} remaining)"
             )
-            # Log filtered images at debug level and update their SANITY header
+            # Write SANITY=False to header for images rejected by criteria (early-rejected already have it)
             for img in filtered_out:
                 self.logger.debug(f"Filtered out image: {os.path.basename(img)}")
-                # Update SANITY header to False if it wasn't already False, using header already read
-                if img in rejected_info:
-                    header, original_sanity_was_false = rejected_info[img]
-                    # Only update if SANITY wasn't already False
-                    if not original_sanity_was_false:
-                        try:
-                            with fits.open(img, mode="update") as hdul:
-                                hdul[0].header["SANITY"] = (False, "Pipeline image sanity flag")
-                                hdul.flush()
-                                self.logger.debug(f"Updated SANITY header to False for {os.path.basename(img)}")
-                        except Exception as e:
-                            self.logger.warning(f"Failed to update SANITY header for {os.path.basename(img)}: {e}")
+                if img in needs_sanity_update:
+                    try:
+                        with fits.open(img, mode="update") as hdul:
+                            hdul[0].header["SANITY"] = (False, "Pipeline image sanity flag")
+                            hdul.flush()
+                            self.logger.debug(f"Updated SANITY header to False for {os.path.basename(img)}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to update SANITY header for {os.path.basename(img)}: {e}")
 
-            # Always recreate path with filtered images to keep it in sync
+            # Recreate self.path to keep it in sync
             self._recreate_pathhandler_instance()
+
         return input_changed
 
     def _recreate_pathhandler_instance(self):
