@@ -4,11 +4,11 @@ Update PPFLAG in preprocessed science images and master frames
 (including those processed with older pipeline versions).
 
 PPFLAG is computed from dependencies in IMCMB:
-  - Science: bias | dark | flat (propagated)
+  - Science: bias | dark | flat (propagated) | bit 1 when any master has different
+    nightdate than the science frame | bit 4 when any master has SANITY=False
   - Master bias: 0 (no master dependencies)
   - Master dark: bias
   - Master flat: bias | flatdark
-  - Bit 8: ignored lenient keys when match was found (set by pipeline fetch, not this script)
 
 Usage:
     # Science frames
@@ -28,7 +28,7 @@ Usage:
 Optional: --dry-run to only print computed PPFLAG without writing.
 
 Real Usage cases:
-    find /lyman/data2/master_frame -type d -name "7DT*" -exec python run_update_ppflag.py --master {} \;
+    find /lyman/data2/master_frame -type d -name "7DT*" -exec python run_update_ppflag.py --master {} \; | tee run_update_ppflag.log
 """
 
 import argparse
@@ -109,6 +109,21 @@ def _is_masterframe_basename(value: str) -> bool:
     return b.startswith("bias_") or b.startswith("dark_") or b.startswith("flat_")
 
 
+def _is_science_image(path: str) -> bool:
+    """True if path looks like a science image (not a master bias/dark/flat)."""
+    b = os.path.basename(path)
+    return not (b.startswith("bias_") or b.startswith("dark_") or b.startswith("flat_"))
+
+
+def _sanity_is_false(path: str) -> bool:
+    """True if SANITY header is False (F) in the given file."""
+    try:
+        val = get_header(path).get("SANITY", True)
+        return val is False or (isinstance(val, str) and val.upper() == "F")
+    except Exception:
+        return False
+
+
 def _get_all_master_dependencies(path: str) -> list[str]:
     """
     Get all master frame dependency paths from IMCMB.
@@ -158,10 +173,8 @@ def update_ppflag(path: str, dry_run: bool = False) -> int | None:
     """
     Compute and optionally write PPFLAG for any image (master frame or science).
     Resolves all master frame dependencies from IMCMB and propagates their PPFLAGs
-    via bitwise OR. Masters already carry bits 0–4 and 8 from pipeline fetch; this
-    script just propagates.
-
-    Returns the computed PPFLAG, or None on error.
+    via bitwise OR. For science images, bit 1 (different date) is set when any
+    master has a different nightdate than the science frame.
     """
     if not os.path.exists(path) and not os.path.exists(path.replace(".fits", ".header")):
         print(f"  [skip] {path}: file not found")
@@ -173,10 +186,18 @@ def update_ppflag(path: str, dry_run: bool = False) -> int | None:
         # No master dependencies means this is a master bias (PPFLAG = 0)
         val = 0
     else:
-        # Propagate PPFLAG from each master (raise if any ingredient lacks PPFLAG)
-        val = ppflag.propagate_ppflag(
-            *[ppflag.get_ppflag_from_header(p, raise_if_missing=True) for p in master_paths]
+        base_ppflag = ppflag.propagate_ppflag(
+            *[ppflag.get_ppflag_from_header(p, raise_if_missing=False) for p in master_paths]
         )
+        extras = []
+        # For science images: bit 1 when any master has different nightdate than this frame
+        if _is_science_image(path):
+            if any(not ppflag.is_same_nightdate(m, path) for m in master_paths):
+                extras.append(ppflag.PPFLAG_DIFFERENT_DATE)
+        # Bit 4 when any master has SANITY=False
+        if any(_sanity_is_false(m) for m in master_paths):
+            extras.append(ppflag.PPFLAG_SANITY_F_USED)
+        val = ppflag.propagate_ppflag(base_ppflag, *extras)
 
     if dry_run:
         print(f"  [dry-run] {path} -> PPFLAG={val}")
@@ -192,7 +213,8 @@ def _collect_paths_from_config(config_path: str, masters: bool) -> list[str]:
     """Collect science or master frame paths from preproc config."""
     from pipeline.config import PreprocConfiguration
 
-    cfg = PreprocConfiguration.from_yaml(config_path)
+    raise NotImplementedError("Not implemented")
+    cfg = PreprocConfiguration.from_yaml(config_path)  # << wrong
     paths: list[str] = []
     if masters:
         if hasattr(cfg, "input") and getattr(cfg.input, "masterframe_images", None):

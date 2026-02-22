@@ -485,6 +485,8 @@ def get_num_sources(catalog: str | Table, depth: float = 17.0, zp: float = 0, ma
     Use any depth shallower than the image's expected depth.
     """
     if isinstance(catalog, str):
+        if not os.path.exists(catalog):
+            raise FileNotFoundError(f"Catalog file does not exist: {catalog}")
         catalog = Table.read(catalog, hdu=2)
     catalog = catalog[catalog[mag_key] + zp < depth]
     return len(catalog)

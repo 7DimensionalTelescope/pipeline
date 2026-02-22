@@ -1,14 +1,15 @@
 import os
 import gc
 import subprocess
+from typing import Literal
 import numpy as np
-from astropy.io import fits
-from numba import njit, prange
-from scipy.stats import variation
 import tempfile
 import time
 import uuid
 import fitsio
+from astropy.io import fits
+from numba import njit, prange
+from scipy.stats import variation
 
 from .utils import read_fits_image, read_fits_images, write_fits_images
 from ..const import SOURCE_DIR, SERVICES_TMP_DIR
@@ -83,6 +84,7 @@ def combine_images_with_cpu(
     subtract=None,
     scale=None,
     norm=False,
+    combine_method: Literal["median", "mean"] = "median",
     make_bpmask: str = None,
     bpmask_sigma=5,
     **kwargs,  # prevent crash if extra args are passed. e.g., device_id
@@ -106,15 +108,19 @@ def combine_images_with_cpu(
     if norm:
         np_stack = _normalize_stack(np_stack)
 
-    np_median, np_std = _calc_median_and_std(np_stack)  # coadded image and std
-    fits.writeto(output, data=np_median, overwrite=True)
+    if combine_method == "mean":
+        np_combined = np.mean(np_stack, axis=0).astype(np.float32)
+        np_std = np.std(np_stack, axis=0, ddof=1).astype(np.float32)
+    else:
+        np_combined, np_std = _calc_median_and_std(np_stack)
+    fits.writeto(output, data=np_combined, overwrite=True)
     fits.writeto(sig_output, data=np_std, overwrite=True)
 
     if make_bpmask is not None:
-        hot_mask = sigma_clipped_stats_cpu(np_median, bpmask_sigma, return_mask=True)
+        hot_mask = sigma_clipped_stats_cpu(np_combined, bpmask_sigma, return_mask=True)
         fits.writeto(make_bpmask, data=hot_mask.astype(np.uint8), overwrite=True)
 
-    return np_median, np_std, None
+    return np_combined, np_std, None
 
 
 def process_image_with_subprocess_gpu(image_paths, bias, dark, flat, device_id=0, output_paths=None, **kwargs):
@@ -392,7 +398,7 @@ def sigma_clipped_stats_cpu(data, sigma=3.0, maxiters=5, minmax=False, return_ma
 
 
 @njit(parallel=True)
-def _compute_outlier_mask_2d(data, median, std, hot_sigma):
+def _compute_outlier_mask_2d(data: np.ndarray, median: float, std: float, hot_sigma: float):
     H, W = data.shape
     mask = np.empty((H, W), dtype=np.uint8)
     threshold = hot_sigma * std
@@ -402,7 +408,7 @@ def _compute_outlier_mask_2d(data, median, std, hot_sigma):
     return mask
 
 
-def compute_rms(new_data, ref_data):
+def compute_rms(new_data: np.ndarray, ref_data: np.ndarray):
     if new_data.shape != ref_data.shape:
         h = min(new_data.shape[0], ref_data.shape[0])
         w = min(new_data.shape[1], ref_data.shape[1])
@@ -467,7 +473,7 @@ def calculate_edge_variation(d):
         return 0.0, [0, 0, 0, 0], False
 
 
-def uniformity_statistical(fits_path, bpmask_path=None, grid_size=32):
+def uniformity_statistical(fits_path: str, bpmask_path: str = None, grid_size: int = 32):
     """
     Fast uniformity checking using statistical grid analysis.
     This divides the image into a grid and analyzes statistics of each cell.
@@ -537,7 +543,7 @@ def uniformity_statistical(fits_path, bpmask_path=None, grid_size=32):
     return float(-1 * log_uniformity_score)
 
 
-def record_statistics(filename, header, device_id=0, cropsize=500, dtype=None):
+def record_statistics(filename: str, header: fits.Header, device_id: int = 0, cropsize: int = 500, *, dtype: str):
     data = fits.getdata(filename).astype(np.float32)  # Ensure data is float32
     mean, median, std, min, max = sigma_clipped_stats(data, device_id=device_id, sigma=3, maxiters=5, minmax=True)
     header["CLIPMEAN"] = (float(mean), "3-sig clipped mean of the pixel values")
