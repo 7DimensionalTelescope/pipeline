@@ -468,9 +468,9 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
             ppflag_val = 0
         self._ppflag[dtype] = ppflag_val
 
-        flag = self._quality_assessment(header=header, dtype=dtype, ppflag_val=ppflag_val)
+        sanity_flag = self._assess_quality_and_update_header(header=header, dtype=dtype, ppflag_val=ppflag_val)
 
-        if flag:
+        if sanity_flag:
             self.logger.info(f"[Group {self._current_group+1}] Nominal master {dtype} generated successfully in {time_diff_in_seconds(st)} seconds")  # fmt: skip
             self.logger.debug(f"[Group {self._current_group+1}] FITS Written: {getattr(self, f'{dtype}_output')}")
             return True
@@ -486,19 +486,19 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
 
         return False
 
-    def _quality_assessment(self, header, dtype, ppflag_val: int = 0):
+    def _assess_quality_and_update_header(self, header, dtype, ppflag_val: int = 0):
         header = record_statistics(getattr(self, f"{dtype}_output"), header, dtype=dtype)
 
-        flag, header = self.apply_criteria(header=header, dtype=dtype)
+        sanity_flag, header = self.apply_criteria(header=header, dtype=dtype)
 
         ppflag.set_ppflag_in_header(header, ppflag_val)
 
         if dtype == "dark":
-            hotpix = self.update_bpmask(sanity=flag)
+            hotpix = self.update_bpmask(sanity=sanity_flag)
             header["NHOTPIX"] = (hotpix, "Number of hot pixels")
 
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
-        return flag
+        return sanity_flag
 
     def _fetch_masterframe(self, template, dtype, dry_run: bool = False):
         """
@@ -624,6 +624,7 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
 
         st = time.time()
         device_id = device_id if self._use_gpu else "CPU"
+        n_head_blocks = get_key(self.config_node.preprocess, "n_head_blocks", 8)
 
         with acquire_available_gpu(device_id=device_id) as device_id:
             if device_id is None:
@@ -655,6 +656,7 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
                 device_id=device_id,
                 use_gpu=self._use_gpu,
                 n_workers=n_workers,
+                n_head_blocks=n_head_blocks,
             )
 
         self.logger.info(
@@ -686,7 +688,7 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
             return
 
         bias, dark, flat = self.bias_output, self.dark_output, self.flat_output
-        n_head_blocks = self.config_node.preprocess.n_head_blocks
+        n_head_blocks = get_key(self.config_node.preprocess, "n_head_blocks", 8)
 
         sci_ppflag = ppflag.propagate_ppflag(
             self._ppflag.get("bias", ppflag.get_ppflag_from_header(bias)),

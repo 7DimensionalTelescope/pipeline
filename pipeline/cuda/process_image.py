@@ -9,13 +9,15 @@ import time
 
 import fitsio
 
+from ..utils.header import add_padding
+
 # Reduction kernel
 reduction_kernel = cp.ElementwiseKernel(
     in_params="T x, T s, T m", out_params="T z", operation="z = x * m - s", name="reduction"
 )
 
 
-def process_image_with_cupy(obs, bias, dark, flat, output, device_id):
+def process_image_with_cupy(obs, bias, dark, flat, output, device_id, n_head_blocks=None):
     """median is GPU, std is CPU. Uses pinned memory for better host-GPU transfer performance."""
 
     # Write output files in parallel using threading (I/O bound operation)
@@ -25,8 +27,10 @@ def process_image_with_cupy(obs, bias, dark, flat, output, device_id):
         if os.path.exists(header_file):
             with open(header_file, "r") as f:
                 header = fits.Header.fromstring(f.read(), sep="\n")
+            if n_head_blocks is not None:
+                header = add_padding(header, n_head_blocks, copy_header=True)
 
-        fitsio.write(o, data, header=list(header.cards), clobber=True)
+        fitsio.write(o, data, header=list(header.cards) if header is not None else None, clobber=True)
 
     with cp.cuda.Device(device_id):
         # Load images in parallel using threading (I/O bound operation)
@@ -125,6 +129,13 @@ if __name__ == "__main__":
         "-output-list", type=str, help="Text file containing output FITS image paths (one per line)."
     )
     parser.add_argument("-device", type=int, default=0, help="CUDA device ID.")
+    parser.add_argument(
+        "-n-head-blocks",
+        type=int,
+        default=None,
+        dest="n_head_blocks",
+        help="Target number of 2880-byte FITS header blocks (padding).",
+    )
 
     args = parser.parse_args()
 
@@ -149,4 +160,5 @@ if __name__ == "__main__":
         args.flat,
         output_paths,
         args.device,
+        n_head_blocks=args.n_head_blocks,
     )

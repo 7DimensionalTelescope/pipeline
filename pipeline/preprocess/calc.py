@@ -123,7 +123,9 @@ def combine_images_with_cpu(
     return np_combined, np_std, None
 
 
-def process_image_with_subprocess_gpu(image_paths, bias, dark, flat, device_id=0, output_paths=None, **kwargs):
+def process_image_with_subprocess_gpu(
+    image_paths, bias, dark, flat, device_id=0, output_paths=None, n_head_blocks=None, **kwargs
+):
     """
     Process images using a subprocess call to a CUDA-accelerated script.
     If the process times out (10 seconds per image), falls back to CPU processing.
@@ -165,6 +167,8 @@ def process_image_with_subprocess_gpu(image_paths, bias, dark, flat, device_id=0
             "-device",
             str(device_id),
         ]
+        if n_head_blocks is not None:
+            cmd.extend(["-n-head-blocks", str(n_head_blocks)])
 
         try:
             # Run subprocess and save output to log file
@@ -185,7 +189,13 @@ def process_image_with_subprocess_gpu(image_paths, bias, dark, flat, device_id=0
             # Fall back to CPU processing
             success = False
             return process_image_with_cpu(
-                image_paths=image_paths, bias=bias, dark=dark, flat=flat, output_paths=output_paths, **kwargs
+                image_paths=image_paths,
+                bias=bias,
+                dark=dark,
+                flat=flat,
+                output_paths=output_paths,
+                n_head_blocks=n_head_blocks,
+                **kwargs,
             )
     finally:
         # Clean up temporary files
@@ -204,6 +214,7 @@ def process_image_with_cpu(
     dark: str,
     flat: str,
     output_paths: list,
+    n_head_blocks=None,
     **kwargs,
 ):
     """
@@ -246,7 +257,7 @@ def process_image_with_cpu(
             processed_batch.append(processed_data)
 
         # Write outputs in parallel
-        write_fits_images(out_paths, processed_batch)
+        write_fits_images(out_paths, processed_batch, n_head_blocks=n_head_blocks)
         gc.collect()
 
     # Clean up

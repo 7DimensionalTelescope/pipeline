@@ -12,7 +12,7 @@ from watchdog.events import FileSystemEventHandler
 from ..path.path import PathHandler
 from ..path.name import NameHandler
 from ..services.checker import CheckerMixin
-from ..utils.header import write_header_file, get_header
+from ..utils.header import write_header_file, get_header, add_padding
 
 
 class FileCreationHandler(FileSystemEventHandler):
@@ -412,7 +412,7 @@ def read_fits_images(input_paths, output_paths, max_workers=10):
     return data, in_paths, out_paths
 
 
-def write_fits_image(output_path, processed_data):
+def write_fits_image(output_path, processed_data, n_head_blocks=None):
     """Write processed image to disk using the header pre-generated on disk."""
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     header_file = output_path.replace(".fits", ".header")
@@ -420,14 +420,17 @@ def write_fits_image(output_path, processed_data):
     if os.path.exists(header_file):
         with open(header_file, "r") as f:
             header = fits.Header.fromstring(f.read(), sep="\n")
+        if n_head_blocks is not None:
+            header = add_padding(header, n_head_blocks, copy_header=True)
 
     fits.writeto(output_path, processed_data, header=header, overwrite=True)
     # fitsio.write(output_path, processed_data, header=list(header.cards), clobber=True)
 
 
-def write_fits_images(paths, data, max_workers=10):
+def write_fits_images(paths, data, max_workers=10, n_head_blocks=None):
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        list(executor.map(write_fits_image, paths, data))
+        # list(executor.map(write_fits_image, paths, data))
+        list(executor.map(lambda p_d: write_fits_image(p_d[0], p_d[1], n_head_blocks=n_head_blocks), zip(paths, data)))
 
     # for output_path, subdata in zip(paths, data):
     #     write_fits_image(output_path, subdata)
