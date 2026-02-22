@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from ..utils import flatten
 from ..path import PathHandler
 from ..config.utils import get_filter_from_config
+from ..const import DEFAULT_SCIDATA_PROCESSES
 from ..const.observation import BROAD_FILTERS
 
 from .utils import SortedGroupDict, PreprocessGroup, ScienceGroup
@@ -155,7 +156,7 @@ class Blueprint:
         overwrite_preprocess=False,
         overwrite_science=False,
         preprocess_kwargs=None,
-        processes=["astrometry", "photometry", "coadd", "subtract"],
+        processes=DEFAULT_SCIDATA_PROCESSES,
         input_type: Literal["Daily", "ToO", "Reprocess", "User-input"] = None,
         **kwargs,
     ):
@@ -289,7 +290,9 @@ class Blueprint:
                     priority = 11  # sciprocess
                     schedule["priority"][parent_idx] = 12  # preprocess
 
-                scheduler_kwargs = ["-overwrite"] if overwrite or overwrite_science else [] + ["-processes"] + processes
+                scheduler_kwargs = ["-overwrite"] if overwrite or overwrite_science else []
+                if processes != DEFAULT_SCIDATA_PROCESSES:
+                    scheduler_kwargs = scheduler_kwargs + ["-processes"] + processes
 
                 schedule.add_row(
                     [

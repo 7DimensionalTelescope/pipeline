@@ -6,13 +6,14 @@ from pipeline.wrapper import DataReduction
 from pipeline.services.database.query import RawImageQuery, free_query
 
 
-"""Run like: python run_preprocess_commission.py 2>&1 | tee 2026-01-15_preprocess_commission_tee.log"""
+"""Run like: python run_preprocess_commission_sketch.py 2>&1 | tee 2026-02-20_preprocess_commission_sketch_tee.log"""
 
+
+OVERWRITE_DATA = False
 
 OVERWRITE_CONFIG = True
-OVERWRITE_DATA = False
-OVERWRITE_SCIENCE = False
 USE_SYSTEM_QUEUE = True
+BASE_PRIORITY = 5
 
 
 # from /home/pipeline/dhhyun/uds_debug/20260220_makeshift_masterframes.ipynb
@@ -41,8 +42,8 @@ for date in nightdates[1:]:
         dr.run(
             overwrite_config=OVERWRITE_CONFIG,
             overwrite_data=OVERWRITE_DATA,
-            overwrite_science=OVERWRITE_SCIENCE,
             use_system_queue=USE_SYSTEM_QUEUE,
+            base_priority=BASE_PRIORITY,
             processes=[],
         )
 
@@ -54,7 +55,7 @@ for date in nightdates[1:]:
         tb = traceback.format_exc()
         print(msg)
         print(tb)
-        with open("2026-01-15_preprocess_errors.log", "a") as f:
+        with open("2026-02-20_preprocess_commission_sketch_errors.log", "a") as f:
             f.write(msg)
             f.write(tb)
 

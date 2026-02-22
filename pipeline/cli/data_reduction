@@ -4,6 +4,7 @@ import argparse
 import sys
 import signal
 
+from pipeline.const import DEFAULT_SCIDATA_PROCESSES
 from pipeline.run import run_scidata_reduction
 
 
@@ -23,13 +24,19 @@ if __name__ == "__main__":
         )
     )
     parser.add_argument("-config", type=str, required=True, help="Path to the preprocessing configuration file")
-    parser.add_argument("-processes", nargs="+", required=False, help="Processes to run")
+    parser.add_argument(
+        "-processes",
+        nargs="*",
+        required=False,
+        help="Processes to run (default: all). Pass -processes with no args to skip all.",
+    )
     parser.add_argument("-overwrite", action="store_true", help="Overwrite existing results")
     parser.add_argument("-is_too", action="store_true", help="Use TOO processing")
     args = parser.parse_args()
 
+    # if None, default behavior; if [], skips sciprocess
     if args.processes is None:
-        args.processes = ["astrometry", "photometry", "coadd", "subtract"]
+        args.processes = DEFAULT_SCIDATA_PROCESSES
 
     if not args.config.endswith(".yml"):
         print(f"\nError: {args.config} is not a valid configuration file")

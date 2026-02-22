@@ -2,6 +2,7 @@ import json
 from typing import List
 
 from .config import PreprocConfiguration, SciProcConfiguration
+from .const import DEFAULT_SCIDATA_PROCESSES
 from .preprocess import Preprocess
 from .astrometry import Astrometry
 from .photometry import Photometry
@@ -43,11 +44,10 @@ def run_preprocess(
 
 def run_scidata_reduction(
     config: SciProcConfiguration | str,
-    processes: list[str] = ["astrometry", "photometry", "coadd", "subtract"],
+    processes: list[str] = DEFAULT_SCIDATA_PROCESSES,
     overwrite: bool = False,
     is_too: bool = False,
 ):
-    # print(config, is_too)
     try:
         if isinstance(config, SciProcConfiguration):
             pass

@@ -1,3 +1,4 @@
+from .const import DEFAULT_SCIDATA_PROCESSES
 from .services.blueprint import Blueprint
 from .services.scheduler import Scheduler
 from .services.queue import QueueManager
@@ -66,7 +67,7 @@ class DataReduction:
         overwrite_schedule=False,
         max_workers=50,
         base_priority=None,
-        processes=["astrometry", "photometry", "coadd", "subtract"],
+        processes=DEFAULT_SCIDATA_PROCESSES,
         queue=None,
         preprocess_kwargs=None,
         dry_run=False,
