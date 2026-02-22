@@ -570,13 +570,10 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
                 self.logger.info(
                     f"[Group {self._current_group+1}] Found pre-existing nominal (sanity: {flatdark_sanity}) flatdark at {os.path.basename(existing_flatdark_file)}"
                 )
-                # Flatdark: PPFLAG 0 if same nightdate as target (user requirement)
-                flatdark_same_night = ppflag.is_same_nightdate(existing_flatdark_file, flatdark_template)
                 self._flatdark_ppflag = ppflag.compute_fetch_ppflag(
                     existing_flatdark_file,
                     flatdark_template,
                     flatdark_sanity,
-                    flatdark_same_nightdate=flatdark_same_night,
                     ignored_lenient_keys=flatdark_ignored_lenient,
                 )
             else:

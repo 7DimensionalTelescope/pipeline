@@ -77,7 +77,6 @@ def compute_fetch_ppflag(
     template: str,
     sanity_value: bool,
     *,
-    flatdark_same_nightdate: bool = False,
     ignored_lenient_keys: bool = False,
 ) -> int:
     """
@@ -87,15 +86,11 @@ def compute_fetch_ppflag(
         found_path: Path to the found/existing master frame.
         template: Template path used for search (contains target dates).
         sanity_value: SANITY header value of the fetched frame.
-        flatdark_same_nightdate: If True, treat as PPFLAG 0 (flatdark with same nightdate).
         ignored_lenient_keys: If True, match was found by relaxing lenient keys (bit 8).
 
     Returns:
         PPFLAG value (0-31).
     """
-    if flatdark_same_nightdate:
-        return 0
-
     result = 0
     # Bit 1: different date
     if not is_same_nightdate(found_path, template):
