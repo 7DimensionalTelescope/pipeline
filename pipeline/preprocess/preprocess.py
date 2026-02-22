@@ -690,15 +690,14 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
 
         bias, dark, flat = self.bias_output, self.dark_output, self.flat_output
         n_head_blocks = self.config_node.preprocess.n_head_blocks
-        base_ppflag = ppflag.propagate_ppflag(
+
+        sci_ppflag = ppflag.propagate_ppflag(
             self._ppflag.get("bias", ppflag.get_ppflag_from_header(bias)),
             self._ppflag.get("dark", ppflag.get_ppflag_from_header(dark)),
             self._ppflag.get("flat", ppflag.get_ppflag_from_header(flat)),
         )
+
         for raw_file, processed_file in zip(self.sci_input, self.sci_output):
-            # Bit 1: any master has different nightdate than this science frame
-            distant = any(not ppflag.is_same_nightdate(m, raw_file) for m in [bias, dark, flat])
-            sci_ppflag = ppflag.propagate_ppflag(base_ppflag, ppflag.PPFLAG_DIFFERENT_DATE if distant else 0)
             with fits.open(raw_file) as hdul:
                 header = hdul[0].header.copy()
             header["SATURATE"] = prep_utils.get_saturation_level(header, bias, dark, flat)
