@@ -1,0 +1,114 @@
+#!/home/pipeline-stable/.conda/envs/pipeline/bin/python
+
+import sqlite3
+from pathlib import Path
+import sys
+import argparse
+
+from pipeline.services.database.handler import DatabaseHandler
+
+"""ln -s /home/pipeline-stable/pipeline/pipeline/cli/autostash_dh /usr/local/bin/autostash_dh"""
+
+# Add pipeline-stable's python to path
+pipeline_dir = Path(__file__).parents[2]
+sys.path.insert(0, str(pipeline_dir))
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Autostash failed scheduler entries")
+    parser.add_argument("--grep-status", type=str, default="Failed", help="Status to filter for (default: Failed)")
+    parser.add_argument(
+        "--whitelist-error",
+        type=int,
+        nargs="*",
+        default=[382],
+        help="List of error codes to whitelist (default: 382). Usage: --whitelist-error 399 400",
+    )
+    parser.add_argument(
+        "--whitelist-obj", type=str, nargs="*", default=[], help="List of objects to whitelist (default: [])"
+    )
+    parser.add_argument(
+        "--blacklist-object",
+        type=str,
+        nargs="*",
+        default=["UDS"],
+        help="List of objects to blacklist (default: ['UDS'])",
+    )
+    return parser.parse_args()
+
+
+args = parse_args()
+
+DB_PATH = "/var/db/scheduler.db"
+GREP_STATUS = args.grep_status
+WHITELIST_ERROR = args.whitelist_error
+WHITELIST_OBJ = args.whitelist_obj
+BLACKLIST_OBJECT = args.blacklist_object
+
+print(f"DB_PATH: {DB_PATH}")
+print(f"GREP_STATUS: {GREP_STATUS}")
+print(f"WHITELIST_ERROR: {WHITELIST_ERROR}")
+print(f"WHITELIST_OBJ: {WHITELIST_OBJ}")
+print(f"BLACKLIST_OBJECT: {BLACKLIST_OBJECT}")
+
+# Connect to scheduler database
+con = sqlite3.connect(DB_PATH)
+con.row_factory = sqlite3.Row
+cur = con.cursor()
+
+# Get all failed rows first
+failed_rows = cur.execute(f"SELECT \"index\", status, config FROM scheduler WHERE status = '{GREP_STATUS}'").fetchall()
+print(f"Found {len(failed_rows)} rows with status 'Failed'")
+
+if len(failed_rows) == 0:
+    print("No failed rows to process")
+    con.close()
+else:
+    # Initialize process_status handler (no need to load entire table)
+    process_status_handler = DatabaseHandler(add_database=True).process_status
+
+    # Process failed rows - query only the configs we need
+    updated_count = 0
+    skipped_count = 0
+
+    for row in failed_rows:
+        config = row["config"]
+
+        if not config:
+            print(f"Skipping row {row['index']}: config is None")
+            skipped_count += 1
+            continue
+
+        # Query only this specific config_file - much more efficient!
+        process_status_data = process_status_handler.read_data_by_params(config_file=config, return_pyTable=True)
+
+        if process_status_data is None:
+            print(f"Skipping {config}: not found in process_status")
+            skipped_count += 1
+            continue
+
+        error = process_status_data.errors
+        obj = process_status_data.object
+
+        # Check if error is None and convert to int for comparison
+        error_int = int(error) if error is not None else None
+
+        if (error_int in WHITELIST_ERROR or obj in WHITELIST_OBJ) and obj not in BLACKLIST_OBJECT:
+            cur.execute("UPDATE scheduler SET status = 'Stashed' WHERE \"index\" = ?", (row["index"],))
+            updated_count += 1
+        else:
+            print(f"Skipping {obj} (error: {error_int})")
+            skipped_count += 1
+
+    # Commit the changes
+    con.commit()
+
+    print(f"\nSummary:")
+    print(f"  Updated: {updated_count} rows from 'Failed' to 'Stashed'")
+    print(f"  Skipped: {skipped_count} rows")
+
+    # Verify the update
+    updated_rows = cur.execute("SELECT \"index\", status, config FROM scheduler WHERE status = 'Stashed'").fetchall()
+    print(f"  Verification: Found {len(updated_rows)} total rows with status 'Stashed'")
+
+    con.close()

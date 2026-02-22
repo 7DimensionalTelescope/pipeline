@@ -390,7 +390,14 @@ class Scheduler:
             return None
 
         if self.use_system_queue:
-            return self._get_next_task_db()
+            row, cmd = self._get_next_task_db()
+            if row is None:
+                import subprocess
+
+                subprocess.run([f"{SCRIPTS_DIR}/autostash"], check=True)
+                return None, None
+            else:
+                return row, cmd
         else:
             return self._get_next_task_memory()
 
@@ -466,8 +473,9 @@ class Scheduler:
         if row is None:
             return None, None
 
-        if row["priority"] == 0 and ["-overwrite"] not in row["kwargs"]:
-            row["kwargs"].append("-overwrite")
+        # This is dangerous
+        # if row["priority"] == 0 and ["-overwrite"] not in row["kwargs"]:
+        #     row["kwargs"].append("-overwrite")
 
         return row, self._generate_command(row["index"], row["kwargs"])
 
@@ -1166,3 +1174,13 @@ class Scheduler:
         mask = self._schedule["index"] == index
         self._schedule["status"][mask] = "Ready"
         return True
+
+    def _get_failed_tasks_from_db(self):
+        """Get all failed tasks from the schedule."""
+        with self._db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT \"index\", config FROM scheduler WHERE status = 'Failed'")
+            failed_tasks = cursor.fetchall()
+
+        failed_names = [(task[0], os.path.basename(task[1]).replace(".yml", "")) for task in failed_tasks]
+        return np.asarray(failed_names)
