@@ -353,10 +353,13 @@ class ConfigNode:
             # If list is empty, return empty list (valid configuration value)
             if len(obj) == 0:
                 return []
-            try:
+            if -len(obj) <= i < len(obj):
                 return [obj[i]]  # pick i-th element (wrapped back in a list)
-            except IndexError:
-                raise IndexError(f"Index {i} out of bounds for list: {obj}")
+
+            # If list is shorter than i, return the list itself
+            # This can happen when images are sanity filtered, and input_images of next processes is set already
+            # e.g., len(config.node.photometry.input_images) is 240, len(config.node.imcoadd.input_images) is 239
+            return obj
 
         else:
             return obj
