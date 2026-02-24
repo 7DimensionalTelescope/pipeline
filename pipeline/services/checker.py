@@ -210,19 +210,16 @@ class CheckerMixin:
 
     def apply_sanity_filter_and_report(
         self,
-        dtype: str = "science",  # Type of images for sanity check
+        dtype: Literal["science", "masterframe"] = "science",  # Type of images for sanity check
     ) -> bool:
         """
-        Applies SANITY filtering to `self.input_images` and overrides it.
+        Applies SANITY filtering to `self.input_images` and redefine `self.path`.
+        Does not modify config.
 
-        This is the main method to call in __init__ after setting input_images.
-        Only filters self.input_images and updates self.path - does not modify config.
-
-        Args:
-            dtype: Type of images for sanity check ("science", "masterframe", etc.)
+        Use this in __init__() after setting self.input_images.
 
         Returns:
-            True if input images changed, False otherwise
+            bool: True if input images changed, False otherwise
         """
         if not self.input_images:
             return
@@ -232,9 +229,9 @@ class CheckerMixin:
         self.input_images, needs_sanity_update = self._filter_by_sanity(self.input_images, dtype=dtype)
 
         filtered_count = len(self.input_images)
-        input_changed = filtered_count != original_count
+        input_has_changed = filtered_count != original_count
 
-        if input_changed:
+        if input_has_changed:
             filtered_out = [img for img in original_images if img not in self.input_images]
             self.logger.info(
                 f"Filtered {original_count - filtered_count} images based on SANITY check "
@@ -255,7 +252,7 @@ class CheckerMixin:
             # Recreate self.path to keep it in sync
             self._recreate_pathhandler_instance()
 
-        return input_changed
+        return input_has_changed
 
     def _recreate_pathhandler_instance(self):
         """

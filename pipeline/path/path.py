@@ -316,14 +316,14 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             self._output_parent_dir = [working_dir or os.getcwd()]
             self._preproc_output_dir = self._output_parent_dir
             self._factory_parent_dir = [os.path.join(self._output_parent_dir[0], TMP_DIRNAME)]
-            self._is_pipeline_vectorized = [is_pipeline]
+            # self._is_pipeline_vectorized = [is_pipeline]
 
         else:
             # Process each file independently
             self._output_parent_dir = []
             self._preproc_output_dir = []
             self._factory_parent_dir = []
-            self._is_pipeline_vectorized = []
+            # self._is_pipeline_vectorized = []
 
             for i, input_file in enumerate(self._input_files):
                 file_dir = str(Path(input_file).absolute().parent)
@@ -344,13 +344,13 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
 
                     self._output_parent_dir.append(output_parent_dir)
                     self._factory_parent_dir.append(os.path.join(output_parent_dir, TMP_DIRNAME))
-                    self._is_pipeline_vectorized.append(False)
+                    # self._is_pipeline_vectorized.append(False)
 
                 # pipeline_dirs found in input_file or explicitly given as pipeline
                 else:
                     from datetime import date
 
-                    nightdate = self._get_name_property_at_index("nightdate", i)
+                    nightdate = self._get_namehandler_property_at_index("nightdate", i)
                     if isinstance(nightdate, list):
                         current_nightdate = nightdate[i] if i < len(nightdate) else nightdate[0]
                     else:
@@ -361,18 +361,20 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                             output_parent_dir = const.TOO_PROCESSED_DIR
                             self._output_parent_dir.append(output_parent_dir)
                             self._factory_parent_dir.append(const.TOO_FACTORY_DIR)
-                            self._is_pipeline_vectorized.append(True)
+                            # self._is_pipeline_vectorized.append(True)
                         else:
                             output_parent_dir = const.PROCESSED_DIR
                             self._output_parent_dir.append(output_parent_dir)
                             self._factory_parent_dir.append(const.FACTORY_DIR)
-                            self._is_pipeline_vectorized.append(True)
+                            # self._is_pipeline_vectorized.append(True)
                     else:
                         raise ValueError(
                             f"Nightdate cap ({const.DISK_CHANGE_NIGHTDATE}) reached for file {input_file}: consider moving to another disk."
                         )
 
-                preproc_output_dir = os.path.join(output_parent_dir, self._get_name_property_at_index("nightdate", i))
+                preproc_output_dir = os.path.join(
+                    output_parent_dir, self._get_namehandler_property_at_index("nightdate", i)
+                )
                 self._preproc_output_dir.append(preproc_output_dir)
 
         # Store as lists
@@ -413,7 +415,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
 
         return self._name_cache[prop_name]
 
-    def _get_name_property_at_index(self, prop_name: str, index: int):
+    def _get_namehandler_property_at_index(self, prop_name: str, index: int):
         """
         Use this instead of direct getattr to ensure proper caching and indexing.
         Get cached NameHandler property value at specific index.
@@ -430,11 +432,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def is_pipeline(self):
-        all_flag = all(self._is_pipeline_vectorized)
-        or_flag = any(self._is_pipeline_vectorized)
-        if not all_flag and or_flag:
-            raise PathHandlerError.GroupingError("Pipeline and non-pipeline paths are mixed. Aborting...")
-        return all_flag
+        return self.settings.is_pipeline
 
     @property
     def file_dep_initialized(self):
@@ -517,11 +515,11 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
 
         yml_basenames = []
         for i in range(len(self._input_files)):
-            obj = self._get_name_property_at_index("obj", i)
-            filte = self._get_name_property_at_index("filter", i)
+            obj = self._get_namehandler_property_at_index("obj", i)
+            filte = self._get_namehandler_property_at_index("filter", i)
             # unit = self._get_property_at_index("unit", i)
             # date = self._get_property_at_index("date", i)
-            nightdate = self._get_name_property_at_index("nightdate", i)
+            nightdate = self._get_namehandler_property_at_index("nightdate", i)
 
             yml_stem = "_".join([obj, filte, nightdate])
             if self._is_too_vectorized[i]:
@@ -564,11 +562,11 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
 
         for i in range(len(self._input_files)):
             # Get properties for this specific file
-            nightdate = self._get_name_property_at_index("nightdate", i)
-            unit = self._get_name_property_at_index("unit", i)
-            obj = self._get_name_property_at_index("obj", i)
-            filte = self._get_name_property_at_index("filter", i)
-            typ = self._get_name_property_at_index("type", i)
+            nightdate = self._get_namehandler_property_at_index("nightdate", i)
+            unit = self._get_namehandler_property_at_index("unit", i)
+            obj = self._get_namehandler_property_at_index("obj", i)
+            filte = self._get_namehandler_property_at_index("filter", i)
+            typ = self._get_namehandler_property_at_index("type", i)
 
             # Masterframe directory
             masterframe_dir = os.path.join(const.MASTER_FRAME_DIR, nightdate, unit)
@@ -578,7 +576,8 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             self._preproc_config_stem.append(config_stem)
 
             if "calibrated" in typ or "raw" in typ:
-                if self._is_pipeline_vectorized[i]:
+                # if self._is_pipeline_vectorized[i]:
+                if self.is_pipeline:
                     # Within pipeline processing
                     relative_path = os.path.join(nightdate, obj, filte)
                     output_dir = os.path.join(self._output_parent_dir[i], relative_path)
@@ -646,10 +645,10 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         return PathImsubtract(self, self._config)
 
     def _raw_dir(self, i, is_too=False):
-        unit = self._get_name_property_at_index("unit", i)
-        nightdate = self._get_name_property_at_index("nightdate", i)
-        n_binning = self._get_name_property_at_index("n_binning", i)
-        gain = self._get_name_property_at_index("gain", i)
+        unit = self._get_namehandler_property_at_index("unit", i)
+        nightdate = self._get_namehandler_property_at_index("nightdate", i)
+        n_binning = self._get_namehandler_property_at_index("n_binning", i)
+        gain = self._get_namehandler_property_at_index("gain", i)
         root = find_raw_path(unit, nightdate, n_binning, gain, is_too=is_too)
         return root
 
@@ -661,8 +660,8 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         """
         paths = []
         for i, input in enumerate(self._input_files):
-            typ = self._get_name_property_at_index("type", i)
-            basename = self._get_name_property_at_index("conjugate_basename", i)
+            typ = self._get_namehandler_property_at_index("type", i)
+            basename = self._get_namehandler_property_at_index("conjugate_basename", i)
 
             if "raw" in typ[0]:
                 # original was raw → conjugate is processed
@@ -684,7 +683,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         # return [i if "raw" in typ[0] else c for typ, i, c in zip(self.name.type, self._input_files, self.conjugate)]
         paths = []
         for i in range(len(self._input_files)):
-            basename = self._get_name_property_at_index("raw_basename", i)
+            basename = self._get_namehandler_property_at_index("raw_basename", i)
             root = self._raw_dir(i)
             raw_image_template = os.path.join(root, basename)
             globbed = glob(raw_image_template)
@@ -704,7 +703,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         # return [c if "raw" in typ else i for typ, i, c in zip(self.name.type, self._input_files, self.conjugate)]
         paths = []
         for i, input in enumerate(self._input_files):
-            basename = self._get_name_property_at_index("processed_basename", i)
+            basename = self._get_namehandler_property_at_index("processed_basename", i)
             root = self._single_dir[i]
             paths.append(os.path.join(root, basename))
 

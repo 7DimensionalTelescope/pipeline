@@ -99,6 +99,7 @@ class SciProcConfiguration(BaseConfig):
             )
             self.logger.info("Generating 'SciProcConfiguration' from the 'base' configuration")
             self.logger.debug(f"Configuration source: {config_source}")
+            self.logger.debug(f"PathHandler settings: {self.path.settings}")
             super().__init__(config_source=config_source, write=self.write, **kwargs)
             self.node.logging.file = log_file
 
@@ -107,11 +108,10 @@ class SciProcConfiguration(BaseConfig):
             config_source = input
             super().__init__(config_source=config_source, write=self.write, **kwargs)
             # working_dir = os.path.dirname(config_source) if isinstance(config_source, str) else None
-            is_too = is_too or get_key(self.node.settings, "is_too", False)
             self.path = self._set_pathhandler_from_config(
                 working_dir=working_dir,
-                is_pipeline=is_pipeline,
-                is_too=is_too,
+                is_pipeline=get_key(self.node.settings, "is_pipeline", False),
+                is_too=get_key(self.node.settings, "is_too", False),
             )
             self.node.logging.file = self.path.sciproc_output_log
 
@@ -127,6 +127,7 @@ class SciProcConfiguration(BaseConfig):
             self._initialized = True
             self.logger.info("Loading 'SciProcConfiguration' from an exisiting file or dictionary")
             self.logger.debug(f"Configuration source: {config_source}")
+            self.logger.debug(f"PathHandler settings: {self.path.settings}")
 
         else:
             raise ValueError("Input must be a list of image files, a configuration file path, or a configuration dictionary.")  # fmt: skip
@@ -239,7 +240,7 @@ class SciProcConfiguration(BaseConfig):
         logger = False if not write else logger
         input_images = sorted([os.path.abspath(image) for image in atleast_1d(input_images)])
         # path = PathHandler(input_images, working_dir=working_dir or os.getcwd(), is_too=is_too)
-        path = PathHandler(input_images, working_dir=working_dir, is_too=is_too)
+        path = PathHandler(input_images, working_dir=working_dir, is_pipeline=is_pipeline, is_too=is_too)
         self = cls.base_config(write=write)
         self.input_files = input_images
         self.path = path
