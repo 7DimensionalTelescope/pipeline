@@ -1225,7 +1225,7 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
                         f.write(fits.Header(cards).tostring(sep="\n"))
 
         except Exception as e:
-            self.logger.error(f"Failed to evaluate solution: {e}", AstrometryError.UnknownError, exc_info=True)
+            self.logger.error(f"Failed to evaluate solution: {e}", e, exc_info=True)
 
             # don't raise error
 

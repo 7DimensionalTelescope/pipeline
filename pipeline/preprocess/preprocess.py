@@ -243,7 +243,7 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
 
             self.logger.info(f"Preprocessing completed in {time_diff_in_seconds(st)} seconds")
         except Exception as e:
-            self.logger.error(f"Error during preprocessing: {str(e)}", PreprocessError.UnknownError, exc_info=True)
+            self.logger.error(f"Error during preprocessing: {str(e)}", e, exc_info=True)
             raise
 
     def proceed_to_next_group(self):
@@ -821,7 +821,7 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
             else:
                 self.logger.info(f"[Group {group_index+1}] Skipping science plot")
         except Exception as e:
-            self.logger.error(f"[Group {group_index+1}] Error making plots: {e}", PreprocessError.UnknownError)
+            self.logger.error(f"[Group {group_index+1}] Error making plots: {e}", e)
             self.logger.debug(traceback.format_exc())
 
     def update_bpmask(self, sanity=True):

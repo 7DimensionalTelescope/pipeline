@@ -258,7 +258,7 @@ class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
             self.logger.info(f"'Photometry' is Completed in {time_diff_in_seconds(st)} seconds")
             self.logger.debug(MemoryMonitor.log_memory_usage)
         except Exception as e:
-            self.logger.error(f"Photometry failed: {str(e)}", UnknownError, exc_info=True)
+            self.logger.error(f"Photometry failed: {str(e)}", e, exc_info=True)
             raise
 
     def _run_parallel(self, overwrite=True) -> None:
@@ -464,7 +464,7 @@ class PhotometrySingle:
             )
         except Exception as e:
             self.logger.error(
-                f"PhotometrySingle failed for the image [{self._id}]: {str(e)}", UnknownError, exc_info=True
+                f"PhotometrySingle failed for the image [{self._id}]: {str(e)}", e, exc_info=True
             )
             raise
 
