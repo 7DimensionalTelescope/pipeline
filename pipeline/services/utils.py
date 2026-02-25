@@ -700,14 +700,19 @@ class PreprocessGroup:
     def add_sci_keys(self, keys: str):
         self.sci_keys.append(keys)
 
-    def create_config(self, overwrite=False, is_too=False, **kwargs):
+    def create_config(self, overwrite: bool = False, is_too: bool = False, is_pipeline: bool = False, **kwargs):
         from ..config import PreprocConfiguration
 
         # print(
         #     f"PreprocessGroup {self.key} creating config with {len(self.image_files)} images; "
         #     f"{len(os.listdir(f'/proc/{os.getpid()}/fd'))} FDs under limit of {resource.getrlimit(resource.RLIMIT_NOFILE)} FDs"
         # )
-        c = PreprocConfiguration(self.image_files, overwrite=overwrite, is_too=is_too)
+        c = PreprocConfiguration(
+            self.image_files,
+            overwrite=overwrite,
+            is_pipeline=is_pipeline,
+            is_too=is_too,
+        )
 
         self._config = c.config_file
 

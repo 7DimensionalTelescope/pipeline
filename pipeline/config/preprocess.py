@@ -21,16 +21,24 @@ class PreprocConfiguration(BaseConfig):
         write=True,
         overwrite=False,
         verbose=True,
-        is_too=False,
+        is_pipeline: bool = False,
+        is_too: bool = False,
         **kwargs,
     ):
         st = time.time()
         self.write = write
-        self._handle_input(input, logger, verbose, is_too=is_too, **kwargs)
+        self._handle_input(
+            input,
+            logger,
+            verbose,
+            is_pipeline=is_pipeline,
+            is_too=is_too,
+            **kwargs,
+        )
 
         if not self._initialized:
             self.logger.info("Initializing configuration")
-            self.initialize(is_too=is_too)
+            self.initialize(is_pipeline=is_pipeline, is_too=is_too)
             self.logger.info(f"'PreprocConfiguration' initialized in {time_diff_in_seconds(st)} seconds")
             self.logger.info(f"Writing configuration to file")
             self.logger.debug(f"Configuration file: {self.config_file}")
@@ -48,13 +56,13 @@ class PreprocConfiguration(BaseConfig):
             return None
 
     @classmethod
-    def user_config(cls, **kwargs):
+    def user_config(cls, is_pipeline=False, **kwargs):
         print("[WARNING] Not implemented yet. Returning base config...\n")  # TODO
         self = cls.base_config()
-        self.node.settings.is_pipeline = False
+        self.node.settings.is_pipeline = is_pipeline
         return self
 
-    def initialize(self, is_too=False):
+    def initialize(self, is_pipeline: bool = False, is_too: bool = False):
         if is_too:
             self.logger.info(f"Overriding preproc base configuration with {self.path.preproc_too_override_yml}")
             self.override_from_yaml(self.path.preproc_too_override_yml)
@@ -63,6 +71,10 @@ class PreprocConfiguration(BaseConfig):
         self.node.info.creation_datetime = datetime.now().isoformat()
         self.node.info.file = self.config_file
         self.node.name = self.path.output_name
+
+        # Keep settings in sync with how SciProcConfiguration handles pipeline flags
+        self.node.settings.is_pipeline = is_pipeline
+        self.node.settings.is_too = is_too
 
         if self.input_files:
             masterframe_images = set()
@@ -78,7 +90,16 @@ class PreprocConfiguration(BaseConfig):
         self.node.input.raw_dir = self.input_dir
         self._initialized = True
 
-    def _handle_input(self, input, logger, verbose, is_too=False, **kwargs):
+    def _handle_input(
+        self,
+        input,
+        logger,
+        verbose,
+        working_dir=None,
+        is_pipeline: bool = False,
+        is_too: bool = False,
+        **kwargs,
+    ):
 
         # List of FITS files
         if isinstance(input, list):
@@ -88,7 +109,7 @@ class PreprocConfiguration(BaseConfig):
             # sci_images = PathHandler(input).pick_type("science")
             # print(sci_images)
             # self.path = PathHandler(sorted(sci_images)[-1])  # in case of multiple dates, use the later date
-            self.path = PathHandler(input, is_too=is_too)
+            self.path = PathHandler(input, working_dir=working_dir, is_pipeline=is_pipeline, is_too=is_too)
             config_source = self.path.preproc_base_yml
             config_output = collapse(self.path.preproc_output_yml, raise_error=True)
             log_file = self.path.preproc_output_log
@@ -108,7 +129,11 @@ class PreprocConfiguration(BaseConfig):
             config_source = input
             super().__init__(config_source=config_source, write=self.write, is_too=is_too, **kwargs)
             self._initialized = True
-            self.path = self._set_pathhandler_from_config(is_too=is_too or get_key(self.node.settings, "is_too", False))
+            self.path = self._set_pathhandler_from_config(
+                working_dir=working_dir,
+                is_pipeline=is_pipeline or get_key(self.node.settings, "is_pipeline", False),
+                is_too=is_too or get_key(self.node.settings, "is_too", False),
+            )
             config_output = self.path.preproc_output_yml
             log_file = self.path.preproc_output_log
 
@@ -143,18 +168,38 @@ class PreprocConfiguration(BaseConfig):
 
         return
 
-    def _set_pathhandler_from_config(self, is_too=False):
+    def _set_pathhandler_from_config(
+        self,
+        working_dir=None,
+        is_pipeline: bool = False,
+        is_too: bool = False,
+    ):
         # mind the check order
         if hasattr(self.node, "input"):
             if hasattr(self.node.input, "science_images") and self.node.input.science_images:
-                return PathHandler(self.node.input.science_images[0], is_too=is_too)
+                return PathHandler(
+                    self.node.input.science_images[0],
+                    working_dir=working_dir,
+                    is_pipeline=is_pipeline,
+                    is_too=is_too,
+                )
 
             elif hasattr(self.node.input, "masterframe_images") and self.node.input.masterframe_images:
-                return PathHandler(flatten(self.node.input.masterframe_images)[0], is_too=is_too)
+                return PathHandler(
+                    flatten(self.node.input.masterframe_images)[0],
+                    working_dir=working_dir,
+                    is_pipeline=is_pipeline,
+                    is_too=is_too,
+                )
 
             elif hasattr(self.node.input, "raw_dir") and self.node.input.raw_dir:
                 f = os.path.join(self.node.input.raw_dir, "**.fits")
-                return PathHandler(sorted(glob.glob(f))[0], is_too=is_too)
+                return PathHandler(
+                    sorted(glob.glob(f))[0],
+                    working_dir=working_dir,
+                    is_pipeline=is_pipeline,
+                    is_too=is_too,
+                )
 
         raise ValueError("Configuration does not contain valid input files or directories to create PathHandler.")
 
