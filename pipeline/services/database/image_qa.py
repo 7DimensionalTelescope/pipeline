@@ -55,6 +55,7 @@ class ImageQATable:
     nhotpix: Optional[int] = None
     ntotpix: Optional[int] = None
 
+    seeingmn: Optional[float] = None
     seeingsd: Optional[float] = None
     pa_quad: Optional[float] = None
     pa_align: Optional[float] = None
