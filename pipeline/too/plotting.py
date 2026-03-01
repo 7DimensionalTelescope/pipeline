@@ -222,6 +222,10 @@ def plot_cutouts_and_sed(
     gs = fig.add_gridspec(2, 1, height_ratios=[4, k_with_headers * figsize_per_subplot[1]], hspace=0.05)
 
     ax_sed = fig.add_subplot(gs[0])
+    
+    for s in sed_data:
+        print(s)
+
     det_mask = ~is_upper_limit
     det_colors = mcolors[det_mask]
     det_widths = filter_widths[det_mask]
@@ -232,7 +236,9 @@ def plot_cutouts_and_sed(
     for i, (wav, mag, mag_err, width, c) in enumerate(
         zip(wavelengths[det_mask], magnitudes[det_mask], det_mag_errors, det_widths, det_colors)
     ):
-        if mag is not None:
+        print(wav, mag)
+
+        if mag is not None and mag > 1.0:
             ax_sed.errorbar(
                 [wav],
                 [mag],
@@ -251,7 +257,7 @@ def plot_cutouts_and_sed(
     for i, (wav, mag, width, c) in enumerate(
         zip(wavelengths[is_upper_limit], mag_errors[is_upper_limit], ul_widths, ul_colors)
     ):
-        if mag is not None:
+        if mag is not None and mag > 1.0:
             ax_sed.arrow(
                 wav,
                 mag,  # Start from the magnitude value

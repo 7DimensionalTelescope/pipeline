@@ -52,7 +52,7 @@ def get_coord_in_pixel(header, sky_position, return_wcs=False):
     return (x, y, wcs) if return_wcs else (x, y)
 
 
-def extract_mag_from_catalog(image_path, sky_position, aperture_key="auto"):
+def extract_mag_from_catalog(image_path, sky_position, aperture_key="auto", match_threshold=4.0):
     header = fits.getheader(image_path)
     filter_name = header.get("FILTER", "").lower()
     x, y = get_coord_in_pixel(header, sky_position)
@@ -61,8 +61,10 @@ def extract_mag_from_catalog(image_path, sky_position, aperture_key="auto"):
         return None, None
     tbl = Table.read(cat_file)
     distances = np.sqrt((tbl["X_IMAGE"] - x) ** 2 + (tbl["Y_IMAGE"] - y) ** 2)
+
     nearest_idx = np.argmin(distances)
-    if distances[nearest_idx] > 4.0:
+    if distances[nearest_idx] > match_threshold:
+        print(f"No match found (min: {distances[nearest_idx]:.2f} pixels) for {os.path.basename(image_path)}")
         return None, None
 
     if aperture_key == "auto":
@@ -203,6 +205,7 @@ def get_sed_data(image_path, sky_position, aperture_key="auto"):
     #         f"{cat_mag:.2f}+/-{cat_mag_err:.2f} versus {aper_mag:.2f}+/-{aper_mag_err:.2f}",
     #     )
 
+    print(wavelength, cat_mag, aper_mag)
     return {
         "magnitude": cat_mag if cat_mag is not None else aper_mag,
         "mag_error": cat_mag_err if cat_mag is not None else aper_mag_err,
