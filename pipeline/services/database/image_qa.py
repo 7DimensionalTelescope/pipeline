@@ -26,6 +26,7 @@ class ImageQATable:
     image_name: Optional[str] = None
     image_type: Optional[str] = None
     image_group: Optional[str] = None
+    image_path: Optional[str] = None
 
     nightdate: Optional[date] = None
     unit: Optional[str] = None
@@ -162,6 +163,8 @@ class ImageQATable:
     @classmethod
     def from_file(cls, file: str, process_status_id: int = None):
         cls = cls(image_name=os.path.basename(file.replace(".fits", "")), process_status_id=process_status_id)
+
+        cls.image_path = file
 
         header = fits.getheader(file)
 
