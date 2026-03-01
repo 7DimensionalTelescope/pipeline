@@ -2,12 +2,6 @@ name:
 
 process_id:
 
-input: 
-  masterframe_images: 
-  science_images: 
-  grouped_raw_images:
-  raw_dir: 
-
 info:
   file:
   project: 7DT/7DS
@@ -39,3 +33,9 @@ preprocess:
 settings:
   is_too: false
   is_pipeline: true  # keep it true. preprocess is assumed to be pipeline
+
+input: 
+  masterframe_images: 
+  science_images: 
+  grouped_raw_images:
+  raw_dir: 
