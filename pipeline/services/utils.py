@@ -700,7 +700,7 @@ class PreprocessGroup:
     def add_sci_keys(self, keys: str):
         self.sci_keys.append(keys)
 
-    def create_config(self, overwrite: bool = False, is_too: bool = False, is_pipeline: bool = False, **kwargs):
+    def create_config(self, overwrite: bool = False, is_too: bool = False, is_pipeline: bool = True, **kwargs):
         from ..config import PreprocConfiguration
 
         # print(
