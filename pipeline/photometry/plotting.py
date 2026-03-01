@@ -81,7 +81,7 @@ def plot_filter_check(self, alleged_filter, inferred_filter, narrowed_filters, f
     plt.tight_layout()
 
     img_stem = os.path.splitext(os.path.basename(self.input_image))[0]
-    f = os.path.join(self.path.photometry.figure_dir, f"{img_stem}_filtercheck.png")
+    f = os.path.join(self.path.photometry.figure_dir, f"{img_stem}_filtercheck.jpg")
     plt.savefig(f, dpi=100)
     plt.close()
     return
@@ -160,7 +160,7 @@ def plot_zp(
 
     img_stem = os.path.splitext(os.path.basename(self.input_image))[0]
     fpath = os.path.join(
-        self.path.photometry.figure_dir, f"{img_stem}_{mag_key}{'' if filt is None else '_' + filt}.png"
+        self.path.photometry.figure_dir, f"{img_stem}_{mag_key}{'' if filt is None else '_' + filt}.jpg"
     )
     plt.savefig(fpath, dpi=100)
     plt.close()
