@@ -359,7 +359,9 @@ class PhotometrySingle:
 
         self._id = f"{next(type(self)._id_counter)}/{total_image}"
 
-        self.path = PathHandler(self.input_image, is_too=self.config_node.settings.is_too)
+        self.path = PathHandler(
+            self.input_image, is_pipeline=self.config_node.settings.is_pipeline, is_too=self.config_node.settings.is_too
+        )
         self.path_tmp = self.path.photometry.tmp_dir
 
         self._trust_header_seeing = difference_photometry
@@ -463,9 +465,7 @@ class PhotometrySingle:
                 f" in {time_diff_in_seconds(start_time)} seconds"
             )
         except Exception as e:
-            self.logger.error(
-                f"PhotometrySingle failed for the image [{self._id}]: {str(e)}", e, exc_info=True
-            )
+            self.logger.error(f"PhotometrySingle failed for the image [{self._id}]: {str(e)}", e, exc_info=True)
             raise
 
     def calculate_seeing(
