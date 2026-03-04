@@ -671,22 +671,26 @@ class Scheduler:
             failed = self.schedule[self.schedule["status"] == "Failed"]
             return (len(completed) + len(failed)) == len(self.schedule)
 
-    def rerun_failed_tasks(self):
+    def rerun_failed_tasks(self, overwrite=False):
         """
         Rerun all failed tasks by changing their status to Ready with priority 1 and readiness 100.
 
         Returns:
             int: Number of tasks that were updated
+
+        Parameters:
+            overwrite (bool): If True, set kwargs to ['-overwrite'] so reruns overwrite existing outputs.
         """
+        kwargs = "['-overwrite']" if overwrite else "[]"
         if self.use_system_queue:
             with self._db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     """UPDATE scheduler 
-                       SET status = ?, priority = ?, readiness = ?, is_ready = ?, pid = 0, 
+                       SET status = ?, priority = ?, readiness = ?, is_ready = ?, pid = 0,
                            process_start = ?, process_end = ?, input_type = ?, kwargs = ?
                        WHERE status = ?""",
-                    ("Ready", 0, 100, 1, "", "", "Reprocess", "[]", "Failed"),
+                    ("Ready", 0, 100, 1, "", "", "Reprocess", kwargs, "Failed"),
                 )
                 conn.commit()
                 return cursor.rowcount
@@ -703,7 +707,7 @@ class Scheduler:
                 self._schedule["process_start"][mask] = ""
                 self._schedule["process_end"][mask] = ""
                 self._schedule["input_type"][mask] = "Reprocess"
-                self._schedule["kwargs"][mask] = "[]"  # "['-overwrite']"  # don't overwrite by default: dangerous
+                self._schedule["kwargs"][mask] = kwargs
             return count
 
     def clear_schedule(self, all=False):
