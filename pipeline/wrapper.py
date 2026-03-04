@@ -35,6 +35,7 @@ class DataReduction:
             use_db=use_db,
             master_frame_only=master_frame_only,
             is_too=is_too,
+            is_pipeline=is_pipeline,
             **kwargs,
         )
         self._created_config = False

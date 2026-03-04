@@ -116,14 +116,25 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
 
         self.logger.info("Initializing Preprocess")
 
+        # Respect pipeline vs ad-hoc layout from the configuration
+        is_pipeline = get_key(self.config_node.settings, "is_pipeline", False)
+
         if get_key(self.config_node.input, "masterframe_images") or get_key(self.config_node.input, "science_images"):
             bdf_flattened = flatten(self.config_node.input.masterframe_images)
             input_files = bdf_flattened + list(self.config_node.input.science_images)
-            self.raw_groups = PathHandler.take_raw_inventory(input_files, is_too=self.is_too)
+            self.raw_groups = PathHandler.take_raw_inventory(
+                input_files,
+                is_too=self.is_too,
+                is_pipeline=is_pipeline,
+            )
             # self.logger.debug(f"raw_groups initialized: {self.raw_groups}")
         elif self.config_node.input.raw_dir:
             input_files = glob.glob(os.path.join(self.config_node.input.raw_dir, "*.fits"))
-            self.raw_groups = PathHandler.take_raw_inventory(input_files, is_too=self.is_too)
+            self.raw_groups = PathHandler.take_raw_inventory(
+                input_files,
+                is_too=self.is_too,
+                is_pipeline=is_pipeline,
+            )
         else:
             raise ValueError("No input files or directory specified")
 

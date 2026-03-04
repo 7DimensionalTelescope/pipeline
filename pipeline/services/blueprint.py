@@ -25,6 +25,7 @@ class Blueprint:
         use_db: bool = False,
         master_frame_only: bool = False,
         is_too: bool = False,
+        is_pipeline: bool = False,
         **kwargs,
     ):
         self.groups = SortedGroupDict()
@@ -54,14 +55,14 @@ class Blueprint:
                 return
 
             print("Grouping images...")
-            self.initialize()
+            self.initialize(is_pipeline=is_pipeline)
 
         print("Blueprint initialized.")
 
         self._config_generated = False
 
     @classmethod
-    def from_list(cls, list_of_images: list[str], is_too=False, **kwargs):
+    def from_list(cls, list_of_images: list[str], is_too: bool = False, is_pipeline: bool = False, **kwargs):
         # if not all(f.endswith(".fits") for f in list_of_images):
         #     raise ValueError("Non-fits images in input")
         if not list_of_images:
@@ -70,11 +71,15 @@ class Blueprint:
         if not all(isinstance(f, str) and f.endswith(".fits") for f in list_of_images):
             raise ValueError("Non-fits images in input")
 
-        return cls(list_of_images=list_of_images, is_too=is_too, **kwargs)
+        return cls(list_of_images=list_of_images, is_too=is_too, is_pipeline=is_pipeline, **kwargs)
 
-    def initialize(self):
+    def initialize(self, is_pipeline: bool = False):
         # [raw bdf, mframes, sci_dict]
-        image_inventory = PathHandler.take_raw_inventory(self.list_of_images)
+        image_inventory = PathHandler.take_raw_inventory(
+            self.list_of_images,
+            is_too=self.is_too,
+            is_pipeline=is_pipeline,
+        )
 
         if len(image_inventory) == 0:
             self.logger.warning(f"No group for wrapper out of {self.list_of_images}\nPossibly due to NUM_MIN_CALIB")

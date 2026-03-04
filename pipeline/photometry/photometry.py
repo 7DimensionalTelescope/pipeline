@@ -1052,7 +1052,11 @@ class PhotometrySingle:
         self.logger.debug(f"get_active_filters: DB connection failed, fallback to local filesystem")
         # fallback to local filesystem
         try:
-            template = PathHandler(self.input_image, is_too=self.config_node.settings.is_too).conjugate
+            template = PathHandler(
+                self.input_image,
+                is_pipeline=self.config_node.settings.is_pipeline,
+                is_too=self.config_node.settings.is_too,
+            ).conjugate
             self.logger.debug(f"Filter check glob template (PathHandler.conjugate): {template}")
             flist = glob(os.path.join(os.path.dirname(template), "*.fits"))
             flats = NameHandler(flist).pick_type("raw_flat")

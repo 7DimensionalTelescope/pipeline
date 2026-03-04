@@ -766,11 +766,18 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
     #     return result
 
     @classmethod
-    def take_raw_inventory(cls, files: list[str], lone_calib=True, is_too=False):
+    def take_raw_inventory(
+        cls,
+        files: list[str],
+        lone_calib: bool = True,
+        is_too: bool = False,
+        is_pipeline: bool = False,
+    ):
         return cls.build_preproc_input(
             *NameHandler.find_calib_for_sci(files),
             allow_unassociated_calib=lone_calib,
             is_too=is_too,
+            is_pipeline=is_pipeline,
         )
 
     @classmethod
@@ -781,6 +788,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         unassociated_calib: List[str] = None,
         allow_unassociated_calib: bool = True,
         is_too: bool = False,
+        is_pipeline: bool = False,
     ):
         """
         Group science files by their associated same-night calibration sets.
@@ -837,7 +845,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         calib_map = defaultdict(lambda: {"bias": None, "dark": None, "flat": None, "sci": []})
 
         for (bias, dark, flat), sci in zip(associated_calib, sci_files):
-            mbias, mdark, mflat = cls(sci[0]).preprocess.masterframe  # [0]: trust the grouping
+            mbias, mdark, mflat = cls(sci[0], is_pipeline=is_pipeline).preprocess.masterframe  # [0]: trust the grouping
 
             key = tuple((mbias, mdark, mflat))  # (tuple(bias), tuple(dark), tuple(flat))
             entry = calib_map[key]
@@ -861,7 +869,10 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             for sci_group in entry["sci"]:
                 sci_group = sorted(sci_group)
                 key = get_dict_key(sci_group)
-                sci_dict[key] = (sci_group, atleast_1d(cls(sci_group, is_too=is_too).conjugate))
+                sci_dict[key] = (
+                    sci_group,
+                    atleast_1d(cls(sci_group, is_pipeline=is_pipeline, is_too=is_too).conjugate),
+                )
 
             raw_bias = entry["bias"]
             raw_dark = entry["dark"]
@@ -875,7 +886,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                 raw_flat = []
 
             sample_file = next(iter(sci_dict.values()))[0][0]
-            mbias, mdark, mflat = cls(sample_file).preprocess.masterframe  # trust the grouping
+            mbias, mdark, mflat = cls(sample_file, is_pipeline=is_pipeline).preprocess.masterframe  # trust the grouping
 
             result.append(
                 [
@@ -892,7 +903,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                 if len(unassociated_raw_bias_group) < const.NUM_MIN_CALIB:
                     continue
 
-                mbias = cls(unassociated_raw_bias_group).preprocess.masterframe
+                mbias = cls(unassociated_raw_bias_group, is_pipeline=is_pipeline).preprocess.masterframe
                 # preprocess.mbias works too
                 result.append([[sorted(unassociated_raw_bias_group), [], []], [mbias, "", ""], dict()])
 
@@ -900,8 +911,10 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                 if len(unassociated_raw_dark_group) < const.NUM_MIN_CALIB:
                     continue
 
-                mdark = cls(unassociated_raw_dark_group).preprocess.masterframe
-                mbias = cls(unassociated_raw_dark_group).preprocess.mbias  # mbias needed for mdark generation
+                mdark = cls(unassociated_raw_dark_group, is_pipeline=is_pipeline).preprocess.masterframe
+                mbias = cls(
+                    unassociated_raw_dark_group, is_pipeline=is_pipeline
+                ).preprocess.mbias  # mbias needed for mdark generation
 
                 # use pre-generated mbias saved to disk, even if raw available
                 result.append([[[], sorted(unassociated_raw_dark_group), []], [mbias, mdark, ""], dict()])
@@ -910,8 +923,8 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                 if len(unassociated_raw_flat_group) < const.NUM_MIN_CALIB:
                     continue
 
-                mflat = cls(unassociated_raw_flat_group).preprocess.masterframe
-                self = cls(unassociated_raw_flat_group)
+                mflat = cls(unassociated_raw_flat_group, is_pipeline=is_pipeline).preprocess.masterframe
+                self = cls(unassociated_raw_flat_group, is_pipeline=is_pipeline)
                 self.name.exptime = ["*"] * len(unassociated_raw_flat_group)  # * is a glob wildcard
                 mdark = self.preprocess.mdark
                 mbias = cls(unassociated_raw_flat_group).preprocess.mbias

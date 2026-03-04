@@ -177,7 +177,9 @@ class SciProcConfiguration(BaseConfig):
         self.node.info.file = self.config_file
         self.node.name = self.node.name or self.name
 
-        self.node.input.calibrated_images = atleast_1d(PathHandler(self.input_files, is_too=is_too).processed_images)
+        self.node.input.calibrated_images = atleast_1d(
+            PathHandler(self.input_files, is_pipeline=is_pipeline, is_too=is_too).processed_images
+        )
 
         if is_too and is_pipeline:
             from .toodb import update_too_times
