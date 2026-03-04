@@ -148,7 +148,7 @@ class PreprocConfiguration(BaseConfig):
         elif isinstance(input, str) and os.path.isdir(input):
             sample_file = self._has_fits_file(input)
 
-            self.path = PathHandler(sample_file)
+            self.path = PathHandler(sample_file, is_pipeline=is_pipeline, is_too=is_too)
             config_source = self.path.preproc_base_yml
             config_output = self.path.preproc_output_yml
             log_file = self.path.preproc_output_log

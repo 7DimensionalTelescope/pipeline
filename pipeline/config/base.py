@@ -45,28 +45,28 @@ class BaseConfig(ABC):
         self._initialized = True
         return self
 
-    @classmethod
-    def from_config(cls, input: str, write=True, is_too=False, **kwargs) -> Self:
-        """
-        Deprecated. Move away from it.
+    # @classmethod
+    # def from_config(cls, input: str, write=True, is_too=False, **kwargs) -> Self:
+    #     """
+    #     Deprecated. Move away from it.
 
-        Much faster (4.8 ms) than SciProcConfiguration(input, write=write) (36 ms)
-        as it defines PathHandler with only the first file, and skips writing
-        to disk during initialization.
-        """
-        print("[DeprecationWarning] Use SciProcConfiguration(input, write=write) instead.")
-        # return cls(input, write=write, **kwargs)
-        self = cls.__new__(cls)
-        self._initialized = False
-        self.write = write
-        self._load_config(config_source=input)
-        self.config_file = input
-        # initialize PathHandler with the first group of input images
-        input_dict = self.node.input.to_dict()
-        input_images = next(iter(input_dict.values())) or None  # if empty, use None
-        self.path = PathHandler(input_images, is_too=is_too)
-        self._initialized = True
-        return self
+    #     Much faster (4.8 ms) than SciProcConfiguration(input, write=write) (36 ms)
+    #     as it defines PathHandler with only the first file, and skips writing
+    #     to disk during initialization.
+    #     """
+    #     print("[DeprecationWarning] Use SciProcConfiguration(input, write=write) instead.")
+    #     # return cls(input, write=write, **kwargs)
+    #     self = cls.__new__(cls)
+    #     self._initialized = False
+    #     self.write = write
+    #     self._load_config(config_source=input)
+    #     self.config_file = input
+    #     # initialize PathHandler with the first group of input images
+    #     input_dict = self.node.input.to_dict()
+    #     input_images = next(iter(input_dict.values())) or None  # if empty, use None
+    #     self.path = PathHandler(input_images, is_too=is_too)
+    #     self._initialized = True
+    #     return self
 
     @classmethod
     def base_config(cls, write=False):

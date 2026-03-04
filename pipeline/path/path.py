@@ -59,7 +59,9 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         input: Union[str, Path, list[str | Path]] = None,
         *,
         working_dir=None,
-        is_pipeline=False,
+        is_pipeline=True,  # too many features assume it's True; default False is impractical.
+        # especially weight_map_input, get_bpmask, and photometry.*_catalog are subtle points
+        # But user-facing APIs should use is_pipeline=False. e.g., user_config, DataReduction, etc.
         is_too=False,
     ):
         self._name_cache = {}  # Cache for NameHandler properties
@@ -938,9 +940,9 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         mdark = raw_group[1][1]
         mflat = raw_group[1][2]
         if mdark:
-            exptime = collapse(PathHandler(mdark).exptime)
+            exptime = collapse(NameHandler(mdark).exptime)
         if mflat:
-            filter = collapse(PathHandler(mflat).filter)
+            filter = collapse(NameHandler(mflat).filter)
         return f"{filter}: {exptime}"
 
     @classmethod
@@ -957,7 +959,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         return d_m_file, f_m_file, sig_z_file, sig_f_file
 
     @classmethod
-    def get_bpmask(cls, input: Union[str, Path, "fits.Header"]) -> str | list[str]:
+    def get_bpmask(cls, input: Union[str, Path, "astropy.io.fits.Header"]) -> str | list[str]:
         from astropy.io import fits
 
         if isinstance(input, str | Path):

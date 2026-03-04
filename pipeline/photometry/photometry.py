@@ -776,7 +776,11 @@ class PhotometrySingle:
         if output is None:
             # new PathHandler for single
             output = getattr(
-                PathHandler(self.input_image, is_too=self.config_node.settings.is_too).photometry,
+                PathHandler(
+                    self.input_image,
+                    is_pipeline=self.config_node.settings.is_pipeline,
+                    is_too=self.config_node.settings.is_too,
+                ).photometry,
                 f"{sex_preset}_catalog",
             )
 

@@ -12,7 +12,6 @@ from ..utils import add_suffix, swap_ext, collapse, time_diff_in_seconds, atleas
 from ..tools.table import match_two_catalogs
 from ..config.utils import get_key
 from ..errors import SubtractionError
-from ..path import PathHandler
 from ..preprocess.plotting import save_fits_as_figures
 from ..tools.ds9 import create_ds9_region_file
 

@@ -5,8 +5,8 @@ import warnings
 import logging
 
 from ..config import PreprocConfiguration, SciProcConfiguration, ConfigNode
-from ..path.path import PathHandler
-from .checker import CheckerMixin
+
+# from ..path.path import PathHandler
 from .logger import Logger, LockingFileHandler
 from .queue import QueueManager
 
