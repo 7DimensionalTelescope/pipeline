@@ -46,7 +46,7 @@ def backfill_too(i, overwrite=False, use_system_queue=True, **kwargs):
         try:
 
             bp = Blueprint.from_list(list_of_images=list_of_images, is_too=True)
-            bp.create_config(overwrite=overwrite, is_too=True)
+            bp.create_config(overwrite=overwrite, is_too=True, is_pipeline=True)
             bp.create_schedule(is_too=True, input_type="ToO")
 
             if len(bp.schedule) == 0:

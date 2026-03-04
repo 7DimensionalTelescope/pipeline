@@ -39,6 +39,7 @@ class SciProcConfiguration(BaseConfig):
             logger,
             verbose,
             working_dir=working_dir,
+            is_pipeline=is_pipeline,
             is_too=is_too,
             overwrite=overwrite,
             **kwargs,

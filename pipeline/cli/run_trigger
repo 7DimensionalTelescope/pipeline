@@ -77,9 +77,10 @@ def get_too_images(image_path):
 def run_image_processing(image_paths, is_too=False):
     br = Blueprint.from_list(
         list_of_images=image_paths,
+        is_pipeline=True,
         is_too=is_too,
     )
-    br.create_config(is_too=is_too, overwrite=False)
+    br.create_config(is_too=is_too, overwrite=False, is_pipeline=True)
     br.create_schedule(is_too=is_too, input_type="Daily")
     sc = Scheduler(br.schedule, use_system_queue=True)
     sc.start_system_queue()

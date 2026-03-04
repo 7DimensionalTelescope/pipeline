@@ -115,12 +115,14 @@ class Blueprint:
         overwrite=False,
         max_workers=30,
         is_too=False,
-        is_pipeline=True,
+        is_pipeline=False,
         is_multi_epoch=False,
         priority=None,
     ):
         """
-        Create configs for all groups. is_pipeline=True for normal pipeline runs (DataReduction / from_list).
+        Create configs for all groups.
+        - is_pipeline=True for normal pipeline runs (DataReduction / from_list).
+        - is_pipeline=False (default) for ad-hoc / reprocess usage.
         """
         is_too = is_too or self.is_too
 

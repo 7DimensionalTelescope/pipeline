@@ -14,14 +14,14 @@ class DataReduction:
         overwrite=False,
         master_frame_only=False,
         is_too=False,
-        is_pipeline=True,
+        is_pipeline=False,
         is_multi_epoch=False,
         **kwargs,
     ):
         """
         master_frame_only: if True, 1) globs only bias, dark, flat images, 2) skips SciProcGroup creation
                             if given list_of_images, 1) is negated.
-        is_pipeline: True for normal pipeline runs (configs get settings.is_pipeline=True). Set False for ad-hoc/reprocess.
+        is_pipeline: True for normal pipeline runs (configs get settings.is_pipeline=True). Set False for ad-hoc/reprocess. Defaults to False.
         is_multi_epoch: True for multi-epoch override (configs get settings.is_multi_epoch=True).
         """
 
