@@ -188,7 +188,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
         self.path_tmp = self.path.imcoadd.tmp_dir
 
         # self.set_metadata()
-        self.set_metadata_without_ccdproc()
+        self.set_metadata_from_single_images()
 
         # Output coadd image file name
         self.config_node.imcoadd.coadd_image = (
@@ -201,7 +201,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
 
         self.logger.info(f"Initialization for ImCoadd is completed")
 
-    def set_metadata_without_ccdproc(self):
+    def set_metadata_from_single_images(self):
         """
         Use OBJCTRA and OBJCTDEC of the first image as the deprojection center.
         The code currently does not check existence and uniqueness of the keys.
@@ -323,13 +323,13 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
         ):
             st_loop = time.time()
             is_steppy = bkg_func(
-                inim, outim, bkg=bkg, bkg_rms=bkg_rms, skyvalue=skyvalue, ignore_steepy_flag=ignore_steppy_flag
+                inim, outim, bkg=bkg, bkg_rms=bkg_rms, skyvalue=skyvalue, ignore_steppy_flag=ignore_steppy_flag
             )
 
-            if is_steppy and not ignore_steppy_flag:
-                self.logger.warning(f"Background subtraction failed for {get_basename(outim)}")
-                self.logger.warning(f"Re-running background subtraction with constant value")
-                self._const_bkgsub(inim, outim, skyvalue=skyvalue)
+            # if is_steppy and not ignore_steppy_flag:
+            #     self.logger.warning(f"Background subtraction failed for {get_basename(outim)}")
+            #     self.logger.warning(f"Re-running background subtraction with constant value")
+            #     self._const_bkgsub(inim, outim, skyval=skyvalue)
 
             self.logger.info(
                 f"Background subtraction completed for {get_basename(outim)} [image {i+1}/{len(self.input_images)}] in {time_diff_in_seconds(st_loop)} seconds"
@@ -341,22 +341,28 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
 
         self.images_to_coadd = self.config_node.imcoadd.bkgsub_images
 
-    def _const_bkgsub(self, inim, outim, skyvalue, **kwargs):
+    def _const_bkgsub(self, inim, outim, skyval, skyval_cut=40, **kwargs):
 
-        if os.path.exists(outim) and not self.overwrite:
-            self.logger.info(f"Background subtraction result exists; skipping: {get_basename(outim)}")
-            return
+        if os.path.exists(outim):
+            if fits.getval(outim, "BACKTYPE", "DYNAMIC").upper() == "CONSTANT":
+                if not self.overwrite:
+                    self.logger.info(f"Background subtraction result exists; skipping: {get_basename(outim)}")
+                    return
+
+        is_steppy = skyval < skyval_cut
 
         with fits.open(inim, memmap=True) as hdul:
             _data = hdul[0].data
             _hdr = hdul[0].header
-            _data -= skyvalue
-            self.logger.debug(f"Using SKYVAL: {skyvalue:.3f}")
+            _hdr["BACKTYPE"] = ("CONSTANT", "Background subtraction type")
+            _hdr["BKG_STEP"] = (is_steppy, "SE Background can be step-like")
+            _data -= skyval
+            self.logger.debug(f"Using SKYVAL: {skyval:.3f}")
             fits.writeto(outim, _data, header=_hdr, overwrite=True)
 
-        return False
+        return False  # is_steppy is False by definition for constant background subtraction
 
-    def _dynamic_bkgsub(self, inim, outim, bkg, bkg_rms, ignore_steepy_flag=False, **kwargs):
+    def _dynamic_bkgsub(self, inim, outim, bkg, bkg_rms, ignore_steppy_flag=False, **kwargs):
         """
         Later to be refined using iterations
         """
@@ -376,27 +382,28 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
 
         bkg_data = fits.getdata(bkg)
 
-        if ignore_steepy_flag:
-            is_steppy = False
-        else:
-            h, w = bkg_data.shape
-            stripe = np.mean(bkg_data[h // 2 - 100 : h // 2 + 100, :], axis=0)  # already smooth bkg: mean is okay?
-            is_steppy, info = step_background_check(stripe)
-            if is_steppy:
-                self.logger.warning(f"Background is steppy in {get_basename(outim)}")
-                self.logger.debug(f"Background is steppy: {info}")
-                return True
-            else:
-                self.logger.debug(f"Background is not steppy in {get_basename(outim)}: {info}")
+        # if ignore_steppy_flag:
+        #     is_steppy = False
+        # else:
+        #     h, w = bkg_data.shape
+        #     stripe = np.mean(bkg_data[h // 2 - 100 : h // 2 + 100, :], axis=0)  # already smooth bkg: mean is okay?
+        #     is_steppy, info = step_background_check(stripe)
+        #     if is_steppy:
+        #         self.logger.warning(f"Background is steppy in {get_basename(outim)}")
+        #         self.logger.debug(f"Background is steppy: {info}")
+        #         return True
+        #     else:
+        #         self.logger.debug(f"Background is not steppy in {get_basename(outim)}: {info}")
 
         with fits.open(inim, memmap=True) as hdul:
             _data = hdul[0].data
             _hdr = hdul[0].header
-            _hdr["BKG_STEP"] = (is_steppy, "Background is step-like; likely quantization artifact")
+            _hdr["BACKTYPE"] = ("DYNAMIC", "Background subtraction type")
+            # _hdr["BKG_STEP"] = (is_steppy, "Background is step-like; likely quantization artifact")
             _data -= bkg_data
             fits.writeto(outim, _data, header=_hdr, overwrite=True)
 
-        return is_steppy
+        # return is_steppy
 
     # # TODO:
     # def _bkg_qa(self, bkgsub_type: str = "dynamic"):
@@ -891,6 +898,25 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
         )
         coadd_egain = np.sum([egain / flxscale for egain, flxscale in zip(self.coadd_egain_list, self.flxscale_list)])
 
+        # Determine BACKTYPE for the coadd image based on the inputs
+        backtypes = set()
+        for bkgsub_image in getattr(self, "images_to_coadd", []):
+            try:
+                bt = fits.getval(bkgsub_image, "BACKTYPE")  # not self.input_images and header_list
+            except Exception:
+                bt = None
+            if bt is not None:
+                backtypes.add(str(bt).upper())
+
+        if not backtypes:
+            coadd_backtype = "MIXED"
+        elif backtypes == {"CONSTANT"}:
+            coadd_backtype = "CONSTANT"
+        elif backtypes == {"DYNAMIC"}:
+            coadd_backtype = "DYNAMIC"
+        else:
+            coadd_backtype = "MIXED"
+
         # datestr, timestr = extract_date_and_time(dateobs_coadd)
         # comim = f"{self.path_save}/calib_{self.config.unit}_{self.obj}_{datestr}_{timestr}_{self.filte}_{exptime_coadd:g}.com.fits"
 
@@ -920,6 +946,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
             "EGAIN": (coadd_egain, "Effective EGAIN for coadded image (e-/ADU)"),  # swarp calculates it as GAIN, but irreproducible.
             "GAIN": (self.camera_gain, "Gain from the camera configuration"),
             "SATURATE": (coadd_satur_level, "Conservative saturation level for coadded image"),  # let swarp handle this
+            "BACKTYPE": (coadd_backtype, "Background subtraction type for coadded image"),
         }  # fmt: skip
 
         # 	Update Header
@@ -935,7 +962,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
                 header[key] = (value, comment)
 
             # 	Names of coadded single images
-            for nn, inim in enumerate(self.input_images):
-                header[f"IMG{nn:0>5}"] = (get_basename(inim), "single exposures")
+            for nn, bkgsub_image in enumerate(self.input_images):
+                header[f"IMG{nn:0>5}"] = (get_basename(bkgsub_image), "single exposures")
 
             hdul.flush()
