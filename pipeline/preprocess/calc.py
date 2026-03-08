@@ -484,7 +484,84 @@ def calculate_edge_variation(d):
         return 0.0, [0, 0, 0, 0], False
 
 
-def uniformity_statistical(fits_path: str, bpmask_path: str = None, grid_size: int = 32):
+# def uniformity_statistical(fits_path: str, bpmask_path: str = None, grid_size: int = 32):
+#     """
+#     Fast uniformity checking using statistical grid analysis.
+#     This divides the image into a grid and analyzes statistics of each cell.
+#     Fast and gives spatial uniformity information.
+#     Returns log10(uniformity_score) for easier interpretation.
+#     """
+
+#     # Load data
+#     d = fits.getdata(fits_path).astype(np.float32)
+
+#     if bpmask_path is None:
+#         bpmask_path = fits_path.replace("dark", "bpmask")
+#     bpm = fits.getdata(bpmask_path).astype(np.float32)
+
+#     if d.ndim != 2 or bpm.ndim != 2 or d.shape != bpm.shape:
+#         raise ValueError(f"Shape mismatch: data {d.shape}, bpmask {bpm.shape}")
+
+#     # BPM mask
+#     hot_mask = bpm != 0
+
+#     # Auto-shift to positive
+#     dmin = float(d.min())
+#     if dmin <= 0:
+#         d = d - dmin + 1e-8
+
+#     # Apply mask
+#     d_masked = d.copy()
+#     d_masked[hot_mask] = np.nan
+
+#     h, w = d_masked.shape
+#     cell_h, cell_w = h // grid_size, w // grid_size
+
+#     # Analyze each grid cell
+#     cell_means = []
+#     cell_stds = []
+
+#     for i in range(grid_size):
+#         for j in range(grid_size):
+#             start_h = i * cell_h
+#             end_h = (i + 1) * cell_h if i < grid_size - 1 else h
+#             start_w = j * cell_w
+#             end_w = (j + 1) * cell_w if j < grid_size - 1 else w
+
+#             cell_data = d_masked[start_h:end_h, start_w:end_w]
+#             valid_cell = cell_data[~np.isnan(cell_data)]
+
+#             if len(valid_cell) > 0:
+#                 cell_means.append(np.mean(valid_cell))
+#                 cell_stds.append(np.std(valid_cell))
+
+#     # Calculate uniformity metrics
+#     cell_means = np.array(cell_means)
+#     cell_stds = np.array(cell_stds)
+
+#     # Spatial uniformity (variation between cells)
+#     spatial_cv = variation(cell_means)
+
+#     # Local uniformity (average variation within cells)
+#     local_cv = np.mean(cell_stds / (cell_means + 1e-10))
+
+#     # Overall uniformity score
+#     uniformity_score = spatial_cv + 0.5 * local_cv
+
+#     # Apply log10 for easier interpretation
+#     log_uniformity_score = np.log10(uniformity_score + 1e-10)
+
+#     return float(-1 * log_uniformity_score)
+
+
+def uniformity_statistical(
+    fits_path: str,
+    bpmask_path: str = None,
+    grid_size: int = 32,
+    bin_x: int = 1,
+    bin_y: int = 1,
+    alpha: float = 0.5,  # 0.5 for uncorrelated noise; lower if correlated structure dominates
+):
     """
     Fast uniformity checking using statistical grid analysis.
     This divides the image into a grid and analyzes statistics of each cell.
@@ -494,6 +571,9 @@ def uniformity_statistical(fits_path: str, bpmask_path: str = None, grid_size: i
 
     # Load data
     d = fits.getdata(fits_path).astype(np.float32)
+    n = bin_x * bin_y
+    d = d / n  # convert sum-binned image to mean-equivalent units
+    print("sum-bin")
 
     if bpmask_path is None:
         bpmask_path = fits_path.replace("dark", "bpmask")
@@ -515,43 +595,46 @@ def uniformity_statistical(fits_path: str, bpmask_path: str = None, grid_size: i
     d_masked[hot_mask] = np.nan
 
     h, w = d_masked.shape
-    cell_h, cell_w = h // grid_size, w // grid_size
 
-    # Analyze each grid cell
+    # --- (A) Grid correction for spatial_cv: keep physical scale fixed ---
+    # If image is binned by (bin_y, bin_x), its dimensions typically shrink.
+    # To keep the same "unbinned" footprint per cell, reduce grid counts accordingly.
+    grid_y = max(1, int(round(grid_size / bin_y)))
+    grid_x = max(1, int(round(grid_size / bin_x)))
+
+    cell_h = h // grid_y
+    cell_w = w // grid_x
+
     cell_means = []
     cell_stds = []
 
-    for i in range(grid_size):
-        for j in range(grid_size):
-            start_h = i * cell_h
-            end_h = (i + 1) * cell_h if i < grid_size - 1 else h
-            start_w = j * cell_w
-            end_w = (j + 1) * cell_w if j < grid_size - 1 else w
+    for i in range(grid_y):
+        for j in range(grid_x):
+            sh = i * cell_h
+            eh = (i + 1) * cell_h if i < grid_y - 1 else h
+            sw = j * cell_w
+            ew = (j + 1) * cell_w if j < grid_x - 1 else w
 
-            cell_data = d_masked[start_h:end_h, start_w:end_w]
-            valid_cell = cell_data[~np.isnan(cell_data)]
+            cell = d_masked[sh:eh, sw:ew]
+            valid = cell[~np.isnan(cell)]
+            if valid.size:
+                m = np.mean(valid)
+                s = np.std(valid)
+                cell_means.append(m)
+                cell_stds.append(s)
 
-            if len(valid_cell) > 0:
-                cell_means.append(np.mean(valid_cell))
-                cell_stds.append(np.std(valid_cell))
+    cell_means = np.asarray(cell_means)
+    cell_stds = np.asarray(cell_stds)
 
-    # Calculate uniformity metrics
-    cell_means = np.array(cell_means)
-    cell_stds = np.array(cell_stds)
-
-    # Spatial uniformity (variation between cells)
     spatial_cv = variation(cell_means)
 
-    # Local uniformity (average variation within cells)
     local_cv = np.mean(cell_stds / (cell_means + 1e-10))
 
-    # Overall uniformity score
+    # --- (B) Local correction: undo binning noise reduction ---
+    local_cv *= n**alpha
+
     uniformity_score = spatial_cv + 0.5 * local_cv
-
-    # Apply log10 for easier interpretation
-    log_uniformity_score = np.log10(uniformity_score + 1e-10)
-
-    return float(-1 * log_uniformity_score)
+    return float(-np.log10(uniformity_score + 1e-10))
 
 
 def record_statistics(filename: str, header: fits.Header, device_id: int = 0, cropsize: int = 500, *, dtype: str):
@@ -622,3 +705,39 @@ def delta_edge_center(data, check_size=100):
     center_mean = center.mean()
     delta = edge_avg - center_mean
     return delta
+
+
+def bin_image(
+    img: np.ndarray,
+    bin_x: int,
+    bin_y: int | None = None,
+    method: Literal["mean", "sum", "median"] = "mean",
+):
+    """Block binning by integer factors in X and Y (cropping remainder)."""
+    img = np.asarray(img)
+    if bin_y is None:
+        bin_y = bin_x
+
+    nx = int(bin_x)
+    ny = int(bin_y)
+    if img.ndim != 2:
+        raise ValueError("img must be 2D")
+    if nx <= 0 or ny <= 0:
+        raise ValueError("bin_x and bin_y must be >= 1")
+
+    h, w = img.shape
+
+    h2 = (h // ny) * ny
+    w2 = (w // nx) * nx
+    if h2 != h or w2 != w:
+        print("[WARNING] Image dimensions not divisible by the bin factors. Cropping remainder.")
+        img = img[:h2, :w2]
+
+    if method == "mean":
+        return img.reshape(h2 // ny, ny, w2 // nx, nx).mean(axis=(1, 3))
+    elif method == "sum":
+        return img.reshape(h2 // ny, ny, w2 // nx, nx).sum(axis=(1, 3))
+    elif method == "median":
+        return np.median(img.reshape(h2 // ny, ny, w2 // nx, nx), axis=(1, 3))
+    else:
+        raise ValueError(f"Invalid method: {method}")

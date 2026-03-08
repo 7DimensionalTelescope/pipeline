@@ -384,6 +384,13 @@ class NameHandler:
 
         return nbins
 
+    @n_binning.setter
+    def n_binning(self, value):
+        if getattr(self, "_single", False):
+            self._n_binning = value
+        else:
+            self._n_binning = [value] * len(self._n_binning)
+
     @property
     def gain(self):
         """

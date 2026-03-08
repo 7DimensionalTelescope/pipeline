@@ -525,7 +525,7 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
         self.logger.debug(f"[Group {self._current_group+1}] ignore_sanity: {ignore_sanity}")
         self.logger.debug(f"[Group {self._current_group+1}] ignore_lenient: {ignore_lenient}")
         self.logger.debug(f"[Group {self._current_group+1}] Masterframe Search ({dtype}) Template: {template}")
-        existing_mframe_file, ignored_lenient = prep_utils.tolerant_search(
+        existing_mframe_file, relaxation_flags = prep_utils.tolerant_search(
             template,
             dtype,
             max_offset=max_offset,
@@ -533,6 +533,8 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
             ignore_sanity_if_no_match=ignore_sanity,
             ignore_lenient_keys_if_no_match=ignore_lenient,
         )
+        ignored_lenient = relaxation_flags["ignored_lenient_keys"]
+        ignored_binning = relaxation_flags["ignored_binning"]
 
         if not existing_mframe_file:
             self.logger.error(
@@ -542,11 +544,14 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
             raise MasterFrameNotFoundError(
                 f"No pre-existing master {dtype} found in place of {template} within {max_offset} days"
             )
-        else:
-            sanity_check = fits.getval(existing_mframe_file, "SANITY")
-            self.logger.info(
-                f"[Group {self._current_group+1}] Found pre-existing nominal (sanity: {sanity_check}) master {dtype} at {os.path.basename(existing_mframe_file)}"
-            )
+
+        if ignored_binning:
+            existing_mframe_file = self._generated_binned_master_frame(existing_mframe_file, template, dtype=dtype)
+
+        sanity_check = fits.getval(existing_mframe_file, "SANITY")
+        self.logger.info(
+            f"[Group {self._current_group+1}] Found pre-existing nominal (sanity: {sanity_check}) master {dtype} at {os.path.basename(existing_mframe_file)}"
+        )
 
         # PPFLAG: fetched frame gets 1 (different date), 4 (sanity F), 8 (lenient keys) as appropriate
         ppflag_val = ppflag.compute_fetch_ppflag(
@@ -596,6 +601,45 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
                 raise MasterFrameNotFoundError(
                     f"No pre-existing master flatdark found in place of {flatdark_template} within {max_offset} days"
                 )
+
+    def _generated_binned_master_frame(self, existing_mframe_file, template, dtype):
+        if not (dtype == "flat"):
+            self.logger.error(
+                f"[Group {self._current_group+1}] Undefined behavior: _generated_binned_master_frame is called but dtype is not flat",
+                ValueError,
+            )
+            raise ValueError(
+                f"[Group {self._current_group+1}] Undefined behavior: _generated_binned_master_frame is called but dtype is not flat"
+            )
+
+        self.logger.info(f"[Group {self._current_group+1}] Generating binned master frame for {dtype}")
+
+        from .calc import bin_image
+        from .utils import set_inspcomm_in_header
+        from .ppflag import propagate_ppflag, set_ppflag_in_header
+
+        n_binning = NameHandler(template).n_binning
+        data, header = fits.getdata(existing_mframe_file, header=True)
+        binned_mflat = bin_image(data, bin_x=n_binning, bin_y=n_binning, method="mean")
+
+        name = NameHandler(existing_mframe_file)
+        name.n_binning = n_binning
+        binned_mflat_path = os.path.join(os.path.dirname(existing_mframe_file), name.mflat_basename)
+
+        header["XBINNING"] = n_binning
+        header["YBINNING"] = n_binning
+        header["NAXIS1"] = binned_mflat.shape[1]
+        header["NAXIS2"] = binned_mflat.shape[0]
+        # header["SANITY"] = False
+        header = set_inspcomm_in_header(header, "Auto-generated binned master frame")
+        header = set_ppflag_in_header(header, propagate_ppflag(header["PPFLAG"], 2))
+        fits.writeto(binned_mflat_path, binned_mflat, header=header, overwrite=True)
+
+        self.logger.debug(
+            f"[Group {self._current_group+1}] Generated binned master frame for binning {n_binning}x{n_binning} {dtype} at {os.path.basename(existing_mframe_file)}"
+        )
+
+        return binned_mflat_path
 
     def data_reduction(self, device_id=None, use_gpu: bool = True, dry_run: bool = False):
         self._use_gpu = all([use_gpu, self._use_gpu])

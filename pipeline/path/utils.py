@@ -396,15 +396,22 @@ def find_raw_path(unit, nightdate, n_binning, gain, is_too=False):
     from ..const import RAWDATA_DIR
     import glob
 
+    def _ToO_aware_glob(template, is_too=False):
+        globbed = glob.glob(template)
+        if is_too:
+            return [f for f in globbed if "_ToO" in f]
+        else:
+            return [f for f in globbed if "_ToO" not in f]
+
     def _search(unit, nightdate, n_binning, gain, is_too=False):
         template = f"{RAWDATA_DIR}/{unit}/{nightdate}*" + ("_ToO" if is_too else "")
-        raw_data_folders = glob.glob(template)
+        raw_data_folders = _ToO_aware_glob(template, is_too=is_too)
 
         if len(raw_data_folders) > 1:
-            raw_data_folders = glob.glob(f"{RAWDATA_DIR}/{unit}/{nightdate}*_gain{gain}*" + ("_ToO" if is_too else ""))
+            raw_data_folders = _ToO_aware_glob(f"{RAWDATA_DIR}/{unit}/{nightdate}*_gain{gain}*", is_too=is_too)
             if len(raw_data_folders) > 1:
-                raw_data_folders = glob.glob(
-                    f"{RAWDATA_DIR}/{unit}/{nightdate}_{n_binning}x{n_binning}_gain{gain}*" + ("_ToO" if is_too else "")
+                raw_data_folders = _ToO_aware_glob(
+                    f"{RAWDATA_DIR}/{unit}/{nightdate}_{n_binning}x{n_binning}_gain{gain}*", is_too=is_too
                 )
 
         elif len(raw_data_folders) == 0:

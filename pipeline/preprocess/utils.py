@@ -1,3 +1,4 @@
+from typing import Literal
 import os
 import time
 import uuid
@@ -58,7 +59,7 @@ def wait_for_masterframe(file_path, timeout=1800):
         observer.join()
 
 
-def _build_lenient_template(template, dtype):
+def _build_lenient_template(template, dtype, ignore_binning=False):
     """Build a template with lenient keys set to '*' for the given dtype."""
     from ..const.observation import (
         BIAS_GROUP_LENIENT_KEYS,
@@ -79,25 +80,36 @@ def _build_lenient_template(template, dtype):
     for key in lenient_keys:
         if hasattr(path.name, key):
             setattr(path.name, key, "*")
+    if ignore_binning:
+        setattr(path.name, "n_binning", "*")
     return path.preprocess.masterframe
 
 
 def tolerant_search(
     template,
-    dtype,
+    dtype: Literal["bias", "dark", "flat"],
     max_offset=30,
     future=False,
     ignore_sanity_if_no_match=False,
     ignore_lenient_keys_if_no_match=False,
-):
+) -> tuple[str, dict]:
     """
     Search for a master frame matching the template.
 
     Returns:
-        tuple: (path_or_none, ignored_lenient_keys).
-        ignored_lenient_keys is True if the match was found by relaxing lenient keys (bit 8 in PPFLAG).
+        tuple: (path_or_none, relaxation_flags).
+        relaxation_flags is a dictionary with the following keys:
+            - ignored_lenient_keys: True if the match was found by relaxing lenient keys (bit 8 in PPFLAG).
+            - ignored_sanity: True if the match was found by ignoring sanity check.
+            - ignored_binning: True if the match was found by ignoring binning.
     """
     kw = dict(max_offset=max_offset, future=future)
+
+    relaxation_flags = {
+        "ignored_lenient_keys": False,
+        "ignored_sanity": False,
+        "ignored_binning": False,
+    }
 
     def _search(tpl, ignore_sanity):
         return search_with_date_offsets(tpl, **kw, ignore_sanity=ignore_sanity)
@@ -105,21 +117,33 @@ def tolerant_search(
     # 1. Strict search
     searched = _search(template, ignore_sanity=False)
     if not searched and ignore_sanity_if_no_match:
+        relaxation_flags["ignored_sanity"] = True
         searched = _search(template, ignore_sanity=True)
     if searched:
-        return searched, False
+        return searched, relaxation_flags
 
     # 2. Lenient search (relax dtype-specific keys) if enabled
     if ignore_lenient_keys_if_no_match:
+        relaxation_flags["ignored_lenient_keys"] = True
         lenient_template = _build_lenient_template(template, dtype)
-        if lenient_template is not None:
-            searched = _search(lenient_template, ignore_sanity=False)
-            if not searched and ignore_sanity_if_no_match:
-                searched = _search(lenient_template, ignore_sanity=True)
-            if searched:
-                return searched, True
+        searched = _search(lenient_template, ignore_sanity=False)
+        if not searched and ignore_sanity_if_no_match:
+            relaxation_flags["ignored_sanity"] = True
+            searched = _search(lenient_template, ignore_sanity=True)
 
-    return None, False
+            # special routine for flat: ignore binning
+            if not searched and dtype == "flat":
+                relaxation_flags["ignored_binning"] = True
+                lenient_template = _build_lenient_template(template, dtype, ignore_binning=True)
+                searched = _search(lenient_template, ignore_sanity=False)
+                if not searched and ignore_sanity_if_no_match:
+                    relaxation_flags["ignored_sanity"] = True
+                    searched = _search(lenient_template, ignore_sanity=True)
+
+        if searched:
+            return searched, relaxation_flags
+
+    return None, relaxation_flags
 
 
 def search_with_date_offsets(template, max_offset=30, future=False, ignore_sanity=False):
@@ -434,3 +458,9 @@ def write_fits_images(paths, data, max_workers=10, n_head_blocks=None):
 
     # for output_path, subdata in zip(paths, data):
     #     write_fits_image(output_path, subdata)
+
+
+def set_inspcomm_in_header(header, inspcomm: int, comment: str = "Human inspection comment; Trust SANITY if exists"):
+    """Set INSPCOMM in header. Mutates header in place."""
+    header["INSPCOMM"] = (inspcomm, comment)
+    return header
