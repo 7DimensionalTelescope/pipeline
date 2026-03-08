@@ -1,6 +1,7 @@
 [Unit]
 Description=Pipeline Trigger Service - Monitors directories and processes images
 After=network.target
+Wants=pipeline-clear-schedules.timer
 StartLimitIntervalSec=600
 StartLimitBurst=5
 
