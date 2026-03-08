@@ -136,7 +136,7 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
                 is_pipeline=is_pipeline,
             )
         else:
-            raise ValueError("No input files or directory specified")
+            raise PreprocessError.ValueError("No input files or directory specified")
 
         self._n_groups = len(self.raw_groups)
         self._original_raw_groups = copy.deepcopy(self.raw_groups)
@@ -541,7 +541,7 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
                 f"[Group {self._current_group+1}] No pre-existing master {dtype} found in place of {template} within {max_offset} days",
                 MasterFrameNotFoundError,
             )
-            raise MasterFrameNotFoundError(
+            raise PreprocessError.MasterFrameNotFoundError(
                 f"No pre-existing master {dtype} found in place of {template} within {max_offset} days"
             )
 
@@ -598,7 +598,7 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
                     MasterFrameNotFoundError,
                 )
 
-                raise MasterFrameNotFoundError(
+                raise PreprocessError.MasterFrameNotFoundError(
                     f"No pre-existing master flatdark found in place of {flatdark_template} within {max_offset} days"
                 )
 
@@ -608,7 +608,7 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
                 f"[Group {self._current_group+1}] Undefined behavior: _generated_binned_master_frame is called but dtype is not flat",
                 ValueError,
             )
-            raise ValueError(
+            raise PreprocessError.ValueError(
                 f"[Group {self._current_group+1}] Undefined behavior: _generated_binned_master_frame is called but dtype is not flat"
             )
 
