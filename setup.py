@@ -4,11 +4,12 @@ from setuptools import setup, find_packages
 ROOT = Path(__file__).parent
 README = (ROOT / "README.md").read_text(encoding="utf-8") if (ROOT / "README.md").exists() else ""
 
-from pipeline.version import __version__
+version_ns = {}
+exec((ROOT / "pipeline" / "version.py").read_text(encoding="utf-8"), version_ns)
 
 setup(
     name="pipeline",
-    version=__version__,
+    version=version_ns["__version__"],
     description="Pipeline for 7-dimensional Telescope",
     long_description=README,
     long_description_content_type="text/markdown",
@@ -17,6 +18,7 @@ setup(
     python_requires=">=3.8",
     install_requires=[
         "numpy<1.27",
+        "python-dotenv>=1.0.0",
     ],
     include_package_data=True,  # include files from MANIFEST.in if present
     classifiers=[  # helps PyPI & tooling understand the project

@@ -1,5 +1,9 @@
 import os
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    load_dotenv = None
 
 # Internal paths
 SOURCE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -7,8 +11,9 @@ ROOT_DIR = os.path.abspath(os.path.join(SOURCE_DIR, ".."))
 REF_DIR = os.path.abspath(os.path.join(ROOT_DIR, "ref"))
 SCRIPTS_DIR = os.path.join(SOURCE_DIR, "cli")  # "scripts"
 
-# load environment variables from .env file
-load_dotenv(os.path.join(ROOT_DIR, ".env"), override=True)
+# load environment variables from .env file when python-dotenv is available
+if load_dotenv is not None:
+    load_dotenv(os.path.join(ROOT_DIR, ".env"), override=True)
 
 
 # Bashrc-defined system paths
