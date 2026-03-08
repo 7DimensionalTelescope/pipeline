@@ -6,6 +6,7 @@ This script monitors directories for new images and processes them directly.
 It uses the existing Monitor class from the pipeline codebase.
 """
 
+import argparse
 import time
 import logging
 import glob
@@ -132,13 +133,25 @@ def process_new_images(image_paths):
         logger.error(f"Error processing images: {e}", exc_info=True)
 
 
-def start_trigger_monitoring():
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run the pipeline trigger monitor.")
+    parser.add_argument(
+        "--rerun-failed",
+        action="store_true",
+        help="Requeue failed tasks on startup before beginning monitoring.",
+    )
+    return parser.parse_args()
+
+
+def start_trigger_monitoring(rerun_failed=False):
     """Start the trigger monitoring service using the existing Monitor class."""
     # RAWDATA_DIR = "/lyman/data2/obsdata/"
     # Create the monitor using the existing codebase
 
     sc = Scheduler(use_system_queue=True)
-    sc.rerun_failed_tasks()
+    if rerun_failed:
+        rerun_count = sc.rerun_failed_tasks()
+        logger.info(f"Requeued {rerun_count} failed tasks on startup")
     sc.update_process_status()
 
     monitor = Monitor(base_path=Path(RAWDATA_DIR))
@@ -159,4 +172,5 @@ def start_trigger_monitoring():
 
 
 if __name__ == "__main__":
-    start_trigger_monitoring()
+    args = parse_args()
+    start_trigger_monitoring(rerun_failed=args.rerun_failed)
