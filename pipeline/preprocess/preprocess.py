@@ -476,7 +476,9 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
         elif dtype == "flat":
             ppflag_val = ppflag.propagate_ppflag(self._ppflag.get("bias", 0), getattr(self, "_flatdark_ppflag", 0))
         else:
-            ppflag_val = 0
+            raise PreprocessError.ValueError(
+                f"[Group {self._current_group+1}] Undefined behavior: _generate_masterframe is called but dtype is not bias, dark, or flat"
+            )
         self._ppflag[dtype] = ppflag_val
 
         sanity_flag = self._assess_quality_and_update_header(header=header, dtype=dtype, ppflag_val=ppflag_val)
@@ -498,9 +500,13 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
         return False
 
     def _assess_quality_and_update_header(self, header, dtype, ppflag_val: int = 0):
+        """TODO: This is inefficient as it calls unnecessary IO. Ideally stats should be calculated in calc_function"""
         header = record_statistics(getattr(self, f"{dtype}_output"), header, dtype=dtype)
 
-        sanity_flag, header = self.apply_criteria(header=header, dtype=dtype)
+        sanity_flag, header = self.apply_criteria(header=header, dtype=dtype)  # evaluates sanity of the image itself
+        if ppflag_val & ppflag.PPFLAG_SANITY_F_USED:  # consider propagated sanity flag of the ingredient frames
+            header["SANITY"] = False
+            sanity_flag = False
 
         ppflag.set_ppflag_in_header(header, ppflag_val)
 

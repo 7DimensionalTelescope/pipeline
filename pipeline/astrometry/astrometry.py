@@ -360,7 +360,7 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
             if not image_info.sane:
                 idx_to_exclude.append(i)
                 self.logger.info(
-                    f"Early QA rejected {os.path.basename(image_info.image_path)}! "
+                    f"Early QA rejected {image_info.id}: {os.path.basename(image_info.image_path)}! "
                     f"Skipping all subsequent processing, including Astrometry and Photometry."
                 )
                 self.logger.warning(

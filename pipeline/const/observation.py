@@ -76,3 +76,5 @@ HEADER_KEY_MAP = {
     "ra": "OBJCTRA",  # intended pointing, not the actual mount position
     "dec": "OBJCTDEC",
 }
+
+BIAS_LEVEL = 512  # ADU
