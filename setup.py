@@ -17,8 +17,7 @@ setup(
     packages=find_packages(exclude=("test", "test.*")),
     python_requires=">=3.8",
     install_requires=[
-        "numpy<1.27",
-        "python-dotenv>=1.0.0",
+        "numpy>=1.25",
     ],
     include_package_data=True,  # include files from MANIFEST.in if present
     classifiers=[  # helps PyPI & tooling understand the project
