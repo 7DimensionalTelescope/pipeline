@@ -562,7 +562,7 @@ class PhotometrySingle:
         """
         # ref_ris_dir = get_key(self.config_node.photometry, "path.ref_ris_dir") or self.path.photometry.get_ref_cat(self.ref_catalog)
 
-        predefined_ref_cat = get_key(self.config_node.photometry, "path.ref_cat")
+        predefined_ref_cat = get_key(self.config_node.photometry, "ref_cat")
         if predefined_ref_cat:
             ref_cat = predefined_ref_cat
         else:
@@ -623,7 +623,7 @@ class PhotometrySingle:
         Applies proper motion corrections and performs spatial matching.
 
         Returns:
-            Table of matched sources
+            Table of detections with reference columns appended.
         """
 
         self.logger.debug("Loading reference catalog.")
@@ -631,15 +631,19 @@ class PhotometrySingle:
 
         self.logger.debug("Matching sources with reference catalog.")
         r = self.phot_conf.match_radius * u.arcsec
+        # left join as the final catalog must contain all detections in the image
         post_match_table = match_two_catalogs(obs_src_table, ref_src_table, x1="ra", y1="dec", radius=r, join="left")
 
-        self.logger.info(f"Matched sources: {len(post_match_table)} (r = {r.to_value(u.arcsec):.3f} arcsec)")
+        self.logger.info(
+            f"Reference columns appended to {len(post_match_table)} detections "
+            f"with left join (r = {r.to_value(u.arcsec):.3f} arcsec)"
+        )
         if len(post_match_table) == 0:
             self.logger.error(
-                "There is no matched source for photometry. It will cause a problem in the next step.",
-                NoReferenceSourceError,
+                "No science detections are available for reference matching.",
+                NotEnoughSourcesError,
             )
-            raise self.logger.process_error.exception(NoReferenceSourceError)
+            raise self.logger.process_error.exception(NotEnoughSourcesError)
 
         return post_match_table
 
@@ -695,6 +699,19 @@ class PhotometrySingle:
                 f"Required column '{ref_mag_key}' not found in table (prerequisite not met). "
                 f"Available columns: {list(post_match_table.colnames)}."
             )
+
+        ref_mag_column = post_match_table[ref_mag_key]
+        matched_mask = ~np.ma.getmaskarray(ref_mag_column)
+        matched_mask &= np.isfinite(np.ma.asarray(ref_mag_column, dtype=float).filled(np.nan))
+        matched_count = int(np.count_nonzero(matched_mask))
+        self.logger.debug(
+            f"Usable reference matches for '{ref_mag_key}': {matched_count}/{len(post_match_table)} detections"
+        )
+        if matched_count == 0:
+            raise self.logger.process_error.exception(NoReferenceSourceError)(
+                f"No usable reference sources found for '{ref_mag_key}' after reference matching."
+            )
+        post_match_table = post_match_table[matched_mask]
 
         if low_mag_cut:
             post_match_table = phot_utils.filter_table(post_match_table, ref_mag_key, low_mag_cut, method="lower")
@@ -817,8 +834,15 @@ class PhotometrySingle:
         """Returns the filtered table of image sources to be compared with the reference catalog for zp calculation"""
         self.logger.debug(f"Filtering source catalog for zp calculation")
         zp_src_table = self.filter_catalog(obs_src_table)
-        self.logger.debug(f"After filtering: {len(zp_src_table)}/{len(obs_src_table)} sources")
-        self.logger.info(f"Calculating zero points with {len(zp_src_table)} sources")
+        self.logger.info(
+            f"ZP calibration sample: {len(zp_src_table)}/{len(obs_src_table)} detections have a usable "
+            f"'{self.image_info.ref_mag_key}' and pass the quality cuts"
+        )
+        if len(zp_src_table) == 0:
+            raise self.logger.process_error.exception(NotEnoughSourcesError)(
+                f"No sources remain for ZP calibration after applying quality cuts to matched "
+                f"reference sources for '{self.image_info.ref_mag_key}'."
+            )
         phot_header = phot_header or self.phot_header
         phot_header.STDNUMB = len(zp_src_table)
         return zp_src_table
@@ -932,6 +956,16 @@ class PhotometrySingle:
         filters_checked = [k for k in phot_headers.keys()]
 
         self.logger.debug(f"phot_headers: {phot_headers}")
+        self.logger.debug(
+            "phot_headers excerpts:\n%s",
+            {
+                filt: {
+                    "ZP_AUTO": phot_header.dict.get("ZP_AUTO", (None,))[0],
+                    "EZP_AUTO": phot_header.dict.get("EZP_AUTO", (None,))[0],
+                }
+                for filt, phot_header in phot_headers.items()
+            },
+        )
         self.logger.debug(f"alleged_filter: {alleged_filter}")
         self.logger.debug(f"filters_checked: {filters_checked}")
 
