@@ -81,6 +81,7 @@ class Scheduler:
         overwrite_data=False,
         overwrite_preprocess=False,
         overwrite_science=False,
+        input_type=None,
         **kwargs,
     ):
         """Create a scheduler from a list of configs."""
@@ -117,7 +118,7 @@ class Scheduler:
                     idx,
                     config,
                     task_type,
-                    "User-input",
+                    input_type or "User-input",
                     True,
                     priority,
                     100,

@@ -33,7 +33,7 @@ from ..const import PIXSCALE, MEDIUM_FILTERS, BROAD_FILTERS, ALL_FILTERS
 from ..services.setup import BaseSetup
 from ..tools.table import match_two_catalogs, build_condition_mask
 from ..path.path import PathHandler
-from ..utils.header import get_header_key, update_padded_header
+from ..utils.header import get_header_key, update_padded_header_smart
 from ..utils.tile import is_ris_tile
 from ..errors import (
     # process errors
@@ -1126,7 +1126,13 @@ class PhotometrySingle:
         else:
             phot_header = self.phot_header
             self.logger.debug(f"Using self.phot_header at update_image_header(): {phot_header}")
-        update_padded_header(self.input_image, phot_header.dict)
+
+        if not phot_header.aperture_info:
+            self.logger.warning("No zero point was derived for this image.", NotEnoughSourcesError)
+            phot_header.SANITY = False
+            self.logger.info(f"Set SANITY=False for {os.path.basename(self.input_image)}")
+
+        update_padded_header_smart(self.input_image, phot_header.dict)  # smart ver. for SANITY
         self.logger.info(f"Image header has been updated with photometry information (aperture, zero point, ...).")
 
     def write_catalog(self, obs_src_table) -> None:
@@ -1330,6 +1336,7 @@ class PhotometryHeader:
     MAGLOW: float = None
     MAGUP: float = None
     STDNUMB: int = None
+    SANITY: Optional[bool] = None
 
     # a dict of all information accompanying each aperture
     aperture_info: Dict = None
@@ -1452,6 +1459,9 @@ class PhotometryHeader:
         }
 
         phot_header_dict.update(misc_dict)
+        if self.SANITY is not None:
+            phot_header_dict["SANITY"] = (self.SANITY, None)
+
         # round float values to .3f
         phot_header_dict.update({k: (round(v[0], 3), v[1]) for k, v in self.aperture_dict.items()})
         phot_header_dict.update({k: (round(v[0], 3), v[1]) for k, v in self.zp_dict.items()})

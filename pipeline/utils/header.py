@@ -151,17 +151,17 @@ def update_padded_header(target_fits, header_new: dict | List[Tuple] | fits.Head
     """
 
     def _update_header(header: fits.Header, header_new):
-        cards = header.cards
+        cards_image = header.cards
         # format new header for iteration
         if isinstance(header_new, fits.Header):
-            cardpack = header_new.cards
+            cards_new = header_new.cards
         elif isinstance(header_new, dict):  # (key, value) or (key, (value, comment))
-            cardpack = [
+            cards_new = [
                 (key, *value) if isinstance(value, tuple) else (key, value) for key, value in header_new.items()
             ]
         elif isinstance(header_new, list):
             if all(isinstance(card, tuple) and len(card) == 3 for card in header_new):
-                cardpack = header_new
+                cards_new = header_new
             else:
                 raise ValueError("update_padded_header: cardpack must be a list of 3-tuples (keyword, value, comment)")
         else:
@@ -170,14 +170,14 @@ def update_padded_header(target_fits, header_new: dict | List[Tuple] | fits.Head
             )
 
         # i is the last non-comment idx
-        for i in range(len(cards) - 1, -1, -1):
-            if cards[i][0] != "COMMENT":
+        for i in range(len(cards_image) - 1, -1, -1):
+            if cards_image[i][0] != "COMMENT":
                 break
         i += 1
 
         # Expects (key, value, comment)
-        for j, card in enumerate(cardpack):
-            if i + j <= len(cards) - 1:
+        for j, card in enumerate(cards_new):
+            if i + j <= len(cards_image) - 1:
                 del header[i + j]
                 header.insert(i + j, card)
             else:
@@ -188,56 +188,57 @@ def update_padded_header(target_fits, header_new: dict | List[Tuple] | fits.Head
         _update_header(header, header_new)
 
 
-# def update_padded_header(target_fits, header_new):
-#     """
-#     Update a FITS file's header with header_new (scamp or photometry output).
-#     header_new can be either astropy.io.fits.Header or dict.
+def update_padded_header_smart(target_fits, header_new):
+    """
+    Update a FITS file's header with header_new (scamp or photometry output).
+    header_new can be either astropy.io.fits.Header or dict.
 
-#     This version will override any existing key/value pairs in-place,
-#     and append truly new cards just before the trailing COMMENTs.
+    This version will override any existing key/value pairs in-place,
+    and append truly new cards just before the trailing COMMENTs.
 
-#     Args:
-#         target_fits (str): Path to the target FITS file to be updated
-#         header_new (dict or Header): Header object or mapping with info to be added
+    Args:
+        target_fits (str): Path to the target FITS file to be updated
+        header_new (dict or Header): Header object or mapping with info to be added
 
-#     Note:
-#         - Modifies the target FITS file in-place
-#         - Preserves existing non-COMMENT header entries (except overridden ones)
-#         - Appends only those cards whose keys did not exist before
-#     """
-#     with fits.open(target_fits, mode="update") as hdul:
-#         header: fits.Header = hdul[0].header
+    Note:
+        - Modifies the target FITS file in-place
+        - Preserves existing non-COMMENT header entries (except overridden ones)
+        - Appends only those cards whose keys did not exist before
+    """
+    with fits.open(target_fits, mode="update") as hdul:
+        header: fits.Header = hdul[0].header
 
-#         # Find the index of the last non-COMMENT card
-#         last_non_comment = None
-#         for idx, card in enumerate(header.cards):
-#             if card.keyword != "COMMENT":
-#                 last_non_comment = idx
+        # Find the index of the last non-COMMENT card
+        insert_pos = 0
+        for idx in range(len(header.cards) - 1, -1, -1):
+            if header.cards[idx].keyword != "COMMENT":
+                insert_pos = idx + 1
+                break
 
-#         insert_pos = (last_non_comment + 1) if last_non_comment is not None else len(header.cards)
+        # Normalize header_new into a list of (key, value, comment) tuples
+        if isinstance(header_new, fits.Header):
+            new_cards = [(c.keyword, c.value, c.comment) for c in header_new.cards]
+        elif isinstance(header_new, dict):
+            new_cards = []
+            for key, val in header_new.items():
+                if isinstance(val, tuple):
+                    new_cards.append((key, val[0], val[1]))
+                else:
+                    new_cards.append((key, val, None))
+        else:
+            raise ValueError("Unsupported Header format for updating padded Header")
 
-#         # Normalize header_new into a list of (key, value, comment) tuples
-#         if isinstance(header_new, fits.Header):
-#             new_cards = [(c.keyword, c.value, c.comment) for c in header_new.cards]
-#         elif isinstance(header_new, dict):
-#             new_cards = []
-#             for key, val in header_new.items():
-#                 if isinstance(val, tuple):
-#                     new_cards.append((key, val[0], val[1]))
-#                 else:
-#                     new_cards.append((key, val, None))
-#         else:
-#             raise ValueError("Unsupported Header format for updating padded Header")
-
-#         # Apply each new card: override if exists, otherwise append in padding
-#         for key, value, comment in new_cards:
-#             if key in header:  # override existing
-#                 # header.set handles both update and insertion
-#                 header.set(key, value, comment or header.comments.get(key))
-#             else:
-#                 # insert before COMMENTS
-#                 header.insert(insert_pos, (key, value, comment), after=False)
-#                 insert_pos += 1  # shift insertion point forward
+        # Apply each new card: override if exists, otherwise append in padding
+        for key, value, comment in new_cards:
+            if key in header:  # override existing
+                if comment is None:
+                    comment = header.comments[key]
+                header.set(key, value, comment)
+            else:
+                # insert before COMMENTS
+                del header[insert_pos]
+                header.insert(insert_pos, (key, value, comment), after=False)
+                insert_pos += 1  # shift insertion point forward
 
 
 def add_padding(header: fits.Header, n: int, copy_header=False) -> fits.Header:
