@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .. import external
 from ..const import PIXSCALE, REF_DIR
+from ..const.sciproc import SCIPROCESS_REGISTRY
 from ..errors import AstrometryError, ScampError, SolveFieldError
 from ..utils import swap_ext, add_suffix, force_symlink, time_diff_in_seconds, unique_filename, atleast_1d
 from ..utils.header import update_padded_header, reset_header, fitsrec_to_header
@@ -121,7 +122,7 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
                 self.logger.debug(
                     f"Initialized DatabaseHandler for pipeline and QA data management, Pipeline ID: {self.process_status_id}"
                 )
-            self.update_progress(0, "astrometry-configured")
+            self.update_progress(SCIPROCESS_REGISTRY.configured_progress("astrometry"), "astrometry-configured")
             if self.process_status_id is not None:
                 for image_info in self.images_info:
                     qa_id = self.create_image_qa_data(image_info.image_path, self.process_status_id)
@@ -321,10 +322,10 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
 
             # evaluate main scamp result
             self.evaluate_solution(use_threading=use_threading_for_eval, scamp_preset="main", overwrite=overwrite)
-            self.update_progress(15, "astrometry-scamp-main-eval")
+            self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("astrometry", "scamp_main_eval"), "astrometry-scamp-main-eval")
             # update the input image
             self.update_header()
-            self.update_progress(20, "astrometry")
+            self.update_progress(SCIPROCESS_REGISTRY.completed_progress("astrometry"), "astrometry")
 
             if self.is_connected:
                 for image_info, qa_id in zip(self.images_info, self.qa_ids):
@@ -382,7 +383,7 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
         # reject if all images are rejected by early QA
         if not any(image_info.SANITY for image_info in self.images_info):
             self.logger.error("All images rejected by early QA.", AstrometryError.EarlyQARejectionError)
-            self.update_progress(5, "rejected-all-by-early-qa")
+            self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("astrometry", "all_rejected_early_qa"), "rejected-all-by-early-qa")
             raise AstrometryError.EarlyQARejectionError("All images rejected by early QA.")
 
     def _solve_field_suite(
@@ -450,7 +451,7 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
             overwrite=overwrite,
             raise_error=False,
         )
-        self.update_progress(5, "astrometry-scamp-prep")
+        self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("astrometry", "scamp_prep"), "astrometry-scamp-prep")
 
         if evaluate_prep_sol:
             self.evaluate_solution(
@@ -474,7 +475,7 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
             raise_error=avoid_solvefield,  # suppress raise to move on to solve-field
         )
 
-        self.update_progress(10, "astrometry-scamp-main")
+        self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("astrometry", "scamp_main"), "astrometry-scamp-main")
         self.logger.info(f"Scamp iteration completed for {image_info.prep_cat} [{i+1}/{len(self.images_info)}]")
 
         if image_info.bad:

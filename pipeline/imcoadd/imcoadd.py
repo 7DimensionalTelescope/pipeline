@@ -9,6 +9,7 @@ from astropy.table import Table
 from astropy.coordinates import Angle
 
 from ..const import REF_DIR
+from ..const.sciproc import SCIPROCESS_REGISTRY
 from ..errors import CoaddError
 from ..config import SciProcConfiguration
 from ..path.path import PathHandler
@@ -73,7 +74,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
                 self.logger.debug(
                     f"Initialized DatabaseHandler for pipeline and QA data management, Pipeline ID: {self.process_status_id}"
                 )
-            self.update_progress(60, "imcoadd-configured")
+            self.update_progress(SCIPROCESS_REGISTRY.configured_progress("coadd"), "imcoadd-configured")
 
     @classmethod
     def from_list(cls, input_images, working_dir=None):
@@ -111,37 +112,43 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
 
             # background subtraction
             self.bkgsub()
-            self.update_progress(61, "imcoadd-bkgsub-completed")
+            self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("coadd", "bkgsub"), "imcoadd-bkgsub-completed")
             # zero point scaling
             self.zpscale()
-            self.update_progress(62, "imcoadd-zpscale-completed")
+            self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("coadd", "zpscale"), "imcoadd-zpscale-completed")
 
             if self.config_node.imcoadd.weight_map:
                 self.calculate_weight_map(device_id=device_id)
-                self.update_progress(63, "imcoadd-calculate-weight-map-completed")
+                self.update_progress(
+                    SCIPROCESS_REGISTRY.milestone_progress("coadd", "calculate_weight_map"),
+                    "imcoadd-calculate-weight-map-completed",
+                )
 
             # replace hot pixels
             if self.config_node.imcoadd.apply_bpmask:
                 self.apply_bpmask(device_id=device_id)
-                self.update_progress(64, "imcoadd-apply-bpmask-completed")
+                self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("coadd", "apply_bpmask"), "imcoadd-apply-bpmask-completed")
 
             # re-registration
             if self.config_node.imcoadd.joint_wcs:
                 self.joint_registration()
-                self.update_progress(65, "imcoadd-joint-registration-completed")
+                self.update_progress(
+                    SCIPROCESS_REGISTRY.milestone_progress("coadd", "joint_registration"),
+                    "imcoadd-joint-registration-completed",
+                )
 
             # seeing convolution
             if self.config_node.imcoadd.convolve:
                 self.prepare_convolution()
                 self.run_convolution(device_id=device_id)
-                self.update_progress(66, "imcoadd-run-convolution-completed")
+                self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("coadd", "run_convolution"), "imcoadd-run-convolution-completed")
 
             # swarp coaddition
             self.coadd_with_swarp()
-            self.update_progress(68, "imcoadd-coadd-with-swarp-completed")
+            self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("coadd", "coadd_with_swarp"), "imcoadd-coadd-with-swarp-completed")
 
             self.plot_coadd_image()
-            self.update_progress(69, "imcoadd-plot-coadded-image-completed")
+            self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("coadd", "plot_coadd_image"), "imcoadd-plot-coadded-image-completed")
 
             if self.is_connected and self.process_status_id is not None:
                 coadd_image = self.config_node.imcoadd.coadd_image
@@ -158,7 +165,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
                     )
                     self.image_qa.update_data(qa_data.id, **qa_data.to_dict())
 
-            self.update_progress(70, "imcoadd-completed")
+            self.update_progress(SCIPROCESS_REGISTRY.completed_progress("coadd"), "imcoadd-completed")
 
             self.config_node.flag.coadd = True
             self.logger.info(f"'ImCoadd' is Completed in {time_diff_in_seconds(self._st)} seconds")

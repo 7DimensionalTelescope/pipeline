@@ -8,6 +8,7 @@ from astropy.table import Table
 from datetime import datetime, timedelta
 
 from .. import external
+from ..const.sciproc import SCIPROCESS_REGISTRY
 from ..utils import add_suffix, swap_ext, collapse, time_diff_in_seconds, atleast_1d
 from ..tools.table import match_two_catalogs
 from ..config.utils import get_key
@@ -60,7 +61,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
                 self.logger.debug(
                     f"Initialized DatabaseHandler for pipeline and QA data management, Pipeline ID: {self.process_status_id}"
                 )
-            self.update_progress(80, "imsubtract-configured")
+            self.update_progress(SCIPROCESS_REGISTRY.configured_progress("subtraction"), "imsubtract-configured")
 
     @classmethod
     def from_list(cls, input_images):
@@ -93,26 +94,29 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
             if self.reference_images is None:  # if not found, do not run
                 self.logger.info(f"No reference image found for {self.name}; Skipping transient search.")
                 self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")
-                self.update_progress(100, "imsubtract-completed")
+                self.update_progress(SCIPROCESS_REGISTRY.completed_progress("subtraction"), "imsubtract-completed")
                 return
 
             self.define_paths()
-            self.update_progress(82, "imsubtract-define-paths-completed")
+            self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("subtraction", "define_paths"), "imsubtract-define-paths-completed")
 
             if not overwrite and os.path.exists(self.subt_image_file):
                 self.logger.info(f"Subtracted image already exists: {self.subt_image_file}; Skipping subtraction.")
                 self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")
-                self.update_progress(100, "imsubtract-completed")
+                self.update_progress(SCIPROCESS_REGISTRY.completed_progress("subtraction"), "imsubtract-completed")
                 return
 
             self.create_substamps()
-            self.update_progress(84, "imsubtract-create-substamps-completed")
+            self.update_progress(
+                SCIPROCESS_REGISTRY.milestone_progress("subtraction", "create_substamps"),
+                "imsubtract-create-substamps-completed",
+            )
 
             self.create_masks()
-            self.update_progress(86, "imsubtract-create-masks-completed")
+            self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("subtraction", "create_masks"), "imsubtract-create-masks-completed")
 
             self.run_hotpants()
-            self.update_progress(88, "imsubtract-run-hotpants-completed")
+            self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("subtraction", "run_hotpants"), "imsubtract-run-hotpants-completed")
 
             self.mask_unsubtracted()
 
@@ -136,7 +140,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
                     )
                     self.image_qa.update_data(qa_data.id, **qa_data.to_dict())
 
-            self.update_progress(90, "imsubtract-completed")
+            self.update_progress(SCIPROCESS_REGISTRY.completed_progress("subtraction"), "imsubtract-completed")
 
             self.config_node.flag.subtraction = True
             self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")

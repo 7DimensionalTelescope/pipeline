@@ -4,7 +4,7 @@ import argparse
 import sys
 import signal
 
-from pipeline.const import DEFAULT_SCIDATA_PROCESSES
+from pipeline.const.run import DEFAULT_SCIDATA_PROCESSES
 from pipeline.run import run_scidata_reduction
 
 

@@ -1,4 +1,4 @@
-from .const import DEFAULT_SCIDATA_PROCESSES
+from .const.run import DEFAULT_SCIDATA_PROCESSES
 from .services.blueprint import Blueprint
 from .services.scheduler import Scheduler
 from .services.queue import QueueManager

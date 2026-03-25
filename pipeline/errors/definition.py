@@ -2,6 +2,7 @@ from typing import Any, Tuple
 
 from .registry import ErrorRegistry, make_process_error
 from .errors import *
+from ..const.sciproc import SCIPROCESS_REGISTRY
 
 # ---------------------------
 # Setup
@@ -13,14 +14,13 @@ registry = ErrorRegistry()
 #                             Process Errors
 # =============================================================================
 
-# Processes (1..7) - Specific pipeline processes
+# Preprocess is not part of sciprocess orchestration.
 registry.register_process("preprocess", 1)
-registry.register_process("astrometry", 2)
-registry.register_process("single_photometry", 3)
-registry.register_process("coadd", 4)
-registry.register_process("coadd_photometry", 5)
-registry.register_process("subtraction", 6)
-registry.register_process("difference_photometry", 7)
+
+# Processes (2..7) - Specific science processes, such as astrometry, single_photometry, coadd ...
+for process_spec in SCIPROCESS_REGISTRY.specs:
+    registry.register_process(process_spec.name, process_spec.error_code)
+
 # errors outside specific processes (orchestrator, config, PathHandler, user-input, etc.)
 registry.register_process("system", 9)  # errors from outside scientific processes
 registry.register_process("undefined_process", 0)

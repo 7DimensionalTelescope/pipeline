@@ -30,6 +30,7 @@ from ..config import SciProcConfiguration
 from ..config.base import ConfigNode
 from .. import external
 from ..const import PIXSCALE, MEDIUM_FILTERS, BROAD_FILTERS, ALL_FILTERS
+from ..const.sciproc import SCIPROCESS_REGISTRY
 from ..services.setup import BaseSetup
 from ..tools.table import match_two_catalogs, build_condition_mask
 from ..path.path import PathHandler
@@ -127,6 +128,7 @@ class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
             )
 
         self.logger.info(f"Photometry mode: {self._photometry_mode}")
+        self._process_spec = SCIPROCESS_REGISTRY.get(self._photometry_mode)
 
         self.qa_ids = []
         DatabaseHandler.__init__(
@@ -134,13 +136,7 @@ class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
         )
 
         if self.is_connected:
-
-            if self._photometry_mode == "single_photometry":
-                self.reset_exceptions("single_photometry")
-            elif self._photometry_mode == "coadd_photometry":
-                self.reset_exceptions("coadd_photometry")
-            elif self._photometry_mode == "difference_photometry":
-                self.reset_exceptions("difference_photometry")
+            self.reset_exceptions(self._process_spec.name)
 
             if self.process_status_id is not None:
                 from ..services.database.handler import ExceptionHandler
@@ -154,18 +150,10 @@ class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
                 self.logger.debug(
                     f"Initialized DatabaseHandler for pipeline and QA data management, Pipeline ID: {self.process_status_id}"
                 )
-            self.update_progress(self._progress_by_mode[0], f"{self._photometry_mode}-configured")
-
-    @property
-    def _progress_by_mode(self):
-        if self._photometry_mode == "single_photometry":
-            return 40, 20
-        elif self._photometry_mode == "coadd_photometry":
-            return 70, 10
-        elif self._photometry_mode == "difference_photometry":
-            return 90, 10
-        else:
-            raise SinglePhotometryError.ValueError(f"Undefined photometry mode: {self._photometry_mode}")
+            self.update_progress(
+                SCIPROCESS_REGISTRY.configured_progress(self._process_spec),
+                f"{self._photometry_mode}-configured",
+            )
 
     @classmethod
     def from_list(cls, images: List[str], working_dir=None) -> Optional["Photometry"]:
@@ -207,7 +195,10 @@ class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
             if self._photometry_mode == "difference_photometry":
                 self.logger.info(f"No input images found. Skipping {self._photometry_mode}.")
 
-                self.update_progress(100, f"{self._photometry_mode}-completed")
+                self.update_progress(
+                    SCIPROCESS_REGISTRY.completed_progress(self._process_spec),
+                    f"{self._photometry_mode}-completed",
+                )
                 if self.is_too and self.too_id is not None:
                     interim_notice = self.too_db.read_data_by_id(self.too_id).get("interim_notice")
 
@@ -236,7 +227,10 @@ class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
                     )
                     qa_id = self.image_qa.update_data(qa_id, **qa_data.to_dict())
 
-            self.update_progress(sum(self._progress_by_mode), f"{self._photometry_mode}-completed")
+            self.update_progress(
+                SCIPROCESS_REGISTRY.completed_progress(self._process_spec),
+                f"{self._photometry_mode}-completed",
+            )
 
             if self.is_too and self.too_id is not None and self._photometry_mode == "difference_photometry":
                 interim_notice = self.too_db.read_data_by_id(self.too_id).get("interim_notice")
@@ -246,14 +240,7 @@ class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
 
                 self.too_db.mark_completed(self.too_id)
 
-            if self._photometry_mode == "single_photometry":
-                self.config_node.flag.single_photometry = True
-            elif self._photometry_mode == "coadd_photometry":
-                self.config_node.flag.coadd_photometry = True
-            elif self._photometry_mode == "difference_photometry":
-                self.config_node.flag.difference_photometry = True
-            else:
-                raise SinglePhotometryError.ValueError(f"Undefined photometry mode: {self._photometry_mode}")
+            setattr(self.config_node.flag, self._process_spec.yml_key, True)
 
             self.logger.info(f"'Photometry' is Completed in {time_diff_in_seconds(st)} seconds")
             self.logger.debug(MemoryMonitor.log_memory_usage)
@@ -301,7 +288,7 @@ class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
             ).run(overwrite=overwrite)
 
             self.update_progress(
-                self._progress_by_mode[0] + (self._progress_by_mode[1] / len(self.input_images)) * (i + 1),
+                SCIPROCESS_REGISTRY.step_progress(self._process_spec, i + 1, len(self.input_images)),
                 f"{self._photometry_mode}-{i}/{len(self.input_images)}",
             )
 
@@ -464,6 +451,15 @@ class PhotometrySingle:
                 f"'PhotometrySingle' is completed for the image [{self._id}]"
                 f" in {time_diff_in_seconds(start_time)} seconds"
             )
+        except NotEnoughSourcesError as e:
+            self.phot_header.SANITY = False
+            self.logger.info(f"Set SANITY=False for {os.path.basename(self.input_image)} after photometry failure")
+            self.update_image_header()
+            self.logger.error(
+                f"PhotometrySingle failed for the image [{self._id}]: {str(e)}, but will continue until it depletes all input_images.",
+                e,
+            )
+            return
         except Exception as e:
             self.logger.error(f"PhotometrySingle failed for the image [{self._id}]: {str(e)}", e, exc_info=True)
             raise

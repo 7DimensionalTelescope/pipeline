@@ -2,7 +2,7 @@ import json
 from typing import List
 
 from .config import PreprocConfiguration, SciProcConfiguration
-from .const import DEFAULT_SCIDATA_PROCESSES
+from .const.run import DEFAULT_SCIDATA_PROCESSES
 from .preprocess import Preprocess
 from .astrometry import Astrometry
 from .photometry import Photometry
@@ -61,9 +61,9 @@ def run_scidata_reduction(
             raise ValueError("is_too mismatch")
 
         if "astrometry" in processes and (not config.node.flag.astrometry or overwrite):
-            astr = Astrometry(config)
-            astr.run(overwrite=overwrite)
-            del astr
+            ast = Astrometry(config)
+            ast.run(overwrite=overwrite)
+            del ast
         if "photometry" in processes and (not config.node.flag.single_photometry or overwrite):
             phot = Photometry(config, photometry_mode="single_photometry")
             phot.run()

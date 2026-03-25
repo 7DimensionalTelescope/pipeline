@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from ..utils import flatten
 from ..path import PathHandler
 from ..config.utils import get_filter_from_config
-from ..const import DEFAULT_SCIDATA_PROCESSES
+from ..const.run import DEFAULT_SCIDATA_PROCESSES
 from ..const.observation import BROAD_FILTERS
 
 from .utils import SortedGroupDict, PreprocessGroup, ScienceGroup
