@@ -231,14 +231,36 @@ def update_padded_header_smart(target_fits, header_new):
         # Apply each new card: override if exists, otherwise append in padding
         for key, value, comment in new_cards:
             if key in header:  # override existing
+                existing_idx = list(header.keys()).index(key)
+                # print(
+                #     f"[update_padded_header_smart] replacing key={key} idx={existing_idx} "
+                #     f"old_value={header[key]!r} new_value={value!r}"
+                # )
                 if comment is None:
                     comment = header.comments[key]
-                header.set(key, value, comment)
+                # header.set(key, value, comment)
+                del header[key]
+                header.insert(existing_idx, (key, value, comment), after=False)
+                # print(
+                #     f"[update_padded_header_smart] replaced key={key} "
+                #     f"stored_value={header[key]!r} comment={header.comments[key]!r}"
+                # )
             else:
                 # insert before COMMENTS
+                # print(f"[update_padded_header_smart] inserting new key={key} " f"at idx={insert_pos} value={value!r}")
                 del header[insert_pos]
                 header.insert(insert_pos, (key, value, comment), after=False)
                 insert_pos += 1  # shift insertion point forward
+
+        hdul.flush()
+        # print(f"[header dump]: {header.tostring()}")
+
+    check_header = fits.getheader(target_fits)
+    # print(
+    #     "[update_padded_header_smart] readback "
+    #     f"SANITY={check_header.get('SANITY')!r} "
+    #     f"REJ_PROC={check_header.get('REJ_PROC')!r}"
+    # )
 
 
 def add_padding(header: fits.Header, n: int, copy_header=False) -> fits.Header:

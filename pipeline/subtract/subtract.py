@@ -19,13 +19,13 @@ from ..tools.ds9 import create_ds9_region_file
 from ..services.setup import BaseSetup
 from ..services.database.handler import DatabaseHandler
 from ..services.database.image_qa import ImageQATable
-from ..services.checker import CheckerMixin
+from ..services.checker import Checker
 from ..services.database.query import RawImageQuery
 
 from .utils import select_sources
 
 
-class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
+class ImSubtract(BaseSetup, DatabaseHandler, Checker):
     def __init__(
         self,
         config=None,

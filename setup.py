@@ -15,7 +15,7 @@ setup(
     long_description_content_type="text/markdown",
     license="MIT",
     packages=find_packages(exclude=("test", "test.*")),
-    python_requires=">=3.8",
+    python_requires=">=3.10",  # match case syntax in checker.py
     install_requires=[
         "numpy>=1.25",
     ],

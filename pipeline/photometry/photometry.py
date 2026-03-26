@@ -22,7 +22,7 @@ from ..services.memory import MemoryMonitor
 from ..services.queue import QueueManager
 from ..services.database.handler import DatabaseHandler
 from ..services.database.image_qa import ImageQATable
-from ..services.checker import CheckerMixin
+from ..services.checker import Checker
 
 from ..config.utils import get_key
 from ..utils import time_diff_in_seconds, force_symlink, collapse
@@ -64,7 +64,7 @@ from . import utils as phot_utils
 from .plotting import plot_zp, plot_filter_check
 
 
-class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
+class Photometry(BaseSetup, DatabaseHandler, Checker):
     """
     A wrapper class of PhotometrySingle.
     Dispatches to PhotometrySingle based on the photometry_mode:
@@ -471,9 +471,6 @@ class PhotometrySingle:
                 f" in {time_diff_in_seconds(start_time)} seconds"
             )
         except NotEnoughSourcesError as e:
-            self.phot_header.SANITY = False
-            self.phot_header.REJ_PROC = self._sciproc_rejection_process_name
-            self.logger.info(f"Set SANITY=False for {os.path.basename(self.input_image)} after photometry failure")
             self.update_image_header()
             self.logger.error(
                 f"PhotometrySingle failed for the image [{self._id}]: {str(e)}, but will continue until it depletes all input_images.",
@@ -546,6 +543,7 @@ class PhotometrySingle:
                 obs_src_table = self._run_sextractor(sex_preset="prep", fits_ldac=True, overwrite=overwrite)
 
             post_match_table = self.add_matched_reference_catalog(obs_src_table)
+            self.logger.debug(f"Filtering source catalog for seeing calculation")
             post_match_table = self.filter_catalog(post_match_table, snr_cut=False, low_mag_cut=11.75)
 
             if len(post_match_table) == 0:
@@ -682,7 +680,7 @@ class PhotometrySingle:
         Returns:
             Table of sources meeting all criteria
         """
-        self.logger.debug(f"Filtering catalog with columns: {table.colnames}")
+        self.logger.debug(f"Catalog to be filtered has {len(table)} rows and columns: {table.colnames}")
         self.logger.debug(
             f"Filtering catalog with snr_cut: {snr_cut}, low_mag_cut: {low_mag_cut}, high_mag_cut: {high_mag_cut}"
         )
@@ -1147,7 +1145,7 @@ class PhotometrySingle:
             self.logger.warning("No zero point was derived for this image.", NotEnoughSourcesError)
             phot_header.SANITY = False
             phot_header.REJ_PROC = self._sciproc_rejection_process_name
-            self.logger.info(f"Set SANITY=False for {os.path.basename(self.input_image)}")
+            self.logger.info(f"Setting SANITY=False for {os.path.basename(self.input_image)}")
 
         update_padded_header_smart(self.input_image, phot_header.dict)  # smart ver. for SANITY
         self.logger.info(f"Image header has been updated with photometry information (aperture, zero point, ...).")
@@ -1338,7 +1336,7 @@ class PhotometryHeader:
     """
 
     # must match the actual header keys
-    AUTHOR: str = "pipeline"
+    AUTHOR: str = getpass.getuser()  # "pipeline"
     PHOTIME: str = None
     INF_FILT: str = None
     JD: float = None
