@@ -56,7 +56,7 @@ class SciProcessRegistry:
         try:
             return self._by_name[name]
         except KeyError as exc:
-            raise KeyError(f"Unknown process name: {name}") from exc
+            raise KeyError(f"Unknown process name in SciProcessRegistry: {name}") from exc
 
     def configured_progress(self, process: str | ProcessSpec) -> int:
         process_info = self.get(process) if isinstance(process, str) else process
@@ -86,74 +86,81 @@ class SciProcessRegistry:
         return int(round(progress))
 
 
+ASTROMETRY_SPEC = ProcessSpec(
+    name="astrometry",
+    error_code=2,
+    progress_start=0,
+    progress_end=20,
+    yml_key="astrometry",
+    milestones=(
+        ("scamp_prep", 5),
+        ("all_rejected_early_qa", 5),
+        ("scamp_main", 10),
+        ("scamp_main_eval", 15),
+    ),
+)
+SINGLE_PHOTOMETRY_SPEC = ProcessSpec(
+    name="single_photometry",
+    error_code=3,
+    progress_start=40,
+    progress_end=60,
+    yml_key="single_photometry",
+    photometry_mode="single_photometry",
+)
+COADD_SPEC = ProcessSpec(
+    name="coadd",
+    error_code=4,
+    progress_start=60,
+    progress_end=70,
+    yml_key="coadd",
+    milestones=(
+        ("bkgsub", 61),
+        ("zpscale", 62),
+        ("calculate_weight_map", 63),
+        ("apply_bpmask", 64),
+        ("joint_registration", 65),
+        ("run_convolution", 66),
+        ("coadd_with_swarp", 68),
+        ("plot_coadd_image", 69),
+    ),
+)
+COADD_PHOTOMETRY_SPEC = ProcessSpec(
+    name="coadd_photometry",
+    error_code=5,
+    progress_start=70,
+    progress_end=80,
+    yml_key="coadd_photometry",
+    photometry_mode="coadd_photometry",
+)
+SUBTRACTION_SPEC = ProcessSpec(
+    name="subtraction",
+    error_code=6,
+    progress_start=80,
+    progress_end=90,
+    yml_key="subtraction",
+    milestones=(
+        ("define_paths", 82),
+        ("create_substamps", 84),
+        ("create_masks", 86),
+        ("run_hotpants", 88),
+    ),
+)
+DIFFERENCE_PHOTOMETRY_SPEC = ProcessSpec(
+    name="difference_photometry",
+    error_code=7,
+    progress_start=90,
+    progress_end=100,
+    yml_key="difference_photometry",
+    photometry_mode="difference_photometry",
+)
+
 SCIPROC_PROCESSES = [
-    ProcessSpec(
-        name="astrometry",
-        error_code=2,
-        progress_start=0,
-        progress_end=20,
-        yml_key="astrometry",
-        milestones=(
-            ("scamp_prep", 5),
-            ("all_rejected_early_qa", 5),
-            ("scamp_main", 10),
-            ("scamp_main_eval", 15),
-        ),
-    ),
-    ProcessSpec(
-        name="single_photometry",
-        error_code=3,
-        progress_start=40,
-        progress_end=60,
-        yml_key="single_photometry",
-        photometry_mode="single_photometry",
-    ),
-    ProcessSpec(
-        name="coadd",
-        error_code=4,
-        progress_start=60,
-        progress_end=70,
-        yml_key="coadd",
-        milestones=(
-            ("bkgsub", 61),
-            ("zpscale", 62),
-            ("calculate_weight_map", 63),
-            ("apply_bpmask", 64),
-            ("joint_registration", 65),
-            ("run_convolution", 66),
-            ("coadd_with_swarp", 68),
-            ("plot_coadd_image", 69),
-        ),
-    ),
-    ProcessSpec(
-        name="coadd_photometry",
-        error_code=5,
-        progress_start=70,
-        progress_end=80,
-        yml_key="coadd_photometry",
-        photometry_mode="coadd_photometry",
-    ),
-    ProcessSpec(
-        name="subtraction",
-        error_code=6,
-        progress_start=80,
-        progress_end=90,
-        yml_key="subtraction",
-        milestones=(
-            ("define_paths", 82),
-            ("create_substamps", 84),
-            ("create_masks", 86),
-            ("run_hotpants", 88),
-        ),
-    ),
-    ProcessSpec(
-        name="difference_photometry",
-        error_code=7,
-        progress_start=90,
-        progress_end=100,
-        yml_key="difference_photometry",
-        photometry_mode="difference_photometry",
-    ),
+    ASTROMETRY_SPEC,
+    SINGLE_PHOTOMETRY_SPEC,
+    COADD_SPEC,
+    COADD_PHOTOMETRY_SPEC,
+    SUBTRACTION_SPEC,
+    DIFFERENCE_PHOTOMETRY_SPEC,
 ]
 
 SCIPROCESS_REGISTRY = SciProcessRegistry(SCIPROC_PROCESSES)

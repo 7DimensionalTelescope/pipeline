@@ -9,7 +9,7 @@ from astropy.table import Table
 from astropy.coordinates import Angle
 
 from ..const import REF_DIR
-from ..const.sciproc import SCIPROCESS_REGISTRY
+from ..const.sciproc import COADD_SPEC, SCIPROCESS_REGISTRY
 from ..errors import CoaddError
 from ..config import SciProcConfiguration
 from ..path.path import PathHandler
@@ -115,7 +115,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
             self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("coadd", "bkgsub"), "imcoadd-bkgsub-completed")
             # zero point scaling
             self.zpscale()
-            self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("coadd", "zpscale"), "imcoadd-zpscale-completed")
+            self.update_progress(
+                SCIPROCESS_REGISTRY.milestone_progress("coadd", "zpscale"), "imcoadd-zpscale-completed"
+            )
 
             if self.config_node.imcoadd.weight_map:
                 self.calculate_weight_map(device_id=device_id)
@@ -127,7 +129,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
             # replace hot pixels
             if self.config_node.imcoadd.apply_bpmask:
                 self.apply_bpmask(device_id=device_id)
-                self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("coadd", "apply_bpmask"), "imcoadd-apply-bpmask-completed")
+                self.update_progress(
+                    SCIPROCESS_REGISTRY.milestone_progress("coadd", "apply_bpmask"), "imcoadd-apply-bpmask-completed"
+                )
 
             # re-registration
             if self.config_node.imcoadd.joint_wcs:
@@ -141,14 +145,23 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
             if self.config_node.imcoadd.convolve:
                 self.prepare_convolution()
                 self.run_convolution(device_id=device_id)
-                self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("coadd", "run_convolution"), "imcoadd-run-convolution-completed")
+                self.update_progress(
+                    SCIPROCESS_REGISTRY.milestone_progress("coadd", "run_convolution"),
+                    "imcoadd-run-convolution-completed",
+                )
 
             # swarp coaddition
             self.coadd_with_swarp()
-            self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("coadd", "coadd_with_swarp"), "imcoadd-coadd-with-swarp-completed")
+            self.update_progress(
+                SCIPROCESS_REGISTRY.milestone_progress("coadd", "coadd_with_swarp"),
+                "imcoadd-coadd-with-swarp-completed",
+            )
 
             self.plot_coadd_image()
-            self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("coadd", "plot_coadd_image"), "imcoadd-plot-coadded-image-completed")
+            self.update_progress(
+                SCIPROCESS_REGISTRY.milestone_progress("coadd", "plot_coadd_image"),
+                "imcoadd-plot-coadded-image-completed",
+            )
 
             if self.is_connected and self.process_status_id is not None:
                 coadd_image = self.config_node.imcoadd.coadd_image
@@ -181,7 +194,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, CheckerMixin):
         # use common input if imcoadd.input_files override is not set
         local_input_images = get_key(self.config_node.imcoadd, "input_images")
         self.input_images = local_input_images or self.config_node.input.calibrated_images
-        self.apply_sanity_filter_and_report()
+        self.apply_sanity_filter_and_report(current_process=COADD_SPEC, overwrite=self.overwrite)
         self.config_node.imcoadd.input_images = self.input_images
         if not self.input_images:
             self.logger.error("No Input for ImCoadd", CoaddError.EmptyInput)

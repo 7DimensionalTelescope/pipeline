@@ -30,7 +30,12 @@ from ..config import SciProcConfiguration
 from ..config.base import ConfigNode
 from .. import external
 from ..const import PIXSCALE, MEDIUM_FILTERS, BROAD_FILTERS, ALL_FILTERS
-from ..const.sciproc import SCIPROCESS_REGISTRY
+from ..const.sciproc import (
+    DIFFERENCE_PHOTOMETRY_SPEC,
+    ProcessSpec,
+    SCIPROCESS_REGISTRY,
+    SINGLE_PHOTOMETRY_SPEC,
+)
 from ..services.setup import BaseSetup
 from ..tools.table import match_two_catalogs, build_condition_mask
 from ..path.path import PathHandler
@@ -76,6 +81,7 @@ class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
         images: Optional[List[str]] = None,
         photometry_mode: Optional[str] = None,
         ref_cat_type: Optional[str] = None,
+        overwrite: bool = False,
     ) -> None:
         """
         Initialize the Photometry class.
@@ -86,6 +92,7 @@ class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
         """
         # Load Configuration
         super().__init__(config, logger, queue)
+        self.overwrite = overwrite
         # self._flag_name = "photometry"
 
         self.ref_cat_type = ref_cat_type or self.config_node.photometry.refcatname
@@ -96,7 +103,10 @@ class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
         ):
             self.logger.process_error = SinglePhotometryError
             self.input_images = images or self.config_node.input.calibrated_images
-            self.apply_sanity_filter_and_report()  # overrides self.input_images
+            self.apply_sanity_filter_and_report(
+                current_process=SINGLE_PHOTOMETRY_SPEC,
+                overwrite=self.overwrite,
+            )  # overrides self.input_images
             self.config_node.photometry.input_images = self.input_images
 
             self.logger.debug("Running single photometry")
@@ -257,11 +267,13 @@ class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
             diff_phot = self._photometry_mode == "difference_photometry"
 
             phot_single = PhotometrySingle(
-                image,
-                single_config,  # self.config,
-                self.logger,
+                single_config,
+                logger=self.logger,
                 ref_cat_type=self.ref_cat_type,
                 reset_count=i == 0,
+                total_image=len(self.input_images),
+                difference_photometry=diff_phot,
+                current_process=self._process_spec,
             )
             task_id = self.queue.add_task(
                 phot_single.run,
@@ -278,13 +290,13 @@ class Photometry(BaseSetup, DatabaseHandler, CheckerMixin):
             single_config = self.config_node.extract_single_image_config(i)
             diff_phot = self._photometry_mode == "difference_photometry"
             PhotometrySingle(
-                # image,
-                single_config,  # self.config,
+                single_config,
                 logger=self.logger,
                 ref_cat_type=self.ref_cat_type,
                 total_image=len(self.input_images),
                 difference_photometry=diff_phot,
                 reset_count=i == 0,
+                current_process=self._process_spec,
             ).run(overwrite=overwrite)
 
             self.update_progress(
@@ -317,6 +329,7 @@ class PhotometrySingle:
         check_filter=True,
         difference_photometry=False,
         reset_count=False,
+        current_process: Optional[ProcessSpec] = None,
     ) -> None:
         """Initialize PhotometrySingle instance."""
 
@@ -354,6 +367,12 @@ class PhotometrySingle:
         self._trust_header_seeing = difference_photometry
         self._trust_header_zp = difference_photometry
         self._check_filter = check_filter and not difference_photometry
+        if current_process is not None:
+            self._sciproc_rejection_process_name = current_process.name
+        else:
+            self._sciproc_rejection_process_name = (
+                DIFFERENCE_PHOTOMETRY_SPEC.name if difference_photometry else SINGLE_PHOTOMETRY_SPEC.name
+            )
 
     def _setup_logger(self, config: Any) -> Any:
         """Initialize logger instance."""
@@ -453,6 +472,7 @@ class PhotometrySingle:
             )
         except NotEnoughSourcesError as e:
             self.phot_header.SANITY = False
+            self.phot_header.REJ_PROC = self._sciproc_rejection_process_name
             self.logger.info(f"Set SANITY=False for {os.path.basename(self.input_image)} after photometry failure")
             self.update_image_header()
             self.logger.error(
@@ -1126,6 +1146,7 @@ class PhotometrySingle:
         if not phot_header.aperture_info:
             self.logger.warning("No zero point was derived for this image.", NotEnoughSourcesError)
             phot_header.SANITY = False
+            phot_header.REJ_PROC = self._sciproc_rejection_process_name
             self.logger.info(f"Set SANITY=False for {os.path.basename(self.input_image)}")
 
         update_padded_header_smart(self.input_image, phot_header.dict)  # smart ver. for SANITY
@@ -1333,6 +1354,7 @@ class PhotometryHeader:
     MAGUP: float = None
     STDNUMB: int = None
     SANITY: Optional[bool] = None
+    REJ_PROC: Optional[str] = None  # ProcessSpec.name of step that set SANITY False; FITS key REJ_PROC
 
     # a dict of all information accompanying each aperture
     aperture_info: Dict = None
@@ -1457,6 +1479,8 @@ class PhotometryHeader:
         phot_header_dict.update(misc_dict)
         if self.SANITY is not None:
             phot_header_dict["SANITY"] = (self.SANITY, None)
+        if self.REJ_PROC is not None:
+            phot_header_dict["REJ_PROC"] = (self.REJ_PROC, "Sci-process that set SANITY to False")
 
         # round float values to .3f
         phot_header_dict.update({k: (round(v[0], 3), v[1]) for k, v in self.aperture_dict.items()})

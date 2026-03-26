@@ -8,7 +8,7 @@ from astropy.table import Table
 from datetime import datetime, timedelta
 
 from .. import external
-from ..const.sciproc import SCIPROCESS_REGISTRY
+from ..const.sciproc import SCIPROCESS_REGISTRY, SUBTRACTION_SPEC
 from ..utils import add_suffix, swap_ext, collapse, time_diff_in_seconds, atleast_1d
 from ..tools.table import match_two_catalogs
 from ..config.utils import get_key
@@ -98,7 +98,10 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
                 return
 
             self.define_paths()
-            self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("subtraction", "define_paths"), "imsubtract-define-paths-completed")
+            self.update_progress(
+                SCIPROCESS_REGISTRY.milestone_progress("subtraction", "define_paths"),
+                "imsubtract-define-paths-completed",
+            )
 
             if not overwrite and os.path.exists(self.subt_image_file):
                 self.logger.info(f"Subtracted image already exists: {self.subt_image_file}; Skipping subtraction.")
@@ -113,10 +116,16 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
             )
 
             self.create_masks()
-            self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("subtraction", "create_masks"), "imsubtract-create-masks-completed")
+            self.update_progress(
+                SCIPROCESS_REGISTRY.milestone_progress("subtraction", "create_masks"),
+                "imsubtract-create-masks-completed",
+            )
 
             self.run_hotpants()
-            self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("subtraction", "run_hotpants"), "imsubtract-run-hotpants-completed")
+            self.update_progress(
+                SCIPROCESS_REGISTRY.milestone_progress("subtraction", "run_hotpants"),
+                "imsubtract-run-hotpants-completed",
+            )
 
             self.mask_unsubtracted()
 
@@ -223,7 +232,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, CheckerMixin):
                 resolved.append(p_str if os.path.isabs(p_str) else os.path.join(base_dir, p_str))
             self.input_images = resolved
 
-        self.apply_sanity_filter_and_report()
+        self.apply_sanity_filter_and_report(current_process=SUBTRACTION_SPEC, overwrite=self.overwrite)
         input_image = collapse(self.input_images, raise_error=True)
         self.config_node.imsubtract.input_image = input_image
 

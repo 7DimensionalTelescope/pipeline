@@ -60,10 +60,14 @@ class DatabaseHandler:
         existing_process_id = self.process_status.read_data_by_params(**table.to_dict())
         if existing_process_id:
             self.logger.info(f"Found existing process db record (PID: {existing_process_id})")
-            prev_errors = self.process_status.read_data_by_id(existing_process_id).errors
-            self.process_status.update_data(existing_process_id, errors=None)
+            existing_row = self.process_status.read_data_by_id(existing_process_id)
+            prev_errors = existing_row.errors
+            prev_warnings = existing_row.warnings
+            self.process_status_id = existing_process_id
+            self.reset_exceptions()
             self.logger.info(
-                f"Reset errors for existing process db record (PID: {existing_process_id}), previous errors: {prev_errors}"
+                "Reset warnings/errors for existing process db record "
+                f"(PID: {existing_process_id}), previous warnings: {prev_warnings}, previous errors: {prev_errors}"
             )
             if overwrite:
                 # Use cascade delete to properly handle foreign key constraints

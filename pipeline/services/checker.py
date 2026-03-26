@@ -1,7 +1,9 @@
 import json
 import os
 from astropy.io import fits
-from typing import List, Literal
+from typing import List, Literal, Optional
+
+from ..const.sciproc import REJECTION_PROCESS_HEADER_KEY, ProcessSpec, SCIPROCESS_REGISTRY
 from .. import const
 
 
@@ -9,7 +11,8 @@ class CheckerMixin:
     """
     Mixin class that generates, reads, and filters on the "SANITY" key in image headers.
 
-    Sanity is unidirectional: it can only be set to False, not True.
+    Existing SANITY values are normally trusted, but overwrite-enabled reruns can
+    recompute and refresh the header.
     """
 
     dtype = None
@@ -54,9 +57,9 @@ class CheckerMixin:
         self,
         header: fits.Header,
         dtype: Literal["bias", "dark", "flat", "masterframe", "science"] = None,
-    ) -> tuple[bool, fits.Header]:
+    ) -> bool:
         """
-        Generate a sanity flag based on the criteria. Returns the flag and the updated header.
+        Generate a sanity flag based on the criteria.
         Tolerates missing header keys if dtype is "science"
 
         `dtype` in Preprocess can be directly passed on to this method.
@@ -114,15 +117,33 @@ class CheckerMixin:
                     sanity = False
                     break
 
-        header["SANITY"] = (sanity, "Pipeline image sanity flag")
-
         if not sanity:
             if hasattr(self, "logger") and self.logger is not None:
                 self.logger.info(f"Rejected {header.get('FILENAME', 'image')} by key {key}: {value['description']}")
             else:
                 print(f"Rejected {header.get('FILENAME', 'image')} by key {key}: {value['description']}")
 
-        return sanity, header
+        return sanity
+
+    def update_sanity_header(
+        self,
+        header: fits.Header,
+        sanity: bool,
+        current_process: Optional[ProcessSpec] = None,
+    ) -> None:
+        """
+        Update SANITY-related header cards on an existing header object in place.
+        """
+        header["SANITY"] = (sanity, "Pipeline image sanity flag")
+
+        if sanity:
+            if REJECTION_PROCESS_HEADER_KEY in header:
+                del header[REJECTION_PROCESS_HEADER_KEY]
+        elif current_process is not None:
+            header[REJECTION_PROCESS_HEADER_KEY] = (
+                current_process.name,
+                "Sci-process that set SANITY to False",
+            )
 
     def sanity_check(self, file_path: str = None, header: dict = None, dtype: str = None):
         """
@@ -139,65 +160,96 @@ class CheckerMixin:
             header = fits.getheader(file_path)
             header["FILENAME"] = os.path.basename(file_path)  # to log the name in apply_criteria
 
-            flag, _ = self.apply_criteria(header=header, dtype=dtype)
-            return flag
+            return self.apply_criteria(header=header, dtype=dtype)
 
         elif header is not None:
-            flag, _ = self.apply_criteria(header=header, dtype=dtype)
-            return flag
+            return self.apply_criteria(header=header, dtype=dtype)
 
         else:
             raise ValueError("Either file_path or header must be provided")
 
     def _filter_by_sanity(
-        self, images: List[str], dtype: str = "science"
-    ) -> tuple[List[str], dict[str, tuple[fits.Header, bool]]]:
+        self,
+        images: List[str],
+        dtype: str = "science",
+        current_process: Optional[ProcessSpec] = None,
+        overwrite: bool = False,
+    ) -> tuple[List[str], dict[str, bool]]:
         """
         Filter images based on SANITY check from Checker.
 
-        If SANITY is False in the header, reject the image immediately.
+        If SANITY is False in the header, reject the image immediately, unless current_process <= REJ_PROC.
         If SANITY is True or missing, recompute the SANITY from criteria.
-        If INSPCOMM is present in the header, trust the SANITY as is and do not recompute from criteria.
+        If INSPCOMM is present in the header, trust the SANITY as is and do not
+        recompute from criteria, even when overwrite=True.
 
         Args:
             images: List of image file paths to filter
             dtype: Type of images for sanity check ("science", "masterframe", etc.)
 
         Returns:
-            Tuple of (filtered_images, needs_sanity_update) where:
+            Tuple of (filtered_images, sanity_updates) where:
             - filtered_images: List of image paths that pass SANITY check
-            - needs_sanity_update: Set of rejected image paths that need SANITY=False written to header
+            - sanity_updates: Mapping of image path -> recomputed SANITY value that
+              should be written back to the FITS header
         """
         if not images:
-            return images, set()
+            return images, {}
         if not isinstance(images, list):
             images = [images]
 
         filtered_images = []
-        needs_sanity_update = set()
+        sanity_updates = {}
         for image in images:
             try:
                 # Read header once and check sanity
-                header = fits.getheader(image)
+                header: fits.Header = fits.getheader(image)
+                has_inspcomm = "INSPCOMM" in header
+                existing_sanity: bool | None = header.get("SANITY")
 
                 # Reject if SANITY is False (e.g. for Early QA - header keys may not reproduce early QA)
-                if "SANITY" in header and header["SANITY"] is False:
-                    self.logger.debug(f"Filtered out image due to SANITY=False: {os.path.basename(image)}")
-                    continue
+                if not overwrite and "SANITY" in header and existing_sanity is False:
+
+                    if has_inspcomm:
+                        self.logger.debug(f"Trusting SANITY=F as INSPCOMM exists: {os.path.basename(image)}")
+                        continue
+
+                    rej_proc = (header.get(REJECTION_PROCESS_HEADER_KEY) or "").strip()
+
+                    keep_for_sanity_reevaluation = False
+
+                    # keep if current stage is before or matches REJ_PROC
+                    if current_process is not None and rej_proc:
+                        rej_spec = SCIPROCESS_REGISTRY.get(rej_proc)
+                        if current_process.progress_start <= rej_spec.progress_start:
+                            keep_for_sanity_reevaluation = True
+
+                    if keep_for_sanity_reevaluation:
+                        self.logger.debug(
+                            f"Keeping image despite SANITY=False (REJ_PROC={rej_proc}; "
+                            f"current step precedes or matches rejection step): {os.path.basename(image)}"
+                        )
+                    else:
+                        self.logger.debug(f"Filtered out image due to SANITY=False: {os.path.basename(image)}")
+                        continue
 
                 # Trust SANITY as is for images with INSPCOMM (don't recompute from criteria)
-                if "INSPCOMM" in header:
+                if has_inspcomm:
+                    self.logger.debug(f"Trusting SANITY=T as INSPCOMM exists: {os.path.basename(image)}")
                     filtered_images.append(image)
                     continue
 
+                # standard sanity compute route
                 header["FILENAME"] = os.path.basename(image)  # to log the name in apply_criteria
-                computed_sanity, updated_header = self.apply_criteria(header=header, dtype=dtype)
+                computed_sanity = self.apply_criteria(header=header, dtype=dtype)
 
                 if computed_sanity:
                     filtered_images.append(image)
+                    if overwrite and existing_sanity is False:
+                        sanity_updates[image] = True
                 else:
                     self.logger.debug(f"Filtered out image due to SANITY=False: {os.path.basename(image)}")
-                    needs_sanity_update.add(image)
+                    sanity_updates[image] = False
 
             except Exception as e:
                 # If sanity check fails, log warning but include image to avoid breaking pipeline
@@ -206,30 +258,44 @@ class CheckerMixin:
                 )
                 filtered_images.append(image)
 
-        return filtered_images, needs_sanity_update
+        return filtered_images, sanity_updates
 
     def apply_sanity_filter_and_report(
         self,
         dtype: Literal["science", "masterframe"] = "science",  # Type of images for sanity check
+        current_process: Optional[ProcessSpec] = None,
+        overwrite: bool = False,
     ) -> bool:
         """
         Applies SANITY filtering to `self.input_images` and redefine `self.path`.
         Does not modify config.
 
         Use this in __init__() after setting self.input_images.
-
-        Returns:
-            bool: True if input images changed, False otherwise
         """
         if not self.input_images:
-            return
+            return False
 
         original_count = len(self.input_images)
         original_images = self.input_images.copy()
-        self.input_images, needs_sanity_update = self._filter_by_sanity(self.input_images, dtype=dtype)
+        self.input_images, sanity_updates = self._filter_by_sanity(
+            self.input_images, dtype=dtype, current_process=current_process, overwrite=overwrite
+        )
 
         filtered_count = len(self.input_images)
         input_has_changed = filtered_count != original_count
+
+        for img, sanity_value in sanity_updates.items():
+            try:
+                with fits.open(img, mode="update") as hdul:
+                    self.update_sanity_header(
+                        hdul[0].header,
+                        sanity_value,
+                        current_process=current_process,
+                    )
+                    hdul.flush()
+                    self.logger.debug(f"Updated SANITY header to {sanity_value} for {os.path.basename(img)}")
+            except Exception as e:
+                self.logger.warning(f"Failed to update SANITY header for {os.path.basename(img)}: {e}")
 
         if input_has_changed:
             filtered_out = [img for img in original_images if img not in self.input_images]
@@ -240,14 +306,6 @@ class CheckerMixin:
             # Write SANITY=False to header for images rejected by criteria (early-rejected already have it)
             for img in filtered_out:
                 self.logger.debug(f"Filtered out image: {os.path.basename(img)}")
-                if img in needs_sanity_update:
-                    try:
-                        with fits.open(img, mode="update") as hdul:
-                            hdul[0].header["SANITY"] = (False, "Pipeline image sanity flag")
-                            hdul.flush()
-                            self.logger.debug(f"Updated SANITY header to False for {os.path.basename(img)}")
-                    except Exception as e:
-                        self.logger.warning(f"Failed to update SANITY header for {os.path.basename(img)}: {e}")
 
             # Recreate self.path to keep it in sync
             self._recreate_pathhandler_instance()

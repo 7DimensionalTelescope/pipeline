@@ -503,10 +503,11 @@ class Preprocess(BaseSetup, CheckerMixin, DatabaseHandler):
         """TODO: This is inefficient as it calls unnecessary IO. Ideally stats should be calculated in calc_function"""
         header = record_statistics(getattr(self, f"{dtype}_output"), header, dtype=dtype)
 
-        sanity_flag, header = self.apply_criteria(header=header, dtype=dtype)  # evaluates sanity of the image itself
+        sanity_flag = self.apply_criteria(header=header, dtype=dtype)  # evaluates sanity of the image itself
         if ppflag_val & ppflag.PPFLAG_SANITY_F_USED:  # consider propagated sanity flag of the ingredient frames
-            header["SANITY"] = False
             sanity_flag = False
+
+        self.update_sanity_header(header, sanity_flag)
 
         ppflag.set_ppflag_in_header(header, ppflag_val)
 

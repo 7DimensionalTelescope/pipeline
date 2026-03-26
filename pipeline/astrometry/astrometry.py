@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .. import external
 from ..const import PIXSCALE, REF_DIR
-from ..const.sciproc import SCIPROCESS_REGISTRY
+from ..const.sciproc import ASTROMETRY_SPEC, REJECTION_PROCESS_HEADER_KEY, SCIPROCESS_REGISTRY
 from ..errors import AstrometryError, ScampError, SolveFieldError
 from ..utils import swap_ext, add_suffix, force_symlink, time_diff_in_seconds, unique_filename, atleast_1d
 from ..utils.header import update_padded_header, reset_header, fitsrec_to_header
@@ -113,8 +113,6 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
 
         self._handle_input()
 
-        # self.load_criteria(category="science")  # changed to lazy load
-
         if self.is_connected:
             if self.too_id is not None:
                 self.logger.debug(f"Initialized DatabaseHandler for ToO data management, ToO ID: {self.too_id}")
@@ -188,6 +186,10 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
 
         self.input_images = input_images
         # self.apply_sanity_filter_and_report()  # astrometry is the starter: nothing to filter out
+        self.config_node.astrometry.input_images = self.input_images
+        if not self.input_images:
+            self.logger.error("No input images remain after SANITY filter.", AstrometryError.EmptyInput)
+            raise AstrometryError.EmptyInputError("No input images remain after SANITY filter.")
 
         # set ImageInfo
         self.images_info = [
@@ -322,7 +324,9 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
 
             # evaluate main scamp result
             self.evaluate_solution(use_threading=use_threading_for_eval, scamp_preset="main", overwrite=overwrite)
-            self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("astrometry", "scamp_main_eval"), "astrometry-scamp-main-eval")
+            self.update_progress(
+                SCIPROCESS_REGISTRY.milestone_progress("astrometry", "scamp_main_eval"), "astrometry-scamp-main-eval"
+            )
             # update the input image
             self.update_header()
             self.update_progress(SCIPROCESS_REGISTRY.completed_progress("astrometry"), "astrometry")
@@ -356,7 +360,7 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
         idx_to_exclude = []
         for i, image_info in enumerate(self.images_info):
             image_info.set_early_qa_stats(sci_cat=image_info.prep_cat, ref_cat=self.config_node.astrometry.local_astref)
-            flag, _ = self.apply_criteria(header=fits.Header(image_info.early_qa_cards), dtype="science")
+            flag = self.apply_criteria(header=fits.Header(image_info.early_qa_cards), dtype="science")
             image_info.SANITY = flag  # true if nothing to check
             if not image_info.sane:
                 idx_to_exclude.append(i)
@@ -383,8 +387,21 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
         # reject if all images are rejected by early QA
         if not any(image_info.SANITY for image_info in self.images_info):
             self.logger.error("All images rejected by early QA.", AstrometryError.EarlyQARejectionError)
-            self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("astrometry", "all_rejected_early_qa"), "rejected-all-by-early-qa")
+            self.update_progress(
+                SCIPROCESS_REGISTRY.milestone_progress("astrometry", "all_rejected_early_qa"),
+                "rejected-all-by-early-qa",
+            )
             raise AstrometryError.EarlyQARejectionError("All images rejected by early QA.")
+
+    def _write_astrometry_sanity_rejection_to_header(self, image_path: str) -> None:
+        """Write SANITY=F and REJ_PROC so downstream (e.g. single photometry) can match on re-run."""
+        update_padded_header(
+            image_path,
+            [
+                ("SANITY", False, "Sanity flag for SCIPROCESS"),
+                (REJECTION_PROCESS_HEADER_KEY, ASTROMETRY_SPEC.name, "Sci-process that set SANITY to False"),
+            ],
+        )
 
     def _solve_field_suite(
         self,
@@ -451,7 +468,9 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
             overwrite=overwrite,
             raise_error=False,
         )
-        self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("astrometry", "scamp_prep"), "astrometry-scamp-prep")
+        self.update_progress(
+            SCIPROCESS_REGISTRY.milestone_progress("astrometry", "scamp_prep"), "astrometry-scamp-prep"
+        )
 
         if evaluate_prep_sol:
             self.evaluate_solution(
@@ -475,7 +494,9 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
             raise_error=avoid_solvefield,  # suppress raise to move on to solve-field
         )
 
-        self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("astrometry", "scamp_main"), "astrometry-scamp-main")
+        self.update_progress(
+            SCIPROCESS_REGISTRY.milestone_progress("astrometry", "scamp_main"), "astrometry-scamp-main"
+        )
         self.logger.info(f"Scamp iteration completed for {image_info.prep_cat} [{i+1}/{len(self.images_info)}]")
 
         if image_info.bad:
@@ -982,6 +1003,12 @@ class Astrometry(BaseSetup, DatabaseHandler, CheckerMixin):
                             f"Setting SANITY to False for {image_info.id} ({os.path.basename(image_info.image_path)}) due to scamp error"
                         )
                         image_info.SANITY = False  # still salvageable if prep
+                        try:
+                            self._write_astrometry_sanity_rejection_to_header(image_info.image_path)
+                        except Exception as hdr_exc:
+                            self.logger.warning(
+                                f"Failed to write SANITY/REJ_PROC for {os.path.basename(image_info.image_path)}: {hdr_exc}"
+                            )
 
             # Raise error if all images fail
             scamp_success = any(scamp_success_list)
@@ -1551,9 +1578,11 @@ class ImageInfo:
     @property
     def early_qa_cards(self) -> List[Tuple[str, float]]:
         cards = [
-            (f"SANITY", self.SANITY, "Sanity flag for SCIPROCESS"),
-            (f"NUMFRAC", self.num_frac, "Source number fraction vs Gaia expected"),
+            ("SANITY", self.SANITY, "Sanity flag for SCIPROCESS"),
         ]
+        if self.SANITY is False:
+            cards.append((REJECTION_PROCESS_HEADER_KEY, ASTROMETRY_SPEC.name, "Sci-process that set SANITY to False"))
+        cards.append(("NUMFRAC", self.num_frac, "Source number fraction vs Gaia expected"))
         return cards
 
     @property
