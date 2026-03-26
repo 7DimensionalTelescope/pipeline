@@ -412,7 +412,7 @@ class Checker:
 
         if existing_sanity is False:
             if not overwrite or current_process is None:
-                return SanityAction.RECOMPUTE_SANITY  # SanityAction.DROP_IMAGE
+                return SanityAction.DROP_IMAGE
 
             relation = self._current_stage(header, current_process)
 

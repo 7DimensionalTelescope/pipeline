@@ -193,7 +193,11 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker):
         self.logger.info(f"Start 'ImCoadd'")
         # use common input if imcoadd.input_files override is not set
         local_input_images = get_key(self.config_node.imcoadd, "input_images")
-        self.input_images = local_input_images or self.config_node.input.calibrated_images
+        self.input_images = (
+            local_input_images
+            if local_input_images is not None  # local_input_images can be an empty list
+            else self.config_node.input.calibrated_images
+        )
         self.apply_sanity_filter_and_report(current_process=COADD_SPEC, overwrite=self.overwrite)
         self.config_node.imcoadd.input_images = self.input_images
         if not self.input_images:
