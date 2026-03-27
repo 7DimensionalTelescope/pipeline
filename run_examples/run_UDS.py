@@ -30,7 +30,7 @@ for date in dates[-2::-1]:
         flist = RawImageQuery().for_target("UDS").on_date(date).image_files()
         print(f"Found {len(flist)} images for {date}")
 
-        dr = DataReduction(list_of_images=flist, use_db=True)
+        dr = DataReduction(list_of_images=flist, use_db=True, is_pipeline=True)
         dr.run(
             overwrite_config=OVERWRITE_CONFIG,
             # overwrite_data=OVERWRITE_DATA,

@@ -31,7 +31,7 @@ for date in dates:
     try:
         flist = RawImageQuery().on_date(date).image_files()  # cross-unit filters exist
         print(f"Found {len(flist)} images for {date}")
-        dr = DataReduction(list_of_images=flist, use_db=True)
+        dr = DataReduction(list_of_images=flist, use_db=True, is_pipeline=True)
         dr.run(
             overwrite_config=OVERWRITE_CONFIG,
             overwrite_data=OVERWRITE_DATA,
