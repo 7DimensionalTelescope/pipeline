@@ -246,10 +246,11 @@ def update_padded_header_smart(target_fits, header_new):
                 #     f"stored_value={header[key]!r} comment={header.comments[key]!r}"
                 # )
             else:
-                # insert before COMMENTS
-                # print(f"[update_padded_header_smart] inserting new key={key} " f"at idx={insert_pos} value={value!r}")
-                del header[insert_pos]
-                header.insert(insert_pos, (key, value, comment), after=False)
+                if insert_pos <= len(header) - 1:
+                    del header[insert_pos]
+                    header.insert(insert_pos, (key, value, comment), after=False)
+                else:
+                    header.append((key, value, comment), end=True)
                 insert_pos += 1  # shift insertion point forward
 
         hdul.flush()
