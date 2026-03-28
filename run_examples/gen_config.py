@@ -33,7 +33,7 @@ dbh = DatabaseHandler()
 for date in dates:
     try:
         generated_ids = []
-        dr = DataReduction([date], use_db=True)
+        dr = DataReduction([date], use_db=True, is_pipeline=True)
 
         dr.create_config(overwrite=OVERWRITE_CONFIG)
         for group in dr.blueprint.groups:
