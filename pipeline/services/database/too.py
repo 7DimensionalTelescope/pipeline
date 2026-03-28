@@ -816,15 +816,15 @@ class TooDB:
         except Exception as e:
             raise TooDBError(f"Failed to check calibrated science images: {e}")
 
-    def send_initial_notice_email(self, too_id: int, test=False) -> bool:
+    def send_initial_notice_email(self, too_id: int, test=True) -> bool:
 
         return self.mail.send_initial_notice_email(too_id, test=test)
 
-    def send_final_notice_email(self, too_id: int, sed_data=None, test=False, force_to_send=False) -> bool:
+    def send_final_notice_email(self, too_id: int, sed_data=None, test=True, force_to_send=False) -> bool:
 
         return self.mail.send_final_notice_email(too_id, sed_data=sed_data, test=test, force_to_send=force_to_send)
 
-    def send_interim_notice_email(self, too_id: int, dtype="difference", test=False) -> bool:
+    def send_interim_notice_email(self, too_id: int, dtype="difference", test=True) -> bool:
 
         return self.mail.send_interim_notice_email(too_id, dtype=dtype, test=test)
 
