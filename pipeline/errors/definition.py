@@ -114,6 +114,7 @@ registry.register_kind("GroupingError", 83, GroupingError)
 registry.register_kind("ParseError", 84, ParseError)
 registry.register_kind("PreviousStageError", 85, PreviousStageError)
 registry.register_kind("EmptyInputError", 86, EmptyInputError)
+registry.register_kind("EmptyInputAfterSanityRejectionError", 87, EmptyInputAfterSanityRejectionError)
 
 
 # Reserved sentinel

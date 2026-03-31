@@ -146,6 +146,10 @@ class EmptyInputError(Exception):
     pass
 
 
+class EmptyInputAfterSanityRejectionError(Exception):
+    pass
+
+
 class UnknownError(Exception):
     pass
 

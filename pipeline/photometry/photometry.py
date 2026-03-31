@@ -220,9 +220,11 @@ class Photometry(BaseSetup, DatabaseHandler, Checker):
             else:
                 self.logger.error(
                     f"No input images found in {self._photometry_mode}.",
-                    SinglePhotometryError.EmptyInput,
+                    SinglePhotometryError.EmptyInputAfterSanityRejection,
                 )
-                raise SinglePhotometryError.EmptyInputError(f"No input images found in {self._photometry_mode}.")
+                raise SinglePhotometryError.EmptyInputAfterSanityRejectionError(
+                    f"No input images found in {self._photometry_mode}."
+                )
         try:
             if self.queue:
                 self._run_parallel(overwrite=overwrite)

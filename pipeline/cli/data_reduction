@@ -7,6 +7,9 @@ import signal
 from pipeline.const.run import DEFAULT_SCIDATA_PROCESSES
 from pipeline.run import run_scidata_reduction
 
+# from pipeline.errors import AstrometryError, SinglePhotometryError, CoaddError
+from pipeline.errors import EmptyInputAfterSanityRejectionError
+
 
 def signal_handler(sig, frame):
     print("\nTerminate process")
@@ -44,6 +47,13 @@ if __name__ == "__main__":
 
     try:
         run_scidata_reduction(args.config, processes=args.processes, overwrite=args.overwrite, is_too=args.is_too)
+
+    # Empty inputs due to AstrometryError.EarlyQARejectionError is a normal pipeline procedure
+    # Mostly at SinglePhotometry and Coadd
+    except EmptyInputAfterSanityRejectionError as e:
+        print(f"\nError: {e}")
+        sys.exit(0)
+
     except Exception as e:
         print(f"\nError: {e}")
         sys.exit(1)
