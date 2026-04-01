@@ -14,7 +14,7 @@ FLAT_GROUP_LENIENT_KEYS = ["gain", "camera"]
 
 # OBS-related
 CalibType = ["BIAS", "DARK", "FLAT"]
-available_7dt_units = [f"7DT0{unit}" if unit < 10 else f"7DT{unit}" for unit in range(1, 20)]
+available_7dt_units = [f"7DT0{unit}" if unit < 10 else f"7DT{unit}" for unit in range(1, 21)]
 WIDE_FILTERS = ["m375w", "m425w", "m466w", "m692w", "m710w", "m769w", "m832w"]
 FIRST_MEDIUM_FILTERS = [f"m{wav}" for wav in range(400, 900, 25)]
 SECOND_MEDIUM_FILTERS = ["m386", "m438", "m483", "m512", "m534", "m561", "m586", "m615", "m640", "m661"]

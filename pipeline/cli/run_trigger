@@ -11,10 +11,12 @@ import time
 import logging
 import glob
 from pathlib import Path
+
+from pipeline.const import RAWDATA_DIR, RECENT_RAWDATA_TRANSFER_HISTORY
+from pipeline.services.batchtriggerlock import BatchTriggerLock
 from pipeline.services.monitor import Monitor
 from pipeline.services.scheduler import Scheduler
 from pipeline.services.blueprint import Blueprint
-from pipeline.const import RAWDATA_DIR
 
 
 # Set up logging with rotation
@@ -110,20 +112,24 @@ def process_new_images(image_paths):
         # Process non-ToO images: add corresponding ToO images and process with is_too=False
         if len(non_too_image_paths) > 0:
             logger.info(f"Non-ToO images detected. A daily image processing will be triggered.")
-            # Collect all ToO images for non-ToO directories
-            all_too_images = set()
-            for image in non_too_image_paths:
-                too_images = get_too_images(image)
-                if too_images:
-                    all_too_images.update(too_images)
+            if len(too_image_paths) > 0:
+                # BatchTriggerLock already released the matching ToO files.
+                all_too_images = set(too_image_paths)
+            else:
+                # Fallback when transfer-history locking is not active.
+                all_too_images = set()
+                for image in non_too_image_paths:
+                    too_images = get_too_images(image)
+                    if too_images:
+                        all_too_images.update(too_images)
 
             # Combine non-ToO images with their corresponding ToO images
-            combined_images = non_too_image_paths + list(all_too_images)
-            if len(combined_images) > 0:
+            total_images = sorted(set(non_too_image_paths) | all_too_images)
+            if len(total_images) > 0:
                 logger.info(
-                    f"Processed {len(combined_images)} daily images, including {len(all_too_images)} ToO images observed on the same day"
+                    f"Processed {len(total_images)} daily images, including {len(all_too_images)} ToO images observed on the same day"
                 )
-                run_image_processing(combined_images, is_too=False)
+                run_image_processing(total_images, is_too=False)
         elif len(too_image_paths) > 0:
             logger.info(f"ToO images detected. A ToO image processing will be triggered.")
             logger.info(f"Processed {len(too_image_paths)} ToO images")
@@ -155,7 +161,13 @@ def start_trigger_monitoring(rerun_failed=False):
     sc.update_process_status()
 
     monitor = Monitor(base_path=Path(RAWDATA_DIR))
-    monitor.add_callback(process_new_images)
+    monitor.add_callback(
+        BatchTriggerLock(
+            process_new_images,
+            rawdata_dir=Path(RAWDATA_DIR),
+            history_path=Path(RECENT_RAWDATA_TRANSFER_HISTORY),
+        )
+    )
     observer = monitor.start()
 
     logger.info("Trigger service started - monitoring directories for new images")

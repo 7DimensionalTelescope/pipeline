@@ -336,10 +336,11 @@ def to_datetime_string(datetime_str, date_only=False):
         return dt.strftime("%Y%m%d_%H%M%S")
 
 
-def get_nightdate(fpath: str) -> str | None:
-    dirname = os.path.dirname(fpath)
+def get_nightdate(fpath: str, use_dirname: bool = True) -> str | None:
+    if use_dirname:
+        fpath = os.path.dirname(fpath) or fpath
 
-    m = date_regex.search(dirname)
+    m = date_regex.search(fpath)
 
     if m:
         return m.group("nightdate")
