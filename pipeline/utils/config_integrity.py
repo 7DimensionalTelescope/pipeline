@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from ..const import REF_DIR, ROOT_DIR
-from ..errors import PipelineError
+
+from ..const.environ import REF_DIR, ROOT_DIR
+from ..errors.errors import PipelineError
 
 
 configs_to_check = [
@@ -128,6 +129,20 @@ def write_config_hashes(
 
     - If the file already exists and overwrite=False -> raise PipelineError.
     - Returns the Path to the written hash file.
+
+    `The trick` to use it to update config_hashes is doing the following:
+
+    Inside a Jupyter notebook,
+
+    # First:
+    import pipeline
+
+    # Then, in a next cell:
+    from pipeline.utils.config_integrity import write_config_hashes
+    write_config_hashes(overwrite=True)
+
+    The first import failure prevents import blocking of write_config_hashes,
+    which by itself would trigger the config integrity check again otherwise.
     """
     project_root = Path(ROOT_DIR)
 

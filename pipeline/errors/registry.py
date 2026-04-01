@@ -105,8 +105,6 @@ class ErrorRegistry:
             )
         return p.name, k.name
 
-    
-
 
 # ---------------------------
 # Base mixin used by all generated exceptions
@@ -188,11 +186,11 @@ class ProcessErrorBase(Exception, metaclass=ProcessErrorMeta):
     def __init__(self, message: Optional[str] = None, *, cause: Optional[BaseException] = None, **data: Any) -> None:
         reg = self._registry
         pinfo = self._process_info
-        
+
         # Check if this is a combo class (has kind_name, kind_code, error_code as class attributes)
         # If so, use those instead of defaulting to "ProcessError"
         cls = type(self)
-        if hasattr(cls, 'kind_name') and hasattr(cls, 'kind_code') and hasattr(cls, 'error_code'):
+        if hasattr(cls, "kind_name") and hasattr(cls, "kind_code") and hasattr(cls, "error_code"):
             # This is a combo class, use its predefined kind information
             self.process_name = cls.process_name
             self.process_code = cls.process_code
