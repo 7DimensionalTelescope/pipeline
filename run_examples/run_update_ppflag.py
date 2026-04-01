@@ -147,7 +147,7 @@ def _get_all_master_dependencies(path: str) -> list[str]:
             return os.path.abspath(c)
         # Use PathHandler to resolve the absolute path from basename
         try:
-            resolved = PathHandler(c).preprocess.masterframe
+            resolved = PathHandler(c).preprocess.masterframe_template
             # PathHandler returns str | list[str], normalize to str
             if isinstance(resolved, list):
                 resolved = resolved[0] if resolved else None

@@ -2,7 +2,7 @@ from __future__ import annotations
 import os
 from glob import glob
 from pathlib import Path
-from typing import Union, List, Tuple
+from typing import TYPE_CHECKING, Union, List, Tuple
 from functools import cached_property
 import numpy as np
 from dataclasses import dataclass, replace as dc_replaces
@@ -27,6 +27,9 @@ from .const import (
     SINGLES_DIRNAME,
     DAILY_COADD_DIRNAME,
 )
+
+if TYPE_CHECKING:
+    from astropy.io.fits import Header
 
 
 @dataclass(frozen=True, slots=True)
@@ -946,26 +949,26 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         return f"{filter}: {exptime}"
 
     @classmethod
-    def weight_map_input(cls, mzdf_list: list[str]):
+    def resolve_weight_map_input_abspath(cls, mzdf_list: list[str]):
         """
         Input is a list of basenames of [mbias, mdark, mflat]
 
         Returns d_m_file, f_m_file, sig_z_file, sig_f_file
         """
         # z_m_file, d_m_file, f_m_file = (cls(s).preprocess.masterframe for s in mzdf_list)  # basename to full path
-        z_m_file, d_m_file, f_m_file = cls(mzdf_list).preprocess.masterframe  # with vectorized PathHandler
+        z_m_file, d_m_file, f_m_file = cls(mzdf_list).preprocess.masterframe_template  # with vectorized PathHandler
         sig_z_file = z_m_file.replace("bias", "biassig")
         sig_f_file = f_m_file.replace("flat", "flatsig")
         return d_m_file, f_m_file, sig_z_file, sig_f_file
 
     @classmethod
-    def get_bpmask(cls, input: Union[str, Path, "astropy.io.fits.Header"]) -> str | list[str]:
+    def get_bpmask(cls, input: Union[str, Path, Header]) -> str | list[str]:
         from astropy.io import fits
 
         if isinstance(input, str | Path):
             name = NameHandler(input)
             if name.type[0] == "master" and (name.type[1] == "dark" or name.type[1] == "darksig"):
-                input = cls(input).preprocess.masterframe  # ensure full path to master dark, not darksig
+                input = cls(input).preprocess.masterframe_template  # ensure full path to master dark, not darksig
                 return input.replace("dark", "bpmask")
 
             elif name.type[0] == "calibrated":
@@ -983,11 +986,18 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         calibs = [v for k, v in header.items() if "IMCMB" in k]
         mdark = NameHandler(calibs).pick_type("master_dark")
         assert isinstance(mdark, str)
-        mdark = cls(mdark).preprocess.masterframe
+        mdark = cls(mdark).preprocess.masterframe_template
         return mdark.replace("dark", "bpmask")
 
 
 class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
+    _mkdir_exclude = AutoMkdirMixin._mkdir_exclude | {
+        "masterframe_template",
+        "mbias_template",
+        "mdark_template",
+        "mflat_template",
+    }
+
     def __init__(self, parent: PathHandler, config=None):
         self._parent = parent
 
@@ -1002,9 +1012,9 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
     @property
     def _masterframe_dir(self):
         """returns list-wrapped masterframe_dir"""
-        if isinstance(self._parent.masterframe_dir, str):
-            return [self._parent.masterframe_dir] * len(self._parent.name.masterframe_basename)
-        return self._parent.masterframe_dir
+        if isinstance(self._parent._masterframe_dir, str):
+            return [self._parent._masterframe_dir] * len(self._parent.name.masterframe_basename)
+        return self._parent._masterframe_dir
 
     @property
     def mbias(self):
@@ -1026,6 +1036,11 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
         return bjoin(self._parent._masterframe_dir, self._parent.name.mbias_basename)
 
     @property
+    def mbias_template(self):
+        """No AutoMkdirMixin."""
+        return bjoin(self._parent._masterframe_dir, self._parent.name.mbias_basename)
+
+    @property
     def mdark(self):
         # result = []
         # for typ, d, s in zip(
@@ -1041,6 +1056,11 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
         #         result.append(None)
 
         # return result
+        return bjoin(self._parent._masterframe_dir, self._parent.name.mdark_basename)
+
+    @property
+    def mdark_template(self):
+        """No AutoMkdirMixin."""
         return bjoin(self._parent._masterframe_dir, self._parent.name.mdark_basename)
 
     @property
@@ -1062,20 +1082,23 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
         return bjoin(self._parent._masterframe_dir, self._parent.name.mflat_basename)
 
     @property
-    def masterframe(self):
-        """
-        * This relies on const.MASTER_FRAME_DIR being set in .env
+    def mflat_template(self):
+        """No AutoMkdirMixin."""
+        return bjoin(self._parent._masterframe_dir, self._parent.name.mflat_basename)
 
-        Delegates NameHandler.masterframe_basename to make a full absolute path
-        tuple(z, d, f) if science, just list[str] | str if calib
+    @property
+    def masterframe_template(self):
         """
+        This doesn't trigger AutoMkdirMixin, as set in _mkdir_exclude.
 
+        This is used for grouping and lookup templates where callers need the
+        target filename, but the directory should only be created at write time.
+        """
         if self._parent.name._single:
             typ = self._parent.name.type
             if typ[1] == "science":
                 return [os.path.join(self._masterframe_dir[0], s) for s in self._parent.name.masterframe_basename]
-            else:
-                return os.path.join(self._masterframe_dir[0], self._parent.name.masterframe_basename)
+            return os.path.join(self._masterframe_dir[0], self._parent.name.masterframe_basename)
 
         result = []
         for typ, mfdir, basename in zip(
@@ -1086,6 +1109,17 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
             else:
                 result.append(os.path.join(mfdir, basename))
         return result
+
+    @property
+    def masterframe(self):
+        """
+        * This relies on const.MASTER_FRAME_DIR being set in .env
+
+        Delegates NameHandler.masterframe_basename to make a full absolute path
+        tuple(z, d, f) if science, just list[str] | str if calib
+        """
+
+        return self.masterframe_template
 
         # return bjoin(self._parent.masterframe_dir, self._parent.name.masterframe_basename)
 

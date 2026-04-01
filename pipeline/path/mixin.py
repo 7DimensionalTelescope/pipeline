@@ -74,6 +74,7 @@ class AutoMkdirMixin:
         "sciproc_too_override_yml",
         "sciproc_multi_epoch_override_yml",
         "settings",
+        "raw_images",
     }
 
     def __init_subclass__(cls):

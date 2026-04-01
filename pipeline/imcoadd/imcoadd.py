@@ -498,7 +498,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker):
             st_loop = time.time()
             calibs = get_zdf_from_header_IMCMB(input_images[0])  # trust the grouping and use the first image for calibs
             self.logger.debug(f"Group {i} calibs: {calibs}")
-            d_m_file, f_m_file, sig_z_file, sig_f_file = PathHandler.weight_map_input(calibs)
+            d_m_file, f_m_file, sig_z_file, sig_f_file = PathHandler.resolve_weight_map_input_abspath(calibs)
 
             self.logger.debug(f"{time_diff_in_seconds(st_loop)} seconds for group {i} preparation")
 
@@ -841,7 +841,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker):
             # weight images
             self._run_swarp("wht", args=["-RESAMPLING_TYPE", "NEAREST"])
 
-            # Update/Todo: consider uncollapsed bpmask files
+            # Update/TODO: consider uncollapsed bpmask files
             if self.config_node.imcoadd.propagate_mask:
                 # bpmask_file = self.config.preprocess.bpmask_file
                 bpmask_file = PathHandler.get_bpmask(self.images_to_coadd)
