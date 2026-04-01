@@ -414,6 +414,11 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
         input_files = getattr(self, f"{dtype}_input")
         header = self.get_header(dtype)
+        outputs = [getattr(self, f"{dtype}_output"), getattr(self, f"{dtype}sig_output")]
+        if dtype == "dark":
+            outputs.append(self.bpmask_output)
+        for output_path in outputs:
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
         device_id = device_id if self._use_gpu else "CPU"
 
@@ -577,7 +582,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             self.logger.debug(f"[Group {self._current_group+1}] Masterframe Search (flatdark) Template: {template}")
             path = PathHandler(template)
             path.name.exptime = "*"
-            flatdark_template = path.preprocess.masterframe
+            flatdark_template = path.preprocess.masterframe_template
             existing_flatdark_file, flatdark_ignored_lenient = prep_utils.tolerant_search(
                 flatdark_template,
                 "dark",

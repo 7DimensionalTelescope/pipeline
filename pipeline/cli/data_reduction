@@ -1,19 +1,22 @@
 #!/home/pipeline-stable/.conda/envs/pipeline/bin/python
 
-import argparse
 import sys
 import signal
+import argparse
 
-from pipeline.const.run import DEFAULT_SCIDATA_PROCESSES
 from pipeline.run import run_scidata_reduction
-
-# from pipeline.errors import AstrometryError, SinglePhotometryError, CoaddError
-from pipeline.errors import EmptyInputAfterSanityRejectionError
+from pipeline.const.run import (
+    DEFAULT_SCIDATA_PROCESSES,
+    SUCCESS_RETURN_CODE,
+    FAILURE_RETURN_CODE,
+    EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE,
+)
+from pipeline.errors.errors import EmptyInputAfterSanityRejectionError
 
 
 def signal_handler(sig, frame):
     print("\nTerminate process")
-    sys.exit(0)
+    sys.exit(SUCCESS_RETURN_CODE)
 
 
 signal.signal(signal.SIGINT, signal_handler)
@@ -43,7 +46,7 @@ if __name__ == "__main__":
 
     if not args.config.endswith(".yml"):
         print(f"\nError: {args.config} is not a valid configuration file")
-        sys.exit(1)
+        sys.exit(FAILURE_RETURN_CODE)
 
     try:
         run_scidata_reduction(args.config, processes=args.processes, overwrite=args.overwrite, is_too=args.is_too)
@@ -52,8 +55,8 @@ if __name__ == "__main__":
     # Mostly at SinglePhotometry and Coadd
     except EmptyInputAfterSanityRejectionError as e:
         print(f"\nError: {e}")
-        sys.exit(0)
+        sys.exit(EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE)
 
     except Exception as e:
         print(f"\nError: {e}")
-        sys.exit(1)
+        sys.exit(FAILURE_RETURN_CODE)

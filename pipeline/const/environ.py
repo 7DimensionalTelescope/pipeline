@@ -42,6 +42,8 @@ PHOT_REF_DIR = "/lyman/data1/factory/ref_cat"  # divided by RIS tiles
 GAIA_REF_DIR = "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile"
 REF_IMAGE_DIR = "/lyman/data1/factory/ref_frame"
 
+RECENT_RAWDATA_DIR_MANIFEST = "/home/7dt/7dt_too/backend/data/7dt/sync/transfer/transfer_history.ascii_fixed_width"
+
 
 # define pipeline directories
 PIPELINE_DIRS = {

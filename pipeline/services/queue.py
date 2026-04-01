@@ -10,8 +10,8 @@ from datetime import datetime
 import subprocess
 
 from ..utils import time_diff_in_seconds
-from ..const import QUEUE_SOCKET_PATH
-
+from ..const.environ import QUEUE_SOCKET_PATH
+from ..const.run import SUCCESS_RETURN_CODE
 from .memory import MemoryMonitor
 from .logger import Logger
 from .scheduler import Scheduler
@@ -387,7 +387,7 @@ class QueueManager:
 
                         if proc.poll() is not None:  # Process finished
                             pid = proc.pid
-                            success = proc.returncode == 0
+                            success = proc.returncode == SUCCESS_RETURN_CODE
 
                             # Get process output for logging
                             try:
