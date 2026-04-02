@@ -122,6 +122,7 @@ class Blueprint:
         is_too=False,
         is_pipeline=False,
         is_multi_epoch=False,
+        overwrite_preprocess=False,
         priority=None,
     ):
         """
@@ -139,6 +140,7 @@ class Blueprint:
             "is_too": is_too,
             "is_pipeline": is_pipeline,
             "is_multi_epoch": is_multi_epoch,
+            "overwrite_preprocess": overwrite_preprocess,
         }
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(group.create_config, **kwargs) for group in self.groups.values()]

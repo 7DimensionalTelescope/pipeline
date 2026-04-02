@@ -76,6 +76,29 @@ def get_too_images(image_path):
                 return image_list if image_list else None
     return None
 
+def find_all_images(image_path):
+    file_path = Path(image_path)
+    rawdata_path = Path(RAWDATA_DIR)
+    relative_path = file_path.relative_to(rawdata_path)
+    path_parts = list(relative_path.parts)
+    if path_parts and path_parts[0].startswith("7DT"):
+        datetime = path_parts[1].split("_")[0]
+        glob_path = rawdata_path / path_parts[0] / f"{datetime}_*"
+        image_list = list(glob.glob(str(glob_path / "*.fits")))
+        return image_list if image_list else None
+
+    return None
+
+def get_fits_files(image_paths, find_all=True):
+    if find_all:
+        all_images = set()
+        for image in image_paths:
+            if image.endswith(".fits"):
+                all_images.update(find_all_images(image))
+        return all_images
+    else:
+        return [image for image in image_paths if image.endswith(".fits")]
+
 
 def run_image_processing(image_paths, is_too=False):
     br = Blueprint.from_list(
@@ -83,14 +106,20 @@ def run_image_processing(image_paths, is_too=False):
         is_pipeline=True,
         is_too=is_too,
     )
-    br.create_config(is_too=is_too, overwrite=False, is_pipeline=True)
-    br.create_schedule(is_too=is_too, input_type="Daily")
-    sc = Scheduler(br.schedule, use_system_queue=True)
+    br.create_config(is_too=is_too, overwrite=False, is_pipeline=True, overwrite_preprocess=True)
+    logger.info(
+        "Config generation completed (is_too=%s, input_images=%d, groups=%d)",
+        is_too,
+        len(image_paths),
+        len(br.groups),
+    )
+    br.create_schedule(
+        is_too=is_too,
+        input_type="Daily",
+    )
+    sc = Scheduler(br.schedule, use_system_queue=True, overwrite_schedule=True)
     sc.start_system_queue()
 
-
-def get_fits_files(image_paths):
-    return [image for image in image_paths if image.endswith(".fits")]
 
 
 def process_new_images(image_paths):
@@ -104,7 +133,9 @@ def process_new_images(image_paths):
     """
     try:
         logger.info(f"New images detected: {len(image_paths)} images")
+        
         image_paths = get_fits_files(image_paths)
+        
         # Separate ToO and non-ToO images
         too_image_paths = [image for image in image_paths if check_too(image)]
         non_too_image_paths = [image for image in image_paths if not check_too(image)]

@@ -700,9 +700,11 @@ class PreprocessGroup:
     def add_sci_keys(self, keys: str):
         self.sci_keys.append(keys)
 
-    def create_config(self, overwrite: bool = False, is_too: bool = False, is_pipeline: bool = False, **kwargs):
+    def create_config(self, overwrite: bool = False, is_too: bool = False, is_pipeline: bool = False, overwrite_preprocess: bool = False, **kwargs):
         from ..config import PreprocConfiguration
 
+
+        overwrite = overwrite or overwrite_preprocess
         # print(
         #     f"PreprocessGroup {self.key} creating config with {len(self.image_files)} images; "
         #     f"{len(os.listdir(f'/proc/{os.getpid()}/fd'))} FDs under limit of {resource.getrlimit(resource.RLIMIT_NOFILE)} FDs"
@@ -765,7 +767,7 @@ class ScienceGroup:
         else:
             raise ValueError("Invalid filepath type")
 
-    def create_config(self, overwrite=False, is_too=False, is_pipeline=False, is_multi_epoch=False):
+    def create_config(self, overwrite=False, is_too=False, is_pipeline=False, is_multi_epoch=False, **kwargs):
 
         from ..config import SciProcConfiguration
         from ..path import PathHandler

@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import threading
 from collections import defaultdict
 from pathlib import Path
@@ -8,6 +9,14 @@ from ..const.observation import available_7dt_units
 from ..path.utils import get_nightdate
 
 logger = logging.getLogger(__name__)
+
+_UNIT_IN_PATH_RE = re.compile(r"7DT\d{2}")
+
+
+def unit_from_transfer_entry(path_or_name: str | Path) -> str | None:
+    """Return 7DTxx from a transfer-history path/filename, or None if not present."""
+    m = _UNIT_IN_PATH_RE.search(os.fspath(path_or_name))
+    return m.group(0) if m else None
 
 
 def normalize_raw_dirname(path_or_name: str | Path) -> str | None:
@@ -80,8 +89,12 @@ class TransferHistoryIndex:
                     batch_dirname = normalize_batch_key(columns[0])
                     nightdate = get_nightdate(columns[0], use_dirname=False)
                     if batch_dirname and nightdate:
-                        for unit in available_7dt_units:
-                            expected_dirs_by_nightdate[nightdate].add((unit, batch_dirname))
+                        unit_in_entry = unit_from_transfer_entry(columns[0])
+                        if unit_in_entry:
+                            expected_dirs_by_nightdate[nightdate].add((unit_in_entry, batch_dirname))
+                        else:
+                            for unit in available_7dt_units:
+                                expected_dirs_by_nightdate[nightdate].add((unit, batch_dirname))
 
             self._history_mtime_ns = stat.st_mtime_ns
             self._expected_dirs_by_nightdate = {
@@ -176,18 +189,22 @@ class TransferHistoryIndex:
         self._refresh()
 
         if not self.history_path.exists():
+            print("history not exists")
             return False
 
         path_keys = self._path_keys(path)
         nightdate = get_nightdate(path)
         if not path_keys or nightdate is None:
+            print("path_keys or nightdate is None")
             return False
 
         if not self._nightdate_in_range(nightdate):
+            print("nightdate not in range")
             return False
 
         expected_dirs = self._expected_dirs_by_nightdate.get(nightdate)
         if not expected_dirs or not (path_keys & expected_dirs):
+            print("expected_dirs or path_keys not in expected_dirs")
             return False
 
         return True
@@ -237,6 +254,7 @@ class BatchTriggerLock:
         locked_paths = defaultdict(list)
 
         for image_path in image_paths:
+
             if self.history.should_lock_for(image_path):
                 nightdate = get_nightdate(image_path)
                 if nightdate is not None:

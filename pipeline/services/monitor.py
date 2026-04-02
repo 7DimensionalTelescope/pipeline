@@ -77,6 +77,7 @@ class Monitor(FileSystemEventHandler):
         if not event.is_directory and event.src_path.endswith(".fits"):
             # Check if the file is in an immediate subdirectory starting with "7DT"
             file_path = Path(event.src_path)
+
             relative_path = file_path.relative_to(self.base_path)
             path_parts = relative_path.parts
 

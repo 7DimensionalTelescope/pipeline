@@ -2,6 +2,7 @@ import json
 import sqlite3
 import socket
 import os
+import signal
 import numpy as np
 from contextlib import contextmanager
 from datetime import datetime
@@ -294,6 +295,18 @@ class Scheduler:
                     duplicate_configs = [
                         config for config, is_dup in zip(other_table["config"], duplicate_mask) if is_dup
                     ]
+
+                    # Stop currently running duplicate tasks before replacement.
+                    processing_duplicate_rows = current_table[
+                        [
+                            (config in duplicate_configs) and (status == "Processing") and (pid not in (None, 0))
+                            for config, status, pid in zip(
+                                current_table["config"], current_table["status"], current_table["pid"]
+                            )
+                        ]
+                    ]
+                    for row in processing_duplicate_rows:
+                        self._terminate_process(row["pid"])
 
                     # Remove duplicate rows from current_table
                     current_table = current_table[
@@ -907,6 +920,14 @@ class Scheduler:
                         duplicate_configs = [
                             config for config, is_dup in zip(new_table["config"], duplicate_mask) if is_dup
                         ]
+                        placeholders = ",".join(["?"] * len(duplicate_configs))
+                        cursor.execute(
+                            f'SELECT pid FROM scheduler WHERE status = ? AND pid IS NOT NULL AND config IN ({placeholders})',
+                            ("Processing", *duplicate_configs),
+                        )
+                        for (pid,) in cursor.fetchall():
+                            self._terminate_process(pid)
+
                         cursor.execute(
                             "DELETE FROM scheduler WHERE config IN ({})".format(
                                 ",".join(["?"] * len(duplicate_configs))
@@ -920,7 +941,7 @@ class Scheduler:
                             [config not in duplicate_configs for config in existing_table["config"]]
                         ]
 
-                        print(f"Replaced {len(duplicate_configs)} existing schedule(s) with new ones")
+                        logger.info("Replaced %d existing schedule(s) with new ones", len(duplicate_configs))
 
                     # Use all new rows (replacing existing ones)
                     filtered_table = new_table
@@ -1066,6 +1087,15 @@ class Scheduler:
                 reverted_count += 1
 
         return reverted_count
+
+    def _terminate_process(self, pid):
+        """Terminate a process safely; ignore invalid or already-dead PIDs."""
+        if pid in (None, 0):
+            return
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, ValueError, TypeError):
+            pass
 
     def _is_process_alive(self, pid):
         """
