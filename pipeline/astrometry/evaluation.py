@@ -91,6 +91,13 @@ class EvaluationResult:
     radial_stats: RadialStats
 
 
+def _get_column_mask(column) -> np.ndarray | None:
+    mask = getattr(column, "mask", None)
+    if mask is None:
+        return None
+    return np.asarray(mask, dtype=bool)
+
+
 def evaluate_single_wcs(
     image: str,
     ref_cat: Table,
@@ -112,6 +119,7 @@ def evaluate_single_wcs(
     logger=None,
     overwrite=True,
     id=None,
+    matched_catalog_path: str | None = None,
 ) -> EvaluationResult:
     """Ensure num_plot <= num_sci, num_ref"""
 
@@ -121,7 +129,8 @@ def evaluate_single_wcs(
         else:
             print(f"[evaluate_single_wcs:{level.upper()}] {msg}")
 
-    matched_catalog_path = add_suffix(source_cat, "matched")
+    if matched_catalog_path is None:
+        matched_catalog_path = add_suffix(source_cat if isinstance(source_cat, str) else "table_evaluated.fits", "matched")
 
     # Failed attempt to skip if matched catalog already exists
     # if os.path.exists(matched_catalog_path) and not overwrite:
@@ -156,13 +165,22 @@ def evaluate_single_wcs(
 
     # compute separation statistics
     sep = matched["separation"]
-    n_valid = sep.count()
-    matched_bidirectional = matched[~sep.mask]
+    sep_mask = _get_column_mask(sep)
+    if sep_mask is None:
+        chatter(
+            f"{id} Matched catalog separation column is not masked; treating UNMATCH as unavailable for this evaluation.",
+            "warning",
+        )
+        n_valid = len(sep)
+        matched_bidirectional = matched
+    else:
+        n_valid = int((~sep_mask).sum())
+        matched_bidirectional = matched[~sep_mask]
 
     if n_valid > 0:
         # Fractions
-        subpixel_fraction = float(np.ma.mean(sep < PIXSCALE))
-        subsecond_fraction = float(np.ma.mean(sep < 1.0))
+        subpixel_fraction = float(np.ma.mean(np.ma.array(sep) < PIXSCALE))
+        subsecond_fraction = float(np.ma.mean(np.ma.array(sep) < 1.0))
 
         # compute
         sep_sci = matched_bidirectional["separation"]
@@ -190,9 +208,8 @@ def evaluate_single_wcs(
         )
 
     else:
-        # unmatched_fraction = 1.0
-        subpixel_fraction = 0  # no NaN. fits requires values
-        subsecond_fraction = 0
+        subpixel_fraction = None
+        subsecond_fraction = None
         separation_stats = SeparationStats()  # empty
 
     rsep_stats = RSEPStats(
@@ -222,7 +239,7 @@ def evaluate_single_wcs(
 
     # radial stats #TODO
     radial_stats = RadialStats.from_matched_catalog(matched_bidirectional, W, H)
-    if plot_save_path is not None and unmatched_fraction < 1.0:
+    if plot_save_path is not None and n_valid > 0 and (unmatched_fraction is None or unmatched_fraction < 1.0):
         chatter(f"evaluate_single_wcs: plotting to {plot_save_path}")
         wcs_check_plot(
             ref_cat,
@@ -363,34 +380,41 @@ def prepare_matched_catalog(
     NUM_REF = len(ref_cat)
 
     # match source tbl with refcat
-    if os.path.exists(matched_catalog_path) and not overwrite:
-        matched = Table.read(matched_catalog_path)
-        write_matched_catalog = False
-        chatter(f"Matched catalog already exists: {matched_catalog_path}, skipping...", "debug")
-    else:
+    pm_keys = dict(pmra="pmra", pmdec="pmdec", parallax=None, ref_epoch=2016.0)
+    matched = match_two_catalogs(
+        tbl,
+        ref_cat,
+        x1="ra",
+        y1="dec",
+        join="right",
+        sep_components=True,
+        radius=match_radius,
+        correct_pm=True,
+        obs_time=Time(date_obs),
+        pm_keys=pm_keys,
+    )  # right join: preserve all ref sources
+    matched = add_id_column(matched)  # id needed to plot selected 9 stars
 
-        pm_keys = dict(pmra="pmra", pmdec="pmdec", parallax=None, ref_epoch=2016.0)
-        matched = match_two_catalogs(
-            tbl,
-            ref_cat,
-            x1="ra",
-            y1="dec",
-            join="right",
-            sep_components=True,
-            radius=match_radius,
-            correct_pm=True,
-            obs_time=Time(date_obs),
-            pm_keys=pm_keys,
-        )  # right join: preserve all ref sources
-        matched = add_id_column(matched)  # id needed to plot selected 9 stars
-
-    if write_matched_catalog:
-        matched.write(matched_catalog_path, overwrite=overwrite)
+    if write_matched_catalog and matched_catalog_path is not None:
+        if overwrite or not os.path.exists(matched_catalog_path):
+            matched.write(matched_catalog_path, overwrite=overwrite)
+        else:
+            chatter(
+                f"Matched catalog already exists: {matched_catalog_path}; recomputed in memory and not rewritten because overwrite=False.",
+                "debug",
+            )
 
     # clean saturated sources after deriving UNMATCH
     sep = matched["separation"]
-    unmatched_fraction = sep.mask.sum() / sep.size
-    matched_cleaned = matched[(matched["FLAGS"] == 0) | matched["FLAGS"].mask]
+    sep_mask = _get_column_mask(sep)
+    unmatched_fraction = None if sep_mask is None else float(sep_mask.sum() / sep.size)
+
+    flags = matched["FLAGS"]
+    flags_mask = _get_column_mask(flags)
+    if flags_mask is None:
+        matched_cleaned = matched[matched["FLAGS"] == 0]
+    else:
+        matched_cleaned = matched[(matched["FLAGS"] == 0) | flags_mask]
 
     return matched_cleaned, tbl, ref_cat, (unmatched_fraction, REF_MAX_MAG, SCI_MAX_MAG, NUM_REF)
 

@@ -526,7 +526,7 @@ class PhotometrySingle:
             self.logger.debug(f"(photometry) prep_cat: {prep_cat}")
 
             # load astrometry prep cat if it exists
-            astrometry_prep_cat = self.path.astrometry.catalog
+            astrometry_prep_cat = self.path.astrometry.factory.catalog
             self.logger.debug(f"astrometry_prep_cat: {astrometry_prep_cat}")
             if os.path.exists(astrometry_prep_cat):
                 self.logger.debug(f"Creating symlink: {astrometry_prep_cat} -> {prep_cat}")

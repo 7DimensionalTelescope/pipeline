@@ -369,7 +369,9 @@ def get_3x3_stars(
     # H, W = data.shape  # numpy: (y, x)
 
     # remove ref-only rows
-    matched_catalog = matched_catalog[~matched_catalog["separation"].mask]
+    sep_mask = getattr(matched_catalog["separation"], "mask", None)
+    if sep_mask is not None:
+        matched_catalog = matched_catalog[~sep_mask]
     if len(matched_catalog) == 0:
         return []
 

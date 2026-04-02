@@ -14,12 +14,12 @@ from .utils import find_id_rows
 class RSEPStats:
     """SeparationStats + metadata"""
 
-    ref_max_mag: float
-    sci_max_mag: float
-    num_ref_sources: int
-    unmatched_fraction: float
-    subpixel_fraction: float
-    subsecond_fraction: float
+    ref_max_mag: Optional[float]
+    sci_max_mag: Optional[float]
+    num_ref_sources: Optional[int]
+    unmatched_fraction: Optional[float]
+    subpixel_fraction: Optional[float]
+    subsecond_fraction: Optional[float]
     separation_stats: SeparationStats
 
     @property
@@ -210,7 +210,9 @@ class BinStats:
                 ),
             )
 
-        binned_catalog = binned_catalog[~binned_catalog["separation"].mask]  # filter out ref-only rows
+        sep_mask = getattr(binned_catalog["separation"], "mask", None)
+        if sep_mask is not None:
+            binned_catalog = binned_catalog[~sep_mask]  # filter out ref-only rows
 
         sep = binned_catalog["separation"]
         sep_stats = SeparationStats(

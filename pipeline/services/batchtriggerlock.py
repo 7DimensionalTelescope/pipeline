@@ -179,7 +179,7 @@ class TransferHistoryIndex:
             return False
 
         path_keys = self._path_keys(path)
-        nightdate = get_nightdate(path, use_dirname=True)
+        nightdate = get_nightdate(path)
         if not path_keys or nightdate is None:
             return False
 
@@ -192,9 +192,7 @@ class TransferHistoryIndex:
 
         return True
 
-    def batch_status(
-        self, nightdate: str
-    ) -> tuple[bool, set[tuple[str, str]], set[tuple[str, str]]]:
+    def batch_status(self, nightdate: str) -> tuple[bool, set[tuple[str, str]], set[tuple[str, str]]]:
         """
         Return whether a nightdate is ready to release.
 
@@ -240,7 +238,7 @@ class BatchTriggerLock:
 
         for image_path in image_paths:
             if self.history.should_lock_for(image_path):
-                nightdate = get_nightdate(image_path, use_dirname=True)
+                nightdate = get_nightdate(image_path)
                 if nightdate is not None:
                     locked_paths[nightdate].append(image_path)
                     continue

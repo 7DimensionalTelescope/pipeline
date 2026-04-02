@@ -1144,13 +1144,13 @@ class PathAstrometry(AutoMkdirMixin, AutoCollapseMixin):
     def __repr__(self):
         return "\n".join(f"{k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
 
-    @property
-    def tmp_dir(self) -> str:
-        return os.path.join(self._parent.factory_dir, ASTRM_DIRNAME)
+    @cached_property
+    def factory(self):
+        return PathAstrometryFactory(self)
 
-    @property
-    def figure_dir(self) -> str:
-        return os.path.join(self._parent.figure_dir, ASTRM_DIRNAME)
+    @cached_property
+    def figures(self):
+        return PathAstrometryFigures(self)
 
     @property
     def astrefcat(self) -> str:
@@ -1172,14 +1172,53 @@ class PathAstrometry(AutoMkdirMixin, AutoCollapseMixin):
     #     exts = ["solved", "axy", "corr", "match", "rdls", "wcs"]  # -indx.xyls?
     #     return tuple([swap_ext(image, ext) for ext in exts] for image in self.input_files)
 
+class PathAstrometryFactory(AutoMkdirMixin, AutoCollapseMixin):
+    def __init__(self, parent: PathAstrometry):
+        self._parent = parent
+
+    @property
+    def dir(self) -> str:
+        return os.path.join(self._parent._parent.factory_dir, ASTRM_DIRNAME)
+
     @cached_property
     def soft_link(self) -> str | List[str]:
-        return [os.path.join(self.tmp_dir, os.path.basename(s)) for s in atleast_1d(self._input_files)]
+        return [os.path.join(self.dir, os.path.basename(s)) for s in atleast_1d(self._parent._input_files)]
 
     @property
     def catalog(self) -> str | List[str]:
-        # return (add_suffix(add_suffix(inim, 'prep'), "cat") for inim in self.input_files)
         return [add_suffix(inim, "cat") for inim in atleast_1d(self.soft_link)]
+
+    @property
+    def solvefield_image(self) -> str | List[str]:
+        return add_suffix(self.soft_link, "solved")
+
+    @property
+    def solved_head(self) -> str | List[str]:
+        return swap_ext(self.catalog, "head")
+
+    @property
+    def matched_catalog(self) -> str | List[str]:
+        return add_suffix(self.catalog, "matched")
+
+    @property
+    def scamp_input_manifest(self) -> str:
+        return os.path.join(self.dir, "scamp_input.cat")
+
+    def evaluation_cards(self, suffix: str = "wcs") -> str | List[str]:
+        return swap_ext(add_suffix(self.catalog, f"{suffix}_eval_cards"), "txt")
+
+
+class PathAstrometryFigures(AutoMkdirMixin, AutoCollapseMixin):
+    def __init__(self, parent: PathAstrometry):
+        self._parent = parent
+
+    @property
+    def dir(self) -> str:
+        return os.path.join(self._parent._parent.figure_dir, ASTRM_DIRNAME)
+
+    def evaluation_plot(self, suffix: str = "wcs") -> str | List[str]:
+        basenames = [os.path.basename(path) for path in atleast_1d(self._parent._parent._input_files)]
+        return bjoin(self.dir, swap_ext(add_suffix(basenames, suffix), "jpg"))
 
 
 class PathPhotometry(AutoMkdirMixin, AutoCollapseMixin):

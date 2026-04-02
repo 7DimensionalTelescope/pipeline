@@ -19,7 +19,7 @@ from .. import external
 from ..const import PIXSCALE, REF_DIR
 from ..const.sciproc import ASTROMETRY_SPEC, REJECTION_PROCESS_HEADER_KEY, SCIPROCESS_REGISTRY
 from ..errors import AstrometryError, ScampError, SolveFieldError
-from ..utils import swap_ext, add_suffix, force_symlink, time_diff_in_seconds, unique_filename, atleast_1d
+from ..utils import swap_ext, add_suffix, force_symlink, time_diff_in_seconds, unique_filename, atleast_1d, collapse
 from ..utils.header import update_padded_header, reset_header, fitsrec_to_header
 from ..services.memory import MemoryMonitor
 from ..config import SciProcConfiguration
@@ -148,17 +148,17 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         import shutil
 
         self.logger.info(f"Clearing Astrometry factory")
-        factory = self.path.astrometry.tmp_dir  # this generates factory if not exists
-        self.logger.debug(f"Deleting {factory}")
-        shutil.rmtree(factory)
-        # PathHandler's mkdir cache prevents regeneration; manually regenerate
-        os.makedirs(factory, exist_ok=True)
-        self.logger.debug(f"Re-generated {self.path.astrometry.tmp_dir}")
+        astrometry_factory = self.path.astrometry.factory.dir  # this generates factory if not exists
+        self.logger.debug(f"Deleting {astrometry_factory}")
+        shutil.rmtree(astrometry_factory)
+        # PathHandler's mkdir cache prevents regeneration; regenerate manually
+        os.makedirs(astrometry_factory, exist_ok=True)
+        self.logger.debug(f"Re-generated {astrometry_factory}")
 
     def _handle_input(self):
         self.logger.info("Defining paths for astrometry")
         self.logger.debug("Starting Astrometry._handle_input")
-        # self.path_astrometry = self.path.astrometry.tmp_dir
+        # self.path_astrometry = self.path.astrometry.factory.dir
 
         # prefer astrometry.input_images if set
         local_input_images = get_key(self.config_node, "astrometry.input_images")
@@ -501,7 +501,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
         if image_info.bad:
             self.logger.warning(
-                f"{image_info.id} Bad solution. UNMATCH: {image_info.rsep_stats.unmatched_fraction if image_info.rsep_stats.unmatched_fraction is not None else 'None'}, "
+                f"{image_info.id} Bad solution. UNMATCH: "
+                f"{image_info.rsep_stats.unmatched_fraction if image_info.rsep_stats.unmatched_fraction is not None else 'None'}, "
                 # f"RSEP_P95: {image_info.rsep_stats.separation_stats.P95 if image_info.rsep_stats.separation_stats.P95 is not None else 'None'} "
                 f"RSEP_Q2: {image_info.rsep_stats.separation_stats.Q2 if image_info.rsep_stats.separation_stats.Q2 is not None else 'None'} "
                 f"after {max_scamp_iter} iterations for {image_info.image_path}",
@@ -565,9 +566,12 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     overwrite=overwrite,
                 )
                 self.logger.debug(
-                    f"{image_info.id} UNMATCH: {image_info.rsep_stats.unmatched_fraction if image_info.rsep_stats.unmatched_fraction is not None else 'None'}\n"
-                    f"{image_info.id} SEP_P95: {image_info.rsep_stats.separation_stats.P95 if image_info.rsep_stats.separation_stats.P95 is not None else 'None'}\n"
-                    f"{image_info.id} SEP_Q2: {image_info.rsep_stats.separation_stats.Q2 if image_info.rsep_stats.separation_stats.Q2 is not None else 'None'}"
+                    f"{image_info.id} UNMATCH: "
+                    f"{image_info.rsep_stats.unmatched_fraction if image_info.rsep_stats.unmatched_fraction is not None else 'None'}\n"
+                    f"{image_info.id} SEP_P95: "
+                    f"{image_info.rsep_stats.separation_stats.P95 if image_info.rsep_stats.separation_stats.P95 is not None else 'None'}\n"
+                    f"{image_info.id} SEP_Q2: "
+                    f"{image_info.rsep_stats.separation_stats.Q2 if image_info.rsep_stats.separation_stats.Q2 is not None else 'None'}"
                 )
                 if image_info.good:
                     self.logger.debug(f"Stop iterating at {_}")
@@ -921,7 +925,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         # joint scamp
         if joint:
             # write target files into a text file
-            cat_to_scamp = os.path.join(self.path.astrometry.tmp_dir, "scamp_input.cat")
+            cat_to_scamp = self.path.astrometry.factory.scamp_input_manifest
             with open(cat_to_scamp, "w") as f:
                 for precat in input_catalogs:
                     f.write(f"{precat}\n")
@@ -1145,9 +1149,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             image_info = images_info[idx]
             prep_cat = prep_cats[idx]
 
-            bname = os.path.basename(input_image)
             plot_path = unique_filename(
-                os.path.join(self.path.astrometry.figure_dir, swap_ext(add_suffix(bname, suffix), "jpg"))
+                collapse(image_info.path.astrometry.figures.evaluation_plot(suffix), raise_error=True)
             )
 
             # update FOV polygon to ImageInfo. It will be cached and put into final image header later
@@ -1171,6 +1174,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
                     image=input_image,
                     ref_cat=refcat,
                     source_cat=prep_cat,
+                    matched_catalog_path=collapse(image_info.path.astrometry.factory.matched_catalog, raise_error=True),
                     date_obs=image_info.dateobs,
                     wcs=image_info.wcs,
                     H=image_info.naxis2,
@@ -1248,7 +1252,9 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
             if export_eval_cards:
                 for image_info, prep_cat in zip(images_info, prep_cats):
                     cards = image_info.wcs_eval_cards
-                    text_path = unique_filename(swap_ext(add_suffix(prep_cat, f"{suffix}_eval_cards"), "txt"))
+                    text_path = unique_filename(
+                        collapse(image_info.path.astrometry.factory.evaluation_cards(suffix), raise_error=True)
+                    )
                     with open(text_path, "w") as f:
                         f.write(fits.Header(cards).tostring(sep="\n"))
 
@@ -1440,7 +1446,7 @@ class ImageInfo:
     @cached_property
     def soft_link_to_input_image(self) -> str:
         """lazy creation; cached property to avoid duplicate creation"""
-        soft_link = self.path.astrometry.soft_link
+        soft_link = self.path.astrometry.factory.soft_link
         force_symlink(self.image_path, soft_link)
         self.logger.debug(f"Soft link created: {self.image_path} -> {soft_link}")
         return soft_link
@@ -1448,17 +1454,17 @@ class ImageInfo:
     @property
     def prep_cat(self) -> str:
         """sextractor output (FITS-LDAC)"""
-        return self.path.astrometry.catalog  # relying on AutoCollapseMixin for str return
+        return self.path.astrometry.factory.catalog  # relying on AutoCollapseMixin for str return
 
     @property
     def solved_image(self) -> str:
         """solve-field output"""
-        return add_suffix(self.soft_link_to_input_image, "solved")
+        return collapse(self.path.astrometry.factory.solvefield_image, raise_error=True)
 
     @property
     def solved_head(self) -> str:
         """scamp output"""
-        return swap_ext(self.prep_cat, "head")
+        return collapse(self.path.astrometry.factory.solved_head, raise_error=True)
 
     def __repr__(self) -> str:
         """Returns a string representation of the ImageInfo."""
@@ -1751,7 +1757,9 @@ class ImageInfo:
         """iteration condition"""
 
         # return self.rsep_stats.unmatched_fraction > 0.9 or self.rsep_stats.separation_stats.P95 > 2 * PIXSCALE  # too tight
-        return self.rsep_stats.unmatched_fraction > 0.9 or self.rsep_stats.separation_stats.Q2 > 2 * PIXSCALE
+        return (
+            self.rsep_stats.unmatched_fraction is not None and self.rsep_stats.unmatched_fraction > 0.9
+        ) or (self.rsep_stats.separation_stats.Q2 is not None and self.rsep_stats.separation_stats.Q2 > 2 * PIXSCALE)
 
     @property
     def invalid(self) -> bool:

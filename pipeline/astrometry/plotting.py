@@ -108,7 +108,8 @@ def wcs_check_plot(
         if subpixel_fraction is not None:
             text = f"Subpixel Frac: {subpixel_fraction:.2f}, " + text
         if rsep_stats is not None:
-            text = f"[UNMATCH: {rsep_stats.unmatched_fraction:.2f}, NUM_REF: {rsep_stats.num_ref_sources}]  " + text
+            unmatch_text = "None" if rsep_stats.unmatched_fraction is None else f"{rsep_stats.unmatched_fraction:.2f}"
+            text = f"[UNMATCH: {unmatch_text}, NUM_REF: {rsep_stats.num_ref_sources}]  " + text
 
         # fig.text(0.5, 0.62, text, ha="center", va="center", fontsize=8)
         ax_spacer.text(0.47, 0.9, text, ha="center", va="center", fontsize=8, transform=ax_spacer.transAxes)
@@ -283,7 +284,9 @@ def wcs_check_psf_plot(
     if matched_ids is None:
         print(f"matched_ids not provided. Selecting sources now.")
         # # remove ref-only rows
-        matched_catalog = matched_catalog[~matched_catalog["separation"].mask]
+        sep_mask = getattr(matched_catalog["separation"], "mask", None)
+        if sep_mask is not None:
+            matched_catalog = matched_catalog[~sep_mask]
         if len(matched_catalog) == 0:
             return
         selected_idx = get_3x3_stars(matched_catalog, H, W, cutout_size, return_id=False)
