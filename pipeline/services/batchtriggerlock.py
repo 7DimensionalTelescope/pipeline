@@ -79,6 +79,8 @@ class TransferHistoryIndex:
                     batch_dirname = normalize_batch_key(columns[0])
                     nightdate = get_nightdate(columns[0], use_dirname=False)
                     if batch_dirname and nightdate:
+                        if batch_dirname.endswith("_ToO"):
+                            continue
                         # Transfer history tracks batch-level arrivals, not per-unit completeness.
                         expected_dirs_by_nightdate[nightdate].add(batch_dirname)
 
@@ -109,7 +111,7 @@ class TransferHistoryIndex:
 
     def _present_batch_keys(
         self, expected_dirs: set[str]
-    ) -> tuple[set[str], set[Path], set[Path]]:
+    ) -> tuple[set[str], set[Path]]:
         """
         Check batch completeness by dirname only, independent of unit.
 
@@ -119,7 +121,6 @@ class TransferHistoryIndex:
         """
         present_dirs = set()
         release_dirs = set()
-        too_dirs = set()
 
         unit_dirs = self._unit_dirs()
 
@@ -133,19 +134,14 @@ class TransferHistoryIndex:
                 batch_is_present = True
                 release_dirs.add(base_dir)
 
-                if not batch_dirname.endswith("_ToO"):
-                    too_dir = unit_dir / f"{batch_dirname}_ToO"
-                    if too_dir.is_dir():
-                        too_dirs.add(too_dir)
-
             if batch_is_present:
                 present_dirs.add(batch_dirname)
 
-        return present_dirs, release_dirs, too_dirs
+        return present_dirs, release_dirs
 
-    def _nightdate_dirs(self, nightdate: str) -> set[Path]:
-        """Return all same-night raw directories, including `_ToO` and suffix variants."""
-        release_dirs = set()
+    def _nightdate_too_dirs(self, nightdate: str) -> set[Path]:
+        """Return all same-night `_ToO` directories across units."""
+        too_dirs = set()
 
         for unit_dir in self._unit_dirs():
             try:
@@ -153,12 +149,14 @@ class TransferHistoryIndex:
                     for entry in entries:
                         if not entry.is_dir():
                             continue
+                        if not entry.name.endswith("_ToO"):
+                            continue
                         if get_nightdate(entry.name, use_dirname=False) == nightdate:
-                            release_dirs.add(Path(entry.path))
+                            too_dirs.add(Path(entry.path))
             except FileNotFoundError:
                 continue
 
-        return release_dirs
+        return too_dirs
 
     def batch_files(self, nightdate: str) -> list[str]:
         expected_dirs = self._expected_dirs_by_nightdate.get(nightdate)
@@ -166,8 +164,9 @@ class TransferHistoryIndex:
             return []
 
         files = set()
+        _, release_dirs = self._present_batch_keys(set(expected_dirs))
 
-        for directory in sorted(self._nightdate_dirs(nightdate), key=str):
+        for directory in sorted(release_dirs | self._nightdate_too_dirs(nightdate), key=str):
             try:
                 with os.scandir(directory) as entries:
                     for entry in entries:
@@ -189,6 +188,9 @@ class TransferHistoryIndex:
         if batch_key is None or nightdate is None:
             return False
 
+        if normalize_batch_key(path).endswith("_ToO"):
+            return False
+
         if not self._nightdate_in_range(nightdate):
             return False
 
@@ -196,7 +198,7 @@ class TransferHistoryIndex:
         if not expected_dirs:
             return False
 
-        return True
+        return batch_key in expected_dirs
 
     def batch_status(self, nightdate: str) -> tuple[bool, set[str], set[str]]:
         """
@@ -214,7 +216,7 @@ class TransferHistoryIndex:
         if not expected_dirs:
             return True, set(), set()
 
-        present_dirs, _, _ = self._present_batch_keys(set(expected_dirs))
+        present_dirs, _ = self._present_batch_keys(set(expected_dirs))
         missing_dirs = set(expected_dirs) - present_dirs
         return len(missing_dirs) == 0, set(expected_dirs), missing_dirs
 
