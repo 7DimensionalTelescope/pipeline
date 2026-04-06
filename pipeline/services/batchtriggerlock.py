@@ -1,22 +1,12 @@
 import logging
 import os
-import re
 import threading
 from collections import defaultdict
 from pathlib import Path
 
-from ..const.observation import available_7dt_units
 from ..path.utils import get_nightdate
 
 logger = logging.getLogger(__name__)
-
-_UNIT_IN_PATH_RE = re.compile(r"7DT\d{2}")
-
-
-def unit_from_transfer_entry(path_or_name: str | Path) -> str | None:
-    """Return 7DTxx from a transfer-history path/filename, or None if not present."""
-    m = _UNIT_IN_PATH_RE.search(os.fspath(path_or_name))
-    return m.group(0) if m else None
 
 
 def normalize_raw_dirname(path_or_name: str | Path) -> str | None:
@@ -60,7 +50,7 @@ class TransferHistoryIndex:
         self.history_path = Path(history_path)
         self.rawdata_dir = Path(rawdata_dir)
         self._history_mtime_ns: int | None = None
-        self._expected_dirs_by_nightdate: dict[str, frozenset[tuple[str, str]]] = {}
+        self._expected_dirs_by_nightdate: dict[str, frozenset[str]] = {}
         self._indexed_nightdates: tuple[str, ...] = ()
         self._refresh(force=True)
 
@@ -89,12 +79,8 @@ class TransferHistoryIndex:
                     batch_dirname = normalize_batch_key(columns[0])
                     nightdate = get_nightdate(columns[0], use_dirname=False)
                     if batch_dirname and nightdate:
-                        unit_in_entry = unit_from_transfer_entry(columns[0])
-                        if unit_in_entry:
-                            expected_dirs_by_nightdate[nightdate].add((unit_in_entry, batch_dirname))
-                        else:
-                            for unit in available_7dt_units:
-                                expected_dirs_by_nightdate[nightdate].add((unit, batch_dirname))
+                        # Transfer history tracks batch-level arrivals, not per-unit completeness.
+                        expected_dirs_by_nightdate[nightdate].add(batch_dirname)
 
             self._history_mtime_ns = stat.st_mtime_ns
             self._expected_dirs_by_nightdate = {
@@ -112,69 +98,76 @@ class TransferHistoryIndex:
             return False
         return self._indexed_nightdates[0] <= nightdate <= self._indexed_nightdates[-1]
 
-    def _path_keys(self, path: str | Path) -> set[tuple[str, str]]:
-        """
-        Convert a raw dir or FITS path to the possible `(unit, batch_dirname)`
-        keys used by the transfer-history lock.
-
-        `_ToO` is retained in the exact key, but we also include its base batch
-        family so `_ToO` arrivals can still be locked by a base history entry.
-        """
+    def _unit_dirs(self) -> list[Path]:
         try:
-            relative_path = Path(path).relative_to(self.rawdata_dir)
-        except ValueError:
-            return set()
-
-        if len(relative_path.parts) < 2:
-            return set()
-
-        unit, dirname = relative_path.parts[:2]
-        exact_key = normalize_batch_key(dirname)
-        if exact_key is None:
-            return set()
-
-        keys = {(unit, exact_key)}
-        family_key = batch_family_key(dirname)
-        if family_key is not None:
-            keys.add((unit, family_key))
-        return keys
+            return sorted(
+                (path for path in self.rawdata_dir.iterdir() if path.is_dir() and path.name.startswith("7DT")),
+                key=lambda path: path.name,
+            )
+        except FileNotFoundError:
+            return []
 
     def _present_batch_keys(
-        self, expected_dirs: set[tuple[str, str]]
-    ) -> tuple[set[tuple[str, str]], set[Path], set[Path]]:
+        self, expected_dirs: set[str]
+    ) -> tuple[set[str], set[Path], set[Path]]:
         """
-        Check only the exact history-expected unit/batch directories.
+        Check batch completeness by dirname only, independent of unit.
 
-        This avoids broad scans under `RAWDATA_DIR` and separately tracks the
-        optional `_ToO` sibling directories so release can include them.
+        A batch is considered present as soon as at least one unit directory for
+        that exact batch exists. Units are intentionally not part of the
+        completeness criteria because some units may be absent by design.
         """
         present_dirs = set()
         release_dirs = set()
         too_dirs = set()
 
-        for unit, batch_dirname in expected_dirs:
-            base_dir = self.rawdata_dir / unit / batch_dirname
-            if not base_dir.is_dir():
-                continue
+        unit_dirs = self._unit_dirs()
 
-            present_dirs.add((unit, batch_dirname))
-            release_dirs.add(base_dir)
+        for batch_dirname in expected_dirs:
+            batch_is_present = False
+            for unit_dir in unit_dirs:
+                base_dir = unit_dir / batch_dirname
+                if not base_dir.is_dir():
+                    continue
 
-            too_dir = self.rawdata_dir / unit / f"{batch_dirname}_ToO"
-            if too_dir.is_dir():
-                too_dirs.add(too_dir)
+                batch_is_present = True
+                release_dirs.add(base_dir)
+
+                if not batch_dirname.endswith("_ToO"):
+                    too_dir = unit_dir / f"{batch_dirname}_ToO"
+                    if too_dir.is_dir():
+                        too_dirs.add(too_dir)
+
+            if batch_is_present:
+                present_dirs.add(batch_dirname)
 
         return present_dirs, release_dirs, too_dirs
+
+    def _nightdate_dirs(self, nightdate: str) -> set[Path]:
+        """Return all same-night raw directories, including `_ToO` and suffix variants."""
+        release_dirs = set()
+
+        for unit_dir in self._unit_dirs():
+            try:
+                with os.scandir(unit_dir) as entries:
+                    for entry in entries:
+                        if not entry.is_dir():
+                            continue
+                        if get_nightdate(entry.name, use_dirname=False) == nightdate:
+                            release_dirs.add(Path(entry.path))
+            except FileNotFoundError:
+                continue
+
+        return release_dirs
 
     def batch_files(self, nightdate: str) -> list[str]:
         expected_dirs = self._expected_dirs_by_nightdate.get(nightdate)
         if not expected_dirs:
             return []
 
-        _, release_dirs, too_dirs = self._present_batch_keys(set(expected_dirs))
         files = set()
 
-        for directory in sorted(release_dirs | too_dirs, key=str):
+        for directory in sorted(self._nightdate_dirs(nightdate), key=str):
             try:
                 with os.scandir(directory) as entries:
                     for entry in entries:
@@ -189,27 +182,23 @@ class TransferHistoryIndex:
         self._refresh()
 
         if not self.history_path.exists():
-            print("history not exists")
             return False
 
-        path_keys = self._path_keys(path)
+        batch_key = batch_family_key(path)
         nightdate = get_nightdate(path)
-        if not path_keys or nightdate is None:
-            print("path_keys or nightdate is None")
+        if batch_key is None or nightdate is None:
             return False
 
         if not self._nightdate_in_range(nightdate):
-            print("nightdate not in range")
             return False
 
         expected_dirs = self._expected_dirs_by_nightdate.get(nightdate)
-        if not expected_dirs or not (path_keys & expected_dirs):
-            print("expected_dirs or path_keys not in expected_dirs")
+        if not expected_dirs:
             return False
 
         return True
 
-    def batch_status(self, nightdate: str) -> tuple[bool, set[tuple[str, str]], set[tuple[str, str]]]:
+    def batch_status(self, nightdate: str) -> tuple[bool, set[str], set[str]]:
         """
         Return whether a nightdate is ready to release.
 
