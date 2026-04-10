@@ -256,6 +256,7 @@ def process_image_with_cpu(
             processed_data = reduction_kernel_cpu(image_data, subtractive, multiplicative, h, w)
             processed_batch.append(processed_data)
 
+    
         # Write outputs in parallel
         write_fits_images(out_paths, processed_batch, n_head_blocks=n_head_blocks)
         gc.collect()
@@ -661,6 +662,9 @@ def record_statistics(filename: str, header: fits.Header, device_id: int = 0, cr
     header["CENCLPSD"] = (float(std), f"3-sig clipped std of center {cropsize}x{cropsize}")  # fmt: skip
     # header["CENCMIN"] = float(min)
     # header["CENCMAX"] = float(max)
+    edge_var, _, trimmed = calculate_edge_variation(data)
+    header["TRIMMED"] = (trimmed, "Non-positive values in the middle of the image")
+    
     trimmed = False
     if dtype.upper() == "FLAT":
         datasig = fits.getdata(filename.replace("flat_", "flatsig_")).astype(np.float32)  # Ensure data is float32
@@ -669,11 +673,8 @@ def record_statistics(filename: str, header: fits.Header, device_id: int = 0, cr
         header["SIGMEAN"] = (s_mean, "3-sig clipped mean of the errormap")
         header["SIGMED"] = (s_median, "3-sig clipped median of the errormap")
         header["SIGSTD"] = (s_std, "3-sig clipped std of the errormap")
-
-        edge_var, _, trimmed = calculate_edge_variation(data)
         header["EDGEVAR"] = (edge_var, "Edge variation of the image")
-        header["TRIMMED"] = (trimmed, "Non-positive values in the middle of the image")
-
+        
     elif dtype.upper() == "DARK":
         uniformity_score = uniformity_statistical(filename)
         header["UNIFORM"] = (uniformity_score, "Uniformity score")

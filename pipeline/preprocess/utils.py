@@ -437,6 +437,8 @@ def read_fits_images(input_paths, output_paths, max_workers=10):
 
 
 def write_fits_image(output_path, processed_data, n_head_blocks=None):
+    from .calc import calculate_edge_variation
+    
     """Write processed image to disk using the header pre-generated on disk."""
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     header_file = output_path.replace(".fits", ".header")
@@ -446,6 +448,9 @@ def write_fits_image(output_path, processed_data, n_head_blocks=None):
             header = fits.Header.fromstring(f.read(), sep="\n")
         if n_head_blocks is not None:
             header = add_padding(header, n_head_blocks, copy_header=True)
+
+    _, _, trimmed = calculate_edge_variation(processed_data)
+    header["TRIMMED"] = (trimmed, "Non-positive values in the middle of the image")
 
     fits.writeto(output_path, processed_data, header=header, overwrite=True)
     # fitsio.write(output_path, processed_data, header=list(header.cards), clobber=True)

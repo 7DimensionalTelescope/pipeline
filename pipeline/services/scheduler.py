@@ -10,6 +10,7 @@ from astropy.table import Table, vstack
 
 
 from ..const import SCRIPTS_DIR, NUM_GPUS, SCHEDULER_DB_PATH, QUEUE_SOCKET_PATH
+from ..const import SUCCESS_RETURN_CODE, FAILURE_RETURN_CODE, EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE
 
 
 class Scheduler:
@@ -554,13 +555,13 @@ class Scheduler:
 
         return row_dict, self._generate_command(task_index, scheduler_kwargs)
 
-    def mark_done(self, index, success=True):
+    def mark_done(self, index, return_code=True):
         if self.use_system_queue:
-            self._mark_done_db(index, success)
+            self._mark_done_db(index, return_code)
         else:
-            self._mark_done_memory(index, success)
+            self._mark_done_memory(index, return_code)
 
-    def _mark_done_db(self, index, success=True):
+    def _mark_done_db(self, index, return_code=True):
         with self._db_connection() as conn:
             cursor = conn.cursor()
             # Check if task is already marked as done to prevent duplicate processing
@@ -575,14 +576,13 @@ class Scheduler:
                 return
 
             dependent_indices = json.loads(dependent_idx_json) if dependent_idx_json else []
+            process_end = datetime.now().isoformat()
 
-            if success:
-                new_status = "Completed"
-                # Mark as Completed, clear PID, and set process_end
-                process_end = datetime.now().isoformat()
+            if return_code==SUCCESS_RETURN_CODE:
+
                 cursor.execute(
                     'UPDATE scheduler SET status = ?, pid = 0, process_end = ? WHERE "index" = ?',
-                    (new_status, process_end, index),
+                    ("Completed", process_end, index),
                 )
                 for dep_idx in dependent_indices:
                     cursor.execute('SELECT readiness FROM scheduler WHERE "index" = ?', (dep_idx,))
@@ -602,16 +602,22 @@ class Scheduler:
                             cursor.execute(
                                 'UPDATE scheduler SET readiness = ? WHERE "index" = ?', (new_readiness, dep_idx)
                             )
-            else:
-                process_end = datetime.now().isoformat()
+            elif return_code==FAILURE_RETURN_CODE:
+                
                 cursor.execute(
                     'UPDATE scheduler SET status = ?, readiness = ?, is_ready = ?, pid = 0, process_end = ? WHERE "index" = ?',
                     ("Failed", 0, 0, process_end, index),
                 )
+            elif return_code==EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE:
+                process_end = datetime.now().isoformat()
+                cursor.execute(
+                    'UPDATE scheduler SET status = ?, pid = 0, process_end = ? WHERE "index" = ?',
+                    ("Rejected", process_end, index),
+                )
 
             conn.commit()
 
-    def _mark_done_memory(self, task_index, success=True):
+    def _mark_done_memory(self, task_index, return_code=True):
         mask = self._schedule["index"] == task_index
         if len(self._schedule[mask]) == 0:
             return
@@ -623,7 +629,7 @@ class Scheduler:
         if current_status == "Completed" or current_status == "Failed":
             return
 
-        if success:
+        if return_code==SUCCESS_RETURN_CODE:
             # Get task info
             config_type = row_dict["config_type"]
             dependent_indices = row_dict["dependent_idx"]

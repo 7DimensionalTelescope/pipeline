@@ -387,7 +387,7 @@ class QueueManager:
 
                         if proc.poll() is not None:  # Process finished
                             pid = proc.pid
-                            success = proc.returncode == SUCCESS_RETURN_CODE
+                            return_code = proc.returncode
 
                             # Get process output for logging
                             try:
@@ -399,7 +399,7 @@ class QueueManager:
                             except Exception:
                                 stdout_str = stderr_str = "Could not collect output"
 
-                            if success:
+                            if return_code == SUCCESS_RETURN_CODE:
                                 self.logger.info(
                                     f"Process with {config} (PID = {pid}) completed successfully in {time_diff_in_seconds(start_time)} seconds."
                                 )
@@ -416,7 +416,7 @@ class QueueManager:
                             # Use try-finally to ensure process is removed even if mark_done fails
                             try:
                                 if task_index is not None and self.scheduler is not None:
-                                    self.scheduler.mark_done(task_index, success=success)
+                                    self.scheduler.mark_done(task_index, return_code = return_code)
                             except Exception as e:
                                 self.logger.error(f"Error marking task {task_index} as done: {e}", exc_info=True)
                             finally:
