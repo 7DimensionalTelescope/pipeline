@@ -12,11 +12,11 @@ storage:
   SERVICES_TMP_DIR: "/tmp/pipeline"
   DISK_CHANGE_NIGHTDATE: "2026-04-08"
 
-  FACTORY_DIR_2: "/balmer/data2/factory"
-  MASTER_FRAME_DIR_2: "/balmer/data2/master_frame"
-  PROCESSED_DIR_2: "/balmer/data2/processed"
-  TOO_PROCESSED_DIR_2: "/balmer/data2/too"
-  TOO_FACTORY_DIR_2: "/balmer/data2/too_factory"
+  FACTORY_DIR_2: "/balmer/data1/factory"
+  MASTER_FRAME_DIR_2: "/balmer/data1/master_frame"
+  PROCESSED_DIR_2: "/balmer/data1/processed"
+  TOO_PROCESSED_DIR_2: "/balmer/data1/too"
+  TOO_FACTORY_DIR_2: "/balmer/data1/too_factory"
   DISK_CHANGE_NIGHTDATE_2: "2027-01-10"
 
 references:
