@@ -35,45 +35,27 @@ _reference_paths = _storage_config.get("references") or {}
 _external_paths = _storage_config.get("external") or {}
 
 
-# Bashrc-defined system paths
+# Storage Configuration
 RAWDATA_DIR = _storage_paths.get("RAWDATA_DIR") or "/lyman/data1/obsdata"
 FACTORY_DIR = _storage_paths.get("FACTORY_DIR") or "/lyman/data2/factory"
-FACTORY_DIR_2 = _storage_paths.get("FACTORY_DIR_2")
 MASTER_FRAME_DIR = _storage_paths.get("MASTER_FRAME_DIR") or "/lyman/data2/master_frame"
-MASTER_FRAME_DIR_2 = _storage_paths.get("MASTER_FRAME_DIR_2")
 PROCESSED_DIR = _storage_paths.get("PROCESSED_DIR") or "/lyman/data2/processed"
-PROCESSED_DIR_2 = _storage_paths.get("PROCESSED_DIR_2")
 TOO_PROCESSED_DIR = _storage_paths.get("TOO_PROCESSED_DIR") or "/lyman/data2/too"
 TOO_FACTORY_DIR = _storage_paths.get("TOO_FACTORY_DIR") or "/lyman/data2/too_factory"
 COADD_DIR = _storage_paths.get("COADD_DIR") or "/lyman/data2/coadd"
 
-SERVICES_TMP_DIR = _storage_paths.get("SERVICES_TMP_DIR") or "/tmp/pipeline"
+# Next disk
+DISK_CHANGE_NIGHTDATE = _storage_paths.get("DISK_CHANGE_NIGHTDATE") or "2026-04-08"
+MASTER_FRAME_DIR_2 = _storage_paths.get("MASTER_FRAME_DIR_2")
+FACTORY_DIR_2 = _storage_paths.get("FACTORY_DIR_2")
+PROCESSED_DIR_2 = _storage_paths.get("PROCESSED_DIR_2")
+TOO_PROCESSED_DIR_2 = _storage_paths.get("TOO_PROCESSED_DIR_2")
+TOO_FACTORY_DIR_2 = _storage_paths.get("TOO_FACTORY_DIR_2")
 
-SLACK_TOKEN = os.environ.get("SLACK_TOKEN", None)
-INSTRUM_STATUS_DICT = _external_paths.get("INSTRUM_STATUS_DICT")
-SEXTRACTOR_COMMAND = os.environ.get("SEXTRACTOR_COMMAND") or "source-extractor"
+# Next disk
+DISK_CHANGE_NIGHTDATE_2 = _storage_paths.get("DISK_CHANGE_NIGHTDATE_2") or "2027-01-10"
 
-# Paths to pre-generated data
-ASTRM_TILE_REF_DIR = (
-    _reference_paths.get("ASTRM_TILE_REF_DIR") or "/lyman/data2/py7dt_requisites/ref_scamp/gaia_dr3_7DS"
-)
-ASTRM_CUSTOM_REF_DIR = (
-    _reference_paths.get("ASTRM_CUSTOM_REF_DIR") or "/lyman/data2/py7dt_requisites/ref_scamp/gaia_dr3_custom"
-)
-GAIA_ROOT_DIR = _reference_paths.get("GAIA_ROOT_DIR") or "/lyman/data1/factory/catalog/gaia_source_dr3/healpix_nside64"
-SCAMP_QUERY_DIR = _reference_paths.get("SCAMP_QUERY_DIR") or "/lyman/data2/py7dt_requisites/ref_scamp/queried"
-PHOT_REF_DIR = _reference_paths.get("PHOT_REF_DIR") or "/lyman/data1/factory/ref_cat"
-GAIA_REF_DIR = (
-    _reference_paths.get("GAIA_REF_DIR") or "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile"
-)
-REF_IMAGE_DIR = _reference_paths.get("REF_IMAGE_DIR") or "/lyman/data1/factory/ref_frame"
-
-RECENT_RAWDATA_TRANSFER_HISTORY = _external_paths.get("RECENT_RAWDATA_TRANSFER_HISTORY") or (
-    "/home/7dt/7dt_too/backend/data/7dt/sync/transfer/transfer_history.ascii_fixed_width"
-)
-
-
-# define pipeline directories
+# collection of pipeline directories
 PIPELINE_DIRS = {
     path
     for path in {
@@ -91,6 +73,18 @@ PIPELINE_DIRS = {
     if path is not None
 }
 
+# Paths to pre-generated data
+ASTRM_TILE_REF_DIR = _reference_paths.get("ASTRM_TILE_REF_DIR", "/lyman/data2/py7dt_requisites/ref_scamp/gaia_dr3_7DS")
+ASTRM_CUSTOM_REF_DIR = _reference_paths.get(
+    "ASTRM_CUSTOM_REF_DIR", "/lyman/data2/py7dt_requisites/ref_scamp/gaia_dr3_custom"
+)
+GAIA_ROOT_DIR = _reference_paths.get("GAIA_ROOT_DIR", "/lyman/data1/factory/catalog/gaia_source_dr3/healpix_nside64")
+SCAMP_QUERY_DIR = _reference_paths.get("SCAMP_QUERY_DIR", "/lyman/data2/py7dt_requisites/ref_scamp/queried")
+PHOT_REF_DIR = _reference_paths.get("PHOT_REF_DIR", "/lyman/data1/factory/ref_cat")
+GAIA_REF_DIR = _reference_paths.get("GAIA_REF_DIR", "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile")
+REF_IMAGE_DIR = _reference_paths.get("REF_IMAGE_DIR", "/lyman/data1/factory/ref_frame")
+
+# define a collection
 REQUISITE_DIRS = {
     ASTRM_TILE_REF_DIR,
     ASTRM_CUSTOM_REF_DIR,
@@ -101,9 +95,12 @@ REQUISITE_DIRS = {
     REF_IMAGE_DIR,
 }
 
-
-# Storage Configuration
-DISK_CHANGE_NIGHTDATE = "2026-05-01"
+# Miscellaneous
+SERVICES_TMP_DIR = _storage_paths.get("SERVICES_TMP_DIR") or "/tmp/pipeline"
+SLACK_TOKEN = os.environ.get("SLACK_TOKEN", None)
+INSTRUM_STATUS_DICT = _external_paths.get("INSTRUM_STATUS_DICT")
+SEXTRACTOR_COMMAND = os.environ.get("SEXTRACTOR_COMMAND") or "source-extractor"
+RECENT_RAWDATA_TRANSFER_HISTORY = _external_paths.get("RECENT_RAWDATA_TRANSFER_HISTORY")
 
 
 # database access

@@ -340,12 +340,8 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                     output_parent_dir = working_dir or os.path.dirname(input_file)
 
                     # ad hoc for diffim input only
-                    # typ = self._get_name_property_at_index("type", i)
-                    # if typ[3] == "difference":
                     if os.path.basename(output_parent_dir) == DIFFIM_DIRNAME:
                         output_parent_dir = os.path.dirname(output_parent_dir)
-                    # if output_parent_dir.endswith("singles"):
-                    #     output_parent_dir = str(Path(output_parent_dir).parent)
 
                     self._output_parent_dir.append(output_parent_dir)
                     self._factory_parent_dir.append(os.path.join(output_parent_dir, TMP_DIRNAME))
@@ -364,18 +360,26 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                     if current_nightdate < const.DISK_CHANGE_NIGHTDATE:
                         if is_too:
                             output_parent_dir = const.TOO_PROCESSED_DIR
-                            self._output_parent_dir.append(output_parent_dir)
-                            self._factory_parent_dir.append(const.TOO_FACTORY_DIR)
-                            # self._is_pipeline_vectorized.append(True)
+                            output_factory_dir = const.TOO_FACTORY_DIR
                         else:
                             output_parent_dir = const.PROCESSED_DIR
-                            self._output_parent_dir.append(output_parent_dir)
-                            self._factory_parent_dir.append(const.FACTORY_DIR)
-                            # self._is_pipeline_vectorized.append(True)
+                            output_factory_dir = const.FACTORY_DIR
+                        self._output_parent_dir.append(output_parent_dir)
+                        self._factory_parent_dir.append(output_factory_dir)
+                    if current_nightdate < const.DISK_CHANGE_NIGHTDATE_2:
+                        if is_too:
+                            output_parent_dir = const.TOO_PROCESSED_DIR_2
+                            output_factory_dir = const.TOO_FACTORY_DIR_2
+                        else:
+                            output_parent_dir = const.PROCESSED_DIR_2
+                            output_factory_dir = const.FACTORY_DIR_2
+                        self._output_parent_dir.append(output_parent_dir)
+                        self._factory_parent_dir.append(output_factory_dir)
                     else:
                         raise ValueError(
-                            f"Nightdate cap ({const.DISK_CHANGE_NIGHTDATE}) reached for file {input_file}: consider moving to another disk."
+                            f"Nightdate cap ({const.DISK_CHANGE_NIGHTDATE_2}) reached for file {input_file}: consider moving to another disk."
                         )
+                    # self._is_pipeline_vectorized.append(True)
 
                 preproc_output_dir = os.path.join(
                     output_parent_dir, self._get_namehandler_property_at_index("nightdate", i)
@@ -1171,6 +1175,7 @@ class PathAstrometry(AutoMkdirMixin, AutoCollapseMixin):
     # def solvefield_outputs(self):
     #     exts = ["solved", "axy", "corr", "match", "rdls", "wcs"]  # -indx.xyls?
     #     return tuple([swap_ext(image, ext) for ext in exts] for image in self.input_files)
+
 
 class PathAstrometryFactory(AutoMkdirMixin, AutoCollapseMixin):
     def __init__(self, parent: PathAstrometry):

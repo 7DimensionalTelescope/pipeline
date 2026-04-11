@@ -10,11 +10,14 @@ storage:
   TOO_FACTORY_DIR: "/lyman/data2/too_factory"
   COADD_DIR: "/lyman/data2/coadd"
   SERVICES_TMP_DIR: "/tmp/pipeline"
-
   DISK_CHANGE_NIGHTDATE: "2026-04-08"
+
   FACTORY_DIR_2: "/balmer/data2/factory"
   MASTER_FRAME_DIR_2: "/balmer/data2/master_frame"
   PROCESSED_DIR_2: "/balmer/data2/processed"
+  TOO_PROCESSED_DIR_2: "/balmer/data2/too"
+  TOO_FACTORY_DIR_2: "/balmer/data2/too_factory"
+  DISK_CHANGE_NIGHTDATE_2: "2027-01-10"
 
 references:
   ASTRM_TILE_REF_DIR: "/lyman/data2/py7dt_requisites/ref_scamp/gaia_dr3_7DS"
