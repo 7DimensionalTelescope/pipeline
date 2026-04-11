@@ -5,6 +5,7 @@ import sys
 import signal
 
 from pipeline.services.scheduler import Scheduler
+from pipeline.services.pipeline_lock import enforce_pipeline_lock
 
 
 def signal_handler(sig, frame):
@@ -63,6 +64,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     try:
+        enforce_pipeline_lock(
+            action="run_config is about to enqueue pipeline configuration(s).",
+            requested_is_pipeline=True,
+        )
         sc = Scheduler.from_list(
             args.configs,
             base_priority=args.priority,

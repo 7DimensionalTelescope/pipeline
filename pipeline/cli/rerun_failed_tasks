@@ -16,6 +16,7 @@ sys.path.insert(0, str(pipeline_dir))
 
 from pipeline.services.scheduler import Scheduler
 from pipeline.const import SCHEDULER_DB_PATH
+from pipeline.services.pipeline_lock import enforce_pipeline_lock
 
 
 def parse_args():
@@ -36,6 +37,10 @@ def main():
 
     try:
         args = parse_args()
+        enforce_pipeline_lock(
+            action="rerun_failed_tasks is about to requeue failed scheduler entries.",
+            requested_is_pipeline=True,
+        )
         scheduler = Scheduler(use_system_queue=True)
         scheduler.rerun_failed_tasks(overwrite=bool(args.overwrite))
         if args.overwrite:

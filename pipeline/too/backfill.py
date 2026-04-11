@@ -2,10 +2,15 @@ from ..services.database.too import TooDB
 from ..services.database.query import RawImageQuery
 import datetime
 from ..services.blueprint import Blueprint
+from ..services.pipeline_lock import enforce_pipeline_lock
 from ..services.scheduler import Scheduler
 
 
 def backfill_too(i, overwrite=False, use_system_queue=True, **kwargs):
+    enforce_pipeline_lock(
+        action="backfill_too is about to create and queue ToO pipeline work.",
+        requested_is_pipeline=True,
+    )
     too = TooDB()
     dt = too.read_data_by_id(i)
 

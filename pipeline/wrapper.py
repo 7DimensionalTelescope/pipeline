@@ -1,5 +1,6 @@
 from .const.run import DEFAULT_SCIDATA_PROCESSES
 from .services.blueprint import Blueprint
+from .services.pipeline_lock import enforce_pipeline_lock
 from .services.scheduler import Scheduler
 from .services.queue import QueueManager
 
@@ -92,6 +93,11 @@ class DataReduction:
         overwrite_data = overwrite_data or overwrite
 
         is_too = is_too or self.is_too
+
+        enforce_pipeline_lock(
+            action="DataReduction.run() is about to create or queue pipeline work.",
+            requested_is_pipeline=self.is_pipeline,
+        )
 
         if dry_run:
             if preprocess_kwargs is None:

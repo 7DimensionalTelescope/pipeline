@@ -10,6 +10,13 @@ try:
 except ModuleNotFoundError:
     load_dotenv = None
 
+
+def _get_bool_env(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
 # Internal paths
 SOURCE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ROOT_DIR = os.path.abspath(os.path.join(SOURCE_DIR, ".."))
@@ -97,6 +104,8 @@ REQUISITE_DIRS = {
 
 # Miscellaneous
 SERVICES_TMP_DIR = _storage_paths.get("SERVICES_TMP_DIR") or "/tmp/pipeline"
+IS_PIPELINE_LOCK = _get_bool_env("IS_PIPELINE", False)
+PIPELINE_LOCK_WAIT_SECONDS = 60
 SLACK_TOKEN = os.environ.get("SLACK_TOKEN", None)
 INSTRUM_STATUS_DICT = _external_paths.get("INSTRUM_STATUS_DICT")
 SEXTRACTOR_COMMAND = os.environ.get("SEXTRACTOR_COMMAND") or "source-extractor"

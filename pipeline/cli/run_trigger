@@ -14,6 +14,7 @@ from pathlib import Path
 
 from pipeline.const import PIPELINE_TRIGGER_LOG_FILE, RAWDATA_DIR, RECENT_RAWDATA_TRANSFER_HISTORY
 from pipeline.services.batchtriggerlock import BatchTriggerLock
+from pipeline.services.pipeline_lock import enforce_pipeline_lock
 from pipeline.services.monitor import Monitor
 from pipeline.services.scheduler import Scheduler
 from pipeline.services.blueprint import Blueprint
@@ -164,6 +165,10 @@ def start_trigger_monitoring(rerun_failed=False):
     """Start the trigger monitoring service using the existing Monitor class."""
     # RAWDATA_DIR = "/lyman/data2/obsdata/"
     # Create the monitor using the existing codebase
+    enforce_pipeline_lock(
+        action="run_trigger is about to monitor raw data and queue pipeline work.",
+        requested_is_pipeline=True,
+    )
 
     sc = Scheduler(use_system_queue=True)
     if rerun_failed:
