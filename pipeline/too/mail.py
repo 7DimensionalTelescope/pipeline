@@ -518,9 +518,8 @@ Interim Processing Result:
         filter_str = filt if filt else "Unknown Filter"
         contents += f"Filter: {filter_str}\n"
 
-
         if mag is None and is_upper_limit:
-            contents += f"Magnitude: >{mag_err:.3f} (5σ upper limit)\n"
+            contents += f"Magnitude: >{mag_error:.3f} (5σ upper limit)\n"
         else:
             if mag_error is not None and not np.isnan(mag_error) and mag_error > 0:
                 contents += f"Magnitude: {mag:.3f} ± {mag_error:.3f}\n"

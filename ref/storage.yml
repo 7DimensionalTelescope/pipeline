@@ -1,0 +1,33 @@
+# Non-secret storage and reference paths for the pipeline.
+# Environment variables in `.env` can still override any of these values.
+
+storage:
+  RAWDATA_DIR: "/lyman/data1/obsdata"
+  FACTORY_DIR: "/lyman/data2/factory"
+  MASTER_FRAME_DIR: "/lyman/data2/master_frame"
+  PROCESSED_DIR: "/lyman/data2/processed"
+  TOO_PROCESSED_DIR: "/lyman/data2/too"
+  TOO_FACTORY_DIR: "/lyman/data2/too_factory"
+  COADD_DIR: "/lyman/data2/coadd"
+  SERVICES_TMP_DIR: "/tmp/pipeline"
+
+  DISK_CHANGE_NIGHTDATE: "2026-04-08"
+  FACTORY_DIR_2: "/balmer/data2/factory"
+  MASTER_FRAME_DIR_2: "/balmer/data2/master_frame"
+  PROCESSED_DIR_2: "/balmer/data2/processed"
+
+references:
+  ASTRM_TILE_REF_DIR: "/lyman/data2/py7dt_requisites/ref_scamp/gaia_dr3_7DS"
+  ASTRM_CUSTOM_REF_DIR: "/lyman/data2/py7dt_requisites/ref_scamp/gaia_dr3_custom"
+  GAIA_ROOT_DIR: "/lyman/data1/factory/catalog/gaia_source_dr3/healpix_nside64"
+  SCAMP_QUERY_DIR: "/lyman/data2/py7dt_requisites/ref_scamp/queried"
+  PHOT_REF_DIR: "/lyman/data1/factory/ref_cat"
+  GAIA_REF_DIR: "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile"
+  REF_IMAGE_DIR: "/lyman/data1/factory/ref_frame"
+
+external:
+  QUEUE_SOCKET_PATH: "/run/queue/queue.sock"
+  SCHEDULER_DB_PATH: "/var/db/scheduler.db"
+  TOO_DB_PATH: "/var/db/too_requested.db"
+  INSTRUM_STATUS_DICT: "/home/7dt/7dt_too/backend/data/7dt/sync/multitelescopes.dict"
+  RECENT_RAWDATA_TRANSFER_HISTORY: "/home/7dt/7dt_too/backend/data/7dt/sync/transfer/transfer_history.ascii_fixed_width"
