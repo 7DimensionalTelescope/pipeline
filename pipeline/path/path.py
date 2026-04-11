@@ -366,7 +366,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                             output_factory_dir = const.FACTORY_DIR
                         self._output_parent_dir.append(output_parent_dir)
                         self._factory_parent_dir.append(output_factory_dir)
-                    if current_nightdate < const.DISK_CHANGE_NIGHTDATE_2:
+                    elif current_nightdate < const.DISK_CHANGE_NIGHTDATE_2:
                         if is_too:
                             output_parent_dir = const.TOO_PROCESSED_DIR_2
                             output_factory_dir = const.TOO_FACTORY_DIR_2
