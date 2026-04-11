@@ -256,7 +256,6 @@ def process_image_with_cpu(
             processed_data = reduction_kernel_cpu(image_data, subtractive, multiplicative, h, w)
             processed_batch.append(processed_data)
 
-    
         # Write outputs in parallel
         write_fits_images(out_paths, processed_batch, n_head_blocks=n_head_blocks)
         gc.collect()
@@ -638,7 +637,9 @@ def uniformity_statistical(
     return float(-np.log10(uniformity_score + 1e-10))
 
 
-def record_statistics(filename: str, header: fits.Header, device_id: int = 0, cropsize: int = 500, *, dtype: str):
+def record_masterframe_statistics(
+    filename: str, header: fits.Header, device_id: int = 0, cropsize: int = 500, *, dtype: str
+):
     data = fits.getdata(filename).astype(np.float32)  # Ensure data is float32
     mean, median, std, min, max = sigma_clipped_stats(data, device_id=device_id, sigma=3, maxiters=5, minmax=True)
     header["CLIPMEAN"] = (float(mean), "3-sig clipped mean of the pixel values")
@@ -664,8 +665,7 @@ def record_statistics(filename: str, header: fits.Header, device_id: int = 0, cr
     # header["CENCMAX"] = float(max)
     edge_var, _, trimmed = calculate_edge_variation(data)
     header["TRIMMED"] = (trimmed, "Non-positive values in the middle of the image")
-    
-    trimmed = False
+
     if dtype.upper() == "FLAT":
         datasig = fits.getdata(filename.replace("flat_", "flatsig_")).astype(np.float32)  # Ensure data is float32
         s_mean, s_median, s_std = sigma_clipped_stats(datasig, device_id=device_id, sigma=3, maxiters=5)
@@ -674,7 +674,7 @@ def record_statistics(filename: str, header: fits.Header, device_id: int = 0, cr
         header["SIGMED"] = (s_median, "3-sig clipped median of the errormap")
         header["SIGSTD"] = (s_std, "3-sig clipped std of the errormap")
         header["EDGEVAR"] = (edge_var, "Edge variation of the image")
-        
+
     elif dtype.upper() == "DARK":
         uniformity_score = uniformity_statistical(filename)
         header["UNIFORM"] = (uniformity_score, "Uniformity score")

@@ -10,7 +10,7 @@ import traceback
 
 from .plotting import *
 from . import utils as prep_utils
-from .calc import record_statistics
+from .calc import record_masterframe_statistics, calculate_edge_variation
 from . import ppflag
 
 from ..utils import flatten, time_diff_in_seconds, atleast_1d
@@ -486,7 +486,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             )
         self._ppflag[dtype] = ppflag_val
 
-        sanity_flag = self._assess_quality_and_update_header(header=header, dtype=dtype, ppflag_val=ppflag_val)
+        sanity_flag = self._assess_masterframe_quality_and_update_header(
+            header=header, dtype=dtype, ppflag_val=ppflag_val
+        )
 
         if sanity_flag:
             self.logger.info(f"[Group {self._current_group+1}] Nominal master {dtype} generated successfully in {time_diff_in_seconds(st)} seconds")  # fmt: skip
@@ -504,9 +506,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
         return False
 
-    def _assess_quality_and_update_header(self, header, dtype, ppflag_val: int = 0):
+    def _assess_masterframe_quality_and_update_header(self, header, dtype, ppflag_val: int = 0):
         """TODO: This is inefficient as it calls unnecessary IO. Ideally stats should be calculated in calc_function"""
-        header = record_statistics(getattr(self, f"{dtype}_output"), header, dtype=dtype)
+        header = record_masterframe_statistics(getattr(self, f"{dtype}_output"), header, dtype=dtype)
 
         sanity_flag = self.apply_criteria(header=header, dtype=dtype)  # evaluates sanity of the image itself
         if ppflag_val & ppflag.PPFLAG_SANITY_F_USED:  # consider propagated sanity flag of the ingredient frames
@@ -766,6 +768,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         for raw_file, processed_file in zip(self.sci_input, self.sci_output):
             with fits.open(raw_file) as hdul:
                 header = hdul[0].header.copy()
+                raw_data = hdul[0].data.astype(np.float32)
+            _, _, trimmed = calculate_edge_variation(raw_data)
+            header["TRIMMED"] = (trimmed, "Non-positive values in the middle of the image")
             header["SATURATE"] = prep_utils.get_saturation_level(header, bias, dark, flat)
             header = prep_utils.write_IMCMB_to_header(header, [bias, dark, flat, raw_file])
             ppflag.set_ppflag_in_header(header, sci_ppflag)
