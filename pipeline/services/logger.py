@@ -12,6 +12,40 @@ from ..errors import UndefinedProcessError, exception_from_code, ProcessErrorBas
 from ..services.database.handler import ExceptionHandler
 
 
+HIGH_LEVEL_TASK_LOGGER_NAME = "pipeline.high_level_tasks"
+
+
+def get_high_level_task_logger(logger_name: str, log_file: Optional[str] = None) -> logging.Logger:
+    """Return a shared rotating-file logger for high-level orchestration tasks."""
+    log_file = log_file or const.HIGH_LEVEL_TASK_LOG_FILE
+    parent_logger = logging.getLogger(HIGH_LEVEL_TASK_LOGGER_NAME)
+    parent_logger.setLevel(logging.INFO)
+    parent_logger.propagate = False
+
+    abs_log_file = os.path.abspath(log_file)
+    has_matching_handler = any(
+        isinstance(handler, RotatingFileHandler)
+        and getattr(handler, "baseFilename", None) == abs_log_file
+        and getattr(handler, "name", None) == "high_level_tasks_file"
+        for handler in parent_logger.handlers
+    )
+
+    if not has_matching_handler:
+        os.makedirs(os.path.dirname(abs_log_file), exist_ok=True)
+        file_handler = RotatingFileHandler(abs_log_file, maxBytes=1024 * 1024 * 2, backupCount=5)
+        file_handler.name = "high_level_tasks_file"
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(
+            logging.Formatter("[%(levelname)s] %(asctime)s - %(name)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+        )
+        parent_logger.addHandler(file_handler)
+
+    child_logger = logging.getLogger(f"{HIGH_LEVEL_TASK_LOGGER_NAME}.{logger_name}")
+    child_logger.setLevel(logging.INFO)
+    child_logger.propagate = True
+    return child_logger
+
+
 class Logger:
     """
     A flexible logging utility with file, console, and Slack notification capabilities.

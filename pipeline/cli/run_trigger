@@ -12,7 +12,7 @@ import logging
 import glob
 from pathlib import Path
 
-from pipeline.const import RAWDATA_DIR, RECENT_RAWDATA_TRANSFER_HISTORY
+from pipeline.const import PIPELINE_TRIGGER_LOG_FILE, RAWDATA_DIR, RECENT_RAWDATA_TRANSFER_HISTORY
 from pipeline.services.batchtriggerlock import BatchTriggerLock
 from pipeline.services.monitor import Monitor
 from pipeline.services.scheduler import Scheduler
@@ -24,7 +24,7 @@ from logging.handlers import RotatingFileHandler
 
 # Create rotating file handler (max 10MB per file, keep 5 backup files = 50MB total)
 file_handler = RotatingFileHandler(
-    "/var/log/pipeline-trigger.log",
+    PIPELINE_TRIGGER_LOG_FILE,
     maxBytes=10 * 1024 * 1024,  # 10MB
     backupCount=5,  # Keep 5 backup files
 )

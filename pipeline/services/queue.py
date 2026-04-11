@@ -10,7 +10,7 @@ from datetime import datetime
 import subprocess
 
 from ..utils import time_diff_in_seconds
-from ..const.environ import QUEUE_SOCKET_PATH
+from ..const.environ import PIPELINE_LOG_DIR, QUEUE_SOCKET_PATH
 from ..const.run import SUCCESS_RETURN_CODE
 from .memory import MemoryMonitor
 from .logger import Logger
@@ -71,11 +71,11 @@ class QueueManager:
             self.logger = Logger("QueueManager")
             if monitor:
                 self.logger.set_output_file(
-                    f"/var/log/pipeline/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_monitor_{os.getpid()}.log"
+                    f"{PIPELINE_LOG_DIR}/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_monitor_{os.getpid()}.log"
                 )
             else:
                 self.logger.set_output_file(
-                    f"/var/log/pipeline/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_{os.getpid()}.log"
+                    f"{PIPELINE_LOG_DIR}/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_{os.getpid()}.log"
                 )
 
         self.logger.debug(f"Initialize QueueManager.")

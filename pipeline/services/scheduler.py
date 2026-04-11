@@ -11,6 +11,7 @@ from astropy.table import Table, vstack
 
 from ..const import SCRIPTS_DIR, NUM_GPUS, SCHEDULER_DB_PATH, QUEUE_SOCKET_PATH
 from ..const import SUCCESS_RETURN_CODE, FAILURE_RETURN_CODE, EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE
+from .logger import get_high_level_task_logger
 
 
 class Scheduler:
@@ -947,7 +948,9 @@ class Scheduler:
                             [config not in duplicate_configs for config in existing_table["config"]]
                         ]
 
-                        logger.info("Replaced %d existing schedule(s) with new ones", len(duplicate_configs))
+                        get_high_level_task_logger(__name__).info(
+                            "Replaced %d existing schedule(s) with new ones", len(duplicate_configs)
+                        )
 
                     # Use all new rows (replacing existing ones)
                     filtered_table = new_table

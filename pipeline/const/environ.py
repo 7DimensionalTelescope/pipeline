@@ -101,6 +101,13 @@ SLACK_TOKEN = os.environ.get("SLACK_TOKEN", None)
 INSTRUM_STATUS_DICT = _external_paths.get("INSTRUM_STATUS_DICT")
 SEXTRACTOR_COMMAND = os.environ.get("SEXTRACTOR_COMMAND") or "source-extractor"
 RECENT_RAWDATA_TRANSFER_HISTORY = _external_paths.get("RECENT_RAWDATA_TRANSFER_HISTORY")
+PIPELINE_LOG_DIR = _external_paths.get("PIPELINE_LOG_DIR") or "/var/log/pipeline"
+PIPELINE_TRIGGER_LOG_FILE = (
+    _external_paths.get("PIPELINE_TRIGGER_LOG_FILE") or "/var/log/pipeline-trigger.log"
+)
+HIGH_LEVEL_TASK_LOG_FILE = (
+    _external_paths.get("HIGH_LEVEL_TASK_LOG_FILE") or os.path.join(PIPELINE_LOG_DIR, "high_level_tasks.log")
+)
 
 
 # database access

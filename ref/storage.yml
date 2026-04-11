@@ -29,6 +29,9 @@ references:
   REF_IMAGE_DIR: "/lyman/data1/factory/ref_frame"
 
 external:
+  PIPELINE_LOG_DIR: "/var/log/pipeline"
+  PIPELINE_TRIGGER_LOG_FILE: "/var/log/pipeline-trigger.log"
+  HIGH_LEVEL_TASK_LOG_FILE: "/var/log/pipeline/high_level_tasks.log"
   QUEUE_SOCKET_PATH: "/run/queue/queue.sock"
   SCHEDULER_DB_PATH: "/var/db/scheduler.db"
   TOO_DB_PATH: "/var/db/too_requested.db"

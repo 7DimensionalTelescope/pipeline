@@ -9,6 +9,7 @@ from ..config.utils import get_filter_from_config
 from ..const.run import DEFAULT_SCIDATA_PROCESSES
 from ..const.observation import BROAD_FILTERS
 
+from .logger import get_high_level_task_logger
 from .utils import SortedGroupDict, PreprocessGroup, ScienceGroup
 from .fd import log_fd_info
 
@@ -82,7 +83,9 @@ class Blueprint:
         )
 
         if len(image_inventory) == 0:
-            self.logger.warning(f"No group for wrapper out of {self.list_of_images}\nPossibly due to NUM_MIN_CALIB")
+            get_high_level_task_logger(__name__).warning(
+                f"No group for wrapper out of {self.list_of_images}\nPossibly due to NUM_MIN_CALIB"
+            )
 
         for i, group in enumerate(image_inventory):
             try:
