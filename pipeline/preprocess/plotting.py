@@ -1,4 +1,3 @@
-import os
 import numpy as np
 from pathlib import Path
 import fitsio
@@ -13,10 +12,11 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
 from ..path import PathHandler
 
 
-def save_fits_as_figures(image_data, output_path, stretch=True, log_scale=False, max_width=1000, overwrite=False):
+def plot_outputs_exist(output_paths) -> bool:
+    return all(Path(output_path).exists() for output_path in output_paths)
 
-    # Handle potential NaN or inf values
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+def save_fits_as_figures(image_data, output_path, stretch=True, log_scale=False, max_width=1000, overwrite=False):
+    output_path = Path(output_path)
 
     if output_path.exists() and not overwrite:
         return
@@ -55,8 +55,11 @@ def save_fits_as_figures(image_data, output_path, stretch=True, log_scale=False,
     pil_image.save(output_path, "JPEG", quality=85, optimize=True)
 
 
-def save_fits_with_contrast(image_data, output_path, max_width=1000):
+def save_fits_with_contrast(image_data, output_path, max_width=1000, overwrite=False):
     # Open the FITS file
+    output_path = Path(output_path)
+    if output_path.exists() and not overwrite:
+        return None
 
     data = fitsio.read(image_data)
 
@@ -99,148 +102,167 @@ def plot_bias(file, overwrite=False, dry_run: bool = False):
         print("An image path (bias) is not properly defined.")
         return
 
-    path = Path(file)
+    figures = PathHandler(file).preprocess.figures
+    hist_path = figures._bias_hist
+    image_path = figures._bias_image
+    contrast_path = figures._bias_contrast
     if dry_run:
-        print(path.parent / "figures" / f"{path.stem}_hist.jpg")
-        print(path.parent / "figures" / f"{path.stem}.jpg")
-        print(path.parent / "figures" / f"{path.stem}_contrast.jpg")
+        print(hist_path)
+        print(image_path)
+        print(contrast_path)
         return
-    os.makedirs(path.parent / "figures", exist_ok=True)
-    output_path = path.parent / "figures" / f"{path.stem}_hist.jpg"
+    if plot_outputs_exist((hist_path, image_path, contrast_path)) and not overwrite:
+        return
 
-    # if output_path.exists() and not overwrite:
-    #     return
+    need_hist = overwrite or not hist_path.exists()
+    need_image = overwrite or not image_path.exists()
+    need_contrast = overwrite or not contrast_path.exists()
+    data = None
 
-    data = fitsio.read(file)
-    header = fits.getheader(file)
+    if need_hist or need_image:
+        data = fitsio.read(file)
 
-    fdata = data.ravel()
-    clipmin = int(header["CLIPMIN"])
-    clipmax = int(header["CLIPMAX"])
-    mn = fdata.min()
-    mx = fdata.max()
-    scope = (350, 700)  # (400, 600) (clipmin, clipmax)
+    if need_hist:
+        header = fits.getheader(file)
+        fdata = data.ravel()
+        clipmin = int(header["CLIPMIN"])
+        clipmax = int(header["CLIPMAX"])
+        mn = fdata.min()
+        mx = fdata.max()
+        scope = (350, 700)  # (400, 600) (clipmin, clipmax)
 
-    # edges = np.unique(np.concatenate(([mn], np.arange(clipmin, clipmax + 1, 1), [mx])))
-    edges = np.unique(np.concatenate(([mn], np.arange(scope[0], scope[1] + 1, 1), [mx]))) + 0.5
-    fig = Figure(figsize=(10, 6))
-    canvas = FigureCanvas(fig)
-    ax = fig.add_subplot(1, 1, 1)
-    # plt.figure()
-    ax.hist(fdata, bins=edges, density=True, alpha=0.6, label="Data", log=True, histtype="step")
+        # edges = np.unique(np.concatenate(([mn], np.arange(clipmin, clipmax + 1, 1), [mx])))
+        edges = np.unique(np.concatenate(([mn], np.arange(scope[0], scope[1] + 1, 1), [mx]))) + 0.5
+        fig = Figure(figsize=(10, 6))
+        canvas = FigureCanvas(fig)
+        ax = fig.add_subplot(1, 1, 1)
+        # plt.figure()
+        ax.hist(fdata, bins=edges, density=True, alpha=0.6, label="Data", log=True, histtype="step")
 
-    lses = ["--", "-."]
-    for i, key in enumerate(["CLIPMEAN", "CLIPMED"]):
-        ax.axvline(header[key], linestyle=lses[i], color=f"C{i+1}", label=f"{key}: {header[key]:.4f}")
+        lses = ["--", "-."]
+        for i, key in enumerate(["CLIPMEAN", "CLIPMED"]):
+            ax.axvline(header[key], linestyle=lses[i], color=f"C{i+1}", label=f"{key}: {header[key]:.4f}")
 
-    label = r"outside 5 clipped $\sigma$"
-    ax.axvspan(mn, header["CLIPMEAN"] - 5 * header["CLIPSTD"], color="gray", alpha=0.2, label=label)
-    ax.axvspan(header["CLIPMEAN"] + 5 * header["CLIPSTD"], mx, color="gray", alpha=0.2)
-    ax.set_yscale("log")
-    ax.set_xlabel("ADU")
-    ax.set_ylabel("Density")
-    ax.set_title("Master Bias")
-    ax.set_xlim(*scope)
-    # plt.ylim(1e-7, 10)
-    ax.legend(loc=2)
+        label = r"outside 5 clipped $\sigma$"
+        ax.axvspan(mn, header["CLIPMEAN"] - 5 * header["CLIPSTD"], color="gray", alpha=0.2, label=label)
+        ax.axvspan(header["CLIPMEAN"] + 5 * header["CLIPSTD"], mx, color="gray", alpha=0.2)
+        ax.set_yscale("log")
+        ax.set_xlabel("ADU")
+        ax.set_ylabel("Density")
+        ax.set_title("Master Bias")
+        ax.set_xlim(*scope)
+        # plt.ylim(1e-7, 10)
+        ax.legend(loc=2)
 
-    # Inset to show the right tail
-    axins = inset_axes(ax, width="30%", height="30%", loc="upper right", borderpad=2)
-    tail = fdata[(fdata >= scope[1])]
-    axins.hist(tail, bins=100, density=False, histtype="step")
-    axins.set_xlim(scope[1], mx + 100)
-    # axins.set_yscale("log")
-    axins.tick_params(axis="both", which="major", labelsize=8)
-    axins.set_title("Right-tail zoom", fontsize=9)
+        # Inset to show the right tail
+        axins = inset_axes(ax, width="30%", height="30%", loc="upper right", borderpad=2)
+        tail = fdata[(fdata >= scope[1])]
+        axins.hist(tail, bins=100, density=False, histtype="step")
+        axins.set_xlim(scope[1], mx + 100)
+        # axins.set_yscale("log")
+        axins.tick_params(axis="both", which="major", labelsize=8)
+        axins.set_title("Right-tail zoom", fontsize=9)
 
-    canvas.print_figure(output_path)
-    # plt.savefig(output_path)
-    # plt.close()
-    save_fits_as_figures(data, path.parent / "figures" / f"{path.stem}.jpg")
-    save_fits_with_contrast(file, path.parent / "figures" / f"{path.stem}_contrast.jpg")
+        canvas.print_figure(figures.bias_hist)
+
+    if need_image:
+        save_fits_as_figures(data if data is not None else file, figures.bias_image, overwrite=overwrite)
+
+    if need_contrast:
+        save_fits_with_contrast(file, figures.bias_contrast, overwrite=overwrite)
 
 
-def plot_dark(file, flattened_mask=None, dry_run: bool = False):
+def plot_dark(file, flattened_mask=None, bpmask_file=None, overwrite=False, dry_run: bool = False):
     if not (isinstance(file, str)):
         print("An image path (dark) is not properly defined.")
         return
 
-    path = Path(file)
+    figures = PathHandler(file).preprocess.figures
+    hist_path = figures._dark_hist
+    image_path = figures._dark_image
+    contrast_path = figures._dark_contrast
     if dry_run:
-        print(path.parent / "figures" / f"{path.stem}_hist.jpg")
-        print(path.parent / "figures" / f"{path.stem}.jpg")
-        print(path.parent / "figures" / f"{path.stem}_contrast.jpg")
+        print(hist_path)
+        print(image_path)
+        print(contrast_path)
         return
-    os.makedirs(path.parent / "figures", exist_ok=True)
-    output_path = path.parent / "figures" / f"{path.stem}_hist.jpg"
-    # if output_path.exists():
-    #     return
+    if plot_outputs_exist((hist_path, image_path, contrast_path)) and not overwrite:
+        return
 
-    data = fitsio.read(file)
-    header = fits.getheader(file)
-    fdata = data.ravel()
+    need_hist = overwrite or not hist_path.exists()
+    need_image = overwrite or not image_path.exists()
+    need_contrast = overwrite or not contrast_path.exists()
+    data = None
 
-    scope = (-170, 200)
-    mn = fdata.min()
-    mx = fdata.max()
-    edges = np.unique(np.concatenate(([mn], np.arange(scope[0], scope[1] + 1, 1), [mx]))) + 0.5
+    if need_hist or need_image:
+        data = fitsio.read(file)
 
-    # fig, ax = plt.subplots(figsize=(10, 6))
-    fig = Figure(figsize=(10, 6))
-    canvas = FigureCanvas(fig)
-    ax = fig.add_subplot(1, 1, 1)
-    axins = inset_axes(ax, width="40%", height="40%", loc="upper right", borderpad=2)
+    if need_hist:
+        header = fits.getheader(file)
+        fdata = data.ravel()
+        if flattened_mask is None and bpmask_file:
+            badpix = fits.getval(bpmask_file, "BADPIX", ext=1)
+            if badpix is None:
+                badpix = 1
+            flattened_mask = fits.getdata(bpmask_file, ext=1) != badpix
+            flattened_mask = flattened_mask.ravel()
 
-    # unmasked data
-    ax.hist(fdata, bins=edges, density=True, alpha=0.6, label="Unmasked Data", histtype="step")
-    plot_dark_tail_on_ax(fdata, ax=axins, i=0, mx=mx)
+        scope = (-170, 200)
+        mn = fdata.min()
+        mx = fdata.max()
+        edges = np.unique(np.concatenate(([mn], np.arange(scope[0], scope[1] + 1, 1), [mx]))) + 0.5
 
-    # percentiles (unmasked)
-    fdata_pos = fdata[fdata > 0]
-    # p99 = np.percentile(fdata_pos, 99, method="nearest")
-    # p999 = np.percentile(fdata_pos, 99.9, method="nearest")
-    # ax.axvline(p99, color="k", linestyle=":", label="99th pct")
-    # ax.axvline(p999, color="k", label="99.9th pct")
-    p9973 = np.percentile(fdata_pos, 99.73, method="nearest")
-    ax.axvline(p9973, color="k", ls="-", label="99.73th percentile (unmasked)")
+        # fig, ax = plt.subplots(figsize=(10, 6))
+        fig = Figure(figsize=(10, 6))
+        canvas = FigureCanvas(fig)
+        ax = fig.add_subplot(1, 1, 1)
+        axins = inset_axes(ax, width="40%", height="40%", loc="upper right", borderpad=2)
 
-    # masked data
-    fdata = fdata[flattened_mask] if flattened_mask is not None else fdata
-    ax.hist(fdata, bins=edges, density=True, alpha=0.6, label="Masked Data", histtype="step", linestyle="--")
-    plot_dark_tail_on_ax(fdata, ax=axins, i=1, mx=mx)
+        # unmasked data
+        ax.hist(fdata, bins=edges, density=True, alpha=0.6, label="Unmasked Data", histtype="step")
+        plot_dark_tail_on_ax(fdata, ax=axins, i=0, mx=mx)
 
-    # percentiles (masked)
-    fdata_pos = fdata[fdata > 0]
-    if len(fdata_pos) > 0:
+        # percentiles (unmasked)
+        fdata_pos = fdata[fdata > 0]
         p9973 = np.percentile(fdata_pos, 99.73, method="nearest")
-        ax.axvline(p9973, color="k", ls=":", label="99.73th percentile (masked)")
+        ax.axvline(p9973, color="k", ls="-", label="99.73th percentile (unmasked)")
 
-    # mean and median lines
-    lses = ["--", "-."]
-    for i, key in enumerate(["CLIPMEAN", "CLIPMED"]):
-        ax.axvline(header[key], linestyle=lses[i], color=f"C{i+1}", label=f"{key}: {header[key]:.4f}")
+        # masked data
+        fdata = fdata[flattened_mask] if flattened_mask is not None else fdata
+        ax.hist(fdata, bins=edges, density=True, alpha=0.6, label="Masked Data", histtype="step", linestyle="--")
+        plot_dark_tail_on_ax(fdata, ax=axins, i=1, mx=mx)
 
-    # 5-sigma shade
-    label = r"outside 5 clipped $\sigma$"
-    ax.axvspan(mn, header["CLIPMEAN"] - 5 * header["CLIPSTD"], color="gray", alpha=0.1, label=label)
-    ax.axvspan(header["CLIPMEAN"] + 5 * header["CLIPSTD"], mx, color="gray", alpha=0.1)
+        # percentiles (masked)
+        fdata_pos = fdata[fdata > 0]
+        if len(fdata_pos) > 0:
+            p9973 = np.percentile(fdata_pos, 99.73, method="nearest")
+            ax.axvline(p9973, color="k", ls=":", label="99.73th percentile (masked)")
 
-    ax.set_xlim(*scope)
-    # plt.xscale("symlog")
-    ax.set_yscale("log")
-    ax.set_xlabel("ADU")
-    ax.set_ylabel("Density")
-    ax.set_title(f"Master Dark")
+        # mean and median lines
+        lses = ["--", "-."]
+        for i, key in enumerate(["CLIPMEAN", "CLIPMED"]):
+            ax.axvline(header[key], linestyle=lses[i], color=f"C{i+1}", label=f"{key}: {header[key]:.4f}")
 
-    # plt.ylim(1e-6, 10)
-    ax.legend(loc=2)
+        # 5-sigma shade
+        label = r"outside 5 clipped $\sigma$"
+        ax.axvspan(mn, header["CLIPMEAN"] - 5 * header["CLIPSTD"], color="gray", alpha=0.1, label=label)
+        ax.axvspan(header["CLIPMEAN"] + 5 * header["CLIPSTD"], mx, color="gray", alpha=0.1)
 
-    canvas.print_figure(output_path)  # writes to PNG
-    # plt.savefig(output_path)
-    # plt.close()
-    save_fits_as_figures(data, path.parent / "figures" / f"{path.stem}.jpg")
-    save_fits_with_contrast(file, path.parent / "figures" / f"{path.stem}_contrast.jpg")
-    # plot_dark_tail(fdata, file, savefig=savefig)
+        ax.set_xlim(*scope)
+        # plt.xscale("symlog")
+        ax.set_yscale("log")
+        ax.set_xlabel("ADU")
+        ax.set_ylabel("Density")
+        ax.set_title(f"Master Dark")
+        ax.legend(loc=2)
+
+        canvas.print_figure(figures.dark_hist)
+
+    if need_image:
+        save_fits_as_figures(data if data is not None else file, figures.dark_image, overwrite=overwrite)
+
+    if need_contrast:
+        save_fits_with_contrast(file, figures.dark_contrast, overwrite=overwrite)
 
 
 def plot_dark_tail_on_ax(fdata, ax, i=0, mx=None):
@@ -293,82 +315,91 @@ def plot_dark_tail_on_ax(fdata, ax, i=0, mx=None):
 #         plt.show(block=False)
 
 
-def plot_flat(file, fmask=None, dry_run: bool = False):
+def plot_flat(file, fmask=None, bpmask_file=None, overwrite=False, dry_run: bool = False):
     if not (isinstance(file, str)):
         print("An image path (flat) is not properly defined.")
         return
-    path = Path(file)
+    figures = PathHandler(file).preprocess.figures
+    hist_path = figures._flat_hist
+    image_path = figures._flat_image
     if dry_run:
-        print(path.parent / "figures" / f"{path.stem}_hist.jpg")
-        print(path.parent / "figures" / f"{path.stem}.jpg")
+        print(hist_path)
+        print(image_path)
         return
-    os.makedirs(path.parent / "figures", exist_ok=True)
-    output_path = path.parent / "figures" / f"{path.stem}_hist.jpg"
-    # if output_path.exists():
-    #     return
+    if plot_outputs_exist((hist_path, image_path)) and not overwrite:
+        return
 
-    data = fitsio.read(file)
-    header = fits.getheader(file)
+    need_hist = overwrite or not hist_path.exists()
+    need_image = overwrite or not image_path.exists()
+    data = None
 
-    fig = Figure(figsize=(10, 6))
-    canvas = FigureCanvas(fig)
-    ax = fig.add_subplot(1, 1, 1)
+    if need_hist or need_image:
+        data = fitsio.read(file)
 
-    fdata = data.ravel()
-    # unmasked data
-    ax.hist(fdata, bins=100, color="C0", histtype="step", label="Unmasked Data")
+    if need_hist:
+        header = fits.getheader(file)
+        if fmask is None and bpmask_file:
+            badpix = fits.getval(bpmask_file, "BADPIX", ext=1)
+            if badpix is None:
+                badpix = 1
+            fmask = fits.getdata(bpmask_file, ext=1) != badpix
+            fmask = fmask.ravel()
 
-    fdata = fdata[fmask] if fmask is not None else fdata
+        fig = Figure(figsize=(10, 6))
+        canvas = FigureCanvas(fig)
+        ax = fig.add_subplot(1, 1, 1)
 
-    # masked data
-    ax.hist(fdata, bins=100, color="C1", histtype="step", linestyle="--", label="Masked Data")
+        fdata = data.ravel()
+        # unmasked data
+        ax.hist(fdata, bins=100, color="C0", histtype="step", label="Unmasked Data")
 
-    lses = ["--", "-."]
-    for i, key in enumerate(["CLIPMEAN", "CLIPMED"]):
-        ax.axvline(header[key], linestyle=lses[i], color=f"C{i+1}", label=f"{key}: {header[key]:.4f}")
+        fdata = fdata[fmask] if fmask is not None else fdata
 
-    # label = r"outside 5 clipped $\sigma$, inside CLIPMIN/CLIPMAX"
-    label = r"outside CLIPMIN/CLIPMAX"
-    x_min, x_max = ax.get_xlim()
-    ax.axvspan(x_min, header["CLIPMIN"], color="gray", alpha=0.1, label=label)
-    ax.axvspan(header["CLIPMAX"], x_max, color="gray", alpha=0.1)
-    ax.axvspan(
-        header["CLIPMEAN"] - 1 * header["CLIPSTD"],
-        header["CLIPMEAN"] + 1 * header["CLIPSTD"],
-        color="gray",
-        alpha=0.3,
-        label=r"inside 1 clipped $\sigma$",
-    )
+        # masked data
+        ax.hist(fdata, bins=100, color="C1", histtype="step", linestyle="--", label="Masked Data")
 
-    ax.set_yscale("log")
-    ax.set_xlabel("Normalized ADU")
-    ax.set_ylabel("N")
-    ax.set_title(f"Master Flat")
-    # ax.set_ylim(1e5)
-    ax.set_xlim(x_min, x_max)
-    # ax.set_xlim(0, 1.5)
-    ax.legend()
+        lses = ["--", "-."]
+        for i, key in enumerate(["CLIPMEAN", "CLIPMED"]):
+            ax.axvline(header[key], linestyle=lses[i], color=f"C{i+1}", label=f"{key}: {header[key]:.4f}")
 
-    canvas.print_figure(output_path)
-    # fig.savefig(output_path)
-    # fig.close()
+        label = r"outside CLIPMIN/CLIPMAX"
+        x_min, x_max = ax.get_xlim()
+        ax.axvspan(x_min, header["CLIPMIN"], color="gray", alpha=0.1, label=label)
+        ax.axvspan(header["CLIPMAX"], x_max, color="gray", alpha=0.1)
+        ax.axvspan(
+            header["CLIPMEAN"] - 1 * header["CLIPSTD"],
+            header["CLIPMEAN"] + 1 * header["CLIPSTD"],
+            color="gray",
+            alpha=0.3,
+            label=r"inside 1 clipped $\sigma$",
+        )
 
-    save_fits_as_figures(data, path.parent / "figures" / f"{path.stem}.jpg")
+        ax.set_yscale("log")
+        ax.set_xlabel("Normalized ADU")
+        ax.set_ylabel("N")
+        ax.set_title(f"Master Flat")
+        ax.set_xlim(x_min, x_max)
+        ax.legend()
+
+        canvas.print_figure(figures.flat_hist)
+
+    if need_image:
+        save_fits_as_figures(data if data is not None else file, figures.flat_image, overwrite=overwrite)
 
 
-def plot_bpmask(file, ext=1, badpix=1, dry_run: bool = False):
+def plot_bpmask(file, ext=1, badpix=1, overwrite=False, dry_run: bool = False):
     if not (isinstance(file, str)):
         print("An image path (bpmask) is not properly defined.")
         return
-    path = Path(file)
+    figures = PathHandler(file).preprocess.figures
+    output_path = figures._bpmask_image
     if dry_run:
-        print(path.parent / "figures" / f"{path.stem}.jpg")
+        print(output_path)
         return
-    os.makedirs(path.parent / "figures", exist_ok=True)
-    output_path = path.parent / "figures" / f"{path.stem}.jpg"
+    if output_path.exists() and not overwrite:
+        return
+
     data = fitsio.read(file, ext=ext)
-    # if output_path.exists():
-    #     return
 
     header = fits.getheader(file, ext=ext)
     if "BADPIX" in header.keys():
@@ -390,23 +421,26 @@ def plot_bpmask(file, ext=1, badpix=1, dry_run: bool = False):
     ax.set_ylabel("Y (pixels)")
 
     fig.tight_layout()
-    canvas.print_figure(output_path)
-    # plt.savefig(output_path)
-    # plt.close()
+    canvas.print_figure(figures.bpmask_image)
 
 
-def plot_sci(input_img, output_img, is_too=False, dry_run: bool = False):
+def plot_sci(input_img, output_img, is_too=False, overwrite=False, dry_run: bool = False):
     if not (isinstance(input_img, str)):
         print("An image path (input_img) is not properly defined.")
         return
     if not (isinstance(output_img, str)):
         print("An image path (output_img) is not properly defined.")
         return
-    path = PathHandler(output_img, is_too=is_too)
+    figures = PathHandler(output_img, is_too=is_too).preprocess.figures
+    raw_output_path = figures._science_raw
+    processed_output_path = figures._science_processed
     if dry_run:
-        print(path.figure_dir_to_path / f"{path.stem[0]}_raw.jpg")
-        print(path.figure_dir_to_path / f"{path.stem[0]}.jpg")
+        print(raw_output_path)
+        print(processed_output_path)
         return
 
-    save_fits_as_figures(fits.getdata(input_img), path.figure_dir_to_path / f"{path.stem[0]}_raw.jpg")
-    save_fits_as_figures(fits.getdata(output_img), path.figure_dir_to_path / f"{path.stem[0]}.jpg")
+    if plot_outputs_exist((raw_output_path, processed_output_path)) and not overwrite:
+        return
+
+    save_fits_as_figures(input_img, figures.science_raw, overwrite=overwrite)
+    save_fits_as_figures(output_img, figures.science_processed, overwrite=overwrite)

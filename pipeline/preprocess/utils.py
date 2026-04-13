@@ -82,7 +82,7 @@ def _build_lenient_template(template, dtype, ignore_binning=False):
             setattr(path.name, key, "*")
     if ignore_binning:
         setattr(path.name, "n_binning", "*")
-    return path.preprocess.masterframe_template
+    return path.preprocess._masterframe
 
 
 def tolerant_search(

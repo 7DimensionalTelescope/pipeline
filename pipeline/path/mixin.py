@@ -59,7 +59,7 @@ class AutoCollapseMixin:
 
 
 class AutoMkdirMixin:
-    """This makes sure accessed dirs exist. Prepend _ to variables to prevent mkdir"""
+    """Create parent dirs for accessed path attrs; private names (prefixed with _) are skipped."""
 
     # attrs to skip mkdir; subclasses can modify this set
     _mkdir_exclude = {
@@ -95,7 +95,7 @@ class AutoMkdirMixin:
 
         # print("mkdir", name)
 
-        # Skip excluded attributes
+        # Skip manually excluded attributes.
         if name in object.__getattribute__(self, "_mkdir_exclude"):
             return value
 

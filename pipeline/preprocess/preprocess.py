@@ -197,6 +197,11 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             else:
                 self.logger.info("Pipeline run started; no files will be created or modified (DRY RUN)")
 
+            if self.overwrite:
+                self.logger.info("Overwrite=True; existing science outputs and plots may be regenerated")
+            else:
+                self.logger.info("Overwrite=False; existing science outputs and plots will be reused when available")
+
             threads_for_making_plots = []
             for i in range(self._n_groups):
                 # Calculate progress percentage
@@ -584,7 +589,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             self.logger.debug(f"[Group {self._current_group+1}] Masterframe Search (flatdark) Template: {template}")
             path = PathHandler(template)
             path.name.exptime = "*"
-            flatdark_template = path.preprocess.masterframe_template
+            flatdark_template = path.preprocess._masterframe
             existing_flatdark_file, flatdark_ignored_lenient = prep_utils.tolerant_search(
                 flatdark_template,
                 "dark",
@@ -756,6 +761,10 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             )
             return
 
+        if self.sci_input and all(os.path.exists(path) for path in self.sci_output) and not self.overwrite:
+            self.logger.info(f"[Group {self._current_group+1}] All science outputs already exist; skipping header preparation")
+            return
+
         bias, dark, flat = self.bias_output, self.dark_output, self.flat_output
         n_head_blocks = get_key(self.config_node.preprocess, "n_head_blocks", 8)
 
@@ -784,20 +793,20 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
     def make_masterframe_plots(self, file_path: str, dtype: str, group_index: int, dry_run: bool = False):
         if dtype == "bias":
-            plot_bias(file_path, dry_run=dry_run)
+            plot_bias(file_path, overwrite=self.overwrite, dry_run=dry_run)
         elif dtype == "dark":
             bpmask_file = file_path.replace("dark", "bpmask")
-            plot_bpmask(bpmask_file, dry_run=dry_run)
+            plot_bpmask(bpmask_file, overwrite=self.overwrite, dry_run=dry_run)
             badpix = fits.getval(bpmask_file, "BADPIX", ext=1) or 1
             mask = fits.getdata(bpmask_file, ext=1) != badpix
             fmask = mask.ravel()
-            plot_dark(file_path, fmask, dry_run=dry_run)
+            plot_dark(file_path, fmask, overwrite=self.overwrite, dry_run=dry_run)
         elif dtype == "flat":
             bpmask_file = self._get_raw_group("bpmask_output", group_index)
             badpix = fits.getval(bpmask_file, "BADPIX", ext=1) or 1
             mask = fits.getdata(bpmask_file, ext=1) != badpix
             fmask = mask.ravel()
-            plot_flat(file_path, fmask, dry_run=dry_run)
+            plot_flat(file_path, fmask, overwrite=self.overwrite, dry_run=dry_run)
 
     def make_plots(
         self,
@@ -823,39 +832,31 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             if "bias" in self.calib_types and not skip_flags["bias"]:
                 bias_file = self._get_raw_group("bias_output", group_index)
                 if os.path.exists(bias_file):
-                    plot_bias(bias_file, dry_run=dry_run)
+                    plot_bias(bias_file, overwrite=self.overwrite, dry_run=dry_run)
                 else:
                     self.logger.warning(f"[Group {group_index+1}] Bias image does not exist. Skipping bias plot.")
 
             else:
                 self.logger.info(f"[Group {group_index+1}] Skipping bias plot")
 
+            dark_file = self._get_raw_group("dark_output", group_index)
+            flat_file = self._get_raw_group("flat_output", group_index)
+            bpmask_file = self._get_raw_group("bpmask_output", group_index)
+
             # bpmask
             if "dark" in self.calib_types:
-                bpmask_file = self._get_raw_group("bpmask_output", group_index)
                 if os.path.exists(bpmask_file):
                     if not skip_flags["dark"]:
-                        plot_bpmask(bpmask_file, dry_run=dry_run)
-                    badpix = fits.getval(bpmask_file, "BADPIX", ext=1)
-                    if badpix is None:
-                        self.logger.warning(f"[Group {group_index+1}] Header missing BADPIX; using 1")
-
-                        badpix = 1
-
-                    mask = fits.getdata(bpmask_file, ext=1) != badpix
-                    fmask = mask.ravel()
+                        plot_bpmask(bpmask_file, overwrite=self.overwrite, dry_run=dry_run)
                 else:
                     self.logger.warning(f"[Group {group_index+1}] BPMask image does not exist. Skipping bpmask plot.")
-
-                    fmask = None
             else:
                 self.logger.info(f"[Group {group_index+1}] Skipping bpmask plot")
 
             # dark
             if "dark" in self.calib_types and not skip_flags["dark"]:
-                dark_file = self._get_raw_group("dark_output", group_index)
                 if os.path.exists(dark_file):
-                    plot_dark(dark_file, fmask, dry_run=dry_run)
+                    plot_dark(dark_file, bpmask_file=bpmask_file if os.path.exists(bpmask_file) else None, overwrite=self.overwrite, dry_run=dry_run)
                 else:
                     self.logger.warning(f"[Group {group_index+1}] Dark image does not exist. Skipping dark plot.")
 
@@ -864,9 +865,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
             # flat
             if "flat" in self.calib_types and not skip_flags["flat"]:
-                flat_file = self._get_raw_group("flat_output", group_index)
                 if os.path.exists(flat_file):
-                    plot_flat(flat_file, fmask, dry_run=dry_run)
+                    plot_flat(flat_file, bpmask_file=bpmask_file if os.path.exists(bpmask_file) else None, overwrite=self.overwrite, dry_run=dry_run)
                 else:
                     self.logger.warning(f"[Group {group_index+1}] Flat image does not exist. Skipping flat plot.")
 
@@ -877,14 +877,13 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
             # science
             st = time.time()
-            num_sci = len(self._get_raw_group("sci_input", group_index))
+            sci_pairs = list(zip(self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)))
+            num_sci = len(sci_pairs)
             if num_sci and not skip_flags["sci"]:
                 self.logger.info(f"[Group {group_index+1}] Generating plots for science frames ({num_sci} images)")
 
-                for input_img, output_img in zip(
-                    self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)
-                ):
-                    plot_sci(input_img, output_img, is_too=self.is_too, dry_run=dry_run)
+                for input_img, output_img in sci_pairs:
+                    plot_sci(input_img, output_img, is_too=self.is_too, overwrite=self.overwrite, dry_run=dry_run)
 
                 self.logger.info(
                     f"[Group {group_index+1}] Completed plot generation for images in {time_diff_in_seconds(st)} seconds "

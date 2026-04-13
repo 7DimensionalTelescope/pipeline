@@ -960,7 +960,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         Returns d_m_file, f_m_file, sig_z_file, sig_f_file
         """
         # z_m_file, d_m_file, f_m_file = (cls(s).preprocess.masterframe for s in mzdf_list)  # basename to full path
-        z_m_file, d_m_file, f_m_file = cls(mzdf_list).preprocess.masterframe_template  # with vectorized PathHandler
+        z_m_file, d_m_file, f_m_file = cls(mzdf_list).preprocess._masterframe  # with vectorized PathHandler
         sig_z_file = z_m_file.replace("bias", "biassig")
         sig_f_file = f_m_file.replace("flat", "flatsig")
         return d_m_file, f_m_file, sig_z_file, sig_f_file
@@ -972,7 +972,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         if isinstance(input, str | Path):
             name = NameHandler(input)
             if name.type[0] == "master" and (name.type[1] == "dark" or name.type[1] == "darksig"):
-                input = cls(input).preprocess.masterframe_template  # ensure full path to master dark, not darksig
+                input = cls(input).preprocess._masterframe  # ensure full path to master dark, not darksig
                 return input.replace("dark", "bpmask")
 
             elif name.type[0] == "calibrated":
@@ -990,18 +990,11 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         calibs = [v for k, v in header.items() if "IMCMB" in k]
         mdark = NameHandler(calibs).pick_type("master_dark")
         assert isinstance(mdark, str)
-        mdark = cls(mdark).preprocess.masterframe_template
+        mdark = cls(mdark).preprocess._masterframe
         return mdark.replace("dark", "bpmask")
 
 
 class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
-    _mkdir_exclude = AutoMkdirMixin._mkdir_exclude | {
-        "masterframe_template",
-        "mbias_template",
-        "mdark_template",
-        "mflat_template",
-    }
-
     def __init__(self, parent: PathHandler, config=None):
         self._parent = parent
 
@@ -1013,6 +1006,10 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
     def __repr__(self):
         return "\n".join(f"{k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
 
+    @cached_property
+    def figures(self):
+        return PathPreprocessFigures(self)
+
     @property
     def _masterframe_dir(self):
         """returns list-wrapped masterframe_dir"""
@@ -1021,7 +1018,7 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
         return self._parent._masterframe_dir
 
     @property
-    def mbias(self):
+    def _mbias(self):
         # PathHandlerDeprecated Behavior
         # """Given mixed raw calib images, pick up only bias frames and give their
         # masterframe counterparts"""
@@ -1040,12 +1037,11 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
         return bjoin(self._parent._masterframe_dir, self._parent.name.mbias_basename)
 
     @property
-    def mbias_template(self):
-        """No AutoMkdirMixin."""
-        return bjoin(self._parent._masterframe_dir, self._parent.name.mbias_basename)
+    def mbias(self):
+        return self._mbias
 
     @property
-    def mdark(self):
+    def _mdark(self):
         # result = []
         # for typ, d, s in zip(
         #     self._parent.name.type, self._parent._masterframe_dir, self._parent.name.masterframe_basename
@@ -1063,12 +1059,11 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
         return bjoin(self._parent._masterframe_dir, self._parent.name.mdark_basename)
 
     @property
-    def mdark_template(self):
-        """No AutoMkdirMixin."""
-        return bjoin(self._parent._masterframe_dir, self._parent.name.mdark_basename)
+    def mdark(self):
+        return self._mdark
 
     @property
-    def mflat(self):
+    def _mflat(self):
         # result = []
         # for typ, d, s in zip(
         #     self._parent.name.type, self._parent._masterframe_dir, self._parent.name.masterframe_basename
@@ -1086,15 +1081,12 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
         return bjoin(self._parent._masterframe_dir, self._parent.name.mflat_basename)
 
     @property
-    def mflat_template(self):
-        """No AutoMkdirMixin."""
-        return bjoin(self._parent._masterframe_dir, self._parent.name.mflat_basename)
+    def mflat(self):
+        return self._mflat
 
     @property
-    def masterframe_template(self):
+    def _masterframe(self):
         """
-        This doesn't trigger AutoMkdirMixin, as set in _mkdir_exclude.
-
         This is used for grouping and lookup templates where callers need the
         target filename, but the directory should only be created at write time.
         """
@@ -1123,9 +1115,124 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
         tuple(z, d, f) if science, just list[str] | str if calib
         """
 
-        return self.masterframe_template
+        return self._masterframe
 
         # return bjoin(self._parent.masterframe_dir, self._parent.name.masterframe_basename)
+
+
+class PathPreprocessFigures(AutoMkdirMixin, AutoCollapseMixin):
+    def __init__(self, parent: PathPreprocess):
+        self._parent = parent
+
+    @property
+    def _figure_dir(self):
+        dirs = []
+        input_files = atleast_1d(self._parent._parent._input_files)
+        stored_figure_dirs = atleast_1d(getattr(self._parent._parent, "_figure_dir", []))
+
+        for i, (input_file, typ) in enumerate(zip(input_files, atleast_1d(self._parent._parent.name.type))):
+            if "master" in typ:
+                dirs.append(os.path.join(os.path.dirname(input_file), FIGURES_DIRNAME))
+            else:
+                dirs.append(stored_figure_dirs[i])
+
+        return dirs
+
+    @property
+    def _dir(self):
+        return self._figure_dir
+
+    @property
+    def dir(self):
+        return self._dir
+
+    @property
+    def _bias_hist(self):
+        return bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "hist"), "jpg"))
+
+    @property
+    def bias_hist(self):
+        return self._bias_hist
+
+    @property
+    def _bias_image(self):
+        return bjoin(self._figure_dir, swap_ext(self._parent._parent.name.basename, "jpg"))
+
+    @property
+    def bias_image(self):
+        return self._bias_image
+
+    @property
+    def _bias_contrast(self):
+        return bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "contrast"), "jpg"))
+
+    @property
+    def bias_contrast(self):
+        return self._bias_contrast
+
+    @property
+    def _dark_hist(self):
+        return bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "hist"), "jpg"))
+
+    @property
+    def dark_hist(self):
+        return self._dark_hist
+
+    @property
+    def _dark_image(self):
+        return bjoin(self._figure_dir, swap_ext(self._parent._parent.name.basename, "jpg"))
+
+    @property
+    def dark_image(self):
+        return self._dark_image
+
+    @property
+    def _dark_contrast(self):
+        return bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "contrast"), "jpg"))
+
+    @property
+    def dark_contrast(self):
+        return self._dark_contrast
+
+    @property
+    def _flat_hist(self):
+        return bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "hist"), "jpg"))
+
+    @property
+    def flat_hist(self):
+        return self._flat_hist
+
+    @property
+    def _flat_image(self):
+        return bjoin(self._figure_dir, swap_ext(self._parent._parent.name.basename, "jpg"))
+
+    @property
+    def flat_image(self):
+        return self._flat_image
+
+    @property
+    def _bpmask_image(self):
+        return bjoin(self._figure_dir, swap_ext(self._parent._parent.name.basename, "jpg"))
+
+    @property
+    def bpmask_image(self):
+        return self._bpmask_image
+
+    @property
+    def _science_raw(self):
+        return bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "raw"), "jpg"))
+
+    @property
+    def science_raw(self):
+        return self._science_raw
+
+    @property
+    def _science_processed(self):
+        return bjoin(self._figure_dir, swap_ext(self._parent._parent.name.basename, "jpg"))
+
+    @property
+    def science_processed(self):
+        return self._science_processed
 
 
 class PathAstrometry(AutoMkdirMixin, AutoCollapseMixin):
