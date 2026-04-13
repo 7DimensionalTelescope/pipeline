@@ -16,7 +16,8 @@ import astropy.units as u
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .. import external
-from ..const import PIXSCALE, REF_DIR
+from ..const.environ import REF_DIR
+from ..const.observation import PIXSCALE, DEFAULT_EXPTIME
 from ..const.sciproc import ASTROMETRY_SPEC, REJECTION_PROCESS_HEADER_KEY, SCIPROCESS_REGISTRY
 from ..errors import AstrometryError, ScampError, SolveFieldError
 from ..utils import swap_ext, add_suffix, force_symlink, time_diff_in_seconds, unique_filename, atleast_1d, collapse
@@ -39,7 +40,6 @@ from .utils import (
     polygon_info_header,
     get_fov_quad,
     strip_wcs,
-    read_text_header,
     get_source_num_frac,
 )
 from .evaluation import (
@@ -1400,6 +1400,7 @@ class ImageInfo:
     n_binning: int  # Binning factor
     pixscale: float  # Pixel scale [arcsec/pix]
     filter: str  # Filter
+    exptime: float  # Exposure time [s]
 
     # WCS solution
     sip_wcs: Optional[str] = field(default=None)
@@ -1519,6 +1520,7 @@ class ImageInfo:
             n_binning=n_binning,
             pixscale=pixscale,
             filter=hdr["FILTER"],
+            exptime=hdr["EXPTIME"],
         )
 
     @cached_property
@@ -1543,7 +1545,7 @@ class ImageInfo:
         self.internal_match_counts = match_stats["counts_by_group_size"]  # ex) {2: 70, 3: 180, 1: 16}
         self.internal_match_recall = match_stats["recall"]
 
-    def set_early_qa_stats(self, sci_cat: str, ref_cat: str):
+    def set_early_qa_stats(self, sci_cat: str, ref_cat: str, exptime: float = DEFAULT_EXPTIME):
         """sets self.early_qa_cards"""
         if not ref_cat:
             self.logger.error("No refcat to perform early QA. Skipping...")
@@ -1555,7 +1557,7 @@ class ImageInfo:
         with open(os.path.join(REF_DIR, "zeropoints.json"), "r") as f:
             zp_per_filter = json.load(f)
         with open(os.path.join(REF_DIR, "depths.json"), "r") as f:
-            depths_per_filter = json.load(f)
+            depths_per_filter = json.load(f)  # The depths are for 100s exposures
         if self.filter in zp_per_filter:
             zp = zp_per_filter[self.filter]
         else:
@@ -1572,8 +1574,12 @@ class ImageInfo:
                 f"Filter {self.filter} not in depths.json for early QA. Using default: {depth}.",
                 exception=AstrometryError.PrerequisiteNotMet,
             )
+        # exptime correction
+        depth = depth + 1.25 * np.log10(exptime / DEFAULT_EXPTIME)
+        # safety margin
+        depth = depth - 0.5
 
-        self.num_frac = get_source_num_frac(sci_cat, ref_cat, sci_zp=zp, depth=depth - 0.5)
+        self.num_frac = get_source_num_frac(sci_cat, ref_cat, sci_zp=zp, depth=depth)
         self.logger.info(f"{self.id}: Early QA: NUMFRAC = {self.num_frac}")
         return
 
@@ -1757,9 +1763,9 @@ class ImageInfo:
         """iteration condition"""
 
         # return self.rsep_stats.unmatched_fraction > 0.9 or self.rsep_stats.separation_stats.P95 > 2 * PIXSCALE  # too tight
-        return (
-            self.rsep_stats.unmatched_fraction is not None and self.rsep_stats.unmatched_fraction > 0.9
-        ) or (self.rsep_stats.separation_stats.Q2 is not None and self.rsep_stats.separation_stats.Q2 > 2 * PIXSCALE)
+        return (self.rsep_stats.unmatched_fraction is not None and self.rsep_stats.unmatched_fraction > 0.9) or (
+            self.rsep_stats.separation_stats.Q2 is not None and self.rsep_stats.separation_stats.Q2 > 2 * PIXSCALE
+        )
 
     @property
     def invalid(self) -> bool:

@@ -494,9 +494,8 @@ def get_num_sources(catalog: str | Table, depth: float = 17.0, zp: float = 0, ma
     return len(catalog)
 
 
-def get_source_num_frac(sci_cat: str, local_astref: str, sci_zp, depth: float = 17.0):
-    """hard-coded"""
-    SCI_TO_REF_AREA_RATIO = 0.5  # Science image area / Reference image area
+def get_source_num_frac(sci_cat: str, local_astref: str, sci_zp, depth: float = 17.0, SCI_TO_REF_AREA_RATIO=0.5):
+    """The value of SCI_TO_REF_AREA_RATIO is hard-coded. It is the ratio of science image area / reference image area"""
 
     sci_num_sources = get_num_sources(sci_cat, zp=sci_zp, depth=depth, mag_key="MAG_AUTO")
     ref_num_sources = get_num_sources(local_astref, depth=depth, mag_key="phot_g_mean_mag")

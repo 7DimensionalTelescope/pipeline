@@ -22,6 +22,8 @@ MEDIUM_FILTERS = sorted(FIRST_MEDIUM_FILTERS + SECOND_MEDIUM_FILTERS)
 BROAD_FILTERS = ["u", "g", "r", "i", "z"]
 ALL_FILTERS = sorted(MEDIUM_FILTERS + WIDE_FILTERS) + BROAD_FILTERS
 PIXSCALE = 0.505  # arcsec/pixel. Default plate scale assumed prior to astrometric solving
+BIAS_LEVEL = 512  # ADU
+DEFAULT_EXPTIME = 100.0  # s
 NUM_MIN_CALIB = 5  # 2
 
 
@@ -78,5 +80,3 @@ HEADER_KEY_MAP = {
     "ra": "OBJCTRA",  # intended pointing, not the actual mount position
     "dec": "OBJCTDEC",
 }
-
-BIAS_LEVEL = 512  # ADU
