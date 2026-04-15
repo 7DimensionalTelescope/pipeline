@@ -157,9 +157,9 @@ class BaseDatabase:
     def read_all_data(self, return_type: str = "list", order_by: str = "created_at DESC"):
 
         if return_type == "table":
-            return self.export_to_table(self.table_name, order_by)
+            return self.export_to_table(order_by=order_by, full_table=True)
         elif return_type == "csv":
-            return self.export_to_table(self.table_name, order_by)
+            return self.export_to_table(order_by=order_by, full_table=True)
         else:
             try:
                 # Format query string with table name and order_by using f-string
@@ -280,23 +280,94 @@ class BaseDatabase:
         query = query_delete.format(table_name=self.table_name)
         self.excute_query(query, {"id": target_id})
 
-    def export_to_table(self, order_by: str = "created_at DESC") -> pd.DataFrame:
+    def _get_table_columns(self) -> set[str]:
+        return set(getattr(self.pyTable, "__annotations__", {}).keys())
+
+    def export_to_table(
+        self,
+        order_by: str = "created_at DESC",
+        full_table: bool = False,
+        limit: int = 10000,
+        nightdate: Optional[Union[str, Tuple[Any, Any], List[Any]]] = None,
+        nightdate_start: Optional[Any] = None,
+        nightdate_end: Optional[Any] = None,
+        **filters,
+    ) -> pd.DataFrame:
         """
         Export table data to pandas DataFrame.
 
         Args:
-            table_name: Name of the table to export
             order_by: ORDER BY clause for the query
+            full_table: Return all rows instead of the latest limited subset
+            limit: Maximum number of rows to return when full_table is False
+            nightdate: Exact nightdate to match, or a 2-item range
+            nightdate_start: Inclusive nightdate lower bound
+            nightdate_end: Inclusive nightdate upper bound
+            **filters: Additional column=value filters to apply
 
         Returns:
             pandas DataFrame with the table data
         """
         try:
-            # Format query string with table name and order_by using f-string
-            query = query_all_columns.format(table_name=self.table_name, order_by=order_by)
+            if not full_table and limit <= 0:
+                raise ValueError("limit must be a positive integer")
+
+            if nightdate is not None and (nightdate_start is not None or nightdate_end is not None):
+                raise ValueError("Use either nightdate or nightdate_start/nightdate_end, not both")
+
+            if isinstance(nightdate, (tuple, list)):
+                if len(nightdate) != 2:
+                    raise ValueError("nightdate range must contain exactly two values")
+                nightdate_start, nightdate_end = nightdate
+                nightdate = None
+
+            table_columns = self._get_table_columns()
+            filters = {key: value for key, value in filters.items() if value is not None}
+
+            invalid_filters = sorted(set(filters) - table_columns)
+            if invalid_filters:
+                raise ValueError(f"Invalid filter column(s): {', '.join(invalid_filters)}")
+
+            query = f"""
+                SELECT *
+                FROM {self.table_name}
+            """
+            query_params: Dict[str, Any] = {}
+            where_clauses = []
+
+            if nightdate is not None or nightdate_start is not None or nightdate_end is not None:
+                if "nightdate" not in table_columns:
+                    raise ValueError(f"{self.table_name} does not have a nightdate column")
+                if nightdate is not None:
+                    where_clauses.append("nightdate = %(nightdate)s")
+                    query_params["nightdate"] = nightdate
+                else:
+                    if nightdate_start is not None:
+                        where_clauses.append("nightdate >= %(nightdate_start)s")
+                        query_params["nightdate_start"] = nightdate_start
+                    if nightdate_end is not None:
+                        where_clauses.append("nightdate <= %(nightdate_end)s")
+                        query_params["nightdate_end"] = nightdate_end
+
+            for column, value in filters.items():
+                param_name = f"filter_{column}"
+                if isinstance(value, (list, tuple, set)):
+                    where_clauses.append(f'"{column}" = ANY(%({param_name})s)')
+                    query_params[param_name] = list(value)
+                else:
+                    where_clauses.append(f'"{column}" = %({param_name})s')
+                    query_params[param_name] = value
+
+            if where_clauses:
+                query += "\nWHERE " + " AND ".join(where_clauses)
+
+            query += f"\nORDER BY {order_by}"
+            if not full_table:
+                query += "\nLIMIT %(limit)s"
+                query_params["limit"] = limit
 
             # Use excute_query with return_columns=True to get rows and column names
-            rows, columns = self.excute_query(query, return_columns=True)
+            rows, columns = self.excute_query(query, query_params, return_columns=True)
 
             if not rows:
                 print(f"No data found in {self.table_name}")
@@ -314,7 +385,6 @@ class BaseDatabase:
         Export table data to CSV file.
 
         Args:
-            table_name: Name of the table to export
             filename: Output CSV filename
             order_by: ORDER BY clause for the query
 
@@ -323,7 +393,7 @@ class BaseDatabase:
         """
         try:
             # Get table data using the table function
-            df = self.export_to_table(order_by)
+            df = self.export_to_table(order_by=order_by, full_table=True)
 
             if df.empty:
                 print(f"No data found in {self.table_name} to export")
