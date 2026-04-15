@@ -3,7 +3,7 @@ from typing import List, Tuple
 from collections import defaultdict
 from pathlib import Path
 
-from ..utils import equal_in_keys, collapse, swap_ext
+from ..utils import equal_in_keys, collapse, swap_ext, atleast_1d
 from ..utils.header import get_header
 from .. import const
 from ..utils import lapse
@@ -205,7 +205,7 @@ class NameHandler:
             elif typ[0] == "calibrated":
                 parsing_func = self._parse_processed
             # configs
-            elif typ[0] == "sciprocess":
+            elif typ[0] == "science":
                 parser_kwargs["is_too"] = bool(typ[1])
                 parsing_func = self._parse_sciproc_config
             elif typ[0] == "preprocess":
@@ -283,7 +283,7 @@ class NameHandler:
         """
         TODO: change type to a slot dataclass
         Tuple components:
-        0. preprocess / sciprocess
+        0. preprocess / science
         1. None / ToO
         2. None
         3. None
@@ -292,12 +292,12 @@ class NameHandler:
         # is_too = "ToO" in parts
         is_too = len(parts) > 3
         if is_too:
-            kind = "preprocess" if get_nightdate(parts[0]) else "sciprocess"
+            kind = "preprocess" if get_nightdate(parts[0]) else "science"
         else:
             if len(parts) == 2:
                 kind = "preprocess"
             elif len(parts) == 3:
-                kind = "sciprocess"
+                kind = "science"
             else:
                 raise ValueError(f"Invalid number of parts for config: {parts}")
         return (kind, "ToO" if is_too else None, None, None, "config")
@@ -946,6 +946,28 @@ class NameHandler:
 
         # multi-file: each attribute is a list; zip them to rows of dicts
         return [dict(zip(keys, row)) for row in zip(*values)]
+
+    @property
+    def config_properties(self):
+        config_properties_list = []
+        for i, typ in enumerate(atleast_1d(self.type)):
+            if typ[0] == "science":
+                config_properties = {
+                    "config_type": "science",
+                    "object": atleast_1d(self.obj)[i],
+                    "filter": atleast_1d(self.filter)[i],
+                    "nightdate": atleast_1d(self.nightdate)[i],
+                }
+            elif typ[0] == "preprocess":
+                config_properties = {
+                    "config_type": "preprocess",
+                    "nightdate": atleast_1d(self.nightdate)[i],
+                    "unit": atleast_1d(self.unit)[i],
+                }
+            else:
+                raise ValueError(f"Invalid config type: {typ[0]}")
+            config_properties_list.append(config_properties)
+        return config_properties_list[0] if self._single else config_properties_list
 
     @property
     def groupname(self):

@@ -75,13 +75,16 @@ class ProcessStatusTable:
         return data
 
     @classmethod
-    def from_file(cls, config: str):
-        from ...config.utils import find_config
+    def from_file(cls, config_path: str):
+        # from ...config.utils import find_config
         from ...version import __version__
+        from ...path.name import NameHandler
 
-        config_file, config_properties = find_config(config, return_properties=True)
-
-        name = os.path.basename(config_file).replace(".yml", "")
+        # config_file, config_properties = find_config(config, return_properties=True)
+        nh = NameHandler(config_path)
+        config_file = nh.abspath
+        config_properties = nh.config_properties
+        name = nh.stem
 
         return cls(
             name=name,
