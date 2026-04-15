@@ -1,10 +1,15 @@
+from __future__ import annotations
 import json
 import logging
+from typing import TYPE_CHECKING
 
 from .too import TooDB
 from .process_status import ProcessStatus
 from .image_qa import ImageQA
 from ...errors import registry
+
+if TYPE_CHECKING:
+    from ...config import ConfigNode
 
 
 class DatabaseHandler:
@@ -47,15 +52,15 @@ class DatabaseHandler:
         else:
             return self.process_status is not None and self.image_qa is not None
 
-    def create_process_data(self, config, overwrite: bool = False):
+    def create_process_data(self, config_node: ConfigNode, overwrite: bool = False):
         if self.is_too and self.too_db is not None:
-            self.too_db.read_data(config.name)
+            self.too_db.read_data(config_node.name)
             self.too_id = self.too_db.too_id
             return None
         elif not self.is_connected:
             return None
 
-        table = self.process_status.pyTable.from_file(config.name)
+        table = self.process_status.pyTable.from_file(config_node.info.file)
 
         existing_process_id = self.process_status.read_data_by_params(**table.to_dict())
         if existing_process_id:
