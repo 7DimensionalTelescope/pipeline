@@ -3,7 +3,7 @@ from typing import List, Tuple
 from collections import defaultdict
 from pathlib import Path
 
-from ..utils import equal_in_keys, collapse, swap_ext
+from ..utils import equal_in_keys, collapse, swap_ext, atleast_1d
 from ..utils.header import get_header
 from .. import const
 from ..utils import lapse
@@ -180,23 +180,37 @@ class NameHandler:
         # lapse("for parts construction")
 
         # --- 3. Determine raw vs processed for each input ---
-        type_hints = [
-            "raw" if const.RAWDATA_DIR in p else None for p in self.abspath
-        ]  # this is ad-hoc for <=2024 path parsing
-        # lapse("for type hint construction")
+        # config
+        if all(ext == ".yml" for ext in self.ext):
+            self.type = [self._detect_config_type(parts) for parts in self.parts]
+        # image
+        else:
+            type_hints = [
+                "raw" if const.RAWDATA_DIR in p else None for p in self.abspath
+            ]  # this is ad-hoc for <=2024 path parsing
+            # lapse("for type hint construction")
 
-        self.type = [self._detect_type(stem, type_hint) for stem, type_hint in zip(self.stem, type_hints)]
-        # lapse("for type construction")
+            self.type = [self._detect_image_type(stem, type_hint) for stem, type_hint in zip(self.stem, type_hints)]
+            # lapse("for type construction")
 
         # --- 5. Parse each file into its components ---
         units, dates, hmses, objs, filters, nbinnings, exptimes, gains, cameras = [], [], [], [], [], [], [], [], []
         for i, (parts, typ, nightdate) in enumerate(zip(self.parts, self.type, self.nightdate)):
-            if "raw" in typ:
+            parser_kwargs = {}
+            # images
+            if typ[0] == "raw":
                 parsing_func = self._parse_raw
-            elif "master" in typ:
+            elif typ[0] == "master":
                 parsing_func = self._parse_master
-            else:
+            elif typ[0] == "calibrated":
                 parsing_func = self._parse_processed
+            # configs
+            elif typ[0] == "science":
+                parser_kwargs["is_too"] = bool(typ[1])
+                parsing_func = self._parse_sciproc_config
+            elif typ[0] == "preprocess":
+                parser_kwargs["is_too"] = bool(typ[1])
+                parsing_func = self._parse_preproc_config
 
             unit, date, hms, obj, filte, nbin, exptime, gain, camera = parsing_func(parts)
 
@@ -241,6 +255,16 @@ class NameHandler:
         self.exposure = self.exptime
         # lapse("for singling")
 
+    def _handle_yml(self):
+        self.type = [self._detect_config_type(parts) for parts in self.parts]
+        for i, (typ, parts) in enumerate(zip(self.type, self.parts)):
+            if "preprocess" in typ:
+                parsing_func = self._parse_preproc_config
+            elif "science" in typ:
+                parsing_func = self._parse_sciproc_config
+
+            unit, date, hms, obj, filte, nbin, exptime, gain, camera = parsing_func(parts)
+
     def __repr__(self):
         # when list: show first few
         if hasattr(self, "_single") and not self._single:
@@ -255,7 +279,31 @@ class NameHandler:
             return [os.path.exists(p) for p in self.abspath]
 
     @staticmethod
-    def _detect_type(stem: str, type_hint: str = None) -> tuple:
+    def _detect_config_type(parts: list[str]) -> tuple:
+        """
+        TODO: change type to a slot dataclass
+        Tuple components:
+        0. preprocess / science
+        1. None / ToO
+        2. None
+        3. None
+        4. config
+        """
+        # is_too = "ToO" in parts
+        is_too = len(parts) > 3
+        if is_too:
+            kind = "preprocess" if get_nightdate(parts[0]) else "science"
+        else:
+            if len(parts) == 2:
+                kind = "preprocess"
+            elif len(parts) == 3:
+                kind = "science"
+            else:
+                raise ValueError(f"Invalid number of parts for config: {parts}")
+        return (kind, "ToO" if is_too else None, None, None, "config")
+
+    @staticmethod
+    def _detect_image_type(stem: str, type_hint: str = None) -> tuple:
         """Classify a filename stem into a 5-component tuple.
 
         Order of components:
@@ -582,6 +630,44 @@ class NameHandler:
 
         return unit, date, hms, obj, filt, nb, exptime, gain, camera
 
+    @staticmethod
+    def _parse_preproc_config(parts, is_too=False):
+        obj = None
+        date = None
+        hms = None
+        filt = None
+        nb = None
+        exptime = None
+        gain = None
+        camera = None
+
+        # nightdate = parts[0]
+        unit = parts[1]
+        if is_too:
+            obj = parts[2]
+            date = parts[4]
+            hms = parts[5]
+        return unit, date, hms, obj, filt, nb, exptime, gain, camera
+
+    @staticmethod
+    def _parse_sciproc_config(parts, is_too=False):
+        unit = None
+        date = None
+        hms = None
+        filt = None
+        nb = None
+        exptime = None
+        gain = None
+        camera = None
+
+        obj = parts[0]
+        filt = parts[1]
+        # nightdate = parts[2]
+        if is_too:
+            date = parts[4]
+            hms = parts[5]
+        return unit, date, hms, obj, filt, nb, exptime, gain, camera
+
     # @property
     # def masterframe_basename(self):
     #     """works for mixed calibration file types"""
@@ -860,6 +946,28 @@ class NameHandler:
 
         # multi-file: each attribute is a list; zip them to rows of dicts
         return [dict(zip(keys, row)) for row in zip(*values)]
+
+    @property
+    def config_properties(self):
+        config_properties_list = []
+        for i, typ in enumerate(atleast_1d(self.type)):
+            if typ[0] == "science":
+                config_properties = {
+                    "config_type": "science",
+                    "object": atleast_1d(self.obj)[i],
+                    "filter": atleast_1d(self.filter)[i],
+                    "nightdate": atleast_1d(self.nightdate)[i],
+                }
+            elif typ[0] == "preprocess":
+                config_properties = {
+                    "config_type": "preprocess",
+                    "nightdate": atleast_1d(self.nightdate)[i],
+                    "unit": atleast_1d(self.unit)[i],
+                }
+            else:
+                raise ValueError(f"Invalid config type: {typ[0]}")
+            config_properties_list.append(config_properties)
+        return config_properties_list[0] if self._single else config_properties_list
 
     @property
     def groupname(self):
