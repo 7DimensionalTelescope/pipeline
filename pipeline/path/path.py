@@ -1120,9 +1120,43 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
         # return bjoin(self._parent.masterframe_dir, self._parent.name.masterframe_basename)
 
 
-class PathPreprocessFigures(AutoMkdirMixin, AutoCollapseMixin):
-    def __init__(self, parent: PathPreprocess):
+class PathFiguresBase(AutoMkdirMixin, AutoCollapseMixin):
+    def __init__(self, parent):
         self._parent = parent
+        self._single = self._parent._parent.name._single
+
+    def _regularize(self, value):
+        if self._single and isinstance(value, list):
+            return value[0]
+        return value
+
+    def __repr__(self):
+        lines = [f"{k}: {v}" for k, v in sorted(self.__dict__.items()) if not k.startswith("_")]
+        seen = {k for k in self.__dict__ if not k.startswith("_")}
+
+        for base in type(self).__mro__:
+            for name, obj in getattr(base, "__dict__", {}).items():
+                if name in seen:
+                    continue
+
+                if isinstance(obj, property):
+                    lines.append(f"{name}: <property>")
+                    seen.add(name)
+                    continue
+
+                if obj.__class__.__name__ in ("cached_property", "CachedProperty"):
+                    lines.append(f"{name}: <cached_property>")
+                    seen.add(name)
+                    continue
+
+                if callable(obj) and not (name.startswith("__") and name.endswith("__")):
+                    lines.append(f"{name}: <method>")
+                    seen.add(name)
+
+        return "\n".join(lines)
+
+
+class PathPreprocessFigures(PathFiguresBase):
 
     @property
     def _figure_dir(self):
@@ -1136,7 +1170,7 @@ class PathPreprocessFigures(AutoMkdirMixin, AutoCollapseMixin):
             else:
                 dirs.append(stored_figure_dirs[i])
 
-        return dirs
+        return self._regularize(dirs)
 
     @property
     def _dir(self):
@@ -1148,7 +1182,7 @@ class PathPreprocessFigures(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def _bias_hist(self):
-        return bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "hist"), "jpg"))
+        return self._regularize(bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "hist"), "jpg")))
 
     @property
     def bias_hist(self):
@@ -1156,7 +1190,7 @@ class PathPreprocessFigures(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def _bias_image(self):
-        return bjoin(self._figure_dir, swap_ext(self._parent._parent.name.basename, "jpg"))
+        return self._regularize(bjoin(self._figure_dir, swap_ext(self._parent._parent.name.basename, "jpg")))
 
     @property
     def bias_image(self):
@@ -1164,7 +1198,9 @@ class PathPreprocessFigures(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def _bias_contrast(self):
-        return bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "contrast"), "jpg"))
+        return self._regularize(
+            bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "contrast"), "jpg"))
+        )
 
     @property
     def bias_contrast(self):
@@ -1172,7 +1208,7 @@ class PathPreprocessFigures(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def _dark_hist(self):
-        return bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "hist"), "jpg"))
+        return self._regularize(bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "hist"), "jpg")))
 
     @property
     def dark_hist(self):
@@ -1180,7 +1216,7 @@ class PathPreprocessFigures(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def _dark_image(self):
-        return bjoin(self._figure_dir, swap_ext(self._parent._parent.name.basename, "jpg"))
+        return self._regularize(bjoin(self._figure_dir, swap_ext(self._parent._parent.name.basename, "jpg")))
 
     @property
     def dark_image(self):
@@ -1188,7 +1224,9 @@ class PathPreprocessFigures(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def _dark_contrast(self):
-        return bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "contrast"), "jpg"))
+        return self._regularize(
+            bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "contrast"), "jpg"))
+        )
 
     @property
     def dark_contrast(self):
@@ -1196,7 +1234,7 @@ class PathPreprocessFigures(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def _flat_hist(self):
-        return bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "hist"), "jpg"))
+        return self._regularize(bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "hist"), "jpg")))
 
     @property
     def flat_hist(self):
@@ -1204,7 +1242,7 @@ class PathPreprocessFigures(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def _flat_image(self):
-        return bjoin(self._figure_dir, swap_ext(self._parent._parent.name.basename, "jpg"))
+        return self._regularize(bjoin(self._figure_dir, swap_ext(self._parent._parent.name.basename, "jpg")))
 
     @property
     def flat_image(self):
@@ -1212,7 +1250,7 @@ class PathPreprocessFigures(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def _bpmask_image(self):
-        return bjoin(self._figure_dir, swap_ext(self._parent._parent.name.basename, "jpg"))
+        return self._regularize(bjoin(self._figure_dir, swap_ext(self._parent._parent.name.basename, "jpg")))
 
     @property
     def bpmask_image(self):
@@ -1220,7 +1258,7 @@ class PathPreprocessFigures(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def _science_raw(self):
-        return bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "raw"), "jpg"))
+        return self._regularize(bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "raw"), "jpg")))
 
     @property
     def science_raw(self):
@@ -1228,7 +1266,7 @@ class PathPreprocessFigures(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def _science_processed(self):
-        return bjoin(self._figure_dir, swap_ext(self._parent._parent.name.basename, "jpg"))
+        return self._regularize(bjoin(self._figure_dir, swap_ext(self._parent._parent.name.basename, "jpg")))
 
     @property
     def science_processed(self):
@@ -1320,17 +1358,14 @@ class PathAstrometryFactory(AutoMkdirMixin, AutoCollapseMixin):
         return swap_ext(add_suffix(self.catalog, f"{suffix}_eval_cards"), "txt")
 
 
-class PathAstrometryFigures(AutoMkdirMixin, AutoCollapseMixin):
-    def __init__(self, parent: PathAstrometry):
-        self._parent = parent
-
+class PathAstrometryFigures(PathFiguresBase):
     @property
     def dir(self) -> str:
-        return os.path.join(self._parent._parent.figure_dir, ASTRM_DIRNAME)
+        return self._regularize(bjoin(self._parent._parent.figure_dir, ASTRM_DIRNAME))
 
     def evaluation_plot(self, suffix: str = "wcs") -> str | List[str]:
         basenames = [os.path.basename(path) for path in atleast_1d(self._parent._parent._input_files)]
-        return bjoin(self.dir, swap_ext(add_suffix(basenames, suffix), "jpg"))
+        return self._regularize(bjoin(self.dir, swap_ext(add_suffix(basenames, suffix), "jpg")))
 
 
 class PathPhotometry(AutoMkdirMixin, AutoCollapseMixin):
