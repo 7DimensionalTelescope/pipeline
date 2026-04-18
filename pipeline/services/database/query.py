@@ -311,6 +311,7 @@ def get_image_files(
     return results
 
 
+# Deprecated. Use RawFrameQuery instead.
 class RawImageQuery:
     """
     Example 1:

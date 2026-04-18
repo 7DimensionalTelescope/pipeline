@@ -239,14 +239,48 @@ class _SqlBackend:
         self.pool = get_pool()
         if self.pool is None:
             raise RuntimeError("Postgres connection pool unavailable")
+        # Introspection: populated by ``_execute`` (or ``_capture``) so callers
+        # can inspect what was actually run.
+        self.last_sql: Optional[str] = None
+        self.last_params: Optional[Tuple[Any, ...]] = None
+        # When True, ``_execute`` records the SQL / params but skips execution
+        # and returns ``[]``. Used by the ``dry_run=True`` path on builders.
+        self.dry_run: bool = False
 
     # -- helpers ---------------------------------------------------------- #
     def _execute(self, sql: str, params: Sequence[Any]) -> List[Dict[str, Any]]:
+        # Always capture before we even try, so a failing query is still
+        # inspectable via ``last_sql`` / ``last_params``.
+        self.last_sql = sql
+        self.last_params = tuple(params)
+        if self.dry_run:
+            return []
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, params)
                 cols = [d[0] for d in cur.description]
                 return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    # -- introspection ---------------------------------------------------- #
+    def mogrify(self, sql: Optional[str] = None, params: Optional[Sequence[Any]] = None) -> str:
+        """
+        Return a fully-substituted SQL string (placeholders replaced with
+        properly-quoted literals). Useful for copy/paste into ``psql``.
+
+        If ``sql`` / ``params`` are omitted, the last captured query is used.
+        """
+        sql = sql if sql is not None else self.last_sql
+        params = params if params is not None else self.last_params
+        if sql is None:
+            return ""
+        try:
+            from psycopg import ClientCursor
+            with self.pool.connection() as conn:
+                with ClientCursor(conn) as cur:
+                    return cur.mogrify(sql, tuple(params or ()))
+        except Exception:
+            # Fall back: return the statement with a separate repr of params.
+            return f"{sql}\n-- params: {params!r}"
 
     @staticmethod
     def _apply_date_filters(
@@ -1097,6 +1131,10 @@ class _HttpBackend:
 
     def __init__(self, client: Optional[GWPortalClient] = None):
         self.client = client or GWPortalClient()
+        # Introspection counterparts of _SqlBackend.last_sql / last_params.
+        self.last_url: Optional[str] = None
+        self.last_params: Optional[Dict[str, Any]] = None
+        self.dry_run: bool = False
 
     # Entities that have no REST endpoint and therefore can only be queried
     # through the SQL backend.
@@ -1110,7 +1148,28 @@ class _HttpBackend:
                 "available)."
             )
         params = self._translate(entity, filters)
+        # Capture the would-be request so callers can inspect it.
+        self.last_params = dict(params)
+        try:
+            endpoint = self.client.ENDPOINTS.get(entity, entity)
+            base = (self.client.base_url or "").rstrip("/")
+            self.last_url = f"{base}/api/{endpoint.lstrip('/')}"
+        except Exception:
+            self.last_url = None
+        if self.dry_run:
+            return []
         return self.client.fetch_all(entity, **params)
+
+    def request_str(self) -> str:
+        """Human-readable summary of the last HTTP request."""
+        if not self.last_url:
+            return ""
+        try:
+            from urllib.parse import urlencode
+            qs = urlencode(self.last_params or {}, doseq=True)
+        except Exception:
+            qs = repr(self.last_params)
+        return f"GET {self.last_url}?{qs}" if qs else f"GET {self.last_url}"
 
     @staticmethod
     def _translate(entity: str, f: Dict[str, Any]) -> Dict[str, Any]:
@@ -1242,6 +1301,10 @@ class GWPortalQuery:
         self._sql: Optional[_SqlBackend] = None
         self._http: Optional[_HttpBackend] = None
         self.last_backend_used: Optional[Backend] = None
+        # Introspection populated after each call to :meth:`query`.
+        self.last_sql: Optional[str] = None
+        self.last_params: Optional[Any] = None
+        self.last_url: Optional[str] = None
 
     # ------------------------------------------------------------------ #
     # Backend availability
@@ -1267,16 +1330,42 @@ class GWPortalQuery:
     # ------------------------------------------------------------------ #
     # Main entry point
     # ------------------------------------------------------------------ #
-    def query(self, **filters: Any) -> List[Dict[str, Any]]:
-        """Run the query and return a list of dict rows."""
+    def query(self, *, dry_run: bool = False, **filters: Any) -> List[Dict[str, Any]]:
+        """
+        Run the query and return a list of dict rows.
+
+        Parameters
+        ----------
+        dry_run : bool
+            If True, build and capture the backend request (SQL or HTTP URL)
+            without actually executing it. The captured info is available on
+            ``self.last_sql`` / ``self.last_params`` / ``self.last_url``.
+        """
         order = self._backend_order()
         errors: List[Tuple[Backend, Exception]] = []
         for be in order:
             try:
                 if be is Backend.SQL:
-                    rows = self._get_sql().query(self.entity, **filters)
+                    sql_be = self._get_sql()
+                    sql_be.dry_run = dry_run
+                    try:
+                        rows = sql_be.query(self.entity, **filters)
+                    finally:
+                        # Propagate introspection regardless of outcome.
+                        self.last_sql = sql_be.last_sql
+                        self.last_params = sql_be.last_params
+                        self.last_url = None
+                        sql_be.dry_run = False
                 else:
-                    rows = self._get_http().query(self.entity, **filters)
+                    http_be = self._get_http()
+                    http_be.dry_run = dry_run
+                    try:
+                        rows = http_be.query(self.entity, **filters)
+                    finally:
+                        self.last_url = http_be.last_url
+                        self.last_params = http_be.last_params
+                        self.last_sql = None
+                        http_be.dry_run = False
                 self.last_backend_used = be
                 return rows
             except Exception as exc:  # noqa: BLE001 - want broad fallback
@@ -1295,6 +1384,27 @@ class GWPortalQuery:
 
         rows = self.query(**filters)
         return Table(rows) if rows else Table()
+
+    # ------------------------------------------------------------------ #
+    # Introspection
+    # ------------------------------------------------------------------ #
+    def explain(self, *, interpolate: bool = True) -> str:
+        """
+        Return a human-readable description of the most recent query.
+
+        * SQL backend: the SQL statement, with placeholders substituted when
+          ``interpolate=True`` (via psycopg's ``ClientCursor.mogrify``).
+        * HTTP backend: ``GET <url>?<querystring>``.
+
+        Returns an empty string if nothing has been executed yet.
+        """
+        if self.last_backend_used is Backend.SQL and self.last_sql is not None:
+            if interpolate and self._sql is not None:
+                return self._sql.mogrify(self.last_sql, self.last_params)
+            return f"{self.last_sql}\n-- params: {self.last_params!r}"
+        if self.last_backend_used is Backend.HTTP and self._http is not None:
+            return self._http.request_str()
+        return ""
 
     # ------------------------------------------------------------------ #
     # Internal
@@ -1335,7 +1445,11 @@ class _BaseQueryBuilder:
     backend: Union[Backend, str] = Backend.AUTO
     _filters: Dict[str, Any] = field(default_factory=dict)
     _results: Optional[List[Dict[str, Any]]] = field(default=None, repr=False)
+    _query: Optional["GWPortalQuery"] = field(default=None, repr=False)
     last_backend_used: Optional[Backend] = field(default=None, repr=False)
+    last_sql: Optional[str] = field(default=None, repr=False)
+    last_params: Optional[Any] = field(default=None, repr=False)
+    last_url: Optional[str] = field(default=None, repr=False)
 
     # -- shared fluent methods --------------------------------------- #
     def where(self, **filters: Any):
@@ -1346,13 +1460,28 @@ class _BaseQueryBuilder:
     def reset(self):
         self._filters.clear()
         self._results = None
+        self._query = None
         self.last_backend_used = None
+        self.last_sql = None
+        self.last_params = None
+        self.last_url = None
         return self
 
-    def fetch(self) -> List[Dict[str, Any]]:
+    def _run(self, *, dry_run: bool = False) -> List[Dict[str, Any]]:
+        """Shared SQL/HTTP dispatch that also copies introspection state."""
         q = GWPortalQuery(self.entity, backend=self.backend)
-        self._results = q.query(**self._filters)
-        self.last_backend_used = q.last_backend_used
+        try:
+            rows = q.query(dry_run=dry_run, **self._filters)
+        finally:
+            self._query = q
+            self.last_backend_used = q.last_backend_used
+            self.last_sql = q.last_sql
+            self.last_params = q.last_params
+            self.last_url = q.last_url
+        return rows
+
+    def fetch(self) -> List[Dict[str, Any]]:
+        self._results = self._run()
         return self._results
 
     def fetch_table(self):
@@ -1373,6 +1502,42 @@ class _BaseQueryBuilder:
                     key = k
                     break
         return [r.get(key) for r in (self._results or []) if r.get(key)]
+
+    # -- introspection ------------------------------------------------ #
+    def sql(self, *, interpolate: bool = True, dry_run: bool = True) -> str:
+        """
+        Return the backend query as a string.
+
+        By default this is a *dry run*: the query is built (and, for SQL,
+        placeholders are substituted by the database driver) but nothing is
+        executed. Pass ``dry_run=False`` to re-use the statement from the
+        most recent :meth:`fetch` call.
+
+        Works for both backends:
+
+        * SQL  -> returns the ``SELECT`` statement. With ``interpolate=True``
+          (default) placeholders are substituted via psycopg's
+          ``ClientCursor.mogrify`` so the string is copy/paste-ready for
+          ``psql``.
+        * HTTP -> returns ``GET <url>?<querystring>``.
+        """
+        if dry_run or self._query is None:
+            self._run(dry_run=True)
+        if self.last_backend_used is Backend.HTTP:
+            return self._query.explain() if self._query is not None else (self.last_url or "")
+        if self.last_sql is None:
+            return ""
+        if interpolate and self._query is not None:
+            return self._query.explain(interpolate=True)
+        return f"{self.last_sql}\n-- params: {self.last_params!r}"
+
+    def print_sql(self, *, interpolate: bool = True, dry_run: bool = True) -> None:
+        """Convenience: print the result of :meth:`sql`."""
+        print(self.sql(interpolate=interpolate, dry_run=dry_run))
+
+    def explain(self, *, interpolate: bool = True) -> str:
+        """Describe the most recent executed query (no dry run)."""
+        return self.sql(interpolate=interpolate, dry_run=False)
 
 
 # ---------- Mixins for common filter groups --------------------------- #
