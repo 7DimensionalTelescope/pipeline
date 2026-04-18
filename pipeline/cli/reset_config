@@ -1,0 +1,59 @@
+#!/home/pipeline-stable/.conda/envs/pipeline/bin/python
+
+import argparse
+import sys
+import signal
+
+from pipeline.config import SciProcConfiguration
+
+
+def signal_handler(sig, frame):
+    print("\nTerminate process")
+    sys.exit(0)
+
+
+signal.signal(signal.SIGINT, signal_handler)
+
+
+def reset_one(config_path: str) -> bool:
+    try:
+        SciProcConfiguration.reset_config(config_path)
+        print(f"[OK] {config_path}")
+        return True
+    except Exception as e:
+        print(f"[FAIL] {config_path}: {e}", file=sys.stderr)
+        return False
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description=(
+            "Reset one or more SciProcConfiguration YAML files to their pristine state, "
+            "preserving only the essentials (name, process_id, settings.is_* flags, "
+            "input.calibrated_images). All other fields are rebuilt from sciproc_base.yml."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  %(prog)s /path/to/config.yml\n"
+            "  %(prog)s /path/to/config1.yml /path/to/config2.yml"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "configs",
+        nargs="+",
+        help="Path(s) to SciProcConfiguration YAML file(s) to reset (one or more)",
+    )
+    args = parser.parse_args()
+
+    n_ok = 0
+    n_fail = 0
+    for config_path in args.configs:
+        if reset_one(config_path):
+            n_ok += 1
+        else:
+            n_fail += 1
+
+    total = n_ok + n_fail
+    print(f"\nReset {n_ok}/{total} config(s); {n_fail} failed.")
+    sys.exit(0 if n_fail == 0 else 1)

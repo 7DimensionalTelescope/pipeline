@@ -292,3 +292,39 @@ class SciProcConfiguration(BaseConfig):
             if key.startswith("_"):
                 continue
             setattr(self.node.flag, key, False)
+
+    @classmethod
+    def reset_config(cls, config_path: str, write: bool = True) -> "SciProcConfiguration":
+        """
+        Rebuild the config at ``config_path`` from ``sciproc_base.yml``, preserving
+        only the essentials that define *which* config it is:
+
+        - ``settings.is_too`` / ``settings.is_pipeline`` / ``settings.is_multi_epoch``
+        - ``input.calibrated_images`` (the seed image list)
+
+        Everything else (``flag``, ``info``, ``logging``, ``astrometry``,
+        ``photometry``, ``imcoadd``, ``imsubtract``, ...) is rebuilt by
+        :meth:`user_config`, which runs :meth:`initialize` on the seed images.
+
+        Use this to recover from stale per-stage state (e.g. ``imcoadd.input_images: []``
+        left over from a previous sanity-rejected run) before re-running the pipeline.
+        """
+        old = cls(config_path)
+        calibrated_images = atleast_1d(get_key(old.node.input, "calibrated_images", default=[]) or [])
+        if len(calibrated_images) == 0:
+            raise ConfigurationError.ValueError(
+                f"Cannot reset {config_path}: input.calibrated_images is empty. "
+                "The config has no seed image list to rebuild from."
+            )
+        is_too = bool(get_key(old.node.settings, "is_too", default=False))
+        is_pipeline = bool(get_key(old.node.settings, "is_pipeline", default=False))
+        is_multi_epoch = bool(get_key(old.node.settings, "is_multi_epoch", default=False))
+
+        return cls.user_config(
+            input_images=list(calibrated_images),
+            config_file=config_path,
+            write=write,
+            is_too=is_too,
+            is_pipeline=is_pipeline,
+            is_multi_epoch=is_multi_epoch,
+        )

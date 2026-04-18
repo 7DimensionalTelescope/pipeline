@@ -1,11 +1,24 @@
 #!/home/pipeline-stable/.conda/envs/pipeline/bin/python
 
 import argparse
+import os
+import re
 import sys
 import signal
 
 from pipeline.services.scheduler import Scheduler
 from pipeline.services.pipeline_lock import enforce_pipeline_lock
+from pipeline.config import SciProcConfiguration
+
+
+_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _is_science_config(config_path: str) -> bool:
+    """Mirror Scheduler.from_list's task_type discriminator: science iff the
+    basename does not start with a YYYY-MM-DD date token."""
+    discriminator = os.path.basename(config_path).split("_")[0]
+    return not bool(_DATE_RE.fullmatch(discriminator))
 
 
 def signal_handler(sig, frame):
@@ -61,6 +74,15 @@ if __name__ == "__main__":
         action="store_true",
         help="Overwrite existing schedule in the database",
     )
+    parser.add_argument(
+        "--overwrite-config",
+        action="store_true",
+        help=(
+            "Reset each science config YAML to its pristine state before enqueueing "
+            "(preserves only input.calibrated_images and settings.is_* flags; everything "
+            "else is rebuilt from sciproc_base.yml). Implied by --overwrite."
+        ),
+    )
     args = parser.parse_args()
 
     try:
@@ -68,6 +90,18 @@ if __name__ == "__main__":
             action="run_config is about to enqueue pipeline configuration(s).",
             requested_is_pipeline=True,
         )
+
+        if args.overwrite or args.overwrite_config:
+            for cfg in args.configs:
+                if not _is_science_config(cfg):
+                    continue
+                try:
+                    SciProcConfiguration.reset_config(cfg)
+                    print(f"[reset-config] {cfg}")
+                except Exception as e:
+                    print(f"[reset-config FAIL] {cfg}: {e}", file=sys.stderr)
+                    sys.exit(1)
+
         sc = Scheduler.from_list(
             args.configs,
             base_priority=args.priority,
