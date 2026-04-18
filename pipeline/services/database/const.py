@@ -18,6 +18,10 @@ DB_PARAMS = {
     "password": password,
 }
 
+# GWPortal REST API credentials (used by the HTTP backend)
+GWPORTAL_BASE_URL = os.environ.get("GWPORTAL_BASE_URL")
+GWPORTAL_API_KEY = os.environ.get("GWPORTAL_API_KEY")
+
 
 TABLES = {
     "sci": "survey_scienceframe",
