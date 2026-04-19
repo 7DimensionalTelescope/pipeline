@@ -199,10 +199,11 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker):
             else self.config_node.input.calibrated_images
         )
         self.apply_sanity_filter_and_report(current_process=COADD_SPEC, overwrite=self.overwrite)
-        self.config_node.imcoadd.input_images = self.input_images
         if not self.input_images:
             self.logger.error("No Input for ImCoadd", CoaddError.EmptyInputAfterSanityRejection)
             raise CoaddError.EmptyInputAfterSanityRejection("No Input for ImCoadd")
+        # if rejected, let the input remain so that a rerun has a change to reevaluate SANITY
+        self.config_node.imcoadd.input_images = self.input_images
 
         self.zpkey = self.config_node.imcoadd.zp_key or ZP_KEY
         # self.ic_keys = IC_KEYS

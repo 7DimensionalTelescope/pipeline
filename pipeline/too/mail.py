@@ -382,7 +382,7 @@ The data processing for the ToO observation is complete. The results are as foll
         Args:
             too_id: ToO request ID
             sed_data: SED data containing filter and magnitude information
-            dtype: Detection type - "difference" for difference image, "stacked" for stacked image
+            dtype: Detection type - "difference" for difference image; "coadd" or "stacked" for stacked/coadd analysis
             test: If True, send to test email address
 
         Returns:
@@ -447,7 +447,13 @@ The data processing for the ToO observation is complete. The results are as foll
             has_valid_mag = mag is not None and not (isinstance(mag, float) and (mag != mag or mag == float("inf")))
             is_detected = has_valid_mag and not is_upper_limit
 
-        detection_status = "Detected" if is_detected else "Not Detected"
+        # Subject must match body: coadd path (see photometry.py) uses dtype="coadd", not "stacked"
+        if not is_detected:
+            detection_status = "Not Detected"
+        elif dtype == "difference":
+            detection_status = "Detected"
+        else:
+            detection_status = "Possibly Detected"
 
         # Build subject
         filter_str = filt if filt else "Unknown Filter"
@@ -506,10 +512,11 @@ Interim Processing Result:
             elif isinstance(sed_data, dict):
                 filt = sed_data.get("filter_name")
 
+        stacked_like = dtype in ("stacked", "coadd")
         if is_detected and dtype == "difference":
             contents += f"Detection: Detected\n"
             contents += "Detection Method: Difference Image Analysis\n"
-        elif is_detected and dtype == "stacked":
+        elif is_detected and stacked_like:
             contents += f"Detection: Possibly Detected. \n"
             contents += "Detection Method: Stacked Image Analysis\n"
         else:
@@ -532,7 +539,7 @@ Interim Processing Result:
                 contents += "The target has been detected in the difference image, which indicates a high-confidence "
                 contents += "detection. Continued follow-up observations are strongly recommended to confirm and "
                 contents += "characterize the transient event.\n"
-            elif dtype == "stacked":
+            elif stacked_like:
                 contents += "The target has been detected in the stacked image. Please note that the detected source "
                 contents += "may be a pre-existing source or a known object in the field. Cross-matching with "
                 contents += "astronomical catalogs (e.g., Gaia, SDSS, Pan-STARRS), visual inspection of the "

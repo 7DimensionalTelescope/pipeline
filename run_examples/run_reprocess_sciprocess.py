@@ -5,16 +5,15 @@ from pipeline.services.database import DatabaseHandler
 """Run like: python run_reprocess_preprocess.py 2>&1 | tee 2026-04-18_reprocess_preprocess_tee.log"""
 
 BASE_PRIORITY = 1
-OVERWRITE_CONFIG = True  # False
-OVERWRITE_DATA = True  # False
+OVERWRITE_CONFIG = False
+OVERWRITE_DATA = False
 
 dh = DatabaseHandler()
 df = dh.process_status.export_to_table()
 
 preproc_df = df[df["config_type"] == "preprocess"]
 df_errors = preproc_df[~pd.isna(preproc_df["errors"])]
-# df_rerun = df_errors[df_errors["errors"] == 102]
-df_rerun = df_errors
+df_rerun = df_errors[df_errors["errors"] == 102]
 
 config_files = df_rerun["config_file"].tolist()
 nightdates = [date.strftime("%Y-%m-%d") for date in set(df_rerun["nightdate"])]

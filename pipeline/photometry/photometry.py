@@ -164,6 +164,15 @@ class Photometry(BaseSetup, DatabaseHandler, Checker):
                 SCIPROCESS_REGISTRY.configured_progress(self._process_spec),
                 f"{self._photometry_mode}-configured",
             )
+            # Align with astrometry: image_qa rows are created there; photometry must refresh them from the FITS
+            # header after SEEING / photometry keywords are written. Without these IDs, run() never calls update_data.
+            if self.process_status_id is not None and self.image_qa is not None and self.input_images:
+                for image in self.input_images:
+                    image_name = os.path.basename(image).replace(".fits", "")
+                    qa_id = self.image_qa.read_data_by_params(
+                        image_name=image_name, process_status_id=self.process_status_id
+                    )
+                    self.qa_ids.append(qa_id)
 
     @classmethod
     def from_list(cls, images: List[str], working_dir=None) -> Optional["Photometry"]:
@@ -231,13 +240,15 @@ class Photometry(BaseSetup, DatabaseHandler, Checker):
             else:
                 self._run_sequential(overwrite=overwrite)
 
-            if self.is_connected:
+            if self.is_connected and self.image_qa is not None:
                 for image, qa_id in zip(self.input_images, self.qa_ids):
+                    if qa_id is None:
+                        continue
                     qa_data = ImageQATable.from_file(
                         image,
                         process_status_id=self.process_status_id,
                     )
-                    qa_id = self.image_qa.update_data(qa_id, **qa_data.to_dict())
+                    self.image_qa.update_data(qa_id, **qa_data.to_dict())
 
             self.update_progress(
                 SCIPROCESS_REGISTRY.completed_progress(self._process_spec),
