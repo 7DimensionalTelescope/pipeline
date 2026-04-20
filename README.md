@@ -34,13 +34,12 @@ gpPy-gpu underwent significant renovation to become a new package, Py7DT.pipelin
 
 
 ## Development Team
-- **Original Developer**: Gregory Paek
 - **Current Maintainers/Developers**: 
   - Donghwan Hyun
-  - WonHyeong Lee
+  - Donggeun Tak
 - **Core Contributors**:
   - Gregory Paek
-  - Donggeun Tak
+  - WonHyeong Lee
   
 ## Contact
 If you have any inquiries or feedback, please contact the 7DT pipeline team via email at [7dt.pipeline@gmail.com](mailto:7dt.pipeline@gmail.com) or open an issue on our [GitHub repository](https://github.com/7DimensionalTelescope/pipeline).
