@@ -39,6 +39,8 @@ gpPy-gpu underwent significant renovation to become a new package, Py7DT.pipelin
   - Donggeun Tak
 - **Core Contributors**:
   - Gregory Paek
+  - Donghwan Hyun
+  - Donggeun Tak
   - WonHyeong Lee
   
 ## Contact
