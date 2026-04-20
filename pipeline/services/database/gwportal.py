@@ -163,6 +163,170 @@ def _normalize_entity(entity: str) -> str:
 _TILE_RE = re.compile(r"^T\d+$")
 
 
+# --------------------------------------------------------------------------- #
+# Lean (default) SELECT column lists
+# --------------------------------------------------------------------------- #
+# These are the hand-picked column lists used when ``full_table`` is False
+# (the default). They keep result rows small so common notebook workflows
+# stay fast. Pass ``full_table=True`` (or call ``.full_table()`` on a
+# builder) to get every native column of the underlying table instead.
+
+_LEAN_COLS_RAW = """
+    sf.id,
+    sf.original_filename                AS filename,
+    sf.file_path                        AS filepath,
+    sf.unified_filename,
+    sf.obstime,
+    sf.mjd,
+    sf.exptime,
+    sf.airmass,
+    sf.fwhm                             AS seeing,
+    sf.object_name,
+    sf.object_type,
+    sf.object_ra,
+    sf.object_dec,
+    sf.obsnote,
+    u.name  AS unit,
+    f.name  AS filter,
+    t.name  AS target,
+    tl.name AS tile,
+    n.date  AS night
+"""
+
+_LEAN_COLS_PROCESSED = """
+    pf.id,
+    pf.filename,
+    pf.filepath,
+    pf.processing_version,
+    pf.data_stream,
+    pf.reduction_status,
+    pf.created_at,
+    pf.mjd,
+    sf.obstime,
+    sf.unified_filename,
+    sf.obsnote,
+    pf.ra_center,
+    pf.dec_center,
+    pf.l_center,
+    pf.b_center,
+    pf.seeing,
+    pf.ellip,
+    pf.elong,
+    pf.skyval,
+    pf.skysig,
+    pf.ul5,
+    pf.zp,
+    sf.exptime,
+    u.name  AS unit,
+    f.name  AS filter,
+    t.name  AS target,
+    tl.name AS tile,
+    n.date  AS night,
+    pf.raw_frame_id
+"""
+
+_LEAN_COLS_COMBINED = """
+    cf.id,
+    cf.filename,
+    cf.filepath,
+    cf.processing_version,
+    cf.data_stream,
+    cf.reduction_status,
+    cf.n_combined,
+    cf.total_exptime,
+    cf.obs_start,
+    cf.obs_end,
+    cf.mjd,
+    cf.ra_center,
+    cf.dec_center,
+    cf.l_center,
+    cf.b_center,
+    cf.seeing,
+    cf.ellip,
+    cf.elong,
+    cf.skyval,
+    cf.skysig,
+    cf.ul5,
+    cf.zp,
+    u.name  AS unit,
+    f.name  AS filter,
+    t.name  AS target,
+    tl.name AS tile
+"""
+
+_LEAN_COLS_RAW_CALIB = """
+    cf.id,
+    cf.original_filename AS filename,
+    cf.file_path         AS filepath,
+    cf.unified_filename,
+    cf.obstime,
+    cf.mjd,
+    cf.exptime,
+    cf.binning_x,
+    cf.binning_y,
+    cf.gain,
+    cf.egain,
+    cf.instrument,
+    cf.ccdtemp,
+    cf.is_usable,
+    cf.quality_score,
+    cf.processing_status,
+    u.name AS unit,
+    n.date AS night
+"""
+
+# Kind-specific extras that are appended to ``_LEAN_COLS_RAW_CALIB`` when
+# ``full_table=False``. In full mode these are already covered by ``cf.*``.
+_LEAN_CALIB_EXTRAS = {
+    "bias": "cf.median_level, cf.noise_level, cf.std_deviation",
+    "dark": "cf.dark_current, cf.hotpix_count, cf.median_level",
+    "flat": (
+        "cf.median_counts, cf.uniformity_rms, "
+        "cf.vignetting_level, cf.illumination_gradient"
+    ),
+}
+
+_LEAN_COLS_TILE = """
+    t.id, t.name, t.ra, t.dec, t.l, t.b, t.priority,
+    t.survey_program, t.area_sq_deg, t.observation_count,
+    t.total_exposure_time, t.first_observed, t.last_observed
+"""
+
+_LEAN_COLS_TARGET = """
+    t.id, t.name, t.ra, t.dec, t.l, t.b, t.target_type,
+    t.description, t.area_sq_deg, t.observation_count,
+    t.total_exposure_time, t.first_observed, t.last_observed
+"""
+
+_LEAN_COLS_MASTER = {
+    "bias": """
+        m.id, m.file_path, m.sigma_file_path, m.nightdate,
+        m.binning_x, m.binning_y, m.gain, m.camera_serial,
+        m.processing_version, m.software_version, m.is_production,
+        m.n_combined, m.clip_mean, m.clip_median, m.clip_std,
+        m.center_clip_mean, m.center_clip_median, m.center_clip_std,
+        u.name AS unit
+    """,
+    "dark": """
+        m.id, m.file_path, m.sigma_file_path, m.nightdate, m.exptime,
+        m.binning_x, m.binning_y, m.gain, m.camera_serial,
+        m.processing_version, m.software_version, m.is_production,
+        m.n_combined, m.clip_mean, m.clip_median, m.clip_std,
+        m.center_clip_mean, m.center_clip_median, m.center_clip_std,
+        m.master_bias_id, u.name AS unit
+    """,
+    "flat": """
+        m.id, m.file_path, m.sigma_file_path, m.nightdate,
+        m.binning_x, m.binning_y, m.gain, m.camera_serial,
+        m.processing_version, m.software_version, m.is_production,
+        m.n_combined, m.clip_mean, m.clip_median, m.clip_std,
+        m.center_clip_mean, m.center_clip_median, m.center_clip_std,
+        m.master_bias_id, m.master_dark_id,
+        f.name AS filter, u.name AS unit
+    """,
+}
+
+
 # Spatial columns per entity. First element is the (ra, dec) point columns,
 # second is the polygon column, each in the (radec, galactic) coordinate
 # system. ``None`` means that system is not stored (and the SQL backend will
@@ -246,8 +410,76 @@ class _SqlBackend:
         # When True, ``_execute`` records the SQL / params but skips execution
         # and returns ``[]``. Used by the ``dry_run=True`` path on builders.
         self.dry_run: bool = False
+        # Cache of table -> [column_name, ...] used by ``_star`` to expand
+        # ``<alias>.*`` at query-build time with optional prefix aliasing.
+        self._columns_cache: Dict[str, Tuple[str, ...]] = {}
 
     # -- helpers ---------------------------------------------------------- #
+    def _table_columns(self, table: str) -> Tuple[str, ...]:
+        """
+        Return the column names of ``table`` in the ``public`` schema,
+        cached across calls. Used by :meth:`_star` to materialize
+        ``<alias>.*`` into an explicit list so we can control aliasing
+        (and avoid collisions across JOINs).
+        """
+        if table in self._columns_cache:
+            return self._columns_cache[table]
+        sql = (
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = %s "
+            "ORDER BY ordinal_position"
+        )
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (table,))
+                cols = tuple(row[0] for row in cur.fetchall())
+        self._columns_cache[table] = cols
+        return cols
+
+    def _star(
+        self,
+        *,
+        alias: str,
+        table: str,
+        prefix: str = "",
+        exclude: Sequence[str] = (),
+    ) -> str:
+        """
+        Build an explicit ``alias.col AS [prefix]col`` list for every column
+        in ``table``.
+
+        Use this instead of ``alias.*`` whenever more than one ``*`` would
+        appear in the same SELECT (to avoid silent column collisions when
+        the result rows are zipped into dicts in :meth:`_execute`).
+
+        Parameters
+        ----------
+        alias : str
+            SQL alias used for the table in the FROM/JOIN clause.
+        table : str
+            Unqualified table name (``public`` schema assumed).
+        prefix : str
+            Optional prefix prepended to each output column name. Use e.g.
+            ``"raw_"`` to disambiguate joined rows.
+        exclude : sequence of str
+            Column names (unprefixed) to omit from the expansion.
+        """
+        cols = self._table_columns(table)
+        if not cols:
+            # Fall back to the SQL star; better than an empty SELECT. Any
+            # duplicates will still clobber, but at least the query runs.
+            return f"{alias}.*"
+        excluded = set(exclude)
+        parts: List[str] = []
+        for c in cols:
+            if c in excluded:
+                continue
+            if prefix:
+                parts.append(f"{alias}.{c} AS {prefix}{c}")
+            else:
+                parts.append(f"{alias}.{c}")
+        return ",\n                ".join(parts)
+
     def _execute(self, sql: str, params: Sequence[Any]) -> List[Dict[str, Any]]:
         # Always capture before we even try, so a failing query is still
         # inspectable via ``last_sql`` / ``last_params``.
@@ -452,6 +684,7 @@ class _SqlBackend:
         gb: Optional[float] = None,
         radius: Optional[float] = None,
         polygon: Any = None,
+        full_table: bool = False,
         **_ignored: Any,
     ) -> List[Dict[str, Any]]:
         clauses: List[str] = []
@@ -511,27 +744,24 @@ class _SqlBackend:
 
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
 
+        if full_table:
+            sf_cols = self._star(alias="sf", table="survey_scienceframe")
+            cols = (
+                f"{sf_cols},\n"
+                "                sf.original_filename AS filename,\n"
+                "                sf.file_path         AS filepath,\n"
+                "                sf.fwhm              AS seeing,\n"
+                "                u.name  AS unit,\n"
+                "                f.name  AS filter,\n"
+                "                t.name  AS target,\n"
+                "                tl.name AS tile,\n"
+                "                n.date  AS night"
+            )
+        else:
+            cols = _LEAN_COLS_RAW
         sql = f"""
             SELECT
-                sf.id,
-                sf.original_filename                AS filename,
-                sf.file_path                        AS filepath,
-                sf.unified_filename,
-                sf.obstime,
-                sf.mjd,
-                sf.exptime,
-                sf.airmass,
-                sf.fwhm                             AS seeing,
-                sf.object_name,
-                sf.object_type,
-                sf.object_ra,
-                sf.object_dec,
-                sf.obsnote,
-                u.name  AS unit,
-                f.name  AS filter,
-                t.name  AS target,
-                tl.name AS tile,
-                n.date  AS night
+                {cols}
             FROM survey_scienceframe sf
             JOIN facility_unit u       ON sf.unit_id = u.id
             JOIN survey_night  n       ON sf.night_id = n.id
@@ -567,6 +797,7 @@ class _SqlBackend:
         gb: Optional[float] = None,
         radius: Optional[float] = None,
         polygon: Any = None,
+        full_table: bool = False,
         **_ignored: Any,
     ) -> List[Dict[str, Any]]:
         """
@@ -622,37 +853,24 @@ class _SqlBackend:
         )
 
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        if full_table:
+            # All native columns of the processed-frame table plus the joined
+            # name/date labels. Raw-frame columns are intentionally not
+            # included here; if you need them, query ``RawFrameQuery``.
+            pf_cols = self._star(alias="pf", table="survey_processedscienceframe")
+            cols = (
+                f"{pf_cols},\n"
+                "                u.name  AS unit,\n"
+                "                f.name  AS filter,\n"
+                "                t.name  AS target,\n"
+                "                tl.name AS tile,\n"
+                "                n.date  AS night"
+            )
+        else:
+            cols = _LEAN_COLS_PROCESSED
         sql = f"""
             SELECT
-                pf.id,
-                pf.filename,
-                pf.filepath,
-                pf.processing_version,
-                pf.data_stream,
-                pf.reduction_status,
-                pf.created_at,
-                pf.mjd,
-                sf.obstime,
-                sf.unified_filename,
-                sf.obsnote,
-                pf.ra_center,
-                pf.dec_center,
-                pf.l_center,
-                pf.b_center,
-                pf.seeing,
-                pf.ellip,
-                pf.elong,
-                pf.skyval,
-                pf.skysig,
-                pf.ul5,
-                pf.zp,
-                sf.exptime,
-                u.name  AS unit,
-                f.name  AS filter,
-                t.name  AS target,
-                tl.name AS tile,
-                n.date  AS night,
-                pf.raw_frame_id
+                {cols}
             FROM survey_processedscienceframe pf
             JOIN survey_scienceframe sf ON pf.raw_frame_id = sf.id
             JOIN facility_unit u        ON sf.unit_id = u.id
@@ -686,6 +904,7 @@ class _SqlBackend:
         gb: Optional[float] = None,
         radius: Optional[float] = None,
         polygon: Any = None,
+        full_table: bool = False,
         **_ignored: Any,
     ) -> List[Dict[str, Any]]:
         clauses: List[str] = []
@@ -728,34 +947,20 @@ class _SqlBackend:
         )
 
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        if full_table:
+            cf_cols = self._star(alias="cf", table="survey_combinedscienceframe")
+            cols = (
+                f"{cf_cols},\n"
+                "                u.name  AS unit,\n"
+                "                f.name  AS filter,\n"
+                "                t.name  AS target,\n"
+                "                tl.name AS tile"
+            )
+        else:
+            cols = _LEAN_COLS_COMBINED
         sql = f"""
             SELECT
-                cf.id,
-                cf.filename,
-                cf.filepath,
-                cf.processing_version,
-                cf.data_stream,
-                cf.reduction_status,
-                cf.n_combined,
-                cf.total_exptime,
-                cf.obs_start,
-                cf.obs_end,
-                cf.mjd,
-                cf.ra_center,
-                cf.dec_center,
-                cf.l_center,
-                cf.b_center,
-                cf.seeing,
-                cf.ellip,
-                cf.elong,
-                cf.skyval,
-                cf.skysig,
-                cf.ul5,
-                cf.zp,
-                u.name  AS unit,
-                f.name  AS filter,
-                t.name  AS target,
-                tl.name AS tile
+                {cols}
             FROM survey_combinedscienceframe cf
             JOIN facility_unit u        ON cf.unit_id = u.id
             LEFT JOIN facility_filter f ON cf.filter_id = f.id
@@ -805,6 +1010,7 @@ class _SqlBackend:
         binning: Optional[int] = None,
         gain: Optional[int] = None,
         is_usable: Optional[bool] = None,
+        full_table: bool = False,
         **_ignored: Any,
     ) -> List[Dict[str, Any]]:
         """
@@ -861,40 +1067,26 @@ class _SqlBackend:
                 f"{kind!r} frames have no filter; drop filter_name."
             )
 
-        # Kind-specific extra columns (all tables share a common subset).
-        extras = {
-            "bias": ", cf.median_level, cf.noise_level, cf.std_deviation",
-            "dark": ", cf.dark_current, cf.hotpix_count, cf.median_level",
-            "flat": (
-                ", cf.median_counts, cf.uniformity_rms, "
-                "cf.vignetting_level, cf.illumination_gradient"
-            ),
-        }[kind]
-
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
 
+        if full_table:
+            cf_cols = self._star(alias="cf", table=table)
+            cols = (
+                f"{cf_cols},\n"
+                "                cf.original_filename AS filename,\n"
+                "                cf.file_path         AS filepath,\n"
+                "                u.name AS unit,\n"
+                f"                n.date AS night{filter_select}"
+            )
+        else:
+            cols = (
+                f"{_LEAN_COLS_RAW_CALIB.rstrip()},"
+                f"\n                {_LEAN_CALIB_EXTRAS[kind]}"
+                f"{filter_select}"
+            )
         sql = f"""
             SELECT
-                cf.id,
-                cf.original_filename AS filename,
-                cf.file_path         AS filepath,
-                cf.unified_filename,
-                cf.obstime,
-                cf.mjd,
-                cf.exptime,
-                cf.binning_x,
-                cf.binning_y,
-                cf.gain,
-                cf.egain,
-                cf.instrument,
-                cf.ccdtemp,
-                cf.is_usable,
-                cf.quality_score,
-                cf.processing_status,
-                u.name AS unit,
-                n.date AS night
-                {filter_select}
-                {extras}
+                {cols}
             FROM {table} cf
             JOIN facility_unit u ON cf.unit_id = u.id
             JOIN survey_night  n ON cf.night_id = n.id
@@ -918,6 +1110,7 @@ class _SqlBackend:
         gb: Optional[float] = None,
         radius: Optional[float] = None,
         polygon: Any = None,
+        full_table: bool = False,
         **_ignored: Any,
     ) -> List[Dict[str, Any]]:
         clauses: List[str] = []
@@ -944,10 +1137,9 @@ class _SqlBackend:
         )
 
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        cols = self._star(alias="t", table="survey_tile") if full_table else _LEAN_COLS_TILE
         sql = f"""
-            SELECT t.id, t.name, t.ra, t.dec, t.l, t.b, t.priority,
-                   t.survey_program, t.area_sq_deg, t.observation_count,
-                   t.total_exposure_time, t.first_observed, t.last_observed
+            SELECT {cols}
             FROM survey_tile t
             {where}
             ORDER BY t.name
@@ -966,6 +1158,7 @@ class _SqlBackend:
         gb: Optional[float] = None,
         radius: Optional[float] = None,
         polygon: Any = None,
+        full_table: bool = False,
         **_ignored: Any,
     ) -> List[Dict[str, Any]]:
         clauses: List[str] = []
@@ -989,10 +1182,9 @@ class _SqlBackend:
         )
 
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        cols = self._star(alias="t", table="survey_target") if full_table else _LEAN_COLS_TARGET
         sql = f"""
-            SELECT t.id, t.name, t.ra, t.dec, t.l, t.b, t.target_type,
-                   t.description, t.area_sq_deg, t.observation_count,
-                   t.total_exposure_time, t.first_observed, t.last_observed
+            SELECT {cols}
             FROM survey_target t
             {where}
             ORDER BY t.name
@@ -1026,6 +1218,7 @@ class _SqlBackend:
         exptime: Optional[float] = None,
         min_exptime: Optional[float] = None,
         max_exptime: Optional[float] = None,
+        full_table: bool = False,
         **_ignored: Any,
     ) -> List[Dict[str, Any]]:
         table = {
@@ -1077,38 +1270,19 @@ class _SqlBackend:
 
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
 
-        # Per-kind column selection
-        if kind == "bias":
-            cols = """
-                m.id, m.file_path, m.sigma_file_path, m.nightdate,
-                m.binning_x, m.binning_y, m.gain, m.camera_serial,
-                m.processing_version, m.software_version, m.is_production,
-                m.n_combined, m.clip_mean, m.clip_median, m.clip_std,
-                m.center_clip_mean, m.center_clip_median, m.center_clip_std,
-                u.name AS unit
-            """
-            join_filter = ""
-        elif kind == "dark":
-            cols = """
-                m.id, m.file_path, m.sigma_file_path, m.nightdate, m.exptime,
-                m.binning_x, m.binning_y, m.gain, m.camera_serial,
-                m.processing_version, m.software_version, m.is_production,
-                m.n_combined, m.clip_mean, m.clip_median, m.clip_std,
-                m.center_clip_mean, m.center_clip_median, m.center_clip_std,
-                m.master_bias_id, u.name AS unit
-            """
-            join_filter = ""
-        else:  # flat
-            cols = """
-                m.id, m.file_path, m.sigma_file_path, m.nightdate,
-                m.binning_x, m.binning_y, m.gain, m.camera_serial,
-                m.processing_version, m.software_version, m.is_production,
-                m.n_combined, m.clip_mean, m.clip_median, m.clip_std,
-                m.center_clip_mean, m.center_clip_median, m.center_clip_std,
-                m.master_bias_id, m.master_dark_id,
-                f.name AS filter, u.name AS unit
-            """
-            join_filter = "LEFT JOIN facility_filter f ON m.filter_id = f.id"
+        join_filter = (
+            "LEFT JOIN facility_filter f ON m.filter_id = f.id"
+            if kind == "flat"
+            else ""
+        )
+        if full_table:
+            m_cols = self._star(alias="m", table=table)
+            if kind == "flat":
+                cols = f"{m_cols}, u.name AS unit, f.name AS filter"
+            else:
+                cols = f"{m_cols}, u.name AS unit"
+        else:
+            cols = _LEAN_COLS_MASTER[kind]
 
         sql = f"""
             SELECT {cols}
@@ -1457,6 +1631,21 @@ class _BaseQueryBuilder:
         self._filters.update({k: v for k, v in filters.items() if v is not None})
         return self
 
+    def full_table(self, flag: bool = True):
+        """
+        Return every native column of the underlying table on the next
+        ``fetch()`` / ``fetch_table()``. Default is the lean, hand-picked
+        column set which is noticeably faster for large result sets.
+
+        Only affects the SQL backend; the HTTP backend's column set is
+        controlled server-side.
+        """
+        if flag:
+            self._filters["full_table"] = True
+        else:
+            self._filters.pop("full_table", None)
+        return self
+
     def reset(self):
         self._filters.clear()
         self._results = None
@@ -1480,14 +1669,28 @@ class _BaseQueryBuilder:
             self.last_url = q.last_url
         return rows
 
-    def fetch(self) -> List[Dict[str, Any]]:
+    def fetch(self, *, full_table: bool = False) -> List[Dict[str, Any]]:
+        """
+        Execute the query and return rows.
+
+        Pass ``full_table=True`` to include every native column of the
+        underlying table. This is a one-shot shortcut for
+        ``self.full_table().fetch()``.
+        """
+        if full_table:
+            self._filters["full_table"] = True
         self._results = self._run()
         return self._results
 
-    def fetch_table(self):
+    def fetch_table(self, *, full_table: bool = False):
+        """
+        Same as :meth:`fetch` but returns an ``astropy.table.Table``.
+
+        Pass ``full_table=True`` for every native column.
+        """
         from astropy.table import Table
 
-        rows = self.fetch()
+        rows = self.fetch(full_table=full_table)
         return Table(rows) if rows else Table()
 
     def files(self, key: Optional[str] = None) -> List[str]:
