@@ -6,7 +6,7 @@
 - [Usage](#usage)
 - [History and Development](#history-and-development)
 - [Development Team](#development-team)
-- [Version History](#version-history)
+<!-- - [Version History](#version-history) -->
 - [Contact](#contact)
 
 ## Overview
