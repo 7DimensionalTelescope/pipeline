@@ -1,5 +1,5 @@
+import os
 import numpy as np
-from pathlib import Path
 import fitsio
 from astropy.io import fits
 from astropy.visualization import ZScaleInterval
@@ -13,12 +13,10 @@ from ..path import PathHandler
 
 
 def plot_outputs_exist(output_paths) -> bool:
-    return all(Path(output_path).exists() for output_path in output_paths)
+    return all(os.path.exists(output_path) for output_path in output_paths)
 
 def save_fits_as_figures(image_data, output_path, stretch=True, log_scale=False, max_width=1000, overwrite=False):
-    output_path = Path(output_path)
-
-    if output_path.exists() and not overwrite:
+    if os.path.exists(output_path) and not overwrite:
         return
 
     if isinstance(image_data, str):
@@ -56,9 +54,7 @@ def save_fits_as_figures(image_data, output_path, stretch=True, log_scale=False,
 
 
 def save_fits_with_contrast(image_data, output_path, max_width=1000, overwrite=False):
-    # Open the FITS file
-    output_path = Path(output_path)
-    if output_path.exists() and not overwrite:
+    if os.path.exists(output_path) and not overwrite:
         return None
 
     data = fitsio.read(image_data)
@@ -114,9 +110,9 @@ def plot_bias(file, overwrite=False, dry_run: bool = False):
     if plot_outputs_exist((hist_path, image_path, contrast_path)) and not overwrite:
         return
 
-    need_hist = overwrite or not hist_path.exists()
-    need_image = overwrite or not image_path.exists()
-    need_contrast = overwrite or not contrast_path.exists()
+    need_hist = overwrite or not os.path.exists(hist_path)
+    need_image = overwrite or not os.path.exists(image_path)
+    need_contrast = overwrite or not os.path.exists(contrast_path)
     data = None
 
     if need_hist or need_image:
@@ -189,9 +185,9 @@ def plot_dark(file, flattened_mask=None, bpmask_file=None, overwrite=False, dry_
     if plot_outputs_exist((hist_path, image_path, contrast_path)) and not overwrite:
         return
 
-    need_hist = overwrite or not hist_path.exists()
-    need_image = overwrite or not image_path.exists()
-    need_contrast = overwrite or not contrast_path.exists()
+    need_hist = overwrite or not os.path.exists(hist_path)
+    need_image = overwrite or not os.path.exists(image_path)
+    need_contrast = overwrite or not os.path.exists(contrast_path)
     data = None
 
     if need_hist or need_image:
@@ -329,8 +325,8 @@ def plot_flat(file, fmask=None, bpmask_file=None, overwrite=False, dry_run: bool
     if plot_outputs_exist((hist_path, image_path)) and not overwrite:
         return
 
-    need_hist = overwrite or not hist_path.exists()
-    need_image = overwrite or not image_path.exists()
+    need_hist = overwrite or not os.path.exists(hist_path)
+    need_image = overwrite or not os.path.exists(image_path)
     data = None
 
     if need_hist or need_image:
@@ -396,7 +392,7 @@ def plot_bpmask(file, ext=1, badpix=1, overwrite=False, dry_run: bool = False):
     if dry_run:
         print(output_path)
         return
-    if output_path.exists() and not overwrite:
+    if os.path.exists(output_path) and not overwrite:
         return
 
     data = fitsio.read(file, ext=ext)
