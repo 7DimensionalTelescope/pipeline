@@ -39,6 +39,7 @@ def shifted_overscan_score(
     pair_dmax: int = 50,
     pair_sigma_min: float = 8.0,
     dip_abs_min: float = 10.0,
+    noise_floor: float = 1.0,
 ) -> float:
     from numpy.lib.stride_tricks import sliding_window_view
 
@@ -69,11 +70,16 @@ def shifted_overscan_score(
     pb = win_baseline // 2
     baseline = np.median(sliding_window_view(np.pad(col, pb, mode="reflect"), win_baseline), axis=-1)
     resid = col - baseline
-    mad = float(np.median(np.abs(resid - np.median(resid)))) + 1e-6
+    mad = float(np.median(np.abs(resid - np.median(resid))))
     # Quantized SExtractor-style profiles can have MAD(resid)==0; median|Δcol|
     # matches the usual ~1 ADU column-to-column jitter on bias-like data.
-    col_step = float(np.median(np.abs(np.diff(col)))) + 1e-6
-    sigma = max(1.4826 * mad, col_step)
+    col_step = float(np.median(np.abs(np.diff(col))))
+    # 1 ADU floor is physically motivated: col is a mean over O(100-400) rows,
+    # so real column-to-column scatter is already <=1 ADU even on noisy frames,
+    # while genuine shifted-overscan defects are tens of ADU. Without a floor,
+    # quantization-dominated short exposures (low sky, near-integer col values)
+    # collapse sigma to the old +1e-6 safety term and inflate the score by ~1e6.
+    sigma = max(1.4826 * mad, col_step, noise_floor)
 
     # --- Plateau-dip path: catches edge-flush defects and wide interior dips
     # where the col-mean stays flat to within plateau_range_max ADU. A smooth
@@ -105,7 +111,7 @@ def shifted_overscan_score(
     # and the plateau between both cliffs sitting at least dip_abs_min ADU
     # below the global col-mean median (rejects hot-column pair artifacts).
     dcol = np.diff(col)
-    med_abs = float(np.median(np.abs(dcol))) + 1e-6
+    med_abs = max(float(np.median(np.abs(dcol))), noise_floor)
     cliff_thr = pair_sigma_min * med_abs
     bulk_limit = bulk_med - dip_abs_min
     col_right = col[1:]
