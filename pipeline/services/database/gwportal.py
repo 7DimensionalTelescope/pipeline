@@ -773,6 +773,101 @@ class _SqlBackend:
         """
         return self._execute(sql, params)
 
+    # ---- Distinct raw nightdates --------------------------------------- #
+    def _q_raw_nights(
+        self,
+        *,
+        date_start: Optional[DateLike] = None,
+        date_end: Optional[DateLike] = None,
+        days: Optional[int] = None,
+        filter_name: ListOrOne = None,
+        unit_name: ListOrOne = None,
+        object_name: Optional[str] = None,
+        obsnote_contains: Optional[str] = None,
+        tile_name: ListOrOne = None,
+        target_name: ListOrOne = None,
+        coord_sys: Optional[str] = None,
+        ra: Optional[float] = None,
+        dec: Optional[float] = None,
+        gl: Optional[float] = None,
+        gb: Optional[float] = None,
+        radius: Optional[float] = None,
+        polygon: Any = None,
+        **_ignored: Any,
+    ) -> List[Dict[str, Any]]:
+        """
+        Return the distinct ``survey_night.date`` values that have at least
+        one raw science frame, honoring the same filter vocabulary as
+        :meth:`_q_raw`. Each row carries a ``n_frames`` count.
+        """
+        clauses: List[str] = []
+        params: List[Any] = []
+
+        self._apply_date_filters(
+            clauses,
+            params,
+            col="sf.obstime",
+            date_start=date_start,
+            date_end=date_end,
+            days=days,
+        )
+        self._apply_in(clauses, params, "u.name", _as_list(unit_name))
+        self._apply_in(clauses, params, "f.name", _as_list(filter_name))
+        self._apply_in(clauses, params, "tl.name", _as_list(tile_name))
+
+        self._apply_spatial(
+            clauses,
+            params,
+            entity="raw",
+            coord_sys=coord_sys,
+            ra=ra,
+            dec=dec,
+            gl=gl,
+            gb=gb,
+            radius=radius,
+            polygon=polygon,
+        )
+
+        if target_name is not None:
+            names = _as_list(target_name) or []
+            tile_tgts = [n for n in names if _TILE_RE.match(n)]
+            reg_tgts = [n for n in names if not _TILE_RE.match(n)]
+            sub: List[str] = []
+            if reg_tgts:
+                ph = ",".join(["%s"] * len(reg_tgts))
+                sub.append(f"t.name IN ({ph})")
+                params.extend(reg_tgts)
+            if tile_tgts:
+                ph = ",".join(["%s"] * len(tile_tgts))
+                sub.append(f"sf.tile_id IN (SELECT id FROM survey_tile WHERE name IN ({ph}))")
+                params.extend(tile_tgts)
+            if sub:
+                clauses.append("(" + " OR ".join(sub) + ")")
+
+        if object_name:
+            clauses.append("sf.object_name ILIKE %s")
+            params.append(f"%{object_name}%")
+        if obsnote_contains:
+            clauses.append("sf.obsnote ILIKE %s")
+            params.append(f"%{obsnote_contains}%")
+
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"""
+            SELECT
+                n.date         AS nightdate,
+                COUNT(*)       AS n_frames
+            FROM survey_scienceframe sf
+            JOIN facility_unit u       ON sf.unit_id = u.id
+            JOIN survey_night  n       ON sf.night_id = n.id
+            LEFT JOIN facility_filter f ON sf.filter_id = f.id
+            LEFT JOIN survey_target  t  ON sf.target_id = t.id
+            LEFT JOIN survey_tile    tl ON sf.tile_id = tl.id
+            {where}
+            GROUP BY n.date
+            ORDER BY n.date
+        """
+        return self._execute(sql, params)
+
     # ---- Processed science frames -------------------------------------- #
     def _q_processed(
         self,
@@ -1871,6 +1966,59 @@ class RawFrameQuery(_BaseQueryBuilder, _DateFilterMixin, _FrameFilterMixin, _Spa
     def object_name_contains(self, text: str):
         self._filters["object_name"] = text
         return self
+
+    def nightdates(self, *, counts: bool = False) -> List[Any]:
+        """
+        Return the distinct night dates that exist in the raw science-frame
+        database, honoring any filters already set on this builder (unit,
+        filter, date range, tile/target, spatial, obsnote, object name).
+
+        Parameters
+        ----------
+        counts : bool, default False
+            If True, return a list of dicts ``{"nightdate": date,
+            "n_frames": int}`` sorted by date. If False (default), return
+            a plain sorted list of :class:`datetime.date`.
+
+        Notes
+        -----
+        This is a SQL-only operation. The GWPortal REST API has no
+        endpoint for a distinct-nightdate listing, so ``backend="http"``
+        raises :class:`NotImplementedError`. With ``backend="auto"`` the
+        SQL backend is used when credentials are available.
+
+        Example
+        -------
+        >>> RawFrameQuery().by_unit("7DT01").nightdates()
+        [datetime.date(2024, 11, 14), datetime.date(2024, 11, 15), ...]
+
+        >>> (RawFrameQuery()
+        ...  .between("2025-10-01", "2025-10-31")
+        ...  .with_filter("m525")
+        ...  .nightdates(counts=True))
+        [{'nightdate': datetime.date(2025, 10, 01), 'n_frames': 42}, ...]
+        """
+        backend = Backend.parse(self.backend)
+        if backend is Backend.HTTP:
+            raise NotImplementedError(
+                "RawFrameQuery.nightdates() requires the SQL backend; the "
+                "GWPortal REST API has no distinct-nightdate endpoint."
+            )
+
+        q = GWPortalQuery(self.entity, backend=Backend.SQL)
+        sql_be = q._get_sql()
+        try:
+            rows = sql_be._q_raw_nights(**self._filters)
+        finally:
+            self._query = q
+            self.last_backend_used = Backend.SQL
+            self.last_sql = sql_be.last_sql
+            self.last_params = sql_be.last_params
+            self.last_url = None
+
+        if counts:
+            return rows
+        return [r["nightdate"] for r in rows]
 
 
 class ProcessedFrameQuery(_BaseQueryBuilder, _DateFilterMixin, _FrameFilterMixin, _SpatialFilterMixin):
