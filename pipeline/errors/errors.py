@@ -150,6 +150,12 @@ class EmptyInputAfterSanityRejectionError(Exception):
     pass
 
 
+class NoSpaceLeftOnDeviceError(OSError):
+    """Disk full / ENOSPC from the OS or wrapped tools."""
+
+    pass
+
+
 class UnknownError(Exception):
     pass
 

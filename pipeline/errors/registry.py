@@ -1,4 +1,5 @@
 from __future__ import annotations
+import errno
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Type, Union
 
@@ -233,6 +234,8 @@ class ProcessErrorBase(Exception, metaclass=ProcessErrorMeta):
         """
         # If passed an instance, use its type
         if isinstance(kind, BaseException):
+            if isinstance(kind, OSError) and getattr(kind, "errno", None) == errno.ENOSPC:
+                return getattr(cls, "NoSpaceLeftOnDeviceError")
             kind_obj = type(kind)
         else:
             kind_obj = kind
