@@ -785,7 +785,12 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             )
             return
 
-        if self.sci_input and all(os.path.exists(path) for path in self.sci_output) and not self.overwrite:
+        if self.overwrite:
+            pairs = list(zip(self.sci_input, self.sci_output))
+        else:
+            pairs = [(i, o) for i, o in zip(self.sci_input, self.sci_output) if not os.path.exists(o)]
+
+        if self.sci_input and not pairs:
             self.logger.info(
                 f"[Group {self._current_group+1}] All science outputs already exist; skipping header preparation"
             )
@@ -800,7 +805,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             self._ppflag.get("flat", ppflag.get_ppflag_from_header(flat)),
         )
 
-        for raw_file, processed_file in zip(self.sci_input, self.sci_output):
+        for raw_file, processed_file in pairs:
             header = get_header(raw_file)
             header["SATURATE"] = prep_utils.get_saturation_level(header, bias, dark, flat)
             header = prep_utils.write_IMCMB_to_header(header, [bias, dark, flat, raw_file])
