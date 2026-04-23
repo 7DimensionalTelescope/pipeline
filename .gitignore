@@ -191,3 +191,7 @@ catalog_archive/
 
 # log files in run script dir
 run_examples/*.log
+
+
+# tmp sqlite db
+reprocess.db*
