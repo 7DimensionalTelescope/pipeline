@@ -136,7 +136,7 @@ class NameHandler:
     CAVEAT: For NINA filenames, only raw -> processed supported
     """
 
-    def __init__(self, filenames: str | Path | list[str] | list[Path]):
+    def __init__(self, filenames: str | Path | list[str] | list[Path], nightdate_only: bool = False):
         # lapse("start NameHandler init", reset=True)
 
         # --- 1. Normalize input to a list of strings ---
@@ -151,6 +151,9 @@ class NameHandler:
 
         # --- 4. Parse nightdate from the dirname if available ---
         self.nightdate = [get_nightdate(p) for p in self.input]
+        if nightdate_only:
+            # fast mode
+            return
         # lapse("for nightdate construction")
         if self.nightdate[0] and (self.nightdate[0] < "2024-02-15"):
             use_db_unified_names = True
