@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 from glob import glob
+from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Union, List, Tuple
 from functools import cached_property
@@ -321,6 +322,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             self._output_parent_dir = [working_dir or os.getcwd()]
             self._preproc_output_dir = self._output_parent_dir
             self._factory_parent_dir = [os.path.join(self._output_parent_dir[0], TMP_DIRNAME)]
+            self._masterframe_parent_dir = [const.MASTER_FRAME_DIR]
             # self._is_pipeline_vectorized = [is_pipeline]
 
         else:
@@ -328,12 +330,29 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             self._output_parent_dir = []
             self._preproc_output_dir = []
             self._factory_parent_dir = []
+            self._masterframe_parent_dir = []
             # self._is_pipeline_vectorized = []
 
             for i, input_file in enumerate(self._input_files):
                 file_dir = str(Path(input_file).absolute().parent)
 
                 not_pipeline_dir = not any(s in file_dir for s in const.PIPELINE_DIRS)
+
+                nightdate = self._get_namehandler_property_at_index("nightdate", i)
+                if isinstance(nightdate, list):
+                    current_nightdate = nightdate[i] if i < len(nightdate) else nightdate[0]
+                else:
+                    current_nightdate = nightdate or date.today().strftime("%Y-%m-%d")
+
+                if current_nightdate < const.DISK_CHANGE_NIGHTDATE:
+                    masterframe_parent_dir = const.MASTER_FRAME_DIR
+                elif current_nightdate < const.DISK_CHANGE_NIGHTDATE_2:
+                    masterframe_parent_dir = const.MASTER_FRAME_DIR_2
+                else:
+                    raise ValueError(
+                        f"Nightdate cap ({const.DISK_CHANGE_NIGHTDATE_2}) reached for file {input_file}: consider moving to another disk."
+                    )
+                self._masterframe_parent_dir.append(masterframe_parent_dir)
 
                 # working_dir explicitly given or pipeline_dirs not found in input_file
                 if (working_dir or not_pipeline_dir) and not is_pipeline:
@@ -349,14 +368,6 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
 
                 # pipeline_dirs found in input_file or explicitly given as pipeline
                 else:
-                    from datetime import date
-
-                    nightdate = self._get_namehandler_property_at_index("nightdate", i)
-                    if isinstance(nightdate, list):
-                        current_nightdate = nightdate[i] if i < len(nightdate) else nightdate[0]
-                    else:
-                        current_nightdate = nightdate or date.today().strftime("%Y%m%d")
-
                     if current_nightdate < const.DISK_CHANGE_NIGHTDATE:
                         if is_too:
                             output_parent_dir = const.TOO_PROCESSED_DIR
@@ -390,6 +401,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         self.output_parent_dir = self._output_parent_dir
         self.preproc_output_dir = self._preproc_output_dir
         self.factory_parent_dir = self._factory_parent_dir
+        self.masterframe_parent_dir = self._masterframe_parent_dir
 
     def _get_cached_namehandler_property(self, prop_name: str):
         """
@@ -577,8 +589,8 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             filte = self._get_namehandler_property_at_index("filter", i)
             typ = self._get_namehandler_property_at_index("type", i)
 
-            # Masterframe directory
-            masterframe_dir = os.path.join(const.MASTER_FRAME_DIR, nightdate, unit)
+            # Masterframe directory (parent disk selected by nightdate in select_output_dir)
+            masterframe_dir = os.path.join(self._masterframe_parent_dir[i], nightdate, unit)
             self._masterframe_dir.append(masterframe_dir)
 
             config_stem = "_".join([nightdate, unit])  # for preproc config

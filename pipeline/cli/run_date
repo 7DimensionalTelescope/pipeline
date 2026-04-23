@@ -30,9 +30,7 @@ def _count_existing_schedule_entries(nightdates):
     try:
         with sqlite3.connect(SCHEDULER_DB_PATH) as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='scheduler'"
-            )
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='scheduler'")
             if cursor.fetchone() is None:
                 return counts
 
@@ -76,9 +74,7 @@ def _prompt_overwrite_schedule(counts):
 
     while True:
         try:
-            answer = input(
-                "How to proceed? [o]verwrite / [k]eep existing / [a]bort: "
-            ).strip().lower()
+            answer = input("How to proceed? [o]verwrite / [k]eep existing / [a]bort: ").strip().lower()
         except EOFError:
             print("\nAborted.")
             sys.exit(0)
@@ -136,6 +132,12 @@ if __name__ == "__main__":
         action="store_true",
         help="Overwrite existing schedule in the database",
     )
+    parser.add_argument(
+        "--use-db",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use the database (default: True). Use --no-use-db to disable.",
+    )
 
     args = parser.parse_args()
 
@@ -153,7 +155,7 @@ if __name__ == "__main__":
             print("Proceeding with --overwrite-schedule enabled.")
 
     try:
-        dr = DataReduction(args.condition, use_db=True, is_pipeline=True)
+        dr = DataReduction(args.condition, use_db=args.use_db, is_pipeline=True)
         dr.run(
             use_system_queue=True,
             base_priority=args.priority,
