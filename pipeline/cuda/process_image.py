@@ -10,6 +10,9 @@ import time
 import fitsio
 
 from ..utils.header import add_padding
+from ..preprocess.calc import shifted_overscan_score
+from ..preprocess.utils import prepare_raw_qa_header
+
 
 # Reduction kernel
 reduction_kernel = cp.ElementwiseKernel(
@@ -62,7 +65,12 @@ def process_image_with_cupy(obs, bias, dark, flat, output, device_id, n_head_blo
             batch_output = output[batch_start:batch_end]
             batch_num_images = len(batch_obs)
 
-            batch_data = [fitsio.read(path).astype(np.float32) for path in batch_obs]
+            batch_data = []
+            for path, out_path in zip(batch_obs, batch_output):
+                d = fitsio.read(path).astype(np.float32)
+                s = shifted_overscan_score(d)
+                prepare_raw_qa_header(out_path, s)
+                batch_data.append(d)
 
             print(
                 f"[Batch {batch_idx}/{total_batches}] Transferring {batch_num_images} images to GPU memory (device {device_id})"

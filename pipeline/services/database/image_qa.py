@@ -50,7 +50,7 @@ class ImageQATable:
     clipmin: Optional[float] = None
     clipmax: Optional[float] = None
     sigmean: Optional[float] = None
-    trimmed: Optional[bool] = None
+    shifted: Optional[bool] = None
     edgevar: Optional[float] = None
     uniform: Optional[float] = None
     nhotpix: Optional[int] = None

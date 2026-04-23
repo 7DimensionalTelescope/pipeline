@@ -351,6 +351,50 @@ def write_header(filename, header):
     write_header_file(filename, header)
 
 
+def load_header_file(fits_path: str) -> fits.Header | None:
+    """Read the FITS sibling ``.header`` text file for ``fits_path``, or ``None`` if absent."""
+    from ..utils.header import read_header_file as _read_text_header
+
+    path = PathHandler(fits_path).preprocess.header
+    if not os.path.exists(path):
+        return None
+    return _read_text_header(path)
+
+
+def update_header_file(fits_path: str, extra: fits.Header) -> None:
+    """Merge ``extra`` into the FITS sibling ``.header`` text file, preserving existing keys."""
+    hdr = load_header_file(fits_path) or fits.Header()
+    for card in extra.cards:
+        hdr[card.keyword] = (card.value, card.comment)
+    path = PathHandler(fits_path).preprocess.header
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    write_header_file(path, hdr)
+
+
+# Shifted-overscan score is "lower is worse"; images with ``score < threshold`` are flagged
+# as having a shifted overscan band (tuned on real defective frames).
+SHIFTED_SCORE_THRESHOLD = -5.0
+
+
+def combined_shifted_score(scores: list[float]) -> float:
+    """Policy wrapper for shifted-overscan score for a combined image: the minimum (worst) of its inputs.
+    This is useful because we only save the coadded master frames, not their individual processed frames.
+    It's only for back-tracking, without any scientific meaning.
+    """
+    return float(min(scores)) if scores else 0.0
+
+
+def prepare_raw_qa_header(fits_path: str, score: float) -> None:
+    """Write SHIFTED/SHFTSCR to the FITS sibling ``.header`` text file (preserves existing keys)."""
+    cut = SHIFTED_SCORE_THRESHOLD
+    extra = fits.Header()
+    extra["SHIFTED"] = (bool(score < cut), f"Shifted overscan band (SHFTSCR<{cut:g})")
+    extra["SHFTSCR"] = (float(score), f"Shifted overscan score; shifted if <{cut:g}")
+    update_header_file(fits_path, extra)
+
+
 def ensure_mjd_in_header(header, logger=None):
     """
     Ensure the FITS header has MJD. If missing but DATE-OBS exists,
@@ -437,8 +481,6 @@ def read_fits_images(input_paths, output_paths, max_workers=10):
 
 
 def write_fits_image(output_path, processed_data, n_head_blocks=None):
-    from .calc import calculate_edge_variation
-
     """Write processed image to disk using the header pre-generated on disk."""
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     header_file = output_path.replace(".fits", ".header")

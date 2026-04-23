@@ -4,6 +4,9 @@ import cupy as cp
 import numpy as np
 import fitsio
 
+from ..preprocess.calc import prepare_masterframe_header, shifted_overscan_score
+from ..preprocess.utils import combined_shifted_score, prepare_raw_qa_header
+
 
 def pinned_empty(shape, dtype=np.float32):
     size = np.prod(shape)
@@ -105,6 +108,12 @@ if __name__ == "__main__":
     parser.add_argument("-bpmask", help="Output FITS file for BPMask.")
     parser.add_argument("-bpmask_sigma", type=float, default=5.0, help="Sigma threshold for BPMask.")
     parser.add_argument("-device", type=int, default=0, help="CUDA device ID.")
+    parser.add_argument(
+        "-dtype",
+        choices=("bias", "dark", "flat"),
+        default=None,
+        help="Masterframe type; when set, compute per-dtype stats and stamp them into the sibling .header.",
+    )
 
     args = parser.parse_args()
 
@@ -123,7 +132,14 @@ if __name__ == "__main__":
     else:
         make_bpmask = False
 
-    data = [fitsio.read(img).astype(np.float32) for img in args.input]
+    data = []
+    scores = []
+    for img in args.input:
+        d = fitsio.read(img).astype(np.float32)
+        scores.append(shifted_overscan_score(d))
+        data.append(d)
+
+    joint_score = combined_shifted_score(scores)
 
     np_median, np_std, np_bpmask = combine_images_with_cupy(
         data,
@@ -139,3 +155,13 @@ if __name__ == "__main__":
     fitsio.write(args.std_out, np_std, clobber=True)
     if make_bpmask:
         fitsio.write(args.bpmask, np_bpmask, clobber=True)
+
+    prepare_raw_qa_header(args.median_out, joint_score)
+    if args.dtype is not None:
+        prepare_masterframe_header(
+            args.median_out,
+            np_median,
+            dtype=args.dtype,
+            sig_data=np_std,
+            bpmask_path=args.bpmask,
+        )

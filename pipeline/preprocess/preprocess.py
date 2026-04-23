@@ -10,7 +10,7 @@ import traceback
 
 from .plotting import plot_bias, plot_bpmask, plot_dark, plot_flat, plot_sci
 from . import utils as prep_utils
-from .calc import record_masterframe_statistics, calculate_edge_variation
+from .calc import record_masterframe_statistics
 from . import ppflag
 
 from ..utils import flatten, time_diff_in_seconds, atleast_1d
@@ -442,7 +442,13 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 self.logger.info(f"[Group {self._current_group+1}] Generating masterframe {dtype} in GPU device {device_id}")  # fmt: skip
 
             if dtype == "bias":
-                calc_function(input_files, device_id=device_id, output=self.bias_output, sig_output=self.biassig_output)
+                calc_function(
+                    input_files,
+                    device_id=device_id,
+                    output=self.bias_output,
+                    sig_output=self.biassig_output,
+                    dtype=dtype,
+                )
 
             elif dtype == "dark":
                 calc_function(
@@ -454,6 +460,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                     sig_output=self.darksig_output,
                     make_bpmask=self.bpmask_output,
                     bpmask_sigma=self.config_node.preprocess.n_sigma,
+                    dtype=dtype,
                 )
                 # for flatdark
                 self.flatdark_output = self.dark_output  # named _output for consistency, but not written to disk
@@ -469,9 +476,15 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                     device_id=device_id,
                     output=self.flat_output,
                     sig_output=self.flatsig_output,
+                    dtype=dtype,
                 )
 
                 self.logger.info(f"[Group {self._current_group+1}] Checking the quality and updating header for {dtype}")  # fmt: skip
+
+            else:
+                raise PreprocessError.ValueError(
+                    f"[Group {self._current_group+1}] _generate_masterframe: unknown dtype {dtype!r}"
+                )
 
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), header)
 
@@ -492,7 +505,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         self._ppflag[dtype] = ppflag_val
 
         sanity_flag = self._assess_masterframe_quality_and_update_header(
-            header=header, dtype=dtype, ppflag_val=ppflag_val
+            header=header,
+            dtype=dtype,
+            ppflag_val=ppflag_val,
         )
 
         if sanity_flag:
@@ -511,9 +526,18 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
         return False
 
-    def _assess_masterframe_quality_and_update_header(self, header, dtype, ppflag_val: int = 0):
-        """TODO: This is inefficient as it calls unnecessary IO. Ideally stats should be calculated in calc_function"""
-        header = record_masterframe_statistics(getattr(self, f"{dtype}_output"), header, dtype=dtype)
+    def _assess_masterframe_quality_and_update_header(
+        self,
+        header,
+        dtype,
+        ppflag_val: int = 0,
+    ):
+        """Merge pre-computed raw QA + pixel statistics from the master ``.header`` text file."""
+        header = record_masterframe_statistics(
+            getattr(self, f"{dtype}_output"),
+            header,
+            # dtype=dtype,
+        )
 
         sanity_flag = self.apply_criteria(header=header, dtype=dtype)  # evaluates sanity of the image itself
         if ppflag_val & ppflag.PPFLAG_SANITY_F_USED:  # consider propagated sanity flag of the ingredient frames
@@ -762,7 +786,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             return
 
         if self.sci_input and all(os.path.exists(path) for path in self.sci_output) and not self.overwrite:
-            self.logger.info(f"[Group {self._current_group+1}] All science outputs already exist; skipping header preparation")
+            self.logger.info(
+                f"[Group {self._current_group+1}] All science outputs already exist; skipping header preparation"
+            )
             return
 
         bias, dark, flat = self.bias_output, self.dark_output, self.flat_output
@@ -775,11 +801,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         )
 
         for raw_file, processed_file in zip(self.sci_input, self.sci_output):
-            with fits.open(raw_file) as hdul:
-                header = hdul[0].header.copy()
-                raw_data = hdul[0].data.astype(np.float32)
-            _, _, trimmed = calculate_edge_variation(raw_data)
-            header["TRIMMED"] = (trimmed, "Non-positive values in the middle of the image")
+            header = get_header(raw_file)
             header["SATURATE"] = prep_utils.get_saturation_level(header, bias, dark, flat)
             header = prep_utils.write_IMCMB_to_header(header, [bias, dark, flat, raw_file])
             ppflag.set_ppflag_in_header(header, sci_ppflag)
@@ -856,7 +878,12 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             # dark
             if "dark" in self.calib_types and not skip_flags["dark"]:
                 if os.path.exists(dark_file):
-                    plot_dark(dark_file, bpmask_file=bpmask_file if os.path.exists(bpmask_file) else None, overwrite=self.overwrite, dry_run=dry_run)
+                    plot_dark(
+                        dark_file,
+                        bpmask_file=bpmask_file if os.path.exists(bpmask_file) else None,
+                        overwrite=self.overwrite,
+                        dry_run=dry_run,
+                    )
                 else:
                     self.logger.warning(f"[Group {group_index+1}] Dark image does not exist. Skipping dark plot.")
 
@@ -866,7 +893,12 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             # flat
             if "flat" in self.calib_types and not skip_flags["flat"]:
                 if os.path.exists(flat_file):
-                    plot_flat(flat_file, bpmask_file=bpmask_file if os.path.exists(bpmask_file) else None, overwrite=self.overwrite, dry_run=dry_run)
+                    plot_flat(
+                        flat_file,
+                        bpmask_file=bpmask_file if os.path.exists(bpmask_file) else None,
+                        overwrite=self.overwrite,
+                        dry_run=dry_run,
+                    )
                 else:
                     self.logger.warning(f"[Group {group_index+1}] Flat image does not exist. Skipping flat plot.")
 
@@ -877,7 +909,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
             # science
             st = time.time()
-            sci_pairs = list(zip(self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index)))
+            sci_pairs = list(
+                zip(self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index))
+            )
             num_sci = len(sci_pairs)
             if num_sci and not skip_flags["sci"]:
                 self.logger.info(f"[Group {group_index+1}] Generating plots for science frames ({num_sci} images)")

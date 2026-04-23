@@ -39,10 +39,10 @@
             "criteria": "lt",
             "description": "Mean of the errormap must be < 0.04"
         },
-        "TRIMMED": {
+        "SHIFTED": {
             "value": false,
             "criteria": "eq",
-            "description": "Image must NOT be cut/trimmed"
+            "description": "Image must NOT have a shifted-overscan band"
         }
     }
 } 

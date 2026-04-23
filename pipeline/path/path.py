@@ -997,6 +997,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
 class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
     def __init__(self, parent: PathHandler, config=None):
         self._parent = parent
+        # self._single = self._parent.name._single
 
         # Apply config overrides if provided
         if config and hasattr(config, "path"):
@@ -1009,6 +1010,13 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
     @cached_property
     def figures(self):
         return PathPreprocessFigures(self)
+
+    @property
+    def header(self):
+        """Sibling ``.header`` text file(s) for each input FITS (see ``prepare_header``)."""
+        return [swap_ext(f, "header") for f in self._parent._input_files]
+        # headers: list = [swap_ext(f, "header") for f in self._parent._input_files]
+        # return headers[0] if self._single else headers
 
     @property
     def _masterframe_dir(self):
@@ -1182,7 +1190,9 @@ class PathPreprocessFigures(PathFiguresBase):
 
     @property
     def _bias_hist(self):
-        return self._regularize(bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "hist"), "jpg")))
+        return self._regularize(
+            bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "hist"), "jpg"))
+        )
 
     @property
     def bias_hist(self):
@@ -1208,7 +1218,9 @@ class PathPreprocessFigures(PathFiguresBase):
 
     @property
     def _dark_hist(self):
-        return self._regularize(bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "hist"), "jpg")))
+        return self._regularize(
+            bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "hist"), "jpg"))
+        )
 
     @property
     def dark_hist(self):
@@ -1234,7 +1246,9 @@ class PathPreprocessFigures(PathFiguresBase):
 
     @property
     def _flat_hist(self):
-        return self._regularize(bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "hist"), "jpg")))
+        return self._regularize(
+            bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "hist"), "jpg"))
+        )
 
     @property
     def flat_hist(self):
@@ -1258,7 +1272,9 @@ class PathPreprocessFigures(PathFiguresBase):
 
     @property
     def _science_raw(self):
-        return self._regularize(bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "raw"), "jpg")))
+        return self._regularize(
+            bjoin(self._figure_dir, swap_ext(add_suffix(self._parent._parent.name.basename, "raw"), "jpg"))
+        )
 
     @property
     def science_raw(self):

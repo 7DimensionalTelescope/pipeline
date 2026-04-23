@@ -11,8 +11,128 @@ from astropy.io import fits
 from numba import njit, prange
 from scipy.stats import variation
 
-from .utils import read_fits_image, read_fits_images, write_fits_images
+from .utils import (
+    SHIFTED_SCORE_THRESHOLD,
+    combined_shifted_score,
+    load_header_file,
+    prepare_raw_qa_header,
+    read_fits_image,
+    read_fits_images,
+    update_header_file,
+    write_fits_images,
+)
 from ..const import SOURCE_DIR, SERVICES_TMP_DIR
+
+
+def shifted_overscan_score(
+    image: np.ndarray,
+    row_frac: float = 0.6,
+    profile_max_rows: int = 384,
+    win_baseline: int = 801,
+    win_smooth: int = 8,
+    plateau_win: int = 16,
+    plateau_range_max: float = 5.0,
+    plateau_qlo: float = 0.1,
+    plateau_qhi: float = 0.9,
+    plateau_min_run: int = 5,
+    pair_dmin: int = 5,
+    pair_dmax: int = 50,
+    pair_sigma_min: float = 8.0,
+    dip_abs_min: float = 10.0,
+) -> float:
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    # Use the middle row_frac of rows to reduce influence of row-edge artifacts
+    # and source concentrations at detector edges on the column-mean profile.
+    h = image.shape[0]
+    r0 = int(h * (1.0 - row_frac) / 2.0)
+    r1 = h - r0
+    band = image[r0:r1]
+    nr = band.shape[0]
+    step = max(1, (nr + profile_max_rows - 1) // profile_max_rows)
+    sample = band[::step]
+    # Per-column mean is biased high in crowded fields; median tracks the sky
+    # floor. SExtractor's mode proxy (2.5*median - 1.5*mean) uses both, with no
+    # extra passes beyond mean+median on the decimated band. Clip to [lo, hi]
+    # with lo=min(mean,median), hi=max(mean,median) so heavily skewed columns
+    # do not produce negative or extrapolated values.
+    col_mean = sample.mean(axis=0).astype(np.float32, copy=False)
+    col_med = np.median(sample, axis=0).astype(np.float32, copy=False)
+    mode = 2.5 * col_med - 1.5 * col_mean
+    lo = np.minimum(col_mean, col_med)
+    hi = np.maximum(col_mean, col_med)
+    col = np.clip(mode, lo, hi).astype(np.float32, copy=False)
+    bulk_med = float(np.median(col))
+
+    # Reflect padding so an edge-anchored defect is compared to interior columns
+    # rather than to a replication of itself.
+    pb = win_baseline // 2
+    baseline = np.median(sliding_window_view(np.pad(col, pb, mode="reflect"), win_baseline), axis=-1)
+    resid = col - baseline
+    mad = float(np.median(np.abs(resid - np.median(resid)))) + 1e-6
+    # Quantized SExtractor-style profiles can have MAD(resid)==0; median|Δcol|
+    # matches the usual ~1 ADU column-to-column jitter on bias-like data.
+    col_step = float(np.median(np.abs(np.diff(col)))) + 1e-6
+    sigma = max(1.4826 * mad, col_step)
+
+    # --- Plateau-dip path: catches edge-flush defects and wide interior dips
+    # where the col-mean stays flat to within plateau_range_max ADU. A smooth
+    # flat-field rolloff fails the plateau test; short coincidental flat spots
+    # in bulk are discarded by the plateau_min_run filter.
+    pp = plateau_win // 2
+    win = sliding_window_view(np.pad(col, (pp, plateau_win - 1 - pp), mode="edge"), plateau_win)
+    local_range = np.quantile(win, plateau_qhi, axis=-1) - np.quantile(win, plateau_qlo, axis=-1)
+    is_plateau = local_range < plateau_range_max
+    if is_plateau.any():
+        p_int = is_plateau.astype(np.int8)
+        d_run = np.diff(np.concatenate([[0], p_int, [0]]))
+        starts = np.where(d_run == 1)[0]
+        ends = np.where(d_run == -1)[0]
+        for s, e in zip(starts, ends):
+            if (e - s) < plateau_min_run:
+                is_plateau[s:e] = False
+    if is_plateau.sum() >= plateau_min_run:
+        dip = np.where(is_plateau, -resid, 0.0).astype(np.float32, copy=False)
+        ps = win_smooth // 2
+        smooth = sliding_window_view(np.pad(dip, (ps, win_smooth - 1 - ps), mode="edge"), win_smooth).mean(axis=-1)
+        plateau_score = -float(smooth.max() / sigma)
+    else:
+        plateau_score = 0.0
+
+    # --- Paired-cliff path: catches narrow interior dips (e.g. in flats with
+    # strong vignetting) by requiring a sharp drop followed by a sharp rise
+    # within pair_dmax cols, both steps above pair_sigma_min * median|diff|,
+    # and the plateau between both cliffs sitting at least dip_abs_min ADU
+    # below the global col-mean median (rejects hot-column pair artifacts).
+    dcol = np.diff(col)
+    med_abs = float(np.median(np.abs(dcol))) + 1e-6
+    cliff_thr = pair_sigma_min * med_abs
+    bulk_limit = bulk_med - dip_abs_min
+    col_right = col[1:]
+    best_pair = 0.0
+    for dd in range(pair_dmin, pair_dmax + 1):
+        fd = dcol[:-dd]
+        tr = dcol[dd:]
+        right_after_drop = col_right[:-dd]
+        right_before_rise = col[dd:-1]
+        msk = (fd < -cliff_thr) & (tr > cliff_thr) & (right_after_drop < bulk_limit) & (right_before_rise < bulk_limit)
+        if msk.any():
+            mag = (-fd) * tr
+            v = float(mag[msk].max())
+            if v > best_pair:
+                best_pair = v
+    cliff_score = -float(np.sqrt(best_pair) / med_abs) if best_pair > 0 else 0.0
+
+    return min(plateau_score, cliff_score)
+
+
+def check_shifted_overscan(
+    image: np.ndarray,
+    threshold: float = SHIFTED_SCORE_THRESHOLD,
+    **kwargs,
+) -> tuple[bool, float]:
+    score = shifted_overscan_score(image, **kwargs)
+    return (score < threshold), score
 
 
 def combine_images_with_subprocess_gpu(
@@ -25,12 +145,19 @@ def combine_images_with_subprocess_gpu(
     scale=None,
     make_bpmask=None,
     bpmask_sigma=5,
+    dtype: str | None = None,
     **kwargs,
 ):
     """
     Combine images using a subprocess call to a CUDA-accelerated script.
     If the process times out (10 seconds per image), falls back to CPU processing.
+
+    The subprocess writes both raw QA (SHIFTED/SHFTSCR) and the masterframe pixel
+    statistics (CLIPMEAN/CLIPMED/..., UNIFORM for dark, SIGMEAN/EDGEVAR for flat)
+    into the sibling ``.header`` text file next to ``output``, so the parent never
+    re-reads the master FITS.
     """
+
     cmd = [
         "python",
         f"{SOURCE_DIR}/cuda/combine_images.py",
@@ -54,17 +181,17 @@ def combine_images_with_subprocess_gpu(
         cmd.extend(["-bpmask", make_bpmask])
         cmd.extend(["-bpmask_sigma", str(bpmask_sigma)])
 
+    if dtype is not None:
+        cmd.extend(["-dtype", dtype])
+
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
 
         if result.returncode != 0:
             raise RuntimeError(f"Error combining images: {result.stderr}")
 
-        return None
-
     except:
-        # Fall back to CPU processing
-        return combine_images_with_cpu(
+        combine_images_with_cpu(
             images=images,
             output=output,
             sig_output=sig_output,
@@ -73,6 +200,7 @@ def combine_images_with_subprocess_gpu(
             norm=norm,
             make_bpmask=make_bpmask,
             bpmask_sigma=bpmask_sigma,
+            dtype=dtype,
             **kwargs,
         )
 
@@ -87,10 +215,19 @@ def combine_images_with_cpu(
     combine_method: Literal["median", "mean"] = "median",
     make_bpmask: str = None,
     bpmask_sigma=5,
+    dtype: str | None = None,
     **kwargs,  # prevent crash if extra args are passed. e.g., device_id
 ):
 
-    np_stack = np.stack([read_fits_image(img) for img in images])
+    raw_scores = []
+    raw_data = []
+    for img in images:
+        d = read_fits_image(img)
+        raw_scores.append(shifted_overscan_score(d))
+        raw_data.append(d)
+    np_stack = np.stack(raw_data)
+    del raw_data
+    joint_score = combined_shifted_score(raw_scores)
 
     if subtract is not None:
         sub_arr = np.zeros_like(np_stack[0], dtype=np.float32)
@@ -120,7 +257,15 @@ def combine_images_with_cpu(
         hot_mask = sigma_clipped_stats_cpu(np_combined, bpmask_sigma, return_mask=True)
         fits.writeto(make_bpmask, data=hot_mask.astype(np.uint8), overwrite=True)
 
-    return np_combined, np_std, None
+    prepare_raw_qa_header(output, joint_score)
+    if dtype is not None:
+        prepare_masterframe_header(
+            output,
+            np_combined,
+            dtype=dtype,
+            sig_data=np_std,
+            bpmask_path=make_bpmask,
+        )
 
 
 def process_image_with_subprocess_gpu(
@@ -129,6 +274,8 @@ def process_image_with_subprocess_gpu(
     """
     Process images using a subprocess call to a CUDA-accelerated script.
     If the process times out (10 seconds per image), falls back to CPU processing.
+
+    The subprocess stamps SHIFTED/SHFTSCR into each output's sibling ``.header`` file.
     """
     gc.collect()
 
@@ -237,7 +384,7 @@ def process_image_with_cpu(
     multiplicative, subtractive = preparation_kernel(bias_data, dark_data, flat_data, h, w)
 
     batch_size = 30
-    max_workers = 3
+    max_workers = 10  # 3
     total_batches = (len(image_paths) + batch_size - 1) // batch_size
 
     for batch_idx, batch_start in enumerate(range(0, len(image_paths), batch_size), 1):
@@ -248,11 +395,14 @@ def process_image_with_cpu(
 
         # Load images in parallel using threading
 
-        batch_data, in_paths, out_paths = read_fits_images(batch_image_paths, batch_output_paths)
+        batch_data, in_paths, out_paths = read_fits_images(
+            batch_image_paths, batch_output_paths, max_workers=max_workers
+        )
 
         # Process images in batch
         processed_batch = []
-        for image_data in batch_data:
+        for image_data, out_path in zip(batch_data, out_paths):
+            prepare_raw_qa_header(out_path, shifted_overscan_score(image_data))
             processed_data = reduction_kernel_cpu(image_data, subtractive, multiplicative, h, w)
             processed_batch.append(processed_data)
 
@@ -439,26 +589,12 @@ def calculate_edge_variation(d):
     Returns (max-min)/min ratio for edge values.
     """
     try:
-        h, w = d.shape
-
-        # Define edge regions (100x100 pixels at each corner)
         edge_size = 100
 
-        # Top-left edge
-        top_left = d[:edge_size, :edge_size]
-        top_left_median = np.median(top_left)
-
-        # Top-right edge
-        top_right = d[:edge_size, -edge_size:]
-        top_right_median = np.median(top_right)
-
-        # Bottom-left edge
-        bottom_left = d[-edge_size:, :edge_size]
-        bottom_left_median = np.median(bottom_left)
-
-        # Bottom-right edge
-        bottom_right = d[-edge_size:, -edge_size:]
-        bottom_right_median = np.median(bottom_right)
+        top_left_median = np.median(d[:edge_size, :edge_size])
+        top_right_median = np.median(d[:edge_size, -edge_size:])
+        bottom_left_median = np.median(d[-edge_size:, :edge_size])
+        bottom_right_median = np.median(d[-edge_size:, -edge_size:])
 
         # Calculate edge values
         edge_values = [top_left_median, top_right_median, bottom_left_median, bottom_right_median]
@@ -467,21 +603,16 @@ def calculate_edge_variation(d):
         min_val = min(edge_values)
         max_val = max(edge_values)
 
-        has_negative_middle_row = np.any(d[int(h / 2.0)] <= 0)
-        has_negative_middle_col = np.any(d[:, int(w / 2.0)] <= 0)
-
-        trimmed = has_negative_middle_row or has_negative_middle_col
-
         if min_val > 0:  # Avoid division by zero
             edge_var = (max_val - min_val) / min_val
         else:
             edge_var = 0.0
 
-        return edge_var, edge_values, trimmed
+        return edge_var, edge_values
 
     except Exception as e:
         print(f"Error calculating edge variation: {e}")
-        return 0.0, [0, 0, 0, 0], False
+        return 0.0, [0, 0, 0, 0]
 
 
 # def uniformity_statistical(fits_path: str, bpmask_path: str = None, grid_size: int = 32):
@@ -637,10 +768,24 @@ def uniformity_statistical(
     return float(-np.log10(uniformity_score + 1e-10))
 
 
-def record_masterframe_statistics(
-    filename: str, header: fits.Header, device_id: int = 0, cropsize: int = 500, *, dtype: str
-):
-    data = fits.getdata(filename).astype(np.float32)  # Ensure data is float32
+def compute_masterframe_stats(
+    filename: str,
+    data: np.ndarray,
+    *,
+    dtype: str,
+    device_id: int = 0,
+    cropsize: int = 500,
+    sig_data: np.ndarray | None = None,
+    bpmask_path: str | None = None,
+) -> fits.Header:
+    """Compute per-masterframe pixel statistics into a fresh Header (no FITS re-read).
+
+    Intended to run where ``data`` / ``sig_data`` are already in memory (CPU combine
+    or GPU subprocess). DARK uniformity re-reads the bpmask file (``bpmask_path``)
+    that was just written alongside the master.
+    """
+    header = fits.Header()
+    data = np.asarray(data, dtype=np.float32, copy=False)
     mean, median, std, min, max = sigma_clipped_stats(data, device_id=device_id, sigma=3, maxiters=5, minmax=True)
     header["CLIPMEAN"] = (float(mean), "3-sig clipped mean of the pixel values")
     header["CLIPMED"] = (float(median), "3-sig clipped median of the pixel values")
@@ -663,12 +808,14 @@ def record_masterframe_statistics(
     header["CENCLPSD"] = (float(std), f"3-sig clipped std of center {cropsize}x{cropsize}")  # fmt: skip
     # header["CENCMIN"] = float(min)
     # header["CENCMAX"] = float(max)
-    edge_var, _, trimmed = calculate_edge_variation(data)
-    header["TRIMMED"] = (trimmed, "Non-positive values in the middle of the image")
 
     if dtype.upper() == "FLAT":
-        datasig = fits.getdata(filename.replace("flat_", "flatsig_")).astype(np.float32)  # Ensure data is float32
+        if sig_data is None:
+            datasig = fits.getdata(filename.replace("flat_", "flatsig_")).astype(np.float32)
+        else:
+            datasig = np.asarray(sig_data, dtype=np.float32, copy=False)
         s_mean, s_median, s_std = sigma_clipped_stats(datasig, device_id=device_id, sigma=3, maxiters=5)
+        edge_var, _ = calculate_edge_variation(data)
 
         header["SIGMEAN"] = (s_mean, "3-sig clipped mean of the errormap")
         header["SIGMED"] = (s_median, "3-sig clipped median of the errormap")
@@ -676,10 +823,54 @@ def record_masterframe_statistics(
         header["EDGEVAR"] = (edge_var, "Edge variation of the image")
 
     elif dtype.upper() == "DARK":
-        uniformity_score = uniformity_statistical(filename)
+        uniformity_score = uniformity_statistical(filename, bpmask_path=bpmask_path)
         header["UNIFORM"] = (uniformity_score, "Uniformity score")
         header["NTOTPIX"] = (data.shape[0] * data.shape[1], "Total number of pixels")
 
+    return header
+
+
+def prepare_masterframe_header(
+    filename: str,
+    data: np.ndarray,
+    *,
+    dtype: str,
+    device_id: int = 0,
+    sig_data: np.ndarray | None = None,
+    bpmask_path: str | None = None,
+) -> None:
+    """Compute masterframe pixel statistics and merge them into the sibling ``.header`` text file."""
+    stats = compute_masterframe_stats(
+        filename,
+        data,
+        dtype=dtype,
+        device_id=device_id,
+        sig_data=sig_data,
+        bpmask_path=bpmask_path,
+    )
+    update_header_file(filename, stats)
+
+
+def record_masterframe_statistics(
+    filename: str,
+    header: fits.Header,
+    # *,
+    # dtype: str,
+) -> fits.Header:
+    """Merge raw QA + pixel statistics from the sibling ``.header`` text file into ``header``.
+
+    The combine step (CPU or CUDA subprocess) writes all keys into the ``.header`` text file
+    via ``prepare_raw_qa_header`` and ``prepare_masterframe_header``, so the parent just
+    merges them without touching the master FITS again.
+    """
+    side_header = load_header_file(filename)
+    if side_header is None:
+        raise FileNotFoundError(
+            f"Master-frame header text file not found next to {filename!r}; "
+            "combine step did not run or failed to write stats."
+        )
+    for card in side_header.cards:
+        header[card.keyword] = (card.value, card.comment)
     return header
 
 
