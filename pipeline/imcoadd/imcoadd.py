@@ -26,6 +26,7 @@ from ..utils.header import update_padded_header
 from ..services.database.handler import DatabaseHandler
 from ..services.database.image_qa import ImageQATable
 from ..services.checker import Checker
+from ..services.version_check import RuntimeVersionMixin
 
 from .const import ZP_KEY, CORE_KEYS
 
@@ -33,7 +34,9 @@ from .const import ZP_KEY, CORE_KEYS
 warnings.filterwarnings("ignore")
 
 
-class ImCoadd(BaseSetup, DatabaseHandler, Checker):
+class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
+    _process_spec = COADD_SPEC
+
     def __init__(
         self,
         config=None,
@@ -44,10 +47,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker):
     ) -> None:
 
         super().__init__(config, logger, queue)
-        self.overwrite = overwrite
+        self.overwrite = self.resolve_overwrite(overwrite)
         self._device_id = None
         self._use_gpu = use_gpu
-        # self._flag_name = "coadd"
         self.logger.process_error = CoaddError
 
         if self.config_node.settings.is_pipeline:

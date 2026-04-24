@@ -21,11 +21,14 @@ from ..services.database.handler import DatabaseHandler
 from ..services.database.image_qa import ImageQATable
 from ..services.checker import Checker
 from ..services.database.query import RawImageQuery
+from ..services.version_check import RuntimeVersionMixin
 
 from .utils import select_sources
 
 
-class ImSubtract(BaseSetup, DatabaseHandler, Checker):
+class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
+    _process_spec = SUBTRACTION_SPEC
+
     def __init__(
         self,
         config=None,
@@ -35,9 +38,8 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker):
     ) -> None:
 
         super().__init__(config, logger, queue)
-        # self._flag_name = "subtract"
         self.logger.process_error = SubtractionError
-        self.overwrite = overwrite
+        self.overwrite = self.resolve_overwrite(overwrite)
         self.name = self.config_node.name
         self.reference_images = None
 

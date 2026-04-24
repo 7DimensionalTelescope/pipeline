@@ -70,6 +70,7 @@ input:
 
 astrometry:
   input_images:
+  runtime_version:
   eval_match_radius: 5.0  # 10.0  # arcsec
   path:
     ref_ris_dir: "/lyman/data1/factory/catalog/gaia_dr3_7DT"
@@ -81,7 +82,7 @@ astrometry:
 
 photometry:
   input_images:
-  # path:  # can be specified manually
+  runtime_version:
   ref_cat:  # for RIS tiles
   query_radius: 1.0  # deg
   match_radius: 1.0  # arcsec
@@ -108,13 +109,11 @@ photometry:
 
 imcoadd:
   input_images:
-  # path:
-  #   ref_image_dir: "/lyman/data1/factory/ref_frame"
+  runtime_version:
   coadd_image:  # output coadd image
   gpu: True
   device: 0
   zp_key: 'ZP_AUTO'
-  # images_to_combine:
   bkgsub_type: 'Dynamic'
   weight_map: true
   joint_wcs: False
@@ -126,6 +125,7 @@ imcoadd:
 
 imsubtract:
   input_image:
+  runtime_version:
   reference_image:
   # input_mask:
   # template_mask:

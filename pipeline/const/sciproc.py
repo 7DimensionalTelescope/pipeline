@@ -9,11 +9,11 @@ REJECTION_PROCESS_HEADER_KEY = "REJ_PROC"
 class ProcessSpec:
     """Canonical description of one science-process step."""
 
-    name: str
+    name: str  # config flag key under `flag:` in sciproc_base.yml (also the process's unique id)
+    config_section: str  # top-level yml sections
     error_code: int
     progress_start: int
     progress_end: int
-    yml_key: str  # this must be in sync with sciproc_base.yml
     photometry_mode: str | None = None
     milestones: tuple[tuple[str, int], ...] = ()
 
@@ -28,7 +28,6 @@ class SciProcessRegistry:
         self._validate_unique("name", [process.name for process in self._processes])
         self._validate_unique("code", [process.error_code for process in self._processes])
         self._validate_unique("progress", [process.progress_start for process in self._processes])
-        self._validate_unique("yml_key", [process.yml_key for process in self._processes])
         for process in self._processes:
             if process.progress_end < process.progress_start:
                 raise ValueError(
@@ -88,10 +87,10 @@ class SciProcessRegistry:
 
 ASTROMETRY_SPEC = ProcessSpec(
     name="astrometry",
+    config_section="astrometry",
     error_code=2,
     progress_start=0,
     progress_end=20,
-    yml_key="astrometry",
     milestones=(
         ("scamp_prep", 5),
         ("all_rejected_early_qa", 5),
@@ -101,18 +100,18 @@ ASTROMETRY_SPEC = ProcessSpec(
 )
 SINGLE_PHOTOMETRY_SPEC = ProcessSpec(
     name="single_photometry",
+    config_section="photometry",
     error_code=3,
     progress_start=40,
     progress_end=60,
-    yml_key="single_photometry",
     photometry_mode="single_photometry",
 )
 COADD_SPEC = ProcessSpec(
     name="coadd",
+    config_section="imcoadd",
     error_code=4,
     progress_start=60,
     progress_end=70,
-    yml_key="coadd",
     milestones=(
         ("bkgsub", 61),
         ("zpscale", 62),
@@ -126,18 +125,18 @@ COADD_SPEC = ProcessSpec(
 )
 COADD_PHOTOMETRY_SPEC = ProcessSpec(
     name="coadd_photometry",
+    config_section="photometry",
     error_code=5,
     progress_start=70,
     progress_end=80,
-    yml_key="coadd_photometry",
     photometry_mode="coadd_photometry",
 )
 SUBTRACTION_SPEC = ProcessSpec(
     name="subtraction",
+    config_section="imsubtract",
     error_code=6,
     progress_start=80,
     progress_end=90,
-    yml_key="subtraction",
     milestones=(
         ("define_paths", 82),
         ("create_substamps", 84),
@@ -147,10 +146,10 @@ SUBTRACTION_SPEC = ProcessSpec(
 )
 DIFFERENCE_PHOTOMETRY_SPEC = ProcessSpec(
     name="difference_photometry",
+    config_section="photometry",
     error_code=7,
     progress_start=90,
     progress_end=100,
-    yml_key="difference_photometry",
     photometry_mode="difference_photometry",
 )
 

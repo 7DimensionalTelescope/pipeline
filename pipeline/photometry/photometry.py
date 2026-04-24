@@ -1,7 +1,7 @@
 from __future__ import annotations
 import os
 import getpass
-from typing import Any, List, Dict, Tuple, Optional, Union
+from typing import Any, List, Dict, Tuple, Optional, Union, Literal
 import datetime
 import numpy as np
 import itertools
@@ -37,6 +37,7 @@ from ..const.sciproc import (
     SINGLE_PHOTOMETRY_SPEC,
 )
 from ..services.setup import BaseSetup
+from ..services.version_check import RuntimeVersionMixin
 from ..tools.table import match_two_catalogs, build_condition_mask
 from ..path.path import PathHandler
 from ..utils.header import get_header_key, update_padded_header_smart
@@ -64,7 +65,7 @@ from . import utils as phot_utils
 from .plotting import plot_zp, plot_filter_check
 
 
-class Photometry(BaseSetup, DatabaseHandler, Checker):
+class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
     """
     A wrapper class of PhotometrySingle.
     Dispatches to PhotometrySingle based on the photometry_mode:
@@ -79,7 +80,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker):
         logger: Any = None,
         queue: Union[bool, QueueManager] = False,
         images: Optional[List[str]] = None,
-        photometry_mode: Optional[str] = None,
+        photometry_mode: Literal["single_photometry", "coadd_photometry", "difference_photometry"] = None,
         ref_cat_type: Optional[str] = None,
         overwrite: bool = False,
     ) -> None:
@@ -90,55 +91,55 @@ class Photometry(BaseSetup, DatabaseHandler, Checker):
         safer to explicitly set the mode when re-running scidata reduction,
         where the flags can be out of sync.
         """
-        # Load Configuration
         super().__init__(config, logger, queue)
-        self.overwrite = overwrite
-        # self._flag_name = "photometry"
-
         self.ref_cat_type = ref_cat_type or self.config_node.photometry.refcatname
 
         if photometry_mode == "single_photometry" or (
             not self.config_node.flag.single_photometry
             # and (not self.config.input.coadd_image and not self.config.input.difference_image)  # hassle when rerunning
         ):
-            self.logger.process_error = SinglePhotometryError
-            self.input_images = images or self.config_node.input.calibrated_images
-            self.apply_sanity_filter_and_report(
-                current_process=SINGLE_PHOTOMETRY_SPEC,
-                overwrite=self.overwrite,
-            )  # overrides self.input_images
-            self.config_node.photometry.input_images = self.input_images
-
-            self.logger.debug("Running single photometry")
             self._photometry_mode = "single_photometry"
         elif photometry_mode == "coadd_photometry" or (
             not self.config_node.flag.coadd_photometry
             # and (self.config.input.coadd_image and not self.config.input.difference_image)
         ):
-            self.logger.process_error = CoaddPhotometryError
-            self.config_node.photometry.input_images = (
-                images or [x] if (x := self.config_node.input.coadd_image) else None
-            )
-            self.input_images = self.config_node.photometry.input_images
-            self.logger.debug("Running coadd photometry")
             self._photometry_mode = "coadd_photometry"
         elif photometry_mode == "difference_photometry" or not self.config_node.flag.difference_photometry:
-            self.logger.process_error = DifferencePhotometryError
-            self.config_node.photometry.input_images = (
-                images or [x] if (x := self.config_node.input.difference_image) else None
-            )
-            self.input_images = self.config_node.photometry.input_images
-            self.logger.debug("Running difference photometry")
             self._photometry_mode = "difference_photometry"
-
         else:
             self.logger.debug(f"photometry mode undefined: {photometry_mode}")
             raise self.logger.process_error.exception(ValueError)(
                 "Unexpected photometry mode: check if flags are sequentially turned on for single_photometry, combined_photometry, and difference_photometry"
             )
 
-        self.logger.info(f"Photometry mode: {self._photometry_mode}")
         self._process_spec = SCIPROCESS_REGISTRY.get(self._photometry_mode)
+        self.overwrite = self.resolve_overwrite(overwrite)
+
+        if self._photometry_mode == "single_photometry":
+            self.logger.process_error = SinglePhotometryError
+            self.input_images = images or self.config_node.input.calibrated_images
+            self.apply_sanity_filter_and_report(
+                current_process=self._process_spec,
+                overwrite=self.overwrite,
+            )
+            self.config_node.photometry.input_images = self.input_images
+            self.logger.debug("Running single photometry")
+        elif self._photometry_mode == "coadd_photometry":
+            self.logger.process_error = CoaddPhotometryError
+            self.config_node.photometry.input_images = (
+                images or [x] if (x := self.config_node.input.coadd_image) else None
+            )
+            self.input_images = self.config_node.photometry.input_images
+            self.logger.debug("Running coadd photometry")
+        else:
+            self.logger.process_error = DifferencePhotometryError
+            self.config_node.photometry.input_images = (
+                images or [x] if (x := self.config_node.input.difference_image) else None
+            )
+            self.input_images = self.config_node.photometry.input_images
+            self.logger.debug("Running difference photometry")
+
+        self.logger.info(f"Photometry mode: {self._photometry_mode}")
 
         self.qa_ids = []
         DatabaseHandler.__init__(
@@ -263,7 +264,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker):
 
                 self.too_db.mark_completed(self.too_id)
 
-            setattr(self.config_node.flag, self._process_spec.yml_key, True)
+            setattr(self.config_node.flag, self._process_spec.name, True)
 
             self.logger.info(f"'Photometry' is Completed in {time_diff_in_seconds(st)} seconds")
             self.logger.debug(MemoryMonitor.log_memory_usage)

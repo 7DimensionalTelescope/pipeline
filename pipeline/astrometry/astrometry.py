@@ -32,6 +32,7 @@ from ..services.database.handler import DatabaseHandler
 from ..services.database.image_qa import ImageQATable
 from ..services.checker import Checker
 from ..services.logger import Logger
+from ..services.version_check import RuntimeVersionMixin
 
 from .utils import (
     polygon_info_header,
@@ -54,7 +55,7 @@ from .evaluation import (
 from .generate_refcat_gaia import get_refcat_gaia
 
 
-class Astrometry(BaseSetup, DatabaseHandler, Checker):
+class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
     """A class to handle astrometric solutions for astronomical images.
 
     This class manages the complete astrometric pipeline including plate solving,
@@ -71,7 +72,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         >>> astro.run(solve_field=True, joint_scamp=True)
     """
 
-    start_time = None
+    _process_spec = ASTROMETRY_SPEC
 
     def __init__(
         self,
@@ -89,7 +90,6 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
         """
         super().__init__(config, logger, queue)
         self.logger.debug("Starting Astrometry.__init__")
-        self._flag_name = "astrometry"
         self.logger.process_error = AstrometryError
         self.logger.debug(f"Astrometry Queue is '{queue}'")
 
@@ -256,6 +256,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker):
 
             self.logger.info(f"Start 'Astrometry'")
             self.logger.debug(f"Starting Astrometry.run")
+
+            overwrite = self.resolve_overwrite(overwrite)
 
             avoid_solvefield = False
             force_solve_field = False
