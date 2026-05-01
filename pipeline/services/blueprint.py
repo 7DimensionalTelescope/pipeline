@@ -36,6 +36,8 @@ class Blueprint:
         self.master_frame_only = master_frame_only
 
         if input_params is not None or list_of_images is not None:
+            if not isinstance(input_params, list):
+                raise ValueError(f"input_params must be a list. Maybe you intended [{input_params}]?")
             self.input_params = input_params
 
             if list_of_images is None:
