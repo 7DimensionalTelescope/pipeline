@@ -386,11 +386,15 @@ def combined_shifted_score(scores: list[float]) -> float:
     return float(min(scores)) if scores else 0.0
 
 
-def prepare_raw_qa_header(fits_path: str, score: float) -> None:
-    """Write SHIFTED/SHFTSCR to the FITS sibling ``.header`` text file (preserves existing keys)."""
+def prepare_raw_qa_header(fits_path: str, flag: bool, score: float) -> None:
+    """Write SHIFTED/SHFTSCR to the FITS sibling ``.header`` text file (preserves existing keys).
+
+    The flag/score pair must come from :func:`check_shifted_overscan` (the single
+    source of truth for the threshold comparison); this function only serializes it.
+    """
     cut = SHIFTED_SCORE_THRESHOLD
     extra = fits.Header()
-    extra["SHIFTED"] = (bool(score < cut), f"Shifted overscan band (SHFTSCR<{cut:g})")
+    extra["SHIFTED"] = (bool(flag), f"Shifted overscan band (SHFTSCR<{cut:g})")
     extra["SHFTSCR"] = (float(score), f"Shifted overscan score; shifted if <{cut:g}")
     update_header_file(fits_path, extra)
 

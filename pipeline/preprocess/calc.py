@@ -225,15 +225,19 @@ def combine_images_with_cpu(
     **kwargs,  # prevent crash if extra args are passed. e.g., device_id
 ):
 
+    raw_flags = []
     raw_scores = []
     raw_data = []
     for img in images:
         d = read_fits_image(img)
-        raw_scores.append(shifted_overscan_score(d))
+        f, s = check_shifted_overscan(d)
+        raw_flags.append(f)
+        raw_scores.append(s)
         raw_data.append(d)
     np_stack = np.stack(raw_data)
     del raw_data
     joint_score = combined_shifted_score(raw_scores)
+    joint_flag = any(raw_flags)
 
     if subtract is not None:
         sub_arr = np.zeros_like(np_stack[0], dtype=np.float32)
@@ -263,7 +267,7 @@ def combine_images_with_cpu(
         hot_mask = sigma_clipped_stats_cpu(np_combined, bpmask_sigma, return_mask=True)
         fits.writeto(make_bpmask, data=hot_mask.astype(np.uint8), overwrite=True)
 
-    prepare_raw_qa_header(output, joint_score)
+    prepare_raw_qa_header(output, joint_flag, joint_score)
     if dtype is not None:
         prepare_masterframe_header(
             output,
@@ -408,7 +412,8 @@ def process_image_with_cpu(
         # Process images in batch
         processed_batch = []
         for image_data, out_path in zip(batch_data, out_paths):
-            prepare_raw_qa_header(out_path, shifted_overscan_score(image_data))
+            shifted_flag, shifted_score = check_shifted_overscan(image_data)
+            prepare_raw_qa_header(out_path, shifted_flag, shifted_score)
             processed_data = reduction_kernel_cpu(image_data, subtractive, multiplicative, h, w)
             processed_batch.append(processed_data)
 

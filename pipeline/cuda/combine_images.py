@@ -4,7 +4,7 @@ import cupy as cp
 import numpy as np
 import fitsio
 
-from ..preprocess.calc import prepare_masterframe_header, shifted_overscan_score
+from ..preprocess.calc import check_shifted_overscan, prepare_masterframe_header
 from ..preprocess.utils import combined_shifted_score, prepare_raw_qa_header
 
 
@@ -133,13 +133,17 @@ if __name__ == "__main__":
         make_bpmask = False
 
     data = []
+    flags = []
     scores = []
     for img in args.input:
         d = fitsio.read(img).astype(np.float32)
-        scores.append(shifted_overscan_score(d))
+        f, s = check_shifted_overscan(d)
+        flags.append(f)
+        scores.append(s)
         data.append(d)
 
     joint_score = combined_shifted_score(scores)
+    joint_flag = any(flags)
 
     np_median, np_std, np_bpmask = combine_images_with_cupy(
         data,
@@ -156,7 +160,7 @@ if __name__ == "__main__":
     if make_bpmask:
         fitsio.write(args.bpmask, np_bpmask, clobber=True)
 
-    prepare_raw_qa_header(args.median_out, joint_score)
+    prepare_raw_qa_header(args.median_out, joint_flag, joint_score)
     if args.dtype is not None:
         prepare_masterframe_header(
             args.median_out,

@@ -10,7 +10,7 @@ import time
 import fitsio
 
 from ..utils.header import add_padding
-from ..preprocess.calc import shifted_overscan_score
+from ..preprocess.calc import check_shifted_overscan
 from ..preprocess.utils import prepare_raw_qa_header
 
 
@@ -68,8 +68,8 @@ def process_image_with_cupy(obs, bias, dark, flat, output, device_id, n_head_blo
             batch_data = []
             for path, out_path in zip(batch_obs, batch_output):
                 d = fitsio.read(path).astype(np.float32)
-                s = shifted_overscan_score(d)
-                prepare_raw_qa_header(out_path, s)
+                f, s = check_shifted_overscan(d)
+                prepare_raw_qa_header(out_path, f, s)
                 batch_data.append(d)
 
             print(
