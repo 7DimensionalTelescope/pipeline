@@ -796,7 +796,7 @@ def compute_masterframe_stats(
     that was just written alongside the master.
     """
     header = fits.Header()
-    data = np.asarray(data, dtype=np.float32, copy=False)
+    data = np.asarray(data, dtype=np.float32)
     mean, median, std, min, max = sigma_clipped_stats(data, device_id=device_id, sigma=3, maxiters=5, minmax=True)
     header["CLIPMEAN"] = (float(mean), "3-sig clipped mean of the pixel values")
     header["CLIPMED"] = (float(median), "3-sig clipped median of the pixel values")
@@ -824,7 +824,7 @@ def compute_masterframe_stats(
         if sig_data is None:
             datasig = fits.getdata(filename.replace("flat_", "flatsig_")).astype(np.float32)
         else:
-            datasig = np.asarray(sig_data, dtype=np.float32, copy=False)
+            datasig = np.asarray(sig_data, dtype=np.float32)
         s_mean, s_median, s_std = sigma_clipped_stats(datasig, device_id=device_id, sigma=3, maxiters=5)
         edge_var, _ = calculate_edge_variation(data)
 
