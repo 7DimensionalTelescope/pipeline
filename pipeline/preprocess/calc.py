@@ -19,21 +19,11 @@ from .utils import (
 )
 from .shifted_score import (
     SHIFTED_SCORE_THRESHOLD,
-    SHIFTED_SCORE_THRESHOLD_V2,
-    SHIFTED_SCORE_THRESHOLD_V3,
     check_shifted_overscan,
-    check_shifted_overscan_v2,
-    check_shifted_overscan_v3,
     combined_shifted_score,
     explain_shifted_overscan_score,
-    explain_shifted_overscan_score_v2,
-    explain_shifted_overscan_score_v3,
     plot_shifted_overscan_explanation,
-    plot_shifted_overscan_explanation_v2,
-    plot_shifted_overscan_explanation_v3,
     shifted_overscan_score,
-    shifted_overscan_score_v2,
-    shifted_overscan_score_v3,
 )
 from ..const import SOURCE_DIR, SERVICES_TMP_DIR
 

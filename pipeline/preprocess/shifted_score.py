@@ -5,19 +5,21 @@ the camera bias level (~`BIAS_LEVEL` ADU), produced when the readout starts
 shifted by ~20-30 columns and the overscan region ends up imaged inside the
 frame instead of at the edge. It can affect science, dark and flat frames.
 
-This file holds three generations of the metric:
+Public API (bias-anchored matched filter / LRT; positive score on detection,
+matching the log-likelihood-ratio convention):
 
-* v1 (``shifted_overscan_score``): plateau-dip + paired-cliff heuristics on
-  a running-median baseline. Currently in production. Returns negative ->
-  shift detected.
+* :data:`SHIFTED_SCORE_THRESHOLD`
+* :func:`shifted_overscan_score`
+* :func:`check_shifted_overscan`
+* :func:`explain_shifted_overscan_score`
+* :func:`plot_shifted_overscan_explanation`
+* :func:`combined_shifted_score`
 
-* v2 (``shifted_overscan_score_v2``): bias-anchored window-min over column
-  elevation; cheaper than v1 and zero false positives in our tests, but
-  bails on shallow darks.
-
-* v3 (``shifted_overscan_score_v3``): bias-anchored matched filter / LRT.
-  ~Same compute as v2, returns POSITIVE -> shift detected (sign matches the
-  log-likelihood ratio convention). Robust to shallow darks.
+Earlier generations are kept for back-compat / research under private names
+(``_shifted_overscan_score_v1``: plateau-dip + paired-cliff heuristics on a
+running-median baseline; ``_shifted_overscan_score_v2``: bias-anchored
+window-min, cheaper but bails on shallow darks). Both return NEGATIVE on
+detection. Use them only to reproduce historical scores.
 """
 
 from typing import Literal
@@ -27,19 +29,13 @@ from ..const import BIAS_LEVEL
 
 
 # --------------------------------------------------------------------------
-# v1: plateau-dip + paired-cliff (currently in production, "lower is worse")
+# Legacy v1: plateau-dip + paired-cliff ("lower is worse"). Private.
 # --------------------------------------------------------------------------
 
-SHIFTED_SCORE_THRESHOLD = -5.0
+_SHIFTED_SCORE_THRESHOLD_V1 = -5.0
 
 
-def combined_shifted_score(scores: list[float]) -> float:
-    """Worst (lowest) of a list of v1 scores. Used for coadded master frames
-    where the individual frames' scores are no longer separately accessible."""
-    return float(min(scores)) if scores else 0.0
-
-
-def shifted_overscan_score(
+def _shifted_overscan_score_v1(
     image: np.ndarray,
     row_frac: float = 0.6,
     profile_max_rows: int = 384,
@@ -141,16 +137,16 @@ def shifted_overscan_score(
     return min(plateau_score, cliff_score)
 
 
-def check_shifted_overscan(
+def _check_shifted_overscan_v1(
     image: np.ndarray,
-    threshold: float = SHIFTED_SCORE_THRESHOLD,
+    threshold: float = _SHIFTED_SCORE_THRESHOLD_V1,
     **kwargs,
 ) -> tuple[bool, float]:
-    score = shifted_overscan_score(image, **kwargs)
+    score = _shifted_overscan_score_v1(image, **kwargs)
     return (score < threshold), score
 
 
-def explain_shifted_overscan_score(
+def _explain_shifted_overscan_score_v1(
     image: np.ndarray,
     row_frac: float = 0.6,
     profile_max_rows: int = 384,
@@ -167,7 +163,7 @@ def explain_shifted_overscan_score(
     dip_abs_min: float = 10.0,
     noise_floor: float = 1.0,
 ) -> dict:
-    # Bit-equivalent replay of `shifted_overscan_score` returning every
+    # Bit-equivalent replay of `_shifted_overscan_score_v1` returning every
     # intermediate array (col profile, baseline, plateau-dip and paired-cliff
     # path internals, score).
     from numpy.lib.stride_tricks import sliding_window_view
@@ -279,7 +275,7 @@ def explain_shifted_overscan_score(
     }
 
 
-def plot_shifted_overscan_explanation(
+def _plot_shifted_overscan_explanation_v1(
     image: np.ndarray,
     figsize: tuple = (12, 12),
     bin_factor: int = 4,
@@ -293,7 +289,7 @@ def plot_shifted_overscan_explanation(
 
     from .calc import bin_image  # local import to avoid circular dependency
 
-    info = explain_shifted_overscan_score(image, **kwargs)
+    info = _explain_shifted_overscan_score_v1(image, **kwargs)
     score = info["score"]
     plateau_s = info["plateau_score"]
     cliff_s = info["cliff_score"]
@@ -452,10 +448,10 @@ def plot_shifted_overscan_explanation(
 
 
 # --------------------------------------------------------------------------
-# v2: bias-anchored window-min ("lower is worse")
+# Legacy v2: bias-anchored window-min ("lower is worse"). Private.
 # --------------------------------------------------------------------------
 
-SHIFTED_SCORE_THRESHOLD_V2 = -5.0
+_SHIFTED_SCORE_THRESHOLD_V2 = -5.0
 
 
 def _shifted_v2_qualifying_threshold(bulk_elev: float, bias_tol: float, bulk_frac: float) -> float:
@@ -465,7 +461,7 @@ def _shifted_v2_qualifying_threshold(bulk_elev: float, bias_tol: float, bulk_fra
     return min(bias_tol, bulk_frac * bulk_elev)
 
 
-def shifted_overscan_score_v2(
+def _shifted_overscan_score_v2(
     image: np.ndarray,
     bias_level: float = BIAS_LEVEL,
     row_frac: float = 0.6,
@@ -521,16 +517,16 @@ def shifted_overscan_score_v2(
     return best_score
 
 
-def check_shifted_overscan_v2(
+def _check_shifted_overscan_v2(
     image: np.ndarray,
-    threshold: float = SHIFTED_SCORE_THRESHOLD_V2,
+    threshold: float = _SHIFTED_SCORE_THRESHOLD_V2,
     **kwargs,
 ) -> tuple[bool, float]:
-    score = shifted_overscan_score_v2(image, **kwargs)
+    score = _shifted_overscan_score_v2(image, **kwargs)
     return (score < threshold), score
 
 
-def explain_shifted_overscan_score_v2(
+def _explain_shifted_overscan_score_v2(
     image: np.ndarray,
     bias_level: float = BIAS_LEVEL,
     row_frac: float = 0.6,
@@ -656,7 +652,7 @@ def explain_shifted_overscan_score_v2(
     }
 
 
-def plot_shifted_overscan_explanation_v2(
+def _plot_shifted_overscan_explanation_v2(
     image: np.ndarray,
     figsize: tuple = (12, 12),
     bin_factor: int = 4,
@@ -671,7 +667,7 @@ def plot_shifted_overscan_explanation_v2(
 
     from .calc import bin_image
 
-    info = explain_shifted_overscan_score_v2(image, **kwargs)
+    info = _explain_shifted_overscan_score_v2(image, **kwargs)
     score = info["score"]
     W = info["col"].shape[0]
     H = image.shape[0]
@@ -831,7 +827,7 @@ def plot_shifted_overscan_explanation_v2(
 
 
 # --------------------------------------------------------------------------
-# v3: bias-anchored matched filter / LRT (HIGHER is worse; positive = signal)
+# Public: bias-anchored matched filter / LRT. Positive score = signal.
 # --------------------------------------------------------------------------
 #
 # Score (per window of width w starting at column c0):
@@ -853,10 +849,16 @@ def plot_shifted_overscan_explanation_v2(
 # s = (bias_level - bg) (the dip signal); see the README of this module for
 # the full derivation.
 
-SHIFTED_SCORE_THRESHOLD_V3 = +5.0
+SHIFTED_SCORE_THRESHOLD = +5.0
 
 
-def _shifted_v3_smoothed_bg(col: np.ndarray, bin_size: int = 200) -> np.ndarray:
+def combined_shifted_score(scores: list[float]) -> float:
+    """Worst (highest) of a list of scores. Used for coadded master frames
+    where the individual frames' scores are no longer separately accessible."""
+    return float(max(scores)) if scores else 0.0
+
+
+def _shifted_smoothed_bg(col: np.ndarray, bin_size: int = 200) -> np.ndarray:
     # Coarse-binned median + linear interp. Robust to localised dips that
     # span <~25% of a bin (median stays at the bulk) and to wide gradients
     # (vignetting, bias tilt). O(W) cost, far cheaper than a wide running
@@ -891,7 +893,7 @@ def _compress_columns_to_1d(
         return col
 
 
-def shifted_overscan_score_v3(
+def shifted_overscan_score(
     image: np.ndarray,
     bias_level: float = BIAS_LEVEL,
     row_frac: float = 0.6,
@@ -908,7 +910,7 @@ def shifted_overscan_score_v3(
     r0 = int(h0 * (1.0 - row_frac) / 2.0)
     strip = _compress_columns_to_1d(image[r0 : h0 - r0], profile_max_rows, method=background_method)
 
-    background = _shifted_v3_smoothed_bg(strip, bg_bin_size)
+    background = _shifted_smoothed_bg(strip, bg_bin_size)
     # Clip at 0: only positive-elevation bg can host a dip *to* bias_level.
     background_elevation = np.maximum(background - float(bias_level), 0.0).astype(np.float64, copy=False)
     observed_elevation = (strip - float(bias_level)).astype(np.float64, copy=False)
@@ -942,16 +944,16 @@ def shifted_overscan_score_v3(
     return best_score
 
 
-def check_shifted_overscan_v3(
+def check_shifted_overscan(
     image: np.ndarray,
-    threshold: float = SHIFTED_SCORE_THRESHOLD_V3,
+    threshold: float = SHIFTED_SCORE_THRESHOLD,
     **kwargs,
 ) -> tuple[bool, float]:
-    score = shifted_overscan_score_v3(image, **kwargs)
+    score = shifted_overscan_score(image, **kwargs)
     return (score > threshold), score
 
 
-def explain_shifted_overscan_score_v3(
+def explain_shifted_overscan_score(
     image: np.ndarray,
     bias_level: float = BIAS_LEVEL,
     row_frac: float = 0.6,
@@ -963,12 +965,12 @@ def explain_shifted_overscan_score_v3(
     min_kernel_norm: float = 4.0,
     background_method: Literal["median", "sextractor"] = "sextractor",
 ) -> dict:
-    """replay shifted_overscan_score_v3 with intermediates for plotting"""
+    """replay shifted_overscan_score with intermediates for plotting"""
     h0, w0 = image.shape
     r0 = int(h0 * (1.0 - row_frac) / 2.0)
     strip = _compress_columns_to_1d(image[r0 : h0 - r0], profile_max_rows, method=background_method)
 
-    background = _shifted_v3_smoothed_bg(strip, bg_bin_size)
+    background = _shifted_smoothed_bg(strip, bg_bin_size)
     background_elevation = np.maximum(background - float(bias_level), 0.0).astype(np.float64, copy=False)
     observed_elevation = (strip - float(bias_level)).astype(np.float64, copy=False)
 
@@ -1049,7 +1051,7 @@ def explain_shifted_overscan_score_v3(
     }
 
 
-def plot_shifted_overscan_explanation_v3(
+def plot_shifted_overscan_explanation(
     image: np.ndarray,
     figsize: tuple = (12, 12),
     bin_factor: int = 4,
@@ -1064,7 +1066,7 @@ def plot_shifted_overscan_explanation_v3(
 
     from .calc import bin_image
 
-    info = explain_shifted_overscan_score_v3(image, bias_level=bias_level, **kwargs)
+    info = explain_shifted_overscan_score(image, bias_level=bias_level, **kwargs)
     score = info["score"]
     h0, w0 = image.shape
     has_dip = info["run_length"] > 0
@@ -1159,11 +1161,11 @@ def plot_shifted_overscan_explanation_v3(
         )
         ax_mf.axhline(0.0, color="red", lw=0.7, ls="--", label="0 (no preference)")
         ax_mf.axhline(
-            SHIFTED_SCORE_THRESHOLD_V3,
+            SHIFTED_SCORE_THRESHOLD,
             color="orange",
             lw=0.5,
             ls="--",
-            label=f"thresh = {SHIFTED_SCORE_THRESHOLD_V3:.0f}",
+            label=f"thresh = {SHIFTED_SCORE_THRESHOLD:.0f}",
         )
         if best_c >= 0:
             ax_mf.axvline(best_c, color="C3", lw=0.6, ls=":")
