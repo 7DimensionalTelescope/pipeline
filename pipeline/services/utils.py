@@ -700,9 +700,15 @@ class PreprocessGroup:
     def add_sci_keys(self, keys: str):
         self.sci_keys.append(keys)
 
-    def create_config(self, overwrite: bool = False, is_too: bool = False, is_pipeline: bool = False, overwrite_preprocess: bool = False, **kwargs):
+    def create_config(
+        self,
+        overwrite: bool = False,
+        is_too: bool = False,
+        is_pipeline: bool = False,
+        overwrite_preprocess: bool = False,
+        **kwargs,
+    ):
         from ..config import PreprocConfiguration
-
 
         overwrite = overwrite or overwrite_preprocess
         # print(
@@ -718,8 +724,14 @@ class PreprocessGroup:
 
         self._config = c.config_file
 
-        del c
-        gc.collect()
+        # Explicitly close logger file handlers so FDs are released immediately
+        # rather than waiting for non-deterministic Logger.__del__ + gc to fire.
+        try:
+            if getattr(c, "logger", None) is not None and hasattr(c.logger, "cleanup"):
+                c.logger.cleanup()
+        finally:
+            del c
+            gc.collect()
 
     def __repr__(self):
         return f"PreprocessGroup ({self.key} used in {self.sci_keys} with {len(self.image_files)} images)"
@@ -797,8 +809,14 @@ class ScienceGroup:
 
         self._config = c.config_file
 
-        del c
-        gc.collect()
+        # Explicitly close logger file handlers so FDs are released immediately
+        # rather than waiting for non-deterministic Logger.__del__ + gc to fire.
+        try:
+            if getattr(c, "logger", None) is not None and hasattr(c.logger, "cleanup"):
+                c.logger.cleanup()
+        finally:
+            del c
+            gc.collect()
 
     def __repr__(self):
         return f"ScienceGroup({self.key} with {len(self.image_files)} images)"

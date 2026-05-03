@@ -1,0 +1,201 @@
+#!/home/pipeline-stable/.conda/envs/pipeline/bin/python
+
+import argparse
+import os
+import signal
+import sqlite3
+import sys
+import time
+
+from pipeline.const import SCHEDULER_DB_PATH
+from pipeline.services.database.query import RawImageQuery
+from pipeline.wrapper import DataReduction
+
+
+def signal_handler(sig, frame):
+    print("\nTerminate process")
+    sys.exit(0)
+
+
+signal.signal(signal.SIGINT, signal_handler)
+
+
+def _split_dates(date_args):
+    dates = []
+    for date_arg in date_args:
+        dates.extend(date.strip() for date in date_arg.split(",") if date.strip())
+    return dates
+
+
+def _count_existing_schedule_entries(nightdates):
+    """Count scheduler rows whose config filename contains each nightdate."""
+    counts = {nd: 0 for nd in nightdates}
+    if not SCHEDULER_DB_PATH or not os.path.exists(SCHEDULER_DB_PATH):
+        return counts
+
+    try:
+        with sqlite3.connect(SCHEDULER_DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='scheduler'")
+            if cursor.fetchone() is None:
+                return counts
+
+            for nd in nightdates:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM scheduler WHERE config LIKE ?",
+                    (f"%{nd}%",),
+                )
+                counts[nd] = cursor.fetchone()[0]
+    except sqlite3.Error as e:
+        print(f"Warning: Could not check existing scheduler entries: {e}")
+
+    return counts
+
+
+def _prompt_overwrite_schedule(counts):
+    """Warn about duplicate schedule entries and ask how to proceed."""
+    nonzero = {nd: c for nd, c in counts.items() if c > 0}
+    if not nonzero:
+        return False
+
+    summary = ", ".join(f"{nd}: {c}" for nd, c in nonzero.items())
+    print(f"Warning: scheduler DB already contains entries for ({summary}).")
+
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print(
+            "Error: cannot prompt for confirmation (non-interactive shell). "
+            "Re-run with --overwrite-schedule to replace them, or remove the "
+            "duplicate entries first.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    while True:
+        try:
+            answer = input("How to proceed? [o]verwrite / [k]eep existing / [a]bort: ").strip().lower()
+        except EOFError:
+            print("\nAborted.")
+            sys.exit(0)
+
+        if answer in ("o", "overwrite"):
+            return True
+        if answer in ("k", "keep"):
+            return False
+        if answer in ("a", "abort", "q", "quit"):
+            print("Aborted.")
+            sys.exit(0)
+        print("Please answer 'o', 'k', or 'a'.")
+
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser(
+        description="Run data reduction for one or more night dates",
+        epilog=(
+            "Examples:\n"
+            "  %(prog)s 2026-04-20 2026-04-21\n"
+            "  %(prog)s 2026-04-20,2026-04-21 --overwrite-config --overwrite-data"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "dates",
+        nargs="+",
+        help="Night date(s) to run data reduction for. Accepts space- or comma-separated YYYY-MM-DD values.",
+    )
+    parser.add_argument(
+        "--priority",
+        type=int,
+        default=4,
+        help="Base priority for scheduled jobs (default: 4)",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite all outputs (preprocess and science)",
+    )
+    parser.add_argument(
+        "--overwrite-config",
+        action="store_true",
+        help="Overwrite configs",
+    )
+    parser.add_argument(
+        "--overwrite-data",
+        action="store_true",
+        help="Overwrite pipeline data outputs",
+    )
+    parser.add_argument(
+        "--overwrite-preprocess",
+        action="store_true",
+        help="Overwrite preprocess outputs only",
+    )
+    parser.add_argument(
+        "--overwrite-science",
+        action="store_true",
+        help="Overwrite science outputs only",
+    )
+    parser.add_argument(
+        "--overwrite-schedule",
+        action="store_true",
+        help="Overwrite existing schedule in the database",
+    )
+    parser.add_argument(
+        "--use-db",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use the database (default: True). Use --no-use-db to disable.",
+    )
+    parser.add_argument(
+        "--use-system-queue",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use the system queue (default: True). Use --no-use-system-queue to run locally.",
+    )
+    parser.add_argument(
+        "--sleep",
+        type=float,
+        default=120.0,
+        help="Seconds to wait between dates to avoid fd oversubscription (default: 120).",
+    )
+
+    args = parser.parse_args()
+    dates = _split_dates(args.dates)
+
+    if not dates:
+        print("Error: at least one date is required")
+        sys.exit(1)
+
+    overwrite_schedule = args.overwrite_schedule
+    if not overwrite_schedule:
+        existing_counts = _count_existing_schedule_entries(dates)
+        if _prompt_overwrite_schedule(existing_counts):
+            overwrite_schedule = True
+            print("Proceeding with --overwrite-schedule enabled.")
+
+    for i, date in enumerate(dates):
+        # print(date)
+
+        try:
+            # flist = RawImageQuery().on_date(date).image_files()
+            # print(f"Found {len(flist)} images for {date}")
+            # if not flist:
+            #     print(f"Skipping {date}: no images found.")
+            #     continue
+
+            dr = DataReduction([date], use_db=args.use_db, is_pipeline=True)
+            dr.run(
+                use_system_queue=args.use_system_queue,
+                base_priority=args.priority,
+                overwrite=args.overwrite,
+                overwrite_config=args.overwrite or args.overwrite_config,
+                overwrite_data=args.overwrite or args.overwrite_data,
+                overwrite_preprocess=args.overwrite or args.overwrite_data or args.overwrite_preprocess,
+                overwrite_science=args.overwrite or args.overwrite_data or args.overwrite_science,
+                overwrite_schedule=overwrite_schedule,
+            )
+        except Exception as e:
+            print(f"\nError processing {date}: {e}")
+            sys.exit(1)
+
+        if args.sleep > 0 and i < len(dates) - 1:
+            time.sleep(args.sleep)
