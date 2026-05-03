@@ -51,6 +51,7 @@ class ImageQATable:
     clipmax: Optional[float] = None
     sigmean: Optional[float] = None
     shifted: Optional[bool] = None
+    shftscr: Optional[float] = None
     edgevar: Optional[float] = None
     uniform: Optional[float] = None
     nhotpix: Optional[int] = None
@@ -62,17 +63,6 @@ class ImageQATable:
     pa_align: Optional[float] = None
     isep_q2: Optional[float] = None
     isep_p95: Optional[float] = None
-    i_recall: Optional[float] = None
-    bin0fwhm: Optional[float] = None
-    bin1fwhm: Optional[float] = None
-    bin2fwhm: Optional[float] = None
-    bin0mad: Optional[float] = None
-    bin1mad: Optional[float] = None
-    bin2mad: Optional[float] = None
-    unmatch: Optional[float] = None
-    rsep_rms: Optional[float] = None
-    rsep_q2: Optional[float] = None
-    rsep_p95: Optional[float] = None
     i_recall: Optional[float] = None
     bin0fwhm: Optional[float] = None
     bin1fwhm: Optional[float] = None
@@ -98,7 +88,6 @@ class ImageQATable:
     ezp_auto: Optional[float] = None
     ul5_5: Optional[float] = None
     stdnumb: Optional[float] = None
-    err_msgs: Optional[List[str]] = None
 
     inf_filt: Optional[str] = None
     bkg_step: Optional[bool] = None
