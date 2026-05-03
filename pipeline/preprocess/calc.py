@@ -3,17 +3,13 @@ import gc
 import subprocess
 from typing import Literal
 import numpy as np
-import tempfile
 import time
 import uuid
-import fitsio
 from astropy.io import fits
 from numba import njit, prange
 from scipy.stats import variation
 
 from .utils import (
-    SHIFTED_SCORE_THRESHOLD,
-    combined_shifted_score,
     load_header_file,
     prepare_raw_qa_header,
     read_fits_image,
@@ -21,124 +17,25 @@ from .utils import (
     update_header_file,
     write_fits_images,
 )
+from .shifted_score import (
+    SHIFTED_SCORE_THRESHOLD,
+    SHIFTED_SCORE_THRESHOLD_V2,
+    SHIFTED_SCORE_THRESHOLD_V3,
+    check_shifted_overscan,
+    check_shifted_overscan_v2,
+    check_shifted_overscan_v3,
+    combined_shifted_score,
+    explain_shifted_overscan_score,
+    explain_shifted_overscan_score_v2,
+    explain_shifted_overscan_score_v3,
+    plot_shifted_overscan_explanation,
+    plot_shifted_overscan_explanation_v2,
+    plot_shifted_overscan_explanation_v3,
+    shifted_overscan_score,
+    shifted_overscan_score_v2,
+    shifted_overscan_score_v3,
+)
 from ..const import SOURCE_DIR, SERVICES_TMP_DIR
-
-
-def shifted_overscan_score(
-    image: np.ndarray,
-    row_frac: float = 0.6,
-    profile_max_rows: int = 384,
-    win_baseline: int = 801,
-    win_smooth: int = 8,
-    plateau_win: int = 16,
-    plateau_range_max: float = 5.0,
-    plateau_qlo: float = 0.1,
-    plateau_qhi: float = 0.9,
-    plateau_min_run: int = 5,
-    pair_dmin: int = 5,
-    pair_dmax: int = 50,
-    pair_sigma_min: float = 8.0,
-    dip_abs_min: float = 10.0,
-    noise_floor: float = 1.0,
-) -> float:
-    from numpy.lib.stride_tricks import sliding_window_view
-
-    # Use the middle row_frac of rows to reduce influence of row-edge artifacts
-    # and source concentrations at detector edges on the column-mean profile.
-    h = image.shape[0]
-    r0 = int(h * (1.0 - row_frac) / 2.0)
-    r1 = h - r0
-    band = image[r0:r1]
-    nr = band.shape[0]
-    step = max(1, (nr + profile_max_rows - 1) // profile_max_rows)
-    sample = band[::step]
-    # Per-column mean is biased high in crowded fields; median tracks the sky
-    # floor. SExtractor's mode proxy (2.5*median - 1.5*mean) uses both, with no
-    # extra passes beyond mean+median on the decimated band. Clip to [lo, hi]
-    # with lo=min(mean,median), hi=max(mean,median) so heavily skewed columns
-    # do not produce negative or extrapolated values.
-    col_mean = sample.mean(axis=0).astype(np.float32, copy=False)
-    col_med = np.median(sample, axis=0).astype(np.float32, copy=False)
-    mode = 2.5 * col_med - 1.5 * col_mean
-    lo = np.minimum(col_mean, col_med)
-    hi = np.maximum(col_mean, col_med)
-    col = np.clip(mode, lo, hi).astype(np.float32, copy=False)
-    bulk_med = float(np.median(col))
-
-    # Reflect padding so an edge-anchored defect is compared to interior columns
-    # rather than to a replication of itself.
-    pb = win_baseline // 2
-    baseline = np.median(sliding_window_view(np.pad(col, pb, mode="reflect"), win_baseline), axis=-1)
-    resid = col - baseline
-    mad = float(np.median(np.abs(resid - np.median(resid))))
-    # Quantized SExtractor-style profiles can have MAD(resid)==0; median|Δcol|
-    # matches the usual ~1 ADU column-to-column jitter on bias-like data.
-    col_step = float(np.median(np.abs(np.diff(col))))
-    # 1 ADU floor is physically motivated: col is a mean over O(100-400) rows,
-    # so real column-to-column scatter is already <=1 ADU even on noisy frames,
-    # while genuine shifted-overscan defects are tens of ADU. Without a floor,
-    # quantization-dominated short exposures (low sky, near-integer col values)
-    # collapse sigma to the old +1e-6 safety term and inflate the score by ~1e6.
-    sigma = max(1.4826 * mad, col_step, noise_floor)
-
-    # --- Plateau-dip path: catches edge-flush defects and wide interior dips
-    # where the col-mean stays flat to within plateau_range_max ADU. A smooth
-    # flat-field rolloff fails the plateau test; short coincidental flat spots
-    # in bulk are discarded by the plateau_min_run filter.
-    pp = plateau_win // 2
-    win = sliding_window_view(np.pad(col, (pp, plateau_win - 1 - pp), mode="edge"), plateau_win)
-    local_range = np.quantile(win, plateau_qhi, axis=-1) - np.quantile(win, plateau_qlo, axis=-1)
-    is_plateau = local_range < plateau_range_max
-    if is_plateau.any():
-        p_int = is_plateau.astype(np.int8)
-        d_run = np.diff(np.concatenate([[0], p_int, [0]]))
-        starts = np.where(d_run == 1)[0]
-        ends = np.where(d_run == -1)[0]
-        for s, e in zip(starts, ends):
-            if (e - s) < plateau_min_run:
-                is_plateau[s:e] = False
-    if is_plateau.sum() >= plateau_min_run:
-        dip = np.where(is_plateau, -resid, 0.0).astype(np.float32, copy=False)
-        ps = win_smooth // 2
-        smooth = sliding_window_view(np.pad(dip, (ps, win_smooth - 1 - ps), mode="edge"), win_smooth).mean(axis=-1)
-        plateau_score = -float(smooth.max() / sigma)
-    else:
-        plateau_score = 0.0
-
-    # --- Paired-cliff path: catches narrow interior dips (e.g. in flats with
-    # strong vignetting) by requiring a sharp drop followed by a sharp rise
-    # within pair_dmax cols, both steps above pair_sigma_min * median|diff|,
-    # and the plateau between both cliffs sitting at least dip_abs_min ADU
-    # below the global col-mean median (rejects hot-column pair artifacts).
-    dcol = np.diff(col)
-    med_abs = max(float(np.median(np.abs(dcol))), noise_floor)
-    cliff_thr = pair_sigma_min * med_abs
-    bulk_limit = bulk_med - dip_abs_min
-    col_right = col[1:]
-    best_pair = 0.0
-    for dd in range(pair_dmin, pair_dmax + 1):
-        fd = dcol[:-dd]
-        tr = dcol[dd:]
-        right_after_drop = col_right[:-dd]
-        right_before_rise = col[dd:-1]
-        msk = (fd < -cliff_thr) & (tr > cliff_thr) & (right_after_drop < bulk_limit) & (right_before_rise < bulk_limit)
-        if msk.any():
-            mag = (-fd) * tr
-            v = float(mag[msk].max())
-            if v > best_pair:
-                best_pair = v
-    cliff_score = -float(np.sqrt(best_pair) / med_abs) if best_pair > 0 else 0.0
-
-    return min(plateau_score, cliff_score)
-
-
-def check_shifted_overscan(
-    image: np.ndarray,
-    threshold: float = SHIFTED_SCORE_THRESHOLD,
-    **kwargs,
-) -> tuple[bool, float]:
-    score = shifted_overscan_score(image, **kwargs)
-    return (score < threshold), score
 
 
 def combine_images_with_subprocess_gpu(

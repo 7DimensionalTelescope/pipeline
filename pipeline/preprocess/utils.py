@@ -373,25 +373,14 @@ def update_header_file(fits_path: str, extra: fits.Header) -> None:
     write_header_file(path, hdr)
 
 
-# Shifted-overscan score is "lower is worse"; images with ``score < threshold`` are flagged
-# as having a shifted overscan band (tuned on real defective frames).
-SHIFTED_SCORE_THRESHOLD = -5.0
-
-
-def combined_shifted_score(scores: list[float]) -> float:
-    """Policy wrapper for shifted-overscan score for a combined image: the minimum (worst) of its inputs.
-    This is useful because we only save the coadded master frames, not their individual processed frames.
-    It's only for back-tracking, without any scientific meaning.
-    """
-    return float(min(scores)) if scores else 0.0
-
-
 def prepare_raw_qa_header(fits_path: str, flag: bool, score: float) -> None:
     """Write SHIFTED/SHFTSCR to the FITS sibling ``.header`` text file (preserves existing keys).
 
     The flag/score pair must come from :func:`check_shifted_overscan` (the single
     source of truth for the threshold comparison); this function only serializes it.
     """
+    from .shifted_score import SHIFTED_SCORE_THRESHOLD
+
     cut = SHIFTED_SCORE_THRESHOLD
     extra = fits.Header()
     extra["SHIFTED"] = (bool(flag), f"Shifted overscan band (SHFTSCR<{cut:g})")

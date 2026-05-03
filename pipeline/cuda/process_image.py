@@ -10,7 +10,7 @@ import time
 import fitsio
 
 from ..utils.header import add_padding
-from ..preprocess.calc import check_shifted_overscan
+from ..preprocess.shifted_score import check_shifted_overscan
 from ..preprocess.utils import prepare_raw_qa_header
 
 

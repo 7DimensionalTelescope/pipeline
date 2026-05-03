@@ -4,8 +4,9 @@ import cupy as cp
 import numpy as np
 import fitsio
 
-from ..preprocess.calc import check_shifted_overscan, prepare_masterframe_header
-from ..preprocess.utils import combined_shifted_score, prepare_raw_qa_header
+from ..preprocess.calc import prepare_masterframe_header
+from ..preprocess.shifted_score import check_shifted_overscan, combined_shifted_score
+from ..preprocess.utils import prepare_raw_qa_header
 
 
 def pinned_empty(shape, dtype=np.float32):
