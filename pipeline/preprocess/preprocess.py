@@ -625,7 +625,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             if existing_flatdark_file:
                 flatdark_sanity = fits.getval(existing_flatdark_file, "SANITY")
                 setattr(self, "flatdark_output", existing_flatdark_file)  # mdark for mflat
-                self.dark_exptime = get_header(existing_flatdark_file)[HEADER_KEY_MAP["exptime"]]
+                self.dark_exptime = fits.getval(existing_flatdark_file, HEADER_KEY_MAP["exptime"])
                 self.logger.info(
                     f"[Group {self._current_group+1}] Found pre-existing nominal (sanity: {flatdark_sanity}) flatdark at {os.path.basename(existing_flatdark_file)}"
                 )
