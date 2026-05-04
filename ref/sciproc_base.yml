@@ -114,7 +114,7 @@ imcoadd:
   gpu: True
   device: 0
   zp_key: 'ZP_AUTO'
-  bkgsub_type: 'Dynamic'
+  bkgsub_type: # 'Dynamic'
   weight_map: true
   joint_wcs: False
   apply_bpmask: False

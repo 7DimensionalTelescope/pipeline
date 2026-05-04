@@ -312,7 +312,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         #     )
         self.logger.debug(f"Reference zero point: {self.zp_base}")
 
-    def bkgsub(self, ignore_steppy_flag: bool = False):
+    def bkgsub(self, ignore_steppy_flag: bool = False, skyval_cut: float = 40):
         # ------------------------------------------------------------
         # 	Global Background Subtraction
         # ------------------------------------------------------------
@@ -327,6 +327,12 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         bkg_images = [f"{self.path_bkgsub}/{add_suffix(get_basename(f), 'bkg')}" for f in self.input_images]
         bkg_rms_images = [f"{self.path_bkgsub}/{add_suffix(get_basename(f), 'bkgrms')}" for f in self.input_images]
+
+        # TODO: ad-hoc; later derive is_steppy from actual data check
+        if any(self.skyvalues < skyval_cut):
+            self.config_node.imcoadd.bkgsub_type = "constant"
+        else:
+            self.config_node.imcoadd.bkgsub_type = "dynamic"
 
         if self.config_node.imcoadd.bkgsub_type.lower() == "dynamic":
             self.logger.info("Start dynamic background subtraction")
@@ -382,7 +388,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             _data = hdul[0].data
             _hdr = hdul[0].header
             _hdr["BACKTYPE"] = ("CONSTANT", "Background subtraction type")
-            _hdr["BKG_STEP"] = (is_steppy, "SE Background can be step-like")
+            # _hdr["BKG_STEP"] = (is_steppy, "SE Background can be step-like")
             _data -= skyval
             self.logger.debug(f"Using SKYVAL: {skyval:.3f}")
             fits.writeto(outim, _data, header=_hdr, overwrite=True)
