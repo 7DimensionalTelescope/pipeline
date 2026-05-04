@@ -383,8 +383,8 @@ def prepare_raw_qa_header(fits_path: str, flag: bool, score: float) -> None:
 
     cut = SHIFTED_SCORE_THRESHOLD
     extra = fits.Header()
-    extra["SHIFTED"] = (bool(flag), f"Shifted overscan band (SHFTSCR<{cut:g})")
-    extra["SHFTSCR"] = (float(score), f"Shifted overscan score; shifted if <{cut:g}")
+    extra["SHIFTED"] = (bool(flag), f"Shifted overscan band (SHFTSCR>{cut:g})")
+    extra["SHFTSCR"] = (float(score), f"Shifted overscan score; shifted if >{cut:g}")
     update_header_file(fits_path, extra)
 
 
