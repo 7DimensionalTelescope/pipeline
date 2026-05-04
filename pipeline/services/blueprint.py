@@ -11,7 +11,7 @@ from ..const.observation import BROAD_FILTERS
 
 from .logger import get_high_level_task_logger
 from .utils import SortedGroupDict, PreprocessGroup, ScienceGroup
-from .fd import log_fd_info
+from .fd import log_fd_info, FDTracker, PeakFDSampler
 
 import json
 
@@ -137,8 +137,8 @@ class Blueprint:
         """
         is_too = is_too or self.is_too
 
-        # Log FD info before starting
         log_fd_info(prefix="[create_config] Before: ")
+        fd_tracker = FDTracker(label="create_config:start")
 
         kwargs = {
             "overwrite": overwrite,
@@ -147,18 +147,19 @@ class Blueprint:
             "is_multi_epoch": is_multi_epoch,
             "overwrite_preprocess": overwrite_preprocess,
         }
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(group.create_config, **kwargs) for group in self.groups.values()]
-            for i, f in enumerate(futures):
-                f.result()
-                # Log FD info periodically during processing
-                if (i + 1) % 10 == 0 or i == len(futures) - 1:
-                    log_fd_info(prefix=f"[create_config] After {i+1}/{len(futures)} configs: ")
-        del futures
-        gc.collect()
+        # Background FD watcher
+        with PeakFDSampler(interval=0.05) as fd_peak:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(group.create_config, **kwargs) for group in self.groups.values()]
+                for i, f in enumerate(futures):
+                    f.result()
+                    if (i + 1) % 10 == 0 or i == len(futures) - 1:
+                        fd_tracker.checkpoint(f"create_config:{i+1}/{len(futures)}")
+            del futures
+            gc.collect()
 
-        # Log FD info after completion
-        log_fd_info(prefix="[create_config] After cleanup: ")
+        fd_peak.report(prefix="[create_config] ")
+        fd_tracker.checkpoint("create_config:after_cleanup")
 
         self._config_generated = True
 
