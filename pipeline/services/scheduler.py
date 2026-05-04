@@ -692,33 +692,64 @@ class Scheduler:
             failed = self.schedule[self.schedule["status"] == "Failed"]
             return (len(completed) + len(failed)) == len(self.schedule)
 
-    def rerun_failed_tasks(self, overwrite=False):
+    def rerun_failed_tasks(self, overwrite=False, dates=None):
         """
-        Rerun all failed tasks by changing their status to Ready with priority 1 and readiness 100.
+        Rerun failed tasks by changing their status to Ready with readiness 100.
 
         Returns:
             int: Number of tasks that were updated
 
         Parameters:
             overwrite (bool): If True, set kwargs to ['-overwrite'] so reruns overwrite existing outputs.
+            dates (str | Iterable[str] | None): If given, only rerun failed tasks whose config
+                path contains one of these date strings (e.g. "2025-04-30" or
+                ["2025-04-30", "2025-05-01"]). If None or empty, all failed tasks are rerun.
         """
         kwargs = "['-overwrite']" if overwrite else "[]"
+
+        if dates is None:
+            date_list = []
+        elif isinstance(dates, str):
+            date_list = [d.strip() for d in dates.split(",") if d.strip()]
+        else:
+            date_list = [str(d).strip() for d in dates if str(d).strip()]
+
         if self.use_system_queue:
             with self._db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    """UPDATE scheduler 
-                       SET status = ?, priority = ?, readiness = ?, is_ready = ?, pid = 0,
-                           process_start = ?, process_end = ?, input_type = ?, kwargs = ?
-                       WHERE status = ?""",
-                    ("Ready", 0, 100, 1, "", "", "Reprocess", kwargs, "Failed"),
-                )
+                if date_list:
+                    like_clause = " OR ".join(["config LIKE ?"] * len(date_list))
+                    params = (
+                        "Ready", 0, 100, 1, "", "", "Reprocess", kwargs, "Failed",
+                        *(f"%{d}%" for d in date_list),
+                    )
+                    cursor.execute(
+                        f"""UPDATE scheduler
+                           SET status = ?, priority = ?, readiness = ?, is_ready = ?, pid = 0,
+                               process_start = ?, process_end = ?, input_type = ?, kwargs = ?
+                           WHERE status = ? AND ({like_clause})""",
+                        params,
+                    )
+                else:
+                    cursor.execute(
+                        """UPDATE scheduler
+                           SET status = ?, priority = ?, readiness = ?, is_ready = ?, pid = 0,
+                               process_start = ?, process_end = ?, input_type = ?, kwargs = ?
+                           WHERE status = ?""",
+                        ("Ready", 0, 100, 1, "", "", "Reprocess", kwargs, "Failed"),
+                    )
                 conn.commit()
                 return cursor.rowcount
         else:
-            # Handle in-memory schedule
             mask = self._schedule["status"] == "Failed"
-            count = np.sum(mask)
+            if date_list:
+                configs = self._schedule["config"]
+                date_mask = np.array(
+                    [any(d in str(c) for d in date_list) for c in configs],
+                    dtype=bool,
+                )
+                mask = mask & date_mask
+            count = int(np.sum(mask))
             if count > 0:
                 self._schedule["status"][mask] = "Ready"
                 self._schedule["priority"][mask] = 1
