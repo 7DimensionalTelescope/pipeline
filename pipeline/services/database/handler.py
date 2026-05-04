@@ -115,6 +115,7 @@ class DatabaseHandler:
             return True
 
     def create_image_qa_data(self, file: str, process_status_id: int, overwrite: bool = False):
+        """Reads image header to generate image QA data"""
 
         if not self.is_connected:
             self.logger.warning(f"Skipping QA data creation: process_status_id is not set")
