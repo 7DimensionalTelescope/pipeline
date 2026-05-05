@@ -21,9 +21,6 @@ from .shifted_score import (
     SHIFTED_SCORE_THRESHOLD,
     check_shifted_overscan,
     combined_shifted_score,
-    explain_shifted_overscan_score,
-    plot_shifted_overscan_explanation,
-    shifted_overscan_score,
 )
 from ..const import SOURCE_DIR, SERVICES_TMP_DIR
 

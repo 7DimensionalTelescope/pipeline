@@ -329,7 +329,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         bkg_rms_images = [f"{self.path_bkgsub}/{add_suffix(get_basename(f), 'bkgrms')}" for f in self.input_images]
 
         # TODO: ad-hoc; later derive is_steppy from actual data check
-        if any(self.skyvalues < skyval_cut):
+        if any([skyval < skyval_cut for skyval in self.skyvalues]):
             self.config_node.imcoadd.bkgsub_type = "constant"
         else:
             self.config_node.imcoadd.bkgsub_type = "dynamic"

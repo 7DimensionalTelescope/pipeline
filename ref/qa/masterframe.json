@@ -1,7 +1,10 @@
 {
     "BIAS": {
         "CLIPMED": {
-            "value": [512, 514],
+            "value": [
+                512,
+                514
+            ],
             "criteria": "within",
             "description": "Median clipping value must be ≥ 512"
         },
@@ -12,10 +15,10 @@
         }
     },
     "DARK": {
-        "UNIFORM": {
-            "value": 2.15,
-            "criteria": "gte",
-            "description": "Uniformity measure must be ≥ 2.15"
+        "CLIPSTD": {
+            "value": 2.8,
+            "criteria": "lte",
+            "description": "Standard deviation must be ≥ 2.8"
         }
     },
     "FLAT": {
@@ -45,4 +48,4 @@
             "description": "Image must NOT have a shifted-overscan band"
         }
     }
-} 
+}
