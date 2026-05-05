@@ -362,14 +362,11 @@ def load_header_file(fits_path: str) -> fits.Header | None:
 
 
 def update_header_file(fits_path: str, extra: fits.Header) -> None:
-    """Merge ``extra`` into the FITS sibling ``.header`` text file, preserving existing keys."""
+    """Updates .header text file with `extra`"""
     hdr = load_header_file(fits_path) or fits.Header()
     for card in extra.cards:
         hdr[card.keyword] = (card.value, card.comment)
     path = PathHandler(fits_path).preprocess.header
-    d = os.path.dirname(path)
-    if d:
-        os.makedirs(d, exist_ok=True)
     write_header_file(path, hdr)
 
 

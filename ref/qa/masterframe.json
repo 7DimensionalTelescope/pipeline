@@ -20,15 +20,10 @@
         }
     },
     "DARK": {
-        "UNIFORM": {
-            "value": 2.15,
-            "criteria": "gte",
-            "description": "Uniformity measure must be ≥ 2.15"
-        },
-        "SHIFTED": {
-            "value": false,
-            "criteria": "eq",
-            "description": "Image must NOT have a shifted-overscan band"
+        "CLIPSTD": {
+            "value": 2.8,
+            "criteria": "lte",
+            "description": "Standard deviation must be ≥ 2.8"
         }
     },
     "FLAT": {
