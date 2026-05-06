@@ -356,7 +356,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         ):
             st_loop = time.time()
             is_steppy = bkg_func(
-                inim, outim, bkg=bkg, bkg_rms=bkg_rms, skyvalue=skyvalue, ignore_steppy_flag=ignore_steppy_flag
+                inim, outim, bkg=bkg, bkg_rms=bkg_rms, skyval=skyvalue, ignore_steppy_flag=ignore_steppy_flag
             )
 
             # if is_steppy and not ignore_steppy_flag:
