@@ -364,12 +364,17 @@ class Scheduler:
         in_pending = len(schedule[schedule["status"] == "Pending"])
         in_processing = len(schedule[schedule["status"] == "Processing"])
         in_completed = len(schedule[schedule["status"] == "Completed"])
+        in_paused = len(schedule[schedule["status"] == "Paused"])
         is_preprocess = len(schedule[schedule["config_type"] == "preprocess"])
         is_science = len(schedule[schedule["config_type"] == "science"])
         is_failed = len(schedule[schedule["status"] == "Failed"])
         if with_table:
             schedule.pprint_all(max_lines=10)
-        return f"Scheduler with {total_tasks} (preprocess: {is_preprocess} and science: {is_science}) tasks: {in_ready} ready, {in_pending} pending, {in_processing} processing, {is_failed} failed, and {in_completed} completed"
+        return (
+            f"Scheduler with {total_tasks} (preprocess: {is_preprocess} and science: {is_science}) tasks: "
+            f"{in_ready} ready, {in_pending} pending, {in_processing} processing, {in_paused} paused, "
+            f"{is_failed} failed, and {in_completed} completed"
+        )
 
     @property
     def schedule(self):
@@ -1127,6 +1132,61 @@ class Scheduler:
                 reverted_count += 1
 
         return reverted_count
+
+    def terminate_scheduler_tasks(self):
+        """
+        SIGTERM every non-zero PID stored on the schedule and reset those rows.
+
+        Affected rows are set to status ``Paused`` (not ``Ready``) so the queue will not
+        immediately pick them up again. Use :meth:`resume_paused_scheduler_tasks` to move
+        them back to ``Ready``. ``pid`` is cleared and ``process_start`` is reset.
+        Does not delete rows or modify tasks that have no PID set.
+        """
+        if self.use_system_queue:
+            terminated = 0
+            with self._db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    'SELECT "index", pid FROM scheduler WHERE pid IS NOT NULL AND pid != 0'
+                )
+                for task_index, pid in cursor.fetchall():
+                    self._terminate_process(pid)
+                    cursor.execute(
+                        'UPDATE scheduler SET status = ?, pid = 0, process_start = ? WHERE "index" = ?',
+                        ("Paused", "", task_index),
+                    )
+                    terminated += 1
+                conn.commit()
+            return terminated
+
+        terminated = 0
+        mask = (self._schedule["pid"] != 0) & (self._schedule["pid"] != None)  # noqa: E711
+        for task in self._schedule[mask]:
+            self._terminate_process(task["pid"])
+            idx_mask = self._schedule["index"] == task["index"]
+            self._schedule["status"][idx_mask] = "Paused"
+            self._schedule["pid"][idx_mask] = 0
+            self._schedule["process_start"][idx_mask] = ""
+            terminated += 1
+        return terminated
+
+    def resume_paused_scheduler_tasks(self):
+        """
+        Set every ``Paused`` task to ``Ready`` so :meth:`get_next_task` can run them again.
+        """
+        if self.use_system_queue:
+            with self._db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("UPDATE scheduler SET status = ? WHERE status = ?", ("Ready", "Paused"))
+                n = cursor.rowcount
+                conn.commit()
+            return n
+
+        mask = self._schedule["status"] == "Paused"
+        n = int(np.sum(mask))
+        if n:
+            self._schedule["status"][mask] = "Ready"
+        return n
 
     def _terminate_process(self, pid):
         """Terminate a process safely; ignore invalid or already-dead PIDs."""

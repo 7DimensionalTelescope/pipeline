@@ -1,0 +1,57 @@
+#!/home/pipeline-stable/.conda/envs/pipeline/bin/python
+"""
+Terminate Scheduler Tasks
+
+SIGTERM every process recorded in the scheduler table (non-zero PID). Affected rows are set
+to Paused (not Ready) so the queue will not immediately re-run them. Use resume_scheduler_tasks
+to move Paused tasks back to Ready.
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+# Add pipeline to path
+pipeline_dir = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(pipeline_dir))
+
+from pipeline.services.queue import terminate_all_scheduler_tasks
+from pipeline.const import SCHEDULER_DB_PATH
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Terminate subprocesses recorded on scheduler rows (SIGTERM by PID). "
+            "Affected rows become Paused so they are not auto-started; use resume_scheduler_tasks to Ready them. "
+            "No rows are deleted."
+        )
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm that you intend to send SIGTERM to every recorded scheduler PID.",
+    )
+    args = parser.parse_args()
+
+    if not SCHEDULER_DB_PATH:
+        print("ERROR: SCHEDULER_DB_PATH environment variable not set", file=sys.stderr)
+        sys.exit(1)
+
+    if not args.yes:
+        print(
+            "ERROR: Refusing to terminate scheduler tasks without --yes.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    try:
+        terminate_all_scheduler_tasks()
+        sys.exit(0)
+    except Exception as e:
+        print(f"ERROR: Failed to terminate scheduler tasks: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

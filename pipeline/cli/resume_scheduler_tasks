@@ -1,0 +1,41 @@
+#!/home/pipeline-stable/.conda/envs/pipeline/bin/python
+"""
+Resume Paused Scheduler Tasks
+
+Set every scheduler row with status Paused back to Ready so the queue daemon can run them again.
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+pipeline_dir = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(pipeline_dir))
+
+from pipeline.services.queue import resume_paused_scheduler_tasks
+from pipeline.const import SCHEDULER_DB_PATH
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Move all Paused scheduler tasks to Ready (after terminate_scheduler_tasks or manual Paused rows)."
+        )
+    )
+    parser.parse_args()
+
+    if not SCHEDULER_DB_PATH:
+        print("ERROR: SCHEDULER_DB_PATH environment variable not set", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        n = resume_paused_scheduler_tasks()
+        print(f"Resumed {n} task(s) (Paused -> Ready).")
+        sys.exit(0)
+    except Exception as e:
+        print(f"ERROR: Failed to resume paused scheduler tasks: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

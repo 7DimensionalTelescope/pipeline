@@ -620,3 +620,50 @@ def clear_completed_schedules():
     except Exception as e:
         logger.error(f"Error clearing completed schedules: {e}", exc_info=True)
         raise
+
+
+def terminate_all_scheduler_tasks():
+    """
+    SIGTERM processes recorded on scheduler rows (non-zero PID).
+
+    Affected rows are set to ``Paused`` so the queue does not immediately re-run them.
+    Use :func:`resume_paused_scheduler_tasks` to set ``Paused`` tasks back to ``Ready``.
+
+    Does not remove any rows from the scheduler database.
+    """
+    from .scheduler import Scheduler
+    from .logger import Logger
+
+    logger = Logger("TerminateSchedulerTasks")
+    logger.info("Terminating scheduler tasks with recorded PIDs (rows stay in the database)")
+
+    try:
+        scheduler = Scheduler(use_system_queue=True)
+        n = scheduler.terminate_scheduler_tasks()
+        logger.info(
+            f"Sent SIGTERM for {n} scheduler task(s); affected rows set to Paused (use resume to run again)"
+        )
+        return n
+    except Exception as e:
+        logger.error(f"Error terminating scheduler tasks: {e}", exc_info=True)
+        raise
+
+
+def resume_paused_scheduler_tasks():
+    """
+    Set all ``Paused`` scheduler rows to ``Ready`` so the queue daemon can execute them again.
+    """
+    from .scheduler import Scheduler
+    from .logger import Logger
+
+    logger = Logger("ResumePausedSchedulerTasks")
+    logger.info("Resuming Paused scheduler tasks (setting status to Ready)")
+
+    try:
+        scheduler = Scheduler(use_system_queue=True)
+        n = scheduler.resume_paused_scheduler_tasks()
+        logger.info(f"Moved {n} task(s) from Paused to Ready")
+        return n
+    except Exception as e:
+        logger.error(f"Error resuming paused scheduler tasks: {e}", exc_info=True)
+        raise
