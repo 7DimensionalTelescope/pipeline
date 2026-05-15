@@ -1,59 +1,8 @@
-import os
-import re
 import json
-import numpy as np
-from astropy.table import Table, Column, vstack
-from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 
-from ..const import REF_DIR, INSTRUM_STATUS_DICT
-
-
-def log_date_to_nightdate(log_date: str) -> datetime:
-    """
-    InstrumEvent log has ~1 day uncertainty, as the logging sometimes happen
-    real-time, sometimes after the event.
-
-    Assuming half-day delay, an event happens on nightdate = log date - 1 day.
-    The result of the instrumental event usually takes effect the next day.
-    """
-    # KST
-    date_kst = datetime.strptime(str(log_date), "%y%m%d")
-    # CLST
-    nightdate = date_kst - timedelta(days=0)  # always +-1 day uncertainty in the log.
-    # it ways day=1 with date as input, not nightdate
-    return nightdate
-
-
-def get_cam_events(unit: int, swap_only: bool = False):
-    """
-    Caution: the logs are in KST, telescopes are in CLST.
-    This function returns in CLST.
-
-    Assumes logging (KST) happened half a day later than the actual event (CLST).
-    """
-    changelog = os.path.join(REF_DIR, f"InstrumEvent/changelog_unit{unit}.txt")
-    tbl = Table.read(changelog, format="ascii.tab", guess=False, fast_reader=False)
-    # tbl = Table.read(changelog, format="ascii.basic", guess=False, fast_reader=False)
-
-    is_cam = tbl["parts"] == "cam"
-    # is_install = np.char.startswith(comments, "install:")
-    # is_uninstall = np.char.startswith(comments, "uninstall:")
-    # is_swap = np.char.startswith(comments, "swap:")
-
-    # combine all conditions with bitwise ops
-    mask = is_cam  # & (is_install | is_uninstall | is_swap)
-    filtered_tbl = tbl[mask]
-    cam_event_tbl = Table()
-    cam_event_tbl["nightdate"] = [log_date_to_nightdate(s) for s in filtered_tbl["date"]]
-    # camswap_tbl["serial"] = [s.split(":")[-1].split(">")[-1] for s in filtered_tbl["comment"]]
-    cam_event_tbl["serial"] = filtered_tbl["comment"]
-    if swap_only:
-        _ = [bool(re.match(r"\d+", str(s))) for s in cam_event_tbl["serial"]]
-        cam_event_tbl = cam_event_tbl[cam_event_tbl["serial"].astype(str) != ""]
-        return cam_event_tbl[np.asarray(_)]
-
-    return cam_event_tbl
+from ..const.environ import INSTRUM_STATUS_DICT
+from ..const.instrum_log import get_cam_events
 
 
 def get_current_camera_serial(unit: int) -> str:
@@ -77,7 +26,7 @@ def get_camera_serial(unit: int, query_date: str):
 
     # 2) parse query_date ("YYYY-MM-DD" or "YYYYMMDD")
     fmt = "%Y-%m-%d"  # if "-" in query_date else "%Y%m%d"
-    qdate = datetime.strptime(query_date, fmt)
+    qdate = datetime.strptime(query_date, fmt).date()
 
     # 3) if qdate <= last nightdate, pick the most recent past event
     last_date = dates[-1]

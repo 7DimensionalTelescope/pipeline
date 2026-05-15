@@ -24,6 +24,11 @@
             "value": 2.8,
             "criteria": "lte",
             "description": "Standard deviation must be ≥ 2.8"
+        },
+        "SHIFTED": {
+            "value": false,
+            "criteria": "eq",
+            "description": "Image must NOT have a shifted-overscan band"
         }
     },
     "FLAT": {

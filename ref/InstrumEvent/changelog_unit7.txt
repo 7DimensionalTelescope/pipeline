@@ -1,18 +1,26 @@
-date	parts	comment
-231018	cam	31166
-231018	fw	223444941
-231019	filt_config	
-231103	cam	PA
-231125	mirror	collimation_start
-231128	mirror	collimation_end
-231205	mount	modeling
-231211	mount	tipadjust_start
-231213	mount	tipadjust_end
-240506	motor	tuning
-240618	cam	PA
-241206	cam	PA
-250311	mirror	cleaning
-250914	cam	0
-251109	cam	31241
-260104	fw	new_filters
-260104	mirror	optical_alignment
+# date is in KST, with +-1 day uncertainty
+# nightdate is in CLST, the canonical date used in the pipeline directory structure
+# ~< 2026 records of date are especially uncertain; nightdate records are more reliable if exist
+# nightdate will be generated from date if missing
+#
+# nightdate and date should indicate the START of the affected date range!
+#
+date	nightdate	parts	wall	comment
+231018		cam	bias,dark,flat	31166
+231018		fw	flat	223444941
+231019		fw	flat	filt_config	
+231103		cam	flat	PA
+231125		mirror	flat	collimation_start
+231128		mirror	flat	collimation_end
+231205		mount		modeling
+231211		mount		tipadjust_start
+231213		mount		tipadjust_end
+240506		motor		tuning
+240618		cam	flat	PA
+241206		cam	flat	PA
+250311		mirror	flat	cleaning
+250914		cam	bias,dark,flat	0
+251109		cam	bias,dark,flat	31241
+260104		fw	flat	new_filters
+260104		mirror	flat	optical_alignment
+260513	2026-05-13	cam	flat	PA
