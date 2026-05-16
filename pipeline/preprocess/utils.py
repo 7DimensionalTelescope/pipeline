@@ -9,54 +9,59 @@ from astropy.io import fits
 import fitsio
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from datetime import datetime
+from dataclasses import dataclass, replace
 
 from ..path.path import PathHandler
 from ..path.name import NameHandler
 from ..services.checker import Checker
 from ..utils.header import write_header_file, get_header, add_padding
+from ..const.instrum_log import get_masterframe_walls
 
 
-class FileCreationHandler(FileSystemEventHandler):
-    def __init__(self, target_file):
-        self.target_file = os.path.basename(target_file)
-        self.created = False
+# current grouping scheme ensures a masterframe is generated only once even under parallelization.
+# waiting became unnecessary
+# class FileCreationHandler(FileSystemEventHandler):
+#     def __init__(self, target_file):
+#         self.target_file = os.path.basename(target_file)
+#         self.created = False
 
-    def on_created(self, event):
-        if not event.is_directory and event.src_path.endswith(self.target_file):
-            self.created = True
+#     def on_created(self, event):
+#         if not event.is_directory and event.src_path.endswith(self.target_file):
+#             self.created = True
 
 
-def wait_for_masterframe(file_path, timeout=1800):
-    """
-    Wait for a file to be created using watchdog with timeout.
+# def wait_for_masterframe(file_path, timeout=1800):
+#     """
+#     Wait for a file to be created using watchdog with timeout.
 
-    Args:
-        file_path (str): Path to the file to watch for
-        timeout (int): Maximum time to wait in seconds (default: 1800 seconds / 30 minutes)
+#     Args:
+#         file_path (str): Path to the file to watch for
+#         timeout (int): Maximum time to wait in seconds (default: 1800 seconds / 30 minutes)
 
-    Returns:
-        bool: True if file was created, False if timeout occurred
-    """
-    # First check if file already exists
-    if os.path.exists(file_path):
-        return True
+#     Returns:
+#         bool: True if file was created, False if timeout occurred
+#     """
+#     # First check if file already exists
+#     if os.path.exists(file_path):
+#         return True
 
-    directory = os.path.dirname(file_path) or "."
-    handler = FileCreationHandler(file_path)
-    observer = Observer()
-    observer.schedule(handler, directory, recursive=False)
-    observer.start()
+#     directory = os.path.dirname(file_path) or "."
+#     handler = FileCreationHandler(file_path)
+#     observer = Observer()
+#     observer.schedule(handler, directory, recursive=False)
+#     observer.start()
 
-    try:
-        start_time = time.time()
-        while not handler.created:
-            if time.time() - start_time > timeout:
-                return False
-            time.sleep(1)
-        return True
-    finally:
-        observer.stop()
-        observer.join()
+#     try:
+#         start_time = time.time()
+#         while not handler.created:
+#             if time.time() - start_time > timeout:
+#                 return False
+#             time.sleep(1)
+#         return True
+#     finally:
+#         observer.stop()
+#         observer.join()
 
 
 def _build_lenient_template(template, dtype, ignore_binning=False):
@@ -85,6 +90,16 @@ def _build_lenient_template(template, dtype, ignore_binning=False):
     return path.preprocess._masterframe
 
 
+@dataclass(frozen=True, slots=True)
+class RelaxationFlags:
+    """Frozen. Updates should be stored in a new copy"""
+
+    ignored_binning: bool = False
+    ignored_sanity: bool = False
+    ignored_lenient_keys: bool = False
+    ignored_masterframe_walls: bool = False
+
+
 def tolerant_search(
     template,
     dtype: Literal["bias", "dark", "flat"],
@@ -92,61 +107,118 @@ def tolerant_search(
     future=False,
     ignore_sanity_if_no_match=False,
     ignore_lenient_keys_if_no_match=False,
-) -> tuple[str, dict]:
+) -> tuple[str | None, RelaxationFlags]:
     """
     Search for a master frame matching the template.
 
     Returns:
         tuple: (path_or_none, relaxation_flags).
         relaxation_flags is a dictionary with the following keys:
-            - ignored_lenient_keys: True if the match was found by relaxing lenient keys (bit 8 in PPFLAG).
+            - ignored_lenient_keys: True if the match was found by relaxing lenient keys.
             - ignored_sanity: True if the match was found by ignoring sanity check.
             - ignored_binning: True if the match was found by ignoring binning.
+            - ignored_masterframe_walls: True if the match was found using masterframe-wall offsets.
     """
-    kw = dict(max_offset=max_offset, future=future)
+    found_flags = RelaxationFlags()
 
-    relaxation_flags = {
-        "ignored_lenient_keys": False,
-        "ignored_sanity": False,
-        "ignored_binning": False,
-    }
+    def _commit_flags(flags: RelaxationFlags):
+        nonlocal found_flags
+        found_flags = flags
 
-    def _search(tpl, ignore_sanity):
-        return search_with_date_offsets(tpl, **kw, ignore_sanity=ignore_sanity)
+    def _search(search_template, **kwargs):
+        return search_with_date_offsets(search_template, max_offset=max_offset, future=future, **kwargs)
 
-    # 1. Strict search
-    searched = _search(template, ignore_sanity=False)
-    if not searched and ignore_sanity_if_no_match:
-        relaxation_flags["ignored_sanity"] = True
-        searched = _search(template, ignore_sanity=True)
-    if searched:
-        return searched, relaxation_flags
-
-    # 2. Lenient search (relax dtype-specific keys) if enabled
-    if ignore_lenient_keys_if_no_match:
-        relaxation_flags["ignored_lenient_keys"] = True
-        lenient_template = _build_lenient_template(template, dtype)
-        searched = _search(lenient_template, ignore_sanity=False)
-        if not searched and ignore_sanity_if_no_match:
-            relaxation_flags["ignored_sanity"] = True
-            searched = _search(lenient_template, ignore_sanity=True)
-
-            # special routine for flat: ignore binning
-            if not searched and dtype == "flat":
-                relaxation_flags["ignored_binning"] = True
-                lenient_template = _build_lenient_template(template, dtype, ignore_binning=True)
-                searched = _search(lenient_template, ignore_sanity=False)
-                if not searched and ignore_sanity_if_no_match:
-                    relaxation_flags["ignored_sanity"] = True
-                    searched = _search(lenient_template, ignore_sanity=True)
-
+    def _search_with_binning_tries(search_template, flags: RelaxationFlags, ignore_sanity=False, **kwargs):
+        searched = _search(search_template, ignore_sanity=ignore_sanity, **kwargs)
         if searched:
-            return searched, relaxation_flags
+            _commit_flags(flags)
+            return searched
 
-    return None, relaxation_flags
+        # Special routine for flat: ignore binning.
+        if dtype == "flat":
+            binning_flags = replace(flags, ignored_binning=True)
+            searched = _search(search_template, ignore_binning=True, ignore_sanity=ignore_sanity, **kwargs)
+            if searched:
+                _commit_flags(binning_flags)
+                return searched
+
+        return None
+
+    def _search_with_sanity_tries(search_template, flags: RelaxationFlags, **kwargs):
+        searched = _search_with_binning_tries(search_template, flags, ignore_sanity=False, **kwargs)
+        if searched:
+            return searched
+
+        if ignore_sanity_if_no_match:
+            sanity_flags = replace(flags, ignored_sanity=True)
+            searched = _search_with_binning_tries(search_template, sanity_flags, ignore_sanity=True, **kwargs)
+            if searched:
+                return searched
+
+        return None
+
+    def _search_with_lenient_key_tries(search_template, flags: RelaxationFlags, **kwargs):
+        searched = _search_with_sanity_tries(search_template, flags, **kwargs)
+        if searched:
+            return searched
+
+        if ignore_lenient_keys_if_no_match:
+            lenient_template = _build_lenient_template(search_template, dtype)
+            lenient_flags = replace(flags, ignored_lenient_keys=True)
+
+            searched = _search_with_sanity_tries(lenient_template, lenient_flags, **kwargs)
+            if searched:
+                return searched
+
+        return None
+
+    def _get_masterframe_wall_offsets(search_template):
+        nh = NameHandler(search_template)
+
+        nightdate_str = nh.nightdate
+        nightdate = datetime.strptime(nightdate_str, "%Y-%m-%d").date()
+
+        unit = int(nh.unit[3:])  # 7DT01 -> 1
+
+        # If get_masterframe_walls expects a date object instead of a string, change nightdate_str to nightdate.
+        lb, ub = get_masterframe_walls(nightdate_str, unit, dtype=dtype)
+
+        lo = (lb - nightdate).days
+        uo = (ub - nightdate).days
+
+        return lo, uo
+
+    def _search_with_masterframe_walls_tries(search_template, flags: RelaxationFlags, **kwargs):
+        searched = _search_with_lenient_key_tries(search_template, flags, **kwargs)
+        if searched:
+            return searched
+
+        lo, uo = _get_masterframe_wall_offsets(search_template)
+        wall_flags = replace(flags, ignored_masterframe_walls=True)
+
+        searched = _search_with_lenient_key_tries(
+            search_template, wall_flags, lower_offset=lo, upper_offset=uo, **kwargs
+        )
+        if searched:
+            return searched
+
+        return None
+
+    searched = _search_with_masterframe_walls_tries(template, RelaxationFlags())
+    if searched:
+        return searched, found_flags
+
+    return None, found_flags
 
 
-def search_with_date_offsets(template, max_offset=30, future=False, ignore_sanity=False):
+def search_with_date_offsets(
+    template,
+    max_offset=30,
+    lower_offset=None,
+    upper_offset=None,
+    future=False,
+    ignore_sanity=False,
+):
     """
     Search for files based on a template, modifying embedded dates with offsets.
     future=False includes the current date
@@ -186,6 +258,12 @@ def search_with_date_offsets(template, max_offset=30, future=False, ignore_sanit
     else:
         offsets = [-i for i in range(1, max_offset + 1)]
     offsets = [0] + offsets  # Include the original dates (offset 0)
+
+    # Apply lower and upper bounds
+    if lower_offset is not None:
+        offsets = [offset for offset in offsets if offset >= lower_offset]
+    if upper_offset is not None:
+        offsets = [offset for offset in offsets if offset <= upper_offset]
 
     # Iterate through offsets - try all combinations of date offsets
     for offset_night in offsets:

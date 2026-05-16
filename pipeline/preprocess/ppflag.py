@@ -7,9 +7,10 @@ Bit definitions (combined with bitwise OR):
     2: Manually generated master frames (not set by pipeline; input may have this. e.g., exptime-scaled dark, superflat)
     4: SANITY was F, but used
     8: Strict search failed; match found by ignoring lenient keys (unit for bias/dark, gain/camera for flat)
-    16: Hard keys had to be ignored (not set by pipeline)
+    16: Strict search failed; match found by ignoring masterframe walls (ref/InstrumEvent/changelog_unit{unit}.txt)
+    32: Hard keys had to be ignored (not set by pipeline; exists just for completeness)
 
-Range: 0-31 when all bits set.
+Range: 0-63 when all bits set.
 """
 
 import os
@@ -24,10 +25,12 @@ PPFLAG_DIFFERENT_DATE = 1
 PPFLAG_MANUAL = 2
 PPFLAG_SANITY_F_USED = 4
 PPFLAG_LENIENT_KEYS_IGNORED = 8
-PPFLAG_HARD_KEYS_IGNORED = 16
+PPFLAG_MASTERFRAME_WALL_IGNORED = 16
+PPFLAG_HARD_KEYS_IGNORED = 32
+
 
 PPFLAG_KEY = "PPFLAG"
-PPFLAG_MAX = 31
+PPFLAG_MAX = 63
 
 
 def get_ppflag_from_header(header_or_path, raise_if_missing: bool = False):
@@ -78,6 +81,7 @@ def compute_fetch_ppflag(
     sanity_value: bool,
     *,
     ignored_lenient_keys: bool = False,
+    ignored_masterframe_wall: bool = False,
 ) -> int:
     """
     Compute PPFLAG for a fetched master frame.
@@ -87,9 +91,10 @@ def compute_fetch_ppflag(
         template: Template path used for search (contains target dates).
         sanity_value: SANITY header value of the fetched frame.
         ignored_lenient_keys: If True, match was found by relaxing lenient keys (bit 8).
+        ignored_masterframe_wall: If True, match was found using masterframe-wall offsets (bit 16).
 
     Returns:
-        PPFLAG value (0-31).
+        PPFLAG value (0-63).
     """
     result = 0
     # Bit 1: different date
@@ -103,6 +108,9 @@ def compute_fetch_ppflag(
     # Bit 8: lenient keys were ignored to find match
     if ignored_lenient_keys:
         result |= PPFLAG_LENIENT_KEYS_IGNORED
+
+    if ignored_masterframe_wall:
+        result |= PPFLAG_MASTERFRAME_WALL_IGNORED
 
     return result
 
