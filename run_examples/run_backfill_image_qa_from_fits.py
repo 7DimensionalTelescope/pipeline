@@ -160,7 +160,7 @@ def main() -> int:
 
     iq_main = ImageQA()
     sql, params = _build_select_sql(args)
-    rows, columns = iq_main.excute_query(sql, params or None, return_columns=True)
+    rows, columns = iq_main.execute_query(sql, params or None, return_columns=True)
 
     if not rows:
         print("No matching rows.")
@@ -203,9 +203,7 @@ def main() -> int:
             _handle_result(kind, rid, path, detail)
     else:
         with ThreadPoolExecutor(max_workers=args.workers) as executor:
-            future_to_row = {
-                executor.submit(_process_one_row, columns, row, dry_run=args.dry_run): row for row in rows
-            }
+            future_to_row = {executor.submit(_process_one_row, columns, row, dry_run=args.dry_run): row for row in rows}
             for fut in as_completed(future_to_row):
                 kind, rid, path, detail = fut.result()
                 with progress_lock:

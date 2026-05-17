@@ -209,7 +209,7 @@ class ImageQA(BaseDatabase):
             )
             params = {"process_status_id": process_status_id}
 
-            rows, columns = self.excute_query(query, params, return_columns=True)
+            rows, columns = self.execute_query(query, params, return_columns=True)
 
             if not rows or len(rows) == 0:
                 return []
