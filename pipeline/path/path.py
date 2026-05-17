@@ -35,9 +35,23 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class PathHandlerSettings:
+    """Single source of truth. Do not mutate it"""
+
     working_dir: str | Path | None = None
-    is_pipeline: bool = False
+    is_pipeline: bool = True  # vectorized is_pipeline has been deprecated
     is_too: bool = False
+
+
+@dataclass
+class TopDirs:
+    """
+    Determined by night and PathHandlerSettings only.
+    ToO variants are handled too.
+    """
+
+    processed: str
+    factory: str
+    masterframe: str
 
 
 # Check MRO: PathHandler.mro()
@@ -67,12 +81,14 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         # especially weight_map_input, get_bpmask, and photometry.*_catalog are subtle points
         # But user-facing APIs should use is_pipeline=False. e.g., user_config, DataReduction, etc.
         is_too=False,
+        top_dirs: TopDirs | None = None,
     ):
         self._name_cache = {}  # Cache for NameHandler properties
         self._file_indep_initialized = False
         self._file_dep_initialized = False
         self._config = None  # unused
         self._input_files: list[str] = None
+        self._resolved_files: list[str] = []
 
         # preserve input parameters for later use; don't access them inside PathHandler
         self.settings = PathHandlerSettings(
@@ -80,9 +96,11 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             is_pipeline=is_pipeline,
             is_too=is_too,
         )
+        # When provided, every input file shares this TopDirs (skips per-file dispatch).
+        self._user_top_dirs = top_dirs
 
         self._handle_input(input, is_too=is_too, working_dir=working_dir)
-        self.select_output_dir(working_dir=working_dir, is_pipeline=is_pipeline, is_too=is_too)
+        self.select_output_dir()
 
         self.define_file_independent_paths()
 
@@ -106,6 +124,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             working_dir=s.working_dir,
             is_pipeline=s.is_pipeline,
             is_too=s.is_too,
+            top_dirs=self._user_top_dirs,
         )
 
     def _handle_input(self, input, is_too=False, working_dir=None):
@@ -313,30 +332,69 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         else:
             return Path(path).exists()
 
-    def select_output_dir(self, working_dir=None, is_pipeline=False, is_too=False):
+    @classmethod
+    def top_dirs(cls, nightdate: str, settings: PathHandlerSettings | None = None) -> TopDirs:
+        """Return the top-level pipeline directories for a given nightdate.
+
+        Centralizes disk dispatch
         """
-        Vectorized output directory selection
-        CWD if user-input. Assume pipeline paths otherwise.
+        settings = settings or PathHandlerSettings()
+
+        # Self-contained user run: everything under working_dir
+        if not settings.is_pipeline and settings.working_dir:
+            wd = str(settings.working_dir)
+            return TopDirs(
+                processed=wd,
+                factory=os.path.join(wd, TMP_DIRNAME),
+                masterframe=wd,
+            )
+
+        if nightdate < const.DISK_CHANGE_NIGHTDATE:
+            return TopDirs(
+                processed=const.TOO_PROCESSED_DIR if settings.is_too else const.PROCESSED_DIR,
+                factory=const.TOO_FACTORY_DIR if settings.is_too else const.FACTORY_DIR,
+                masterframe=const.MASTER_FRAME_DIR,
+            )
+        if nightdate < const.DISK_CHANGE_NIGHTDATE_2:
+            return TopDirs(
+                processed=const.TOO_PROCESSED_DIR_2 if settings.is_too else const.PROCESSED_DIR_2,
+                factory=const.TOO_FACTORY_DIR_2 if settings.is_too else const.FACTORY_DIR_2,
+                masterframe=const.MASTER_FRAME_DIR_2,
+            )
+        raise ValueError(
+            f"Nightdate cap ({const.DISK_CHANGE_NIGHTDATE_2}) reached for nightdate {nightdate!r}: "
+            "consider moving to another disk."
+        )
+
+    def select_output_dir(self):
+        """Build ``self._top_dirs`` (one ``TopDirs`` per input file).
+
+        Single source of truth for top-level directories. Per-file lists like
+        ``_output_parent_dir`` are exposed as @property views over this list,
+        so mutating an entry (or replacing it) propagates to derived paths.
         """
+        settings = self.settings
+
+        # No input files: synthesize a single TopDirs from working_dir/cwd.
         if not self._input_files:
-            self._output_parent_dir = [working_dir or os.getcwd()]
-            self._preproc_output_dir = self._output_parent_dir
-            self._factory_parent_dir = [os.path.join(self._output_parent_dir[0], TMP_DIRNAME)]
-            self._masterframe_parent_dir = [const.MASTER_FRAME_DIR]
-            # self._is_pipeline_vectorized = [is_pipeline]
-
+            if self._user_top_dirs is not None:
+                self._top_dirs = [self._user_top_dirs]
+            else:
+                wd = str(settings.working_dir or os.getcwd())
+                self._top_dirs = [
+                    TopDirs(
+                        processed=wd,
+                        factory=os.path.join(wd, TMP_DIRNAME),
+                        masterframe=wd,
+                    )
+                ]
         else:
-            # Process each file independently
-            self._output_parent_dir = []
-            self._preproc_output_dir = []
-            self._factory_parent_dir = []
-            self._masterframe_parent_dir = []
-            # self._is_pipeline_vectorized = []
-
+            self._top_dirs = []
             for i, input_file in enumerate(self._input_files):
-                file_dir = str(Path(input_file).absolute().parent)
-
-                not_pipeline_dir = not any(s in file_dir for s in const.PIPELINE_DIRS)
+                if self._user_top_dirs is not None:
+                    # User override: same TopDirs for every input file.
+                    self._top_dirs.append(self._user_top_dirs)
+                    continue
 
                 nightdate = self._get_namehandler_property_at_index("nightdate", i)
                 if isinstance(nightdate, list):
@@ -344,64 +402,56 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                 else:
                     current_nightdate = nightdate or date.today().strftime("%Y-%m-%d")
 
-                if current_nightdate < const.DISK_CHANGE_NIGHTDATE:
-                    masterframe_parent_dir = const.MASTER_FRAME_DIR
-                elif current_nightdate < const.DISK_CHANGE_NIGHTDATE_2:
-                    masterframe_parent_dir = const.MASTER_FRAME_DIR_2
-                else:
-                    raise ValueError(
-                        f"Nightdate cap ({const.DISK_CHANGE_NIGHTDATE_2}) reached for file {input_file}: consider moving to another disk."
-                    )
-                self._masterframe_parent_dir.append(masterframe_parent_dir)
+                file_dir = str(Path(input_file).absolute().parent)
+                not_pipeline_dir = not any(s in file_dir for s in const.PIPELINE_DIRS)
 
-                # working_dir explicitly given or pipeline_dirs not found in input_file
-                if (working_dir or not_pipeline_dir) and not is_pipeline:
-                    output_parent_dir = working_dir or os.path.dirname(input_file)
-
+                # Per-file effective settings: synthesize working_dir from input
+                # location when user-input mode is active but no working_dir was given.
+                if (settings.working_dir or not_pipeline_dir) and not settings.is_pipeline:
+                    effective_wd = settings.working_dir or file_dir
                     # ad hoc for diffim input only
-                    if os.path.basename(output_parent_dir) == DIFFIM_DIRNAME:
-                        output_parent_dir = os.path.dirname(output_parent_dir)
-
-                    self._output_parent_dir.append(output_parent_dir)
-                    self._factory_parent_dir.append(os.path.join(output_parent_dir, TMP_DIRNAME))
-                    # self._is_pipeline_vectorized.append(False)
-
-                # pipeline_dirs found in input_file or explicitly given as pipeline
+                    if os.path.basename(effective_wd) == DIFFIM_DIRNAME:
+                        effective_wd = os.path.dirname(effective_wd)
+                    file_settings = dc_replaces(settings, working_dir=effective_wd)
                 else:
-                    if current_nightdate < const.DISK_CHANGE_NIGHTDATE:
-                        if is_too:
-                            output_parent_dir = const.TOO_PROCESSED_DIR
-                            output_factory_dir = const.TOO_FACTORY_DIR
-                        else:
-                            output_parent_dir = const.PROCESSED_DIR
-                            output_factory_dir = const.FACTORY_DIR
-                        self._output_parent_dir.append(output_parent_dir)
-                        self._factory_parent_dir.append(output_factory_dir)
-                    elif current_nightdate < const.DISK_CHANGE_NIGHTDATE_2:
-                        if is_too:
-                            output_parent_dir = const.TOO_PROCESSED_DIR_2
-                            output_factory_dir = const.TOO_FACTORY_DIR_2
-                        else:
-                            output_parent_dir = const.PROCESSED_DIR_2
-                            output_factory_dir = const.FACTORY_DIR_2
-                        self._output_parent_dir.append(output_parent_dir)
-                        self._factory_parent_dir.append(output_factory_dir)
-                    else:
-                        raise ValueError(
-                            f"Nightdate cap ({const.DISK_CHANGE_NIGHTDATE_2}) reached for file {input_file}: consider moving to another disk."
-                        )
-                    # self._is_pipeline_vectorized.append(True)
+                    file_settings = settings
 
-                preproc_output_dir = os.path.join(
-                    output_parent_dir, self._get_namehandler_property_at_index("nightdate", i)
-                )
-                self._preproc_output_dir.append(preproc_output_dir)
+                self._top_dirs.append(self.top_dirs(current_nightdate, file_settings))
 
-        # Store as lists
+        # Public snapshots for backward compat (also keeps __repr__ verbose).
+        # The ``top_dirs=`` constructor parameter is the supported override path;
+        # post-init mutations of ``_top_dirs`` will not be reflected here.
         self.output_parent_dir = self._output_parent_dir
-        self.preproc_output_dir = self._preproc_output_dir
         self.factory_parent_dir = self._factory_parent_dir
         self.masterframe_parent_dir = self._masterframe_parent_dir
+        self.preproc_output_dir = self._preproc_output_dir
+
+    @property
+    def _output_parent_dir(self) -> list[str]:
+        return [td.processed for td in self._top_dirs]
+
+    @property
+    def _factory_parent_dir(self) -> list[str]:
+        return [td.factory for td in self._top_dirs]
+
+    @property
+    def _masterframe_parent_dir(self) -> list[str]:
+        return [td.masterframe for td in self._top_dirs]
+
+    @property
+    def _preproc_output_dir(self) -> list[str]:
+        """``processed/<nightdate>`` for pipeline runs, ``processed`` otherwise."""
+        if not self._input_files:
+            return [self._top_dirs[0].processed]
+
+        result = []
+        for i, td in enumerate(self._top_dirs):
+            if self.settings.is_pipeline:
+                nightdate = self._get_namehandler_property_at_index("nightdate", i) or date.today().strftime("%Y-%m-%d")
+                result.append(os.path.join(td.processed, nightdate))
+            else:
+                result.append(td.processed)
+        return result
 
     def _get_cached_namehandler_property(self, prop_name: str):
         """
@@ -580,6 +630,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         self._subtracted_dir = []
         self._coadd_dir = []
         self._metadata_dir = []
+        self._resolved_files = []  # Single source of truth for the full path
 
         for i in range(len(self._input_files)):
             # Get properties for this specific file
@@ -588,6 +639,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             obj = self._get_namehandler_property_at_index("obj", i)
             filte = self._get_namehandler_property_at_index("filter", i)
             typ = self._get_namehandler_property_at_index("type", i)
+            basename = self._get_namehandler_property_at_index("basename", i)
 
             # Masterframe directory (parent disk selected by nightdate in select_output_dir)
             masterframe_dir = os.path.join(self._masterframe_parent_dir[i], nightdate, unit)
@@ -618,11 +670,13 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                 self._daily_coadd_dir.append(os.path.join(output_dir, DAILY_COADD_DIRNAME))
                 self._subtracted_dir.append(os.path.join(output_dir, IMSUBTRACT_TMP_DIRNAME))
                 self._figure_dir.append(os.path.join(self._output_dir[-1], FIGURES_DIRNAME))
+                self._resolved_files.append(self._input_files[i])
 
             elif "master" in typ:
                 self._output_dir.append(self._output_parent_dir[i])
                 self._factory_dir.append(self._factory_parent_dir[i])
                 self._single_dir.append(self._output_parent_dir[i])
+                self._resolved_files.append(os.path.join(masterframe_dir, basename))
             else:
                 raise ValueError("Unrecognized type for PathHandling")
 
@@ -1026,7 +1080,8 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
     @property
     def header(self):
         """Sibling ``.header`` text file(s) for each input FITS (see ``prepare_header``)."""
-        return [swap_ext(f, "header") for f in self._parent._input_files]
+        return [swap_ext(f, "header") for f in self._parent._resolved_files]
+        # return [swap_ext(f, "header") for f in self._parent._input_files]
         # headers: list = [swap_ext(f, "header") for f in self._parent._input_files]
         # return headers[0] if self._single else headers
 
@@ -1141,7 +1196,7 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
 
 
 class PathFiguresBase(AutoMkdirMixin, AutoCollapseMixin):
-    def __init__(self, parent):
+    def __init__(self, parent: PathPreprocess | PathAstrometry | PathPhotometry | PathImcoadd | PathImsubtract):
         self._parent = parent
         self._single = self._parent._parent.name._single
 
@@ -1181,12 +1236,14 @@ class PathPreprocessFigures(PathFiguresBase):
     @property
     def _figure_dir(self):
         dirs = []
-        input_files = atleast_1d(self._parent._parent._input_files)
+        resolved_files = atleast_1d(
+            getattr(self._parent._parent, "_resolved_files", None) or self._parent._parent._input_files
+        )
         stored_figure_dirs = atleast_1d(getattr(self._parent._parent, "_figure_dir", []))
 
-        for i, (input_file, typ) in enumerate(zip(input_files, atleast_1d(self._parent._parent.name.type))):
+        for i, (resolved, typ) in enumerate(zip(resolved_files, atleast_1d(self._parent._parent.name.type))):
             if "master" in typ:
-                dirs.append(os.path.join(os.path.dirname(input_file), FIGURES_DIRNAME))
+                dirs.append(os.path.join(os.path.dirname(resolved), FIGURES_DIRNAME))
             else:
                 dirs.append(stored_figure_dirs[i])
 

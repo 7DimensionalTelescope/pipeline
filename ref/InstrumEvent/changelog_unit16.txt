@@ -1,5 +1,13 @@
-date	parts	comment
-250302	cam	31102
-250302	fw	22244179
-260104	fw	new_filters
-260104	mirror	optical_alignment
+# date is in KST, with +-1 day uncertainty
+# nightdate is in CLST, the canonical date used in the pipeline directory structure
+# ~< 2026 records of date are especially uncertain; nightdate records are more reliable if exist
+# nightdate will be generated from date if missing
+#
+# nightdate and date should indicate the START of the affected date range!
+#
+date	nightdate	parts	wall	comment
+250302		cam	bias,dark,flat	31102
+250302		fw	flat	22244179
+260104		fw	flat	new_filters
+260104		mirror	flat	optical_alignment
+260514	2026-05-14	cam	flat	PA

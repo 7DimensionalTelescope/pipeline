@@ -1755,6 +1755,8 @@ class ImageInfo:
     def good(self) -> bool:
         """iteration condition"""
         # not checking unmatched fraction as it's better to exit _iterate_scamp quickly and go to solve-field
+        if self.rsep_stats is None or self.rsep_stats.separation_stats is None:
+            return False
         if self.rsep_stats.separation_stats.P95 is None:
             return False
         else:
@@ -1765,6 +1767,8 @@ class ImageInfo:
         """iteration condition"""
 
         # return self.rsep_stats.unmatched_fraction > 0.9 or self.rsep_stats.separation_stats.P95 > 2 * PIXSCALE  # too tight
+        if self.rsep_stats is None or self.rsep_stats.separation_stats is None:
+            return False
         return (self.rsep_stats.unmatched_fraction is not None and self.rsep_stats.unmatched_fraction > 0.9) or (
             self.rsep_stats.separation_stats.Q2 is not None and self.rsep_stats.separation_stats.Q2 > 2 * PIXSCALE
         )

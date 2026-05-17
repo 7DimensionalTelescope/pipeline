@@ -576,8 +576,6 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             ignore_sanity_if_no_match=ignore_sanity,
             ignore_lenient_keys_if_no_match=ignore_lenient,
         )
-        ignored_lenient = relaxation_flags["ignored_lenient_keys"]
-        ignored_binning = relaxation_flags["ignored_binning"]
 
         if not existing_mframe_file:
             self.logger.error(
@@ -588,20 +586,20 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 f"No pre-existing master {dtype} found in place of {template} within {max_offset} days"
             )
 
-        if ignored_binning:
+        if relaxation_flags.ignored_binning:
             existing_mframe_file = self._generated_binned_master_frame(existing_mframe_file, template, dtype=dtype)
 
-        sanity_check = fits.getval(existing_mframe_file, "SANITY")
+        existing_header_sanity = fits.getval(existing_mframe_file, "SANITY")
         self.logger.info(
-            f"[Group {self._current_group+1}] Found pre-existing nominal (sanity: {sanity_check}) master {dtype} at {os.path.basename(existing_mframe_file)}"
+            f"[Group {self._current_group+1}] Found pre-existing nominal (sanity: {existing_header_sanity}) master {dtype} at {os.path.basename(existing_mframe_file)}"
         )
 
         # PPFLAG: fetched frame gets 1 (different date), 4 (sanity F), 8 (lenient keys) as appropriate
         ppflag_val = ppflag.compute_fetch_ppflag(
             existing_mframe_file,
             template,
-            sanity_check,
-            ignored_lenient_keys=ignored_lenient,
+            existing_header_sanity,
+            ignored_lenient_keys=relaxation_flags.ignored_lenient_keys,
         )
         self._ppflag[dtype] = ppflag_val
 
@@ -614,7 +612,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             path = PathHandler(template)
             path.name.exptime = "*"
             flatdark_template = path.preprocess._masterframe
-            existing_flatdark_file, flatdark_ignored_lenient = prep_utils.tolerant_search(
+            existing_flatdark_file, flatdark_relaxation_flags = prep_utils.tolerant_search(
                 flatdark_template,
                 "dark",
                 max_offset=max_offset,
@@ -633,7 +631,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                     existing_flatdark_file,
                     flatdark_template,
                     flatdark_sanity,
-                    ignored_lenient_keys=flatdark_ignored_lenient,
+                    ignored_lenient_keys=flatdark_relaxation_flags.ignored_lenient_keys,
                 )
             else:
                 self.logger.error(

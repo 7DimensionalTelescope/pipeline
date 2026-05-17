@@ -1,8 +1,15 @@
-date	parts	comment
-241027	cam	31243
-241027	fw	22446146
-241109	filt_config	g, r, I, m600, m625, m500, m775
-241115	mirror	collimation
-241206	cam	PA
-260104	fw	new_filters
-260104	mirror	optical_alignment
+# date is in KST, with +-1 day uncertainty
+# nightdate is in CLST, the canonical date used in the pipeline directory structure
+# ~< 2026 records of date are especially uncertain; nightdate records are more reliable if exist
+# nightdate will be generated from date if missing
+#
+# nightdate and date should indicate the START of the affected date range!
+#
+date	nightdate	parts	wall	comment
+241027		cam	bias,dark,flat	31243
+241027		fw	flat	22446146
+241109		fw	flat	filt_config g, r, I, m600, m625, m500, m775
+241115		mirror	flat	collimation
+241206		cam	flat	PA
+260104		fw	flat	new_filters
+260104		mirror	flat	optical_alignment

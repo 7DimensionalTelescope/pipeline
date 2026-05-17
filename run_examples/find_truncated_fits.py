@@ -153,7 +153,7 @@ def main() -> int:
     if args.from_db:
         iq = ImageQA()
         sql, params = _build_select_sql(args)
-        rows, columns = iq.excute_query(sql, params or None, return_columns=True)
+        rows, columns = iq.execute_query(sql, params or None, return_columns=True)
         file_list = []
         if rows:
             for row in rows:
@@ -193,9 +193,7 @@ def main() -> int:
     else:
         print(f"Using {args.workers} workers", file=sys.stderr)
         with ThreadPoolExecutor(max_workers=args.workers) as executor:
-            future_to_item = {
-                executor.submit(_check_one_row, qa_id, path): (qa_id, path) for qa_id, path in file_list
-            }
+            future_to_item = {executor.submit(_check_one_row, qa_id, path): (qa_id, path) for qa_id, path in file_list}
             for fut in as_completed(future_to_item):
                 qid, pth, outcome, detail = fut.result()
                 with progress_lock:

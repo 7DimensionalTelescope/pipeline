@@ -44,7 +44,13 @@ class BaseDatabase:
             if conn:
                 conn.close()
 
-    def excute_query(
+    def excute_query(self, query: str, *args, **kwargs):
+        """
+        Deprecated: use execute_query() instead.
+        """
+        return self.execute_query(query, *args, **kwargs)
+
+    def execute_query(
         self,
         query: str,
         params: Dict[str, Any] = None,
@@ -148,7 +154,7 @@ class BaseDatabase:
                     INSERT INTO {self.table_name} ({columns}) VALUES ({placeholders})
                     RETURNING id
                 """
-                id = self.excute_query(query, filtered_data)
+                id = self.execute_query(query, filtered_data)
                 return id
 
         except Exception as e:
@@ -164,7 +170,7 @@ class BaseDatabase:
             try:
                 # Format query string with table name and order_by using f-string
                 query = query_all_columns.format(table_name=self.table_name, order_by=order_by)
-                rows, columns = self.excute_query(query, {}, return_columns=True)
+                rows, columns = self.execute_query(query, {}, return_columns=True)
 
                 if not rows:
                     return []
@@ -183,7 +189,7 @@ class BaseDatabase:
             query = query_column_by_name.format(table_name=self.table_name)
             params = {"name": name}
 
-            rows, columns = self.excute_query(query, params, return_columns=True)
+            rows, columns = self.execute_query(query, params, return_columns=True)
 
             if not rows or len(rows) == 0:
                 return None
@@ -202,7 +208,7 @@ class BaseDatabase:
             query = query_column_by_id.format(table_name=self.table_name)
             params = {"id": target_id}
 
-            rows, columns = self.excute_query(query, params, return_columns=True)
+            rows, columns = self.execute_query(query, params, return_columns=True)
 
             if not rows or len(rows) == 0:
                 return None
@@ -219,7 +225,7 @@ class BaseDatabase:
         params_str = " AND ".join([f"{k} = %({k})s" for k in params.keys()])
         query = query_by_params.format(table_name=self.table_name, params=params_str)
 
-        rows, columns = self.excute_query(query, params, return_columns=True)
+        rows, columns = self.execute_query(query, params, return_columns=True)
 
         if not rows or len(rows) == 0:
             return None
@@ -254,7 +260,7 @@ class BaseDatabase:
             params_str += " AND "
         params_str += "date_obs BETWEEN %(date_min)s::timestamp AND %(date_max)s::timestamp"
         query = f"SELECT {columns_str} FROM {self.table_name} WHERE {params_str}"
-        rows, column_names = self.excute_query(query, params, return_columns=True)
+        rows, column_names = self.execute_query(query, params, return_columns=True)
 
         return rows
 
@@ -273,12 +279,12 @@ class BaseDatabase:
         params_str = ", ".join([f"{k} = %({k})s" for k in params.keys()])
         query = query_update.format(table_name=self.table_name, params=params_str)
         # Use return_rowcount=True for UPDATE statements (they don't return rows)
-        id = self.excute_query(query, {**params, "id": target_id})
+        id = self.execute_query(query, {**params, "id": target_id})
         return id
 
     def delete_data(self, target_id: int):
         query = query_delete.format(table_name=self.table_name)
-        self.excute_query(query, {"id": target_id})
+        self.execute_query(query, {"id": target_id})
 
     def _get_table_columns(self) -> set[str]:
         return set(getattr(self.pyTable, "__annotations__", {}).keys())
@@ -367,7 +373,7 @@ class BaseDatabase:
                 query_params["limit"] = limit
 
             # Use excute_query with return_columns=True to get rows and column names
-            rows, columns = self.excute_query(query, query_params, return_columns=True)
+            rows, columns = self.execute_query(query, query_params, return_columns=True)
 
             if not rows:
                 print(f"No data found in {self.table_name}")
@@ -423,7 +429,7 @@ class BaseDatabase:
             query = query_clear_table.format(table_name=self.table_name)
 
             # Use excute_query with commit and return_rowcount for write operations
-            self.excute_query(query)
+            self.execute_query(query)
 
             return True
 
