@@ -189,16 +189,15 @@ def tolerant_search(
         return lo, uo
 
     def _search_with_masterframe_walls_tries(search_template, flags: RelaxationFlags, **kwargs):
-        searched = _search_with_lenient_key_tries(search_template, flags, **kwargs)
+        lo, uo = _get_masterframe_wall_offsets(search_template)
+        # first with walls
+        searched = _search_with_lenient_key_tries(search_template, flags, lower_offset=lo, upper_offset=uo, **kwargs)
         if searched:
             return searched
 
-        lo, uo = _get_masterframe_wall_offsets(search_template)
+        # then without walls
         wall_flags = replace(flags, ignored_masterframe_walls=True)
-
-        searched = _search_with_lenient_key_tries(
-            search_template, wall_flags, lower_offset=lo, upper_offset=uo, **kwargs
-        )
+        searched = _search_with_lenient_key_tries(search_template, wall_flags, **kwargs)
         if searched:
             return searched
 
