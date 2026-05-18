@@ -1,15 +1,26 @@
 import logging
 import os
+import re
 import threading
 from collections import defaultdict
 from pathlib import Path
 
+from astropy.table import Table
+
 from ..path.utils import get_nightdate
+
+_DATETIME_SUFFIX_RE = re.compile(r"_\d{8}_\d{6}$")
 
 logger = logging.getLogger(__name__)
 
 
 def normalize_raw_dirname(path_or_name: str | Path) -> str | None:
+    """Basename of the directory that contains raw data.
+
+    Examples:
+        "2026-05-16_gain2750.tar"                        -> "2026-05-16_gain2750.tar"
+        "/rawdata/7DT01/2026-05-16_gain2750/image.fits"  -> "2026-05-16_gain2750"
+    """
     raw = os.fspath(path_or_name).rstrip(os.sep)
     if not raw:
         return None
@@ -22,11 +33,19 @@ def normalize_raw_dirname(path_or_name: str | Path) -> str | None:
 
 
 def normalize_batch_key(path_or_name: str | Path) -> str | None:
+    """Canonical batch directory name: strip .tar, datetime suffix (_YYYYMMDD_HHMMSS), validate date.
+
+    Examples:
+        "2026-05-16_gain2750.tar"                        -> "2026-05-16_gain2750"
+        "2026-05-16_gain2750_ToO_20260518_063633.tar"    -> "2026-05-16_gain2750_ToO"
+        "/rawdata/7DT01/2026-05-16_gain2750/image.fits"  -> "2026-05-16_gain2750"
+    """
     dirname = normalize_raw_dirname(path_or_name)
     if dirname is None:
         return None
 
     normalized = dirname[:-4] if dirname.endswith(".tar") else dirname
+    normalized = _DATETIME_SUFFIX_RE.sub("", normalized)
 
     if get_nightdate(normalized, use_dirname=False) is None:
         return None
@@ -67,22 +86,16 @@ class TransferHistoryIndex:
                 return
 
             expected_dirs_by_nightdate = defaultdict(set)
-            with self.history_path.open() as stream:
-                for raw_line in stream:
-                    if "|" not in raw_line:
+            table = Table.read(self.history_path, format="ascii.fixed_width")
+            for row in table:
+                filename = str(row["Filename"])
+                batch_dirname = normalize_batch_key(filename)
+                nightdate = get_nightdate(filename, use_dirname=False)
+                if batch_dirname and nightdate:
+                    if batch_dirname.endswith("_ToO"):
                         continue
-
-                    columns = [part.strip() for part in raw_line.strip().split("|")[1:-1]]
-                    if not columns or columns[0] == "Filename":
-                        continue
-
-                    batch_dirname = normalize_batch_key(columns[0])
-                    nightdate = get_nightdate(columns[0], use_dirname=False)
-                    if batch_dirname and nightdate:
-                        if batch_dirname.endswith("_ToO"):
-                            continue
-                        # Transfer history tracks batch-level arrivals, not per-unit completeness.
-                        expected_dirs_by_nightdate[nightdate].add(batch_dirname)
+                    # Transfer history tracks batch-level arrivals, not per-unit completeness.
+                    expected_dirs_by_nightdate[nightdate].add(batch_dirname)
 
             self._history_mtime_ns = stat.st_mtime_ns
             self._expected_dirs_by_nightdate = {
