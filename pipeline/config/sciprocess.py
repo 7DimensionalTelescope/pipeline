@@ -113,6 +113,7 @@ class SciProcConfiguration(BaseConfig):
                 working_dir=working_dir,
                 is_pipeline=get_key(self.node.settings, "is_pipeline", False),
                 is_too=get_key(self.node.settings, "is_too", False),
+                config_file=config_source if isinstance(config_source, str) else None,
             )
             self.node.logging.file = self.path.sciproc_output_log
 
@@ -139,24 +140,19 @@ class SciProcConfiguration(BaseConfig):
 
         return
 
-    def _set_pathhandler_from_config(self, working_dir=None, is_pipeline=False, is_too=False):
+    def _set_pathhandler_from_config(self, working_dir=None, is_pipeline=False, is_too=False, config_file=None):
         # mind the check order
+        kwargs = {"working_dir": working_dir, "is_pipeline": is_pipeline, "is_too": is_too, "config_file": config_file}
         if hasattr(self.node, "input"):
             if hasattr(self.node.input, "calibrated_images") and self.node.input.calibrated_images:
-                return PathHandler(
-                    self.node.input.calibrated_images, working_dir=working_dir, is_pipeline=is_pipeline, is_too=is_too
-                )
+                return PathHandler(self.node.input.calibrated_images, **kwargs)
 
             if hasattr(self.node.input, "processed_dir") and self.node.input.processed_dir:
                 f = os.path.join(self.node.input.processed_dir, "**.fits")
-                return PathHandler(
-                    sorted(glob.glob(f)), working_dir=working_dir, is_pipeline=is_pipeline, is_too=is_too
-                )
+                return PathHandler(sorted(glob.glob(f)), **kwargs)
 
             if hasattr(self.node.input, "coadd_image") and self.node.input.coadd_image:
-                return PathHandler(
-                    self.node.input.coadd_image, working_dir=working_dir, is_pipeline=is_pipeline, is_too=is_too
-                )
+                return PathHandler(self.node.input.coadd_image, **kwargs)
 
         raise ValueError("Configuration does not contain valid input files or directories to create PathHandler.")
 
@@ -177,9 +173,7 @@ class SciProcConfiguration(BaseConfig):
         self.node.info.file = self.config_file
         self.node.name = self.node.name or self.name
 
-        self.node.input.calibrated_images = atleast_1d(
-            PathHandler(self.input_files, is_pipeline=is_pipeline, is_too=is_too).processed_images
-        )
+        self.node.input.calibrated_images = atleast_1d(self.path.processed_images)
 
         if is_too and is_pipeline:
             from .toodb import update_too_times
@@ -243,11 +237,17 @@ class SciProcConfiguration(BaseConfig):
         logger = False if not write else logger
         input_images = sorted([os.path.abspath(image) for image in atleast_1d(input_images)])
         # path = PathHandler(input_images, working_dir=working_dir or os.getcwd(), is_too=is_too)
-        path = PathHandler(input_images, working_dir=working_dir, is_pipeline=is_pipeline, is_too=is_too)
+        path = PathHandler(
+            input_images,
+            working_dir=working_dir,
+            is_pipeline=is_pipeline,
+            is_too=is_too,
+            config_file=config_file,
+        )
         self = cls.base_config(write=write)
         self.input_files = input_images
         self.path = path
-        self.config_file = config_file or self.path.sciproc_output_yml
+        self.config_file = self.path.sciproc_output_yml
         if isinstance(self.config_file, list):
             if config_name_policy == "error":
                 raise ConfigurationError.GroupingError(

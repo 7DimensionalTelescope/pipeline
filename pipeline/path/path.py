@@ -40,6 +40,7 @@ class PathHandlerSettings:
     working_dir: str | Path | None = None
     is_pipeline: bool = True  # vectorized is_pipeline has been deprecated
     is_too: bool = False
+    config_file: str | Path | None = None  # explicit override for sciproc_output_yml
 
 
 @dataclass
@@ -47,11 +48,15 @@ class TopDirs:
     """
     Determined by night and PathHandlerSettings only.
     ToO variants are handled too.
+
+    Fields are ``None`` when the disk root cannot be propagated from the input
+    (e.g. calibrated/master inputs in user mode have no system-wide
+    ``processed``/``factory`` root; the file's own location is the truth).
     """
 
-    processed: str
-    factory: str
-    masterframe: str
+    processed: str | None
+    factory: str | None
+    masterframe: str | None
 
 
 # Check MRO: PathHandler.mro()
@@ -81,6 +86,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         # especially weight_map_input, get_bpmask, and photometry.*_catalog are subtle points
         # But user-facing APIs should use is_pipeline=False. e.g., user_config, DataReduction, etc.
         is_too=False,
+        config_file: str | Path | None = None,
         top_dirs: TopDirs | None = None,
     ):
         self._name_cache = {}  # Cache for NameHandler properties
@@ -89,23 +95,35 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         self._config = None  # unused
         self._input_files: list[str] = None
         self._resolved_files: list[str] = []
+        self._top_dirs: list[TopDirs] = []  # populated by select_output_dir when input exists
+
+        # resolve relative config_file to abspath, mirroring input-file handling below
+        if config_file is not None:
+            config_file = os.fspath(config_file)
+            if working_dir and not os.path.isabs(config_file):
+                config_file = os.path.join(working_dir, config_file)
+            config_file = os.path.abspath(config_file)
 
         # preserve input parameters for later use; don't access them inside PathHandler
         self.settings = PathHandlerSettings(
             working_dir=working_dir,
             is_pipeline=is_pipeline,
             is_too=is_too,
+            config_file=config_file,
         )
         # When provided, every input file shares this TopDirs (skips per-file dispatch).
         self._user_top_dirs = top_dirs
 
         self._handle_input(input, is_too=is_too, working_dir=working_dir)
-        self.select_output_dir()
 
         self.define_file_independent_paths()
 
         if not self._file_dep_initialized and self._input_files:
+            self.select_output_dir()
             self.define_file_dependent_paths()
+        elif self._user_top_dirs is not None:
+            # No input, but caller pinned the TopDirs explicitly.
+            self._top_dirs = [self._user_top_dirs]
 
     # @classmethod
     # def from_instance(cls, instance: PathHandler, input=None):
@@ -124,6 +142,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             working_dir=s.working_dir,
             is_pipeline=s.is_pipeline,
             is_too=s.is_too,
+            config_file=s.config_file,
             top_dirs=self._user_top_dirs,
         )
 
@@ -366,57 +385,76 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             "consider moving to another disk."
         )
 
-    def select_output_dir(self):
-        """Build ``self._top_dirs`` (one ``TopDirs`` per input file).
+    @classmethod
+    def _system_masterframe(cls, nightdate: str) -> str:
+        """Disk-dispatched ``MASTER_FRAME_DIR`` for a given nightdate."""
+        if nightdate < const.DISK_CHANGE_NIGHTDATE:
+            return const.MASTER_FRAME_DIR
+        if nightdate < const.DISK_CHANGE_NIGHTDATE_2:
+            return const.MASTER_FRAME_DIR_2
+        raise ValueError(
+            f"Nightdate cap ({const.DISK_CHANGE_NIGHTDATE_2}) reached for nightdate {nightdate!r}: "
+            "consider moving to another disk."
+        )
 
-        Single source of truth for top-level directories. Per-file lists like
-        ``_output_parent_dir`` are exposed as @property views over this list,
-        so mutating an entry (or replacing it) propagates to derived paths.
+    def select_output_dir(self):
+        """Per-file ``TopDirs``: propagate what's known from input path + type.
+
+        Reflection layer (no name-derived prediction of output anchors):
+
+        - ``is_pipeline=True`` (any type): unchanged — system-wide globals
+          dispatched by nightdate via :meth:`top_dirs`.
+        - ``is_pipeline=False`` + raw: ``working_dir`` (else cwd) anchors
+          outputs; ``masterframe`` stays system unless a ``working_dir`` was
+          given (self-contained run).
+        - ``is_pipeline=False`` + calibrated: ``processed``/``factory`` are
+          ``None`` — the file's own location is the truth, applied per-file in
+          :meth:`define_file_dependent_paths`. ``masterframe`` is kept so
+          ``path.preprocess.masterframe`` resolves for processed inputs.
+        - ``is_pipeline=False`` + master: all fields ``None``; the file's own
+          directory IS the master location.
+
+        Only called when ``_input_files`` is non-empty.
         """
         settings = self.settings
+        self._top_dirs = []
 
-        # No input files: synthesize a single TopDirs from working_dir/cwd.
-        if not self._input_files:
+        for i, input_file in enumerate(self._input_files):
             if self._user_top_dirs is not None:
-                self._top_dirs = [self._user_top_dirs]
+                self._top_dirs.append(self._user_top_dirs)
+                continue
+
+            nightdate = self._get_namehandler_property_at_index("nightdate", i)
+            if isinstance(nightdate, list):
+                current_nightdate = nightdate[i] if i < len(nightdate) else nightdate[0]
             else:
-                wd = str(settings.working_dir or os.getcwd())
-                self._top_dirs = [
+                current_nightdate = nightdate or date.today().strftime("%Y-%m-%d")
+
+            if settings.is_pipeline:
+                self._top_dirs.append(self.top_dirs(current_nightdate, settings))
+                continue
+
+            # User mode dispatch
+            typ = self._get_namehandler_property_at_index("type", i)
+
+            # Masterframe disk: system unless caller pinned working_dir (self-contained)
+            mf = str(settings.working_dir) if settings.working_dir else self._system_masterframe(current_nightdate)
+
+            if "raw" in typ:
+                anchor = str(settings.working_dir or os.getcwd())
+                self._top_dirs.append(
                     TopDirs(
-                        processed=wd,
-                        factory=os.path.join(wd, TMP_DIRNAME),
-                        masterframe=wd,
+                        processed=anchor,
+                        factory=os.path.join(anchor, TMP_DIRNAME),
+                        masterframe=mf,
                     )
-                ]
-        else:
-            self._top_dirs = []
-            for i, input_file in enumerate(self._input_files):
-                if self._user_top_dirs is not None:
-                    # User override: same TopDirs for every input file.
-                    self._top_dirs.append(self._user_top_dirs)
-                    continue
-
-                nightdate = self._get_namehandler_property_at_index("nightdate", i)
-                if isinstance(nightdate, list):
-                    current_nightdate = nightdate[i] if i < len(nightdate) else nightdate[0]
-                else:
-                    current_nightdate = nightdate or date.today().strftime("%Y-%m-%d")
-
-                file_dir = str(Path(input_file).absolute().parent)
-                not_pipeline_dir = not any(s in file_dir for s in const.PIPELINE_DIRS)
-
-                # Per-file effective settings: synthesize working_dir from input
-                # location when user-input mode is active but no working_dir was given.
-                if (settings.working_dir or not_pipeline_dir) and not settings.is_pipeline:
-                    effective_wd = settings.working_dir or file_dir
-                    # ad hoc for diffim input only
-                    if os.path.basename(effective_wd) == DIFFIM_DIRNAME:
-                        effective_wd = os.path.dirname(effective_wd)
-                    file_settings = dc_replaces(settings, working_dir=effective_wd)
-                else:
-                    file_settings = settings
-
-                self._top_dirs.append(self.top_dirs(current_nightdate, file_settings))
+                )
+            elif "calibrated" in typ:
+                self._top_dirs.append(TopDirs(processed=None, factory=None, masterframe=mf))
+            elif "master" in typ:
+                self._top_dirs.append(TopDirs(processed=None, factory=None, masterframe=None))
+            else:
+                raise ValueError(f"Unrecognized input type for {input_file}: {typ}")
 
         # Public snapshots for backward compat (also keeps __repr__ verbose).
         # The ``top_dirs=`` constructor parameter is the supported override path;
@@ -439,14 +477,18 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         return [td.masterframe for td in self._top_dirs]
 
     @property
-    def _preproc_output_dir(self) -> list[str]:
+    def _preproc_output_dir(self) -> list[str | None]:
         """``processed/<nightdate>`` for pipeline runs, ``processed`` otherwise."""
         if not self._input_files:
+            if not self._top_dirs:
+                return []
             return [self._top_dirs[0].processed]
 
         result = []
         for i, td in enumerate(self._top_dirs):
-            if self.settings.is_pipeline:
+            if td.processed is None:
+                result.append(None)
+            elif self.settings.is_pipeline:
                 nightdate = self._get_namehandler_property_at_index("nightdate", i) or date.today().strftime("%Y-%m-%d")
                 result.append(os.path.join(td.processed, nightdate))
             else:
@@ -572,8 +614,12 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         #     for obj, filte, unit, date in zip(self.name.obj, self.name.filter, self.name.unit, self.name.date)
         # ]
 
+        if self.settings.config_file is not None:
+            return self.settings.config_file
+
         if not self._input_files:
-            return bjoin(self.output_parent_dir, "sciproc_config.yml")
+            anchor = str(self.settings.working_dir or os.getcwd())
+            return os.path.join(anchor, "sciproc_config.yml")
 
         # assumes is_too images are all from the same group
         too_time = (
@@ -618,12 +664,23 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             self._input_files = [files]
 
     def define_file_dependent_paths(self):
+        """Per-file path derivation, dispatched by input type.
+
+        Pipeline mode (any type): unchanged — name-derived layout
+        ``<output_parent>/<nightdate>/<obj>/<filter>[/singles]``.
+
+        User mode:
+        - raw: outputs anchor at ``_output_parent_dir[i]`` (working_dir or cwd
+          from :meth:`select_output_dir`).
+        - calibrated: reflect from the input file's own location; if the caller
+          set ``working_dir`` explicitly, that overrides.
+        - master: only ``_masterframe_dir`` is meaningful (= file's parent);
+          all other dirs left ``None`` so accidental access raises downstream.
+        """
         self._output_dir = []
         self._factory_dir = []
         self._single_dir = []
         self._preproc_config_stem = []
-        # raw_images = []
-        # processed_images = []
         self._masterframe_dir = []
         self._figure_dir = []
         self._daily_coadd_dir = []
@@ -640,16 +697,22 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             filte = self._get_namehandler_property_at_index("filter", i)
             typ = self._get_namehandler_property_at_index("type", i)
             basename = self._get_namehandler_property_at_index("basename", i)
+            file_dir = str(Path(self._input_files[i]).absolute().parent)
 
-            # Masterframe directory (parent disk selected by nightdate in select_output_dir)
-            masterframe_dir = os.path.join(self._masterframe_parent_dir[i], nightdate, unit)
-            self._masterframe_dir.append(masterframe_dir)
+            # masterframe_dir: name-derived (nightdate+unit) when a parent disk is known;
+            # only fall back to the file's own parent for user-mode master inputs, where
+            # select_output_dir intentionally leaves masterframe parent unset.
+            if self._masterframe_parent_dir[i] is not None:
+                self._masterframe_dir.append(os.path.join(self._masterframe_parent_dir[i], nightdate, unit))
+            elif "master" in typ:
+                self._masterframe_dir.append(file_dir)
+            else:
+                self._masterframe_dir.append(None)
 
             config_stem = "_".join([nightdate, unit])  # for preproc config
             self._preproc_config_stem.append(config_stem)
 
-            if "calibrated" in typ or "raw" in typ:
-                # if self._is_pipeline_vectorized[i]:
+            if "raw" in typ:
                 if self.is_pipeline:
                     # Within pipeline processing
                     relative_path = os.path.join(nightdate, obj, filte)
@@ -660,7 +723,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                     self._coadd_dir.append(os.path.join(const.COADD_DIR, obj, filte))
                     self._metadata_dir.append(os.path.join(self._output_parent_dir[i], nightdate))
                 else:
-                    # Outside pipeline
+                    # User mode: anchor at working_dir or cwd (set in select_output_dir)
                     output_dir = self._output_parent_dir[i]
                     self._factory_dir.append(self._factory_parent_dir[i])
                     self._single_dir.append(output_dir)
@@ -672,13 +735,51 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                 self._figure_dir.append(os.path.join(self._output_dir[-1], FIGURES_DIRNAME))
                 self._resolved_files.append(self._input_files[i])
 
+            elif "calibrated" in typ:
+                if self.is_pipeline:
+                    # Pipeline mode unchanged.
+                    relative_path = os.path.join(nightdate, obj, filte)
+                    output_dir = os.path.join(self._output_parent_dir[i], relative_path)
+
+                    self._factory_dir.append(os.path.join(self._factory_parent_dir[i], relative_path))
+                    self._single_dir.append(os.path.join(output_dir, SINGLES_DIRNAME))
+                    self._coadd_dir.append(os.path.join(const.COADD_DIR, obj, filte))
+                    self._metadata_dir.append(os.path.join(self._output_parent_dir[i], nightdate))
+                else:
+                    # Anchor priority: config_file's dir → working_dir → cwd.
+                    if self.settings.config_file:
+                        output_dir = os.path.dirname(self.settings.config_file)
+                    elif self.settings.working_dir:
+                        output_dir = str(self.settings.working_dir)
+                    else:
+                        output_dir = os.getcwd()
+                    self._factory_dir.append(os.path.join(output_dir, TMP_DIRNAME))
+                    self._single_dir.append(output_dir)
+                    self._coadd_dir.append(output_dir)
+
+                self._output_dir.append(output_dir)
+                self._daily_coadd_dir.append(os.path.join(output_dir, DAILY_COADD_DIRNAME))
+                self._subtracted_dir.append(os.path.join(output_dir, IMSUBTRACT_TMP_DIRNAME))
+                self._figure_dir.append(os.path.join(self._output_dir[-1], FIGURES_DIRNAME))
+                self._resolved_files.append(self._input_files[i])
+
             elif "master" in typ:
-                self._output_dir.append(self._output_parent_dir[i])
-                self._factory_dir.append(self._factory_parent_dir[i])
-                self._single_dir.append(self._output_parent_dir[i])
-                self._resolved_files.append(os.path.join(masterframe_dir, basename))
+                if self.is_pipeline:
+                    self._output_dir.append(self._output_parent_dir[i])
+                    self._factory_dir.append(self._factory_parent_dir[i])
+                    self._single_dir.append(self._output_parent_dir[i])
+                else:
+                    self._output_dir.append(None)
+                    self._factory_dir.append(None)
+                    self._single_dir.append(None)
+                self._coadd_dir.append(None)
+                self._metadata_dir.append(None)
+                self._figure_dir.append(None)
+                self._daily_coadd_dir.append(None)
+                self._subtracted_dir.append(None)
+                self._resolved_files.append(os.path.join(self._masterframe_dir[i], basename))
             else:
-                raise ValueError("Unrecognized type for PathHandling")
+                raise ValueError(f"Unrecognized input type for {self._input_files[i]}: {typ}")
 
         # Public attrs are collapsed
         self.output_dir = collapse(self._output_dir)
@@ -773,14 +874,32 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def processed_images(self):
-        """blindly tries to construct processed_image name"""
-        # """Returns input as is if given calib frames"""
-        # return [c if "raw" in typ else i for typ, i, c in zip(self.name.type, self._input_files, self.conjugate)]
+        """Best-inferrable processed-image path per input.
+
+        - calibrated → the input itself.
+        - raw → predicted location ``<_single_dir[i]>/<processed_basename>``;
+          raises if the anchor is unknown (raw + user mode with no working_dir
+          can't happen because :meth:`select_output_dir` falls back to cwd, so
+          this only fires under genuinely broken settings).
+        - master → raises (no processed-image notion).
+        """
         paths = []
         for i, input in enumerate(self._input_files):
-            basename = self._get_namehandler_property_at_index("processed_basename", i)
-            root = self._single_dir[i]
-            paths.append(os.path.join(root, basename))
+            typ = self._get_namehandler_property_at_index("type", i)
+            if "calibrated" in typ:
+                paths.append(input)
+            elif "raw" in typ:
+                anchor = self._single_dir[i]
+                if anchor is None:
+                    raise ValueError(
+                        f"Cannot derive processed_image for raw input {input!r}: " "output anchor is unknown."
+                    )
+                basename = self._get_namehandler_property_at_index("processed_basename", i)
+                paths.append(os.path.join(anchor, basename))
+            elif "master" in typ:
+                raise ValueError(f"Master input has no processed_image: {input!r}")
+            else:
+                raise ValueError(f"Unrecognized input type: {typ}")
 
         return paths
 
@@ -1026,7 +1145,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         Returns d_m_file, f_m_file, sig_z_file, sig_f_file
         """
         # z_m_file, d_m_file, f_m_file = (cls(s).preprocess.masterframe for s in mzdf_list)  # basename to full path
-        z_m_file, d_m_file, f_m_file = cls(mzdf_list).preprocess._masterframe  # with vectorized PathHandler
+        z_m_file, d_m_file, f_m_file = cls(mzdf_list, is_pipeline=True).preprocess._masterframe  # with vectorized PathHandler
         sig_z_file = z_m_file.replace("bias", "biassig")
         sig_f_file = f_m_file.replace("flat", "flatsig")
         return d_m_file, f_m_file, sig_z_file, sig_f_file

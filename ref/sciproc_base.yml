@@ -110,6 +110,7 @@ photometry:
 imcoadd:
   input_images:
   runtime_version:
+  coadd_mode: 'legacy' # 'legacy' or 'mean'
   coadd_image:  # output coadd image
   gpu: True
   device: 0

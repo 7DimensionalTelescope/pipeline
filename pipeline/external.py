@@ -613,7 +613,7 @@ def swarp(
     dump_dir=None,
     resample_dir=None,
     log_file=None,
-    combine=True,
+    coadd=True,
     weight_map=False,
     logger=None,
     swarp_args=None,
@@ -673,7 +673,7 @@ def swarp(
     if not weight_map:
         swarpcom.extend(["-WEIGHT_TYPE", "NONE"])
 
-    if not combine:
+    if not coadd:
         swarpcom.extend(["-COMBINE", "N"])
 
     swarpcom.extend(swarp_args or [])
