@@ -73,15 +73,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
         self.calib_types = calib_types or ["bias", "dark", "flat"]
 
-        self.skip_plotting_flags = {
-            "bias": True,
-            "dark": True,
-            "flat": True,
-            "sci": True,
-        }  # keys synced with self.calib_types!
-        for calib in self.calib_types:
-            self.skip_plotting_flags[calib] = False
-        self.skip_plotting_flags["sci"] = master_frame_only
+        self._reset_skip_plotting_flags()
 
         self._use_gpu = use_gpu
 
@@ -212,6 +204,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 self.logger.debug("\n" + "#" * 100 + f"\n{' '*30}Start processing group {i+1} / {self._n_groups}\n" + "#" * 100)  # fmt: skip
                 self.logger.debug(f"[Group {i+1}] [filter: exptime] {PathHandler.get_group_info(self.raw_groups[i])}")
 
+                # Reset per-group plot-skip flags so prior groups' state doesn't leak
+                self._reset_skip_plotting_flags()
+
                 # ---- group-level work ----
                 try:
                     self.load_masterframe(device_id=device_id, dry_run=dry_run)
@@ -261,6 +256,13 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         except Exception as e:
             self.logger.error(f"Error during preprocessing: {str(e)}", e, exc_info=True)
             raise
+
+    def _reset_skip_plotting_flags(self):
+        # Per-group state; calib keys default to skip, then enabled per calib_types
+        self.skip_plotting_flags = {"bias": True, "dark": True, "flat": True, "sci": True}
+        for calib in self.calib_types:
+            self.skip_plotting_flags[calib] = False
+        self.skip_plotting_flags["sci"] = self.master_frame_only
 
     def proceed_to_next_group(self):
         self._current_group += 1

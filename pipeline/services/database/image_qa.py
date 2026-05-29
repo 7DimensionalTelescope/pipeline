@@ -43,6 +43,7 @@ class ImageQATable:
     sanity: Optional[bool] = None
     inspectd: Optional[bool] = None
     err_msgs: Optional[List[str]] = None
+    ppflag: Optional[int] = None
 
     clipped: Optional[float] = None
     clipmed: Optional[float] = None
