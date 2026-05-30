@@ -2,13 +2,11 @@ import os
 import time
 import shutil
 import warnings
+
 import numpy as np
 from astropy.io import fits
-from astropy.time import Time
-from astropy.table import Table
-from astropy.coordinates import Angle
+from astropy.wcs import WCS
 
-from ..const import REF_DIR
 from ..const.sciproc import COADD_SPEC, SCIPROCESS_REGISTRY
 from ..errors import CoaddError
 from ..config import SciProcConfiguration
@@ -20,7 +18,6 @@ from ..utils import collapse, add_suffix, time_diff_in_seconds, get_basename, at
 from ..preprocess.utils import get_zdf_from_header_IMCMB
 from ..preprocess.plotting import save_fits_as_figures
 from .. import external
-from ..utils.tile import is_ris_tile, find_ris_tile
 from ..utils.header import update_padded_header
 
 from ..services.database.handler import DatabaseHandler
@@ -28,7 +25,8 @@ from ..services.database.image_qa import ImageQATable
 from ..services.checker import Checker
 from ..services.version_check import RuntimeVersionMixin
 
-from .const import ZP_KEY, CORE_KEYS
+from .const import ZP_KEY
+from .header_set import InputHeaderSet
 
 
 warnings.filterwarnings("ignore")
@@ -36,6 +34,7 @@ warnings.filterwarnings("ignore")
 
 class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
     _process_spec = COADD_SPEC
+    zp_base: float = 23.9  # uJy; flux-scaling reference zero point
 
     def __init__(
         self,
@@ -57,7 +56,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         self.qa_id = None
         DatabaseHandler.__init__(
-            self, add_database=self.config_node.settings.is_pipeline, is_too=self.config_node.settings.is_too
+            self, use_database=self.config_node.settings.is_pipeline, is_too=self.config_node.settings.is_too
         )
 
         if self.is_connected:
@@ -183,9 +182,10 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self._use_gpu = all([use_gpu, self.config_node.imcoadd.gpu, self._use_gpu])
 
         optional_steps = (
-            int(self.config_node.imcoadd.apply_bpmask)
-            + int(self.config_node.imcoadd.joint_wcs)
-            + int(self.config_node.imcoadd.convolve)
+            int(bool(self.config_node.imcoadd.weight_map))
+            + int(bool(self.config_node.imcoadd.apply_bpmask))
+            + int(bool(self.config_node.imcoadd.joint_wcs))
+            + int(bool(self.config_node.imcoadd.convolve))
         )
         TOTAL_STEPS = 4 + optional_steps  # reproject + bkgsub + zpscale + coadd + optionals
         step = 0
@@ -193,6 +193,13 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.initialize()
 
         images = self.input_images
+        if self.config_node.imcoadd.weight_map:
+            self.calculate_weight_map(images, device_id=device_id)
+            step += 1
+            self.update_progress(
+                SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS),
+                "imcoadd-calculate-weight-map-completed",
+            )
 
         # Bad pixel interpolation
         if self.config_node.imcoadd.apply_bpmask:
@@ -240,6 +247,24 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         # Simple in-memory mean coaddition
         self.coadd_in_memory(images, device_id=device_id)
+        step += 1
+        self.update_progress(SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-coadd-completed")
+
+        # Plot coadd image
+        self.plot_coadd_image()
+        step += 1
+        self.update_progress(SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-plot-completed")
+
+        # Update QA data from header if database is connected
+        if self.is_connected and self.qa_id is not None:
+            coadd_image = self.config_node.imcoadd.coadd_image
+            if coadd_image and os.path.exists(coadd_image):
+                qa_data = ImageQATable.from_file(
+                    coadd_image,
+                    process_status_id=self.process_status_id,
+                )
+                self.image_qa.update_data(qa_data.id, **qa_data.to_dict())
+
         self.update_progress(SCIPROCESS_REGISTRY.completed_progress("coadd"), "imcoadd-completed")
 
     def run(self, use_gpu: bool = False, device_id=None):
@@ -278,13 +303,15 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         self.zpkey = self.config_node.imcoadd.zp_key or ZP_KEY
         # self.ic_keys = IC_KEYS
-        self.keys_to_propagate = CORE_KEYS
 
         # self.define_paths(working_dir=self.config.path.path_processed)
         self.path_tmp = self.path.imcoadd.tmp_dir
 
-        # self.set_metadata()
-        self.set_metadata_from_single_images()
+        # Single read of every input header; all aggregates/coadd_header live on this snapshot.
+        self.input_headers = InputHeaderSet.from_files(self.input_images)
+        self.input_headers.check_uniqueness(["OBJECT", "FILTER", "EGAIN", "GAIN"], self.logger)
+        self.center = self.input_headers.deprojection_center
+        self.logger.debug(f"Deprojection center: {self.center}")
 
         # Output coadd image file name
         self.config_node.imcoadd.coadd_image = (
@@ -296,90 +323,6 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.logger.debug(f"Coadd Image: {self.config_node.imcoadd.coadd_image}")
 
         self.logger.info(f"Initialization for ImCoadd is completed")
-
-    def set_metadata_from_single_images(self):
-        """
-        Use OBJCTRA and OBJCTDEC of the first image as the deprojection center.
-        The code currently does not check existence and uniqueness of the keys.
-
-        The image with the highest ZP value gives the refernce ZP. This
-        is a conservative choice for saturation levels across images.
-        """
-        self.n_coadd = len(self.input_images)
-
-        header_list = [fits.getheader(f) for f in self.input_images]
-        self.header_list = header_list
-
-        self.total_exptime = np.sum([hdr["EXPTIME"] for hdr in header_list])  # sec
-        self.zpvalues = [hdr[self.zpkey] for hdr in header_list]
-        self.skyvalues = [hdr["SKYVAL"] for hdr in header_list]
-        self.mjd_coadd = np.mean([hdr["MJD"] for hdr in header_list])
-        # self.satur_level = np.min([hdr["SATURATE"] * hdr["FLXSCALE"] for hdr in header_list])  # this is before FLSCALE def
-        # self.coadd_egain = np.sum([hdr["EGAIN"] / hdr["FLXSCALE"] for hdr in header_list])
-        self.satur_level_list = [hdr["SATURATE"] for hdr in header_list]
-        self.coadd_egain_list = [hdr["EGAIN"] for hdr in header_list]
-
-        objs = list(set([hdr["OBJECT"] for hdr in header_list]))
-        filters = list(set([hdr["FILTER"] for hdr in header_list]))
-        egains = list(set([hdr["EGAIN"] for hdr in header_list]))
-        camera_gains = list(set([hdr["GAIN"] for hdr in header_list]))
-        self.obj = objs[0]
-        self.camera_gain = camera_gains[0]
-
-        if len(objs) != 1:
-            self.logger.warning("Multiple OBJECT found. Using the first one.", CoaddError.AssumptionFailedError)
-
-        self.filte = filters[0]
-        if len(filters) != 1:
-            self.logger.warning("Multiple FILTER found. Using the first one.", CoaddError.AssumptionFailedError)
-
-        if len(egains) != 1:
-            self.logger.warning("Multiple EGAIN found. Using the first one.", CoaddError.AssumptionFailedError)
-
-        if len(camera_gains) != 1:
-            self.logger.warning("Multiple GAIN found. Using the first one.", CoaddError.AssumptionFailedError)
-
-        #   Hard coding for the UDS field
-        # self.gain_default = 0.78
-
-        self.header_ref_img = self.input_images[0]
-
-        # Determine Deprojection Center
-        # 	Tile object (e.g. T01026)
-        if is_ris_tile(self.obj):
-            self.logger.info(f"Using predefined deprojection center for {self.obj}.")
-
-            skygrid_table = Table.read(os.path.join(REF_DIR, "skygrid.fits"))
-            idx_tile = skygrid_table["tile"] == find_ris_tile(self.obj)
-
-            ra = Angle(skygrid_table["ra"][idx_tile][0], unit="deg")
-            objra = ra.to_string(unit="hourangle", sep=":", pad=True)
-
-            dec = Angle(skygrid_table["dec"][idx_tile][0], unit="deg")
-            objdec = dec.to_string(unit="degree", sep=":", pad=True, alwayssign=True)
-
-        # 	Non-Tile object
-        else:
-            self.logger.info(f"Using the center of the first image as the deprojection center.")
-            objra = header_list[0]["OBJCTRA"]
-            objdec = header_list[0]["OBJCTDEC"]
-            # images from <~ 2024-03 has space-separated OBJCTRA/OBJCTDEC
-            objra = objra.replace(" ", ":")
-            objdec = objdec.replace(" ", ":")
-
-        self.center = f"{objra},{objdec}"
-        self.logger.debug(f"Deprojection center: {self.center}")
-
-        # base zero point for flux scaling
-        # base = np.where(self.zpvalues == np.max(self.zpvalues))[0][0]
-        # self.zp_base = self.zpvalues[base]
-        self.zp_base = 23.9  # uJy
-        # if self.zp_base < np.max(self.zpvalues):
-        #     self.logger.warning(
-        #         f"Scaline downward: destination ZP: ({self.zp_base}), "
-        #         f"max image ZP: ({np.max(self.zpvalues)})"
-        #     )
-        self.logger.debug(f"Reference zero point: {self.zp_base}")
 
     def bkgsub(
         self,
@@ -403,11 +346,16 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         bkg_images = [f"{self.path_bkgsub}/{add_suffix(get_basename(f), 'bkg')}" for f in input_images]
         bkg_rms_images = [f"{self.path_bkgsub}/{add_suffix(get_basename(f), 'bkgrms')}" for f in input_images]
 
+        skyvalues = self.input_headers.values("SKYVAL")
         # TODO: ad-hoc; later derive is_steppy from actual data check
-        if any([skyval < skyval_cut for skyval in self.skyvalues]):
+        if any([skyval < skyval_cut for skyval in skyvalues]):
             self.config_node.imcoadd.bkgsub_type = "constant"
         else:
             self.config_node.imcoadd.bkgsub_type = "dynamic"
+        # Stamp BACKTYPE onto the in-memory snapshot so coadd_header picks it up
+        backtype_upper = self.config_node.imcoadd.bkgsub_type.upper()
+        for hdr in self.input_headers:
+            hdr["BACKTYPE"] = (backtype_upper, "Background subtraction type")
 
         if self.config_node.imcoadd.bkgsub_type.lower() == "dynamic":
             self.logger.info("Start dynamic background subtraction")
@@ -427,7 +375,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             raise ValueError(f"bkgsub_type: {self.config_node.imcoadd.bkgsub_type} is invalid")
 
         for i, (inim, outim, bkg, bkg_rms, skyvalue) in enumerate(
-            zip(input_images, bkgsub_images, bkg_images, bkg_rms_images, self.skyvalues)
+            zip(input_images, bkgsub_images, bkg_images, bkg_rms_images, skyvalues)
         ):
             st_loop = time.time()
             is_steppy = bkg_func(
@@ -745,16 +693,26 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         if input_images is None:
             input_images = self.images_to_coadd
         st = time.time()
-        self.flxscale_list = []
-        for file, zp in zip(input_images, self.zpvalues):
+        zpvalues = self.input_headers.values(self.zpkey)
+        # base zero point for flux scaling
+        # base = np.where(zpvalues == np.max(zpvalues))[0][0]
+        # self.zp_base = zpvalues[base]
+        # if self.zp_base < np.max(zpvalues):
+        #     self.logger.warning(
+        #         f"Scaline downward: destination ZP: ({self.zp_base}), "
+        #         f"max image ZP: ({np.max(zpvalues)})"
+        #     )
+        self.logger.debug(f"Reference zero point: {self.zp_base}")
+        for i, (file, zp) in enumerate(zip(input_images, zpvalues)):
             flxscale = 10 ** (0.4 * (self.zp_base - zp))
-            self.flxscale_list.append(flxscale)
             with fits.open(file, mode="update") as hdul:
                 hdul[0].header["FLXSCALE"] = (
                     flxscale,
                     "flux scaling factor by 7DT Pipeline (ImCoadd)",
                 )
                 hdul.flush()
+            # Stamp on snapshot so coadd_header (SATURATE/EGAIN) can read it back without fits I/O
+            self.input_headers[i]["FLXSCALE"] = (flxscale, "flux scaling factor by 7DT Pipeline (ImCoadd)")
             self.logger.debug(f"{get_basename(file)} FLXSCALE: {flxscale:.3f}")
 
         self.logger.info(f"ZP scaling is completed in {time_diff_in_seconds(st)} seconds")
@@ -943,11 +901,13 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
     ) -> str | list[str]:
         """Run SWarp. ``coadd=True`` produces a single coadd image;
         ``coadd=False`` only reprojects each input and returns the resampled paths."""
-        if input_images is None:
-            input_images = self.images_to_coadd
         st = time.time()
         action = "coadding" if coadd else "reprojecting"
         self.logger.info(f"Start to run swarp for {action} images")
+
+        if input_images is None:
+            input_images = self.images_to_coadd
+        self.logger.debug(f"input_images: {input_images}")
 
         # Write target images to a text file
         self.path_imagelist = os.path.join(self.path_tmp, "images_to_coadd.txt")
@@ -955,7 +915,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             for inim in input_images:
                 f.write(f"{inim}\n")
 
-        self.logger.debug(f"Total Exptime: {self.total_exptime}")
+        self.logger.debug(f"Total Exptime: {self.input_headers.total_exptime}")
 
         if not self.config_node.imcoadd.weight_map:
             sci_resample_dir = self._run_swarp("", coadd=coadd)
@@ -1039,23 +999,56 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         return self.config_node.imcoadd.coadd_image
 
     def coadd_with_numpy(self, input_images: list[str]) -> str:
-        """Simple flux-scaled mean (np.mean). Weighted variant TBD."""
+        """Simple flux-scaled mean. SWarp-reprojected frames can differ by ~few pixels
+        in shape and CRPIX; align all frames to a common CRPIX (= per-axis max) and
+        pad to the bounding box before averaging. Weighted variant TBD."""
         st = time.time()
         self.logger.info("Start in-memory numpy coaddition (simple mean)")
 
-        stack = []
+        # First pass: collect CRPIX and shape of each frame to size the target frame
+        crpix = []
+        shapes = []
         for f in input_images:
+            with fits.open(f, memmap=True) as hdul:
+                hdr = hdul[0].header
+                crpix.append((hdr["CRPIX1"], hdr["CRPIX2"]))
+                shapes.append(hdul[0].data.shape)  # (h, w)
+
+        crpix = np.array(crpix, dtype=float)
+        shapes = np.array(shapes, dtype=int)
+        target_cx, target_cy = float(crpix[:, 0].max()), float(crpix[:, 1].max())
+        x0 = np.rint(target_cx - crpix[:, 0]).astype(int)  # column offset of each frame in target
+        y0 = np.rint(target_cy - crpix[:, 1]).astype(int)
+        target_w = int((x0 + shapes[:, 1]).max())
+        target_h = int((y0 + shapes[:, 0]).max())
+        self.logger.debug(f"Target shape ({target_h}, {target_w}) with CRPIX ({target_cx}, {target_cy})")
+
+        # Second pass: running mean (memory-bounded, one frame at a time).
+        # SWarp pads unobserved areas with 0, not NaN, so treat exact-zero as no-data.
+        sum_arr = np.zeros((target_h, target_w), dtype=np.float64)
+        count_arr = np.zeros((target_h, target_w), dtype=np.int32)
+        for i, f in enumerate(input_images):
             with fits.open(f) as hdul:
-                data = hdul[0].data
+                a = hdul[0].data.astype(np.float64)
                 flxscale = hdul[0].header.get("FLXSCALE", 1.0)
-                stack.append(data * flxscale)
-        coadd = np.mean(np.stack(stack, axis=0), axis=0)
+            h, w = a.shape
+            valid = np.isfinite(a) & (a != 0.0)
+            sum_arr[y0[i] : y0[i] + h, x0[i] : x0[i] + w] += np.where(valid, a * flxscale, 0.0)
+            count_arr[y0[i] : y0[i] + h, x0[i] : x0[i] + w] += valid
 
-        # WCS / shape come from the (already-reprojected) first input
-        header = fits.getheader(input_images[0])
-        fits.writeto(self.config_node.imcoadd.coadd_image, coadd, header=header, overwrite=True)
+        coadd = np.where(count_arr > 0, sum_arr / np.maximum(count_arr, 1), np.nan).astype(np.float32)
 
-        self._update_header()
+        # Build the output header in memory and write once:
+        #   - clean WCS from the first frame via astropy.wcs (drops per-frame keys
+        #     like FLXSCALE/SKYVAL/BACKTYPE that would otherwise leak from any single input)
+        #   - overlay coadd metadata via self.input_headers.coadd_header
+        wcs = WCS(fits.getheader(input_images[0]))
+        wcs.wcs.crpix = [target_cx, target_cy]
+        out_header = wcs.to_header(relax=True)
+        for card in self.input_headers.coadd_header.cards:
+            out_header[card.keyword] = (card.value, card.comment)
+
+        fits.writeto(self.config_node.imcoadd.coadd_image, coadd, header=out_header, overwrite=True)
         self.logger.info(f"Numpy coaddition completed in {time_diff_in_seconds(st)} seconds")
         return self.config_node.imcoadd.coadd_image
 
@@ -1069,87 +1062,12 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         save_fits_as_figures(fits.getdata(coadd_img), path_to_plot)
         self.logger.info(f"Coadd image is plotted and saved in {path_to_plot}.")
 
-    def _update_header(self, add_version: bool = True):
-        # 	Get Header info
-        exptime_coadd = self.total_exptime
-        mjd_coadd = self.mjd_coadd
-        jd_coadd = Time(mjd_coadd, format="mjd").jd
-        dateobs_coadd = Time(mjd_coadd, format="mjd").isot
-        # gain = (2 / 3) * self.n_coadd * self.egain
-        # airmass_coadd = np.mean(airmasslist)
-        # dateloc_coadd = calc_mean_dateloc(dateloclist)
-        # alt_coadd = np.mean(altlist)
-        # az_coadd = np.mean(azlist)
-        coadd_satur_level = np.min(
-            [satur * flxscale for satur, flxscale in zip(self.satur_level_list, self.flxscale_list)]
-        )
-        coadd_egain = np.sum([egain / flxscale for egain, flxscale in zip(self.coadd_egain_list, self.flxscale_list)])
-
-        # Determine BACKTYPE for the coadd image based on the inputs
-        backtypes = set()
-        for bkgsub_image in getattr(self, "images_to_coadd", []):
-            try:
-                bt = fits.getval(bkgsub_image, "BACKTYPE")  # not self.input_images and header_list
-            except Exception:
-                bt = None
-            if bt is not None:
-                backtypes.add(str(bt).upper())
-
-        if not backtypes:
-            coadd_backtype = "MIXED"
-        elif backtypes == {"CONSTANT"}:
-            coadd_backtype = "CONSTANT"
-        elif backtypes == {"DYNAMIC"}:
-            coadd_backtype = "DYNAMIC"
-        else:
-            coadd_backtype = "MIXED"
-
-        # datestr, timestr = extract_date_and_time(dateobs_coadd)
-        # comim = f"{self.path_save}/calib_{self.config.unit}_{self.obj}_{datestr}_{timestr}_{self.filte}_{exptime_coadd:g}.com.fits"
-
-        # 	Get Select Header Keys from Base Image
-        with fits.open(self.header_ref_img) as hdulist:
-            header = hdulist[0].header
-            select_header_dict = {key: header.get(key, None) for key in self.keys_to_propagate}
-
-        # 	Put them into coadded image
-        with fits.open(self.config_node.imcoadd.coadd_image) as hdulist:
-            header = hdulist[0].header
-            for key in select_header_dict.keys():
-                header[key] = select_header_dict[key]
-
-        # 	Additional Header Information
-        keywords_to_update = {
-            "DATE-OBS": (dateobs_coadd, "Time of observation (UTC) for coadded image"),
-            # 'DATE-LOC': (dateloc_coadd, 'Time of observation (local) for coadded image'),
-            "EXPTIME": (exptime_coadd, "[s] Total exposure duration for coadded image"),
-            "EXPOSURE": (exptime_coadd, "[s] Total exposure duration for coadded image"),
-            # 'CENTALT' : (alt_coadd,     '[deg] Average altitude of telescope for coadded image'),
-            # 'CENTAZ'  : (az_coadd,      '[deg] Average azimuth of telescope for coadded image'),
-            # 'AIRMASS' : (airmass_coadd, 'Average airmass at frame center for coadded image (Gueymard 1993)'),
-            "MJD": (mjd_coadd, "Modified Julian Date at start of observations for coadded image"),
-            "JD": (jd_coadd, "Julian Date at start of observations for coadded image"),
-            "SKYVAL": (0, "SKY MEDIAN VALUE (Subtracted)"),
-            "EGAIN": (coadd_egain, "Effective EGAIN for coadded image (e-/ADU)"),  # swarp calculates it as GAIN, but irreproducible.
-            "GAIN": (self.camera_gain, "Gain from the camera configuration"),
-            "SATURATE": (coadd_satur_level, "Conservative saturation level for coadded image"),  # let swarp handle this
-            "BACKTYPE": (coadd_backtype, "Background subtraction type for coadded image"),
-        }  # fmt: skip
-
-        # 	Update Header
+    def _update_header(self):
+        """Legacy routine: overlay ``self.input_headers.coadd_header`` onto the SWarp-written coadd FITS."""
+        coadd_header = self.input_headers.coadd_header
+        # 	Put them into coadded image / Update Header
         with fits.open(self.config_node.imcoadd.coadd_image, mode="update") as hdul:
             header = hdul[0].header
-
-            if add_version:
-                from .. import __version__
-
-                header["PIPE_VER"] = (str(__version__), "Last Run Sciproc Pipeline Version")
-
-            for key, (value, comment) in keywords_to_update.items():
-                header[key] = (value, comment)
-
-            # 	Names of coadded single images
-            for nn, bkgsub_image in enumerate(self.input_images):
-                header[f"IMG{nn:0>5}"] = (get_basename(bkgsub_image), "single exposures")
-
+            for card in coadd_header.cards:
+                header[card.keyword] = (card.value, card.comment)
             hdul.flush()

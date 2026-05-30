@@ -45,7 +45,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         self.qa_id = None
         self.is_too = self.config_node.settings.is_too
-        DatabaseHandler.__init__(self, add_database=self.config_node.settings.is_pipeline, is_too=self.is_too)
+        DatabaseHandler.__init__(self, use_database=self.config_node.settings.is_pipeline, is_too=self.is_too)
 
         if self.is_connected:
 

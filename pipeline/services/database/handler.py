@@ -17,17 +17,17 @@ class DatabaseHandler:
     def __init__(
         self,
         db_params=None,
-        add_database: bool = True,
+        use_database: bool = True,
         is_too: bool = False,
         logger=None,
     ):
         self.is_too = is_too
-        self.add_database = add_database
+        self.use_database = use_database
 
         if not hasattr(self, "logger"):
             self.logger = logger or logging.getLogger(__name__)
 
-        if add_database:
+        if use_database:
             self.too_db = TooDB() if is_too else None
             self.too_id = None
             self.process_status = None if is_too else ProcessStatus(db_params)
@@ -45,7 +45,7 @@ class DatabaseHandler:
     @property
     def is_connected(self) -> bool:
 
-        if not self.add_database:
+        if not self.use_database:
             return False
         elif self.is_too and self.too_db is not None:
             return True

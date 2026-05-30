@@ -143,7 +143,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         self.qa_ids = []
         DatabaseHandler.__init__(
-            self, add_database=self.config_node.settings.is_pipeline, is_too=self.config_node.settings.is_too
+            self, use_database=self.config_node.settings.is_pipeline, is_too=self.config_node.settings.is_too
         )
 
         if self.is_connected:

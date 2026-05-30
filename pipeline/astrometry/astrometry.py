@@ -98,7 +98,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.qa_ids = []
         DatabaseHandler.__init__(
             self,
-            add_database=self.config_node.settings.is_pipeline,
+            use_database=self.config_node.settings.is_pipeline,
             is_too=get_key(self.config_node.settings, "is_too", False),
         )
 

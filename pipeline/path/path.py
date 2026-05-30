@@ -876,18 +876,26 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
     def processed_images(self):
         """Best-inferrable processed-image path per input.
 
-        - calibrated → the input itself.
+        - calibrated, ``is_pipeline=True`` → reconstruct from
+          ``<_single_dir[i]>/<processed_basename>`` (handles both stems and
+          fully-pathed inputs; matches the input when the file is correctly
+          placed in the pipeline tree).
+        - calibrated, ``is_pipeline=False`` → the input itself (user mode: the
+          input IS the processed image, regardless of where it lives).
         - raw → predicted location ``<_single_dir[i]>/<processed_basename>``;
-          raises if the anchor is unknown (raw + user mode with no working_dir
-          can't happen because :meth:`select_output_dir` falls back to cwd, so
-          this only fires under genuinely broken settings).
+          raises if the anchor is unknown.
         - master → raises (no processed-image notion).
         """
         paths = []
         for i, input in enumerate(self._input_files):
             typ = self._get_namehandler_property_at_index("type", i)
             if "calibrated" in typ:
-                paths.append(input)
+                if self.is_pipeline:
+                    anchor = self._single_dir[i]
+                    basename = self._get_namehandler_property_at_index("processed_basename", i)
+                    paths.append(os.path.join(anchor, basename))
+                else:
+                    paths.append(input)
             elif "raw" in typ:
                 anchor = self._single_dir[i]
                 if anchor is None:
