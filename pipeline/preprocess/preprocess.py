@@ -73,8 +73,6 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
         self.calib_types = calib_types or ["bias", "dark", "flat"]
 
-        self._reset_skip_plotting_flags()
-
         self._use_gpu = use_gpu
 
         # Initialize DatabaseHandler
@@ -165,12 +163,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         device_id=None,
         make_plots=True,
         use_gpu=True,
-        override_skip_plotting_flags=None,
         dry_run: bool = False,
     ):
         """
-        override_skip_plotting_flags is for finer control over which plots to generate.
-        e.g., override_skip_plotting_flags={"bias": True, "dark": True, "flat": True, "sci": False} to regenerate sci plots
         dry_run traces execution without modifying data on disk (reads are allowed).
         """
 
@@ -204,9 +199,6 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 self.logger.debug("\n" + "#" * 100 + f"\n{' '*30}Start processing group {i+1} / {self._n_groups}\n" + "#" * 100)  # fmt: skip
                 self.logger.debug(f"[Group {i+1}] [filter: exptime] {PathHandler.get_group_info(self.raw_groups[i])}")
 
-                # Reset per-group plot-skip flags so prior groups' state doesn't leak
-                self._reset_skip_plotting_flags()
-
                 # ---- group-level work ----
                 try:
                     self.load_masterframe(device_id=device_id, dry_run=dry_run)
@@ -215,15 +207,11 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                         self.prepare_header(dry_run=dry_run)
                         self.data_reduction(device_id=device_id, dry_run=dry_run)
 
-                    flags_for_this_group = copy.deepcopy(self.skip_plotting_flags)
-
                     if make_plots:
                         t = threading.Thread(
                             target=self.make_plots,
                             kwargs={
                                 "group_index": i,
-                                "skip_flags": flags_for_this_group,
-                                "override_skip_flags": override_skip_plotting_flags,
                                 "dry_run": dry_run,
                             },
                         )
@@ -256,13 +244,6 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         except Exception as e:
             self.logger.error(f"Error during preprocessing: {str(e)}", e, exc_info=True)
             raise
-
-    def _reset_skip_plotting_flags(self):
-        # Per-group state; calib keys default to skip, then enabled per calib_types
-        self.skip_plotting_flags = {"bias": True, "dark": True, "flat": True, "sci": True}
-        for calib in self.calib_types:
-            self.skip_plotting_flags[calib] = False
-        self.skip_plotting_flags["sci"] = self.master_frame_only
 
     def proceed_to_next_group(self):
         self._current_group += 1
@@ -378,7 +359,6 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 self._generated_masterframes.append(output_file)
             elif isinstance(output_file, str) and len(output_file) != 0:
                 self._fetch_masterframe(output_file, dtype, dry_run=dry_run)
-                self.skip_plotting_flags[dtype] = True
             else:
                 # cases like lone bias, where no dark_, flat_output exist
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype} has no input or output data to fetch.")
@@ -693,14 +673,12 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             for attr in ("bias_data", "dark_data", "flat_data"):
                 if attr in self.__dict__:
                     del self.__dict__[attr]
-            self.skip_plotting_flags["sci"] = True
             return
 
         flag = [os.path.exists(file) for file in self.sci_output]
 
         if all(flag) and not (self.overwrite):
             self.logger.info(f"[Group {self._current_group+1}] All images are already processed")
-            self.skip_plotting_flags["sci"] = True
             return
         elif self.overwrite:
             input_files = self.sci_input
@@ -835,34 +813,17 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             fmask = mask.ravel()
             plot_flat(file_path, fmask, overwrite=self.overwrite, dry_run=dry_run)
 
-    def make_plots(
-        self,
-        group_index: int,
-        skip_flags={"bias": False, "dark": False, "flat": False, "sci": False},
-        override_skip_flags=None,
-        dry_run: bool = False,
-    ):
+    def make_plots(self, group_index: int, dry_run: bool = False):
         try:
-            all_flag = all(skip_flags.values())
-            if all_flag and not override_skip_flags:
-                self.logger.info(f"[Group {group_index+1}] Skipping plot generation")
-                return
-
-            skip_flags = override_skip_flags or skip_flags
-            self.logger.debug(f"[Group {group_index+1}] skip_flags after override: {skip_flags}")
-
-            # generate calib plots
             self.logger.info(f"[Group {group_index+1}] Generating plots for master calibration frames")
-            # use_multi_thread = self.config.preprocess.use_multi_thread
 
             # bias
-            if "bias" in self.calib_types and not skip_flags["bias"]:
+            if "bias" in self.calib_types:
                 bias_file = self._get_raw_group("bias_output", group_index)
                 if os.path.exists(bias_file):
                     plot_bias(bias_file, overwrite=self.overwrite, dry_run=dry_run)
                 else:
                     self.logger.warning(f"[Group {group_index+1}] Bias image does not exist. Skipping bias plot.")
-
             else:
                 self.logger.info(f"[Group {group_index+1}] Skipping bias plot")
 
@@ -873,15 +834,14 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             # bpmask
             if "dark" in self.calib_types:
                 if os.path.exists(bpmask_file):
-                    if not skip_flags["dark"]:
-                        plot_bpmask(bpmask_file, overwrite=self.overwrite, dry_run=dry_run)
+                    plot_bpmask(bpmask_file, overwrite=self.overwrite, dry_run=dry_run)
                 else:
                     self.logger.warning(f"[Group {group_index+1}] BPMask image does not exist. Skipping bpmask plot.")
             else:
                 self.logger.info(f"[Group {group_index+1}] Skipping bpmask plot")
 
             # dark
-            if "dark" in self.calib_types and not skip_flags["dark"]:
+            if "dark" in self.calib_types:
                 if os.path.exists(dark_file):
                     plot_dark(
                         dark_file,
@@ -891,12 +851,11 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                     )
                 else:
                     self.logger.warning(f"[Group {group_index+1}] Dark image does not exist. Skipping dark plot.")
-
             else:
                 self.logger.info(f"[Group {group_index+1}] Skipping dark plot")
 
             # flat
-            if "flat" in self.calib_types and not skip_flags["flat"]:
+            if "flat" in self.calib_types:
                 if os.path.exists(flat_file):
                     plot_flat(
                         flat_file,
@@ -906,7 +865,6 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                     )
                 else:
                     self.logger.warning(f"[Group {group_index+1}] Flat image does not exist. Skipping flat plot.")
-
             else:
                 self.logger.info(f"[Group {group_index+1}] Skipping flat plot")
 
@@ -918,7 +876,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 zip(self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index))
             )
             num_sci = len(sci_pairs)
-            if num_sci and not skip_flags["sci"]:
+            if num_sci and not self.master_frame_only:
                 self.logger.info(f"[Group {group_index+1}] Generating plots for science frames ({num_sci} images)")
 
                 for input_img, output_img in sci_pairs:
