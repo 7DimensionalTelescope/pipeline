@@ -94,17 +94,13 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         super().__init__(config, logger, queue)
         self.ref_cat_type = ref_cat_type or self.config_node.photometry.refcatname
 
-        if photometry_mode == "single_photometry" or (
-            not self.config_node.flag.single_photometry
-            # and (not self.config.input.coadd_image and not self.config.input.difference_image)  # hassle when rerunning
-        ):
+        if photometry_mode is not None:
+            self._photometry_mode = photometry_mode
+        elif not self.config_node.flag.single_photometry:
             self._photometry_mode = "single_photometry"
-        elif photometry_mode == "coadd_photometry" or (
-            not self.config_node.flag.coadd_photometry
-            # and (self.config.input.coadd_image and not self.config.input.difference_image)
-        ):
+        elif not self.config_node.flag.coadd_photometry:
             self._photometry_mode = "coadd_photometry"
-        elif photometry_mode == "difference_photometry" or not self.config_node.flag.difference_photometry:
+        elif not self.config_node.flag.difference_photometry:
             self._photometry_mode = "difference_photometry"
         else:
             self.logger.debug(f"photometry mode undefined: {photometry_mode}")
@@ -288,6 +284,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 total_image=len(self.input_images),
                 difference_photometry=diff_phot,
                 current_process=self._process_spec,
+                parent_path=self.path,
             )
             task_id = self.queue.add_task(
                 phot_single.run,
@@ -311,6 +308,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 difference_photometry=diff_phot,
                 reset_count=i == 0,
                 current_process=self._process_spec,
+                parent_path=self.path,
             ).run(overwrite=overwrite)
 
             self.update_progress(
@@ -344,6 +342,7 @@ class PhotometrySingle:
         difference_photometry=False,
         reset_count=False,
         current_process: Optional[ProcessSpec] = None,
+        parent_path=None,
     ) -> None:
         """Initialize PhotometrySingle instance."""
 
@@ -373,8 +372,15 @@ class PhotometrySingle:
 
         self._id = f"{next(type(self)._id_counter)}/{total_image}"
 
-        self.path = PathHandler(
-            self.input_image, is_pipeline=self.config_node.settings.is_pipeline, is_too=self.config_node.settings.is_too
+        self.path = (
+            parent_path.replace(input=self.input_image)
+            if parent_path is not None
+            else PathHandler(
+                self.input_image,
+                is_pipeline=self.config_node.settings.is_pipeline,
+                is_too=self.config_node.settings.is_too,
+                config_file=self.config_node.info.file,
+            )
         )
         self.path_tmp = self.path.photometry.tmp_dir
 

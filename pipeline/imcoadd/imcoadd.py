@@ -7,6 +7,7 @@ import numpy as np
 from astropy.io import fits
 from astropy.wcs import WCS
 
+from ..const import REF_DIR
 from ..const.sciproc import COADD_SPEC, SCIPROCESS_REGISTRY
 from ..errors import CoaddError
 from ..config import SciProcConfiguration
@@ -27,6 +28,7 @@ from ..services.version_check import RuntimeVersionMixin
 
 from .const import ZP_KEY
 from .header_set import InputHeaderSet
+from .utils import determine_size, build_coadd_wcs_header
 
 
 warnings.filterwarnings("ignore")
@@ -178,7 +180,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         self.update_progress(SCIPROCESS_REGISTRY.completed_progress("coadd"), "imcoadd-completed")
 
-    def mean_coadd_routine(self, use_gpu: bool = False, device_id=None):
+    def reproject_first_coadd_routine(self, use_gpu: bool = False, device_id=None):
+        """SWarp for reprojection only; the combine step runs in memory via
+        ``coadd_in_memory``, which picks mean/median from ``imcoadd.coadd_mode``."""
         self._use_gpu = all([use_gpu, self.config_node.imcoadd.gpu, self._use_gpu])
 
         optional_steps = (
@@ -245,7 +249,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         step += 1
         self.update_progress(SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-zpscale-completed")
 
-        # Simple in-memory mean coaddition
+        # In-memory coaddition (mean/median selected by imcoadd.coadd_mode)
         self.coadd_in_memory(images, device_id=device_id)
         step += 1
         self.update_progress(SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-coadd-completed")
@@ -269,12 +273,13 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
     def run(self, use_gpu: bool = False, device_id=None):
         try:
-            if self.config_node.imcoadd.coadd_mode == "legacy":
+            routine = self.config_node.imcoadd.coadd_routine
+            if "legacy" in routine.lower():
                 self.legacy_coadd_routine(use_gpu=use_gpu, device_id=device_id)
-            elif self.config_node.imcoadd.coadd_mode == "mean":
-                self.mean_coadd_routine(use_gpu=use_gpu, device_id=device_id)
+            elif "reproject-first" in routine.lower():
+                self.reproject_first_coadd_routine(use_gpu=use_gpu, device_id=device_id)
             else:
-                raise ValueError(f"Invalid coadd mode: {self.config_node.imcoadd.coadd_mode}")
+                raise ValueError(f"Invalid coadd routine: {routine!r} (expected 'legacy' or 'reproject-first')")
 
             self.config_node.flag.coadd = True
             self.logger.info(f"'ImCoadd' is Completed in {time_diff_in_seconds(self._st)} seconds")
@@ -314,11 +319,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.logger.debug(f"Deprojection center: {self.center}")
 
         # Output coadd image file name
-        self.config_node.imcoadd.coadd_image = (
-            self.path.imcoadd.daily_coadd_image
-            if not get_key(self.config_node.settings, "is_multi_epoch", default=False)
-            else self.path.imcoadd.coadd_image
-        )
+        self.config_node.imcoadd.coadd_image = self.path.imcoadd.coadd_image
         self.config_node.input.coadd_image = self.config_node.imcoadd.coadd_image
         self.logger.debug(f"Coadd Image: {self.config_node.imcoadd.coadd_image}")
 
@@ -989,67 +990,150 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         return resample_dir
 
     def coadd_in_memory(self, input_images: list[str] | None = None, device_id=None) -> str:
-        """Dispatcher to numpy/cupy and simple/weighted backends."""
+        """Dispatcher to numpy/cupy and mean/median backends.
+        ``imcoadd.coadd_mode`` picks the combine algorithm; for ``mean``, the
+        weighted variant kicks in when ``imcoadd.weight_map`` is set and the
+        NEAREST-resampled weight maps (``tmp/wht/resamp/<base>.weight.fits``)
+        produced by ``reproject_and_coadd_with_swarp`` exist for every input."""
         if input_images is None:
             input_images = self.images_to_coadd
-        if device_id is None:
-            self.coadd_with_numpy(input_images)
-        else:
+
+        if device_id is not None:
             self.coadd_with_cupy(input_images, device_id=device_id)
+            return self.config_node.imcoadd.coadd_image
+
+        mode = self.config_node.imcoadd.coadd_mode
+        if mode == "mean":
+            weights = None
+            if self.config_node.imcoadd.weight_map:
+                # NEAREST-resampled weights live next to the wht pass output; the
+                # LANCZOS3 companions next to the sci resamp ring to ~0 almost
+                # everywhere (99%+ zeros) and must NOT be used.
+                wht_dir = os.path.join(self.path_tmp, "wht", "resamp")
+                candidates = [os.path.join(wht_dir, swap_ext(get_basename(f), "weight.fits")) for f in input_images]
+                if all(os.path.exists(w) for w in candidates):
+                    weights = candidates
+                else:
+                    missing = [w for w in candidates if not os.path.exists(w)][:3]
+                    self.logger.warning(
+                        f"weight_map=True but NEAREST-resampled weight maps not found "
+                        f"in {wht_dir} (e.g. {missing}); falling back to simple mean."
+                    )
+            self.coadd_with_numpy(input_images, weights=weights)
+        elif mode == "median":
+            self.coadd_median_with_numpy(input_images)
+        else:
+            raise ValueError(f"Invalid coadd mode: {mode!r} (expected 'mean' or 'median')")
         return self.config_node.imcoadd.coadd_image
 
-    def coadd_with_numpy(self, input_images: list[str]) -> str:
-        """Simple flux-scaled mean. SWarp-reprojected frames can differ by ~few pixels
-        in shape and CRPIX; align all frames to a common CRPIX (= per-axis max) and
-        pad to the bounding box before averaging. Weighted variant TBD."""
+    def coadd_with_numpy(
+        self,
+        input_images: list[str],
+        weights: list[str] | None = None,
+        match_swarp_size: bool = True,
+    ) -> str:
         st = time.time()
-        self.logger.info("Start in-memory numpy coaddition (simple mean)")
+        backend = "weighted" if weights is not None else "simple"
+        grid = "swarp grid" if match_swarp_size else "tight bbox"
+        self.logger.info(f"Start in-memory numpy coaddition ({backend} mean, {grid})")
+        if weights is not None and len(weights) != len(input_images):
+            raise ValueError(f"weights ({len(weights)}) and input_images ({len(input_images)}) length mismatch")
 
-        # First pass: collect CRPIX and shape of each frame to size the target frame
-        crpix = []
-        shapes = []
-        for f in input_images:
-            with fits.open(f, memmap=True) as hdul:
-                hdr = hdul[0].header
-                crpix.append((hdr["CRPIX1"], hdr["CRPIX2"]))
-                shapes.append(hdul[0].data.shape)  # (h, w)
+        target_w, target_h, target_cx, target_cy, x0, y0, shapes = determine_size(input_images, match_swarp_size)
 
-        crpix = np.array(crpix, dtype=float)
-        shapes = np.array(shapes, dtype=int)
-        target_cx, target_cy = float(crpix[:, 0].max()), float(crpix[:, 1].max())
-        x0 = np.rint(target_cx - crpix[:, 0]).astype(int)  # column offset of each frame in target
-        y0 = np.rint(target_cy - crpix[:, 1]).astype(int)
-        target_w = int((x0 + shapes[:, 1]).max())
-        target_h = int((y0 + shapes[:, 0]).max())
-        self.logger.debug(f"Target shape ({target_h}, {target_w}) with CRPIX ({target_cx}, {target_cy})")
-
-        # Second pass: running mean (memory-bounded, one frame at a time).
+        # Running mean (memory-bounded, one frame at a time).
         # SWarp pads unobserved areas with 0, not NaN, so treat exact-zero as no-data.
         sum_arr = np.zeros((target_h, target_w), dtype=np.float64)
-        count_arr = np.zeros((target_h, target_w), dtype=np.int32)
+        norm_arr = np.zeros((target_h, target_w), dtype=np.float64 if weights is not None else np.int32)
         for i, f in enumerate(input_images):
             with fits.open(f) as hdul:
                 a = hdul[0].data.astype(np.float64)
                 flxscale = hdul[0].header.get("FLXSCALE", 1.0)
             h, w = a.shape
-            valid = np.isfinite(a) & (a != 0.0)
-            sum_arr[y0[i] : y0[i] + h, x0[i] : x0[i] + w] += np.where(valid, a * flxscale, 0.0)
-            count_arr[y0[i] : y0[i] + h, x0[i] : x0[i] + w] += valid
 
-        coadd = np.where(count_arr > 0, sum_arr / np.maximum(count_arr, 1), np.nan).astype(np.float32)
+            tx0 = max(0, x0[i]); tx1 = min(target_w, x0[i] + w)  # fmt: skip
+            ty0 = max(0, y0[i]); ty1 = min(target_h, y0[i] + h)  # fmt: skip
+            if tx1 <= tx0 or ty1 <= ty0:
+                self.logger.debug(f"{get_basename(f)}: no overlap with target grid; skipped")
+                continue
+            sx0 = tx0 - x0[i]; sx1 = tx1 - x0[i]  # source slice in the frame's pixel grid  # fmt: skip
+            sy0 = ty0 - y0[i]; sy1 = ty1 - y0[i]  # fmt: skip
+            src = a[sy0:sy1, sx0:sx1]
+            valid = np.isfinite(src) & (src != 0.0)
 
-        # Build the output header in memory and write once:
-        #   - clean WCS from the first frame via astropy.wcs (drops per-frame keys
-        #     like FLXSCALE/SKYVAL/BACKTYPE that would otherwise leak from any single input)
-        #   - overlay coadd metadata via self.input_headers.coadd_header
-        wcs = WCS(fits.getheader(input_images[0]))
-        wcs.wcs.crpix = [target_cx, target_cy]
-        out_header = wcs.to_header(relax=True)
-        for card in self.input_headers.coadd_header.cards:
-            out_header[card.keyword] = (card.value, card.comment)
+            if weights is None:
+                sum_arr[ty0:ty1, tx0:tx1] += np.where(valid, src * flxscale, 0.0)
+                norm_arr[ty0:ty1, tx0:tx1] += valid
+            else:
+                # SWarp's MAP_WEIGHT = 1/variance of the raw resampled data
+                # (RESCALE_WEIGHTS = N). After we multiply data by FLXSCALE its
+                # variance scales by FLXSCALE^2, so use w/FLXSCALE^2 as the
+                # inverse-variance weight of the flux-normalised image.
+                with fits.open(weights[i]) as hdul:
+                    w_full = hdul[0].data.astype(np.float64)
+                w_eff = w_full[sy0:sy1, sx0:sx1] / (flxscale * flxscale)
+                valid &= w_eff > 0
+                sum_arr[ty0:ty1, tx0:tx1] += np.where(valid, w_eff * src * flxscale, 0.0)
+                norm_arr[ty0:ty1, tx0:tx1] += np.where(valid, w_eff, 0.0)
 
+        coadd = np.where(norm_arr > 0, sum_arr / np.where(norm_arr > 0, norm_arr, 1), np.nan).astype(np.float32)
+
+        out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, self.input_headers.coadd_header)
         fits.writeto(self.config_node.imcoadd.coadd_image, coadd, header=out_header, overwrite=True)
+
+        # Coadd inverse-variance weight map (SWarp's <coadd>_weight.fits convention).
+        if weights is not None:
+            weight_out = add_suffix(self.config_node.imcoadd.coadd_image, "weight")
+            fits.writeto(weight_out, norm_arr.astype(np.float32), header=out_header, overwrite=True)
+            self.logger.debug(f"Wrote coadd weight map: {weight_out}")
+
         self.logger.info(f"Numpy coaddition completed in {time_diff_in_seconds(st)} seconds")
+        return self.config_node.imcoadd.coadd_image
+
+    # ---- median backend ----
+
+    _MEDIAN_CHUNK_H: int = 128  # row strips; 142 frames × 128 × 10200 × 4 B ≈ 750 MB per strip
+
+    def coadd_median_with_numpy(self, input_images: list[str], match_swarp_size: bool = True) -> str:
+        """Per-pixel flux-scaled median coadd. SWarp-resampled frames are stacked
+        in row strips (chunked along Y) to keep peak memory bounded regardless of
+        frame count; the median along the frame axis is taken with NaN-aware
+        aggregation, treating SWarp's zero padding as missing."""
+        st = time.time()
+        size = "swarp FOV size" if match_swarp_size else "tight bbox"
+        self.logger.info(f"Start in-memory numpy coaddition (median, {size})")
+
+        target_w, target_h, target_cx, target_cy, x0, y0, shapes = determine_size(input_images, match_swarp_size)
+
+        # Open all inputs once; memmap=True keeps RAM cost negligible until slicing.
+        handles = [fits.open(f, memmap=True) for f in input_images]
+        flxscales = np.array([h[0].header.get("FLXSCALE", 1.0) for h in handles], dtype=np.float32)
+
+        coadd = np.full((target_h, target_w), np.nan, dtype=np.float32)
+        try:
+            for ys in range(0, target_h, self._MEDIAN_CHUNK_H):
+                ye = min(target_h, ys + self._MEDIAN_CHUNK_H)
+                # (N, strip_h, target_w) stack; NaN-init so np.nanmedian ignores unfilled cells.
+                stack = np.full((len(input_images), ye - ys, target_w), np.nan, dtype=np.float32)
+                for i, hdul in enumerate(handles):
+                    h, w = shapes[i]
+                    tx0 = max(0, x0[i]); tx1 = min(target_w, x0[i] + w)  # fmt: skip
+                    ty0 = max(ys, max(0, y0[i])); ty1 = min(ye, min(target_h, y0[i] + h))  # fmt: skip
+                    if tx1 <= tx0 or ty1 <= ty0:
+                        continue
+                    sx0 = tx0 - x0[i]; sx1 = tx1 - x0[i]  # fmt: skip
+                    sy0 = ty0 - y0[i]; sy1 = ty1 - y0[i]  # fmt: skip
+                    src = hdul[0].data[sy0:sy1, sx0:sx1].astype(np.float32) * flxscales[i]
+                    src[(src == 0.0) | ~np.isfinite(src)] = np.nan
+                    stack[i, ty0 - ys : ty1 - ys, tx0:tx1] = src
+                coadd[ys:ye, :] = np.nanmedian(stack, axis=0)
+        finally:
+            for hdul in handles:
+                hdul.close()
+
+        out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, self.input_headers.coadd_header)
+        fits.writeto(self.config_node.imcoadd.coadd_image, coadd, header=out_header, overwrite=True)
+        self.logger.info(f"Numpy median coaddition completed in {time_diff_in_seconds(st)} seconds")
         return self.config_node.imcoadd.coadd_image
 
     def coadd_with_cupy(self, input_images: list[str], device_id) -> str:

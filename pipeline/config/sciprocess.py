@@ -41,6 +41,7 @@ class SciProcConfiguration(BaseConfig):
             working_dir=working_dir,
             is_pipeline=is_pipeline,
             is_too=is_too,
+            is_multi_epoch=is_multi_epoch,
             overwrite=overwrite,
             **kwargs,
         )
@@ -81,13 +82,16 @@ class SciProcConfiguration(BaseConfig):
         working_dir=None,
         is_pipeline=False,
         is_too=False,
+        is_multi_epoch=False,
         overwrite=False,
         **kwargs,
     ):
         # list of science images
         if isinstance(input, list) or (isinstance(input, str) and input.endswith(".fits")):
             self.input_files = sorted(input)
-            self.path = PathHandler(input, working_dir=working_dir, is_pipeline=is_pipeline, is_too=is_too)
+            self.path = PathHandler(
+                input, working_dir=working_dir, is_pipeline=is_pipeline, is_too=is_too, is_multi_epoch=is_multi_epoch
+            )
             config_source = collapse(self.path.sciproc_base_yml, raise_error=True)
             log_file = self.path.sciproc_output_log
 
@@ -113,6 +117,7 @@ class SciProcConfiguration(BaseConfig):
                 working_dir=working_dir,
                 is_pipeline=get_key(self.node.settings, "is_pipeline", False),
                 is_too=get_key(self.node.settings, "is_too", False),
+                is_multi_epoch=get_key(self.node.settings, "is_multi_epoch", False),
                 config_file=config_source if isinstance(config_source, str) else None,
             )
             self.node.logging.file = self.path.sciproc_output_log
@@ -140,9 +145,17 @@ class SciProcConfiguration(BaseConfig):
 
         return
 
-    def _set_pathhandler_from_config(self, working_dir=None, is_pipeline=False, is_too=False, config_file=None):
+    def _set_pathhandler_from_config(
+        self, working_dir=None, is_pipeline=False, is_too=False, is_multi_epoch=False, config_file=None
+    ):
         # mind the check order
-        kwargs = {"working_dir": working_dir, "is_pipeline": is_pipeline, "is_too": is_too, "config_file": config_file}
+        kwargs = {
+            "working_dir": working_dir,
+            "is_pipeline": is_pipeline,
+            "is_too": is_too,
+            "is_multi_epoch": is_multi_epoch,
+            "config_file": config_file,
+        }
         if hasattr(self.node, "input"):
             if hasattr(self.node.input, "calibrated_images") and self.node.input.calibrated_images:
                 return PathHandler(self.node.input.calibrated_images, **kwargs)

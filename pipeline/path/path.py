@@ -40,6 +40,7 @@ class PathHandlerSettings:
     working_dir: str | Path | None = None
     is_pipeline: bool = True  # vectorized is_pipeline has been deprecated
     is_too: bool = False
+    is_multi_epoch: bool = False
     config_file: str | Path | None = None  # explicit override for sciproc_output_yml
 
 
@@ -86,6 +87,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         # especially weight_map_input, get_bpmask, and photometry.*_catalog are subtle points
         # But user-facing APIs should use is_pipeline=False. e.g., user_config, DataReduction, etc.
         is_too=False,
+        is_multi_epoch=False,
         config_file: str | Path | None = None,
         top_dirs: TopDirs | None = None,
     ):
@@ -109,6 +111,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             working_dir=working_dir,
             is_pipeline=is_pipeline,
             is_too=is_too,
+            is_multi_epoch=is_multi_epoch,
             config_file=config_file,
         )
         # When provided, every input file shares this TopDirs (skips per-file dispatch).
@@ -142,6 +145,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             working_dir=s.working_dir,
             is_pipeline=s.is_pipeline,
             is_too=s.is_too,
+            is_multi_epoch=s.is_multi_epoch,
             config_file=s.config_file,
             top_dirs=self._user_top_dirs,
         )
@@ -1674,17 +1678,11 @@ class PathImcoadd(AutoMkdirMixin, AutoCollapseMixin):
         return fname
 
     @property
-    def daily_coadd_image(self):
-        return os.path.join(self._parent.daily_coadd_dir, self.coadd_image_basename)
-
-    @property
     def coadd_image(self):
-        # return os.path.join(collapse(self._parent.coadd_dir, raise_error=True), self.coadd_image_basename)
-        return bjoin(self._parent.coadd_dir, self.coadd_image_basename)
-
-    @property
-    def daily_coadd_weight_image(self):
-        return add_suffix(self.daily_coadd_image, "weight")
+        # multi-epoch: global coadd dir; single-epoch: daily dir (working_dir/cwd fallback when not pipeline)
+        if self._parent.settings.is_multi_epoch:
+            return bjoin(self._parent.coadd_dir, self.coadd_image_basename)
+        return os.path.join(self._parent.daily_coadd_dir, self.coadd_image_basename)
 
     @property
     def coadd_weight_image(self):
