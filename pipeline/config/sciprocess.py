@@ -4,7 +4,7 @@ import glob
 import time
 from pathlib import Path
 from datetime import datetime
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from .. import __version__
 from ..errors import ConfigurationError
@@ -16,8 +16,13 @@ from ..services.logger import Logger
 from .base import BaseConfig
 from .utils import get_key
 
+if TYPE_CHECKING:
+    from ._sciproc_stubs import SciProcNode
+
 
 class SciProcConfiguration(BaseConfig):
+    if TYPE_CHECKING:
+        node: SciProcNode
     def __init__(
         self,
         input: list[str] | str | dict = None,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import yaml
 from pathlib import Path
 
 from ..const.environ import REF_DIR, ROOT_DIR
@@ -106,7 +107,7 @@ def verify_config_hashes(
             errors.append(
                 f"{rel} hash mismatch: expected {expected}, got {actual}. "
                 "Config changed: bump up the version in pipeline/version.py and run \n\n"
-                "from pipeline.utils.config_integrity import write_config_hashes; write_config_hashes(overwrite=True)\n\n"
+                "from pipeline.utils.config_integrity import update_config_artifacts; update_config_artifacts()\n\n"
                 "before running the pipeline."
             )
 
@@ -115,6 +116,60 @@ def verify_config_hashes(
         raise PipelineError(msg)
 
     return True
+
+
+def _infer_annotation(value) -> str:
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    if isinstance(value, str):
+        return "str"
+    if isinstance(value, list):
+        return "list"
+    if isinstance(value, dict):
+        return "dict"
+    return "Any"
+
+
+def gen_config_stubs(yml_path: Path, output_path: Path, root_class: str) -> None:
+    """Generate TYPE_CHECKING stub classes from a base config YAML."""
+    with open(yml_path) as f:
+        data = yaml.safe_load(f) or {}
+
+    lines = [
+        "# AUTO-GENERATED — do not edit manually.",
+        f"# Source: {yml_path.name}",
+        "# Run update_config_artifacts() to regenerate.",
+        "from __future__ import annotations",
+        "from typing import Any, TYPE_CHECKING",
+        "",
+        "if TYPE_CHECKING:",
+        "    from pipeline.config.base import ConfigNode",
+        "",
+    ]
+
+    section_classes: dict[str, str] = {}
+
+    for key, value in data.items():
+        if not isinstance(value, dict):
+            continue
+        class_name = "".join(p.capitalize() for p in key.split("_")) + "Node"
+        section_classes[key] = class_name
+        lines.append(f"    class {class_name}(ConfigNode):")
+        for subkey, subval in value.items():
+            lines.append(f"        {subkey}: {_infer_annotation(subval)}")
+        lines.append("")
+
+    lines.append(f"    class {root_class}(ConfigNode):")
+    for key, value in data.items():
+        ann = section_classes.get(key, _infer_annotation(value))
+        lines.append(f"        {key}: {ann}")
+    lines.append("")
+
+    output_path.write_text("\n".join(lines) + "\n")
 
 
 def write_config_hashes(
@@ -139,10 +194,10 @@ def write_config_hashes(
     import pipeline
 
     # Then, in a next cell:
-    from pipeline.utils.config_integrity import write_config_hashes
-    write_config_hashes(overwrite=True)
+    from pipeline.utils.config_integrity import update_config_artifacts
+    update_config_artifacts()
 
-    The first import failure prevents import blocking of write_config_hashes,
+    The first import failure prevents import blocking of update_config_artifacts,
     which by itself would trigger the config integrity check again otherwise.
     """
     project_root = Path(ROOT_DIR)
@@ -169,3 +224,24 @@ def write_config_hashes(
 
     hash_file.write_text("".join(lines))
     return str(hash_file)
+
+
+def gen_all_stubs() -> None:
+    """Regenerate all TYPE_CHECKING stub files from their source YAMLs."""
+    config_dir = Path(ROOT_DIR) / "pipeline" / "config"
+    gen_config_stubs(
+        Path(REF_DIR) / "sciproc_base.yml",
+        config_dir / "_sciproc_stubs.py",
+        "SciProcNode",
+    )
+    gen_config_stubs(
+        Path(REF_DIR) / "preproc_base.yml",
+        config_dir / "_preproc_stubs.py",
+        "PreprocNode",
+    )
+
+
+def update_config_artifacts(overwrite: bool = True) -> None:
+    """Recompute config hashes and regenerate IDE stubs in one shot."""
+    write_config_hashes(overwrite=overwrite)
+    gen_all_stubs()
