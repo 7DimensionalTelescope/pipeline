@@ -203,7 +203,9 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         # Check if it's a NameHandler property and cache it
         nh = self.__dict__.get("name", None)
         if nh and hasattr(nh, name):
-            return self._get_cached_namehandler_property(name)
+            value = self._get_cached_namehandler_property(name)
+            # __getattr__ bypasses __getattribute__, so collapse explicitly
+            return self._apply_conditional_collapse(name, value)
 
         # Lazy initialization
         # if not self._file_dep_initialized and self._input_files:
