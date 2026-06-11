@@ -183,8 +183,8 @@ def tolerant_search(
         # If get_masterframe_walls expects a date object instead of a string, change nightdate_str to nightdate.
         lb, ub = get_masterframe_walls(nightdate_str, unit, dtype=dtype)
 
-        lo = (lb - nightdate).days
-        uo = (ub - nightdate).days
+        lo = (lb - nightdate).days if lb is not None else None
+        uo = (ub - nightdate).days if ub is not None else None
 
         return lo, uo
 
