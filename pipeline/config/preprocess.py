@@ -3,6 +3,7 @@ import sys
 from datetime import datetime
 import glob
 import time
+from typing import TYPE_CHECKING
 
 from .. import __version__
 from ..utils import clean_up_folder, flatten, time_diff_in_seconds, collapse
@@ -11,8 +12,13 @@ from ..const import CalibType
 from .base import BaseConfig
 from .utils import get_key
 
+if TYPE_CHECKING:
+    from ._preproc_stubs import PreprocNode
+
 
 class PreprocConfiguration(BaseConfig):
+    if TYPE_CHECKING:
+        node: PreprocNode
 
     def __init__(
         self,

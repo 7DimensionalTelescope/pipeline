@@ -16,6 +16,15 @@ class AutoCollapseMixin:
     _collapse_exclude = {}  # "output_name", "name", "preprocess"}
     _collapse_include = {"masterframe"}  # "output_dir", "image_dir", "factory_dir", "coadd_dir"}
 
+    def _apply_conditional_collapse(self, name, value):
+        """Single source of truth for collapse logic; called from both __getattribute__ and __getattr__."""
+        if name not in self._collapse_exclude and (
+            name in self._collapse_include
+            or (isinstance(value, list) and all(isinstance(v, (str, Path)) for v in value))
+        ):
+            return collapse(value)
+        return value
+
     def __getattribute__(self, name):
         # if name.startswith("_"):
         #     return object.__getattribute__(self, name)
@@ -29,14 +38,8 @@ class AutoCollapseMixin:
         # print("collapse", name, value)
 
         # Collapse if explicitly included or path-like list
-        if name not in self._collapse_exclude and (
-            name in self._collapse_include
-            or (isinstance(value, list) and all(isinstance(v, (str, Path)) for v in value))
-        ):
-            # print("being collapsed", name, value)
-            return collapse(value)
-
-        return value
+        # print("being collapsed", name, value)
+        return self._apply_conditional_collapse(name, value)
 
     # def __getattribute__(self, name):
     #     if name.startswith("_"):

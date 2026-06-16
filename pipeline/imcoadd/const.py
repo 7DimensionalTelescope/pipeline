@@ -27,43 +27,65 @@ IC_KEYS = [
 #     "ellip",
 # ]
 
-CORE_KEYS = [
+# Keys expected to be uniform across all inputs of a coadd; aggregate just
+# picks one (the first unmasked value).
+HOMOGENEOUS_KEYS = [
     "IMAGETYP",
-    # "EXPOSURE",
-    # "EXPTIME",
-    "DATE-LOC",
-    # "DATE-OBS",
+    "OBJECT",
+    "OBJTYPE",
+    "OBJCTID",
+    "FILTER",
+    "INSTRUME",
+    "TELESCOP",
+    "OBSMODE",
+    "SPECMODE",
+    "OBSERVER",
+    "NTELSCOP",
+    "IS_TOO",
     "XBINNING",
     "YBINNING",
-    "EGAIN",
     "XPIXSZ",
     "YPIXSZ",
-    "INSTRUME",
-    "SET-TEMP",
-    "CCD-TEMP",
-    "TELESCOP",
     "FOCALLEN",
-    "FOCRATIO",
-    "RA",
-    "DEC",
-    "CENTALT",
-    "CENTAZ",
-    "AIRMASS",
-    "PIERSIDE",
-    "SITEELEV",
+    "FOCALRAT",
+    "APTDIA",
+    "APTAREA",
     "SITELAT",
     "SITELONG",
-    "FWHEEL",
-    "FILTER",
-    "OBJECT",
+    "SITEELEV",
     "OBJCTRA",
     "OBJCTDEC",
-    "OBJCTROT",
-    "FOCNAME",
-    "FOCPOS",
-    "FOCUSPOS",
-    "FOCUSSZ",
-    "ROWORDER",
-    # "_QUINOX",
-    "SWCREATE",
+    "EQUINOX",
+    "RADESYS",
+    # unsure: uncomment when confirmed homogeneous in current headers
+    # "PIERSIDE",
+    # "FWHEEL",
+    # "OBJCTROT",
+    # "FOCNAME",
+    # "FOCPOS",
+    # "FOCUSPOS",
+    # "FOCUSSZ",
+    # "ROWORDER",
+    # "SWCREATE",
+    # "FOCRATIO",  # superseded by FOCALRAT
 ]
+
+# Keys expected to vary across inputs; aggregate returns a representative
+# (numeric mean / "MIXED" for strings).
+INHOMOGENEOUS_KEYS = [
+    "ALTITUDE",
+    "AZIMUTH",
+    "CENTALT",
+    "CENTAZ",
+    "RA",
+    "DEC",
+    "AIRMASS",
+    "CCD-TEMP",
+    "SET-TEMP",
+    "MOONSEP",
+    "MOONPHAS",
+    # DATE-LOC, DATE-OBS handled separately in coadd_header
+    # EGAIN handled separately (coadd-effective EGAIN with FLXSCALE)
+]
+
+CORE_KEYS = HOMOGENEOUS_KEYS + INHOMOGENEOUS_KEYS

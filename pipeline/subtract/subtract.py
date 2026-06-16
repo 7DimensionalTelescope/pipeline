@@ -45,7 +45,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         self.qa_id = None
         self.is_too = self.config_node.settings.is_too
-        DatabaseHandler.__init__(self, add_database=self.config_node.settings.is_pipeline, is_too=self.is_too)
+        DatabaseHandler.__init__(self, use_database=self.config_node.settings.is_pipeline, is_too=self.is_too)
 
         if self.is_connected:
 
@@ -164,7 +164,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             )
             raise
 
-    def find_reference_image(self):
+    def find_reference_image(self, use_db: bool = True):
 
         obs, filt, date = self.path.name.obj[0], self.path.name.filter[0], self.path.name.date[0]
         image_list = RawImageQuery().for_target(obs).with_filter(filt).fetch()["sci"]
@@ -192,7 +192,6 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
             # Search in both processed and too directories
             base_paths = ["/lyman/data2/processed", "/lyman/data2/too"]
-            ref_image = None
 
             for search_date in search_dates:
                 date_formatted = search_date.strftime("%Y-%m-%d")

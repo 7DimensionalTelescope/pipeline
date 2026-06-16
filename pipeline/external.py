@@ -613,7 +613,7 @@ def swarp(
     dump_dir=None,
     resample_dir=None,
     log_file=None,
-    combine=True,
+    coadd=True,
     weight_map=False,
     logger=None,
     swarp_args=None,
@@ -632,7 +632,12 @@ def swarp(
         else:
             print(message)
 
-    if input is list:
+    if isinstance(input, str):
+        input_image_list = read_text_file(input)
+    else:
+        input_image_list = []
+
+    if isinstance(input, list):
         input = ",".join(input)
     elif isinstance(input, str):  # assume file input
         input = f"@{input}"
@@ -650,9 +655,20 @@ def swarp(
     # weightim = swap_ext(comim, "weight.fits")
     weightim = add_suffix(comim, "weight")
 
-    if os.path.exists(comim) and not overwrite:
-        if not (weight_map and not os.path.exists(weightim)):
-            chatter(f"SWarp output image already exists: {comim}, skipping...")
+    # Skipping logic when all outputs already exist
+    if coadd:
+        if os.path.exists(comim) and not overwrite:
+            if not (weight_map and not os.path.exists(weightim)):
+                chatter(f"SWarp output image already exists: {comim}, skipping...")
+                return
+    else:
+        resampled_list = [
+            os.path.join(resample_dir, add_suffix(os.path.basename(f), "resamp")) for f in input_image_list
+        ]
+        if resampled_list and all(os.path.exists(f) for f in resampled_list) and not overwrite:
+            chatter(
+                f"SWarp resampled outputs already exist ({len(resampled_list)} files in {resample_dir}), skipping..."
+            )
             return
 
     # 	SWarp
@@ -673,7 +689,7 @@ def swarp(
     if not weight_map:
         swarpcom.extend(["-WEIGHT_TYPE", "NONE"])
 
-    if not combine:
+    if not coadd:
         swarpcom.extend(["-COMBINE", "N"])
 
     swarpcom.extend(swarp_args or [])

@@ -65,7 +65,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
 
 
-It your code changes, never remove existing comments unless they are directly related to a stale code. 
+It your code changes, never remove existing comments. If they look stale, just report and preserve them as is.
 The docstring of a function should be one-line short, consisting of only a few keywords, while Python type hint takes care of the details.
 Keep explanatory comments in the middle of the code short (one-liner) or nonexistent. The clean code itself is self-explanatory. One-line section header comment might help.
 Try to mimic existing comment style whenever possible.

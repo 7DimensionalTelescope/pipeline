@@ -110,6 +110,8 @@ photometry:
 imcoadd:
   input_images:
   runtime_version:
+  coadd_routine: 'legacy'  # legacy or reproject-first
+  coadd_mode: 'median'
   coadd_image:  # output coadd image
   gpu: True
   device: 0
