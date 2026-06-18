@@ -69,3 +69,6 @@ It your code changes, never remove existing comments. If they look stale, just r
 The docstring of a function should be one-line short, consisting of only a few keywords, while Python type hint takes care of the details.
 Keep explanatory comments in the middle of the code short (one-liner) or nonexistent. The clean code itself is self-explanatory. One-line section header comment might help.
 Try to mimic existing comment style whenever possible.
+
+Whenever you have to deal with FITS files and parse their types, refer to PathHandler and NameHandler rather than creating another normalizer. 
+They are the core to be trusted.

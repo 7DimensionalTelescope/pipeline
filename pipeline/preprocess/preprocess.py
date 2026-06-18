@@ -348,6 +348,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             if dtype == "dark":
                 self.logger.debug(f"[Group {self._current_group+1}] flatdark_output: {self.flatdark_output}")
 
+            generated_now = False
             if (
                 input_file
                 and (not os.path.exists(output_file) or self.overwrite)
@@ -356,6 +357,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 norminal = self._generate_masterframe(dtype, device_id, dry_run=dry_run)
                 if not norminal:
                     self._fetch_masterframe(output_file, dtype, dry_run=dry_run)
+                else:
+                    generated_now = True
                 self._generated_masterframes.append(output_file)
             elif isinstance(output_file, str) and len(output_file) != 0:
                 self._fetch_masterframe(output_file, dtype, dry_run=dry_run)
@@ -375,6 +378,12 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 )
 
                 self.logger.info(f"[Group {self._current_group+1}] Created QA data for {dtype} with ID: {qa_id}")
+                # Register dependencies only for a freshly generated master; a fetched
+                # master keeps the dependencies written when it was generated.
+                if generated_now:
+                    self.create_image_qa_dependencies(getattr(self, f"{dtype}_output"), qa_id)
+                    # sci image_qa_dependency is handled in Astrometry, not Preprocess
+                    self.logger.info(f"[Group {self._current_group+1}] Created QA dependencies for {dtype}")
 
         self.logger.info(f"[Group {self._current_group+1}] Generation/Loading of masterframes completed in {time_diff_in_seconds(st)} seconds")  # fmt: skip
 

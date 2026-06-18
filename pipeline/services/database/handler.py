@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from .too import TooDB
 from .process_status import ProcessStatus
 from .image_qa import ImageQA
+from .image_qa_dependency import ImageQADependency
 from ...errors import registry
 
 if TYPE_CHECKING:
@@ -34,6 +35,7 @@ class DatabaseHandler:
             self.process_status_id = None if is_too else None
             self.image_qa = None if is_too else ImageQA(db_params)
             self.image_qa_id = None if is_too else None
+            self.image_qa_dependency = None if is_too else ImageQADependency(db_params)
         else:
             self.too_db = None
             self.too_id = None
@@ -41,6 +43,7 @@ class DatabaseHandler:
             self.process_status_id = None
             self.image_qa = None
             self.image_qa_id = None
+            self.image_qa_dependency = None
 
     @property
     def is_connected(self) -> bool:
@@ -129,6 +132,19 @@ class DatabaseHandler:
         qa_id = self.image_qa.create_data(table)
 
         return qa_id
+
+    def create_image_qa_dependencies(self, file: str, qa_id: int) -> int:
+        """Sync image_qa_dependency rows for the given file and image_qa id."""
+        if not self.is_connected or self.image_qa_dependency is None or qa_id is None:
+            return 0
+        try:
+            n = self.image_qa_dependency.sync(file, qa_id)
+            if n:
+                self.logger.debug(f"Synced {n} image_qa_dependency rows for qa_id={qa_id}")
+            return n
+        except Exception as e:
+            self.logger.warning(f"Failed to sync image_qa_dependency for qa_id={qa_id}: {e}")
+            return 0
 
     def update_image_qa_data(self, image_qa_id: int, data):
         data.pop("id", None)

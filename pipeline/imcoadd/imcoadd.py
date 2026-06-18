@@ -167,6 +167,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             coadd_image = self.config_node.imcoadd.coadd_image
             if coadd_image and os.path.exists(coadd_image):
                 self.qa_id = self.create_image_qa_data(coadd_image, process_status_id=self.process_status_id)
+                self.create_image_qa_dependencies(coadd_image, self.qa_id)
 
         # Update QA data from header if database is connected
         if self.is_connected and self.qa_id is not None:

@@ -19,6 +19,7 @@ def atleast_1d(x):
     if isinstance(x, list):
         return x
 
+    # Don't revive it: causes problems with atleast_1d(nh.type)
     # if isinstance(x, (tuple, set, frozenset)):
     #     return list(x)
 

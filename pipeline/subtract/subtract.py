@@ -140,6 +140,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 subt_image = self.subt_image_file
                 if subt_image and os.path.exists(subt_image):
                     self.qa_id = self.create_image_qa_data(subt_image, process_status_id=self.process_status_id)
+                    self.create_image_qa_dependencies(subt_image, self.qa_id)
 
             # Update QA data from header if database is connected
             if self.is_connected and self.qa_id is not None:

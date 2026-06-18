@@ -125,6 +125,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 for image_info in self.images_info:
                     qa_id = self.create_image_qa_data(image_info.image_path, self.process_status_id)
                     self.qa_ids.append(qa_id)
+                    self.create_image_qa_dependencies(image_info.image_path, qa_id)
 
         self.logger.debug("Finished Astrometry.__init__")
 
