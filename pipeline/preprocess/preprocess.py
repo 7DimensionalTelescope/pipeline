@@ -59,7 +59,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         master_frame_only=False,
         calib_types=None,
         use_gpu=False,
-        add_database=True,
+        use_database=True,
         **kwargs,
     ):
         # Load Configuration
@@ -67,6 +67,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         self.logger.process_error = PreprocessError
 
         is_too = get_key(self.config_node.settings, "is_too", False)
+        is_pipeline = get_key(self.config_node.settings, "is_pipeline", False)
 
         self.overwrite = overwrite
         self.master_frame_only = master_frame_only
@@ -76,7 +77,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         self._use_gpu = use_gpu
 
         # Initialize DatabaseHandler
-        DatabaseHandler.__init__(self, use_database=add_database if not is_too else False, logger=self.logger)
+        DatabaseHandler.__init__(
+            self, use_database=(use_database and is_pipeline) if not is_too else False, logger=self.logger
+        )
 
         if self.is_connected:
             self.logger.debug("Initialized DatabaseHandler for pipeline and QA data management")

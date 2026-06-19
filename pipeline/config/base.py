@@ -2,11 +2,13 @@ import os
 import yaml
 from datetime import datetime
 from abc import ABC, abstractmethod
-from typing import Self
+
+# from typing import Self
 
 from .. import __version__
 from .utils import merge_dicts, merge_missing
 from ..path.path import PathHandler
+from ..services.logger import Logger
 
 
 class BaseConfig(ABC):
@@ -167,7 +169,18 @@ class BaseConfig(ABC):
                 self._config_in_dict[key] = value
 
     @classmethod
-    def _setup_logger(cls, logger=None, name=None, log_file=None, verbose=True, overwrite=True, **kwargs):
+    def _setup_logger(
+        cls, logger: bool | Logger = None, name=None, log_file=None, verbose=True, overwrite=True, **kwargs
+    ):
+        if logger is False:
+            import logging
+            from ..services.logger import Logger
+
+            dummy = Logger(name=name or "null")
+            dummy.cleanup()
+            dummy.logger.addHandler(logging.NullHandler())
+            return dummy
+
         if logger is None:
             from ..services.logger import Logger
 

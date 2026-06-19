@@ -23,14 +23,15 @@ if TYPE_CHECKING:
 class SciProcConfiguration(BaseConfig):
     if TYPE_CHECKING:
         node: SciProcNode
+
     def __init__(
         self,
         input: list[str] | str | dict = None,
-        logger=None,
+        logger: bool | Logger = None,
         write=True,  # False for PhotometrySingle
         verbose=True,
         overwrite=False,
-        working_dir=None,
+        working_dir: str | None = None,
         is_pipeline=False,
         is_too=False,
         is_multi_epoch=False,
@@ -132,7 +133,7 @@ class SciProcConfiguration(BaseConfig):
             self.logger = self._setup_logger(
                 logger,
                 name=self.name,
-                log_file=self.node.logging.file,
+                log_file=self.node.logging.file if self.write else None,
                 verbose=verbose,
                 overwrite=overwrite,
             )
