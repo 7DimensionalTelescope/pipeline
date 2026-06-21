@@ -2,6 +2,7 @@ import os
 import time
 import shutil
 import warnings
+from typing import Literal
 
 import numpy as np
 from astropy.io import fits
@@ -938,7 +939,12 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         if not self.config_node.imcoadd.weight_map:
             self._run_swarp("", coadd=coadd, swarp_args=swarp_options_override)
         else:
-            self._run_swarp("sci", coadd=coadd, swarp_args=["-RESAMPLING_TYPE", "LANCZOS3"] + swarp_options_override)
+            self._run_swarp(
+                "sci",
+                coadd=coadd,
+                swarp_args=["-RESAMPLING_TYPE", "LANCZOS3"] + swarp_options_override,
+                use_weight_map=False,
+            )  # Disable weight in the sci pass
             self._run_swarp("wht", coadd=coadd, swarp_args=["-RESAMPLING_TYPE", "NEAREST"] + swarp_options_override)
 
             # Update/TODO: consider uncollapsed bpmask files
@@ -965,7 +971,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.logger.info(f"SWarp reprojection completed in {time_diff_in_seconds(st)} seconds")
         return resampled
 
-    def _run_swarp(self, type="", coadd=True, swarp_args=None) -> str:
+    def _run_swarp(
+        self, type: Literal["sci", "wht", "bpm"] = "", coadd=True, swarp_args=None, use_weight_map: bool = True
+    ) -> str:
         """Pass type='' for no weight. Returns the SWarp resample directory."""
         working_dir = os.path.join(self.path.imcoadd.tmp_dir, type)
         resample_dir = os.path.join(working_dir, "resamp")
@@ -986,7 +994,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             coadd=coadd,
             log_file=log_file,
             logger=self.logger,
-            weight_map=self.config_node.imcoadd.weight_map,
+            use_weight_map=self.config_node.imcoadd.weight_map and use_weight_map,
             swarp_args=swarp_args,
         )
 

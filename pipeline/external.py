@@ -614,7 +614,7 @@ def swarp(
     resample_dir=None,
     log_file=None,
     coadd=True,
-    weight_map=False,
+    use_weight_map=False,
     logger=None,
     swarp_args=None,
 ):
@@ -658,7 +658,7 @@ def swarp(
     # Skipping logic when all outputs already exist
     if coadd:
         if os.path.exists(comim) and not overwrite:
-            if not (weight_map and not os.path.exists(weightim)):
+            if not (use_weight_map and not os.path.exists(weightim)):
                 chatter(f"SWarp output image already exists: {comim}, skipping...")
                 return
     else:
@@ -686,7 +686,7 @@ def swarp(
         # f"-FSCALE_KEYWORD FAKE"
     ]  # fmt: skip
 
-    if not weight_map:
+    if not use_weight_map:
         swarpcom.extend(["-WEIGHT_TYPE", "NONE"])
 
     if not coadd:
