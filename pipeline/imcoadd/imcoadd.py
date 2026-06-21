@@ -522,22 +522,28 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         use_gpu: bool = True,
         overwrite: bool = False,
     ) -> list[str]:
-        """Retains cpu support as a code template"""
+        """
+        Uses self.input_images. Takes in input_images just for name carrying.
+        """
         if input_images is None:
             input_images = get_key(self.config_node.imcoadd, "bkgsub_images") or self.input_images
+
+        value_images = self.input_images  # r_p. input_images for name carrying
+
         st = time.time()
         self._use_gpu = False  # all([use_gpu, self.config.imcoadd.gpu, self._use_gpu])
         device_id = device_id if self._use_gpu else "CPU"
 
         self.logger.info(f"Start weight-map calculation")
 
-        self.config_node.imcoadd.bkgsub_weight_images = atleast_1d(add_suffix(input_images, "weight"))
+        out_weights = atleast_1d(add_suffix(input_images, "weight"))
+        self.config_node.imcoadd.bkgsub_weight_images = out_weights
 
-        groups = self._group_IMCMB(input_images)
+        groups = self._group_IMCMB(value_images, out_weights)
         self.logger.info(f"{len(groups)} groups for weight map calculation.")
         self.logger.debug(f"calculate_weight_map groups: {groups}")
 
-        for i, ((z_m_file, d_m_file, f_m_file), input_images) in enumerate(groups.items()):
+        for i, ((z_m_file, d_m_file, f_m_file), (group_values, group_outputs)) in enumerate(groups.items()):
             st_loop = time.time()
             self.logger.debug(f"IMCMB group {i}: {z_m_file}, {d_m_file}, {f_m_file}")
             # calibs = get_zdf_from_header_IMCMB(input_images[0])  # trust the grouping and use the first image for calibs
@@ -548,14 +554,15 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self.logger.debug(f"{time_diff_in_seconds(st_loop)} seconds for group {i} preparation")
 
             uncalculated_images = []
+            uncalculated_outputs = []
 
-            for img in input_images:
-                weight_image_file = add_suffix(img, "weight")
-                if os.path.exists(weight_image_file) and not self.overwrite:
-                    self.logger.debug(f"Already exists; skip generating {weight_image_file}")
+            for vimg, oname in zip(group_values, group_outputs):
+                if os.path.exists(oname) and not self.overwrite:
+                    self.logger.debug(f"Already exists; skip generating {oname}")
                     continue
                 else:
-                    uncalculated_images.append(img)
+                    uncalculated_images.append(vimg)
+                    uncalculated_outputs.append(oname)
 
             if uncalculated_images:
                 st_image = time.time()
@@ -566,7 +573,14 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                         calc_weight = calc_weight_with_cpu
                         self.logger.info("Calculate weight map with CPU")
                         device_id = "CPU"
-                        calc_weight(uncalculated_images, d_m_file, f_m_file, sig_z_file, sig_f_file)
+                        calc_weight(
+                            uncalculated_images,
+                            d_m_file,
+                            f_m_file,
+                            sig_z_file,
+                            sig_f_file,
+                            out_names=uncalculated_outputs,
+                        )
                     else:
                         from .weight import calc_weight_with_gpu
 
@@ -579,6 +593,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                             sig_z_file,
                             sig_f_file,
                             device_id=device_id,
+                            out_names=uncalculated_outputs,
                         )
 
                 self.logger.debug(
@@ -588,7 +603,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 self.logger.info("All weight images already exist. Skipping weight map calculation")
 
             self.logger.info(
-                f"Weight-map calculation is completed in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(input_images):.1f} s/image)"
+                f"Weight-map calculation is completed in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(group_values):.1f} s/image)"
             )
 
         return self.config_node.imcoadd.bkgsub_weight_images

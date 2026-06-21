@@ -58,7 +58,7 @@ weight_combined_kernel = cp.ElementwiseKernel(
 )
 
 
-def calc_weight(images, d_m, f_m, sig_z, sig_f, p_d, p_z, p_f, egain, weight=True, device=None):
+def calc_weight(images, d_m, f_m, sig_z, sig_f, p_d, p_z, p_f, egain, weight=True, device=None, out_names=None):
 
     with cp.cuda.Device(device):
         sig_b = np.zeros(d_m.shape, dtype=np.float32)
@@ -91,7 +91,7 @@ def calc_weight(images, d_m, f_m, sig_z, sig_f, p_d, p_z, p_f, egain, weight=Tru
 
         cp.get_default_memory_pool().free_all_blocks()
 
-    output_names = add_suffix(images, "weight")
+    output_names = out_names if out_names is not None else add_suffix(images, "weight")
 
     for i, o in enumerate(output_names):
         fits.writeto(o, weight_results[i], overwrite=True)

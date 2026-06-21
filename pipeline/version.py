@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 # increase version with ANY change in scientific config. e.g., prep.sex
-__version__ = "1.10.10"
+__version__ = "1.10.11"
 
 MIN_PREPROC_RUNTIME_VERSION = "1.10.6"
 MIN_SCIPROC_RUNTIME_VERSION = "1.9.6"
 MIN_SCIPROC_RUNTIME_VERSION_MAP = {
     "astrometry": "1.9.6",
     "photometry": "1.8.14",
-    "imcoadd": "1.10.5",
+    "imcoadd": "1.10.11",
     "imsubtract": "1.8.12",
 }
 

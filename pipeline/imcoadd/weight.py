@@ -5,6 +5,7 @@ import numpy as np
 import fitsio
 from ..cuda.weight_map import calc_weight as gpu_calc_weight
 
+
 def _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file):
     """
     Load calibration arrays and metadata shared by CPU and GPU paths.
@@ -22,7 +23,7 @@ def _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file):
     return sig_z, d_m, f_m, sig_f, p_z, p_d, p_f, egain
 
 
-def calc_weight_with_gpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, device_id=0, weight=True):
+def calc_weight_with_gpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, device_id=0, weight=True, out_names=None):
     """
     Execute the CuPy/CUDA-based weight-map calculation in-process.
     """
@@ -42,13 +43,14 @@ def calc_weight_with_gpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, dev
         egain,
         weight=weight,
         device=device_id,
+        out_names=out_names,
     )
 
 
-def calc_weight_with_cpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, weight=True, **kwargs):
+def calc_weight_with_cpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, weight=True, out_names=None, **kwargs):
     output = _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file)
 
-    out_names = add_suffix(images, suffix="weight")
+    out_names = out_names if out_names is not None else add_suffix(images, suffix="weight")
 
     for fname, outname in zip(images, out_names):
         image = fitsio.read(fname).astype(np.float32)
@@ -62,11 +64,12 @@ def optimized_parallel(image, sig_z, dark, flat, sig_f, num_z, num_d, num_f, ega
     out = np.empty_like(flat)
     h, w = flat.shape
     for i in prange(h):
+        r_p = np.maximum(image[i], 0.0)  # floor at 0 to prevent negative weight
         denom = (
             constants[0] * sig_z[i] * sig_z[i]
             + constants[1] * dark[i]
-            + constants[2] * flat[i] * image[i]
-            + constants[3] * (image[i] * sig_f[i]) ** 2
+            + constants[2] * flat[i] * r_p
+            + constants[3] * (r_p * sig_f[i]) ** 2
         )
         out[i] = flat[i] * flat[i] * (1 / denom)
     return out
