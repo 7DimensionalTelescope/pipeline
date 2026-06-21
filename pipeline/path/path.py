@@ -1690,6 +1690,92 @@ class PathImcoadd(AutoMkdirMixin, AutoCollapseMixin):
     def coadd_weight_image(self):
         return add_suffix(self.coadd_image, "weight")
 
+    @cached_property
+    def factory(self):
+        return PathImcoaddFactory(self)
+
+
+class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
+    """Intermediate/output product paths for the ImCoadd stages.
+
+    Keyed on the parent PathHandler's input images. The legacy routine chains
+    the stage suffixes (bkgsub -> interp -> conv), so each product is a pure
+    function of the original basenames. SWarp-resampled products are named by
+    SWarp after whatever images it receives at runtime, so they are exposed as
+    small methods taking that input list rather than as properties.
+    """
+
+    def __init__(self, parent: PathImcoadd):
+        self._parent = parent
+        self._input_files = atleast_1d(self._parent._parent._input_files)
+
+    def __repr__(self):
+        return "\n".join(f"{k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))
+
+    @property
+    def _basenames(self) -> List[str]:
+        return [os.path.basename(f) for f in self._input_files]
+
+    # ---- stage directories (under imcoadd tmp_dir) ----
+    @property
+    def bkgsub_dir(self) -> str:
+        return os.path.join(self._parent.tmp_dir, "bkgsub")
+
+    @property
+    def interp_dir(self) -> str:
+        return os.path.join(self._parent.tmp_dir, "interp")
+
+    @property
+    def conv_dir(self) -> str:
+        return os.path.join(self._parent.tmp_dir, "conv")
+
+    # ---- background subtraction ----
+    @property
+    def bkgsub_images(self) -> str | List[str]:
+        return [os.path.join(self.bkgsub_dir, add_suffix(b, "bkgsub")) for b in self._basenames]
+
+    @property
+    def bkg_images(self) -> str | List[str]:
+        return [os.path.join(self.bkgsub_dir, add_suffix(b, "bkg")) for b in self._basenames]
+
+    @property
+    def bkg_rms_images(self) -> str | List[str]:
+        return [os.path.join(self.bkgsub_dir, add_suffix(b, "bkgrms")) for b in self._basenames]
+
+    @property
+    def bkgsub_weight_images(self) -> str | List[str]:
+        return add_suffix(self.bkgsub_images, "weight")
+
+    # ---- bad-pixel interpolation (legacy: interp of the bkgsub frame) ----
+    @property
+    def interp_images(self) -> str | List[str]:
+        return [os.path.join(self.interp_dir, add_suffix(add_suffix(b, "bkgsub"), "interp")) for b in self._basenames]
+
+    # ---- coadd output companions (single coadd) ----
+    @property
+    def coadd_weight_image(self) -> str:
+        return self._parent.coadd_weight_image
+
+    @property
+    def coadd_bpmask_image(self) -> str:
+        return add_suffix(self._parent.coadd_image, "bpmask")
+
+    # ---- inverted bpmask staged in tmp_dir for the bpm SWarp pass ----
+    def bpmask_inverted(self, bpmask_file) -> str:
+        return os.path.join(self._parent.tmp_dir, os.path.basename(bpmask_file))
+
+    # ---- SWarp resampled products (named by SWarp from its runtime inputs) ----
+    def swarp_resample_dir(self, pass_type: str = "") -> str:
+        return os.path.join(self._parent.tmp_dir, pass_type, "resamp")
+
+    def resampled_images(self, swarp_inputs, pass_type: str = "") -> List[str]:
+        rdir = self.swarp_resample_dir(pass_type)
+        return [os.path.join(rdir, add_suffix(os.path.basename(f), "resamp")) for f in atleast_1d(swarp_inputs)]
+
+    def resampled_weight_images(self, resampled_images, pass_type: str = "wht") -> List[str]:
+        rdir = self.swarp_resample_dir(pass_type)
+        return [os.path.join(rdir, swap_ext(os.path.basename(f), "weight.fits")) for f in atleast_1d(resampled_images)]
+
 
 class PathImsubtract(AutoMkdirMixin, AutoCollapseMixin):
     _mkdir_exclude = {"ref_image_dir"}

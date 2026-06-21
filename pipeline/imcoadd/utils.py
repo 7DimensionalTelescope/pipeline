@@ -123,3 +123,5 @@ def _parse_swarp_image_size(config_path: str) -> tuple[int, int]:
                 nx, ny = tokens[1].split(",")
                 return int(nx), int(ny)
     raise ValueError(f"IMAGE_SIZE not found in {config_path}")
+
+

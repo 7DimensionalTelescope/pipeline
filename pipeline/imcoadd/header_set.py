@@ -136,24 +136,48 @@ class InputHeaderSet:
     # ---------- representative quantities (unmasked subset) ----------
 
     @property
-    def obj(self) -> str:
-        return self.unique("OBJECT")[0]
+    def obj(self) -> str | None:
+        vals = self.unique("OBJECT")
+        return vals[0] if vals else None
 
     @property
-    def filter(self) -> str:
-        return self.unique("FILTER")[0]
+    def filter(self) -> str | None:
+        vals = self.unique("FILTER")
+        return vals[0] if vals else None
 
     @property
-    def camera_gain(self):
-        return self.unique("GAIN")[0]
+    def camera_gain(self) -> float | None:
+        vals = self.unique("GAIN")
+        return vals[0] if vals else None
 
     @property
-    def total_exptime(self) -> float:
-        return float(np.sum(self.values("EXPTIME")))
+    def total_exptime(self) -> float | None:
+        """Sum of EXPTIME over unmasked inputs; None if the key is absent everywhere."""
+        vals = [v for v in self.values("EXPTIME") if v is not None]
+        if not vals:
+            return None
+        return float(np.sum(vals))
 
     @property
-    def mean_mjd(self) -> float:
-        return float(np.mean(self.values("MJD")))
+    def mean_mjd(self) -> float | None:
+        """Mean MJD over unmasked inputs; None if no time key is present anywhere.
+
+        Tries each header in priority order: MJD → MJD-OBS → JD → DATE-OBS,
+        converting to MJD as needed (JD − 2400000.5; DATE-OBS parsed by astropy).
+        """
+        mjds = []
+        for h in self.headers:
+            if h.get("MJD") is not None:
+                mjds.append(float(h["MJD"]))
+            elif h.get("MJD-OBS") is not None:
+                mjds.append(float(h["MJD-OBS"]))
+            elif h.get("JD") is not None:
+                mjds.append(float(h["JD"]) - 2400000.5)
+            elif h.get("DATE-OBS") is not None:
+                mjds.append(float(Time(h["DATE-OBS"]).mjd))
+        if not mjds:
+            return None
+        return float(np.mean(mjds))
 
     @property
     def mean_dateloc(self) -> str | None:
@@ -227,8 +251,8 @@ class InputHeaderSet:
         WCS-bearing base. Keys absent or value-None are skipped."""
         # 	Get Header info
         mjd = self.mean_mjd
-        dateobs = Time(mjd, format="mjd").isot
-        jd = Time(mjd, format="mjd").jd
+        dateobs = Time(mjd, format="mjd").isot if mjd is not None else None
+        jd = Time(mjd, format="mjd").jd if mjd is not None else None
         # gain = (2 / 3) * len(self) * self.camera_gain
 
         header = fits.Header()
