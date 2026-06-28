@@ -825,15 +825,7 @@ class PhotometrySingle:
         self.logger.info(f"Run source extractor (sextractor) ({sex_preset})")
 
         if output is None:
-            # new PathHandler for single
-            output = getattr(
-                PathHandler(
-                    self.input_image,
-                    is_pipeline=self.config_node.settings.is_pipeline,
-                    is_too=self.config_node.settings.is_too,
-                ).photometry,
-                f"{sex_preset}_catalog",
-            )
+            output = getattr(self.path.photometry, f"{sex_preset}_catalog")
 
         self.logger.debug(f"PhotometrySingle _run_sextractor input image: {self.input_image}")
         self.logger.debug(f"PhotometrySingle _run_sextractor output catalog: {output}")
