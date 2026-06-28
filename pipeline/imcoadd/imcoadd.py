@@ -404,7 +404,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
     def _const_bkgsub(self, inim, outim, skyval, skyval_cut=40, **kwargs):
 
         if os.path.exists(outim):
-            if fits.getval(outim, "BACKTYPE").upper() == "CONSTANT":
+            if fits.getval(outim, "BACKTYPE", default="").upper() == "CONSTANT":
                 if not self.overwrite:
                     self.logger.info(f"Background subtraction result exists; skipping: {get_basename(outim)}")
                     return

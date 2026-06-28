@@ -947,7 +947,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 )
                 self.logger.debug(f"Joint run solved_heads: {solved_heads}")
                 solved_input_catalogs = input_catalogs
-            except ScampError as scamp_error:
+            except ScampError as _e:
+                scamp_error = _e
                 scamp_success = False
                 self.logger.warning(f"Error during joint scamp: {scamp_error}", AstrometryError.ScampGenericError)
                 if raise_error:
@@ -998,7 +999,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     solved_input_catalogs.append(precat)
                     self.logger.debug(f"Completed scamp for {precat}")
                     self.logger.debug(f"Individual run solved_heads: {solved_heads}")
-                except ScampError as scamp_error:
+                except ScampError as _e:
+                    scamp_error = _e
                     scamp_success_list[i] = False
                     self.logger.warning(
                         f"Error during individual scamp for {image_info.id} ({os.path.basename(image_info.image_path)}): {scamp_error}",

@@ -110,15 +110,21 @@ class MemoryMonitor:
         total = virtual_memory.total / 1024 / 1024
         used = virtual_memory.used / 1024 / 1024
         free = virtual_memory.available / 1024 / 1024
-        cgroup_status = utils.read_cgroup_mem()
+        try:
+            cgroup_status = utils.read_cgroup_mem()
+            cg_current = cgroup_status["gb_current"]
+            cg_max = cgroup_status["gb_max"]
+            cg_percent = cgroup_status["percent_of_cap"]
+        except (RuntimeError, OSError):
+            cg_current = cg_max = cg_percent = None
         return {
             "total": total,  # in MB
             "used": used,
             "free": free,
             "percent": virtual_memory.percent,
-            "cg_current": cgroup_status["gb_current"],  # in GB
-            "cg_max": cgroup_status["gb_max"],
-            "cg_percent": cgroup_status["percent_of_cap"],
+            "cg_current": cg_current,  # in GB
+            "cg_max": cg_max,
+            "cg_percent": cg_percent,
         }
 
     @utils.classmethodproperty

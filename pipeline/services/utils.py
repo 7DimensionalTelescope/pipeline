@@ -26,44 +26,32 @@ _cached_cg_path = None  # cache for resolved cgroup path
 
 def _discover_user_slice_dir():
     """
-    Return the absolute /sys/fs/cgroup path to the current user's systemd user slice:
-      /sys/fs/cgroup/user.slice/user-<UID>.slice
-    Tries to infer from /proc/self/cgroup; falls back to UID-derived path.
+    Return the absolute /sys/fs/cgroup path for the current process.
+    Reads /proc/self/cgroup (cgroup v2 unified line) directly.
     """
     uid = os.getuid()
-    uid_slice = f"user-{uid}.slice"
-    from_proc = None
 
-    # 1) Parse cgroup v2 unified line from /proc/self/cgroup
+    # 1) Read the actual cgroup path for this process from /proc/self/cgroup
     try:
         with open("/proc/self/cgroup", "r") as f:
             for line in f:
-                # cgroup v2 unified hierarchy typically: "0::/some/path"
+                # cgroup v2 unified hierarchy: "0::/some/path"
                 if line.startswith("0::"):
                     rel = line.split("::", 1)[1].strip().lstrip("/")
-                    # Look for ".../user.slice/user-<uid>.slice[/...]" and cut at the slice level
-                    m = re.search(r"(?:^|/)user\.slice/(user-\d+\.slice)(?:/|$)", rel)
-                    if m and m.group(1) == uid_slice:
-                        # Keep only up to the user-<uid>.slice component
-                        prefix = rel.split("user.slice/")[0].rstrip("/")
-                        from_proc = "/".join(p for p in ["/sys/fs/cgroup", "user.slice", uid_slice] if p)
+                    candidate = os.path.join("/sys/fs/cgroup", rel)
+                    if os.path.isdir(candidate):
+                        return candidate
                     break
     except FileNotFoundError:
-        pass  # Non-Linux or very unusual env; we'll try the fallback
+        pass
 
-    # 2) Use the discovered path if it exists
-    if from_proc and os.path.isdir(from_proc):
-        return from_proc
-
-    # 3) Fallback: construct from UID
-    candidate = f"/sys/fs/cgroup/user.slice/{uid_slice}"
+    # 2) Fallback: UID-derived user slice
+    candidate = f"/sys/fs/cgroup/user.slice/user-{uid}.slice"
     if os.path.isdir(candidate):
         return candidate
 
-    # 4) Nothing worked
     raise RuntimeError(
-        f"Could not locate user slice for UID {uid}. "
-        f"Tried derived path: {candidate}. "
+        f"Could not locate cgroup directory for UID {uid}. "
         f"If running in a container or non-systemd env, pass cg_path explicitly."
     )
 
