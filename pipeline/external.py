@@ -7,11 +7,10 @@ import numpy as np
 from astropy.io import fits
 from typing import List, Tuple, Dict
 
-from ..const.observation import IMAGE_SIZE_X, IMAGE_SIZE_Y
-
 from .errors import SolveFieldError, ScampError
 from .services.logger import Logger
-from .const import REF_DIR, SEXTRACTOR_COMMAND
+from .const.environ import REF_DIR, SEXTRACTOR_COMMAND
+from .const.observation import IMAGE_SIZE_X, IMAGE_SIZE_Y
 from .utils import add_suffix, force_symlink, swap_ext, read_text_file, ansi_clean
 from .utils.header import fitsrec_to_header
 
