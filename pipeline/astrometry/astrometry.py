@@ -298,6 +298,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                         evaluate_prep_sol=evaluate_prep_sol,
                         debug_plot=debug_plot,
                     )
+                    self._finalize_astrometry_sanity(image_info)
                     continue
 
                 # run initial solve: scamp or solve-field
@@ -324,6 +325,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                         evaluate_prep_sol=evaluate_prep_sol,
                         debug_plot=debug_plot,
                     )
+
+                self._finalize_astrometry_sanity(image_info)
 
             # evaluate main scamp result
             self.evaluate_solution(use_threading=use_threading_for_eval, scamp_preset="main", overwrite=overwrite)
@@ -395,6 +398,19 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 "rejected-all-by-early-qa",
             )
             raise AstrometryError.EarlyQARejectionError("All images rejected by early QA.")
+
+    def _finalize_astrometry_sanity(self, image_info: ImageInfo) -> None:
+        """Mark image insane if no valid main-scamp WCS solution was obtained after scamp/solve-field attempts"""
+        if image_info.invalid:
+            self.logger.info(f"SANITY F for {image_info.id}: no valid WCS solution after scamp/solve-field")
+            image_info.SANITY = False
+            try:
+                self._write_astrometry_sanity_rejection_to_header(image_info.image_path)
+            except Exception as hdr_exc:
+                self.logger.error(
+                    f"Failed to write SANITY/REJ_PROC for {os.path.basename(image_info.image_path)}: {hdr_exc}"
+                )
+                raise hdr_exc
 
     def _write_astrometry_sanity_rejection_to_header(self, image_path: str) -> None:
         """Write SANITY=F and REJ_PROC so downstream (e.g. single photometry) can match on re-run."""
@@ -1014,18 +1030,6 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                         AstrometryError.ScampGenericError,
                     )
 
-                    if scamp_preset == "main":
-                        self.logger.info(
-                            f"Setting SANITY to False for {image_info.id} ({os.path.basename(image_info.image_path)}) due to scamp error"
-                        )
-                        image_info.SANITY = False  # still salvageable if prep
-                        try:
-                            self._write_astrometry_sanity_rejection_to_header(image_info.image_path)
-                        except Exception as hdr_exc:
-                            self.logger.warning(
-                                f"Failed to write SANITY/REJ_PROC for {os.path.basename(image_info.image_path)}: {hdr_exc}"
-                            )
-
             # Raise error if all images fail
             scamp_success = any(scamp_success_list)
             if not scamp_success:
@@ -1053,20 +1057,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 self.logger.debug(f"Backed up prep head {head} to {backup_head}")
 
         if apply_wcs_to_catalog and solved_input_catalogs:
-            # Only update catalogs for images that are still sane (filter out any that became sanity=False during scamp)
-            filtered_catalogs = []
-            filtered_heads = []
-            for cat, head in zip(solved_input_catalogs, solved_heads):
-                # Find the corresponding image_info from the images_info list we're processing
-                for ii in images_info:
-                    if ii.prep_cat == cat:
-                        if ii.sane:
-                            filtered_catalogs.append(cat)
-                            filtered_heads.append(head)
-                        break
-            if filtered_catalogs:
-                self.update_catalog(filtered_catalogs, filtered_heads)
-                self.logger.info(f"Updated catalogs with solved heads")
+            self.update_catalog(solved_input_catalogs, solved_heads)
+            self.logger.info(f"Updated catalogs with solved heads")
 
         self.logger.info(f"Completed {scamp_preset} scamp in {time_diff_in_seconds(start_time)} seconds")
         self.logger.debug(MemoryMonitor.log_memory_usage)
