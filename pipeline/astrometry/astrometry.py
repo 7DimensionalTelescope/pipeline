@@ -896,8 +896,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             images_info: Single ImageInfo or list of ImageInfo objects. If None, uses all sane images.
         """
         start_time = time.time()
-
-        timeout = timeout or self.config_node.astrometry.scamp_timeout
+        from .utils import get_adaptive_scamp_timeout
 
         # Convert to list and filter to sane images
         if images_info is None:
@@ -905,6 +904,14 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         else:
             images_info = atleast_1d(images_info)
             images_info = [ii for ii in images_info if ii.sane]
+
+        if not images_info:
+            self.logger.warning("run_scamp: no sane images to process, skipping")
+            return False
+
+        timeout = timeout or get_adaptive_scamp_timeout(
+            self.config_node.astrometry.scamp_timeout, max(ii.n_det for ii in images_info)
+        )
 
         input_catalogs = [ii.prep_cat for ii in images_info]
         self.logger.info(
@@ -1445,6 +1452,7 @@ class ImageInfo:
 
     # early qa
     num_frac: Optional[float] = field(default=None)
+    n_det: Optional[int] = field(default=None)
     SANITY: Optional[bool] = field(default=True)
     # late qa
     # UNMATCH, PA_ALIGN, ELLIPMN, ELLIPSTD
@@ -1584,7 +1592,7 @@ class ImageInfo:
         # safety margin
         depth = depth - 0.5
 
-        self.num_frac = get_source_num_frac(sci_cat, ref_cat, sci_zp=zp, depth=depth)
+        self.num_frac, self.n_det = get_source_num_frac(sci_cat, ref_cat, sci_zp=zp, depth=depth)
         self.logger.info(f"{self.id}: Early QA: NUMFRAC = {self.num_frac}")
         return
 

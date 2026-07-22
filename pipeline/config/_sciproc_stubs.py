@@ -51,7 +51,7 @@ if TYPE_CHECKING:
         path: dict
         ahead_file: str
         local_astref: Any
-        scamp_timeout: int
+        scamp_timeout: str
         solvefield_timeout: int
 
     class PhotometryNode(ConfigNode):

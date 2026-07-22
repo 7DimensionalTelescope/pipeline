@@ -504,7 +504,7 @@ def get_num_sources(
     if magerr_key is not None:
         snr = 1.08573620476 / catalog[magerr_key]
         catalog = catalog[snr > snr_threshold]  # reject faint spurious detections
-    if inset_pixels and catalog.columns.get("X_IMAGE") and catalog.columns.get("Y_IMAGE"):  # reject edge spurious dets
+    if inset_pixels and "X_IMAGE" in catalog.columns and "Y_IMAGE" in catalog.columns:  # reject edge spurious dets
         max_x = image_size_x or catalog["X_IMAGE"].max()
         max_y = image_size_y or catalog["Y_IMAGE"].max()
         catalog = catalog[
@@ -531,7 +531,7 @@ def get_source_num_frac(sci_cat: str, local_astref: str, sci_zp, depth: float = 
     )
     ref_num_sources = get_num_sources(local_astref, depth=depth, mag_key="phot_g_mean_mag")
 
-    return sci_num_sources / (SCI_TO_REF_AREA_RATIO * ref_num_sources)
+    return sci_num_sources / (SCI_TO_REF_AREA_RATIO * ref_num_sources), sci_num_sources
 
 
 def get_plateau_end(flags: Table.Column, w=15, thr=0.5) -> int:
@@ -545,3 +545,15 @@ def get_plateau_end(flags: Table.Column, w=15, thr=0.5) -> int:
     # index where the plateau of non‑zero flags ends
     plateau_end = np.argmax(frac_nonzero < thr)
     return plateau_end
+
+
+def get_adaptive_scamp_timeout(
+    setting: int | str, n_det_sci: int, min_timeout: int = 60, max_timeout: int = 300, pivot_n_det: int = 10000
+) -> int:
+    """numbers hard-coded"""
+    if type(setting) == int:
+        return setting
+    else:
+        linear_timeout = min_timeout + (n_det_sci / pivot_n_det - 1) * 0.5 * (max_timeout - min_timeout)
+        # const until pivot_n_det, hits max_timeout at pivot_n_det * 3
+        return min(max(min_timeout, linear_timeout), max_timeout)
