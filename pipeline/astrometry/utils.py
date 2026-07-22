@@ -488,6 +488,9 @@ def get_num_sources(
     mag_key: str = "phot_g_mean_mag",
     magerr_key: str = None,
     snr_threshold: float = 5,
+    inset_pixels: int = 5,
+    image_size_x: int = None,
+    image_size_y: int = None,
 ) -> int:
     """
     Get the number of sources in a catalog.
@@ -500,14 +503,32 @@ def get_num_sources(
     catalog = catalog[catalog[mag_key] + zp < depth]  # depth-selected
     if magerr_key is not None:
         snr = 1.08573620476 / catalog[magerr_key]
-        catalog = catalog[snr > snr_threshold]  # reject spurious detections
+        catalog = catalog[snr > snr_threshold]  # reject faint spurious detections
+    if inset_pixels and catalog.columns.get("X_IMAGE") and catalog.columns.get("Y_IMAGE"):  # reject edge spurious dets
+        max_x = image_size_x or catalog["X_IMAGE"].max()
+        max_y = image_size_y or catalog["Y_IMAGE"].max()
+        catalog = catalog[
+            (catalog["X_IMAGE"] > inset_pixels)
+            & (catalog["X_IMAGE"] < max_x - inset_pixels)
+            & (catalog["Y_IMAGE"] > inset_pixels)
+            & (catalog["Y_IMAGE"] < max_y - inset_pixels)
+        ]
     return len(catalog)
 
 
 def get_source_num_frac(sci_cat: str, local_astref: str, sci_zp, depth: float = 17.0, SCI_TO_REF_AREA_RATIO=0.5):
     """The value of SCI_TO_REF_AREA_RATIO is hard-coded. It is the ratio of science image area / reference image area"""
+    from ..const.observation import IMAGE_SIZE_X, IMAGE_SIZE_Y
 
-    sci_num_sources = get_num_sources(sci_cat, zp=sci_zp, depth=depth, mag_key="MAG_AUTO", magerr_key="MAGERR_AUTO")
+    sci_num_sources = get_num_sources(
+        sci_cat,
+        zp=sci_zp,
+        depth=depth,
+        mag_key="MAG_AUTO",
+        magerr_key="MAGERR_AUTO",
+        image_size_x=IMAGE_SIZE_X,
+        image_size_y=IMAGE_SIZE_Y,
+    )
     ref_num_sources = get_num_sources(local_astref, depth=depth, mag_key="phot_g_mean_mag")
 
     return sci_num_sources / (SCI_TO_REF_AREA_RATIO * ref_num_sources)

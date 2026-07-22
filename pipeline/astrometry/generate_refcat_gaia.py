@@ -498,12 +498,14 @@ def clean_refcat_df(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_7dt_wcs_header(center):
+    from ..const.observation import IMAGE_SIZE_X, IMAGE_SIZE_Y
+
     header = fits.Header()
     header["SIMPLE"] = (True, "conforms to FITS standard")
     header["BITPIX"] = (-32, "array data type")
     header["NAXIS"] = (2, "number of array dimensions")
-    header["NAXIS1"] = 9576
-    header["NAXIS2"] = 6388
+    header["NAXIS1"] = IMAGE_SIZE_X
+    header["NAXIS2"] = IMAGE_SIZE_Y
     coarse_wcs = build_wcs(center["ra"], center["dec"], 4788.5, 3194.5, 0.505, 0, flip=True)
     header.update(coarse_wcs.to_header())
     # print(header)

@@ -80,3 +80,6 @@ HEADER_KEY_MAP = {
     "ra": "OBJCTRA",  # intended pointing, not the actual mount position
     "dec": "OBJCTDEC",
 }
+
+IMAGE_SIZE_X = 9576
+IMAGE_SIZE_Y = 6388
