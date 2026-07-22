@@ -9,7 +9,7 @@ from astropy.table import Table
 pipeline_dir = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(pipeline_dir))
 
-from pipeline.subtract.utils import create_ds9_region_file
+from pipeline.tools.ds9 import create_ds9_region_file
 from pipeline.utils import swap_ext
 
 

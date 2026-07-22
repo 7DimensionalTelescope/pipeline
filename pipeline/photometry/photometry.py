@@ -435,9 +435,8 @@ class PhotometrySingle:
             self.logger.info(f"Start 'PhotometrySingle' for the image {self.name} [{self._id}]")
             self.logger.debug(f"{'=' * 13} {os.path.basename(self.input_image)} {'=' * 13}")
 
-            use_header_seeing = (
-                self._trust_header_seeing and not overwrite
-            ) or self._photometry_mode == "difference_photometry"
+            # use_header_seeing = not overwrite or self._trust_header_seeing
+            use_header_seeing = self._trust_header_seeing
             self.calculate_seeing(use_header_seeing=use_header_seeing, overwrite=overwrite)
             obs_src_table = self.photometry_with_sextractor(overwrite=overwrite)
 
@@ -537,7 +536,7 @@ class PhotometrySingle:
                 self.logger.debug(f"SEEING     : {phot_header.SEEING:.3f} arcsec")
                 self.logger.debug(f"PEEING     : {phot_header.PEEING:.3f} pixel")
                 return
-            elif not self._photometry_mode == "difference_photometry":
+            elif not self._trust_header_seeing:
                 self.logger.warning(
                     "No PSF stats from astrometry. Using sextractor to calculate seeing.", PreviousStageError
                 )
