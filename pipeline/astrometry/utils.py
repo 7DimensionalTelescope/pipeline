@@ -499,7 +499,8 @@ def get_num_sources(
         catalog = Table.read(catalog, hdu=2)
     catalog = catalog[catalog[mag_key] + zp < depth]  # depth-selected
     if magerr_key is not None:
-        catalog = catalog[catalog[mag_key] / catalog[magerr_key] > snr_threshold]  # reject spurious detections
+        snr = 1.08573620476 / catalog[magerr_key]
+        catalog = catalog[snr > snr_threshold]  # reject spurious detections
     return len(catalog)
 
 
