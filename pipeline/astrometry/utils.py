@@ -481,7 +481,14 @@ def _select_3x3_by_nearest(cand_xy, targets):
     return selected
 
 
-def get_num_sources(catalog: str | Table, depth: float = 17.0, zp: float = 0, mag_key: str = "phot_g_mean_mag") -> int:
+def get_num_sources(
+    catalog: str | Table,
+    depth: float = 17.0,
+    zp: float = 0,
+    mag_key: str = "phot_g_mean_mag",
+    magerr_key: str = None,
+    snr_threshold: float = 5,
+) -> int:
     """
     Get the number of sources in a catalog.
     Use any depth shallower than the image's expected depth.
@@ -490,14 +497,16 @@ def get_num_sources(catalog: str | Table, depth: float = 17.0, zp: float = 0, ma
         if not os.path.exists(catalog):
             raise FileNotFoundError(f"Catalog file does not exist: {catalog}")
         catalog = Table.read(catalog, hdu=2)
-    catalog = catalog[catalog[mag_key] + zp < depth]
+    catalog = catalog[catalog[mag_key] + zp < depth]  # depth-selected
+    if magerr_key is not None:
+        catalog = catalog[catalog[mag_key] / catalog[magerr_key] > snr_threshold]  # reject spurious detections
     return len(catalog)
 
 
 def get_source_num_frac(sci_cat: str, local_astref: str, sci_zp, depth: float = 17.0, SCI_TO_REF_AREA_RATIO=0.5):
     """The value of SCI_TO_REF_AREA_RATIO is hard-coded. It is the ratio of science image area / reference image area"""
 
-    sci_num_sources = get_num_sources(sci_cat, zp=sci_zp, depth=depth, mag_key="MAG_AUTO")
+    sci_num_sources = get_num_sources(sci_cat, zp=sci_zp, depth=depth, mag_key="MAG_AUTO", magerr_key="MAGERR_AUTO")
     ref_num_sources = get_num_sources(local_astref, depth=depth, mag_key="phot_g_mean_mag")
 
     return sci_num_sources / (SCI_TO_REF_AREA_RATIO * ref_num_sources)

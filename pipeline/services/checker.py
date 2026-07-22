@@ -48,10 +48,10 @@ class Checker:
             header = fits.getheader(file_path)
             header["FILENAME"] = os.path.basename(file_path)  # to log the name in apply_criteria
 
-            return self.apply_criteria(header=header, dtype=dtype)
+            return self.apply_qa_criteria(header=header, dtype=dtype)
 
         elif header is not None:
-            return self.apply_criteria(header=header, dtype=dtype)
+            return self.apply_qa_criteria(header=header, dtype=dtype)
 
         else:
             raise ValueError("Either file_path or header must be provided")
@@ -170,7 +170,7 @@ class Checker:
 
                     case SanityAction.RECOMPUTE_SANITY:
                         header["FILENAME"] = os.path.basename(image)
-                        computed_sanity = self.apply_criteria(header=header, dtype=dtype)
+                        computed_sanity = self.apply_qa_criteria(header=header, dtype=dtype)
                         if computed_sanity:
                             filtered_images.append(image)
                             if overwrite and header.get("SANITY") is False:
@@ -235,7 +235,7 @@ class Checker:
 
         return filtered_images, sanity_updates
 
-    def load_criteria(self, category: Literal["masterframe", "science"] = "masterframe"):
+    def load_qa_criteria(self, category: Literal["masterframe", "science"] = "masterframe"):
         try:
             category = self._dtype_to_category(category)  # in case input isnot category
             criteria_file = os.path.join(const.REF_DIR, "qa", f"{category.lower()}.json")
@@ -250,7 +250,7 @@ class Checker:
         except Exception as e:
             raise RuntimeError(f"Failed to load criteria: {e}")
 
-    def apply_criteria(
+    def apply_qa_criteria(
         self,
         header: fits.Header,
         dtype: Literal["bias", "dark", "flat", "masterframe", "science"] = None,
@@ -268,7 +268,7 @@ class Checker:
         category = self._dtype_to_category(dtype)
 
         if not hasattr(self, "criteria") or self.criteria is None or self.loaded_category != category:
-            self.load_criteria(category=category)
+            self.load_qa_criteria(category=category)
 
         criteria = self.criteria[dtype.upper()]
 

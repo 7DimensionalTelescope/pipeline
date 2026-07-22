@@ -135,7 +135,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         self._original_raw_groups = copy.deepcopy(self.raw_groups)
         self._current_group = 0  # Do not manipulate it directly; use proceed_to_next_group and so on
         self.log_group_manifest()
-        self.load_criteria()
+        self.load_qa_criteria()
 
         self.logger.info(f"{self._n_groups} groups are found")
         self.logger.debug(f"raw_groups:\n{pp.pformat(self.raw_groups)}")
@@ -533,7 +533,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             # dtype=dtype,
         )
 
-        sanity_flag = self.apply_criteria(header=header, dtype=dtype)  # evaluates sanity of the image itself
+        sanity_flag = self.apply_qa_criteria(header=header, dtype=dtype)  # evaluates sanity of the image itself
         if ppflag_val & ppflag.PPFLAG_SANITY_F_USED:  # consider propagated sanity flag of the ingredient frames
             sanity_flag = False
 
