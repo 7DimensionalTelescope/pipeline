@@ -19,3 +19,4 @@ date	nightdate	parts	wall	comment
 260104		fw	flat	new_filters
 260104		mirror	flat	optical_alignment
 260128		cam	bias,dark,flat	31164
+260705		cam	bias,dark,flat	31164

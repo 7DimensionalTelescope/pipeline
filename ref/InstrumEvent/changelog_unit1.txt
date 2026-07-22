@@ -29,3 +29,4 @@ date	nightdate	parts	wall	comment
 250525		cam	flat	PA,tilt
 260104		fw		new_filters
 260104		mirror	flat	optical_alignment
+260704		focuser	flat	replacement

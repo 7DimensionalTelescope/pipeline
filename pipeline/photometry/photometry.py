@@ -362,7 +362,7 @@ class PhotometrySingle:
         self.input_image = collapse(self.phot_conf.input_images, raise_error=True)
         self.logger.debug(f"input_image: {self.input_image}")
         self.logger.debug(f"=" * 100)
-        self.image_info = ImageInfo.parse_image_header_info(self.input_image)
+        self.image_info = ImageInfo.parse_image_header_info(self.input_image, logger=self.logger)
         self.name = name or os.path.basename(self.input_image)
         self.logger.debug(f"{self.name}: ImageInfo: {self.image_info}")
         self.phot_header = PhotometryHeader(self.image_info)  # mind its update structure
@@ -435,7 +435,10 @@ class PhotometrySingle:
             self.logger.info(f"Start 'PhotometrySingle' for the image {self.name} [{self._id}]")
             self.logger.debug(f"{'=' * 13} {os.path.basename(self.input_image)} {'=' * 13}")
 
-            self.calculate_seeing(use_header_seeing=(self._trust_header_seeing and not overwrite), overwrite=overwrite)
+            use_header_seeing = (
+                self._trust_header_seeing and not overwrite
+            ) or self._photometry_mode == "difference_photometry"
+            self.calculate_seeing(use_header_seeing=use_header_seeing, overwrite=overwrite)
             obs_src_table = self.photometry_with_sextractor(overwrite=overwrite)
 
             if self._check_filter:
@@ -517,7 +520,15 @@ class PhotometrySingle:
         phot_header = phot_header or self.phot_header
 
         if use_header_seeing:
-            if self.image_info.has_psf_stats_from_astrometry:
+            if self.image_info.has_psf_stats_from_photometry:
+                phot_header.SEEING = self.image_info.SEEING
+                phot_header.PEEING = self.image_info.PEEING
+                phot_header.ELLIP = self.image_info.ELLIP
+                phot_header.ELONG = self.image_info.ELONG
+                self.logger.debug(f"Trusting seeing/peeing from the header")
+                self.logger.debug(f"SEEING     : {phot_header.SEEING:.3f} arcsec")
+                self.logger.debug(f"PEEING     : {phot_header.PEEING:.3f} pixel")
+            elif self.image_info.has_psf_stats_from_astrometry:
                 phot_header.SEEING = self.image_info.SEEINGMN
                 phot_header.PEEING = self.image_info.PEEINGMN
                 phot_header.ELLIP = self.image_info.ELLIPMN
@@ -526,9 +537,14 @@ class PhotometrySingle:
                 self.logger.debug(f"SEEING     : {phot_header.SEEING:.3f} arcsec")
                 self.logger.debug(f"PEEING     : {phot_header.PEEING:.3f} pixel")
                 return
-            else:
+            elif not self._photometry_mode == "difference_photometry":
                 self.logger.warning(
                     "No PSF stats from astrometry. Using sextractor to calculate seeing.", PreviousStageError
+                )
+            else:
+                self.logger.error("No PSF stats from astrometry and can't recompute seeing.", PreviousStageError)
+                raise self.logger.process_error.PreviousStageError(
+                    "No PSF stats from astrometry and can't recompute seeing."
                 )
 
         # config_seeing = get_key(self.config.qa, "seeing")
@@ -539,7 +555,7 @@ class PhotometrySingle:
         #     phot_header.ellipticity = config_ellipticity  # 1 - b/a
         #     phot_header.elongation = 1 / (1 - config_ellipticity)  # a/b
 
-        else:
+        if phot_header.SEEING is None:
             prep_cat = self.path.photometry.prep_catalog
             self.logger.debug(f"(photometry) prep_cat: {prep_cat}")
 
@@ -1232,6 +1248,10 @@ class ImageInfo:
     PEEINGMN: float = None
     ELLIPMN: float = None
     ELONGMN: float = None
+    SEEING: float = None
+    PEEING: float = None
+    ELLIP: float = None
+    ELONG: float = None
 
     # keys needed in PhotometryHeader
     phot_header_keys: dict = None  # don't make this dict here; can be shared by multiple instances
@@ -1263,8 +1283,14 @@ class ImageInfo:
             and self.ELONGMN is not None
         )
 
+    @property
+    def has_psf_stats_from_photometry(self) -> bool:
+        return (self.SEEING is not None or self.PEEING is not None) and (
+            self.ELLIP is not None or self.ELONG is not None
+        )
+
     @classmethod
-    def parse_image_header_info(cls, image_path: str) -> ImageInfo:
+    def parse_image_header_info(cls, image_path: str, logger=None) -> ImageInfo:
         """Parses image information from a FITS header."""
 
         hdr = fits.getheader(image_path)
@@ -1292,9 +1318,23 @@ class ImageInfo:
                 "Check Astrometry solution: no WCS information for Photometry"
             )
 
+        ELLIPMN = hdr.get("ELLIPMN", None)
         ELONGMN = hdr.get("ELONGMN", None)
-        if ELONGMN is None and hdr.get("ELLIPMN", None) is not None:
-            ELONGMN = 1 / (1 - hdr["ELLIPMN"])
+        if ELONGMN is None and ELLIPMN is not None:
+            ELONGMN = 1 / (1 - ELLIPMN)
+
+        ELLIP = hdr.get("ELLIP", None)
+        ELONG = hdr.get("ELONG", None)
+        if ELONG is None and ELLIP is not None:
+            ELONG = 1 / (1 - ELLIP)
+
+        SATURATE = hdr.get("SATURATE", None)
+        if SATURATE is None:
+            if logger is not None:
+                logger.warning("SATURATE is not in the header. Using default value 60000.", PreviousStageError)
+            else:
+                print("SATURATE is not in the header. Using default value 60000.")
+            SATURATE = 60000
 
         kwargs = dict(
             obj=hdr["OBJECT"],
@@ -1314,12 +1354,16 @@ class ImageInfo:
             ycent=ycent,
             n_binning=hdr["XBINNING"],
             pixscale=hdr["XBINNING"] * PIXSCALE,
-            satur_level=get_header_key(image_path, "SATURATE", default=60000),
+            satur_level=SATURATE,
             bpx_interp=interped,
             SEEINGMN=hdr.get("SEEINGMN", None),
             PEEINGMN=hdr.get("PEEINGMN", None),
-            ELLIPMN=hdr.get("ELLIPMN", None),
+            ELLIPMN=ELLIPMN,
             ELONGMN=ELONGMN,
+            SEEING=hdr.get("SEEING", None),
+            PEEING=hdr.get("PEEING", None),
+            ELLIP=hdr.get("ELLIP", None),
+            ELONG=hdr.get("ELONG", None),
         )
 
         # pick up header keys needed by PhotometryHeader
