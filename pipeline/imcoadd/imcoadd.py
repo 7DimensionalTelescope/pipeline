@@ -285,6 +285,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 raise ValueError(f"Invalid coadd routine: {routine!r} (expected 'legacy' or 'reproject-first')")
 
             self.config_node.flag.coadd = True
+            self.record_runtime_version()
             self.logger.info(f"'ImCoadd' is Completed in {time_diff_in_seconds(self._st)} seconds")
         except Exception as e:
             self.logger.error(f"Error during imcoadd processing: {str(e)}", e, exc_info=True)
