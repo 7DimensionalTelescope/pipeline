@@ -137,7 +137,8 @@ def tolerant_search(
         # Special routine for flat: ignore binning.
         if dtype == "flat":
             binning_flags = replace(flags, ignored_binning=True)
-            searched = _search(search_template, ignore_binning=True, ignore_sanity=ignore_sanity, **kwargs)
+            binning_template = _build_lenient_template(search_template, dtype, ignore_binning=True)
+            searched = _search(binning_template, ignore_sanity=ignore_sanity, **kwargs)
             if searched:
                 _commit_flags(binning_flags)
                 return searched
