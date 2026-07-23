@@ -261,6 +261,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 self.too_db.mark_completed(self.too_id)
 
             setattr(self.config_node.flag, self._process_spec.name, True)
+            self.record_runtime_version()
 
             self.logger.info(f"'Photometry' is Completed in {time_diff_in_seconds(st)} seconds")
             self.logger.debug(MemoryMonitor.log_memory_usage)

@@ -28,3 +28,16 @@ class RuntimeVersionMixin:
                 print(f"[INFO] {msg}")
             return True
         return False
+
+    def record_runtime_version(self) -> None:
+        """
+        Stamp current pipeline version onto this process's config section.
+        Use it after setting config.node.flag.x as it serves as overwrite indicator for successful runs.
+        process_status DB captures the runtime version for failed runs.
+        """
+        from .. import __version__
+
+        spec = self._process_spec
+        section = getattr(self.config_node, spec.config_section, None)
+        if section is not None:
+            section.runtime_version = __version__

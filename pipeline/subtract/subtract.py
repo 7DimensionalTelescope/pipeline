@@ -155,6 +155,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self.update_progress(SCIPROCESS_REGISTRY.completed_progress("subtraction"), "imsubtract-completed")
 
             self.config_node.flag.subtraction = True
+            self.record_runtime_version()
             self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")
 
         except Exception as e:

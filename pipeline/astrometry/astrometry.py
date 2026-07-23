@@ -341,6 +341,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     self.image_qa.update_data(qa_id, **qa_data.to_dict())
 
             self.config_node.flag.astrometry = True
+            self.record_runtime_version()
 
             self.logger.info(
                 f"'Astrometry' is completed in {time_diff_in_seconds(self.start_time)} seconds "
@@ -647,6 +648,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self.update_header()
 
             self.config_node.flag.astrometry = True
+            self.record_runtime_version()
 
             self.logger.info(
                 f"'Astrometry' is completed in {time_diff_in_seconds(start_time)} seconds "
