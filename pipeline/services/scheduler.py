@@ -85,6 +85,7 @@ class Scheduler:
         overwrite_preprocess=False,
         overwrite_science=False,
         input_type=None,
+        processes=None,
         **kwargs,
     ):
         """Create a scheduler from a list of configs."""
@@ -114,7 +115,9 @@ class Scheduler:
             if task_type == "preprocess":
                 scheduler_kwargs = ["-overwrite"] if (overwrite or overwrite_data or overwrite_preprocess) else []
             else:
-                scheduler_kwargs = ["-overwrite"] if (overwrite or overwrite_data or overwrite_science) else []
+                scheduler_kwargs = ["-processes"] + list(processes) if processes is not None else []
+                if overwrite or overwrite_data or overwrite_science:
+                    scheduler_kwargs.append("-overwrite")
 
             table.add_row(
                 [

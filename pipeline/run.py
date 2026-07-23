@@ -64,7 +64,7 @@ def run_scidata_reduction(
             ast = Astrometry(config)
             ast.run(overwrite=overwrite)
             del ast
-        if "photometry" in processes and (not config.node.flag.single_photometry or overwrite):
+        if "single_photometry" in processes and (not config.node.flag.single_photometry or overwrite):
             phot = Photometry(config, photometry_mode="single_photometry", overwrite=overwrite)
             phot.run(overwrite=overwrite)
             del phot
@@ -72,7 +72,7 @@ def run_scidata_reduction(
             coadd = ImCoadd(config, overwrite=overwrite)
             coadd.run()
             del coadd
-        if "photometry" in processes and (not config.node.flag.coadd_photometry or overwrite):
+        if "coadd_photometry" in processes and (not config.node.flag.coadd_photometry or overwrite):
             phot = Photometry(config, photometry_mode="coadd_photometry", overwrite=overwrite)
             phot.run(overwrite=overwrite)
             del phot
@@ -80,7 +80,7 @@ def run_scidata_reduction(
             subt = ImSubtract(config, overwrite=overwrite)
             subt.run()
             del subt
-        if "photometry" in processes and (not config.node.flag.difference_photometry or overwrite):
+        if "difference_photometry" in processes and (not config.node.flag.difference_photometry or overwrite):
             phot = Photometry(config, photometry_mode="difference_photometry", overwrite=overwrite)
             phot.run(overwrite=overwrite)
             del phot
