@@ -257,6 +257,65 @@ class Scheduler:
 
         return Table(data, dtype=self._empty_schedule.dtype)
 
+    @staticmethod
+    def _config_stem(config):
+        """Config-file path -> process_status.name stem (basename without .yml)."""
+        base = os.path.basename(str(config))
+        if base.endswith(".yml"):
+            return base[:-4]
+        if base.endswith(".yaml"):
+            return base[:-5]
+        return base
+
+    def _dependency_edges(self, table):
+        """Extract config-level dependency edges from a schedule table.
+
+        A parent row's ``dependent_idx`` lists the scheduler indices that
+        depend on it, so each entry becomes an edge
+        ``(derived_name, source_name, source_config_type)``.  Walking every row
+        keeps this agnostic to how many config types form the chain (e.g. a
+        future type depending on science is mirrored automatically once the
+        blueprint records those dependent_idx links).
+        """
+        edges = []
+        if table is None or len(table) == 0:
+            return edges
+
+        idx_to_stem = {int(row["index"]): self._config_stem(row["config"]) for row in table}
+
+        for row in table:
+            source_stem = self._config_stem(row["config"])
+            source_type = str(row["config_type"])
+            dependents = row["dependent_idx"] if row["dependent_idx"] is not None else []
+            for child_idx in dependents:
+                derived_stem = idx_to_stem.get(int(child_idx))
+                if not derived_stem:
+                    continue
+                edges.append((derived_stem, source_stem, source_type))
+        return edges
+
+    def mirror_dependencies(self):
+        """Best-effort mirror of the schedule's config dependencies to postgres.
+
+        The SQLite schedule stays authoritative; this never raises so the
+        scheduler keeps working when the database is offline.
+        """
+        try:
+            table = self._get_table_from_db() if self.use_system_queue else self._schedule
+            edges = self._dependency_edges(table)
+            if not edges:
+                return
+            from .database.process_status_dependency import ProcessStatusDependency
+
+            ProcessStatusDependency().replace_dependencies(edges)
+        except Exception as e:
+            try:
+                get_high_level_task_logger(__name__).debug(
+                    f"process_status_dependency mirror skipped: {e}"
+                )
+            except Exception:
+                pass
+
     def _check_duplicates(self):
         """Check for duplicate configs in database. Logs warning but doesn't raise error."""
         with self._db_connection() as conn:
@@ -1074,6 +1133,9 @@ class Scheduler:
                     raise  # Re-raise to see what's wrong
 
             conn.commit()
+
+        # Mirror config-level dependencies to postgres (best-effort; never fatal).
+        self.mirror_dependencies()
 
     def update_process_status(self):
 

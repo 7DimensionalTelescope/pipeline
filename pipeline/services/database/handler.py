@@ -7,6 +7,7 @@ from .too import TooDB
 from .process_status import ProcessStatus
 from .image_qa import ImageQA
 from .image_qa_dependency import ImageQADependency
+from .process_status_dependency import ProcessStatusDependency
 from ...errors import registry
 
 if TYPE_CHECKING:
@@ -36,6 +37,7 @@ class DatabaseHandler:
             self.image_qa = None if is_too else ImageQA(db_params)
             self.image_qa_id = None if is_too else None
             self.image_qa_dependency = None if is_too else ImageQADependency(db_params)
+            self.process_status_dependency = None if is_too else ProcessStatusDependency(db_params)
         else:
             self.too_db = None
             self.too_id = None
@@ -44,6 +46,7 @@ class DatabaseHandler:
             self.image_qa = None
             self.image_qa_id = None
             self.image_qa_dependency = None
+            self.process_status_dependency = None
 
     @property
     def is_connected(self) -> bool:
@@ -144,6 +147,24 @@ class DatabaseHandler:
             return n
         except Exception as e:
             self.logger.warning(f"Failed to sync image_qa_dependency for qa_id={qa_id}: {e}")
+            return 0
+
+    def mirror_config_dependencies(self, edges) -> int:
+        """Best-effort mirror of config-level dependency edges into postgres.
+
+        ``edges`` is an iterable of ``(derived_config_name, source_config_name,
+        dependency_role)``.  Never raises: the scheduler's own store remains
+        authoritative, so a database outage must not break callers.
+        """
+        if not self.is_connected or self.process_status_dependency is None:
+            return 0
+        try:
+            n = self.process_status_dependency.replace_dependencies(edges)
+            if n:
+                self.logger.debug(f"Mirrored {n} process_status_dependency rows")
+            return n
+        except Exception as e:
+            self.logger.warning(f"Failed to mirror process_status_dependency: {e}")
             return 0
 
     def update_image_qa_data(self, image_qa_id: int, data):
