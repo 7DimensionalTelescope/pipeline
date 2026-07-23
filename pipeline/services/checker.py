@@ -315,10 +315,11 @@ class Checker:
                     break
 
         if not sanity:
+            msg = f"Rejected {header.get('FILENAME', 'image')} by key {key}={header[key]}: {value['description']}"
             if hasattr(self, "logger") and self.logger is not None:
-                self.logger.info(f"Rejected {header.get('FILENAME', 'image')} by key {key}: {value['description']}")
+                self.logger.info(msg)
             else:
-                print(f"Rejected {header.get('FILENAME', 'image')} by key {key}: {value['description']}")
+                print(msg)
 
         return sanity
 

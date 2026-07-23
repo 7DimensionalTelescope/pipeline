@@ -487,21 +487,31 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         # PPFLAG: propagate from dependencies (bias=0, dark=bias, flat=bias|flatdark)
         if dtype == "bias":
             ppflag_val = 0
+            ingredient_ppflags = {}
         elif dtype == "dark":
             ppflag_val = self._ppflag.get("bias", 0)
             self._flatdark_ppflag = ppflag_val  # flatdark = dark when generated
+            ingredient_ppflags = {"bias": self._ppflag.get("bias", 0)}
         elif dtype == "flat":
             ppflag_val = ppflag.propagate_ppflag(self._ppflag.get("bias", 0), getattr(self, "_flatdark_ppflag", 0))
+            ingredient_ppflags = {
+                "bias": self._ppflag.get("bias", 0),
+                "flatdark": getattr(self, "_flatdark_ppflag", 0),
+            }
         else:
             raise PreprocessError.ValueError(
                 f"[Group {self._current_group+1}] Undefined behavior: _generate_masterframe is called but dtype is not bias, dark, or flat"
             )
         self._ppflag[dtype] = ppflag_val
+        sanity_f_ingredients = [
+            name for name, val in ingredient_ppflags.items() if val & ppflag.PPFLAG_SANITY_F_USED
+        ]
 
         sanity_flag = self._assess_masterframe_quality_and_update_header(
             header=header,
             dtype=dtype,
             ppflag_val=ppflag_val,
+            sanity_f_ingredients=sanity_f_ingredients,
         )
 
         if sanity_flag:
@@ -525,6 +535,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         header,
         dtype,
         ppflag_val: int = 0,
+        sanity_f_ingredients: list = None,
     ):
         """Merge pre-computed raw QA + pixel statistics from the master ``.header`` text file."""
         header = record_masterframe_statistics(
@@ -535,6 +546,11 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
         sanity_flag = self.apply_qa_criteria(header=header, dtype=dtype)  # evaluates sanity of the image itself
         if ppflag_val & ppflag.PPFLAG_SANITY_F_USED:  # consider propagated sanity flag of the ingredient frames
+            if sanity_flag:
+                culprits = ", ".join(sanity_f_ingredients) if sanity_f_ingredients else "bias/dark/flatdark"
+                self.logger.warning(
+                    f"[Group {self._current_group+1}] Master {dtype} rejected: ingredient frame(s) with SANITY=False were used ({culprits})"
+                )
             sanity_flag = False
 
         self.update_sanity_header(header, sanity_flag)
