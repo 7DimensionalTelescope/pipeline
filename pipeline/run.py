@@ -3,6 +3,15 @@ from typing import List
 
 from .config import PreprocConfiguration, SciProcConfiguration
 from .const.run import DEFAULT_SCIDATA_PROCESSES
+from .const.sciproc import (
+    SCIPROCESS_REGISTRY,
+    ASTROMETRY_SPEC,
+    SINGLE_PHOTOMETRY_SPEC,
+    COADD_SPEC,
+    COADD_PHOTOMETRY_SPEC,
+    SUBTRACTION_SPEC,
+    DIFFERENCE_PHOTOMETRY_SPEC,
+)
 from .preprocess import Preprocess
 from .astrometry import Astrometry
 from .photometry import Photometry
@@ -60,28 +69,36 @@ def run_scidata_reduction(
             print(f"[ERROR] is_too mismatch: node.settings.is_too={config.node.settings.is_too} != is_too={is_too}")
             raise ValueError("is_too mismatch")
 
-        if "astrometry" in processes and (not config.node.flag.astrometry or overwrite):
+        if overwrite:
+            # Invalidate the flags for every stage this run will (re)produce, up front,
+            # so an interrupted overwrite run never leaves stale downstream flags = True.
+            for spec in SCIPROCESS_REGISTRY.specs:
+                if spec.name in processes:
+                    setattr(config.node.flag, spec.name, False)
+            config.write_config()
+
+        if ASTROMETRY_SPEC.name in processes and (not getattr(config.node.flag, ASTROMETRY_SPEC.name) or overwrite):
             ast = Astrometry(config)
             ast.run(overwrite=overwrite)
             del ast
-        if "single_photometry" in processes and (not config.node.flag.single_photometry or overwrite):
-            phot = Photometry(config, photometry_mode="single_photometry", overwrite=overwrite)
+        if SINGLE_PHOTOMETRY_SPEC.name in processes and (not getattr(config.node.flag, SINGLE_PHOTOMETRY_SPEC.name) or overwrite):
+            phot = Photometry(config, photometry_mode=SINGLE_PHOTOMETRY_SPEC.photometry_mode, overwrite=overwrite)
             phot.run(overwrite=overwrite)
             del phot
-        if "coadd" in processes and (not config.node.flag.coadd or overwrite):
+        if COADD_SPEC.name in processes and (not getattr(config.node.flag, COADD_SPEC.name) or overwrite):
             coadd = ImCoadd(config, overwrite=overwrite)
             coadd.run()
             del coadd
-        if "coadd_photometry" in processes and (not config.node.flag.coadd_photometry or overwrite):
-            phot = Photometry(config, photometry_mode="coadd_photometry", overwrite=overwrite)
+        if COADD_PHOTOMETRY_SPEC.name in processes and (not getattr(config.node.flag, COADD_PHOTOMETRY_SPEC.name) or overwrite):
+            phot = Photometry(config, photometry_mode=COADD_PHOTOMETRY_SPEC.photometry_mode, overwrite=overwrite)
             phot.run(overwrite=overwrite)
             del phot
-        if "subtract" in processes and (not config.node.flag.subtraction or overwrite):
+        if SUBTRACTION_SPEC.name in processes and (not getattr(config.node.flag, SUBTRACTION_SPEC.name) or overwrite):
             subt = ImSubtract(config, overwrite=overwrite)
             subt.run()
             del subt
-        if "difference_photometry" in processes and (not config.node.flag.difference_photometry or overwrite):
-            phot = Photometry(config, photometry_mode="difference_photometry", overwrite=overwrite)
+        if DIFFERENCE_PHOTOMETRY_SPEC.name in processes and (not getattr(config.node.flag, DIFFERENCE_PHOTOMETRY_SPEC.name) or overwrite):
+            phot = Photometry(config, photometry_mode=DIFFERENCE_PHOTOMETRY_SPEC.photometry_mode, overwrite=overwrite)
             phot.run(overwrite=overwrite)
             del phot
 

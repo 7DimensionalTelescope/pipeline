@@ -1,5 +1,8 @@
 # this exists separate from sciproc.py for leaner imports
-DEFAULT_SCIDATA_PROCESSES = ["astrometry", "single_photometry", "coadd", "coadd_photometry", "subtract", "difference_photometry"]
+from .sciproc import SCIPROCESS_REGISTRY
+
+# process vocabulary is the ProcessSpec name (also the `flag:` key), in run order
+DEFAULT_SCIDATA_PROCESSES = [spec.name for spec in SCIPROCESS_REGISTRY.specs]
 
 # return code policy: 0 = success, 1 = failure
 SUCCESS_RETURN_CODE = 0

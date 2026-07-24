@@ -62,9 +62,6 @@ class SciProcConfiguration(BaseConfig):
         # fill in missing keys, even though initialized
         self.fill_missing_from_yaml()
 
-        if overwrite:
-            self.reset_flags()
-
         if not os.path.exists(self.config_file) or overwrite:
             self.write_config()
         self.logger.info("Completed to load configuration")
@@ -304,13 +301,6 @@ class SciProcConfiguration(BaseConfig):
             self.write_config(force=True)
 
         return self
-
-    def reset_flags(self):
-        self.logger.info("Resetting flags")
-        for key in self.node.flag.__dict__:
-            if key.startswith("_"):
-                continue
-            setattr(self.node.flag, key, False)
 
     @classmethod
     def reset_config(cls, config_path: str, write: bool = True) -> "SciProcConfiguration":
