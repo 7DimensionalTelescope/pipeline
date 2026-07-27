@@ -818,6 +818,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             ppflag.set_ppflag_in_header(header, sci_ppflag)
             header = prep_utils.ensure_mjd_in_header(header, logger=self.logger)
             header = prep_utils.sanitize_header(header)
+            header = prep_utils.add_image_id(header)  # mint fresh; do not inherit the raw frame's IMAGEID
             header = add_padding(header, n_head_blocks, copy_header=True)
             self.logger.debug(
                 f"Header size: {(x := len(header.tostring()))} bytes, {x//2880} blocks + {(x%2880)/80} lines"

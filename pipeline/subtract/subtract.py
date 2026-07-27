@@ -389,6 +389,10 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             with fits.open(self.subt_image_file, mode="update") as hdul:
                 header = hdul[0].header
                 header["PIPE_VER"] = (str(__version__), "Last Run Sciproc Pipeline Version")
+
+                from ..preprocess.utils import add_image_id
+
+                add_image_id(header)  # fresh id so the diff never inherits the science image's IMAGEID
                 hdul.flush()
 
     def plot_subtracted_image(self):

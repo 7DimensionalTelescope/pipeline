@@ -72,3 +72,23 @@ Try to mimic existing comment style whenever possible.
 
 Whenever you have to deal with FITS files and parse their types, refer to PathHandler and NameHandler rather than creating another normalizer. 
 They are the core to be trusted.
+
+## Read CODEBASE.md before you touch this repository
+
+`CODEBASE.md` at the repo root documents the infrastructure that already exists and must
+not be rebuilt: `PathHandler` (every path), `NameHandler` (filenames), `Configuration`
+(YAML-backed run state), `DatabaseHandler` / `free_query` (the four Postgres tables), and
+the orchestration chain. Agents who skip it reliably reimplement path logic, glob the
+filesystem instead of querying the database, and misread `process_status.status`.
+
+Read it in full for anything non-trivial. At minimum read §5 (the task-to-location table)
+plus the section covering your task: paths §3.2, config §3.3, orchestration §3.4,
+processing modules §3.5, databases and SQL schema §3.8, versioning §3.9. §6 lists the
+invariants.
+
+Two of those constraints apply whether or not you have read the file. Do not scan the
+filesystem to find data — the tree spans several NFS mounts and only raw frames are
+canonical; ask `PathHandler` or the database. And never run anything that writes or
+overwrites data when the recorded-version bookkeeping is inconsistent, because
+`overwrite=True` can be escalated automatically from a stale or missing
+`runtime_version`; report what you found and stop.

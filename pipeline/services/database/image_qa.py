@@ -27,6 +27,7 @@ class ImageQATable:
     image_type: Optional[str] = None
     image_group: Optional[str] = None
     image_path: Optional[str] = None
+    imageid: Optional[str] = None
 
     nightdate: Optional[date] = None
     unit: Optional[str] = None

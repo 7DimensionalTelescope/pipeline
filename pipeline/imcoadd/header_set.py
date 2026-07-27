@@ -293,4 +293,8 @@ class InputHeaderSet:
 
         header["PIPE_VER"] = (str(__version__), "Last Run Sciproc Pipeline Version")
 
+        from ..preprocess.utils import add_image_id
+
+        add_image_id(header)
+
         return header
