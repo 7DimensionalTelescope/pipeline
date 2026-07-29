@@ -1159,7 +1159,9 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         Returns d_m_file, f_m_file, sig_z_file, sig_f_file
         """
         # z_m_file, d_m_file, f_m_file = (cls(s).preprocess.masterframe for s in mzdf_list)  # basename to full path
-        z_m_file, d_m_file, f_m_file = cls(mzdf_list, is_pipeline=True).preprocess._masterframe  # with vectorized PathHandler
+        z_m_file, d_m_file, f_m_file = cls(
+            mzdf_list, is_pipeline=True
+        ).preprocess._masterframe  # with vectorized PathHandler
         sig_z_file = z_m_file.replace("bias", "biassig")
         sig_f_file = f_m_file.replace("flat", "flatsig")
         return d_m_file, f_m_file, sig_z_file, sig_f_file
@@ -1728,6 +1730,15 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
     @property
     def conv_dir(self) -> str:
         return os.path.join(self._parent.tmp_dir, "conv")
+
+    @property
+    def weight_dir(self) -> str:
+        return os.path.join(self._parent.tmp_dir, "weight")
+
+    # ---- weight maps of the pristine input frames ----
+    @property
+    def input_weight_images(self) -> str | List[str]:
+        return [os.path.join(self.weight_dir, add_suffix(b, "weight")) for b in self._basenames]
 
     # ---- background subtraction ----
     @property

@@ -340,6 +340,88 @@ intra-stage checkpoints that drive the `progress` column in `process_status`. Ad
 reordering a stage starts here. `pipeline/const/preproc.py` does the same for the two
 preprocessing phases, `masterframe` and `data_reduction`.
 
+**Never compare a process to a string literal.** `if process == "astrometry"` is the
+canonical mistake: it hardcodes an identifier that is defined once, silently evaluates
+`False` forever if misspelled, and has to be found by grep when a stage is renamed. Go
+through the spec instead — `SCIPROCESS_REGISTRY.get(name)` raises `KeyError` on an unknown
+name, so a typo fails loudly at the point of the error.
+
+The established patterns, all already in the codebase:
+
+- A module declares its identity as a class attribute: `_process_spec = ASTROMETRY_SPEC`
+  (`astrometry.py:75`), `COADD_SPEC` (`imcoadd.py:39`), `SUBTRACTION_SPEC`
+  (`subtract.py:30`). `Photometry` resolves its own at runtime,
+  `self._process_spec = SCIPROCESS_REGISTRY.get(self._photometry_mode)`
+  (`photometry.py:111`), which is why one class can serve three stages.
+- Downstream code reads off the spec rather than re-deriving anything:
+  `self._process_spec.name`, `.config_section`, `.error_code`,
+  `setattr(self.config_node.flag, self._process_spec.name, True)`, and the registry's
+  `configured_progress` / `completed_progress` / `milestone_progress` / `step_progress`.
+- Even mode strings come from the spec: `run.py:85` passes
+  `SINGLE_PHOTOMETRY_SPEC.photometry_mode`, not `"single_photometry"`.
+- Need to iterate the stages in order? Use `SCIPROCESS_REGISTRY.specs`, which the registry
+  sorts by `progress_start`. Do not write your own ordered list of names.
+
+Two traps worth knowing. `name` is unique and validated, but **`config_section` is not** —
+`single_photometry`, `coadd_photometry`, and `difference_photometry` all use
+`config_section="photometry"`, so branching on the section cannot identify a stage; use
+`name` or `photometry_mode`. And you *will* find literal comparisons on `_photometry_mode`
+inside `photometry.py` (`:114`, `:211`, `:255`); treat those as pre-existing, not as a
+pattern to copy or to clean up unasked.
+
+#### The `.header` sidecar — the pristine post-Preprocess header
+
+Every processed single gets a sibling text file with the same stem and a `.header`
+extension (`PathHandler(...).preprocess.header`, `path.py:1215`; written by
+`write_header_file`, `utils/header.py:396`). **It archives the header as it stood at the
+end of `Preprocess`** — before any WCS, zeropoint, or coadd bookkeeping was injected.
+
+Its job is to make sciprocess reruns clean. `reset_header(target_image)`
+(`utils/header.py:335`) restores a FITS header from the sidecar, so a rerun starts from
+the pristine baseline instead of accumulating stale WCS and photometry cards from the
+previous attempt. `Astrometry.reset_headers` (`astrometry.py:718`) calls it under the
+`reset_image_header=True` default (`:684`, `:1288`). Header replacement is card-by-card
+via `_reset_header_core` (`:362`), preserving the structural keys.
+
+**So once sciprocess has run, the FITS header and the `.header` file are deliberately
+different, and neither is stale.** The sidecar is the baseline; the FITS header is the
+current state. Which one you get depends on how you ask:
+
+- `get_header(path)` (`utils/header.py:13`) checks **`.header` first**, then `.head`, then
+  the FITS itself. On a processed single that has been through sciprocess it therefore
+  returns the *pre-sciprocess* header — no WCS, no zeropoints. This is intentional: the
+  point is to avoid FITS I/O for the cheap identity keys.
+- If you need the **current** header — WCS, `ZP*`, `SEEING`, `SANITY` as updated by later
+  stages — read the FITS directly with `astropy.io.fits.getheader`.
+
+Getting this backwards is a quiet failure: you receive a real, complete, correctly-parsed
+header that simply predates the stage you care about. When a header key is missing and you
+expect it, check which of the two you read before concluding the pipeline did not write it.
+
+**Respect the COMMENT padding — in both the FITS header and the sidecar.** Both carry a
+run of blank `COMMENT` cards appended by `add_padding` (`utils/header.py:267`), sizing the
+header to a whole number of 2880-byte blocks. That padding is *reserved space*: later
+stages inject WCS, zeropoints, and QA cards into it, so the header grows without astropy
+having to rewrite the file and shift the data unit behind it. Writing cards with a plain
+`header[key] = ...` or `.append()` spends that reserve without accounting for it, and
+overflowing it turns a cheap in-place header edit into a full rewrite of a multi-GB image.
+
+Always go through the padding-aware helpers:
+
+- **`update_padded_header(target_fits, header_new)`** (`:136`) — inserts at the last
+  non-COMMENT card, consuming padding. Accepts a `fits.Header`, a dict, or a list of
+  `(key, value, comment)` 3-tuples. Its documented caveat: it overwrites COMMENTs adjacent
+  to the padding, so genuine trailing comments are not safe from it.
+- **`update_padded_header_smart(target_fits, header_new)`** (`:191`) — overrides existing
+  keys in place and appends only genuinely new cards just before the trailing COMMENTs.
+  Prefer this when re-running a stage over a header that may already carry its keys.
+- **`remove_padding(header)`** (`:307`) is for *inspection only*; its own docstring warns
+  it is not appropriate for update paths.
+
+Note `.head` is a *different* file — SCAMP's WCS output, not this sidecar. To amend the
+sidecar use `update_header_file` (`preprocess/utils.py:455`), which merges and rewrites it;
+do not hand-edit, and do not delete it, because a later reprocess needs it to reset.
+
 ### 3.6 Errors, logging, QA
 
 **Errors.** Composite exceptions of the form `ProcessError.KindError`, built dynamically
@@ -361,6 +443,37 @@ find-references will not see them — use `grep`.
 `LockingFileHandler`, optional Slack forwarding, and stdout/stderr redirection. Every
 config gets its own logger writing separate INFO and DEBUG files next to the YAML.
 `get_high_level_task_logger` (`:18`) handles orchestrator-level messages.
+
+**All process-level logging goes through `self.logger`, and it is per-configuration.**
+Inside any module that subclasses `BaseSetup`, use `self.logger.info/debug/warning/error`
+— never `print`, never a module-level `logging.getLogger(__name__)`. The logger is
+resolved in `BaseSetup._setup_logger` (`services/setup.py:130`), keyed on
+`config_node.name` and bound to `config_node.logging.file`, so **every module handed the
+same `Configuration` writes into the same pair of log files.** That is what makes a run's
+history readable as one narrative instead of scattered fragments. Resolution order is:
+reuse the `Logger` carried on the config if it already has a `LockingFileHandler`, else
+adopt an existing logger registered under the config name, else build a new one. Passing
+the config around is therefore all the propagation you need — do not construct a `Logger`
+yourself inside a processing module.
+
+**When `self.logger` is not guaranteed, use the `chatter` trick.** Free functions in
+`external.py`, `imcoadd/calc.py`, `astrometry/evaluation.py`, and `preprocess/utils.py`
+are called both from modules (logger available) and from subprocesses or standalone
+scripts (no logger). Each takes an optional `logger=None` and opens with a local closure
+that degrades to a tagged `print`:
+
+```python
+def chatter(msg: str, level: str = "debug"):
+    if logger is not None:
+        return getattr(logger, level)(msg)
+    else:
+        print(f"[sextractor:{level.upper()}] {msg}")
+```
+
+Copy that pattern (`external.py:49`) in any new helper that cannot rely on a logger.
+It keeps call sites free of `if logger` noise and keeps output visible when a function is
+run in isolation. Do not silently swallow the message when no logger is present, and do
+not make `logger` a required argument just to avoid the branch.
 
 **QA.** `Checker` (`services/checker.py:28`) owns the boolean `SANITY` header key and
 `REJ_PROC` (the process that flipped it). Criteria are JSON in `ref/qa/masterframe.json`
@@ -966,8 +1079,12 @@ Directory-name constants are in `pipeline/path/const.py` — use them, don't inl
    That is exactly why `Blueprint` writes everything up front.
 8. **Database failures must not be fatal.** Guard with `is_connected` / `use_database`
    and degrade gracefully.
-9. **Refer to stages by `ProcessSpec.name`**, not by class name — `Photometry` serves
-   three different stages.
+9. **Refer to stages through their `ProcessSpec`**, never by class name and never by
+   string literal. `Photometry` is used repeatedly under the names `single_photometry`,
+   `coadd_photometry`, and `difference_photometry`, so the class name does not tell you
+   which stage is running. A pattern like `if process == "astrometry"` restates a name that
+   `const/sciproc.py` already owns; that redundancy is the bug, since the copy drifts from
+   the definition without anything complaining.
 10. **`is_pipeline=True` is for operational runs only.** Ad-hoc and user code should pass
     `False`; `pipeline_lock.py` enforces this for `DataReduction.run()`.
 11. **Return code 2 is not a failure.** It means all inputs were sanity-rejected.

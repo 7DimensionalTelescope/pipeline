@@ -439,7 +439,12 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             AstrometryError.AlternativeSolver,
         )
 
-        self.run_solve_field(input_catalogs=image_info.prep_cat, solvefield_args=solvefield_args)
+        # last resort for this image alone: failures are reported by the callees and leave no valid solved head,
+        # so _finalize_astrometry_sanity marks the image SANITY F instead of the run aborting here.
+        if not self.run_solve_field(
+            input_catalogs=image_info.prep_cat, solvefield_args=solvefield_args, raise_error=False
+        ):
+            return
 
         if evaluate_prep_sol:
             self.evaluate_solution(
@@ -459,7 +464,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             max_scamp_iter,
             overwrite=True,
             plot=debug_plot,
-            raise_error=True,
+            raise_error=False,
         )
 
     def _scamp_suite(
@@ -789,7 +794,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         overwrite: bool = False,
         solvefield_args: list = [],
         timeout=None,
-    ) -> None:
+        raise_error: bool = True,
+    ) -> bool:
         """Runs astrometry.net's solve-field to determine WCS solution for each image."""
         self.logger.info(f"Start solve-field")
         self.logger.debug(MemoryMonitor.log_memory_usage)
@@ -841,10 +847,16 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         #         pixscale=self.path.pixscale,  # PathHandler brings pixscale from NameHandler
         #     )
         # else:
+        solvefield_success = True
         solvefield_wcs_list = []
         solved_input_catalogs = []
         if input_catalogs:
-            for i, (slink, pixscale) in enumerate(zip(input_catalogs, self.path.name.pixscale)):
+            # input_catalogs may be any subset of self.images_info, so each one owns its ImageInfo and pixscale
+            images_info_by_prep_cat = {ii.prep_cat: ii for ii in self.images_info}
+            for i, slink in enumerate(input_catalogs):
+                image_info = images_info_by_prep_cat.get(slink)
+                if image_info is None:
+                    raise AstrometryError.ValueError(f"No input image matches the given catalog: {slink}")
                 if os.path.exists(swap_ext(slink, ".solved")):
                     self.logger.info(f"Solve-field already run: {swap_ext(slink, '.solved')}. Skipping...")
                     continue
@@ -852,7 +864,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     wcs_file = external.solve_field(
                         input_catalog=slink,
                         # dump_dir=self.path_astrometry,
-                        pixscale=pixscale,
+                        pixscale=image_info.pixscale,
                         overwrite=overwrite,
                         solvefield_args=solvefield_args,
                         timeout=timeout,
@@ -860,12 +872,16 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     self.logger.info(f"Completed solve-field [{i+1}/{len(input_catalogs)}]")
                     self.logger.debug(f"Solve-field input: {slink}, output: {wcs_file}")
                     solved_input_catalogs.append(slink)
-                    self.images_info[i].sip_wcs = wcs_file
-                    self.logger.debug(f"Updated sip_wcs: {self.images_info[i].id}: {wcs_file}")
+                    image_info.sip_wcs = wcs_file
+                    self.logger.debug(f"Updated sip_wcs: {image_info.id}: {wcs_file}")
                     solvefield_wcs_list.append(wcs_file)
                 except SolveFieldError as solvefield_error:
-                    self.logger.error(f"Solve-field failed: {solvefield_error}", AstrometryError.SolveFieldGenericError)
-                    raise AstrometryError.SolveFieldGenericError(f"Solve-field failed: {solvefield_error}")
+                    solvefield_success = False
+                    self.logger.warning(
+                        f"Solve-field failed: {solvefield_error}", AstrometryError.SolveFieldGenericError
+                    )
+                    if raise_error:
+                        raise AstrometryError.SolveFieldGenericError(f"Solve-field failed: {solvefield_error}")
 
         elif input_images:  # this is deprecated. just for code reuse.
             raise AstrometryError.NotImplementedError("input_images for run_solve_field is deprecated")
@@ -891,6 +907,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
         self.update_catalog(solved_input_catalogs, solvefield_wcs_list, wcs_type="solve-field")
+
+        return solvefield_success
 
     def run_scamp(
         self,

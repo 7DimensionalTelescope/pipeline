@@ -394,8 +394,10 @@ def _reset_header_core(header, override_header):
 
 
 def write_header_file(filename: str, header: fits.Header):
+    """Write a header sidecar, rendering before the target is truncated."""
+    text = header.tostring(sep="\n")  # a bad card must fail before open() empties the file
     with open(filename, "w") as f:
-        f.write(header.tostring(sep="\n"))
+        f.write(text)
 
 
 ###############################################################################

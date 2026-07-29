@@ -2,10 +2,10 @@ from __future__ import annotations
 from packaging.version import Version
 
 # increase version with ANY change in scientific config. e.g., prep.sex
-__version__ = "1.10.17"
+__version__ = "1.10.18"
 
 MIN_PREPROC_RUNTIME_VERSION = "1.10.6"
-MIN_SCIPROC_RUNTIME_VERSION = "1.9.6"  # for sciprocess overall
+MIN_SCIPROC_RUNTIME_VERSION = "1.10.18"  # for sciprocess overall
 MIN_SCIPROC_RUNTIME_VERSION_MAP = {  # for individual modules
     "astrometry": "1.10.14",
     "photometry": "1.8.14",

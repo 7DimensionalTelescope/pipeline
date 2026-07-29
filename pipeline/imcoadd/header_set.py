@@ -286,8 +286,11 @@ class InputHeaderSet:
                 header[key] = (value, comment)
 
         # 	Names of coadded single images
-        for nn, name in enumerate(self.names):
+        for nn, (name, input_header) in enumerate(zip(self.names, self.headers)):
             header[f"IMG{nn:0>5}"] = (name, "single exposures")
+            image_id = str(input_header.get("IMAGEID") or "").strip()
+            if image_id:
+                header[f"IID{nn:0>5}"] = (image_id, f"IMAGEID of IMG{nn:0>5}")
 
         from .. import __version__
 

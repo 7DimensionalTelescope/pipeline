@@ -200,8 +200,12 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.initialize()
 
         images = self.input_images
+        weight_images = None
         if self.config_node.imcoadd.weight_map:
-            self.calculate_weight_map(images, device_id=device_id)
+            # weights are computed on the pristine frames, so they cannot be named
+            # after a later stage product nor written next to the inputs
+            weight_images = atleast_1d(self.path.imcoadd.factory.input_weight_images)
+            self.calculate_weight_map(images, device_id=device_id, out_weights=weight_images)
             step += 1
             self.update_progress(
                 SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS),
@@ -226,7 +230,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             )
 
         # Reproject (no combine) onto a common WCS
-        images = self.reproject_and_coadd_with_swarp(images, coadd=False)
+        images = self.reproject_and_coadd_with_swarp(images, coadd=False, weight_images=weight_images)
         step += 1
         self.update_progress(
             SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-reproject-completed"
@@ -527,9 +531,16 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         device_id=None,
         use_gpu: bool = True,
         overwrite: bool = False,
+        out_weights: list[str] | None = None,
     ) -> list[str]:
         """
         Uses self.input_images. Takes in input_images just for name carrying.
+
+        ``out_weights`` defaults to the factory paths keyed on the bkgsub
+        products, which is where the legacy routine's names land anyway. Never
+        derive them from ``input_images`` directly: those may be the pristine
+        inputs, and the weight maps would then be written into the directory the
+        inputs were read from.
         """
         if input_images is None:
             input_images = get_key(self.config_node.imcoadd, "bkgsub_images") or self.input_images
@@ -542,7 +553,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         self.logger.info(f"Start weight-map calculation")
 
-        out_weights = atleast_1d(add_suffix(input_images, "weight"))
+        out_weights = atleast_1d(out_weights if out_weights is not None else self.path.imcoadd.factory.bkgsub_weight_images)  # fmt: skip
         self.config_node.imcoadd.bkgsub_weight_images = out_weights
 
         groups = self._group_IMCMB(value_images, out_weights)
@@ -917,9 +928,13 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         input_images: list[str] | None = None,
         coadd: bool = True,
         swarp_options_override: list[str] = [],
+        weight_images: list[str] | None = None,
     ) -> str | list[str]:
         """Run SWarp. ``coadd=True`` produces a single coadd image;
-        ``coadd=False`` only reprojects each input and returns the resampled paths."""
+        ``coadd=False`` only reprojects each input and returns the resampled paths.
+
+        ``weight_images`` names the input weight maps explicitly; without it SWarp
+        finds them by ``WEIGHT_SUFFIX`` next to each input image."""
         st = time.time()
         action = "coadding" if coadd else "reprojecting"
         self.logger.info(f"Start to run swarp for {action} images")
@@ -950,7 +965,12 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 swarp_args=["-RESAMPLING_TYPE", "LANCZOS3"] + swarp_options_override,
                 use_weight_map=False,
             )  # Disable weight in the sci pass
-            self._run_swarp("wht", coadd=coadd, swarp_args=["-RESAMPLING_TYPE", "NEAREST"] + swarp_options_override)
+            self._run_swarp(
+                "wht",
+                coadd=coadd,
+                swarp_args=["-RESAMPLING_TYPE", "NEAREST"] + swarp_options_override,
+                weight_images=weight_images,
+            )
 
             # Update/TODO: consider uncollapsed bpmask files
             if self.config_node.imcoadd.propagate_mask:
@@ -977,9 +997,17 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         return resampled
 
     def _run_swarp(
-        self, type: Literal["sci", "wht", "bpm"] = "", coadd=True, swarp_args=None, use_weight_map: bool = True
+        self,
+        type: Literal["sci", "wht", "bpm"] = "",
+        coadd=True,
+        swarp_args=None,
+        use_weight_map: bool = True,
+        weight_images: list[str] | None = None,
     ) -> str:
         """Pass type='' for no weight. Returns the SWarp resample directory."""
+        if weight_images:
+            swarp_args = (swarp_args or []) + ["-WEIGHT_IMAGE", ",".join(atleast_1d(weight_images))]
+
         working_dir = os.path.join(self.path.imcoadd.tmp_dir, type)
         resample_dir = os.path.join(working_dir, "resamp")
         log_file = os.path.join(working_dir, "_".join([self.config_node.name, type, "swarp.log"]))

@@ -339,8 +339,10 @@ def write_IMCMB_to_header(header, inputlist, full_path=False):
         # define the key format
         if llist <= 999:
             key = "IMCMB{:03d}"
+            id_key = "IMCID{:03d}"
         else:
             key = "IMCMB{:03X}"
+            id_key = "IMCID{:03X}"
             comment = "IMCMB keys are written in hexadecimal."
             # header.append("COMMENT", comment)  # original eclaire line
             header.add_comment(comment)
@@ -348,6 +350,9 @@ def write_IMCMB_to_header(header, inputlist, full_path=False):
         # write the keys
         for i, f in enumerate(inputlist, 1):
             header[key.format(i)] = f if full_path else os.path.basename(f)
+            image_id = get_image_id(f)
+            if image_id:
+                header[id_key.format(i)] = (image_id, f"IMAGEID of {key.format(i)}")
     return header
 
 
@@ -370,6 +375,14 @@ def add_image_id(header, key="IMAGEID"):
     header[key] = uuid.uuid4().hex
     header.comments[key] = "Unique ID of the image"
     return header
+
+
+def get_image_id(image, key="IMAGEID"):
+    """Unique image ID of an existing image; None if absent."""
+    try:
+        return str(get_header(image)[key]).strip() or None
+    except Exception:
+        return None
 
 
 def update_header_by_overwriting(filename, header, bitpix=-32):
