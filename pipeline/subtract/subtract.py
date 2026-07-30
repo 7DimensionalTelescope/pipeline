@@ -105,10 +105,11 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 "imsubtract-define-paths-completed",
             )
 
-            if not overwrite and os.path.exists(self.subt_image_file):
+            if not (overwrite or self.overwrite) and os.path.exists(self.subt_image_file):
                 self.logger.info(f"Subtracted image already exists: {self.subt_image_file}; Skipping subtraction.")
                 self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")
                 self.update_progress(SCIPROCESS_REGISTRY.completed_progress("subtraction"), "imsubtract-completed")
+                self.config_node.flag.subtraction = True
                 return
 
             self.create_substamps()
@@ -150,7 +151,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                         subt_image,
                         process_status_id=self.process_status_id,
                     )
-                    self.image_qa.update_data(qa_data.id, **qa_data.to_dict())
+                    self.image_qa.update_data(self.qa_id, **qa_data.to_dict())
 
             self.update_progress(SCIPROCESS_REGISTRY.completed_progress("subtraction"), "imsubtract-completed")
 
@@ -250,6 +251,16 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         self.ref_image_file = self.config_node.imsubtract.reference_image or self.reference_images[0]
         self.config_node.imsubtract.reference_image = self.ref_image_file  # sync
+
+        from ..preprocess.utils import get_image_id
+
+        # stamping one here would modify a file the pipeline does not own
+        if not get_image_id(self.ref_image_file):
+            raise self.logger.process_error.PrerequisiteNotMetError(
+                f"Reference image carries no IMAGEID: {self.ref_image_file}."
+                " Add one to the file before registering it as a reference;"
+                " the pipeline does not modify reference images."
+            )
         self.ref_source_table_file = self.ref_image_file.replace(".fits", "_cat.fits")
         # self.ref_source_table_file = swap_ext(self.ref_image_file, "phot.cat")
 

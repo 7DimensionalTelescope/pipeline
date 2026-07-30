@@ -179,7 +179,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     coadd_image,
                     process_status_id=self.process_status_id,
                 )
-                self.image_qa.update_data(qa_data.id, **qa_data.to_dict())
+                self.image_qa.update_data(self.qa_id, **qa_data.to_dict())
 
         self.update_progress(SCIPROCESS_REGISTRY.completed_progress("coadd"), "imcoadd-completed")
 
@@ -274,7 +274,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     coadd_image,
                     process_status_id=self.process_status_id,
                 )
-                self.image_qa.update_data(qa_data.id, **qa_data.to_dict())
+                self.image_qa.update_data(self.qa_id, **qa_data.to_dict())
 
         self.update_progress(SCIPROCESS_REGISTRY.completed_progress("coadd"), "imcoadd-completed")
 

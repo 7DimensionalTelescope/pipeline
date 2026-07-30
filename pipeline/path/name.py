@@ -120,6 +120,12 @@ from .db import unified_names_from_paths
 #         self.hms = self.parts[5]
 
 
+def _splitext(basename: str) -> Tuple[str, str]:
+    """Extension split that keeps a fractional exptime, e.g. dark_0.1s_7DT02_... with no extension."""
+    stem, ext = os.path.splitext(basename)
+    return (basename, "") if ext[1:2].isdigit() else (stem, ext)
+
+
 # vectorized version of above
 class NameHandler:
     """
@@ -173,7 +179,7 @@ class NameHandler:
             self.basename = [os.path.basename(p) for p in self.abspath]
         # lapse("for basename construction")
 
-        self.stem, self.ext = (list(x) for x in zip(*(os.path.splitext(b) for b in self.basename)))
+        self.stem, self.ext = (list(x) for x in zip(*(_splitext(b) for b in self.basename)))
         # lapse("for stem and ext construction")
 
         # if any(ext != ".fits" for ext in self.ext):

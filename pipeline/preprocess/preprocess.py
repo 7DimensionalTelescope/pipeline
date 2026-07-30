@@ -682,6 +682,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         header["NAXIS1"] = binned_mflat.shape[1]
         header["NAXIS2"] = binned_mflat.shape[0]
         # header["SANITY"] = False
+        header = prep_utils.add_image_id(header)  # fresh id: this is a new file, not the source master
         header = set_inspcomm_in_header(header, "Auto-generated binned master frame")
         header = set_ppflag_in_header(header, propagate_ppflag(header["PPFLAG"], 2))
         fits.writeto(binned_mflat_path, binned_mflat, header=header, overwrite=True)

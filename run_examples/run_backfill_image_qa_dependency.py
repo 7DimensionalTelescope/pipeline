@@ -3,9 +3,11 @@
 Backfill image_qa_dependency rows from FITS headers via ImageQADependency.sync().
 
 Each derived image (master dark/flat, calibrated single, coadd, diff) records its
-source images in IMCMB*/IMG* header cards. This walks rows that currently have no
-dependency edges and re-syncs them from disk. Bias masters are skipped: their
-ingredients are raw frames with no image_qa row.
+source images by IMAGEID in IMCID*/IID* cards (diffs: SCIIID/REFIID). This walks
+rows that currently have no dependency edges and re-syncs them from disk. Bias
+masters are skipped: their ingredients are raw frames with no image_qa row.
+A file carrying no ID card syncs to nothing and its existing rows are left as
+they are, so --force-all never empties a row it cannot improve.
 
 Usage:
     # Dry-run: list rows that would be synced
