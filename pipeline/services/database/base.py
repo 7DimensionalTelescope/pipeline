@@ -102,6 +102,20 @@ class BaseDatabase:
         except Exception as e:
             raise DatabaseError(f"Failed to execute query: {e}")
 
+    def _find_existing_id(self, data: Dict[str, Any]) -> Optional[int]:
+        """Id of the row this record should replace; None to insert. Overridable per table."""
+        if "image_name" in data and "process_status_id" in data:
+            existing = self.read_data_by_params(
+                image_name=data["image_name"], process_status_id=data["process_status_id"]
+            )
+            if not existing:
+                return None
+            return existing if isinstance(existing, int) else (existing[0] if isinstance(existing, list) else None)
+        if "name" in data:
+            existing = self.read_data(data["name"])
+            return existing.id if existing else None
+        return None
+
     def create_data(self, file, overwrite: bool = False):
         try:
             if isinstance(file, str):
@@ -111,23 +125,9 @@ class BaseDatabase:
             else:
                 raise ValueError(f"Invalid file type: {type(file)}")
 
-            # Check if record already exists (by image_name and process_status_id)
-            existing_id = None
-            if "image_name" in data and "process_status_id" in data:
-                existing = self.read_data_by_params(
-                    image_name=data["image_name"], process_status_id=data["process_status_id"]
-                )
-                if existing:
-                    existing_id = (
-                        existing if isinstance(existing, int) else (existing[0] if isinstance(existing, list) else None)
-                    )
-            elif "name" in data:
-                existing = self.read_data(data["name"])
-
-                if existing:
-                    existing_id = existing.id
-                else:
-                    existing_id = None
+            # Check if record already exists. Resolved on the runtime class, so a subclass
+            # override (ImageQA has one) decides this, not the branch below.
+            existing_id = self._find_existing_id(data)
 
             if overwrite:
                 self.delete_data(existing_id)

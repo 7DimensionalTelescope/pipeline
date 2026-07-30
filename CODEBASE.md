@@ -174,6 +174,13 @@ scalar, and `AutoMkdirMixin` **creates the parent directory of any public path a
 you read**. `_`-prefixed names are exempt from both, which is why internal code uses
 `_masterframe`, `_output_dir`, and friends when it only needs a name.
 
+Both bite during read-only inventory work. Reading a public attribute over 10⁵ configs
+litters production storage with empty `factory/` trees, so use the `_`-prefixed
+string-only form when you only want a name; and because a single-element result collapses
+to a bare string, `...catalog[0]` yields `"/"` — its first character — and the
+`FileNotFoundError` that follows looks like missing data rather than a typing mistake.
+Wrap in `pipeline.utils.atleast_1d`.
+
 **Do not search the filesystem.** The tree spans several NFS mounts (`lyman`, `balmer`,
 more later) that switch by `nightdate`, so a `glob`/`os.walk` over the pipeline roots is
 both slow and incomplete. Ask `PathHandler` for a path or the database for an inventory.
@@ -444,6 +451,15 @@ find-references will not see them — use `grep`.
 config gets its own logger writing separate INFO and DEBUG files next to the YAML.
 `get_high_level_task_logger` (`:18`) handles orchestrator-level messages.
 
+External engines also leave their own per-image logs next to their inputs in `factory/`,
+and those are often the only record of *why* a stage failed. The SCAMP one,
+`<catalog_stem>_scamp.log` (`external.py:453`), is the case to know: `external.scamp`
+tails it for the `Group N: x/y detections removed` line, takes `y` as the detection count
+SCAMP had to work with, and raises `ScampError.NotEnoughSourcesError` when it is `≤ 5` —
+or `ScampError.ParseError` when the line never appears (`:534-570`). The log also records
+the reference density loaded and the fitted field-matching shift, none of which reaches
+the database.
+
 **All process-level logging goes through `self.logger`, and it is per-configuration.**
 Inside any module that subclasses `BaseSetup`, use `self.logger.info/debug/warning/error`
 — never `print`, never a module-level `logging.getLogger(__name__)`. The logger is
@@ -559,6 +575,18 @@ science metrics (`seeing`, `seeingsd`, `ellipmn`, `ul5_5`, `zp_auto`, `ezp_auto`
 `skyval`, `skysig`, plus the astrometric separation and radial-FWHM bins). It is written
 in real time as products appear, whereas the wider `gwportal` archive ingests the disk
 periodically — so `image_qa` is the fresher, narrower view.
+
+**One row per name, and `imageid` is deliberately not unique.** A row's identity is
+`image_name`: re-registering the same image, from whatever process, updates that row
+instead of adding a second one, and a regenerated file carrying a fresh IMAGEID under the
+same name takes over the row of the version it overwrote. This is enforced at write time
+by `ImageQA._find_existing_id` (`image_qa.py:206`), which overrides a hook on
+`BaseDatabase` (`base.py:105`); the lookup `create_data` performs is picked by the runtime
+class, **so editing the branch in the base class does not change how `image_qa`
+deduplicates.** `imageid` is not the key because one physical file may be linked under
+several names — a synthetic flat standing in for missing filters — and those aliases share
+one IMAGEID while each keeps its own row. Dependency resolution matches on IMAGEID and so
+lands on the earliest alias row, which is correct: they are the same image.
 
 **`image_qa_dependency`** (`database/image_qa_dependency.py:66`) is the image-level
 provenance graph: `(derived_image_id, source_image_id, dependency_role)`. Its purpose is
@@ -794,7 +822,9 @@ Roughly: `image_qa` 970k rows, `image_qa_dependency` 2.5M, `process_status` 240k
 `process_status_dependency` 306k, covering 2023-10-09 to the present.
 
 **The columns you will naturally filter on are not indexed.** `image_qa` carries only
-`(id)`, a partial `(id) WHERE ppflag IS NULL`, and `(process_status_id, image_name)`;
+`(id)`, a partial `(id) WHERE ppflag IS NULL`, `(process_status_id, image_name)`,
+`(imageid)`, and `(image_name)` — the last two exist because registration looks a row up by
+each on every write;
 `process_status` carries `(id)` and `(name)`. There is no index on `nightdate`,
 `image_type`, `unit`, `filter`, or `object`. So the obvious nightly-QA query above plans
 as a **parallel sequential scan over all 970k rows** — a few seconds, not milliseconds.
@@ -1049,6 +1079,7 @@ Directory-name constants are in `pipeline/path/const.py` — use them, don't inl
 | "What was contaminated by this bad master frame?" | `image_qa_dependency` (`get_derived` recursively) |
 | "What must I rerun if I rerun this config?" | `process_status_dependency`, or `scheduler.db` `dependent_idx` |
 | Add a QA metric to the DB | new column + field on `ImageQATable` (`image_qa.py:16`); `from_file` maps it from the header automatically |
+| "Why was this frame rejected / why did astrometry fail?" | §3.8 *Image-level astrometry forensics* — headers, factory prep catalogs, and the per-image SCAMP log; not the tables |
 | Walk existing products (last resort) | `pipeline/path/generator.py` |
 | Look at an image, or overlay a catalog on it | `tools/visualization.py:quickvis`, `tools/ds9.py:create_ds9_region_file` |
 | Crossmatch catalogs, filter a table | `tools/table.py` (`match_two_catalogs`, `match_multi_catalogs`, `filter_table`) |

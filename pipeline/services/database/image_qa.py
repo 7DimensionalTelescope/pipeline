@@ -1,7 +1,9 @@
 from datetime import date, datetime
 from typing import List, Dict, Optional, Any
+from typing_extensions import override
 from dataclasses import dataclass, asdict
 import json
+import logging
 
 from .base import BaseDatabase, DatabaseError
 
@@ -189,10 +191,11 @@ class ImageQATable:
 class ImageQA(BaseDatabase):
     """Database class for managing image_qa records"""
 
-    def __init__(self, db_params: Optional[Dict[str, Any]] = None):
+    def __init__(self, db_params: Optional[Dict[str, Any]] = None, logger=None):
         """Initialize with database parameters"""
         self._table_name = "image_qa"
         self._pyTable = ImageQATable
+        self.logger = logger or logging.getLogger(__name__)
         super().__init__(db_params)
 
     @property
@@ -202,6 +205,45 @@ class ImageQA(BaseDatabase):
     @property
     def pyTable(self):
         return self._pyTable
+
+    @override
+    def _find_existing_id(self, data: Dict[str, Any]) -> Optional[int]:
+        """One row per name and path: a process reusing the image updates that row, not adds one.
+
+        Keyed on the name rather than IMAGEID, so aliases of one file -- a synth linked under
+        several filter names -- keep a row each, while a regenerated file, carrying a fresh
+        IMAGEID under the same name, takes over the row of the version it overwrote. The path
+        separates those two: same name elsewhere on disk is a different file, so it gets a row.
+        """
+        name = data.get("image_name")
+        if not name:
+            return None
+        rows, _ = self.execute_query(
+            f"SELECT id, image_path FROM {self.table_name} WHERE image_name = %(name)s ORDER BY id",
+            {"name": name},
+            return_columns=True,
+        )
+        if not rows:
+            return None
+
+        path = data.get("image_path")
+        if not path:
+            return rows[0][0]
+
+        same_path = next((i for i, p in rows if p == path), None)
+        if same_path is not None:
+            return same_path
+        # a row registered before its file location was known
+        pathless = next((i for i, p in rows if p is None), None)
+        if pathless is not None:
+            return pathless
+
+        self.logger.warning(
+            f"{name} is already registered elsewhere on disk, so it is being added as a"
+            f" separate row rather than overwriting: incoming {path},"
+            f" existing {', '.join(p for _, p in rows)}"
+        )
+        return None
 
     def get_by_process_status_id(self, process_status_id: int) -> List[ImageQATable]:
         """Get all image_qa rows that have the given process_status_id"""

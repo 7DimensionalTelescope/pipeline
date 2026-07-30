@@ -34,7 +34,7 @@ class DatabaseHandler:
             self.too_id = None
             self.process_status = None if is_too else ProcessStatus(db_params)
             self.process_status_id = None if is_too else None
-            self.image_qa = None if is_too else ImageQA(db_params)
+            self.image_qa = None if is_too else ImageQA(db_params, logger=self.logger)
             self.image_qa_id = None if is_too else None
             self.image_qa_dependency = None if is_too else ImageQADependency(db_params)
             self.process_status_dependency = None if is_too else ProcessStatusDependency(db_params)
