@@ -185,6 +185,14 @@ class ImageQATable:
             cls.image_group = "masterframe"
 
         cls.nightdate = re.search(r"/\d{4}-\d{2}-\d{2}/", file).group(0).replace("/", "")
+
+        # Every image the pipeline writes is stamped by add_image_id, so a missing card means
+        # the writer skipped it. Refuse the record rather than let update_data keep the id of
+        # the version this file replaced: a dependency resolved through that id would look
+        # healthy while pointing at pixels that no longer exist.
+        if not str(cls.imageid or "").strip():
+            raise ValueError(f"No IMAGEID in the header of {file}; refusing to register an image with no identity")
+
         return cls
 
 

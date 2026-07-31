@@ -1,4 +1,22 @@
 from __future__ import annotations
+import os
+
+# Thread-pool caps. Must be set before numpy/numba load: OpenBLAS reads its count at
+# library load time, numba at first import. Uncapped, every process starts 64 BLAS
+# threads (6.7 -> 0.17 CPU-s per import once capped) and numba runs prange on all 128
+# cores, which oversubscribes at DEFAULT_MAX_WORKERS concurrency. The pipeline does no
+# large linear algebra, so BLAS pools are pure overhead; numba prange kernels saturate
+# near 8. setdefault: an explicit env var from systemd or the shell still wins.
+for _threads_var, _threads_default in (
+    ("OMP_NUM_THREADS", "1"),
+    ("OPENBLAS_NUM_THREADS", "1"),
+    ("MKL_NUM_THREADS", "1"),
+    ("NUMEXPR_NUM_THREADS", "1"),
+    ("VECLIB_MAXIMUM_THREADS", "1"),
+    ("NUMBA_NUM_THREADS", "8"),
+):
+    os.environ.setdefault(_threads_var, _threads_default)
+
 import warnings
 
 from .version import __version__

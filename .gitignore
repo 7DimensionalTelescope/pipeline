@@ -195,3 +195,7 @@ run_examples/*.log
 
 # tmp sqlite db
 reprocess.db*
+
+
+# machine-readable memory
+.claude

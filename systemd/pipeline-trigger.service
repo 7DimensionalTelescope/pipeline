@@ -24,6 +24,13 @@ Environment=MASTER_FRAME_DIR=/lyman/data2/master_frame
 Environment=PROCESSED_DIR=/lyman/data2/processed
 Environment=DAILY_STACKED_DIR=/lyman/data2/daily_stacked
 Environment=STACKED_DIR=/lyman/data2/stacked
+# Thread-pool caps (see pipeline/__init__.py); Blueprint config generation is threaded.
+Environment=OMP_NUM_THREADS=1
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=MKL_NUM_THREADS=1
+Environment=NUMEXPR_NUM_THREADS=1
+Environment=VECLIB_MAXIMUM_THREADS=1
+Environment=NUMBA_NUM_THREADS=8
 StandardOutput=append:/var/log/pipeline-timer.log
 StandardError=inherit
 CapabilityBoundingSet=CAP_SYS_NICE

@@ -1,94 +1,60 @@
 # CLAUDE.md
 
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+Instructions for AI agents working in this repository (7DT optical image reduction
+pipeline). These override default behavior.
 
-**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+## 1. Read the codebase memory first
 
-## 1. Think Before Coding
+`.claude/memory/` is the machine-readable memory of this codebase. Before any
+non-trivial task:
 
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
+- Read `.claude/memory/INDEX.md` (map + task-to-file table) and
+  `.claude/memory/invariants.md` (never-do rules) in full.
+- Load the per-subsystem files your task touches (INDEX.md tells you which).
 
-Before implementing:
-- State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them - don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
+**Maintenance duty:** the memory is living documentation. When your change affects
+something a memory file documents, update that file in the same piece of work and set
+its `last_verified` to the new commit. If you find the memory contradicts the code,
+fix the memory.
 
-## 2. Simplicity First
+## 2. Hard rules (apply even if you read nothing else)
 
-**Minimum code that solves the problem. Nothing speculative.**
+- **Never scan the filesystem to find data.** The data tree spans several NFS mounts
+  and only raw frames are canonical. Ask `PathHandler` or the databases
+  (`RawFrameQuery`; `free_query` for ad-hoc SQL — `RawImageQuery` is deprecated). See
+  invariants.md §1 for the sanctioned exceptions and the raw-DB anchoring policy.
+- **Never run anything that writes or overwrites data when recorded-version
+  bookkeeping is inconsistent** (missing/stale `runtime_version` in a config, flags
+  disagreeing with products on disk). `overwrite=True` is escalated automatically from
+  stale or missing `runtime_version` (`services/version_check.py`). Report what you
+  found and stop.
+- **PathHandler / NameHandler are the sole authority** for FITS paths, filenames, and
+  type parsing. Never write another normalizer; extend them instead.
+- **Never edit files under `ref/` casually** — they are hash-locked; an unaccompanied
+  edit makes `import pipeline` raise for everyone. Follow the version-bump ritual in
+  `.claude/memory/conventions.md`.
+- **Production runs from the stable clone** `/home/pipeline-stable/pipeline`, but this
+  working tree shares the live Postgres, sqlite DBs, and NFS data. Treat DB writes and
+  data-dir writes as production actions.
 
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
+## 3. Comments and docstrings
 
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+- Never remove existing comments, commented-out code blocks, or stale docstrings. If
+  they look wrong or stale, report and preserve them as-is.
+- Function docstrings: one short line of keywords; Python type hints carry the detail.
+- Explanatory comments inside code: one-liner or none — clean code is self-explanatory.
+  A one-line section-header comment is fine. Mimic the existing comment style.
 
-## 3. Surgical Changes
+## 4. Working style
 
-**Touch only what you must. Clean up only your own mess.**
-
-When editing existing code:
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it - don't delete it.
-
-When your changes create orphans:
-- Remove imports/variables/functions that YOUR changes made unused.
-- Don't remove pre-existing dead code unless asked.
-
-The test: Every changed line should trace directly to the user's request.
-
-## 4. Goal-Driven Execution
-
-**Define success criteria. Loop until verified.**
-
-Transform tasks into verifiable goals:
-- "Add validation" → "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
-
-For multi-step tasks, state a brief plan:
-```
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
-```
-
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
-
----
-
-**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
-
-
-It your code changes, never remove existing comments. If they look stale, just report and preserve them as is.
-The docstring of a function should be one-line short, consisting of only a few keywords, while Python type hint takes care of the details.
-Keep explanatory comments in the middle of the code short (one-liner) or nonexistent. The clean code itself is self-explanatory. One-line section header comment might help.
-Try to mimic existing comment style whenever possible.
-
-Whenever you have to deal with FITS files and parse their types, refer to PathHandler and NameHandler rather than creating another normalizer. 
-They are the core to be trusted.
-
-## Read CODEBASE.md before you touch this repository
-
-`CODEBASE.md` at the repo root documents the infrastructure that already exists and must
-not be rebuilt: `PathHandler` (every path), `NameHandler` (filenames), `Configuration`
-(YAML-backed run state), `DatabaseHandler` / `free_query` (the four Postgres tables), and
-the orchestration chain. Agents who skip it reliably reimplement path logic, glob the
-filesystem instead of querying the database, and misread `process_status.status`.
-
-Read it in full for anything non-trivial. At minimum read §5 (the task-to-location table)
-plus the section covering your task: paths §3.2, config §3.3, orchestration §3.4,
-processing modules §3.5, databases and SQL schema §3.8, versioning §3.9. §6 lists the
-invariants.
-
-Two of those constraints apply whether or not you have read the file. Do not scan the
-filesystem to find data — the tree spans several NFS mounts and only raw frames are
-canonical; ask `PathHandler` or the database. And never run anything that writes or
-overwrites data when the recorded-version bookkeeping is inconsistent, because
-`overwrite=True` can be escalated automatically from a stale or missing
-`runtime_version`; report what you found and stop.
+- **Think before coding.** State assumptions; if multiple interpretations exist,
+  present them instead of picking silently; push back when a simpler approach exists;
+  if something is unclear, stop and ask.
+- **Simplicity first.** Minimum code that solves the problem: no speculative features,
+  abstractions for single-use code, or unrequested configurability.
+- **Surgical changes.** Touch only what the task requires; match existing style; don't
+  refactor or "improve" adjacent code. Remove only orphans your own change created.
+  Every changed line should trace to the request.
+- **Verify against a goal.** Turn tasks into checkable success criteria and loop until
+  they pass. There is no test suite (`test/` is not one — see conventions.md), so state
+  how you verified: a targeted script, a dry run, an import check, a log inspection.
