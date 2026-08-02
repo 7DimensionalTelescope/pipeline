@@ -114,6 +114,63 @@ def build_coadd_wcs_header(
     return out_header
 
 
+def build_source_mask(
+    catalog: str,
+    shape: tuple[int, int],
+    star_scale: float,
+    galaxy_scale: float,
+    class_star_cut: float,
+    min_radius: float,
+    logger=None,
+) -> np.ndarray:
+    """Elliptical source mask from a SExtractor catalog; extended sources get a wider ellipse.
+
+    Each source is masked out to its Kron ellipse (``A_IMAGE``/``B_IMAGE`` scaled by
+    ``KRON_RADIUS``) times a class-dependent factor, so the low-surface-brightness wings
+    a segmentation map would miss are covered too."""
+    cat = Table.read(catalog, format="ascii.sextractor")
+    mask = np.zeros(shape, dtype=bool)
+    if not len(cat):
+        if logger is not None:
+            logger.warning(f"No source detected in {os.path.basename(catalog)}; source mask is empty")
+        return mask
+
+    # KRON_RADIUS is 0 when SExtractor's Kron measurement failed; 1 keeps the isophotal ellipse
+    kron = np.clip(np.asarray(cat["KRON_RADIUS"], dtype=float), 1.0, None)
+    is_extended = np.asarray(cat["CLASS_STAR"], dtype=float) < class_star_cut
+    scale = np.where(is_extended, galaxy_scale, star_scale)
+    a = np.maximum(np.asarray(cat["A_IMAGE"], dtype=float) * kron * scale, min_radius)
+    b = np.maximum(np.asarray(cat["B_IMAGE"], dtype=float) * kron * scale, min_radius)
+    theta = np.radians(np.asarray(cat["THETA_IMAGE"], dtype=float))
+    # SExtractor image coordinates are 1-indexed
+    xc = np.asarray(cat["X_IMAGE"], dtype=float) - 1.0
+    yc = np.asarray(cat["Y_IMAGE"], dtype=float) - 1.0
+
+    cos_t, sin_t = np.cos(theta), np.sin(theta)
+    # half-sizes of each ellipse's axis-aligned bounding box
+    dx = np.sqrt((a * cos_t) ** 2 + (b * sin_t) ** 2)
+    dy = np.sqrt((a * sin_t) ** 2 + (b * cos_t) ** 2)
+
+    h, w = shape
+    for i in range(len(cat)):
+        x0 = max(0, int(np.floor(xc[i] - dx[i]))); x1 = min(w, int(np.ceil(xc[i] + dx[i])) + 1)  # fmt: skip
+        y0 = max(0, int(np.floor(yc[i] - dy[i]))); y1 = min(h, int(np.ceil(yc[i] + dy[i])) + 1)  # fmt: skip
+        if x1 <= x0 or y1 <= y0:
+            continue
+        yy = np.arange(y0, y1, dtype=float)[:, None] - yc[i]
+        xx = np.arange(x0, x1, dtype=float)[None, :] - xc[i]
+        u = xx * cos_t[i] + yy * sin_t[i]
+        v = -xx * sin_t[i] + yy * cos_t[i]
+        mask[y0:y1, x0:x1] |= (u / a[i]) ** 2 + (v / b[i]) ** 2 <= 1.0
+
+    if logger is not None:
+        logger.debug(
+            f"Source mask from {len(cat)} sources ({int(is_extended.sum())} extended, "
+            f"x{galaxy_scale} vs x{star_scale}): {100 * mask.mean():.1f}% of pixels masked"
+        )
+    return mask
+
+
 def _parse_swarp_image_size(config_path: str) -> tuple[int, int]:
     """Return (NX, NY) from a SWarp config's ``IMAGE_SIZE NX,NY`` line."""
     with open(config_path) as fp:

@@ -95,11 +95,12 @@ def mean_coadd_numpy(
     out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, coadd_header)
     fits.writeto(output_path, coadd, header=out_header, overwrite=True)
 
-    if weights is not None:
-        weight_out = weight_output or add_suffix(output_path, "weight")
-        fits.writeto(weight_out, norm_arr.astype(np.float32), header=out_header, overwrite=True)
-        if logger is not None:
-            logger.debug(f"Wrote coadd weight map: {weight_out}")
+    # norm_arr is the summed inverse variance when weighted, the contributing-frame
+    # count otherwise -- the same two cases SWarp writes for the legacy routine.
+    weight_out = weight_output or add_suffix(output_path, "weight")
+    fits.writeto(weight_out, norm_arr.astype(np.float32), header=out_header, overwrite=True)
+    if logger is not None:
+        logger.debug(f"Wrote coadd weight map ({backend}): {weight_out}")
 
     if logger is not None:
         logger.info(f"Numpy coaddition completed in {time_diff_in_seconds(st)} seconds")
@@ -110,6 +111,8 @@ def median_coadd_numpy(
     input_images: list[str],
     output_path: str,
     coadd_header: fits.Header,
+    weights: list[str] | None = None,
+    weight_output: str | None = None,
     flxscales: list[float] | bool | None = None,
     match_swarp_size: bool = True,
     chunk_h: int = 128,
@@ -119,12 +122,18 @@ def median_coadd_numpy(
 
     Works on SWarp-resampled images that are centered differently.
 
+    ``weights`` never enters the median itself -- it only builds the companion
+    weight map, summed over the pixels that did contribute, so a median coadd
+    ships the same companion a mean coadd (and the legacy SWarp pass) does.
+
     Peak memory bounded by chunk_h.
     """
     st = time.time()
     size = "swarp FOV size" if match_swarp_size else "tight bbox"
     if logger is not None:
         logger.info(f"Start in-memory numpy coaddition (median, {size})")
+    if weights is not None and len(weights) != len(input_images):
+        raise ValueError(f"weights ({len(weights)}) and input_images ({len(input_images)}) length mismatch")
     if isinstance(flxscales, list) and len(flxscales) != len(input_images):
         raise ValueError(f"flxscales ({len(flxscales)}) and input_images ({len(input_images)}) length mismatch")
 
@@ -147,6 +156,9 @@ def median_coadd_numpy(
         logger.info(f"Flux scaling: {scale_mode}")
 
     coadd = np.full((target_h, target_w), np.nan, dtype=np.float32)
+    # accumulated per strip alongside the median, so peak memory stays bounded
+    norm_arr = np.zeros((target_h, target_w), dtype=np.float32)
+    whandles = [fits.open(f, memmap=True) for f in weights] if weights is not None else None
     try:
         for ys in range(0, target_h, chunk_h):
             ye = min(target_h, ys + chunk_h)
@@ -163,15 +175,62 @@ def median_coadd_numpy(
                 src = hdul[0].data[sy0:sy1, sx0:sx1].astype(np.float32) * flxscales[i]
                 src[(src == 0.0) | ~np.isfinite(src)] = np.nan
                 stack[i, ty0 - ys : ty1 - ys, tx0:tx1] = src
+                contributed = np.isfinite(src)
+                if whandles is None:
+                    norm_arr[ty0:ty1, tx0:tx1] += contributed
+                else:
+                    # w is the inverse variance of the raw resampled data; the median is
+                    # taken on flux-normalised pixels, whose variance scales by FLXSCALE^2
+                    w = whandles[i][0].data[sy0:sy1, sx0:sx1].astype(np.float32) / (flxscales[i] * flxscales[i])
+                    norm_arr[ty0:ty1, tx0:tx1] += np.where(contributed, w, 0.0)
             coadd[ys:ye, :] = np.nanmedian(stack, axis=0)
     finally:
         for hdul in handles:
             hdul.close()
+        for hdul in whandles or []:
+            hdul.close()
 
     out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, coadd_header)
     fits.writeto(output_path, coadd, header=out_header, overwrite=True)
+
+    weight_out = weight_output or add_suffix(output_path, "weight")
+    fits.writeto(weight_out, norm_arr, header=out_header, overwrite=True)
     if logger is not None:
+        backend = "summed inverse variance" if weights is not None else "frame count"
+        logger.debug(f"Wrote coadd weight map ({backend}): {weight_out}")
         logger.info(f"Numpy median coaddition completed in {time_diff_in_seconds(st)} seconds")
+    return output_path
+
+
+def accumulate_weight_maps(
+    weight_images: list[str],
+    output_path: str,
+    coadd_header: fits.Header,
+    match_swarp_size: bool = True,
+    logger: Logger | None = None,
+) -> str:
+    """Sum SWarp-resampled weight/mask planes onto the coadd grid, one frame at a time."""
+    st = time.time()
+    if logger is not None:
+        logger.info(f"Accumulating {len(weight_images)} resampled maps into {os.path.basename(output_path)}")
+
+    target_w, target_h, target_cx, target_cy, x0, y0, shapes = determine_size(weight_images, match_swarp_size)
+
+    total = np.zeros((target_h, target_w), dtype=np.float32)
+    for i, f in enumerate(weight_images):
+        with fits.open(f, memmap=True) as hdul:
+            a = hdul[0].data
+            h, w = a.shape
+            tx0 = max(0, x0[i]); tx1 = min(target_w, x0[i] + w)  # fmt: skip
+            ty0 = max(0, y0[i]); ty1 = min(target_h, y0[i] + h)  # fmt: skip
+            if tx1 <= tx0 or ty1 <= ty0:
+                continue
+            total[ty0:ty1, tx0:tx1] += a[ty0 - y0[i] : ty1 - y0[i], tx0 - x0[i] : tx1 - x0[i]]
+
+    out_header = build_coadd_wcs_header(weight_images[0], target_cx, target_cy, coadd_header)
+    fits.writeto(output_path, total, header=out_header, overwrite=True)
+    if logger is not None:
+        logger.info(f"Accumulation completed in {time_diff_in_seconds(st)} seconds")
     return output_path
 
 

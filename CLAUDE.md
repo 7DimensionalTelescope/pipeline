@@ -12,10 +12,23 @@ non-trivial task:
   `.claude/memory/invariants.md` (never-do rules) in full.
 - Load the per-subsystem files your task touches (INDEX.md tells you which).
 
-**Maintenance duty:** the memory is living documentation. When your change affects
-something a memory file documents, update that file in the same piece of work and set
-its `last_verified` to the new commit. If you find the memory contradicts the code,
-fix the memory.
+**Maintenance duty — you are the only one who does this.** No human updates or commits
+the memory. When your change affects something a memory file documents, update that file
+in the same piece of work; if you find the memory contradicts the code, fix the memory.
+Then commit it, because it lives in its own git that nothing else touches:
+
+```bash
+git -C .claude/memory add -A && git -C .claude/memory commit -m "<what changed and why>"
+```
+
+Read `.claude/memory/MAINTENANCE.md` before your first memory edit — it defines when an
+update is required, how to repair `path:line` anchors your change shifted, and what
+`last_verified` may and may not be set to.
+
+`.claude/` is gitignored, so the memory exists only in the primary development checkout
+(`/home/pipeline/pipeline`), where it is version-controlled by its own private local git
+— INDEX.md explains that workflow. If you are working in a clone that has no
+`.claude/memory/`, say so rather than proceeding as if the guidance above were satisfied.
 
 ## 2. Hard rules (apply even if you read nothing else)
 

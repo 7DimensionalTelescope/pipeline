@@ -81,7 +81,9 @@ if TYPE_CHECKING:
         gpu: bool
         device: int
         zp_key: str
+        zpscale: bool
         bkgsub_type: Any
+        source_mask: bool
         weight_map: bool
         joint_wcs: bool
         apply_bpmask: bool

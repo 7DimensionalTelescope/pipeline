@@ -1757,6 +1757,16 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
     def bkgsub_weight_images(self) -> str | List[str]:
         return add_suffix(self.bkgsub_images, "weight")
 
+    @property
+    def fov_mask_images(self) -> str | List[str]:
+        return [os.path.join(self.bkgsub_dir, add_suffix(b, "fovmask")) for b in self._basenames]
+
+    @property
+    def source_mask_images(self) -> str | List[str]:
+        """Detected sources knocked out (and the FOV mask folded in): what background
+        estimation may use, 1 = usable."""
+        return [os.path.join(self.bkgsub_dir, add_suffix(b, "srcmask")) for b in self._basenames]
+
     # ---- bad-pixel interpolation (legacy: interp of the bkgsub frame) ----
     @property
     def interp_images(self) -> str | List[str]:

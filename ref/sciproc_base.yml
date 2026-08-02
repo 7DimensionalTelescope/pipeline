@@ -116,7 +116,9 @@ imcoadd:
   gpu: True
   device: 0
   zp_key: 'ZP_AUTO'
+  zpscale: True
   bkgsub_type: # 'Dynamic'
+  source_mask: True  # False, True or 'iterative'; only affects dynamic bkgsub
   weight_map: true
   joint_wcs: False
   apply_bpmask: False

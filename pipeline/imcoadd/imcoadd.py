@@ -29,7 +29,7 @@ from ..services.version_check import RuntimeVersionMixin
 
 from .const import ZP_KEY
 from .header_set import InputHeaderSet
-from .calc import mean_coadd_numpy, median_coadd_numpy
+from .calc import mean_coadd_numpy, median_coadd_numpy, accumulate_weight_maps
 
 
 warnings.filterwarnings("ignore")
@@ -165,21 +165,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             "imcoadd-plot-coadded-image-completed",
         )
 
-        if self.is_connected and self.process_status_id is not None:
-            coadd_image = self.config_node.imcoadd.coadd_image
-            if coadd_image and os.path.exists(coadd_image):
-                self.qa_id = self.create_image_qa_data(coadd_image, process_status_id=self.process_status_id)
-                self.create_image_qa_dependencies(coadd_image, self.qa_id)
-
-        # Update QA data from header if database is connected
-        if self.is_connected and self.qa_id is not None:
-            coadd_image = self.config_node.imcoadd.coadd_image
-            if coadd_image and os.path.exists(coadd_image):
-                qa_data = ImageQATable.from_file(
-                    coadd_image,
-                    process_status_id=self.process_status_id,
-                )
-                self.image_qa.update_data(self.qa_id, **qa_data.to_dict())
+        self.register_coadd_qa()
 
         self.update_progress(SCIPROCESS_REGISTRY.completed_progress("coadd"), "imcoadd-completed")
 
@@ -188,13 +174,15 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         ``coadd_in_memory``, which picks mean/median from ``imcoadd.coadd_mode``."""
         self._use_gpu = all([use_gpu, self.config_node.imcoadd.gpu, self._use_gpu])
 
+        do_zpscale = bool(get_key(self.config_node.imcoadd, "zpscale", default=True))
         optional_steps = (
             int(bool(self.config_node.imcoadd.weight_map))
             + int(bool(self.config_node.imcoadd.apply_bpmask))
             + int(bool(self.config_node.imcoadd.joint_wcs))
             + int(bool(self.config_node.imcoadd.convolve))
+            + int(do_zpscale)
         )
-        TOTAL_STEPS = 4 + optional_steps  # reproject + bkgsub + zpscale + coadd + optionals
+        TOTAL_STEPS = 4 + optional_steps  # reproject + bkgsub + coadd + plot + optionals
         step = 0
 
         self.initialize()
@@ -247,14 +235,21 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             )
 
         # Background subtraction on reprojected (+ optionally convolved) frames
-        images = self.bkgsub(images)
+        images = self.bkgsub(
+            images,
+            mask_out_of_fov=True,
+            mask_sources=get_key(self.config_node.imcoadd, "source_mask", default=True),
+        )
         step += 1
         self.update_progress(SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-bkgsub-completed")
 
         # Flux zero-point scaling (writes FLXSCALE to header in place)
-        self.zpscale(images)
-        step += 1
-        self.update_progress(SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-zpscale-completed")
+        if do_zpscale:
+            self.zpscale(images)
+            step += 1
+            self.update_progress(
+                SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-zpscale-completed"
+            )
 
         # In-memory coaddition (mean/median selected by imcoadd.coadd_mode)
         self.coadd_in_memory(images, device_id=device_id)
@@ -266,15 +261,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         step += 1
         self.update_progress(SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-plot-completed")
 
-        # Update QA data from header if database is connected
-        if self.is_connected and self.qa_id is not None:
-            coadd_image = self.config_node.imcoadd.coadd_image
-            if coadd_image and os.path.exists(coadd_image):
-                qa_data = ImageQATable.from_file(
-                    coadd_image,
-                    process_status_id=self.process_status_id,
-                )
-                self.image_qa.update_data(self.qa_id, **qa_data.to_dict())
+        self.register_coadd_qa()
 
         self.update_progress(SCIPROCESS_REGISTRY.completed_progress("coadd"), "imcoadd-completed")
 
@@ -338,7 +325,12 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         input_images: list[str] | None = None,
         ignore_steppy_flag: bool = False,
         skyval_cut: float = 40,
+        mask_out_of_fov: bool = False,
+        mask_sources: bool | str = False,
     ) -> list[str]:
+        """``mask_sources`` mirrors ``imcoadd.source_mask``: False, True, or "iterative"
+        (a second round after coaddition, not yet wired). Source masking only means
+        anything for the dynamic branch, so a constant background ignores it."""
         # ------------------------------------------------------------
         # 	Global Background Subtraction
         # ------------------------------------------------------------
@@ -354,6 +346,11 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         bkg_images = atleast_1d(self.path.imcoadd.factory.bkg_images)
         bkg_rms_images = atleast_1d(self.path.imcoadd.factory.bkg_rms_images)
 
+        # Reprojected frames carry zero-padded out-of-FOV corners; mask them out
+        fov_mask_images = (
+            atleast_1d(self.path.imcoadd.factory.fov_mask_images) if mask_out_of_fov else [None] * len(input_images)
+        )
+
         skyvalues = self.input_headers.values("SKYVAL")
         # TODO: ad-hoc; later derive is_steppy from actual data check
         if any([skyval < skyval_cut for skyval in skyvalues]):
@@ -365,7 +362,17 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         for hdr in self.input_headers:
             hdr["BACKTYPE"] = (backtype_upper, "Background subtraction type")
 
-        if self.config_node.imcoadd.bkgsub_type.lower() == "dynamic":
+        is_dynamic = self.config_node.imcoadd.bkgsub_type.lower() == "dynamic"
+        # Sources bias the mesh statistics upward, but only the dynamic branch has meshes
+        source_mask_images = (
+            atleast_1d(self.path.imcoadd.factory.source_mask_images)
+            if (mask_sources and is_dynamic)
+            else [None] * len(input_images)
+        )
+        if mask_sources and not is_dynamic:
+            self.logger.info("Constant background subtraction: source_mask has no effect")
+
+        if is_dynamic:
             self.logger.info("Start dynamic background subtraction")
             bkg_func = self._dynamic_bkgsub
             self.config_node.imcoadd.bkg_images = bkg_images
@@ -382,12 +389,25 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         else:
             raise ValueError(f"bkgsub_type: {self.config_node.imcoadd.bkgsub_type} is invalid")
 
-        for i, (inim, outim, bkg, bkg_rms, skyvalue) in enumerate(
-            zip(input_images, bkgsub_images, bkg_images, bkg_rms_images, skyvalues)
+        for i, (inim, outim, bkg, bkg_rms, skyvalue, fov_mask, src_mask) in enumerate(
+            zip(input_images, bkgsub_images, bkg_images, bkg_rms_images, skyvalues, fov_mask_images, source_mask_images)
         ):
             st_loop = time.time()
+            fov_valid = self._write_fov_mask(inim, fov_mask) if fov_mask is not None else None
+            fov_mask = fov_mask if fov_valid is not None else None
+            # what SExtractor may use for its background meshes: FOV alone, or FOV minus sources
+            weight_image = (
+                self._write_source_mask(inim, fov_mask, fov_valid, src_mask) if src_mask is not None else fov_mask
+            )
             is_steppy = bkg_func(
-                inim, outim, bkg=bkg, bkg_rms=bkg_rms, skyval=skyvalue, ignore_steppy_flag=ignore_steppy_flag
+                inim,
+                outim,
+                bkg=bkg,
+                bkg_rms=bkg_rms,
+                skyval=skyvalue,
+                ignore_steppy_flag=ignore_steppy_flag,
+                weight_image=weight_image,
+                fov_valid=fov_valid,
             )
 
             # if is_steppy and not ignore_steppy_flag:
@@ -406,7 +426,94 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.images_to_coadd = bkgsub_images
         return bkgsub_images
 
-    def _const_bkgsub(self, inim, outim, skyval, skyval_cut=40, **kwargs):
+    def _write_source_mask(
+        self,
+        inim: str,
+        fov_mask: str | None,
+        fov_valid: np.ndarray | None,
+        outmask: str,
+        star_scale: float = 2.0,
+        galaxy_scale: float = 3.0,
+        class_star_cut: float = 0.5,
+        min_radius: float = 3.0,
+        min_usable: float = 20.0,
+        detect_params: tuple[str, ...] = ("X_IMAGE", "Y_IMAGE", "A_IMAGE", "B_IMAGE", "THETA_IMAGE", "KRON_RADIUS", "CLASS_STAR"),  # fmt: skip
+    ) -> str:
+        """Detection pass, then what background estimation may use: in FOV and off-source.
+
+        Kron ellipses are widened by ``galaxy_scale`` below ``class_star_cut`` and by
+        ``star_scale`` above it; ``min_usable`` is the % of surviving pixels under which
+        the background meshes are mostly interpolated and we say so.
+
+        Takes any image, not just a single frame: the planned ``source_mask: iterative``
+        re-runs this on the coadd and feeds the result back into a second bkgsub round."""
+        from .utils import build_source_mask
+
+        # own .param file so the hash-locked ref/srcExt presets stay untouched
+        param_file = os.path.join(self.path_bkgsub, "bkgdet.param")
+        with open(param_file, "w") as f:
+            f.write("\n".join(detect_params) + "\n")
+
+        base = os.path.splitext(get_basename(inim))[0]
+        catalog = os.path.join(self.path_bkgsub, f"{base}_bkgdet.cat")
+        sex_options = {
+            "-CATALOG_TYPE": "ASCII_HEAD",
+            "-PARAMETERS_NAME": param_file,
+            "-CHECKIMAGE_TYPE": "NONE",
+        }
+        if fov_mask is not None:
+            sex_options.update({"-WEIGHT_TYPE": "MAP_WEIGHT", "-WEIGHT_IMAGE": f"{fov_mask}", "-WEIGHT_THRESH": "0"})
+        external.sextractor(
+            inim,
+            outcat=catalog,
+            sex_options=sex_options,
+            log_file=os.path.join(self.path_bkgsub, f"{base}_bkgdet_sextractor.log"),
+            overwrite=self.overwrite,
+            logger=self.logger,
+        )
+
+        header = fits.getheader(inim)
+        shape = (header["NAXIS2"], header["NAXIS1"])
+        sources = build_source_mask(
+            catalog,
+            shape,
+            star_scale=star_scale,
+            galaxy_scale=galaxy_scale,
+            class_star_cut=class_star_cut,
+            min_radius=min_radius,
+            logger=self.logger,
+        )
+
+        valid = ~sources if fov_valid is None else (fov_valid & ~sources)
+        fits.writeto(outmask, valid.astype(np.uint8), overwrite=True)
+        usable = 100 * valid.mean()
+        self.logger.debug(f"Source mask ({usable:.1f}% usable) saved as {get_basename(outmask)}")
+        if usable < min_usable:
+            self.logger.warning(
+                f"Only {usable:.1f}% of {get_basename(inim)} is left to estimate the background on; "
+                f"SExtractor will interpolate most meshes. Consider lowering the source-mask scales."
+            )
+        return outmask
+
+    def _write_fov_mask(self, inim: str, outmask: str, erode_iter: int = 3) -> np.ndarray | None:
+        """Valid-pixel mask of a reprojected frame; SWarp pads out-of-FOV with 0.
+
+        ``erode_iter`` 3x3 erosions trim the resampled footprint edge, which rings over
+        LANCZOS3's support radius."""
+        from scipy.ndimage import binary_erosion
+
+        valid = fits.getdata(inim) != 0
+        if valid.all():
+            self.logger.debug(f"No out-of-FOV pixels in {get_basename(inim)}; skipping FOV mask")
+            return None
+
+        # border_value=1: the array bound is not an FOV edge, only the zero padding is
+        valid = binary_erosion(valid, np.ones((3, 3), dtype=bool), iterations=erode_iter, border_value=1)
+        fits.writeto(outmask, valid.astype(np.uint8), overwrite=True)
+        self.logger.debug(f"FOV mask ({100 * valid.mean():.1f}% valid) saved as {get_basename(outmask)}")
+        return valid
+
+    def _const_bkgsub(self, inim, outim, skyval, skyval_cut=40, fov_valid=None, **kwargs):
 
         if os.path.exists(outim):
             try:
@@ -426,12 +533,14 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             _hdr["BACKTYPE"] = ("CONSTANT", "Background subtraction type")
             # _hdr["BKG_STEP"] = (is_steppy, "SE Background can be step-like")
             _data -= skyval
+            if fov_valid is not None:
+                _data[~fov_valid] = 0.0  # keep out-of-FOV at 0: the coadd's validity marker
             self.logger.debug(f"Using SKYVAL: {skyval:.3f}")
             fits.writeto(outim, _data, header=_hdr, overwrite=True)
 
         return False  # is_steppy is False by definition for constant background subtraction
 
-    def _dynamic_bkgsub(self, inim, outim, bkg, bkg_rms, ignore_steppy_flag=False, **kwargs):
+    def _dynamic_bkgsub(self, inim, outim, bkg, bkg_rms, ignore_steppy_flag=False, weight_image=None, fov_valid=None, **kwargs):  # fmt: skip
         """
         Later to be refined using iterations
         """
@@ -444,6 +553,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             "-CHECKIMAGE_TYPE": "BACKGROUND,BACKGROUND_RMS",
             "-CHECKIMAGE_NAME": f"{bkg},{bkg_rms}",
         }
+        if weight_image is not None:
+            # SExtractor drops zero-weight pixels from the background meshes
+            sex_options.update({"-WEIGHT_TYPE": "MAP_WEIGHT", "-WEIGHT_IMAGE": f"{weight_image}", "-WEIGHT_THRESH": "0"})  # fmt: skip
         sex_log = os.path.join(
             self.path_bkgsub,
             os.path.splitext(get_basename(outim))[0] + "_sextractor.log",
@@ -471,6 +583,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             _hdr["BACKTYPE"] = ("DYNAMIC", "Background subtraction type")
             # _hdr["BKG_STEP"] = (is_steppy, "Background is step-like; likely quantization artifact")
             _data -= bkg_data
+            if fov_valid is not None:
+                _data[~fov_valid] = 0.0  # keep out-of-FOV at 0: the coadd's validity marker
             fits.writeto(outim, _data, header=_hdr, overwrite=True)
 
         # return is_steppy
@@ -830,7 +944,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     force_symlink(input_images[i], self.config_node.imcoadd.conv_files[i])
                     if self.config_node.imcoadd.weight_map:
                         force_symlink(
-                            add_suffix(input_images[i], "weight"),
+                            self._resolve_weight_companion(input_images[i]),
                             add_suffix(self.config_node.imcoadd.conv_files[i], "weight"),
                         )
                     self.kernels.append(None)
@@ -915,6 +1029,17 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.images_to_coadd = conv_files
         return conv_files
 
+    def _resolve_weight_companion(self, image: str) -> str:
+        """Weight map belonging to *image*, under either naming convention in play.
+
+        Stage products carry theirs as ``<stem>_weight.fits`` (the SWarp WEIGHT_SUFFIX);
+        SWarp's own resampled outputs use ``<stem>.weight.fits`` instead."""
+        for candidate in (add_suffix(image, "weight"), swap_ext(image, "weight.fits")):
+            if os.path.exists(candidate):
+                return candidate
+        self.logger.error(f"No weight map found for {get_basename(image)}", CoaddError.FileNotFoundError)
+        raise CoaddError.FileNotFoundError(f"No weight map found for {image}")
+
     def _calc_delta_peeing(self, peeing):
         delta_peeing = np.sqrt(self._max_peeing**2 - peeing**2)
         if delta_peeing == 0:
@@ -980,8 +1105,12 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 bpmask_inverted_file = self.path.imcoadd.factory.bpmask_inverted(bpmask_file)
                 fits.writeto(bpmask_inverted_file, bpmask_inverted, overwrite=True)
                 self.logger.debug(f"Inverted bpmask saved as {bpmask_inverted_file}")
-                args = ["-WEIGHT_IMAGE", bpmask_file, "-RESAMPLING_TYPE", "LANCZOS3"]
+                # BADPIX=1 means bad, MAP_WEIGHT means >0 is good: SWarp needs the inverse
+                args = ["-WEIGHT_IMAGE", bpmask_inverted_file, "-RESAMPLING_TYPE", "LANCZOS3"]
                 self._run_swarp("bpm", coadd=coadd, swarp_args=args + swarp_options_override)
+                if not coadd:
+                    # no combine step to sum the resampled masks, so do it ourselves
+                    self._accumulate_propagated_mask(input_images)
 
         if coadd:
             self._update_header()
@@ -995,6 +1124,21 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.images_to_coadd = resampled
         self.logger.info(f"SWarp reprojection completed in {time_diff_in_seconds(st)} seconds")
         return resampled
+
+    def _accumulate_propagated_mask(self, swarp_inputs: list[str]) -> str:
+        """Sum the bpm pass's resampled masks into ``coadd_bpmask_image``.
+
+        The coadd branch gets this for free from SWarp's combine step; the reproject-only
+        branch has no combine, so the per-frame good-pixel maps are summed here to the
+        same product: how many frames contributed an unmasked pixel."""
+        resampled = atleast_1d(self.path.imcoadd.factory.resampled_images(swarp_inputs, pass_type="bpm"))
+        masks = atleast_1d(self.path.imcoadd.factory.resampled_weight_images(resampled, pass_type="bpm"))
+        return accumulate_weight_maps(
+            masks,
+            output_path=self.path.imcoadd.factory.coadd_bpmask_image,
+            coadd_header=self.input_headers.coadd_header,
+            logger=self.logger,
+        )
 
     def _run_swarp(
         self,
@@ -1061,28 +1205,30 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self.coadd_with_cupy(input_images, device_id=device_id)
             return self.config_node.imcoadd.coadd_image
 
+        weights = None
+        if self.config_node.imcoadd.weight_map:
+            # NEAREST-resampled weights live next to the wht pass output; the
+            # LANCZOS3 companions next to the sci resamp ring to ~0 almost
+            # everywhere (99%+ zeros) and must NOT be used.
+            wht_dir = self.path.imcoadd.factory.swarp_resample_dir("wht")
+            # named after what SWarp resampled, not after the later bkgsub products
+            resampled = get_key(self.config_node.imcoadd, "resampled_images") or input_images
+            candidates = atleast_1d(self.path.imcoadd.factory.resampled_weight_images(resampled, pass_type="wht"))
+            if all(os.path.exists(w) for w in candidates):
+                weights = candidates
+            else:
+                missing = [w for w in candidates if not os.path.exists(w)][:3]
+                self.logger.warning(
+                    f"weight_map=True but NEAREST-resampled weight maps not found "
+                    f"in {wht_dir} (e.g. {missing}); coadding unweighted and writing a "
+                    f"frame-count weight map instead."
+                )
+
         mode = self.config_node.imcoadd.coadd_mode
         if mode == "mean":
-            weights = None
-            if self.config_node.imcoadd.weight_map:
-                # NEAREST-resampled weights live next to the wht pass output; the
-                # LANCZOS3 companions next to the sci resamp ring to ~0 almost
-                # everywhere (99%+ zeros) and must NOT be used.
-                wht_dir = self.path.imcoadd.factory.swarp_resample_dir("wht")
-                candidates = atleast_1d(
-                    self.path.imcoadd.factory.resampled_weight_images(input_images, pass_type="wht")
-                )
-                if all(os.path.exists(w) for w in candidates):
-                    weights = candidates
-                else:
-                    missing = [w for w in candidates if not os.path.exists(w)][:3]
-                    self.logger.warning(
-                        f"weight_map=True but NEAREST-resampled weight maps not found "
-                        f"in {wht_dir} (e.g. {missing}); falling back to simple mean."
-                    )
             self.coadd_with_numpy(input_images, weights=weights)
         elif mode == "median":
-            self.coadd_median_with_numpy(input_images)
+            self.coadd_median_with_numpy(input_images, weights=weights)
         else:
             raise ValueError(f"Invalid coadd mode: {mode!r} (expected 'mean' or 'median')")
         return self.config_node.imcoadd.coadd_image
@@ -1106,21 +1252,49 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
     # ---- median backend ----
 
-    _MEDIAN_CHUNK_H: int = 128  # row strips; 142 frames × 128 × 10200 × 4 B ≈ 750 MB per strip
-
-    def coadd_median_with_numpy(self, input_images: list[str], match_swarp_size: bool = True) -> str:
+    def coadd_median_with_numpy(
+        self,
+        input_images: list[str],
+        weights: list[str] | None = None,
+        match_swarp_size: bool = True,
+        chunk_h: int = 128,  # row strips; 142 frames x 128 x 10200 x 4 B ~ 750 MB per strip
+    ) -> str:
         return median_coadd_numpy(
             input_images,
             output_path=self.config_node.imcoadd.coadd_image,
             coadd_header=self.input_headers.coadd_header,
+            weights=weights,
+            weight_output=self.path.imcoadd.factory.coadd_weight_image,
             flxscales=self.input_headers.values("FLXSCALE"),
             match_swarp_size=match_swarp_size,
-            chunk_h=self._MEDIAN_CHUNK_H,
+            chunk_h=chunk_h,
             logger=self.logger,
         )
 
     def coadd_with_cupy(self, input_images: list[str], device_id) -> str:
         raise NotImplementedError("GPU coadd_with_cupy is not implemented yet")
+
+    def register_coadd_qa(self):
+        """image_qa row, its dependency rows, and the header-derived QA update for the coadd."""
+        if not self.is_connected:
+            return
+
+        coadd_image = self.config_node.imcoadd.coadd_image
+        if not (coadd_image and os.path.exists(coadd_image)):
+            self.logger.warning(f"No coadd image to register in image_qa: {coadd_image}")
+            return
+
+        if self.process_status_id is not None:
+            self.qa_id = self.create_image_qa_data(coadd_image, process_status_id=self.process_status_id)
+            self.create_image_qa_dependencies(coadd_image, self.qa_id)
+
+        # Update QA data from header if database is connected
+        if self.qa_id is not None:
+            qa_data = ImageQATable.from_file(
+                coadd_image,
+                process_status_id=self.process_status_id,
+            )
+            self.image_qa.update_data(self.qa_id, **qa_data.to_dict())
 
     def plot_coadd_image(self):
         coadd_img = self.config_node.imcoadd.coadd_image

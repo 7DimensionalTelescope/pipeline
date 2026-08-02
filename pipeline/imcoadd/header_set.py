@@ -38,6 +38,9 @@ class InputHeaderSet:
         self._names: list[str] = list(names)
         self._headers: list[fits.Header] = list(headers)
         self._mask: np.ndarray = np.ones(len(self._names), dtype=bool)
+        # One identity per snapshot: coadd_header rebuilds on every access, but the
+        # product it describes is a single image (see coadd_header).
+        self._coadd_image_id: str | None = None
 
     @classmethod
     def from_files(cls, paths: list[str]) -> "InputHeaderSet":
@@ -248,7 +251,11 @@ class InputHeaderSet:
     def coadd_header(self) -> fits.Header:
         """Coadd metadata header, freshly built from the unmasked snapshot.
         Carries no WCS; callers (e.g. coadd_with_numpy) overlay it onto a
-        WCS-bearing base. Keys absent or value-None are skipped."""
+        WCS-bearing base. Keys absent or value-None are skipped.
+
+        Rebuilt on every access so it picks up cards later steps stamp onto the
+        snapshot, but IMAGEID is minted once per instance: one snapshot describes
+        one coadd, and a second access must not hand it a new identity."""
         # 	Get Header info
         mjd = self.mean_mjd
         dateobs = Time(mjd, format="mjd").isot if mjd is not None else None
@@ -298,6 +305,10 @@ class InputHeaderSet:
 
         from ..preprocess.utils import add_image_id
 
-        add_image_id(header)
+        if self._coadd_image_id is None:
+            add_image_id(header)
+            self._coadd_image_id = header["IMAGEID"]
+        else:
+            header["IMAGEID"] = (self._coadd_image_id, "Unique ID of the image")
 
         return header
