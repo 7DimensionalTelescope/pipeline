@@ -1735,42 +1735,17 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
     def weight_dir(self) -> str:
         return os.path.join(self._parent.tmp_dir, "weight")
 
-    # ---- weight maps of the pristine input frames ----
-    @property
-    def input_weight_images(self) -> str | List[str]:
-        return [os.path.join(self.weight_dir, add_suffix(b, "weight")) for b in self._basenames]
+    # ---- stage products, named after what that stage actually consumed ----
+    def stage_images(self, stage_inputs, suffix: str, subdir: str) -> List[str]:
+        """``<subdir>/<basename of each input>_<suffix>.fits``.
 
-    # ---- background subtraction ----
-    @property
-    def bkgsub_images(self) -> str | List[str]:
-        return [os.path.join(self.bkgsub_dir, add_suffix(b, "bkgsub")) for b in self._basenames]
-
-    @property
-    def bkg_images(self) -> str | List[str]:
-        return [os.path.join(self.bkgsub_dir, add_suffix(b, "bkg")) for b in self._basenames]
-
-    @property
-    def bkg_rms_images(self) -> str | List[str]:
-        return [os.path.join(self.bkgsub_dir, add_suffix(b, "bkgrms")) for b in self._basenames]
-
-    @property
-    def bkgsub_weight_images(self) -> str | List[str]:
-        return add_suffix(self.bkgsub_images, "weight")
-
-    @property
-    def fov_mask_images(self) -> str | List[str]:
-        return [os.path.join(self.bkgsub_dir, add_suffix(b, "fovmask")) for b in self._basenames]
-
-    @property
-    def source_mask_images(self) -> str | List[str]:
-        """Detected sources knocked out (and the FOV mask folded in): what background
-        estimation may use, 1 = usable."""
-        return [os.path.join(self.bkgsub_dir, add_suffix(b, "srcmask")) for b in self._basenames]
-
-    # ---- bad-pixel interpolation (legacy: interp of the bkgsub frame) ----
-    @property
-    def interp_images(self) -> str | List[str]:
-        return [os.path.join(self.interp_dir, add_suffix(add_suffix(b, "bkgsub"), "interp")) for b in self._basenames]
+        Deriving the name from the stage's own runtime input, rather than from the
+        original config input plus a fixed suffix chain, is what lets two routines run
+        the same stages in different orders without colliding: the filename records what
+        was done in the order it was done. Suffixes in use: ``bkgsub``, ``bkg``,
+        ``bkgrms``, ``fovmask``, ``srcmask``, ``interp``, ``weight``.
+        """
+        return [os.path.join(subdir, add_suffix(os.path.basename(f), suffix)) for f in atleast_1d(stage_inputs)]
 
     # ---- coadd output companions (single coadd) ----
     @property

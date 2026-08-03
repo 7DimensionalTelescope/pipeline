@@ -12,6 +12,7 @@ from .const.sciproc import (
     SUBTRACTION_SPEC,
     DIFFERENCE_PHOTOMETRY_SPEC,
 )
+from .errors.errors import EmptyInputAfterSanityRejectionError
 from .preprocess import Preprocess
 from .astrometry import Astrometry
 from .photometry import Photometry
@@ -49,6 +50,25 @@ def run_preprocess(
         del config, prep
     except Exception as e:
         raise e
+
+
+def _record_auto_sanity(config, sanity: bool = None) -> None:
+    """
+    Config-level sanity from the run outcome: False when every input was sanity-rejected
+    (return code 2), None to clear that once a run gets through. Best-effort, never raises,
+    and never overwrites a human verdict (ProcessStatus.set_auto_sanity).
+    """
+    try:
+        if not isinstance(config, SciProcConfiguration):
+            return
+        if not config.node.settings.is_pipeline or config.node.settings.is_too:
+            return
+
+        from .services.database.process_status import ProcessStatus
+
+        ProcessStatus().set_auto_sanity(config.node.name, sanity)
+    except Exception as e:
+        print(f"[WARNING] Failed to record config sanity: {e}")
 
 
 def run_scidata_reduction(
@@ -113,7 +133,13 @@ def run_scidata_reduction(
                 make_too_output(too_data.get("id"))
                 too_db.send_final_notice_email(too_data.get("id"))
 
+        _record_auto_sanity(config, None)  # inputs got through: drop a stale automatic rejection
         del config
+
+    except EmptyInputAfterSanityRejectionError:
+        # Return code 2: not a failure. Record it so automatic reruns skip this config.
+        _record_auto_sanity(config, False)
+        raise
 
     except Exception as e:
         raise e

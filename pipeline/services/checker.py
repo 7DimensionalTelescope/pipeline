@@ -108,6 +108,49 @@ class Checker:
 
         return input_has_changed
 
+    def apply_inspection_filter_and_report(self) -> bool:
+        """
+        Drops only human-sealed rejections (INSPCOMM with SANITY=False) from `self.input_images`.
+
+        For stages that must not run the full sanity filter but must still honor a human verdict.
+        """
+        if not self.input_images:
+            return False
+
+        filtered_images = []
+        for image in self.input_images:
+            try:
+                header: fits.Header = fits.getheader(image)
+                decision = self._sanity_action(header=header, overwrite=False, current_process=None)
+            except Exception as e:
+                self.logger.warning(
+                    f"Failed to check INSPCOMM for {os.path.basename(image)}: {e}. Including image in processing."
+                )
+                filtered_images.append(image)
+                continue
+
+            if decision == SanityAction.TRUST_SANITY_AND_DROP_IMAGE:
+                self.logger.info(
+                    f"Filtered out human-rejected image (INSPCOMM: {header.get('INSPCOMM')}): "
+                    f"{os.path.basename(image)}"
+                )
+            else:
+                filtered_images.append(image)
+
+        if len(filtered_images) == len(self.input_images):
+            return False
+
+        self.logger.info(
+            f"Filtered {len(self.input_images) - len(filtered_images)} human-rejected images "
+            f"({len(filtered_images)}/{len(self.input_images)} remaining)"
+        )
+        self.input_images = filtered_images
+
+        if self.input_images:
+            self._recreate_pathhandler_instance()
+
+        return True
+
     def _filter_by_sanity(
         self,
         images: List[str],

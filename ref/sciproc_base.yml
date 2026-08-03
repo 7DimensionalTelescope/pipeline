@@ -112,12 +112,14 @@ imcoadd:
   runtime_version:
   coadd_routine: 'legacy'  # legacy or reproject-first
   coadd_mode: 'median'
+  image_selection: false  # False, 'auto' or 'interactive'; multi-epoch only
   coadd_image:  # output coadd image
   gpu: True
   device: 0
   zp_key: 'ZP_AUTO'
   zpscale: True
-  bkgsub_type: # 'Dynamic'
+  bkgsub_type:  # empty: imcoadd fills in 'constant'/'dynamic' for the whole group by SKYVAL.
+                # 'constant' scalar SKYVAL | 'dynamic' SExtractor mesh | 'individual' per image
   source_mask: True  # False, True or 'iterative'; only affects dynamic bkgsub
   weight_map: true
   joint_wcs: False

@@ -192,6 +192,17 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self.logger.error("No input images remain after SANITY filter.", AstrometryError.EmptyInput)
             raise AstrometryError.EmptyInputError("No input images remain after SANITY filter.")
 
+        # Honor human verdicts only. Filter after the config is set, so the config keeps the full input record.
+        self.apply_inspection_filter_and_report()
+        if not self.input_images:
+            self.logger.error(
+                "All input images are human-rejected (INSPCOMM with SANITY=False).",
+                AstrometryError.EmptyInputAfterSanityRejection,
+            )
+            raise AstrometryError.EmptyInputAfterSanityRejectionError(
+                "All input images are human-rejected (INSPCOMM with SANITY=False)."
+            )
+
         # set ImageInfo
         self.images_info = [
             ImageInfo.from_fits(image, self.path, self.logger, id=f"[{i+1}/{len(self.input_images)}]")

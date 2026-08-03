@@ -77,6 +77,7 @@ if TYPE_CHECKING:
         runtime_version: Any
         coadd_routine: str
         coadd_mode: str
+        image_selection: bool
         coadd_image: Any
         gpu: bool
         device: int

@@ -33,6 +33,11 @@ class ProcessStatusTable:
     log_file: Optional[str] = None
     debug_log_file: Optional[str] = None
     comments_file: Optional[str] = None
+    # human inspection axis. None everywhere in from_file, so reruns never overwrite it.
+    sanity: Optional[bool] = None  # None: not inspected; False: human-rejected; True: human-approved
+    inspcomm: Optional[str] = None  # mirrors the FITS INSPCOMM card
+    inspected_by: Optional[str] = None
+    inspected_at: Optional[datetime] = None
 
     @classmethod
     def from_row(cls, row: tuple, columns: List[str] = None):
@@ -114,3 +119,31 @@ class ProcessStatus(BaseDatabase):
     @property
     def pyTable(self):
         return self._pyTable
+
+    def set_auto_sanity(self, name: str, sanity: Optional[bool]) -> Optional[int]:
+        """Machine-set config sanity (the return-code-2 path). Never touches a human verdict. None clears it."""
+        row = self.read_data(name)
+        if row is None or row.inspected_at is not None or row.sanity is sanity:
+            return None
+
+        self.update_data(row.id, sanity="None" if sanity is None else sanity)
+        return row.id
+
+    def set_inspection(
+        self, name: str, sanity: bool, inspcomm: str = None, by: str = None, overwrite: bool = False
+    ) -> Optional[int]:
+        """Record a human verdict on one config. Returns the row id, or None if the config has no row."""
+        from ..inspection import resolve_inspcomm
+
+        row = self.read_data(name)
+        if row is None:
+            return None
+
+        self.update_data(
+            row.id,
+            sanity=sanity,
+            inspcomm=resolve_inspcomm(row.inspcomm, inspcomm, overwrite),
+            inspected_by=by or os.environ.get("USER"),
+            inspected_at=datetime.now(),
+        )
+        return row.id
