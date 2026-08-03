@@ -35,6 +35,17 @@ regenerations, which is the ambiguity IMAGEID exists to remove, so an ingredient
 carrying no ID card is dropped: a raw frame (which has no image_qa row anyway)
 or a product written before the ID cards existed.
 
+Each edge stores both identities of its source. source_image_id is the image_qa
+row, which belongs to a path and so follows whatever version currently occupies
+it; source_imageid is the version that was actually used. They agree until the
+ingredient is regenerated, so comparing them is the staleness test:
+
+    SELECT ... FROM image_qa_dependency d JOIN image_qa s ON s.id = d.source_image_id
+     WHERE d.source_imageid IS NOT NULL AND d.source_imageid <> s.imageid
+
+which finds every image built from an ingredient version since superseded. A NULL
+source_imageid is an edge written before this column existed: unknown, not stale.
+
 The complete dependency_role vocabulary:
 
     role      | derived from                    | notes
@@ -167,7 +178,13 @@ class ImageQADependency(BaseDatabase):
         if not ingredients:
             return 0
 
-        roles: Dict[str, str] = {ing["imageid"]: ing["role"] for ing in ingredients}
+        # One image can fill two roles -- a diff whose science and reference are the same
+        # coadd -- and the key is (derived, source, role), so keep every role per id.
+        roles: Dict[str, List[str]] = {}
+        for ing in ingredients:
+            per_id = roles.setdefault(ing["imageid"], [])
+            if ing["role"] not in per_id:
+                per_id.append(ing["role"])
 
         with self.get_connection() as conn:
             with conn.cursor() as cur:
@@ -192,12 +209,19 @@ class ImageQADependency(BaseDatabase):
                     (derived_qa_id,),
                 )
 
-                insert_data = [(derived_qa_id, source_id, roles[imageid]) for imageid, source_id in matched]
+                # source_image_id follows the path, so it tracks whatever version now sits
+                # there; source_imageid pins the version actually used, which is the only
+                # way to tell later that the ingredient has since been regenerated.
+                insert_data = [
+                    (derived_qa_id, source_id, role, imageid)
+                    for imageid, source_id in matched
+                    for role in roles[imageid]
+                ]
                 if insert_data:
                     cur.executemany(
                         "INSERT INTO image_qa_dependency"
-                        " (derived_image_id, source_image_id, dependency_role)"
-                        " VALUES (%s, %s, %s)",
+                        " (derived_image_id, source_image_id, dependency_role, source_imageid)"
+                        " VALUES (%s, %s, %s, %s)",
                         insert_data,
                     )
             conn.commit()

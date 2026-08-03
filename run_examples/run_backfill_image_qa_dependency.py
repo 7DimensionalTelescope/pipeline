@@ -33,6 +33,7 @@ import argparse
 import os
 import sys
 import threading
+import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -43,6 +44,43 @@ from pipeline.services.database.image_qa_dependency import ImageQADependency
 DERIVED_TYPES = ["dark", "flat", "single", "coadd", "diff"]
 
 _thread_local = threading.local()
+
+# astropy reports a truncated FITS without naming the file, so the warning alone cannot
+# be acted on. The worker records which file it is reading and the hook below pairs them.
+_problem_log = None
+_problem_lock = threading.Lock()
+_problem_count = 0
+
+
+def _record_problem(kind: str, path: str, detail: str) -> None:
+    """Append one line to the problem log, if one was opened."""
+    global _problem_count
+    if _problem_log is None:
+        return
+    with _problem_lock:
+        _problem_log.write(f"{kind}\t{path}\t{detail}\n")
+        _problem_log.flush()
+        _problem_count += 1
+
+
+def _install_warning_hook():
+    """Route warnings to the problem log, tagged with the file being read."""
+    original = warnings.showwarning
+
+    def hook(message, category, filename, lineno, file=None, line=None):
+        # the path is the file this thread was reading, which is the cause only for
+        # warnings raised from the FITS layer; the origin disambiguates the rest
+        _record_problem(
+            "warning",
+            getattr(_thread_local, "path", "") or "",
+            f"{category.__name__} from {os.path.basename(filename)}:{lineno}: {str(message).strip()}",
+        )
+        original(message, category, filename, lineno, file, line)
+
+    warnings.showwarning = hook
+    # the default filter shows a given warning text once, which would hide every file
+    # after the first sharing an identical message
+    warnings.simplefilter("always")
 
 
 def _get_thread_dep() -> ImageQADependency:
@@ -88,10 +126,16 @@ def _process_one_row(row: tuple, *, dry_run: bool) -> tuple[str, int, str, int]:
     if dry_run:
         return ("dry_run", rid, path, 0)
 
+    _thread_local.path = path
     try:
         n = _get_thread_dep().sync(path, rid)
+        if n == 0:
+            # a header that cannot be read syncs to nothing, indistinguishable here from
+            # one carrying no ID cards, so record it for the reader to tell apart
+            _record_problem("no_sources", path, f"id={rid}")
         return ("ok", rid, path, n)
     except Exception as e:
+        _record_problem("error", path, f"id={rid} {type(e).__name__}: {e}")
         return ("error", rid, path, 0)
 
 
@@ -109,6 +153,13 @@ def main() -> int:
         help=f"Repeatable. Subset of {DERIVED_TYPES} (default: all of them).",
     )
     parser.add_argument("--limit", type=int, default=None, help="Max rows to process.")
+    parser.add_argument(
+        "--problem-log",
+        default="dependency_problems.log",
+        metavar="FILE",
+        help="Append warnings, unreadable headers and errors here, each with its file path"
+        " (default: dependency_problems.log in the working directory).",
+    )
     default_workers = min(32, max(4, (os.cpu_count() or 8) * 2))
     parser.add_argument("--workers", type=int, default=default_workers, help=f"Parallel threads (default {default_workers}).")
     args = parser.parse_args()
@@ -121,6 +172,12 @@ def main() -> int:
         return 0
 
     print(f"Selected {len(rows)} row(s). dry_run={args.dry_run} workers={args.workers}")
+
+    global _problem_log
+    if not args.dry_run and args.problem_log:
+        _problem_log = open(args.problem_log, "a", buffering=1)
+        _install_warning_hook()
+        print(f"Problem log: {os.path.abspath(args.problem_log)}")
 
     synced = 0
     edges = 0
@@ -161,6 +218,9 @@ def main() -> int:
         f"Done. synced={synced}, edges={edges}, no_sources={no_sources}, "
         f"missing_file={skipped_missing_file}, errors={errors}"
     )
+    if _problem_log is not None:
+        _problem_log.close()
+        print(f"Recorded {_problem_count} problem line(s) in {os.path.abspath(args.problem_log)}")
     return 0 if errors == 0 else 1
 
 
