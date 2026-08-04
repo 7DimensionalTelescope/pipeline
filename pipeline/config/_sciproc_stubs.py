@@ -78,6 +78,7 @@ if TYPE_CHECKING:
         coadd_routine: str
         coadd_mode: str
         image_selection: bool
+        ppflag_bitmask: str
         coadd_image: Any
         gpu: bool
         device: int

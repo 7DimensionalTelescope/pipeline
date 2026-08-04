@@ -113,13 +113,14 @@ imcoadd:
   coadd_routine: 'legacy'  # legacy or reproject-first
   coadd_mode: 'median'
   image_selection: false  # False, 'auto' or 'interactive'; multi-epoch only
+  ppflag_bitmask: '110000'  # one digit per PPFLAG bit, in the order 1,2,4,8,16,32; 1 = tolerated.
+                            # '110000' tolerates bits 1 and 2; '110100' tolerates 1, 2 and 8.
   coadd_image:  # output coadd image
   gpu: True
   device: 0
   zp_key: 'ZP_AUTO'
   zpscale: True
-  bkgsub_type:  # empty: imcoadd fills in 'constant'/'dynamic' for the whole group by SKYVAL.
-                # 'constant' scalar SKYVAL | 'dynamic' SExtractor mesh | 'individual' per image
+  bkgsub_type:  # 'constant' | 'dynamic' | 'individual'; leave empty for auto
   source_mask: True  # False, True or 'iterative'; only affects dynamic bkgsub
   weight_map: true
   joint_wcs: False

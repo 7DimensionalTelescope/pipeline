@@ -1753,8 +1753,10 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
         return self._parent.coadd_weight_image
 
     @property
-    def coadd_bpmask_image(self) -> str:
-        return add_suffix(self._parent.coadd_image, "bpmask")
+    def coadd_footprint_image(self) -> str:
+        """How many frames contributed to each output pixel. Not a mask: whether bad
+        pixels are excluded from the count is `imcoadd.propagate_mask`'s decision."""
+        return add_suffix(self._parent.coadd_image, "footprint")
 
     # ---- inverted bpmask staged in tmp_dir for the bpm SWarp pass ----
     def bpmask_inverted(self, bpmask_file) -> str:

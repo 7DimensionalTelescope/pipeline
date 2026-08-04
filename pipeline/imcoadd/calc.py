@@ -23,6 +23,8 @@ def mean_coadd_numpy(
     coadd_header: fits.Header,
     weights: list[str] | None = None,
     weight_output: str | None = None,
+    footprint_output: str | None = None,
+    masks: list[str] | None = None,
     flxscales: list[float] | bool | None = None,
     match_swarp_size: bool = True,
     logger: Logger | None = None,
@@ -30,6 +32,10 @@ def mean_coadd_numpy(
     """Per-pixel flux-scaled mean coadd (simple or inverse-variance weighted).
 
     Works on SWarp-resampled images that are centered differently.
+
+    ``footprint_output`` receives the count of frames that actually contributed to each
+    output pixel -- taken from the same per-frame validity the combine uses, so it cannot
+    disagree with the coadd. ``masks`` optionally narrows that validity (bad pixels).
     """
     st = time.time()
     backend = "weighted" if weights is not None else "simple"
@@ -51,6 +57,7 @@ def mean_coadd_numpy(
 
     sum_arr = np.zeros((target_h, target_w), dtype=np.float64)
     norm_arr = np.zeros((target_h, target_w), dtype=np.float64 if weights is not None else np.int32)
+    count_arr = np.zeros((target_h, target_w), dtype=np.int32)
     for i, f in enumerate(input_images):
         with fits.open(f) as hdul:
             a = hdul[0].data.astype(np.float64)
@@ -74,6 +81,9 @@ def mean_coadd_numpy(
         sy0 = ty0 - y0[i]; sy1 = ty1 - y0[i]  # fmt: skip
         src = a[sy0:sy1, sx0:sx1]
         valid = np.isfinite(src) & (src != 0.0)
+        if masks is not None:
+            with fits.open(masks[i], memmap=True) as mh:
+                valid &= mh[0].data[sy0:sy1, sx0:sx1] > 0
 
         if weights is None:
             sum_arr[ty0:ty1, tx0:tx1] += np.where(valid, src * flxscale, 0.0)
@@ -89,6 +99,8 @@ def mean_coadd_numpy(
             valid &= w_eff > 0
             sum_arr[ty0:ty1, tx0:tx1] += np.where(valid, w_eff * src * flxscale, 0.0)
             norm_arr[ty0:ty1, tx0:tx1] += np.where(valid, w_eff, 0.0)
+        # counted after the weight test, so the footprint is the frames the coadd used
+        count_arr[ty0:ty1, tx0:tx1] += valid
 
     coadd = np.where(norm_arr > 0, sum_arr / np.where(norm_arr > 0, norm_arr, 1), np.nan).astype(np.float32)
 
@@ -99,8 +111,11 @@ def mean_coadd_numpy(
     # count otherwise -- the same two cases SWarp writes for the legacy routine.
     weight_out = weight_output or add_suffix(output_path, "weight")
     fits.writeto(weight_out, norm_arr.astype(np.float32), header=out_header, overwrite=True)
+    footprint_out = footprint_output or add_suffix(output_path, "footprint")
+    fits.writeto(footprint_out, count_arr.astype(np.int16), header=out_header, overwrite=True)
     if logger is not None:
         logger.debug(f"Wrote coadd weight map ({backend}): {weight_out}")
+        logger.debug(f"Wrote coadd footprint (max {int(count_arr.max())} frames): {footprint_out}")
 
     if logger is not None:
         logger.info(f"Numpy coaddition completed in {time_diff_in_seconds(st)} seconds")
@@ -113,6 +128,8 @@ def median_coadd_numpy(
     coadd_header: fits.Header,
     weights: list[str] | None = None,
     weight_output: str | None = None,
+    footprint_output: str | None = None,
+    masks: list[str] | None = None,
     flxscales: list[float] | bool | None = None,
     match_swarp_size: bool = True,
     chunk_h: int = 128,
@@ -158,7 +175,9 @@ def median_coadd_numpy(
     coadd = np.full((target_h, target_w), np.nan, dtype=np.float32)
     # accumulated per strip alongside the median, so peak memory stays bounded
     norm_arr = np.zeros((target_h, target_w), dtype=np.float32)
+    count_arr = np.zeros((target_h, target_w), dtype=np.int32)
     whandles = [fits.open(f, memmap=True) for f in weights] if weights is not None else None
+    mhandles = [fits.open(f, memmap=True) for f in masks] if masks is not None else None
     try:
         for ys in range(0, target_h, chunk_h):
             ye = min(target_h, ys + chunk_h)
@@ -174,8 +193,11 @@ def median_coadd_numpy(
                 sy0 = ty0 - y0[i]; sy1 = ty1 - y0[i]  # fmt: skip
                 src = hdul[0].data[sy0:sy1, sx0:sx1].astype(np.float32) * flxscales[i]
                 src[(src == 0.0) | ~np.isfinite(src)] = np.nan
+                if mhandles is not None:
+                    src[mhandles[i][0].data[sy0:sy1, sx0:sx1] <= 0] = np.nan
                 stack[i, ty0 - ys : ty1 - ys, tx0:tx1] = src
                 contributed = np.isfinite(src)
+                count_arr[ty0:ty1, tx0:tx1] += contributed
                 if whandles is None:
                     norm_arr[ty0:ty1, tx0:tx1] += contributed
                 else:
@@ -187,7 +209,7 @@ def median_coadd_numpy(
     finally:
         for hdul in handles:
             hdul.close()
-        for hdul in whandles or []:
+        for hdul in (whandles or []) + (mhandles or []):
             hdul.close()
 
     out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, coadd_header)
@@ -195,7 +217,10 @@ def median_coadd_numpy(
 
     weight_out = weight_output or add_suffix(output_path, "weight")
     fits.writeto(weight_out, norm_arr, header=out_header, overwrite=True)
+    footprint_out = footprint_output or add_suffix(output_path, "footprint")
+    fits.writeto(footprint_out, count_arr.astype(np.int16), header=out_header, overwrite=True)
     if logger is not None:
+        logger.debug(f"Wrote coadd footprint (max {int(count_arr.max())} frames): {footprint_out}")
         backend = "summed inverse variance" if weights is not None else "frame count"
         logger.debug(f"Wrote coadd weight map ({backend}): {weight_out}")
         logger.info(f"Numpy median coaddition completed in {time_diff_in_seconds(st)} seconds")
