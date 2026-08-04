@@ -11,7 +11,7 @@ from astropy.table import Table, vstack
 
 from ..const import SCRIPTS_DIR, NUM_GPUS, SCHEDULER_DB_PATH, QUEUE_SOCKET_PATH
 from ..const import SUCCESS_RETURN_CODE, FAILURE_RETURN_CODE, EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE
-from .logger import get_high_level_task_logger
+from .logger import get_high_level_task_logger, log_orchestration_stop
 
 
 class Scheduler:
@@ -40,6 +40,9 @@ class Scheduler:
     # Constants
     MAX_PREPROCESS = 3
     HIGH_PRIORITY_THRESHOLD = 10
+    # Seconds a statement waits for a competing writer before raising "database is locked".
+    # A bulk submission must never make the queue daemon drop a completion.
+    DB_BUSY_TIMEOUT = 30.0
 
     def __init__(
         self,
@@ -143,6 +146,13 @@ class Scheduler:
         """Create scheduler table if it doesn't exist."""
 
         with self._db_connection() as conn:
+            # WAL so a bulk submission's writes never lock out the daemon's readers.
+            # Persists in the file itself; best-effort because it needs a moment with no other writer.
+            try:
+                conn.execute("PRAGMA journal_mode=WAL").fetchone()
+            except sqlite3.Error as e:
+                get_high_level_task_logger(__name__).debug(f"Could not set journal_mode=WAL: {e}")
+
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS scheduler (
@@ -194,7 +204,7 @@ class Scheduler:
     @contextmanager
     def _db_connection(self):
         """Context manager for database connections."""
-        conn = sqlite3.connect(SCHEDULER_DB_PATH)
+        conn = sqlite3.connect(SCHEDULER_DB_PATH, timeout=self.DB_BUSY_TIMEOUT)
         try:
             yield conn
         finally:
@@ -623,6 +633,27 @@ class Scheduler:
 
         return row_dict, self._generate_command(task_index, scheduler_kwargs)
 
+    @staticmethod
+    def _orchestration_stop_reason(return_code) -> str:
+        """Why a run ended without reporting an outcome of its own — for the config's log."""
+        if isinstance(return_code, int) and return_code < 0:
+            try:
+                detail = f"killed by {signal.Signals(-return_code).name}"
+            except ValueError:
+                detail = f"killed by signal {-return_code}"
+
+            if return_code == -signal.SIGTERM:
+                detail += " (queue/trigger restart, schedule overwrite, or terminate_scheduler_tasks)"
+            elif return_code == -signal.SIGKILL:
+                detail += " (OOM killer or a forced kill)"
+        else:
+            detail = f"exited with return code {return_code}, which no stage produces"
+
+        return (
+            f"Marked Failed by the queue daemon: {detail}. Orchestration stop, not a scientific "
+            f"verdict — the run was ended from outside and filed no report of its own."
+        )
+
     def mark_done(self, index, return_code=True):
         if self.use_system_queue:
             self._mark_done_db(index, return_code)
@@ -633,12 +664,14 @@ class Scheduler:
         with self._db_connection() as conn:
             cursor = conn.cursor()
             # Check if task is already marked as done to prevent duplicate processing
-            cursor.execute('SELECT status, dependent_idx, config_type FROM scheduler WHERE "index" = ?', (index,))
+            cursor.execute(
+                'SELECT status, dependent_idx, config_type, config FROM scheduler WHERE "index" = ?', (index,)
+            )
             row = cursor.fetchone()
             if not row:
                 return
 
-            current_status, dependent_idx_json, config_type = row
+            current_status, dependent_idx_json, config_type, config = row
             # If already marked as done, skip to prevent duplicate increments
             if current_status == "Completed" or current_status == "Failed":
                 return
@@ -682,6 +715,15 @@ class Scheduler:
                     'UPDATE scheduler SET status = ?, pid = 0, process_end = ? WHERE "index" = ?',
                     ("Rejected", process_end, index),
                 )
+            else:
+                # The run never reported for itself: killed by a signal (systemd stop, OOM
+                # killer) or an exit code no stage produces. Orchestration, not science —
+                # fail it here, because leaving it Processing strands the row forever.
+                cursor.execute(
+                    'UPDATE scheduler SET status = ?, readiness = ?, is_ready = ?, pid = 0, process_end = ? WHERE "index" = ?',
+                    ("Failed", 0, 0, process_end, index),
+                )
+                log_orchestration_stop(config, self._orchestration_stop_reason(return_code))
 
             conn.commit()
 
@@ -727,6 +769,13 @@ class Scheduler:
             self._schedule["readiness"][mask] = 0
             self._schedule["is_ready"][mask] = False
             self._schedule["process_end"][mask] = datetime.now().isoformat()
+
+            if return_code not in (
+                SUCCESS_RETURN_CODE,
+                FAILURE_RETURN_CODE,
+                EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE,
+            ):
+                log_orchestration_stop(row_dict["config"], self._orchestration_stop_reason(return_code))
 
     def list_of_ready_tasks(self):
         if self.use_system_queue:

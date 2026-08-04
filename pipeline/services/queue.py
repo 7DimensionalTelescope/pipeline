@@ -11,9 +11,9 @@ import subprocess
 
 from ..utils import time_diff_in_seconds
 from ..const.environ import PIPELINE_LOG_DIR, QUEUE_SOCKET_PATH
-from ..const.run import SUCCESS_RETURN_CODE
+from ..const.run import SUCCESS_RETURN_CODE, FAILURE_RETURN_CODE
 from .memory import MemoryMonitor
-from .logger import Logger
+from .logger import Logger, log_orchestration_stop
 from .scheduler import Scheduler
 
 signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -21,6 +21,8 @@ mp.set_start_method("spawn", force=True)
 
 DEFAULT_MAX_WORKERS = 15
 DEFAULT_WORKER_SLEEP_TIME = 0.5
+# Retries of Scheduler.mark_done before a finished task is abandoned as Processing.
+MAX_MARK_DONE_ATTEMPTS = 5
 DEFAULT_MONITOR_CHECK_INTERVAL = 60
 DEFAULT_SOCKET_LISTENER_TIMEOUT = 1.0
 
@@ -367,6 +369,88 @@ class QueueManager:
                 # Don't raise - continue processing
                 continue
 
+    @staticmethod
+    def _entry_config_path(process):
+        """
+        Config path of an active-process entry.
+
+        Entry[0] is the config path for a launched task, but the raw command list for a
+        failed launch (`_scheduler_worker` appends `cmd` there when Popen fails).
+        """
+        first = process[0]
+        if isinstance(first, (list, tuple)):
+            return first[first.index("-config") + 1] if "-config" in first else None
+        return first
+
+    def _fail_unreportable_task(self, process, task_index, return_code, cause):
+        """
+        Last resort when the outcome could not be recorded: fail the row, and say so in the
+        config's own log.
+
+        The note is written first and unconditionally — it is on the filesystem, so it
+        survives exactly the case that brought us here (the scheduler DB being unreachable),
+        and it is the only place a human reading that config will learn why it stopped.
+        """
+        config = self._entry_config_path(process)
+        note = (
+            f"Marked Failed by the queue daemon: the scheduler row could not be updated after "
+            f"{MAX_MARK_DONE_ATTEMPTS} attempts ({cause}). Orchestration stop, not a scientific "
+            f"verdict — this run actually ended with return code {return_code}; the row reads "
+            f"Failed only so it stays visible and rerunnable instead of stranded in Processing."
+        )
+        if log_orchestration_stop(config, note) is None:
+            self.logger.error(f"Could not write the orchestration note for {os.path.basename(str(config))}.")
+
+        try:
+            self.scheduler.mark_done(task_index, return_code=FAILURE_RETURN_CODE)
+        except Exception as e:
+            self.logger.critical(
+                f"Task {task_index} could not be marked Failed either ({e}). Its row is still "
+                f"Processing with a dead PID; update_process_status() will reclaim it at the "
+                f"next trigger start.",
+            )
+
+    def _drop_active_process(self, process):
+        """Remove a finished entry, freeing its worker slot. Caller holds self.lock."""
+        if process in self._active_processes:
+            self._active_processes.remove(process)
+
+    def _mark_done(self, process, task_index, return_code) -> bool:
+        """
+        Record the task's outcome in the scheduler. True when the entry may be dropped.
+
+        False means the update failed and is worth retrying on the next poll; the attempt
+        count rides along on the entry (5th element) so retries are bounded.
+        """
+        if task_index is None or self.scheduler is None:
+            return True
+
+        try:
+            self.scheduler.mark_done(task_index, return_code=return_code)
+            return True
+        except Exception as e:
+            attempts = (process[4] if len(process) > 4 else 0) + 1
+
+            if attempts >= MAX_MARK_DONE_ATTEMPTS:
+                self.logger.error(
+                    f"Error marking task {task_index} as done after {attempts} attempts: {e}. "
+                    f"Failing the row instead of leaving it Processing.",
+                    exc_info=True,
+                )
+                self._fail_unreportable_task(process, task_index, return_code, e)
+                return True
+
+            if len(process) > 4:
+                process[4] = attempts
+            else:
+                process.append(attempts)
+
+            self.logger.warning(
+                f"Error marking task {task_index} as done "
+                f"(attempt {attempts}/{MAX_MARK_DONE_ATTEMPTS}): {e}. Retrying."
+            )
+            return False
+
     def _scheduler_completion_worker(self):
         """
         Worker thread for monitoring subprocess completion.
@@ -382,47 +466,52 @@ class QueueManager:
                         task_index = process[3] if len(process) > 3 else None
 
                         if proc is None:
-                            self.scheduler.mark_done(task_index, success=False)
+                            # Launch failed: the run never started, so its own log says nothing.
+                            if len(process) <= 4:  # first sighting, before any retry counter
+                                log_orchestration_stop(
+                                    self._entry_config_path(process),
+                                    "Marked Failed by the queue daemon: the worker process could not be "
+                                    "launched. Orchestration stop, not a scientific verdict — no stage ran.",
+                                )
+                            if self._mark_done(process, task_index, FAILURE_RETURN_CODE):
+                                self._drop_active_process(process)
                             continue
 
                         if proc.poll() is not None:  # Process finished
                             pid = proc.pid
                             return_code = proc.returncode
+                            already_reported = len(process) > 4  # a mark_done retry; outcome already logged
 
-                            # Get process output for logging
-                            try:
-                                stdout, stderr = proc.communicate(timeout=1)
-                                stdout_str = stdout.decode(errors="replace") if stdout else ""
-                                stderr_str = stderr.decode(errors="replace") if stderr else ""
-                            except subprocess.TimeoutExpired:
-                                stdout_str = stderr_str = "Output collection timed out"
-                            except Exception:
-                                stdout_str = stderr_str = "Could not collect output"
+                            if not already_reported:
+                                # Get process output for logging
+                                try:
+                                    stdout, stderr = proc.communicate(timeout=1)
+                                    stdout_str = stdout.decode(errors="replace") if stdout else ""
+                                    stderr_str = stderr.decode(errors="replace") if stderr else ""
+                                except subprocess.TimeoutExpired:
+                                    stdout_str = stderr_str = "Output collection timed out"
+                                except Exception:
+                                    stdout_str = stderr_str = "Could not collect output"
 
-                            if return_code == SUCCESS_RETURN_CODE:
-                                self.logger.info(
-                                    f"Process with {config} (PID = {pid}) completed successfully in {time_diff_in_seconds(start_time)} seconds."
-                                )
-                                if stdout_str and stdout_str.strip():
-                                    self.logger.debug(f"Process {config} stdout: {stdout_str[:500]}...")
-                            else:
-                                self.logger.error(
-                                    f"Process with {os.path.basename(config)} (PID = {pid}) failed with return code {proc.returncode}."
-                                )
-                                if stderr_str and stderr_str.strip():
-                                    self.logger.error(f"Process {config} stderr: {stderr_str[:500]}...")
+                                if return_code == SUCCESS_RETURN_CODE:
+                                    self.logger.info(
+                                        f"Process with {config} (PID = {pid}) completed successfully in {time_diff_in_seconds(start_time)} seconds."
+                                    )
+                                    if stdout_str and stdout_str.strip():
+                                        self.logger.debug(f"Process {config} stdout: {stdout_str[:500]}...")
+                                else:
+                                    self.logger.error(
+                                        f"Process with {os.path.basename(config)} (PID = {pid}) failed with return code {proc.returncode}."
+                                    )
+                                    if stderr_str and stderr_str.strip():
+                                        self.logger.error(f"Process {config} stderr: {stderr_str[:500]}...")
 
-                            # Mark task as done using index
-                            # Use try-finally to ensure process is removed even if mark_done fails
-                            try:
-                                if task_index is not None and self.scheduler is not None:
-                                    self.scheduler.mark_done(task_index, return_code = return_code)
-                            except Exception as e:
-                                self.logger.error(f"Error marking task {task_index} as done: {e}", exc_info=True)
-                            finally:
-                                # Always remove process from active list, even if mark_done failed
-                                if process in self._active_processes:
-                                    self._active_processes.remove(process)
+                            # Mark task as done using index.
+                            # Keep the entry until the scheduler row is actually updated: dropping it
+                            # on a transient failure (busy database) strands the row in Processing
+                            # with a dead PID, and nothing retries it.
+                            if self._mark_done(process, task_index, return_code):
+                                self._drop_active_process(process)
 
                 time.sleep(DEFAULT_WORKER_SLEEP_TIME)
             except Exception as e:

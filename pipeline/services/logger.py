@@ -46,6 +46,36 @@ def get_high_level_task_logger(logger_name: str, log_file: Optional[str] = None)
     return child_logger
 
 
+def log_orchestration_stop(config_path: str, message: str, level: str = "ERROR") -> Optional[str]:
+    """
+    Append one line to the log paired with a config, for stops the run could not report itself.
+
+    Orchestration-level endings only — killed worker, failed launch, lost bookkeeping —
+    never a scientific verdict, which the run writes through its own logger. Uses the same
+    format and flock discipline as `LockingFileHandler` so it interleaves with the run's
+    own lines. Best-effort: returns the log path, or None if nothing could be written.
+    """
+    from ..utils import swap_ext
+
+    try:
+        log_file = swap_ext(config_path, "log")
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        name = os.path.splitext(os.path.basename(config_path))[0]
+
+        with open(log_file, "a") as stream:
+            fcntl.flock(stream, fcntl.LOCK_EX)
+            try:
+                stream.write(f"[{level}] {stamp} - {name} - {message}\n")
+                stream.flush()
+            finally:
+                fcntl.flock(stream, fcntl.LOCK_UN)
+
+        return log_file
+    except Exception:
+        # The caller is usually the queue daemon; an unwritable log must not stop it.
+        return None
+
+
 class Logger:
     """
     A flexible logging utility with file, console, and Slack notification capabilities.

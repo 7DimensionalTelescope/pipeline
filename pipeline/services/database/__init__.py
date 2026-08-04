@@ -1,6 +1,14 @@
 # Database module for pipeline operations
 from .handler import DatabaseHandler
-from .const import DB_PARAMS, GWPORTAL_API_KEY, GWPORTAL_BASE_URL
+from .const import (
+    DB_PARAMS,
+    DB_PROFILES,
+    GWPORTAL_API_KEY,
+    GWPORTAL_BASE_URL,
+    describe_db_backend,
+    get_db_backend,
+    set_db_backend,
+)
 from .utils import generate_id
 from .query import RawImageQuery, free_query, query_observations_manually
 from .process_status import ProcessStatus
