@@ -778,7 +778,10 @@ class ScienceGroup:
         # )
 
         sci_yml = collapse(
-            PathHandler(self.image_files, is_too=is_too, is_pipeline=is_pipeline).sciproc_output_yml, raise_error=True
+            PathHandler(
+                self.image_files, is_too=is_too, is_pipeline=is_pipeline, is_multi_epoch=is_multi_epoch
+            ).sciproc_output_yml,
+            raise_error=True,
         )
         if os.path.exists(sci_yml) and not overwrite:
             # If the config file already exists, load it

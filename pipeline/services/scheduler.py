@@ -654,6 +654,47 @@ class Scheduler:
             f"verdict — the run was ended from outside and filed no report of its own."
         )
 
+    def requeue_task(self, index, reason=None):
+        """
+        Put an unfinished Processing task back in the queue. True when a row changed.
+
+        For tasks cut off before they could report an outcome — a daemon shutdown, a crash.
+        Mirrors what `update_process_status` does for dead PIDs, one row at a time, and only
+        touches rows still marked Processing so a resolved row is never clobbered.
+        """
+        config = None
+
+        if self.use_system_queue:
+            with self._db_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    'SELECT config FROM scheduler WHERE "index" = ? AND status = ?', (index, "Processing")
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    return False
+
+                config = row[0]
+                cursor.execute(
+                    'UPDATE scheduler SET status = ?, pid = 0, process_start = ? WHERE "index" = ?',
+                    ("Ready", "", index),
+                )
+                conn.commit()
+        else:
+            mask = self._schedule["index"] == index
+            if len(self._schedule[mask]) == 0 or self._schedule["status"][mask][0] != "Processing":
+                return False
+
+            config = self._schedule["config"][mask][0]
+            self._schedule["status"][mask] = "Ready"
+            self._schedule["pid"][mask] = 0
+            self._schedule["process_start"][mask] = ""
+
+        if reason:
+            log_orchestration_stop(config, reason)
+
+        return True
+
     def mark_done(self, index, return_code=True):
         if self.use_system_queue:
             self._mark_done_db(index, return_code)
@@ -1199,27 +1240,39 @@ class Scheduler:
     def _update_process_status_db(self):
         """Check and revert killed processes for database mode."""
         reverted_count = 0
+        reclaimed_configs = []
         with self._db_connection() as conn:
             cursor = conn.cursor()
             # Get all tasks with PIDs that are in Processing status
             cursor.execute(
-                'SELECT "index", pid, config_type FROM scheduler WHERE status = ? AND pid IS NOT NULL',
+                'SELECT "index", pid, config_type, config FROM scheduler WHERE status = ? AND pid IS NOT NULL',
                 ("Processing",),
             )
             processing_tasks = cursor.fetchall()
 
-            for task_index, pid, config_type in processing_tasks:
+            for task_index, pid, config_type, config in processing_tasks:
 
                 # Check if process is still alive
-                if not self._is_process_alive(pid):
+                if not self._is_task_process_alive(pid, config):
                     # Process is dead, revert to Ready state
                     cursor.execute(
                         'UPDATE scheduler SET status = ?, pid = 0, process_start = ? WHERE "index" = ?',
                         ("Ready", "", task_index),
                     )
                     reverted_count += 1
+                    reclaimed_configs.append(config)
 
             conn.commit()
+
+        # After the commit: the note is a courtesy, and must not hold the write lock.
+        for config in reclaimed_configs:
+            log_orchestration_stop(
+                config,
+                "Requeued as Ready: found Processing with a dead PID, so the run died without "
+                "reporting (daemon killed, crash, or reboot). Orchestration stop, not a scientific "
+                "verdict — it will start over from where the config's flags left it.",
+            )
+
         return reverted_count
 
     def _update_process_status_memory(self):
@@ -1237,7 +1290,7 @@ class Scheduler:
             config_type = task["config_type"]
 
             # Check if process is still alive
-            if not self._is_process_alive(pid):
+            if not self._is_task_process_alive(pid, task["config"]):
                 # Process is dead, revert to Ready state
                 mask = self._schedule["index"] == task_index
                 self._schedule["status"][mask] = "Ready"
@@ -1310,6 +1363,34 @@ class Scheduler:
             os.kill(int(pid), signal.SIGTERM)
         except (ProcessLookupError, PermissionError, ValueError, TypeError):
             pass
+
+    def _is_task_process_alive(self, pid, config):
+        """
+        True when `pid` is alive AND still running this task's config.
+
+        PIDs get recycled: after a reboot or a busy week a stored PID can belong to an
+        unrelated process, which would keep an orphaned row Processing forever. Matching the
+        config against the command line makes the reclaim reliable.
+
+        Errs toward "alive" whenever the command line cannot be read — leaving one orphan is
+        far cheaper than reclaiming a task that is genuinely running and launching a duplicate
+        reduction over the same outputs.
+        """
+        if not self._is_process_alive(pid):
+            return False
+
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as cmdline_file:
+                cmdline = cmdline_file.read().decode(errors="replace")
+        except (FileNotFoundError, ProcessLookupError):
+            return False  # exited between the two checks
+        except OSError:
+            return True  # cannot tell (hidepid, permissions) — do not risk a duplicate run
+
+        if not config:
+            return True
+
+        return config in cmdline
 
     def _is_process_alive(self, pid):
         """

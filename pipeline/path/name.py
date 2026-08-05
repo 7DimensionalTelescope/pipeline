@@ -236,7 +236,7 @@ class NameHandler:
             if nightdate:
                 pass
                 # date = add_half_day(nightdate)  # this can mutate the true date crossing midnight
-            else:
+            elif date is not None:
                 nightdate = subtract_half_day(date + "_" + hms if hms is not None else date)  # hms None for masters
                 self.nightdate[i] = nightdate
             dates.append(date)
@@ -304,7 +304,8 @@ class NameHandler:
             kind = "preprocess" if get_nightdate(parts[0]) else "science"
         else:
             if len(parts) == 2:
-                kind = "preprocess"
+                # preprocess is {date}_{unit}; a multi-epoch sciproc config is {obj}_{filter}
+                kind = "preprocess" if parts[0].isdigit() and len(parts[0]) == 8 else "science"
             elif len(parts) == 3:
                 kind = "science"
             else:
@@ -960,18 +961,23 @@ class NameHandler:
     def config_properties(self):
         config_properties_list = []
         for i, typ in enumerate(atleast_1d(self.type)):
+
+            def at(values, i=i):
+                values = atleast_1d(values)  # [] when the property is None, e.g. a dateless coadd config
+                return values[i] if i < len(values) else None
+
             if typ[0] == "science":
                 config_properties = {
                     "config_type": "science",
-                    "object": atleast_1d(self.obj)[i],
-                    "filter": atleast_1d(self.filter)[i],
-                    "nightdate": atleast_1d(self.nightdate)[i],
+                    "object": at(self.obj),
+                    "filter": at(self.filter),
+                    "nightdate": at(self.nightdate),
                 }
             elif typ[0] == "preprocess":
                 config_properties = {
                     "config_type": "preprocess",
-                    "nightdate": atleast_1d(self.nightdate)[i],
-                    "unit": atleast_1d(self.unit)[i],
+                    "nightdate": at(self.nightdate),
+                    "unit": at(self.unit),
                 }
             else:
                 raise ValueError(f"Invalid config type: {typ[0]}")

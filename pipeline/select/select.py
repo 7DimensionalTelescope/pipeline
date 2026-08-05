@@ -28,7 +28,11 @@ own directions in ``table.meta["directions"]``, so nothing downstream needs tell
 which metrics it is looking at.
 """
 
+import json
+import math
 import os
+import sys
+import time
 from typing import Literal
 
 import numpy as np
@@ -188,6 +192,7 @@ def collect_metrics(names: list[str], headers: list, metrics=None, extra=None) -
         directions[metric] = direction
         table[metric] = [_value(h.get(key), key) for h in headers]
     table.meta["directions"] = directions
+    table.meta["keys"] = used_keys
     return table, used_keys
 
 
@@ -291,6 +296,25 @@ def apply_cuts(table: Table, cuts: dict[str, float]) -> np.ndarray:
     return keep
 
 
+def rejection_counts(table: Table, cuts: dict[str, float]) -> dict[str, tuple[int, int]]:
+    """Per cut, ``(rejected, alone)``: how many images it rejects, and how many of those
+    nothing else would have rejected anyway.
+
+    The first number overlaps with the other cuts and so is degenerate on its own — a
+    frame failing three cuts is counted under all three, and a cut can read as expensive
+    while costing nothing. The second is the answer to "what does dropping this cut give
+    me back", which is the number worth acting on.
+    """
+    counts = {}
+    for metric in directions_of(table):
+        if metric not in cuts:
+            continue
+        fails = ~apply_cuts(table, {metric: cuts[metric]})
+        others = apply_cuts(table, {m: v for m, v in cuts.items() if m != metric})
+        counts[metric] = (int(fails.sum()), int((fails & others).sum()))
+    return counts
+
+
 PPFLAG_COLORS = ("tab:blue", "tab:orange", "tab:green", "tab:red", "tab:purple", "tab:brown")
 
 
@@ -313,8 +337,9 @@ def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_p
 
     Pairwise rather than an N-D projection: the cuts are independent 1-D thresholds, and a
     projected cube makes it impossible to see which side of one a point is on. Metrics in
-    `CATEGORICAL_METRICS` get no panel of their own — they colour the kept points instead,
-    with their tally in the title.
+    `CATEGORICAL_METRICS` get no panel of their own — colour carries their value and a bold
+    ``X`` marks the frames they rejected, since such a frame sits on the kept side of every
+    axis drawn and would otherwise look cut for no reason.
     """
     import matplotlib.pyplot as plt
 
@@ -340,6 +365,14 @@ def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_p
     else:
         groups = [("kept", np.ones(len(table), dtype=bool), "tab:blue")]
 
+    # A categorical cut has no axis to be read off, so a point it rejected is otherwise
+    # indistinguishable from one that simply fell outside a threshold. Marker carries it.
+    flag_rejected = (
+        ~apply_cuts(table, {flag_metric: cuts[flag_metric]})
+        if flag_metric and flag_metric in cuts
+        else np.zeros(len(table), dtype=bool)
+    )
+
     for r, row in enumerate(rows):
         for c in range(ncols):
             ax = axes[r][c]
@@ -348,9 +381,14 @@ def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_p
                 continue
             xk, yk = row[c]
             for _, mask, color in groups:
-                cut, kept = mask & ~keep, mask & keep
+                kept = mask & keep
+                cut = mask & ~keep & ~flag_rejected
+                flagged = mask & ~keep & flag_rejected
                 if cut.any():
                     ax.scatter(table[xk][cut], table[yk][cut], s=30, marker="x", lw=1.1, c=color, alpha=0.35)
+                if flagged.any():
+                    ax.scatter(table[xk][flagged], table[yk][flagged], s=85, marker="X", c=color,
+                               edgecolors="black", linewidths=0.9, zorder=3)  # fmt: skip
                 if kept.any():
                     ax.scatter(table[xk][kept], table[yk][kept], s=36, marker="o", c=color)
             if xk in cuts:
@@ -366,19 +404,39 @@ def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_p
     from matplotlib.lines import Line2D
 
     proxies = [Line2D([], [], ls="", marker="x", color="0.55", label="cut (x) / kept (o)")]
+    if flag_rejected.any():
+        proxies.append(Line2D([], [], ls="", marker="X", color="0.45", markeredgecolor="black",
+                              markersize=9, label=f"{flag_metric.upper()}-rejected (X)"))  # fmt: skip
     for label, mask, color in groups:
         counts = f"{int((mask & keep).sum())}/{int(mask.sum())}"
         proxies.append(Line2D([], [], ls="", marker="o", color=color, label=f"{label} {counts}".strip()))
     legend_title = f"{flag_metric.upper()} kept/total" if flag_metric else None
-    fig.legend(handles=proxies, loc="lower center", ncol=min(len(proxies), 7), fontsize=10,
+    ncol = min(len(proxies), 7)
+    fig.legend(handles=proxies, loc="lower center", ncol=ncol, fontsize=10,
                title=legend_title, frameon=False)  # fmt: skip
+    legend_height = 0.35 + 0.28 * math.ceil(len(proxies) / ncol)  # inches; grows when it wraps
+
+    def fitted(text, cap):
+        """``cap`` points, or smaller if that would run off the edge of the figure."""
+        return min(cap, 72 * (4.6 * ncols) / (0.55 * max(len(text), 1)))
 
     title = f"ImCoadd input selection: {int(keep.sum())}/{len(table)} kept"
     if flag_metric and flag_metric in cuts:
         title += f"    {flag_metric.upper()} allow {ppflag_spec(cuts[flag_metric])}"
-    fig.suptitle(title, fontsize=17)
-    legend_room = 0.6 / (4.4 * len(rows) + 0.6)
-    fig.tight_layout(rect=(0, legend_room, 1, 0.97))
+    fig.suptitle(title, fontsize=fitted(title, 17))
+
+    # Second line, because a categorical cut has no panel and its cost is otherwise
+    # invisible: with PPFLAG the points are coloured but nothing says how many it removed.
+    top = 0.97
+    rejected = rejection_counts(table, cuts)
+    if rejected:
+        line = ("rejected by  " + "   ".join(f"{m.upper()} {n} ({alone} alone)"
+                                             for m, (n, alone) in rejected.items())
+                + "   (overlapping; 'alone' = lost to that cut only)")  # fmt: skip
+        fig.text(0.5, 1 - 0.55 / (4.4 * len(rows)), line, ha="center", fontsize=fitted(line, 12))
+        top = 1 - 0.85 / (4.4 * len(rows))
+    legend_room = legend_height / (4.4 * len(rows) + legend_height)
+    fig.tight_layout(rect=(0, legend_room, 1, top))
     if out_path:
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         fig.savefig(out_path, dpi=100)
@@ -395,104 +453,230 @@ def in_notebook() -> bool:
         return False
 
 
-def _ask_float(prompt: str, current: float) -> float:
-    """Read one threshold, re-asking until it parses. Blank keeps ``current``."""
-    while True:
-        answer = input(f"  {prompt} [{current:.4g}]: ").strip()
-        if not answer:
-            return current
-        try:
-            return float(answer)
-        except ValueError:
-            print(f"    {answer!r} is not a number — try again, or press Enter to keep {current:.4g}")
+def cuts_json(cuts: dict) -> str:
+    """The cuts as a one-line JSON object, ready to be edited and handed back."""
+    shown = {m: ppflag_spec(v) if m in CATEGORICAL_METRICS else float(f"{v:.4g}") for m, v in cuts.items()}
+    return json.dumps(shown)
 
 
-def _ask_flags(metric: str, current) -> int:
-    """Read an allow-bitmask, re-asking until it parses. Blank keeps the current one."""
-    while True:
-        answer = input(f"  {metric:<12} allow [{ppflag_spec(current)}]: ").strip()
-        if not answer:
-            return int(current)
-        try:
-            return ppflag_mask(answer)
-        except ValueError as e:
-            print(f"    {e}")
+def cuts_summary(table: Table, cuts: dict, keep, suggested: dict | None = None) -> str:
+    """The whole state on one short line, so it fits inside an `input()` prompt.
 
-
-def _ask_new_metrics(table: Table, headers: list) -> bool:
-    """Offer to add metrics from header keys until a blank line.
-
-    Only a blank line ends this; anything unusable is reported and re-asked, so a typo
-    never falls through to be read as the next threshold.
+    Each cut carries ``(-rejected/alone)``: what it rejects, and what only it rejects.
+    The first overlaps between cuts, the second does not. A metric with no cut yet is
+    listed with the value `suggest_cuts` would give it, so it can be adopted by typing.
     """
-    added = False
-    while True:
-        answer = input("  add metric (HEADER_KEY lower|higher, blank to finish): ").strip()
-        if not answer:
-            return added
-        parts = answer.split()
-        if len(parts) != 2 or parts[1].lower() not in ("lower", "higher"):
-            print("    expected e.g. 'AIRMASS lower' or 'EXPTIME higher'")
+    rejected = rejection_counts(table, cuts)
+    parts = []
+    for metric, direction in directions_of(table).items():
+        if metric not in cuts:
+            hint = (suggested or {}).get(metric)
+            parts.append(f"{metric}(uncut, suggest {hint:.4g})" if hint is not None else f"{metric}(uncut)")
             continue
-        key, direction = parts[0].upper(), parts[1].lower()
-        name = key.lower()
-        if name in table.colnames:
-            print(f"    {name} is already there")
+        if metric in CATEGORICAL_METRICS:
+            shown = f"{metric}={ppflag_spec(cuts[metric])}"
+        else:
+            shown = f"{metric}{'<=' if direction == 'lower' else '>='}{cuts[metric]:.4g}"
+        n, alone = rejected[metric]
+        parts.append(f"{shown}(-{n}/{alone})")
+    return f"{int(np.asarray(keep).sum())}/{len(table)} kept | " + " ".join(parts)
+
+
+def _settle(seconds: float = 0.3) -> None:
+    """Best-effort pause so the figure reaches the frontend before the prompt opens.
+
+    The stdin request and the iopub output travel on different channels with no
+    ordering guarantee between them, so this can only improve the odds, never assure
+    them. What actually makes the prompt answerable is that everything needed to
+    answer it is in the prompt string, which is delivered with the request itself.
+    """
+    sys.stdout.flush()
+    time.sleep(seconds)
+
+
+def _as_number(value) -> float | None:
+    """A JSON number, or a number someone left quoted; None for anything else."""
+    if isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _metric_key(name: str, headers: list | None) -> str:
+    """The header key a metric reads from — its own name, checked against the headers.
+
+    Case-insensitive: upper-cased for the lookup because that is what a FITS card is,
+    and lower case everywhere it is shown.
+    """
+    if headers is None:
+        raise ValueError("metrics cannot be added here; no headers were given")
+    key = name.upper()
+    if not any(h.get(key) is not None for h in headers):
+        raise ValueError(f"no {name} in any of these headers")
+    return key
+
+
+# "<=" before "=", or "airmass<=1.2" would split on the "=" and leave a stray "<"
+_OPERATORS = ("<=", ">=", "=")
+
+
+def _parse_items(text: str) -> dict:
+    """``seeing<=3.6, airmass lower`` -> ``{"seeing": ("<=", "3.6"), "airmass": (None, "lower")}``
+
+    The operator form is exactly what `cuts_summary` prints, so what you are shown can be
+    typed straight back with the number changed — one language for reading and writing.
+    """
+    edits = {}
+    for part in text.split(","):
+        item = part.strip()
+        if not item:
             continue
-        if not any(h.get(key) is not None for h in headers):
-            print(f"    no {key} in any of these headers")
+        for op in _OPERATORS:
+            name, sep, value = item.partition(op)
+            if sep:
+                if not name.strip() or not value.strip():
+                    raise ValueError(f'{item!r} needs a name and a value, as in "airmass<=1.2"')
+                edits[name.strip()] = (op, value.strip())
+                break
+        else:
+            tokens = item.split()
+            if len(tokens) != 2:
+                raise ValueError(f'{item!r} should read "airmass<=1.2", "seeing 3.6" or "airmass lower"')
+            edits[tokens[0]] = (None, tokens[1])
+    return edits
+
+
+def apply_edits(table: Table, cuts: dict, text: str, headers: list | None = None) -> bool:
+    """Fold one edit line into ``cuts``, returning whether anything changed.
+
+    Three spellings, all giving everything at once. ``seeing<=3.6`` is the one the
+    summary prints back at you; it carries the direction as well as the threshold, so
+    it both **adds** a metric and cuts on it in one go (``airmass<=1.2``). ``airmass
+    lower`` adds one *uncut*, to look before deciding. The JSON object `cuts_json`
+    prints can also be pasted back and edited. ``ppflag=110000`` sets a categorical
+    allow-mask. Input is case-insensitive.
+
+    Everything is validated before anything is applied, so a typo anywhere leaves both
+    the cuts and the table exactly as they were and the whole line can be retyped.
+    """
+    text = text.strip()
+    if text.startswith("{"):
+        try:
+            loaded = json.loads(text)
+        except json.JSONDecodeError as e:
+            raise ValueError(f'not valid JSON ({e.msg}); expected e.g. {{"seeing": 3.1}}')
+        if not isinstance(loaded, dict):
+            raise ValueError('expected an object such as {"seeing": 3.1, "depth": 16.5}')
+        edits = {k: (None, v) for k, v in loaded.items()}
+    else:
+        edits = _parse_items(text)
+
+    directions = directions_of(table)
+    new_cuts, new_metrics, new_directions = {}, {}, {}
+    for raw, (op, value) in edits.items():
+        name = raw.lower()
+        if op in ("<=", ">="):
+            if name in CATEGORICAL_METRICS:
+                raise ValueError(f'{name} takes a bitstring, as in "{name}=110000"')
+            number = _as_number(value)
+            if number is None:
+                raise ValueError(f"{name}: {value!r} is not a number")
+            direction = "lower" if op == "<=" else "higher"
+            if name not in directions:
+                new_metrics[name] = (_metric_key(name, headers), direction)
+            elif directions[name] != direction:
+                new_directions[name] = direction
+            new_cuts[name] = number
             continue
+        if name in CATEGORICAL_METRICS:
+            new_cuts[name] = ppflag_mask(value)
+            continue
+        number = _as_number(value)
+        if number is not None:
+            if name not in directions:
+                raise ValueError(f'{name} is not a metric here; add it with "{name}<={value}"')
+            new_cuts[name] = number
+        elif isinstance(value, str) and value.lower() in ("lower", "higher"):
+            new_metrics[name] = (_metric_key(name, headers), value.lower())
+        elif isinstance(value, str):
+            raise ValueError(f'{name}: {value!r} is not a number, nor "lower"/"higher" to add a metric')
+        else:
+            raise ValueError(f'{name}: {value!r} is neither a number nor a "lower"/"higher" spec')
+
+    for name, (key, direction) in new_metrics.items():
         table[name] = [_value(h.get(key), key) for h in headers]
         table.meta.setdefault("directions", {})[name] = direction
-        print(f"    added {name} from {key} ({direction} is better)")
-        added = True
+        table.meta.setdefault("keys", {})[name] = key
+        cuts.pop(name, None)  # a re-added metric takes a fresh suggestion
+        print(f"    {name} ({direction} is better)")
+    for name, direction in new_directions.items():
+        table.meta.setdefault("directions", {})[name] = direction
+        print(f"    {name} now reads {direction} is better")
+    changed = bool(new_metrics) or bool(new_directions)
+    for name, value in new_cuts.items():
+        changed |= value != cuts.get(name)
+        cuts[name] = value
+    return changed
 
 
 def prompt_cuts(table: Table, cuts: dict[str, float], headers: list | None = None, nsigma: float = 1.0,
                 fixed: dict[str, float] | None = None) -> dict:
     """Show the suggestion, take edits, redraw, repeat until nothing changes.
 
-    Blank on every threshold accepts what is drawn and returns. Any edit — a new
-    threshold, or a metric added from a header key — redraws with the consequences
+    Every round asks exactly once, for the whole set of cuts at once, and **the prompt
+    string carries the current state and the last error**. Both of those are forced by
+    the notebook protocol: the prompt travels on the stdin channel while prints and
+    figures travel on iopub, with no ordering guarantee between the two, so the input
+    box routinely opens before the plot and the printed cuts arrive. Anything not in
+    the prompt may simply not be on screen when it has to be answered, and several
+    prompts per round could additionally be answered out of order.
+
+    Blank accepts what is drawn and returns. Any edit redraws with its consequences
     before asking again, so you never commit to a cut you have not seen applied.
-    ``headers`` enables the add-a-metric prompt; without it only the existing metrics
-    can be re-cut.
+    ``headers`` lets the line bind new metrics to header keys; without it only the
+    existing metrics can be re-cut.
     """
     import matplotlib.pyplot as plt
 
     chosen = dict(cuts)
     while True:
-        # a metric added last round has no cut yet; give it the suggestion now so the
-        # redraw below shows its line rather than an axis with nothing on it
+        # A metric added last round is drawn but NOT cut on: adding it is a request to
+        # look at its distribution, and choosing where to cut is the next decision. The
+        # value suggest_cuts would give it rides in the prompt, to adopt by typing it.
         suggested = suggest_cuts(table, nsigma=nsigma, fixed=fixed)
-        for metric in directions_of(table):
-            if metric not in chosen and suggested.get(metric) is not None:
-                chosen[metric] = suggested[metric]
 
         keep = apply_cuts(table, chosen)
         fig = plot_selection(table, chosen, keep)
         plt.show()
         if fig is not None:
             plt.close(fig)
-        print(f"  {int(keep.sum())}/{len(table)} kept — Enter to accept, or type new values")
-
+        summary = cuts_summary(table, chosen, keep, suggested)
+        print(f"  {summary}")
+        print(f"  {cuts_json(chosen)}")
         if any(m in chosen for m in CATEGORICAL_METRICS):
             print("  PPFLAG digits, in order: " + ", ".join(f"{b}={desc}" for b, desc in PPFLAG_BITS))
-
-        changed = False
-        for metric, direction in directions_of(table).items():
-            if metric not in chosen:
-                continue
-            if metric in CATEGORICAL_METRICS:
-                new = _ask_flags(metric, chosen[metric])
-            else:
-                side = "keep <=" if direction == "lower" else "keep >="
-                new = _ask_float(f"{metric:<12} {side}", chosen[metric])
-            changed |= new != chosen[metric]
-            chosen[metric] = new
-
         if headers is not None:
-            changed |= _ask_new_metrics(table, headers)
+            print('  a metric is added by its header key: "airmass<=1.2", or "airmass lower" to look first')
+
+        changed, note = False, ""
+        while True:
+            _settle()
+            add_hint = ', "airmass lower" adds uncut' if headers is not None else ""
+            answer = input(
+                f'  {note}{summary} | (-rejected/alone) type "seeing<=3.6" to set or add{add_hint}, '
+                "Enter accepts: "
+            ).strip()
+            if not answer:
+                break
+            try:
+                changed = apply_edits(table, chosen, answer, headers)
+            except ValueError as e:
+                print(f"    {e}")
+                note = f"[{e}] "  # the prompt is the only output guaranteed to be on screen
+                continue
+            break
 
         if not changed:
             return chosen
@@ -561,6 +745,10 @@ def select_from_table(
         if not ok:
             say("debug", f"Rejected by quality selection: {name}")
     say("info", f"Quality selection keeps {int(keep.sum())}/{len(table)} images (cuts: {cuts})")
+    rejected = rejection_counts(table, cuts)
+    if rejected:
+        say("info", "Rejected per cut (overlapping; 'alone' = would be kept without it): "
+                    + ", ".join(f"{m} {n} ({alone} alone)" for m, (n, alone) in rejected.items()))  # fmt: skip
     return keep, cuts
 
 

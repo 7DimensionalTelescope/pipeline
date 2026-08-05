@@ -23,6 +23,7 @@ from .const import (
     FIGURES_DIRNAME,
     IMCOADD_TMP_DIRNAME,
     IMSUBTRACT_TMP_DIRNAME,
+    MULTI_EPOCH_DIRNAME,
     PHOTOMETRY_DIRNAME,
     TMP_DIRNAME,
     SINGLES_DIRNAME,
@@ -42,6 +43,7 @@ class PathHandlerSettings:
     is_too: bool = False
     is_multi_epoch: bool = False
     config_file: str | Path | None = None  # explicit override for sciproc_output_yml
+    coadd_suffix: str | None = None  # appended to the auto-generated coadd_image name
 
 
 @dataclass
@@ -89,6 +91,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         is_too=False,
         is_multi_epoch=False,
         config_file: str | Path | None = None,
+        coadd_suffix: str | None = None,
         top_dirs: TopDirs | None = None,
     ):
         self._name_cache = {}  # Cache for NameHandler properties
@@ -113,6 +116,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             is_too=is_too,
             is_multi_epoch=is_multi_epoch,
             config_file=config_file,
+            coadd_suffix=coadd_suffix,
         )
         # When provided, every input file shares this TopDirs (skips per-file dispatch).
         self._user_top_dirs = top_dirs
@@ -644,7 +648,8 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             # date = self._get_property_at_index("date", i)
             nightdate = self._get_namehandler_property_at_index("nightdate", i)
 
-            yml_stem = "_".join([obj, filte, nightdate])
+            stem_keys = [obj, filte] if self.settings.is_multi_epoch else [obj, filte, nightdate]
+            yml_stem = "_".join(stem_keys)
             if self._is_too_vectorized[i]:
                 yml_basename = f"{yml_stem}_ToO_{too_time}.yml"
             else:
@@ -745,12 +750,17 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                 if self.is_pipeline:
                     # Pipeline mode unchanged.
                     relative_path = os.path.join(nightdate, obj, filte)
-                    output_dir = os.path.join(self._output_parent_dir[i], relative_path)
+                    night_dir = os.path.join(self._output_parent_dir[i], relative_path)
 
-                    self._factory_dir.append(os.path.join(self._factory_parent_dir[i], relative_path))
-                    self._single_dir.append(os.path.join(output_dir, SINGLES_DIRNAME))
+                    self._single_dir.append(os.path.join(night_dir, SINGLES_DIRNAME))
                     self._coadd_dir.append(os.path.join(const.COADD_DIR, obj, filte))
                     self._metadata_dir.append(os.path.join(self._output_parent_dir[i], nightdate))
+                    if self.settings.is_multi_epoch:
+                        output_dir = self._coadd_dir[-1]
+                        self._factory_dir.append(os.path.join(const.FACTORY_DIR, MULTI_EPOCH_DIRNAME, obj, filte))
+                    else:
+                        output_dir = night_dir
+                        self._factory_dir.append(os.path.join(self._factory_parent_dir[i], relative_path))
                 else:
                     # Anchor priority: config_file's dir → working_dir → cwd.
                     if self.settings.config_file:
@@ -1679,7 +1689,8 @@ class PathImcoadd(AutoMkdirMixin, AutoCollapseMixin):
         unit = collapse(names.unit, force=True)
         datetime = mean_datetime(x) if isinstance(x := names.datetime, list) else x
         fname = f"{names.obj_collapse}_{names.filter_collapse}_{unit}_{datetime}_{exptime_str}_coadd.fits"
-        return fname
+        suffix = self._parent.settings.coadd_suffix
+        return add_suffix(fname, suffix) if suffix else fname
 
     @property
     def coadd_image(self):
@@ -1718,22 +1729,37 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
     def _basenames(self) -> List[str]:
         return [os.path.basename(f) for f in self._input_files]
 
-    # ---- stage directories (under imcoadd tmp_dir) ----
     @property
-    def bkgsub_dir(self) -> str:
-        return os.path.join(self._parent.tmp_dir, "bkgsub")
+    def _config_scope(self) -> str:
+        """Sub-path isolating stages whose output depends on imcoadd options.
 
+        Many coadd configs share one ``{obj}/{filter}`` factory dir and their intermediates
+        carry identical names, so every stage is scoped rather than a hand-picked subset:
+        which stages an option affects is not a fact this module can keep in sync as
+        options are added, and getting it wrong reuses another config's products silently.
+        Single-epoch runs already have a per-nightdate factory dir.
+        """
+        if not self._parent._parent.settings.is_multi_epoch:
+            return ""
+        yml = collapse(self._parent._parent.sciproc_output_yml, force=True)
+        return os.path.splitext(os.path.basename(str(yml)))[0]
+
+    # ---- stage directories (under imcoadd tmp_dir, scoped per config) ----
     @property
     def interp_dir(self) -> str:
-        return os.path.join(self._parent.tmp_dir, "interp")
-
-    @property
-    def conv_dir(self) -> str:
-        return os.path.join(self._parent.tmp_dir, "conv")
+        return os.path.join(self._parent.tmp_dir, self._config_scope, "interp")
 
     @property
     def weight_dir(self) -> str:
-        return os.path.join(self._parent.tmp_dir, "weight")
+        return os.path.join(self._parent.tmp_dir, self._config_scope, "weight")
+
+    @property
+    def bkgsub_dir(self) -> str:
+        return os.path.join(self._parent.tmp_dir, self._config_scope, "bkgsub")
+
+    @property
+    def conv_dir(self) -> str:
+        return os.path.join(self._parent.tmp_dir, self._config_scope, "conv")
 
     # ---- stage products, named after what that stage actually consumed ----
     def stage_images(self, stage_inputs, suffix: str, subdir: str) -> List[str]:
@@ -1764,7 +1790,7 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
 
     # ---- SWarp resampled products (named by SWarp from its runtime inputs) ----
     def swarp_resample_dir(self, pass_type: str = "") -> str:
-        return os.path.join(self._parent.tmp_dir, pass_type, "resamp")
+        return os.path.join(self._parent.tmp_dir, self._config_scope, pass_type, "resamp")
 
     def resampled_images(self, swarp_inputs, pass_type: str = "") -> List[str]:
         rdir = self.swarp_resample_dir(pass_type)

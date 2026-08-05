@@ -11,7 +11,11 @@ import subprocess
 
 from ..utils import time_diff_in_seconds
 from ..const.environ import PIPELINE_LOG_DIR, QUEUE_SOCKET_PATH
-from ..const.run import SUCCESS_RETURN_CODE, FAILURE_RETURN_CODE
+from ..const.run import (
+    SUCCESS_RETURN_CODE,
+    FAILURE_RETURN_CODE,
+    EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE,
+)
 from .memory import MemoryMonitor
 from .logger import Logger, log_orchestration_stop
 from .scheduler import Scheduler
@@ -25,6 +29,14 @@ DEFAULT_WORKER_SLEEP_TIME = 0.5
 MAX_MARK_DONE_ATTEMPTS = 5
 DEFAULT_MONITOR_CHECK_INTERVAL = 60
 DEFAULT_SOCKET_LISTENER_TIMEOUT = 1.0
+# Return codes a run produces for itself. Anything else means it never reported.
+REPORTED_RETURN_CODES = (
+    SUCCESS_RETURN_CODE,
+    FAILURE_RETURN_CODE,
+    EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE,
+)
+# Total budget for reaping workers on shutdown, well inside systemd's 90 s TimeoutStopSec.
+SHUTDOWN_GRACE_SECONDS = 10.0
 
 
 class AbruptStopException(Exception):
@@ -410,6 +422,26 @@ class QueueManager:
                 f"next trigger start.",
             )
 
+    def _requeue_interrupted_task(self, process, task_index):
+        """Put a task the daemon cut off on its way out back in the queue."""
+        if task_index is None or self.scheduler is None:
+            return
+
+        try:
+            self.scheduler.requeue_task(
+                task_index,
+                reason=(
+                    "Requeued as Ready: the queue daemon shut down (systemctl stop/restart, or a "
+                    "signal) while this run was still going. Orchestration stop, not a scientific "
+                    "verdict — it was cut off mid-stage and starts over when the daemon returns."
+                ),
+            )
+        except Exception as e:
+            self.logger.error(
+                f"Could not requeue task {task_index} during shutdown: {e}. It stays Processing "
+                f"until the next daemon start reclaims it."
+            )
+
     def _drop_active_process(self, process):
         """Remove a finished entry, freeing its worker slot. Caller holds self.lock."""
         if process in self._active_processes:
@@ -551,21 +583,41 @@ class QueueManager:
                 with self.lock:
                     active_processes = list(self._active_processes)
 
+                # Signal everything first, so the waits below overlap instead of stacking up.
+                # systemd SIGTERMs the whole cgroup anyway; this covers a direct call too.
                 for process in active_processes:
-                    _, proc = process[:2]
-                    pid = proc.pid
+                    proc = process[1]
+                    if proc is None or proc.poll() is not None:
+                        continue
                     try:
-                        if proc.poll() is None:  # Still running
-                            self.logger.info(f"Terminating process PID {pid}")
-                            proc.terminate()
+                        self.logger.info(f"Terminating process PID {proc.pid}")
+                        proc.terminate()
+                    except Exception as e:
+                        self.logger.error(f"Failed to terminate PID {proc.pid}: {e}")
+
+                # Then reap each one and record an outcome. Leaving this out is what stranded
+                # rows in Processing on every `systemctl stop/restart pipeline-queue`.
+                deadline = time.monotonic() + SHUTDOWN_GRACE_SECONDS
+                for process in active_processes:
+                    proc = process[1]
+                    task_index = process[3] if len(process) > 3 else None
+                    pid = proc.pid if proc is not None else None
+                    try:
+                        if proc is not None:
                             try:
-                                proc.wait(timeout=5)  # Wait a few seconds to exit cleanly
-                                self.logger.info(f"Process PID {pid} terminated gracefully.")
+                                proc.wait(timeout=max(0.0, deadline - time.monotonic()))
                             except subprocess.TimeoutExpired:
                                 self.logger.warning(f"Force killing process PID {pid}")
                                 proc.kill()
+
+                        return_code = proc.poll() if proc is not None else None
+
+                        if return_code in REPORTED_RETURN_CODES:
+                            # It finished on its own before we got here — keep that outcome.
+                            self.logger.info(f"Process PID {pid} finished with return code {return_code}.")
+                            self._mark_done(process, task_index, return_code)
                         else:
-                            self.logger.info(f"Process PID {pid} already finished.")
+                            self._requeue_interrupted_task(process, task_index)
                     except Exception as e:
                         self.logger.error(f"Failed to stop PID {pid}: {e}")
                     finally:

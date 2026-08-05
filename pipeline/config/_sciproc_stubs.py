@@ -80,6 +80,7 @@ if TYPE_CHECKING:
         image_selection: bool
         ppflag_bitmask: str
         coadd_image: Any
+        coadd_suffix: Any
         gpu: bool
         device: int
         zp_key: str

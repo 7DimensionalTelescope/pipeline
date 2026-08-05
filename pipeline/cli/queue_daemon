@@ -33,6 +33,14 @@ def main():
 
     # Create Scheduler with system queue mode
     scheduler = Scheduler(use_system_queue=True)
+
+    # Reclaim rows left Processing by a previous life that never got to clean up (SIGKILL,
+    # crash, reboot). Safe to do before add_scheduler: no worker can claim until then, and
+    # rows whose PID is still alive are left alone.
+    reclaimed = scheduler.update_process_status()
+    if reclaimed:
+        queue.logger.warning(f"Reclaimed {reclaimed} task(s) left Processing by a dead process.")
+
     queue.add_scheduler(scheduler)
     scheduler.start_system_queue()
     queue.logger.info("Scheduler initialized with system queue mode")

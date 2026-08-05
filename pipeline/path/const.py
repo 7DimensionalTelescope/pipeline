@@ -11,6 +11,15 @@
 #  └── *.log
 #  └── *.yml
 
+# Multi-epoch Dir Tree
+# output_dir = coadd_dir  (under COADD_DIR, no nightdate)
+#  └── figures
+#  └── *_coadd.fits
+#  └── *.log
+#  └── *.yml
+# factory  (under FACTORY_DIR/coadd)
+#  └── imcoadd
+
 # User-input Dir Tree
 # output_dir = working_dir = cwd
 #  └── difference
@@ -36,6 +45,7 @@ ASTRM_DIRNAME = "astrometry"
 PHOTOMETRY_DIRNAME = "photometry"
 SINGLES_DIRNAME = "singles"
 DAILY_COADD_DIRNAME = "coadd"
+MULTI_EPOCH_DIRNAME = "coadd"  # factory mirror of COADD_DIR
 DIFFIM_DIRNAME = "difference"
 TMP_DIRNAME = "tmp"
 IMCOADD_TMP_DIRNAME = "imcoadd"

@@ -116,6 +116,7 @@ imcoadd:
   ppflag_bitmask: '110000'  # one digit per PPFLAG bit, in the order 1,2,4,8,16,32; 1 = tolerated.
                             # '110000' tolerates bits 1 and 2; '110100' tolerates 1, 2 and 8.
   coadd_image:  # output coadd image
+  coadd_suffix:  # appended to the auto-generated coadd name, e.g. 'median'
   gpu: True
   device: 0
   zp_key: 'ZP_AUTO'

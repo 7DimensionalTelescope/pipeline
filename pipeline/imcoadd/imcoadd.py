@@ -305,6 +305,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         # Single read of every input header; all aggregates/coadd_header live on this snapshot.
         self.input_headers = InputHeaderSet.from_files(self.input_images)
         self.select_input_images()  # may drop inputs, so it precedes the PathHandler resync
+        self.input_headers.coadd_provenance = self._coadd_provenance()
 
         self._recreate_pathhandler_instance()  # resync
         self.config_node.imcoadd.input_images = self.input_images
@@ -345,19 +346,26 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         from ..select.select import ppflag_mask, select_images
 
-        keep, cuts, _ = select_images(
+        keep, cuts, table = select_images(
             [get_basename(f) for f in self.input_images],
             self.input_headers.headers,
             mode=str(mode).lower(),
             nsigma=nsigma,
             # multi-epoch inputs span nightdates, so figure_dir is a list of dirs
-            plot_path=os.path.join(collapse(self.path.figure_dir, force=True), "imcoadd_selection.jpg"),
+            plot_path=os.path.join(
+                collapse(self.path.figure_dir, force=True),
+                # figure_dir is shared by every coadd config of this target
+                f"{os.path.splitext(get_basename(self.config_node.info.file))[0]}_imcoadd_selection.jpg",
+            ),
             logger=self.logger,
             metrics=metrics,
             extra=extra,
             # PPFLAG is a bitmask: the "cut" is an allow-list of bits, not a threshold
             fixed_cuts={"ppflag": ppflag_mask(get_key(self.config_node.imcoadd, "ppflag_bitmask", default="110000"))},
         )
+        self.input_headers.selection_metrics = {
+            name: (key, table.meta["directions"][name]) for name, key in table.meta.get("keys", {}).items()
+        }
         if keep.all():
             return self.input_images
 
@@ -495,6 +503,21 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         self.images_to_coadd = bkgsub_images
         return bkgsub_images
+
+    def _coadd_provenance(self) -> dict[str, tuple]:
+        """Config options that change the coadd, as coadd header cards."""
+        node = self.config_node.imcoadd
+        shown = lambda value: "NONE" if value is None or value is False else value  # noqa: E731
+        interp = get_key(node, "interp_type") if get_key(node, "apply_bpmask") else None
+        return {
+            "COADDRTN": (shown(get_key(node, "coadd_routine")), "imcoadd.coadd_routine"),
+            "COADDMOD": (shown(get_key(node, "coadd_mode")), "imcoadd.coadd_mode"),
+            "ZPSCALE":  (bool(get_key(node, "zpscale")), "imcoadd.zpscale"),
+            "INTERP":   (shown(interp), "imcoadd.interp_type"),
+            "CONVOLVE": (shown(get_key(node, "convolve")), "imcoadd.convolve"),
+            "JOINTWCS": (bool(get_key(node, "joint_wcs")), "imcoadd.joint_wcs"),
+            "IMGSELEC": (shown(get_key(node, "image_selection")), "imcoadd.image_selection"),
+        }  # fmt: skip
 
     def bkgsub_methods(self) -> dict:
         """Registered background routines: ``bkgsub_type`` value -> per-image callable.

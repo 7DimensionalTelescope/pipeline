@@ -146,6 +146,12 @@ class BaseConfig(ABC):
         self._config_in_dict["info"]["runtime_version"] = __version__
         self._config_in_dict["info"]["last_update_datetime"] = datetime.now().isoformat()
 
+        # Mirror the two stamped here onto the node; object.__setattr__ skips the write-through.
+        info_node = getattr(self.node, "info", None)
+        if info_node is not None:
+            for key in ("runtime_version", "last_update_datetime"):
+                object.__setattr__(info_node, key, self._config_in_dict["info"][key])
+
         # print(f"Writing configuration to file: {self.config_file}")
 
         with open(self.config_file, "w") as f:

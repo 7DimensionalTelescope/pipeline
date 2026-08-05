@@ -24,6 +24,15 @@ from ..utils.tile import is_ris_tile, find_ris_tile
 from .const import CORE_KEYS, HOMOGENEOUS_KEYS
 
 
+_EXTREMA_CARDS = {"seeing": "SEEMAX", "ellipticity": "ELLMAX", "depth": "DEPMIN"}
+
+
+def _extrema_card(metric: str, key: str, lower_is_better: bool) -> str:
+    """Header card for a metric's worst value, derived from its key when not canonical."""
+    suffix = "MAX" if lower_is_better else "MIN"
+    return _EXTREMA_CARDS.get(metric) or (key[: 8 - len(suffix)].upper() + suffix)
+
+
 class InputHeaderSet:
     """Snapshot of input image headers with a selection mask.
 
@@ -41,6 +50,8 @@ class InputHeaderSet:
         # One identity per snapshot: coadd_header rebuilds on every access, but the
         # product it describes is a single image (see coadd_header).
         self._coadd_image_id: str | None = None
+        self.coadd_provenance: dict[str, tuple] = {}
+        self.selection_metrics: dict[str, tuple[str, str]] = {}
 
     @classmethod
     def from_files(cls, paths: list[str]) -> "InputHeaderSet":
@@ -215,6 +226,38 @@ class InputHeaderSet:
         """BACKTYPE for the coadd; "MIXED" if inputs disagree; None before bkgsub stamps it."""
         return self.aggregate("BACKTYPE")
 
+    @property
+    def coadd_ppflag(self) -> int | None:
+        """PPFLAG for the coadd: every compromise any ingredient carries."""
+        from ..preprocess.ppflag import propagate_ppflag
+
+        values = [v for v in self.values("PPFLAG") if v is not None]
+        return propagate_ppflag(*values) if values else None
+
+    @property
+    def coadd_selection_extrema(self) -> dict[str, tuple[float, str]]:
+        """Worst value among the coadded inputs, per metric the selection used."""
+        from ..select.select import CATEGORICAL_METRICS, collect_metrics, directions_of
+
+        metrics = {name: ((key,), direction) for name, (key, direction) in self.selection_metrics.items()}
+        table, used_keys = collect_metrics(self.names, self.headers, metrics=metrics or None)
+        directions = directions_of(table)
+        extrema = {}
+        for metric in table.colnames:
+            if metric == "name" or metric in CATEGORICAL_METRICS:
+                continue
+            values = np.asarray(table[metric], dtype=float)
+            values = values[np.isfinite(values)]
+            if not values.size:
+                continue
+            lower_is_better = directions[metric] == "lower"
+            card = _extrema_card(metric, used_keys[metric], lower_is_better)
+            extrema[card] = (
+                float(values.max() if lower_is_better else values.min()),
+                f"Worst {used_keys[metric]} among the coadded inputs",
+            )
+        return extrema
+
     # ---------- deprojection center for SWarp ----------
 
     @property
@@ -287,7 +330,10 @@ class InputHeaderSet:
             "GAIN":     (self.camera_gain, "Gain from the camera configuration"),
             "SATURATE": (self.coadd_satur_level, "Conservative saturation level for coadded image"),  # let swarp handle this
             "BACKTYPE": (self.coadd_backtype, "Background subtraction type for coadded image"),
+            "PPFLAG":   (self.coadd_ppflag, "Preprocessing quality flag (OR of coadded inputs)"),
         }  # fmt: skip
+        keywords_to_update.update(self.coadd_provenance)
+        keywords_to_update.update(self.coadd_selection_extrema)
         for key, (value, comment) in keywords_to_update.items():
             if value is not None:
                 header[key] = (value, comment)
