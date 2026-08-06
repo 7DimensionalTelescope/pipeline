@@ -199,6 +199,7 @@ def parse_args():
 
     parser.add_argument("-device", type=int, default=0, help="GPU device ID")
     parser.add_argument("-no-weight", dest="weight", action="store_false", help="Disable weight map processing")
+    parser.add_argument("-weight-input", nargs="+", default=None, help="Input weight maps, one per -input")
     return parser.parse_args()
 
 
@@ -206,7 +207,8 @@ if __name__ == "__main__":
     args = parse_args()
     # build tuples
     if args.weight:
-        images = list(zip(args.input, add_suffix(args.input, "weight")))
+        weight_in = args.weight_input if args.weight_input else add_suffix(args.input, "weight")
+        images = list(zip(args.input, weight_in))
         output_paths = list(zip(args.output, add_suffix(args.output, "weight")))
     else:
         images = [(sci, None) for sci in args.input]

@@ -17,6 +17,46 @@ from ..services.logger import Logger
 from .utils import determine_size, build_coadd_wcs_header
 
 
+# Var(median)/Var(mean) for n Gaussian samples, from the order-statistic density
+# n!/(m!m!) F^m (1-F)^m f  with m=(n-1)/2. Approaches pi/2 (Kendall & Stuart Vol.1) but is
+# well below it for the frame counts a coadd actually has, so the limit is not usable.
+_MEDIAN_VAR_RATIO = {
+    1: 1.0, 2: 1.0, 3: 1.3460, 5: 1.4342, 7: 1.4731, 9: 1.4949, 11: 1.5088,
+    15: 1.5254, 21: 1.5385, 31: 1.5489, 51: 1.5575, 101: 1.5641, 201: 1.5674,
+}  # fmt: skip
+
+
+def median_variance_ratio(n: float) -> float:
+    """How much noisier a median of ``n`` frames is than their mean."""
+    knots = np.array(sorted(_MEDIAN_VAR_RATIO), dtype=float)
+    values = np.array([_MEDIAN_VAR_RATIO[int(k)] for k in knots])
+    if n <= knots[0]:
+        return float(values[0])
+    if n >= knots[-1]:
+        return float(np.pi / 2)
+    return float(np.interp(1.0 / n, (1.0 / knots)[::-1], values[::-1]))
+
+
+def coadd_effective_egain(gain_terms, mode: str = "mean", n_eff: float | None = None) -> float | None:
+    """Effective gain of the coadd: ``(sum w)^2 / sum(w^2 / g)``, divided by the median
+    penalty when ``mode`` is median.
+
+    ``gain_terms`` is ``(weight, EGAIN/FLXSCALE)`` per contributing frame; ``n_eff`` is the
+    typical number of frames behind an output pixel (footprint mean, or Kish
+    ``(sum w)^2/sum w^2`` for weighted stacks). The naive ``sum(EGAIN/FLXSCALE)`` equals
+    this only when every term is equal, which FLXSCALE alone breaks.
+    """
+    terms = [(w, g) for w, g in gain_terms if w > 0 and g and np.isfinite(g)]
+    if not terms:
+        return None
+    w = np.array([t[0] for t in terms], dtype=float)
+    g = np.array([t[1] for t in terms], dtype=float)
+    gain = w.sum() ** 2 / np.sum(w**2 / g)
+    if mode == "median":
+        gain /= median_variance_ratio(n_eff if n_eff else len(terms))
+    return float(gain)
+
+
 def mean_coadd_numpy(
     input_images: list[str],
     output_path: str,
@@ -58,9 +98,11 @@ def mean_coadd_numpy(
     sum_arr = np.zeros((target_h, target_w), dtype=np.float64)
     norm_arr = np.zeros((target_h, target_w), dtype=np.float64 if weights is not None else np.int32)
     count_arr = np.zeros((target_h, target_w), dtype=np.int32)
+    gain_terms = []  # (typical weight, EGAIN/FLXSCALE) per contributing image
     for i, f in enumerate(input_images):
         with fits.open(f) as hdul:
             a = hdul[0].data.astype(np.float64)
+            egain = hdul[0].header.get("EGAIN")
             # False disables; explicit list = snapshot source of truth; None = file FLXSCALE.
             if flxscales is False:
                 flxscale = 1.0
@@ -88,6 +130,8 @@ def mean_coadd_numpy(
         if weights is None:
             sum_arr[ty0:ty1, tx0:tx1] += np.where(valid, src * flxscale, 0.0)
             norm_arr[ty0:ty1, tx0:tx1] += valid
+            if egain is not None:
+                gain_terms.append((1.0, float(egain) / flxscale))
         else:
             # SWarp's MAP_WEIGHT = 1/variance of the raw resampled data
             # (RESCALE_WEIGHTS = N). After we multiply data by FLXSCALE its
@@ -99,12 +143,21 @@ def mean_coadd_numpy(
             valid &= w_eff > 0
             sum_arr[ty0:ty1, tx0:tx1] += np.where(valid, w_eff * src * flxscale, 0.0)
             norm_arr[ty0:ty1, tx0:tx1] += np.where(valid, w_eff, 0.0)
+            if egain is not None and valid.any():
+                gain_terms.append((float(w_eff[valid].mean()), float(egain) / flxscale))
         # counted after the weight test, so the footprint is the frames the coadd used
         count_arr[ty0:ty1, tx0:tx1] += valid
 
     coadd = np.where(norm_arr > 0, sum_arr / np.where(norm_arr > 0, norm_arr, 1), np.nan).astype(np.float32)
 
     out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, coadd_header)
+    covered = count_arr > 0
+    n_eff = float(count_arr[covered].mean()) if covered.any() else None
+    effective = coadd_effective_egain(gain_terms, mode="mean", n_eff=n_eff)
+    if effective is not None:
+        out_header["EGAIN"] = (effective, "Effective EGAIN for coadded image (e-/ADU)")
+        if logger is not None and n_eff is not None:
+            logger.debug(f"Mean coadd EGAIN {effective:.4f} ({backend}, n_eff {n_eff:.1f} frames/pixel)")
     fits.writeto(output_path, coadd, header=out_header, overwrite=True)
 
     # norm_arr is the summed inverse variance when weighted, the contributing-frame
@@ -176,6 +229,11 @@ def median_coadd_numpy(
     # accumulated per strip alongside the median, so peak memory stays bounded
     norm_arr = np.zeros((target_h, target_w), dtype=np.float32)
     count_arr = np.zeros((target_h, target_w), dtype=np.int32)
+    gain_terms = [
+        (1.0, float(e) / flxscales[i])
+        for i, e in enumerate(fits.getheader(f).get("EGAIN") for f in input_images)
+        if e is not None
+    ]
     whandles = [fits.open(f, memmap=True) for f in weights] if weights is not None else None
     mhandles = [fits.open(f, memmap=True) for f in masks] if masks is not None else None
     try:
@@ -213,6 +271,13 @@ def median_coadd_numpy(
             hdul.close()
 
     out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, coadd_header)
+    covered = count_arr > 0
+    n_eff = float(count_arr[covered].mean()) if covered.any() else None
+    effective = coadd_effective_egain(gain_terms, mode="median", n_eff=n_eff)
+    if effective is not None:
+        out_header["EGAIN"] = (effective, "Effective EGAIN for coadded image (e-/ADU)")
+        if logger is not None:
+            logger.debug(f"Median coadd EGAIN {effective:.4f} (n_eff {n_eff:.1f} frames/pixel)")
     fits.writeto(output_path, coadd, header=out_header, overwrite=True)
 
     weight_out = weight_output or add_suffix(output_path, "weight")

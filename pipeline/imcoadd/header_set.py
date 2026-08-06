@@ -214,7 +214,12 @@ class InputHeaderSet:
 
     @property
     def coadd_egain(self) -> float | None:
-        """Effective EGAIN for the coadd. Requires FLXSCALE stamped."""
+        """Effective EGAIN for the coadd. Requires FLXSCALE stamped.
+
+        Exact only when every EGAIN/FLXSCALE is equal. `calc.coadd_effective_egain`
+        overrides this for the numpy mean, where the weights are in hand; the median and
+        legacy SWarp paths still land here.
+        """
         egain = self.values("EGAIN")
         flx = self.values("FLXSCALE")
         if any(e is None for e in egain) or any(f is None for f in flx):
@@ -327,7 +332,6 @@ class InputHeaderSet:
             "JD":       (jd, "Julian Date at start of observations for coadded image"),
             "SKYVAL":   (0, "SKY MEDIAN VALUE (Subtracted)"),
             "EGAIN":    (self.coadd_egain, "Effective EGAIN for coadded image (e-/ADU)"),  # swarp calculates it as GAIN, but irreproducible.
-            "GAIN":     (self.camera_gain, "Gain from the camera configuration"),
             "SATURATE": (self.coadd_satur_level, "Conservative saturation level for coadded image"),  # let swarp handle this
             "BACKTYPE": (self.coadd_backtype, "Background subtraction type for coadded image"),
             "PPFLAG":   (self.coadd_ppflag, "Preprocessing quality flag (OR of coadded inputs)"),

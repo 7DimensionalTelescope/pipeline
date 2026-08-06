@@ -158,7 +158,6 @@ class SciProcConfiguration(BaseConfig):
             "is_too": is_too,
             "is_multi_epoch": is_multi_epoch,
             "config_file": config_file,
-            "coadd_suffix": get_key(self.node.imcoadd, "coadd_suffix"),
         }
         if hasattr(self.node, "input"):
             if hasattr(self.node.input, "calibrated_images") and self.node.input.calibrated_images:
@@ -233,7 +232,7 @@ class SciProcConfiguration(BaseConfig):
         is_pipeline: bool = False,
         is_too: bool = False,
         is_multi_epoch: bool = False,
-        coadd_suffix: str = None,
+        config_suffix: str = None,
         config_name_policy: Literal["error", "last"] = "error",
         **kwargs,
     ):
@@ -249,7 +248,7 @@ class SciProcConfiguration(BaseConfig):
         - verbose: verbose level
         - is_pipeline: you want it False unless trying to modify existing pipeline product
         - is_too: flag for ToO observations, which have a dedicated save location
-        - coadd_suffix: appended to the auto-generated coadd_image name, e.g. "median"
+        - config_suffix: appended to the auto-generated multi-epoch config stem, e.g. "median"
         - config_name_policy: "error" to raise an error, other options to resolve the degeneracy
         """
 
@@ -263,7 +262,7 @@ class SciProcConfiguration(BaseConfig):
             is_too=is_too,
             is_multi_epoch=is_multi_epoch,
             config_file=config_file,
-            coadd_suffix=coadd_suffix,
+            config_suffix=config_suffix,
         )
         self = cls.base_config(write=write)
         self.input_files = input_images

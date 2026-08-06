@@ -1,0 +1,176 @@
+#!/home/pipeline-stable/.conda/envs/pipeline/bin/python
+"""
+Drain Queue
+
+Stop the queue claiming new work, wait for in-flight tasks to finish, then put the queue
+back exactly as it was. For restarting the daemons without killing running reductions.
+
+    drain_queue status     # read-only: what is in flight
+    drain_queue pause      # Ready -> Paused, so nothing new is claimed
+    drain_queue wait       # block until nothing is Processing
+    sudo systemctl restart pipeline-trigger
+    drain_queue resume     # Paused -> Ready, only the rows this tool paused
+
+`pause` records the rows it changed in a state file next to the scheduler DB; `resume`
+restores only those, and only if they are still Paused. Rows paused by anything else are
+left alone. `wait` re-pauses anything that becomes claimable meanwhile (newly ingested
+frames, dependents promoted by a finishing parent) and records those too.
+"""
+
+import argparse
+import json
+import os
+import sqlite3
+import sys
+import time
+from pathlib import Path
+
+pipeline_dir = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(pipeline_dir))
+
+from pipeline.const import SCHEDULER_DB_PATH
+from pipeline.services.scheduler import Scheduler
+
+TRACKED_STATUSES = ("Ready", "Pending", "Processing", "Paused")
+CHUNK = 500
+
+
+def state_file(db_path):
+    return os.path.join(os.path.dirname(db_path), ".drain_queue_state.json")
+
+
+def connect(db_path):
+    return sqlite3.connect(db_path, timeout=Scheduler.DB_BUSY_TIMEOUT)
+
+
+def counts(db_path):
+    placeholders = ",".join("?" * len(TRACKED_STATUSES))
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            f"SELECT status, COUNT(*) FROM scheduler WHERE status IN ({placeholders}) GROUP BY status",
+            TRACKED_STATUSES,
+        ).fetchall()
+    return dict(rows)
+
+
+def load_state(db_path):
+    path = state_file(db_path)
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path) as handle:
+            return json.load(handle).get("paused", [])
+    except (json.JSONDecodeError, OSError) as error:
+        print(f"WARNING: could not read {path}: {error}. Treating as empty.", file=sys.stderr)
+        return []
+
+
+def save_state(db_path, indices):
+    with open(state_file(db_path), "w") as handle:
+        json.dump({"paused": sorted(set(indices)), "written_at": time.strftime("%Y-%m-%dT%H:%M:%S")}, handle)
+
+
+def do_pause(db_path):
+    """Ready -> Paused in one transaction, so nothing can be claimed between select and update."""
+    with connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        indices = [row[0] for row in conn.execute('SELECT "index" FROM scheduler WHERE status = ?', ("Ready",))]
+        if indices:
+            conn.execute("UPDATE scheduler SET status = ? WHERE status = ?", ("Paused", "Ready"))
+        conn.commit()
+
+    if indices:
+        save_state(db_path, load_state(db_path) + indices)
+    return len(indices)
+
+
+def do_resume(db_path):
+    """Restore only the rows this tool paused, and only if they are still Paused."""
+    indices = load_state(db_path)
+    if not indices:
+        print("Nothing recorded as paused by this tool. Doing nothing.")
+        return 0
+
+    restored = 0
+    with connect(db_path) as conn:
+        for start in range(0, len(indices), CHUNK):
+            chunk = indices[start : start + CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            cursor = conn.execute(
+                f'UPDATE scheduler SET status = ? WHERE "index" IN ({placeholders}) AND status = ?',
+                ("Ready", *chunk, "Paused"),
+            )
+            restored += cursor.rowcount
+        conn.commit()
+
+    skipped = len(indices) - restored
+    print(f"Restored {restored} row(s) to Ready." + (f" {skipped} no longer Paused; left alone." if skipped else ""))
+    os.remove(state_file(db_path))
+    return restored
+
+
+def do_wait(db_path, poll, timeout):
+    deadline = time.monotonic() + timeout if timeout else None
+    while True:
+        current = counts(db_path)
+        processing = current.get("Processing", 0)
+
+        if current.get("Ready", 0):  # newly claimable rows appeared; hold them too
+            paused = do_pause(db_path)
+            if paused:
+                print(f"  (paused {paused} newly claimable row(s))")
+
+        print(
+            f"  processing={processing} ready={current.get('Ready', 0)} "
+            f"pending={current.get('Pending', 0)} paused={current.get('Paused', 0)}",
+            flush=True,
+        )
+
+        if processing == 0:
+            print("Queue is drained. Safe to restart.")
+            return 0
+
+        if deadline and time.monotonic() > deadline:
+            print(f"Timed out with {processing} task(s) still processing.", file=sys.stderr)
+            return 1
+
+        time.sleep(poll)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Pause the queue, wait for it to drain, restart, then resume.",
+        epilog="Run 'pause', then 'wait', then restart the daemons, then 'resume'.",
+    )
+    parser.add_argument("action", choices=["status", "pause", "wait", "resume"])
+    parser.add_argument("--db", default=SCHEDULER_DB_PATH, help="scheduler DB (default: configured path)")
+    parser.add_argument("--poll", type=float, default=30.0, help="seconds between checks while waiting")
+    parser.add_argument("--timeout", type=float, default=0, help="give up waiting after N seconds (0 = never)")
+    args = parser.parse_args()
+
+    if not args.db:
+        print("ERROR: no scheduler database configured (SCHEDULER_DB_PATH is unset)", file=sys.stderr)
+        return 1
+
+    if args.action == "status":
+        current = counts(args.db)
+        print(f"{args.db}: " + (", ".join(f"{k}={v}" for k, v in sorted(current.items())) or "nothing outstanding"))
+        recorded = load_state(args.db)
+        if recorded:
+            print(f"  {len(recorded)} row(s) recorded as paused by this tool; 'resume' will restore them")
+        return 0
+
+    if args.action == "pause":
+        paused = do_pause(args.db)
+        print(f"Paused {paused} Ready row(s); {len(load_state(args.db))} recorded in total.")
+        return 0
+
+    if args.action == "resume":
+        do_resume(args.db)
+        return 0
+
+    return do_wait(args.db, args.poll, args.timeout)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

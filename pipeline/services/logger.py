@@ -14,6 +14,11 @@ from ..services.database.handler import ExceptionHandler
 
 HIGH_LEVEL_TASK_LOGGER_NAME = "pipeline.high_level_tasks"
 
+# Bounded, non-blocking lock for orchestration notes: these files are on NFS and the queue
+# daemon must never be able to park a thread on one.
+ORCHESTRATION_NOTE_LOCK_ATTEMPTS = 3
+ORCHESTRATION_NOTE_LOCK_WAIT = 0.1
+
 
 def get_high_level_task_logger(logger_name: str, log_file: Optional[str] = None) -> logging.Logger:
     """Return a shared rotating-file logger for high-level orchestration tasks."""
@@ -52,8 +57,13 @@ def log_orchestration_stop(config_path: str, message: str, level: str = "ERROR")
 
     Orchestration-level endings only — killed worker, failed launch, lost bookkeeping —
     never a scientific verdict, which the run writes through its own logger. Uses the same
-    format and flock discipline as `LockingFileHandler` so it interleaves with the run's
-    own lines. Best-effort: returns the log path, or None if nothing could be written.
+    format as `LockingFileHandler` so it interleaves with the run's own lines.
+
+    **Never blocks.** These files live on NFS and the caller is the queue daemon, so the
+    lock is taken non-blocking with a few short retries and then given up on. A courtesy
+    note is not worth stalling a thread for: a blocking `flock` here once wedged the whole
+    daemon (open transaction + held lock + no timeout). Returns the log path, or None if
+    nothing could be written.
     """
     from ..utils import swap_ext
 
@@ -63,7 +73,15 @@ def log_orchestration_stop(config_path: str, message: str, level: str = "ERROR")
         name = os.path.splitext(os.path.basename(config_path))[0]
 
         with open(log_file, "a") as stream:
-            fcntl.flock(stream, fcntl.LOCK_EX)
+            for attempt in range(ORCHESTRATION_NOTE_LOCK_ATTEMPTS):
+                try:
+                    fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if attempt == ORCHESTRATION_NOTE_LOCK_ATTEMPTS - 1:
+                        return None  # someone else holds it; drop the note rather than wait
+                    time.sleep(ORCHESTRATION_NOTE_LOCK_WAIT)
+
             try:
                 stream.write(f"[{level}] {stamp} - {name} - {message}\n")
                 stream.flush()

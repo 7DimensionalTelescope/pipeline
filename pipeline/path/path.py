@@ -43,7 +43,7 @@ class PathHandlerSettings:
     is_too: bool = False
     is_multi_epoch: bool = False
     config_file: str | Path | None = None  # explicit override for sciproc_output_yml
-    coadd_suffix: str | None = None  # appended to the auto-generated coadd_image name
+    config_suffix: str | None = None  # appended to the auto-generated multi-epoch config stem
 
 
 @dataclass
@@ -91,7 +91,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         is_too=False,
         is_multi_epoch=False,
         config_file: str | Path | None = None,
-        coadd_suffix: str | None = None,
+        config_suffix: str | None = None,
         top_dirs: TopDirs | None = None,
     ):
         self._name_cache = {}  # Cache for NameHandler properties
@@ -116,7 +116,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             is_too=is_too,
             is_multi_epoch=is_multi_epoch,
             config_file=config_file,
-            coadd_suffix=coadd_suffix,
+            config_suffix=config_suffix,
         )
         # When provided, every input file shares this TopDirs (skips per-file dispatch).
         self._user_top_dirs = top_dirs
@@ -649,6 +649,8 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             nightdate = self._get_namehandler_property_at_index("nightdate", i)
 
             stem_keys = [obj, filte] if self.settings.is_multi_epoch else [obj, filte, nightdate]
+            if self.settings.is_multi_epoch and self.settings.config_suffix:
+                stem_keys = stem_keys + [str(self.settings.config_suffix)]
             yml_stem = "_".join(stem_keys)
             if self._is_too_vectorized[i]:
                 yml_basename = f"{yml_stem}_ToO_{too_time}.yml"
@@ -1689,8 +1691,22 @@ class PathImcoadd(AutoMkdirMixin, AutoCollapseMixin):
         unit = collapse(names.unit, force=True)
         datetime = mean_datetime(x) if isinstance(x := names.datetime, list) else x
         fname = f"{names.obj_collapse}_{names.filter_collapse}_{unit}_{datetime}_{exptime_str}_coadd.fits"
-        suffix = self._parent.settings.coadd_suffix
+        suffix = self._config_suffix
         return add_suffix(fname, suffix) if suffix else fname
+
+    @property
+    def _config_suffix(self) -> str:
+        """Whatever distinguishes this config's stem from a plain ``{obj}_{filter}``.
+
+        Taken from the config name rather than kept as a config key, so a reloaded config
+        still produces the same coadd name; the stem is the differentiator everywhere else.
+        """
+        if not self._parent.settings.is_multi_epoch:
+            return ""
+        yml = collapse(self._parent.sciproc_output_yml, force=True)
+        stem = os.path.splitext(os.path.basename(str(yml)))[0]
+        prefix = f"{self._parent.name.obj_collapse}_{self._parent.name.filter_collapse}_"
+        return stem[len(prefix):] if stem.startswith(prefix) else ""
 
     @property
     def coadd_image(self):

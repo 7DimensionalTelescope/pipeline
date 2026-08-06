@@ -202,9 +202,11 @@ class Scheduler:
         raise ValueError("Invalid schedule type")
 
     @contextmanager
-    def _db_connection(self):
-        """Context manager for database connections."""
-        conn = sqlite3.connect(SCHEDULER_DB_PATH, timeout=self.DB_BUSY_TIMEOUT)
+    def _db_connection(self, timeout=None):
+        """Context manager for database connections. `timeout` overrides DB_BUSY_TIMEOUT."""
+        conn = sqlite3.connect(
+            SCHEDULER_DB_PATH, timeout=self.DB_BUSY_TIMEOUT if timeout is None else timeout
+        )
         try:
             yield conn
         finally:
@@ -654,46 +656,70 @@ class Scheduler:
             f"verdict — the run was ended from outside and filed no report of its own."
         )
 
-    def requeue_task(self, index, reason=None):
+    def requeue_task(self, index, reason=None, timeout=None):
+        """Put one unfinished Processing task back in the queue. True when the row changed."""
+        return self.requeue_tasks([index], reason=reason, timeout=timeout) == 1
+
+    def requeue_tasks(self, indices, reason=None, timeout=None):
         """
-        Put an unfinished Processing task back in the queue. True when a row changed.
+        Put unfinished Processing tasks back in the queue. Returns how many rows changed.
 
         For tasks cut off before they could report an outcome — a daemon shutdown, a crash.
-        Mirrors what `update_process_status` does for dead PIDs, one row at a time, and only
-        touches rows still marked Processing so a resolved row is never clobbered.
+        Mirrors what `update_process_status` does for dead PIDs, and only touches rows still
+        marked Processing so a resolved row is never clobbered.
+
+        One transaction for the whole set: called from `stop_processing`, where a per-row
+        write could block on `DB_BUSY_TIMEOUT` each time and blow through systemd's
+        `TimeoutStopSec` — which would get the daemon SIGKILLed mid-cleanup and strand the
+        very rows it came to rescue. `timeout` bounds that wait; shutdown passes a short one.
+
+        Notes are written after the commit, never while holding the write lock: they land on
+        NFS, so a slow mount must not extend the transaction. If the process dies between the
+        two, the rows are still correct and only the notes are missing.
         """
-        config = None
+        indices = [int(index) for index in np.atleast_1d(indices) if index is not None]
+        if not indices:
+            return 0
+
+        configs = []
 
         if self.use_system_queue:
-            with self._db_connection() as conn:
+            placeholders = ",".join("?" * len(indices))
+            with self._db_connection(timeout=timeout) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    'SELECT config FROM scheduler WHERE "index" = ? AND status = ?', (index, "Processing")
+                    f'SELECT config FROM scheduler WHERE "index" IN ({placeholders}) AND status = ?',
+                    (*indices, "Processing"),
                 )
-                row = cursor.fetchone()
-                if row is None:
-                    return False
+                configs = [row[0] for row in cursor.fetchall()]
+                if not configs:
+                    return 0
 
-                config = row[0]
                 cursor.execute(
-                    'UPDATE scheduler SET status = ?, pid = 0, process_start = ? WHERE "index" = ?',
-                    ("Ready", "", index),
+                    f'UPDATE scheduler SET status = ?, pid = 0, process_start = ? '
+                    f'WHERE "index" IN ({placeholders}) AND status = ?',
+                    ("Ready", "", *indices, "Processing"),
                 )
+                changed = cursor.rowcount
                 conn.commit()
         else:
-            mask = self._schedule["index"] == index
-            if len(self._schedule[mask]) == 0 or self._schedule["status"][mask][0] != "Processing":
-                return False
+            changed = 0
+            for index in indices:
+                mask = self._schedule["index"] == index
+                if len(self._schedule[mask]) == 0 or self._schedule["status"][mask][0] != "Processing":
+                    continue
 
-            config = self._schedule["config"][mask][0]
-            self._schedule["status"][mask] = "Ready"
-            self._schedule["pid"][mask] = 0
-            self._schedule["process_start"][mask] = ""
+                configs.append(self._schedule["config"][mask][0])
+                self._schedule["status"][mask] = "Ready"
+                self._schedule["pid"][mask] = 0
+                self._schedule["process_start"][mask] = ""
+                changed += 1
 
         if reason:
-            log_orchestration_stop(config, reason)
+            for config in configs:
+                log_orchestration_stop(config, reason)
 
-        return True
+        return changed
 
     def mark_done(self, index, return_code=True):
         if self.use_system_queue:
@@ -702,6 +728,7 @@ class Scheduler:
             self._mark_done_memory(index, return_code)
 
     def _mark_done_db(self, index, return_code=True):
+        orchestration_note = None
         with self._db_connection() as conn:
             cursor = conn.cursor()
             # Check if task is already marked as done to prevent duplicate processing
@@ -764,9 +791,15 @@ class Scheduler:
                     'UPDATE scheduler SET status = ?, readiness = ?, is_ready = ?, pid = 0, process_end = ? WHERE "index" = ?',
                     ("Failed", 0, 0, process_end, index),
                 )
-                log_orchestration_stop(config, self._orchestration_stop_reason(return_code))
+                orchestration_note = self._orchestration_stop_reason(return_code)
 
             conn.commit()
+
+        # Only after the transaction is closed: this writes to a config log on NFS, and doing
+        # it inside the transaction once held the write lock open indefinitely and wedged the
+        # daemon. Nothing that touches a filesystem belongs above this line.
+        if orchestration_note:
+            log_orchestration_stop(config, orchestration_note)
 
     def _mark_done_memory(self, task_index, return_code=True):
         mask = self._schedule["index"] == task_index
@@ -1368,24 +1401,35 @@ class Scheduler:
         """
         True when `pid` is alive AND still running this task's config.
 
-        PIDs get recycled: after a reboot or a busy week a stored PID can belong to an
-        unrelated process, which would keep an orphaned row Processing forever. Matching the
-        config against the command line makes the reclaim reliable.
+        `_is_process_alive` alone is not enough, for two reasons that both produced permanent
+        orphans in production:
 
-        Errs toward "alive" whenever the command line cannot be read — leaving one orphan is
-        far cheaper than reclaiming a task that is genuinely running and launching a duplicate
-        reduction over the same outputs.
+        1. **Zombies.** A finished-but-unreaped child still has a /proc entry, so `kill(pid, 0)`
+           succeeds and it reads as running. Rows behind a zombie survived every reclaim ever
+           run against them.
+        2. **PID recycling.** After a reboot or a busy week a stored PID can belong to an
+           unrelated live process, which would keep the row Processing forever.
+
+        Errs toward "alive" whenever /proc cannot be read — leaving one orphan is far cheaper
+        than reclaiming a task that is genuinely running and launching a duplicate reduction
+        over the same outputs.
         """
         if not self._is_process_alive(pid):
             return False
 
         try:
+            with open(f"/proc/{pid}/stat", "rb") as stat_file:
+                # state is the field after the (possibly space-containing) comm in parentheses
+                state = stat_file.read().rpartition(b")")[2].split()[0].decode()
             with open(f"/proc/{pid}/cmdline", "rb") as cmdline_file:
                 cmdline = cmdline_file.read().decode(errors="replace")
         except (FileNotFoundError, ProcessLookupError):
             return False  # exited between the two checks
-        except OSError:
+        except (OSError, IndexError):
             return True  # cannot tell (hidepid, permissions) — do not risk a duplicate run
+
+        if state == "Z":
+            return False  # exited already; only the unreaped entry is left
 
         if not config:
             return True

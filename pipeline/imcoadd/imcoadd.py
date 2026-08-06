@@ -200,7 +200,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         # Bad pixel interpolation
         if self.config_node.imcoadd.apply_bpmask:
-            images = self.apply_bpmask(images, device_id=device_id)
+            images = self.apply_bpmask(images, device_id=device_id, weight_images=weight_images)
             step += 1
             self.update_progress(
                 SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-apply-bpmask-completed"
@@ -315,7 +315,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         # self.define_paths(working_dir=self.config.path.path_processed)
 
-        self.input_headers.check_uniqueness(["OBJECT", "FILTER", "EGAIN", "GAIN"], self.logger)
+        self.input_headers.check_uniqueness(["OBJECT", "FILTER"], self.logger)
         self.center = self.input_headers.deprojection_center
         self.logger.debug(f"Deprojection center: {self.center}")
 
@@ -928,6 +928,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         input_images: list[str] | None = None,
         device_id=None,
         use_gpu: bool = True,
+        weight_images: list[str] | None = None,
     ) -> list[str]:
         if input_images is None:
             input_images = get_key(self.config_node.imcoadd, "bkgsub_images") or self.input_images
@@ -946,6 +947,11 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         method = self.config_node.imcoadd.interp_type
         weight = self.config_node.imcoadd.weight_map  # boolean flag for generating weight map
+        # Where this run wrote them, not wherever a sibling of the input happens to sit:
+        # reproject-first writes weights to the factory, and a stale one next to the input
+        # would be read in silence.
+        weight_of = dict(zip(input_images, weight_images)) if weight_images is not None else {}
+        zero_interp = bool(get_key(self.config_node.imcoadd, "zero_interp_weight", default=True))
 
         # find images that need interpolation
         uncalculated_images = []
@@ -981,6 +987,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                         interpolate_masked_pixels = interpolate_masked_pixels_subprocess
                         self.logger.info(f"Interpolate masked pixels with GPU device {device_id}")
 
+                    group_weights = [weight_of[f] for f in input_images] if weight_of else weight
                     try:
                         interpolate_masked_pixels(
                             input_images,
@@ -988,7 +995,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                             output_images,
                             method=method,
                             badpix=badpix,
-                            weight=weight,
+                            weight=group_weights,
+                            zero_interp_weight=zero_interp,
                             device=device_id,
                         )
                     except Exception as e:
@@ -1007,7 +1015,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                             output_images,
                             method=method,
                             badpix=badpix,
-                            weight=weight,
+                            weight=group_weights,
+                            zero_interp_weight=zero_interp,
                             device=None,
                         )
                 self.logger.debug(f"[group {group_id}] Interpolation for bad pixels is completed")

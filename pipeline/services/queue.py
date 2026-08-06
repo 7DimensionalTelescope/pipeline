@@ -37,6 +37,8 @@ REPORTED_RETURN_CODES = (
 )
 # Total budget for reaping workers on shutdown, well inside systemd's 90 s TimeoutStopSec.
 SHUTDOWN_GRACE_SECONDS = 10.0
+# Shorter DB wait during shutdown: blowing TimeoutStopSec gets the daemon SIGKILLed mid-cleanup.
+SHUTDOWN_DB_TIMEOUT = 10.0
 
 
 class AbruptStopException(Exception):
@@ -422,24 +424,27 @@ class QueueManager:
                 f"next trigger start.",
             )
 
-    def _requeue_interrupted_task(self, process, task_index):
-        """Put a task the daemon cut off on its way out back in the queue."""
-        if task_index is None or self.scheduler is None:
+    def _requeue_interrupted_tasks(self, task_indices):
+        """Put the tasks the daemon cut off on its way out back in the queue, in one write."""
+        task_indices = [index for index in task_indices if index is not None]
+        if not task_indices or self.scheduler is None:
             return
 
         try:
-            self.scheduler.requeue_task(
-                task_index,
+            requeued = self.scheduler.requeue_tasks(
+                task_indices,
                 reason=(
                     "Requeued as Ready: the queue daemon shut down (systemctl stop/restart, or a "
                     "signal) while this run was still going. Orchestration stop, not a scientific "
                     "verdict — it was cut off mid-stage and starts over when the daemon returns."
                 ),
+                timeout=SHUTDOWN_DB_TIMEOUT,
             )
+            self.logger.info(f"Requeued {requeued} interrupted task(s) as Ready.")
         except Exception as e:
             self.logger.error(
-                f"Could not requeue task {task_index} during shutdown: {e}. It stays Processing "
-                f"until the next daemon start reclaims it."
+                f"Could not requeue {len(task_indices)} interrupted task(s) during shutdown: {e}. "
+                f"They stay Processing until the next daemon start reclaims them."
             )
 
     def _drop_active_process(self, process):
@@ -598,6 +603,7 @@ class QueueManager:
                 # Then reap each one and record an outcome. Leaving this out is what stranded
                 # rows in Processing on every `systemctl stop/restart pipeline-queue`.
                 deadline = time.monotonic() + SHUTDOWN_GRACE_SECONDS
+                interrupted = []
                 for process in active_processes:
                     proc = process[1]
                     task_index = process[3] if len(process) > 3 else None
@@ -609,6 +615,16 @@ class QueueManager:
                             except subprocess.TimeoutExpired:
                                 self.logger.warning(f"Force killing process PID {pid}")
                                 proc.kill()
+                                # Reap it. SIGKILL cannot be blocked, but without this wait the
+                                # child stays a zombie: it keeps a /proc entry, so every later
+                                # liveness check reads its row as still running and never
+                                # reclaims it. This is how the zombie pile-up started.
+                                try:
+                                    proc.wait(timeout=5)
+                                except subprocess.TimeoutExpired:
+                                    self.logger.error(
+                                        f"PID {pid} survived SIGKILL; leaving it unreaped (likely stuck in I/O)."
+                                    )
 
                         return_code = proc.poll() if proc is not None else None
 
@@ -617,13 +633,16 @@ class QueueManager:
                             self.logger.info(f"Process PID {pid} finished with return code {return_code}.")
                             self._mark_done(process, task_index, return_code)
                         else:
-                            self._requeue_interrupted_task(process, task_index)
+                            interrupted.append(task_index)
                     except Exception as e:
                         self.logger.error(f"Failed to stop PID {pid}: {e}")
                     finally:
                         with self.lock:
                             if process in self._active_processes:
                                 self._active_processes.remove(process)
+
+                # One write for the whole interrupted set, after every worker is reaped.
+                self._requeue_interrupted_tasks(interrupted)
             else:
                 return
 

@@ -80,7 +80,6 @@ if TYPE_CHECKING:
         image_selection: bool
         ppflag_bitmask: str
         coadd_image: Any
-        coadd_suffix: Any
         gpu: bool
         device: int
         zp_key: str
@@ -91,6 +90,7 @@ if TYPE_CHECKING:
         joint_wcs: bool
         apply_bpmask: bool
         interp_type: str
+        zero_interp_weight: bool
         convolve: Any
         target_seeing: Any
         propagate_mask: bool

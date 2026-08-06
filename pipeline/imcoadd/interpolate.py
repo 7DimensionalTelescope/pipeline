@@ -15,6 +15,7 @@ def interpolate_masked_pixels_subprocess(
     badpix: int = 1,
     device: int = 0,
     weight: bool = True,
+    zero_interp_weight: bool = True,
 ):
     # base command
     cmd = [
@@ -36,8 +37,12 @@ def interpolate_masked_pixels_subprocess(
         str(device),
     ]
 
-    if not (weight):
+    if isinstance(weight, (list, tuple)):
+        cmd += ["-weight-input", *weight]
+    elif not weight:
         cmd += ["-no-weight"]
+    if not zero_interp_weight:
+        cmd += ["-keep-interp-weight"]
 
     result = subprocess.run(cmd, capture_output=True, text=True)
 
@@ -48,7 +53,8 @@ def interpolate_masked_pixels_subprocess(
 
 
 def interpolate_masked_pixels_cpu(
-    images, mask_path, output_paths, window=1, method="median", badpix=1, weight=True, device=None
+    images, mask_path, output_paths, window=1, method="median", badpix=1, weight=True, device=None,
+    zero_interp_weight=True,
 ):
     """
     High-level function: reads FITS images, applies numba interpolation, and writes output.
@@ -62,9 +68,13 @@ def interpolate_masked_pixels_cpu(
     # Load mask
     mask = fits.getdata(mask_path).astype(np.int32)
 
+    weight_paths = weight if isinstance(weight, (list, tuple)) else None
+    weight = bool(weight)
+
     for idx, sci_in in enumerate(images):
         sci = fits.getdata(sci_in).astype(np.float32)
-        wgt = fits.getdata(add_suffix(sci_in, "weight")).astype(np.float32) if weight else None
+        wgt_in = weight_paths[idx] if weight_paths is not None else add_suffix(sci_in, "weight")
+        wgt = fits.getdata(wgt_in).astype(np.float32) if weight else None
 
         if weight:
             interp_img, interp_wt = interpolate_masked_pixels_cpu_numba(
@@ -76,10 +86,13 @@ def interpolate_masked_pixels_cpu(
         sci_out = output_paths[idx]
         fits.writeto(sci_out, interp_img, header=add_bpx_method(fits.getheader(sci_in), method), overwrite=True)
         if weight and interp_wt is not None:
+            if zero_interp_weight:
+                # an interpolated value is a copy of its neighbours: no independent information
+                interp_wt[mask == badpix] = 0.0
             fits.writeto(
                 add_suffix(sci_out, "weight"),
                 interp_wt,
-                header=add_bpx_method(fits.getheader(add_suffix(sci_in, "weight")), method),
+                header=add_bpx_method(fits.getheader(wgt_in), method),
                 overwrite=True,
             )
 

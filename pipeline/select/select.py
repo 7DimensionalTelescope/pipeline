@@ -109,6 +109,12 @@ def ppflag_mask(spec) -> int:
     return sum(bit for ch, (bit, _) in zip(digits, PPFLAG_BITS) if ch == "1")
 
 
+def ppflag_label(value) -> str:
+    """``9`` -> ``"9 different-date calib + lenient grouping keys ignored"``."""
+    names = [desc for bit, desc in PPFLAG_BITS if int(value) & bit]
+    return f"{int(value)} = " + " + ".join(names) if names else "0 = clean"
+
+
 def ppflag_spec(mask) -> str:
     """11 -> ``"110100"``; the inverse of `ppflag_mask`, always full width."""
     return "".join("1" if int(mask) & bit else "0" for bit, _ in PPFLAG_BITS)
@@ -352,26 +358,29 @@ def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_p
     ncols = max(len(r) for r in rows)
     fig, axes = plt.subplots(len(rows), ncols, figsize=(4.6 * ncols, 4.4 * len(rows)), squeeze=False)
 
-    # Categorical overlay: colour carries the flag, marker carries keep/cut. Colouring the
-    # cut points too is the whole value of it -- a flag cut removes every non-zero value,
-    # so colouring only survivors would leave one colour and show nothing.
+    # Colour carries the current bitmask's verdict, not the raw flag value: the question a
+    # reader has is "did my mask throw this away", and that changes as the mask is edited.
     flag_metric = next((m for m in CATEGORICAL_METRICS if m in directions), None)
     flags = np.asarray(table[flag_metric], dtype=float) if flag_metric else None
-    if flags is not None and np.isfinite(flags).any():
-        values = sorted({v for v in flags if np.isfinite(v)})
-        # label each value by the compromises it encodes, not just its number
-        groups = [(f"{int(v)}" if v else "0 clean", flags == v, PPFLAG_COLORS[n % len(PPFLAG_COLORS)])
-                  for n, v in enumerate(values)]  # fmt: skip
-    else:
-        groups = [("kept", np.ones(len(table), dtype=bool), "tab:blue")]
-
-    # A categorical cut has no axis to be read off, so a point it rejected is otherwise
-    # indistinguishable from one that simply fell outside a threshold. Marker carries it.
     flag_rejected = (
         ~apply_cuts(table, {flag_metric: cuts[flag_metric]})
         if flag_metric and flag_metric in cuts
         else np.zeros(len(table), dtype=bool)
     )
+    if flags is not None and np.isfinite(flags).any():
+        bits = np.where(np.isfinite(flags), flags, 0).astype(np.int64)
+        groups = []
+        for verdict, color, word in ((False, "tab:blue", "allowed"), (True, "tab:orange", "rejected")):
+            mask = flag_rejected == verdict
+            if not mask.any():
+                continue
+            seen = "; ".join(ppflag_label(v) for v in sorted({int(v) for v in bits[mask]}))
+            groups.append((f"{flag_metric.upper()} {word} — {seen}", mask, color))
+    else:
+        groups = [("kept", np.ones(len(table), dtype=bool), "tab:blue")]
+
+    # Smallest group last so it is not buried by the larger one.
+    groups.sort(key=lambda g: int(g[1].sum()), reverse=True)
 
     for r, row in enumerate(rows):
         for c in range(ncols):
@@ -380,17 +389,14 @@ def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_p
                 ax.set_visible(False)
                 continue
             xk, yk = row[c]
-            for _, mask, color in groups:
-                kept = mask & keep
-                cut = mask & ~keep & ~flag_rejected
-                flagged = mask & ~keep & flag_rejected
+            for depth, (_, mask, color) in enumerate(groups):
+                kept, cut = mask & keep, mask & ~keep
                 if cut.any():
-                    ax.scatter(table[xk][cut], table[yk][cut], s=30, marker="x", lw=1.1, c=color, alpha=0.35)
-                if flagged.any():
-                    ax.scatter(table[xk][flagged], table[yk][flagged], s=85, marker="X", c=color,
-                               edgecolors="black", linewidths=0.9, zorder=3)  # fmt: skip
+                    ax.scatter(table[xk][cut], table[yk][cut], s=12, marker="x", lw=0.8,
+                               c=color, alpha=0.35, zorder=2 + depth)  # fmt: skip
                 if kept.any():
-                    ax.scatter(table[xk][kept], table[yk][kept], s=36, marker="o", c=color)
+                    ax.scatter(table[xk][kept], table[yk][kept], s=14, marker="o",
+                               c=color, alpha=0.55, linewidths=0, zorder=2 + depth)  # fmt: skip
             if xk in cuts:
                 ax.axvline(cuts[xk], color="tab:red", ls="--", lw=1.2)
             if yk in cuts:
@@ -404,14 +410,12 @@ def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_p
     from matplotlib.lines import Line2D
 
     proxies = [Line2D([], [], ls="", marker="x", color="0.55", label="cut (x) / kept (o)")]
-    if flag_rejected.any():
-        proxies.append(Line2D([], [], ls="", marker="X", color="0.45", markeredgecolor="black",
-                              markersize=9, label=f"{flag_metric.upper()}-rejected (X)"))  # fmt: skip
     for label, mask, color in groups:
-        counts = f"{int((mask & keep).sum())}/{int(mask.sum())}"
-        proxies.append(Line2D([], [], ls="", marker="o", color=color, label=f"{label} {counts}".strip()))
-    legend_title = f"{flag_metric.upper()} kept/total" if flag_metric else None
-    ncol = min(len(proxies), 7)
+        counts = f"{int((mask & keep).sum())}/{int(mask.sum())} kept"
+        proxies.append(Line2D([], [], ls="", marker="o", color=color, label=f"{counts}  {label}".strip()))
+    legend_title = None
+    widest = max(len(p.get_label()) for p in proxies)
+    ncol = max(1, min(len(proxies), int(20 * ncols / max(widest, 1)) or 1))
     fig.legend(handles=proxies, loc="lower center", ncol=ncol, fontsize=10,
                title=legend_title, frameon=False)  # fmt: skip
     legend_height = 0.35 + 0.28 * math.ceil(len(proxies) / ncol)  # inches; grows when it wraps
@@ -663,10 +667,9 @@ def prompt_cuts(table: Table, cuts: dict[str, float], headers: list | None = Non
         changed, note = False, ""
         while True:
             _settle()
-            add_hint = ', "airmass lower" adds uncut' if headers is not None else ""
             answer = input(
-                f'  {note}{summary} | (-rejected/alone) type "seeing<=3.6" to set or add{add_hint}, '
-                "Enter accepts: "
+                f"  {note}{summary} | (-N/M): N fail that cut, M return if it is dropped "
+                '| type "seeing<=3.6" to set or add, Enter accepts: '
             ).strip()
             if not answer:
                 break
