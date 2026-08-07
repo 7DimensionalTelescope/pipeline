@@ -142,7 +142,8 @@ class NameHandler:
     CAVEAT: For NINA filenames, only raw -> processed supported
     """
 
-    def __init__(self, filenames: str | Path | list[str] | list[Path], nightdate_only: bool = False):
+    def __init__(self, filenames: str | Path | list[str] | list[Path], nightdate_only: bool = False,
+                 type_only: bool = False):
         # lapse("start NameHandler init", reset=True)
 
         # --- 1. Normalize input to a list of strings ---
@@ -202,8 +203,13 @@ class NameHandler:
             self.type = [self._detect_image_type(stem, type_hint) for stem, type_hint in zip(self.stem, type_hints)]
             # lapse("for type construction")
 
+        if type_only:
+            # fast mode: classification without per-file parsing (raw names can cost a DB query)
+            return
+
         # --- 5. Parse each file into its components ---
         units, dates, hmses, objs, filters, nbinnings, exptimes, gains, cameras = [], [], [], [], [], [], [], [], []
+        deferred = []
         for i, (parts, typ, nightdate) in enumerate(zip(self.parts, self.type, self.nightdate)):
             parser_kwargs = {}
             # images
@@ -221,7 +227,15 @@ class NameHandler:
                 parser_kwargs["is_too"] = bool(typ[1])
                 parsing_func = self._parse_preproc_config
 
-            unit, date, hms, obj, filte, nbin, exptime, gain, camera = parsing_func(parts)
+            if parsing_func is self._parse_raw:
+                # defer unparseable raw names: their DB lookups are batched after the loop
+                parsed = self._parse_raw(parts, defer_db=True)
+                if parsed is None:
+                    deferred.append(i)
+                    parsed = (None,) * 9
+                unit, date, hms, obj, filte, nbin, exptime, gain, camera = parsed
+            else:
+                unit, date, hms, obj, filte, nbin, exptime, gain, camera = parsing_func(parts)
 
             units.append(unit)
             hmses.append(hms)
@@ -240,6 +254,22 @@ class NameHandler:
                 nightdate = subtract_half_day(date + "_" + hms if hms is not None else date)  # hms None for masters
                 self.nightdate[i] = nightdate
             dates.append(date)
+
+        if deferred:
+            names = []
+            for i in deferred:
+                fp = "_".join(self.parts[i])
+                names.append(fp if fp.endswith(".fits") else fp + ".fits")
+            resolved = unified_names_from_paths(names)
+            for i, uf in zip(deferred, resolved):
+                unit, date, hms, obj, filte, nbin, exptime, gain, camera = self._parse_raw(
+                    self.parts[i], unified_filename=uf or ""
+                )
+                units[i], hmses[i], objs[i], filters[i] = unit, hms, obj, filte
+                nbinnings[i], exptimes[i], gains[i], cameras[i] = nbin, exptime, gain, camera
+                dates[i] = date
+                if not self.nightdate[i] and date is not None:
+                    self.nightdate[i] = subtract_half_day(date + "_" + hms if hms is not None else date)
 
         if self._single:
             self.abspath = self.abspath[0]
@@ -520,7 +550,7 @@ class NameHandler:
         ]
 
     @staticmethod
-    def _parse_raw(parts):
+    def _parse_raw(parts, defer_db=False, unified_filename=None):
         """only TCSpy has support for underscore-containing object names"""
 
         def _parse_TCSpy_raw(parts):
@@ -565,12 +595,17 @@ class NameHandler:
             # # finally resort to DB
             # else:
 
-            from .db import unified_name_from_path
+            if defer_db:
+                # caller batches the DB lookups; one round trip for all deferred names
+                return None
 
             file_path = "_".join(parts)
             if not file_path.endswith(".fits"):
                 file_path = file_path + ".fits"
-            unified_filename = unified_name_from_path(file_path)
+            if unified_filename is None:
+                from .db import unified_name_from_path
+
+                unified_filename = unified_name_from_path(file_path)
             # print(f"Unified filename: {unified_filename}")
 
             if unified_filename:

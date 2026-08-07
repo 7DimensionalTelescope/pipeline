@@ -45,6 +45,14 @@ ingredient is regenerated, so comparing them is the staleness test:
 
 which finds every image built from an ingredient version since superseded. A NULL
 source_imageid is an edge written before this column existed: unknown, not stale.
+find_stale_edges runs exactly that; impacted_images then walks the graph downward
+from those images, because a coadd stacked from a stale single is stale too even
+though its own edge still matches -- the single was not regenerated, only invalidated.
+
+An astrometric re-solve is deliberately not a new version: the WCS changes but the
+IMAGEID does not, so re-running astrometry does not invalidate the coadds built from
+the image. Only the stages that mint a fresh IMAGEID -- preprocess, imcoadd,
+imsubtract -- start an invalidation chain here.
 
 The complete dependency_role vocabulary:
 
@@ -77,6 +85,19 @@ from ...utils import atleast_1d
 # A diff's two parents are both coadds, so NameHandler would call them both
 # "coadded"; only the card itself says which is the science one.
 DIRECT_PARENT_KEYS = (("SCIIID", "science"), ("REFIID", "reference"))
+
+# Downward closure over the graph. The depth bound is what keeps a cycle finite:
+# UNION already dedupes ids, but an id can legitimately reappear at a greater depth.
+_IMPACT_CTE = """
+WITH RECURSIVE impact(id, depth) AS (
+    SELECT derived_image_id, 1
+      FROM image_qa_dependency WHERE source_image_id = ANY(%s)
+  UNION
+    SELECT d.derived_image_id, i.depth + 1
+      FROM image_qa_dependency d JOIN impact i ON d.source_image_id = i.id
+     WHERE i.depth < %s
+)
+"""
 
 
 def _id_key(name_key: str) -> Optional[str]:
@@ -227,3 +248,86 @@ class ImageQADependency(BaseDatabase):
             conn.commit()
 
         return len(insert_data)
+
+    def find_stale_edges(
+        self,
+        nightdate_from: Optional[str] = None,
+        nightdate_to: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> List[tuple]:
+        """Edges whose source was regenerated after the derived image was built.
+
+        Returns (derived_image_id, derived_name, source_image_id, source_name, role,
+        used_imageid, current_imageid). The nightdate range filters the derived image.
+        """
+        # MATERIALIZED is load-bearing: stale edges are a handful in millions, so folding
+        # this into the outer query lets the planner walk the PK index looking for them
+        # (minutes). Forced first, it is one hash join down to ~100 rows, then lookups.
+        query = (
+            "WITH stale AS MATERIALIZED ("
+            "  SELECT d.derived_image_id, d.source_image_id, d.dependency_role,"
+            "         d.source_imageid, s.imageid AS current_imageid"
+            "    FROM image_qa_dependency d"
+            "    JOIN image_qa s ON s.id = d.source_image_id"
+            "   WHERE d.source_imageid IS NOT NULL AND d.source_imageid <> s.imageid"
+            ")"
+            " SELECT st.derived_image_id, qa_d.image_name, st.source_image_id, qa_s.image_name,"
+            " st.dependency_role, st.source_imageid, st.current_imageid"
+            " FROM stale st"
+            " JOIN image_qa qa_d ON qa_d.id = st.derived_image_id"
+            " JOIN image_qa qa_s ON qa_s.id = st.source_image_id"
+            " WHERE TRUE"
+        )
+        params: List[object] = []
+        if nightdate_from is not None:
+            query += " AND qa_d.nightdate >= %s"
+            params.append(nightdate_from)
+        if nightdate_to is not None:
+            query += " AND qa_d.nightdate <= %s"
+            params.append(nightdate_to)
+        query += " ORDER BY st.derived_image_id"
+        if limit is not None:
+            query += " LIMIT %s"
+            params.append(limit)
+        return self.execute_query(query, tuple(params))
+
+    def impacted_images(self, seed_image_ids: List[int], max_depth: int = 10) -> List[tuple]:
+        """Images reachable downward from the seeds: (image_id, depth, image_type, image_name).
+
+        The seeds themselves are not included -- these are the images that consumed
+        them, then whatever consumed those, to max_depth.
+        """
+        seeds = [int(i) for i in atleast_1d(seed_image_ids) if i is not None]
+        if not seeds:
+            return []
+        return self.execute_query(
+            f"{_IMPACT_CTE}"
+            " SELECT i.id, min(i.depth), qa.image_type, qa.image_name"
+            " FROM impact i JOIN image_qa qa ON qa.id = i.id"
+            " GROUP BY i.id, qa.image_type, qa.image_name ORDER BY 2, 1",
+            (seeds, max_depth),
+        )
+
+    def impacted_configs(
+        self, seed_image_ids: List[int], max_depth: int = 10, include_seeds: bool = True
+    ) -> List[tuple]:
+        """Configs owning any image downstream of the seeds: (config_name, config_type).
+
+        ``include_seeds`` also returns the configs that own the seed images, which is
+        what an invalidation sweep wants (the stale images are themselves affected) and
+        what a "who consumes my output" query does not.
+        """
+        seeds = [int(i) for i in atleast_1d(seed_image_ids) if i is not None]
+        if not seeds:
+            return []
+        scope = "SELECT id FROM impact" + (" UNION SELECT unnest(%s)" if include_seeds else "")
+        params: List[object] = [seeds, max_depth] + ([seeds] if include_seeds else [])
+        return self.execute_query(
+            f"{_IMPACT_CTE}"
+            " SELECT DISTINCT ps.name, ps.config_type"
+            f" FROM ({scope}) affected"
+            " JOIN image_qa qa ON qa.id = affected.id"
+            " JOIN process_status ps ON ps.id = qa.process_status_id"
+            " ORDER BY 2, 1",
+            tuple(params),
+        )

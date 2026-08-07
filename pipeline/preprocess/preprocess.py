@@ -242,6 +242,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             # Update pipeline status to completed
             if not dry_run:
                 self.update_progress(100, "completed")
+                self.sync_config_dependencies()
 
             self.logger.info(f"Preprocessing completed in {time_diff_in_seconds(st)} seconds")
         except Exception as e:

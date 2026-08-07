@@ -153,6 +153,8 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     )
                     self.image_qa.update_data(self.qa_id, **qa_data.to_dict())
 
+            self.sync_config_dependencies()
+
             self.update_progress(SCIPROCESS_REGISTRY.completed_progress("subtraction"), "imsubtract-completed")
 
             self.config_node.flag.subtraction = True

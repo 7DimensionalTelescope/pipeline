@@ -52,10 +52,24 @@ def calc_weight_with_cpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, wei
 
     out_names = out_names if out_names is not None else add_suffix(images, suffix="weight")
 
-    for fname, outname in zip(images, out_names):
-        image = fitsio.read(fname).astype(np.float32)
-        out = optimized_parallel(image, *output)
-        fitsio.write(outname, out.astype(np.float32), clobber=True)
+    # Two threads overlap NFS I/O with the kernel (read-ahead + write-behind); bounded so a
+    # busy system queue is not oversubscribed.
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        pending = None
+        nxt = pool.submit(fitsio.read, images[0])
+        for i, outname in enumerate(out_names):
+            image = nxt.result().astype(np.float32)
+            if i + 1 < len(images):
+                nxt = pool.submit(fitsio.read, images[i + 1])
+            out = optimized_parallel(image, *output)
+            out[~np.isfinite(out)] = 0.0  # degenerate noise model -> weight 0, not inf
+            if pending is not None:
+                pending.result()
+            pending = pool.submit(fitsio.write, outname, out.astype(np.float32), clobber=True)
+        if pending is not None:
+            pending.result()
 
 
 @njit(parallel=True)

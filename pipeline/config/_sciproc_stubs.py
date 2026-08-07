@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         is_multi_epoch: bool
         obsmode: Any
         coadd: bool
+        sanity_from_db: bool
         gpu_enabled: bool
         verbose_gpu: bool
 
@@ -78,6 +79,8 @@ if TYPE_CHECKING:
         coadd_routine: str
         coadd_mode: str
         image_selection: bool
+        image_selection_cuts: Any
+        image_selection_source: str
         ppflag_bitmask: str
         coadd_image: Any
         gpu: bool

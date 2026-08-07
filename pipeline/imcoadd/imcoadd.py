@@ -14,7 +14,7 @@ from ..errors import CoaddError
 from ..config import SciProcConfiguration
 from ..path.path import PathHandler
 from ..services.setup import BaseSetup
-from ..services.utils import acquire_available_gpu
+from ..services.utils import acquire_available_gpu, conservative_worker_count
 from ..config.utils import get_key
 from ..utils import collapse, add_suffix, time_diff_in_seconds, get_basename, atleast_1d, swap_ext
 from ..preprocess.utils import get_zdf_from_header_IMCMB
@@ -186,25 +186,46 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         images = self.input_images
         weight_images = None
-        if self.config_node.imcoadd.weight_map:
-            # weights are computed on the pristine frames, so they cannot be named
-            # after a later stage product nor written next to the inputs
-            factory = self.path.imcoadd.factory
-            weight_images = factory.stage_images(images, "weight", factory.weight_dir)
-            self.calculate_weight_map(images, device_id=device_id, out_weights=weight_images)
+        do_weight = bool(self.config_node.imcoadd.weight_map)
+        do_bpmask = bool(self.config_node.imcoadd.apply_bpmask)
+        if do_weight and do_bpmask:
+            # fused: the weight map is handed to interpolation in memory, one read and one
+            # write per image instead of three reads and two writes
+            images = self.weight_and_interpolate(images)
+            weight_images = [add_suffix(im, "weight") for im in images]
             step += 1
             self.update_progress(
                 SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS),
                 "imcoadd-calculate-weight-map-completed",
             )
-
-        # Bad pixel interpolation
-        if self.config_node.imcoadd.apply_bpmask:
-            images = self.apply_bpmask(images, device_id=device_id, weight_images=weight_images)
             step += 1
             self.update_progress(
                 SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-apply-bpmask-completed"
             )
+        else:
+            if do_weight:
+                # weights come from the pristine frames: the Poisson term must see the measured
+                # pixel, not an interpolated one (masked pixels are zeroed at interp anyway).
+                # Hence the names cannot follow a later stage product nor sit next to the inputs.
+                factory = self.path.imcoadd.factory
+                weight_images = factory.stage_images(images, "weight", factory.weight_dir)
+                self.calculate_weight_map(images, device_id=device_id, out_weights=weight_images)
+                step += 1
+                self.update_progress(
+                    SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS),
+                    "imcoadd-calculate-weight-map-completed",
+                )
+
+            # Bad pixel interpolation
+            if do_bpmask:
+                images = self.apply_bpmask(images, device_id=device_id, weight_images=weight_images)
+                if weight_images is not None:
+                    # hand the interp sidecars onward: they carry the zeroed bad-pixel holes
+                    weight_images = [add_suffix(im, "weight") for im in images]
+                step += 1
+                self.update_progress(
+                    SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-apply-bpmask-completed"
+                )
 
         # Optional joint registration
         if self.config_node.imcoadd.joint_wcs:
@@ -302,9 +323,10 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             raise CoaddError.EmptyInputAfterSanityRejection("No Input for ImCoadd")
         # if rejected, let the input remain so that a rerun has a change to reevaluate SANITY
 
-        # Single read of every input header; all aggregates/coadd_header live on this snapshot.
+        self.select_input_images()  # may drop inputs, so it precedes the snapshot and resync
+        # Single read of every kept header; all aggregates/coadd_header live on this snapshot.
         self.input_headers = InputHeaderSet.from_files(self.input_images)
-        self.select_input_images()  # may drop inputs, so it precedes the PathHandler resync
+        self.input_headers.selection_metrics = getattr(self, "_selection_meta", {})
         self.input_headers.coadd_provenance = self._coadd_provenance()
 
         self._recreate_pathhandler_instance()  # resync
@@ -340,38 +362,78 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         see pipeline/select/select.py."""
         # default mirrors sciproc_base.yml: a config predating the key must not silently
         # gain a filtering step. New multi-epoch configs get 'auto' from the override yml.
+        self._selection_meta = {}
         mode = get_key(self.config_node.imcoadd, "image_selection", default=False)
         if not (mode and self.config_node.settings.is_multi_epoch):
             return self.input_images
 
-        from ..select.select import ppflag_mask, select_images
+        from ..select.select import (CATEGORICAL_METRICS, metrics_for_paths_from_image_qa, ppflag_mask,
+                                     ppflag_spec, resolve_fixed_cuts, select_from_table, select_images)  # fmt: skip
 
-        keep, cuts, table = select_images(
-            [get_basename(f) for f in self.input_images],
-            self.input_headers.headers,
-            mode=str(mode).lower(),
-            nsigma=nsigma,
-            # multi-epoch inputs span nightdates, so figure_dir is a list of dirs
-            plot_path=os.path.join(
-                collapse(self.path.figure_dir, force=True),
-                # figure_dir is shared by every coadd config of this target
-                f"{os.path.splitext(get_basename(self.config_node.info.file))[0]}_imcoadd_selection.jpg",
-            ),
-            logger=self.logger,
-            metrics=metrics,
-            extra=extra,
-            # PPFLAG is a bitmask: the "cut" is an allow-list of bits, not a threshold
-            fixed_cuts={"ppflag": ppflag_mask(get_key(self.config_node.imcoadd, "ppflag_bitmask", default="110000"))},
+        plot_path = os.path.join(
+            # multi-epoch inputs span nightdates, so figure_dir is a list of dirs;
+            # figure_dir is shared by every coadd config of this target
+            collapse(self.path.figure_dir, force=True),
+            f"{os.path.splitext(get_basename(self.config_node.info.file))[0]}_imcoadd_selection.jpg",
         )
-        self.input_headers.selection_metrics = {
+        # PPFLAG is a bitmask: the "cut" is an allow-list of bits, not a threshold
+        fixed_cuts = {
+            "ppflag": ppflag_mask(get_key(self.config_node.imcoadd, "ppflag_bitmask", default="110000")),
+            **(get_key(self.config_node.imcoadd, "image_selection_cuts") or {}),
+        }
+
+        # Metrics from image_qa when possible: header reads then happen only for the kept
+        # frames, in the snapshot. Any failure (unknown column, missing rows would just be
+        # NaN, DB down) falls back to reading every header, as before.
+        table = None
+        source = str(get_key(self.config_node.imcoadd, "image_selection_source", default="db")).lower()
+        if source == "db" and len(self.input_images) >= 20 and self.is_connected:
+            try:
+                numeric_cuts, db_extra = resolve_fixed_cuts(fixed_cuts, metrics, extra)
+                table, n_found = metrics_for_paths_from_image_qa(self.input_images, metrics=metrics, extra=db_extra)
+                self.logger.info(
+                    f"Selection metrics from image_qa for {n_found}/{len(self.input_images)} images -- "
+                    "may lag the headers if edited out of band; set "
+                    "imcoadd.image_selection_source: 'headers' to read headers"
+                )
+            except Exception as e:
+                self.logger.warning(f"image_qa selection metrics unavailable; reading headers instead: {e}")
+                table = None
+
+        if table is not None:
+            keep, cuts = select_from_table(
+                table, mode=str(mode).lower(), nsigma=nsigma, plot_path=plot_path,
+                logger=self.logger, fixed_cuts=numeric_cuts,
+            )  # fmt: skip
+        else:
+            keep, cuts, table = select_images(
+                [get_basename(f) for f in self.input_images],
+                [fits.getheader(f) for f in self.input_images],
+                mode=str(mode).lower(),
+                nsigma=nsigma,
+                plot_path=plot_path,
+                logger=self.logger,
+                metrics=metrics,
+                extra=extra,
+                fixed_cuts=fixed_cuts,
+            )
+        self._selection_meta = {
             name: (key, table.meta["directions"][name]) for name, key in table.meta.get("keys", {}).items()
         }
         if keep.all():
             return self.input_images
 
-        self.input_headers.set_mask(keep)
         self.input_images = [f for f, ok in zip(self.input_images, keep) if ok]
-        self.config_node.imcoadd.image_selection_cuts = cuts
+        # written back in the operator grammar, so a rerun pins exactly what this run applied
+        directions = table.meta.get("directions", {})
+        self.config_node.imcoadd.image_selection_cuts = {
+            m: (
+                ppflag_spec(v)
+                if m in CATEGORICAL_METRICS
+                else f"{'<=' if directions.get(m) == 'lower' else '>='}{v:.6g}"
+            )
+            for m, v in cuts.items()
+        }
         return self.input_images
 
     def bkgsub(
@@ -459,9 +521,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             if get_key(self.config_node.imcoadd, "bkg_rms_images"):
                 self.config_node.imcoadd.bkg_rms_images = None
 
-        for i, (inim, outim, bkg, bkg_rms, skyvalue, fov_mask, src_mask, btype) in enumerate(
-            zip(input_images, bkgsub_images, bkg_images, bkg_rms_images, skyvalues, fov_mask_images, source_mask_images, types)  # fmt: skip
-        ):
+        def _bkgsub_one(i, inim, outim, bkg, bkg_rms, skyvalue, fov_mask, src_mask, btype):
             st_loop = time.time()
             # the FOV mask serves every routine (it re-zeros the padding afterwards);
             # the source mask only means something to a mesh background
@@ -496,6 +556,23 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self.logger.info(
                 f"Background subtraction ({btype}) completed for {get_basename(outim)} [image {i+1}/{len(input_images)}] in {time_diff_in_seconds(st_loop)} seconds"
             )
+
+        # Per-image work is independent (SExtractor subprocesses + FITS I/O, both
+        # GIL-releasing); worker count is load-aware so a busy system queue stays safe.
+        jobs = list(zip(input_images, bkgsub_images, bkg_images, bkg_rms_images, skyvalues,
+                        fov_mask_images, source_mask_images, types))  # fmt: skip
+        n_workers = conservative_worker_count(len(jobs))
+        if n_workers <= 1:
+            for i, job in enumerate(jobs):
+                _bkgsub_one(i, *job)
+        else:
+            self.logger.info(f"Background subtraction with {n_workers} workers")
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                futures = [pool.submit(_bkgsub_one, i, *job) for i, job in enumerate(jobs)]
+                for f in futures:
+                    f.result()
 
         self.logger.info(
             f"Background subtraction is completed in {time_diff_in_seconds(st)} ({time_diff_in_seconds(st, return_float=True)/len(input_images):.1f} s/image)"
@@ -782,19 +859,24 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
     #     recommenced_bkgsub_type = "constant"  # BACKTYPE "Recommended bkgsub type"
     #     return recommenced_bkgsub_type
 
-    @staticmethod
     def _group_IMCMB(
-        input_images: list[str], output_images: list[str] = None
+        self, input_images: list[str], output_images: list[str] = None
     ) -> dict[tuple[str, str, str], list[list[str]]]:
         """
         Group images by their master frames (IMCMB).
         Same logic as the preprocessing grouping, but relies on header info
         instead of parsing filename as in NameHandler.get_grouped_files()
         """
-        # construct zdf bundles for dict keys
+        # construct zdf bundles for dict keys; cached per instance so the header reads
+        # (~80 ms each over NFS) are paid once per run, not once per stage
+        cache = getattr(self, "_zdf_cache", None)
+        if cache is None:
+            cache = self._zdf_cache = {}
         calibs = []
         for image in input_images:
-            calibs.append(get_zdf_from_header_IMCMB(image))
+            if image not in cache:
+                cache[image] = get_zdf_from_header_IMCMB(image)
+            calibs.append(cache[image])
 
         # make a dict of zdf bundles and their corresponding input and output images
         groups = dict()
@@ -867,16 +949,21 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 else:
                     uncalculated_images.append(vimg)
                     uncalculated_outputs.append(oname)
+            if len(uncalculated_images) < len(group_values):
+                self.logger.info(
+                    f"Group {i + 1}: {len(group_values) - len(uncalculated_images)} existing weight maps "
+                    f"skipped, {len(uncalculated_images)} to compute"
+                )
 
             if uncalculated_images:
                 st_image = time.time()
-                with acquire_available_gpu(device_id=device_id) as device_id:
-                    if device_id is None:
+                with acquire_available_gpu(device_id=device_id) as acquired:
+                    if acquired is None:
                         from .weight import calc_weight_with_cpu
 
                         calc_weight = calc_weight_with_cpu
-                        self.logger.info("Calculate weight map with CPU")
-                        device_id = "CPU"
+                        self.logger.info(f"Calculate weight map with CPU [group {i + 1}/{len(groups)}]")
+                        acquired = "CPU"
                         calc_weight(
                             uncalculated_images,
                             d_m_file,
@@ -889,14 +976,16 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                         from .weight import calc_weight_with_gpu
 
                         calc_weight = calc_weight_with_gpu
-                        self.logger.info(f"Calculate weight map with GPU device {device_id}")
+                        self.logger.info(
+                            f"Calculate weight map with GPU device {acquired} [group {i + 1}/{len(groups)}]"
+                        )
                         calc_weight(
                             uncalculated_images,
                             d_m_file,
                             f_m_file,
                             sig_z_file,
                             sig_f_file,
-                            device_id=device_id,
+                            acquired=acquired,
                             out_names=uncalculated_outputs,
                         )
 
@@ -907,7 +996,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 self.logger.info("All weight images already exist. Skipping weight map calculation")
 
             self.logger.info(
-                f"Weight-map calculation is completed in {time_diff_in_seconds(st)} seconds ({time_diff_in_seconds(st, return_float=True)/len(group_values):.1f} s/image)"
+                f"Weight maps completed for group {i + 1}/{len(groups)} in {time_diff_in_seconds(st_loop)} seconds "
+                f"({time_diff_in_seconds(st_loop, return_float=True) / len(group_values):.1f} s/image)"
             )
 
         return self.config_node.imcoadd.bkgsub_weight_images
@@ -922,6 +1012,69 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
             self.logger.warning("BADPIX not found in header. Using default value 0.", CoaddError.KeyError)
         return mask_file, badpix
+
+    def weight_and_interpolate(self, input_images: list[str] | None = None) -> list[str]:
+        """Fused per-group weight + interpolation; the weight map never touches disk raw.
+
+        CPU only by design: both kernels are sub-second and the stage is NFS-bound, so
+        GPU acquisition would serialize on I/O anyway.
+        """
+        if input_images is None:
+            input_images = self.input_images
+        st = time.time()
+        self.logger.info("Start fused weight-map calculation + bad-pixel interpolation")
+
+        factory = self.path.imcoadd.factory
+        interp_images = factory.stage_images(input_images, "interp", factory.interp_dir)
+        self.config_node.imcoadd.interp_images = interp_images
+
+        method = self.config_node.imcoadd.interp_type
+        zero_interp = bool(get_key(self.config_node.imcoadd, "zero_interp_weight", default=True))
+
+        todo_in, todo_out = [], []
+        for inim, outim in zip(input_images, interp_images):
+            if os.path.exists(outim) and os.path.exists(add_suffix(outim, "weight")) and not self.overwrite:
+                self.logger.debug(f"Already exists; skip generating {outim}")
+            else:
+                todo_in.append(inim)
+                todo_out.append(outim)
+
+        if len(todo_in) < len(input_images):
+            self.logger.info(
+                f"{len(input_images) - len(todo_in)} existing fused products skipped, {len(todo_in)} to compute"
+            )
+        if todo_in:
+            from .interpolate import weight_and_interpolate_cpu
+            from .weight import _load_calibration_data
+
+            groups = self._group_IMCMB(todo_in, todo_out)
+            self.logger.info(f"{len(groups)} groups for fused weight+interpolation.")
+            for group_id, ((z, d, f), [group_in, group_out]) in enumerate(groups.items()):
+                st_group = time.time()
+                mask_file, badpix = self._get_bpmask(group_in[0])
+                d_m_file, f_m_file, sig_z_file, sig_f_file = PathHandler.resolve_weight_map_input_abspath([z, d, f])
+                calib = _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file)
+                weight_and_interpolate_cpu(
+                    group_in,
+                    mask_file,
+                    group_out,
+                    calib,
+                    method=method,
+                    badpix=badpix,
+                    zero_interp_weight=zero_interp,
+                    logger=self.logger,
+                )
+                self.logger.info(
+                    f"Weight+interp completed for group {group_id + 1}/{len(groups)} in "
+                    f"{time_diff_in_seconds(st_group)} seconds "
+                    f"({time_diff_in_seconds(st_group, return_float=True) / len(group_in):.1f} s/image)"
+                )
+        else:
+            self.logger.info("All fused weight+interp products already exist. Skipping")
+
+        self.config_node.imcoadd.bkgsub_weight_images = [add_suffix(im, "weight") for im in interp_images]
+        self.logger.info(f"Fused weight+interp completed in {time_diff_in_seconds(st)} seconds")
+        return interp_images
 
     def apply_bpmask(
         self,
@@ -964,6 +1117,11 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 uncalculated_images.append(input_image_file)
                 calculated_outputs.append(output_file)
 
+        if 0 < len(uncalculated_images) < len(input_images):
+            self.logger.info(
+                f"{len(input_images) - len(uncalculated_images)} existing interp products skipped, "
+                f"{len(uncalculated_images)} to compute"
+            )
         # interpolate
         if not uncalculated_images:
             self.logger.info("No images to interpolate. Skipping")
@@ -975,19 +1133,22 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             for group_id, ((z, d, f), [input_images, output_images]) in enumerate(groups.items()):
                 mask_file, badpix = self._get_bpmask(input_images[0])
 
-                with acquire_available_gpu(device_id=device_id) as device_id:
-                    if device_id is None:
+                with acquire_available_gpu(device_id=device_id) as acquired:
+                    if acquired is None:
                         from .interpolate import interpolate_masked_pixels_cpu
 
                         interpolate_masked_pixels = interpolate_masked_pixels_cpu
-                        self.logger.info(f"Interpolate masked pixels with CPU")
+                        self.logger.info(f"Interpolate masked pixels with CPU [group {group_id + 1}/{len(groups)}]")
                     else:
                         from .interpolate import interpolate_masked_pixels_subprocess
 
                         interpolate_masked_pixels = interpolate_masked_pixels_subprocess
-                        self.logger.info(f"Interpolate masked pixels with GPU device {device_id}")
+                        self.logger.info(
+                            f"Interpolate masked pixels with GPU device {acquired} [group {group_id + 1}/{len(groups)}]"
+                        )
 
                     group_weights = [weight_of[f] for f in input_images] if weight_of else weight
+                    st_group = time.time()
                     try:
                         interpolate_masked_pixels(
                             input_images,
@@ -997,14 +1158,15 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                             badpix=badpix,
                             weight=group_weights,
                             zero_interp_weight=zero_interp,
-                            device=device_id,
+                            device=acquired,
+                            **({"logger": self.logger} if acquired is None else {}),
                         )
                     except Exception as e:
                         # The GPU subprocess fails for reasons that have nothing to do with
                         # the data — a cupy/CUDA toolkit mismatch is the usual one — and the
                         # numba kernel next door gives the same answer. Preprocess already
                         # falls back this way; imcoadd used to let it kill the whole coadd.
-                        if device_id is None:
+                        if acquired is None:
                             raise
                         from .interpolate import interpolate_masked_pixels_cpu
 
@@ -1018,8 +1180,13 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                             weight=group_weights,
                             zero_interp_weight=zero_interp,
                             device=None,
+                            logger=self.logger,
                         )
-                self.logger.debug(f"[group {group_id}] Interpolation for bad pixels is completed")
+                self.logger.info(
+                    f"Interpolation completed for group {group_id + 1}/{len(groups)} in "
+                    f"{time_diff_in_seconds(st_group)} seconds "
+                    f"({time_diff_in_seconds(st_group, return_float=True) / len(input_images):.1f} s/image)"
+                )
 
             self.logger.info(
                 f"Interpolation for bad pixels is completed in {time_diff_in_seconds(st)} seconds "
@@ -1204,9 +1371,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self.images_to_coadd = conv_files
             return conv_files
 
-        with acquire_available_gpu(device_id=device_id) as device_id:
+        with acquire_available_gpu(device_id=device_id) as acquired:
 
-            if device_id is None:
+            if acquired is None:
                 from .convolve import convolve_fft_cpu
 
                 convolve_fft = convolve_fft_cpu
@@ -1216,13 +1383,13 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 from .convolve import convolve_fft_subprocess
 
                 convolve_fft = convolve_fft_subprocess
-                self.logger.info(f"Convolution with GPU device {device_id}")
+                self.logger.info(f"Convolution with GPU device {acquired}")
 
             output = convolve_fft(
                 image_list,
                 outim_list,
                 kernels=kernels,
-                device=device_id,
+                device=acquired,
                 apply_edge_mask=weight,
                 method=method,
                 delta_peeing=delta_peeing_list,
@@ -1246,7 +1413,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     weight_list,
                     outwim_list,
                     kernels=kernels,
-                    device=device_id,
+                    device=acquired,
                     apply_edge_mask=weight,
                     method=method,
                     delta_peeing=delta_peeing_list,
@@ -1331,19 +1498,29 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 weight_images=weight_images,
             )
 
-            # Update/TODO: consider uncollapsed bpmask files
             if self.config_node.imcoadd.propagate_mask:
                 # bpmask_file = self.config.preprocess.bpmask_file
-                bpmask_file = PathHandler.get_bpmask(input_images)
-                bpmask_inverted = 1 - fits.getdata(bpmask_file)
-                bpmask_inverted_file = self.path.imcoadd.factory.bpmask_inverted(bpmask_file)
-                fits.writeto(bpmask_inverted_file, bpmask_inverted, overwrite=True)
-                self.logger.debug(f"Inverted bpmask saved as {bpmask_inverted_file}")
-                # BADPIX=1 means bad, MAP_WEIGHT means >0 is good: SWarp needs the inverse.
-                # The resampling follows the sci pass rather than being pinned here: a mask
-                # resampled differently from the image it describes would not line up with it.
-                args = ["-WEIGHT_IMAGE", bpmask_inverted_file] + sci_resampling
-                self._run_swarp("bpm", coadd=coadd, swarp_args=args + swarp_options_override)
+                per_image = atleast_1d(PathHandler.get_bpmask(input_images))
+                if len(per_image) != len(input_images):
+                    per_image = per_image * len(input_images)
+                by_mask: dict[str, list[str]] = {}
+                for inim, mfile in zip(input_images, per_image):
+                    by_mask.setdefault(mfile, []).append(inim)
+                self.logger.info(f"bpm pass over {len(by_mask)} distinct bpmask(s)")
+                for k, (bpmask_file, group_frames) in enumerate(by_mask.items()):
+                    bpmask_inverted = 1 - fits.getdata(bpmask_file)
+                    bpmask_inverted_file = self.path.imcoadd.factory.bpmask_inverted(bpmask_file)
+                    fits.writeto(bpmask_inverted_file, bpmask_inverted, overwrite=True)
+                    self.logger.debug(f"Inverted bpmask saved as {bpmask_inverted_file}")
+                    group_list = os.path.join(self.path.imcoadd.tmp_dir, f"images_bpm_{k}.txt")
+                    with open(group_list, "w") as fp:
+                        fp.write("\n".join(group_frames) + "\n")
+                    # BADPIX=1 means bad, MAP_WEIGHT means >0 is good: SWarp needs the inverse.
+                    # The resampling follows the sci pass rather than being pinned here: a mask
+                    # resampled differently from the image it describes would not line up with it.
+                    args = ["-WEIGHT_IMAGE", bpmask_inverted_file] + sci_resampling
+                    self._run_swarp("bpm", coadd=coadd, swarp_args=args + swarp_options_override,
+                                    input_list=group_list)  # fmt: skip
 
         if coadd:
             self._update_header()
@@ -1382,10 +1559,16 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         swarp_args=None,
         use_weight_map: bool = True,
         weight_images: list[str] | None = None,
+        input_list: str | None = None,
     ) -> str:
         """Pass type='' for no weight. Returns the SWarp resample directory."""
         if weight_images:
-            swarp_args = (swarp_args or []) + ["-WEIGHT_IMAGE", ",".join(atleast_1d(weight_images))]
+            # @file, never a comma-joined argument: ~1000 paths overflow SWarp's option
+            # buffer (SIGABRT). Order must match the input imagelist.
+            weight_list = os.path.join(os.path.dirname(self.path_imagelist), f"weights_to_coadd_{type or 'all'}.txt")
+            with open(weight_list, "w") as fp:
+                fp.write("\n".join(atleast_1d(weight_images)) + "\n")
+            swarp_args = (swarp_args or []) + ["-WEIGHT_IMAGE", f"@{weight_list}"]
 
         working_dir = os.path.join(self.path.imcoadd.tmp_dir, type)
         resample_dir = os.path.join(working_dir, "resamp")
@@ -1398,7 +1581,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             output_file = os.path.join(working_dir, get_basename(self.config_node.imcoadd.coadd_image))
 
         external.swarp(
-            input=self.path_imagelist,
+            input=input_list or self.path_imagelist,
             output=output_file,
             overwrite=self.overwrite,
             center=self.center,
@@ -1539,6 +1722,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 process_status_id=self.process_status_id,
             )
             self.image_qa.update_data(self.qa_id, **qa_data.to_dict())
+
+        self.sync_config_dependencies()
 
     def plot_coadd_image(self):
         coadd_img = self.config_node.imcoadd.coadd_image

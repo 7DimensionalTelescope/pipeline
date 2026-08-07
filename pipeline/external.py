@@ -706,6 +706,29 @@ def swarp(
         text=True,
     )
 
+    monitor_stop = None
+    if logger is not None and resample_dir and str(input).startswith("@") is False and os.path.isfile(input):
+        # one directory scan a minute against the imagelist length; the resamp files SWarp
+        # writes are the only progress signal it emits at file granularity
+        import threading
+
+        n_total = sum(1 for _ in open(input))
+        monitor_stop = threading.Event()
+
+        def _report():
+            last = -1
+            while not monitor_stop.wait(60):
+                try:
+                    done = sum(1 for e in os.scandir(resample_dir)
+                               if e.name.endswith("_resamp.fits"))  # fmt: skip
+                except FileNotFoundError:
+                    continue
+                if done != last:
+                    logger.info(f"SWarp progress: {done}/{n_total} resampled")
+                    last = done
+
+        threading.Thread(target=_report, daemon=True).start()
+
     with open(log_file, "w") as f:
         f.write(swarpcom + "\n" * 3)
         f.flush()
@@ -714,6 +737,8 @@ def swarp(
             f.flush()
 
     process.wait()
+    if monitor_stop is not None:
+        monitor_stop.set()
     if process.returncode != 0:
         raise RuntimeError(f"SWarp failed with return code {process.returncode}. See log: {log_file}")
 

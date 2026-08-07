@@ -215,6 +215,45 @@ def metrics_from_files(images: list[str], metrics=None, extra=None) -> Table:
     return table
 
 
+def metrics_for_paths_from_image_qa(paths: list[str], metrics=None, extra=None) -> tuple[Table, int]:
+    """Metric table aligned to ``paths`` from image_qa; rows absent from the DB come back NaN.
+
+    Alignment is the contract: the caller zips the keep-mask against ``paths``. The
+    ``path`` column stays on the table so the interactive prompt can still read headers
+    on demand. Returns ``(table, n_found)``; header-key metric names are lower-cased to
+    columns and rejected if image_qa has no such column.
+    """
+    from ..services.database.image_qa import ImageQATable
+    from ..services.database.query import free_query
+
+    known = set(ImageQATable.__annotations__)
+    resolved = []
+    for metric, candidates, direction in normalize_metrics(metrics, extra, default=IMAGE_QA_METRICS):
+        col = next((c.lower() for c in candidates if c.lower() in known), None)
+        if col is None:
+            raise ValueError(f"{metric!r}: no image_qa column among {list(candidates)}")
+        resolved.append((metric, col, direction))
+
+    columns = ["image_path"] + [col for _, col, _ in resolved]
+    rows = free_query(
+        f"SELECT {', '.join(columns)} FROM image_qa WHERE image_path = ANY(%s)",
+        (list(paths),),
+        statement_timeout_ms=15000,
+    )
+    by_path = {r[0]: r[1:] for r in rows}
+
+    table = Table({"name": [os.path.basename(p) for p in paths]})
+    table["path"] = list(paths)
+    directions, used = {}, {}
+    for j, (metric, col, direction) in enumerate(resolved):
+        table[metric] = [_value(by_path[p][j], col.upper()) if p in by_path else np.nan for p in paths]
+        directions[metric] = direction
+        used[metric] = col
+    table.meta["directions"] = directions
+    table.meta["keys"] = used
+    return table, len(by_path)
+
+
 def metrics_from_image_qa(
     where: str | None = None, params: list | None = None, metrics=None, extra=None, **equals
 ) -> Table:
@@ -755,6 +794,43 @@ def select_from_table(
     return keep, cuts
 
 
+def resolve_fixed_cuts(fixed_cuts, metrics=None, extra=None):
+    """``{"seeing": "<=2.8", "bin2fwhm": "<=5.6"}`` -> numeric cuts plus auto-declared metrics.
+
+    The operator string is the same grammar the interactive prompt speaks: it carries the
+    direction, so a metric not in the default set is bound to the header key of its own
+    name with no separate ``extra`` mapping. Plain numbers are allowed only for metrics
+    that already exist; a categorical takes its bitstring.
+    """
+    if not fixed_cuts:
+        return {}, extra
+    known = {name for name, _, _ in normalize_metrics(metrics, extra)}
+    numeric, declared = {}, {}
+    for raw, value in fixed_cuts.items():
+        name = raw.lower()
+        if name in CATEGORICAL_METRICS:
+            numeric[name] = ppflag_mask(value) if isinstance(value, str) else float(value)
+            continue
+        text = str(value).strip()
+        op = next((o for o in ("<=", ">=") if text.startswith(o)), None)
+        if op:
+            numeric[name] = float(text[2:])
+            if name not in known:
+                declared[name] = (name.upper(), "lower" if op == "<=" else "higher")
+        elif name in known:
+            numeric[name] = float(value)
+        else:
+            raise ValueError(f'{name} is not a known metric; give it a direction, e.g. "{name}": "<={value}"')
+    if declared:
+        if extra is None:
+            extra = declared
+        elif isinstance(extra, dict):
+            extra = {**declared, **extra}
+        else:
+            extra = tuple(extra) + tuple((n, (k,), d) for n, (k, d) in declared.items())
+    return numeric, extra
+
+
 def select_images(
     names: list[str],
     headers: list,
@@ -767,6 +843,7 @@ def select_images(
     fixed_cuts: dict[str, float] | None = None,
 ) -> tuple[np.ndarray, dict[str, float], Table]:
     """Keep-mask over ``names``, from already-read headers. Returns (mask, cuts, table)."""
+    fixed_cuts, extra = resolve_fixed_cuts(fixed_cuts, metrics, extra)
     table, used_keys = collect_metrics(names, headers, metrics=metrics, extra=extra)
     if used_keys and logger is not None:
         logger.info(f"Quality selection on {', '.join(f'{m}={k}' for m, k in used_keys.items())}")

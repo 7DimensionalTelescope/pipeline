@@ -46,6 +46,7 @@ settings:
   is_multi_epoch: false
   obsmode:  # Deep Spec Color Search Single
   coadd: True
+  sanity_from_db: True  # SANITY filter from image_qa (one query); False reads every header
   gpu_enabled: True
   verbose_gpu: True  # use logger later
   
@@ -113,6 +114,8 @@ imcoadd:
   coadd_routine: 'legacy'  # legacy or reproject-first
   coadd_mode: 'median'
   image_selection: false  # False, 'auto' or 'interactive'; multi-epoch only
+  image_selection_cuts:  # pinned cuts, e.g. {seeing: '<=2.8', bin2fwhm: '<=5.6'}; rest automatic
+  image_selection_source: db  # 'db' (image_qa, one query) or 'headers' (read every file)
   ppflag_bitmask: '110000'  # one digit per PPFLAG bit, in the order 1,2,4,8,16,32; 1 = tolerated.
                             # '110000' tolerates bits 1 and 2; '110100' tolerates 1, 2 and 8.
   coadd_image:  # output coadd image

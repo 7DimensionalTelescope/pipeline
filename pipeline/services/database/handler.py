@@ -167,6 +167,27 @@ class DatabaseHandler:
             self.logger.warning(f"Failed to mirror process_status_dependency: {e}")
             return 0
 
+    def sync_config_dependencies(self, process_status_id: int = None) -> int:
+        """Refresh this config's dependency rows from the products it actually wrote.
+
+        Called at the end of every stage that registers images, so the edges follow
+        reprocessing without depending on how the config was launched.  Never raises:
+        dependency bookkeeping must not fail a run that produced good data.
+        """
+        if not self.is_connected or self.process_status_dependency is None:
+            return 0
+        pid = process_status_id if process_status_id is not None else getattr(self, "process_status_id", None)
+        if pid is None:
+            return 0
+        try:
+            n = self.process_status_dependency.sync_from_products(pid)
+            if n:
+                self.logger.debug(f"Synced {n} process_status_dependency rows from products")
+            return n
+        except Exception as e:
+            self.logger.warning(f"Failed to sync process_status_dependency: {e}")
+            return 0
+
     def update_image_qa_data(self, image_qa_id: int, data):
         data.pop("id", None)
         self.image_qa.update_data(image_qa_id, **data)

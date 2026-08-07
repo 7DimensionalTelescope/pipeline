@@ -360,8 +360,9 @@ def get_zdf_from_header_IMCMB(image):
     header = get_header(image)
     zdf_candidates = [v for k, v in header.items() if "IMCMB" in k]  # [z, d, f]
     zdf = []
+    candidate_types = NameHandler(zdf_candidates, type_only=True).type  # raw IMCMB entries cost a DB query if parsed
     for master_frame_type in ["bias", "dark", "flat"]:
-        for i, typ in enumerate(NameHandler(zdf_candidates).type):
+        for i, typ in enumerate(candidate_types):
             if typ[0] in "master" and typ[1] == master_frame_type:
                 zdf.append(zdf_candidates[i])
                 break

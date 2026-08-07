@@ -105,16 +105,22 @@ def check_db_connection() -> bool:
 
 
 # sql injection risk. dev only
-def free_query(query: str, params: Optional[List[Any]] = None) -> List[Tuple]:
+def free_query(
+    query: str, params: Optional[List[Any]] = None, statement_timeout_ms: Optional[int] = None
+) -> List[Tuple]:
     """
     Execute a free-form query and return the results.
-    Uses the global connection pool.
+    Uses the global connection pool. ``statement_timeout_ms`` bounds the query on the
+    server via SET LOCAL, so it reverts with the transaction and never leaks into the
+    pooled connection.
     """
     POOL = get_pool()
     if POOL is None:
         raise Exception("Database connection pool not available")
     with POOL.connection() as conn:
         with conn.cursor() as cur:
+            if statement_timeout_ms is not None:
+                cur.execute("SELECT set_config('statement_timeout', %s, true)", (str(int(statement_timeout_ms)),))
             cur.execute(query, params)
             return cur.fetchall()
 

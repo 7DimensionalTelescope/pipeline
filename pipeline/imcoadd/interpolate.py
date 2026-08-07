@@ -54,7 +54,7 @@ def interpolate_masked_pixels_subprocess(
 
 def interpolate_masked_pixels_cpu(
     images, mask_path, output_paths, window=1, method="median", badpix=1, weight=True, device=None,
-    zero_interp_weight=True,
+    zero_interp_weight=True, logger=None,
 ):
     """
     High-level function: reads FITS images, applies numba interpolation, and writes output.
@@ -71,20 +71,17 @@ def interpolate_masked_pixels_cpu(
     weight_paths = weight if isinstance(weight, (list, tuple)) else None
     weight = bool(weight)
 
-    for idx, sci_in in enumerate(images):
-        sci = fits.getdata(sci_in).astype(np.float32)
-        wgt_in = weight_paths[idx] if weight_paths is not None else add_suffix(sci_in, "weight")
-        wgt = fits.getdata(wgt_in).astype(np.float32) if weight else None
+    def _wgt_in(idx):
+        return weight_paths[idx] if weight_paths is not None else add_suffix(images[idx], "weight")
 
-        if weight:
-            interp_img, interp_wt = interpolate_masked_pixels_cpu_numba(
-                sci, mask, window=window, weight=wgt, use_median=(method == "median")
-            )
-        else:
-            interp_img, interp_wt = interpolate_masked_pixels_cpu_numba_no_weight(sci, mask, window=window)
+    def _load(idx):
+        sci = fits.getdata(images[idx]).astype(np.float32)
+        wgt = fits.getdata(_wgt_in(idx)).astype(np.float32) if weight else None
+        return sci, wgt
 
+    def _write(idx, interp_img, interp_wt):
         sci_out = output_paths[idx]
-        fits.writeto(sci_out, interp_img, header=add_bpx_method(fits.getheader(sci_in), method), overwrite=True)
+        fits.writeto(sci_out, interp_img, header=add_bpx_method(fits.getheader(images[idx]), method), overwrite=True)
         if weight and interp_wt is not None:
             if zero_interp_weight:
                 # an interpolated value is a copy of its neighbours: no independent information
@@ -92,9 +89,46 @@ def interpolate_masked_pixels_cpu(
             fits.writeto(
                 add_suffix(sci_out, "weight"),
                 interp_wt,
-                header=add_bpx_method(fits.getheader(wgt_in), method),
+                header=add_bpx_method(fits.getheader(_wgt_in(idx)), method),
                 overwrite=True,
             )
+
+    # Two threads overlap NFS I/O with the kernel: prefetch the next frame and flush the
+    # previous write while this one computes. Bounded, so no oversubscription with the
+    # system queue; FITS reads/writes release the GIL.
+    from concurrent.futures import ThreadPoolExecutor
+
+    import os as _os
+    import time as _time
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        pending_write = None
+        nxt = pool.submit(_load, 0)
+        for idx in range(len(images)):
+            st_img = _time.time()
+            sci, wgt = nxt.result()
+            t_read = _time.time() - st_img
+            if idx + 1 < len(images):
+                nxt = pool.submit(_load, idx + 1)
+
+            if weight:
+                interp_img, interp_wt = interpolate_masked_pixels_cpu_numba(
+                    sci, mask, window=window, weight=wgt, use_median=(method == "median")
+                )
+            else:
+                interp_img, interp_wt = interpolate_masked_pixels_cpu_numba_no_weight(sci, mask, window=window)
+
+            t_kernel = _time.time() - st_img - t_read
+            if pending_write is not None:
+                pending_write.result()
+            pending_write = pool.submit(_write, idx, interp_img, interp_wt)
+            if logger is not None:
+                logger.info(
+                    f"Interpolated {_os.path.basename(images[idx])} [image {idx + 1}/{len(images)}] "
+                    f"in {_time.time() - st_img:.1f} seconds (read-wait {t_read:.1f}, kernel {t_kernel:.1f})"
+                )
+        if pending_write is not None:
+            pending_write.result()
 
 
 @njit(parallel=True)
@@ -111,7 +145,7 @@ def interpolate_masked_pixels_cpu_numba(
     """
     H, W = image.shape
     result = image.copy()
-    weight_result = np.zeros_like(image)
+    weight_result = weight.copy()  # GPU kernel does the same; zeros here starved SWarp
 
     # Collect masked coords
     count = np.sum(mask)
@@ -127,12 +161,14 @@ def interpolate_masked_pixels_cpu_numba(
                 idx += 1
 
     max_patch = (2 * window + 1) ** 2
-    vals = np.empty(max_patch, dtype=image.dtype)
-    wts = np.empty(max_patch, dtype=image.dtype)
-    tmp = np.empty(max_patch, dtype=image.dtype)
 
     # Parallel loop
     for k in prange(count):
+        # scratch buffers per iteration: shared ones raced across threads (wrong medians)
+        # and false-shared cache lines (orders of magnitude slower under load)
+        vals = np.empty(max_patch, dtype=image.dtype)
+        wts = np.empty(max_patch, dtype=image.dtype)
+        tmp = np.empty(max_patch, dtype=image.dtype)
         r = rows[k]
         c = cols[k]
 
@@ -467,3 +503,87 @@ def add_bpx_method(header, method):
 # #     # Fill in interpolated values
 # #     result[ys, xs] = interp_vals
 # #     return result
+
+
+def write_weight_int16(path, weight, header, n_holes=None):
+    """Weight sidecar as BITPIX 16 + BSCALE: FITS has no float16, and SWarp reads scaled
+    ints exactly (verified). Half the bytes of float32; quantization <= wmax/64000."""
+    weight = np.where(np.isfinite(weight), weight, 0.0).astype(np.float32)
+    hdu = fits.PrimaryHDU(weight, header=header)
+    if n_holes is not None:
+        hdu.header["WGTHOLES"] = (bool(n_holes), "zero-weight holes at interpolated pixels")
+        hdu.header["NHOLEPIX"] = (int(n_holes), "number of zero-weight (interpolated) pixels")
+    wmax = float(np.nanmax(weight)) if weight.size else 0.0
+    if wmax > 0:
+        hdu.scale("int16", bscale=wmax / 32000.0, bzero=0.0)
+    hdu.writeto(path, overwrite=True)
+
+
+def weight_and_interpolate_cpu(
+    images, mask_path, output_paths, calib, window=1, method="median", badpix=1,
+    zero_interp_weight=True, logger=None,
+):
+    """Fused weight calculation + bad-pixel interpolation, one read and one write per image.
+
+    The weight map lives only in memory between the two kernels: the separate stage wrote
+    it (245 MB), read it back, and read the science frame a second time -- ~735 MB of NFS
+    traffic per image that carried no information. Read-ahead and write-behind threads
+    see-saw I/O against the kernels.
+    """
+    import os as _os
+    import time as _time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from .weight import optimized_parallel
+
+    mask = fits.getdata(mask_path).astype(np.int32)
+    hole = mask == badpix
+    n_holes = int(hole.sum())
+
+    def _load(idx):
+        return fits.getdata(images[idx]).astype(np.float32)
+
+    def _write(idx, interp_img, interp_wt):
+        sci_out = output_paths[idx]
+        hdr = add_bpx_method(fits.getheader(images[idx]), method)
+        fits.writeto(sci_out, interp_img, header=hdr, overwrite=True)
+        write_weight_int16(add_suffix(sci_out, "weight"), interp_wt, hdr,
+                           n_holes=n_holes if zero_interp_weight else 0)
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        pending_write = None
+        ahead = [pool.submit(_load, i) for i in range(min(2, len(images)))]
+        for idx in range(len(images)):
+            st_img = _time.time()
+            sci = ahead.pop(0).result()
+            if idx + 2 < len(images):
+                ahead.append(pool.submit(_load, idx + 2))
+            t_read = _time.time() - st_img
+
+            wgt = optimized_parallel(sci, *calib)
+            # a degenerate noise model (sig_z = dark = pixel = 0) divides to inf/nan;
+            # zero certainty about a pixel is weight 0, not weight infinity
+            nonfinite = ~np.isfinite(wgt)
+            n_nonfinite = int(nonfinite.sum())
+            if n_nonfinite:
+                wgt[nonfinite] = 0.0
+            t_weight = _time.time() - st_img - t_read
+            interp_img, interp_wt = interpolate_masked_pixels_cpu_numba(
+                sci, mask, window=window, weight=wgt, use_median=(method == "median")
+            )
+            if zero_interp_weight:
+                interp_wt[hole] = 0.0
+            t_interp = _time.time() - st_img - t_read - t_weight
+
+            if pending_write is not None:
+                pending_write.result()
+            pending_write = pool.submit(_write, idx, interp_img, interp_wt)
+            if logger is not None:
+                logger.info(
+                    f"Weight+interp {_os.path.basename(images[idx])} [image {idx + 1}/{len(images)}] "
+                    f"in {_time.time() - st_img:.1f} seconds "
+                    f"(read-wait {t_read:.1f}, weight {t_weight:.1f}, interp {t_interp:.1f})"
+                    + (f" [{n_nonfinite} degenerate weight px zeroed]" if n_nonfinite else "")
+                )
+        if pending_write is not None:
+            pending_write.result()

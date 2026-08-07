@@ -353,6 +353,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     qa_data = ImageQATable.from_file(image_info.image_path, process_status_id=self.process_status_id)
                     # update_data expects (target_id, **kwargs)
                     self.image_qa.update_data(qa_id, **qa_data.to_dict())
+                self.sync_config_dependencies()
 
             self.config_node.flag.astrometry = True
             self.record_runtime_version()

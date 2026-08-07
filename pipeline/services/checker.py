@@ -6,6 +6,7 @@ from enum import Enum, auto
 from typing import Optional
 
 from ..const.sciproc import REJECTION_PROCESS_HEADER_KEY, ProcessSpec, SCIPROCESS_REGISTRY
+from ..config.utils import get_key
 from .. import const
 
 
@@ -182,10 +183,42 @@ class Checker:
         if not isinstance(images, list):
             images = [images]
 
+        # DB fast path: one query instead of one header read per image (~120 ms each on
+        # NFS). image_qa.sanity is the recorded verdict; skipped on overwrite reruns,
+        # which must re-evaluate from the header criteria.
+        db_sanity: dict = {}
+        trust_db = bool(get_key(getattr(self.config_node, "settings", None), "sanity_from_db", default=True))
+        # below ~20 images the header reads win: a nightly 3-image stack never depends on
+        # the DB at all, so daily reduction keeps zero new failure modes
+        if trust_db and not overwrite and len(images) >= 20 and getattr(self, "is_connected", False):
+            try:
+                from .database.query import free_query
+
+                rows = free_query(
+                    "SELECT image_path, sanity FROM image_qa WHERE image_path = ANY(%s)",
+                    (list(images),),
+                    statement_timeout_ms=15000,
+                )
+                db_sanity = {p: v for p, v in rows if v is not None}
+            except Exception as e:
+                self.logger.warning(f"image_qa SANITY lookup failed; reading headers instead: {e}")
+            if db_sanity:
+                self.logger.info(
+                    f"SANITY from image_qa for {len(db_sanity)}/{len(images)} images -- may lag the "
+                    "headers if edited out of band (should not happen in normal operations); "
+                    "set settings.sanity_from_db: False to read headers"
+                )
+
         filtered_images = []
         sanity_updates = {}
         for image in images:
             try:
+                if image in db_sanity:
+                    if db_sanity[image]:
+                        filtered_images.append(image)
+                    else:
+                        self.logger.debug(f"Filtered out by image_qa SANITY=False: {os.path.basename(image)}")
+                    continue
                 # Read header once and check sanity
                 header: fits.Header = fits.getheader(image)
                 # has_inspcomm = "INSPCOMM" in header

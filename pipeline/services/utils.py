@@ -422,6 +422,22 @@ def check_gpu_activity(device_id=None, gpu_threshold=500):
     return list(available)
 
 
+def conservative_worker_count(n_tasks: int, cap: int = 4) -> int:
+    """Worker count that respects whatever else the machine is running.
+
+    Sized from idle cores (cpu - 1min loadavg), halved for headroom, capped: the system
+    queue may be processing in the background, and a few long-lived workers beat many
+    short-lived ones (thread init and context switching cost more than they return).
+    """
+    cpu = os.cpu_count() or 1
+    try:
+        load = os.getloadavg()[0]
+    except OSError:
+        load = 0.0
+    idle = max(1.0, cpu - load)
+    return max(1, min(cap, int(idle // 2), n_tasks))
+
+
 @contextmanager
 def acquire_available_gpu(device_id=None, gpu_threshold=400, blocking=True, timeout=1):
     """

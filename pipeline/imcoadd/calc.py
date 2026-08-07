@@ -98,7 +98,9 @@ def mean_coadd_numpy(
     sum_arr = np.zeros((target_h, target_w), dtype=np.float64)
     norm_arr = np.zeros((target_h, target_w), dtype=np.float64 if weights is not None else np.int32)
     count_arr = np.zeros((target_h, target_w), dtype=np.int32)
+    gain_denom = np.zeros((target_h, target_w), dtype=np.float64)  # sum w^2/g for the gain map
     gain_terms = []  # (typical weight, EGAIN/FLXSCALE) per contributing image
+    all_egain = True
     for i, f in enumerate(input_images):
         with fits.open(f) as hdul:
             a = hdul[0].data.astype(np.float64)
@@ -132,6 +134,9 @@ def mean_coadd_numpy(
             norm_arr[ty0:ty1, tx0:tx1] += valid
             if egain is not None:
                 gain_terms.append((1.0, float(egain) / flxscale))
+                gain_denom[ty0:ty1, tx0:tx1] += np.where(valid, flxscale / float(egain), 0.0)
+            else:
+                all_egain = False
         else:
             # SWarp's MAP_WEIGHT = 1/variance of the raw resampled data
             # (RESCALE_WEIGHTS = N). After we multiply data by FLXSCALE its
@@ -145,6 +150,9 @@ def mean_coadd_numpy(
             norm_arr[ty0:ty1, tx0:tx1] += np.where(valid, w_eff, 0.0)
             if egain is not None and valid.any():
                 gain_terms.append((float(w_eff[valid].mean()), float(egain) / flxscale))
+                gain_denom[ty0:ty1, tx0:tx1] += np.where(valid, w_eff * w_eff * flxscale / float(egain), 0.0)
+            elif egain is None:
+                all_egain = False
         # counted after the weight test, so the footprint is the frames the coadd used
         count_arr[ty0:ty1, tx0:tx1] += valid
 
@@ -153,7 +161,12 @@ def mean_coadd_numpy(
     out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, coadd_header)
     covered = count_arr > 0
     n_eff = float(count_arr[covered].mean()) if covered.any() else None
-    effective = coadd_effective_egain(gain_terms, mode="mean", n_eff=n_eff)
+    if all_egain and covered.any() and (gain_denom[covered] > 0).all():
+        # footprint-exact: median of the per-pixel effective gain map norm^2 / sum(w^2/g),
+        # well defined under any coverage; the frame-level formula needs uniform coverage
+        effective = float(np.median(norm_arr[covered] ** 2 / gain_denom[covered]))
+    else:
+        effective = coadd_effective_egain(gain_terms, mode="mean", n_eff=n_eff)
     if effective is not None:
         out_header["EGAIN"] = (effective, "Effective EGAIN for coadded image (e-/ADU)")
         if logger is not None and n_eff is not None:
@@ -229,11 +242,10 @@ def median_coadd_numpy(
     # accumulated per strip alongside the median, so peak memory stays bounded
     norm_arr = np.zeros((target_h, target_w), dtype=np.float32)
     count_arr = np.zeros((target_h, target_w), dtype=np.int32)
-    gain_terms = [
-        (1.0, float(e) / flxscales[i])
-        for i, e in enumerate(fits.getheader(f).get("EGAIN") for f in input_images)
-        if e is not None
-    ]
+    egains = [fits.getheader(f).get("EGAIN") for f in input_images]
+    gain_terms = [(1.0, float(e) / flxscales[i]) for i, e in enumerate(egains) if e is not None]
+    all_egain = all(e is not None for e in egains)
+    ginv_arr = np.zeros((target_h, target_w), dtype=np.float64)  # sum(1/g) over contributing frames
     whandles = [fits.open(f, memmap=True) for f in weights] if weights is not None else None
     mhandles = [fits.open(f, memmap=True) for f in masks] if masks is not None else None
     try:
@@ -253,15 +265,21 @@ def median_coadd_numpy(
                 src[(src == 0.0) | ~np.isfinite(src)] = np.nan
                 if mhandles is not None:
                     src[mhandles[i][0].data[sy0:sy1, sx0:sx1] <= 0] = np.nan
-                stack[i, ty0 - ys : ty1 - ys, tx0:tx1] = src
-                contributed = np.isfinite(src)
-                count_arr[ty0:ty1, tx0:tx1] += contributed
-                if whandles is None:
-                    norm_arr[ty0:ty1, tx0:tx1] += contributed
-                else:
+                if whandles is not None:
                     # w is the inverse variance of the raw resampled data; the median is
                     # taken on flux-normalised pixels, whose variance scales by FLXSCALE^2
                     w = whandles[i][0].data[sy0:sy1, sx0:sx1].astype(np.float32) / (flxscales[i] * flxscales[i])
+                    # zero weight (interpolated/bad pixel) never enters the stack,
+                    # matching the mean path's w_eff > 0 test; footprint follows
+                    src[w <= 0] = np.nan
+                stack[i, ty0 - ys : ty1 - ys, tx0:tx1] = src
+                contributed = np.isfinite(src)
+                count_arr[ty0:ty1, tx0:tx1] += contributed
+                if egains[i] is not None:
+                    ginv_arr[ty0:ty1, tx0:tx1] += np.where(contributed, flxscales[i] / float(egains[i]), 0.0)
+                if whandles is None:
+                    norm_arr[ty0:ty1, tx0:tx1] += contributed
+                else:
                     norm_arr[ty0:ty1, tx0:tx1] += np.where(contributed, w, 0.0)
             coadd[ys:ye, :] = np.nanmedian(stack, axis=0)
     finally:
@@ -273,7 +291,15 @@ def median_coadd_numpy(
     out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, coadd_header)
     covered = count_arr > 0
     n_eff = float(count_arr[covered].mean()) if covered.any() else None
-    effective = coadd_effective_egain(gain_terms, mode="median", n_eff=n_eff)
+    if all_egain and covered.any():
+        # per-pixel: n^2/sum(1/g) with the median penalty at that pixel's own n, then the
+        # covered median -- exact under any coverage, no uniform-rejection assumption
+        ratios = np.array([median_variance_ratio(n) for n in range(int(count_arr.max()) + 1)])
+        n_pix = count_arr[covered]
+        gmap = (n_pix.astype(np.float64) ** 2 / ginv_arr[covered]) / ratios[n_pix]
+        effective = float(np.median(gmap))
+    else:
+        effective = coadd_effective_egain(gain_terms, mode="median", n_eff=n_eff)
     if effective is not None:
         out_header["EGAIN"] = (effective, "Effective EGAIN for coadded image (e-/ADU)")
         if logger is not None:
