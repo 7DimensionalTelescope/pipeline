@@ -508,14 +508,17 @@ def add_bpx_method(header, method):
 def write_weight_int16(path, weight, header, n_holes=None):
     """Weight sidecar as BITPIX 16 + BSCALE: FITS has no float16, and SWarp reads scaled
     ints exactly (verified). Half the bytes of float32; quantization <= wmax/64000."""
-    weight = np.where(np.isfinite(weight), weight, 0.0).astype(np.float32)
+    weight = np.where(np.isfinite(weight) & (weight >= 0), weight, 0.0).astype(np.float32)
     hdu = fits.PrimaryHDU(weight, header=header)
     if n_holes is not None:
         hdu.header["WGTHOLES"] = (bool(n_holes), "zero-weight holes at interpolated pixels")
         hdu.header["NHOLEPIX"] = (int(n_holes), "number of zero-weight (interpolated) pixels")
     wmax = float(np.nanmax(weight)) if weight.size else 0.0
     if wmax > 0:
-        hdu.scale("int16", bscale=wmax / 32000.0, bzero=0.0)
+        # unsigned-int16 convention (BZERO = 32768*BSCALE): weights are nonnegative, so
+        # the full 65535 levels map [0, wmax] and physical 0 stays exactly representable
+        bscale = wmax / 65535.0
+        hdu.scale("int16", bscale=bscale, bzero=32768.0 * bscale)
     hdu.writeto(path, overwrite=True)
 
 

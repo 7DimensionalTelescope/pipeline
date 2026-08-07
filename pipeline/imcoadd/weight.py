@@ -12,6 +12,8 @@ def _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file):
     """
 
     sig_z = fitsio.read(sig_z_file).astype(np.float32)
+    # sig_z can seldom be exactly zero: floor at LSB/sqrt(12)
+    np.maximum(sig_z, np.float32(1.0 / np.sqrt(12.0)), out=sig_z)
     d_m = fitsio.read(d_m_file).astype(np.float32)
     f_m = fitsio.read(f_m_file).astype(np.float32)
     sig_f = fitsio.read(sig_f_file).astype(np.float32)
@@ -74,18 +76,80 @@ def calc_weight_with_cpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, wei
 
 @njit(parallel=True)
 def optimized_parallel(image, sig_z, dark, flat, sig_f, num_z, num_d, num_f, egain):
-    constants = [(1 + 1 / num_z) * (1 + 1 / num_d), (1 + 1 / num_d) / egain, 1 / egain, 1 / num_f]
+    """Pixel weight per paper appendix D, both Poisson terms clipped; r_p stays signed."""
     out = np.empty_like(flat)
     h, w = flat.shape
     for i in prange(h):
-        r_p = np.maximum(image[i], 0.0)  # floor at 0 to prevent negative weight
-        denom = (
-            constants[0] * sig_z[i] * sig_z[i]
-            + constants[1] * dark[i]
-            + constants[2] * flat[i] * r_p
-            + constants[3] * (r_p * sig_f[i]) ** 2
-        )
-        out[i] = flat[i] * flat[i] * (1 / denom)
+        for j in range(w):
+            r_p = image[i, j]
+            f_m = flat[i, j]
+            sz2 = sig_z[i, j] * sig_z[i, j]
+            sig_zm2 = sz2 / num_z  # D1
+            sig_dm2 = (max(dark[i, j], 0.0) / egain + (1 + 1 / num_z) * sz2) / num_d  # D2
+            sig_fm2 = sig_f[i, j] * sig_f[i, j] / num_f  # D3
+            sig_r2 = max(r_p * f_m + dark[i, j], 0.0) / egain + sz2  # D4
+            sig_rp2 = (sig_r2 + sig_zm2 + sig_dm2) / (f_m * f_m) + r_p * r_p * sig_fm2 / (f_m * f_m)  # D5
+            out[i, j] = 1.0 / sig_rp2  # D6, sig_b ~ 0
+    return out
+
+
+# Unused alternatives, same clipping semantics, kept for reference
+@njit(parallel=True)
+def optimized_parallel_twoclip(image, sig_z, dark, flat, sig_f, num_z, num_d, num_f, egain):
+    c_z = (1.0 + 1.0 / num_z) * (1.0 + 1.0 / num_d)
+    c_science = 1.0 / egain
+    c_dark = 1.0 / (egain * num_d)
+    c_flat = 1.0 / num_f
+    out = np.empty_like(flat)
+    h, w = flat.shape
+    for i in prange(h):
+        r_p = image[i]
+        f_m = flat[i]
+        d_m = dark[i]
+        science_poisson = np.maximum(r_p * f_m + d_m, 0.0)
+        dark_poisson = np.maximum(d_m, 0.0)
+        flat_error = r_p * sig_f[i]
+        denom = (c_z * sig_z[i] * sig_z[i] + c_science * science_poisson
+                 + c_dark * dark_poisson + c_flat * flat_error * flat_error)  # fmt: skip
+        out[i] = f_m * f_m / denom
+    return out
+
+
+@njit(parallel=True)
+def prepare_weight_maps(sig_z, dark, flat, sig_f, num_z, num_d, num_f, egain):
+    """use it with optimized_parallel_precomputed"""
+    inv_num_d = 1.0 / num_d
+    z_coeff = egain * (1.0 + 1.0 / num_z) * (1.0 + inv_num_d)
+    flat_error_coeff = egain / num_f
+    A = np.empty_like(flat)
+    B = np.empty_like(flat)
+    C = np.empty_like(flat)
+    N = np.empty_like(flat)
+    h, w = flat.shape
+    for i in prange(h):
+        for j in range(w):
+            d_m = dark[i, j]
+            dark_poisson = d_m if d_m > 0.0 else 0.0
+            a = z_coeff * sig_z[i, j] * sig_z[i, j] + inv_num_d * dark_poisson
+            A[i, j] = a
+            B[i, j] = a + d_m
+            C[i, j] = flat_error_coeff * sig_f[i, j] * sig_f[i, j]
+            N[i, j] = egain * flat[i, j] * flat[i, j]
+    return A, B, C, N
+
+
+@njit(parallel=True)
+def optimized_parallel_precomputed(image, flat, A, B, C, N):
+    """use it with prepare_weight_maps"""
+    out = np.empty_like(flat)
+    h, w = flat.shape
+    for i in prange(h):
+        for j in range(w):
+            r_p = image[i, j]
+            pb = r_p * flat[i, j] + B[i, j]
+            if pb < A[i, j]:
+                pb = A[i, j]
+            out[i, j] = N[i, j] / (pb + C[i, j] * r_p * r_p)
     return out
 
 
