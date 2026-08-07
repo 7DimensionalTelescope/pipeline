@@ -184,7 +184,9 @@ class ImageQATable:
             cls.image_type = header["IMAGETYP"].lower()
             cls.image_group = "masterframe"
 
-        cls.nightdate = re.search(r"/\d{4}-\d{2}-\d{2}/", file).group(0).replace("/", "")
+        # multi-epoch coadds live in COADD_DIR/{obj}/{filter}/ -- dateless by design
+        m = re.search(r"/\d{4}-\d{2}-\d{2}/", file)
+        cls.nightdate = m.group(0).replace("/", "") if m else None
 
         # Every image the pipeline writes is stamped by add_image_id, so a missing card means
         # the writer skipped it. Refuse the record rather than let update_data keep the id of

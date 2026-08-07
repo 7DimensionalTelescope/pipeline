@@ -342,9 +342,12 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.logger.debug(f"Deprojection center: {self.center}")
 
         # Output coadd image file name
-        self.config_node.imcoadd.coadd_image = self.path.imcoadd.coadd_image
+        if not get_key(self.config_node.imcoadd, "coadd_image"):
+            self.config_node.imcoadd.coadd_image = self.path.imcoadd.coadd_image
         self.config_node.input.coadd_image = self.config_node.imcoadd.coadd_image
         self.logger.debug(f"Coadd Image: {self.config_node.imcoadd.coadd_image}")
+        if self.config_node.settings.is_multi_epoch:
+            self._guard_coadd_identity()
 
         self.logger.info(f"Initialization for ImCoadd is completed")
 
@@ -580,6 +583,34 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         self.images_to_coadd = bkgsub_images
         return bkgsub_images
+
+    def _guard_coadd_identity(self):
+        """Refuse to silently overwrite a coadd built with different settings.
+
+        The provenance cards are the product's identity; same name + different settings
+        must either take a config_suffix (coexist) or overwrite=True (replace)."""
+        coadd_image = collapse(self.config_node.imcoadd.coadd_image, force=True)
+        if self.overwrite or not (coadd_image and os.path.exists(coadd_image)):
+            return
+        header = fits.getheader(coadd_image)
+        wanted = self._coadd_provenance()
+        if not any(k in header for k in wanted):
+            self.logger.warning(
+                f"Existing coadd {get_basename(coadd_image)} predates provenance cards; "
+                "its settings are unknown and it will be replaced"
+            )
+            return
+        mismatch = {
+            k: (header.get(k), v)
+            for k, (v, _) in wanted.items()
+            if str(header.get(k)).upper() != str(v).upper()
+        }
+        if mismatch:
+            detail = ", ".join(f"{k}: disk={d!r} config={c!r}" for k, (d, c) in mismatch.items())
+            raise CoaddError.ValueError(
+                f"{get_basename(coadd_image)} exists with different settings ({detail}). "
+                "Use config_suffix to keep both products, or overwrite=True to replace it."
+            )
 
     def _coadd_provenance(self) -> dict[str, tuple]:
         """Config options that change the coadd, as coadd header cards."""
@@ -1570,8 +1601,11 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 fp.write("\n".join(atleast_1d(weight_images)) + "\n")
             swarp_args = (swarp_args or []) + ["-WEIGHT_IMAGE", f"@{weight_list}"]
 
-        working_dir = os.path.join(self.path.imcoadd.tmp_dir, type)
-        resample_dir = os.path.join(working_dir, "resamp")
+        # the factory is the single authority for the resamp location (config-scoped);
+        # a locally built path here is how SWarp once wrote where nothing looked
+        resample_dir = self.path.imcoadd.factory.swarp_resample_dir(type)
+        working_dir = os.path.dirname(resample_dir)
+        os.makedirs(working_dir, exist_ok=True)
         log_file = os.path.join(working_dir, "_".join([self.config_node.name, type, "swarp.log"]))
 
         if type == "":
@@ -1600,13 +1634,13 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             elif type == "wht":
                 shutil.move(
                     add_suffix(output_file, "weight"),
-                    self.path.imcoadd.factory.coadd_weight_image,
+                    add_suffix(self.config_node.imcoadd.coadd_image, "weight"),
                 )
             elif type == "bpm":
                 # legacy: SWarp's own combine produced the summed good-pixel coverage
                 shutil.move(
                     add_suffix(output_file, "weight"),
-                    self.path.imcoadd.factory.coadd_footprint_image,
+                    add_suffix(self.config_node.imcoadd.coadd_image, "footprint"),
                 )
 
         return resample_dir
@@ -1666,8 +1700,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             output_path=self.config_node.imcoadd.coadd_image,
             coadd_header=self.input_headers.coadd_header,
             weights=weights,
-            weight_output=self.path.imcoadd.factory.coadd_weight_image,
-            footprint_output=self.path.imcoadd.factory.coadd_footprint_image,
+            weight_output=add_suffix(self.config_node.imcoadd.coadd_image, "weight"),
+            footprint_output=add_suffix(self.config_node.imcoadd.coadd_image, "footprint"),
             masks=masks,
             flxscales=self.input_headers.values("FLXSCALE"),
             match_swarp_size=match_swarp_size,
@@ -1689,8 +1723,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             output_path=self.config_node.imcoadd.coadd_image,
             coadd_header=self.input_headers.coadd_header,
             weights=weights,
-            weight_output=self.path.imcoadd.factory.coadd_weight_image,
-            footprint_output=self.path.imcoadd.factory.coadd_footprint_image,
+            weight_output=add_suffix(self.config_node.imcoadd.coadd_image, "weight"),
+            footprint_output=add_suffix(self.config_node.imcoadd.coadd_image, "footprint"),
             masks=masks,
             flxscales=self.input_headers.values("FLXSCALE"),
             match_swarp_size=match_swarp_size,
