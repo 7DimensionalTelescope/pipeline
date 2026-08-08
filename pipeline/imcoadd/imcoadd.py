@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 import shutil
 import warnings
@@ -677,7 +678,6 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         class_star_cut: float = 0.5,
         min_radius: float = 3.0,
         min_usable: float = 20.0,
-        detect_params: tuple[str, ...] = ("X_IMAGE", "Y_IMAGE", "A_IMAGE", "B_IMAGE", "THETA_IMAGE", "KRON_RADIUS", "CLASS_STAR"),  # fmt: skip
     ) -> str:
         """Detection pass, then what background estimation may use: in FOV and off-source.
 
@@ -689,10 +689,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         re-runs this on the coadd and feeds the result back into a second bkgsub round."""
         from .utils import build_source_mask
 
-        # own .param file so the hash-locked ref/srcExt presets stay untouched
-        param_file = os.path.join(self.path_bkgsub, "bkgdet.param")
-        with open(param_file, "w") as f:
-            f.write("\n".join(detect_params) + "\n")
+        param_file = os.path.join(REF_DIR, "srcExt", "bkgdet.param")
 
         base = os.path.splitext(get_basename(inim))[0]
         catalog = os.path.join(self.path_bkgsub, f"{base}_bkgdet.cat")

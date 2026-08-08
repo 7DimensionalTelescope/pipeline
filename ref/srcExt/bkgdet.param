@@ -1,0 +1,7 @@
+X_IMAGE                  Object position along x                                   [pixel]
+Y_IMAGE                  Object position along y                                   [pixel]
+A_IMAGE                  Profile RMS along major axis                              [pixel]
+B_IMAGE                  Profile RMS along minor axis                              [pixel]
+THETA_IMAGE              Position angle (CCW/x)                                    [deg]
+KRON_RADIUS              Kron apertures in units of A or B
+CLASS_STAR               S/G classifier output

@@ -63,7 +63,7 @@ def sextractor(
     outcat = outcat or default_outcat  # default is ascii.sextractor
     log_file = log_file or swap_ext(add_suffix(outcat, "sextractor"), "log")
 
-    if os.path.exists(outcat) and not overwrite:
+    if os.path.exists(outcat) and os.path.getsize(outcat) > 0 and not overwrite:
         chatter(f"Sextractor output catalog already exists: {outcat}, skipping...", "info")
         if return_sex_output:
             # take sexout from .log

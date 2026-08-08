@@ -128,8 +128,15 @@ def build_source_mask(
     Each source is masked out to its Kron ellipse (``A_IMAGE``/``B_IMAGE`` scaled by
     ``KRON_RADIUS``) times a class-dependent factor, so the low-surface-brightness wings
     a segmentation map would miss are covered too."""
-    cat = Table.read(catalog, format="ascii.sextractor")
     mask = np.zeros(shape, dtype=bool)
+    try:
+        cat = Table.read(catalog, format="ascii.sextractor")
+    except Exception as e:
+        # transient SExtractor failures ("no key to print in table OBJECTS") leave a
+        # 0-byte catalog; one bad frame must not kill a 1000-frame run
+        if logger is not None:
+            logger.warning(f"Unreadable detection catalog {os.path.basename(catalog)} ({e}); source mask empty")
+        return mask
     if not len(cat):
         if logger is not None:
             logger.warning(f"No source detected in {os.path.basename(catalog)}; source mask is empty")
