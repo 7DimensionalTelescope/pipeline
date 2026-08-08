@@ -3,6 +3,7 @@ import sqlite3
 import socket
 import os
 import signal
+import threading
 import numpy as np
 from contextlib import contextmanager
 from datetime import datetime
@@ -43,6 +44,11 @@ class Scheduler:
     # Seconds a statement waits for a competing writer before raising "database is locked".
     # A bulk submission must never make the queue daemon drop a completion.
     DB_BUSY_TIMEOUT = 30.0
+    # Serializes sqlite3.connect()/close() across threads. libsqlite3 (seen on 3.51.1) can
+    # ABBA-deadlock in its unix VFS when one thread opens a WAL db while another closes it
+    # (unixOpen/findReusableFd vs sqlite3WalClose/unixLock, gdb-verified 2026-08-08) — it
+    # froze the queue daemon whole. Guards only open/close, never the transaction body.
+    _SQLITE_OPEN_CLOSE_LOCK = threading.Lock()
 
     def __init__(
         self,
@@ -204,13 +210,15 @@ class Scheduler:
     @contextmanager
     def _db_connection(self, timeout=None):
         """Context manager for database connections. `timeout` overrides DB_BUSY_TIMEOUT."""
-        conn = sqlite3.connect(
-            SCHEDULER_DB_PATH, timeout=self.DB_BUSY_TIMEOUT if timeout is None else timeout
-        )
+        with Scheduler._SQLITE_OPEN_CLOSE_LOCK:
+            conn = sqlite3.connect(
+                SCHEDULER_DB_PATH, timeout=self.DB_BUSY_TIMEOUT if timeout is None else timeout
+            )
         try:
             yield conn
         finally:
-            conn.close()
+            with Scheduler._SQLITE_OPEN_CLOSE_LOCK:
+                conn.close()
 
     def _row_to_dict(self, row):
         """Convert database row tuple to dictionary."""
