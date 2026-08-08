@@ -743,10 +743,16 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         """
         factory = self.path.imcoadd.factory
         outputs = factory.stage_images(resampled_images, "fovmask", factory.bkgsub_dir)
-        self._fov_masks = [
-            outmask if self._write_fov_mask(inim, outmask, erode_iter=erode_iter) is not None else None
-            for inim, outmask in zip(atleast_1d(resampled_images), outputs)
-        ]
+        self._fov_masks = []
+        for inim, outmask in zip(atleast_1d(resampled_images), outputs):
+            if os.path.exists(outmask) and not self.overwrite:
+                # a written mask means the frame needed one; frames that needed none wrote
+                # nothing and re-derive below (they pay one resamp read, nothing else)
+                self._fov_masks.append(outmask)
+            else:
+                self._fov_masks.append(
+                    outmask if self._write_fov_mask(inim, outmask, erode_iter=erode_iter) is not None else None
+                )
         return self._fov_masks
 
     def shrink_fov_masks(self, delta_peeings, kernel_extent: float = 4.0) -> list[str | None]:
@@ -1600,9 +1606,23 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         # the factory is the single authority for the resamp location (config-scoped);
         # a locally built path here is how SWarp once wrote where nothing looked
-        resample_dir = self.path.imcoadd.factory.swarp_resample_dir(type)
+        factory = self.path.imcoadd.factory
+        resample_dir = factory.swarp_resample_dir(type)
         working_dir = os.path.dirname(resample_dir)
         os.makedirs(working_dir, exist_ok=True)
+
+        if not coadd and not self.overwrite:
+            # all-or-nothing: SWarp regenerates every input per pass, so partial sets rerun
+            inputs = [ln.strip() for ln in open(input_list or self.path_imagelist) if ln.strip()]
+            expected = atleast_1d(factory.resampled_images(inputs, pass_type=type))
+            if type in ("wht", "bpm"):
+                # these passes exist for their resampled weight companions
+                expected = atleast_1d(factory.resampled_weight_images(expected, pass_type=type))
+            if inputs and all(os.path.exists(f) for f in expected):
+                self.logger.info(
+                    f"SWarp {type or 'resample'} pass: all {len(expected)} resampled outputs exist. Skipping"
+                )
+                return resample_dir
         log_file = os.path.join(working_dir, "_".join([self.config_node.name, type, "swarp.log"]))
 
         if type == "":
