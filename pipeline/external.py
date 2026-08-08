@@ -665,6 +665,9 @@ def swarp(
         resampled_list = [
             os.path.join(resample_dir, add_suffix(os.path.basename(f), "resamp")) for f in input_image_list
         ]
+        if use_weight_map:
+            # a weighted pass exists for its resampled weight companions; require them too
+            resampled_list += [swap_ext(f, "weight.fits") for f in resampled_list]
         if resampled_list and all(os.path.exists(f) for f in resampled_list) and not overwrite:
             chatter(
                 f"SWarp resampled outputs already exist ({len(resampled_list)} files in {resample_dir}), skipping..."
