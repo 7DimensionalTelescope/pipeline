@@ -729,15 +729,15 @@ class Scheduler:
 
         return changed
 
-    def mark_done(self, index, return_code=True):
+    def mark_done(self, index, return_code=True, timeout=None):
         if self.use_system_queue:
-            self._mark_done_db(index, return_code)
+            self._mark_done_db(index, return_code, timeout=timeout)
         else:
             self._mark_done_memory(index, return_code)
 
-    def _mark_done_db(self, index, return_code=True):
+    def _mark_done_db(self, index, return_code=True, timeout=None):
         orchestration_note = None
-        with self._db_connection() as conn:
+        with self._db_connection(timeout=timeout) as conn:
             cursor = conn.cursor()
             # Check if task is already marked as done to prevent duplicate processing
             cursor.execute(

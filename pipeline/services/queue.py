@@ -39,6 +39,8 @@ REPORTED_RETURN_CODES = (
 SHUTDOWN_GRACE_SECONDS = 10.0
 # Shorter DB wait during shutdown: blowing TimeoutStopSec gets the daemon SIGKILLed mid-cleanup.
 SHUTDOWN_DB_TIMEOUT = 10.0
+# Shared budget for reaping SIGKILLed stragglers (they only linger when stuck in NFS I/O).
+SHUTDOWN_KILL_REAP_SECONDS = 5.0
 
 
 class AbruptStopException(Exception):
@@ -452,7 +454,7 @@ class QueueManager:
         if process in self._active_processes:
             self._active_processes.remove(process)
 
-    def _mark_done(self, process, task_index, return_code) -> bool:
+    def _mark_done(self, process, task_index, return_code, timeout=None) -> bool:
         """
         Record the task's outcome in the scheduler. True when the entry may be dropped.
 
@@ -463,7 +465,7 @@ class QueueManager:
             return True
 
         try:
-            self.scheduler.mark_done(task_index, return_code=return_code)
+            self.scheduler.mark_done(task_index, return_code=return_code, timeout=timeout)
             return True
         except Exception as e:
             attempts = (process[4] if len(process) > 4 else 0) + 1
@@ -602,7 +604,10 @@ class QueueManager:
 
                 # Then reap each one and record an outcome. Leaving this out is what stranded
                 # rows in Processing on every `systemctl stop/restart pipeline-queue`.
+                # Both deadlines are shared across all workers — per-worker waits stack
+                # (15 x 5 s = 75 s) and blow through systemd's TimeoutStopSec.
                 deadline = time.monotonic() + SHUTDOWN_GRACE_SECONDS
+                kill_deadline = deadline + SHUTDOWN_KILL_REAP_SECONDS
                 interrupted = []
                 for process in active_processes:
                     proc = process[1]
@@ -620,7 +625,7 @@ class QueueManager:
                                 # liveness check reads its row as still running and never
                                 # reclaims it. This is how the zombie pile-up started.
                                 try:
-                                    proc.wait(timeout=5)
+                                    proc.wait(timeout=max(0.0, kill_deadline - time.monotonic()))
                                 except subprocess.TimeoutExpired:
                                     self.logger.error(
                                         f"PID {pid} survived SIGKILL; leaving it unreaped (likely stuck in I/O)."
@@ -631,7 +636,7 @@ class QueueManager:
                         if return_code in REPORTED_RETURN_CODES:
                             # It finished on its own before we got here — keep that outcome.
                             self.logger.info(f"Process PID {pid} finished with return code {return_code}.")
-                            self._mark_done(process, task_index, return_code)
+                            self._mark_done(process, task_index, return_code, timeout=SHUTDOWN_DB_TIMEOUT)
                         else:
                             interrupted.append(task_index)
                     except Exception as e:
