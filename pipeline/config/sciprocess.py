@@ -158,6 +158,7 @@ class SciProcConfiguration(BaseConfig):
             "is_too": is_too,
             "is_multi_epoch": is_multi_epoch,
             "config_file": config_file,
+            "factory_scratch": get_key(self.node.settings, "factory_scratch"),
         }
         if hasattr(self.node, "input"):
             if hasattr(self.node.input, "calibrated_images") and self.node.input.calibrated_images:

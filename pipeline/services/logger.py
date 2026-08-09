@@ -164,9 +164,8 @@ class Logger:
         if redirect_stdout or redirect_stderr:
             sys.excepthook = self._handle_exception
 
-    def __del__(self):
-        """Destructor to properly close all handlers and release file descriptors."""
-        self.cleanup()
+    # No __del__: the underlying logging.Logger is shared by name, so a GC'd stale
+    # wrapper would close the live run's handlers mid-write (call cleanup() explicitly).
 
     def cleanup(self, logger=None):
         """Properly close all handlers and release file descriptors."""
@@ -747,8 +746,9 @@ class LockingFileHandler(logging.FileHandler):
         except Exception as e:
             self.handleError(record)
         finally:
-            # Always release the lock
-            fcntl.flock(self.stream, fcntl.LOCK_UN)
+            # Always release the lock (unless the stream was closed under us)
+            if self.stream is not None:
+                fcntl.flock(self.stream, fcntl.LOCK_UN)
 
 
 # class PrintLogger:

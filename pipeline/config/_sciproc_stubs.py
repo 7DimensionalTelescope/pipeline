@@ -30,6 +30,8 @@ if TYPE_CHECKING:
         obsmode: Any
         coadd: bool
         sanity_from_db: bool
+        factory_scratch: Any
+        factory_scratch_cap_gb: int
         gpu_enabled: bool
         verbose_gpu: bool
 
@@ -93,7 +95,10 @@ if TYPE_CHECKING:
         joint_wcs: bool
         apply_bpmask: bool
         interp_type: str
+        fuse_reproject: bool
+        discard_interp: bool
         zero_interp_weight: bool
+        combine_scratch: Any
         convolve: Any
         target_seeing: Any
         propagate_mask: bool

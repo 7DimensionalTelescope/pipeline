@@ -44,6 +44,7 @@ class PathHandlerSettings:
     is_multi_epoch: bool = False
     config_file: str | Path | None = None  # explicit override for sciproc_output_yml
     config_suffix: str | None = None  # appended to the auto-generated multi-epoch config stem
+    factory_scratch: str | None = None  # local root replacing FACTORY_DIR for multi-epoch factories
 
 
 @dataclass
@@ -92,6 +93,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         is_multi_epoch=False,
         config_file: str | Path | None = None,
         config_suffix: str | None = None,
+        factory_scratch: str | None = None,
         top_dirs: TopDirs | None = None,
     ):
         self._name_cache = {}  # Cache for NameHandler properties
@@ -117,6 +119,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             is_multi_epoch=is_multi_epoch,
             config_file=config_file,
             config_suffix=config_suffix,
+            factory_scratch=factory_scratch,
         )
         # When provided, every input file shares this TopDirs (skips per-file dispatch).
         self._user_top_dirs = top_dirs
@@ -759,7 +762,8 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                     self._metadata_dir.append(os.path.join(self._output_parent_dir[i], nightdate))
                     if self.settings.is_multi_epoch:
                         output_dir = self._coadd_dir[-1]
-                        self._factory_dir.append(os.path.join(const.FACTORY_DIR, MULTI_EPOCH_DIRNAME, obj, filte))
+                        factory_root = self.settings.factory_scratch or const.FACTORY_DIR
+                        self._factory_dir.append(os.path.join(factory_root, MULTI_EPOCH_DIRNAME, obj, filte))
                     else:
                         output_dir = night_dir
                         self._factory_dir.append(os.path.join(self._factory_parent_dir[i], relative_path))

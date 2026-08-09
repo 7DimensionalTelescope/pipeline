@@ -89,9 +89,11 @@ def mean_coadd_numpy(
 
     # Flux-scaling source (logged once): False disables; an explicit list is the
     # snapshot source of truth; None falls back to each file's FLXSCALE header.
-    scale_mode = "disabled" if flxscales is False else ("explicit list" if flxscales is not None else "FLXSCALE header")
+    scale_mode = (
+        "disabled" if flxscales is False else ("from in-memory values" if flxscales is not None else "from FLXSCALE headers")
+    )
     if logger is not None:
-        logger.info(f"Flux scaling: {scale_mode}")
+        logger.info(f"Flux scaling during coadd: {scale_mode}")
 
     target_w, target_h, target_cx, target_cy, x0, y0, shapes = determine_size(input_images, match_swarp_size)
 
@@ -188,6 +190,23 @@ def mean_coadd_numpy(
     return output_path
 
 
+def _auto_chunk_h(n_images: int, width: int, height: int, budget_fraction: float = 0.3,
+                  floor: int = 128, logger: Logger | None = None) -> int:
+    """Strip height from idle memory: strip count scales the NFS slice round-trips, so
+    RAM buys taller strips and directly cuts the latency-bound I/O."""
+    try:
+        avail = int(next(l for l in open("/proc/meminfo") if l.startswith("MemAvailable")).split()[1]) * 1024
+    except Exception:
+        return floor
+    chunk = int(budget_fraction * avail / (n_images * width * 4))
+    chunk = max(floor, min(chunk, height))
+    if logger is not None:
+        n_strips = -(-height // chunk)
+        logger.info(f"Median combine: chunk_h={chunk} ({n_strips} strips, "
+                    f"~{n_images * chunk * width * 4 / 1e9:.0f} GB strip stack)")
+    return chunk
+
+
 def median_coadd_numpy(
     input_images: list[str],
     output_path: str,
@@ -222,6 +241,9 @@ def median_coadd_numpy(
 
     target_w, target_h, target_cx, target_cy, x0, y0, shapes = determine_size(input_images, match_swarp_size)
 
+    if chunk_h is None:
+        chunk_h = _auto_chunk_h(len(input_images), target_w, target_h, logger=logger)
+
     handles = [fits.open(f, memmap=True) for f in input_images]
     # Flux-scaling source (logged once): False disables; explicit list = snapshot
     # source of truth; None falls back to each file's FLXSCALE header.
@@ -230,13 +252,13 @@ def median_coadd_numpy(
         flxscales = np.ones(len(input_images), dtype=np.float32)
     else:
         if flxscales is None:
-            scale_mode = "FLXSCALE header"
+            scale_mode = "from FLXSCALE headers"
             flxscales = [h[0].header.get("FLXSCALE", 1.0) for h in handles]
         else:
-            scale_mode = "explicit list"
+            scale_mode = "from in-memory values"
         flxscales = np.array([1.0 if f is None else f for f in flxscales], dtype=np.float32)
     if logger is not None:
-        logger.info(f"Flux scaling: {scale_mode}")
+        logger.info(f"Flux scaling during coadd: {scale_mode}")
 
     coadd = np.full((target_h, target_w), np.nan, dtype=np.float32)
     # accumulated per strip alongside the median, so peak memory stays bounded

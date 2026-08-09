@@ -47,6 +47,8 @@ settings:
   obsmode:  # Deep Spec Color Search Single
   coadd: True
   sanity_from_db: True  # SANITY filter from image_qa (one query); False reads every header
+  factory_scratch:  # local root for multi-epoch factories (fast disk); empty = FACTORY_DIR on NFS
+  factory_scratch_cap_gb: 1200  # rotate oldest idle scratch trees above this total
   gpu_enabled: True
   verbose_gpu: True  # use logger later
   
@@ -129,7 +131,10 @@ imcoadd:
   joint_wcs: False
   apply_bpmask: False
   interp_type: 'median'
+  fuse_reproject: False  # reproject each frame right after its interp (per-image SWarp)
+  discard_interp: False  # delete interp pairs once their reprojected products exist
   zero_interp_weight: True  # interpolated pixels carry no independent information
+  combine_scratch:  # local dir to stage combine inputs off NFS; empty = off (moot when factory_scratch set)
   convolve: 
   target_seeing:  # auto if it's empty or smaller than max seeing
   propagate_mask: False

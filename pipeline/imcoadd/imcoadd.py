@@ -241,6 +241,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         images = self.reproject_and_coadd_with_swarp(images, coadd=False, weight_images=weight_images)
         # while the padding is still exactly zero -- see build_fov_masks
         self.build_fov_masks(images)
+        self._discard_consumed_interp()
         step += 1
         self.update_progress(
             SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-reproject-completed"
@@ -267,9 +268,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         step += 1
         self.update_progress(SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-bkgsub-completed")
 
-        # Flux zero-point scaling (writes FLXSCALE to header in place)
+        # Flux zero-point scaling (snapshot only; the in-memory combine takes the values directly)
         if do_zpscale:
-            self.zpscale(images)
+            self.zpscale(images, write_headers=False)
             step += 1
             self.update_progress(
                 SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-zpscale-completed"
@@ -324,6 +325,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             raise CoaddError.EmptyInputAfterSanityRejection("No Input for ImCoadd")
         # if rejected, let the input remain so that a rerun has a change to reevaluate SANITY
 
+        self._prune_factory_scratch()
         self.select_input_images()  # may drop inputs, so it precedes the snapshot and resync
         # Single read of every kept header; all aggregates/coadd_header live on this snapshot.
         self.input_headers = InputHeaderSet.from_files(self.input_images)
@@ -612,6 +614,47 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 f"{get_basename(coadd_image)} exists with different settings ({detail}). "
                 "Use config_suffix to keep both products, or overwrite=True to replace it."
             )
+
+    def _prune_factory_scratch(self, min_idle_hours: float = 6.0):
+        """Rotate old factory trees on the scratch volume down to the configured cap.
+
+        Prune unit is one config-stem tree; a tree whose newest file is younger than
+        ``min_idle_hours`` is treated as an active run and never touched, so concurrent
+        filters cannot delete each other's intermediates."""
+        scratch = get_key(self.config_node.settings, "factory_scratch")
+        if not scratch:
+            return
+        cap = float(get_key(self.config_node.settings, "factory_scratch_cap_gb", default=1200)) * 1e9
+        own = os.path.abspath(collapse(self.path.factory_dir, force=True))
+        trees = []
+        total = 0
+        for root, dirs, files in os.walk(scratch):
+            # stem-level trees: scratch/coadd/<obj>/<filter>/imcoadd/<stem>
+            if os.path.basename(os.path.dirname(root)) == "imcoadd" and root != own:
+                size = newest = 0
+                for r2, _, fs in os.walk(root):
+                    for f in fs:
+                        try:
+                            st_ = os.stat(os.path.join(r2, f))
+                        except FileNotFoundError:
+                            continue
+                        size += st_.st_size
+                        newest = max(newest, st_.st_mtime)
+                trees.append((newest, size, root))
+                total += size
+                dirs[:] = []
+        if total <= cap:
+            return
+        for newest, size, root in sorted(trees):
+            if total <= cap:
+                break
+            if time.time() - newest < min_idle_hours * 3600:
+                continue
+            self.logger.info(f"Scratch rotation: removing {root} ({size/1e9:.0f} GB, idle {(time.time()-newest)/3600:.1f} h)")
+            shutil.rmtree(root, ignore_errors=True)
+            total -= size
+        if total > cap:
+            self.logger.warning(f"Scratch still over cap after rotation ({total/1e9:.0f} GB > {cap/1e9:.0f} GB); all trees active")
 
     def _coadd_provenance(self) -> dict[str, tuple]:
         """Config options that change the coadd, as coadd header cards."""
@@ -1047,6 +1090,63 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self.logger.warning("BADPIX not found in header. Using default value 0.", CoaddError.KeyError)
         return mask_file, badpix
 
+    def _discard_consumed_interp(self):
+        """Delete interp pairs whose reprojected products exist (`imcoadd.discard_interp`).
+
+        The look-ahead skip regenerates nothing for these on a rerun, so the ~350 GB per
+        1000-frame filter they occupy buys nothing once the resamps are on disk."""
+        if not get_key(self.config_node.imcoadd, "discard_interp", default=False):
+            return
+        interp_images = atleast_1d(get_key(self.config_node.imcoadd, "interp_images") or [])
+        method = self.config_node.imcoadd.interp_type
+        freed = n = 0
+        for outim in interp_images:
+            sidecar = add_suffix(outim, "weight")
+            if os.path.exists(outim) and self._lookahead_done(outim, method):
+                freed += os.path.getsize(outim) + (os.path.getsize(sidecar) if os.path.exists(sidecar) else 0)
+                os.remove(outim)
+                if os.path.exists(sidecar):
+                    os.remove(sidecar)
+                n += 1
+        if n:
+            self.logger.info(f"Discarded {n} consumed interp pairs ({freed/1e9:.0f} GB freed)")
+
+    def _reproject_single(self, interp_im: str, sidecar: str) -> None:
+        """Per-image sci+wht SWarp passes; grid pinned by CENTER MANUAL + IMAGE_SIZE, so the
+        outputs are bit-identical to the batch passes (measured), and parallel singles beat
+        one batch 6x because batch SWarp resamples sequentially."""
+        factory = self.path.imcoadd.factory
+        base = os.path.splitext(get_basename(interp_im))[0]
+        for pass_type, args, use_w in (
+            ("sci", ["-RESAMPLING_TYPE", "LANCZOS3"], False),
+            ("wht", ["-RESAMPLING_TYPE", "NEAREST", "-WEIGHT_IMAGE", sidecar], True),
+        ):
+            rdir = factory.swarp_resample_dir(pass_type)
+            external.swarp(
+                input=[interp_im],
+                output=os.path.join(os.path.dirname(rdir), f"{base}_single_coadd.fits"),
+                overwrite=self.overwrite,
+                center=self.center,
+                resample_dir=rdir,
+                coadd=False,
+                log_file=os.path.join(os.path.dirname(rdir), f"{base}_swarp.log"),
+                use_weight_map=use_w,
+                swarp_args=args,
+            )
+
+    def _lookahead_done(self, interp_im: str, method: str) -> bool:
+        """A frame is reproducible from its resamps alone: interp may have been discarded.
+
+        True when the sci resamp and wht weight exist AND the resamp's INTERP card (which
+        COPY_KEYWORDS propagates) matches the requested interp_type -- the settings check
+        that makes skipping without the interp product safe."""
+        factory = self.path.imcoadd.factory
+        sci = collapse(factory.resampled_images([interp_im], pass_type="sci"), force=True)
+        wht = collapse(factory.resampled_weight_images([sci], pass_type="wht"), force=True)
+        if not (os.path.exists(sci) and os.path.exists(wht)):
+            return False
+        return str(fits.getheader(sci).get("INTERP", "")).upper() == str(method).upper()
+
     def weight_and_interpolate(self, input_images: list[str] | None = None) -> list[str]:
         """Fused per-group weight + interpolation; the weight map never touches disk raw.
 
@@ -1065,13 +1165,18 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         method = self.config_node.imcoadd.interp_type
         zero_interp = bool(get_key(self.config_node.imcoadd, "zero_interp_weight", default=True))
 
-        todo_in, todo_out = [], []
+        todo_in, todo_out, n_lookahead = [], [], 0
         for inim, outim in zip(input_images, interp_images):
             if os.path.exists(outim) and os.path.exists(add_suffix(outim, "weight")) and not self.overwrite:
                 self.logger.debug(f"Already exists; skip generating {outim}")
+            elif not self.overwrite and self._lookahead_done(outim, method):
+                n_lookahead += 1
+                self.logger.debug(f"Resamps exist with matching INTERP; skip regenerating {outim}")
             else:
                 todo_in.append(inim)
                 todo_out.append(outim)
+        if n_lookahead:
+            self.logger.info(f"{n_lookahead} frames skipped via their reprojected products (interp discarded)")
 
         if len(todo_in) < len(input_images):
             self.logger.info(
@@ -1088,6 +1193,17 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 mask_file, badpix = self._get_bpmask(group_in[0])
                 d_m_file, f_m_file, sig_z_file, sig_f_file = PathHandler.resolve_weight_map_input_abspath([z, d, f])
                 calib = _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file)
+                post_frame = None
+                if get_key(self.config_node.imcoadd, "fuse_reproject", default=False):
+                    discard = bool(get_key(self.config_node.imcoadd, "discard_interp", default=False))
+
+                    def post_frame(sci_out, _discard=discard):
+                        sidecar = add_suffix(sci_out, "weight")
+                        self._reproject_single(sci_out, sidecar)
+                        if _discard:
+                            os.remove(sci_out)
+                            os.remove(sidecar)
+
                 weight_and_interpolate_cpu(
                     group_in,
                     mask_file,
@@ -1097,6 +1213,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     badpix=badpix,
                     zero_interp_weight=zero_interp,
                     logger=self.logger,
+                    post_frame=post_frame,
                 )
                 self.logger.info(
                     f"Weight+interp completed for group {group_id + 1}/{len(groups)} in "
@@ -1231,11 +1348,13 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.images_to_coadd = interp_images
         return interp_images
 
-    def zpscale(self, input_images: list[str] | None = None) -> list[str]:
+    def zpscale(self, input_images: list[str] | None = None, write_headers: bool = True) -> list[str]:
         """
         Store the value in header as FLXSCALE, and use it in coadding.
         Keep FSCALE_KEYWORD = FLXSCALE in SWarp config.
         The headers of the last processed images are modified.
+        write_headers=False stamps only the in-memory snapshot (legacy needs the
+        file cards for SWarp's FSCALE_KEYWORD; the in-memory combine does not).
         """
         if input_images is None:
             input_images = self.images_to_coadd
@@ -1252,12 +1371,13 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.logger.debug(f"Reference zero point: {self.zp_base}")
         for i, (file, zp) in enumerate(zip(input_images, zpvalues)):
             flxscale = 10 ** (0.4 * (self.zp_base - zp))
-            with fits.open(file, mode="update") as hdul:
-                hdul[0].header["FLXSCALE"] = (
-                    flxscale,
-                    "flux scaling factor by 7DT Pipeline (ImCoadd)",
-                )
-                hdul.flush()
+            if write_headers:
+                with fits.open(file, mode="update") as hdul:
+                    hdul[0].header["FLXSCALE"] = (
+                        flxscale,
+                        "flux scaling factor by 7DT Pipeline (ImCoadd)",
+                    )
+                    hdul.flush()
             # Stamp on snapshot so coadd_header (SATURATE/EGAIN) can read it back without fits I/O
             self.input_headers[i]["FLXSCALE"] = (flxscale, "flux scaling factor by 7DT Pipeline (ImCoadd)")
             self.logger.debug(f"{get_basename(file)} FLXSCALE: {flxscale:.3f}")
@@ -1649,6 +1769,46 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         return resample_dir
 
+    def _stage_for_combine(self, groups: dict[str, list[str] | None]):
+        """Copy the combine inputs to local scratch so the strided reads never touch NFS.
+
+        One sequential NFS pass in, all random access local. Subdir per group: the wht and
+        bpm weight companions share basenames. Returns (remapped groups, cleanup)."""
+        scratch = get_key(self.config_node.imcoadd, "combine_scratch")
+        files = [(g, f) for g, lst in groups.items() if lst for f in lst]
+        if not scratch or not files:
+            return groups, lambda: None
+
+        need = sum(os.path.getsize(f) for _, f in files)
+        free = shutil.disk_usage(scratch).free
+        if need * 1.05 > free:
+            self.logger.warning(
+                f"combine_scratch {scratch}: need {need/1e9:.0f} GB, only {free/1e9:.0f} GB free; combining from NFS"
+            )
+            return groups, lambda: None
+
+        stem = os.path.splitext(get_basename(self.config_node.info.file))[0]
+        base = os.path.join(scratch, "imcoadd_combine", stem)
+        st = time.time()
+        self.logger.info(f"Staging {len(files)} files ({need/1e9:.0f} GB) to {base}")
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _copy(item):
+            group, src = item
+            dst = os.path.join(base, group, os.path.basename(src))
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copyfile(src, dst)
+            return src, dst
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            mapping = dict(pool.map(_copy, files))
+        self.logger.info(
+            f"Staged in {time_diff_in_seconds(st)} seconds "
+            f"({need/1e9/max(time.time()-st, 1):.2f} GB/s sequential from NFS)"
+        )
+        remapped = {g: ([mapping[f] for f in lst] if lst else lst) for g, lst in groups.items()}
+        return remapped, lambda: shutil.rmtree(base, ignore_errors=True)
+
     def coadd_in_memory(self, input_images: list[str] | None = None, device_id=None) -> str:
         """Dispatcher to numpy/cupy and mean/median backends.
         ``imcoadd.coadd_mode`` picks the combine algorithm; for ``mean``, the
@@ -1683,13 +1843,19 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         masks = self._propagated_bpmasks()
 
+        staged, cleanup = self._stage_for_combine({"sci": input_images, "wht": weights, "bpm": masks})
+        input_images, weights, masks = staged["sci"], staged["wht"], staged["bpm"]
+
         mode = self.config_node.imcoadd.coadd_mode
-        if mode == "mean":
-            self.coadd_with_numpy(input_images, weights=weights, masks=masks)
-        elif mode == "median":
-            self.coadd_median_with_numpy(input_images, weights=weights, masks=masks)
-        else:
-            raise ValueError(f"Invalid coadd mode: {mode!r} (expected 'mean' or 'median')")
+        try:
+            if mode == "mean":
+                self.coadd_with_numpy(input_images, weights=weights, masks=masks)
+            elif mode == "median":
+                self.coadd_median_with_numpy(input_images, weights=weights, masks=masks)
+            else:
+                raise ValueError(f"Invalid coadd mode: {mode!r} (expected 'mean' or 'median')")
+        finally:
+            cleanup()
         return self.config_node.imcoadd.coadd_image
 
     def coadd_with_numpy(
@@ -1720,7 +1886,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         weights: list[str] | None = None,
         masks: list[str] | None = None,
         match_swarp_size: bool = True,
-        chunk_h: int = 128,  # row strips; 142 frames x 128 x 10200 x 4 B ~ 750 MB per strip
+        chunk_h: int | None = None,  # None: auto-sized from idle memory (see calc._auto_chunk_h)
     ) -> str:
         return median_coadd_numpy(
             input_images,

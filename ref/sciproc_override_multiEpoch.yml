@@ -9,3 +9,6 @@ imcoadd:
   target_seeing:  # auto if it's empty or smaller than max seeing
   propagate_mask: False
   image_selection: 'auto'
+
+settings:
+  factory_scratch: /data0/pipeline_scratch

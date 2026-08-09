@@ -524,7 +524,7 @@ def write_weight_int16(path, weight, header, n_holes=None):
 
 def weight_and_interpolate_cpu(
     images, mask_path, output_paths, calib, window=1, method="median", badpix=1,
-    zero_interp_weight=True, logger=None,
+    zero_interp_weight=True, logger=None, post_frame=None,
 ):
     """Fused weight calculation + bad-pixel interpolation, one read and one write per image.
 
@@ -552,6 +552,8 @@ def weight_and_interpolate_cpu(
         fits.writeto(sci_out, interp_img, header=hdr, overwrite=True)
         write_weight_int16(add_suffix(sci_out, "weight"), interp_wt, hdr,
                            n_holes=n_holes if zero_interp_weight else 0)
+        if post_frame is not None:
+            post_frame(sci_out)  # e.g. per-image reprojection (+ optional interp discard)
 
     with ThreadPoolExecutor(max_workers=3) as pool:
         pending_write = None
