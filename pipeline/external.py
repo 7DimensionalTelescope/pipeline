@@ -626,9 +626,9 @@ def swarp(
 
     from .utils import add_suffix
 
-    def chatter(message):
+    def chatter(message, level="debug"):
         if logger:
-            logger.debug(message)
+            getattr(logger, level)(message)
         else:
             print(message)
 
@@ -659,7 +659,7 @@ def swarp(
     if coadd:
         if os.path.exists(comim) and not overwrite:
             if not (use_weight_map and not os.path.exists(weightim)):
-                chatter(f"SWarp output image already exists: {comim}, skipping...")
+                chatter(f"SWarp output image already exists: {comim}, skipping...", "info")
                 return
     else:
         resampled_list = [
@@ -670,7 +670,8 @@ def swarp(
             resampled_list += [swap_ext(f, "weight.fits") for f in resampled_list]
         if resampled_list and all(os.path.exists(f) for f in resampled_list) and not overwrite:
             chatter(
-                f"SWarp resampled outputs already exist ({len(resampled_list)} files in {resample_dir}), skipping..."
+                f"SWarp resampled outputs already exist ({len(resampled_list)} files in {resample_dir}), skipping...",
+                "info",
             )
             return
 

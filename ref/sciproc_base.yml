@@ -132,10 +132,10 @@ imcoadd:
   joint_wcs: False
   apply_bpmask: False
   interp_type: 'median'
-  zero_interp_weight: True  # interpolated pixels carry no independent information
-  bpmask_policy: 1px  # off | 1px (zeroed hole pixel only) | conservative (LANCZOS3 support)
-  propagate_mask: False  # bpm SWarp pass; consumed by bpmask_policy: conservative
-  fuse_reproject: False  # reproject each frame right after its interp (per-image SWarp)
+  zero_interp_weight: True  # set weight to 0 for interpolated bad pixels
+  bpmask_policy: 1px  # off | 1px | conservative (resamp kernel size): how many weight pixels to zero out
+  propagate_mask: False  # LANCZOS3 bpm mask pass; only bpmask_policy 'conservative' reads it (1px uses wht resamps)
+  streamline_reprojection: False  # (interp + weight + reproject) in one go, per-image; less I/O
   discard_interp: False  # delete interp pairs once their reprojected products exist
   combine_scratch:  # local dir to stage combine inputs off NFS; empty = off (moot when factory_scratch set)
   convolve: 

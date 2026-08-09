@@ -4,7 +4,7 @@ import argparse
 import signal
 import sys
 
-from pipeline.services.database.sync import sync_config, sync_image
+from pipeline.services.database.sync import sync_config, sync_images
 
 
 def signal_handler(sig, frame):
@@ -17,9 +17,11 @@ signal.signal(signal.SIGINT, signal_handler)
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description=(
-            "Post-hoc DB sync. For a FITS image: upsert its image_qa row from the header "
-            "and rebuild its dependency rows. For a config: reconcile its process_status "
-            "row (progress/status) with the flags recorded in the config."
+            "Post-hoc DB sync. FITS images are handled as a batch: each one's sciproc config "
+            "is reconciled first (process_status progress/status from the config flags), its "
+            "id is stamped on the image_qa row, image_qa_dependency is rebuilt, and the edges "
+            "are rolled up into process_status_dependency. A config given directly is "
+            "reconciled on its own."
         ),
         epilog=(
             "Examples:\n"
@@ -32,15 +34,32 @@ if __name__ == "__main__":
     parser.add_argument("paths", nargs="+", help=".fits (image_qa + dependencies) or .yml (process_status)")
     args = parser.parse_args()
 
+    configs = [p for p in args.paths if p.endswith((".yml", ".yaml"))]
+    images = [p for p in args.paths if p not in configs]
+
     n_fail = 0
-    for path in args.paths:
+
+    # images go through sync_images, which resolves each one's config first so the
+    # process_status id lands on its image_qa row, then rolls the edges up per config
+    if images:
+        report = sync_images(images)
+        for yml, info in report["configs"].items():
+            rollup = info.get("n_rollup_edges", 0)
+            print(
+                f"[OK] {yml}: process_status id={info['process_status_id']} -> "
+                f"{info['status'] or 'no completed stage; row left as-is'}"
+                f" ({info['n_images']} images, {rollup} rollup edges)"
+            )
+        for path, info in report["images"].items():
+            print(f"[OK] {path}: qa_id={info['qa_id']}, {info['n_dependency_rows']} dependency rows")
+        for path, err in report["errors"].items():
+            print(f"[FAIL] {path}: {err}", file=sys.stderr)
+            n_fail += 1
+
+    for path in configs:
         try:
-            if path.endswith((".yml", ".yaml")):
-                ps_id, status = sync_config(path)
-                print(f"[OK] {path}: process_status id={ps_id} -> {status or 'no completed stage; row left as-is'}")
-            else:
-                qa_id, n_dep = sync_image(path)
-                print(f"[OK] {path}: qa_id={qa_id}, {n_dep} dependency rows")
+            ps_id, status = sync_config(path)
+            print(f"[OK] {path}: process_status id={ps_id} -> {status or 'no completed stage; row left as-is'}")
         except Exception as e:
             print(f"[FAIL] {path}: {e}", file=sys.stderr)
             n_fail += 1

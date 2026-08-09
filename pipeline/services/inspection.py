@@ -7,6 +7,10 @@ it: the header is the truth, `image_qa.sanity`/`inspectd` is its index, and
 `process_status.sanity` is the config-level decision automation reads
 (`WHERE sanity IS NOT FALSE`).
 
+The verdict is also mirrored into the sibling `.header` sidecar, which `reset_header`
+restores over the FITS when preprocess reruns with `overwrite` — a verdict written only
+into the FITS does not survive that.
+
 Idempotent: repeating a call writes nothing. INSPCOMM is freeform, so an existing comment
 is left exactly as it is; pass `overwrite=True` to replace it with the new one.
 
@@ -20,7 +24,7 @@ from typing import List, Optional, Union
 
 from astropy.io import fits
 
-from ..utils.header import update_padded_header_smart
+from ..utils.header import update_padded_header_file, update_padded_header_smart
 from ..utils import atleast_1d
 
 INSPCOMM_KEY = "INSPCOMM"
@@ -45,7 +49,15 @@ def inspect_images(
 ) -> dict:
     """Seal a human verdict into image headers and mirror it into image_qa."""
     images = [image for image in atleast_1d(images) if image]
-    report = {"headers_written": [], "headers_unchanged": [], "image_qa_updated": [], "image_qa_missing": []}
+    report = {
+        "headers_written": [],
+        "headers_unchanged": [],
+        "sidecars_written": [],
+        "sidecars_unchanged": [],
+        "sidecars_missing": [],
+        "image_qa_updated": [],
+        "image_qa_missing": [],
+    }
 
     image_qa = None
     if use_database:
@@ -57,14 +69,20 @@ def inspect_images(
         header = fits.getheader(image)
         resolved = resolve_inspcomm(header.get(INSPCOMM_KEY), inspcomm, overwrite)
 
+        cards = {"SANITY": (sanity, SANITY_COMMENT)}
+        if resolved is not None:
+            cards[INSPCOMM_KEY] = (resolved, INSPCOMM_COMMENT)
+
         if header.get("SANITY") is sanity and resolved == header.get(INSPCOMM_KEY):
             report["headers_unchanged"].append(image)
         else:
-            cards = {"SANITY": (sanity, SANITY_COMMENT)}
-            if resolved is not None:
-                cards[INSPCOMM_KEY] = (resolved, INSPCOMM_COMMENT)
             update_padded_header_smart(image, cards)
             report["headers_written"].append(image)
+
+        # reset_header restores the sidecar over the FITS on an overwrite rerun, so a verdict
+        # that lives only in the FITS is erased. Synced on its own merits: the FITS may already
+        # carry the verdict from an earlier manual injection while the sidecar still does not.
+        report[f"sidecars_{update_padded_header_file(image, cards)}"].append(image)
 
         if image_qa is None:
             continue

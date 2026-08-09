@@ -1768,6 +1768,11 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
 
     # ---- stage directories (under imcoadd tmp_dir, scoped per config) ----
     @property
+    def manifest_file(self) -> str:
+        """Stat-validated option cache for this scope's intermediates (see ImCoadd._manifest_*)."""
+        return os.path.join(self._parent.tmp_dir, self._config_scope, "manifest.json")
+
+    @property
     def interp_dir(self) -> str:
         return os.path.join(self._parent.tmp_dir, self._config_scope, "interp")
 

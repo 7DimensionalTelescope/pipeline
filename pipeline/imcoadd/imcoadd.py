@@ -1,3 +1,4 @@
+import json
 import os
 import threading
 import time
@@ -565,18 +566,23 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         # Per-image work is independent (SExtractor subprocesses + FITS I/O, both
         # GIL-releasing); worker count is load-aware so a busy system queue stays safe.
-        jobs = list(zip(input_images, bkgsub_images, bkg_images, bkg_rms_images, skyvalues,
-                        fov_mask_images, source_mask_images, types))  # fmt: skip
+        jobs = list(enumerate(zip(input_images, bkgsub_images, bkg_images, bkg_rms_images, skyvalues,
+                                  fov_mask_images, source_mask_images, types)))  # fmt: skip
+        if not self.overwrite:
+            n_all = len(jobs)
+            jobs = [(i, job) for i, job in jobs if not os.path.exists(job[1])]
+            if len(jobs) < n_all:
+                self.logger.info(f"{n_all - len(jobs)} existing bkgsub products skipped, {len(jobs)} to compute")
         n_workers = conservative_worker_count(len(jobs))
         if n_workers <= 1:
-            for i, job in enumerate(jobs):
+            for i, job in jobs:
                 _bkgsub_one(i, *job)
         else:
             self.logger.info(f"Background subtraction with {n_workers} workers")
             from concurrent.futures import ThreadPoolExecutor
 
             with ThreadPoolExecutor(max_workers=n_workers) as pool:
-                futures = [pool.submit(_bkgsub_one, i, *job) for i, job in enumerate(jobs)]
+                futures = [pool.submit(_bkgsub_one, i, *job) for i, job in jobs]
                 for f in futures:
                     f.result()
 
@@ -604,9 +610,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             )
             return
         mismatch = {
-            k: (header.get(k), v)
-            for k, (v, _) in wanted.items()
-            if str(header.get(k)).upper() != str(v).upper()
+            k: (header.get(k), v) for k, (v, _) in wanted.items() if str(header.get(k)).upper() != str(v).upper()
         }
         if mismatch:
             detail = ", ".join(f"{k}: disk={d!r} config={c!r}" for k, (d, c) in mismatch.items())
@@ -650,11 +654,15 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 break
             if time.time() - newest < min_idle_hours * 3600:
                 continue
-            self.logger.info(f"Scratch rotation: removing {root} ({size/1e9:.0f} GB, idle {(time.time()-newest)/3600:.1f} h)")
+            self.logger.info(
+                f"Scratch rotation: removing {root} ({size/1e9:.0f} GB, idle {(time.time()-newest)/3600:.1f} h)"
+            )
             shutil.rmtree(root, ignore_errors=True)
             total -= size
         if total > cap:
-            self.logger.warning(f"Scratch still over cap after rotation ({total/1e9:.0f} GB > {cap/1e9:.0f} GB); all trees active")
+            self.logger.warning(
+                f"Scratch still over cap after rotation ({total/1e9:.0f} GB > {cap/1e9:.0f} GB); all trees active"
+            )
 
     def _coadd_provenance(self) -> dict[str, tuple]:
         """Config options that change the coadd, as coadd header cards."""
@@ -1119,6 +1127,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         one batch 6x because batch SWarp resamples sequentially."""
         factory = self.path.imcoadd.factory
         base = os.path.splitext(get_basename(interp_im))[0]
+        self._stagger_swarp()
         for pass_type, args, use_w in (
             ("sci", ["-RESAMPLING_TYPE", "LANCZOS3"], False),
             ("wht", ["-RESAMPLING_TYPE", "NEAREST", "-WEIGHT_IMAGE", sidecar], True),
@@ -1135,19 +1144,92 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 use_weight_map=use_w,
                 swarp_args=args,
             )
+        sci = collapse(factory.resampled_images([interp_im], pass_type="sci"), force=True)
+        self._manifest_note(sci, interp=str(self.config_node.imcoadd.interp_type).upper())
+
+    # ---- factory manifest: stat-validated option cache for intermediates ----
+    # An entry is trusted only while the file's (mtime_ns, size) still match, so a file
+    # regenerated behind the manifest's back is treated as unknown and falls back to a
+    # header read, which repopulates the entry. Keys are paths relative to tmp_dir.
+
+    def _manifest_load(self) -> dict:
+        if getattr(self, "_manifest", None) is None:
+            try:
+                with open(self.path.imcoadd.factory.manifest_file) as fp:
+                    self._manifest = json.load(fp)
+            except (OSError, ValueError):
+                self._manifest = {}
+        return self._manifest
+
+    def _manifest_flush(self) -> None:
+        if getattr(self, "_manifest", None) is None:
+            return
+        manifest_file = self.path.imcoadd.factory.manifest_file
+        os.makedirs(os.path.dirname(manifest_file), exist_ok=True)
+        tmp = manifest_file + ".tmp"
+        with open(tmp, "w") as fp:
+            json.dump(self._manifest, fp)
+        os.replace(tmp, manifest_file)
+
+    def _manifest_key(self, path: str) -> str:
+        return os.path.relpath(path, self.path.imcoadd.tmp_dir)
+
+    def _manifest_note(self, path: str, **options) -> None:
+        try:
+            st = os.stat(path)
+        except OSError:
+            return
+        self._manifest_load()[self._manifest_key(path)] = {
+            "mtime_ns": st.st_mtime_ns, "size": st.st_size, **options
+        }  # fmt: skip
+
+    def _manifest_options(self, path: str) -> dict | None:
+        """Recorded options for path, or None when absent or stale (stat mismatch)."""
+        entry = self._manifest_load().get(self._manifest_key(path))
+        if not entry:
+            return None
+        try:
+            st = os.stat(path)
+        except OSError:
+            return None
+        if st.st_mtime_ns != entry.get("mtime_ns") or st.st_size != entry.get("size"):
+            return None
+        return entry
+
+    _swarp_launch_lock = threading.Lock()
+    _swarp_last_launch = 0.0
+
+    def _stagger_swarp(self, gap: float = 0.5) -> None:
+        """Space out per-image SWarp launches so parallel singles don't hit the disk at once."""
+        cls = type(self)
+        with cls._swarp_launch_lock:
+            now = time.time()
+            wait = max(0.0, cls._swarp_last_launch + gap - now)
+            cls._swarp_last_launch = now + wait
+        if wait:
+            time.sleep(wait)
 
     def _lookahead_done(self, interp_im: str, method: str) -> bool:
         """A frame is reproducible from its resamps alone: interp may have been discarded.
 
-        True when the sci resamp and wht weight exist AND the resamp's INTERP card (which
-        COPY_KEYWORDS propagates) matches the requested interp_type -- the settings check
-        that makes skipping without the interp product safe."""
+        True when the sci resamp and wht weight exist AND the recorded interp option
+        matches the requested interp_type -- from the manifest when fresh; only a
+        missing/stale entry costs a header read (INTERP card), which then heals it."""
         factory = self.path.imcoadd.factory
         sci = collapse(factory.resampled_images([interp_im], pass_type="sci"), force=True)
         wht = collapse(factory.resampled_weight_images([sci], pass_type="wht"), force=True)
         if not (os.path.exists(sci) and os.path.exists(wht)):
             return False
-        return str(fits.getheader(sci).get("INTERP", "")).upper() == str(method).upper()
+        entry = self._manifest_options(sci)
+        if entry is not None:
+            return str(entry.get("interp", "")).upper() == str(method).upper()
+        try:
+            ok = str(fits.getheader(sci).get("INTERP", "")).upper() == str(method).upper()
+        except OSError:
+            return False
+        if ok:
+            self._manifest_note(sci, interp=str(method).upper())
+        return ok
 
     def weight_and_interpolate(self, input_images: list[str] | None = None) -> list[str]:
         """Fused per-group weight + interpolation; the weight map never touches disk raw.
@@ -1167,18 +1249,30 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         method = self.config_node.imcoadd.interp_type
         zero_interp = bool(get_key(self.config_node.imcoadd, "zero_interp_weight", default=True))
 
-        todo_in, todo_out, n_lookahead = [], [], 0
+        streamline = bool(get_key(self.config_node.imcoadd, "streamline_reprojection", default=False))
+        # resamp-first: a frame whose reprojected products exist needs nothing here,
+        # whatever the state of its interp/weight intermediates
+        todo_in, todo_out, n_lookahead, reproject_only = [], [], 0, []
         for inim, outim in zip(input_images, interp_images):
-            if os.path.exists(outim) and os.path.exists(add_suffix(outim, "weight")) and not self.overwrite:
-                self.logger.debug(f"Already exists; skip generating {outim}")
-            elif not self.overwrite and self._lookahead_done(outim, method):
+            if not self.overwrite and self._lookahead_done(outim, method):
                 n_lookahead += 1
-                self.logger.debug(f"Resamps exist with matching INTERP; skip regenerating {outim}")
+                self.logger.debug(f"Resamps exist with matching options; nothing to do for {outim}")
+            elif os.path.exists(outim) and os.path.exists(add_suffix(outim, "weight")) and not self.overwrite:
+                if streamline:
+                    reproject_only.append(outim)
+                else:
+                    self.logger.debug(f"Already exists; skip generating {outim}")
             else:
                 todo_in.append(inim)
                 todo_out.append(outim)
         if n_lookahead:
-            self.logger.info(f"{n_lookahead} frames skipped via their reprojected products (interp discarded)")
+            self.logger.info(f"{n_lookahead} frames skipped via their reprojected products")
+        if reproject_only:
+            self.logger.info(f"{len(reproject_only)} frames reproject-only (interp exists, resamps missing)")
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                list(pool.map(lambda im: self._reproject_single(im, add_suffix(im, "weight")), reproject_only))
 
         if len(todo_in) < len(input_images):
             self.logger.info(
@@ -1196,7 +1290,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 d_m_file, f_m_file, sig_z_file, sig_f_file = PathHandler.resolve_weight_map_input_abspath([z, d, f])
                 calib = _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file)
                 post_frame = None
-                if get_key(self.config_node.imcoadd, "fuse_reproject", default=False):
+                if get_key(self.config_node.imcoadd, "streamline_reprojection", default=False):
                     discard = bool(get_key(self.config_node.imcoadd, "discard_interp", default=False))
 
                     def post_frame(sci_out, _discard=discard):
@@ -1226,6 +1320,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self.logger.info("All fused weight+interp products already exist. Skipping")
 
         self.config_node.imcoadd.bkgsub_weight_images = [add_suffix(im, "weight") for im in interp_images]
+        self._manifest_flush()
         self.logger.info(f"Fused weight+interp completed in {time_diff_in_seconds(st)} seconds")
         return interp_images
 
@@ -1654,7 +1749,20 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 weight_images=weight_images,
             )
 
-            if self.config_node.imcoadd.propagate_mask:
+            factory = self.path.imcoadd.factory
+            masks_predicted = atleast_1d(
+                factory.resampled_weight_images(
+                    atleast_1d(factory.resampled_images(input_images, pass_type="bpm")), pass_type="bpm"
+                )
+            )
+            if (
+                self.config_node.imcoadd.propagate_mask
+                and not self.overwrite
+                and all(os.path.exists(m) for m in masks_predicted)
+            ):
+                # checked before get_bpmask: resolving 1000 bpmasks costs ~20 min
+                self.logger.info(f"bpm pass outputs already exist ({len(masks_predicted)} masks), skipping")
+            elif self.config_node.imcoadd.propagate_mask:
                 # bpmask_file = self.config.preprocess.bpmask_file
                 per_image = atleast_1d(PathHandler.get_bpmask(input_images))
                 if len(per_image) != len(input_images):

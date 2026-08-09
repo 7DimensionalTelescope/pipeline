@@ -264,6 +264,63 @@ def update_padded_header_smart(target_fits, header_new):
     # )
 
 
+def update_padded_header_file(target: str, header_new: dict) -> str:
+    """
+    Apply cards to a FITS file's sibling ``.header`` sidecar, consuming COMMENT padding.
+
+    Mirrors :func:`update_padded_header_smart` so the sidecar and its FITS stay in step:
+    an existing key is replaced where it sits, a new key takes the slot of the first
+    padding COMMENT. The card count is therefore unchanged, and so is the block count
+    :func:`reset_header` restores on an overwrite rerun.
+
+    Returns "written", "unchanged", or "missing" (no sidecar next to `target`).
+    """
+    header_file = swap_ext(target, "header")
+    if not os.path.exists(header_file):
+        return "missing"
+
+    header = read_header_file(header_file)
+    cards_new = [(key, *val) if isinstance(val, tuple) else (key, val, None) for key, val in header_new.items()]
+
+    # Compare rendered 80-char images, not values: astropy truncates an over-long comment
+    # to fit the card, so a requested comment can never equal the stored one.
+    def _already_stored(key, value, comment):
+        if key not in header:
+            return False
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            want = fits.Card(key, value, header.comments[key] if comment is None else comment)
+        return str(want) == str(header.cards[key])
+
+    if all(_already_stored(*card) for card in cards_new):
+        return "unchanged"
+
+    # first padding COMMENT: where a genuinely new card goes, so it lands before the padding
+    insert_pos = 0
+    for idx in range(len(header.cards) - 1, -1, -1):
+        if header.cards[idx].keyword != "COMMENT":
+            insert_pos = idx + 1
+            break
+
+    for key, value, comment in cards_new:
+        if key in header:
+            existing_idx = list(header.keys()).index(key)
+            if comment is None:
+                comment = header.comments[key]
+            del header[key]
+            header.insert(existing_idx, (key, value, comment), after=False)
+        else:
+            if insert_pos <= len(header) - 1:
+                del header[insert_pos]  # spend one padding COMMENT to keep the card count
+                header.insert(insert_pos, (key, value, comment), after=False)
+            else:
+                header.append((key, value, comment), end=True)
+            insert_pos += 1
+
+    write_header_file(header_file, header)
+    return "written"
+
+
 def add_padding(header: fits.Header, n: int, copy_header=False) -> fits.Header:
     """
     Add empty COMMENT entries to a FITS header to ensure specific block sizes.

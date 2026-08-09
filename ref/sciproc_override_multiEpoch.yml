@@ -8,6 +8,8 @@ imcoadd:
   convolve: 'Gaussian'
   target_seeing:  # auto if it's empty or smaller than max seeing
   propagate_mask: False
+  streamline_reprojection: True
+  discard_interp: True
   image_selection: 'auto'
 
 settings:

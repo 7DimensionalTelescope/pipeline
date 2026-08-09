@@ -99,7 +99,7 @@ if TYPE_CHECKING:
         zero_interp_weight: bool
         bpmask_policy: str
         propagate_mask: bool
-        fuse_reproject: bool
+        streamline_reprojection: bool
         discard_interp: bool
         combine_scratch: Any
         convolve: Any
