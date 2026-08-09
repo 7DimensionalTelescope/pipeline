@@ -80,6 +80,7 @@ if TYPE_CHECKING:
         runtime_version: Any
         coadd_routine: str
         coadd_mode: str
+        coadd_weighting: str
         image_selection: bool
         image_selection_cuts: Any
         image_selection_source: str
@@ -95,13 +96,14 @@ if TYPE_CHECKING:
         joint_wcs: bool
         apply_bpmask: bool
         interp_type: str
+        zero_interp_weight: bool
+        bpmask_policy: str
+        propagate_mask: bool
         fuse_reproject: bool
         discard_interp: bool
-        zero_interp_weight: bool
         combine_scratch: Any
         convolve: Any
         target_seeing: Any
-        propagate_mask: bool
 
     class ImsubtractNode(ConfigNode):
         input_image: Any

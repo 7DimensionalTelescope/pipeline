@@ -115,6 +115,7 @@ imcoadd:
   runtime_version:
   coadd_routine: 'legacy'  # legacy or reproject-first
   coadd_mode: 'median'
+  coadd_weighting: global  # false | global (1/SKYSIG^2 per image) | pixel-wise (weight maps)
   image_selection: false  # False, 'auto' or 'interactive'; multi-epoch only
   image_selection_cuts:  # pinned cuts, e.g. {seeing: '<=2.8', bin2fwhm: '<=5.6'}; rest automatic
   image_selection_source: db  # 'db' (image_qa, one query) or 'headers' (read every file)
@@ -131,13 +132,14 @@ imcoadd:
   joint_wcs: False
   apply_bpmask: False
   interp_type: 'median'
+  zero_interp_weight: True  # interpolated pixels carry no independent information
+  bpmask_policy: 1px  # off | 1px (zeroed hole pixel only) | conservative (LANCZOS3 support)
+  propagate_mask: False  # bpm SWarp pass; consumed by bpmask_policy: conservative
   fuse_reproject: False  # reproject each frame right after its interp (per-image SWarp)
   discard_interp: False  # delete interp pairs once their reprojected products exist
-  zero_interp_weight: True  # interpolated pixels carry no independent information
   combine_scratch:  # local dir to stage combine inputs off NFS; empty = off (moot when factory_scratch set)
   convolve: 
   target_seeing:  # auto if it's empty or smaller than max seeing
-  propagate_mask: False
 
 imsubtract:
   input_image:

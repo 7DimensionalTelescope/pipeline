@@ -665,13 +665,18 @@ class NameHandler:
                 exptime = strip_exptime(parts[5 + offset])
                 return unit, date, hms, obj, filt, nb, exptime, gain, camera
 
+            parsed = None
             for offset in range(0, len(parts)):
                 try:
-                    unit, date, hms, obj, filt, nb, exptime, gain, camera = parse_with_offset(parts, offset)
-                    if unit.startswith("7DT"):
+                    parsed = parse_with_offset(parts, offset)
+                    if parsed[0].startswith("7DT"):
                         break
                 except:
                     continue
+            if parsed is None:
+                # no unit token (e.g. suffixed multi-epoch coadd names): unit undefined
+                parsed = (None, None, None, parts[0], parts[1] if len(parts) > 1 else None, nb, None, gain, camera)
+            unit, date, hms, obj, filt, nb, exptime, gain, camera = parsed
 
         return unit, date, hms, obj, filt, nb, exptime, gain, camera
 

@@ -664,6 +664,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         return {
             "COADDRTN": (shown(get_key(node, "coadd_routine")), "imcoadd.coadd_routine"),
             "COADDMOD": (shown(get_key(node, "coadd_mode")), "imcoadd.coadd_mode"),
+            "COADDWGT": (shown(get_key(node, "coadd_weighting", default="global")), "imcoadd.coadd_weighting"),
+            "BPMPOL":   (shown(get_key(node, "bpmask_policy", default="1px")), "imcoadd.bpmask_policy"),
             "ZPSCALE":  (bool(get_key(node, "zpscale")), "imcoadd.zpscale"),
             "INTERP":   (shown(interp), "imcoadd.interp_type"),
             "CONVOLVE": (shown(get_key(node, "convolve")), "imcoadd.convolve"),
@@ -1822,8 +1824,19 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self.coadd_with_cupy(input_images, device_id=device_id)
             return self.config_node.imcoadd.coadd_image
 
-        weights = None
-        if self.config_node.imcoadd.weight_map:
+        weighting = str(get_key(self.config_node.imcoadd, "coadd_weighting", default="global") or "off")
+        weighting = weighting.lower().replace("-", "").replace("_", "")
+        weighting = {"false": "off", "none": "off", "no": "off"}.get(weighting, weighting)
+        if weighting not in ("off", "global", "pixelwise"):
+            raise ValueError(f"Invalid imcoadd.coadd_weighting: {weighting!r} (False, 'global' or 'pixel-wise')")
+        policy = str(get_key(self.config_node.imcoadd, "bpmask_policy", default="1px") or "off").lower()
+        policy = {"false": "off", "none": "off", "no": "off"}.get(policy, policy)
+        if policy not in ("off", "1px", "conservative"):
+            raise ValueError(f"Invalid imcoadd.bpmask_policy: {policy!r} ('off', '1px' or 'conservative')")
+        self.logger.info(f"Coadd weighting: {weighting}; bpmask policy: {policy}")
+
+        wht_maps = None
+        if self.config_node.imcoadd.weight_map and (weighting == "pixelwise" or policy == "1px"):
             # NEAREST-resampled weights live next to the wht pass output; the
             # LANCZOS3 companions next to the sci resamp ring to ~0 almost
             # everywhere (99%+ zeros) and must NOT be used.
@@ -1832,19 +1845,36 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             resampled = get_key(self.config_node.imcoadd, "resampled_images") or input_images
             candidates = atleast_1d(self.path.imcoadd.factory.resampled_weight_images(resampled, pass_type="wht"))
             if all(os.path.exists(w) for w in candidates):
-                weights = candidates
+                wht_maps = candidates
             else:
                 missing = [w for w in candidates if not os.path.exists(w)][:3]
                 self.logger.warning(
-                    f"weight_map=True but NEAREST-resampled weight maps not found "
-                    f"in {wht_dir} (e.g. {missing}); coadding unweighted and writing a "
-                    f"frame-count weight map instead."
+                    f"NEAREST-resampled weight maps not found in {wht_dir} (e.g. {missing}); "
+                    f"pixel-wise weighting / 1px hole masking unavailable for this run."
                 )
 
-        masks = self._propagated_bpmasks()
+        weights = None
+        if weighting == "pixelwise":
+            weights = wht_maps
+        elif weighting == "global":
+            skysigs = self.input_headers.values("SKYSIG")
+            n_missing = sum(1 for s in skysigs if not s)
+            if n_missing:
+                self.logger.warning(f"SKYSIG missing on {n_missing}/{len(skysigs)} frames; weighting those 1.0")
+            weights = [1.0 / float(s) ** 2 if s else 1.0 for s in skysigs]
 
-        staged, cleanup = self._stage_for_combine({"sci": input_images, "wht": weights, "bpm": masks})
-        input_images, weights, masks = staged["sci"], staged["wht"], staged["bpm"]
+        if policy == "conservative":
+            masks = self._propagated_bpmasks()
+        elif policy == "1px" and weighting != "pixelwise":
+            masks = wht_maps  # NEAREST resamp: each hole is a single sub-eps pixel
+        else:
+            masks = None  # pixel-wise weights already exclude holes via calc.WEIGHT_EPS
+
+        stage_wht = weights if weighting == "pixelwise" else None
+        staged, cleanup = self._stage_for_combine({"sci": input_images, "wht": stage_wht, "bpm": masks})
+        input_images, masks = staged["sci"], staged["bpm"]
+        if weighting == "pixelwise":
+            weights = staged["wht"]
 
         mode = self.config_node.imcoadd.coadd_mode
         try:

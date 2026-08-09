@@ -154,6 +154,8 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             is_too=s.is_too,
             is_multi_epoch=s.is_multi_epoch,
             config_file=s.config_file,
+            config_suffix=s.config_suffix,
+            factory_scratch=s.factory_scratch,
             top_dirs=self._user_top_dirs,
         )
 

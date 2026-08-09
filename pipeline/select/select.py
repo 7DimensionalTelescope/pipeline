@@ -438,8 +438,12 @@ def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_p
                                c=color, alpha=0.55, linewidths=0, zorder=2 + depth)  # fmt: skip
             if xk in cuts:
                 ax.axvline(cuts[xk], color="tab:red", ls="--", lw=1.2)
+                ax.annotate(f"{cuts[xk]:g}", xy=(cuts[xk], 0.99), xycoords=("data", "axes fraction"),
+                            color="tab:red", fontsize=10, ha="left", va="top")  # fmt: skip
             if yk in cuts:
                 ax.axhline(cuts[yk], color="tab:red", ls="--", lw=1.2)
+                ax.annotate(f"{cuts[yk]:g}", xy=(0.99, cuts[yk]), xycoords=("axes fraction", "data"),
+                            color="tab:red", fontsize=10, ha="right", va="bottom")  # fmt: skip
             ax.set_xlabel(xk.upper(), fontsize=13)
             ax.set_ylabel(yk.upper(), fontsize=13)
             ax.tick_params(labelsize=11)
@@ -473,7 +477,14 @@ def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_p
     top = 0.97
     rejected = rejection_counts(table, cuts)
     if rejected:
-        line = ("rejected by  " + "   ".join(f"{m.upper()} {n} ({alone} alone)"
+        sign = {"lower": "<=", "higher": ">="}
+
+        def cut_label(m):
+            if m in cuts and m not in CATEGORICAL_METRICS:
+                return f"{m.upper()}{sign.get(directions.get(m), '')}{cuts[m]:g}"
+            return m.upper()
+
+        line = ("rejected by  " + "   ".join(f"{cut_label(m)} {n} ({alone} alone)"
                                              for m, (n, alone) in rejected.items())
                 + "   (overlapping; 'alone' = lost to that cut only)")  # fmt: skip
         fig.text(0.5, 1 - 0.55 / (4.4 * len(rows)), line, ha="center", fontsize=fitted(line, 12))

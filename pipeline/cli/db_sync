@@ -1,0 +1,48 @@
+#!/home/pipeline-stable/.conda/envs/pipeline/bin/python
+
+import argparse
+import signal
+import sys
+
+from pipeline.services.database.sync import sync_config, sync_image
+
+
+def signal_handler(sig, frame):
+    print("\nTerminate process")
+    sys.exit(0)
+
+
+signal.signal(signal.SIGINT, signal_handler)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description=(
+            "Post-hoc DB sync. For a FITS image: upsert its image_qa row from the header "
+            "and rebuild its dependency rows. For a config: reconcile its process_status "
+            "row (progress/status) with the flags recorded in the config."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  %(prog)s /path/to/UDS_m525_coadd.fits\n"
+            "  %(prog)s /path/to/UDS_m525.yml\n"
+            "  %(prog)s /path/dir/*.fits /path/to/UDS_m525.yml"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("paths", nargs="+", help=".fits (image_qa + dependencies) or .yml (process_status)")
+    args = parser.parse_args()
+
+    n_fail = 0
+    for path in args.paths:
+        try:
+            if path.endswith((".yml", ".yaml")):
+                ps_id, status = sync_config(path)
+                print(f"[OK] {path}: process_status id={ps_id} -> {status or 'no completed stage; row left as-is'}")
+            else:
+                qa_id, n_dep = sync_image(path)
+                print(f"[OK] {path}: qa_id={qa_id}, {n_dep} dependency rows")
+        except Exception as e:
+            print(f"[FAIL] {path}: {e}", file=sys.stderr)
+            n_fail += 1
+
+    sys.exit(1 if n_fail else 0)

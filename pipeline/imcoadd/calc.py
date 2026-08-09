@@ -16,6 +16,10 @@ from ..utils import time_diff_in_seconds, add_suffix
 from ..services.logger import Logger
 from .utils import determine_size, build_coadd_wcs_header
 
+# SWarp resampling turns exact-zero weights into float dust (~1e-15 measured; physical
+# weights are >=1e-4), so hole exclusion must test against this instead of 0.
+WEIGHT_EPS = 1e-9
+
 
 # Var(median)/Var(mean) for n Gaussian samples, from the order-statistic density
 # n!/(m!m!) F^m (1-F)^m f  with m=(n-1)/2. Approaches pi/2 (Kendall & Stuart Vol.1) but is
@@ -61,7 +65,7 @@ def mean_coadd_numpy(
     input_images: list[str],
     output_path: str,
     coadd_header: fits.Header,
-    weights: list[str] | None = None,
+    weights: list[str] | list[float] | None = None,
     weight_output: str | None = None,
     footprint_output: str | None = None,
     masks: list[str] | None = None,
@@ -129,7 +133,7 @@ def mean_coadd_numpy(
         valid = np.isfinite(src) & (src != 0.0)
         if masks is not None:
             with fits.open(masks[i], memmap=True) as mh:
-                valid &= mh[0].data[sy0:sy1, sx0:sx1] > 0
+                valid &= mh[0].data[sy0:sy1, sx0:sx1] > WEIGHT_EPS
 
         if weights is None:
             sum_arr[ty0:ty1, tx0:tx1] += np.where(valid, src * flxscale, 0.0)
@@ -144,14 +148,20 @@ def mean_coadd_numpy(
             # (RESCALE_WEIGHTS = N). After we multiply data by FLXSCALE its
             # variance scales by FLXSCALE^2, so use w/FLXSCALE^2 as the
             # inverse-variance weight of the flux-normalised image.
-            with fits.open(weights[i]) as hdul:
-                w_full = hdul[0].data.astype(np.float64)
-            w_eff = w_full[sy0:sy1, sx0:sx1] / (flxscale * flxscale)
-            valid &= w_eff > 0
+            if isinstance(weights[i], str):
+                with fits.open(weights[i]) as hdul:
+                    w_full = hdul[0].data.astype(np.float64)
+                w_full[w_full < WEIGHT_EPS] = 0.0
+                w_eff = w_full[sy0:sy1, sx0:sx1] / (flxscale * flxscale)
+                valid &= w_eff > 0
+            else:
+                # scalar per-image weight (e.g. 1/SKYSIG^2); same FLXSCALE^2 rule
+                w_eff = float(weights[i]) / (flxscale * flxscale)
             sum_arr[ty0:ty1, tx0:tx1] += np.where(valid, w_eff * src * flxscale, 0.0)
             norm_arr[ty0:ty1, tx0:tx1] += np.where(valid, w_eff, 0.0)
             if egain is not None and valid.any():
-                gain_terms.append((float(w_eff[valid].mean()), float(egain) / flxscale))
+                w_typ = float(w_eff[valid].mean()) if isinstance(weights[i], str) else w_eff
+                gain_terms.append((w_typ, float(egain) / flxscale))
                 gain_denom[ty0:ty1, tx0:tx1] += np.where(valid, w_eff * w_eff * flxscale / float(egain), 0.0)
             elif egain is None:
                 all_egain = False
@@ -211,7 +221,7 @@ def median_coadd_numpy(
     input_images: list[str],
     output_path: str,
     coadd_header: fits.Header,
-    weights: list[str] | None = None,
+    weights: list[str] | list[float] | None = None,
     weight_output: str | None = None,
     footprint_output: str | None = None,
     masks: list[str] | None = None,
@@ -268,7 +278,8 @@ def median_coadd_numpy(
     gain_terms = [(1.0, float(e) / flxscales[i]) for i, e in enumerate(egains) if e is not None]
     all_egain = all(e is not None for e in egains)
     ginv_arr = np.zeros((target_h, target_w), dtype=np.float64)  # sum(1/g) over contributing frames
-    whandles = [fits.open(f, memmap=True) for f in weights] if weights is not None else None
+    pixel_weights = weights is not None and len(weights) > 0 and isinstance(weights[0], str)
+    whandles = [fits.open(f, memmap=True) for f in weights] if pixel_weights else None
     mhandles = [fits.open(f, memmap=True) for f in masks] if masks is not None else None
     try:
         for ys in range(0, target_h, chunk_h):
@@ -286,11 +297,13 @@ def median_coadd_numpy(
                 src = hdul[0].data[sy0:sy1, sx0:sx1].astype(np.float32) * flxscales[i]
                 src[(src == 0.0) | ~np.isfinite(src)] = np.nan
                 if mhandles is not None:
-                    src[mhandles[i][0].data[sy0:sy1, sx0:sx1] <= 0] = np.nan
+                    src[mhandles[i][0].data[sy0:sy1, sx0:sx1] <= WEIGHT_EPS] = np.nan
                 if whandles is not None:
                     # w is the inverse variance of the raw resampled data; the median is
                     # taken on flux-normalised pixels, whose variance scales by FLXSCALE^2
-                    w = whandles[i][0].data[sy0:sy1, sx0:sx1].astype(np.float32) / (flxscales[i] * flxscales[i])
+                    w = whandles[i][0].data[sy0:sy1, sx0:sx1].astype(np.float32)
+                    w[w < WEIGHT_EPS] = 0.0
+                    w /= flxscales[i] * flxscales[i]
                     # zero weight (interpolated/bad pixel) never enters the stack,
                     # matching the mean path's w_eff > 0 test; footprint follows
                     src[w <= 0] = np.nan
@@ -299,10 +312,14 @@ def median_coadd_numpy(
                 count_arr[ty0:ty1, tx0:tx1] += contributed
                 if egains[i] is not None:
                     ginv_arr[ty0:ty1, tx0:tx1] += np.where(contributed, flxscales[i] / float(egains[i]), 0.0)
-                if whandles is None:
-                    norm_arr[ty0:ty1, tx0:tx1] += contributed
-                else:
+                if whandles is not None:
                     norm_arr[ty0:ty1, tx0:tx1] += np.where(contributed, w, 0.0)
+                elif weights is not None:
+                    # scalar per-image weights: the median vote is unweighted, but the
+                    # output weight map still accumulates the inverse variance
+                    norm_arr[ty0:ty1, tx0:tx1] += np.where(contributed, float(weights[i]) / (flxscales[i] * flxscales[i]), 0.0)
+                else:
+                    norm_arr[ty0:ty1, tx0:tx1] += contributed
             coadd[ys:ye, :] = np.nanmedian(stack, axis=0)
     finally:
         for hdul in handles:
