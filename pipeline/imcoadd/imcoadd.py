@@ -31,7 +31,7 @@ from ..services.version_check import RuntimeVersionMixin
 
 from .const import ZP_KEY
 from .header_set import InputHeaderSet
-from .calc import mean_coadd_numpy, median_coadd_numpy
+from .calc import clipped_mean_coadd_numpy, mean_coadd_numpy, median_coadd_numpy
 
 
 warnings.filterwarnings("ignore")
@@ -266,10 +266,14 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             mask_sources=get_key(self.config_node.imcoadd, "source_mask", default=True),
             fov_masks=getattr(self, "_fov_masks", None),
         )
+        self._discard_consumed_bkgsub_inputs()
         step += 1
         self.update_progress(SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-bkgsub-completed")
 
         # Flux zero-point scaling (snapshot only; the in-memory combine takes the values directly)
+        if not do_zpscale:
+            for hdr in self.input_headers:
+                hdr.pop("FLXSCALE", None)  # stale photometry-era cards must not aggregate
         if do_zpscale:
             self.zpscale(images, write_headers=False)
             step += 1
@@ -1058,6 +1062,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                             sig_z_file,
                             sig_f_file,
                             out_names=uncalculated_outputs,
+                            weight_store=bool(get_key(self.config_node.imcoadd, "persist_weight_maps", default=True)),
                         )
                     else:
                         from .weight import calc_weight_with_gpu
@@ -1121,6 +1126,27 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         if n:
             self.logger.info(f"Discarded {n} consumed interp pairs ({freed/1e9:.0f} GB freed)")
 
+    def _discard_consumed_bkgsub_inputs(self):
+        """Delete sci resamps + bkg/bkgrms models once their bkgsub product exists
+        (`imcoadd.lean_factory`). Buys scratch space; a resume recomputes them."""
+        if not get_key(self.config_node.imcoadd, "lean_factory", default=False):
+            return
+        bkgsub_images = atleast_1d(get_key(self.config_node.imcoadd, "bkgsub_images") or [])
+        resampled = atleast_1d(get_key(self.config_node.imcoadd, "resampled_images") or [])
+        freed = n = 0
+        for resamp, bkgsub in zip(resampled, bkgsub_images):
+            if not os.path.exists(bkgsub):
+                continue
+            # bkg/bkgrms are staged off the resamp name (stage_images suffix convention)
+            doomed = [add_suffix(resamp, "bkg"), add_suffix(resamp, "bkgrms"), resamp]
+            for f in doomed:
+                if os.path.exists(f):
+                    freed += os.path.getsize(f)
+                    os.remove(f)
+                    n += 1
+        if n:
+            self.logger.info(f"Lean factory: discarded {n} consumed bkgsub inputs/models ({freed/1e9:.0f} GB freed)")
+
     def _reproject_single(self, interp_im: str, sidecar: str) -> None:
         """Per-image sci+wht SWarp passes; grid pinned by CENTER MANUAL + IMAGE_SIZE, so the
         outputs are bit-identical to the batch passes (measured), and parallel singles beat
@@ -1142,6 +1168,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 coadd=False,
                 log_file=os.path.join(os.path.dirname(rdir), f"{base}_swarp.log"),
                 use_weight_map=use_w,
+                logger=self.logger,
                 swarp_args=args,
             )
         sci = collapse(factory.resampled_images([interp_im], pass_type="sci"), force=True)
@@ -1284,11 +1311,30 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
             groups = self._group_IMCMB(todo_in, todo_out)
             self.logger.info(f"{len(groups)} groups for fused weight+interpolation.")
+            persist = bool(get_key(self.config_node.imcoadd, "persist_weight_maps", default=True))
             for group_id, ((z, d, f), [group_in, group_out]) in enumerate(groups.items()):
                 st_group = time.time()
                 mask_file, badpix = self._get_bpmask(group_in[0])
                 d_m_file, f_m_file, sig_z_file, sig_f_file = PathHandler.resolve_weight_map_input_abspath([z, d, f])
-                calib = _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file)
+                weight_store = None
+                calib = None
+                if persist:
+                    from .weight_store import check_single_weight
+
+                    masters = {"d": d_m_file, "f": f_m_file, "sz": sig_z_file, "sf": sig_f_file}
+                    store_paths = [PathHandler.single_weight_map(im) for im in group_in]
+                    weight_store = (store_paths, masters)
+                    n_reusable = sum(check_single_weight(p, masters) for p in store_paths)
+                    if n_reusable:
+                        self.logger.info(
+                            f"Group {group_id + 1}: {n_reusable}/{len(group_in)} single weight maps reusable"
+                        )
+                    if n_reusable == len(group_in):
+                        calib = "skip"  # every frame verified: masters never touched
+                if calib != "skip":
+                    calib = _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file)
+                else:
+                    calib = None
                 post_frame = None
                 if get_key(self.config_node.imcoadd, "streamline_reprojection", default=False):
                     discard = bool(get_key(self.config_node.imcoadd, "discard_interp", default=False))
@@ -1305,6 +1351,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     mask_file,
                     group_out,
                     calib,
+                    weight_store=weight_store,
                     method=method,
                     badpix=badpix,
                     zero_interp_weight=zero_interp,
@@ -1721,6 +1768,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         swarp_options_override_from_config = get_key(self.config_node.imcoadd, "swarp_options_override", default=[])
         swarp_options_override = swarp_options_override_from_config + swarp_options_override
+        if not get_key(self.config_node.imcoadd, "zpscale", default=True):
+            # zpscale off: stale FLXSCALE cards on the files must not flux-scale the combine
+            swarp_options_override = swarp_options_override + ["-FSCALE_KEYWORD", "NOFSCALE"]
         if swarp_options_override:
             self.logger.warning(f"SWarp options override: {swarp_options_override}")
 
@@ -1944,7 +1994,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.logger.info(f"Coadd weighting: {weighting}; bpmask policy: {policy}")
 
         wht_maps = None
-        if self.config_node.imcoadd.weight_map and (weighting == "pixelwise" or policy == "1px"):
+        if self.config_node.imcoadd.weight_map:
             # NEAREST-resampled weights live next to the wht pass output; the
             # LANCZOS3 companions next to the sci resamp ring to ~0 almost
             # everywhere (99%+ zeros) and must NOT be used.
@@ -1978,6 +2028,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         else:
             masks = None  # pixel-wise weights already exclude holes via calc.WEIGHT_EPS
 
+        var_maps = wht_maps if weighting != "pixelwise" else None
         stage_wht = weights if weighting == "pixelwise" else None
         staged, cleanup = self._stage_for_combine({"sci": input_images, "wht": stage_wht, "bpm": masks})
         input_images, masks = staged["sci"], staged["bpm"]
@@ -1985,16 +2036,46 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             weights = staged["wht"]
 
         mode = self.config_node.imcoadd.coadd_mode
+        # combines on one filesystem only divide its bandwidth: serialize per st_dev,
+        # and lease planned stack bytes so concurrent (cross-fs) combines cannot each
+        # size their strips against the same MemAvailable. Multi-epoch only: nightly
+        # coadds are small and must never queue behind a deep combine.
+        from ..services.combine_lock import CombineSlot, NullSlot
+
+        anchor = os.path.dirname(collapse(atleast_1d(input_images)[0], force=True))
+        slot_ctx = (
+            CombineSlot(anchor, logger=self.logger)
+            if self.config_node.settings.is_multi_epoch
+            else NullSlot()
+        )
         try:
-            if mode == "mean":
-                self.coadd_with_numpy(input_images, weights=weights, masks=masks)
-            elif mode == "median":
-                self.coadd_median_with_numpy(input_images, weights=weights, masks=masks)
-            else:
-                raise ValueError(f"Invalid coadd mode: {mode!r} (expected 'mean' or 'median')")
+            with slot_ctx as slot:
+                if mode == "mean":
+                    slot.lease(4 * 110_000_000 * 8)  # sum/norm/count/gain accumulators, ~3.5 GB
+                    self.coadd_with_numpy(input_images, weights=weights, masks=masks, var_maps=var_maps)
+                elif mode == "clipped":
+                    slot.lease(6 * 110_000_000 * 8)  # two-pass accumulators, ~5 GB
+                    self.coadd_clipped_with_numpy(input_images, weights=weights, masks=masks, var_maps=var_maps)
+                elif mode == "median":
+                    reserved = slot.reserved_bytes
+                    try:
+                        avail = int(next(l for l in open("/proc/meminfo") if l.startswith("MemAvailable")).split()[1]) * 1024
+                    except Exception:
+                        avail = 0
+                    slot.lease(int(0.3 * max(0, avail - reserved)))  # upper bound of _auto_chunk_h's pick
+                    self.coadd_median_with_numpy(input_images, weights=weights, masks=masks, reserved_bytes=reserved, var_maps=var_maps)
+                else:
+                    raise ValueError(f"Invalid coadd mode: {mode!r} (expected 'mean', 'median' or 'clipped')")
         finally:
             cleanup()
         return self.config_node.imcoadd.coadd_image
+
+    def _combine_flxscales(self):
+        """zpscale's snapshot values; with zpscale off, the stale photometry-era FLXSCALE
+        cards on the singles must not scale anything -- False disables scaling."""
+        if get_key(self.config_node.imcoadd, "zpscale", default=True):
+            return self.input_headers.values("FLXSCALE")
+        return False
 
     def coadd_with_numpy(
         self,
@@ -2002,6 +2083,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         weights: list[str] | None = None,
         masks: list[str] | None = None,
         match_swarp_size: bool = True,
+        var_maps: list[str] | None = None,
     ) -> str:
         return mean_coadd_numpy(
             input_images,
@@ -2011,8 +2093,30 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             weight_output=add_suffix(self.config_node.imcoadd.coadd_image, "weight"),
             footprint_output=add_suffix(self.config_node.imcoadd.coadd_image, "footprint"),
             masks=masks,
-            flxscales=self.input_headers.values("FLXSCALE"),
+            flxscales=self._combine_flxscales(),
             match_swarp_size=match_swarp_size,
+            logger=self.logger,
+        )
+
+    def coadd_clipped_with_numpy(
+        self,
+        input_images: list[str],
+        weights: list[str] | None = None,
+        masks: list[str] | None = None,
+        match_swarp_size: bool = True,
+        var_maps: list[str] | None = None,
+    ) -> str:
+        return clipped_mean_coadd_numpy(
+            input_images,
+            output_path=self.config_node.imcoadd.coadd_image,
+            coadd_header=self.input_headers.coadd_header,
+            weights=weights,
+            weight_output=add_suffix(self.config_node.imcoadd.coadd_image, "weight"),
+            footprint_output=add_suffix(self.config_node.imcoadd.coadd_image, "footprint"),
+            masks=masks,
+            flxscales=self._combine_flxscales(),
+            match_swarp_size=match_swarp_size,
+            var_maps=var_maps,
             logger=self.logger,
         )
 
@@ -2025,6 +2129,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         masks: list[str] | None = None,
         match_swarp_size: bool = True,
         chunk_h: int | None = None,  # None: auto-sized from idle memory (see calc._auto_chunk_h)
+        reserved_bytes: int = 0,
+        var_maps: list[str] | None = None,
     ) -> str:
         return median_coadd_numpy(
             input_images,
@@ -2034,9 +2140,11 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             weight_output=add_suffix(self.config_node.imcoadd.coadd_image, "weight"),
             footprint_output=add_suffix(self.config_node.imcoadd.coadd_image, "footprint"),
             masks=masks,
-            flxscales=self.input_headers.values("FLXSCALE"),
+            flxscales=self._combine_flxscales(),
             match_swarp_size=match_swarp_size,
             chunk_h=chunk_h,
+            reserved_bytes=reserved_bytes,
+            var_maps=var_maps,
             logger=self.logger,
         )
 

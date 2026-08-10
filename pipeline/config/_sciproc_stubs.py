@@ -60,6 +60,7 @@ if TYPE_CHECKING:
     class PhotometryNode(ConfigNode):
         input_images: Any
         runtime_version: Any
+        use_weight_map: bool
         ref_cat: Any
         query_radius: float
         match_radius: float
@@ -93,6 +94,7 @@ if TYPE_CHECKING:
         bkgsub_type: Any
         source_mask: bool
         weight_map: bool
+        persist_weight_maps: bool
         joint_wcs: bool
         apply_bpmask: bool
         interp_type: str
@@ -101,6 +103,7 @@ if TYPE_CHECKING:
         propagate_mask: bool
         streamline_reprojection: bool
         discard_interp: bool
+        lean_factory: bool
         combine_scratch: Any
         convolve: Any
         target_seeing: Any

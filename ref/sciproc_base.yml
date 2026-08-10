@@ -86,6 +86,7 @@ astrometry:
 photometry:
   input_images:
   runtime_version:
+  use_weight_map: False  # attach <image>_weight.fits as MAP_WEIGHT; off = historical weightless photometry
   ref_cat:  # for RIS tiles
   query_radius: 1.0  # deg
   match_radius: 1.0  # arcsec
@@ -114,7 +115,7 @@ imcoadd:
   input_images:
   runtime_version:
   coadd_routine: 'legacy'  # legacy or reproject-first
-  coadd_mode: 'median'
+  coadd_mode: 'median'  # mean | median | clipped (two-pass 3-sigma clipped weighted mean)
   coadd_weighting: global  # false | global (1/SKYSIG^2 per image) | pixel-wise (weight maps)
   image_selection: false  # False, 'auto' or 'interactive'; multi-epoch only
   image_selection_cuts:  # pinned cuts, e.g. {seeing: '<=2.8', bin2fwhm: '<=5.6'}; rest automatic
@@ -129,6 +130,7 @@ imcoadd:
   bkgsub_type:  # 'constant' | 'dynamic' | 'individual'; leave empty for auto
   source_mask: True  # False, True or 'iterative'; only affects dynamic bkgsub
   weight_map: true
+  persist_weight_maps: True  # durable RICE maps in singles/weight_maps/; reused across campaigns when masters match
   joint_wcs: False
   apply_bpmask: False
   interp_type: 'median'
@@ -137,6 +139,7 @@ imcoadd:
   propagate_mask: False  # LANCZOS3 bpm mask pass; only bpmask_policy 'conservative' reads it (1px uses wht resamps)
   streamline_reprojection: False  # (interp + weight + reproject) in one go, per-image; less I/O
   discard_interp: False  # delete interp pairs once their reprojected products exist
+  lean_factory: False  # delete sci resamps + bkg/bkgrms once bkgsub products exist; resumes recompute
   combine_scratch:  # local dir to stage combine inputs off NFS; empty = off (moot when factory_scratch set)
   convolve: 
   target_seeing:  # auto if it's empty or smaller than max seeing

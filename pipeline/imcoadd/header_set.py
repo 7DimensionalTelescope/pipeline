@@ -216,9 +216,9 @@ class InputHeaderSet:
     def coadd_egain(self) -> float | None:
         """Effective EGAIN for the coadd. Requires FLXSCALE stamped.
 
-        Exact only when every EGAIN/FLXSCALE is equal. `calc.coadd_effective_egain`
-        overrides this for the numpy mean, where the weights are in hand; the median and
-        legacy SWarp paths still land here.
+        Naive sum(EGAIN/FLXSCALE): no footprint thinning, no median penalty. Every
+        in-memory combine (mean/median/clipped) OVERRIDES it with the footprint-exact
+        per-pixel gain map; only legacy SWarp-combined products keep this value.
         """
         egain = self.values("EGAIN")
         flx = self.values("FLXSCALE")

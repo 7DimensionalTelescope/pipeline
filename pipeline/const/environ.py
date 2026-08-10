@@ -119,6 +119,9 @@ HIGH_LEVEL_TASK_LOG_FILE = (
 )
 
 
+# host-local coordination (ephemeral: /var/lock is tmpfs, cleared on boot)
+HOST_LOCK_DIR = _external_paths.get("HOST_LOCK_DIR") or "/var/lock/py7dt"
+
 # database access
 EMAIL_USER = os.environ.get("EMAIL_USER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")

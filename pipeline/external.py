@@ -637,6 +637,7 @@ def swarp(
     else:
         input_image_list = []
 
+    input_was_list = isinstance(input, list)
     if isinstance(input, list):
         input = ",".join(input)
     elif isinstance(input, str):  # assume file input
@@ -711,7 +712,9 @@ def swarp(
     )
 
     monitor_stop = None
-    if logger is not None and resample_dir and str(input).startswith("@") is False and os.path.isfile(input):
+    # imagelist inputs only: for a direct FITS path the line count would read the
+    # whole binary file, and a per-image call is over before the first 60 s tick
+    if logger is not None and resample_dir and not input_was_list and str(input).startswith("@") is False and os.path.isfile(input):
         # one directory scan a minute against the imagelist length; the resamp files SWarp
         # writes are the only progress signal it emits at file granularity
         import threading

@@ -440,10 +440,18 @@ def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_p
                 ax.axvline(cuts[xk], color="tab:red", ls="--", lw=1.2)
                 ax.annotate(f"{cuts[xk]:g}", xy=(cuts[xk], 0.99), xycoords=("data", "axes fraction"),
                             color="tab:red", fontsize=10, ha="left", va="top")  # fmt: skip
+                xl = ax.get_xlim()
+                lo, hi = (cuts[xk], xl[1]) if directions.get(xk) == "lower" else (xl[0], cuts[xk])
+                ax.axvspan(lo, hi, color="0.92", zorder=0)
+                ax.set_xlim(xl)
             if yk in cuts:
                 ax.axhline(cuts[yk], color="tab:red", ls="--", lw=1.2)
                 ax.annotate(f"{cuts[yk]:g}", xy=(0.99, cuts[yk]), xycoords=("axes fraction", "data"),
                             color="tab:red", fontsize=10, ha="right", va="bottom")  # fmt: skip
+                yl = ax.get_ylim()
+                lo, hi = (cuts[yk], yl[1]) if directions.get(yk) == "lower" else (yl[0], cuts[yk])
+                ax.axhspan(lo, hi, color="0.92", zorder=0)
+                ax.set_ylim(yl)
             ax.set_xlabel(xk.upper(), fontsize=13)
             ax.set_ylabel(yk.upper(), fontsize=13)
             ax.tick_params(labelsize=11)

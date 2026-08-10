@@ -144,6 +144,13 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
     #         is_too=instance._is_too,
     #     )
 
+    @staticmethod
+    def single_weight_map(single_path: str) -> str:
+        """Durable per-single weight map: <dir>/weight_maps/<stem>_wmap.fits (RICE inside)."""
+        base = os.path.basename(str(single_path))
+        stem = base[:-5] if base.endswith(".fits") else base
+        return os.path.join(os.path.dirname(str(single_path)), "weight_maps", f"{stem}_wmap.fits")
+
     def replace(self, input=None, **setting_overrides) -> PathHandler:
         """A method to create a new PathHandler instance with the same settings but different input files."""
         s = dc_replaces(self.settings, **setting_overrides) if setting_overrides else self.settings

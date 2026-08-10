@@ -1,6 +1,7 @@
 from astropy.io import fits
 from numba import njit, prange
 from ..utils import add_suffix
+from ..path.path import PathHandler
 import numpy as np
 import fitsio
 from ..cuda.weight_map import calc_weight as gpu_calc_weight
@@ -49,8 +50,13 @@ def calc_weight_with_gpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, dev
     )
 
 
-def calc_weight_with_cpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, weight=True, out_names=None, **kwargs):
-    output = _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file)
+def calc_weight_with_cpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, weight=True, out_names=None,
+                         weight_store=None, **kwargs):
+    from .weight_store import load_single_weight, persist_single_weight
+
+    # calibration masters load lazily: an all-reusable group never touches them
+    output = None
+    masters = {"d": d_m_file, "f": f_m_file, "sz": sig_z_file, "sf": sig_f_file}
 
     out_names = out_names if out_names is not None else add_suffix(images, suffix="weight")
 
@@ -65,8 +71,14 @@ def calc_weight_with_cpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, wei
             image = nxt.result().astype(np.float32)
             if i + 1 < len(images):
                 nxt = pool.submit(fitsio.read, images[i + 1])
-            out = optimized_parallel(image, *output)
-            out[~np.isfinite(out)] = 0.0  # degenerate noise model -> weight 0, not inf
+            out = load_single_weight(PathHandler.single_weight_map(images[i]), masters) if weight_store else None
+            if out is None:
+                if output is None:
+                    output = _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file)
+                out = optimized_parallel(image, *output)
+                out[~np.isfinite(out)] = 0.0  # degenerate noise model -> weight 0, not inf
+                if weight_store:
+                    pool.submit(persist_single_weight, PathHandler.single_weight_map(images[i]), out.copy(), masters)
             if pending is not None:
                 pending.result()
             pending = pool.submit(fitsio.write, outname, out.astype(np.float32), clobber=True)

@@ -5,6 +5,7 @@ from astropy.table import Table, hstack, vstack, unique
 from astropy.coordinates import SkyCoord
 
 from ..const import GAIA_REF_DIR
+from ..utils import add_suffix
 from ..config.base import ConfigNode
 
 
@@ -324,11 +325,12 @@ def get_sex_options(
             key_name = key if key.startswith("-") else f"-{key}"
             sex_options[key_name] = phot_conf.sex_vars[key]
 
-    # 	Add Weight Map from SWarp
-    weightim = image.replace("com", "weight")
-    if "com" in image and os.path.exists(weightim):
-        sex_options["-WEIGHT_TYPE"] = "MAP_WEIGHT"
-        sex_options["-WEIGHT_IMAGE"] = weightim
+    # 	Add Weight Map (opt-in: weightless coadd photometry was deliberate)
+    if getattr(phot_conf, "use_weight_map", False):
+        weightim = add_suffix(image, "weight")
+        if os.path.exists(weightim):
+            sex_options["-WEIGHT_TYPE"] = "MAP_WEIGHT"
+            sex_options["-WEIGHT_IMAGE"] = weightim
 
     # 	Check Image
     head = image.replace(".fits", "")

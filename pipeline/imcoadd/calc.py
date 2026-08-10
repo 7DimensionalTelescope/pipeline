@@ -41,6 +41,14 @@ def median_variance_ratio(n: float) -> float:
     return float(np.interp(1.0 / n, (1.0 / knots)[::-1], values[::-1]))
 
 
+def _median_penalty(counts) -> "np.ndarray":
+    """Vectorized median_variance_ratio over a per-pixel contributor-count array."""
+    knots = np.array(sorted(_MEDIAN_VAR_RATIO), dtype=float)
+    values = np.array([_MEDIAN_VAR_RATIO[int(k)] for k in knots])
+    n = np.maximum(counts.astype(np.float64), 1.0)
+    return np.interp(1.0 / n, (1.0 / knots)[::-1], values[::-1])
+
+
 def coadd_effective_egain(gain_terms, mode: str = "mean", n_eff: float | None = None) -> float | None:
     """Effective gain of the coadd: ``(sum w)^2 / sum(w^2 / g)``, divided by the median
     penalty when ``mode`` is median.
@@ -71,6 +79,7 @@ def mean_coadd_numpy(
     masks: list[str] | None = None,
     flxscales: list[float] | bool | None = None,
     match_swarp_size: bool = True,
+    var_maps: list[str] | None = None,
     logger: Logger | None = None,
 ) -> str:
     """Per-pixel flux-scaled mean coadd (simple or inverse-variance weighted).
@@ -107,6 +116,10 @@ def mean_coadd_numpy(
     gain_denom = np.zeros((target_h, target_w), dtype=np.float64)  # sum w^2/g for the gain map
     gain_terms = []  # (typical weight, EGAIN/FLXSCALE) per contributing image
     all_egain = True
+    # scalar/no weighting + per-frame variance maps: propagate them through the same
+    # weighting the sci pixels get, so the output weight is the coadd's true 1/sigma^2
+    propagate = var_maps is not None and (weights is None or not isinstance(weights[0], str))
+    var_den = np.zeros((target_h, target_w), dtype=np.float64) if propagate else None
     for i, f in enumerate(input_images):
         with fits.open(f) as hdul:
             a = hdul[0].data.astype(np.float64)
@@ -167,8 +180,21 @@ def mean_coadd_numpy(
                 all_egain = False
         # counted after the weight test, so the footprint is the frames the coadd used
         count_arr[ty0:ty1, tx0:tx1] += valid
+        if propagate:
+            with fits.open(var_maps[i], memmap=True) as vh:
+                vm = vh[0].data[sy0:sy1, sx0:sx1].astype(np.float64)
+            vm[vm < WEIGHT_EPS] = 0.0
+            # combine weight on the flux-normalized scale (matches w_eff/norm_arr);
+            # sigma_norm^2 = flxscale^2 / w_map
+            se = 1.0 if weights is None else float(weights[i]) / (flxscale * flxscale)
+            ok = valid & (vm > 0)
+            var_den[ty0:ty1, tx0:tx1] += np.where(ok, se * se * flxscale * flxscale / np.where(ok, vm, 1.0), 0.0)
 
     coadd = np.where(norm_arr > 0, sum_arr / np.where(norm_arr > 0, norm_arr, 1), np.nan).astype(np.float32)
+    if propagate:
+        weight_map_out = np.where(var_den > 0, norm_arr.astype(np.float64) ** 2 / np.where(var_den > 0, var_den, 1), 0.0)
+    else:
+        weight_map_out = norm_arr
 
     out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, coadd_header)
     covered = count_arr > 0
@@ -180,15 +206,18 @@ def mean_coadd_numpy(
     else:
         effective = coadd_effective_egain(gain_terms, mode="mean", n_eff=n_eff)
     if effective is not None:
-        out_header["EGAIN"] = (effective, "Effective EGAIN for coadded image (e-/ADU)")
+        # value-only: InputHeaderSet.coadd_header owns the card's comment
+        out_header["EGAIN"] = effective
+        if not out_header.comments["EGAIN"]:
+            out_header.comments["EGAIN"] = "Effective EGAIN for coadded image (e-/ADU)"
         if logger is not None and n_eff is not None:
             logger.debug(f"Mean coadd EGAIN {effective:.4f} ({backend}, n_eff {n_eff:.1f} frames/pixel)")
     fits.writeto(output_path, coadd, header=out_header, overwrite=True)
 
-    # norm_arr is the summed inverse variance when weighted, the contributing-frame
-    # count otherwise -- the same two cases SWarp writes for the legacy routine.
+    # propagated: (sum s)^2 / sum(s^2 sigma_p^2) -- the coadd's own per-pixel inverse
+    # variance; otherwise summed inverse variance (pixel-wise) or frame count (simple).
     weight_out = weight_output or add_suffix(output_path, "weight")
-    fits.writeto(weight_out, norm_arr.astype(np.float32), header=out_header, overwrite=True)
+    fits.writeto(weight_out, weight_map_out.astype(np.float32), header=out_header, overwrite=True)
     footprint_out = footprint_output or add_suffix(output_path, "footprint")
     fits.writeto(footprint_out, count_arr.astype(np.int16), header=out_header, overwrite=True)
     if logger is not None:
@@ -200,14 +229,172 @@ def mean_coadd_numpy(
     return output_path
 
 
+CLIP_KAPPA = 3.0  # clip threshold in units of each sample's own expected noise
+CLIP_FRAC = 0.1  # fractional tolerance: bright cores scatter with seeing, not with sky noise
+
+
+def clipped_mean_coadd_numpy(
+    input_images: list[str],
+    output_path: str,
+    coadd_header: fits.Header,
+    weights: list[str] | list[float] | None = None,
+    weight_output: str | None = None,
+    footprint_output: str | None = None,
+    masks: list[str] | None = None,
+    flxscales: list[float] | bool | None = None,
+    match_swarp_size: bool = True,
+    kappa: float = CLIP_KAPPA,
+    reserved_bytes: int = 0,
+    var_maps: list[str] | None = None,
+    logger: Logger | None = None,
+) -> str:
+    """Median-centered kappa-sigma clipped weighted mean (Gruen+2014-style).
+
+    Pass 1 builds a median coadd (the existing strip machinery) as the robust center;
+    pass 2 streams the frames once more, keeping samples with
+    ``|x - c| <= kappa/sqrt(w) + CLIP_FRAC*|c|`` -- each sample judged against its OWN
+    expected noise, with the fractional term protecting bright cores whose frame-to-frame
+    scatter is seeing-driven, not sky-noise-driven -- then weighted-means the survivors.
+    An empirical-scatter criterion cannot do this job: a single outlier among n frames
+    caps at z = sqrt(n-1), inside kappa=3 for n <= 9. Requires weights.
+    """
+    if weights is None:
+        raise ValueError("clipped mean needs weights (set coadd_weighting to 'global' or 'pixel-wise')")
+    st = time.time()
+    if logger is not None:
+        logger.info(f"Start in-memory numpy coaddition (clipped weighted mean, kappa={kappa:g})")
+    if len(weights) != len(input_images):
+        raise ValueError(f"weights ({len(weights)}) and input_images ({len(input_images)}) length mismatch")
+    if isinstance(flxscales, list) and len(flxscales) != len(input_images):
+        raise ValueError(f"flxscales ({len(flxscales)}) and input_images ({len(input_images)}) length mismatch")
+
+    # pass 1: robust center from the proven median machinery, into temporaries
+    tmp_center = add_suffix(output_path, "clipcenter")
+    median_coadd_numpy(
+        input_images, tmp_center, coadd_header, weights=weights,
+        weight_output=add_suffix(tmp_center, "weight"), footprint_output=add_suffix(tmp_center, "footprint"),
+        masks=masks, flxscales=flxscales, match_swarp_size=match_swarp_size,
+        chunk_h=None, reserved_bytes=reserved_bytes, logger=logger,
+    )
+    center = fits.getdata(tmp_center).astype(np.float64)
+    for t in (tmp_center, add_suffix(tmp_center, "weight"), add_suffix(tmp_center, "footprint")):
+        try:
+            os.remove(t)
+        except OSError:
+            pass
+    center = np.where(np.isfinite(center), center, 0.0)  # no coverage: nothing survives anyway
+
+    target_w, target_h, target_cx, target_cy, x0, y0, shapes = determine_size(input_images, match_swarp_size)
+
+    sum_arr = np.zeros((target_h, target_w), dtype=np.float64)
+    norm_arr = np.zeros((target_h, target_w), dtype=np.float64)
+    count_arr = np.zeros((target_h, target_w), dtype=np.int32)
+    gain_denom = np.zeros((target_h, target_w), dtype=np.float64)
+    gain_terms = []
+    all_egain = True
+    propagate = var_maps is not None and not isinstance(weights[0], str)
+    var_den = np.zeros((target_h, target_w), dtype=np.float64) if propagate else None
+    n_clipped = n_total = 0
+    for i, f in enumerate(input_images):
+        with fits.open(f) as hdul:
+            a = hdul[0].data.astype(np.float64)
+            egain = hdul[0].header.get("EGAIN")
+            if flxscales is False:
+                flxscale = 1.0
+            elif flxscales is not None:
+                flxscale = flxscales[i]
+            else:
+                flxscale = hdul[0].header.get("FLXSCALE", 1.0)
+        flxscale = 1.0 if flxscale is None else flxscale
+        h, w = a.shape
+        tx0 = max(0, x0[i]); tx1 = min(target_w, x0[i] + w)  # fmt: skip
+        ty0 = max(0, y0[i]); ty1 = min(target_h, y0[i] + h)  # fmt: skip
+        if tx1 <= tx0 or ty1 <= ty0:
+            continue
+        sx0 = tx0 - x0[i]; sx1 = tx1 - x0[i]  # fmt: skip
+        sy0 = ty0 - y0[i]; sy1 = ty1 - y0[i]  # fmt: skip
+        sl = (slice(ty0, ty1), slice(tx0, tx1))
+        raw = a[sy0:sy1, sx0:sx1]
+        valid = np.isfinite(raw) & (raw != 0.0)
+        if masks is not None:
+            with fits.open(masks[i], memmap=True) as mh:
+                valid &= mh[0].data[sy0:sy1, sx0:sx1] > WEIGHT_EPS
+        if isinstance(weights[i], str):
+            with fits.open(weights[i]) as hdul:
+                w_full = hdul[0].data.astype(np.float64)
+            w_full[w_full < WEIGHT_EPS] = 0.0
+            w_eff = w_full[sy0:sy1, sx0:sx1] / (flxscale * flxscale)
+            valid &= w_eff > 0
+        else:
+            w_eff = float(weights[i]) / (flxscale * flxscale)
+        src = raw * flxscale
+
+        c = center[sl]
+        sigma_i = 1.0 / np.sqrt(np.where(valid, w_eff, 1.0) if not np.isscalar(w_eff) else w_eff)
+        keep = valid & (np.abs(src - c) <= kappa * sigma_i + CLIP_FRAC * np.abs(c))
+        n_total += int(valid.sum())
+        n_clipped += int(valid.sum() - keep.sum())
+
+        wv = np.where(keep, w_eff, 0.0)
+        sum_arr[sl] += wv * np.where(keep, src, 0.0)
+        norm_arr[sl] += wv
+        count_arr[sl] += keep
+        if egain is not None and keep.any():
+            w_typ = float(w_eff) if np.isscalar(w_eff) else float(w_eff[keep].mean())
+            gain_terms.append((w_typ, float(egain) / flxscale))
+            gain_denom[sl] += np.where(keep, wv * wv * flxscale / float(egain), 0.0)
+        elif egain is None:
+            all_egain = False
+        if propagate:
+            with fits.open(var_maps[i], memmap=True) as vh:
+                vm = vh[0].data[sy0:sy1, sx0:sx1].astype(np.float64)
+            vm[vm < WEIGHT_EPS] = 0.0
+            se = float(weights[i]) / (flxscale * flxscale)
+            ok = keep & (vm > 0)
+            var_den[sl] += np.where(ok, se * se * flxscale * flxscale / np.where(ok, vm, 1.0), 0.0)
+
+    coadd = np.where(norm_arr > 0, sum_arr / np.where(norm_arr > 0, norm_arr, 1), np.nan).astype(np.float32)
+    if logger is not None:
+        logger.info(f"Clipped {n_clipped} of {n_total} samples ({100 * n_clipped / max(n_total, 1):.3f}%)")
+
+    out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, coadd_header)
+    covered = count_arr > 0
+    n_eff = float(count_arr[covered].mean()) if covered.any() else None
+    if all_egain and covered.any() and (gain_denom[covered] > 0).all():
+        effective = float(np.median(norm_arr[covered] ** 2 / gain_denom[covered]))
+    else:
+        effective = coadd_effective_egain(gain_terms, mode="mean", n_eff=n_eff)
+    if effective is not None:
+        # value-only: InputHeaderSet.coadd_header owns the card's comment
+        out_header["EGAIN"] = effective
+        if not out_header.comments["EGAIN"]:
+            out_header.comments["EGAIN"] = "Effective EGAIN for coadded image (e-/ADU)"
+    fits.writeto(output_path, coadd, header=out_header, overwrite=True)
+    # survivors form a weighted mean: propagated (sum s)^2/sum(s^2 sigma^2), no penalty
+    if propagate:
+        weight_map_out = np.where(var_den > 0, norm_arr.astype(np.float64) ** 2 / np.where(var_den > 0, var_den, 1), 0.0)
+    else:
+        weight_map_out = norm_arr.astype(np.float64)
+    weight_out = weight_output or add_suffix(output_path, "weight")
+    fits.writeto(weight_out, weight_map_out.astype(np.float32), header=out_header, overwrite=True)
+    footprint_out = footprint_output or add_suffix(output_path, "footprint")
+    fits.writeto(footprint_out, count_arr.astype(np.int16), header=out_header, overwrite=True)
+    if logger is not None:
+        logger.info(f"Numpy clipped-mean coaddition completed in {time_diff_in_seconds(st)} seconds")
+    return output_path
+
+
 def _auto_chunk_h(n_images: int, width: int, height: int, budget_fraction: float = 0.3,
-                  floor: int = 128, logger: Logger | None = None) -> int:
+                  floor: int = 128, reserved_bytes: int = 0, logger: Logger | None = None) -> int:
     """Strip height from idle memory: strip count scales the NFS slice round-trips, so
-    RAM buys taller strips and directly cuts the latency-bound I/O."""
+    RAM buys taller strips and directly cuts the latency-bound I/O. ``reserved_bytes``
+    subtracts other combines' leased stacks (services.combine_lock) so concurrent
+    combines cannot each size against the same free memory."""
     try:
         avail = int(next(l for l in open("/proc/meminfo") if l.startswith("MemAvailable")).split()[1]) * 1024
     except Exception:
         return floor
+    avail = max(0, avail - int(reserved_bytes))
     chunk = int(budget_fraction * avail / (n_images * width * 4))
     chunk = max(floor, min(chunk, height))
     if logger is not None:
@@ -228,6 +415,8 @@ def median_coadd_numpy(
     flxscales: list[float] | bool | None = None,
     match_swarp_size: bool = True,
     chunk_h: int = 128,
+    reserved_bytes: int = 0,
+    var_maps: list[str] | None = None,
     logger: Logger | None = None,
 ) -> str:
     """Per-pixel flux-scaled median coadd.
@@ -252,7 +441,7 @@ def median_coadd_numpy(
     target_w, target_h, target_cx, target_cy, x0, y0, shapes = determine_size(input_images, match_swarp_size)
 
     if chunk_h is None:
-        chunk_h = _auto_chunk_h(len(input_images), target_w, target_h, logger=logger)
+        chunk_h = _auto_chunk_h(len(input_images), target_w, target_h, reserved_bytes=reserved_bytes, logger=logger)
 
     handles = [fits.open(f, memmap=True) for f in input_images]
     # Flux-scaling source (logged once): False disables; explicit list = snapshot
@@ -271,14 +460,15 @@ def median_coadd_numpy(
         logger.info(f"Flux scaling during coadd: {scale_mode}")
 
     coadd = np.full((target_h, target_w), np.nan, dtype=np.float32)
-    # accumulated per strip alongside the median, so peak memory stays bounded
-    norm_arr = np.zeros((target_h, target_w), dtype=np.float32)
     count_arr = np.zeros((target_h, target_w), dtype=np.int32)
     egains = [fits.getheader(f).get("EGAIN") for f in input_images]
     gain_terms = [(1.0, float(e) / flxscales[i]) for i, e in enumerate(egains) if e is not None]
     all_egain = all(e is not None for e in egains)
     ginv_arr = np.zeros((target_h, target_w), dtype=np.float64)  # sum(1/g) over contributing frames
     pixel_weights = weights is not None and len(weights) > 0 and isinstance(weights[0], str)
+    propagate = var_maps is not None and not pixel_weights
+    have_sigma = propagate or pixel_weights or weights is not None
+    var_den = np.zeros((target_h, target_w), dtype=np.float64) if have_sigma else None
     whandles = [fits.open(f, memmap=True) for f in weights] if pixel_weights else None
     mhandles = [fits.open(f, memmap=True) for f in masks] if masks is not None else None
     try:
@@ -312,14 +502,23 @@ def median_coadd_numpy(
                 count_arr[ty0:ty1, tx0:tx1] += contributed
                 if egains[i] is not None:
                     ginv_arr[ty0:ty1, tx0:tx1] += np.where(contributed, flxscales[i] / float(egains[i]), 0.0)
-                if whandles is not None:
-                    norm_arr[ty0:ty1, tx0:tx1] += np.where(contributed, w, 0.0)
+                # the median vote is UNWEIGHTED, whatever coadd_weighting says: its weight
+                # product is the equal-vote mean's variance, sum sigma_i^2 of contributors
+                # (user decision 2026-08-10) -- sigma from the best available source
+                if propagate:
+                    with fits.open(var_maps[i], memmap=True) as vh:
+                        vm = vh[0].data[sy0:sy1, sx0:sx1].astype(np.float64)
+                    vm[vm < WEIGHT_EPS] = 0.0
+                    fx = flxscales[i]
+                    ok = contributed & (vm > 0)
+                    var_den[ty0:ty1, tx0:tx1] += np.where(ok, fx * fx / np.where(ok, vm, 1.0), 0.0)
+                elif whandles is not None:
+                    ok = contributed & (w > 0)
+                    var_den[ty0:ty1, tx0:tx1] += np.where(ok, 1.0 / np.where(ok, w, 1.0), 0.0)
                 elif weights is not None:
-                    # scalar per-image weights: the median vote is unweighted, but the
-                    # output weight map still accumulates the inverse variance
-                    norm_arr[ty0:ty1, tx0:tx1] += np.where(contributed, float(weights[i]) / (flxscales[i] * flxscales[i]), 0.0)
-                else:
-                    norm_arr[ty0:ty1, tx0:tx1] += contributed
+                    var_den[ty0:ty1, tx0:tx1] += np.where(
+                        contributed, (flxscales[i] * flxscales[i]) / float(weights[i]), 0.0
+                    )
             coadd[ys:ye, :] = np.nanmedian(stack, axis=0)
     finally:
         for hdul in handles:
@@ -340,13 +539,26 @@ def median_coadd_numpy(
     else:
         effective = coadd_effective_egain(gain_terms, mode="median", n_eff=n_eff)
     if effective is not None:
-        out_header["EGAIN"] = (effective, "Effective EGAIN for coadded image (e-/ADU)")
+        # value-only: InputHeaderSet.coadd_header owns the card's comment
+        out_header["EGAIN"] = effective
+        if not out_header.comments["EGAIN"]:
+            out_header.comments["EGAIN"] = "Effective EGAIN for coadded image (e-/ADU)"
         if logger is not None:
             logger.debug(f"Median coadd EGAIN {effective:.4f} (n_eff {n_eff:.1f} frames/pixel)")
     fits.writeto(output_path, coadd, header=out_header, overwrite=True)
 
+    # equal-vote mean variance (n^2 / sum sigma_i^2) with the order-statistics penalty
+    # folded in, so 1/sqrt(weight) is THE per-pixel sigma of this median image. The
+    # penalty is exact for homogeneous stacks and conservative for heterogeneous ones.
+    if have_sigma:
+        base_w = np.where(
+            var_den > 0, count_arr.astype(np.float64) ** 2 / np.where(var_den > 0, var_den, 1), 0.0
+        )
+    else:
+        base_w = count_arr.astype(np.float64)  # no sigma source: frame count
+    weight_map_out = base_w / _median_penalty(count_arr)
     weight_out = weight_output or add_suffix(output_path, "weight")
-    fits.writeto(weight_out, norm_arr, header=out_header, overwrite=True)
+    fits.writeto(weight_out, weight_map_out.astype(np.float32), header=out_header, overwrite=True)
     footprint_out = footprint_output or add_suffix(output_path, "footprint")
     fits.writeto(footprint_out, count_arr.astype(np.int16), header=out_header, overwrite=True)
     if logger is not None:

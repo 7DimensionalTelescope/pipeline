@@ -234,6 +234,7 @@ class SciProcConfiguration(BaseConfig):
         is_too: bool = False,
         is_multi_epoch: bool = False,
         config_suffix: str = None,
+        factory_scratch: str = None,
         config_name_policy: Literal["error", "last"] = "error",
         **kwargs,
     ):
@@ -264,10 +265,15 @@ class SciProcConfiguration(BaseConfig):
             is_multi_epoch=is_multi_epoch,
             config_file=config_file,
             config_suffix=config_suffix,
+            factory_scratch=factory_scratch,
         )
         self = cls.base_config(write=write)
         self.input_files = input_images
         self.path = path
+        if factory_scratch is not None:
+            # keep the recorded config in step with the live PathHandler; a post-hoc
+            # node assignment alone never reaches the already-built path (2026-08-10 bug)
+            self.node.settings.factory_scratch = factory_scratch
         self.config_file = self.path.sciproc_output_yml
         if isinstance(self.config_file, list):
             if config_name_policy == "error":

@@ -123,10 +123,12 @@ def interpolate_masked_pixels_cpu(
                 pending_write.result()
             pending_write = pool.submit(_write, idx, interp_img, interp_wt)
             if logger is not None:
-                logger.info(
+                logger.debug(
                     f"Interpolated {_os.path.basename(images[idx])} [image {idx + 1}/{len(images)}] "
                     f"in {_time.time() - st_img:.1f} seconds (read-wait {t_read:.1f}, kernel {t_kernel:.1f})"
                 )
+                if (idx + 1) % 25 == 0 or idx + 1 == len(images):
+                    logger.info(f"Interpolation progress {idx + 1}/{len(images)}")
         if pending_write is not None:
             pending_write.result()
 
@@ -505,6 +507,9 @@ def add_bpx_method(header, method):
 # #     return result
 
 
+from .weight_store import load_single_weight, persist_single_weight
+
+
 def write_weight_int16(path, weight, header, n_holes=None):
     """Weight sidecar as BITPIX 16 + BSCALE: FITS has no float16, and SWarp reads scaled
     ints exactly (verified). Half the bytes of float32; quantization <= wmax/64000."""
@@ -524,7 +529,7 @@ def write_weight_int16(path, weight, header, n_holes=None):
 
 def weight_and_interpolate_cpu(
     images, mask_path, output_paths, calib, window=1, method="median", badpix=1,
-    zero_interp_weight=True, logger=None, post_frame=None,
+    zero_interp_weight=True, logger=None, post_frame=None, weight_store=None,
 ):
     """Fused weight calculation + bad-pixel interpolation, one read and one write per image.
 
@@ -535,6 +540,8 @@ def weight_and_interpolate_cpu(
     """
     import os as _os
     import time as _time
+
+    st_stage = _time.time()
     from concurrent.futures import ThreadPoolExecutor
 
     from .weight import optimized_parallel
@@ -565,13 +572,23 @@ def weight_and_interpolate_cpu(
                 ahead.append(pool.submit(_load, idx + 2))
             t_read = _time.time() - st_img
 
-            wgt = optimized_parallel(sci, *calib)
-            # a degenerate noise model (sig_z = dark = pixel = 0) divides to inf/nan;
-            # zero certainty about a pixel is weight 0, not weight infinity
-            nonfinite = ~np.isfinite(wgt)
-            n_nonfinite = int(nonfinite.sum())
-            if n_nonfinite:
-                wgt[nonfinite] = 0.0
+            # durable store: reuse a provenance-verified map, else compute and persist
+            wgt = n_nonfinite = None
+            if weight_store is not None:
+                store_paths, store_masters = weight_store
+                wgt = load_single_weight(store_paths[idx], store_masters)
+            if wgt is None:
+                if calib is None:
+                    raise RuntimeError(f"single weight map vanished mid-run for {images[idx]}")
+                wgt = optimized_parallel(sci, *calib)
+                # a degenerate noise model (sig_z = dark = pixel = 0) divides to inf/nan;
+                # zero certainty about a pixel is weight 0, not weight infinity
+                nonfinite = ~np.isfinite(wgt)
+                n_nonfinite = int(nonfinite.sum())
+                if n_nonfinite:
+                    wgt[nonfinite] = 0.0
+                if weight_store is not None:
+                    pool.submit(persist_single_weight, store_paths[idx], wgt.copy(), store_masters)
             t_weight = _time.time() - st_img - t_read
             interp_img, interp_wt = interpolate_masked_pixels_cpu_numba(
                 sci, mask, window=window, weight=wgt, use_median=(method == "median")
@@ -584,11 +601,17 @@ def weight_and_interpolate_cpu(
                 pending_write.result()
             pending_write = pool.submit(_write, idx, interp_img, interp_wt)
             if logger is not None:
-                logger.info(
+                # per-image detail at DEBUG; INFO gets one summary line per 25 frames
+                logger.debug(
                     f"Weight+interp {_os.path.basename(images[idx])} [image {idx + 1}/{len(images)}] "
                     f"in {_time.time() - st_img:.1f} seconds "
                     f"(read-wait {t_read:.1f}, weight {t_weight:.1f}, interp {t_interp:.1f})"
-                    + (f" [{n_nonfinite} degenerate weight px zeroed]" if n_nonfinite else "")
+                    + (f" [{n_nonfinite} degenerate weight px zeroed]" if (n_nonfinite or 0) else "")
                 )
+                if (idx + 1) % 25 == 0 or idx + 1 == len(images):
+                    logger.info(
+                        f"Weight+interp progress {idx + 1}/{len(images)} "
+                        f"({(_time.time() - st_stage) / (idx + 1):.1f} s/image avg)"
+                    )
         if pending_write is not None:
             pending_write.result()
