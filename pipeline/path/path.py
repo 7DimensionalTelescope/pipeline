@@ -1719,7 +1719,7 @@ class PathImcoadd(AutoMkdirMixin, AutoCollapseMixin):
         yml = collapse(self._parent.sciproc_output_yml, force=True)
         stem = os.path.splitext(os.path.basename(str(yml)))[0]
         prefix = f"{self._parent.name.obj_collapse}_{self._parent.name.filter_collapse}_"
-        return stem[len(prefix):] if stem.startswith(prefix) else ""
+        return stem[len(prefix) :] if stem.startswith(prefix) else ""
 
     @property
     def coadd_image(self):
@@ -1776,16 +1776,15 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
     # ---- stage directories (under imcoadd tmp_dir, scoped per config) ----
     @property
     def source_mask_dir(self) -> str:
-        """Persistent per-frame source masks: <output dir>/source_masks/<config stem>/.
+        if self._parent._parent.settings.is_multi_epoch:
+            yml = self._parent._parent.sciproc_output_yml
+            from ..utils import collapse as _collapse
 
-        Lives next to the config yml (NOT in the factory) so it survives factory
-        cleanup; scoped per config stem because masks are drawn on the config's grid."""
-        yml = self._parent._parent.sciproc_output_yml
-        from ..utils import collapse as _collapse
-
-        yml = _collapse(yml, force=True)
-        stem = os.path.splitext(os.path.basename(str(yml)))[0]
-        return os.path.join(os.path.dirname(str(yml)), "source_masks", stem)
+            stem = os.path.splitext(os.path.basename(str(_collapse(yml, force=True))))[0]
+            single_dir = _collapse(self._parent._parent.single_dir, force=True)
+            return os.path.join(str(single_dir), "source_masks", stem)
+        else:
+            return self._parent._parent.single_dir
 
     @property
     def manifest_file(self) -> str:
