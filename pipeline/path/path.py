@@ -1775,6 +1775,19 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
 
     # ---- stage directories (under imcoadd tmp_dir, scoped per config) ----
     @property
+    def source_mask_dir(self) -> str:
+        """Persistent per-frame source masks: <output dir>/source_masks/<config stem>/.
+
+        Lives next to the config yml (NOT in the factory) so it survives factory
+        cleanup; scoped per config stem because masks are drawn on the config's grid."""
+        yml = self._parent._parent.sciproc_output_yml
+        from ..utils import collapse as _collapse
+
+        yml = _collapse(yml, force=True)
+        stem = os.path.splitext(os.path.basename(str(yml)))[0]
+        return os.path.join(os.path.dirname(str(yml)), "source_masks", stem)
+
+    @property
     def manifest_file(self) -> str:
         """Stat-validated option cache for this scope's intermediates (see ImCoadd._manifest_*)."""
         return os.path.join(self._parent.tmp_dir, self._config_scope, "manifest.json")
@@ -1814,8 +1827,9 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def coadd_footprint_image(self) -> str:
-        """How many frames contributed to each output pixel. Not a mask: whether bad
-        pixels are excluded from the count is `imcoadd.propagate_mask`'s decision."""
+        """How many frames contributed to each output pixel. Not a mask: whether
+        bad-pixel-touched samples are excluded from the count is
+        `imcoadd.badpix_reprojection_policy`'s decision."""
         return add_suffix(self._parent.coadd_image, "footprint")
 
     # ---- inverted bpmask staged in tmp_dir for the bpm SWarp pass ----

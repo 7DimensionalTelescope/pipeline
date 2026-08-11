@@ -114,6 +114,28 @@ def build_coadd_wcs_header(
     return out_header
 
 
+def write_mask_plio(path, mask) -> str:
+    """Binary mask as PLIO_1-compressed FITS (~1-3 MB for a 61 Mpx frame).
+
+    PLIO is FITS-standard tile compression designed for pixel masks; any compliant
+    reader sees an ordinary integer image. Plain uint8 working copies are still
+    written wherever SExtractor must read the mask (it cannot read tile-compressed)."""
+    hdu = fits.CompImageHDU(data=np.asarray(mask, dtype=np.uint8), compression_type="PLIO_1")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fits.HDUList([fits.PrimaryHDU(), hdu]).writeto(path, overwrite=True)
+    return path
+
+
+def read_mask_plio(path):
+    """Persisted mask -> bool array, or None when absent/unreadable."""
+    if not os.path.exists(path):
+        return None
+    try:
+        return fits.getdata(path, ext=1).astype(bool)
+    except OSError:
+        return None
+
+
 def build_source_mask(
     catalog: str,
     shape: tuple[int, int],
@@ -121,6 +143,8 @@ def build_source_mask(
     galaxy_scale: float,
     class_star_cut: float,
     min_radius: float,
+    bright_flux_adu: float = 3.0e5,
+    bright_radius_per_dex: float = 90.0,
     logger=None,
 ) -> np.ndarray:
     """Elliptical source mask from a SExtractor catalog; extended sources get a wider ellipse.
@@ -152,6 +176,26 @@ def build_source_mask(
     # SExtractor image coordinates are 1-indexed
     xc = np.asarray(cat["X_IMAGE"], dtype=float) - 1.0
     yc = np.asarray(cat["Y_IMAGE"], dtype=float) - 1.0
+
+    # bright tier by INSTRUMENTAL flux (ADU): saturated/near-saturated stars break
+    # KRON/CLASS_STAR, and their wings/spikes escape any Kron ellipse. Circular on
+    # purpose: single-exposure PAs differ, so spikes cannot line up on the reprojected
+    # plane. r grows per decade of flux; constants are first-guess pending wing-profile
+    # calibration on a deep coadd.
+    if "FLUX_AUTO" in cat.colnames:
+        flux = np.asarray(cat["FLUX_AUTO"], dtype=float)
+        bright = np.isfinite(flux) & (flux > bright_flux_adu)
+        if bright.any():
+            r_bright = min_radius + bright_radius_per_dex * np.log10(
+                np.maximum(flux, bright_flux_adu) / bright_flux_adu
+            )
+            a = np.where(bright, np.maximum(a, r_bright), a)
+            b = np.where(bright, np.maximum(b, r_bright), b)
+            if logger is not None:
+                logger.debug(f"{int(bright.sum())} bright stars got circular wing masks "
+                             f"(max r {float(r_bright.max()):.0f} px)")
+    elif logger is not None:
+        logger.debug("catalog has no FLUX_AUTO (pre-2026-08-11 bkgdet cat); bright-star tier skipped")
 
     cos_t, sin_t = np.cos(theta), np.sin(theta)
     # half-sizes of each ellipse's axis-aligned bounding box

@@ -93,17 +93,18 @@ if TYPE_CHECKING:
         zpscale: bool
         bkgsub_type: Any
         source_mask: bool
-        weight_map: bool
+        output_weight_map: bool
+        output_footprint: bool
         persist_weight_maps: bool
         joint_wcs: bool
-        apply_bpmask: bool
+        interpolate_badpix: bool
         interp_type: str
-        zero_interp_weight: bool
-        bpmask_policy: str
-        propagate_mask: bool
+        zero_badpix_weight: bool
+        badpix_reprojection_policy: str
         streamline_reprojection: bool
         discard_interp: bool
         lean_factory: bool
+        combine_lock_threshold: int
         combine_scratch: Any
         convolve: Any
         target_seeing: Any

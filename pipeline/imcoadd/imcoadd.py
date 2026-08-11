@@ -120,7 +120,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self.zpscale(images)
         self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("coadd", "zpscale"), "imcoadd-zpscale-completed")
 
-        if self.config_node.imcoadd.weight_map:
+        if self._coadd_plan()["need_weights"]:
             self.calculate_weight_map(images, device_id=device_id)
             self.update_progress(
                 SCIPROCESS_REGISTRY.milestone_progress("coadd", "calculate_weight_map"),
@@ -128,7 +128,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             )
 
         # replace hot pixels
-        if self.config_node.imcoadd.apply_bpmask:
+        if self._coadd_plan()["interpolate"]:
             images = self.apply_bpmask(images, device_id=device_id)
             self.update_progress(
                 SCIPROCESS_REGISTRY.milestone_progress("coadd", "apply_bpmask"), "imcoadd-apply-bpmask-completed"
@@ -175,8 +175,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         do_zpscale = bool(get_key(self.config_node.imcoadd, "zpscale", default=True))
         optional_steps = (
-            int(bool(self.config_node.imcoadd.weight_map))
-            + int(bool(self.config_node.imcoadd.apply_bpmask))
+            int(bool(self._coadd_plan()["need_weights"]))
+            + int(bool(self._coadd_plan()["interpolate"]))
             + int(bool(self.config_node.imcoadd.joint_wcs))
             + int(bool(self.config_node.imcoadd.convolve))
             + int(do_zpscale)
@@ -188,8 +188,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         images = self.input_images
         weight_images = None
-        do_weight = bool(self.config_node.imcoadd.weight_map)
-        do_bpmask = bool(self.config_node.imcoadd.apply_bpmask)
+        do_weight = bool(self._coadd_plan()["need_weights"])
+        do_bpmask = bool(self._coadd_plan()["interpolate"])
         if do_weight and do_bpmask:
             # fused: the weight map is handed to interpolation in memory, one read and one
             # write per image instead of three reads and two writes
@@ -543,11 +543,20 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             else:
                 fov_valid = self._write_fov_mask(inim, fov_mask)
                 fov_mask = fov_mask if fov_valid is not None else None
-            weight_image = (
-                self._write_source_mask(inim, fov_mask, fov_valid, src_mask)
-                if (src_mask is not None and btype == "dynamic")
-                else fov_mask
-            )
+            weight_image = fov_mask
+            if src_mask is not None and btype == "dynamic":
+                weight_image, usable = self._write_source_mask(inim, fov_mask, fov_valid, src_mask)
+                if usable < 20.0:
+                    # crowded field: too little unmasked sky for a mesh -- fall back to a
+                    # constant background for this frame. Defining a GOOD constant level
+                    # under crowding is its own open problem (see scientific-guidelines);
+                    # this only avoids a mesh built almost entirely on interpolation.
+                    self.logger.warning(
+                        f"{get_basename(inim)}: source mask leaves {usable:.0f}% of the FOV; "
+                        f"falling back to constant background subtraction"
+                    )
+                    btype = "constant"
+                    weight_image = fov_mask
             is_steppy = methods[btype](
                 inim,
                 outim,
@@ -672,12 +681,14 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         """Config options that change the coadd, as coadd header cards."""
         node = self.config_node.imcoadd
         shown = lambda value: "NONE" if value is None or value is False else value  # noqa: E731
-        interp = get_key(node, "interp_type") if get_key(node, "apply_bpmask") else None
+        bp = self._coadd_plan()
+        interp = get_key(node, "interp_type") if bp["interpolate"] else None
         return {
             "COADDRTN": (shown(get_key(node, "coadd_routine")), "imcoadd.coadd_routine"),
             "COADDMOD": (shown(get_key(node, "coadd_mode")), "imcoadd.coadd_mode"),
             "COADDWGT": (shown(get_key(node, "coadd_weighting", default="global")), "imcoadd.coadd_weighting"),
-            "BPMPOL":   (shown(get_key(node, "bpmask_policy", default="1px")), "imcoadd.bpmask_policy"),
+            "BPMPOL":   (shown(bp["policy"]), "imcoadd.badpix_reprojection_policy"),
+            "ZBPWGT":   (bool(bp["zero"]), "imcoadd.zero_badpix_weight"),
             "ZPSCALE":  (bool(get_key(node, "zpscale")), "imcoadd.zpscale"),
             "INTERP":   (shown(interp), "imcoadd.interp_type"),
             "CONVOLVE": (shown(get_key(node, "convolve")), "imcoadd.convolve"),
@@ -731,7 +742,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         fov_valid: np.ndarray | None,
         outmask: str,
         star_scale: float = 2.0,
-        galaxy_scale: float = 3.0,
+        galaxy_scale: float = 2.5,
         class_star_cut: float = 0.5,
         min_radius: float = 3.0,
         min_usable: float = 20.0,
@@ -744,12 +755,25 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         Takes any image, not just a single frame: the planned ``source_mask: iterative``
         re-runs this on the coadd and feeds the result back into a second bkgsub round."""
-        from .utils import build_source_mask
+        from .utils import build_source_mask, read_mask_plio, write_mask_plio
 
         param_file = os.path.join(REF_DIR, "srcExt", "bkgdet.param")
 
         base = os.path.splitext(get_basename(inim))[0]
         catalog = os.path.join(self.path_bkgsub, f"{base}_bkgdet.cat")
+
+        header = fits.getheader(inim)
+        shape = (header["NAXIS2"], header["NAXIS1"])
+        persist = os.path.join(
+            collapse(self.path.imcoadd.factory.source_mask_dir, force=True), get_basename(outmask)
+        )
+        if not self.overwrite:
+            # persisted mask (PLIO, output dir): skip detection+painting; SExtractor needs
+            # a plain working copy, so materialize one in the factory
+            valid = read_mask_plio(persist)
+            if valid is not None and valid.shape == shape:
+                fits.writeto(outmask, valid.astype(np.uint8), overwrite=True)
+                return outmask, float(100 * valid.mean())
         sex_options = {
             "-CATALOG_TYPE": "ASCII_HEAD",
             "-PARAMETERS_NAME": param_file,
@@ -766,8 +790,6 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             logger=self.logger,
         )
 
-        header = fits.getheader(inim)
-        shape = (header["NAXIS2"], header["NAXIS1"])
         sources = build_source_mask(
             catalog,
             shape,
@@ -780,14 +802,15 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         valid = ~sources if fov_valid is None else (fov_valid & ~sources)
         fits.writeto(outmask, valid.astype(np.uint8), overwrite=True)
-        usable = 100 * valid.mean()
+        write_mask_plio(persist, valid)  # durable copy next to the config, survives factory cleanup
+        usable = float(100 * valid.mean())
         self.logger.debug(f"Source mask ({usable:.1f}% usable) saved as {get_basename(outmask)}")
         if usable < min_usable:
             self.logger.warning(
                 f"Only {usable:.1f}% of {get_basename(inim)} is left to estimate the background on; "
                 f"SExtractor will interpolate most meshes. Consider lowering the source-mask scales."
             )
-        return outmask
+        return outmask, usable
 
     def build_fov_masks(self, resampled_images, erode_iter: int = 3) -> list[str | None]:
         """Footprint masks taken from the **pristine SWarp resamps**, stored for bkgsub.
@@ -1055,6 +1078,12 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                         calc_weight = calc_weight_with_cpu
                         self.logger.info(f"Calculate weight map with CPU [group {i + 1}/{len(groups)}]")
                         acquired = "CPU"
+                        bp = self._coadd_plan()
+                        zero_mask = None
+                        if bp["zero"] and not bp["interpolate"]:
+                            # interpolation off but bad-pixel weights still zeroed
+                            mask_file, badpix = self._get_bpmask(uncalculated_images[0])
+                            zero_mask = fits.getdata(mask_file) == badpix
                         calc_weight(
                             uncalculated_images,
                             d_m_file,
@@ -1063,8 +1092,15 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                             sig_f_file,
                             out_names=uncalculated_outputs,
                             weight_store=bool(get_key(self.config_node.imcoadd, "persist_weight_maps", default=True)),
+                            zero_mask=zero_mask,
                         )
                     else:
+                        bp = self._coadd_plan()
+                        if bp["zero"] and not bp["interpolate"]:
+                            raise NotImplementedError(
+                                "zero_badpix_weight without interpolation is CPU-only "
+                                "(the GPU weight kernel is untrusted anyway); set imcoadd.gpu: False"
+                            )
                         from .weight import calc_weight_with_gpu
 
                         calc_weight = calc_weight_with_gpu
@@ -1274,7 +1310,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.config_node.imcoadd.interp_images = interp_images
 
         method = self.config_node.imcoadd.interp_type
-        zero_interp = bool(get_key(self.config_node.imcoadd, "zero_interp_weight", default=True))
+        zero_interp = bool(self._coadd_plan()["zero"])
 
         streamline = bool(get_key(self.config_node.imcoadd, "streamline_reprojection", default=False))
         # resamp-first: a frame whose reprojected products exist needs nothing here,
@@ -1394,12 +1430,12 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         # bpmask_array, header = fits.getdata(self.config.preprocess.bpmask_file, header=True)
 
         method = self.config_node.imcoadd.interp_type
-        weight = self.config_node.imcoadd.weight_map  # boolean flag for generating weight map
+        weight = self._coadd_plan()["need_weights"]  # derived: outputs or internal consumers
         # Where this run wrote them, not wherever a sibling of the input happens to sit:
         # reproject-first writes weights to the factory, and a stale one next to the input
         # would be read in silence.
         weight_of = dict(zip(input_images, weight_images)) if weight_images is not None else {}
-        zero_interp = bool(get_key(self.config_node.imcoadd, "zero_interp_weight", default=True))
+        zero_interp = bool(self._coadd_plan()["zero"])
 
         # find images that need interpolation
         uncalculated_images = []
@@ -1626,7 +1662,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 # symlink images to conv output folder that don't need convolution
                 if delta_peeing is None:
                     force_symlink(input_images[i], self.config_node.imcoadd.conv_files[i])
-                    if self.config_node.imcoadd.weight_map:
+                    if self._coadd_plan()["need_weights"]:
                         force_symlink(
                             self._resolve_weight_companion(input_images[i]),
                             add_suffix(self.config_node.imcoadd.conv_files[i], "weight"),
@@ -1782,10 +1818,11 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         self.logger.debug(f"Total Exptime: {self.input_headers.total_exptime}")
 
-        if not self.config_node.imcoadd.weight_map:
-            self._run_swarp("", coadd=coadd, swarp_args=swarp_options_override)
+        sci_resampling = ["-RESAMPLING_TYPE", "LANCZOS3"]
+        if not self._coadd_plan()["need_weights"]:
+            # no weight consumer anywhere: single pass, no wht division
+            self._run_swarp("", coadd=coadd, swarp_args=sci_resampling + swarp_options_override)
         else:
-            sci_resampling = ["-RESAMPLING_TYPE", "LANCZOS3"]
             self._run_swarp(
                 "sci",
                 coadd=coadd,
@@ -1799,42 +1836,45 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 weight_images=weight_images,
             )
 
-            factory = self.path.imcoadd.factory
-            masks_predicted = atleast_1d(
-                factory.resampled_weight_images(
-                    atleast_1d(factory.resampled_images(input_images, pass_type="bpm")), pass_type="bpm"
-                )
+
+        # conservative policy: LANCZOS3 bpm masks, needed with or without weights
+        factory = self.path.imcoadd.factory
+        masks_predicted = atleast_1d(
+            factory.resampled_weight_images(
+                atleast_1d(factory.resampled_images(input_images, pass_type="bpm")), pass_type="bpm"
             )
-            if (
-                self.config_node.imcoadd.propagate_mask
-                and not self.overwrite
-                and all(os.path.exists(m) for m in masks_predicted)
-            ):
-                # checked before get_bpmask: resolving 1000 bpmasks costs ~20 min
-                self.logger.info(f"bpm pass outputs already exist ({len(masks_predicted)} masks), skipping")
-            elif self.config_node.imcoadd.propagate_mask:
-                # bpmask_file = self.config.preprocess.bpmask_file
-                per_image = atleast_1d(PathHandler.get_bpmask(input_images))
-                if len(per_image) != len(input_images):
-                    per_image = per_image * len(input_images)
-                by_mask: dict[str, list[str]] = {}
-                for inim, mfile in zip(input_images, per_image):
-                    by_mask.setdefault(mfile, []).append(inim)
-                self.logger.info(f"bpm pass over {len(by_mask)} distinct bpmask(s)")
-                for k, (bpmask_file, group_frames) in enumerate(by_mask.items()):
-                    bpmask_inverted = 1 - fits.getdata(bpmask_file)
-                    bpmask_inverted_file = self.path.imcoadd.factory.bpmask_inverted(bpmask_file)
-                    fits.writeto(bpmask_inverted_file, bpmask_inverted, overwrite=True)
-                    self.logger.debug(f"Inverted bpmask saved as {bpmask_inverted_file}")
-                    group_list = os.path.join(self.path.imcoadd.tmp_dir, f"images_bpm_{k}.txt")
-                    with open(group_list, "w") as fp:
-                        fp.write("\n".join(group_frames) + "\n")
-                    # BADPIX=1 means bad, MAP_WEIGHT means >0 is good: SWarp needs the inverse.
-                    # The resampling follows the sci pass rather than being pinned here: a mask
-                    # resampled differently from the image it describes would not line up with it.
-                    args = ["-WEIGHT_IMAGE", bpmask_inverted_file] + sci_resampling
-                    self._run_swarp("bpm", coadd=coadd, swarp_args=args + swarp_options_override,
-                                    input_list=group_list)  # fmt: skip
+        )
+        bp_policy = self._coadd_plan()["policy"]
+        if (
+            bp_policy == "conservative"
+            and not self.overwrite
+            and all(os.path.exists(m) for m in masks_predicted)
+        ):
+            # checked before get_bpmask: resolving 1000 bpmasks costs ~20 min
+            self.logger.info(f"bpm pass outputs already exist ({len(masks_predicted)} masks), skipping")
+        elif bp_policy == "conservative":
+            # bpmask_file = self.config.preprocess.bpmask_file
+            per_image = atleast_1d(PathHandler.get_bpmask(input_images))
+            if len(per_image) != len(input_images):
+                per_image = per_image * len(input_images)
+            by_mask: dict[str, list[str]] = {}
+            for inim, mfile in zip(input_images, per_image):
+                by_mask.setdefault(mfile, []).append(inim)
+            self.logger.info(f"bpm pass over {len(by_mask)} distinct bpmask(s)")
+            for k, (bpmask_file, group_frames) in enumerate(by_mask.items()):
+                bpmask_inverted = 1 - fits.getdata(bpmask_file)
+                bpmask_inverted_file = self.path.imcoadd.factory.bpmask_inverted(bpmask_file)
+                fits.writeto(bpmask_inverted_file, bpmask_inverted, overwrite=True)
+                self.logger.debug(f"Inverted bpmask saved as {bpmask_inverted_file}")
+                group_list = os.path.join(self.path.imcoadd.tmp_dir, f"images_bpm_{k}.txt")
+                with open(group_list, "w") as fp:
+                    fp.write("\n".join(group_frames) + "\n")
+                # BADPIX=1 means bad, MAP_WEIGHT means >0 is good: SWarp needs the inverse.
+                # The resampling follows the sci pass rather than being pinned here: a mask
+                # resampled differently from the image it describes would not line up with it.
+                args = ["-WEIGHT_IMAGE", bpmask_inverted_file] + sci_resampling
+                self._run_swarp("bpm", coadd=coadd, swarp_args=args + swarp_options_override,
+                                input_list=group_list)  # fmt: skip
 
         if coadd:
             self._update_header()
@@ -1842,7 +1882,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             return self.config_node.imcoadd.coadd_image
 
         # reproject-only branch: predict resampled output paths (named by SWarp from its inputs)
-        pass_type = "sci" if self.config_node.imcoadd.weight_map else ""
+        pass_type = "sci" if self._coadd_plan()["need_weights"] else ""
         resampled = atleast_1d(self.path.imcoadd.factory.resampled_images(input_images, pass_type=pass_type))
         self.config_node.imcoadd.resampled_images = resampled
         self.images_to_coadd = resampled
@@ -1852,17 +1892,18 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
     def _propagated_bpmasks(self) -> list[str] | None:
         """Per-frame resampled bad-pixel masks from the bpm pass, or None if it did not run.
 
-        These narrow the per-frame validity the combine counts, so `propagate_mask` decides
-        whether a pixel a bad column touched still counts towards the footprint. It is a
-        separate question from the footprint itself, which always exists.
+        These narrow the per-frame validity the combine counts under
+        badpix_reprojection_policy 'conservative' (LANCZOS3-support rejection). The
+        footprint product itself always exists; this only decides whether kernel-touched
+        pixels count towards it.
         """
-        if not self.config_node.imcoadd.propagate_mask:
+        if self._coadd_plan()["policy"] != "conservative":
             return None
         resampled = atleast_1d(get_key(self.config_node.imcoadd, "resampled_images") or [])
         masks = atleast_1d(self.path.imcoadd.factory.resampled_weight_images(resampled, pass_type="bpm"))
         missing = [m for m in masks if not os.path.exists(m)]
         if not masks or missing:
-            self.logger.warning(f"propagate_mask is on but the bpm pass left no masks (e.g. {missing[:2]})")
+            self.logger.warning(f"conservative policy set but the bpm pass left no masks (e.g. {missing[:2]})")
             return None
         return masks
 
@@ -1907,7 +1948,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             coadd=coadd,
             log_file=log_file,
             logger=self.logger,
-            use_weight_map=self.config_node.imcoadd.weight_map and use_weight_map,
+            use_weight_map=self._coadd_plan()["need_weights"] and use_weight_map,
             swarp_args=swarp_args,
         )
 
@@ -1982,19 +2023,19 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self.coadd_with_cupy(input_images, device_id=device_id)
             return self.config_node.imcoadd.coadd_image
 
-        weighting = str(get_key(self.config_node.imcoadd, "coadd_weighting", default="global") or "off")
-        weighting = weighting.lower().replace("-", "").replace("_", "")
-        weighting = {"false": "off", "none": "off", "no": "off"}.get(weighting, weighting)
-        if weighting not in ("off", "global", "pixelwise"):
-            raise ValueError(f"Invalid imcoadd.coadd_weighting: {weighting!r} (False, 'global' or 'pixel-wise')")
-        policy = str(get_key(self.config_node.imcoadd, "bpmask_policy", default="1px") or "off").lower()
-        policy = {"false": "off", "none": "off", "no": "off"}.get(policy, policy)
-        if policy not in ("off", "1px", "conservative"):
-            raise ValueError(f"Invalid imcoadd.bpmask_policy: {policy!r} ('off', '1px' or 'conservative')")
-        self.logger.info(f"Coadd weighting: {weighting}; bpmask policy: {policy}")
+        plan = self._coadd_plan()
+        weighting = plan["weighting"]
+        policy = plan["policy"]
+        self.logger.info(f"Coadd weighting: {weighting}; badpix policy: {policy}")
+        if weighting == "pixelwise" and policy == "off" and self._coadd_plan()["zero"]:
+            self.logger.info(
+                "pixel-wise weighting with zeroed bad-pixel weights: bad pixels cannot vote "
+                "regardless of policy 'off' (a zero-weight vote is no vote); set "
+                "zero_badpix_weight: False to let interpolated pixels vote"
+            )
 
         wht_maps = None
-        if self.config_node.imcoadd.weight_map:
+        if self._coadd_plan()["need_weights"]:
             # NEAREST-resampled weights live next to the wht pass output; the
             # LANCZOS3 companions next to the sci resamp ring to ~0 almost
             # everywhere (99%+ zeros) and must NOT be used.
@@ -2043,19 +2084,21 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         from ..services.combine_lock import CombineSlot, NullSlot
 
         anchor = os.path.dirname(collapse(atleast_1d(input_images)[0], force=True))
+        # lock only high-demand combines: the threshold (config) replaces the old
+        # is_multi_epoch gate -- nightly-scale stacks fall under it naturally
         slot_ctx = (
             CombineSlot(anchor, logger=self.logger)
-            if self.config_node.settings.is_multi_epoch
+            if len(atleast_1d(input_images)) >= plan["combine_lock_threshold"]
             else NullSlot()
         )
         try:
             with slot_ctx as slot:
                 if mode == "mean":
                     slot.lease(4 * 110_000_000 * 8)  # sum/norm/count/gain accumulators, ~3.5 GB
-                    self.coadd_with_numpy(input_images, weights=weights, masks=masks, var_maps=var_maps)
+                    self.coadd_with_numpy(input_images, weights=weights, masks=masks, var_maps=var_maps, write_weight=plan["output_weight_map"], write_footprint=plan["output_footprint"])
                 elif mode == "clipped":
                     slot.lease(6 * 110_000_000 * 8)  # two-pass accumulators, ~5 GB
-                    self.coadd_clipped_with_numpy(input_images, weights=weights, masks=masks, var_maps=var_maps)
+                    self.coadd_clipped_with_numpy(input_images, weights=weights, masks=masks, var_maps=var_maps, write_weight=plan["output_weight_map"], write_footprint=plan["output_footprint"])
                 elif mode == "median":
                     reserved = slot.reserved_bytes
                     try:
@@ -2063,12 +2106,64 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     except Exception:
                         avail = 0
                     slot.lease(int(0.3 * max(0, avail - reserved)))  # upper bound of _auto_chunk_h's pick
-                    self.coadd_median_with_numpy(input_images, weights=weights, masks=masks, reserved_bytes=reserved, var_maps=var_maps)
+                    self.coadd_median_with_numpy(input_images, weights=weights, masks=masks, reserved_bytes=reserved, var_maps=var_maps, write_weight=plan["output_weight_map"], write_footprint=plan["output_footprint"])
                 else:
                     raise ValueError(f"Invalid coadd mode: {mode!r} (expected 'mean', 'median' or 'clipped')")
         finally:
             cleanup()
         return self.config_node.imcoadd.coadd_image
+
+    def _coadd_plan(self) -> dict:
+        """Resolve the run plan: bad-pixel handling, weighting, outputs, derived needs.
+
+        Active dispatcher, not a registry: `need_weights` decides whether intermediate
+        weight maps exist at all (outputs OR internal consumers force them), which in
+        turn shapes the fused/standalone prep, the SWarp pass roster, and the combine.
+        Legacy keys are read as fallback when the new key is absent; permanently
+        renamed configs are the expected long-term state (manual conversion).
+        """
+        node = self.config_node.imcoadd
+
+        def opt(new, old, default):
+            v = get_key(node, new)
+            return get_key(node, old, default=default) if v is None else v
+
+        interpolate = bool(opt("interpolate_badpix", "apply_bpmask", False))
+        zero = bool(opt("zero_badpix_weight", "zero_interp_weight", True))
+        policy = str(opt("badpix_reprojection_policy", "bpmask_policy", "1px") or "off").lower()
+        policy = {"false": "off", "none": "off", "no": "off"}.get(policy, policy)
+        if policy not in ("off", "1px", "conservative"):
+            raise ValueError(f"Invalid badpix_reprojection_policy: {policy!r} ('off', '1px' or 'conservative')")
+
+        weighting = str(get_key(node, "coadd_weighting", default="global") or "off").lower().replace("-", "").replace("_", "")
+        weighting = {"false": "off", "none": "off", "no": "off"}.get(weighting, weighting)
+        if weighting not in ("off", "global", "pixelwise"):
+            raise ValueError(f"Invalid imcoadd.coadd_weighting: {weighting!r} (False, 'global' or 'pixel-wise')")
+
+        output_weight_map = bool(opt("output_weight_map", "weight_map", True))
+        output_footprint = bool(get_key(node, "output_footprint", default=True))
+        # intermediate weight maps exist iff something consumes them; requesting
+        # pixel-wise weighting or the 1px channel FORCES generation, so the old
+        # "pixel-wise without weight maps" conflict can no longer be expressed
+        need_weights = output_weight_map or weighting == "pixelwise" or policy == "1px"
+
+        if policy == "1px" and not zero:
+            raise NotImplementedError(
+                "badpix_reprojection_policy '1px' with zero_badpix_weight: False has no "
+                "information channel (dual weight maps / bpmask-only reprojection are "
+                "deliberately unimplemented); zero the weights or use 'conservative'"
+            )
+
+        return {
+            "interpolate": interpolate,
+            "zero": zero,
+            "policy": policy,
+            "weighting": weighting,
+            "output_weight_map": output_weight_map,
+            "output_footprint": output_footprint,
+            "need_weights": need_weights,
+            "combine_lock_threshold": int(get_key(node, "combine_lock_threshold", default=50)),
+        }
 
     def _combine_flxscales(self):
         """zpscale's snapshot values; with zpscale off, the stale photometry-era FLXSCALE
@@ -2084,14 +2179,16 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         masks: list[str] | None = None,
         match_swarp_size: bool = True,
         var_maps: list[str] | None = None,
+        write_weight: bool = True,
+        write_footprint: bool = True,
     ) -> str:
         return mean_coadd_numpy(
             input_images,
             output_path=self.config_node.imcoadd.coadd_image,
             coadd_header=self.input_headers.coadd_header,
             weights=weights,
-            weight_output=add_suffix(self.config_node.imcoadd.coadd_image, "weight"),
-            footprint_output=add_suffix(self.config_node.imcoadd.coadd_image, "footprint"),
+            weight_output=add_suffix(self.config_node.imcoadd.coadd_image, "weight") if write_weight else False,
+            footprint_output=add_suffix(self.config_node.imcoadd.coadd_image, "footprint") if write_footprint else False,
             masks=masks,
             flxscales=self._combine_flxscales(),
             match_swarp_size=match_swarp_size,
@@ -2105,14 +2202,16 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         masks: list[str] | None = None,
         match_swarp_size: bool = True,
         var_maps: list[str] | None = None,
+        write_weight: bool = True,
+        write_footprint: bool = True,
     ) -> str:
         return clipped_mean_coadd_numpy(
             input_images,
             output_path=self.config_node.imcoadd.coadd_image,
             coadd_header=self.input_headers.coadd_header,
             weights=weights,
-            weight_output=add_suffix(self.config_node.imcoadd.coadd_image, "weight"),
-            footprint_output=add_suffix(self.config_node.imcoadd.coadd_image, "footprint"),
+            weight_output=add_suffix(self.config_node.imcoadd.coadd_image, "weight") if write_weight else False,
+            footprint_output=add_suffix(self.config_node.imcoadd.coadd_image, "footprint") if write_footprint else False,
             masks=masks,
             flxscales=self._combine_flxscales(),
             match_swarp_size=match_swarp_size,
@@ -2131,14 +2230,16 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         chunk_h: int | None = None,  # None: auto-sized from idle memory (see calc._auto_chunk_h)
         reserved_bytes: int = 0,
         var_maps: list[str] | None = None,
+        write_weight: bool = True,
+        write_footprint: bool = True,
     ) -> str:
         return median_coadd_numpy(
             input_images,
             output_path=self.config_node.imcoadd.coadd_image,
             coadd_header=self.input_headers.coadd_header,
             weights=weights,
-            weight_output=add_suffix(self.config_node.imcoadd.coadd_image, "weight"),
-            footprint_output=add_suffix(self.config_node.imcoadd.coadd_image, "footprint"),
+            weight_output=add_suffix(self.config_node.imcoadd.coadd_image, "weight") if write_weight else False,
+            footprint_output=add_suffix(self.config_node.imcoadd.coadd_image, "footprint") if write_footprint else False,
             masks=masks,
             flxscales=self._combine_flxscales(),
             match_swarp_size=match_swarp_size,

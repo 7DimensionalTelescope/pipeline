@@ -216,12 +216,15 @@ def mean_coadd_numpy(
 
     # propagated: (sum s)^2 / sum(s^2 sigma_p^2) -- the coadd's own per-pixel inverse
     # variance; otherwise summed inverse variance (pixel-wise) or frame count (simple).
-    weight_out = weight_output or add_suffix(output_path, "weight")
-    fits.writeto(weight_out, weight_map_out.astype(np.float32), header=out_header, overwrite=True)
-    footprint_out = footprint_output or add_suffix(output_path, "footprint")
-    fits.writeto(footprint_out, count_arr.astype(np.int16), header=out_header, overwrite=True)
-    if logger is not None:
+    if weight_output is not False:
+        weight_out = weight_output or add_suffix(output_path, "weight")
+        fits.writeto(weight_out, weight_map_out.astype(np.float32), header=out_header, overwrite=True)
+    if footprint_output is not False:
+        footprint_out = footprint_output or add_suffix(output_path, "footprint")
+        fits.writeto(footprint_out, count_arr.astype(np.int16), header=out_header, overwrite=True)
+    if logger is not None and weight_output is not False:
         logger.debug(f"Wrote coadd weight map ({backend}): {weight_out}")
+    if logger is not None and footprint_output is not False:
         logger.debug(f"Wrote coadd footprint (max {int(count_arr.max())} frames): {footprint_out}")
 
     if logger is not None:
@@ -375,10 +378,12 @@ def clipped_mean_coadd_numpy(
         weight_map_out = np.where(var_den > 0, norm_arr.astype(np.float64) ** 2 / np.where(var_den > 0, var_den, 1), 0.0)
     else:
         weight_map_out = norm_arr.astype(np.float64)
-    weight_out = weight_output or add_suffix(output_path, "weight")
-    fits.writeto(weight_out, weight_map_out.astype(np.float32), header=out_header, overwrite=True)
-    footprint_out = footprint_output or add_suffix(output_path, "footprint")
-    fits.writeto(footprint_out, count_arr.astype(np.int16), header=out_header, overwrite=True)
+    if weight_output is not False:
+        weight_out = weight_output or add_suffix(output_path, "weight")
+        fits.writeto(weight_out, weight_map_out.astype(np.float32), header=out_header, overwrite=True)
+    if footprint_output is not False:
+        footprint_out = footprint_output or add_suffix(output_path, "footprint")
+        fits.writeto(footprint_out, count_arr.astype(np.int16), header=out_header, overwrite=True)
     if logger is not None:
         logger.info(f"Numpy clipped-mean coaddition completed in {time_diff_in_seconds(st)} seconds")
     return output_path
@@ -519,7 +524,16 @@ def median_coadd_numpy(
                     var_den[ty0:ty1, tx0:tx1] += np.where(
                         contributed, (flxscales[i] * flxscales[i]) / float(weights[i]), 0.0
                     )
-            coadd[ys:ye, :] = np.nanmedian(stack, axis=0)
+            # overwrite_input: nanmedian otherwise COPIES the stack (peak 2x the budgeted
+            # strip memory -- the 2026-08-11 swap-fill); the stack is dead after this line
+            coadd[ys:ye, :] = np.nanmedian(stack, axis=0, overwrite_input=True)
+            # the strip's file pages have no reuse (each strip reads different rows):
+            # release them so the page cache stops displacing anonymous memory into swap
+            for hdul in handles + (whandles or []) + (mhandles or []):
+                try:
+                    os.posix_fadvise(hdul._file._file.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+                except (AttributeError, OSError):
+                    pass
     finally:
         for hdul in handles:
             hdul.close()
@@ -557,14 +571,18 @@ def median_coadd_numpy(
     else:
         base_w = count_arr.astype(np.float64)  # no sigma source: frame count
     weight_map_out = base_w / _median_penalty(count_arr)
-    weight_out = weight_output or add_suffix(output_path, "weight")
-    fits.writeto(weight_out, weight_map_out.astype(np.float32), header=out_header, overwrite=True)
-    footprint_out = footprint_output or add_suffix(output_path, "footprint")
-    fits.writeto(footprint_out, count_arr.astype(np.int16), header=out_header, overwrite=True)
+    if weight_output is not False:
+        weight_out = weight_output or add_suffix(output_path, "weight")
+        fits.writeto(weight_out, weight_map_out.astype(np.float32), header=out_header, overwrite=True)
+    if footprint_output is not False:
+        footprint_out = footprint_output or add_suffix(output_path, "footprint")
+        fits.writeto(footprint_out, count_arr.astype(np.int16), header=out_header, overwrite=True)
     if logger is not None:
-        logger.debug(f"Wrote coadd footprint (max {int(count_arr.max())} frames): {footprint_out}")
-        backend = "summed inverse variance" if weights is not None else "frame count"
-        logger.debug(f"Wrote coadd weight map ({backend}): {weight_out}")
+        if footprint_output is not False:
+            logger.debug(f"Wrote coadd footprint (max {int(count_arr.max())} frames): {footprint_out}")
+        if weight_output is not False:
+            backend = "summed inverse variance" if weights is not None else "frame count"
+            logger.debug(f"Wrote coadd weight map ({backend}): {weight_out}")
         logger.info(f"Numpy median coaddition completed in {time_diff_in_seconds(st)} seconds")
     return output_path
 

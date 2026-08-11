@@ -51,7 +51,7 @@ def calc_weight_with_gpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, dev
 
 
 def calc_weight_with_cpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, weight=True, out_names=None,
-                         weight_store=None, **kwargs):
+                         weight_store=None, zero_mask=None, **kwargs):
     from .weight_store import load_single_weight, persist_single_weight
 
     # calibration masters load lazily: an all-reusable group never touches them
@@ -79,6 +79,11 @@ def calc_weight_with_cpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, wei
                 out[~np.isfinite(out)] = 0.0  # degenerate noise model -> weight 0, not inf
                 if weight_store:
                     pool.submit(persist_single_weight, PathHandler.single_weight_map(images[i]), out.copy(), masters)
+            if zero_mask is not None:
+                # zero_badpix_weight without interpolation: the factory copy carries the
+                # zeros; the persisted store copy above stays pristine by contract
+                out = out.copy()
+                out[zero_mask] = 0.0
             if pending is not None:
                 pending.result()
             pending = pool.submit(fitsio.write, outname, out.astype(np.float32), clobber=True)
