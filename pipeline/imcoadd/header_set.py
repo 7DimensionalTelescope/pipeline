@@ -203,28 +203,31 @@ class InputHeaderSet:
         return Time(float(np.mean(jds)), format="jd").isot
 
     @property
+    def _flxscales(self) -> list[float]:
+        """Per-image flux scaling, unity where unstamped -- which is what an
+        unstamped snapshot means: ``zpscale`` off scales no pixels either."""
+        return [1.0 if f is None else f for f in self.values("FLXSCALE")]
+
+    @property
     def coadd_satur_level(self) -> float | None:
-        """Conservative saturation: min over SATURATE * FLXSCALE.
-        Requires FLXSCALE to have been stamped (e.g. by ``zpscale``)."""
+        """Conservative saturation: min over SATURATE * FLXSCALE."""
         satur = self.values("SATURATE")
-        flx = self.values("FLXSCALE")
-        if any(s is None for s in satur) or any(f is None for f in flx):
+        if any(s is None for s in satur):
             return None
-        return float(np.min([s * f for s, f in zip(satur, flx)]))
+        return float(np.min([s * f for s, f in zip(satur, self._flxscales)]))
 
     @property
     def coadd_egain(self) -> float | None:
-        """Effective EGAIN for the coadd. Requires FLXSCALE stamped.
+        """Effective EGAIN for the coadd.
 
         Naive sum(EGAIN/FLXSCALE): no footprint thinning, no median penalty. Every
         in-memory combine (mean/median/clipped) OVERRIDES it with the footprint-exact
         per-pixel gain map; only legacy SWarp-combined products keep this value.
         """
         egain = self.values("EGAIN")
-        flx = self.values("FLXSCALE")
-        if any(e is None for e in egain) or any(f is None for f in flx):
+        if any(e is None for e in egain):
             return None
-        return float(np.sum([e / f for e, f in zip(egain, flx)]))
+        return float(np.sum([e / f for e, f in zip(egain, self._flxscales)]))
 
     @property
     def coadd_backtype(self) -> str | None:

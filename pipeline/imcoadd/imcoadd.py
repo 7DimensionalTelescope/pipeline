@@ -116,8 +116,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         images = self.bkgsub(self.input_images)
         self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("coadd", "bkgsub"), "imcoadd-bkgsub-completed")
         # zero point scaling
-        if get_key(self.config_node.imcoadd, "zpscale", default=True):
-            self.zpscale(images)
+        self.zpscale(images)
         self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("coadd", "zpscale"), "imcoadd-zpscale-completed")
 
         if self._coadd_plan()["need_weights"]:
@@ -271,11 +270,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.update_progress(SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-bkgsub-completed")
 
         # Flux zero-point scaling (snapshot only; the in-memory combine takes the values directly)
-        if not do_zpscale:
-            for hdr in self.input_headers:
-                hdr.pop("FLXSCALE", None)  # stale photometry-era cards must not aggregate
+        self.zpscale(images, write_headers=False)
         if do_zpscale:
-            self.zpscale(images, write_headers=False)
             step += 1
             self.update_progress(
                 SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-zpscale-completed"
@@ -1535,9 +1531,18 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         The headers of the last processed images are modified.
         write_headers=False stamps only the in-memory snapshot (legacy needs the
         file cards for SWarp's FSCALE_KEYWORD; the in-memory combine does not).
+        With imcoadd.zpscale off it scrubs instead of stamps, so both routines
+        reach the same state through one decision.
         """
         if input_images is None:
             input_images = self.images_to_coadd
+        if not get_key(self.config_node.imcoadd, "zpscale", default=True):
+            # Nothing scales the pixels (combine gets flxscales=False, SWarp gets
+            # -FSCALE_KEYWORD NOFSCALE), so the snapshot must not carry a factor either.
+            for hdr in self.input_headers:
+                hdr.pop("FLXSCALE", None)  # stale photometry-era cards must not aggregate
+            self.logger.debug("zpscale off; stale FLXSCALE scrubbed from the snapshot")
+            return input_images
         st = time.time()
         zpvalues = self.input_headers.values(self.zpkey)
         # base zero point for flux scaling
