@@ -517,18 +517,30 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         if mask_sources and not any_dynamic:
             self.logger.info("No image takes a mesh background: source_mask has no effect")
 
+        # catalog reuse needs the inputs to be the singles' derivatives 1:1
+        singles = atleast_1d(self.input_images)
+        try:
+            catalogs = atleast_1d(self.path.photometry.final_catalog)
+        except Exception as e:  # an optimization must not become a new failure mode
+            self.logger.debug(f"No photometry catalogs resolvable ({e}); detection pass it is")
+            catalogs = []
+        if not (len(singles) == len(catalogs) == len(input_images)):
+            singles = catalogs = [None] * len(input_images)
+
         counts = {name: types.count(name) for name in sorted(set(types))}
         self.logger.info(f"Start background subtraction (bkgsub_type={requested!r}): {counts}")
         if any_dynamic:
             self.config_node.imcoadd.bkg_images = bkg_images
-            self.config_node.imcoadd.bkg_rms_images = bkg_rms_images
+            self.config_node.imcoadd.bkg_rms_images = (
+                bkg_rms_images if get_key(self.config_node.imcoadd, "output_sky_rms_map", default=False) else None
+            )
         else:
             if get_key(self.config_node.imcoadd, "bkg_images"):
                 self.config_node.imcoadd.bkg_images = None
             if get_key(self.config_node.imcoadd, "bkg_rms_images"):
                 self.config_node.imcoadd.bkg_rms_images = None
 
-        def _bkgsub_one(i, inim, outim, bkg, bkg_rms, skyvalue, fov_mask, src_mask, btype):
+        def _bkgsub_one(i, inim, outim, bkg, bkg_rms, skyvalue, fov_mask, src_mask, btype, single, phot_cat):
             st_loop = time.time()
             # the FOV mask serves every routine (it re-zeros the padding afterwards);
             # the source mask only means something to a mesh background
@@ -541,7 +553,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 fov_mask = fov_mask if fov_valid is not None else None
             weight_image = fov_mask
             if src_mask is not None and btype == "dynamic":
-                weight_image, usable = self._write_source_mask(inim, fov_mask, fov_valid, src_mask)
+                weight_image, usable = self._write_source_mask(
+                    inim, fov_mask, fov_valid, src_mask, photometry_catalog=phot_cat, source_image=single
+                )
                 if usable < 20.0:
                     # crowded field: too little unmasked sky for a mesh -- fall back to a
                     # constant background for this frame. Defining a GOOD constant level
@@ -576,7 +590,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         # Per-image work is independent (SExtractor subprocesses + FITS I/O, both
         # GIL-releasing); worker count is load-aware so a busy system queue stays safe.
         jobs = list(enumerate(zip(input_images, bkgsub_images, bkg_images, bkg_rms_images, skyvalues,
-                                  fov_mask_images, source_mask_images, types)))  # fmt: skip
+                                  fov_mask_images, source_mask_images, types, singles, catalogs)))  # fmt: skip
         if not self.overwrite:
             n_all = len(jobs)
             jobs = [(i, job) for i, job in jobs if not os.path.exists(job[1])]
@@ -742,6 +756,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         class_star_cut: float = 0.5,
         min_radius: float = 3.0,
         min_usable: float = 20.0,
+        photometry_catalog: str | None = None,
+        source_image: str | None = None,
     ) -> str:
         """Detection pass, then what background estimation may use: in FOV and off-source.
 
@@ -751,7 +767,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         Takes any image, not just a single frame: the planned ``source_mask: iterative``
         re-runs this on the coadd and feeds the result back into a second bkgsub round."""
-        from .utils import build_source_mask, read_mask_plio, write_mask_plio
+        from .utils import build_source_mask, read_mask_plio, source_ellipses_on_frame, write_mask_plio
 
         param_file = os.path.join(REF_DIR, "srcExt", "bkgdet.param")
 
@@ -770,24 +786,37 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             if valid is not None and valid.shape == shape:
                 fits.writeto(outmask, valid.astype(np.uint8), overwrite=True)
                 return outmask, float(100 * valid.mean())
-        sex_options = {
-            "-CATALOG_TYPE": "ASCII_HEAD",
-            "-PARAMETERS_NAME": param_file,
-            "-CHECKIMAGE_TYPE": "NONE",
-        }
-        if fov_mask is not None:
-            sex_options.update({"-WEIGHT_TYPE": "MAP_WEIGHT", "-WEIGHT_IMAGE": f"{fov_mask}", "-WEIGHT_THRESH": "0"})
-        external.sextractor(
-            inim,
-            outcat=catalog,
-            sex_options=sex_options,
-            log_file=os.path.join(self.path_bkgsub, f"{base}_bkgdet_sextractor.log"),
-            overwrite=self.overwrite,
-            logger=self.logger,
-        )
+
+        # reuse photometry's catalog: its DETECT_THRESH 3.0 is accepted over a 1.5 pass to save the run
+        detection_override = self._detection_override()
+        ellipses = None
+        if photometry_catalog and os.path.exists(photometry_catalog) and not detection_override:
+            ellipses = source_ellipses_on_frame(
+                photometry_catalog, fits.getheader(source_image or inim), header, logger=self.logger
+            )
+            if ellipses is not None:
+                self.logger.debug(f"{len(ellipses)} source ellipses from {get_basename(photometry_catalog)}")
+        if ellipses is None:
+            sex_options = {
+                "-CATALOG_TYPE": "ASCII_HEAD",
+                "-PARAMETERS_NAME": param_file,
+                "-CHECKIMAGE_TYPE": "NONE",
+            }
+            sex_options.update({f"-{k}": str(v) for k, v in detection_override.items()})
+            if fov_mask is not None:
+                sex_options.update({"-WEIGHT_TYPE": "MAP_WEIGHT", "-WEIGHT_IMAGE": f"{fov_mask}", "-WEIGHT_THRESH": "0"})  # fmt: skip
+            external.sextractor(
+                inim,
+                outcat=catalog,
+                sex_options=sex_options,
+                log_file=os.path.join(self.path_bkgsub, f"{base}_bkgdet_sextractor.log"),
+                overwrite=self.overwrite,
+                logger=self.logger,
+            )
+            ellipses = catalog
 
         sources = build_source_mask(
-            catalog,
+            ellipses,
             shape,
             star_scale=star_scale,
             galaxy_scale=galaxy_scale,
@@ -871,6 +900,45 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.logger.debug(f"FOV mask ({100 * valid.mean():.1f}% valid) saved as {get_basename(outmask)}")
         return valid
 
+    def _sex_vars(self, section: str = "imcoadd") -> dict:
+        """main.sex settings under a section's sex_vars override; empty override = inherit."""
+        from .utils import parse_sex_config
+
+        keys = ("BACK_SIZE", "BACK_FILTERSIZE", "DETECT_THRESH", "DETECT_MINAREA")
+        values = parse_sex_config(os.path.join(REF_DIR, "srcExt", "main.sex"), keys)
+        overrides = get_key(getattr(self.config_node, section), "sex_vars") or {}
+        for key in keys:
+            if overrides.get(key) is not None:
+                values[key] = overrides[key]
+        return values
+
+    def _background_mesh(self) -> tuple[int, int]:
+        """(BACK_SIZE, BACK_FILTERSIZE) for the dynamic background."""
+        values = self._sex_vars()
+        return int(values["BACK_SIZE"]), int(values["BACK_FILTERSIZE"])
+
+    def _detection_override(self) -> dict:
+        """Explicit sex_vars detection keys, or {} to take the photometry catalog as detected."""
+        overrides = get_key(self.config_node.imcoadd, "sex_vars") or {}
+        wanted = {k: overrides.get(k) for k in ("DETECT_THRESH", "DETECT_MINAREA")}
+        wanted = {k: v for k, v in wanted.items() if v is not None}
+        if not wanted:
+            return {}
+        # a catalog already detected at these values needs no second pass
+        photometry = self._sex_vars("photometry")
+        if all(float(v) == float(photometry[k]) for k, v in wanted.items()):
+            return {}
+        return wanted
+
+    def _guard_sky_rms_propagation(self):
+        """Raise if a coadd sky-noise map is asked for; propagation is unimplemented."""
+        if get_key(self.config_node.imcoadd, "output_sky_rms_map", default=False):
+            raise NotImplementedError(
+                "imcoadd.output_sky_rms_map: the per-frame sky-RMS models are written, but "
+                "propagating them into a coadd sky-noise map (the source-free counterpart of "
+                "the current weight map) is not implemented yet"
+            )
+
     def _const_bkgsub(self, inim, outim, skyval, skyval_cut=40, fov_valid=None, **kwargs):
 
         if os.path.exists(outim):
@@ -902,42 +970,39 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         """
         Later to be refined using iterations
         """
-        from ..external import sextractor
+        from .utils import estimate_background
 
         # from .bkg_step import step_background_check
 
-        sex_options = {
-            "-CATALOG_TYPE": "NONE",  # save no source catalog
-            "-CHECKIMAGE_TYPE": "BACKGROUND,BACKGROUND_RMS",
-            "-CHECKIMAGE_NAME": f"{bkg},{bkg_rms}",
-        }
-        if weight_image is not None:
-            # SExtractor drops zero-weight pixels from the background meshes
-            sex_options.update({"-WEIGHT_TYPE": "MAP_WEIGHT", "-WEIGHT_IMAGE": f"{weight_image}", "-WEIGHT_THRESH": "0"})  # fmt: skip
-        sex_log = os.path.join(
-            self.path_bkgsub,
-            os.path.splitext(get_basename(outim))[0] + "_sextractor.log",
-        )
-        sextractor(inim, sex_options=sex_options, log_file=sex_log, logger=self.logger)
+        back_size, filter_size = self._background_mesh()
+        # zero-weight pixels are dropped from the meshes, as -WEIGHT_THRESH 0 did
+        exclude = fits.getdata(weight_image) == 0 if weight_image is not None else None
 
-        bkg_data = fits.getdata(bkg)
-
-        # if ignore_steppy_flag:
-        #     is_steppy = False
-        # else:
-        #     h, w = bkg_data.shape
-        #     stripe = np.mean(bkg_data[h // 2 - 100 : h // 2 + 100, :], axis=0)  # already smooth bkg: mean is okay?
-        #     is_steppy, info = step_background_check(stripe)
-        #     if is_steppy:
-        #         self.logger.warning(f"Background is steppy in {get_basename(outim)}")
-        #         self.logger.debug(f"Background is steppy: {info}")
-        #         return True
-        #     else:
-        #         self.logger.debug(f"Background is not steppy in {get_basename(outim)}: {info}")
-
+        # one read: the models are built in memory, not round-tripped through check images
         with fits.open(inim, memmap=True) as hdul:
             _data = hdul[0].data
             _hdr = hdul[0].header
+            bkg_data, bkg_rms_data = estimate_background(
+                _data, mask=exclude, back_size=back_size, filter_size=filter_size
+            )
+            if get_key(self.config_node.imcoadd, "output_sky_rms_map", default=False):
+                fits.writeto(bkg_rms, bkg_rms_data, overwrite=True)
+            del bkg_rms_data  # do not hold a second full frame past its write
+            fits.writeto(bkg, bkg_data, overwrite=True)
+
+            # if ignore_steppy_flag:
+            #     is_steppy = False
+            # else:
+            #     h, w = bkg_data.shape
+            #     stripe = np.mean(bkg_data[h // 2 - 100 : h // 2 + 100, :], axis=0)  # already smooth bkg: mean is okay?
+            #     is_steppy, info = step_background_check(stripe)
+            #     if is_steppy:
+            #         self.logger.warning(f"Background is steppy in {get_basename(outim)}")
+            #         self.logger.debug(f"Background is steppy: {info}")
+            #         return True
+            #     else:
+            #         self.logger.debug(f"Background is not steppy in {get_basename(outim)}: {info}")
+
             _hdr["BACKTYPE"] = ("DYNAMIC", "Background subtraction type")
             # _hdr["BKG_STEP"] = (is_steppy, "Background is step-like; likely quantization artifact")
             _data -= bkg_data
@@ -1882,6 +1947,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                                 input_list=group_list)  # fmt: skip
 
         if coadd:
+            self._guard_sky_rms_propagation()
             self._update_header()
             self.logger.info(f"Running swarp is completed in {time_diff_in_seconds(st)} seconds")
             return self.config_node.imcoadd.coadd_image
@@ -2023,6 +2089,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         produced by ``reproject_and_coadd_with_swarp`` exist for every input."""
         if input_images is None:
             input_images = self.images_to_coadd
+        self._guard_sky_rms_propagation()
 
         if device_id is not None:
             self.coadd_with_cupy(input_images, device_id=device_id)

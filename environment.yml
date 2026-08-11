@@ -24,6 +24,7 @@ dependencies:
   - astroquery
   - shapely
   - fitsio
+  - sep
   - healpy
   - yagmail
 

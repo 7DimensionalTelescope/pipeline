@@ -204,8 +204,7 @@ class InputHeaderSet:
 
     @property
     def _flxscales(self) -> list[float]:
-        """Per-image flux scaling, unity where unstamped -- which is what an
-        unstamped snapshot means: ``zpscale`` off scales no pixels either."""
+        """Per-image flux scaling, unity where unstamped (zpscale off scales no pixels)."""
         return [1.0 if f is None else f for f in self.values("FLXSCALE")]
 
     @property

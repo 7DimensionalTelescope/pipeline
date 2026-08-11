@@ -154,7 +154,7 @@ def build_source_mask(
     a segmentation map would miss are covered too."""
     mask = np.zeros(shape, dtype=bool)
     try:
-        cat = Table.read(catalog, format="ascii.sextractor")
+        cat = catalog if isinstance(catalog, Table) else Table.read(catalog, format="ascii.sextractor")
     except Exception as e:
         # transient SExtractor failures ("no key to print in table OBJECTS") leave a
         # 0-byte catalog; one bad frame must not kill a 1000-frame run
@@ -163,7 +163,8 @@ def build_source_mask(
         return mask
     if not len(cat):
         if logger is not None:
-            logger.warning(f"No source detected in {os.path.basename(catalog)}; source mask is empty")
+            name = "the supplied table" if isinstance(catalog, Table) else os.path.basename(catalog)
+            logger.warning(f"No source detected in {name}; source mask is empty")
         return mask
 
     # KRON_RADIUS is 0 when SExtractor's Kron measurement failed; 1 keeps the isophotal ellipse
@@ -220,6 +221,93 @@ def build_source_mask(
             f"x{galaxy_scale} vs x{star_scale}): {100 * mask.mean():.1f}% of pixels masked"
         )
     return mask
+
+
+# B_IMAGE is derivable; the rest must be in the catalog
+_ELLIPSE_KEYS = ["ALPHA_J2000", "DELTA_J2000", "A_IMAGE", "THETA_IMAGE", "KRON_RADIUS", "CLASS_STAR", "FLUX_AUTO"]
+
+
+def source_ellipses_on_frame(catalog, source_header, target_header, logger=None):
+    """Catalog ellipses on another frame's pixels; None if the catalog lacks a column."""
+    from astropy.wcs import WCS
+
+    try:
+        cat = catalog if isinstance(catalog, Table) else Table.read(catalog)
+    except Exception as e:
+        if logger is not None:
+            logger.debug(f"Cannot read {os.path.basename(str(catalog))} ({e})")
+        return None
+    if not len(cat):
+        return None
+
+    missing = [c for c in _ELLIPSE_KEYS if c not in cat.colnames]
+    # main.param comments B_IMAGE out; ELLIPTICITY = 1 - B/A and ELONGATION = A/B recover it
+    axis_ratio = None
+    if "B_IMAGE" in cat.colnames:
+        axis_ratio = np.asarray(cat["B_IMAGE"], float) / np.asarray(cat["A_IMAGE"], float)
+    elif "ELLIPTICITY" in cat.colnames:
+        axis_ratio = 1.0 - np.asarray(cat["ELLIPTICITY"], float)
+    elif "ELONGATION" in cat.colnames:
+        axis_ratio = 1.0 / np.asarray(cat["ELONGATION"], float)
+    else:
+        missing.append("B_IMAGE/ELLIPTICITY/ELONGATION")
+    if missing:
+        if logger is not None:
+            logger.info(f"Photometry catalog lacks {missing}; running a detection pass instead")
+        return None
+
+    wcs_s, wcs_t = WCS(source_header), WCS(target_header)
+    ra = np.asarray(cat["ALPHA_J2000"], float)
+    dec = np.asarray(cat["DELTA_J2000"], float)
+    x_s, y_s = wcs_s.all_world2pix(ra, dec, 0)
+    x_t, y_t = wcs_t.all_world2pix(ra, dec, 0)
+
+    def step(dx, dy):
+        """Where a unit step in the source frame lands in the target frame."""
+        r1, d1 = wcs_s.all_pix2world(x_s + dx, y_s + dy, 0)
+        x1, y1 = wcs_t.all_world2pix(r1, d1, 0)
+        return x1 - x_t, y1 - y_t
+
+    theta = np.radians(np.asarray(cat["THETA_IMAGE"], float))
+    ux, uy = step(np.cos(theta), np.sin(theta))  # along the major axis
+    vx, vy = step(-np.sin(theta), np.cos(theta))  # along the minor axis
+    a_src = np.asarray(cat["A_IMAGE"], float)
+
+    return Table({
+        "X_IMAGE": x_t + 1.0,  # build_source_mask subtracts 1: SExtractor is 1-indexed
+        "Y_IMAGE": y_t + 1.0,
+        "A_IMAGE": a_src * np.hypot(ux, uy),
+        "B_IMAGE": a_src * axis_ratio * np.hypot(vx, vy),
+        "THETA_IMAGE": np.degrees(np.arctan2(uy, ux)),
+        "KRON_RADIUS": np.asarray(cat["KRON_RADIUS"], float),
+        "CLASS_STAR": np.asarray(cat["CLASS_STAR"], float),
+        "FLUX_AUTO": np.asarray(cat["FLUX_AUTO"], float),
+    })  # fmt: skip
+
+
+def parse_sex_config(config_path: str, keys) -> dict:
+    """Named settings from a SExtractor config, as strings."""
+    values = {}
+    with open(config_path) as fp:
+        for line in fp:
+            tokens = line.split("#", 1)[0].split()
+            if tokens and tokens[0] in keys:
+                values[tokens[0]] = " ".join(tokens[1:])
+    missing = set(keys) - set(values)
+    if missing:
+        raise ValueError(f"{sorted(missing)} not found in {config_path}")
+    return values
+
+
+def estimate_background(data, mask=None, back_size: int = 64, filter_size: int = 3):
+    """Mesh background + RMS via sep; ``mask`` marks pixels to EXCLUDE."""
+    import sep
+
+    # sep rejects the big-endian arrays FITS hands back; astype also gives it C-contiguity
+    arr = data.astype(np.float32)
+    bkg = sep.Background(arr, mask=mask, bw=back_size, bh=back_size,
+                         fw=filter_size, fh=filter_size, fthresh=0.0)  # fmt: skip
+    return bkg.back(), bkg.rms()
 
 
 def _parse_swarp_image_size(config_path: str) -> tuple[int, int]:

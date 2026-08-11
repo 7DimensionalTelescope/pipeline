@@ -92,9 +92,11 @@ if TYPE_CHECKING:
         zp_key: str
         zpscale: bool
         bkgsub_type: Any
+        sex_vars: dict
         source_mask: bool
         output_weight_map: bool
         output_footprint: bool
+        output_sky_rms_map: bool
         persist_weight_maps: bool
         joint_wcs: bool
         interpolate_badpix: bool
