@@ -351,6 +351,15 @@ class InputHeaderSet:
             if image_id:
                 header[f"IID{nn:0>5}"] = (image_id, f"IMAGEID of IMG{nn:0>5}")
 
+        # 	Unit mix: the filename token and TELESCOP can each name only one
+        units = sorted({u for h in self.headers if (u := str(h.get("TELESCOP") or "").strip())})
+        if units:
+            header["NUNITS"] = (len(units), "Number of distinct 7DT units combined")
+            joined = ",".join(units)
+            if len(joined) > 68:  # one card; NUNITS and IMG##### still carry the full truth
+                joined = joined[:65] + "..."
+            header["UNITS"] = (joined, "Units combined (TELESCOP names only one)")
+
         from .. import __version__
 
         header["PIPE_VER"] = (str(__version__), "Last Run Sciproc Pipeline Version")

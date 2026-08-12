@@ -11,6 +11,7 @@ from .const import (
 )
 from .utils import generate_id
 from .query import RawImageQuery, free_query, query_observations_manually
+from .recipes import images_of_unit, units_of
 from .process_status import ProcessStatus
 from .image_qa import ImageQA
 from .image_qa_dependency import ImageQADependency, parse_ingredients
