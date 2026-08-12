@@ -48,7 +48,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         DatabaseHandler.__init__(self, use_database=self.config_node.settings.is_pipeline, is_too=self.is_too)
 
         if self.is_connected:
-
+            self.process_status_id = self.create_process_data(self.config_node)
             self.reset_exceptions("subtraction")
 
             if self.process_status_id is not None:
@@ -56,7 +56,6 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
                 self.logger.database = ExceptionHandler(self.process_status_id)
 
-            self.process_status_id = self.create_process_data(self.config_node)
             if self.too_id is not None:
                 self.logger.debug(f"Initialized DatabaseHandler for ToO data management, ToO ID: {self.too_id}")
             else:

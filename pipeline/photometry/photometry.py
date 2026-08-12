@@ -143,6 +143,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         )
 
         if self.is_connected:
+            self.process_status_id = self.create_process_data(self.config_node)
             self.reset_exceptions(self._process_spec.name)
 
             if self.process_status_id is not None:
@@ -150,7 +151,6 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
                 self.logger.database = ExceptionHandler(self.process_status_id)
 
-            self.process_status_id = self.create_process_data(self.config_node)
             if self.too_id is not None:
                 self.logger.debug(f"Initialized DatabaseHandler for ToO data management, ToO ID: {self.too_id}")
             else:

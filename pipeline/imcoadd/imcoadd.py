@@ -63,6 +63,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         if self.is_connected:
 
+            self.process_status_id = self.create_process_data(self.config_node)
             self.reset_exceptions("coadd")
 
             if self.process_status_id is not None:
@@ -70,7 +71,6 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
                 self.logger.database = ExceptionHandler(self.process_status_id)
 
-            self.process_status_id = self.create_process_data(self.config_node)
             if self.too_id is not None:
                 self.logger.debug(f"Initialized DatabaseHandler for ToO data management, ToO ID: {self.too_id}")
             else:
@@ -632,11 +632,15 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 "its settings are unknown and it will be replaced"
             )
             return
+        # an absent card records no setting: the product predates it, which is not a conflict
         mismatch = {
-            k: (header.get(k), v) for k, (v, _) in wanted.items() if str(header.get(k)).upper() != str(v).upper()
+            k: (header[k], v)
+            for k, (v, _) in wanted.items()
+            if k in header and str(header[k]).upper() != str(v).upper()
         }
         if mismatch:
             detail = ", ".join(f"{k}: disk={d!r} config={c!r}" for k, (d, c) in mismatch.items())
+            self.logger.error(f"Coadd identity mismatch on {get_basename(coadd_image)}: {detail}")
             raise CoaddError.ValueError(
                 f"{get_basename(coadd_image)} exists with different settings ({detail}). "
                 "Use config_suffix to keep both products, or overwrite=True to replace it."
@@ -776,9 +780,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         header = fits.getheader(inim)
         shape = (header["NAXIS2"], header["NAXIS1"])
-        persist = os.path.join(
-            collapse(self.path.imcoadd.factory.source_mask_dir, force=True), get_basename(outmask)
-        )
+        persist = os.path.join(collapse(self.path.imcoadd.factory.source_mask_dir, force=True), get_basename(outmask))
         if not self.overwrite:
             # persisted mask (PLIO, output dir): skip detection+painting; SExtractor needs
             # a plain working copy, so materialize one in the factory
@@ -1906,7 +1908,6 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 weight_images=weight_images,
             )
 
-
         # conservative policy: LANCZOS3 bpm masks, needed with or without weights
         factory = self.path.imcoadd.factory
         masks_predicted = atleast_1d(
@@ -1915,11 +1916,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             )
         )
         bp_policy = self._coadd_plan()["policy"]
-        if (
-            bp_policy == "conservative"
-            and not self.overwrite
-            and all(os.path.exists(m) for m in masks_predicted)
-        ):
+        if bp_policy == "conservative" and not self.overwrite and all(os.path.exists(m) for m in masks_predicted):
             # checked before get_bpmask: resolving 1000 bpmasks costs ~20 min
             self.logger.info(f"bpm pass outputs already exist ({len(masks_predicted)} masks), skipping")
         elif bp_policy == "conservative":
@@ -2167,18 +2164,43 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             with slot_ctx as slot:
                 if mode == "mean":
                     slot.lease(4 * 110_000_000 * 8)  # sum/norm/count/gain accumulators, ~3.5 GB
-                    self.coadd_with_numpy(input_images, weights=weights, masks=masks, var_maps=var_maps, write_weight=plan["output_weight_map"], write_footprint=plan["output_footprint"])
+                    self.coadd_with_numpy(
+                        input_images,
+                        weights=weights,
+                        masks=masks,
+                        var_maps=var_maps,
+                        write_weight=plan["output_weight_map"],
+                        write_footprint=plan["output_footprint"],
+                    )
                 elif mode == "clipped":
                     slot.lease(6 * 110_000_000 * 8)  # two-pass accumulators, ~5 GB
-                    self.coadd_clipped_with_numpy(input_images, weights=weights, masks=masks, var_maps=var_maps, write_weight=plan["output_weight_map"], write_footprint=plan["output_footprint"])
+                    self.coadd_clipped_with_numpy(
+                        input_images,
+                        weights=weights,
+                        masks=masks,
+                        var_maps=var_maps,
+                        write_weight=plan["output_weight_map"],
+                        write_footprint=plan["output_footprint"],
+                    )
                 elif mode == "median":
                     reserved = slot.reserved_bytes
                     try:
-                        avail = int(next(l for l in open("/proc/meminfo") if l.startswith("MemAvailable")).split()[1]) * 1024
+                        avail = (
+                            int(next(l for l in open("/proc/meminfo") if l.startswith("MemAvailable")).split()[1])
+                            * 1024
+                        )
                     except Exception:
                         avail = 0
                     slot.lease(int(0.3 * max(0, avail - reserved)))  # upper bound of _auto_chunk_h's pick
-                    self.coadd_median_with_numpy(input_images, weights=weights, masks=masks, reserved_bytes=reserved, var_maps=var_maps, write_weight=plan["output_weight_map"], write_footprint=plan["output_footprint"])
+                    self.coadd_median_with_numpy(
+                        input_images,
+                        weights=weights,
+                        masks=masks,
+                        reserved_bytes=reserved,
+                        var_maps=var_maps,
+                        write_weight=plan["output_weight_map"],
+                        write_footprint=plan["output_footprint"],
+                    )
                 else:
                     raise ValueError(f"Invalid coadd mode: {mode!r} (expected 'mean', 'median' or 'clipped')")
         finally:
@@ -2207,7 +2229,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         if policy not in ("off", "1px", "conservative"):
             raise ValueError(f"Invalid badpix_reprojection_policy: {policy!r} ('off', '1px' or 'conservative')")
 
-        weighting = str(get_key(node, "coadd_weighting", default="global") or "off").lower().replace("-", "").replace("_", "")
+        weighting = (
+            str(get_key(node, "coadd_weighting", default="global") or "off").lower().replace("-", "").replace("_", "")
+        )
         weighting = {"false": "off", "none": "off", "no": "off"}.get(weighting, weighting)
         if weighting not in ("off", "global", "pixelwise"):
             raise ValueError(f"Invalid imcoadd.coadd_weighting: {weighting!r} (False, 'global' or 'pixel-wise')")
@@ -2260,7 +2284,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             coadd_header=self.input_headers.coadd_header,
             weights=weights,
             weight_output=add_suffix(self.config_node.imcoadd.coadd_image, "weight") if write_weight else False,
-            footprint_output=add_suffix(self.config_node.imcoadd.coadd_image, "footprint") if write_footprint else False,
+            footprint_output=(
+                add_suffix(self.config_node.imcoadd.coadd_image, "footprint") if write_footprint else False
+            ),
             masks=masks,
             flxscales=self._combine_flxscales(),
             match_swarp_size=match_swarp_size,
@@ -2283,7 +2309,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             coadd_header=self.input_headers.coadd_header,
             weights=weights,
             weight_output=add_suffix(self.config_node.imcoadd.coadd_image, "weight") if write_weight else False,
-            footprint_output=add_suffix(self.config_node.imcoadd.coadd_image, "footprint") if write_footprint else False,
+            footprint_output=(
+                add_suffix(self.config_node.imcoadd.coadd_image, "footprint") if write_footprint else False
+            ),
             masks=masks,
             flxscales=self._combine_flxscales(),
             match_swarp_size=match_swarp_size,
@@ -2311,7 +2339,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             coadd_header=self.input_headers.coadd_header,
             weights=weights,
             weight_output=add_suffix(self.config_node.imcoadd.coadd_image, "weight") if write_weight else False,
-            footprint_output=add_suffix(self.config_node.imcoadd.coadd_image, "footprint") if write_footprint else False,
+            footprint_output=(
+                add_suffix(self.config_node.imcoadd.coadd_image, "footprint") if write_footprint else False
+            ),
             masks=masks,
             flxscales=self._combine_flxscales(),
             match_swarp_size=match_swarp_size,
