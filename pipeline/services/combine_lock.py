@@ -41,6 +41,76 @@ def _lease_dir() -> str:
     return d
 
 
+_MEMINFO_KEYS = ("MemTotal", "MemFree", "MemAvailable", "Cached", "Committed_AS")
+
+
+def meminfo_bytes(keys=_MEMINFO_KEYS) -> dict:
+    """Selected /proc/meminfo fields in bytes; 0 for anything unreadable."""
+    wanted, out = set(keys), dict.fromkeys(keys, 0)
+    try:
+        with open("/proc/meminfo") as fp:
+            for line in fp:
+                key, _, rest = line.partition(":")
+                if key in wanted:
+                    out[key] = int(rest.split()[0]) * 1024
+    except OSError:
+        pass
+    return out
+
+
+def cgroup_memory() -> tuple[int, int]:
+    """(binding memory ceiling, anonymous bytes under it), or (0, 0) when unconstrained.
+
+    The limit usually sits on an ancestor slice rather than the process's own leaf cgroup,
+    so every level is inspected and the tightest ceiling wins."""
+    try:
+        rel = open("/proc/self/cgroup").read().strip().rsplit(":", 1)[-1].lstrip("/")
+    except OSError:
+        return 0, 0
+    node = os.path.join("/sys/fs/cgroup", rel)
+    limit, holder = 0, None
+    while True:
+        for name in ("memory.high", "memory.max"):
+            # unreadable or unparsable means "no ceiling here", never a crash: this runs on
+            # hosts with cgroup v1, no cgroups, or none of it mounted
+            try:
+                value = int(open(os.path.join(node, name)).read().strip())
+            except (OSError, ValueError):
+                continue
+            if limit == 0 or value < limit:
+                limit, holder = value, node
+        if os.path.realpath(node) == "/sys/fs/cgroup" or not node.startswith("/sys/fs/cgroup"):
+            break
+        node = os.path.dirname(node)
+    if not limit:
+        return 0, 0
+    anon = 0
+    try:
+        for line in open(os.path.join(holder, "memory.stat")):
+            key, _, value = line.partition(" ")
+            if key == "anon":
+                anon = int(value)
+                break
+    except (OSError, ValueError):
+        pass
+    return limit, anon
+
+
+def memory_headroom_bytes(reserved_bytes: int = 0) -> int:
+    """Bytes a combine may plan for: the tighter of its cgroup ceiling and host RAM.
+
+    Both bind. The cgroup ceiling is what throttles this account (and differs per user --
+    a dedicated slice override, the global one, or none at all), while the host is shared
+    with every other account, whose slices may sum past physical RAM. Page cache is
+    excluded from both: it is reclaimable, and the combine creates it itself, which is
+    what made MemAvailable unusable as a budget."""
+    mem = meminfo_bytes()
+    host = mem["MemTotal"] - mem["Committed_AS"]
+    limit, anon = cgroup_memory()
+    headroom = min(limit - anon, host) if limit else host
+    return max(0, headroom - int(reserved_bytes))
+
+
 def active_lease_bytes(exclude_pid: int | None = None) -> int:
     """Sum of planned combine bytes leased by live processes (dead PIDs are cleaned up)."""
     total = 0
@@ -120,8 +190,23 @@ class CombineSlot:
         return active_lease_bytes(exclude_pid=os.getpid())
 
     def lease(self, planned_bytes: int) -> None:
+        peers = self.reserved_bytes
         with open(self._lease_file, "w") as fp:
             json.dump({"pid": os.getpid(), "bytes": int(planned_bytes), "tag": self.tag, "ts": time.time()}, fp)
+        if self.logger:
+            mem, (limit, anon) = meminfo_bytes(), cgroup_memory()
+            budget = (
+                f"cgroup ceiling {limit/2**30:.0f} GiB - anon {anon/2**30:.0f} GiB"
+                if limit
+                else f"host RAM {mem['MemTotal']/2**30:.0f} GiB - Committed_AS {mem['Committed_AS']/2**30:.0f} GiB"
+            )
+            self.logger.debug(
+                f"Combine memory claim [{self.tag}]: this run {planned_bytes/2**30:.0f} GiB, "
+                f"other combines {peers/2**30:.0f} GiB, total claimed {(planned_bytes + peers)/2**30:.0f} GiB "
+                f"| headroom {memory_headroom_bytes(peers)/2**30:.0f} GiB ({budget}, peers reserved) "
+                f"| host MemAvailable {mem['MemAvailable']/2**30:.0f} GiB "
+                f"(free {mem['MemFree']/2**30:.0f} + cached {mem['Cached']/2**30:.0f}) -- not the budget"
+            )
 
     def __exit__(self, *exc):
         try:

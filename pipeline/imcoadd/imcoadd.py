@@ -2183,15 +2183,16 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                         write_footprint=plan["output_footprint"],
                     )
                 elif mode == "median":
+                    from ..services.combine_lock import memory_headroom_bytes
+                    from .calc import plan_median_memory
+                    from .utils import _parse_swarp_image_size
+
+                    # lease what the model says will actually be allocated, not a bound
                     reserved = slot.reserved_bytes
-                    try:
-                        avail = (
-                            int(next(l for l in open("/proc/meminfo") if l.startswith("MemAvailable")).split()[1])
-                            * 1024
-                        )
-                    except Exception:
-                        avail = 0
-                    slot.lease(int(0.3 * max(0, avail - reserved)))  # upper bound of _auto_chunk_h's pick
+                    grid_w, grid_h = _parse_swarp_image_size(os.path.join(REF_DIR, "7dt.swarp"))
+                    budget = int(0.3 * memory_headroom_bytes(reserved))
+                    _, planned = plan_median_memory(len(atleast_1d(input_images)), grid_w, grid_h, budget)
+                    slot.lease(planned)
                     self.coadd_median_with_numpy(
                         input_images,
                         weights=weights,

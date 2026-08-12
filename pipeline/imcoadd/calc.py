@@ -389,23 +389,48 @@ def clipped_mean_coadd_numpy(
     return output_path
 
 
+# Full-frame accumulators a median combine holds for its whole run, per output pixel:
+# coadd f32 + count_arr i32 + ginv_arr f64 + var_den f64. The post-loop weight-map
+# temporaries peak higher (~44 B/px) but by then no strip stack is alive.
+ACCUMULATOR_BYTES_PER_PIXEL = 24
+
+
+def plan_median_memory(n_images: int, width: int, height: int, budget_bytes: int,
+                       floor: int = 128) -> tuple[int, int]:
+    """Strip height and total bytes for a median combine held under ``budget_bytes``.
+
+    Requirement is analytic, not guessed: ``accumulators(width, height) +
+    n_images * chunk_h * width * 4``. Inverting it for chunk_h is what makes the same
+    model serve any frame count, any output grid and any ceiling."""
+    accumulators = height * width * ACCUMULATOR_BYTES_PER_PIXEL
+    per_row = n_images * width * 4  # one strip row across the stack, float32
+    chunk = height if per_row <= 0 else int(max(0, budget_bytes - accumulators) // per_row)
+    chunk = max(floor, min(chunk, height))
+    return chunk, accumulators + chunk * per_row
+
+
 def _auto_chunk_h(n_images: int, width: int, height: int, budget_fraction: float = 0.3,
                   floor: int = 128, reserved_bytes: int = 0, logger: Logger | None = None) -> int:
     """Strip height from idle memory: strip count scales the NFS slice round-trips, so
     RAM buys taller strips and directly cuts the latency-bound I/O. ``reserved_bytes``
     subtracts other combines' leased stacks (services.combine_lock) so concurrent
     combines cannot each size against the same free memory."""
-    try:
-        avail = int(next(l for l in open("/proc/meminfo") if l.startswith("MemAvailable")).split()[1]) * 1024
-    except Exception:
-        return floor
-    avail = max(0, avail - int(reserved_bytes))
-    chunk = int(budget_fraction * avail / (n_images * width * 4))
-    chunk = max(floor, min(chunk, height))
+    from ..services.combine_lock import memory_headroom_bytes
+
+    budget = int(budget_fraction * memory_headroom_bytes(reserved_bytes))
+    chunk, total = plan_median_memory(n_images, width, height, budget, floor)
     if logger is not None:
         n_strips = -(-height // chunk)
         logger.info(f"Median combine: chunk_h={chunk} ({n_strips} strips, "
-                    f"~{n_images * chunk * width * 4 / 1e9:.0f} GB strip stack)")
+                    f"~{total / 2**30:.0f} GiB for {n_images} frames on {width}x{height}, "
+                    f"budget {budget / 2**30:.0f} GiB)")
+        if total > budget:
+            # the floor cannot go lower: this frame count on this grid does not fit
+            logger.warning(
+                f"Median combine needs {total / 2**30:.0f} GiB at the {floor}-row floor but only "
+                f"{budget / 2**30:.0f} GiB is available; expect memory pressure. Raise the memory "
+                f"ceiling for this account, or coadd fewer frames at once."
+            )
     return chunk
 
 
