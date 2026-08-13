@@ -13,6 +13,9 @@ from .utils import strip_binning, format_binning, strip_exptime, format_exptime,
 from .cam_tracker import get_camera_serial
 from .db import unified_names_from_paths
 
+# auxiliary planes that live beside the images they describe, not science data
+MASK_SUFFIXES = ("_srcmask", "_fovmask", "_bpmask", "_footprint", "_bkg", "_bkgrms")
+
 
 # # class Path7DS:
 # class NameHandlerDeprecated:
@@ -387,11 +390,15 @@ class NameHandler:
         else:
             types += (None,)
 
-        # image/weight/cat
+        # image/weight/cat/mask
         if stem.endswith("_cat"):
             types += ("catalog",)
         elif stem.endswith("_weight"):
             types += ("weight",)
+        elif stem.endswith(MASK_SUFFIXES):
+            # auxiliary planes now sitting beside the frames they describe; without this
+            # they parse as science images and any directory sweep picks them up as data
+            types += ("mask",)
         else:
             types += ("image",)
 
@@ -1101,7 +1108,7 @@ class NameHandler:
             1: {"bias", "dark", "flat", "science", "calib", "calibration"},
             2: {"single", "coadded"},
             3: {"difference"},
-            4: {"image", "weight", "catalog"},
+            4: {"image", "weight", "catalog", "mask"},
         }
         for idx, nameset in category_map.items():
             for name in nameset:

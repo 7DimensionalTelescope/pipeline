@@ -28,12 +28,22 @@ def run_preprocess(
     preprocess_kwargs: str = None,
     is_too=False,
     use_gpu=False,
+    master_frame_only=False,
+    calib_types=None,
+    dry_run=False,
 ):
     """
     Generate master calibration frames for a specific observation set.
 
     Master frames are stacked calibration images (like dark, flat, bias) that
     help in reducing systematic errors in scientific observations.
+
+    `master_frame_only` and `calib_types` are parameters rather than hardcoded defaults so a
+    masters-only pass can be queued: a regeneration cascade has to rebuild every affected
+    master before any science frame is calibrated, and a config that interleaves the two
+    cannot express that. They are plain parameters, not `preprocess_kwargs` keys, because the
+    scheduler stores kwargs as `str(list)` and parses them back through a quote swap
+    (scheduler.py:227, :260), which mangles any embedded JSON -- flags survive, JSON does not.
     """
 
     try:
@@ -43,10 +53,18 @@ def run_preprocess(
         if preprocess_kwargs:
             kwargs = json.loads(preprocess_kwargs)
 
+        # preprocess_kwargs is for the constructor; run() takes only what is named here.
+        # Splatting the same dict into both raised TypeError on any constructor-only key.
         prep = Preprocess(
-            config, use_gpu=use_gpu, overwrite=overwrite, master_frame_only=False, is_too=is_too, **kwargs
+            config,
+            use_gpu=use_gpu,
+            overwrite=overwrite,
+            master_frame_only=kwargs.pop("master_frame_only", master_frame_only),
+            calib_types=kwargs.pop("calib_types", calib_types),
+            is_too=is_too,
+            **kwargs,
         )
-        prep.run(device_id=device_id, make_plots=make_plots, **kwargs)
+        prep.run(device_id=device_id, make_plots=make_plots, dry_run=dry_run)
         del config, prep
     except Exception as e:
         raise e

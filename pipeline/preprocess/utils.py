@@ -2,6 +2,7 @@ from typing import Literal
 import os
 import time
 import uuid
+from functools import lru_cache
 from glob import glob
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
@@ -460,6 +461,135 @@ def update_header_file(fits_path: str, extra: fits.Header) -> None:
         hdr[card.keyword] = (card.value, card.comment)
     path = PathHandler(fits_path).preprocess.header
     write_header_file(path, hdr)
+
+
+def recorded_ingredient_ids(image) -> dict:
+    """``{ingredient basename: IMAGEID}`` from the IMCMB/IMCID card pairs of an existing image.
+
+    Read from the FITS and never from the sibling ``.header``: that sidecar is written by
+    ``prepare_header`` ahead of the pixels, so it describes the run about to happen rather
+    than the file on disk, and reading it would make every frame look up to date the moment
+    its header was staged.
+    """
+    try:
+        header = fits.getheader(image)
+    except Exception:
+        return {}
+
+    recorded = {}
+    for key in header:
+        if not key.startswith("IMCMB"):
+            continue
+        name = str(header[key] or "").strip()
+        image_id = str(header.get(f"IMCID{key[5:]}", "") or "").strip()
+        if name and image_id:
+            recorded[os.path.basename(name)] = image_id
+    return recorded
+
+
+@lru_cache(maxsize=4096)
+def resolve_master_path(basename: str, is_pipeline: bool = True) -> str | None:
+    """On-disk path of a master frame from its basename alone; None if it is not a master.
+
+    A master basename carries its nightdate and unit, and masters live at
+    ``<master root for that night>/<nightdate>/<unit>/``, so PathHandler derives the path
+    outright -- no glob, no date sweep, no database. This is what lets the staleness check
+    ask about the ingredient an image ACTUALLY used rather than the one `tolerant_search`
+    would pick today. Raw frames resolve to a non-master type and are dropped.
+    """
+    from ..path.path import PathHandler
+    from ..utils import atleast_1d
+
+    try:
+        path = PathHandler(basename, is_pipeline=is_pipeline)
+        if "master" not in atleast_1d(path.name.type)[0]:
+            return None
+        return atleast_1d(path._resolved_files)[0]
+    except Exception:
+        return None
+
+
+def ingredient_state(path: str, cache: dict = None) -> tuple:
+    """``(IMAGEID, SANITY)`` of an ingredient as it stands on disk.
+
+    The two cards come from different files on purpose: IMAGEID via ``get_image_id``, the
+    same sidecar-first accessor that stamps IMCID (so the comparison converges), and SANITY
+    from the FITS, because a master's ``.header`` sidecar carries statistics and the id but
+    never SANITY. `cache` is keyed by path and is worth passing -- one group's frames share
+    the same handful of masters.
+    """
+    if cache is not None and path in cache:
+        return cache[path]
+    try:
+        sanity = fits.getval(path, "SANITY")
+    except Exception:
+        sanity = None
+    state = (get_image_id(path), sanity)
+    if cache is not None:
+        cache[path] = state
+    return state
+
+
+def ingredient_change(image, selected=(), better_match: bool = False, is_pipeline: bool = True, cache: dict = None):
+    """Why `image` must be rebuilt, or None if it is still current.
+
+    Returns ``"regenerated"``, ``"sanity"``, ``"better-match"``, or ``None``.
+
+    The first two questions are asked of the ingredients the image ACTUALLY used --
+    resolved from the IMCMB basename through `resolve_master_path` -- not of what
+    `tolerant_search` would select today. That matters in both directions: a rebuilt master
+    is caught even when a nearer one has since appeared and would now be chosen instead,
+    and a master demoted to SANITY=False is caught even though the search now skips it.
+
+    - ``regenerated``: an ingredient still sits at the name the image recorded but carries a
+      different IMAGEID -- the file was rebuilt.
+    - ``sanity``: a SANITY=False ingredient came or went. The identity comparison cannot see
+      this (a verdict flip leaves every IMAGEID alone), but PPFLAG bit 4 records exactly
+      "a SANITY=False ingredient was used", so comparing that bit against the ingredients'
+      SANITY now catches a demotion (the rerun will pick a different master) and a revival
+      (the recorded bit is now wrong) alike. Limit: bit 4 is an OR over the ingredients, so
+      one master flipping while another is still rejected is not visible.
+    - ``better-match``: only when `better_match` -- an ingredient now selected is a file the
+      image never recorded, because the search found a closer or less relaxed candidate.
+      Nothing was rebuilt; what changed is what is available.
+
+    Unknown provenance is never reported -- an image with no ID cards, an ingredient whose
+    IMAGEID cannot be read, or (for the sanity test) an image with no PPFLAG card -- so
+    products predating those cards are left alone instead of being rebuilt on a guess.
+    """
+    from .ppflag import PPFLAG_SANITY_F_USED, get_ppflag_from_header
+
+    recorded = recorded_ingredient_ids(image)
+    if not recorded:
+        return None
+
+    used_rejected = False
+    sanity_known = True
+    for name, was in recorded.items():
+        path = resolve_master_path(name, is_pipeline)
+        if path is None:
+            continue  # a raw frame: no master path fits the name
+        image_id, sanity = ingredient_state(path, cache=cache)
+        if image_id and image_id != was:
+            return "regenerated"
+        if sanity is None:
+            sanity_known = False
+        elif sanity is False:
+            used_rejected = True
+
+    if sanity_known:
+        try:
+            recorded_flag = bool(get_ppflag_from_header(image, raise_if_missing=True) & PPFLAG_SANITY_F_USED)
+            if recorded_flag != used_rejected:
+                return "sanity"
+        except Exception:
+            pass  # no PPFLAG card: written before the flag existed
+
+    if better_match:
+        for ingredient in selected:
+            if ingredient and os.path.basename(ingredient) not in recorded:
+                return "better-match"
+    return None
 
 
 def prepare_raw_qa_header(fits_path: str, flag: bool, score: float) -> None:

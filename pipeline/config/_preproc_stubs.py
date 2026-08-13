@@ -31,6 +31,7 @@ if TYPE_CHECKING:
         device: Any
         ignore_sanity_if_no_match: bool
         ignore_lenient_keys_if_no_match: bool
+        reprocess_on_better_match: bool
 
     class SettingsNode(ConfigNode):
         is_too: bool

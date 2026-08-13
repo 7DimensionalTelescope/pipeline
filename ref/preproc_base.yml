@@ -28,6 +28,7 @@ preprocess:
   device: 
   ignore_sanity_if_no_match: true
   ignore_lenient_keys_if_no_match: true
+  reprocess_on_better_match: false  # also rebuild when a closer master is now available, not just when one was regenerated
 
 
 settings:
