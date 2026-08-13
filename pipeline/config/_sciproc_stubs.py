@@ -95,6 +95,7 @@ if TYPE_CHECKING:
         sex_vars: dict
         source_mask: bool
         output_weight_map: bool
+        output_single_weight_map: bool
         output_footprint: bool
         output_sky_rms_map: bool
         persist_weight_maps: bool

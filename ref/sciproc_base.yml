@@ -134,9 +134,10 @@ imcoadd:
     DETECT_MINAREA:
   source_mask: True  # False, True or 'iterative'; only affects dynamic bkgsub
   output_weight_map: true  # write the coadd weight product
+  output_single_weight_map: false  # keep each frame's resampled weight in singles/ (int16)
   output_footprint: true  # write the coadd footprint product
   output_sky_rms_map: false  # BACKGROUND_RMS model of source-free sky
-  persist_weight_maps: True  # durable RICE maps in singles/weight_maps/; reused across campaigns when masters match
+  persist_weight_maps: False  # durable per-single maps; costs 1.71 s/frame to save a 0.04 s kernel
   joint_wcs: False
   interpolate_badpix: False  # interpolate bad pixels in the sci frames (was apply_bpmask)
   interp_type: 'median'

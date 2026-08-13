@@ -511,8 +511,11 @@ from .weight_store import load_single_weight, persist_single_weight
 
 
 def write_weight_int16(path, weight, header, n_holes=None):
-    """Weight sidecar as BITPIX 16 + BSCALE: FITS has no float16, and SWarp reads scaled
-    ints exactly (verified). Half the bytes of float32; quantization <= wmax/64000."""
+    """Weight as BITPIX 16 + BSCALE with BZERO=0, so physical zero decodes exactly.
+
+    The unsigned convention (BZERO = 32768*BSCALE) bought one bit and cost exact zero:
+    BZERO is not bit-identically 32768*BSCALE once written to the header, so every zero
+    decoded as ~8e-16 and downstream had to filter it by epsilon."""
     weight = np.where(np.isfinite(weight) & (weight >= 0), weight, 0.0).astype(np.float32)
     hdu = fits.PrimaryHDU(weight, header=header)
     if n_holes is not None:
@@ -520,10 +523,19 @@ def write_weight_int16(path, weight, header, n_holes=None):
         hdu.header["NHOLEPIX"] = (int(n_holes), "number of zero-weight (interpolated) pixels")
     wmax = float(np.nanmax(weight)) if weight.size else 0.0
     if wmax > 0:
-        # unsigned-int16 convention (BZERO = 32768*BSCALE): weights are nonnegative, so
-        # the full 65535 levels map [0, wmax] and physical 0 stays exactly representable
-        bscale = wmax / 65535.0
-        hdu.scale("int16", bscale=bscale, bzero=32768.0 * bscale)
+        hdu.scale("int16", bscale=wmax / 32767.0, bzero=0.0)
+    hdu.writeto(path, overwrite=True)
+
+
+def write_weight_float32(path, weight, header, n_holes=None):
+    """Full-precision weight sidecar. int16 cannot hold the ~6 decades a weight map spans:
+    every weight below half a quantum becomes a literal zero, which the combine then reads
+    as 'no data' and punches out of the coadd at bright stars."""
+    weight = np.where(np.isfinite(weight) & (weight >= 0), weight, 0.0).astype(np.float32)
+    hdu = fits.PrimaryHDU(weight, header=header)
+    if n_holes is not None:
+        hdu.header["WGTHOLES"] = (bool(n_holes), "zero-weight holes at interpolated pixels")
+        hdu.header["NHOLEPIX"] = (int(n_holes), "number of zero-weight (interpolated) pixels")
     hdu.writeto(path, overwrite=True)
 
 
@@ -557,8 +569,8 @@ def weight_and_interpolate_cpu(
         sci_out = output_paths[idx]
         hdr = add_bpx_method(fits.getheader(images[idx]), method)
         fits.writeto(sci_out, interp_img, header=hdr, overwrite=True)
-        write_weight_int16(add_suffix(sci_out, "weight"), interp_wt, hdr,
-                           n_holes=n_holes if zero_interp_weight else 0)
+        write_weight_float32(add_suffix(sci_out, "weight"), interp_wt, hdr,
+                             n_holes=n_holes if zero_interp_weight else 0)
         if post_frame is not None:
             post_frame(sci_out)  # e.g. per-image reprojection (+ optional interp discard)
 

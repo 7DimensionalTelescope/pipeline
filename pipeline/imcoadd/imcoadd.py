@@ -1154,7 +1154,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                             sig_z_file,
                             sig_f_file,
                             out_names=uncalculated_outputs,
-                            weight_store=bool(get_key(self.config_node.imcoadd, "persist_weight_maps", default=True)),
+                            weight_store=bool(get_key(self.config_node.imcoadd, "persist_weight_maps", default=False)),
                             zero_mask=zero_mask,
                         )
                     else:
@@ -1410,7 +1410,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
             groups = self._group_IMCMB(todo_in, todo_out)
             self.logger.info(f"{len(groups)} groups for fused weight+interpolation.")
-            persist = bool(get_key(self.config_node.imcoadd, "persist_weight_maps", default=True))
+            persist = bool(get_key(self.config_node.imcoadd, "persist_weight_maps", default=False))
             for group_id, ((z, d, f), [group_in, group_out]) in enumerate(groups.items()):
                 st_group = time.time()
                 mask_file, badpix = self._get_bpmask(group_in[0])
@@ -1953,9 +1953,33 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         pass_type = "sci" if self._coadd_plan()["need_weights"] else ""
         resampled = atleast_1d(self.path.imcoadd.factory.resampled_images(input_images, pass_type=pass_type))
         self.config_node.imcoadd.resampled_images = resampled
+        self._save_single_weight_products(resampled)
         self.images_to_coadd = resampled
         self.logger.info(f"SWarp reprojection completed in {time_diff_in_seconds(st)} seconds")
         return resampled
+
+    def _save_single_weight_products(self, resampled: list[str]) -> None:
+        """Keep each frame's resampled weight beside its single, as a product not a scratch file.
+
+        Off by default (`imcoadd.output_single_weight_map`): the factory copies SWarp wrote
+        are the working ones and get discarded with the rest of the factory."""
+        if not get_key(self.config_node.imcoadd, "output_single_weight_map", default=False):
+            return
+        from .interpolate import write_weight_int16
+
+        sources = atleast_1d(self.path.imcoadd.factory.resampled_weight_images(resampled, pass_type="wht"))
+        targets = atleast_1d(self.path.weight)
+        if not (len(sources) == len(targets) == len(atleast_1d(resampled))):
+            self.logger.warning("Resampled weights do not map 1:1 onto the inputs; not saved as products")
+            return
+        n = 0
+        for src, dst in zip(sources, targets):
+            if not os.path.exists(src):
+                continue
+            with fits.open(src, memmap=True) as hdul:
+                write_weight_int16(dst, hdul[0].data, hdul[0].header)
+            n += 1
+        self.logger.info(f"Saved {n} resampled weight maps beside their singles")
 
     def _propagated_bpmasks(self) -> list[str] | None:
         """Per-frame resampled bad-pixel masks from the bpm pass, or None if it did not run.

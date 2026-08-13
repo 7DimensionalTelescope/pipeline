@@ -32,14 +32,14 @@ def persist_single_weight(out_path: str, weight: np.ndarray, masters: dict) -> s
     """Write the pristine weight on the sidecar's uint16 grid, RICE-compressed."""
     weight = np.where(np.isfinite(weight) & (weight >= 0), weight, 0.0).astype(np.float32)
     wmax = float(weight.max()) if weight.size else 0.0
-    bscale = wmax / 65535.0 if wmax > 0 else 1.0
-    # unsigned-int16 convention (BZERO = 32768*BSCALE): quantize through astropy's own
-    # scale() so the stored integers are bit-identical to write_weight_int16's
+    bscale = wmax / 32767.0 if wmax > 0 else 1.0
+    # BZERO=0 so physical zero decodes exactly; the unsigned convention bought one bit and
+    # made every zero read back as ~8e-16 (see write_weight_int16)
     tmp = fits.PrimaryHDU(weight)
-    tmp.scale("int16", bscale=bscale, bzero=32768.0 * bscale)
+    tmp.scale("int16", bscale=bscale, bzero=0.0)
     hdu = fits.CompImageHDU(data=tmp.data, compression_type="RICE_1")
     hdu.header["BSCALE"] = bscale
-    hdu.header["BZERO"] = 32768.0 * bscale
+    hdu.header["BZERO"] = 0.0
     hdu.header["WMUNITS"] = ("ADU**-2 raw inv variance", "no FLXSCALE, no interp/bpmask zeroing")
     for card, val in _masters_cards(masters).items():
         hdu.header[card] = (val, "master frame this map was built from")

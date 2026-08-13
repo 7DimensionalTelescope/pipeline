@@ -16,9 +16,12 @@ from ..utils import time_diff_in_seconds, add_suffix
 from ..services.logger import Logger
 from .utils import determine_size, build_coadd_wcs_header
 
-# SWarp resampling turns exact-zero weights into float dust (~1e-15 measured; physical
-# weights are >=1e-4), so hole exclusion must test against this instead of 0.
-WEIGHT_EPS = 1e-9
+# SWarp resampling turns exact-zero weights into float dust, so hole exclusion tests
+# against this rather than 0. Measured over 184-frame UDS resamps: dust peaks at 2.9e-15,
+# the smallest real weight is 2.6e-5, so this sits ~1000x above the dust and ~7 decades
+# below any physical weight. Not anchored to float32 eps: the dust is SWarp's arithmetic
+# residue, not an IEEE rounding limit, and 2-3x eps (~3e-7) would sit above real weights.
+WEIGHT_EPS = 1e-12
 
 
 # Var(median)/Var(mean) for n Gaussian samples, from the order-statistic density
