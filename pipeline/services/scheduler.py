@@ -95,9 +95,17 @@ class Scheduler:
         overwrite_science=False,
         input_type=None,
         processes=None,
+        extra_kwargs=None,
         **kwargs,
     ):
-        """Create a scheduler from a list of configs."""
+        """Create a scheduler from a list of configs.
+
+        `extra_kwargs` is appended verbatim to every task's command line — the only way to
+        reach a worker with a flag this method does not model (`-master_frame_only`,
+        `-calib_types bias dark`, `-dry_run`). Pass plain flags, never JSON: kwargs are
+        stored as `str(list)` and parsed back through a quote swap (:227, :260), which
+        mangles anything quoted.
+        """
         import re
         import copy
 
@@ -127,6 +135,9 @@ class Scheduler:
                 scheduler_kwargs = ["-processes"] + list(processes) if processes is not None else []
                 if overwrite or overwrite_data or overwrite_science:
                     scheduler_kwargs.append("-overwrite")
+
+            if extra_kwargs:
+                scheduler_kwargs = scheduler_kwargs + list(extra_kwargs)
 
             table.add_row(
                 [
