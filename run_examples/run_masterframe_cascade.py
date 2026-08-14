@@ -2,40 +2,24 @@
 """
 Plan -- and optionally queue -- the reprocessing cascade of regenerated master frames.
 
-Give it the master frames that were ALREADY regenerated. It walks image_qa_dependency for
-everything built from them and emits the work in three phases:
+Give it master frames that were ALREADY regenerated; it walks image_qa_dependency and
+emits the work in four ordered batches:
 
-  phase 1  masters   the preprocess configs that own the raw calibration frames of the
-                     CHAINED masters (a rebuilt bias invalidates the darks and flats made
-                     from it), run master_frame_only in three cumulative calib_types sweeps
-                     -- bias, then bias+dark, then bias+dark+flat. Kind order is the real
-                     topological order; blast-radius depth is not, because a flat records
-                     its bias directly as well as through the dark.
+  --phase 1 --sweep 1|2|3   rebuild chained masters (-master_frame_only, cumulative
+                            -calib_types sweeps: bias / bias+dark / bias+dark+flat)
+  --phase 2                 recalibrate the affected singles (overwrite=False)
+  --phase 3 --execute       rerun the affected nightly science configs with -overwrite
+  --phase 4 --execute       rerun the multi-epoch science configs, after 3 drained
 
-  phase 2  singles   the preprocess configs that must recalibrate the affected science
-                     singles. A different set: a regenerated FLAT has no master descendants,
-                     so phase 1 is empty for it, yet every single it calibrated is stale.
-                     Nothing else rebuilds those pixels -- the science stages run on the
-                     singles that already exist.
-
-  phase 3  science   the affected science configs, with -overwrite. Science stage skipping
-                     is flag-based and will never notice an IMCID change on its own.
-
-Read-only by default: it prints the plan and stops. --submit queues it, and even then the
-default is a sizing pass (-dry_run on every task) that writes nothing -- pass --execute to
-do the actual work.
-
-**The phases are not independent.** Do not start phase N+1 until phase N has drained: the
-queue runs tasks concurrently, and a science config calibrated against a master that is
-still being rebuilt is exactly what this exists to prevent. Submit one phase per invocation
-and watch the queue between them.
+Read-only by default. --submit queues ONE batch; without --execute, phases 1-2 queue a
+-dry_run sizing pass (a lower bound). Wait for each batch to drain before the next; if a
+task fails, resubmit through this script (rerun_failed_tasks wipes the sweep flags).
 
 Usage:
     python run_masterframe_cascade.py flat_m675_7DT02_20260704_1x1_gain2750_C31166
-    python run_masterframe_cascade.py /balmer/.../bias_7DT06_20260711_1x1_gain2750_C31093.fits
     python run_masterframe_cascade.py --from-file seeds.txt --show-configs
-    python run_masterframe_cascade.py <seed> --submit --phase 1            # sizing pass
-    python run_masterframe_cascade.py <seed> --submit --phase 1 --execute  # for real
+    python run_masterframe_cascade.py <seed> --submit --phase 1 --sweep 1            # sizing
+    python run_masterframe_cascade.py <seed> --submit --phase 1 --sweep 1 --execute  # real
 """
 
 from __future__ import annotations
@@ -55,9 +39,13 @@ def main():
     parser.add_argument("--show-configs", action="store_true", help="list every config, not just the counts")
     parser.add_argument("--show-masters", action="store_true", help="list the chained master frames")
     parser.add_argument("--submit", action="store_true", help="queue the plan (default: print and stop)")
-    parser.add_argument("--phase", type=int, choices=[1, 2, 3], action="append",
-                        help="which phase to submit; repeatable. Default: refuse and ask, so that "
-                             "phases are never queued together by accident")
+    parser.add_argument("--phase", type=int, choices=[1, 2, 3, 4],
+                        help="which ONE phase to submit; the scheduler dedupes on config path, so "
+                             "batches sharing configs must be queued one at a time, drained in between")
+    parser.add_argument("--sweep", type=int, choices=[1, 2, 3],
+                        help="with --phase 1: which cumulative calib_types sweep ("
+                             + "; ".join(f"{i+1}=" + "+".join(s) for i, s in enumerate(MASTER_SWEEPS))
+                             + "), run in order and drained in between")
     parser.add_argument("--execute", action="store_true",
                         help="with --submit, do the real work instead of a -dry_run sizing pass")
     parser.add_argument("--base-priority", type=int, default=1, help="scheduler base priority (default 1)")
@@ -84,7 +72,8 @@ def main():
         for label, configs in (
             ("phase 1  masters", [c for c in p.master_configs]),
             ("phase 2  singles", [c for c in p.preprocess_configs]),
-            ("phase 3  science", [(n, f) for n, f, _ in p.nightly_science + p.multiepoch_science]),
+            ("phase 3  science (nightly)", [(n, f) for n, f, _ in p.nightly_science]),
+            ("phase 4  science (multi-epoch)", [(n, f) for n, f, _ in p.multiepoch_science]),
         ):
             if configs:
                 print(f"\n  {label}:")
@@ -95,37 +84,46 @@ def main():
         print("\n  Read-only. Re-run with --submit --phase N to queue a phase.")
         return
 
-    if not args.phase:
+    if args.phase is None:
         print(
-            "\n  --submit needs --phase. The phases are ordered and must not overlap:\n"
-            "    --phase 1   rebuild the chained masters (3 sweeps: "
+            "\n  --submit needs --phase (exactly one). The batches are ordered and must not overlap:\n"
+            "    --phase 1 --sweep 1|2|3   rebuild the chained masters ("
             + ", ".join("+".join(s) for s in MASTER_SWEEPS)
             + ")\n"
-            "    --phase 2   recalibrate the singles\n"
-            "    --phase 3   rerun the science configs with -overwrite\n"
-            "  Wait for each to drain before submitting the next."
+            "    --phase 2                 recalibrate the singles\n"
+            "    --phase 3 --execute       rerun the nightly science configs with -overwrite\n"
+            "    --phase 4 --execute       rerun the multi-epoch science configs with -overwrite\n"
+            "  Wait for each batch to drain before submitting the next. If a task fails,\n"
+            "  resubmit through this script -- rerun_failed_tasks would wipe the sweep flags."
         )
         sys.exit(2)
 
-    if p.unregenerable and 1 in args.phase:
+    if args.phase == 1 and args.sweep is None:
+        print("\n  --phase 1 needs --sweep 1, 2 or 3 (run them in order, drained in between).")
+        sys.exit(2)
+
+    if p.unregenerable and args.phase == 1:
         print(
             f"\n  {len(p.unregenerable)} master frame(s) cannot be regenerated (see above). "
             "Everything below them stays stale; the cascade will be incomplete."
         )
 
     dry = not args.execute
-    phases = sorted(set(args.phase))
-    if dry and phases == [3]:
+    if dry and args.phase in (3, 4):
         print(
-            "\n  Phase 3 has no sizing pass -- cli/data_reduction takes no -dry_run, and a science\n"
+            f"\n  Phase {args.phase} has no sizing pass -- cli/data_reduction takes no -dry_run, and a science\n"
             "  rerun is all-or-nothing per config. The config count above is the size.\n"
             "  Re-run with --execute to queue it."
         )
         sys.exit(2)
 
-    print(f"\n  Submitting phase(s) {phases}" + ("  [-dry_run sizing pass]" if dry else "  [FOR REAL]"))
-    schedulers = submit(p, phases=phases, base_priority=args.base_priority, dry_run=dry)
-    print(f"  queued {len(schedulers)} batch(es) to the system queue")
+    batch = f"phase {args.phase}" + (f" sweep {args.sweep}" if args.phase == 1 else "")
+    print(f"\n  Submitting {batch}" + ("  [-dry_run sizing pass]" if dry else "  [FOR REAL]"))
+    sc = submit(p, phase=args.phase, sweep=args.sweep, base_priority=args.base_priority, dry_run=dry)
+    if sc is None:
+        print("  nothing to queue for this phase")
+    else:
+        print(f"  queued {len(sc.schedule)} task(s) to the system queue")
 
 
 if __name__ == "__main__":

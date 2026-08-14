@@ -98,14 +98,7 @@ class Scheduler:
         extra_kwargs=None,
         **kwargs,
     ):
-        """Create a scheduler from a list of configs.
-
-        `extra_kwargs` is appended verbatim to every task's command line — the only way to
-        reach a worker with a flag this method does not model (`-master_frame_only`,
-        `-calib_types bias dark`, `-dry_run`). Pass plain flags, never JSON: kwargs are
-        stored as `str(list)` and parsed back through a quote swap (:227, :260), which
-        mangles anything quoted.
-        """
+        """Create a scheduler from a list of configs. `extra_kwargs`: plain flags appended to every task's command line; never JSON (the kwargs round-trip mangles quotes)."""
         import re
         import copy
 

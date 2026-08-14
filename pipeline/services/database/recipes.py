@@ -66,10 +66,7 @@ def images_of_unit(unit: str, kind: str = "coadd", limit: Optional[int] = None) 
     return free_query(query, params)
 
 
-# Descendant walk over image_qa_dependency: source -> derived, transitively. The chain
-# bias -> dark -> flat -> single -> coadd -> diff is fully recorded (master-to-master
-# edges exist), so one recursion reaches every affected product. UNION (not UNION ALL)
-# dedupes, and the depth cap is a cycle backstop.
+# transitive descendant walk over image_qa_dependency; the depth cap is a cycle backstop
 _DESCENDANTS = r"""
 WITH RECURSIVE seed AS (
     SELECT id FROM image_qa WHERE image_name = ANY(%s)
@@ -108,14 +105,7 @@ def ingredients_of(image_name, role: Optional[str] = None) -> List[Tuple[str, st
 def blast_radius(image_name, max_depth: int = 12) -> List[Tuple[str, str, int]]:
     """Every product transitively derived from `image`, as (image_name, image_path, depth).
 
-    Depth 1 = direct consumers. Regenerating a master frame makes this the set of images
-    that no longer descend from what produced them.
-
-    `depth` is the SHORTEST path, which is not a topological rank and must not be used to
-    order regeneration: a master bias reaches the flat it made both through the dark
-    (depth 2) and directly, since a flat records its bias too, so the flat also comes out
-    at depth 1 alongside that dark. Regenerating in depth order would rebuild the flat from
-    the dark it is about to replace.
+    `depth` is the SHORTEST path, not a topological rank: never order regeneration by it.
     """
     return free_query(
         _DESCENDANTS
@@ -132,16 +122,7 @@ def blast_radius(image_name, max_depth: int = 12) -> List[Tuple[str, str, int]]:
 def configs_to_rerun(image_name, max_depth: int = 12) -> List[Tuple[str, str, int, int]]:
     """Configs owning anything derived from `image`: (name, config_file, depth, n_images).
 
-    The actionable form of `blast_radius`, and it inherits that function's caveat: `depth`
-    is a shortest path, not a topological rank, so it does not order the reruns. Preprocess
-    configs must run before the science configs that consume their products, and a
-    preprocess config that only fetches a master cannot regenerate it -- only the config
-    owning its raw calibration frames can.
-
-    A preprocess rerun does pick the change up on its own (`Preprocess` compares IMCID
-    against the masters it would select now, preprocess.py `_sci_needs_processing` /
-    `_master_ingredients_changed`), but a science rerun does not: stage skipping there is
-    flag-based (run.py:100). Flip the stage `flag:` booleans, or rerun with overwrite=True.
+    `depth` does not order the reruns (shortest path); a science rerun needs -overwrite.
     """
     return free_query(
         _DESCENDANTS
@@ -180,17 +161,7 @@ def configs_missing_products(nightdate: Optional[str] = None, min_progress: int 
 
 
 def image_names(images) -> List[str]:
-    """Normalize image path(s) or name(s) to bare `image_name` values as stored in image_qa.
-
-    Accepts a str/Path or a list of them. `image_name` is the basename without ".fits",
-    so both "/lyman/.../UDS_m525_..._coadd.fits" and "UDS_m525_..._coadd" are valid input.
-    Raises ValueError on anything that cannot be a name (empty, a directory, a glob).
-
-    A list is accepted for CONVENIENCE, not speed: seeding the recursive walk with an array
-    was measured 2x SLOWER than looping single seeds (8 masters: 0.65 s batched vs 0.30 s
-    looped), because one union traversal is bigger than several small ones. Same answers
-    either way; both are sub-second.
-    """
+    """Normalize image path(s)/name(s) to bare image_qa `image_name` values (basename without .fits)."""
     from ...utils import atleast_1d
 
     names = []
@@ -212,7 +183,7 @@ def image_names(images) -> List[str]:
 
 
 def _registered(names: List[str]) -> List[str]:
-    """The subset of `names` present in image_qa, raising if none are."""
+    """The subset of `names` present in image_qa; raises if none are (an empty result would be indistinguishable from 'no dependencies')."""
     rows = free_query("SELECT image_name FROM image_qa WHERE image_name = ANY(%s)", (names,))
     found = {r[0] for r in rows}
     if not found:

@@ -29,6 +29,10 @@ preprocess:
   ignore_sanity_if_no_match: true
   ignore_lenient_keys_if_no_match: true
   reprocess_on_better_match: false  # also rebuild when a closer master is now available, not just when one was regenerated
+  designated_masterframes:  # manual override instead of generation/search; master/science frames that did not use these are rebuilt
+    # - dark: /path/dark_100s_...fits      # sci-dark role ONLY -> flatdark falls back to the normal search
+    # - flatdark: /path/dark_3s_...fits    # flatdark ONLY -> sci-dark role stays automatic
+    # - /path/dark_100s_...fits            # plain: both roles
 
 
 settings:

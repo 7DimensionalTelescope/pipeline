@@ -37,13 +37,6 @@ def run_preprocess(
 
     Master frames are stacked calibration images (like dark, flat, bias) that
     help in reducing systematic errors in scientific observations.
-
-    `master_frame_only` and `calib_types` are parameters rather than hardcoded defaults so a
-    masters-only pass can be queued: a regeneration cascade has to rebuild every affected
-    master before any science frame is calibrated, and a config that interleaves the two
-    cannot express that. They are plain parameters, not `preprocess_kwargs` keys, because the
-    scheduler stores kwargs as `str(list)` and parses them back through a quote swap
-    (scheduler.py:227, :260), which mangles any embedded JSON -- flags survive, JSON does not.
     """
 
     try:
@@ -53,8 +46,8 @@ def run_preprocess(
         if preprocess_kwargs:
             kwargs = json.loads(preprocess_kwargs)
 
-        # preprocess_kwargs is for the constructor; run() takes only what is named here.
-        # Splatting the same dict into both raised TypeError on any constructor-only key.
+        # dry_run may arrive via preprocess_kwargs (wrapper.py); a sizing pass must not touch the DB
+        dry_run = kwargs.pop("dry_run", dry_run)
         prep = Preprocess(
             config,
             use_gpu=use_gpu,
@@ -62,6 +55,7 @@ def run_preprocess(
             master_frame_only=kwargs.pop("master_frame_only", master_frame_only),
             calib_types=kwargs.pop("calib_types", calib_types),
             is_too=is_too,
+            use_database=kwargs.pop("use_database", not dry_run),
             **kwargs,
         )
         prep.run(device_id=device_id, make_plots=make_plots, dry_run=dry_run)

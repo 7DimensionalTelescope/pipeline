@@ -256,8 +256,6 @@ class Blueprint:
             if isinstance(group, ScienceGroup):
                 continue
 
-            # Parenthesized: without them this read as `A if C else ((...) if pk else [])`,
-            # so preprocess_kwargs was silently dropped whenever overwrite was on.
             scheduler_kwargs = ["-overwrite"] if (overwrite or overwrite_preprocess) else []
             if preprocess_kwargs:
                 scheduler_kwargs = scheduler_kwargs + ["--preprocess_kwargs", json.dumps(preprocess_kwargs)]

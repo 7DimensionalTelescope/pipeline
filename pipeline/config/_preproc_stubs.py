@@ -32,6 +32,7 @@ if TYPE_CHECKING:
         ignore_sanity_if_no_match: bool
         ignore_lenient_keys_if_no_match: bool
         reprocess_on_better_match: bool
+        designated_masterframes: Any
 
     class SettingsNode(ConfigNode):
         is_too: bool

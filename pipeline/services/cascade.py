@@ -1,33 +1,9 @@
-"""Plan the reprocessing cascade of one or more regenerated master frames.
+"""Plan and queue the reprocessing cascade of regenerated master frames.
 
-A regenerated master carries a fresh IMAGEID, which invalidates every product built from
-it: other master frames first, then the calibrated singles, then the coadds and diffs above
-them. This module answers "what must rerun, in what order" from `image_qa_dependency`, and
-optionally submits it. It never decides that something is stale -- `Preprocess` does that
-per frame from the IMCID cards ([api-recipes.md] `ingredient_change`); this only routes the
-work.
-
-Three phases, and the barriers between them are the whole point:
-
-    1. masters   the affected preprocess configs, master_frame_only, in three CUMULATIVE
-                 calib_types sweeps: [bias], [bias,dark], [bias,dark,flat]
-    2. singles   the same preprocess configs, normal run, overwrite=False
-    3. science   the affected science configs, overwrite=True, nightly before multi-epoch
-
-Why phase 1 cannot be folded into phase 2: a config both consumes masters from other nights
-and produces its own, and `Preprocess.run` interleaves master generation with science
-reduction inside each group. Night A's flat may be built from night B's bias while night B's
-singles use night A's flat, so the order is B-masters -> A-flat -> science-of-both, which no
-single pass over configs can produce.
-
-Why the sweeps are cumulative rather than one kind each: kind order (bias -> dark -> flat) is
-the real topological order -- shortest-path depth is not, because a flat records its bias
-directly as well as through the dark -- but a later kind needs the earlier ones *loaded* for
-PPFLAG to propagate. An already-built bias is never rebuilt in sweeps 2 and 3, so the repeat
-costs one tolerant_search per group.
-
-Read-only unless `submit()` is called explicitly (owner's rule: dependency bookkeeping must
-not touch run configs).
+Four drained batches: (1) chained masters via three cumulative calib_types sweeps,
+(2) singles, (3) nightly science with -overwrite, (4) multi-epoch science with -overwrite.
+Read-only unless submit() is called; one phase (and sweep) per call.
+Rationale and measurements: .claude/memory/services.md "cascade.py".
 """
 
 from __future__ import annotations
@@ -41,9 +17,7 @@ from ..utils import atleast_1d
 from .database.query import free_query
 from .database.recipes import image_names
 
-# Downward closure over the dependency graph. Depth-bounded rather than visited-bounded:
-# UNION dedupes ids but one id can legitimately reappear deeper, so the cap is what
-# terminates a cycle. The real graph is 5 deep at most, so 12 never binds.
+# depth-bounded downward closure; the cap terminates cycles (real graph is <=5 deep)
 _CLOSURE = """
 WITH RECURSIVE seed AS (
     SELECT id FROM image_qa WHERE image_name = ANY(%s)
@@ -93,8 +67,8 @@ class CascadePlan:
             + (" (" + ", ".join(f"{sum(1 for m in self.masters if m[1] == k)} {k}" for k in ("bias", "dark", "flat")) + ")" if self.masters else ""),  # fmt: skip
             f"  phase 1  masters    {len(self.master_configs)} preprocess configs × 3 sweeps",
             f"  phase 2  singles    {len(self.preprocess_configs)} preprocess configs",
-            f"  phase 3  science    {len(self.science_configs)} configs "
-            f"({len(self.nightly_science)} nightly, {len(self.multiepoch_science)} multi-epoch)",
+            f"  phase 3  science    {len(self.nightly_science)} nightly configs",
+            f"  phase 4  science    {len(self.multiepoch_science)} multi-epoch configs",
         ]
         if self.unregenerable:
             lines += ["", f"  CANNOT REGENERATE ({len(self.unregenerable)}) — the chain stops here and"
@@ -123,14 +97,7 @@ def _closure(names: List[str], max_depth: int) -> List[tuple]:
 
 
 def _master_config_stems(master_names: List[str]) -> dict:
-    """{master name: preprocess config stem}, from the names alone.
-
-    Derived from the name, not from `image_qa.process_status_id`: a master fetched by another
-    night can have its row taken over by the fetching config (520 such rows live), and only
-    the config for the master's own (nightdate, unit) holds the raw calibration frames that
-    can rebuild it. The basename carries both, and PathHandler builds the stem exactly the way
-    the config itself was named. One batched parse, no database.
-    """
+    """{master name: preprocess config stem} from the names alone; a fetched master's image_qa row can be owned by the fetching config, so process_status_id must not be used here."""
     if not master_names:
         return {}
     stems = atleast_1d(PathHandler(list(master_names), is_pipeline=True)._preproc_config_stem)
@@ -160,17 +127,16 @@ def _resolve_configs(stems) -> tuple:
             blocked.append((stem, "human-rejected (sanity=False)"))
         elif not config_file or not os.path.exists(config_file):
             blocked.append((stem, "config file is missing on disk"))
+        elif config_file.startswith("/home/"):
+            # the queue daemon cannot traverse /home/*: the task would exit 1 with no log
+            blocked.append((stem, f"config under /home is unreadable by the queue daemon: {config_file}"))
         else:
             runnable[stem] = config_file
     return runnable, blocked
 
 
 def plan(seed_images, max_depth: int = 12) -> CascadePlan:
-    """Everything a set of regenerated master frames obliges. Read-only.
-
-    `seed_images` are the masters that were ALREADY regenerated -- names or paths. They are
-    not themselves scheduled; their consumers are.
-    """
+    """Everything a set of ALREADY-regenerated master frames obliges. Read-only."""
     names = image_names(seed_images)
     registered = free_query("SELECT image_name FROM image_qa WHERE image_name = ANY(%s)", (names,))
     found = sorted({r[0] for r in registered})
@@ -188,14 +154,18 @@ def plan(seed_images, max_depth: int = 12) -> CascadePlan:
     rows = _closure(found, max_depth)
     seen = set(found)
     counts = {}
-    master_names, science_ps_ids, single_stems = [], set(), set()
+    master_names, science_ps_ids = [], set()
+    counted = set()
     for name, image_type, ps_id, nightdate in rows:
         if name in seen:
             continue
-        counts[image_type] = counts.get(image_type, 0) + 1
-        if image_type in ("bias", "dark", "flat"):
-            master_names.append((name, image_type))
-        else:
+        # count each name once, but keep every owning config for phase 3
+        if name not in counted:
+            counted.add(name)
+            counts[image_type] = counts.get(image_type, 0) + 1
+            if image_type in ("bias", "dark", "flat"):
+                master_names.append((name, image_type))
+        if image_type not in ("bias", "dark", "flat"):
             science_ps_ids.add(ps_id)
     out.counts = counts
 
@@ -207,11 +177,7 @@ def plan(seed_images, max_depth: int = 12) -> CascadePlan:
     out.unregenerable = blocked
 
     # ---- phase 2: the configs that must recalibrate the affected singles ----
-    # A different, usually larger set than phase 1: a regenerated FLAT has no master
-    # descendants at all, so phase 1 is empty for it, yet every single it calibrated must be
-    # reduced again. Nothing else does that -- the science stages run on the singles that
-    # exist, they do not rebuild pixels. Stems come from image_qa's own nightdate and unit,
-    # which for a single is its real unit (unlike a coadd's, which is only a naming token).
+    # a larger set than phase 1: a regenerated flat has no master descendants but stale singles
     affected_singles = free_query(
         _CLOSURE
         + """
@@ -238,11 +204,8 @@ def plan(seed_images, max_depth: int = 12) -> CascadePlan:
         ):
             science[name] = (config_file, nightdate, sanity)
 
-    # Second source, deliberately narrow: a config under an affected preprocess config whose
-    # singles carry NO dependency edges at all is invisible to the walk above (0.17% of
-    # singles live). Taking every child of an affected preprocess config instead would be a
-    # gross over-reach -- measured, one flat seed goes from 26 configs to 128, and the other
-    # 102 own nothing that changed.
+    # second source: only configs whose singles carry no dependency edges at all
+    # (partial-edge singles are a known blind spot -- see memory known-bugs.md)
     if out.preprocess_configs:
         for name, config_file, nightdate, sanity in free_query(
             "SELECT DISTINCT p.name, p.config_file, p.nightdate, p.sanity"
@@ -262,62 +225,89 @@ def plan(seed_images, max_depth: int = 12) -> CascadePlan:
             out.skipped.append((name, "human-rejected (sanity=False)"))
         elif not config_file or not os.path.exists(config_file):
             out.skipped.append((name, "config file is missing on disk"))
+        elif config_file.startswith("/home/"):
+            out.skipped.append((name, f"config under /home is unreadable by the queue daemon: {config_file}"))
         else:
             out.science_configs.append((name, config_file, nightdate))
 
     return out
 
 
+def _queued_rows(config_files):
+    """[(config, status)] of system-queue rows whose config is in `config_files`."""
+    import sqlite3
+
+    from ..const import SCHEDULER_DB_PATH
+
+    targets = set(config_files)
+    if not targets or SCHEDULER_DB_PATH is None or not os.path.exists(SCHEDULER_DB_PATH):
+        return []
+    with sqlite3.connect(SCHEDULER_DB_PATH, timeout=10) as conn:
+        rows = conn.execute("SELECT config, status FROM scheduler").fetchall()
+    return [(c, s) for c, s in rows if c in targets]
+
+
 def submit(
     plan: CascadePlan,
-    phases=(1, 2, 3),
+    phase: int,
+    sweep: int = None,
     base_priority: int = 1,
     dry_run: bool = True,
     input_type: str = "Reprocess",
 ):
-    """Queue the plan. `dry_run=True` (the default) queues sizing passes that write nothing.
+    """Queue ONE phase of the plan -- and for phase 1, ONE calib_types sweep.
 
-    Returns the list of `Scheduler` objects it created, in submission order. Phases are
-    submitted one call at a time on purpose: **phase N+1 must not be queued until phase N has
-    drained**, because the queue runs tasks concurrently and a science config calibrated
-    against a master that is still being rebuilt is exactly the corruption this exists to
-    prevent. There is no cross-config dependency mechanism to lean on -- `dependent_idx` is
-    only ever preprocess->science within one blueprint.
-
-    `dry_run` reaches the preprocess phases only. `cli/data_reduction` has no such flag and
-    would reject it; phase 3 has no sizing pass, because the plan's config count already is
-    one -- a science rerun is all-or-nothing per config.
+    One drained batch per call: the scheduler dedupes on config path alone, so this refuses
+    (RuntimeError) while any target config still has a Ready/Processing/Paused row, and
+    replaces drained rows via overwrite_schedule (never signals a non-Processing task).
+    Resubmit failed cascade tasks through here, never rerun_failed_tasks (it wipes kwargs).
+    dry_run=True (default) queues a write-nothing sizing pass -- a LOWER bound; phases 3-4
+    have no sizing pass and raise on dry_run. Returns the Scheduler, or None if empty.
     """
     from .scheduler import Scheduler
 
-    master_files = [f for _, f in plan.master_configs]
-    preprocess_files = [f for _, f in plan.preprocess_configs]
-    science_files = [f for _, f, _ in plan.nightly_science] + [f for _, f, _ in plan.multiepoch_science]
-    submitted = []
+    if phase == 1:
+        if sweep not in (1, 2, 3):
+            raise ValueError("phase 1 needs sweep=1, 2 or 3 (cumulative calib_types); run them in order")
+        configs = [f for _, f in plan.master_configs]
+        extra = ["-master_frame_only", "-calib_types", *MASTER_SWEEPS[sweep - 1]]
+        priority, kw = base_priority + 1, {}
+    elif phase == 2:
+        configs = [f for _, f in plan.preprocess_configs]
+        extra = []
+        priority, kw = base_priority + 1, {}
+    elif phase in (3, 4):
+        # nightly (3) strictly before multi-epoch (4); -overwrite because sciproc skipping is flag-based
+        if dry_run:
+            raise ValueError(f"phase {phase} has no sizing pass; call with dry_run=False to queue the reruns")
+        configs = [f for _, f, _ in (plan.nightly_science if phase == 3 else plan.multiepoch_science)]
+        extra = []
+        priority, kw = base_priority, {"overwrite_science": True}
+    else:
+        raise ValueError(f"phase must be 1, 2, 3 (nightly science) or 4 (multi-epoch science), not {phase!r}")
 
-    def _queue(configs, extra, priority, **kw):
-        if not configs:
-            return None
-        sc = Scheduler.from_list(
-            configs,
-            base_priority=priority,
-            use_system_queue=True,
-            input_type=input_type,
-            extra_kwargs=list(extra) or None,
-            **kw,
+    if not configs:
+        return None
+
+    busy = [(c, s) for c, s in _queued_rows(configs) if s in ("Ready", "Processing", "Paused")]
+    if busy:
+        listing = ", ".join(f"{os.path.basename(c)} [{s}]" for c, s in busy[:5])
+        raise RuntimeError(
+            f"{len(busy)} target config(s) still queued ({listing}{', ...' if len(busy) > 5 else ''}); "
+            "wait for the queue to drain before submitting the next batch"
         )
-        sc.start_system_queue()
-        submitted.append(sc)
-        return sc
 
-    sizing = ["-dry_run"] if dry_run else []
-    if 1 in phases:
-        for sweep in MASTER_SWEEPS:
-            _queue(master_files, ["-master_frame_only", "-calib_types", *sweep] + sizing, base_priority + 1)
-    if 2 in phases:
-        _queue(preprocess_files, sizing, base_priority + 1)
-    if 3 in phases and not dry_run:
-        # overwrite=True: sciproc skipping is flag-based and will not notice an IMCID change.
-        _queue(science_files, [], base_priority, overwrite_science=True)
+    if dry_run:  # phase 3 already raised
+        extra = extra + ["-dry_run"]
 
-    return submitted
+    sc = Scheduler.from_list(
+        configs,
+        base_priority=priority,
+        use_system_queue=True,
+        overwrite_schedule=True,
+        input_type=input_type,
+        extra_kwargs=extra or None,
+        **kw,
+    )
+    sc.start_system_queue()
+    return sc

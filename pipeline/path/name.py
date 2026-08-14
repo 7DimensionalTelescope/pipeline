@@ -396,8 +396,7 @@ class NameHandler:
         elif stem.endswith("_weight"):
             types += ("weight",)
         elif stem.endswith(MASK_SUFFIXES):
-            # auxiliary planes now sitting beside the frames they describe; without this
-            # they parse as science images and any directory sweep picks them up as data
+            # without this, masks beside the frames they describe parse as science images
             types += ("mask",)
         else:
             types += ("image",)

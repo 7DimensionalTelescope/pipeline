@@ -48,7 +48,7 @@ def iter_config(date_pattern: str, reverse: bool = False, is_too: bool = False):
     #     )
 
     return iter_processed(
-        date_pattern=date_pattern, type_pattern="", filename_pattern="*.yml", reverse=reverse, is_too=is_too
+        date_pattern=date_pattern, type_pattern="", filename_pattern="*.yml", product=None, reverse=reverse, is_too=is_too
     )
 
 
@@ -62,6 +62,7 @@ def iter_catalog(date_pattern: str, type_pattern: str = "singles", reverse: bool
         date_pattern=date_pattern,
         type_pattern=type_pattern,
         filename_pattern="*_cat.fits",
+        product="catalog",
         reverse=reverse,
         is_too=is_too,
     )
@@ -122,8 +123,7 @@ def iter_processed(
                 if not os.path.isdir(search_dir):
                     continue
 
-                # 4) files. The glob makes no assumption about the trailing token;
-                # NameHandler decides what each file is.
+                # 4) files
                 for path in sorted(glob(os.path.join(search_dir, filename_pattern))):
                     if product is not None and not _is_product(path, product):
                         continue
