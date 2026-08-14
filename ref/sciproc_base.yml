@@ -137,6 +137,7 @@ imcoadd:
   output_single_weight_map: false  # keep each frame's resampled weight in singles/ (int16)
   output_footprint: true  # write the coadd footprint product
   output_sky_rms_map: false  # BACKGROUND_RMS model of source-free sky
+  output_bkg_map: false  # keep each frame's mesh background model (262 MB/frame, read by nobody)
   persist_weight_maps: False  # durable per-single maps; costs 1.71 s/frame to save a 0.04 s kernel
   joint_wcs: False
   interpolate_badpix: False  # interpolate bad pixels in the sci frames (was apply_bpmask)
@@ -147,7 +148,7 @@ imcoadd:
   discard_interp: true  # delete interp pairs once their reprojected products exist
   lean_factory: False  # delete sci resamps + bkg/bkgrms once bkgsub products exist; resumes recompute
   combine_lock_threshold: 20  # combines with >= this many inputs take the per-filesystem flock
-  combine_scratch:  # local dir to stage combine inputs off NFS; empty = off (moot when factory_scratch set)
+  combine_scratch: auto  # local dir to stage combine inputs off NFS; 'auto' picks one only when the inputs are on a network fs and the combine is >= combine_lock_threshold frames; empty = off (moot when factory_scratch set)
   convolve: 
   target_seeing:  # auto if it's empty or smaller than max seeing
 

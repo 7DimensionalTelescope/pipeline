@@ -239,8 +239,12 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         # Reproject (no combine) onto a common WCS
         images = self.reproject_and_coadd_with_swarp(images, coadd=False, weight_images=weight_images)
-        # while the padding is still exactly zero -- see build_fov_masks
-        self.build_fov_masks(images)
+        if self.config_node.imcoadd.convolve:
+            # only convolution runs between here and bkgsub, and it is what destroys the
+            # exactly-zero padding -- so only then must the footprint be captured now.
+            # Without it bkgsub derives the identical mask from the read it already does,
+            # saving a serial 262 MB read + 65 MB write per frame (see build_fov_masks).
+            self.build_fov_masks(images)
         self._discard_consumed_interp()
         step += 1
         self.update_progress(
@@ -477,8 +481,10 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         bkg_rms_images = factory.stage_images(input_images, "bkgrms", self.path_bkgsub)
 
         # Reprojected frames carry zero-padded out-of-FOV corners; mask them out.
-        # Prefer masks built earlier from the pristine resamps (`build_fov_masks`): once a
-        # stage has run in between, the padding is no longer exactly 0 and cannot be found.
+        # Masks built earlier from the pristine resamps (`build_fov_masks`) win where they
+        # exist: once a stage has run in between, the padding is no longer exactly 0 and
+        # cannot be found. Otherwise the mask is derived in memory from the frame this
+        # stage reads anyway; the path is then only scratch for a SExtractor weight image.
         if fov_masks is not None:
             fov_mask_images = list(fov_masks)
         elif mask_out_of_fov:
@@ -530,7 +536,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         counts = {name: types.count(name) for name in sorted(set(types))}
         self.logger.info(f"Start background subtraction (bkgsub_type={requested!r}): {counts}")
         if any_dynamic:
-            self.config_node.imcoadd.bkg_images = bkg_images
+            self.config_node.imcoadd.bkg_images = (
+                bkg_images if get_key(self.config_node.imcoadd, "output_bkg_map", default=False) else None
+            )
             self.config_node.imcoadd.bkg_rms_images = (
                 bkg_rms_images if get_key(self.config_node.imcoadd, "output_sky_rms_map", default=False) else None
             )
@@ -542,20 +550,28 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         def _bkgsub_one(i, inim, outim, bkg, bkg_rms, skyvalue, fov_mask, src_mask, btype, single, phot_cat):
             st_loop = time.time()
+            # One read of the frame serves the FOV mask, the detection pass and the
+            # background model, and the masks stay arrays. Round-tripping them through
+            # 65 MB files (plus a second and third read of the frame) was ~1 GB of NFS
+            # traffic per image that carried nothing this loop did not already hold.
+            # memmap=False on purpose: page-fault reads measure ~2x slower over NFS.
+            data, header = fits.getdata(inim, header=True, memmap=False)
+            data = np.ascontiguousarray(data, dtype=np.float32)
+
             # the FOV mask serves every routine (it re-zeros the padding afterwards);
             # the source mask only means something to a mesh background
             if fov_mask is None:
                 fov_valid = None
-            elif fov_masks is not None:
-                fov_valid = fits.getdata(fov_mask).astype(bool)
+            elif fov_masks is not None and os.path.exists(fov_mask):
+                fov_valid = fits.getdata(fov_mask, memmap=False).astype(bool)
             else:
-                fov_valid = self._write_fov_mask(inim, fov_mask)
-                fov_mask = fov_mask if fov_valid is not None else None
-            weight_image = fov_mask
+                fov_valid = self._fov_valid(data, get_basename(inim))
+            exclude = None if fov_valid is None else ~fov_valid
             if src_mask is not None and btype == "dynamic":
-                weight_image, usable = self._write_source_mask(
-                    inim, fov_mask, fov_valid, src_mask, photometry_catalog=phot_cat, source_image=single
-                )
+                valid, usable = self._source_mask(
+                    inim, header, fov_valid, src_mask, fov_mask,
+                    photometry_catalog=phot_cat, source_image=single,
+                )  # fmt: skip
                 if usable < 20.0:
                     # crowded field: too little unmasked sky for a mesh -- fall back to a
                     # constant background for this frame. Defining a GOOD constant level
@@ -566,15 +582,18 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                         f"falling back to constant background subtraction"
                     )
                     btype = "constant"
-                    weight_image = fov_mask
+                else:
+                    exclude = ~valid
             is_steppy = methods[btype](
                 inim,
                 outim,
+                data=data,
+                header=header,
                 bkg=bkg,
                 bkg_rms=bkg_rms,
                 skyval=skyvalue,
                 ignore_steppy_flag=ignore_steppy_flag,
-                weight_image=weight_image,
+                exclude=exclude,
                 fov_valid=fov_valid,
             )
 
@@ -717,12 +736,15 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         Every routine is called with the same keywords and must accept ``**kwargs`` so it
         can ignore the ones it has no use for:
 
-            inim, outim, bkg, bkg_rms, skyval, ignore_steppy_flag, weight_image, fov_valid
+            inim, outim, data, header, bkg, bkg_rms, skyval, ignore_steppy_flag,
+            exclude, fov_valid
 
-        ``weight_image`` is the mask of pixels the background may be estimated from and is
-        only built for routines named ``"dynamic"``; ``fov_valid`` is the boolean
-        in-field mask every routine must use to re-zero the out-of-FOV padding, because
-        exact 0 is what the in-memory combine treats as "no data".
+        ``data``/``header`` are the frame the caller already read (native float32);
+        ``inim`` remains only as the name to report. ``exclude`` marks the pixels the
+        background may NOT be estimated from (out of FOV, and on sources for a mesh
+        background) and is only built for routines named ``"dynamic"``; ``fov_valid`` is
+        the boolean in-field mask every routine must use to re-zero the out-of-FOV
+        padding, because exact 0 is what the in-memory combine treats as "no data".
 
         ``individual`` is deliberately absent: it is a per-image chooser over these
         entries (`_resolve_bkgsub_type`), not a routine.
@@ -749,12 +771,13 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         # scalar SKYVAL there
         return "constant" if skyval < skyval_cut else "dynamic"
 
-    def _write_source_mask(
+    def _source_mask(
         self,
         inim: str,
-        fov_mask: str | None,
+        header,
         fov_valid: np.ndarray | None,
         outmask: str,
+        fov_mask: str | None = None,
         star_scale: float = 2.0,
         galaxy_scale: float = 2.5,
         class_star_cut: float = 0.5,
@@ -762,8 +785,12 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         min_usable: float = 20.0,
         photometry_catalog: str | None = None,
         source_image: str | None = None,
-    ) -> str:
+    ) -> tuple[np.ndarray, float]:
         """Detection pass, then what background estimation may use: in FOV and off-source.
+
+        Returns the boolean usable mask, not a path: the only consumer is the background
+        routine in the same loop. The durable PLIO copy is still written, and a plain
+        uint8 FOV weight image is materialized only when SExtractor really runs.
 
         Kron ellipses are widened by ``galaxy_scale`` below ``class_star_cut`` and by
         ``star_scale`` above it; ``min_usable`` is the % of surviving pixels under which
@@ -778,16 +805,13 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         base = os.path.splitext(get_basename(inim))[0]
         catalog = os.path.join(self.path_bkgsub, f"{base}_bkgdet.cat")
 
-        header = fits.getheader(inim)
         shape = (header["NAXIS2"], header["NAXIS1"])
         persist = os.path.join(collapse(self.path.imcoadd.factory.source_mask_dir, force=True), get_basename(outmask))
         if not self.overwrite:
-            # persisted mask (PLIO, output dir): skip detection+painting; SExtractor needs
-            # a plain working copy, so materialize one in the factory
+            # persisted mask (PLIO, output dir): skip detection+painting
             valid = read_mask_plio(persist)
             if valid is not None and valid.shape == shape:
-                fits.writeto(outmask, valid.astype(np.uint8), overwrite=True)
-                return outmask, float(100 * valid.mean())
+                return valid, float(100 * valid.mean())
 
         # reuse photometry's catalog: its DETECT_THRESH 3.0 is accepted over a 1.5 pass to save the run
         detection_override = self._detection_override()
@@ -805,7 +829,10 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 "-CHECKIMAGE_TYPE": "NONE",
             }
             sex_options.update({f"-{k}": str(v) for k, v in detection_override.items()})
-            if fov_mask is not None:
+            # SExtractor cannot be handed an array; this is the one caller that still
+            # needs the FOV mask on disk, so it is written here and only here
+            if fov_mask is not None and fov_valid is not None:
+                fits.writeto(fov_mask, fov_valid.astype(np.uint8), overwrite=True)
                 sex_options.update({"-WEIGHT_TYPE": "MAP_WEIGHT", "-WEIGHT_IMAGE": f"{fov_mask}", "-WEIGHT_THRESH": "0"})  # fmt: skip
             external.sextractor(
                 inim,
@@ -828,16 +855,15 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         )
 
         valid = ~sources if fov_valid is None else (fov_valid & ~sources)
-        fits.writeto(outmask, valid.astype(np.uint8), overwrite=True)
         write_mask_plio(persist, valid)  # durable copy next to the config, survives factory cleanup
         usable = float(100 * valid.mean())
-        self.logger.debug(f"Source mask ({usable:.1f}% usable) saved as {get_basename(outmask)}")
+        self.logger.debug(f"Source mask ({usable:.1f}% usable) saved as {get_basename(persist)}")
         if usable < min_usable:
             self.logger.warning(
                 f"Only {usable:.1f}% of {get_basename(inim)} is left to estimate the background on; "
                 f"SExtractor will interpolate most meshes. Consider lowering the source-mask scales."
             )
-        return outmask, usable
+        return valid, usable
 
     def build_fov_masks(self, resampled_images, erode_iter: int = 3) -> list[str | None]:
         """Footprint masks taken from the **pristine SWarp resamps**, stored for bkgsub.
@@ -884,22 +910,30 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self.logger.debug(f"Shrank {get_basename(mask)} by {extra} px for a {delta:.2f} px kernel")
         return self._fov_masks
 
-    def _write_fov_mask(self, inim: str, outmask: str, erode_iter: int = 3) -> np.ndarray | None:
+    def _fov_valid(self, data: np.ndarray, name: str, erode_iter: int = 3) -> np.ndarray | None:
         """Valid-pixel mask of a reprojected frame; SWarp pads out-of-FOV with 0.
 
         ``erode_iter`` 3x3 erosions trim the resampled footprint edge, which rings over
         LANCZOS3's support radius."""
         from scipy.ndimage import binary_erosion
 
-        valid = fits.getdata(inim) != 0
+        valid = data != 0
         if valid.all():
-            self.logger.debug(f"No out-of-FOV pixels in {get_basename(inim)}; skipping FOV mask")
+            self.logger.debug(f"No out-of-FOV pixels in {name}; skipping FOV mask")
             return None
 
         # border_value=1: the array bound is not an FOV edge, only the zero padding is
         valid = binary_erosion(valid, np.ones((3, 3), dtype=bool), iterations=erode_iter, border_value=1)
+        self.logger.debug(f"FOV mask ({100 * valid.mean():.1f}% valid) for {name}")
+        return valid
+
+    def _write_fov_mask(self, inim: str, outmask: str, erode_iter: int = 3) -> np.ndarray | None:
+        """`_fov_valid` on a frame read from disk, persisted for a later stage to reuse."""
+        valid = self._fov_valid(fits.getdata(inim, memmap=False), get_basename(inim), erode_iter=erode_iter)
+        if valid is None:
+            return None
         fits.writeto(outmask, valid.astype(np.uint8), overwrite=True)
-        self.logger.debug(f"FOV mask ({100 * valid.mean():.1f}% valid) saved as {get_basename(outmask)}")
+        self.logger.debug(f"FOV mask saved as {get_basename(outmask)}")
         return valid
 
     def _sex_vars(self, section: str = "imcoadd") -> dict:
@@ -941,7 +975,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 "the current weight map) is not implemented yet"
             )
 
-    def _const_bkgsub(self, inim, outim, skyval, skyval_cut=40, fov_valid=None, **kwargs):
+    def _const_bkgsub(self, inim, outim, skyval, data=None, header=None, skyval_cut=40, fov_valid=None, **kwargs):
 
         if os.path.exists(outim):
             try:
@@ -955,20 +989,18 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         is_steppy = skyval < skyval_cut
 
-        with fits.open(inim, memmap=True) as hdul:
-            _data = hdul[0].data
-            _hdr = hdul[0].header
-            _hdr["BACKTYPE"] = ("CONSTANT", "Background subtraction type")
-            # _hdr["BKG_STEP"] = (is_steppy, "SE Background can be step-like")
-            _data -= skyval
-            if fov_valid is not None:
-                _data[~fov_valid] = 0.0  # keep out-of-FOV at 0: the coadd's validity marker
-            self.logger.debug(f"Using SKYVAL: {skyval:.3f}")
-            fits.writeto(outim, _data, header=_hdr, overwrite=True)
+        _data, _hdr = self._read_frame(inim, data, header)
+        _hdr["BACKTYPE"] = ("CONSTANT", "Background subtraction type")
+        # _hdr["BKG_STEP"] = (is_steppy, "SE Background can be step-like")
+        _data -= skyval
+        if fov_valid is not None:
+            _data[~fov_valid] = 0.0  # keep out-of-FOV at 0: the coadd's validity marker
+        self.logger.debug(f"Using SKYVAL: {skyval:.3f}")
+        fits.writeto(outim, _data, header=_hdr, overwrite=True)
 
         return False  # is_steppy is False by definition for constant background subtraction
 
-    def _dynamic_bkgsub(self, inim, outim, bkg, bkg_rms, ignore_steppy_flag=False, weight_image=None, fov_valid=None, **kwargs):  # fmt: skip
+    def _dynamic_bkgsub(self, inim, outim, bkg, bkg_rms, data=None, header=None, ignore_steppy_flag=False, exclude=None, fov_valid=None, **kwargs):  # fmt: skip
         """
         Later to be refined using iterations
         """
@@ -977,42 +1009,50 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         # from .bkg_step import step_background_check
 
         back_size, filter_size = self._background_mesh()
-        # zero-weight pixels are dropped from the meshes, as -WEIGHT_THRESH 0 did
-        exclude = fits.getdata(weight_image) == 0 if weight_image is not None else None
+        # `exclude` holds the pixels the meshes must not see, as -WEIGHT_THRESH 0 did
 
         # one read: the models are built in memory, not round-tripped through check images
-        with fits.open(inim, memmap=True) as hdul:
-            _data = hdul[0].data
-            _hdr = hdul[0].header
-            bkg_data, bkg_rms_data = estimate_background(
-                _data, mask=exclude, back_size=back_size, filter_size=filter_size
-            )
-            if get_key(self.config_node.imcoadd, "output_sky_rms_map", default=False):
-                fits.writeto(bkg_rms, bkg_rms_data, overwrite=True)
-            del bkg_rms_data  # do not hold a second full frame past its write
+        _data, _hdr = self._read_frame(inim, data, header)
+        bkg_data, bkg_rms_data = estimate_background(
+            _data, mask=exclude, back_size=back_size, filter_size=filter_size
+        )
+        if get_key(self.config_node.imcoadd, "output_sky_rms_map", default=False):
+            fits.writeto(bkg_rms, bkg_rms_data, overwrite=True)
+        del bkg_rms_data  # do not hold a second full frame past its write
+        if get_key(self.config_node.imcoadd, "output_bkg_map", default=False):
+            # nothing downstream reads it; a full-frame model per input is 262 MB of
+            # write and of factory space that only a human inspecting the mesh wants
             fits.writeto(bkg, bkg_data, overwrite=True)
 
-            # if ignore_steppy_flag:
-            #     is_steppy = False
-            # else:
-            #     h, w = bkg_data.shape
-            #     stripe = np.mean(bkg_data[h // 2 - 100 : h // 2 + 100, :], axis=0)  # already smooth bkg: mean is okay?
-            #     is_steppy, info = step_background_check(stripe)
-            #     if is_steppy:
-            #         self.logger.warning(f"Background is steppy in {get_basename(outim)}")
-            #         self.logger.debug(f"Background is steppy: {info}")
-            #         return True
-            #     else:
-            #         self.logger.debug(f"Background is not steppy in {get_basename(outim)}: {info}")
+        # if ignore_steppy_flag:
+        #     is_steppy = False
+        # else:
+        #     h, w = bkg_data.shape
+        #     stripe = np.mean(bkg_data[h // 2 - 100 : h // 2 + 100, :], axis=0)  # already smooth bkg: mean is okay?
+        #     is_steppy, info = step_background_check(stripe)
+        #     if is_steppy:
+        #         self.logger.warning(f"Background is steppy in {get_basename(outim)}")
+        #         self.logger.debug(f"Background is steppy: {info}")
+        #         return True
+        #     else:
+        #         self.logger.debug(f"Background is not steppy in {get_basename(outim)}: {info}")
 
-            _hdr["BACKTYPE"] = ("DYNAMIC", "Background subtraction type")
-            # _hdr["BKG_STEP"] = (is_steppy, "Background is step-like; likely quantization artifact")
-            _data -= bkg_data
-            if fov_valid is not None:
-                _data[~fov_valid] = 0.0  # keep out-of-FOV at 0: the coadd's validity marker
-            fits.writeto(outim, _data, header=_hdr, overwrite=True)
+        _hdr["BACKTYPE"] = ("DYNAMIC", "Background subtraction type")
+        # _hdr["BKG_STEP"] = (is_steppy, "Background is step-like; likely quantization artifact")
+        _data -= bkg_data
+        if fov_valid is not None:
+            _data[~fov_valid] = 0.0  # keep out-of-FOV at 0: the coadd's validity marker
+        fits.writeto(outim, _data, header=_hdr, overwrite=True)
 
         # return is_steppy
+
+    @staticmethod
+    def _read_frame(inim, data, header):
+        """The frame the caller already read, or read it now for a direct routine call."""
+        if data is not None and header is not None:
+            return data, header
+        data, header = fits.getdata(inim, header=True, memmap=False)
+        return np.ascontiguousarray(data, dtype=np.float32), header
 
     # # TODO:
     # def _bkg_qa(self, bkgsub_type: str = "dynamic"):
@@ -1270,8 +1310,32 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 logger=self.logger,
                 swarp_args=args,
             )
+            self._drop_swarp_byproduct([interp_im], pass_type)  # as it appears, not in a storm at the end
         sci = collapse(factory.resampled_images([interp_im], pass_type="sci"), force=True)
         self._manifest_note(sci, interp=str(self.config_node.imcoadd.interp_type).upper())
+
+    def _drop_swarp_byproduct(self, swarp_inputs, pass_type: str) -> None:
+        """Delete the half of a reproject-only SWarp pass that nothing may read.
+
+        Every pass emits both a resampled image and a resampled weight, and each of these
+        two passes has exactly one product, 262 MB per frame each:
+        - "sci" is LANCZOS3 and is read for its **image**; its weight rings to ~0 almost
+          everywhere (99%+ zeros) and `coadd_in_memory` explicitly forbids using it.
+        - "wht" is NEAREST and is read for its **weight**; its image is a NEAREST-resampled
+          science frame, which is not something to coadd.
+
+        Only these two, and only reproject-only: the single-pass (`need_weights` False) and
+        "bpm" rosters are left alone. Resume stays intact because neither skip check looks
+        at what is deleted -- `external.swarp` checks `<base>_resamp.fits` and, for a
+        weighted pass, its companion; the sci pass here is unweighted, and the wht pass is
+        guarded on its weights alone by `reproject_and_coadd_with_swarp`."""
+        if pass_type not in ("sci", "wht"):
+            return
+        images = atleast_1d(self.path.imcoadd.factory.resampled_images(swarp_inputs, pass_type=pass_type))
+        doomed = images if pass_type == "wht" else [swap_ext(f, "weight.fits") for f in images]
+        for f in doomed:
+            if os.path.exists(f):
+                os.remove(f)
 
     # ---- factory manifest: stat-validated option cache for intermediates ----
     # An entry is trusted only while the file's (mtime_ns, size) still match, so a file
@@ -1376,6 +1440,32 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         zero_interp = bool(self._coadd_plan()["zero"])
 
         streamline = bool(get_key(self.config_node.imcoadd, "streamline_reprojection", default=False))
+        # The reprojection tail used to run inline in the interp loop's single writer
+        # thread, so the two SWarp passes of frame N blocked the kernels of frame N+1:
+        # measured 15 s/frame of which read+weight+interp was ~2 s. Its own bounded pool
+        # overlaps the passes with each other and with interpolation. The backpressure cap
+        # keeps not-yet-discarded interp pairs from piling up when SWarp falls behind.
+        tail_pool, tail_futures, n_tail = None, None, 0
+        if streamline:
+            from collections import deque
+            from concurrent.futures import ThreadPoolExecutor
+
+            n_tail = conservative_worker_count(len(input_images))
+            tail_pool = ThreadPoolExecutor(max_workers=n_tail)
+            tail_futures = deque()
+            self.logger.info(f"Reprojection tail on {n_tail} workers")
+
+        def _reproject_frame(sci_out, discard):
+            sidecar = add_suffix(sci_out, "weight")
+            self._reproject_single(sci_out, sidecar)
+            if discard:
+                os.remove(sci_out)
+                os.remove(sidecar)
+
+        def _drain_tail(keep: int = 0):
+            while tail_futures and len(tail_futures) > keep:
+                tail_futures.popleft().result()
+
         # resamp-first: a frame whose reprojected products exist needs nothing here,
         # whatever the state of its interp/weight intermediates
         todo_in, todo_out, n_lookahead, reproject_only = [], [], 0, []
@@ -1435,15 +1525,12 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 else:
                     calib = None
                 post_frame = None
-                if get_key(self.config_node.imcoadd, "streamline_reprojection", default=False):
+                if streamline:
                     discard = bool(get_key(self.config_node.imcoadd, "discard_interp", default=False))
 
                     def post_frame(sci_out, _discard=discard):
-                        sidecar = add_suffix(sci_out, "weight")
-                        self._reproject_single(sci_out, sidecar)
-                        if _discard:
-                            os.remove(sci_out)
-                            os.remove(sidecar)
+                        _drain_tail(keep=2 * n_tail)
+                        tail_futures.append(tail_pool.submit(_reproject_frame, sci_out, _discard))
 
                 weight_and_interpolate_cpu(
                     group_in,
@@ -1464,6 +1551,12 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 )
         else:
             self.logger.info("All fused weight+interp products already exist. Skipping")
+
+        if tail_pool is not None:
+            try:
+                _drain_tail()  # the manifest below must record every reprojection
+            finally:
+                tail_pool.shutdown()
 
         self.config_node.imcoadd.bkgsub_weight_images = [add_suffix(im, "weight") for im in interp_images]
         self._manifest_flush()
@@ -1676,10 +1769,13 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             input_images = self.images_to_coadd
         return input_images
 
-    def prepare_convolution(self, input_images: list[str] | None = None):
+    def prepare_convolution(self, input_images: list[str] | None = None, weight: bool = False):
         """
         This is ad-hoc. Change it to convolve after resampling and take
         advantage of uniform pixel scale.
+
+        ``weight`` must match the flag `run_convolution` is called with: the two together
+        decide whether a weight companion exists beside every conv file or beside none.
         """
         if input_images is None:
             input_images = self.images_to_coadd
@@ -1734,7 +1830,14 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 # symlink images to conv output folder that don't need convolution
                 if delta_peeing is None:
                     force_symlink(input_images[i], self.config_node.imcoadd.conv_files[i])
-                    if self._coadd_plan()["need_weights"]:
+                    if weight and self._coadd_plan()["need_weights"]:
+                        # Only when the weights genuinely travel with the conv files, i.e.
+                        # when `run_convolution(weight=True)` writes the other half of the
+                        # set for the frames that ARE convolved. Unconditionally it built
+                        # a half-set -- a companion for the frames needing no convolution
+                        # and none for the rest -- which no consumer can use, and in
+                        # reproject-first nothing reads these at all (the combine takes
+                        # its weights from the wht pass via `resampled_images`).
                         force_symlink(
                             self._resolve_weight_companion(input_images[i]),
                             add_suffix(self.config_node.imcoadd.conv_files[i], "weight"),
@@ -1837,9 +1940,21 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         """Weight map belonging to *image*, under either naming convention in play.
 
         Stage products carry theirs as ``<stem>_weight.fits`` (the SWarp WEIGHT_SUFFIX);
-        SWarp's own resampled outputs use ``<stem>.weight.fits`` instead."""
-        for candidate in (add_suffix(image, "weight"), swap_ext(image, "weight.fits")):
-            if os.path.exists(candidate):
+        SWarp's own resampled outputs use ``<stem>.weight.fits`` instead.
+
+        A **sci-pass resamp is the exception**: its weight is the NEAREST one from the wht
+        pass, not the LANCZOS3 file sitting beside it under the second naming convention.
+        That one rings to ~0 almost everywhere (99%+ zeros) and `coadd_in_memory` forbids
+        it outright, so returning it -- which is what the plain fallback did, silently,
+        for every convolve-on run -- handed the seeing-match a weight map nothing else in
+        the pipeline is allowed to use. `_drop_swarp_byproduct` now deletes it too."""
+        factory = self.path.imcoadd.factory
+        candidates = []
+        if os.path.dirname(image) == factory.swarp_resample_dir("sci"):
+            candidates.append(collapse(factory.resampled_weight_images([image], pass_type="wht"), force=True))
+        candidates += [add_suffix(image, "weight"), swap_ext(image, "weight.fits")]
+        for candidate in candidates:
+            if candidate and os.path.exists(candidate):
                 return candidate
         self.logger.error(f"No weight map found for {get_basename(image)}", CoaddError.FileNotFoundError)
         raise CoaddError.FileNotFoundError(f"No weight map found for {image}")
@@ -1901,12 +2016,28 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 swarp_args=sci_resampling + swarp_options_override,
                 use_weight_map=False,
             )  # Disable weight in the sci pass
-            self._run_swarp(
-                "wht",
-                coadd=coadd,
-                swarp_args=["-RESAMPLING_TYPE", "NEAREST"] + swarp_options_override,
-                weight_images=weight_images,
+            if not coadd:
+                self._drop_swarp_byproduct(input_images, "sci")
+            # The wht pass is skipped on its weights alone, the same shape as the bpm guard
+            # below: `external.swarp` would also demand the NEAREST-resampled science that
+            # `_drop_swarp_byproduct` deletes, and re-resample every frame on every rerun.
+            factory = self.path.imcoadd.factory
+            wht_predicted = atleast_1d(
+                factory.resampled_weight_images(
+                    atleast_1d(factory.resampled_images(input_images, pass_type="sci")), pass_type="wht"
+                )
             )
+            if not coadd and not self.overwrite and all(os.path.exists(w) for w in wht_predicted):
+                self.logger.info(f"wht pass outputs already exist ({len(wht_predicted)} weights), skipping")
+            else:
+                self._run_swarp(
+                    "wht",
+                    coadd=coadd,
+                    swarp_args=["-RESAMPLING_TYPE", "NEAREST"] + swarp_options_override,
+                    weight_images=weight_images,
+                )
+                if not coadd:
+                    self._drop_swarp_byproduct(input_images, "wht")
 
         # conservative policy: LANCZOS3 bpm masks, needed with or without weights
         factory = self.path.imcoadd.factory
@@ -2062,6 +2193,91 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         return resample_dir
 
+    # local filesystems worth staging onto; anything else (nfs/cifs/tmpfs/overlay/fuse) is
+    # either the problem we are escaping or too small/volatile to hold a combine
+    _LOCAL_FSTYPES = {"ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs", "reiserfs"}
+
+    @staticmethod
+    def _fstype_of(path: str) -> tuple[str, str]:
+        """(mount point, fstype) of the filesystem holding *path*, longest prefix wins."""
+        best = ("", "")
+        real = os.path.realpath(path)
+        try:
+            with open("/proc/mounts") as fp:
+                entries = [ln.split()[:3] for ln in fp if len(ln.split()) >= 3]
+        except OSError:
+            return best
+        for _dev, mnt, fstype in entries:
+            if (real == mnt or real.startswith(mnt.rstrip("/") + "/")) and len(mnt) > len(best[0]):
+                best = (mnt, fstype)
+        return best
+
+    def _pick_combine_scratch(self, files) -> str | None:
+        """`combine_scratch: auto` -- a local disk to stage onto, or None to stay put.
+
+        Only fires when the inputs actually sit on a network filesystem and the combine is
+        big enough for the strided reads to hurt (`combine_lock_threshold` frames, the
+        same line that decides a combine is worth serializing). Nightly-scale stacks fall
+        under it and are untouched.
+
+        Why it is worth a full copy: the combine reads every input once per strip, and on
+        NFS those reads are latency bound. Measured on UDS 2026-08-14 -- m475 (614 frames,
+        NFS, 3 strips) took 14292 s while m850 (649 frames, local, **6** strips) took
+        3269 s: twice the passes, 4.4x faster. m400 was worse still, forced to 54 strips by
+        a momentary memory shortage, and after 7 h it was reading at 1 MB/s and had to be
+        killed. Staging is one sequential pass in; everything after it is local.
+
+        Candidates come from /proc/mounts rather than config, so no path list can go stale;
+        `/` is excluded (filling the system disk is its own outage) as is the filesystem
+        the inputs are already on."""
+        n_frames = len({f for _g, f in files})
+        if n_frames < int(self._coadd_plan()["combine_lock_threshold"]):
+            return None
+        src_mnt, src_fstype = self._fstype_of(os.path.dirname(files[0][1]))
+        if src_fstype in self._LOCAL_FSTYPES:
+            self.logger.debug(f"combine_scratch auto: inputs already local on {src_mnt} ({src_fstype})")
+            return None
+
+        need = sum(os.path.getsize(f) for _g, f in files if os.path.exists(f)) * 1.1
+        best = None
+        seen_dev = set()
+        try:
+            with open("/proc/mounts") as fp:
+                entries = [ln.split()[:3] for ln in fp if len(ln.split()) >= 3]
+        except OSError:
+            return None
+        for _dev, mnt, fstype in entries:
+            # never the system disk, never a home directory: /home is often the same
+            # physical disk as a scratch mount anyway, and filling either is an outage
+            if fstype not in self._LOCAL_FSTYPES or mnt == "/" or mnt.startswith(("/home", "/root", "/boot")):
+                continue
+            try:
+                dev = os.stat(mnt).st_dev  # one entry per physical filesystem, not per mount
+                if dev in seen_dev:
+                    continue
+                seen_dev.add(dev)
+                root = os.path.join(mnt, "pipeline_coadd_scratch")
+                os.makedirs(root, exist_ok=True)
+                free = shutil.disk_usage(mnt).free
+            except OSError as e:
+                # worth saying: a big local disk whose ROOT is not writable by this user is
+                # invisible here, and that is a provisioning fix, not a code one
+                self.logger.debug(f"combine_scratch auto: {mnt} ({fstype}) unusable -- {e}")
+                continue
+            if free > need and (best is None or free > best[1]):
+                best = (root, free)
+        if best is None:
+            self.logger.warning(
+                f"combine_scratch auto: inputs are on {src_fstype} ({src_mnt}) and no local "
+                f"filesystem has the {need/1e9:.0f} GB needed; combining over the network"
+            )
+            return None
+        self.logger.info(
+            f"combine_scratch auto: inputs on {src_fstype} ({src_mnt}); staging "
+            f"{need/1e9:.0f} GB to {best[0]} ({best[1]/1e12:.1f} TB free)"
+        )
+        return best[0]
+
     def _stage_for_combine(self, groups: dict[str, list[str] | None]):
         """Copy the combine inputs to local scratch so the strided reads never touch NFS.
 
@@ -2069,7 +2285,11 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         bpm weight companions share basenames. Returns (remapped groups, cleanup)."""
         scratch = get_key(self.config_node.imcoadd, "combine_scratch")
         files = [(g, f) for g, lst in groups.items() if lst for f in lst]
-        if not scratch or not files:
+        if not files:
+            return groups, lambda: None
+        if str(scratch).lower() == "auto":
+            scratch = self._pick_combine_scratch(files)
+        if not scratch:
             return groups, lambda: None
 
         need = sum(os.path.getsize(f) for _, f in files)
@@ -2081,7 +2301,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             return groups, lambda: None
 
         stem = os.path.splitext(get_basename(self.config_node.info.file))[0]
-        base = os.path.join(scratch, "imcoadd_combine", stem)
+        base = os.path.join(scratch, "imcoadd_staged", stem)
         st = time.time()
         self.logger.info(f"Staging {len(files)} files ({need/1e9:.0f} GB) to {base}")
         from concurrent.futures import ThreadPoolExecutor

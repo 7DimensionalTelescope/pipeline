@@ -98,6 +98,7 @@ if TYPE_CHECKING:
         output_single_weight_map: bool
         output_footprint: bool
         output_sky_rms_map: bool
+        output_bkg_map: bool
         persist_weight_maps: bool
         joint_wcs: bool
         interpolate_badpix: bool
@@ -108,7 +109,7 @@ if TYPE_CHECKING:
         discard_interp: bool
         lean_factory: bool
         combine_lock_threshold: int
-        combine_scratch: Any
+        combine_scratch: str
         convolve: Any
         target_seeing: Any
 

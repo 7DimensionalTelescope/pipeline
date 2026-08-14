@@ -303,8 +303,9 @@ def estimate_background(data, mask=None, back_size: int = 64, filter_size: int =
     """Mesh background + RMS via sep; ``mask`` marks pixels to EXCLUDE."""
     import sep
 
-    # sep rejects the big-endian arrays FITS hands back; astype also gives it C-contiguity
-    arr = data.astype(np.float32)
+    # sep rejects the big-endian arrays FITS hands back; this also gives it C-contiguity.
+    # ascontiguousarray, not astype: a caller that already converted pays no second copy
+    arr = np.ascontiguousarray(data, dtype=np.float32)
     bkg = sep.Background(arr, mask=mask, bw=back_size, bh=back_size,
                          fw=filter_size, fh=filter_size, fthresh=0.0)  # fmt: skip
     return bkg.back(), bkg.rms()
