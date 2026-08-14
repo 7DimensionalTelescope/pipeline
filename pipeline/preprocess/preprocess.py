@@ -25,11 +25,12 @@ from ..services.database.handler import DatabaseHandler
 from ..utils.header import add_padding, get_header
 from ..errors import PreprocessError, MasterFrameNotFoundError
 from ..path import PathHandler, NameHandler
+from .reprocess import ReprocessMixin
 
 pp = pprint.PrettyPrinter(indent=2)  # , width=120)
 
 
-class Preprocess(BaseSetup, Checker, DatabaseHandler):
+class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
     """
     Assumes homogeneous BIAS, DARK, FLAT, SCI frames as input
     taken on the same date with the same
@@ -73,6 +74,17 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         self.master_frame_only = master_frame_only
 
         self.calib_types = calib_types or ["bias", "dark", "flat"]
+        if list(self.calib_types) != ["bias", "dark", "flat"][: len(self.calib_types)]:
+            raise PreprocessError.ValueError(
+                f"calib_types must be a cumulative prefix of ['bias', 'dark', 'flat'], not {self.calib_types}"
+            )
+
+        self._better_match = get_key(self.config_node.preprocess, "reprocess_on_better_match", False)
+        self._change_policy = "regenerated+sanity+better-match" if self._better_match else "regenerated+sanity"
+        self._is_pipeline = is_pipeline
+        self._ingredient_cache = {}  # {master path: (IMAGEID, SANITY)}; reset per group
+
+        self._load_designated_masterframes()
 
         self._use_gpu = use_gpu
 
@@ -140,6 +152,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         self.logger.info(f"{self._n_groups} groups are found")
         self.logger.debug(f"raw_groups:\n{pp.pformat(self.raw_groups)}")
 
+        # designation dispatch is resolved, logged and validated before anything runs
+        self._dispatch_designated_masterframes()
+
         # Create pipeline record in database
         if self.is_connected:
             self.logger.debug(f"is connected: creating pipeline record in database")
@@ -191,6 +206,11 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 self.logger.info("Overwrite=True; existing science outputs and plots may be regenerated")
             else:
                 self.logger.info("Overwrite=False; existing science outputs and plots will be reused when available")
+                self.logger.info(
+                    f"Ingredient-change policy: {self._change_policy} — products whose master frames' "
+                    "IMAGEID moved are rebuilt; dry_run=True sizes it (a lower bound: a dry run "
+                    "regenerates nothing, so work cascading from a rebuilt master is not counted)"
+                )
 
             threads_for_making_plots = []
             for i in range(self._n_groups):
@@ -284,17 +304,19 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             dark_out = self._get_raw_group("dark_output", group_index)
             return dark_out.replace("dark", "bpmask")
 
+        # Strip the whole suffix rather than taking name[:4]: "flatdark_output"[:4] is "flat",
+        # which silently resolved the flatdark to the master FLAT path.
         if name.endswith("_input"):
-            key = name[:4]  # strip "_input" (e.g., bias from bias_input)
+            key = name[: -len("_input")]
             if key in self._key_to_index:
                 return self.raw_groups[group_index][0][self._key_to_index[key]]
         elif name.endswith("_output"):
-            key = name[:4]  # strip "_output" (e.g., bias from bias_output)
+            key = name[: -len("_output")]
+            if key.endswith("sig") and key[: -len("sig")] in self._key_to_index:
+                base = key[: -len("sig")]
+                return getattr(self, f"{base}_output").replace(base, f"{base}sig")
             if key in self._key_to_index:
-                if "sig" in name:
-                    return getattr(self, f"{key}_output").replace(key, f"{key}sig")
-                else:
-                    return self.raw_groups[group_index][1][self._key_to_index[key]]
+                return self.raw_groups[group_index][1][self._key_to_index[key]]
         raise AttributeError(f"Attribute {name} not found")
 
     def _parse_sci_list(self, group_index, dtype="input") -> list[str]:
@@ -340,6 +362,11 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
         st = time.time()
         self._ppflag = {}  # PPFLAG per dtype for current group; also _flatdark_ppflag for flat
+        # per-group state; leaking any of these across groups corrupts the next flat
+        self.flatdark_output = None
+        self.dark_exptime = None
+        self._flatdark_ppflag = 0
+        self._ingredient_cache = {}
 
         for dtype in self.calib_types:
 
@@ -353,10 +380,16 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 self.logger.debug(f"[Group {self._current_group+1}] flatdark_output: {self.flatdark_output}")
 
             generated_now = False
-            if (
+            if designated_file := self._designation_dispatch.get((self._current_group, dtype)):
+                self._adopt_designated_masterframe(designated_file, dtype, template=output_file)
+            elif (
                 input_file
-                and (not os.path.exists(output_file) or self.overwrite)
                 and (output_file not in self._generated_masterframes)
+                and (
+                    not os.path.exists(output_file)
+                    or self.overwrite
+                    or self._master_change(dtype, output_file)
+                )
             ):
                 norminal = self._generate_masterframe(dtype, device_id, dry_run=dry_run)
                 if not norminal:
@@ -373,6 +406,18 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 self.logger.debug(f"[Group {self._current_group+1}] {dtype}_output: {output_file}")
                 # self.logger.error(msg, MasterFrameNotFoundError)
                 # raise MasterFrameNotFoundError(msg)
+
+            # settle the flatdark once per group, only when a flat will be built
+            if dtype == "dark" and output_file and self.flat_output and "flat" in self.calib_types:
+                try:
+                    self._resolve_flatdark(output_file)
+                except MasterFrameNotFoundError:
+                    if not dry_run:
+                        raise
+                    self.logger.info(
+                        f"[Group {self._current_group+1}] No flatdark on disk yet; a real run "
+                        "would resolve it after generating the dark (DRY RUN)"
+                    )
 
             if input_file and not dry_run:
 
@@ -407,7 +452,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                 outputs.append(self.bpmask_output)
             self.logger.info(f"[Group {self._current_group+1}] Would create master {dtype} files: {outputs} (DRY RUN)")
             if dtype == "dark":
-                self.logger.info(f"[Group {self._current_group+1}] Flatdark will use current dark output (DRY RUN)")
+                self.logger.info(f"[Group {self._current_group+1}] Flatdark will be resolved once the dark is settled (DRY RUN)")  # fmt: skip
             return True
 
         st = time.time()
@@ -457,9 +502,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                     bpmask_sigma=self.config_node.preprocess.n_sigma,
                     dtype=dtype,
                 )
-                # for flatdark
-                self.flatdark_output = self.dark_output  # named _output for consistency, but not written to disk
-                self.dark_exptime = header[HEADER_KEY_MAP["exptime"]]
+                # flatdark comes from _resolve_flatdark, never from this group's dark
 
             elif dtype == "flat":
                 dark_scale = self._calc_dark_scale(header[HEADER_KEY_MAP["exptime"]], self.dark_exptime)
@@ -483,15 +526,12 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
 
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), header)
 
-        header = prep_utils.add_image_id(header)
-
         # PPFLAG: propagate from dependencies (bias=0, dark=bias, flat=bias|flatdark)
         if dtype == "bias":
             ppflag_val = 0
             ingredient_ppflags = {}
         elif dtype == "dark":
             ppflag_val = self._ppflag.get("bias", 0)
-            self._flatdark_ppflag = ppflag_val  # flatdark = dark when generated
             ingredient_ppflags = {"bias": self._ppflag.get("bias", 0)}
         elif dtype == "flat":
             ppflag_val = ppflag.propagate_ppflag(self._ppflag.get("bias", 0), getattr(self, "_flatdark_ppflag", 0))
@@ -545,6 +585,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             # dtype=dtype,
         )
 
+        # mint AFTER the sidecar merge, or the replaced version's IMAGEID would be restored
+        header = prep_utils.add_image_id(header)
+
         sanity_flag = self.apply_qa_criteria(header=header, dtype=dtype)  # evaluates sanity of the image itself
         if ppflag_val & ppflag.PPFLAG_SANITY_F_USED:  # consider propagated sanity flag of the ingredient frames
             if sanity_flag:
@@ -563,6 +606,11 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             header["NHOTPIX"] = (hotpix, "Number of hot pixels")
 
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}_output"), header)
+        # consumers read the id sidecar-first; the sidecar must carry the new identity too
+        prep_utils.update_header_file(
+            getattr(self, f"{dtype}_output"),
+            fits.Header([("IMAGEID", header["IMAGEID"], header.comments["IMAGEID"])]),
+        )
         return sanity_flag
 
     def _fetch_masterframe(self, template, dtype, dry_run: bool = False):
@@ -598,7 +646,13 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
             )
 
         if relaxation_flags.ignored_binning:
-            existing_mframe_file = self._generated_binned_master_frame(existing_mframe_file, template, dtype=dtype)
+            if dry_run:
+                self.logger.info(
+                    f"[Group {self._current_group+1}] Would generate a binned master {dtype} "
+                    f"from {os.path.basename(existing_mframe_file)} (DRY RUN)"
+                )
+            else:
+                existing_mframe_file = self._generated_binned_master_frame(existing_mframe_file, template, dtype=dtype)
 
         existing_header_sanity = fits.getval(existing_mframe_file, "SANITY")
         self.logger.info(
@@ -617,42 +671,59 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         # update the output names in raw_groups
         self.raw_groups[self._current_group][1][self._key_to_index[dtype]] = existing_mframe_file
 
-        # for flatdark
-        if dtype == "dark":
-            self.logger.debug(f"[Group {self._current_group+1}] Masterframe Search (flatdark) Template: {template}")
-            path = PathHandler(template)
-            path.name.exptime = "*"
-            flatdark_template = path.preprocess._masterframe
-            existing_flatdark_file, flatdark_relaxation_flags = prep_utils.tolerant_search(
-                flatdark_template,
-                "dark",
-                max_offset=max_offset,
-                future=True,
-                ignore_sanity_if_no_match=ignore_sanity,
-                ignore_lenient_keys_if_no_match=ignore_lenient,
-            )  # search closest date first, minimum exptime if multiple found
-            if existing_flatdark_file:
-                flatdark_sanity = fits.getval(existing_flatdark_file, "SANITY")
-                setattr(self, "flatdark_output", existing_flatdark_file)  # mdark for mflat
-                self.dark_exptime = fits.getval(existing_flatdark_file, HEADER_KEY_MAP["exptime"])
-                self.logger.info(
-                    f"[Group {self._current_group+1}] Found pre-existing nominal (sanity: {flatdark_sanity}) flatdark at {os.path.basename(existing_flatdark_file)}"
-                )
-                self._flatdark_ppflag = ppflag.compute_fetch_ppflag(
-                    existing_flatdark_file,
-                    flatdark_template,
-                    flatdark_sanity,
-                    ignored_lenient_keys=flatdark_relaxation_flags.ignored_lenient_keys,
-                )
-            else:
-                self.logger.error(
-                    f"[Group {self._current_group+1}] No pre-existing master flatdark found in place of {flatdark_template} within {max_offset} days",
-                    MasterFrameNotFoundError,
-                )
+    def _resolve_flatdark(self, template):
+        """Flatdark = designated dark if dispatched, else the minimum-exptime dark on the closest date."""
+        if designated_file := self._designation_dispatch.get((self._current_group, "flatdark")):
+            self.flatdark_output = designated_file
+            self.dark_exptime = fits.getval(designated_file, HEADER_KEY_MAP["exptime"])
+            try:
+                flatdark_sanity = fits.getval(designated_file, "SANITY")
+            except Exception:
+                flatdark_sanity = None
+            self.logger.info(
+                f"[Group {self._current_group+1}] Using designated (sanity: {flatdark_sanity}) flatdark "
+                f"{os.path.basename(designated_file)} ({self.dark_exptime}s)"
+            )
+            self._flatdark_ppflag = ppflag.compute_fetch_ppflag(designated_file, template, flatdark_sanity)
+            return
 
-                raise PreprocessError.MasterFrameNotFoundError(
-                    f"No pre-existing master flatdark found in place of {flatdark_template} within {max_offset} days"
-                )
+        max_offset = self.config_node.preprocess.max_offset
+        path = PathHandler(template)
+        path.name.exptime = "*"
+        flatdark_template = path.preprocess._masterframe
+        self.logger.debug(f"[Group {self._current_group+1}] Masterframe Search (flatdark) Template: {flatdark_template}")  # fmt: skip
+
+        existing_flatdark_file, flatdark_relaxation_flags = prep_utils.tolerant_search(
+            flatdark_template,
+            "dark",
+            max_offset=max_offset,
+            future=True,
+            ignore_sanity_if_no_match=get_key(self.config_node.preprocess, "ignore_sanity_if_no_match", False),
+            ignore_lenient_keys_if_no_match=get_key(self.config_node.preprocess, "ignore_lenient_keys_if_no_match", False),  # fmt: skip
+        )  # search closest date first, minimum exptime if multiple found
+        if not existing_flatdark_file:
+            self.logger.error(
+                f"[Group {self._current_group+1}] No pre-existing master flatdark found in place of {flatdark_template} within {max_offset} days",
+                MasterFrameNotFoundError,
+            )
+
+            raise PreprocessError.MasterFrameNotFoundError(
+                f"No pre-existing master flatdark found in place of {flatdark_template} within {max_offset} days"
+            )
+
+        flatdark_sanity = fits.getval(existing_flatdark_file, "SANITY")
+        self.flatdark_output = existing_flatdark_file  # mdark for mflat
+        self.dark_exptime = fits.getval(existing_flatdark_file, HEADER_KEY_MAP["exptime"])
+        self.logger.info(
+            f"[Group {self._current_group+1}] Using nominal (sanity: {flatdark_sanity}) flatdark "
+            f"{os.path.basename(existing_flatdark_file)} ({self.dark_exptime}s)"
+        )
+        self._flatdark_ppflag = ppflag.compute_fetch_ppflag(
+            existing_flatdark_file,
+            flatdark_template,
+            flatdark_sanity,
+            ignored_lenient_keys=flatdark_relaxation_flags.ignored_lenient_keys,
+        )
 
     def _generated_binned_master_frame(self, existing_mframe_file, template, dtype):
         if not (dtype == "flat"):
@@ -705,21 +776,26 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
                     del self.__dict__[attr]
             return
 
-        flag = [os.path.exists(file) for file in self.sci_output]
+        reasons = [self._sci_change(file) for file in self.sci_output]
+        todo = [r is not None for r in reasons]
+        self.logger.info(
+            f"[Group {self._current_group+1}] {len(reasons)} science image(s), policy={self._change_policy}: "
+            + ", ".join(
+                f"{sum(1 for r in reasons if r == kind)} {kind}"
+                for kind in ("missing", "designated", "regenerated", "sanity", "better-match")
+            )
+            + f", {len(reasons) - sum(todo)} up to date"
+        )
 
-        if all(flag) and not (self.overwrite):
+        if not any(todo) and not (self.overwrite):
             self.logger.info(f"[Group {self._current_group+1}] All images are already processed")
             return
         elif self.overwrite:
             input_files = self.sci_input
             output_files = self.sci_output
         else:
-            input_files = []
-            output_files = []
-            for infile, outfile in zip(self.sci_input, self.sci_output):
-                if not os.path.exists(outfile):
-                    input_files.append(infile)
-                    output_files.append(outfile)
+            input_files = [infile for infile, t in zip(self.sci_input, todo) if t]
+            output_files = [outfile for outfile, t in zip(self.sci_output, todo) if t]
 
         if dry_run:
             self.logger.info(
@@ -796,7 +872,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler):
         if self.overwrite:
             pairs = list(zip(self.sci_input, self.sci_output))
         else:
-            pairs = [(i, o) for i, o in zip(self.sci_input, self.sci_output) if not os.path.exists(o)]
+            # must stay the same predicate as data_reduction: this stages the sidecar it bakes in
+            pairs = [(i, o) for i, o in zip(self.sci_input, self.sci_output) if self._sci_change(o)]
 
         if self.sci_input and not pairs:
             self.logger.info(

@@ -31,6 +31,18 @@ if __name__ == "__main__":
     )
     parser.add_argument("-is_too", action="store_true", help="Use TOO processing")
     parser.add_argument("-use_gpu", action="store_true", help="Use GPU processing")
+    parser.add_argument(
+        "-master_frame_only", action="store_true", help="Generate master frames only; skip science reduction"
+    )
+    parser.add_argument(
+        "-calib_types",
+        nargs="*",
+        default=None,
+        choices=["bias", "dark", "flat"],
+        help="Master frame types to load (default: all three). Give them as a prefix of "
+        "bias dark flat -- a later type needs the earlier ones loaded for PPFLAG to propagate.",
+    )
+    parser.add_argument("-dry_run", action="store_true", help="Trace execution and report the work; write nothing")
     args = parser.parse_args()
 
     try:
@@ -49,6 +61,9 @@ if __name__ == "__main__":
             preprocess_kwargs=args.preprocess_kwargs,  # dict encoded as json string
             is_too=args.is_too,
             use_gpu=args.use_gpu,
+            master_frame_only=args.master_frame_only,
+            calib_types=args.calib_types,
+            dry_run=args.dry_run,
         )
     except Exception as e:
         print(f"\nError: {e}")

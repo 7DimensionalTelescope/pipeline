@@ -381,7 +381,14 @@ def add_image_id(header, key="IMAGEID"):
 def get_image_id(image, key="IMAGEID"):
     """Unique image ID of an existing image; None if absent."""
     try:
-        return str(get_header(image)[key]).strip() or None
+        value = str(get_header(image).get(key, "") or "").strip()
+        if value:
+            return value
+    except Exception:
+        pass
+    # the sidecar may predate the id; identity falls through to the FITS per-key
+    try:
+        return str(fits.getval(image, key)).strip() or None
     except Exception:
         return None
 

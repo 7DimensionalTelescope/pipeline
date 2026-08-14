@@ -28,6 +28,9 @@ def run_preprocess(
     preprocess_kwargs: str = None,
     is_too=False,
     use_gpu=False,
+    master_frame_only=False,
+    calib_types=None,
+    dry_run=False,
 ):
     """
     Generate master calibration frames for a specific observation set.
@@ -43,10 +46,19 @@ def run_preprocess(
         if preprocess_kwargs:
             kwargs = json.loads(preprocess_kwargs)
 
+        # dry_run may arrive via preprocess_kwargs (wrapper.py); a sizing pass must not touch the DB
+        dry_run = kwargs.pop("dry_run", dry_run)
         prep = Preprocess(
-            config, use_gpu=use_gpu, overwrite=overwrite, master_frame_only=False, is_too=is_too, **kwargs
+            config,
+            use_gpu=use_gpu,
+            overwrite=overwrite,
+            master_frame_only=kwargs.pop("master_frame_only", master_frame_only),
+            calib_types=kwargs.pop("calib_types", calib_types),
+            is_too=is_too,
+            use_database=kwargs.pop("use_database", not dry_run),
+            **kwargs,
         )
-        prep.run(device_id=device_id, make_plots=make_plots, **kwargs)
+        prep.run(device_id=device_id, make_plots=make_plots, dry_run=dry_run)
         del config, prep
     except Exception as e:
         raise e

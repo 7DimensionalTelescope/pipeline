@@ -48,7 +48,7 @@ def iter_config(date_pattern: str, reverse: bool = False, is_too: bool = False):
     #     )
 
     return iter_processed(
-        date_pattern=date_pattern, type_pattern="", filename_pattern="*.yml", reverse=reverse, is_too=is_too
+        date_pattern=date_pattern, type_pattern="", filename_pattern="*.yml", product=None, reverse=reverse, is_too=is_too
     )
 
 
@@ -62,9 +62,20 @@ def iter_catalog(date_pattern: str, type_pattern: str = "singles", reverse: bool
         date_pattern=date_pattern,
         type_pattern=type_pattern,
         filename_pattern="*_cat.fits",
+        product="catalog",
         reverse=reverse,
         is_too=is_too,
     )
+
+
+def _is_product(path: str, product: str) -> bool:
+    """Does NameHandler call this file that product? Unparsable names are not data."""
+    from .name import NameHandler
+
+    try:
+        return NameHandler(path).type[4] == product
+    except Exception:
+        return False
 
 
 def iter_processed(
@@ -72,7 +83,8 @@ def iter_processed(
     obj_pattern: str = "*",
     filter_pattern: str = "*",
     type_pattern: str = "singles",
-    filename_pattern: str = "*s.fits",  # pattern for files in singles/
+    filename_pattern: str = "*.fits",
+    product: str | None = "image",
     reverse: bool = False,
     is_too: bool = False,
 ) -> Iterator[str]:
@@ -84,6 +96,8 @@ def iter_processed(
     doing one huge glob over everything.
 
     Args:
+        product: NameHandler type token to keep ("image", "catalog", "weight", "mask");
+            None yields everything the glob matched.
         reverse: If True, iterate in reverse date order (default: False)
     """
 
@@ -111,6 +125,8 @@ def iter_processed(
 
                 # 4) files
                 for path in sorted(glob(os.path.join(search_dir, filename_pattern))):
+                    if product is not None and not _is_product(path, product):
+                        continue
                     yield path
 
 

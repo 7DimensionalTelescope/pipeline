@@ -22,7 +22,6 @@ if TYPE_CHECKING:
         handlers: list
 
     class PreprocessNode(ConfigNode):
-        masterframe: str
         max_offset: int
         n_sigma: int
         n_head_blocks: int
@@ -31,6 +30,8 @@ if TYPE_CHECKING:
         device: Any
         ignore_sanity_if_no_match: bool
         ignore_lenient_keys_if_no_match: bool
+        reprocess_on_better_match: bool
+        designated_masterframes: Any
 
     class SettingsNode(ConfigNode):
         is_too: bool

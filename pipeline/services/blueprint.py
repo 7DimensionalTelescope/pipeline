@@ -256,11 +256,9 @@ class Blueprint:
             if isinstance(group, ScienceGroup):
                 continue
 
-            scheduler_kwargs = (
-                ["-overwrite"]
-                if overwrite or overwrite_preprocess
-                else [] + ["--preprocess_kwargs", json.dumps(preprocess_kwargs)] if preprocess_kwargs else []
-            )
+            scheduler_kwargs = ["-overwrite"] if (overwrite or overwrite_preprocess) else []
+            if preprocess_kwargs:
+                scheduler_kwargs = scheduler_kwargs + ["--preprocess_kwargs", json.dumps(preprocess_kwargs)]
 
             # preproc gets priority +1 from base_priority
             schedule.add_row(
