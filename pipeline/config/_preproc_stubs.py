@@ -22,7 +22,6 @@ if TYPE_CHECKING:
         handlers: list
 
     class PreprocessNode(ConfigNode):
-        masterframe: str
         max_offset: int
         n_sigma: int
         n_head_blocks: int

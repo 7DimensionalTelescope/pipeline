@@ -19,7 +19,6 @@ logging:
     - file
 
 preprocess:
-  masterframe: default # closest, custom
   max_offset: 300
   n_sigma: 5  # bad pixel mask criterion
   n_head_blocks: 8
