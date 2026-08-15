@@ -41,7 +41,9 @@ def _lease_dir() -> str:
     return d
 
 
-_MEMINFO_KEYS = ("MemTotal", "MemFree", "MemAvailable", "Cached", "Committed_AS")
+_MEMINFO_KEYS = ("MemTotal", "MemFree", "MemAvailable", "Cached", "Committed_AS",
+                 "AnonPages", "Shmem", "Unevictable", "SUnreclaim", "KernelStack",
+                 "PageTables", "SwapTotal", "SwapFree")
 
 
 def meminfo_bytes(keys=_MEMINFO_KEYS) -> dict:
@@ -96,6 +98,15 @@ def cgroup_memory() -> tuple[int, int]:
     return limit, anon
 
 
+def host_irreclaimable_bytes(mem: dict | None = None) -> int:
+    """Host RAM the kernel cannot reclaim (anon, tmpfs, mlocked, kernel), plus swapped-out
+    pages that may return. Planned-but-untouched combine allocations are deliberately not
+    in here -- the lease files carry those."""
+    mem = mem or meminfo_bytes()
+    return (mem["AnonPages"] + mem["Shmem"] + mem["Unevictable"] + mem["SUnreclaim"]
+            + mem["KernelStack"] + mem["PageTables"] + (mem["SwapTotal"] - mem["SwapFree"]))
+
+
 def memory_headroom_bytes(reserved_bytes: int = 0) -> int:
     """Bytes a combine may plan for: the tighter of its cgroup ceiling and host RAM.
 
@@ -103,9 +114,16 @@ def memory_headroom_bytes(reserved_bytes: int = 0) -> int:
     a dedicated slice override, the global one, or none at all), while the host is shared
     with every other account, whose slices may sum past physical RAM. Page cache is
     excluded from both: it is reclaimable, and the combine creates it itself, which is
-    what made MemAvailable unusable as a budget."""
+    what made MemAvailable unusable as a budget.
+
+    The host term counts irreclaimable pages, not Committed_AS: a memmapped combine
+    promises its whole input set as private COW mappings, so Committed_AS runs past
+    MemTotal while nearly all of it will never be dirtied (518 vs 504 GiB measured
+    2026-08-14, 397 GiB of it one combine's own .fits maps, budget pinned to 0 and every
+    combine to the strip floor -- fatal on NFS). Reading inputs moves MemFree to Cached
+    and touches neither term here, so the budget no longer shrinks as combines run."""
     mem = meminfo_bytes()
-    host = mem["MemTotal"] - mem["Committed_AS"]
+    host = mem["MemTotal"] - host_irreclaimable_bytes(mem)
     limit, anon = cgroup_memory()
     headroom = min(limit - anon, host) if limit else host
     return max(0, headroom - int(reserved_bytes))
@@ -198,7 +216,7 @@ class CombineSlot:
             budget = (
                 f"cgroup ceiling {limit/2**30:.0f} GiB - anon {anon/2**30:.0f} GiB"
                 if limit
-                else f"host RAM {mem['MemTotal']/2**30:.0f} GiB - Committed_AS {mem['Committed_AS']/2**30:.0f} GiB"
+                else f"host RAM {mem['MemTotal']/2**30:.0f} GiB - irreclaimable {host_irreclaimable_bytes(mem)/2**30:.0f} GiB"
             )
             self.logger.debug(
                 f"Combine memory claim [{self.tag}]: this run {planned_bytes/2**30:.0f} GiB, "
