@@ -5,11 +5,11 @@ imcoadd:
   joint_wcs: true
   interpolate_badpix: True
   interp_type: 'median'
-  convolve: 'Gaussian'
+  convolve: False
   target_seeing:  # auto if it's empty or smaller than max seeing
   streamline_reprojection: True
   discard_interp: True
   image_selection: 'auto'
 
 settings:
-  factory_scratch: /data0/pipeline_scratch
+  factory_scratch:

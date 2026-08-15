@@ -336,6 +336,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.input_headers = InputHeaderSet.from_files(self.input_images)
         self.input_headers.selection_metrics = getattr(self, "_selection_meta", {})
         self.input_headers.coadd_provenance = self._coadd_provenance()
+        self.input_headers.multi_epoch = bool(self.config_node.settings.is_multi_epoch)
 
         self._recreate_pathhandler_instance()  # resync
         self.config_node.imcoadd.input_images = self.input_images

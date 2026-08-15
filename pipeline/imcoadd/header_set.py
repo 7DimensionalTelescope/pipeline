@@ -52,6 +52,9 @@ class InputHeaderSet:
         self._coadd_image_id: str | None = None
         self.coadd_provenance: dict[str, tuple] = {}
         self.selection_metrics: dict[str, tuple[str, str]] = {}
+        # Classification, not a pixel-affecting setting -- deliberately NOT in
+        # coadd_provenance, which feeds _guard_coadd_identity.
+        self.multi_epoch: bool | None = None
 
     @classmethod
     def from_files(cls, paths: list[str]) -> "InputHeaderSet":
@@ -337,6 +340,7 @@ class InputHeaderSet:
             "SATURATE": (self.coadd_satur_level, "Conservative saturation level for coadded image"),  # let swarp handle this
             "BACKTYPE": (self.coadd_backtype, "Background subtraction type for coadded image"),
             "PPFLAG":   (self.coadd_ppflag, "Preprocessing quality flag (OR of coadded inputs)"),
+            "M_EPOCH":  (self.multi_epoch, "Multi-epoch (deep) coadd"),
         }  # fmt: skip
         keywords_to_update.update(self.coadd_provenance)
         keywords_to_update.update(self.coadd_selection_extrema)

@@ -30,6 +30,7 @@ class ImageQATable:
     image_group: Optional[str] = None
     image_path: Optional[str] = None
     imageid: Optional[str] = None
+    m_epoch: Optional[bool] = None
 
     nightdate: Optional[date] = None
     unit: Optional[str] = None

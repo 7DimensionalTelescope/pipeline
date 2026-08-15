@@ -270,14 +270,6 @@ class SciProcConfiguration(BaseConfig):
         self = cls.base_config(write=write)
         self.input_files = input_images
         self.path = path
-        # keep the recorded config in step with the live PathHandler; a post-hoc
-        # node assignment alone never reaches the already-built path (2026-08-10 bug).
-        # Recorded even when None: the PathHandler above was built with None either way,
-        # so leaving a template's value (the multi-epoch override ships
-        # factory_scratch: /data0/pipeline_scratch) made the yml disagree with the run.
-        # Reloading such a yml points the factory at a lane the products are not on and
-        # silently redoes the whole prep -- it cost UDS m475/m500/m550 on 2026-08-13.
-        self.node.settings.factory_scratch = factory_scratch
         self.config_file = self.path.sciproc_output_yml
         if isinstance(self.config_file, list):
             if config_name_policy == "error":
@@ -312,6 +304,7 @@ class SciProcConfiguration(BaseConfig):
             return self
 
         self.initialize(write=write, is_pipeline=is_pipeline, is_too=is_too, is_multi_epoch=is_multi_epoch)
+        self.node.settings.factory_scratch = factory_scratch
         if self.write:  # defined in base_config
             self.write_config(force=True)
 
