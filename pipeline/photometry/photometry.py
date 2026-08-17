@@ -240,6 +240,9 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             if self.is_connected and self.image_qa is not None:
                 for image, qa_id in zip(self.input_images, self.qa_ids):
                     if qa_id is None:
+                        self.logger.warning(
+                            f"No image_qa row for {os.path.basename(image)}; header changes were not mirrored"
+                        )
                         continue
                     qa_data = ImageQATable.from_file(
                         image,

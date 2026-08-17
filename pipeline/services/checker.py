@@ -91,6 +91,7 @@ class Checker:
                     )
                     hdul.flush()
                     self.logger.debug(f"Updated SANITY header to {sanity_value} for {os.path.basename(img)}")
+                self.sync_sanity_to_image_qa(img, sanity_value)
             except Exception as e:
                 self.logger.warning(f"Failed to update SANITY header for {os.path.basename(img)}: {e}")
 
@@ -398,6 +399,20 @@ class Checker:
                 print(msg)
 
         return sanity
+
+    def sync_sanity_to_image_qa(self, image: str, sanity: bool) -> None:
+        """Mirror a SANITY flip into image_qa; they are not synced otherwise because self.input_images miss the rejected images."""
+        if not getattr(self, "is_connected", False) or getattr(self, "image_qa", None) is None:
+            return
+        try:
+            name = os.path.basename(image).replace(".fits", "")
+            qa_id = self.image_qa.read_data_by_params(image_name=name)
+            if qa_id is None:
+                self.logger.debug(f"No image_qa row for {name}; SANITY={sanity} recorded in the header only")
+                return
+            self.image_qa.update_data(qa_id, sanity=sanity)
+        except Exception as e:
+            self.logger.warning(f"Failed to mirror SANITY={sanity} for {os.path.basename(image)} into image_qa: {e}")
 
     def update_sanity_header(
         self,
