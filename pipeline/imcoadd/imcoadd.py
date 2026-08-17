@@ -330,6 +330,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             raise CoaddError.EmptyInputAfterSanityRejection("No Input for ImCoadd")
         # if rejected, let the input remain so that a rerun has a change to reevaluate SANITY
 
+        if str(get_key(self.config_node.imcoadd, "coadd_mode") or "").lower() == "proper":
+            self._validate_proper_mode()
         self._prune_factory_scratch()
         self.select_input_images()  # may drop inputs, so it precedes the snapshot and resync
         # Single read of every kept header; all aggregates/coadd_header live on this snapshot.
@@ -717,7 +719,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         shown = lambda value: "NONE" if value is None or value is False else value  # noqa: E731
         bp = self._coadd_plan()
         interp = get_key(node, "interp_type") if bp["interpolate"] else None
-        return {
+        cards = {
             "COADDRTN": (shown(get_key(node, "coadd_routine")), "imcoadd.coadd_routine"),
             "COADDMOD": (shown(get_key(node, "coadd_mode")), "imcoadd.coadd_mode"),
             "COADDWGT": (shown(get_key(node, "coadd_weighting", default="global")), "imcoadd.coadd_weighting"),
@@ -729,6 +731,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             "JOINTWCS": (bool(get_key(node, "joint_wcs")), "imcoadd.joint_wcs"),
             "IMGSELEC": (shown(get_key(node, "image_selection")), "imcoadd.image_selection"),
         }  # fmt: skip
+        if str(get_key(node, "coadd_mode") or "").lower() == "proper":
+            cards["PROPWMP"] = (self._proper_weight_policy().upper(), "imcoadd.proper_coadd_weight_map_policy")
+        return cards
 
     def bkgsub_methods(self) -> dict:
         """Registered background routines: ``bkgsub_type`` value -> per-image callable.
@@ -2383,6 +2388,10 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         else:
             masks = None  # pixel-wise weights already exclude holes via calc.WEIGHT_EPS
 
+        if str(self.config_node.imcoadd.coadd_mode).lower() == "proper":
+            # one sequential read per frame and no strips: staging buys nothing here
+            return self.coadd_proper_with_numpy(input_images, holes=masks)
+
         var_maps = wht_maps if weighting != "pixelwise" else None
         stage_wht = weights if weighting == "pixelwise" else None
         staged, cleanup = self._stage_for_combine({"sci": input_images, "wht": stage_wht, "bpm": masks})
@@ -2452,6 +2461,79 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         finally:
             cleanup()
         return self.config_node.imcoadd.coadd_image
+
+    def coadd_proper_with_numpy(self, input_images: list[str], holes: list[str] | None = None) -> str:
+        """Zackay & Ofek proper coaddition; imcoadd.proper_coadd_weight_map_policy picks the weight product."""
+        from ..services.combine_lock import CombineSlot, NullSlot
+        from .proper import proper_coadd_numpy
+
+        plan = self._coadd_plan()
+        policy = self._proper_weight_policy()
+        coadd_image = self.config_node.imcoadd.coadd_image
+        anchor = os.path.dirname(collapse(atleast_1d(input_images)[0], force=True))
+        slot_ctx = (
+            CombineSlot(anchor, logger=self.logger)
+            if len(atleast_1d(input_images)) >= plan["combine_lock_threshold"]
+            else NullSlot()
+        )
+        with slot_ctx as slot:
+            slot.lease(5 * 110_000_000 * 8)  # numerator + share accumulators + final FFT pair, ~4.4 GB
+            return proper_coadd_numpy(
+                input_images,
+                output_path=coadd_image,
+                coadd_header=self.input_headers.coadd_header,
+                peeings=self._proper_peeings(input_images),
+                skysigs=self.input_headers.values("SKYSIG"),
+                flxscales=self._combine_flxscales(),
+                weight_map_policy=policy,
+                weight_output=add_suffix(coadd_image, "weight") if policy != "off" else False,
+                footprint_output=add_suffix(coadd_image, "footprint") if plan["output_footprint"] else False,
+                psf_output=add_suffix(coadd_image, "psf"),
+                holes=holes,
+                logger=self.logger,
+            )
+
+    def _proper_weight_policy(self) -> str:
+        """Validated imcoadd.proper_coadd_weight_map_policy."""
+        from .proper import WEIGHT_MAP_POLICIES
+
+        raw = get_key(self.config_node.imcoadd, "proper_coadd_weight_map_policy", default="white-noise")
+        policy = str(raw or "off").lower().replace("_", "-")
+        if policy not in WEIGHT_MAP_POLICIES:
+            raise CoaddError.ValueError(
+                f"Invalid imcoadd.proper_coadd_weight_map_policy: {raw!r} (expected one of {WEIGHT_MAP_POLICIES})"
+            )
+        return policy
+
+    def _proper_peeings(self, input_images: list[str]) -> list[float]:
+        """Per-frame PSF FWHM in pixels; the homogenized target when convolution ran."""
+        n = len(atleast_1d(input_images))
+        if self.config_node.imcoadd.convolve and getattr(self, "_max_peeing", None):
+            return [float(self._max_peeing)] * n
+        peeings = self.input_headers.values("PEEING")
+        if len(peeings) != n or any(p is None for p in peeings):
+            missing = [name for name, p in zip(self.input_headers.names, peeings) if p is None]
+            self.logger.error(f"No PEEING for {missing[:3]}; proper coadd needs a per-frame PSF", CoaddError.KeyError)
+            raise CoaddError.KeyError(f"No PEEING for {len(missing)} input(s); proper coadd needs a per-frame PSF")
+        return [float(p) for p in peeings]
+
+    def _validate_proper_mode(self):
+        """Fail fast on option combinations the Fourier-domain combine cannot honor."""
+        routine = str(self.config_node.imcoadd.coadd_routine or "")
+        if "reproject-first" not in routine.lower():
+            raise CoaddError.ValueError(f"coadd_mode 'proper' requires coadd_routine 'reproject-first', not {routine!r}")
+        plan = self._coadd_plan()
+        if plan["weighting"] == "pixelwise":
+            raise CoaddError.ValueError(
+                "coadd_mode 'proper' is incompatible with pixel-wise weighting; use 'global' or False"
+            )
+        if not plan["interpolate"]:
+            raise CoaddError.ValueError(
+                "coadd_mode 'proper' requires interpolate_badpix: True (a Fourier-domain vote cannot skip pixels)"
+            )
+        self._proper_weight_policy()
+        if plan["weighting"] == "off":
+            self.logger.info("coadd_weighting has no effect under 'proper': frames are inverse-variance weighted by construction")  # fmt: skip
 
     def _coadd_plan(self) -> dict:
         """Resolve the run plan: bad-pixel handling, weighting, outputs, derived needs.

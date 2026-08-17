@@ -154,6 +154,67 @@ def sextractor(
         return outcat
 
 
+def psfex(
+    catalog: str,
+    config_file: str = None,
+    psfex_options: Dict[str, str] = None,
+    log_file: str = None,
+    overwrite: bool = False,
+    logger: Logger = None,
+) -> str:
+    """Run PSFEx on a FITS_LDAC catalog; returns the .psf model path beside it."""
+
+    def chatter(msg: str, level: str = "debug"):
+        if logger is not None:
+            return getattr(logger, level)(msg)
+        else:
+            print(f"[psfex:{level.upper()}] {msg}")
+
+    psf_file = os.path.splitext(catalog)[0] + ".psf"
+    log_file = log_file or swap_ext(add_suffix(catalog, "psfex"), "log")
+
+    if os.path.exists(psf_file) and os.path.getsize(psf_file) > 0 and not overwrite:
+        chatter(f"PSFEx model already exists: {psf_file}, skipping...", "info")
+        return psf_file
+
+    psfex_args_master = {
+        "-PSF_DIR": os.path.dirname(catalog) or ".",
+        "-WRITE_XML": "N",
+        "-CHECKPLOT_TYPE": "NONE",
+        "-CHECKIMAGE_TYPE": "NONE",
+    }
+    if config_file:
+        psfex_args_master["-c"] = config_file
+    if psfex_options:
+        psfex_args_master.update(psfex_options)
+
+    options = [str(item) for k, v in psfex_args_master.items() for item in (f"-{k}" if not k.startswith("-") else k, v)]
+    psfexcom = " ".join(["psfex", f"{catalog}"] + options)
+    chatter(f"PSFEx Command: {psfexcom}")
+
+    process = subprocess.Popen(
+        psfexcom,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        stdin=subprocess.DEVNULL,
+    )
+    stdout, _ = process.communicate()
+    psfexout = stdout if stdout else ""
+
+    with open(log_file, "w") as f:
+        f.write(psfexcom)
+        f.write("\n" * 3)
+        f.write(psfexout)
+
+    if process.returncode != 0 or not os.path.exists(psf_file):
+        raise RuntimeError(f"PSFEx failed with return code {process.returncode}: {psfexout}")
+
+    chatter(f"PSFEx completed: {psf_file}")
+    return psf_file
+
+
 def solve_field(
     input_image: str = None,
     input_catalog: str = None,  # FITS_LDAC

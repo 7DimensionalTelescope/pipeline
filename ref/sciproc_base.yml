@@ -115,8 +115,9 @@ imcoadd:
   input_images:
   runtime_version:
   coadd_routine: 'legacy'  # legacy or reproject-first
-  coadd_mode: 'median'  # mean | median | clipped (two-pass 3-sigma clipped weighted mean)
+  coadd_mode: 'median'  # mean | median | clipped (two-pass 3-sigma clipped weighted mean) | proper (Zackay & Ofek 2015)
   coadd_weighting: global  # false | global (1/SKYSIG^2 per image) | pixel-wise (weight maps)
+  proper_coadd_weight_map_policy: white-noise  # proper only: off | weighted-mean | white-noise | colored-noise (also whitens the resampling-colored noise)
   image_selection: false  # False, 'auto' or 'interactive'; multi-epoch only
   image_selection_cuts:  # pinned cuts, e.g. {seeing: '<=2.8', bin2fwhm: '<=5.6'}; rest automatic
   image_selection_source: db  # 'db' (image_qa, one query) or 'headers' (read every file)
