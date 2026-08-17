@@ -1019,9 +1019,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         # one read: the models are built in memory, not round-tripped through check images
         _data, _hdr = self._read_frame(inim, data, header)
-        bkg_data, bkg_rms_data = estimate_background(
-            _data, mask=exclude, back_size=back_size, filter_size=filter_size
-        )
+        bkg_data, bkg_rms_data = estimate_background(_data, mask=exclude, back_size=back_size, filter_size=filter_size)
         if get_key(self.config_node.imcoadd, "output_sky_rms_map", default=False):
             fits.writeto(bkg_rms, bkg_rms_data, overwrite=True)
         del bkg_rms_data  # do not hold a second full frame past its write
@@ -1711,6 +1709,11 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             return input_images
         st = time.time()
         zpvalues = self.input_headers.values(self.zpkey)
+        for zp in zpvalues:
+            if zp is None:
+                msg = f"{self.zpkey} is None for {input_images[i]}"
+                self.logger.error(msg, CoaddError.PreviousStageError)
+                raise CoaddError.PreviousStageError(msg)
         # base zero point for flux scaling
         # base = np.where(zpvalues == np.max(zpvalues))[0][0]
         # self.zp_base = zpvalues[base]
@@ -2521,7 +2524,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         """Fail fast on option combinations the Fourier-domain combine cannot honor."""
         routine = str(self.config_node.imcoadd.coadd_routine or "")
         if "reproject-first" not in routine.lower():
-            raise CoaddError.ValueError(f"coadd_mode 'proper' requires coadd_routine 'reproject-first', not {routine!r}")
+            raise CoaddError.ValueError(
+                f"coadd_mode 'proper' requires coadd_routine 'reproject-first', not {routine!r}"
+            )
         plan = self._coadd_plan()
         if plan["weighting"] == "pixelwise":
             raise CoaddError.ValueError(
