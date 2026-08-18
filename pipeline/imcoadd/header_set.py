@@ -52,8 +52,7 @@ class InputHeaderSet:
         self._coadd_image_id: str | None = None
         self.coadd_provenance: dict[str, tuple] = {}
         self.selection_metrics: dict[str, tuple[str, str]] = {}
-        # Classification, not a pixel-affecting setting -- deliberately NOT in
-        # coadd_provenance, which feeds _guard_coadd_identity.
+        # kept out of coadd_provenance: that dict feeds _guard_coadd_identity
         self.multi_epoch: bool | None = None
 
     @classmethod
@@ -355,7 +354,6 @@ class InputHeaderSet:
             if image_id:
                 header[f"IID{nn:0>5}"] = (image_id, f"IMAGEID of IMG{nn:0>5}")
 
-        # 	Unit mix: the filename token and TELESCOP can each name only one
         units = sorted({u for h in self.headers if (u := str(h.get("TELESCOP") or "").strip())})
         if units:
             header["NUNITS"] = (len(units), "Number of distinct 7DT units combined")

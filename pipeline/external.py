@@ -9,7 +9,7 @@ from typing import List, Tuple, Dict
 
 from .errors import SolveFieldError, ScampError
 from .services.logger import Logger
-from .const.environ import REF_DIR, SEXTRACTOR_COMMAND
+from .const.environ import REF_DIR, SEXTRACTOR_COMMAND, SWARP_COMMAND
 from .const.observation import IMAGE_SIZE_X, IMAGE_SIZE_Y
 from .utils import add_suffix, force_symlink, swap_ext, read_text_file, ansi_clean
 from .utils.header import fitsrec_to_header
@@ -740,7 +740,7 @@ def swarp(
     # 	SWarp
     # swarpcom = f"swarp -c {path_config}/7dt.swarp @{path_imagelist} -IMAGEOUT_NAME {comim} -CENTER_TYPE MANUAL -CENTER {center} -SUBTRACT_BACK N -RESAMPLE_DIR {path_resamp} -GAIN_KEYWORD EGAIN -GAIN_DEFAULT {gain_default} -FSCALE_KEYWORD FAKE -WEIGHTOUT_NAME {weightim}"
     swarpcom = [
-        "swarp", input,
+        SWARP_COMMAND, input,
         "-c", os.path.join(REF_DIR, '7dt.swarp'),
         "-IMAGEOUT_NAME", f"{comim}",
         "-WEIGHTOUT_NAME", f"{weightim}",

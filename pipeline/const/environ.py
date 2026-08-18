@@ -1,4 +1,5 @@
 import os
+import warnings
 
 try:
     import yaml
@@ -22,24 +23,35 @@ SOURCE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ROOT_DIR = os.path.abspath(os.path.join(SOURCE_DIR, ".."))
 REF_DIR = os.path.abspath(os.path.join(ROOT_DIR, "ref"))
 SCRIPTS_DIR = os.path.join(SOURCE_DIR, "cli")  # "scripts"
-STORAGE_CONFIG_FILE = os.path.join(REF_DIR, "storage.yml")
+DEPLOYMENT_CONFIG_FILE = os.path.join(REF_DIR, "deployment.yml")
+# Transitional: drop once every deployment has migrated off ref/storage.yml.
+_LEGACY_CONFIG_FILE = os.path.join(REF_DIR, "storage.yml")
+if not os.path.exists(DEPLOYMENT_CONFIG_FILE) and os.path.exists(_LEGACY_CONFIG_FILE):
+    warnings.warn(
+        f"{_LEGACY_CONFIG_FILE} is deprecated; rename it to {DEPLOYMENT_CONFIG_FILE}",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    DEPLOYMENT_CONFIG_FILE = _LEGACY_CONFIG_FILE
+STORAGE_CONFIG_FILE = DEPLOYMENT_CONFIG_FILE  # backward-compatible alias
 
 # load environment variables from .env file when python-dotenv is available
 if load_dotenv is not None:
     load_dotenv(os.path.join(ROOT_DIR, ".env"), override=True)
 
 if yaml is not None:
-    with open(STORAGE_CONFIG_FILE, encoding="utf-8") as stream:
-        _storage_config = yaml.safe_load(stream) or {}
+    with open(DEPLOYMENT_CONFIG_FILE, encoding="utf-8") as stream:
+        _deployment_config = yaml.safe_load(stream) or {}
 
-    if not isinstance(_storage_config, dict):
-        raise ValueError(f"Storage config must contain a mapping: {STORAGE_CONFIG_FILE}")
+    if not isinstance(_deployment_config, dict):
+        raise ValueError(f"Deployment config must contain a mapping: {DEPLOYMENT_CONFIG_FILE}")
 else:
-    _storage_config = {}
+    _deployment_config = {}
 
-_storage_paths = _storage_config.get("storage") or {}
-_reference_paths = _storage_config.get("references") or {}
-_external_paths = _storage_config.get("external") or {}
+_storage_paths = _deployment_config.get("storage") or {}
+_reference_paths = _deployment_config.get("references") or {}
+_external_paths = _deployment_config.get("external") or {}
+_commands = _deployment_config.get("commands") or {}
 
 
 # Storage Configuration
@@ -108,7 +120,8 @@ IS_PIPELINE_LOCK = _get_bool_env("IS_PIPELINE", False)
 PIPELINE_LOCK_WAIT_SECONDS = 60
 SLACK_TOKEN = os.environ.get("SLACK_TOKEN", None)
 INSTRUM_STATUS_DICT = _external_paths.get("INSTRUM_STATUS_DICT")
-SEXTRACTOR_COMMAND = os.environ.get("SEXTRACTOR_COMMAND") or "source-extractor"
+SEXTRACTOR_COMMAND = _commands.get("SEXTRACTOR_COMMAND") or os.environ.get("SEXTRACTOR_COMMAND") or "source-extractor"
+SWARP_COMMAND = _commands.get("SWARP_COMMAND") or os.environ.get("SWARP_COMMAND") or "swarp"
 RECENT_RAWDATA_TRANSFER_HISTORY = _external_paths.get("RECENT_RAWDATA_TRANSFER_HISTORY")
 PIPELINE_LOG_DIR = _external_paths.get("PIPELINE_LOG_DIR") or "/var/log/pipeline"
 PIPELINE_TRIGGER_LOG_FILE = (

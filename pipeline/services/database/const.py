@@ -1,15 +1,13 @@
 import os
 import warnings
-from dotenv import load_dotenv
 
-env_file = os.path.join(os.path.dirname(__file__), "../../../.env")
-load_dotenv(env_file)
-
+# relies on const.environ loading dotenv first, which it always does.
 dbname = os.environ.get("DBNAME")
 user = os.environ.get("DBUSER")
 host = os.environ.get("DBHOST")
 port = os.environ.get("DBPORT")
 password = os.environ.get("DBPASSWORD")
+
 
 def _remote_from_env() -> dict:
     """Remote profile, re-read from the environment on every call."""
@@ -96,6 +94,7 @@ def get_db_backend() -> str:
     """Name of the active connection profile."""
 
     return DB_BACKEND
+
 
 # GWPortal REST API credentials (used by the HTTP backend)
 GWPORTAL_BASE_URL = os.environ.get("GWPORTAL_BASE_URL")

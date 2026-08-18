@@ -25,7 +25,7 @@ configs_to_check = [
     "zeropoints.json",
     "depths.json",
     # base yml
-    "storage.yml",
+    "deployment.yml",
     "preproc_base.yml",
     "sciproc_base.yml",
     "preproc_override_ToO.yml",
