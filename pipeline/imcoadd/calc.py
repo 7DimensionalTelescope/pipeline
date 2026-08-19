@@ -9,6 +9,7 @@ no reprojection is performed.
 import os
 import time
 import numpy as np
+from numba import njit, prange
 from astropy.io import fits
 from astropy.wcs import WCS
 
@@ -125,7 +126,7 @@ def mean_coadd_numpy(
     var_den = np.zeros((target_h, target_w), dtype=np.float64) if propagate else None
     for i, f in enumerate(input_images):
         with fits.open(f) as hdul:
-            a = hdul[0].data.astype(np.float64)
+            a = hdul[0].data.astype(np.float32)
             egain = hdul[0].header.get("EGAIN")
             # False disables; explicit list = snapshot source of truth; None = file FLXSCALE.
             if flxscales is False:
@@ -147,9 +148,11 @@ def mean_coadd_numpy(
         sy0 = ty0 - y0[i]; sy1 = ty1 - y0[i]  # fmt: skip
         src = a[sy0:sy1, sx0:sx1]
         valid = np.isfinite(src) & (src != 0.0)
+        mask_strip = None
         if masks is not None:
             with fits.open(masks[i], memmap=True) as mh:
-                valid &= mh[0].data[sy0:sy1, sx0:sx1] > WEIGHT_EPS
+                mask_strip = np.array(mh[0].data[sy0:sy1, sx0:sx1], dtype=np.float32, copy=True)
+            valid &= mask_strip > WEIGHT_EPS
 
         if weights is None:
             sum_arr[ty0:ty1, tx0:tx1] += np.where(valid, src * flxscale, 0.0)
@@ -166,7 +169,7 @@ def mean_coadd_numpy(
             # inverse-variance weight of the flux-normalised image.
             if isinstance(weights[i], str):
                 with fits.open(weights[i]) as hdul:
-                    w_full = hdul[0].data.astype(np.float64)
+                    w_full = hdul[0].data.astype(np.float32)
                 w_full[w_full < WEIGHT_EPS] = 0.0
                 w_eff = w_full[sy0:sy1, sx0:sx1] / (flxscale * flxscale)
                 valid &= w_eff > 0
@@ -184,14 +187,16 @@ def mean_coadd_numpy(
         # counted after the weight test, so the footprint is the frames the coadd used
         count_arr[ty0:ty1, tx0:tx1] += valid
         if propagate:
-            with fits.open(var_maps[i], memmap=True) as vh:
-                vm = vh[0].data[sy0:sy1, sx0:sx1].astype(np.float64)
-            vm[vm < WEIGHT_EPS] = 0.0
+            if mask_strip is not None and var_maps[i] == masks[i]:
+                vm = mask_strip
+            else:
+                with fits.open(var_maps[i], memmap=True) as vh:
+                    vm = vh[0].data[sy0:sy1, sx0:sx1].astype(np.float32)
             # combine weight on the flux-normalized scale (matches w_eff/norm_arr);
             # sigma_norm^2 = flxscale^2 / w_map
             se = 1.0 if weights is None else float(weights[i]) / (flxscale * flxscale)
-            ok = valid & (vm > 0)
-            var_den[ty0:ty1, tx0:tx1] += np.where(ok, se * se * flxscale * flxscale / np.where(ok, vm, 1.0), 0.0)
+            ok = valid & (vm >= WEIGHT_EPS)
+            var_den[ty0:ty1, tx0:tx1] += np.where(ok, se * se * flxscale * flxscale / np.where(ok, vm, np.float32(1.0)), 0.0)
 
     coadd = np.where(norm_arr > 0, sum_arr / np.where(norm_arr > 0, norm_arr, 1), np.nan).astype(np.float32)
     if propagate:
@@ -282,7 +287,7 @@ def clipped_mean_coadd_numpy(
         masks=masks, flxscales=flxscales, match_swarp_size=match_swarp_size,
         chunk_h=None, reserved_bytes=reserved_bytes, logger=logger,
     )
-    center = fits.getdata(tmp_center).astype(np.float64)
+    center = fits.getdata(tmp_center).astype(np.float32)
     for t in (tmp_center, add_suffix(tmp_center, "weight"), add_suffix(tmp_center, "footprint")):
         try:
             os.remove(t)
@@ -303,7 +308,7 @@ def clipped_mean_coadd_numpy(
     n_clipped = n_total = 0
     for i, f in enumerate(input_images):
         with fits.open(f) as hdul:
-            a = hdul[0].data.astype(np.float64)
+            a = hdul[0].data.astype(np.float32)
             egain = hdul[0].header.get("EGAIN")
             if flxscales is False:
                 flxscale = 1.0
@@ -322,12 +327,14 @@ def clipped_mean_coadd_numpy(
         sl = (slice(ty0, ty1), slice(tx0, tx1))
         raw = a[sy0:sy1, sx0:sx1]
         valid = np.isfinite(raw) & (raw != 0.0)
+        mask_strip = None
         if masks is not None:
             with fits.open(masks[i], memmap=True) as mh:
-                valid &= mh[0].data[sy0:sy1, sx0:sx1] > WEIGHT_EPS
+                mask_strip = np.array(mh[0].data[sy0:sy1, sx0:sx1], dtype=np.float32, copy=True)
+            valid &= mask_strip > WEIGHT_EPS
         if isinstance(weights[i], str):
             with fits.open(weights[i]) as hdul:
-                w_full = hdul[0].data.astype(np.float64)
+                w_full = hdul[0].data.astype(np.float32)
             w_full[w_full < WEIGHT_EPS] = 0.0
             w_eff = w_full[sy0:sy1, sx0:sx1] / (flxscale * flxscale)
             valid &= w_eff > 0
@@ -352,12 +359,14 @@ def clipped_mean_coadd_numpy(
         elif egain is None:
             all_egain = False
         if propagate:
-            with fits.open(var_maps[i], memmap=True) as vh:
-                vm = vh[0].data[sy0:sy1, sx0:sx1].astype(np.float64)
-            vm[vm < WEIGHT_EPS] = 0.0
+            if mask_strip is not None and var_maps[i] == masks[i]:
+                vm = mask_strip
+            else:
+                with fits.open(var_maps[i], memmap=True) as vh:
+                    vm = vh[0].data[sy0:sy1, sx0:sx1].astype(np.float32)
             se = float(weights[i]) / (flxscale * flxscale)
-            ok = keep & (vm > 0)
-            var_den[sl] += np.where(ok, se * se * flxscale * flxscale / np.where(ok, vm, 1.0), 0.0)
+            ok = keep & (vm >= WEIGHT_EPS)
+            var_den[sl] += np.where(ok, se * se * flxscale * flxscale / np.where(ok, vm, np.float32(1.0)), 0.0)
 
     coadd = np.where(norm_arr > 0, sum_arr / np.where(norm_arr > 0, norm_arr, 1), np.nan).astype(np.float32)
     if logger is not None:
@@ -437,6 +446,71 @@ def _auto_chunk_h(n_images: int, width: int, height: int, budget_fraction: float
     return chunk
 
 
+@njit
+def _quickselect(buf, m, k):
+    """In-place k-th smallest of buf[:m] (Devillard median-of-three quickselect); leaves buf[:k] <= buf[k]."""
+    low = 0
+    high = m - 1
+    while True:
+        if high <= low:
+            return buf[k]
+        if high == low + 1:
+            if buf[low] > buf[high]:
+                buf[low], buf[high] = buf[high], buf[low]
+            return buf[k]
+        middle = (low + high) >> 1
+        if buf[middle] > buf[high]:
+            buf[middle], buf[high] = buf[high], buf[middle]
+        if buf[low] > buf[high]:
+            buf[low], buf[high] = buf[high], buf[low]
+        if buf[middle] > buf[low]:
+            buf[middle], buf[low] = buf[low], buf[middle]
+        buf[middle], buf[low + 1] = buf[low + 1], buf[middle]
+        ll = low + 1
+        hh = high
+        while True:
+            ll += 1
+            while buf[low] > buf[ll]:
+                ll += 1
+            hh -= 1
+            while buf[hh] > buf[low]:
+                hh -= 1
+            if hh < ll:
+                break
+            buf[ll], buf[hh] = buf[hh], buf[ll]
+        buf[low], buf[hh] = buf[hh], buf[low]
+        if hh <= k:
+            low = ll
+        if hh >= k:
+            high = hh - 1
+
+
+@njit(parallel=True)
+def _nanmedian_axis0(stack, out):
+    """Row-parallel NaN-ignoring median over axis 0; matches np.nanmedian bitwise."""
+    n, h, w = stack.shape
+    for y in prange(h):
+        buf = np.empty(n, dtype=np.float32)
+        for x in range(w):
+            m = 0
+            for i in range(n):
+                v = stack[i, y, x]
+                if not np.isnan(v):
+                    buf[m] = v
+                    m += 1
+            if m == 0:
+                out[y, x] = np.nan
+            elif m % 2:
+                out[y, x] = _quickselect(buf, m, (m - 1) // 2)
+            else:
+                hi = _quickselect(buf, m, m // 2)
+                lo = buf[0]
+                for j in range(1, m // 2):
+                    if buf[j] > lo:
+                        lo = buf[j]
+                out[y, x] = 0.5 * (lo + hi)
+
+
 def median_coadd_numpy(
     input_images: list[str],
     output_path: str,
@@ -504,6 +578,9 @@ def median_coadd_numpy(
     var_den = np.zeros((target_h, target_w), dtype=np.float64) if have_sigma else None
     whandles = [fits.open(f, memmap=True) for f in weights] if pixel_weights else None
     mhandles = [fits.open(f, memmap=True) for f in masks] if masks is not None else None
+    # the 1px badpix policy passes the same wht resamps as masks AND var_maps: read once
+    var_is_mask = propagate and masks is not None and list(var_maps) == list(masks)
+    vhandles = [fits.open(f, memmap=True) for f in var_maps] if propagate and not var_is_mask else None
     try:
         for ys in range(0, target_h, chunk_h):
             ye = min(target_h, ys + chunk_h)
@@ -519,8 +596,10 @@ def median_coadd_numpy(
                 sy0 = ty0 - y0[i]; sy1 = ty1 - y0[i]  # fmt: skip
                 src = hdul[0].data[sy0:sy1, sx0:sx1].astype(np.float32) * flxscales[i]
                 src[(src == 0.0) | ~np.isfinite(src)] = np.nan
+                m_strip = None
                 if mhandles is not None:
-                    src[mhandles[i][0].data[sy0:sy1, sx0:sx1] <= WEIGHT_EPS] = np.nan
+                    m_strip = mhandles[i][0].data[sy0:sy1, sx0:sx1]
+                    src[m_strip <= WEIGHT_EPS] = np.nan
                 if whandles is not None:
                     # w is the inverse variance of the raw resampled data; the median is
                     # taken on flux-normalised pixels, whose variance scales by FLXSCALE^2
@@ -539,12 +618,10 @@ def median_coadd_numpy(
                 # product is the equal-vote mean's variance, sum sigma_i^2 of contributors
                 # (user decision 2026-08-10) -- sigma from the best available source
                 if propagate:
-                    with fits.open(var_maps[i], memmap=True) as vh:
-                        vm = vh[0].data[sy0:sy1, sx0:sx1].astype(np.float64)
-                    vm[vm < WEIGHT_EPS] = 0.0
+                    vm = m_strip if var_is_mask else vhandles[i][0].data[sy0:sy1, sx0:sx1]
                     fx = flxscales[i]
-                    ok = contributed & (vm > 0)
-                    var_den[ty0:ty1, tx0:tx1] += np.where(ok, fx * fx / np.where(ok, vm, 1.0), 0.0)
+                    ok = contributed & (vm >= WEIGHT_EPS)
+                    var_den[ty0:ty1, tx0:tx1] += np.where(ok, fx * fx / np.where(ok, vm, np.float32(1.0)), 0.0)
                 elif whandles is not None:
                     ok = contributed & (w > 0)
                     var_den[ty0:ty1, tx0:tx1] += np.where(ok, 1.0 / np.where(ok, w, 1.0), 0.0)
@@ -552,12 +629,12 @@ def median_coadd_numpy(
                     var_den[ty0:ty1, tx0:tx1] += np.where(
                         contributed, (flxscales[i] * flxscales[i]) / float(weights[i]), 0.0
                     )
-            # overwrite_input: nanmedian otherwise COPIES the stack (peak 2x the budgeted
-            # strip memory -- the 2026-08-11 swap-fill); the stack is dead after this line
-            coadd[ys:ye, :] = np.nanmedian(stack, axis=0, overwrite_input=True)
+            # threaded selection median: 13x np.nanmedian, bitwise-identical, and none of
+            # np.ma.median's temporaries (measured 4.5x the planned strip stack)
+            _nanmedian_axis0(stack, coadd[ys:ye, :])
             # the strip's file pages have no reuse (each strip reads different rows):
             # release them so the page cache stops displacing anonymous memory into swap
-            for hdul in handles + (whandles or []) + (mhandles or []):
+            for hdul in handles + (whandles or []) + (mhandles or []) + (vhandles or []):
                 try:
                     os.posix_fadvise(hdul._file._file.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
                 except (AttributeError, OSError):
@@ -565,7 +642,7 @@ def median_coadd_numpy(
     finally:
         for hdul in handles:
             hdul.close()
-        for hdul in (whandles or []) + (mhandles or []):
+        for hdul in (whandles or []) + (mhandles or []) + (vhandles or []):
             hdul.close()
 
     out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, coadd_header)
