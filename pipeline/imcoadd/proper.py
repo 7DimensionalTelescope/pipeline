@@ -189,6 +189,10 @@ def proper_coadd_numpy(
         if not finite.all():
             data[~finite] = 0.0
         sigma_px = float(peeings[i]) / np.sqrt(8 * np.log(2))
+        # data on the array boundary (a frame clipped by the coadd grid) turns the linear
+        # correlation's truncation into 1/sqrt(den)-amplified ringing (measured 6e5 ADU)
+        edge = _gauss_radius(sigma_px)
+        data[:edge, :] = data[-edge:, :] = data[:, :edge] = data[:, -edge:] = 0.0
         # float64 and constant-0 boundary like convolve_gaussian_separable: float32 roundoff
         # at PSF-dead frequencies is amplified by 1/sqrt(den) (measured 3e-3 of peak)
         matched = gaussian_filter(

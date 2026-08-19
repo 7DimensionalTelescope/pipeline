@@ -31,6 +31,7 @@ class ImageQATable:
     image_path: Optional[str] = None
     imageid: Optional[str] = None
     m_epoch: Optional[bool] = None
+    pipe_ver: Optional[str] = None
 
     nightdate: Optional[date] = None
     unit: Optional[str] = None
