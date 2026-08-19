@@ -25,6 +25,55 @@ from .utils import determine_size, build_coadd_wcs_header
 WEIGHT_EPS = 1e-12
 
 
+def _open_plain_float32(path: str) -> tuple[int, int, int, int]:
+    """Open a plain float32 2D primary-HDU FITS for raw row reads: (fd, data offset, width, height)."""
+    hdr = fits.getheader(path)
+    if hdr["NAXIS"] != 2 or hdr["BITPIX"] != -32 or hdr.get("BSCALE", 1) != 1 or hdr.get("BZERO", 0) != 0:
+        raise ValueError(f"combine raw reader expects an unscaled float32 2D primary HDU: {path}")
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_SEQUENTIAL)
+    except (AttributeError, OSError):
+        pass
+    return fd, len(hdr.tostring()), int(hdr["NAXIS1"]), int(hdr["NAXIS2"])
+
+
+_READ_CHUNK = 16 << 20  # interleaved A/B: 16 MB preadv pieces beat one giant read and memmap
+
+
+def _read_rows(
+    handle: tuple[int, int, int, int], y0: int, y1: int, scratch: np.ndarray | None = None
+) -> tuple[np.ndarray, np.ndarray]:
+    """Rows [y0:y1) as native float32 plus the reusable byte scratch (FITS stores big-endian).
+
+    Chunked preadv into ``scratch`` (grown as needed): a fresh bytes object per read measured
+    3.6x slower than reuse -- allocation and first-touch faults, not the read itself."""
+    fd, offset, w, _h = handle
+    nbytes = (y1 - y0) * w * 4
+    if scratch is None or scratch.nbytes < nbytes:
+        scratch = np.empty(nbytes, dtype=np.uint8)
+    base = offset + y0 * w * 4
+    pos = 0
+    while pos < nbytes:
+        n = min(_READ_CHUNK, nbytes - pos)
+        got = os.preadv(fd, [memoryview(scratch)[pos : pos + n]], base + pos)
+        if got != n:
+            raise IOError(f"short read ({pos + got} of {nbytes} bytes) at fd {fd}: truncated FITS?")
+        pos += n
+    return scratch[:nbytes].view(">f4").reshape(y1 - y0, w).astype(np.float32), scratch
+
+
+def _read_plain_float32(
+    path: str, y0: int = 0, y1: int | None = None, scratch: np.ndarray | None = None
+) -> tuple[np.ndarray, np.ndarray]:
+    """One-shot raw read of a plain float32 FITS: full frame, or rows [y0:y1)."""
+    handle = _open_plain_float32(path)
+    try:
+        return _read_rows(handle, y0, handle[3] if y1 is None else y1, scratch)
+    finally:
+        os.close(handle[0])
+
+
 # Var(median)/Var(mean) for n Gaussian samples, from the order-statistic density
 # n!/(m!m!) F^m (1-F)^m f  with m=(n-1)/2. Approaches pi/2 (Kendall & Stuart Vol.1) but is
 # well below it for the frame counts a coadd actually has, so the limit is not usable.
@@ -124,17 +173,18 @@ def mean_coadd_numpy(
     # weighting the sci pixels get, so the output weight is the coadd's true 1/sigma^2
     propagate = var_maps is not None and (weights is None or not isinstance(weights[0], str))
     var_den = np.zeros((target_h, target_w), dtype=np.float64) if propagate else None
+    scratch = None
     for i, f in enumerate(input_images):
-        with fits.open(f) as hdul:
-            a = hdul[0].data.astype(np.float32)
-            egain = hdul[0].header.get("EGAIN")
-            # False disables; explicit list = snapshot source of truth; None = file FLXSCALE.
-            if flxscales is False:
-                flxscale = 1.0
-            elif flxscales is not None:
-                flxscale = flxscales[i]
-            else:
-                flxscale = hdul[0].header.get("FLXSCALE", 1.0)
+        hdr = fits.getheader(f)
+        a, scratch = _read_plain_float32(f, scratch=scratch)
+        egain = hdr.get("EGAIN")
+        # False disables; explicit list = snapshot source of truth; None = file FLXSCALE.
+        if flxscales is False:
+            flxscale = 1.0
+        elif flxscales is not None:
+            flxscale = flxscales[i]
+        else:
+            flxscale = hdr.get("FLXSCALE", 1.0)
         flxscale = 1.0 if flxscale is None else flxscale
         h, w = a.shape
 
@@ -150,8 +200,8 @@ def mean_coadd_numpy(
         valid = np.isfinite(src) & (src != 0.0)
         mask_strip = None
         if masks is not None:
-            with fits.open(masks[i], memmap=True) as mh:
-                mask_strip = np.array(mh[0].data[sy0:sy1, sx0:sx1], dtype=np.float32, copy=True)
+            m_rows, scratch = _read_plain_float32(masks[i], sy0, sy1, scratch)
+            mask_strip = m_rows[:, sx0:sx1]
             valid &= mask_strip > WEIGHT_EPS
 
         if weights is None:
@@ -168,8 +218,7 @@ def mean_coadd_numpy(
             # variance scales by FLXSCALE^2, so use w/FLXSCALE^2 as the
             # inverse-variance weight of the flux-normalised image.
             if isinstance(weights[i], str):
-                with fits.open(weights[i]) as hdul:
-                    w_full = hdul[0].data.astype(np.float32)
+                w_full, scratch = _read_plain_float32(weights[i], scratch=scratch)
                 w_full[w_full < WEIGHT_EPS] = 0.0
                 w_eff = w_full[sy0:sy1, sx0:sx1] / (flxscale * flxscale)
                 valid &= w_eff > 0
@@ -190,8 +239,8 @@ def mean_coadd_numpy(
             if mask_strip is not None and var_maps[i] == masks[i]:
                 vm = mask_strip
             else:
-                with fits.open(var_maps[i], memmap=True) as vh:
-                    vm = vh[0].data[sy0:sy1, sx0:sx1].astype(np.float32)
+                v_rows, scratch = _read_plain_float32(var_maps[i], sy0, sy1, scratch)
+                vm = v_rows[:, sx0:sx1]
             # combine weight on the flux-normalized scale (matches w_eff/norm_arr);
             # sigma_norm^2 = flxscale^2 / w_map
             se = 1.0 if weights is None else float(weights[i]) / (flxscale * flxscale)
@@ -306,16 +355,17 @@ def clipped_mean_coadd_numpy(
     propagate = var_maps is not None and not isinstance(weights[0], str)
     var_den = np.zeros((target_h, target_w), dtype=np.float64) if propagate else None
     n_clipped = n_total = 0
+    scratch = None
     for i, f in enumerate(input_images):
-        with fits.open(f) as hdul:
-            a = hdul[0].data.astype(np.float32)
-            egain = hdul[0].header.get("EGAIN")
-            if flxscales is False:
-                flxscale = 1.0
-            elif flxscales is not None:
-                flxscale = flxscales[i]
-            else:
-                flxscale = hdul[0].header.get("FLXSCALE", 1.0)
+        hdr = fits.getheader(f)
+        a, scratch = _read_plain_float32(f, scratch=scratch)
+        egain = hdr.get("EGAIN")
+        if flxscales is False:
+            flxscale = 1.0
+        elif flxscales is not None:
+            flxscale = flxscales[i]
+        else:
+            flxscale = hdr.get("FLXSCALE", 1.0)
         flxscale = 1.0 if flxscale is None else flxscale
         h, w = a.shape
         tx0 = max(0, x0[i]); tx1 = min(target_w, x0[i] + w)  # fmt: skip
@@ -329,12 +379,11 @@ def clipped_mean_coadd_numpy(
         valid = np.isfinite(raw) & (raw != 0.0)
         mask_strip = None
         if masks is not None:
-            with fits.open(masks[i], memmap=True) as mh:
-                mask_strip = np.array(mh[0].data[sy0:sy1, sx0:sx1], dtype=np.float32, copy=True)
+            m_rows, scratch = _read_plain_float32(masks[i], sy0, sy1, scratch)
+            mask_strip = m_rows[:, sx0:sx1]
             valid &= mask_strip > WEIGHT_EPS
         if isinstance(weights[i], str):
-            with fits.open(weights[i]) as hdul:
-                w_full = hdul[0].data.astype(np.float32)
+            w_full, scratch = _read_plain_float32(weights[i], scratch=scratch)
             w_full[w_full < WEIGHT_EPS] = 0.0
             w_eff = w_full[sy0:sy1, sx0:sx1] / (flxscale * flxscale)
             valid &= w_eff > 0
@@ -362,8 +411,8 @@ def clipped_mean_coadd_numpy(
             if mask_strip is not None and var_maps[i] == masks[i]:
                 vm = mask_strip
             else:
-                with fits.open(var_maps[i], memmap=True) as vh:
-                    vm = vh[0].data[sy0:sy1, sx0:sx1].astype(np.float32)
+                v_rows, scratch = _read_plain_float32(var_maps[i], sy0, sy1, scratch)
+                vm = v_rows[:, sx0:sx1]
             se = float(weights[i]) / (flxscale * flxscale)
             ok = keep & (vm >= WEIGHT_EPS)
             var_den[sl] += np.where(ok, se * se * flxscale * flxscale / np.where(ok, vm, np.float32(1.0)), 0.0)
@@ -550,7 +599,7 @@ def median_coadd_numpy(
     if chunk_h is None:
         chunk_h = _auto_chunk_h(len(input_images), target_w, target_h, reserved_bytes=reserved_bytes, logger=logger)
 
-    handles = [fits.open(f, memmap=True) for f in input_images]
+    handles = [_open_plain_float32(f) for f in input_images]
     # Flux-scaling source (logged once): False disables; explicit list = snapshot
     # source of truth; None falls back to each file's FLXSCALE header.
     if flxscales is False:
@@ -559,7 +608,7 @@ def median_coadd_numpy(
     else:
         if flxscales is None:
             scale_mode = "from FLXSCALE headers"
-            flxscales = [h[0].header.get("FLXSCALE", 1.0) for h in handles]
+            flxscales = [fits.getheader(f).get("FLXSCALE", 1.0) for f in input_images]
         else:
             scale_mode = "from in-memory values"
         flxscales = np.array([1.0 if f is None else f for f in flxscales], dtype=np.float32)
@@ -576,17 +625,18 @@ def median_coadd_numpy(
     propagate = var_maps is not None and not pixel_weights
     have_sigma = propagate or pixel_weights or weights is not None
     var_den = np.zeros((target_h, target_w), dtype=np.float64) if have_sigma else None
-    whandles = [fits.open(f, memmap=True) for f in weights] if pixel_weights else None
-    mhandles = [fits.open(f, memmap=True) for f in masks] if masks is not None else None
+    whandles = [_open_plain_float32(f) for f in weights] if pixel_weights else None
+    mhandles = [_open_plain_float32(f) for f in masks] if masks is not None else None
     # the 1px badpix policy passes the same wht resamps as masks AND var_maps: read once
     var_is_mask = propagate and masks is not None and list(var_maps) == list(masks)
-    vhandles = [fits.open(f, memmap=True) for f in var_maps] if propagate and not var_is_mask else None
+    vhandles = [_open_plain_float32(f) for f in var_maps] if propagate and not var_is_mask else None
+    scratch = None
     try:
         for ys in range(0, target_h, chunk_h):
             ye = min(target_h, ys + chunk_h)
             # (N, strip_h, target_w) stack; NaN-init so np.nanmedian ignores unfilled cells.
             stack = np.full((len(input_images), ye - ys, target_w), np.nan, dtype=np.float32)
-            for i, hdul in enumerate(handles):
+            for i, handle in enumerate(handles):
                 h, w = shapes[i]
                 tx0 = max(0, x0[i]); tx1 = min(target_w, x0[i] + w)  # fmt: skip
                 ty0 = max(ys, max(0, y0[i])); ty1 = min(ye, min(target_h, y0[i] + h))  # fmt: skip
@@ -594,16 +644,19 @@ def median_coadd_numpy(
                     continue
                 sx0 = tx0 - x0[i]; sx1 = tx1 - x0[i]  # fmt: skip
                 sy0 = ty0 - y0[i]; sy1 = ty1 - y0[i]  # fmt: skip
-                src = hdul[0].data[sy0:sy1, sx0:sx1].astype(np.float32) * flxscales[i]
+                rows, scratch = _read_rows(handle, sy0, sy1, scratch)
+                src = rows[:, sx0:sx1] * flxscales[i]
                 src[(src == 0.0) | ~np.isfinite(src)] = np.nan
                 m_strip = None
                 if mhandles is not None:
-                    m_strip = mhandles[i][0].data[sy0:sy1, sx0:sx1]
+                    m_rows, scratch = _read_rows(mhandles[i], sy0, sy1, scratch)
+                    m_strip = m_rows[:, sx0:sx1]
                     src[m_strip <= WEIGHT_EPS] = np.nan
                 if whandles is not None:
                     # w is the inverse variance of the raw resampled data; the median is
                     # taken on flux-normalised pixels, whose variance scales by FLXSCALE^2
-                    w = whandles[i][0].data[sy0:sy1, sx0:sx1].astype(np.float32)
+                    w_rows, scratch = _read_rows(whandles[i], sy0, sy1, scratch)
+                    w = w_rows[:, sx0:sx1]
                     w[w < WEIGHT_EPS] = 0.0
                     w /= flxscales[i] * flxscales[i]
                     # zero weight (interpolated/bad pixel) never enters the stack,
@@ -618,7 +671,11 @@ def median_coadd_numpy(
                 # product is the equal-vote mean's variance, sum sigma_i^2 of contributors
                 # (user decision 2026-08-10) -- sigma from the best available source
                 if propagate:
-                    vm = m_strip if var_is_mask else vhandles[i][0].data[sy0:sy1, sx0:sx1]
+                    if var_is_mask:
+                        vm = m_strip
+                    else:
+                        v_rows, scratch = _read_rows(vhandles[i], sy0, sy1, scratch)
+                        vm = v_rows[:, sx0:sx1]
                     fx = flxscales[i]
                     ok = contributed & (vm >= WEIGHT_EPS)
                     var_den[ty0:ty1, tx0:tx1] += np.where(ok, fx * fx / np.where(ok, vm, np.float32(1.0)), 0.0)
@@ -634,16 +691,14 @@ def median_coadd_numpy(
             _nanmedian_axis0(stack, coadd[ys:ye, :])
             # the strip's file pages have no reuse (each strip reads different rows):
             # release them so the page cache stops displacing anonymous memory into swap
-            for hdul in handles + (whandles or []) + (mhandles or []) + (vhandles or []):
+            for handle in handles + (whandles or []) + (mhandles or []) + (vhandles or []):
                 try:
-                    os.posix_fadvise(hdul._file._file.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+                    os.posix_fadvise(handle[0], 0, 0, os.POSIX_FADV_DONTNEED)
                 except (AttributeError, OSError):
                     pass
     finally:
-        for hdul in handles:
-            hdul.close()
-        for hdul in (whandles or []) + (mhandles or []) + (vhandles or []):
-            hdul.close()
+        for handle in handles + (whandles or []) + (mhandles or []) + (vhandles or []):
+            os.close(handle[0])
 
     out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, coadd_header)
     covered = count_arr > 0
@@ -707,15 +762,15 @@ def accumulate_weight_maps(
     target_w, target_h, target_cx, target_cy, x0, y0, shapes = determine_size(weight_images, match_swarp_size)
 
     total = np.zeros((target_h, target_w), dtype=np.float32)
+    scratch = None
     for i, f in enumerate(weight_images):
-        with fits.open(f, memmap=True) as hdul:
-            a = hdul[0].data
-            h, w = a.shape
-            tx0 = max(0, x0[i]); tx1 = min(target_w, x0[i] + w)  # fmt: skip
-            ty0 = max(0, y0[i]); ty1 = min(target_h, y0[i] + h)  # fmt: skip
-            if tx1 <= tx0 or ty1 <= ty0:
-                continue
-            total[ty0:ty1, tx0:tx1] += a[ty0 - y0[i] : ty1 - y0[i], tx0 - x0[i] : tx1 - x0[i]]
+        a, scratch = _read_plain_float32(f, scratch=scratch)
+        h, w = a.shape
+        tx0 = max(0, x0[i]); tx1 = min(target_w, x0[i] + w)  # fmt: skip
+        ty0 = max(0, y0[i]); ty1 = min(target_h, y0[i] + h)  # fmt: skip
+        if tx1 <= tx0 or ty1 <= ty0:
+            continue
+        total[ty0:ty1, tx0:tx1] += a[ty0 - y0[i] : ty1 - y0[i], tx0 - x0[i] : tx1 - x0[i]]
 
     out_header = build_coadd_wcs_header(weight_images[0], target_cx, target_cy, coadd_header)
     fits.writeto(output_path, total, header=out_header, overwrite=True)
