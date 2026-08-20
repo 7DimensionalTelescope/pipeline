@@ -6,6 +6,7 @@ import numpy as np
 import os
 from glob import glob
 from ..const import FILTER_WAVELENGTHS, FILTER_WIDTHS, BROAD_FILTERS
+from ..io.ldac import read_catalog
 
 
 def file_list(base_dir):
@@ -59,7 +60,7 @@ def extract_mag_from_catalog(image_path, sky_position, aperture_key="auto", matc
     cat_file = image_path.replace(".fits", "_cat.fits")
     if not os.path.exists(cat_file):
         return None, None
-    tbl = Table.read(cat_file)
+    tbl = read_catalog(cat_file)
     distances = np.sqrt((tbl["X_IMAGE"] - x) ** 2 + (tbl["Y_IMAGE"] - y) ** 2)
 
     nearest_idx = np.argmin(distances)

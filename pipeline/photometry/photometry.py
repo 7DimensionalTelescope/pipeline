@@ -40,6 +40,7 @@ from ..services.setup import BaseSetup
 from ..services.version_check import RuntimeVersionMixin
 from ..tools.table import match_two_catalogs, build_condition_mask
 from ..path.path import PathHandler
+from ..io.cfitsldac import write_ldac
 from ..utils.header import get_header_key, update_padded_header_smart
 from ..utils.tile import is_ris_tile
 from ..errors import (
@@ -1214,8 +1215,23 @@ class PhotometrySingle:
             obs_src_table = obs_src_table[other_cols + present_gaia_cols]
 
         # save
+        from .. import __version__
+
+        pipe_ver = (str(__version__), "Last Run Sciproc Pipeline Version")
+        obs_src_table.meta["PIPE_VER"] = pipe_ver
         output_catalog_file = self.path.photometry.final_catalog
-        obs_src_table.write(output_catalog_file, format="fits", overwrite=True)  # "ascii.tab" "ascii.ecsv"
+        tmp_catalog_file = f"{output_catalog_file}.tmp"
+        try:
+            write_ldac(fits.getheader(self.input_image), obs_src_table, tmp_catalog_file)
+            with fits.open(tmp_catalog_file, mode="update", checksum=False) as hdul:
+                hdul[0].header["PIPE_VER"] = pipe_ver
+                for hdu in hdul:  # fixed comments: cfitsio stamps wall-clock time into them
+                    hdu.add_datasum(when="data unit checksum")
+                    hdu.add_checksum(when="HDU checksum", override_datasum=True)
+            os.replace(tmp_catalog_file, output_catalog_file)
+        finally:
+            if os.path.exists(tmp_catalog_file):
+                os.remove(tmp_catalog_file)
         self.logger.info(f"Photometry catalog is written in {os.path.basename(output_catalog_file)}")
 
         return

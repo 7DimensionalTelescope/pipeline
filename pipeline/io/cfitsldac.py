@@ -73,7 +73,10 @@ def header_to_cards80_bytes(header: fits.Header) -> bytes:
 def table_to_fits_bintable_bytes(tbl) -> bytes:
     # Accept either astropy.table.Table or already a BinTableHDU/FITS_rec
     if isinstance(tbl, Table):
-        hdu = fits.BinTableHDU(data=tbl.as_array())
+        # astropy's own writer already emits Primary+BINTABLE, keeping units, masks and descriptions
+        buf = BytesIO()
+        tbl.write(buf, format="fits")
+        return buf.getvalue()
     elif isinstance(tbl, fits.BinTableHDU):
         hdu = tbl
     elif isinstance(tbl, fits.FITS_rec):

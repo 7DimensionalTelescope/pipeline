@@ -24,6 +24,7 @@ from ..services.database.query import RawImageQuery
 from ..services.version_check import RuntimeVersionMixin
 
 from .utils import select_sources
+from ..io.ldac import read_catalog
 
 
 class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
@@ -282,8 +283,8 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.ds9_file = swap_ext(self.subt_image_file, "ssf.reg")
 
     def create_substamps(self, ds9_region=True):
-        sci_source_table = Table.read(self.sci_source_table_file)
-        ref_source_table = Table.read(self.ref_source_table_file)
+        sci_source_table = read_catalog(self.sci_source_table_file)
+        ref_source_table = read_catalog(self.ref_source_table_file)
         # ref_source_table = Table.read(self.ref_source_table_file, format="ascii")
 
         # Select substamp sources

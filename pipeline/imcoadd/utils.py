@@ -7,6 +7,7 @@ from astropy.wcs import WCS
 from ..const.environ import REF_DIR
 
 from .header_set import InputHeaderSet
+from ..io.ldac import read_catalog
 
 
 def extract_date_and_time(date_obs_str, round_seconds=False):
@@ -232,7 +233,7 @@ def source_ellipses_on_frame(catalog, source_header, target_header, logger=None)
     from astropy.wcs import WCS
 
     try:
-        cat = catalog if isinstance(catalog, Table) else Table.read(catalog)
+        cat = catalog if isinstance(catalog, Table) else read_catalog(catalog)
     except Exception as e:
         if logger is not None:
             logger.debug(f"Cannot read {os.path.basename(str(catalog))} ({e})")
