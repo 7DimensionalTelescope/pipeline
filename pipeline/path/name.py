@@ -338,7 +338,7 @@ class NameHandler:
         else:
             if len(parts) == 2:
                 # preprocess is {date}_{unit}; a multi-epoch sciproc config is {obj}_{filter}
-                kind = "preprocess" if parts[0].isdigit() and len(parts[0]) == 8 else "science"
+                kind = "preprocess" if get_nightdate(parts[0]) else "science"
             elif len(parts) == 3:
                 kind = "science"
             else:

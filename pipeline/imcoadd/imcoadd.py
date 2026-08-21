@@ -436,6 +436,10 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         }
         if keep.all():
             return self.input_images
+        if not keep.any():
+            self.logger.error(f"Quality cuts {cuts} reject all {len(keep)} images",
+                              CoaddError.EmptyInputAfterSanityRejection)  # fmt: skip
+            raise CoaddError.EmptyInputAfterSanityRejection(f"Quality cuts {cuts} reject all {len(keep)} images")
 
         self.input_images = [f for f, ok in zip(self.input_images, keep) if ok]
         # written back in the operator grammar, so a rerun pins exactly what this run applied

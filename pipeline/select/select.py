@@ -783,10 +783,7 @@ def select_from_table(
             say("warning", "interactive selection needs a notebook; using the automatic cuts")
 
     keep = apply_cuts(table, cuts)
-    if not keep.any():
-        say("warning", f"Quality cuts {cuts} would reject everything; keeping all instead")
-        keep = np.ones(len(table), dtype=bool)
-    elif keep.sum() < min_keep:
+    if keep.sum() < min_keep and keep.any():
         # legal, but a coadd of one or two frames is rarely what was meant and nothing
         # downstream objects: the products simply end up named after those frames
         say(

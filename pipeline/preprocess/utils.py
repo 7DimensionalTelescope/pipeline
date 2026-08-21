@@ -64,6 +64,13 @@ from ..const.instrum_log import get_masterframe_walls
 #         observer.join()
 
 
+def _build_binning_template(template):
+    """Build a template with binning set to '*'."""
+    path = PathHandler(template)
+    setattr(path.name, "n_binning", "*")
+    return path.preprocess._masterframe
+
+
 def _build_lenient_template(template, dtype, ignore_binning=False):
     """Build a template with lenient keys set to '*' for the given dtype."""
     from ..const.observation import (
@@ -137,7 +144,7 @@ def tolerant_search(
         # Special routine for flat: ignore binning.
         if dtype == "flat":
             binning_flags = replace(flags, ignored_binning=True)
-            binning_template = _build_lenient_template(search_template, dtype, ignore_binning=True)
+            binning_template = _build_binning_template(search_template)
             searched = _search(binning_template, ignore_sanity=ignore_sanity, **kwargs)
             if searched:
                 _commit_flags(binning_flags)

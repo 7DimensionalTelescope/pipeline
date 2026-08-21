@@ -232,7 +232,8 @@ def strip_binning(binning_string):
     # pattern = r".*(\dx\d).*"
     # match = re.match(pattern, binning_string)
     # return int(match.group(1)[0])
-    return int(binning_string[0])
+    n = binning_string[0]
+    return int(n) if n.isdigit() else n
 
 
 def format_binning(n_binning: int | str):
@@ -276,7 +277,8 @@ def strip_gain(gain_string):
     # pattern = r".*(\dx\d).*"
     # match = re.match(pattern, binning_string)
     # return int(match.group(1)[0])
-    return int(gain_string[4:])
+    gain = gain_string[4:]
+    return int(gain) if gain.isdigit() else gain
 
 
 def format_gain(gain: int | str):
