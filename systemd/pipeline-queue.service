@@ -19,6 +19,8 @@ Environment=NUMEXPR_NUM_THREADS=1
 Environment=VECLIB_MAXIMUM_THREADS=1
 Environment=NUMBA_NUM_THREADS=8
 EnvironmentFile=/home/pipeline-stable/pipeline/.env
+# /run is root-owned: without this the daemon cannot create /run/queue and the socket wake listener disables itself.
+RuntimeDirectory=queue
 ExecStart=/home/pipeline-stable/.conda/envs/pipeline/bin/python3 /home/pipeline-stable/pipeline/pipeline/cli/queue_daemon
 Restart=always
 RestartSec=10
