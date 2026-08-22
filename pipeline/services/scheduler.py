@@ -933,12 +933,14 @@ class Scheduler:
         else:
             self._schedule["pid"][self._schedule["index"] == index] = pid
 
-    def claim_next_dispatch_task(self, server_name, config_types=None):
+    def claim_next_dispatch_task(self, server_name, config_types=None, input_type=None):
         """
         Claim one Ready task for a worker host.
 
         ``config_types``: restrict to these config_type values, for a worker that cannot run
         every kind of task (a GPU-less host must never claim preprocess or coadd work).
+        ``input_type``: relabel the claimed row, so both databases attribute it to this worker.
+        A ToO row keeps its own label: `is_too` and the ToO exclusivity gate both key off it.
 
         Marks the row Processing, sets ``dispatch`` to ``server_name``, and leaves
         ``pid`` at 0 until :meth:`set_dispatch_pid` is called.
@@ -975,10 +977,16 @@ class Scheduler:
 
                 task_index = index_row[0]
                 process_start = datetime.now().isoformat()
+                relabel = ", input_type = CASE WHEN LOWER(input_type) = 'too' THEN input_type ELSE ? END"
+                update_params = ["Processing", server_name, process_start, ""]
+                if input_type:
+                    update_params.append(input_type)
+                update_params += [task_index, "Ready"]
                 cursor.execute(
-                    f'UPDATE scheduler SET status = ?, dispatch = ?, pid = 0, process_start = ?, process_end = ? '
+                    f'UPDATE scheduler SET status = ?, dispatch = ?, pid = 0, process_start = ?, process_end = ?'
+                    f'{relabel if input_type else ""} '
                     f'WHERE "index" = ? AND status = ? AND {self._LOCAL_TASK_FILTER}',
-                    ("Processing", server_name, process_start, "", task_index, "Ready"),
+                    tuple(update_params),
                 )
                 if cursor.rowcount == 0:
                     conn.rollback()

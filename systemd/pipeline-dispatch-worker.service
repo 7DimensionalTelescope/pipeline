@@ -21,8 +21,9 @@ Environment=VECLIB_MAXIMUM_THREADS=1
 Environment=NUMBA_NUM_THREADS=8
 EnvironmentFile=@PIPELINE_ROOT@/.env
 Environment=DISPATCH_SERVER_NAME=@SERVER_NAME@
-# A host without a GPU must stay off preprocess and coadd: both import cupy at module import.
+# Narrow while a worker is new. No stage needs a GPU, so "any" is safe when you want it.
 Environment=DISPATCH_CONFIG_TYPES=@CONFIG_TYPES@
+Environment=DISPATCH_INPUT_TYPE=@INPUT_TYPE@
 Environment=DISPATCH_MAX_WORKERS=@MAX_WORKERS@
 Environment=DISPATCH_POLL_INTERVAL=5
 ExecStart=@PYTHON_BIN_DIR@/python3 @PIPELINE_ROOT@/pipeline/cli/dispatch_worker_daemon

@@ -14,7 +14,8 @@ Environment:
   PROTON_SSH_PORT         ssh port (default 45204)
   PROTON_SCHEDULER_RPC    path to cli/scheduler_rpc on proton
   DISPATCH_SERVER_NAME    worker name stored in the origin dispatch column (default: hostname)
-  DISPATCH_CONFIG_TYPES   comma-separated config_type whitelist, e.g. "science" for a GPU-less host
+  DISPATCH_CONFIG_TYPES   comma-separated config_type whitelist (default "science"; "any" for no limit)
+  DISPATCH_INPUT_TYPE     relabel each claimed row with this scheduler input_type (default: leave it alone)
   DISPATCH_MAX_WORKERS    parallel jobs (default 5)
   DISPATCH_POLL_INTERVAL  seconds between polls (default 5)
 """
@@ -45,6 +46,8 @@ from pipeline.services.scheduler import Scheduler
 
 DEFAULT_POLL_INTERVAL = 5.0
 DEFAULT_MAX_WORKERS = 5
+# Deliberately narrow while a worker is new; no stage needs a GPU, so widen when ready.
+DEFAULT_CONFIG_TYPES = "science"
 RPC_TIMEOUT = 60.0
 # Shutdown runs against TimeoutStopSec, so its RPCs get a much shorter leash than a live claim.
 SHUTDOWN_RPC_TIMEOUT = 10.0
@@ -80,8 +83,8 @@ class ProtonScheduler:
                 return response["result"]
         raise RuntimeError(f"scheduler_rpc {method}: no response (rc={proc.returncode}) {proc.stderr.strip()[:300]}")
 
-    def claim(self, server, config_types):
-        return self._call("claim", server=server, config_types=config_types)
+    def claim(self, server, config_types, input_type):
+        return self._call("claim", server=server, config_types=config_types, input_type=input_type)
 
     def set_pid(self, index, server, pid):
         return self._call("set_pid", index=index, server=server, pid=pid)
@@ -94,11 +97,12 @@ class ProtonScheduler:
 
 
 class DispatchWorker:
-    def __init__(self, scheduler, server_name, max_workers, config_types=None):
+    def __init__(self, scheduler, server_name, max_workers, config_types=None, input_type=None):
         self.scheduler = scheduler
         self.server_name = server_name
         self.max_workers = max_workers
         self.config_types = config_types
+        self.input_type = input_type
         self._stop = False
         self._rpc_down = False
         self._active: dict[int, dict] = {}  # pid -> {index, config, proc}
@@ -125,7 +129,7 @@ class DispatchWorker:
         if len(self._active) >= self.max_workers:
             return False
 
-        task = self.scheduler.claim(self.server_name, self.config_types)
+        task = self.scheduler.claim(self.server_name, self.config_types, self.input_type)
         if task is None:
             return False
 
@@ -154,10 +158,11 @@ class DispatchWorker:
 
     def run_forever(self, poll_interval):
         logger.info(
-            "Dispatch worker started (server=%s, max_workers=%d, config_types=%s)",
+            "Dispatch worker started (server=%s, max_workers=%d, config_types=%s, input_type=%s)",
             self.server_name,
             self.max_workers,
             self.config_types or "any",
+            self.input_type or "(unchanged)",
         )
         while not self._stop:
             try:
@@ -231,7 +236,9 @@ def parse_args():
         default=os.environ.get("PROTON_SCHEDULER_RPC", "/home/pipeline-stable/pipeline/pipeline/cli/scheduler_rpc"),
     )
     parser.add_argument("--server-name", default=os.environ.get("DISPATCH_SERVER_NAME", socket.gethostname()))
-    parser.add_argument("--config-types", default=os.environ.get("DISPATCH_CONFIG_TYPES", ""))
+    parser.add_argument("--input-type", default=os.environ.get("DISPATCH_INPUT_TYPE", "") or None,
+                        help="Relabel each claimed row with this scheduler input_type")
+    parser.add_argument("--config-types", default=os.environ.get("DISPATCH_CONFIG_TYPES", DEFAULT_CONFIG_TYPES))
     parser.add_argument(
         "--max-workers", type=int, default=int(os.environ.get("DISPATCH_MAX_WORKERS", DEFAULT_MAX_WORKERS))
     )
@@ -248,14 +255,16 @@ def main():
 
     scheduler = ProtonScheduler(args.ssh, args.ssh_port, args.rpc_path)
     config_types = [t.strip() for t in args.config_types.split(",") if t.strip()] or None
+    if config_types == ["any"]:
+        config_types = None
 
     if args.check:
         # A claim of a config_type nothing uses proves the whole path without taking work.
-        scheduler.claim(args.server_name, ["__connection_check__"])
+        scheduler.claim(args.server_name, ["__connection_check__"], None)
         print(f"OK: scheduler_rpc reachable on {args.ssh}")
         return
 
-    worker = DispatchWorker(scheduler, args.server_name, args.max_workers, config_types)
+    worker = DispatchWorker(scheduler, args.server_name, args.max_workers, config_types, args.input_type)
     signal.signal(signal.SIGTERM, worker.stop)
     signal.signal(signal.SIGINT, worker.stop)
     worker.run_forever(args.poll_interval)

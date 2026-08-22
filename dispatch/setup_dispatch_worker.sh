@@ -16,9 +16,10 @@ PIPELINE_ROOT="${PIPELINE_ROOT:-$HOME/pipeline}"
 PYTHON_BIN_DIR="${PYTHON_BIN_DIR:-$(dirname "$(command -v python3)")}"
 WORKER_USER="${WORKER_USER:-$(id -un)}"
 SERVER_NAME="${SERVER_NAME:-$(hostname -s)}"
-MAX_WORKERS="${MAX_WORKERS:-5}"
-# Default to CPU-only stages; set CONFIG_TYPES=science,preprocess on a host with a working GPU.
+MAX_WORKERS="${MAX_WORKERS:-6}"
+# Narrow while a worker is new; no stage needs a GPU, so "any" is safe when you want it.
 CONFIG_TYPES="${CONFIG_TYPES:-science}"
+INPUT_TYPE="${INPUT_TYPE:-}"                                # relabels each claimed row, e.g. single-reduction-balmer
 
 NFSOPT="rw,noatime,nodiratime,vers=4.1,rsize=1048576,wsize=1048576,hard,proto=tcp,timeo=600,_netdev 0 0"
 UNIT_TEMPLATE="$PIPELINE_ROOT/systemd/pipeline-dispatch-worker.service"
@@ -59,7 +60,7 @@ echo "  OK: ssh $MAIN_SSH"
 echo "=== 4. Pipeline env ==="
 for kv in "PROTON_SSH=${MAIN_SSH}" "PROTON_SSH_PORT=${MAIN_SSH_PORT}" \
           "PROTON_SCHEDULER_RPC=${MAIN_SCHEDULER_RPC}" "DISPATCH_SERVER_NAME=${SERVER_NAME}" \
-          "DISPATCH_CONFIG_TYPES=${CONFIG_TYPES}"; do
+          "DISPATCH_CONFIG_TYPES=${CONFIG_TYPES}" "DISPATCH_INPUT_TYPE=${INPUT_TYPE}"; do
   grep -q "^${kv%%=*}=" "$PIPELINE_ROOT/.env" 2>/dev/null || echo "$kv" >> "$PIPELINE_ROOT/.env"
 done
 grep -q "^DB_BACKEND=" "$PIPELINE_ROOT/.env" 2>/dev/null \
@@ -81,6 +82,7 @@ sed -e "s|@USER@|${WORKER_USER}|g" \
     -e "s|@PYTHON_BIN_DIR@|${PYTHON_BIN_DIR}|g" \
     -e "s|@SERVER_NAME@|${SERVER_NAME}|g" \
     -e "s|@CONFIG_TYPES@|${CONFIG_TYPES}|g" \
+    -e "s|@INPUT_TYPE@|${INPUT_TYPE}|g" \
     -e "s|@MAX_WORKERS@|${MAX_WORKERS}|g" \
     "$UNIT_TEMPLATE" | sudo tee /etc/systemd/system/pipeline-dispatch-worker.service >/dev/null
 sudo systemctl daemon-reload

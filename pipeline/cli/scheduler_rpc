@@ -21,7 +21,9 @@ RESPONSE_TAG = "__SCHEDULER_RPC__"
 
 def _dispatch(scheduler, method, args):
     if method == "claim":
-        return scheduler.claim_next_dispatch_task(args["server"], config_types=args.get("config_types"))
+        return scheduler.claim_next_dispatch_task(
+            args["server"], config_types=args.get("config_types"), input_type=args.get("input_type")
+        )
     if method == "set_pid":
         return scheduler.set_dispatch_pid(args["index"], args["server"], args["pid"])
     if method == "release":
