@@ -1,0 +1,179 @@
+#!/home/pipeline-stable/.conda/envs/pipeline/bin/python
+"""
+Simple dispatch pipeline worker.
+
+One process on the worker host:
+  claim from the origin host -> run preprocess/data_reduction -> mark_done on the origin host
+
+No local scheduler DB. No queue_daemon. No bridge state file.
+
+Environment:
+  ORIGIN_SCHEDULER_DB_PATH   origin scheduler DB (required)
+  DISPATCH_SERVER_NAME       worker name stored in the origin dispatch column (default: hostname)
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import signal
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+pipeline_dir = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(pipeline_dir))
+
+from pipeline.const import FAILURE_RETURN_CODE, SUCCESS_RETURN_CODE
+from pipeline.services.scheduler import Scheduler
+
+DEFAULT_POLL_INTERVAL = 5.0
+DEFAULT_MAX_WORKERS = 5
+
+logger = logging.getLogger("pipeline.dispatch_worker")
+
+
+class DispatchWorker:
+    def __init__(self, origin_db: str, server_name: str, max_workers: int):
+        self.origin_db = origin_db
+        self.server_name = server_name
+        self.max_workers = max_workers
+        self._stop = False
+        self._active: dict[int, dict] = {}  # pid -> {origin_index, config, proc}
+
+    def _scheduler(self) -> Scheduler:
+        return Scheduler(use_system_queue=True, db_path=self.origin_db)
+
+    def _reap_finished(self) -> None:
+        scheduler = self._scheduler()
+        for pid in list(self._active):
+            entry = self._active[pid]
+            proc = entry["proc"]
+            rc = proc.poll()
+            if rc is None:
+                continue
+
+            return_code = SUCCESS_RETURN_CODE if rc == 0 else FAILURE_RETURN_CODE
+            scheduler.mark_done(entry["origin_index"], return_code=return_code)
+            logger.info(
+                "Finished origin index %s (%s) rc=%s",
+                entry["origin_index"],
+                os.path.basename(entry["config"]),
+                rc,
+            )
+            del self._active[pid]
+
+    def _try_start_one(self) -> bool:
+        if len(self._active) >= self.max_workers:
+            return False
+
+        scheduler = self._scheduler()
+        task = scheduler.claim_next_dispatch_task(self.server_name)
+        if task is None:
+            return False
+
+        origin_index = task["index"]
+        try:
+            cmd = scheduler._generate_command(origin_index, task["kwargs"])
+            proc = subprocess.Popen(cmd)
+        except Exception:
+            scheduler.release_dispatch_task(origin_index, self.server_name)
+            raise
+
+        scheduler.set_dispatch_pid(origin_index, self.server_name, proc.pid)
+        self._active[proc.pid] = {
+            "origin_index": origin_index,
+            "config": task["config"],
+            "proc": proc,
+        }
+        logger.info(
+            "Started origin index %s pid=%s (%s)",
+            origin_index,
+            proc.pid,
+            os.path.basename(task["config"]),
+        )
+        return True
+
+    def run_once(self) -> dict:
+        self._reap_finished()
+        started = self._try_start_one()
+        return {"active": len(self._active), "max_workers": self.max_workers, "started": started}
+
+    def run_forever(self, poll_interval: float) -> None:
+        logger.info(
+            "Dispatch worker started (origin=%s, server=%s, max_workers=%d)",
+            self.origin_db,
+            self.server_name,
+            self.max_workers,
+        )
+        while not self._stop:
+            try:
+                self.run_once()
+            except Exception:
+                logger.exception("Worker iteration failed")
+            time.sleep(poll_interval)
+        logger.info("Dispatch worker stopped")
+
+    def stop(self, *_args) -> None:
+        self._stop = True
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Simple dispatch pipeline worker (claim and run on the origin scheduler DB)")
+    parser.add_argument(
+        "--origin-db",
+        default=os.environ.get("ORIGIN_SCHEDULER_DB_PATH"),
+        help="Proton scheduler DB (default: ORIGIN_SCHEDULER_DB_PATH)",
+    )
+    parser.add_argument(
+        "--server-name",
+        default=os.environ.get("DISPATCH_SERVER_NAME", socket.gethostname()),
+        help="Name stored in the origin dispatch column",
+    )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=int(os.environ.get("DISPATCH_MAX_WORKERS", DEFAULT_MAX_WORKERS)),
+        help=f"Parallel jobs (default: {DEFAULT_MAX_WORKERS})",
+    )
+    parser.add_argument(
+        "--poll-interval",
+        type=float,
+        default=float(os.environ.get("DISPATCH_POLL_INTERVAL", DEFAULT_POLL_INTERVAL)),
+        help=f"Seconds between polls (default: {DEFAULT_POLL_INTERVAL})",
+    )
+    parser.add_argument("--once", action="store_true", help="Run one iteration and exit")
+    return parser.parse_args()
+
+
+def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+    args = parse_args()
+    if not args.origin_db:
+        print("ERROR: set --origin-db or ORIGIN_SCHEDULER_DB_PATH", file=sys.stderr)
+        sys.exit(1)
+    if not os.path.exists(args.origin_db):
+        print(f"ERROR: origin DB not found: {args.origin_db}", file=sys.stderr)
+        sys.exit(1)
+
+    worker = DispatchWorker(args.origin_db, args.server_name, args.max_workers)
+    signal.signal(signal.SIGTERM, worker.stop)
+    signal.signal(signal.SIGINT, worker.stop)
+
+    if args.once:
+        import json
+
+        print(json.dumps(worker.run_once(), indent=2))
+        return
+
+    worker.run_forever(args.poll_interval)
+
+
+if __name__ == "__main__":
+    main()
