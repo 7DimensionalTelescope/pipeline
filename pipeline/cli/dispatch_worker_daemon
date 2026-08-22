@@ -10,7 +10,7 @@ opens the scheduler sqlite: WAL's index is coherent only within one host, and op
 over NFS hands the same task to two hosts (measured).
 
 Environment:
-  PROTON_SSH              user@host for the origin (default pipeline@147.46.46.188)
+  PROTON_SSH              user@host for the origin (default pipeline-stable@<MAIN_HOST_ADDRESS>)
   PROTON_SSH_PORT         ssh port (default 45204)
   PROTON_SCHEDULER_RPC    path to cli/scheduler_rpc on proton
   DISPATCH_SERVER_NAME    worker name stored in the origin dispatch column (default: hostname)
@@ -35,7 +35,12 @@ from pathlib import Path
 pipeline_dir = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(pipeline_dir))
 
-from pipeline.const import FAILURE_RETURN_CODE, SUCCESS_RETURN_CODE, EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE
+from pipeline.const import (
+    FAILURE_RETURN_CODE,
+    SUCCESS_RETURN_CODE,
+    EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE,
+    MAIN_HOST_ADDRESS,
+)
 from pipeline.services.scheduler import Scheduler
 
 DEFAULT_POLL_INTERVAL = 5.0
@@ -219,7 +224,7 @@ class DispatchWorker:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Dispatch pipeline worker (claims from proton over ssh)")
-    parser.add_argument("--ssh", default=os.environ.get("PROTON_SSH", "pipeline@147.46.46.188"))
+    parser.add_argument("--ssh", default=os.environ.get("PROTON_SSH", f"pipeline-stable@{MAIN_HOST_ADDRESS}"))
     parser.add_argument("--ssh-port", default=os.environ.get("PROTON_SSH_PORT", "45204"))
     parser.add_argument(
         "--rpc-path",
@@ -227,8 +232,12 @@ def parse_args():
     )
     parser.add_argument("--server-name", default=os.environ.get("DISPATCH_SERVER_NAME", socket.gethostname()))
     parser.add_argument("--config-types", default=os.environ.get("DISPATCH_CONFIG_TYPES", ""))
-    parser.add_argument("--max-workers", type=int, default=int(os.environ.get("DISPATCH_MAX_WORKERS", DEFAULT_MAX_WORKERS)))
-    parser.add_argument("--poll-interval", type=float, default=float(os.environ.get("DISPATCH_POLL_INTERVAL", DEFAULT_POLL_INTERVAL)))
+    parser.add_argument(
+        "--max-workers", type=int, default=int(os.environ.get("DISPATCH_MAX_WORKERS", DEFAULT_MAX_WORKERS))
+    )
+    parser.add_argument(
+        "--poll-interval", type=float, default=float(os.environ.get("DISPATCH_POLL_INTERVAL", DEFAULT_POLL_INTERVAL))
+    )
     parser.add_argument("--check", action="store_true", help="Verify the proton connection and exit")
     return parser.parse_args()
 

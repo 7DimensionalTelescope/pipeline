@@ -8,8 +8,8 @@
 
 set -euo pipefail
 
-MAIN_SSH="${MAIN_SSH:-pipeline@147.46.46.188}"       # the host running the scheduler + queue daemons
-MAIN_SSH_PORT="${MAIN_SSH_PORT:-45204}"              # its sshd is not bound to the 10.1.1.x interface
+MAIN_SSH="${MAIN_SSH:-pipeline-stable@proton.snu.ac.kr}"   # the host running the scheduler + queue daemons
+MAIN_SSH_PORT="${MAIN_SSH_PORT:-45204}"                    # its sshd binds the public interface only
 MAIN_SCHEDULER_RPC="${MAIN_SCHEDULER_RPC:-/home/pipeline-stable/pipeline/pipeline/cli/scheduler_rpc}"
 LYMAN_IP="${LYMAN_IP:-20.20.20.11}"                  # NFS server for /lyman/data1 and /lyman/data2
 PIPELINE_ROOT="${PIPELINE_ROOT:-$HOME/pipeline}"
@@ -40,6 +40,15 @@ sudo install -d -m 1777 /tmp/pipeline
 
 echo "=== 3. ssh to the main host (key-based, no password) ==="
 test -f ~/.ssh/id_ed25519 || ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519
+# The daemon connects with BatchMode=yes, which never prompts, so the host key must already be
+# known. Accept it by connecting once by hand 
+MAIN_HOSTNAME="${MAIN_SSH#*@}"
+if ! ssh-keygen -F "[${MAIN_HOSTNAME}]:${MAIN_SSH_PORT}" >/dev/null 2>&1; then
+  echo "  ${MAIN_HOSTNAME} host key is unknown. Connect once by hand and accept it after checking"
+  echo "  the fingerprint against 'ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub' on that host:"
+  echo "    ssh -p ${MAIN_SSH_PORT} ${MAIN_SSH}"
+  exit 1
+fi
 if ! ssh -p "$MAIN_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=10 "$MAIN_SSH" true 2>/dev/null; then
   echo "  Authorize this key on ${MAIN_SSH}, then re-run:"
   echo "    $(cat ~/.ssh/id_ed25519.pub)"
