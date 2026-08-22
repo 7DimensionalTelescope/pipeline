@@ -215,6 +215,7 @@ class Blueprint:
                 ("status", object),  # Ready, Pending, Processing, Completed
                 ("dependent_idx", list),
                 ("pid", int),  # Process ID
+                ("dispatch", object),  # worker host running the task, empty for the local host
                 ("kwargs", object),  # overwrite, ...
                 ("process_start", object),  # ISO format timestamp when processing started
                 ("process_end", object),  # ISO format timestamp when processing ended
@@ -273,6 +274,7 @@ class Blueprint:
                     "Ready",
                     [],
                     0,
+                    "",
                     scheduler_kwargs,
                     "",
                     "",
@@ -319,6 +321,7 @@ class Blueprint:
                         "Pending",
                         [],
                         0,
+                        "",
                         scheduler_kwargs,
                         "",
                         "",
