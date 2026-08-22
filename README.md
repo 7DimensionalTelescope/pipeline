@@ -28,6 +28,20 @@ conda env create -f environment.yml
 
 This command will create a new environment named `pipeline` with all required packages listed in `environment.yml`. Activate this environment by running `conda activate pipeline`. Additionally, you will need to install external packages from [astromatic.net](https://www.astromatic.net/software/): `MissFITs`, `SCAMP`, `SWarp`, `SExtractor`, etc.
 
+Then install the package itself and put the command-line scripts on your `PATH`:
+
+```bash
+pip install -e .                                          # so `import pipeline` works from any directory
+echo 'export PATH="'"$(pwd)"'/pipeline/cli:$PATH"' >> ~/.bashrc
+```
+
+The editable install is what lets `pipeline/cli/*` import the package: Python puts the *script's*
+directory on `sys.path`, not your working directory. The `PATH` line is for interactive use only —
+the daemons build absolute paths from `SCRIPTS_DIR` and do not depend on it.
+
+If the external binaries are installed under different names (`SWarp` rather than `swarp`, say), set
+`SWARP_COMMAND` / `SEXTRACTOR_COMMAND` in `.env`; they take precedence over `ref/deployment.yml`.
+
 ### Host tuning
 Post-install steps for a production host. Rationale and benchmarks are in `.claude/memory/performance-tuning.md`.
 

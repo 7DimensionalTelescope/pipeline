@@ -65,12 +65,17 @@ done
 grep -q "^DB_BACKEND=" "$PIPELINE_ROOT/.env" 2>/dev/null \
   || echo "  Postgres runs on the main host: add DB_BACKEND=remote and REMOTE_DBHOST to .env."
 
-echo "=== 5. External binaries ==="
+echo "=== 5. Interactive shell: cli on PATH ==="
+CLI_LINE="export PATH=\"${PIPELINE_ROOT}/pipeline/cli:\$PATH\""
+grep -qF "${PIPELINE_ROOT}/pipeline/cli" ~/.bashrc 2>/dev/null || echo "$CLI_LINE" >> ~/.bashrc
+echo "  ${PIPELINE_ROOT}/pipeline/cli on PATH in ~/.bashrc (daemons use absolute paths and do not need it)"
+
+echo "=== 6. External binaries ==="
 for bin in source-extractor swarp scamp; do
   command -v "$bin" >/dev/null || echo "  MISSING: $bin (or set SEXTRACTOR_COMMAND / SWARP_COMMAND in .env)"
 done
 
-echo "=== 6. systemd unit, rendered from the template for this host ==="
+echo "=== 7. systemd unit, rendered from the template for this host ==="
 sed -e "s|@USER@|${WORKER_USER}|g" \
     -e "s|@PIPELINE_ROOT@|${PIPELINE_ROOT}|g" \
     -e "s|@PYTHON_BIN_DIR@|${PYTHON_BIN_DIR}|g" \
