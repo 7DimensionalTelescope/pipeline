@@ -13,7 +13,8 @@ emits the work in four ordered batches:
 
 Read-only by default. --submit queues ONE batch; without --execute, phases 1-2 queue a
 -dry_run sizing pass (a lower bound). Wait for each batch to drain before the next; if a
-task fails, resubmit through this script (rerun_failed_tasks wipes the sweep flags).
+task fails, resubmit through this script (it checks the drain discipline; since
+v1.10.44 rerun_failed_tasks keeps the sweep flags, but skips that check).
 
 Usage:
     python run_masterframe_cascade.py flat_m675_7DT02_20260704_1x1_gain2750_C31166
@@ -94,7 +95,8 @@ def main():
             "    --phase 3 --execute       rerun the nightly science configs with -overwrite\n"
             "    --phase 4 --execute       rerun the multi-epoch science configs with -overwrite\n"
             "  Wait for each batch to drain before submitting the next. If a task fails,\n"
-            "  resubmit through this script -- rerun_failed_tasks would wipe the sweep flags."
+            "  resubmit through this script -- it checks the drain discipline, which\n"
+            "  rerun_failed_tasks (kwargs-preserving since v1.10.44) does not."
         )
         sys.exit(2)
 

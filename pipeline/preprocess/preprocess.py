@@ -155,6 +155,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         # designation dispatch is resolved, logged and validated before anything runs
         self._dispatch_designated_masterframes()
 
+        self._expected_outputs = self._collect_expected_outputs()
+        self.logger.info(f"This run is expected to produce {len(self._expected_outputs)} output file(s)")
+
         # Create pipeline record in database
         if self.is_connected:
             self.logger.debug(f"is connected: creating pipeline record in database")
@@ -213,12 +216,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 )
 
             threads_for_making_plots = []
+            failed_groups = []
             for i in range(self._n_groups):
-                # Calculate progress percentage
-                if not dry_run:
-                    progress = int((i / self._n_groups) * 100)
-                    self.update_progress(progress)
-
                 self.logger.debug("\n" + "#" * 100 + f"\n{' '*30}Start processing group {i+1} / {self._n_groups}\n" + "#" * 100)  # fmt: skip
                 self.logger.debug(f"[Group {i+1}] [filter: exptime] {PathHandler.get_group_info(self.raw_groups[i])}")
 
@@ -249,9 +248,16 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                     )
                     self.logger.debug(traceback.format_exc())
 
+                    # existence alone cannot see this on reruns: the previous run's files still pass the check
+                    failed_groups.append(i + 1)
                     self.logger.info(f"[Group {i+1}] Skipping to next group")
 
                 finally:
+                    # in `finally` so a group that raised still contributes what it owed
+                    self._check_group_outputs(i)
+                    if not dry_run:
+                        self.update_progress(self._output_progress)
+
                     if i < self._n_groups - 1:
                         self.proceed_to_next_group()
 
@@ -259,11 +265,22 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 for t in threads_for_making_plots:
                     t.join()
 
-            # Update pipeline status to completed
+            # Final status: completed only if every expected output exists and no group raised
+            missing = [f for f, exists in self._expected_outputs.items() if not exists]
+            problems = []
+            if missing:
+                problems.append(f"{len(missing)} of {len(self._expected_outputs)} expected output file(s) missing")
+            if failed_groups:
+                problems.append(f"group(s) {', '.join(map(str, failed_groups))} raised an error")
             if not dry_run:
-                self.update_progress(100, "completed")
+                self.update_progress(self._output_progress, "failed" if problems else "completed")
                 self.sync_config_dependencies()
 
+            if problems and not dry_run:
+                if missing:
+                    self.logger.debug(f"Missing expected outputs:\n{pp.pformat(missing)}")
+                self.logger.warning(f"Preprocessing ended incomplete in {time_diff_in_seconds(st)} seconds")
+                raise PreprocessError("; ".join(problems))
             self.logger.info(f"Preprocessing completed in {time_diff_in_seconds(st)} seconds")
         except Exception as e:
             self.logger.error(f"Error during preprocessing: {str(e)}", e, exc_info=True)
@@ -304,8 +321,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             dark_out = self._get_raw_group("dark_output", group_index)
             return dark_out.replace("dark", "bpmask")
 
-        # Strip the whole suffix rather than taking name[:4]: "flatdark_output"[:4] is "flat",
-        # which silently resolved the flatdark to the master FLAT path.
+        # Strip the whole suffix rather than taking name[:4]: "flatdark_output"[:4] is "flat", which silently
+        # resolved the flatdark to the master FLAT path.
         if name.endswith("_input"):
             key = name[: -len("_input")]
             if key in self._key_to_index:
@@ -437,11 +454,40 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         self.logger.info(f"[Group {self._current_group+1}] Generation/Loading of masterframes completed in {time_diff_in_seconds(st)} seconds")  # fmt: skip
 
         # Update pipeline progress after masterframe processing
-        if self.has_process_status_id and not dry_run:
-            masterframe_progress = int(
-                (self._current_group + 1) / self._n_groups * 50
-            )  # Masterframes are 50% of total work
-            self.update_progress(masterframe_progress)
+        if not dry_run:
+            self._check_group_outputs(self._current_group)
+            self.update_progress(self._output_progress)
+
+    def _collect_expected_outputs(self) -> dict[str, bool]:
+        """Every file this run commits to produce, judged from the input pool alone: {path: seen on disk}."""
+        expected = {}
+        for i, (raws, masters, sci_dict) in enumerate(self._original_raw_groups):
+            for dtype in self.calib_types:
+                idx = self._key_to_index[dtype]
+                # a master is owed only where the group holds its raw calibs and no designation preempts generation
+                if raws[idx] and masters[idx] and (i, dtype) not in self._designation_dispatch:
+                    expected[masters[idx]] = False
+            if not self.master_frame_only:
+                for _, processed in sci_dict.values():
+                    expected.update(dict.fromkeys(processed, False))
+        return expected
+
+    def _check_group_outputs(self, group_index):
+        """Mark this group's share of the expected outputs off against the disk."""
+        # read _original_raw_groups: _fetch_masterframe and designation adoption rewrite raw_groups[...][1] in place
+        raws, masters, sci_dict = self._original_raw_groups[group_index]
+        paths = [masters[self._key_to_index[d]] for d in self.calib_types if raws[self._key_to_index[d]]]
+        paths += [f for _, processed in sci_dict.values() for f in processed]
+        for path in paths:
+            if path in self._expected_outputs:
+                self._expected_outputs[path] = os.path.exists(path)
+
+    @property
+    def _output_progress(self) -> int:
+        """Percent of expected output files existing on disk."""
+        if not self._expected_outputs:
+            return 100
+        return int(100 * sum(self._expected_outputs.values()) / len(self._expected_outputs))
 
     def _generate_masterframe(self, dtype, device_id, dry_run: bool = False):
         """Generate & Save masterframe and sigma image"""
@@ -653,6 +699,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 )
             else:
                 existing_mframe_file = self._generated_binned_master_frame(existing_mframe_file, template, dtype=dtype)
+        elif not dry_run:
+            self._reregister_adopted_binned_master(existing_mframe_file)
 
         existing_header_sanity = fits.getval(existing_mframe_file, "SANITY")
         self.logger.info(
@@ -753,6 +801,10 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         header["YBINNING"] = n_binning
         header["NAXIS1"] = binned_mflat.shape[1]
         header["NAXIS2"] = binned_mflat.shape[0]
+        # true lineage is the source flat alone; its own ingredients are reached through its image_qa row
+        for card in [k for k in header if k.startswith("IMCMB") or k.startswith("IMCID")]:
+            del header[card]
+        header = prep_utils.write_IMCMB_to_header(header, [existing_mframe_file])
         # header["SANITY"] = False
         header = prep_utils.add_image_id(header)  # fresh id: this is a new file, not the source master
         header = set_inspcomm_in_header(header, "Auto-generated binned master frame")
@@ -763,7 +815,23 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             f"[Group {self._current_group+1}] Generated binned master frame for binning {n_binning}x{n_binning} {dtype} at {os.path.basename(existing_mframe_file)}"
         )
 
+        # a new product of this run: register it even though the group holds no raw flats
+        qa_id = self.create_image_qa_data(binned_mflat_path, self.process_status_id)
+        self.create_image_qa_dependencies(binned_mflat_path, qa_id)
+
         return binned_mflat_path
+
+    def _reregister_adopted_binned_master(self, path):
+        """A re-adopted auto-binned copy self-heals its image_qa row and edges (upsert by name)."""
+        if not self.is_connected:
+            return
+        try:
+            marker = fits.getval(path, "INSPCOMM")
+        except KeyError:
+            return
+        if marker == "Auto-generated binned master frame":
+            qa_id = self.create_image_qa_data(path, self.process_status_id)
+            self.create_image_qa_dependencies(path, qa_id)
 
     def data_reduction(self, device_id=None, use_gpu: bool = True, dry_run: bool = False):
         self._use_gpu = all([use_gpu, self._use_gpu])
@@ -848,11 +916,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         )
 
         # Update pipeline progress after data reduction
-        if self.has_process_status_id:
-            data_reduction_progress = 50 + int(
-                (self._current_group + 1) / self._n_groups * 50
-            )  # Data reduction is 50-100% of total work
-            self.update_progress(data_reduction_progress)
+        self._check_group_outputs(self._current_group)
+        self.update_progress(self._output_progress)
 
         # for raw_file, processed_file in zip(self.sci_input, self.sci_output):
         #     header = fits.getheader(raw_file)

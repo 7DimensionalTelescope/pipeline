@@ -95,8 +95,7 @@ def ingredient_change(
         if path is None:
             continue
         if was is None:
-            # used but unidentified: undetectable regeneration, and the sanity comparison
-            # would mistake the invisibility for a revival and churn forever
+            # used but unidentified: regeneration is invisible, and the sanity test would churn forever
             sanity_known = False
             continue
         image_id, sanity = ingredient_state(path, cache=cache)
@@ -262,8 +261,7 @@ class ReprocessMixin:
 
             dark_template = templates[self._key_to_index["dark"]]
             if dark_template and self._designated.get("dark"):
-                # flatdark role is exptime-free (the term is scaled); an explicit
-                # `flatdark:` pin outranks plain darks, which resolve by minimum exptime
+                # flatdark role is exptime-free; an explicit `flatdark:` pin outranks plain darks (min exptime)
                 target = NameHandler(dark_template)
                 candidates = [
                     (name.exptime, path, role)

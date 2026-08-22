@@ -204,8 +204,7 @@ def plan(seed_images, max_depth: int = 12) -> CascadePlan:
         ):
             science[name] = (config_file, nightdate, sanity)
 
-    # second source: only configs whose singles carry no dependency edges at all
-    # (partial-edge singles are a known blind spot -- see memory known-bugs.md)
+    # second source: configs whose singles carry no dependency edges at all (partial-edge: known-bugs.md)
     if out.preprocess_configs:
         for name, config_file, nightdate, sanity in free_query(
             "SELECT DISTINCT p.name, p.config_file, p.nightdate, p.sanity"
@@ -260,7 +259,8 @@ def submit(
     One drained batch per call: the scheduler dedupes on config path alone, so this refuses
     (RuntimeError) while any target config still has a Ready/Processing/Paused row, and
     replaces drained rows via overwrite_schedule (never signals a non-Processing task).
-    Resubmit failed cascade tasks through here, never rerun_failed_tasks (it wipes kwargs).
+    Resubmit failed cascade tasks through here rather than rerun_failed_tasks: kwargs
+    survive both since v1.10.44, but only this checks the drain discipline.
     dry_run=True (default) queues a write-nothing sizing pass -- a LOWER bound; phases 3-4
     have no sizing pass and raise on dry_run. Returns the Scheduler, or None if empty.
     """

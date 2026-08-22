@@ -753,20 +753,52 @@ class Scheduler:
 
             current_status, dependent_idx_json, config_type, config = row
             # If already marked as done, skip to prevent duplicate increments
-            if current_status == "Completed" or current_status == "Failed":
+            if current_status in ("Completed", "Failed", "Rejected"):
                 return
 
             dependent_indices = json.loads(dependent_idx_json) if dependent_idx_json else []
             process_end = datetime.now().isoformat()
 
+            # the WHERE's done-status guard is a compare-and-swap: one of two racing mark_done calls wins and promotes
+            done_guard = " AND status NOT IN (?, ?, ?)"
+            done_states = ("Completed", "Failed", "Rejected")
             if return_code==SUCCESS_RETURN_CODE:
 
                 cursor.execute(
-                    'UPDATE scheduler SET status = ?, pid = 0, process_end = ? WHERE "index" = ?',
-                    ("Completed", process_end, index),
+                    'UPDATE scheduler SET status = ?, pid = 0, process_end = ? WHERE "index" = ?' + done_guard,
+                    ("Completed", process_end, index, *done_states),
                 )
+            elif return_code==FAILURE_RETURN_CODE:
+
+                cursor.execute(
+                    'UPDATE scheduler SET status = ?, readiness = ?, is_ready = ?, pid = 0, '
+                    'process_end = ? WHERE "index" = ?' + done_guard,
+                    ("Failed", 0, 0, process_end, index, *done_states),
+                )
+            elif return_code==EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE:
+                process_end = datetime.now().isoformat()
+                cursor.execute(
+                    'UPDATE scheduler SET status = ?, pid = 0, process_end = ? WHERE "index" = ?' + done_guard,
+                    ("Rejected", process_end, index, *done_states),
+                )
+            else:
+                # The run never reported for itself: killed by a signal (systemd stop, OOM
+                # killer) or an exit code no stage produces. Orchestration, not science —
+                # fail it here, because leaving it Processing strands the row forever.
+                cursor.execute(
+                    'UPDATE scheduler SET status = ?, readiness = ?, is_ready = ?, pid = 0, '
+                    'process_end = ? WHERE "index" = ?' + done_guard,
+                    ("Failed", 0, 0, process_end, index, *done_states),
+                )
+                if cursor.rowcount:
+                    orchestration_note = self._orchestration_stop_reason(return_code)
+
+            # any outcome advances the still-Pending dependents; missing-input ones fail fast downstream
+            if cursor.rowcount:
                 for dep_idx in dependent_indices:
-                    cursor.execute('SELECT readiness FROM scheduler WHERE "index" = ?', (dep_idx,))
+                    cursor.execute(
+                        'SELECT readiness FROM scheduler WHERE "index" = ? AND status = ?', (dep_idx, "Pending")
+                    )
                     dep_row = cursor.fetchone()
                     if dep_row:
                         new_readiness = dep_row[0] + 1
@@ -776,34 +808,15 @@ class Scheduler:
 
                         if new_readiness == 100:
                             cursor.execute(
-                                'UPDATE scheduler SET readiness = ?, status = ?, is_ready = ? WHERE "index" = ?',
-                                (new_readiness, "Ready", 1, dep_idx),
+                                'UPDATE scheduler SET readiness = ?, status = ?, is_ready = ? '
+                                'WHERE "index" = ? AND status = ?',
+                                (new_readiness, "Ready", 1, dep_idx, "Pending"),
                             )
                         else:
                             cursor.execute(
-                                'UPDATE scheduler SET readiness = ? WHERE "index" = ?', (new_readiness, dep_idx)
+                                'UPDATE scheduler SET readiness = ? WHERE "index" = ? AND status = ?',
+                                (new_readiness, dep_idx, "Pending"),
                             )
-            elif return_code==FAILURE_RETURN_CODE:
-                
-                cursor.execute(
-                    'UPDATE scheduler SET status = ?, readiness = ?, is_ready = ?, pid = 0, process_end = ? WHERE "index" = ?',
-                    ("Failed", 0, 0, process_end, index),
-                )
-            elif return_code==EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE:
-                process_end = datetime.now().isoformat()
-                cursor.execute(
-                    'UPDATE scheduler SET status = ?, pid = 0, process_end = ? WHERE "index" = ?',
-                    ("Rejected", process_end, index),
-                )
-            else:
-                # The run never reported for itself: killed by a signal (systemd stop, OOM
-                # killer) or an exit code no stage produces. Orchestration, not science —
-                # fail it here, because leaving it Processing strands the row forever.
-                cursor.execute(
-                    'UPDATE scheduler SET status = ?, readiness = ?, is_ready = ?, pid = 0, process_end = ? WHERE "index" = ?',
-                    ("Failed", 0, 0, process_end, index),
-                )
-                orchestration_note = self._orchestration_stop_reason(return_code)
 
             conn.commit()
 
@@ -825,28 +838,19 @@ class Scheduler:
         if current_status == "Completed" or current_status == "Failed":
             return
 
+        # Get task info
+        config_type = row_dict["config_type"]
+        dependent_indices = row_dict["dependent_idx"]
+
+        if config_type == "preprocess":
+            self.processing_preprocess -= 1
+            if self.processing_preprocess < 0:
+                self.processing_preprocess = 0
+
         if return_code==SUCCESS_RETURN_CODE:
-            # Get task info
-            config_type = row_dict["config_type"]
-            dependent_indices = row_dict["dependent_idx"]
-
-            if config_type == "preprocess":
-                self.processing_preprocess -= 1
-                if self.processing_preprocess < 0:
-                    self.processing_preprocess = 0
-
             self._schedule["status"][mask] = "Completed"
             self._schedule["pid"][mask] = 0
             self._schedule["process_end"][mask] = datetime.now().isoformat()
-
-            for dep_idx in dependent_indices:
-                dep_mask = self._schedule["index"] == dep_idx
-                self._schedule["readiness"][dep_mask] += 1
-
-                if self._schedule["readiness"][dep_mask] >= 100:
-                    self._schedule["readiness"][dep_mask] = 100
-                    self._schedule["status"][dep_mask] = "Ready"
-                    self._schedule["is_ready"][dep_mask] = True
 
         else:
             # Check if this is a retry (priority is already 0)
@@ -862,6 +866,18 @@ class Scheduler:
                 EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE,
             ):
                 log_orchestration_stop(row_dict["config"], self._orchestration_stop_reason(return_code))
+
+        # any outcome advances the still-Pending dependents; missing-input ones fail fast downstream
+        for dep_idx in dependent_indices:
+            dep_mask = (self._schedule["index"] == dep_idx) & (self._schedule["status"] == "Pending")
+            if not dep_mask.any():
+                continue
+            self._schedule["readiness"][dep_mask] += 1
+
+            if self._schedule["readiness"][dep_mask] >= 100:
+                self._schedule["readiness"][dep_mask] = 100
+                self._schedule["status"][dep_mask] = "Ready"
+                self._schedule["is_ready"][dep_mask] = True
 
     def list_of_ready_tasks(self):
         if self.use_system_queue:
@@ -902,13 +918,13 @@ class Scheduler:
             int: Number of tasks that were updated
 
         Parameters:
-            overwrite (bool): If True, set kwargs to ['-overwrite'] so reruns overwrite existing outputs.
+            overwrite (bool): If True, add '-overwrite' to each row's kwargs so reruns overwrite
+                existing outputs; the row's other kwargs (e.g. a cascade sweep's
+                -master_frame_only -calib_types ...) are preserved either way.
             dates (str | Iterable[str] | None): If given, only rerun failed tasks whose config
                 path contains one of these date strings (e.g. "2025-04-30" or
                 ["2025-04-30", "2025-05-01"]). If None or empty, all failed tasks are rerun.
         """
-        kwargs = "['-overwrite']" if overwrite else "[]"
-
         if dates is None:
             date_list = []
         elif isinstance(dates, str):
@@ -921,27 +937,24 @@ class Scheduler:
                 cursor = conn.cursor()
                 if date_list:
                     like_clause = " OR ".join(["config LIKE ?"] * len(date_list))
-                    params = (
-                        "Ready", 0, 100, 1, "", "", "Reprocess", kwargs, "Failed",
-                        *(f"%{d}%" for d in date_list),
-                    )
                     cursor.execute(
-                        f"""UPDATE scheduler
-                           SET status = ?, priority = ?, readiness = ?, is_ready = ?, pid = 0,
-                               process_start = ?, process_end = ?, input_type = ?, kwargs = ?
-                           WHERE status = ? AND ({like_clause})""",
-                        params,
+                        f'SELECT "index", kwargs FROM scheduler WHERE status = ? AND ({like_clause})',
+                        ("Failed", *(f"%{d}%" for d in date_list)),
                     )
                 else:
+                    cursor.execute('SELECT "index", kwargs FROM scheduler WHERE status = ?', ("Failed",))
+                rows = cursor.fetchall()
+                for index, row_kwargs in rows:
+                    retry_kwargs = str(self._retry_kwargs(row_kwargs, overwrite))
                     cursor.execute(
                         """UPDATE scheduler
                            SET status = ?, priority = ?, readiness = ?, is_ready = ?, pid = 0,
                                process_start = ?, process_end = ?, input_type = ?, kwargs = ?
-                           WHERE status = ?""",
-                        ("Ready", 0, 100, 1, "", "", "Reprocess", kwargs, "Failed"),
+                           WHERE "index" = ?""",
+                        ("Ready", 0, 100, 1, "", "", "Reprocess", retry_kwargs, index),
                     )
                 conn.commit()
-                return cursor.rowcount
+                return len(rows)
         else:
             mask = self._schedule["status"] == "Failed"
             if date_list:
@@ -953,6 +966,8 @@ class Scheduler:
                 mask = mask & date_mask
             count = int(np.sum(mask))
             if count > 0:
+                for idx in np.where(mask)[0]:
+                    self._schedule["kwargs"][idx] = self._retry_kwargs(self._schedule["kwargs"][idx], overwrite)
                 self._schedule["status"][mask] = "Ready"
                 self._schedule["priority"][mask] = 1
                 self._schedule["readiness"][mask] = 100
@@ -961,8 +976,20 @@ class Scheduler:
                 self._schedule["process_start"][mask] = ""
                 self._schedule["process_end"][mask] = ""
                 self._schedule["input_type"][mask] = "Reprocess"
-                self._schedule["kwargs"][mask] = kwargs
             return count
+
+    @staticmethod
+    def _retry_kwargs(kwargs, overwrite):
+        """A failed row keeps its kwargs on retry; '-overwrite' only when requested."""
+        if isinstance(kwargs, str):
+            try:
+                kwargs = json.loads(kwargs.replace("'", '"'))
+            except (ValueError, TypeError):
+                kwargs = []
+        retry = [k for k in (kwargs or []) if k != "-overwrite"]
+        if overwrite:
+            retry.append("-overwrite")
+        return retry
 
     def clear_schedule(self, all=False):
         import signal
