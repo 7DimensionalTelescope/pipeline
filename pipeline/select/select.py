@@ -278,10 +278,10 @@ def metrics_from_image_qa(
     # concatenated into the SQL, which is also what keeps this free_query safe
     resolved = []
     for metric, candidates, direction in normalize_metrics(metrics, extra, default=IMAGE_QA_METRICS):
-        bad = [c for c in candidates if c not in known]
-        if bad:
-            raise ValueError(f"{metric!r}: not image_qa columns: {bad}")
-        resolved.append((metric, candidates[0], direction))
+        col = next((c.lower() for c in candidates if c.lower() in known), None)
+        if col is None:
+            raise ValueError(f"{metric!r}: no image_qa column among {list(candidates)}")
+        resolved.append((metric, col, direction))
 
     columns = ["image_name"] + [col for _, col, _ in resolved]
     clauses = [f"{col} = %s" for col in equals]  # names validated above; values bound
