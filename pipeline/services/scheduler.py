@@ -933,9 +933,12 @@ class Scheduler:
         else:
             self._schedule["pid"][self._schedule["index"] == index] = pid
 
-    def claim_next_dispatch_task(self, server_name):
+    def claim_next_dispatch_task(self, server_name, config_types=None):
         """
         Claim one Ready task for a worker host.
+
+        ``config_types``: restrict to these config_type values, for a worker that cannot run
+        every kind of task (a GPU-less host must never claim preprocess or coadd work).
 
         Marks the row Processing, sets ``dispatch`` to ``server_name``, and leaves
         ``pid`` at 0 until :meth:`set_dispatch_pid` is called.
@@ -958,6 +961,9 @@ class Scheduler:
                     f'SELECT "index" FROM scheduler WHERE status = ? AND {self._LOCAL_TASK_FILTER}'
                 )
                 params = ["Ready"]
+                if config_types:
+                    query += f" AND config_type IN ({','.join('?' for _ in config_types)})"
+                    params.extend(config_types)
                 query, params = self._append_ready_task_constraints(cursor, query, params)
                 query += f" {self._ORDER_BY} LIMIT 1"
 
@@ -1269,23 +1275,27 @@ class Scheduler:
             config_type = self._schedule["config_type"][mask][0]
             input_type = self._schedule["input_type"][mask][0]
 
+        return self.build_command(config, config_type, input_type, scheduler_kwargs)
+
+    @staticmethod
+    def build_command(config, config_type, input_type, scheduler_kwargs):
+        """Reduction command line for one row; SCRIPTS_DIR is the CALLING host's, so a worker builds its own."""
         is_too = str(input_type).lower() == "too" or "_ToO_" in config
 
         if config_type == "preprocess":
             cmd = [f"{SCRIPTS_DIR}/preprocess", "-config", config, "-make_plots"]
-            if is_too:
-                cmd.append("-is_too")
-            cmd.extend(scheduler_kwargs)
         elif config_type == "science":
             cmd = [f"{SCRIPTS_DIR}/data_reduction", "-config", config]
-            if is_too:
-                cmd.append("-is_too")
-            cmd.extend(scheduler_kwargs)
         elif config_type == "debug":
-            cmd = [f"{SCRIPTS_DIR}/debug", "-config", config]
+            return [f"{SCRIPTS_DIR}/debug", "-config", config]
         else:
             raise ValueError(f"Invalid systemd queue config_type: {config_type}")
 
+        if input_type:
+            cmd.extend(["-input_type", str(input_type)])
+        if is_too:
+            cmd.append("-is_too")
+        cmd.extend(scheduler_kwargs)
         return cmd
 
     def _get_table_from_db(self):

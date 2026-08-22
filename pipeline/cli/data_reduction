@@ -4,6 +4,7 @@ import sys
 import signal
 import argparse
 
+from pipeline.services.database.process_status import set_input_type
 from pipeline.run import run_scidata_reduction
 from pipeline.const.run import (
     DEFAULT_SCIDATA_PROCESSES,
@@ -38,7 +39,10 @@ if __name__ == "__main__":
     )
     parser.add_argument("-overwrite", action="store_true", help="Overwrite existing results")
     parser.add_argument("-is_too", action="store_true", help="Use TOO processing")
+    parser.add_argument("-input_type", type=str, help="Scheduler input_type recorded on the process_status row")
     args = parser.parse_args()
+
+    set_input_type(args.input_type)
 
     # if None, default behavior; if [], skips sciprocess
     if args.processes is None:

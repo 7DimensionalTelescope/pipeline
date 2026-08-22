@@ -4,6 +4,7 @@ import argparse
 import sys
 import signal
 
+from pipeline.services.database.process_status import set_input_type
 from pipeline.run import run_preprocess
 
 
@@ -30,6 +31,7 @@ if __name__ == "__main__":
         "--preprocess_kwargs", type=str, default=None, help="JSON dict of kwargs forwarded to Preprocess.__init__"
     )
     parser.add_argument("-is_too", action="store_true", help="Use TOO processing")
+    parser.add_argument("-input_type", type=str, help="Scheduler input_type recorded on the process_status row")
     parser.add_argument("-use_gpu", action="store_true", help="Use GPU processing")
     parser.add_argument(
         "-master_frame_only", action="store_true", help="Generate master frames only; skip science reduction"
@@ -44,6 +46,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("-dry_run", action="store_true", help="Trace execution and report the work; write nothing")
     args = parser.parse_args()
+
+    set_input_type(args.input_type)
 
     try:
         if args.device_id is None:

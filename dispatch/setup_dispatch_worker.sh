@@ -1,62 +1,78 @@
 #!/bin/bash
-# Set up a pipeline dispatch worker on a new host.
-# Run on the worker host as a user with sudo. Override any variable from the environment.
+# Set up a pipeline dispatch worker on any host. Run it ON that host, as the pipeline user.
+# Every variable below can be overridden from the environment.
+#
+# The worker never opens the main host's scheduler sqlite: every scheduler write runs THERE via
+# cli/scheduler_rpc over ssh (WAL's index is coherent only within one host, so opening it over NFS
+# hands the same task to two hosts). There is therefore no /var/db export and no mount of it.
 
 set -euo pipefail
 
-ORIGIN_IP="${ORIGIN_IP:-10.1.1.51}"          # host running the scheduler + trigger + queue daemons
-LYMAN_IP="${LYMAN_IP:-10.1.1.50}"            # NFS server for /lyman/data1 and /lyman/data2
-BALMER_IP="${BALMER_IP:-10.1.1.52}"          # NFS server for /balmer/data1 (the *_DIR_2 roots)
-MOUNT="${MOUNT:-/mnt/origin/var/db}"
-ORIGIN_DB="${MOUNT}/scheduler.db"
-PIPELINE_ROOT="${PIPELINE_ROOT:-/opt/pipeline}"
-CONDA_PYTHON="${CONDA_PYTHON:-/opt/conda/envs/pipeline/bin/python3}"
+MAIN_SSH="${MAIN_SSH:-pipeline@147.46.46.188}"       # the host running the scheduler + queue daemons
+MAIN_SSH_PORT="${MAIN_SSH_PORT:-45204}"              # its sshd is not bound to the 10.1.1.x interface
+MAIN_SCHEDULER_RPC="${MAIN_SCHEDULER_RPC:-/home/pipeline-stable/pipeline/pipeline/cli/scheduler_rpc}"
+LYMAN_IP="${LYMAN_IP:-20.20.20.11}"                  # NFS server for /lyman/data1 and /lyman/data2
+PIPELINE_ROOT="${PIPELINE_ROOT:-$HOME/pipeline}"
+PYTHON_BIN_DIR="${PYTHON_BIN_DIR:-$(dirname "$(command -v python3)")}"
+WORKER_USER="${WORKER_USER:-$(id -un)}"
 SERVER_NAME="${SERVER_NAME:-$(hostname -s)}"
+MAX_WORKERS="${MAX_WORKERS:-5}"
+# Default to CPU-only stages; set CONFIG_TYPES=science,preprocess on a host with a working GPU.
+CONFIG_TYPES="${CONFIG_TYPES:-science}"
 
-NFSOPT="rw,noatime,nodiratime,vers=4.1,rsize=1048576,wsize=1048576,hard,proto=tcp,timeo=600,acregmin=1,acregmax=1,acdirmin=1,acdirmax=1,_netdev 0 0"
+NFSOPT="rw,noatime,nodiratime,vers=4.1,rsize=1048576,wsize=1048576,hard,proto=tcp,timeo=600,_netdev 0 0"
+UNIT_TEMPLATE="$PIPELINE_ROOT/systemd/pipeline-dispatch-worker.service"
+
+echo "=== worker: $SERVER_NAME  user: $WORKER_USER  root: $PIPELINE_ROOT  python: $PYTHON_BIN_DIR ==="
 
 echo "=== 1. Data mounts (read-write: PathHandler creates directories on attribute read) ==="
-for spec in "${LYMAN_IP}:/lyman/data1 /lyman/data1" \
-            "${LYMAN_IP}:/lyman/data2 /lyman/data2" \
-            "${BALMER_IP}:/balmer/data1 /balmer/data1"; do
-  src="${spec%% *}"; dst="${spec##* }"
+for dst in /lyman/data1 /lyman/data2; do
   sudo mkdir -p "$dst"
   grep -qE "^[^#]*[[:space:]]${dst}[[:space:]]" /etc/fstab 2>/dev/null \
-    || echo "${src} ${dst} nfs4 ${NFSOPT}" | sudo tee -a /etc/fstab >/dev/null
+    || echo "${LYMAN_IP}:${dst} ${dst} nfs4 ${NFSOPT}" | sudo tee -a /etc/fstab >/dev/null
   mountpoint -q "$dst" || sudo mount "$dst"
 done
 
-echo "=== 2. Origin scheduler DB mount ==="
-sudo mkdir -p "$MOUNT"
-grep -qE "^[^#]*[[:space:]]${MOUNT}[[:space:]]" /etc/fstab 2>/dev/null \
-  || echo "${ORIGIN_IP}:/var/db ${MOUNT} nfs4 ${NFSOPT}" | sudo tee -a /etc/fstab >/dev/null
-mountpoint -q "$MOUNT" || sudo mount "$MOUNT"
-test -f "$ORIGIN_DB" || { echo "Missing $ORIGIN_DB - export /var/db from ${ORIGIN_IP} first"; exit 1; }
-echo "OK: $ORIGIN_DB"
-
-echo "=== 3. Host directories ==="
+echo "=== 2. Host directories ==="
 sudo install -d -m 0775 -o root -g pipeline /var/log/pipeline
 sudo install -d -m 0775 -o root -g pipeline /var/lock/py7dt
 sudo install -d -m 1777 /tmp/pipeline
 
+echo "=== 3. ssh to the main host (key-based, no password) ==="
+test -f ~/.ssh/id_ed25519 || ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519
+if ! ssh -p "$MAIN_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=10 "$MAIN_SSH" true 2>/dev/null; then
+  echo "  Authorize this key on ${MAIN_SSH}, then re-run:"
+  echo "    $(cat ~/.ssh/id_ed25519.pub)"
+  exit 1
+fi
+echo "  OK: ssh $MAIN_SSH"
+
 echo "=== 4. Pipeline env ==="
-grep -q ORIGIN_SCHEDULER_DB_PATH "$PIPELINE_ROOT/.env" 2>/dev/null \
-  || echo "ORIGIN_SCHEDULER_DB_PATH=${ORIGIN_DB}" >> "$PIPELINE_ROOT/.env"
-grep -q DISPATCH_SERVER_NAME "$PIPELINE_ROOT/.env" 2>/dev/null \
-  || echo "DISPATCH_SERVER_NAME=${SERVER_NAME}" >> "$PIPELINE_ROOT/.env"
+for kv in "PROTON_SSH=${MAIN_SSH}" "PROTON_SSH_PORT=${MAIN_SSH_PORT}" \
+          "PROTON_SCHEDULER_RPC=${MAIN_SCHEDULER_RPC}" "DISPATCH_SERVER_NAME=${SERVER_NAME}" \
+          "DISPATCH_CONFIG_TYPES=${CONFIG_TYPES}"; do
+  grep -q "^${kv%%=*}=" "$PIPELINE_ROOT/.env" 2>/dev/null || echo "$kv" >> "$PIPELINE_ROOT/.env"
+done
+grep -q "^DB_BACKEND=" "$PIPELINE_ROOT/.env" 2>/dev/null \
+  || echo "  Postgres runs on the main host: add DB_BACKEND=remote and REMOTE_DBHOST to .env."
 
 echo "=== 5. External binaries ==="
-for bin in source-extractor swarp scamp missfits; do
-  command -v "$bin" >/dev/null || echo "  MISSING: $bin (set it in ref/deployment.yml commands:, or install it)"
+for bin in source-extractor swarp scamp; do
+  command -v "$bin" >/dev/null || echo "  MISSING: $bin (or set SEXTRACTOR_COMMAND / SWARP_COMMAND in .env)"
 done
 
-echo "=== 6. systemd unit ==="
-echo "  Edit systemd/pipeline-dispatch-worker.service for this host's paths and user, then:"
-echo "    sudo cp $PIPELINE_ROOT/systemd/pipeline-dispatch-worker.service /etc/systemd/system/"
-echo "    sudo systemctl daemon-reload && sudo systemctl enable --now pipeline-dispatch-worker"
+echo "=== 6. systemd unit, rendered from the template for this host ==="
+sed -e "s|@USER@|${WORKER_USER}|g" \
+    -e "s|@PIPELINE_ROOT@|${PIPELINE_ROOT}|g" \
+    -e "s|@PYTHON_BIN_DIR@|${PYTHON_BIN_DIR}|g" \
+    -e "s|@SERVER_NAME@|${SERVER_NAME}|g" \
+    -e "s|@CONFIG_TYPES@|${CONFIG_TYPES}|g" \
+    -e "s|@MAX_WORKERS@|${MAX_WORKERS}|g" \
+    "$UNIT_TEMPLATE" | sudo tee /etc/systemd/system/pipeline-dispatch-worker.service >/dev/null
+sudo systemctl daemon-reload
+echo "  installed /etc/systemd/system/pipeline-dispatch-worker.service"
 
-echo "=== Done ==="
-echo "  systemctl status pipeline-dispatch-worker"
-echo "  journalctl -u pipeline-dispatch-worker -f"
-echo "  Smoke test in the foreground (do NOT use --once, see the guide):"
-echo "    DISPATCH_MAX_WORKERS=1 $CONDA_PYTHON $PIPELINE_ROOT/pipeline/cli/dispatch_worker_daemon"
+echo "=== Done. Verify, then start ==="
+echo "    $PIPELINE_ROOT/pipeline/cli/dispatch_worker_daemon --check"
+echo "    sudo systemctl enable --now pipeline-dispatch-worker"
+echo "    journalctl -u pipeline-dispatch-worker -f"

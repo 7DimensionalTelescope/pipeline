@@ -1,20 +1,28 @@
 #!/home/pipeline-stable/.conda/envs/pipeline/bin/python
 """
-Simple dispatch pipeline worker.
+Dispatch pipeline worker.
 
 One process on the worker host:
-  claim from the origin host -> run preprocess/data_reduction -> mark_done on the origin host
+  claim on proton -> run preprocess/data_reduction here -> mark_done on proton
 
-No local scheduler DB. No queue_daemon. No bridge state file.
+Every scheduler write executes ON proton via cli/scheduler_rpc over ssh. The worker never
+opens the scheduler sqlite: WAL's index is coherent only within one host, and opening it
+over NFS hands the same task to two hosts (measured).
 
 Environment:
-  ORIGIN_SCHEDULER_DB_PATH   origin scheduler DB (required)
-  DISPATCH_SERVER_NAME       worker name stored in the origin dispatch column (default: hostname)
+  PROTON_SSH              user@host for the origin (default pipeline@147.46.46.188)
+  PROTON_SSH_PORT         ssh port (default 45204)
+  PROTON_SCHEDULER_RPC    path to cli/scheduler_rpc on proton
+  DISPATCH_SERVER_NAME    worker name stored in the origin dispatch column (default: hostname)
+  DISPATCH_CONFIG_TYPES   comma-separated config_type whitelist, e.g. "science" for a GPU-less host
+  DISPATCH_MAX_WORKERS    parallel jobs (default 5)
+  DISPATCH_POLL_INTERVAL  seconds between polls (default 5)
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import signal
@@ -27,87 +35,124 @@ from pathlib import Path
 pipeline_dir = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(pipeline_dir))
 
-from pipeline.const import FAILURE_RETURN_CODE, SUCCESS_RETURN_CODE
+from pipeline.const import FAILURE_RETURN_CODE, SUCCESS_RETURN_CODE, EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE
 from pipeline.services.scheduler import Scheduler
 
 DEFAULT_POLL_INTERVAL = 5.0
 DEFAULT_MAX_WORKERS = 5
+RPC_TIMEOUT = 60.0
+# Shutdown runs against TimeoutStopSec, so its RPCs get a much shorter leash than a live claim.
+SHUTDOWN_RPC_TIMEOUT = 10.0
+SHUTDOWN_GRACE_SECONDS = 10.0
+SHUTDOWN_KILL_REAP_SECONDS = 5.0
+RESPONSE_TAG = "__SCHEDULER_RPC__"
+# Outcomes a run reports for itself; anything else means it was stopped from outside.
+REPORTED_RETURN_CODES = (SUCCESS_RETURN_CODE, FAILURE_RETURN_CODE, EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE)
 
 logger = logging.getLogger("pipeline.dispatch_worker")
 
 
+class ProtonScheduler:
+    """Scheduler writes executed on proton over ssh."""
+
+    def __init__(self, ssh, port, rpc_path):
+        self.ssh_cmd = ["ssh", "-p", str(port), "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", ssh, rpc_path]
+        self.timeout = RPC_TIMEOUT
+
+    def _call(self, method, **args):
+        proc = subprocess.run(
+            self.ssh_cmd,
+            input=json.dumps({"method": method, "args": args}),
+            capture_output=True,
+            text=True,
+            timeout=self.timeout,
+        )
+        for line in proc.stdout.splitlines():
+            if line.startswith(RESPONSE_TAG):
+                response = json.loads(line[len(RESPONSE_TAG) :])
+                if not response["ok"]:
+                    raise RuntimeError(f"scheduler_rpc {method}: {response['error']}")
+                return response["result"]
+        raise RuntimeError(f"scheduler_rpc {method}: no response (rc={proc.returncode}) {proc.stderr.strip()[:300]}")
+
+    def claim(self, server, config_types):
+        return self._call("claim", server=server, config_types=config_types)
+
+    def set_pid(self, index, server, pid):
+        return self._call("set_pid", index=index, server=server, pid=pid)
+
+    def release(self, index, server):
+        return self._call("release", index=index, server=server)
+
+    def mark_done(self, index, return_code):
+        return self._call("mark_done", index=index, return_code=return_code)
+
+
 class DispatchWorker:
-    def __init__(self, origin_db: str, server_name: str, max_workers: int):
-        self.origin_db = origin_db
+    def __init__(self, scheduler, server_name, max_workers, config_types=None):
+        self.scheduler = scheduler
         self.server_name = server_name
         self.max_workers = max_workers
+        self.config_types = config_types
         self._stop = False
-        self._active: dict[int, dict] = {}  # pid -> {origin_index, config, proc}
+        self._rpc_down = False
+        self._active: dict[int, dict] = {}  # pid -> {index, config, proc}
 
-    def _scheduler(self) -> Scheduler:
-        return Scheduler(use_system_queue=True, db_path=self.origin_db)
+    def _finish(self, entry, return_code):
+        """Report a finished run with its RAW return code; 2 (Rejected) is a normal outcome."""
+        self.scheduler.mark_done(entry["index"], return_code)
+        logger.info("Finished index %s (%s) rc=%s", entry["index"], os.path.basename(entry["config"]), return_code)
 
-    def _reap_finished(self) -> None:
-        scheduler = self._scheduler()
+    def _reap_finished(self):
         for pid in list(self._active):
             entry = self._active[pid]
-            proc = entry["proc"]
-            rc = proc.poll()
-            if rc is None:
+            return_code = entry["proc"].poll()
+            if return_code is None:
                 continue
-
-            return_code = SUCCESS_RETURN_CODE if rc == 0 else FAILURE_RETURN_CODE
-            scheduler.mark_done(entry["origin_index"], return_code=return_code)
-            logger.info(
-                "Finished origin index %s (%s) rc=%s",
-                entry["origin_index"],
-                os.path.basename(entry["config"]),
-                rc,
-            )
+            try:
+                self._finish(entry, return_code)
+            except Exception:
+                logger.exception("Could not mark index %s done; will retry next poll", entry["index"])
+                continue
             del self._active[pid]
 
-    def _try_start_one(self) -> bool:
+    def _try_start_one(self):
         if len(self._active) >= self.max_workers:
             return False
 
-        scheduler = self._scheduler()
-        task = scheduler.claim_next_dispatch_task(self.server_name)
+        task = self.scheduler.claim(self.server_name, self.config_types)
         if task is None:
             return False
 
-        origin_index = task["index"]
+        index = task["index"]
         try:
-            cmd = scheduler._generate_command(origin_index, task["kwargs"])
-            proc = subprocess.Popen(cmd)
+            cmd = Scheduler.build_command(task["config"], task["config_type"], task["input_type"], task["kwargs"])
+            proc = subprocess.Popen(cmd, start_new_session=True)
         except Exception:
-            scheduler.release_dispatch_task(origin_index, self.server_name)
+            self.scheduler.release(index, self.server_name)
             raise
 
-        scheduler.set_dispatch_pid(origin_index, self.server_name, proc.pid)
-        self._active[proc.pid] = {
-            "origin_index": origin_index,
-            "config": task["config"],
-            "proc": proc,
-        }
-        logger.info(
-            "Started origin index %s pid=%s (%s)",
-            origin_index,
-            proc.pid,
-            os.path.basename(task["config"]),
-        )
+        # Track before any further RPC. Releasing a claim whose child is alive lets the origin
+        # start a second reduction over the same outputs; a row left at pid=0 costs nothing.
+        self._active[proc.pid] = {"index": index, "config": task["config"], "proc": proc}
+        try:
+            self.scheduler.set_pid(index, self.server_name, proc.pid)
+        except Exception:
+            logger.exception("Could not record pid for index %s on proton; the row keeps pid=0", index)
+        logger.info("Started index %s pid=%s (%s)", index, proc.pid, os.path.basename(task["config"]))
         return True
 
-    def run_once(self) -> dict:
+    def run_once(self):
         self._reap_finished()
         started = self._try_start_one()
         return {"active": len(self._active), "max_workers": self.max_workers, "started": started}
 
-    def run_forever(self, poll_interval: float) -> None:
+    def run_forever(self, poll_interval):
         logger.info(
-            "Dispatch worker started (origin=%s, server=%s, max_workers=%d)",
-            self.origin_db,
+            "Dispatch worker started (server=%s, max_workers=%d, config_types=%s)",
             self.server_name,
             self.max_workers,
+            self.config_types or "any",
         )
         while not self._stop:
             try:
@@ -115,63 +160,95 @@ class DispatchWorker:
             except Exception:
                 logger.exception("Worker iteration failed")
             time.sleep(poll_interval)
+        self._shutdown()
         logger.info("Dispatch worker stopped")
 
-    def stop(self, *_args) -> None:
+    def _shutdown(self):
+        """Report what finished, hand back what died, keep the claim on anything still alive."""
+        self.scheduler.timeout = SHUTDOWN_RPC_TIMEOUT
+        self._settle_stopped()  # honours _rpc_down, unlike _reap_finished's per-entry retry
+        for entry in self._active.values():
+            entry["proc"].terminate()
+
+        deadline = time.monotonic() + SHUTDOWN_GRACE_SECONDS
+        while self._active and time.monotonic() < deadline:
+            self._settle_stopped()
+            if self._active:
+                time.sleep(0.5)
+
+        for entry in list(self._active.values()):
+            entry["proc"].kill()
+            try:
+                entry["proc"].wait(timeout=SHUTDOWN_KILL_REAP_SECONDS)  # a kill without a wait leaves a zombie
+            except subprocess.TimeoutExpired:
+                pass
+        self._settle_stopped()
+
+        for entry in self._active.values():
+            logger.critical(
+                "index %s (pid %s) survived SIGKILL, most likely stuck in NFS I/O; its claim stays with %s "
+                "so nothing reruns it while it may still be writing",
+                entry["index"],
+                entry["proc"].pid,
+                self.server_name,
+            )
+
+    def _settle_stopped(self):
+        """Only ever settles a child confirmed dead: poll() is None for a moment even after SIGKILL."""
+        for pid in list(self._active):
+            entry = self._active[pid]
+            return_code = entry["proc"].poll()
+            if return_code is None or self._rpc_down:
+                continue
+            try:
+                if return_code in REPORTED_RETURN_CODES:
+                    self._finish(entry, return_code)
+                else:
+                    self.scheduler.release(entry["index"], self.server_name)
+                    logger.info("Released index %s back to Ready (rc=%s)", entry["index"], return_code)
+            except Exception:
+                # proton is unreachable; further RPCs would each burn a full timeout for nothing.
+                self._rpc_down = True
+                logger.exception("Could not settle index %s on proton; leaving it claimed", entry["index"])
+                continue
+            del self._active[pid]
+
+    def stop(self, *_args):
         self._stop = True
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Simple dispatch pipeline worker (claim and run on the origin scheduler DB)")
+    parser = argparse.ArgumentParser(description="Dispatch pipeline worker (claims from proton over ssh)")
+    parser.add_argument("--ssh", default=os.environ.get("PROTON_SSH", "pipeline@147.46.46.188"))
+    parser.add_argument("--ssh-port", default=os.environ.get("PROTON_SSH_PORT", "45204"))
     parser.add_argument(
-        "--origin-db",
-        default=os.environ.get("ORIGIN_SCHEDULER_DB_PATH"),
-        help="Proton scheduler DB (default: ORIGIN_SCHEDULER_DB_PATH)",
+        "--rpc-path",
+        default=os.environ.get("PROTON_SCHEDULER_RPC", "/home/pipeline-stable/pipeline/pipeline/cli/scheduler_rpc"),
     )
-    parser.add_argument(
-        "--server-name",
-        default=os.environ.get("DISPATCH_SERVER_NAME", socket.gethostname()),
-        help="Name stored in the origin dispatch column",
-    )
-    parser.add_argument(
-        "--max-workers",
-        type=int,
-        default=int(os.environ.get("DISPATCH_MAX_WORKERS", DEFAULT_MAX_WORKERS)),
-        help=f"Parallel jobs (default: {DEFAULT_MAX_WORKERS})",
-    )
-    parser.add_argument(
-        "--poll-interval",
-        type=float,
-        default=float(os.environ.get("DISPATCH_POLL_INTERVAL", DEFAULT_POLL_INTERVAL)),
-        help=f"Seconds between polls (default: {DEFAULT_POLL_INTERVAL})",
-    )
-    parser.add_argument("--once", action="store_true", help="Run one iteration and exit")
+    parser.add_argument("--server-name", default=os.environ.get("DISPATCH_SERVER_NAME", socket.gethostname()))
+    parser.add_argument("--config-types", default=os.environ.get("DISPATCH_CONFIG_TYPES", ""))
+    parser.add_argument("--max-workers", type=int, default=int(os.environ.get("DISPATCH_MAX_WORKERS", DEFAULT_MAX_WORKERS)))
+    parser.add_argument("--poll-interval", type=float, default=float(os.environ.get("DISPATCH_POLL_INTERVAL", DEFAULT_POLL_INTERVAL)))
+    parser.add_argument("--check", action="store_true", help="Verify the proton connection and exit")
     return parser.parse_args()
 
 
 def main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     args = parse_args()
-    if not args.origin_db:
-        print("ERROR: set --origin-db or ORIGIN_SCHEDULER_DB_PATH", file=sys.stderr)
-        sys.exit(1)
-    if not os.path.exists(args.origin_db):
-        print(f"ERROR: origin DB not found: {args.origin_db}", file=sys.stderr)
-        sys.exit(1)
 
-    worker = DispatchWorker(args.origin_db, args.server_name, args.max_workers)
-    signal.signal(signal.SIGTERM, worker.stop)
-    signal.signal(signal.SIGINT, worker.stop)
+    scheduler = ProtonScheduler(args.ssh, args.ssh_port, args.rpc_path)
+    config_types = [t.strip() for t in args.config_types.split(",") if t.strip()] or None
 
-    if args.once:
-        import json
-
-        print(json.dumps(worker.run_once(), indent=2))
+    if args.check:
+        # A claim of a config_type nothing uses proves the whole path without taking work.
+        scheduler.claim(args.server_name, ["__connection_check__"])
+        print(f"OK: scheduler_rpc reachable on {args.ssh}")
         return
 
+    worker = DispatchWorker(scheduler, args.server_name, args.max_workers, config_types)
+    signal.signal(signal.SIGTERM, worker.stop)
+    signal.signal(signal.SIGINT, worker.stop)
     worker.run_forever(args.poll_interval)
 
 

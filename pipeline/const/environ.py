@@ -132,6 +132,10 @@ HIGH_LEVEL_TASK_LOG_FILE = (
 )
 
 
+# Origin host: it owns the scheduler sqlite and the queue daemon. Any other host is a dispatch
+# worker, and that is what distinguishes them in process_status.dispatch.
+MAIN_HOST = "proton"
+
 # host-local coordination (ephemeral: /var/lock is tmpfs, cleared on boot)
 HOST_LOCK_DIR = _external_paths.get("HOST_LOCK_DIR") or "/var/lock/py7dt"
 

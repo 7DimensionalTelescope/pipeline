@@ -4,9 +4,26 @@ from dataclasses import dataclass, asdict
 import json
 
 from .base import BaseDatabase, DatabaseError
+from ...const.environ import MAIN_HOST
 
 from .query_string import *
 import os
+import socket
+
+
+_INPUT_TYPE = None
+
+
+def set_input_type(value):
+    """The scheduler row's freeform input_type, handed to this run by the reduction CLI's -input_type."""
+    global _INPUT_TYPE
+    _INPUT_TYPE = (value or "").strip() or None
+
+
+def dispatch_host():
+    """Worker host that ran it; None on MAIN_HOST, whose runs are the unremarkable case."""
+    host = socket.gethostname()
+    return None if host.startswith(MAIN_HOST) else host
 
 
 @dataclass
@@ -38,6 +55,8 @@ class ProcessStatusTable:
     inspcomm: Optional[str] = None  # mirrors the FITS INSPCOMM card
     inspected_by: Optional[str] = None
     inspected_at: Optional[datetime] = None
+    # Last, to stay aligned with ALTER TABLE ADD COLUMN, which appends at the end of the row.
+    dispatch: Optional[str] = None
 
     @classmethod
     def from_row(cls, row: tuple, columns: List[str] = None):
@@ -93,7 +112,8 @@ class ProcessStatusTable:
 
         return cls(
             name=name,
-            input_type="daily",
+            input_type=_INPUT_TYPE,
+            dispatch=dispatch_host(),
             pipeline_version=__version__,
             config_file=config_file,
             log_file=config_file.replace(".yml", ".log"),

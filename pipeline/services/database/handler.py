@@ -4,7 +4,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from .too import TooDB
-from .process_status import ProcessStatus
+from .process_status import ProcessStatus, dispatch_host
 from .image_qa import ImageQA
 from .image_qa_dependency import ImageQADependency
 from .process_status_dependency import ProcessStatusDependency
@@ -68,7 +68,9 @@ class DatabaseHandler:
 
         table = self.process_status.pyTable.from_file(config_node.info.file)
 
-        existing_process_id = self.process_status.read_data_by_params(**table.to_dict())
+        # Identity is name (unique index); these two vary per run and must not narrow the match.
+        identity = {k: v for k, v in table.to_dict().items() if k not in ("input_type", "dispatch")}
+        existing_process_id = self.process_status.read_data_by_params(**identity)
         if existing_process_id:
             self.logger.info(f"Found existing process db record (PID: {existing_process_id})")
             existing_row = self.process_status.read_data_by_id(existing_process_id)
@@ -91,10 +93,16 @@ class DatabaseHandler:
             else:
                 self.logger.info(f"Using existing process db record (PID: {existing_process_id})")
                 self.process_status_id = existing_process_id
+                self._stamp_dispatch(existing_process_id)
                 return existing_process_id
 
         self.process_status_id = self.process_status.create_data(table)
+        self._stamp_dispatch(self.process_status_id)
         return self.process_status_id
+
+    def _stamp_dispatch(self, process_status_id):
+        """Which host ran it, always rewritten: update_data drops None, so a rerun elsewhere would keep the old name."""
+        self.process_status.update_data(process_status_id, dispatch=dispatch_host() or "None")
 
     def update_progress(self, progress: int, status: str = None) -> bool:
         """

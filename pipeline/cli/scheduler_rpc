@@ -1,0 +1,49 @@
+#!/home/pipeline-stable/.conda/envs/pipeline/bin/python
+"""
+Scheduler operations executed on the origin host, for workers that must not open the sqlite.
+
+One JSON request on stdin, one JSON response on stdout, tagged with RESPONSE_TAG because
+importing pipeline writes to stdout. Read it over ssh; never export /var/db.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from pipeline.services.scheduler import Scheduler
+
+RESPONSE_TAG = "__SCHEDULER_RPC__"
+
+
+def _dispatch(scheduler, method, args):
+    if method == "claim":
+        return scheduler.claim_next_dispatch_task(args["server"], config_types=args.get("config_types"))
+    if method == "set_pid":
+        return scheduler.set_dispatch_pid(args["index"], args["server"], args["pid"])
+    if method == "release":
+        return scheduler.release_dispatch_task(args["index"], args["server"])
+    if method == "mark_done":
+        scheduler.mark_done(args["index"], return_code=args["return_code"])
+        return True
+    raise ValueError(f"unknown method {method!r}")
+
+
+def main():
+    try:
+        request = json.loads(sys.stdin.read())
+        result = _dispatch(Scheduler(use_system_queue=True), request["method"], request.get("args") or {})
+        response = {"ok": True, "result": result}
+    except Exception as e:
+        response = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    sys.stdout.write(f"\n{RESPONSE_TAG}{json.dumps(response)}\n")
+    sys.stdout.flush()
+    return 0 if response["ok"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
