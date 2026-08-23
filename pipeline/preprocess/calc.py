@@ -112,15 +112,16 @@ def combine_images_with_cpu(
 
     raw_flags = []
     raw_scores = []
-    raw_data = []
-    for img in images:
+    np_stack = None
+    for i, img in enumerate(images):
         d = read_fits_image(img)
         f, s = check_shifted_overscan(d)
         raw_flags.append(f)
         raw_scores.append(s)
-        raw_data.append(d)
-    np_stack = np.stack(raw_data)
-    del raw_data
+        if np_stack is None:
+            np_stack = np.empty((len(images),) + d.shape, dtype=np.float32)
+        np_stack[i] = d
+        d = None
     joint_score = combined_shifted_score(raw_scores)
     joint_flag = any(raw_flags)
 
@@ -135,7 +136,7 @@ def combine_images_with_cpu(
             else:
                 raise ValueError("Subtract must be a FITS file path or a numpy array.")
             sub_arr += sub
-        np_stack = np_stack - sub_arr  # avoid in-place for numba safety
+        np_stack -= sub_arr  # in-place: np_stack is private to this call
 
     if norm:
         np_stack = _normalize_stack(np_stack)
@@ -378,17 +379,70 @@ def preparation_kernel(bias, dark, flat, h, w):
 
 @njit(parallel=True)
 def _normalize_stack(np_stack):
+    """In-place per-frame median normalization; returns the same array."""
     n, h, w = np_stack.shape
-    output = np.empty_like(np_stack)
 
     for i in prange(n):
         flattened = np_stack[i].ravel()
         med = np.median(flattened)
         if med == 0:
             med = 1e-8  # avoid division by zero
-        output[i] = np_stack[i] / med
+        np_stack[i] /= med
 
-    return output
+    return np_stack
+
+
+@njit
+def _select_k(buf, n, k):
+    """In-place selection: after return, buf[k] is the k-th smallest among buf[:n]."""
+    left = 0
+    right = n - 1
+    while True:
+        if left >= right:
+            return
+
+        # median-of-three pivot, then swap into right
+        mid = (left + right) // 2
+        if buf[mid] < buf[left]:
+            buf[left], buf[mid] = buf[mid], buf[left]
+        if buf[right] < buf[left]:
+            buf[left], buf[right] = buf[right], buf[left]
+        if buf[right] < buf[mid]:
+            buf[mid], buf[right] = buf[right], buf[mid]
+
+        pivot = buf[right]
+        i = left
+        for j in range(left, right):
+            if buf[j] < pivot:
+                buf[i], buf[j] = buf[j], buf[i]
+                i += 1
+        buf[i], buf[right] = buf[right], buf[i]
+
+        if k == i:
+            return
+        if k < i:
+            right = i - 1
+        else:
+            left = i + 1
+
+
+@njit
+def _median_1d(buf, n):
+    """Median of buf[:n]. Mutates buf (quickselect / Devillard-Wirth style)."""
+    if n % 2 == 1:
+        k = n // 2
+        _select_k(buf, n, k)
+        return buf[k]
+
+    k1 = n // 2 - 1
+    _select_k(buf, n, k1)
+    # After selecting k1, the upper central value is min(buf[k1+1:n]).
+    m = buf[k1 + 1]
+    for t in range(k1 + 2, n):
+        v = buf[t]
+        if v < m:
+            m = v
+    return np.float32(0.5) * (buf[k1] + m)
 
 
 @njit(parallel=True)
@@ -400,20 +454,23 @@ def _calc_median_and_std(np_stack):
     std_img = np.empty((H, W), dtype=np.float32)
 
     for i in prange(H):
-        for j in prange(W):
-            pixel_series = np_stack[:, i, j]
-            med = np.median(pixel_series)
+        for j in range(W):
+            buf = np.empty(n, dtype=np.float32)
+            for k in range(n):
+                buf[k] = np_stack[k, i, j]
 
-            mean = np.mean(pixel_series)
+            median_img[i, j] = _median_1d(buf, n)
+
+            mean = 0.0
+            for k in range(n):
+                mean += np_stack[k, i, j]
+            mean /= n
 
             var = 0.0
             for k in range(n):
-                diff = pixel_series[k] - mean
+                diff = np_stack[k, i, j] - mean
                 var += diff * diff
-            std = np.sqrt(var / (n - 1))
-
-            median_img[i, j] = med
-            std_img[i, j] = std
+            std_img[i, j] = np.sqrt(var / (n - 1))
 
     return median_img, std_img
 
