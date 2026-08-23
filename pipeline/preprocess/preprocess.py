@@ -505,6 +505,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
 
         input_files = getattr(self, f"{dtype}_input")
         header = self.get_header(dtype)
+        prep_utils.set_pipe_ver_in_header(header)
         outputs = [getattr(self, f"{dtype}_output"), getattr(self, f"{dtype}sig_output")]
         if dtype == "dark":
             outputs.append(self.bpmask_output)
@@ -807,6 +808,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         header = prep_utils.write_IMCMB_to_header(header, [existing_mframe_file])
         # header["SANITY"] = False
         header = prep_utils.add_image_id(header)  # fresh id: this is a new file, not the source master
+        header = prep_utils.set_pipe_ver_in_header(header)  # this run made the copy, not the source's version
         header = set_inspcomm_in_header(header, "Auto-generated binned master frame")
         header = set_ppflag_in_header(header, propagate_ppflag(header["PPFLAG"], 2))
         fits.writeto(binned_mflat_path, binned_mflat, header=header, overwrite=True)
@@ -1089,6 +1091,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         newhdu.header["SIGMAC"] = (self.config_node.preprocess.n_sigma, "HP threshold in clipped sigma")
         newhdu.header["BADPIX"] = (1, "Pixel Value for Bad pixels")
         newhdu.header["SANITY"] = (sanity, "Sanity flag")
+        prep_utils.set_pipe_ver_in_header(newhdu.header)
         primary_hdu = fits.PrimaryHDU()
         newhdul = fits.HDUList([primary_hdu, newhdu])
         newhdul.writeto(self.bpmask_output, overwrite=True)

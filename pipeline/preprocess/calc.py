@@ -14,6 +14,7 @@ from .utils import (
     prepare_raw_qa_header,
     read_fits_image,
     read_fits_images,
+    set_pipe_ver_in_header,
     update_header_file,
     write_fits_images,
 )
@@ -743,6 +744,7 @@ def prepare_masterframe_header(
         sig_data=sig_data,
         bpmask_path=bpmask_path,
     )
+    set_pipe_ver_in_header(stats)
     update_header_file(filename, stats)
 
 

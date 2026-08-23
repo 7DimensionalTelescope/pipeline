@@ -385,6 +385,14 @@ def add_image_id(header, key="IMAGEID"):
     return header
 
 
+def set_pipe_ver_in_header(header, comment: str = "Preprocess version that produced this file"):
+    """Stamp the running preprocess version onto a master-frame product header."""
+    from .. import __version__
+
+    header["PIPE_VER"] = (str(__version__), comment)
+    return header
+
+
 def get_image_id(image, key="IMAGEID"):
     """Unique image ID of an existing image; None if absent."""
     try:
