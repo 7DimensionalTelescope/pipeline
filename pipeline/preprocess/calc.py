@@ -23,6 +23,7 @@ from .shifted_score import (
     check_shifted_overscan,
     combined_shifted_score,
 )
+from ..calc.median import nanmedian_std_axis0
 from ..const import SOURCE_DIR, SERVICES_TMP_DIR
 
 
@@ -392,86 +393,12 @@ def _normalize_stack(np_stack):
     return np_stack
 
 
-@njit
-def _select_k(buf, n, k):
-    """In-place selection: after return, buf[k] is the k-th smallest among buf[:n]."""
-    left = 0
-    right = n - 1
-    while True:
-        if left >= right:
-            return
-
-        # median-of-three pivot, then swap into right
-        mid = (left + right) // 2
-        if buf[mid] < buf[left]:
-            buf[left], buf[mid] = buf[mid], buf[left]
-        if buf[right] < buf[left]:
-            buf[left], buf[right] = buf[right], buf[left]
-        if buf[right] < buf[mid]:
-            buf[mid], buf[right] = buf[right], buf[mid]
-
-        pivot = buf[right]
-        i = left
-        for j in range(left, right):
-            if buf[j] < pivot:
-                buf[i], buf[j] = buf[j], buf[i]
-                i += 1
-        buf[i], buf[right] = buf[right], buf[i]
-
-        if k == i:
-            return
-        if k < i:
-            right = i - 1
-        else:
-            left = i + 1
-
-
-@njit
-def _median_1d(buf, n):
-    """Median of buf[:n]. Mutates buf (quickselect / Devillard-Wirth style)."""
-    if n % 2 == 1:
-        k = n // 2
-        _select_k(buf, n, k)
-        return buf[k]
-
-    k1 = n // 2 - 1
-    _select_k(buf, n, k1)
-    # After selecting k1, the upper central value is min(buf[k1+1:n]).
-    m = buf[k1 + 1]
-    for t in range(k1 + 2, n):
-        v = buf[t]
-        if v < m:
-            m = v
-    return np.float32(0.5) * (buf[k1] + m)
-
-
-@njit(parallel=True)
 def _calc_median_and_std(np_stack):
-    H, W = np_stack.shape[1], np_stack.shape[2]
-    n = np_stack.shape[0]
-
-    median_img = np.empty((H, W), dtype=np.float32)
-    std_img = np.empty((H, W), dtype=np.float32)
-
-    for i in prange(H):
-        for j in range(W):
-            buf = np.empty(n, dtype=np.float32)
-            for k in range(n):
-                buf[k] = np_stack[k, i, j]
-
-            median_img[i, j] = _median_1d(buf, n)
-
-            mean = 0.0
-            for k in range(n):
-                mean += np_stack[k, i, j]
-            mean /= n
-
-            var = 0.0
-            for k in range(n):
-                diff = np_stack[k, i, j] - mean
-                var += diff * diff
-            std_img[i, j] = np.sqrt(var / (n - 1))
-
+    """Per-pixel median and ddof=1 standard deviation over the stack axis."""
+    h, w = np_stack.shape[1], np_stack.shape[2]
+    median_img = np.empty((h, w), dtype=np.float32)
+    std_img = np.empty((h, w), dtype=np.float32)
+    nanmedian_std_axis0(np_stack, median_img, std_img)
     return median_img, std_img
 
 
