@@ -75,31 +75,62 @@ def _read_plain_float32(
 
 
 # Var(median)/Var(mean) for n Gaussian samples, from the order-statistic density
-# n!/(m!m!) F^m (1-F)^m f  with m=(n-1)/2. Approaches pi/2 (Kendall & Stuart Vol.1) but is
-# well below it for the frame counts a coadd actually has, so the limit is not usable.
+# n!/(m!m!) F^m (1-F)^m f. Odd and even n are SEPARATE branches and must never be interpolated
+# together: an even-n median averages the two central order statistics and is markedly more
+# efficient (n=10 is 1.383, between its odd neighbours' 1.495 and 1.509). Each branch is anchored
+# at 1/n = 0 to the pi/2 limit (Kendall & Stuart Vol.1), which is only reached asymptotically.
 _MEDIAN_VAR_RATIO = {
-    1: 1.0, 2: 1.0, 3: 1.3460, 5: 1.4342, 7: 1.4731, 9: 1.4949, 11: 1.5088,
-    15: 1.5254, 21: 1.5385, 31: 1.5489, 51: 1.5575, 101: 1.5641, 201: 1.5674,
+    # odd n
+    1: 1.0, 3: 1.3460133137, 5: 1.4341683080, 7: 1.4731280307, 9: 1.4949115322, 11: 1.5087867690,
+    13: 1.5183869350, 15: 1.5254197812, 17: 1.5307918842, 19: 1.5350285264, 21: 1.5384548547,
+    31: 1.5489329407, 51: 1.5575323379, 101: 1.5641094238, 201: 1.5674391273,
+    # even n
+    2: 1.0, 4: 1.1927984737, 6: 1.2884559995, 8: 1.3454468413, 10: 1.3832643584, 12: 1.4101942454,
+    14: 1.4303497151, 16: 1.4460033796, 18: 1.4585131809, 20: 1.4687405541, 32: 1.5047903033,
+    50: 1.5276417434, 64: 1.5367949276, 100: 1.5487936039, 200: 1.5596846119,
 }  # fmt: skip
 
 
-def median_variance_ratio(n: float) -> float:
-    """How much noisier a median of ``n`` frames is than their mean."""
-    knots = np.array(sorted(_MEDIAN_VAR_RATIO), dtype=float)
-    values = np.array([_MEDIAN_VAR_RATIO[int(k)] for k in knots])
-    if n <= knots[0]:
-        return float(values[0])
-    if n >= knots[-1]:
-        return float(np.pi / 2)
-    return float(np.interp(1.0 / n, (1.0 / knots)[::-1], values[::-1]))
+def _ratio_branch(parity: int) -> tuple["np.ndarray", "np.ndarray"]:
+    """Ascending (1/n, ratio) interpolation coordinates for one n-parity, with 1/n=0 -> pi/2."""
+    knots = np.array(sorted(k for k in _MEDIAN_VAR_RATIO if k % 2 == parity), dtype=np.float64)
+    values = np.array([_MEDIAN_VAR_RATIO[int(k)] for k in knots], dtype=np.float64)
+    return np.concatenate(([0.0], (1.0 / knots)[::-1])), np.concatenate(([np.pi / 2], values[::-1]))
+
+
+_ODD_RATIO_X, _ODD_RATIO_Y = _ratio_branch(1)
+_EVEN_RATIO_X, _EVEN_RATIO_Y = _ratio_branch(0)
+
+
+def _ratio_at_integer(n) -> "np.ndarray":
+    """Parity-aware variance ratio at integer sample sizes, shape-preserving."""
+    flat = np.atleast_1d(n).ravel()
+    out = np.empty(flat.shape, dtype=np.float64)
+    odd = (flat & 1) != 0
+    out[odd] = np.interp(1.0 / flat[odd], _ODD_RATIO_X, _ODD_RATIO_Y)
+    out[~odd] = np.interp(1.0 / flat[~odd], _EVEN_RATIO_X, _EVEN_RATIO_Y)
+    return out.reshape(np.shape(n))
 
 
 def _median_penalty(counts) -> "np.ndarray":
     """Vectorized median_variance_ratio over a per-pixel contributor-count array."""
-    knots = np.array(sorted(_MEDIAN_VAR_RATIO), dtype=float)
-    values = np.array([_MEDIAN_VAR_RATIO[int(k)] for k in knots])
-    n = np.maximum(counts.astype(np.float64), 1.0)
-    return np.interp(1.0 / n, (1.0 / knots)[::-1], values[::-1])
+    n = np.maximum(np.asarray(counts, dtype=np.float64), 1.0)
+    lo = np.floor(n).astype(np.int64)
+    hi = np.ceil(n).astype(np.int64)
+    r_lo = _ratio_at_integer(lo)
+    if np.array_equal(lo, hi):
+        return r_lo
+    return r_lo + (n - lo) * (_ratio_at_integer(hi) - r_lo)
+
+
+def median_variance_ratio(n: float) -> float:
+    """How much noisier a median of ``n`` frames is than their mean; a fractional ``n`` interpolates between the
+    neighbouring integer sample sizes, which is exact when it arises as a mixture of those two counts."""
+    if n <= 1:
+        return 1.0
+    if np.isposinf(n):
+        return float(np.pi / 2)
+    return float(_median_penalty(np.float64(n)))
 
 
 def coadd_effective_egain(gain_terms, mode: str = "mean", n_eff: float | None = None) -> float | None:
