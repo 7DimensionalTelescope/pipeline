@@ -60,8 +60,14 @@ echo "  OK: ssh $MAIN_SSH"
 echo "=== 4. Pipeline env ==="
 for kv in "PROTON_SSH=${MAIN_SSH}" "PROTON_SSH_PORT=${MAIN_SSH_PORT}" \
           "PROTON_SCHEDULER_RPC=${MAIN_SCHEDULER_RPC}" "DISPATCH_SERVER_NAME=${SERVER_NAME}" \
-          "DISPATCH_CONFIG_TYPES=${CONFIG_TYPES}" "DISPATCH_INPUT_TYPE=${INPUT_TYPE}"; do
-  grep -q "^${kv%%=*}=" "$PIPELINE_ROOT/.env" 2>/dev/null || echo "$kv" >> "$PIPELINE_ROOT/.env"
+          "DISPATCH_CONFIG_TYPES=${CONFIG_TYPES}" "DISPATCH_INPUT_TYPE=${INPUT_TYPE}" \
+          "DISPATCH_MAX_WORKERS=${MAX_WORKERS}" "DISPATCH_POLL_INTERVAL=5"; do
+  # upsert, so re-running with a new value actually changes it
+  if grep -q "^${kv%%=*}=" "$PIPELINE_ROOT/.env" 2>/dev/null; then
+    sed -i "s|^${kv%%=*}=.*|${kv}|" "$PIPELINE_ROOT/.env"
+  else
+    echo "$kv" >> "$PIPELINE_ROOT/.env"
+  fi
 done
 grep -q "^DB_BACKEND=" "$PIPELINE_ROOT/.env" 2>/dev/null \
   || echo "  Postgres runs on the main host: add DB_BACKEND=remote and REMOTE_DBHOST to .env."
@@ -80,10 +86,6 @@ echo "=== 7. systemd unit, rendered from the template for this host ==="
 sed -e "s|@USER@|${WORKER_USER}|g" \
     -e "s|@PIPELINE_ROOT@|${PIPELINE_ROOT}|g" \
     -e "s|@PYTHON_BIN_DIR@|${PYTHON_BIN_DIR}|g" \
-    -e "s|@SERVER_NAME@|${SERVER_NAME}|g" \
-    -e "s|@CONFIG_TYPES@|${CONFIG_TYPES}|g" \
-    -e "s|@INPUT_TYPE@|${INPUT_TYPE}|g" \
-    -e "s|@MAX_WORKERS@|${MAX_WORKERS}|g" \
     "$UNIT_TEMPLATE" | sudo tee /etc/systemd/system/pipeline-dispatch-worker.service >/dev/null
 sudo systemctl daemon-reload
 echo "  installed /etc/systemd/system/pipeline-dispatch-worker.service"

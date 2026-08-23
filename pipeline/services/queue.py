@@ -98,8 +98,8 @@ class QueueManager:
 
         self.logger.debug(f"Initialize QueueManager.")
 
-        # Default CPU allocation
-        self.total_cpu_worker = max_workers or DEFAULT_MAX_WORKERS
+        # Default CPU allocation; QUEUE_MAX_WORKERS lives in .env, so a plain restart applies it
+        self.total_cpu_worker = max_workers or int(os.environ.get("QUEUE_MAX_WORKERS") or DEFAULT_MAX_WORKERS)
 
         self.lock = threading.Lock()
 

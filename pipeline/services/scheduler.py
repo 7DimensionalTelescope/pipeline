@@ -60,7 +60,9 @@ class Scheduler:
     _LOCAL_TASK_FILTER = "(dispatch IS NULL OR dispatch = '')"
 
     # Constants
-    MAX_PREPROCESS = 3
+    # Counts Processing preprocess rows across EVERY host, so it is an origin-side gate:
+    # set QUEUE_MAX_PREPROCESS in the origin's .env, where the claim actually runs.
+    MAX_PREPROCESS = int(os.environ.get("QUEUE_MAX_PREPROCESS") or 3)
     HIGH_PRIORITY_THRESHOLD = 10
     # Seconds a statement waits for a competing writer before raising "database is locked".
     # A bulk submission must never make the queue daemon drop a completion.

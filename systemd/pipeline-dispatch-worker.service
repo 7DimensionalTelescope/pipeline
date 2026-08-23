@@ -20,12 +20,9 @@ Environment=NUMEXPR_NUM_THREADS=1
 Environment=VECLIB_MAXIMUM_THREADS=1
 Environment=NUMBA_NUM_THREADS=8
 EnvironmentFile=@PIPELINE_ROOT@/.env
-Environment=DISPATCH_SERVER_NAME=@SERVER_NAME@
-# Narrow while a worker is new. No stage needs a GPU, so "any" is safe when you want it.
-Environment=DISPATCH_CONFIG_TYPES=@CONFIG_TYPES@
-Environment=DISPATCH_INPUT_TYPE=@INPUT_TYPE@
-Environment=DISPATCH_MAX_WORKERS=@MAX_WORKERS@
-Environment=DISPATCH_POLL_INTERVAL=5
+# DISPATCH_SERVER_NAME / _CONFIG_TYPES / _INPUT_TYPE / _MAX_WORKERS / _POLL_INTERVAL all come from
+# the EnvironmentFile above. Keep them there, not here: systemd caches this file, so an Environment=
+# line needs `daemon-reload` to change, while .env is re-read on every start.
 ExecStart=@PYTHON_BIN_DIR@/python3 @PIPELINE_ROOT@/pipeline/cli/dispatch_worker_daemon
 Restart=always
 RestartSec=10
