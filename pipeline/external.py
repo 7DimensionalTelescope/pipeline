@@ -63,7 +63,14 @@ def sextractor(
     outcat = outcat or default_outcat  # default is ascii.sextractor
     log_file = log_file or swap_ext(add_suffix(outcat, "sextractor"), "log")
 
-    if os.path.exists(outcat) and os.path.getsize(outcat) > 0 and not overwrite:
+    def nonempty(path):
+        try:
+            return os.path.getsize(path) > 0
+        except OSError:
+            return False
+
+    # The log is renamed into place only after a clean run, so a catalog without one is from an interrupted run.
+    if nonempty(outcat) and nonempty(log_file) and not overwrite:
         chatter(f"Sextractor output catalog already exists: {outcat}, skipping...", "info")
         if return_sex_output:
             # take sexout from .log
@@ -72,6 +79,9 @@ def sextractor(
                 sexout = "\n".join(lines[1:])  # the first line is the command, not sexout
             return outcat, sexout
         return outcat
+
+    if nonempty(outcat) and not overwrite:
+        chatter(f"Sextractor log {log_file} missing or empty: rerunning the interrupted {outcat}", "info")
 
     sex_args_master = {}
     sex, param, conv, nnw = get_sex_config(sex_preset)
@@ -102,6 +112,12 @@ def sextractor(
     if clean_log:
         sexcom = ansi_clean(sexcom)
 
+    # The log is the completion marker: retire the stale one BEFORE the catalog is touched.
+    try:
+        os.remove(log_file)
+    except FileNotFoundError:
+        pass
+
     process = subprocess.Popen(
         sexcom,
         shell=True,
@@ -116,11 +132,13 @@ def sextractor(
     if process.returncode != 0:
         raise RuntimeError(f"Sextractor failed with return code {process.returncode}: {sexout}")
 
-    with open(log_file, "w") as f:
+    tmp_log = f"{log_file}.{os.getpid()}.part"
+    with open(tmp_log, "w") as f:
         f.write(sexcom)
         f.write("\n" * 3)
         f.write(sexout)
         # f.write(sexerr)
+    os.replace(tmp_log, log_file)
 
     # Run the command and capture output
     # with open(log_file, "w") as f:

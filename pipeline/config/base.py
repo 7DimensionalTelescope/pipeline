@@ -192,6 +192,8 @@ class BaseConfig(ABC):
 
             logger = Logger(name=name, slack_channel="pipeline_report")
             logger.set_output_file(log_file, overwrite=overwrite)
+            hostname = os.uname().nodename.split(".")[0]
+            logger.debug(f"Host: {hostname}, PID: {os.getpid()}")
             if "log_format" in kwargs:
                 logger.set_format(kwargs.pop("log_format"))
 

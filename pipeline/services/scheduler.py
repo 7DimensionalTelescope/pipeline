@@ -58,11 +58,19 @@ class Scheduler:
     )
     _SELECT_COLUMNS = ", ".join(f'"{col}"' if col == "index" else col for col in _DB_COLUMNS)
     _LOCAL_TASK_FILTER = "(dispatch IS NULL OR dispatch = '')"
+    # The origin's own identity in `dispatch`. Legacy NULL rows COALESCE to it, so never write 'proton'.
+    _LOCAL_DISPATCH = ""
+    _AFFINITY_FILTER = "COALESCE(dispatch, '') = ?"
+    # `= 1` is what lets ix_scheduler_foreign match; a bare `<> ''` full-scans the Ready partition.
+    _FOREIGN_FILTER = "(COALESCE(dispatch, '') <> '') = 1"
+    _FOREIGN = object()  # _select_ready_index tier meaning "claimed last by some other host"
 
     # Constants
     # Counts Processing preprocess rows across EVERY host, so it is an origin-side gate:
     # set QUEUE_MAX_PREPROCESS in the origin's .env, where the claim actually runs.
     MAX_PREPROCESS = int(os.environ.get("QUEUE_MAX_PREPROCESS") or 3)
+    # Every Nth origin claim looks at other hosts' rows first, so a down worker's rows are not stranded.
+    FALLBACK_EVERY = int(os.environ.get("QUEUE_FALLBACK_EVERY") or 10)
     HIGH_PRIORITY_THRESHOLD = 10
     # Seconds a statement waits for a competing writer before raising "database is locked".
     # A bulk submission must never make the queue daemon drop a completion.
@@ -87,6 +95,7 @@ class Scheduler:
         self.overwrite_schedule = overwrite_schedule
 
         self._kwargs = kwargs
+        self._claim_tick = 0
 
         if self.use_system_queue:
             self._schedule = None
@@ -229,6 +238,15 @@ class Scheduler:
                 "CREATE INDEX IF NOT EXISTS ix_scheduler_gate "
                 "ON scheduler(status, config_type, priority, input_type)"
             )
+            # Expressions must match _AFFINITY_FILTER / _FOREIGN_FILTER verbatim or those tiers fall back to a scan.
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS ix_scheduler_affinity "
+                "ON scheduler(status, COALESCE(dispatch, ''), is_ready DESC, priority DESC, readiness DESC, \"index\")"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS ix_scheduler_foreign "
+                "ON scheduler(status, COALESCE(dispatch, '') <> '', is_ready DESC, priority DESC, readiness DESC, \"index\")"
+            )
 
             conn.commit()
 
@@ -342,6 +360,28 @@ class Scheduler:
                 params.append("too")
 
         return query, params
+
+    def _select_ready_index(self, cursor, affinity, extra_sql="", extra_params=()):
+        """One claim tier; _FOREIGN restricts to other hosts' rows, None applies no host filter."""
+        query = 'SELECT "index" FROM scheduler WHERE status = ?'
+        params = ["Ready"]
+        if affinity is self._FOREIGN:
+            query += f" AND {self._FOREIGN_FILTER}"
+        elif affinity is not None:
+            query += f" AND {self._AFFINITY_FILTER}"
+            params.append(affinity)
+        query += extra_sql
+        params.extend(extra_params)
+        query, params = self._append_ready_task_constraints(cursor, query, params)
+        query += f" {self._ORDER_BY} LIMIT 1"
+        cursor.execute(query, tuple(params))
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+    def _take_foreign_turn(self):
+        """True when this origin claim should try other hosts' rows before its own."""
+        self._claim_tick += 1
+        return self.FALLBACK_EVERY > 0 and self._claim_tick % self.FALLBACK_EVERY == 0
 
     @staticmethod
     def _config_stem(config):
@@ -573,25 +613,24 @@ class Scheduler:
             cursor = conn.cursor()
             cursor.execute("BEGIN IMMEDIATE")
             try:
-                query = (
-                    f'SELECT "index" FROM scheduler WHERE status = ? AND {self._LOCAL_TASK_FILTER}'
+                # A fallback turn must name other hosts explicitly; "any Ready row" just re-picks a local one.
+                tiers = (
+                    (self._FOREIGN, self._LOCAL_DISPATCH) if self._take_foreign_turn() else (self._LOCAL_DISPATCH, None)
                 )
-                params = ["Ready"]
-                query, params = self._append_ready_task_constraints(cursor, query, params)
-                query += f" {self._ORDER_BY} LIMIT 1"
-
-                cursor.execute(query, tuple(params))
-                index_row = cursor.fetchone()
-                if not index_row:
+                task_index = None
+                for affinity in tiers:
+                    task_index = self._select_ready_index(cursor, affinity)
+                    if task_index is not None:
+                        break
+                if task_index is None:
                     conn.rollback()
                     return None, None
 
-                task_index = index_row[0]
                 process_start = datetime.now().isoformat()
                 cursor.execute(
-                    f'UPDATE scheduler SET status = ?, process_start = ?, process_end = ? '
-                    f'WHERE "index" = ? AND status = ? AND {self._LOCAL_TASK_FILTER}',
-                    ("Processing", process_start, "", task_index, "Ready"),
+                    'UPDATE scheduler SET status = ?, dispatch = ?, pid = 0, process_start = ?, process_end = ? '
+                    'WHERE "index" = ? AND status = ?',
+                    ("Processing", self._LOCAL_DISPATCH, process_start, "", task_index, "Ready"),
                 )
                 if cursor.rowcount == 0:
                     conn.rollback()
@@ -619,9 +658,7 @@ class Scheduler:
 
     def _get_next_task_memory(self):
         """Get next task from in-memory schedule."""
-        ready_mask = (self.schedule["status"] == "Ready") & (
-            (self.schedule["dispatch"] == "") | (self.schedule["dispatch"] == None)  # noqa: E711
-        )
+        ready_mask = self.schedule["status"] == "Ready"
         ready_tasks = self.schedule[ready_mask]
         if len(ready_tasks) == 0:
             return None, None
@@ -800,21 +837,21 @@ class Scheduler:
             if return_code==SUCCESS_RETURN_CODE:
 
                 cursor.execute(
-                    'UPDATE scheduler SET status = ?, pid = 0, dispatch = NULL, '
+                    'UPDATE scheduler SET status = ?, pid = 0, '
                     'process_end = ? WHERE "index" = ?' + done_guard,
                     ("Completed", process_end, index, *done_states),
                 )
             elif return_code==FAILURE_RETURN_CODE:
 
                 cursor.execute(
-                    'UPDATE scheduler SET status = ?, readiness = ?, is_ready = ?, pid = 0, dispatch = NULL, '
+                    'UPDATE scheduler SET status = ?, readiness = ?, is_ready = ?, pid = 0, '
                     'process_end = ? WHERE "index" = ?' + done_guard,
                     ("Failed", 0, 0, process_end, index, *done_states),
                 )
             elif return_code==EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE:
                 process_end = datetime.now().isoformat()
                 cursor.execute(
-                    'UPDATE scheduler SET status = ?, pid = 0, dispatch = NULL, '
+                    'UPDATE scheduler SET status = ?, pid = 0, '
                     'process_end = ? WHERE "index" = ?' + done_guard,
                     ("Rejected", process_end, index, *done_states),
                 )
@@ -823,7 +860,7 @@ class Scheduler:
                 # killer) or an exit code no stage produces. Orchestration, not science —
                 # fail it here, because leaving it Processing strands the row forever.
                 cursor.execute(
-                    'UPDATE scheduler SET status = ?, readiness = ?, is_ready = ?, pid = 0, dispatch = NULL, '
+                    'UPDATE scheduler SET status = ?, readiness = ?, is_ready = ?, pid = 0, '
                     'process_end = ? WHERE "index" = ?' + done_guard,
                     ("Failed", 0, 0, process_end, index, *done_states),
                 )
@@ -961,23 +998,19 @@ class Scheduler:
             cursor = conn.cursor()
             cursor.execute("BEGIN IMMEDIATE")
             try:
-                query = (
-                    f'SELECT "index" FROM scheduler WHERE status = ? AND {self._LOCAL_TASK_FILTER}'
-                )
-                params = ["Ready"]
+                extra_sql, extra_params = "", ()
                 if config_types:
-                    query += f" AND config_type IN ({','.join('?' for _ in config_types)})"
-                    params.extend(config_types)
-                query, params = self._append_ready_task_constraints(cursor, query, params)
-                query += f" {self._ORDER_BY} LIMIT 1"
-
-                cursor.execute(query, tuple(params))
-                index_row = cursor.fetchone()
-                if not index_row:
+                    extra_sql = f" AND config_type IN ({','.join('?' for _ in config_types)})"
+                    extra_params = tuple(config_types)
+                task_index = None
+                for affinity in (server_name, None):
+                    task_index = self._select_ready_index(cursor, affinity, extra_sql, extra_params)
+                    if task_index is not None:
+                        break
+                if task_index is None:
                     conn.rollback()
                     return None
 
-                task_index = index_row[0]
                 process_start = datetime.now().isoformat()
                 relabel = ", input_type = CASE WHEN LOWER(input_type) = 'too' THEN input_type ELSE ? END"
                 update_params = ["Processing", server_name, process_start, ""]
@@ -987,7 +1020,7 @@ class Scheduler:
                 cursor.execute(
                     f'UPDATE scheduler SET status = ?, dispatch = ?, pid = 0, process_start = ?, process_end = ?'
                     f'{relabel if input_type else ""} '
-                    f'WHERE "index" = ? AND status = ? AND {self._LOCAL_TASK_FILTER}',
+                    f'WHERE "index" = ? AND status = ?',
                     tuple(update_params),
                 )
                 if cursor.rowcount == 0:
@@ -1039,7 +1072,7 @@ class Scheduler:
         with self._db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                'UPDATE scheduler SET status = ?, dispatch = NULL, pid = 0, process_start = ?, process_end = ? '
+                'UPDATE scheduler SET status = ?, pid = 0, process_start = ?, process_end = ? '
                 'WHERE "index" = ? AND dispatch = ? AND status = ?',
                 ("Ready", "", "", int(index), str(server_name), "Processing"),
             )

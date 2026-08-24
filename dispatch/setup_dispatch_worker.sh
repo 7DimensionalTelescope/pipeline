@@ -15,11 +15,13 @@ LYMAN_IP="${LYMAN_IP:-20.20.20.11}"                  # NFS server for /lyman/dat
 PIPELINE_ROOT="${PIPELINE_ROOT:-$HOME/pipeline}"
 PYTHON_BIN_DIR="${PYTHON_BIN_DIR:-$(dirname "$(command -v python3)")}"
 WORKER_USER="${WORKER_USER:-$(id -un)}"
-SERVER_NAME="${SERVER_NAME:-$(hostname -s)}"
-MAX_WORKERS="${MAX_WORKERS:-6}"
+# Existing .env wins over these defaults, so re-running the script never downgrades a tuned host.
+env_get() { grep -E "^$1=" "$PIPELINE_ROOT/.env" 2>/dev/null | tail -1 | cut -d= -f2-; }
+SERVER_NAME="${SERVER_NAME:-$(env_get DISPATCH_SERVER_NAME)}"; SERVER_NAME="${SERVER_NAME:-$(hostname -s)}"
+MAX_WORKERS="${MAX_WORKERS:-$(env_get DISPATCH_MAX_WORKERS)}"; MAX_WORKERS="${MAX_WORKERS:-6}"
 # Narrow while a worker is new; no stage needs a GPU, so "any" is safe when you want it.
-CONFIG_TYPES="${CONFIG_TYPES:-science}"
-INPUT_TYPE="${INPUT_TYPE:-}"                                # relabels each claimed row, e.g. single-reduction-balmer
+CONFIG_TYPES="${CONFIG_TYPES:-$(env_get DISPATCH_CONFIG_TYPES)}"; CONFIG_TYPES="${CONFIG_TYPES:-science}"
+INPUT_TYPE="${INPUT_TYPE:-$(env_get DISPATCH_INPUT_TYPE)}"  # relabels each claimed row, e.g. single-reduction-balmer
 
 NFSOPT="rw,noatime,nodiratime,vers=4.1,rsize=1048576,wsize=1048576,hard,proto=tcp,timeo=600,_netdev 0 0"
 UNIT_TEMPLATE="$PIPELINE_ROOT/systemd/pipeline-dispatch-worker.service"
