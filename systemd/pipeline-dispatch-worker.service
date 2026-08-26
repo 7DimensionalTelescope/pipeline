@@ -8,6 +8,9 @@ RequiresMountsFor=/lyman/data1 /lyman/data2
 [Service]
 UMask=0002
 Type=simple
+# Only the daemon gets SIGTERM; without this systemd kills every reduction in the cgroup at t=0,
+# which pre-empts the shutdown path below and makes a graceful drain impossible.
+KillMode=mixed
 User=@USER@
 Group=pipeline
 WorkingDirectory=@PIPELINE_ROOT@

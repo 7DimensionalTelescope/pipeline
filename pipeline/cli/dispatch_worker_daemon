@@ -18,6 +18,10 @@ Environment:
   DISPATCH_INPUT_TYPE     relabel each claimed row with this scheduler input_type (default: leave it alone)
   DISPATCH_MAX_WORKERS    parallel jobs (default 5)
   DISPATCH_POLL_INTERVAL  seconds between polls (default 5)
+  DISPATCH_PREFETCH       extra tasks to claim ahead of a free slot (default 0 = never claim ahead)
+
+Signals: SIGUSR1 drains (stop claiming, let running configs finish), SIGUSR2 resumes,
+SIGTERM/SIGINT stop now (running configs are terminated and their rows released).
 """
 
 from __future__ import annotations
@@ -46,6 +50,8 @@ from pipeline.services.scheduler import Scheduler
 
 DEFAULT_POLL_INTERVAL = 5.0
 DEFAULT_MAX_WORKERS = 5
+# Claiming ahead marks rows Processing before they run; a SIGKILL then strands them, so default to none.
+DEFAULT_PREFETCH = 0
 # Deliberately narrow while a worker is new; no stage needs a GPU, so widen when ready.
 DEFAULT_CONFIG_TYPES = "science"
 RPC_TIMEOUT = 60.0
@@ -86,6 +92,9 @@ class ProtonScheduler:
     def claim(self, server, config_types, input_type):
         return self._call("claim", server=server, config_types=config_types, input_type=input_type)
 
+    def claim_many(self, server, config_types, input_type, count):
+        return self._call("claim_many", server=server, config_types=config_types, input_type=input_type, count=count)
+
     def set_pid(self, index, server, pid):
         return self._call("set_pid", index=index, server=server, pid=pid)
 
@@ -97,15 +106,19 @@ class ProtonScheduler:
 
 
 class DispatchWorker:
-    def __init__(self, scheduler, server_name, max_workers, config_types=None, input_type=None):
+    def __init__(self, scheduler, server_name, max_workers, config_types=None, input_type=None, prefetch=0):
         self.scheduler = scheduler
         self.server_name = server_name
         self.max_workers = max_workers
         self.config_types = config_types
         self.input_type = input_type
+        self.prefetch = max(0, int(prefetch))
         self._stop = False
+        self._drain = False
+        self._drained_logged = False
         self._rpc_down = False
         self._active: dict[int, dict] = {}  # pid -> {index, config, proc}
+        self._pending: list[dict] = []  # claimed but not yet started; only non-empty when prefetch > 0
 
     def _finish(self, entry, return_code):
         """Report a finished run with its RAW return code; 2 (Rejected) is a normal outcome."""
@@ -125,14 +138,7 @@ class DispatchWorker:
                 continue
             del self._active[pid]
 
-    def _try_start_one(self):
-        if len(self._active) >= self.max_workers:
-            return False
-
-        task = self.scheduler.claim(self.server_name, self.config_types, self.input_type)
-        if task is None:
-            return False
-
+    def _start(self, task):
         index = task["index"]
         try:
             cmd = Scheduler.build_command(task["config"], task["config_type"], task["input_type"], task["kwargs"])
@@ -149,11 +155,55 @@ class DispatchWorker:
         except Exception:
             logger.exception("Could not record pid for index %s on proton; the row keeps pid=0", index)
         logger.info("Started index %s pid=%s (%s)", index, proc.pid, os.path.basename(task["config"]))
-        return True
+
+    def _fill(self):
+        """Claim every free slot in one RPC and start them; the poll interval stops gating the fill rate."""
+        if self._stop or self._drain:
+            return 0
+        free = self.max_workers - len(self._active)
+        if free <= 0:
+            return 0
+
+        tasks, self._pending = self._pending, []
+        if len(tasks) < free:
+            try:
+                tasks += self.scheduler.claim_many(
+                    self.server_name, self.config_types, self.input_type, free - len(tasks) + self.prefetch
+                ) or []
+            except Exception:
+                self._pending = tasks
+                raise
+
+        started = 0
+        try:
+            while tasks and started < free and not self._stop:
+                self._start(tasks.pop(0))
+                started += 1
+        finally:
+            self._pending = tasks  # anything unstarted stays claimed; released on drain or shutdown
+        return started
+
+    def _release_pending(self):
+        """Hand back claims that were prefetched but never started, so they do not sit Processing."""
+        keep = []
+        for task in self._pending:
+            try:
+                self.scheduler.release(task["index"], self.server_name)
+            except Exception:
+                logger.exception("Could not release prefetched index %s; leaving it claimed", task["index"])
+                keep.append(task)
+        if self._pending:
+            logger.info("Released %d prefetched claim(s)", len(self._pending) - len(keep))
+        self._pending = keep
 
     def run_once(self):
         self._reap_finished()
-        started = self._try_start_one()
+        if (self._drain or self._stop) and self._pending:
+            self._release_pending()
+        started = self._fill()
+        if self._drain and not self._active and not self._pending and not self._drained_logged:
+            self._drained_logged = True
+            logger.info("Drained: 0 running, 0 claimed. Safe to stop or restart this unit.")
         return {"active": len(self._active), "max_workers": self.max_workers, "started": started}
 
     def run_forever(self, poll_interval):
@@ -164,6 +214,9 @@ class DispatchWorker:
             self.config_types or "any",
             self.input_type or "(unchanged)",
         )
+        if self.prefetch:
+            logger.warning("Prefetch is %d: rows are claimed before a slot frees and strand if this host is killed",
+                           self.prefetch)
         while not self._stop:
             try:
                 self.run_once()
@@ -176,6 +229,7 @@ class DispatchWorker:
     def _shutdown(self):
         """Report what finished, hand back what died, keep the claim on anything still alive."""
         self.scheduler.timeout = SHUTDOWN_RPC_TIMEOUT
+        self._release_pending()
         self._settle_stopped()  # honours _rpc_down, unlike _reap_finished's per-entry retry
         for entry in self._active.values():
             entry["proc"].terminate()
@@ -223,6 +277,19 @@ class DispatchWorker:
                 continue
             del self._active[pid]
 
+    def drain(self, *_args):
+        """Stop claiming; let every running config finish. The daemon stays up and idle."""
+        if not self._drain:
+            self._drain = True
+            self._drained_logged = False
+            logger.info("Drain requested: no new claims; %d running config(s) will finish", len(self._active))
+
+    def resume(self, *_args):
+        if self._drain:
+            self._drain = False
+            self._drained_logged = False
+            logger.info("Drain cleared: claiming resumed")
+
     def stop(self, *_args):
         self._stop = True
 
@@ -245,6 +312,9 @@ def parse_args():
     parser.add_argument(
         "--poll-interval", type=float, default=float(os.environ.get("DISPATCH_POLL_INTERVAL", DEFAULT_POLL_INTERVAL))
     )
+    parser.add_argument(
+        "--prefetch", type=int, default=int(os.environ.get("DISPATCH_PREFETCH", DEFAULT_PREFETCH))
+    )
     parser.add_argument("--check", action="store_true", help="Verify the proton connection and exit")
     return parser.parse_args()
 
@@ -264,9 +334,13 @@ def main():
         print(f"OK: scheduler_rpc reachable on {args.ssh}")
         return
 
-    worker = DispatchWorker(scheduler, args.server_name, args.max_workers, config_types, args.input_type)
+    worker = DispatchWorker(
+        scheduler, args.server_name, args.max_workers, config_types, args.input_type, args.prefetch
+    )
     signal.signal(signal.SIGTERM, worker.stop)
     signal.signal(signal.SIGINT, worker.stop)
+    signal.signal(signal.SIGUSR1, worker.drain)
+    signal.signal(signal.SIGUSR2, worker.resume)
     worker.run_forever(args.poll_interval)
 
 
