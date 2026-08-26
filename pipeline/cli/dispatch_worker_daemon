@@ -20,8 +20,10 @@ Environment:
   DISPATCH_POLL_INTERVAL  seconds between polls (default 5)
   DISPATCH_PREFETCH       extra tasks to claim ahead of a free slot (default 0 = never claim ahead)
 
-Signals: SIGUSR1 drains (stop claiming, let running configs finish), SIGUSR2 resumes,
-SIGTERM/SIGINT stop now (running configs are terminated and their rows released).
+Signals: SIGHUP reloads DISPATCH_MAX_WORKERS, DISPATCH_INPUT_TYPE and
+DISPATCH_POLL_INTERVAL from .env; SIGUSR1 drains (stop claiming, let running configs
+finish), SIGUSR2 resumes, SIGTERM/SIGINT stop now (running configs are terminated and
+their rows released).
 """
 
 from __future__ import annotations
@@ -36,6 +38,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 pipeline_dir = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(pipeline_dir))
@@ -106,16 +110,21 @@ class ProtonScheduler:
 
 
 class DispatchWorker:
-    def __init__(self, scheduler, server_name, max_workers, config_types=None, input_type=None, prefetch=0):
+    def __init__(
+        self, scheduler, server_name, max_workers, config_types=None, input_type=None, prefetch=0,
+        poll_interval=DEFAULT_POLL_INTERVAL,
+    ):
         self.scheduler = scheduler
         self.server_name = server_name
         self.max_workers = max_workers
         self.config_types = config_types
         self.input_type = input_type
         self.prefetch = max(0, int(prefetch))
+        self.poll_interval = poll_interval
         self._stop = False
         self._drain = False
         self._drained_logged = False
+        self._reload_requested = False
         self._rpc_down = False
         self._active: dict[int, dict] = {}  # pid -> {index, config, proc}
         self._pending: list[dict] = []  # claimed but not yet started; only non-empty when prefetch > 0
@@ -206,7 +215,36 @@ class DispatchWorker:
             logger.info("Drained: 0 running, 0 claimed. Safe to stop or restart this unit.")
         return {"active": len(self._active), "max_workers": self.max_workers, "started": started}
 
-    def run_forever(self, poll_interval):
+    def _reload_config(self):
+        """Apply mutable settings at a loop boundary, never from the signal handler."""
+        try:
+            load_dotenv(pipeline_dir / ".env", override=True)
+            max_workers = int(os.environ.get("DISPATCH_MAX_WORKERS", DEFAULT_MAX_WORKERS))
+            poll_interval = float(os.environ.get("DISPATCH_POLL_INTERVAL", DEFAULT_POLL_INTERVAL))
+            if max_workers < 0:
+                raise ValueError("DISPATCH_MAX_WORKERS must be >= 0")
+            if poll_interval < 0:
+                raise ValueError("DISPATCH_POLL_INTERVAL must be >= 0")
+        except (TypeError, ValueError):
+            logger.exception("Dispatch reload rejected; retaining current settings")
+            return
+
+        input_type = os.environ.get("DISPATCH_INPUT_TYPE", "") or None
+        old = (self.max_workers, self.input_type, self.poll_interval)
+        self.max_workers = max_workers
+        self.input_type = input_type
+        self.poll_interval = poll_interval
+        logger.info(
+            "Dispatch reload applied: max_workers %s -> %s, input_type %s -> %s, poll_interval %s -> %s",
+            old[0], self.max_workers, old[1] or "(unchanged)", self.input_type or "(unchanged)",
+            old[2], self.poll_interval,
+        )
+
+    def request_reload(self, *_args):
+        """Schedule a .env reload; signal handlers must not perform I/O or mutate worker state."""
+        self._reload_requested = True
+
+    def run_forever(self):
         logger.info(
             "Dispatch worker started (server=%s, max_workers=%d, config_types=%s, input_type=%s)",
             self.server_name,
@@ -218,11 +256,14 @@ class DispatchWorker:
             logger.warning("Prefetch is %d: rows are claimed before a slot frees and strand if this host is killed",
                            self.prefetch)
         while not self._stop:
+            if self._reload_requested:
+                self._reload_requested = False
+                self._reload_config()
             try:
                 self.run_once()
             except Exception:
                 logger.exception("Worker iteration failed")
-            time.sleep(poll_interval)
+            time.sleep(self.poll_interval)
         self._shutdown()
         logger.info("Dispatch worker stopped")
 
@@ -335,13 +376,15 @@ def main():
         return
 
     worker = DispatchWorker(
-        scheduler, args.server_name, args.max_workers, config_types, args.input_type, args.prefetch
+        scheduler, args.server_name, args.max_workers, config_types, args.input_type, args.prefetch,
+        args.poll_interval,
     )
     signal.signal(signal.SIGTERM, worker.stop)
     signal.signal(signal.SIGINT, worker.stop)
+    signal.signal(signal.SIGHUP, worker.request_reload)
     signal.signal(signal.SIGUSR1, worker.drain)
     signal.signal(signal.SIGUSR2, worker.resume)
-    worker.run_forever(args.poll_interval)
+    worker.run_forever()
 
 
 if __name__ == "__main__":
