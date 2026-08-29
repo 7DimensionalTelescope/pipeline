@@ -15,6 +15,7 @@ class ProcessSpec:
     progress_start: int
     progress_end: int
     photometry_mode: str | None = None
+    input_key: str | None = None
     milestones: tuple[tuple[str, int], ...] = ()
 
 
@@ -105,6 +106,7 @@ SINGLE_PHOTOMETRY_SPEC = ProcessSpec(
     progress_start=40,
     progress_end=60,
     photometry_mode="single_photometry",
+    input_key="calibrated_images",
 )
 COADD_SPEC = ProcessSpec(
     name="coadd",
@@ -130,6 +132,7 @@ COADD_PHOTOMETRY_SPEC = ProcessSpec(
     progress_start=70,
     progress_end=80,
     photometry_mode="coadd_photometry",
+    input_key="coadd_image",
 )
 SUBTRACTION_SPEC = ProcessSpec(
     name="subtraction",
@@ -151,6 +154,7 @@ DIFFERENCE_PHOTOMETRY_SPEC = ProcessSpec(
     progress_start=90,
     progress_end=100,
     photometry_mode="difference_photometry",
+    input_key="difference_image",
 )
 
 SCIPROC_PROCESSES = [

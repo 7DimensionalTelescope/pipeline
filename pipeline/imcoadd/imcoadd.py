@@ -8,7 +8,7 @@ from typing import Literal
 
 import numpy as np
 from astropy.io import fits
-from astropy.wcs import WCS
+from astropy.wcs import WCS, WCSCOMPARE_ANCILLARY
 
 from ..const import REF_DIR
 from ..const.sciproc import COADD_SPEC, SCIPROCESS_REGISTRY
@@ -39,6 +39,14 @@ warnings.filterwarnings("ignore")
 
 class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
     _process_spec = COADD_SPEC
+    _process_registry = SCIPROCESS_REGISTRY
+    _process_error = CoaddError
+    _homogeneous_header_keys = ("OBJECT", "FILTER")
+    _input_label = "singles"
+    _output_filter = None
+    _extra_header_keys = ()
+    _max_header_keys = ()
+    _proper_requires_interpolation = True
     zp_base: float = 23.9  # uJy; flux-scaling reference zero point
 
     def __init__(
@@ -54,7 +62,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.overwrite = self.resolve_overwrite(overwrite)
         self._device_id = None
         self._use_gpu = use_gpu
-        self.logger.process_error = CoaddError
+        self.logger.process_error = self._process_error
 
         self.qa_id = None
         DatabaseHandler.__init__(
@@ -64,7 +72,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         if self.is_connected:
 
             self.process_status_id = self.create_process_data(self.config_node)
-            self.reset_exceptions("coadd")
+            self.reset_exceptions(self._process_spec.name)
 
             if self.process_status_id is not None:
                 from ..services.database.handler import ExceptionHandler
@@ -77,7 +85,13 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 self.logger.debug(
                     f"Initialized DatabaseHandler for pipeline and QA data management, Pipeline ID: {self.process_status_id}"
                 )
-            self.update_progress(SCIPROCESS_REGISTRY.configured_progress("coadd"), "imcoadd-configured")
+            self.update_progress(
+                self._process_registry.configured_progress(self._process_spec),
+                self._progress_status("configured"),
+            )
+
+    def _progress_status(self, suffix: str) -> str:
+        return f"{self._process_spec.name}-{suffix}"
 
     @classmethod
     def from_list(cls, input_images, working_dir=None):
@@ -114,31 +128,38 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         # background subtraction
         images = self.bkgsub(self.input_images)
-        self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("coadd", "bkgsub"), "imcoadd-bkgsub-completed")
+        self.update_progress(
+            self._process_registry.milestone_progress(self._process_spec, "bkgsub"),
+            self._progress_status("bkgsub-completed"),
+        )
         # zero point scaling
         self.zpscale(images)
-        self.update_progress(SCIPROCESS_REGISTRY.milestone_progress("coadd", "zpscale"), "imcoadd-zpscale-completed")
+        self.update_progress(
+            self._process_registry.milestone_progress(self._process_spec, "zpscale"),
+            self._progress_status("zpscale-completed"),
+        )
 
         if self._coadd_plan()["need_weights"]:
             self.calculate_weight_map(images, device_id=device_id)
             self.update_progress(
-                SCIPROCESS_REGISTRY.milestone_progress("coadd", "calculate_weight_map"),
-                "imcoadd-calculate-weight-map-completed",
+                self._process_registry.milestone_progress(self._process_spec, "calculate_weight_map"),
+                self._progress_status("calculate-weight-map-completed"),
             )
 
         # replace hot pixels
         if self._coadd_plan()["interpolate"]:
             images = self.apply_bpmask(images, device_id=device_id)
             self.update_progress(
-                SCIPROCESS_REGISTRY.milestone_progress("coadd", "apply_bpmask"), "imcoadd-apply-bpmask-completed"
+                self._process_registry.milestone_progress(self._process_spec, "apply_bpmask"),
+                self._progress_status("apply-bpmask-completed"),
             )
 
         # re-registration
         if self.config_node.imcoadd.joint_wcs:
             images = self.joint_registration(images)
             self.update_progress(
-                SCIPROCESS_REGISTRY.milestone_progress("coadd", "joint_registration"),
-                "imcoadd-joint-registration-completed",
+                self._process_registry.milestone_progress(self._process_spec, "joint_registration"),
+                self._progress_status("joint-registration-completed"),
             )
 
         # seeing convolution
@@ -146,26 +167,29 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self.prepare_convolution(images)
             images = self.run_convolution(images, device_id=device_id)
             self.update_progress(
-                SCIPROCESS_REGISTRY.milestone_progress("coadd", "run_convolution"),
-                "imcoadd-run-convolution-completed",
+                self._process_registry.milestone_progress(self._process_spec, "run_convolution"),
+                self._progress_status("run-convolution-completed"),
             )
 
         # swarp coaddition
         self.reproject_and_coadd_with_swarp(images, coadd=True)
         self.update_progress(
-            SCIPROCESS_REGISTRY.milestone_progress("coadd", "coadd_with_swarp"),
-            "imcoadd-coadd-with-swarp-completed",
+            self._process_registry.milestone_progress(self._process_spec, "coadd_with_swarp"),
+            self._progress_status("coadd-with-swarp-completed"),
         )
 
         self.plot_coadd_image()
         self.update_progress(
-            SCIPROCESS_REGISTRY.milestone_progress("coadd", "plot_coadd_image"),
-            "imcoadd-plot-coadded-image-completed",
+            self._process_registry.milestone_progress(self._process_spec, "plot_coadd_image"),
+            self._progress_status("plot-coadded-image-completed"),
         )
 
         self.register_coadd_qa()
 
-        self.update_progress(SCIPROCESS_REGISTRY.completed_progress("coadd"), "imcoadd-completed")
+        self.update_progress(
+            self._process_registry.completed_progress(self._process_spec),
+            self._progress_status("completed"),
+        )
 
     def reproject_first_coadd_routine(self, use_gpu: bool = False, device_id=None):
         """SWarp for reprojection only; the combine step runs in memory via
@@ -196,12 +220,13 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             weight_images = [add_suffix(im, "weight") for im in images]
             step += 1
             self.update_progress(
-                SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS),
-                "imcoadd-calculate-weight-map-completed",
+                self._process_registry.step_progress(self._process_spec, step, TOTAL_STEPS),
+                self._progress_status("calculate-weight-map-completed"),
             )
             step += 1
             self.update_progress(
-                SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-apply-bpmask-completed"
+                self._process_registry.step_progress(self._process_spec, step, TOTAL_STEPS),
+                self._progress_status("apply-bpmask-completed"),
             )
         else:
             if do_weight:
@@ -213,8 +238,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 self.calculate_weight_map(images, device_id=device_id, out_weights=weight_images)
                 step += 1
                 self.update_progress(
-                    SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS),
-                    "imcoadd-calculate-weight-map-completed",
+                    self._process_registry.step_progress(self._process_spec, step, TOTAL_STEPS),
+                    self._progress_status("calculate-weight-map-completed"),
                 )
 
             # Bad pixel interpolation
@@ -225,7 +250,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     weight_images = [add_suffix(im, "weight") for im in images]
                 step += 1
                 self.update_progress(
-                    SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-apply-bpmask-completed"
+                    self._process_registry.step_progress(self._process_spec, step, TOTAL_STEPS),
+                    self._progress_status("apply-bpmask-completed"),
                 )
 
         # Optional joint registration
@@ -233,8 +259,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             images = self.joint_registration(images)
             step += 1
             self.update_progress(
-                SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS),
-                "imcoadd-joint-registration-completed",
+                self._process_registry.step_progress(self._process_spec, step, TOTAL_STEPS),
+                self._progress_status("joint-registration-completed"),
             )
 
         # Reproject (no combine) onto a common WCS
@@ -248,7 +274,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self._discard_consumed_interp()
         step += 1
         self.update_progress(
-            SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-reproject-completed"
+            self._process_registry.step_progress(self._process_spec, step, TOTAL_STEPS),
+            self._progress_status("reproject-completed"),
         )
 
         # PSF homogenization
@@ -258,8 +285,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self.shrink_fov_masks(self.delta_peeings)
             step += 1
             self.update_progress(
-                SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS),
-                "imcoadd-run-convolution-completed",
+                self._process_registry.step_progress(self._process_spec, step, TOTAL_STEPS),
+                self._progress_status("run-convolution-completed"),
             )
 
         # Background subtraction on reprojected (+ optionally convolved) frames
@@ -271,29 +298,116 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         )
         self._discard_consumed_bkgsub_inputs()
         step += 1
-        self.update_progress(SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-bkgsub-completed")
+        self.update_progress(
+            self._process_registry.step_progress(self._process_spec, step, TOTAL_STEPS),
+            self._progress_status("bkgsub-completed"),
+        )
 
         # Flux zero-point scaling (snapshot only; the in-memory combine takes the values directly)
         self.zpscale(images, write_headers=False)
         if do_zpscale:
             step += 1
             self.update_progress(
-                SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-zpscale-completed"
+                self._process_registry.step_progress(self._process_spec, step, TOTAL_STEPS),
+                self._progress_status("zpscale-completed"),
             )
 
         # In-memory coaddition (mean/median selected by imcoadd.coadd_mode)
         self.coadd_in_memory(images, device_id=device_id)
         step += 1
-        self.update_progress(SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-coadd-completed")
+        self.update_progress(
+            self._process_registry.step_progress(self._process_spec, step, TOTAL_STEPS),
+            self._progress_status("coadd-completed"),
+        )
 
         # Plot coadd image
         self.plot_coadd_image()
         step += 1
-        self.update_progress(SCIPROCESS_REGISTRY.step_progress("coadd", step, TOTAL_STEPS), "imcoadd-plot-completed")
+        self.update_progress(
+            self._process_registry.step_progress(self._process_spec, step, TOTAL_STEPS),
+            self._progress_status("plot-completed"),
+        )
 
         self.register_coadd_qa()
 
-        self.update_progress(SCIPROCESS_REGISTRY.completed_progress("coadd"), "imcoadd-completed")
+        self.update_progress(
+            self._process_registry.completed_progress(self._process_spec),
+            self._progress_status("completed"),
+        )
+
+    def direct_coadd_routine(self, use_gpu: bool = False, device_id=None):
+        """Combine inputs already on one pixel grid without a SWarp pass."""
+        self._use_gpu = all([use_gpu, self.config_node.imcoadd.gpu, self._use_gpu])
+        if self.config_node.imcoadd.joint_wcs or self.config_node.imcoadd.convolve:
+            raise self._process_error.ValueError("Direct coaddition requires joint_wcs=False and convolve=False")
+
+        plan = self._coadd_plan()
+        do_zpscale = bool(get_key(self.config_node.imcoadd, "zpscale", default=True))
+        total_steps = 3 + int(plan["need_weights"]) + int(plan["interpolate"]) + int(do_zpscale)
+        step = 0
+
+        self.initialize()
+        self._validate_direct_grid()
+        images = self.input_images
+        weight_images = None
+
+        if plan["need_weights"]:
+            factory = self.path.imcoadd.factory
+            weight_images = factory.stage_images(images, "weight", factory.weight_dir)
+            weight_images = self.calculate_weight_map(images, device_id=device_id, out_weights=weight_images)
+            step += 1
+            self.update_progress(
+                self._process_registry.step_progress(self._process_spec, step, total_steps),
+                self._progress_status("calculate-weight-map-completed"),
+            )
+
+        if plan["interpolate"]:
+            images = self.apply_bpmask(images, device_id=device_id, weight_images=weight_images)
+            if weight_images is not None:
+                weight_images = [add_suffix(image, "weight") for image in images]
+            step += 1
+            self.update_progress(
+                self._process_registry.step_progress(self._process_spec, step, total_steps),
+                self._progress_status("apply-bpmask-completed"),
+            )
+
+        images = self.bkgsub(
+            images,
+            mask_out_of_fov=True,
+            mask_sources=get_key(self.config_node.imcoadd, "source_mask", default=True),
+        )
+        step += 1
+        self.update_progress(
+            self._process_registry.step_progress(self._process_spec, step, total_steps),
+            self._progress_status("bkgsub-completed"),
+        )
+
+        self.zpscale(images, write_headers=False)
+        if do_zpscale:
+            step += 1
+            self.update_progress(
+                self._process_registry.step_progress(self._process_spec, step, total_steps),
+                self._progress_status("zpscale-completed"),
+            )
+
+        self.coadd_in_memory(images, device_id=device_id, weight_images=weight_images)
+        step += 1
+        self.update_progress(
+            self._process_registry.step_progress(self._process_spec, step, total_steps),
+            self._progress_status("coadd-completed"),
+        )
+
+        self.plot_coadd_image()
+        step += 1
+        self.update_progress(
+            self._process_registry.step_progress(self._process_spec, step, total_steps),
+            self._progress_status("plot-completed"),
+        )
+        self.register_coadd_qa()
+        self.update_progress(
+            self._process_registry.completed_progress(self._process_spec),
+            self._progress_status("completed"),
+        )
 
     def run(self, use_gpu: bool = False, device_id=None):
         try:
@@ -302,10 +416,14 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 self.legacy_coadd_routine(use_gpu=use_gpu, device_id=device_id)
             elif "reproject-first" in routine.lower():
                 self.reproject_first_coadd_routine(use_gpu=use_gpu, device_id=device_id)
+            elif "direct" in routine.lower():
+                self.direct_coadd_routine(use_gpu=use_gpu, device_id=device_id)
             else:
-                raise ValueError(f"Invalid coadd routine: {routine!r} (expected 'legacy' or 'reproject-first')")
+                raise ValueError(
+                    f"Invalid coadd routine: {routine!r} (expected 'legacy', 'reproject-first', or 'direct')"
+                )
 
-            self.config_node.flag.coadd = True
+            setattr(self.config_node.flag, self._process_spec.name, True)
             self.record_runtime_version()
             self.logger.info(f"'ImCoadd' is Completed in {time_diff_in_seconds(self._st)} seconds")
         except Exception as e:
@@ -324,10 +442,10 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             if local_input_images is not None  # local_input_images can be an empty list
             else self.config_node.input.calibrated_images
         )
-        self.apply_sanity_filter_and_report(current_process=COADD_SPEC, overwrite=self.overwrite)
+        self.apply_sanity_filter_and_report(current_process=self._process_spec, overwrite=self.overwrite)
         if not self.input_images:
-            self.logger.error("No Input for ImCoadd", CoaddError.EmptyInputAfterSanityRejection)
-            raise CoaddError.EmptyInputAfterSanityRejection("No Input for ImCoadd")
+            self.logger.error("No Input for ImCoadd", self._process_error.EmptyInputAfterSanityRejection)
+            raise self._process_error.EmptyInputAfterSanityRejection("No Input for ImCoadd")
         # if rejected, let the input remain so that a rerun has a change to reevaluate SANITY
 
         if str(get_key(self.config_node.imcoadd, "coadd_mode") or "").lower() == "proper":
@@ -336,6 +454,11 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.select_input_images()  # may drop inputs, so it precedes the snapshot and resync
         # Single read of every kept header; all aggregates/coadd_header live on this snapshot.
         self.input_headers = InputHeaderSet.from_files(self.input_images)
+        if self._output_filter is not None:
+            self.input_headers.output_filter = self._output_filter
+        self.input_headers.input_label = self._input_label
+        self.input_headers.extra_core_keys = self._extra_header_keys
+        self.input_headers.max_core_keys = self._max_header_keys
         self.input_headers.selection_metrics = getattr(self, "_selection_meta", {})
         self.input_headers.coadd_provenance = self._coadd_provenance()
         self.input_headers.multi_epoch = bool(self.config_node.settings.is_multi_epoch)
@@ -348,8 +471,12 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         # self.define_paths(working_dir=self.config.path.path_processed)
 
-        self.input_headers.check_uniqueness(["OBJECT", "FILTER"], self.logger)
-        self.center = self.input_headers.deprojection_center
+        self.input_headers.check_uniqueness(self._homogeneous_header_keys, self.logger)
+        self.center = (
+            None
+            if "direct" in str(self.config_node.imcoadd.coadd_routine or "").lower()
+            else self.input_headers.deprojection_center
+        )
         self.logger.debug(f"Deprojection center: {self.center}")
 
         # Output coadd image file name
@@ -361,6 +488,26 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self._guard_coadd_identity()
 
         self.logger.info(f"Initialization for ImCoadd is completed")
+
+    def _validate_direct_grid(self, tolerance: float = 1e-7) -> None:
+        reference_header = self.input_headers[0]
+        reference_shape = (reference_header.get("NAXIS2"), reference_header.get("NAXIS1"))
+        reference_wcs = WCS(reference_header).celestial.wcs
+        mismatched = []
+        for name, header in zip(self.input_headers.names[1:], self.input_headers.headers[1:]):
+            shape = (header.get("NAXIS2"), header.get("NAXIS1"))
+            same_wcs = reference_wcs.compare(
+                WCS(header).celestial.wcs,
+                cmp=WCSCOMPARE_ANCILLARY,
+                tolerance=tolerance,
+            )
+            if shape != reference_shape or not same_wcs:
+                mismatched.append(name)
+        if mismatched:
+            raise self._process_error.ValueError(
+                f"Direct coaddition requires one matched pixel grid; mismatched inputs: {mismatched[:3]}"
+            )
+        self.logger.info(f"Validated one shared pixel grid for {len(self.input_images)} inputs")
 
     def select_input_images(self, nsigma: float = 1.0, metrics=None, extra=None) -> list[str]:
         """Cull the inputs on SEEING / ELLIP / depth. Multi-epoch coadds only.
@@ -438,8 +585,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             return self.input_images
         if not keep.any():
             self.logger.error(f"Quality cuts {cuts} reject all {len(keep)} images",
-                              CoaddError.EmptyInputAfterSanityRejection)  # fmt: skip
-            raise CoaddError.EmptyInputAfterSanityRejection(f"Quality cuts {cuts} reject all {len(keep)} images")
+                              self._process_error.EmptyInputAfterSanityRejection)  # fmt: skip
+            raise self._process_error.EmptyInputAfterSanityRejection(f"Quality cuts {cuts} reject all {len(keep)} images")
 
         self.input_images = [f for f, ok in zip(self.input_images, keep) if ok]
         # written back in the operator grammar, so a rerun pins exactly what this run applied
@@ -667,7 +814,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         if mismatch:
             detail = ", ".join(f"{k}: disk={d!r} config={c!r}" for k, (d, c) in mismatch.items())
             self.logger.error(f"Coadd identity mismatch on {get_basename(coadd_image)}: {detail}")
-            raise CoaddError.ValueError(
+            raise self._process_error.ValueError(
                 f"{get_basename(coadd_image)} exists with different settings ({detail}). "
                 "Use config_suffix to keep both products, or overwrite=True to replace it."
             )
@@ -1249,7 +1396,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self.logger.debug(f"BADPIX found in header. Using badpix {badpix}.")
         else:
 
-            self.logger.warning("BADPIX not found in header. Using default value 0.", CoaddError.KeyError)
+            self.logger.warning("BADPIX not found in header. Using default value 0.", self._process_error.KeyError)
         return mask_file, badpix
 
     def _discard_consumed_interp(self):
@@ -1716,8 +1863,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         for zp in zpvalues:
             if zp is None:
                 msg = f"{self.zpkey} is None for {input_images[i]}"
-                self.logger.error(msg, CoaddError.PreviousStageError)
-                raise CoaddError.PreviousStageError(msg)
+                self.logger.error(msg, self._process_error.PreviousStageError)
+                raise self._process_error.PreviousStageError(msg)
         # base zero point for flux scaling
         # base = np.where(zpvalues == np.max(zpvalues))[0][0]
         # self.zp_base = zpvalues[base]
@@ -1817,8 +1964,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             peeings = [p if p is not None else fits.getheader(f).get("PEEING") for f, p in zip(input_images, peeings)]
             if any(p is None for p in peeings):
                 missing = [get_basename(f) for f, p in zip(input_images, peeings) if p is None]
-                self.logger.error(f"No PEEING for {missing[:3]}; cannot match seeing", CoaddError.KeyError)
-                raise CoaddError.KeyError(f"No PEEING for {len(missing)} input(s); cannot match seeing")
+                self.logger.error(f"No PEEING for {missing[:3]}; cannot match seeing", self._process_error.KeyError)
+                raise self._process_error.KeyError(f"No PEEING for {len(missing)} input(s); cannot match seeing")
 
             # max_peeing = np.max(peeings)
             max_peeing = float(np.max(peeings))
@@ -1927,8 +2074,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 self.logger.debug(f"outwim_list {outwim_list}")
 
                 if not all([os.path.exists(f) for f in atleast_1d(weight_list)]):
-                    self.logger.error(f"Weight map not found for all images.", CoaddError.FileNotFoundError)
-                    raise CoaddError.FileNotFoundError(f"Weight map not found for all images.")
+                    self.logger.error(f"Weight map not found for all images.", self._process_error.FileNotFoundError)
+                    raise self._process_error.FileNotFoundError(f"Weight map not found for all images.")
 
                 # compute
                 convolve_fft(
@@ -1969,8 +2116,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         for candidate in candidates:
             if candidate and os.path.exists(candidate):
                 return candidate
-        self.logger.error(f"No weight map found for {get_basename(image)}", CoaddError.FileNotFoundError)
-        raise CoaddError.FileNotFoundError(f"No weight map found for {image}")
+        self.logger.error(f"No weight map found for {get_basename(image)}", self._process_error.FileNotFoundError)
+        raise self._process_error.FileNotFoundError(f"No weight map found for {image}")
 
     def _calc_delta_peeing(self, peeing):
         # clamped: a target below the worst input is already corrected upstream, this
@@ -2335,7 +2482,12 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         remapped = {g: ([mapping[f] for f in lst] if lst else lst) for g, lst in groups.items()}
         return remapped, lambda: shutil.rmtree(base, ignore_errors=True)
 
-    def coadd_in_memory(self, input_images: list[str] | None = None, device_id=None) -> str:
+    def coadd_in_memory(
+        self,
+        input_images: list[str] | None = None,
+        device_id=None,
+        weight_images: list[str] | None = None,
+    ) -> str:
         """Dispatcher to numpy/cupy and mean/median backends.
         ``imcoadd.coadd_mode`` picks the combine algorithm; for ``mean``, the
         weighted variant kicks in when ``imcoadd.weight_map`` is set and the
@@ -2366,9 +2518,14 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             # LANCZOS3 companions next to the sci resamp ring to ~0 almost
             # everywhere (99%+ zeros) and must NOT be used.
             wht_dir = self.path.imcoadd.factory.swarp_resample_dir("wht")
-            # named after what SWarp resampled, not after the later bkgsub products
-            resampled = get_key(self.config_node.imcoadd, "resampled_images") or input_images
-            candidates = atleast_1d(self.path.imcoadd.factory.resampled_weight_images(resampled, pass_type="wht"))
+            if weight_images is not None:
+                candidates = atleast_1d(weight_images)
+            else:
+                # named after what SWarp resampled, not after the later bkgsub products
+                resampled = get_key(self.config_node.imcoadd, "resampled_images") or input_images
+                candidates = atleast_1d(
+                    self.path.imcoadd.factory.resampled_weight_images(resampled, pass_type="wht")
+                )
             if all(os.path.exists(w) for w in candidates):
                 wht_maps = candidates
             else:
@@ -2407,6 +2564,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             weights = staged["wht"]
 
         mode = self.config_node.imcoadd.coadd_mode
+        match_swarp_size = bool(get_key(self.config_node.imcoadd, "match_swarp_size", default=True))
         # combines on one filesystem only divide its bandwidth: serialize per st_dev,
         # and lease planned stack bytes so concurrent (cross-fs) combines cannot each
         # size their strips against the same MemAvailable. Multi-epoch only: nightly
@@ -2430,6 +2588,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                         weights=weights,
                         masks=masks,
                         var_maps=var_maps,
+                        match_swarp_size=match_swarp_size,
                         write_weight=plan["output_weight_map"],
                         write_footprint=plan["output_footprint"],
                     )
@@ -2440,6 +2599,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                         weights=weights,
                         masks=masks,
                         var_maps=var_maps,
+                        match_swarp_size=match_swarp_size,
                         write_weight=plan["output_weight_map"],
                         write_footprint=plan["output_footprint"],
                     )
@@ -2458,6 +2618,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                         input_images,
                         weights=weights,
                         masks=masks,
+                        match_swarp_size=match_swarp_size,
                         reserved_bytes=reserved,
                         var_maps=var_maps,
                         write_weight=plan["output_weight_map"],
@@ -2497,6 +2658,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 footprint_output=add_suffix(coadd_image, "footprint") if plan["output_footprint"] else False,
                 psf_output=add_suffix(coadd_image, "psf"),
                 holes=holes,
+                match_swarp_size=bool(get_key(self.config_node.imcoadd, "match_swarp_size", default=True)),
                 logger=self.logger,
             )
 
@@ -2507,7 +2669,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         raw = get_key(self.config_node.imcoadd, "proper_coadd_weight_map_policy", default="white-noise")
         policy = str(raw or "off").lower().replace("_", "-")
         if policy not in WEIGHT_MAP_POLICIES:
-            raise CoaddError.ValueError(
+            raise self._process_error.ValueError(
                 f"Invalid imcoadd.proper_coadd_weight_map_policy: {raw!r} (expected one of {WEIGHT_MAP_POLICIES})"
             )
         return policy
@@ -2520,24 +2682,28 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         peeings = self.input_headers.values("PEEING")
         if len(peeings) != n or any(p is None for p in peeings):
             missing = [name for name, p in zip(self.input_headers.names, peeings) if p is None]
-            self.logger.error(f"No PEEING for {missing[:3]}; proper coadd needs a per-frame PSF", CoaddError.KeyError)
-            raise CoaddError.KeyError(f"No PEEING for {len(missing)} input(s); proper coadd needs a per-frame PSF")
+            self.logger.error(
+                f"No PEEING for {missing[:3]}; proper coadd needs a per-frame PSF",
+                self._process_error.KeyError,
+            )
+            raise self._process_error.KeyError(f"No PEEING for {len(missing)} input(s); proper coadd needs a per-frame PSF")
         return [float(p) for p in peeings]
 
     def _validate_proper_mode(self):
         """Fail fast on option combinations the Fourier-domain combine cannot honor."""
         routine = str(self.config_node.imcoadd.coadd_routine or "")
-        if "reproject-first" not in routine.lower():
-            raise CoaddError.ValueError(
-                f"coadd_mode 'proper' requires coadd_routine 'reproject-first', not {routine!r}"
+        is_direct = "direct" in routine.lower()
+        if "reproject-first" not in routine.lower() and not is_direct:
+            raise self._process_error.ValueError(
+                f"coadd_mode 'proper' requires coadd_routine 'reproject-first' or 'direct', not {routine!r}"
             )
         plan = self._coadd_plan()
         if plan["weighting"] == "pixelwise":
-            raise CoaddError.ValueError(
+            raise self._process_error.ValueError(
                 "coadd_mode 'proper' is incompatible with pixel-wise weighting; use 'global' or False"
             )
-        if not plan["interpolate"]:
-            raise CoaddError.ValueError(
+        if not plan["interpolate"] and self._proper_requires_interpolation:
+            raise self._process_error.ValueError(
                 "coadd_mode 'proper' requires interpolate_badpix: True (a Fourier-domain vote cannot skip pixels)"
             )
         self._proper_weight_policy()

@@ -1,0 +1,116 @@
+name:
+
+process_id:
+
+sanity:
+
+flag:
+  white_coadd: false
+  phot7ds: false
+  white_photometry: false
+
+info:
+  file:
+  project: 7DT/7DS
+  creation_version:
+  runtime_version:
+  creation_datetime:
+  last_update_datetime:
+
+settings:
+  is_too: false
+  is_pipeline: false
+  is_multi_epoch: false
+  sanity_from_db: true
+  config_suffix:
+  factory_scratch:
+
+logging:
+  level: INFO
+  file:
+  format: '[%(levelname)s] %(asctime)s - %(name)s - %(message)s'
+  handlers:
+    - console
+    - file
+
+input:
+  science_configs:
+  expected_coadd_images:
+  coadd_images:
+  filters:
+  used_filters:
+  sanity_rejected_science_configs:
+  missing_coadd_images:
+  source_raw_images:
+  discovery_method:
+  discovery_datetime:
+  parents_changed: false
+  minimum_filters: 3
+  output_dir:
+  white_image:
+  white_catalog:
+
+imcoadd:
+  input_images:
+  runtime_version:
+  coadd_routine: 'direct'
+  coadd_mode: 'proper'
+  coadd_weighting: global
+  proper_coadd_weight_map_policy: white-noise
+  match_swarp_size: false
+  image_selection: false
+  image_selection_cuts:
+  image_selection_source: db
+  ppflag_bitmask: '110000'
+  coadd_image:
+  gpu: true
+  device: 0
+  zp_key: 'ZP_AUTO'
+  zpscale: true
+  bkgsub_type: dynamic
+  sex_vars:
+    BACK_SIZE:
+    BACK_FILTERSIZE:
+    DETECT_THRESH:
+    DETECT_MINAREA:
+  source_mask: true
+  output_weight_map: true
+  output_single_weight_map: false
+  output_footprint: true
+  output_sky_rms_map: false
+  output_bkg_map: false
+  persist_weight_maps: false
+  joint_wcs: false
+  interpolate_badpix: false
+  interp_type: 'median'
+  zero_badpix_weight: true
+  badpix_reprojection_policy: '1px'
+  streamline_reprojection: true
+  discard_interp: true
+  lean_factory: false
+  combine_lock_threshold: 20
+  combine_scratch: auto
+  convolve: false
+  target_seeing:
+
+phot7ds:
+  runtime_version:
+  catalog:
+
+photometry:
+  input_images:
+  runtime_version:
+  use_weight_map: true
+  refcatname: GaiaXP
+  check: false
+  satur_margin: 0.99
+  sex_vars:
+    PHOT_APERTURES:
+    PHOT_AUTOPARAMS:
+    DETECT_MINAREA: 5
+    DETECT_THRESH: 3.0
+    DEBLEND_NTHRESH: 64
+    DEBLEND_MINCONT: 0.0001
+    BACK_SIZE: 64
+    BACK_FILTERSIZE: 3
+    BACKPHOTO_TYPE: LOCAL

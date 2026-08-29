@@ -3,14 +3,15 @@ from typing import List, Literal
 from itertools import chain
 from concurrent.futures import ThreadPoolExecutor
 
-from ..utils import flatten
+from ..utils import collapse, flatten
 from ..path import PathHandler
+from ..path.name import NameHandler
 from ..config.utils import get_filter_from_config
-from ..const.run import DEFAULT_SCIDATA_PROCESSES
+from ..const.run import DEFAULT_CROSSFILTER_PROCESSES, DEFAULT_SCIDATA_PROCESSES
 from ..const.observation import BROAD_FILTERS
 
 from .logger import get_high_level_task_logger
-from .utils import SortedGroupDict, PreprocessGroup, ScienceGroup
+from .utils import CrossFilterGroup, SortedGroupDict, PreprocessGroup, ScienceGroup
 from .fd import log_fd_info, FDTracker, PeakFDSampler
 
 import json
@@ -27,11 +28,15 @@ class Blueprint:
         master_frame_only: bool = False,
         is_too: bool = False,
         is_pipeline: bool = False,
+        enable_crossfilter: bool = True,
+        crossfilter_suffix: str | None = None,
         **kwargs,
     ):
         self.groups = SortedGroupDict()
 
         self.is_too = is_too
+        self.enable_crossfilter = enable_crossfilter
+        self.crossfilter_suffix = crossfilter_suffix
 
         self.master_frame_only = master_frame_only
 
@@ -63,6 +68,10 @@ class Blueprint:
         print("Blueprint initialized.")
 
         self._config_generated = False
+
+    @property
+    def crossfilter_configs(self) -> list[str]:
+        return [group.config for group in self.groups.values() if isinstance(group, CrossFilterGroup)]
 
     @classmethod
     def from_list(cls, list_of_images: list[str], is_too: bool = False, is_pipeline: bool = False, **kwargs):
@@ -120,6 +129,17 @@ class Blueprint:
                 self.groups[mfg_key].add_images(flattened_images)
                 self.groups[mfg_key].add_sci_keys(key)
 
+        if self.enable_crossfilter and not self.master_frame_only:
+            science_groups = [group for group in self.groups.values() if isinstance(group, ScienceGroup)]
+            for science_group in science_groups:
+                name = NameHandler(science_group.image_files[0])
+                nightdate = collapse(name.nightdate, raise_error=True)
+                obj = collapse(name.obj, raise_error=True)
+                key = f"crossfilter:{nightdate}:{obj}"
+                if key not in self.groups:
+                    self.groups[key] = CrossFilterGroup(key)
+                self.groups[key].add_source_group(science_group)
+
     def create_config(
         self,
         overwrite=False,
@@ -129,6 +149,7 @@ class Blueprint:
         is_multi_epoch=False,
         overwrite_preprocess=False,
         priority=None,
+        overwrite_crossfilter=None,
     ):
         """
         Create configs for all groups.
@@ -150,11 +171,22 @@ class Blueprint:
         # Background FD watcher
         with PeakFDSampler(interval=0.05) as fd_peak:
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = [executor.submit(group.create_config, **kwargs) for group in self.groups.values()]
+                upstream = [group for group in self.groups.values() if not isinstance(group, CrossFilterGroup)]
+                futures = [executor.submit(group.create_config, **kwargs) for group in upstream]
                 for i, f in enumerate(futures):
                     f.result()
                     if (i + 1) % 10 == 0 or i == len(futures) - 1:
                         fd_tracker.checkpoint(f"create_config:{i+1}/{len(futures)}")
+                crossfilter = [group for group in self.groups.values() if isinstance(group, CrossFilterGroup)]
+                crossfilter_kwargs = dict(
+                    kwargs, overwrite=overwrite if overwrite_crossfilter is None else overwrite_crossfilter
+                )
+                futures = [
+                    executor.submit(group.create_config, config_suffix=self.crossfilter_suffix, **crossfilter_kwargs)
+                    for group in crossfilter
+                ]
+                for f in futures:
+                    f.result()
             del futures
             gc.collect()
 
@@ -170,8 +202,10 @@ class Blueprint:
         overwrite=False,
         overwrite_preprocess=False,
         overwrite_science=False,
+        overwrite_crossfilter=False,
         preprocess_kwargs=None,
         processes=DEFAULT_SCIDATA_PROCESSES,
+        crossfilter_processes=DEFAULT_CROSSFILTER_PROCESSES,
         input_type: Literal["Daily", "ToO", "Reprocess", "User-input"] = None,
         **kwargs,
     ):
@@ -254,7 +288,7 @@ class Blueprint:
 
         for group in self.groups:
             # group is PreprocessGroup
-            if isinstance(group, ScienceGroup):
+            if isinstance(group, ScienceGroup | CrossFilterGroup):
                 continue
 
             scheduler_kwargs = ["-overwrite"] if (overwrite or overwrite_preprocess) else []
@@ -329,6 +363,40 @@ class Blueprint:
                 )
                 schedule["dependent_idx"][parent_idx].append(idx)
                 idx += 1
+
+        for group in self.groups.values():
+            if not isinstance(group, CrossFilterGroup):
+                continue
+            parent_indices = [
+                int(schedule["index"][schedule["config"] == source.config][0])
+                for source in group.source_groups
+                if source.config in schedule["config"]
+            ]
+            scheduler_kwargs = ["-overwrite"] if overwrite or overwrite_crossfilter else []
+            if crossfilter_processes != DEFAULT_CROSSFILTER_PROCESSES:
+                scheduler_kwargs += ["-processes"] + crossfilter_processes
+            schedule.add_row(
+                [
+                    idx,
+                    group.config,
+                    "crossfilter",
+                    input_type,
+                    not parent_indices,
+                    base_priority,
+                    100 - len(parent_indices),
+                    "Ready" if not parent_indices else "Pending",
+                    [],
+                    0,
+                    "",
+                    scheduler_kwargs,
+                    "",
+                    "",
+                ]
+            )
+            for parent_idx in parent_indices:
+                parent_row = next(i for i, value in enumerate(schedule["index"]) if value == parent_idx)
+                schedule["dependent_idx"][parent_row].append(idx)
+            idx += 1
 
         schedule.sort(["is_ready", "priority", "readiness"], reverse=True)
 

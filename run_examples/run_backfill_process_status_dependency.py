@@ -2,21 +2,17 @@
 """
 Backfill process_status_dependency from the products each config actually wrote.
 
-Historically this table held only the schedule's plan ("these configs were queued
-together"), which is wrong whenever a run did not follow the plan -- most often a
-preprocess config that produced no usable master, sending its science configs to
-another night's masters while the plan still named its own night. Stages now
-re-derive their own edges as they finish; this fills in every config that ran
-before that, by rolling image_qa_dependency up to config level.
+This rolls image_qa_dependency up to config level. The legacy origin column is
+ignored; an edge is an edge regardless of which writer first recorded it.
 
 A config whose roll-up finds nothing is left alone rather than emptied, so this
 never removes an edge it cannot replace.
 
 Usage:
-    # Dry-run: how many configs would gain product-derived edges
+    # Dry-run: how many configs currently have no dependency edges
     python run_backfill_process_status_dependency.py --dry-run
 
-    # Fill only configs that have no product-derived rows yet (default)
+    # Fill only configs that have no dependency rows yet (default)
     python run_backfill_process_status_dependency.py
 
     # Re-derive every matched config, including ones already resolved
@@ -55,7 +51,8 @@ def _dependency() -> ProcessStatusDependency:
 
 def select_configs(args) -> list:
     """Candidate (process_status_id, name) rows for the requested scope."""
-    query = "SELECT id, name FROM process_status WHERE TRUE"
+    # crossfilter edges come from the declared science parents (WhiteImage), never the image roll-up
+    query = "SELECT id, name FROM process_status WHERE config_type IS DISTINCT FROM 'crossfilter'"
     params = []
     if args.config_type:
         query += " AND config_type = %s"
@@ -72,7 +69,7 @@ def select_configs(args) -> list:
     if not args.force_all:
         query += (
             " AND NOT EXISTS (SELECT 1 FROM process_status_dependency d"
-            "  WHERE d.derived_config_name = process_status.name AND d.origin = 'product')"
+            "  WHERE d.derived_config_name = process_status.name)"
         )
     query += " ORDER BY id"
     if args.limit:
@@ -89,7 +86,7 @@ def main():
     parser.add_argument("--nightdate-to", help="latest nightdate (YYYY-MM-DD)")
     parser.add_argument("--name", help="a single config name")
     parser.add_argument("--limit", type=int, help="stop after this many configs")
-    parser.add_argument("--force-all", action="store_true", help="re-derive configs already resolved from products")
+    parser.add_argument("--force-all", action="store_true", help="re-derive configs that already have dependency rows")
     parser.add_argument("--dry-run", action="store_true", help="list the scope, write nothing")
     parser.add_argument("--workers", type=int, default=8, help="parallel workers (default 8)")
     args = parser.parse_args()
@@ -132,7 +129,7 @@ def main():
                 print(f"  {i}/{len(configs)} ({time.time() - st:.0f}s)")
 
     print(
-        f"Done in {time.time() - st:.0f}s: {synced} configs given product-derived edges,"
+        f"Done in {time.time() - st:.0f}s: {synced} configs given dependency edges,"
         f" {empty} with nothing to roll up (left as they were), {failed} failed"
     )
 

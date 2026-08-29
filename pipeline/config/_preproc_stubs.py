@@ -51,4 +51,3 @@ if TYPE_CHECKING:
         preprocess: PreprocessNode
         settings: SettingsNode
         input: InputNode
-

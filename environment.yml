@@ -1,17 +1,20 @@
 name: pipeline
 channels:
   - conda-forge
-  - defaults
+  - astrorama  # SourceXtractor++; conda package name is "sourcextractor"
+  - nodefaults
 
 dependencies:
+  # sourcextractor 1.1.0 ships py310/py311 builds only, so python is locked to 3.11
   - python=3.11
-  - ipython=9.0.0
-  - photutils=2.3.0
+  - ipython=9.0
+  - photutils=2.3
+  # numba 0.64 requires numpy >=1.22.3,<2.5 and llvmlite 0.46.*; never bump one of the three alone
   - numpy=2.4.2
-  - scipy=1.17.1
-  - pandas=2.3.3
-  - matplotlib=3.10.0
-  - astropy=7.2.0
+  - scipy=1.17
+  - pandas=2.3
+  - matplotlib=3.10
+  - astropy=7.2
   - numba=0.64.0
   - spherical-geometry
   - psutil
@@ -25,16 +28,29 @@ dependencies:
   - shapely
   - fitsio
   - sep
-  - healpy
   - yagmail
+  - pillow
+  - ruamel.yaml
+  - pytz
+  - packaging
+  - typing_extensions
+
+  # phot7ds
+  - pyvo
+  - sourcextractor
+  - onnxruntime-cpp=*=*cpu*  # SourceXtractor++ dep; unpinned it resolves to a 210 MB CUDA build
 
 
   # pip-only packages
   - pip
   - pip:
-      - cupy-cuda12x==13.4.0
+      - cupy-cuda12x==13.6.0
       - ipykernel==7.2.0
       - psycopg[binary]==3.2.12
       - psycopg-pool==3.2.7
       - nvidia-ml-py
       - multiprocess
+      # yagmail.send() defaults to prettify_html=True and imports premailer unguarded
+      - premailer
+      # conda healpy needs cfitsio 4.6.x but SourceXtractor++ pins 4.3.1; the wheel bundles its own
+      - healpy==1.20.0

@@ -10,7 +10,13 @@ from datetime import datetime
 from astropy.table import Table, vstack
 
 
-from ..const import SCRIPTS_DIR, NUM_GPUS, SCHEDULER_DB_PATH, QUEUE_SOCKET_PATH
+from ..const import (
+    SCRIPTS_DIR,
+    NUM_GPUS,
+    SCHEDULER_DB_PATH,
+    QUEUE_SOCKET_PATH,
+    AUTO_RECORD_PROCESS_STATUS_DEPENDENCIES,
+)
 from ..const import SUCCESS_RETURN_CODE, FAILURE_RETURN_CODE, EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE
 from .logger import get_high_level_task_logger, log_orchestration_stop
 
@@ -127,14 +133,16 @@ class Scheduler:
         overwrite_data=False,
         overwrite_preprocess=False,
         overwrite_science=False,
+        overwrite_crossfilter=False,
         input_type=None,
         processes=None,
+        crossfilter_processes=None,
         extra_kwargs=None,
         **kwargs,
     ):
         """Create a scheduler from a list of configs. `extra_kwargs`: plain flags appended to every task's command line; never JSON (the kwargs round-trip mangles quotes)."""
-        import re
         import copy
+        from ..path.name import NameHandler
 
         list_of_configs = np.atleast_1d(list_of_configs)
 
@@ -145,23 +153,25 @@ class Scheduler:
                 print(f"Warning: Config file {config} does not exist")
                 continue
 
-            basename = os.path.basename(config)
-
-            # Determine task_type based on the config name
-            discriminator = basename.split("_")[0]
-            if bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", discriminator)):
-                task_type = "preprocess"
-                priority = base_priority + 1
-            else:
-                task_type = "science"
-                priority = base_priority
+            task_type = NameHandler(config).config_properties["config_type"]
+            priority = base_priority + 1 if task_type == "preprocess" else base_priority
 
             if task_type == "preprocess":
                 scheduler_kwargs = ["-overwrite"] if (overwrite or overwrite_data or overwrite_preprocess) else []
-            else:
+            elif task_type == "science":
                 scheduler_kwargs = ["-processes"] + list(processes) if processes is not None else []
                 if overwrite or overwrite_data or overwrite_science:
                     scheduler_kwargs.append("-overwrite")
+            elif task_type == "crossfilter":
+                scheduler_kwargs = (
+                    ["-processes"] + list(crossfilter_processes)
+                    if crossfilter_processes is not None
+                    else []
+                )
+                if overwrite or overwrite_data or overwrite_crossfilter:
+                    scheduler_kwargs.append("-overwrite")
+            else:
+                raise ValueError(f"Unsupported config type: {task_type}")
 
             if extra_kwargs:
                 scheduler_kwargs = scheduler_kwargs + list(extra_kwargs)
@@ -426,6 +436,8 @@ class Scheduler:
         The SQLite schedule stays authoritative; this never raises so the
         scheduler keeps working when the database is offline.
         """
+        if not AUTO_RECORD_PROCESS_STATUS_DEPENDENCIES:
+            return
         try:
             table = self._get_table_from_db() if self.use_system_queue else self._schedule
             edges = self._dependency_edges(table)
@@ -550,15 +562,18 @@ class Scheduler:
         in_processing = len(schedule[schedule["status"] == "Processing"])
         in_completed = len(schedule[schedule["status"] == "Completed"])
         in_paused = len(schedule[schedule["status"] == "Paused"])
+        in_rejected = len(schedule[schedule["status"] == "Rejected"])
         is_preprocess = len(schedule[schedule["config_type"] == "preprocess"])
         is_science = len(schedule[schedule["config_type"] == "science"])
+        is_crossfilter = len(schedule[schedule["config_type"] == "crossfilter"])
         is_failed = len(schedule[schedule["status"] == "Failed"])
         if with_table:
             schedule.pprint_all(max_lines=10)
         return (
-            f"Scheduler with {total_tasks} (preprocess: {is_preprocess} and science: {is_science}) tasks: "
+            f"Scheduler with {total_tasks} (preprocess: {is_preprocess}, science: {is_science}, "
+            f"crossfilter: {is_crossfilter}) tasks: "
             f"{in_ready} ready, {in_pending} pending, {in_processing} processing, {in_paused} paused, "
-            f"{is_failed} failed, and {in_completed} completed"
+            f"{is_failed} failed, {in_rejected} rejected, and {in_completed} completed"
         )
 
     @property
@@ -867,14 +882,20 @@ class Scheduler:
                 if cursor.rowcount:
                     orchestration_note = self._orchestration_stop_reason(return_code)
 
-            # any outcome advances the still-Pending dependents; missing-input ones fail fast downstream
+            # Cross-filter rows wait for successful or sanity-rejected science parents.
             if cursor.rowcount:
                 for dep_idx in dependent_indices:
                     cursor.execute(
-                        'SELECT readiness FROM scheduler WHERE "index" = ? AND status = ?', (dep_idx, "Pending")
+                        'SELECT readiness, config_type FROM scheduler WHERE "index" = ? AND status = ?',
+                        (dep_idx, "Pending"),
                     )
                     dep_row = cursor.fetchone()
                     if dep_row:
+                        if dep_row[1] == "crossfilter" and return_code not in (
+                            SUCCESS_RETURN_CODE,
+                            EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE,
+                        ):
+                            continue
                         new_readiness = dep_row[0] + 1
 
                         if new_readiness > 100:
@@ -909,7 +930,7 @@ class Scheduler:
         row_dict = {col: self._schedule[col][mask][0] for col in self._schedule.colnames}
         current_status = row_dict["status"]
 
-        if current_status == "Completed" or current_status == "Failed":
+        if current_status in ("Completed", "Failed", "Rejected"):
             return
 
         # Get task info
@@ -925,7 +946,10 @@ class Scheduler:
             self._schedule["status"][mask] = "Completed"
             self._schedule["pid"][mask] = 0
             self._schedule["process_end"][mask] = datetime.now().isoformat()
-
+        elif return_code == EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE:
+            self._schedule["status"][mask] = "Rejected"
+            self._schedule["pid"][mask] = 0
+            self._schedule["process_end"][mask] = datetime.now().isoformat()
         else:
             # Check if this is a retry (priority is already 0)
             self._schedule["pid"][mask] = 0
@@ -941,10 +965,16 @@ class Scheduler:
             ):
                 log_orchestration_stop(row_dict["config"], self._orchestration_stop_reason(return_code))
 
-        # any outcome advances the still-Pending dependents; missing-input ones fail fast downstream
+        # Cross-filter rows wait for successful or sanity-rejected science parents.
         for dep_idx in dependent_indices:
             dep_mask = (self._schedule["index"] == dep_idx) & (self._schedule["status"] == "Pending")
             if not dep_mask.any():
+                continue
+            dep_type = self._schedule["config_type"][dep_mask][0]
+            if dep_type == "crossfilter" and return_code not in (
+                SUCCESS_RETURN_CODE,
+                EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE,
+            ):
                 continue
             self._schedule["readiness"][dep_mask] += 1
 
@@ -1085,14 +1115,13 @@ class Scheduler:
             with self._db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT COUNT(*) FROM scheduler WHERE status NOT IN (?, ?)",
-                    ("Completed", "Failed"),
+                    "SELECT COUNT(*) FROM scheduler WHERE status NOT IN (?, ?, ?)",
+                    ("Completed", "Failed", "Rejected"),
                 )
                 return cursor.fetchone()[0] == 0
         else:
-            completed = self.schedule[self.schedule["status"] == "Completed"]
-            failed = self.schedule[self.schedule["status"] == "Failed"]
-            return (len(completed) + len(failed)) == len(self.schedule)
+            done = self.schedule[np.isin(self.schedule["status"], ("Completed", "Failed", "Rejected"))]
+            return len(done) == len(self.schedule)
 
     def rerun_failed_tasks(self, overwrite=False, dates=None):
         """
@@ -1186,8 +1215,8 @@ class Scheduler:
                     cursor.execute(f"SELECT {self._SELECT_COLUMNS} FROM scheduler")
                 else:
                     cursor.execute(
-                        f"SELECT {self._SELECT_COLUMNS} FROM scheduler WHERE status = ?",
-                        ("Completed",),
+                        f"SELECT {self._SELECT_COLUMNS} FROM scheduler WHERE status IN (?, ?)",
+                        ("Completed", "Rejected"),
                     )
 
                 completed_rows = cursor.fetchall()
@@ -1204,8 +1233,8 @@ class Scheduler:
                     )
                 else:
                     cursor.execute(
-                        f"SELECT pid FROM scheduler WHERE status = ? AND pid IS NOT NULL AND {self._LOCAL_TASK_FILTER}",
-                        ("Completed",),
+                        f"SELECT pid FROM scheduler WHERE status IN (?, ?) AND pid IS NOT NULL AND {self._LOCAL_TASK_FILTER}",
+                        ("Completed", "Rejected"),
                     )
 
                 pids_to_kill = [row[0] for row in cursor.fetchall() if row[0] is not None]
@@ -1229,14 +1258,14 @@ class Scheduler:
                 if all:
                     cursor.execute("DELETE FROM scheduler")
                 else:
-                    cursor.execute("DELETE FROM scheduler WHERE status = ?", ("Completed",))
+                    cursor.execute("DELETE FROM scheduler WHERE status IN (?, ?)", ("Completed", "Rejected"))
                 conn.commit()
         else:
             # For in-memory schedule, kill PIDs before clearing
             if all:
                 schedule_to_clear = self._schedule
             else:
-                schedule_to_clear = self._schedule[self._schedule["status"] == "Completed"]
+                schedule_to_clear = self._schedule[np.isin(self._schedule["status"], ("Completed", "Rejected"))]
 
             # Save completed tasks to file if any exist
             if len(schedule_to_clear) > 0:
@@ -1258,7 +1287,11 @@ class Scheduler:
                             pass
 
             # Now clear the schedule
-            self._schedule = self._empty_schedule if all else self._schedule[self._schedule["status"] != "Completed"]
+            self._schedule = (
+                self._empty_schedule
+                if all
+                else self._schedule[~np.isin(self._schedule["status"], ("Completed", "Rejected"))]
+            )
 
     def _save_completed_to_file(self, table):
         """Save completed tasks table to /var/db/{date}.npy as astropy Table.
@@ -1329,6 +1362,8 @@ class Scheduler:
             cmd = [f"{SCRIPTS_DIR}/preprocess", "-config", config, "-make_plots"]
         elif config_type == "science":
             cmd = [f"{SCRIPTS_DIR}/data_reduction", "-config", config]
+        elif config_type == "crossfilter":
+            cmd = [f"{SCRIPTS_DIR}/crossfilter", "-config", config]
         elif config_type == "debug":
             return [f"{SCRIPTS_DIR}/debug", "-config", config]
         else:

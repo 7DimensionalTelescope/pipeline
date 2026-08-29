@@ -76,6 +76,8 @@ class AutoMkdirMixin:
         "sciproc_base_yml",
         "sciproc_too_override_yml",
         "sciproc_multi_epoch_override_yml",
+        "crossfilter_base_yml",
+        "config_stem",
         "settings",
         "raw_images",
     }

@@ -28,6 +28,7 @@ configs_to_check = [
     "deployment.yml",
     "preproc_base.yml",
     "sciproc_base.yml",
+    "crossfilter_base.yml",
     "preproc_override_ToO.yml",
     "sciproc_override_ToO.yml",
     "sciproc_override_multiEpoch.yml",
@@ -170,7 +171,7 @@ def gen_config_stubs(yml_path: Path, output_path: Path, root_class: str) -> None
         lines.append(f"        {key}: {ann}")
     lines.append("")
 
-    output_path.write_text("\n".join(lines) + "\n")
+    output_path.write_text("\n".join(lines).rstrip() + "\n")
 
 
 def write_config_hashes(
@@ -239,6 +240,11 @@ def gen_all_stubs() -> None:
         Path(REF_DIR) / "preproc_base.yml",
         config_dir / "_preproc_stubs.py",
         "PreprocNode",
+    )
+    gen_config_stubs(
+        Path(REF_DIR) / "crossfilter_base.yml",
+        config_dir / "_crossfilter_stubs.py",
+        "CrossFilterNode",
     )
 
 

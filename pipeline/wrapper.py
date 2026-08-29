@@ -17,6 +17,7 @@ class DataReduction:
         is_too=False,
         is_pipeline=False,
         is_multi_epoch=False,
+        enable_crossfilter=True,
         **kwargs,
     ):
         """
@@ -24,6 +25,7 @@ class DataReduction:
                             if given list_of_images, 1) is negated.
         is_pipeline: True for normal pipeline runs (configs get settings.is_pipeline=True). Set False for ad-hoc/reprocess. Defaults to False.
         is_multi_epoch: True for multi-epoch override (configs get settings.is_multi_epoch=True).
+        enable_crossfilter: Create target-level configs and schedule them after their science parents. Defaults to True.
         """
 
         self.is_too = is_too
@@ -37,6 +39,7 @@ class DataReduction:
             master_frame_only=master_frame_only,
             is_too=is_too,
             is_pipeline=is_pipeline,
+            enable_crossfilter=enable_crossfilter,
             **kwargs,
         )
         self._created_config = False
@@ -45,7 +48,19 @@ class DataReduction:
     def schedule(self):
         return self.blueprint.schedule
 
-    def create_config(self, overwrite=False, max_workers=50, is_too=False, is_pipeline=None, is_multi_epoch=None):
+    @property
+    def crossfilter_configs(self):
+        return self.blueprint.crossfilter_configs
+
+    def create_config(
+        self,
+        overwrite=False,
+        max_workers=50,
+        is_too=False,
+        is_pipeline=None,
+        is_multi_epoch=None,
+        overwrite_crossfilter=None,
+    ):
         if not self._created_config:
             is_pipeline = self.is_pipeline if is_pipeline is None else is_pipeline
             is_multi_epoch = self.is_multi_epoch if is_multi_epoch is None else is_multi_epoch
@@ -55,6 +70,7 @@ class DataReduction:
                 is_too=is_too,
                 is_pipeline=is_pipeline,
                 is_multi_epoch=is_multi_epoch,
+                overwrite_crossfilter=overwrite_crossfilter,
             )
             self._created_config = True
 
@@ -66,10 +82,12 @@ class DataReduction:
         overwrite_data=False,
         overwrite_preprocess=False,
         overwrite_science=False,
+        overwrite_crossfilter=False,
         overwrite_schedule=False,
         max_workers=50,
         base_priority=None,
         processes=DEFAULT_SCIDATA_PROCESSES,
+        crossfilter_processes=None,
         queue=None,
         preprocess_kwargs=None,
         dry_run=False,
@@ -122,7 +140,9 @@ class DataReduction:
             overwrite=overwrite_data,
             overwrite_preprocess=overwrite_preprocess,
             overwrite_science=overwrite_science,
+            overwrite_crossfilter=overwrite_crossfilter,
             preprocess_kwargs=preprocess_kwargs,
+            **({"crossfilter_processes": crossfilter_processes} if crossfilter_processes is not None else {}),
             input_type=input_type,
         )
 
@@ -135,6 +155,9 @@ class DataReduction:
         if use_system_queue:
             sc.start_system_queue()
         else:
+            # queue choice must not change dependency recording, but only pipeline runs record
+            if self.is_pipeline:
+                sc.mirror_dependencies()
             queue = QueueManager()
             queue.add_scheduler(sc)
             queue.wait_until_task_complete()

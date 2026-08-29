@@ -140,7 +140,7 @@ class ProcessStatus(BaseDatabase):
     def pyTable(self):
         return self._pyTable
 
-    def set_auto_sanity(self, name: str, sanity: Optional[bool]) -> Optional[int]:
+    def set_config_sanity(self, name: str, sanity) -> Optional[int]:
         """Machine-set config sanity (the return-code-2 path). Never touches a human verdict. None clears it."""
         row = self.read_data(name)
         if row is None or row.inspected_at is not None or row.sanity is sanity:

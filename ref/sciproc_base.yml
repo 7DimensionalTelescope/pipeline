@@ -5,6 +5,8 @@ name:
 
 process_id:
 
+sanity:
+
 # obs:
 #   # OBS Info should be updated from header
 #   coherent_input:

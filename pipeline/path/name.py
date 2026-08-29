@@ -229,6 +229,8 @@ class NameHandler:
             elif typ[0] == "preprocess":
                 parser_kwargs["is_too"] = bool(typ[1])
                 parsing_func = self._parse_preproc_config
+            elif typ[0] == "crossfilter":
+                parsing_func = self._parse_crossfilter_config
 
             if parsing_func is self._parse_raw:
                 # defer unparseable raw names: their DB lookups are batched after the loop
@@ -250,6 +252,9 @@ class NameHandler:
             cameras.append(camera)
 
             # override date if nightdate available; vice versa. (some nightdates have multiple dates by TCSpy error)
+            if typ[0] == "crossfilter" and not nightdate and len(parts) >= 3:
+                nightdate = get_nightdate(parts[2])
+                self.nightdate[i] = nightdate
             if nightdate:
                 pass
                 # date = add_half_day(nightdate)  # this can mutate the true date crossing midnight
@@ -304,6 +309,8 @@ class NameHandler:
                 parsing_func = self._parse_preproc_config
             elif "science" in typ:
                 parsing_func = self._parse_sciproc_config
+            elif "crossfilter" in typ:
+                parsing_func = self._parse_crossfilter_config
 
             unit, date, hms, obj, filte, nbin, exptime, gain, camera = parsing_func(parts)
 
@@ -325,15 +332,18 @@ class NameHandler:
         """
         TODO: change type to a slot dataclass
         Tuple components:
-        0. preprocess / science
+        0. preprocess / science / crossfilter
         1. None / ToO
         2. None
         3. None
         4. config
         """
         # is_too = "ToO" in parts
-        is_too = len(parts) > 3
-        if is_too:
+        is_crossfilter = len(parts) >= 2 and parts[1] == const.WHITE_FILTER
+        is_too = len(parts) > 3 and not is_crossfilter
+        if is_crossfilter:
+            kind = "crossfilter"
+        elif is_too:
             kind = "preprocess" if get_nightdate(parts[0]) else "science"
         else:
             if len(parts) == 2:
@@ -724,6 +734,11 @@ class NameHandler:
             hms = parts[5]
         return unit, date, hms, obj, filt, nb, exptime, gain, camera
 
+    @staticmethod
+    def _parse_crossfilter_config(parts):
+        obj = parts[0]
+        return None, None, None, obj, const.WHITE_FILTER, None, None, None, None
+
     # @property
     # def masterframe_basename(self):
     #     """works for mixed calibration file types"""
@@ -1024,6 +1039,13 @@ class NameHandler:
                     "config_type": "preprocess",
                     "nightdate": at(self.nightdate),
                     "unit": at(self.unit),
+                }
+            elif typ[0] == "crossfilter":
+                config_properties = {
+                    "config_type": "crossfilter",
+                    "object": at(self.obj),
+                    "filter": const.WHITE_FILTER,
+                    "nightdate": at(self.nightdate),
                 }
             else:
                 raise ValueError(f"Invalid config type: {typ[0]}")

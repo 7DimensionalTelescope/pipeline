@@ -18,20 +18,7 @@ Direction mirrors image_qa_dependency: the *derived* config depends on the
 type).  The structure is agnostic to the number of config types, so adding a
 new type that depends on science needs no schema change.
 
-Two writers fill this table and ``origin`` says which one owns a row:
-
-    schedule | the plan, from Scheduler.mirror_dependencies: "these configs were
-             |   queued together".  Available before anything has run, and wrong
-             |   whenever a run does not follow the plan -- a preprocess config
-             |   that produced no usable master sends its science configs to
-             |   another night's masters, and the plan still names its own night.
-    product  | the fact, from sync_from_products: a roll-up of image_qa_dependency,
-             |   which is resolved by IMAGEID from the headers of the files that
-             |   were actually written.  Correct across reprocessing by
-             |   construction, because it is re-derived from the products.
-
-A product row therefore supersedes a schedule row and the plan mirror will not
-overwrite one; the plan only fills configs that have not produced anything yet.
+The legacy ``origin`` column is retained for schema compatibility but ignored.
 """
 from __future__ import annotations
 
@@ -45,15 +32,15 @@ Edge = Tuple[str, str, Optional[str]]
 
 # image_qa_dependency rolled up to config level, for one derived config.
 ROLLUP_QUERY = """
-SELECT DISTINCT ps_d.name, ps_s.name, ps_s.config_type
+SELECT DISTINCT qa_s.image_name, qa_s.image_type, ps_s.name, ps_s.config_type
   FROM image_qa qa_d
   JOIN image_qa_dependency iqd ON iqd.derived_image_id = qa_d.id
   JOIN image_qa qa_s ON qa_s.id = iqd.source_image_id
-  JOIN process_status ps_d ON ps_d.id = qa_d.process_status_id
-  JOIN process_status ps_s ON ps_s.id = qa_s.process_status_id
+  LEFT JOIN process_status ps_s ON ps_s.id = qa_s.process_status_id
  WHERE qa_d.process_status_id = %s
-   AND qa_s.process_status_id <> qa_d.process_status_id
 """
+
+MASTER_IMAGE_TYPES = ("bias", "dark", "flat")
 
 
 class ProcessStatusDependency(BaseDatabase):
@@ -91,7 +78,7 @@ class ProcessStatusDependency(BaseDatabase):
                     )
                     """
                 )
-                # every row that predates this column was written by the plan mirror
+                # Deprecated compatibility column; dependency behavior does not read it.
                 cur.execute(
                     "ALTER TABLE process_status_dependency"
                     " ADD COLUMN IF NOT EXISTS origin VARCHAR DEFAULT 'schedule'"
@@ -107,16 +94,13 @@ class ProcessStatusDependency(BaseDatabase):
             conn.commit()
         type(self)._table_ready = True
 
-    def replace_dependencies(self, edges: Iterable[Edge], origin: str = "schedule") -> int:
+    def replace_dependencies(self, edges: Iterable[Edge]) -> int:
         """Full-replace the dependency rows for every derived config in ``edges``.
 
         For each distinct derived config appearing in ``edges``, its existing
         rows are deleted and re-inserted from ``edges``.  Derived configs not
         mentioned are left untouched.  Returns the number of rows inserted.
 
-        Writing with ``origin="schedule"`` skips any derived config that already
-        holds product-derived rows, so re-queueing a config that has already run
-        cannot replace what it did with what it was expected to do.
         """
         by_derived = defaultdict(list)
         for derived, source, role in edges:
@@ -132,30 +116,18 @@ class ProcessStatusDependency(BaseDatabase):
         inserted = 0
         with self.get_connection() as conn:
             with conn.cursor() as cur:
-                if origin == "schedule":
-                    cur.execute(
-                        "SELECT DISTINCT derived_config_name FROM process_status_dependency"
-                        " WHERE origin = 'product' AND derived_config_name = ANY(%s)",
-                        (list(by_derived),),
-                    )
-                    for (resolved,) in cur.fetchall():
-                        by_derived.pop(resolved, None)
-                    if not by_derived:
-                        return 0
-
                 for derived, pairs in by_derived.items():
                     cur.execute(
                         "DELETE FROM process_status_dependency WHERE derived_config_name = %s",
                         (derived,),
                     )
-                    rows = [(derived, source, role, origin) for (source, role) in pairs]
+                    rows = [(derived, source, role) for (source, role) in pairs]
                     cur.executemany(
                         "INSERT INTO process_status_dependency"
-                        " (derived_config_name, source_config_name, dependency_role, origin)"
-                        " VALUES (%s, %s, %s, %s)"
+                        " (derived_config_name, source_config_name, dependency_role)"
+                        " VALUES (%s, %s, %s)"
                         " ON CONFLICT (derived_config_name, source_config_name)"
-                        " DO UPDATE SET dependency_role = EXCLUDED.dependency_role,"
-                        " origin = EXCLUDED.origin",
+                        " DO UPDATE SET dependency_role = EXCLUDED.dependency_role",
                         rows,
                     )
                     inserted += len(rows)
@@ -173,14 +145,39 @@ class ProcessStatusDependency(BaseDatabase):
         (bias/dark/flat/single/...) stay at image level, where they are already
         recorded.
 
-        Returns 0 without deleting anything when the roll-up finds nothing, the
+        The legacy origin column is not used to distinguish these edges. Returns
+        0 without deleting anything when the roll-up finds nothing, the
         same rule ImageQADependency.sync follows: a config whose images are not
         yet registered must not have its existing edges wiped.
+
+        Master sources resolve by NAME, not by image_qa ownership: a reused
+        master's image_qa row is re-owned by the consuming night's preprocess
+        run, while its filename keeps the creating nightdate+unit.
         """
-        edges = self.execute_query(ROLLUP_QUERY, (process_status_id,))
+        from ...path.name import NameHandler
+
+        rows = self.execute_query("SELECT name FROM process_status WHERE id = %s", (process_status_id,))
+        if not rows:
+            return 0
+        derived = rows[0][0]
+
+        sources = self.execute_query(ROLLUP_QUERY, (process_status_id,))
+        edges = []
+        for image_name, image_type, owner_name, owner_type in sources:
+            if image_type in MASTER_IMAGE_TYPES:
+                try:
+                    name = NameHandler(image_name)
+                    source, role = f"{name.nightdate}_{name.unit}", "preprocess"
+                except Exception:
+                    source, role = owner_name, owner_type
+            else:
+                source, role = owner_name, owner_type
+            if source is not None and source != derived:
+                edges.append((derived, source, role))
+        edges = list(dict.fromkeys(edges))
         if not edges:
             return 0
-        return self.replace_dependencies(edges, origin="product")
+        return self.replace_dependencies(edges)
 
     def get_sources(self, derived_config_name: str, role: Optional[str] = None) -> List[tuple]:
         """Return ``(source_config_name, dependency_role)`` rows this config depends on."""

@@ -52,6 +52,10 @@ class InputHeaderSet:
         self._coadd_image_id: str | None = None
         self.coadd_provenance: dict[str, tuple] = {}
         self.selection_metrics: dict[str, tuple[str, str]] = {}
+        self.output_filter: str | None = None
+        self.input_label: str = "single exposures"
+        self.extra_core_keys: tuple = ()
+        self.max_core_keys: tuple = ()
         # kept out of coadd_provenance: that dict feeds _guard_coadd_identity
         self.multi_epoch: bool | None = None
 
@@ -319,8 +323,14 @@ class InputHeaderSet:
         # 	Get Select Header Keys from Base Image
         # Aggregate from unmasked inputs: common value if all agree; mean for
         # numerics; "MIXED" for strings; drop on heterogeneous types.
-        for key in CORE_KEYS:
-            val = self.aggregate(key)
+        for key in (*CORE_KEYS, *self.extra_core_keys):
+            if key == "FILTER" and self.output_filter:
+                val = self.output_filter
+            elif key in self.max_core_keys:
+                numbers = [v for v in self.values(key) if isinstance(v, (int, float)) and not isinstance(v, bool)]
+                val = max(numbers) if numbers else None
+            else:
+                val = self.aggregate(key)
             if val is not None:
                 header[key] = val
 
@@ -349,7 +359,7 @@ class InputHeaderSet:
 
         # 	Names of coadded single images
         for nn, (name, input_header) in enumerate(zip(self.names, self.headers)):
-            header[f"IMG{nn:0>5}"] = (name, "single exposures")
+            header[f"IMG{nn:0>5}"] = (name, self.input_label)
             image_id = str(input_header.get("IMAGEID") or "").strip()
             if image_id:
                 header[f"IID{nn:0>5}"] = (image_id, f"IMAGEID of IMG{nn:0>5}")

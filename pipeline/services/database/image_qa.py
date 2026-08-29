@@ -13,6 +13,8 @@ import os
 from astropy.io import fits
 import re
 
+from ...const import WHITE_FILTER
+
 
 @dataclass
 class ImageQATable:
@@ -174,7 +176,9 @@ class ImageQATable:
                     setattr(cls, key, header[header_key])
 
         if header["IMAGETYP"] == "LIGHT":
-            if "_coadd" in file:
+            if str(header.get("FILTER", "")).lower() == WHITE_FILTER:
+                cls.image_type = "white"
+            elif "_coadd" in file:
                 cls.image_type = "coadd"
             elif "_diff" in file:
                 cls.image_type = "diff"

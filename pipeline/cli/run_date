@@ -128,6 +128,27 @@ if __name__ == "__main__":
         help="Overwrite science outputs only",
     )
     parser.add_argument(
+        "--crossfilter",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Create and schedule target-level cross-filter configs (default: enabled)",
+    )
+    parser.add_argument(
+        "--crossfilter-config-only",
+        action="store_true",
+        help="Create target-level cross-filter configs without adding scheduler rows",
+    )
+    parser.add_argument(
+        "--crossfilter-suffix",
+        type=str,
+        help="Suffix distinguishing an alternate cross-filter config and its products",
+    )
+    parser.add_argument(
+        "--overwrite-crossfilter",
+        action="store_true",
+        help="Overwrite cross-filter outputs only",
+    )
+    parser.add_argument(
         "--overwrite-schedule",
         action="store_true",
         help="Overwrite existing schedule in the database",
@@ -148,14 +169,31 @@ if __name__ == "__main__":
     args.condition = args.condition.split(",")
 
     overwrite_schedule = args.overwrite_schedule
-    if not overwrite_schedule:
+    if not args.crossfilter_config_only and not overwrite_schedule:
         existing_counts = _count_existing_schedule_entries(args.condition)
         if _prompt_overwrite_schedule(existing_counts):
             overwrite_schedule = True
             print("Proceeding with --overwrite-schedule enabled.")
 
     try:
-        dr = DataReduction(args.condition, use_db=args.use_db, is_pipeline=True)
+        dr = DataReduction(
+            args.condition,
+            use_db=args.use_db,
+            is_pipeline=True,
+            enable_crossfilter=args.crossfilter or args.crossfilter_config_only,
+            crossfilter_suffix=args.crossfilter_suffix,
+        )
+        if args.crossfilter_config_only:
+            # strictly crossfilter: upstream configs are loaded, never regenerated
+            dr.create_config(
+                overwrite=False,
+                is_pipeline=True,
+                overwrite_crossfilter=args.overwrite or args.overwrite_config,
+            )
+            print(f"Created {len(dr.crossfilter_configs)} cross-filter config(s):")
+            for config_file in dr.crossfilter_configs:
+                print(config_file)
+            sys.exit(0)
         dr.run(
             use_system_queue=True,
             base_priority=args.priority,
@@ -164,6 +202,7 @@ if __name__ == "__main__":
             overwrite_data=args.overwrite or args.overwrite_data,
             overwrite_preprocess=args.overwrite or args.overwrite_data or args.overwrite_preprocess,
             overwrite_science=args.overwrite or args.overwrite_data or args.overwrite_science,
+            overwrite_crossfilter=args.overwrite or args.overwrite_data or args.overwrite_crossfilter,
             overwrite_schedule=overwrite_schedule,
         )
     except Exception as e:

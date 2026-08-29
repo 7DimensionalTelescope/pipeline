@@ -543,7 +543,7 @@ def acquire_available_gpu(device_id=None, gpu_threshold=400, blocking=True, time
 
 class SortedGroupDict(UserDict):
     """
-    A dictionary that has sorted PreprocessGroups and ScienceGroups for iteration.
+    A dictionary that has sorted preprocess, science, and cross-filter groups.
 
     Iterating over it gives sorted PreprocessGroups and ScienceGroups.
     Its values() method returns a sorted list of PreprocessGroups and ScienceGroups.
@@ -551,6 +551,7 @@ class SortedGroupDict(UserDict):
     The sorted order is:
     1. PreprocessGroup items first, sorted by number of sci_keys (descending)
     2. ScienceGroup items second, sorted by number of image_files (descending)
+    3. CrossFilterGroup items last, sorted by number of source groups (descending)
 
     This ensures preprocessing groups with more science dependencies are processed first,
     and science groups with more images are processed first within their category.
@@ -619,24 +620,27 @@ class SortedGroupDict(UserDict):
         return [(getattr(v, "key", None), v) for v in sorted_values]
 
     def _get_sorted_values(self) -> list[PreprocessGroup | ScienceGroup]:
-        # Separate PreprocessGroup and ScienceGroup
+        # Separate the dependency layers.
         preprocess_groups = []
         science_groups = []
+        crossfilter_groups = []
 
         for value in self.data.values():
             if isinstance(value, PreprocessGroup):
                 preprocess_groups.append(value)
-            else:
+            elif isinstance(value, ScienceGroup):
                 science_groups.append(value)
+            else:
+                crossfilter_groups.append(value)
 
         # Sort PreprocessGroup by sci_keys length (descending)
         sorted_preprocess = sorted(preprocess_groups, key=lambda x: len(x.sci_keys), reverse=True)
 
         # Sort ScienceGroup by image_files length (descending)
         sorted_science = sorted(science_groups, key=lambda x: len(x.image_files), reverse=True)
+        sorted_crossfilter = sorted(crossfilter_groups, key=lambda x: len(x.source_groups), reverse=True)
 
-        # Return PreprocessGroup first, then ScienceGroup
-        return sorted_preprocess + sorted_science
+        return sorted_preprocess + sorted_science + sorted_crossfilter
 
     def __repr__(self):
         if len(self.values()) == 0:
@@ -832,3 +836,77 @@ class ScienceGroup:
         self._config = None
         self.image_files = []
         self.multi_units = False
+
+
+class CrossFilterGroup:
+    def __init__(self, key):
+        self.key = key
+        self.source_groups: list[ScienceGroup] = []
+        self._config = None
+
+    @property
+    def config(self):
+        if self._config is None:
+            self.create_config()
+        return self._config
+
+    def add_source_group(self, group: ScienceGroup):
+        if group not in self.source_groups:
+            self.source_groups.append(group)
+
+    def create_config(
+        self,
+        overwrite=False,
+        is_too=False,
+        is_pipeline=False,
+        is_multi_epoch=False,
+        config_suffix=None,
+        **kwargs,
+    ):
+        from ..config import CrossFilterConfiguration
+        from ..path.path import CrossFilterPathHandler
+
+        science_configs = sorted(group.config for group in self.source_groups)
+        expected_coadds = CrossFilterConfiguration._science_config_coadds(science_configs)
+        output_yml = collapse(
+            CrossFilterPathHandler(
+                expected_coadds,
+                is_too=is_too,
+                is_pipeline=is_pipeline,
+                is_multi_epoch=is_multi_epoch,
+                config_suffix=config_suffix,
+            ).crossfilter.output_yml,
+            raise_error=True,
+        )
+        if os.path.exists(output_yml) and not overwrite:
+            config = CrossFilterConfiguration(output_yml, write=True)
+            if list(config.node.input.science_configs or []) != science_configs:
+                config.set_science_configs(science_configs)
+        else:
+            config = CrossFilterConfiguration(
+                science_configs,
+                overwrite=overwrite,
+                is_too=is_too,
+                is_pipeline=is_pipeline,
+                is_multi_epoch=is_multi_epoch,
+                config_suffix=config_suffix,
+            )
+        source_raw_images = sorted(
+            {image for group in self.source_groups for image in group.image_files}
+        )
+        config.record_discovery(source_raw_images, "raw_inventory")
+        self._config = config.config_file
+
+        try:
+            if getattr(config, "logger", None) is not None and hasattr(config.logger, "cleanup"):
+                config.logger.cleanup()
+        finally:
+            del config
+            gc.collect()
+
+    def __repr__(self):
+        return f"CrossFilterGroup({self.key} from {len(self.source_groups)} science groups)"
+
+    def cleanup(self):
+        self._config = None
+        self.source_groups = []

@@ -22,6 +22,8 @@ Every case a derived image can present:
             |                       | master dark                         | dark
             |                       | master flat                         | flat
     coadd   | IMG00000+ / IID00000+ | the singles in the stack            | single
+            |                       | a source coadd                       | coadd
+    white   | IMG00000+ / IID00000+ | its source coadds                    | coadd
     diff    | SCIIMG / SCIIID       | science coadd                       | science
             | REFIMG / REFIID       | reference coadd                     | reference
             | IMG*/IID* (inherited) | the science coadd's singles         | (ignored)
@@ -65,9 +67,7 @@ The complete dependency_role vocabulary:
     darksig   | NameHandler.type[1], master     |   row, so its ID card matches nothing
     flatsig   | NameHandler.type[1], master     |
     single    | NameHandler.type[2], calibrated | in use
-    coadded   | NameHandler.type[2], calibrated | only if a coadd is named in an IMCMB*/IMG*
-              |                                 |   card; a diff's parent coadds do not come
-              |                                 |   through here, they use SCIIID/REFIID
+    coadd     | NameHandler.type[2], calibrated | in use; source is a coadd
     science   | SCIIID card, not NameHandler    | in use, diff only
     reference | REFIID card, not NameHandler    | in use, diff only
 """
@@ -82,9 +82,25 @@ from astropy.io import fits
 from .base import BaseDatabase
 from ...utils import atleast_1d
 
+COADD_DEPENDENCY_ROLE = "coadd"
+SCIENCE_DEPENDENCY_ROLE = "science"
+REFERENCE_DEPENDENCY_ROLE = "reference"
+IMAGE_DEPENDENCY_ROLES = (
+    "bias",
+    "dark",
+    "flat",
+    "single",
+    COADD_DEPENDENCY_ROLE,
+    SCIENCE_DEPENDENCY_ROLE,
+    REFERENCE_DEPENDENCY_ROLE,
+)
+
 # A diff's two parents are both coadds, so NameHandler would call them both
 # "coadded"; only the card itself says which is the science one.
-DIRECT_PARENT_KEYS = (("SCIIID", "science"), ("REFIID", "reference"))
+DIRECT_PARENT_KEYS = (
+    ("SCIIID", SCIENCE_DEPENDENCY_ROLE),
+    ("REFIID", REFERENCE_DEPENDENCY_ROLE),
+)
 
 # Downward closure over the graph. The depth bound is what keeps a cycle finite:
 # UNION already dedupes ids, but an id can legitimately reappear at a greater depth.
@@ -158,7 +174,7 @@ def parse_ingredients(fits_file: str) -> List[Dict[str, str]]:
         if kind == "master":
             role = typ[1]  # bias / dark / flat, or their sig variants
         elif kind == "calibrated":
-            role = typ[2]  # single / coadded
+            role = COADD_DEPENDENCY_ROLE if typ[2] == "coadded" else typ[2]
         else:
             continue  # raw frame: no image_qa row
         if imageid not in seen:

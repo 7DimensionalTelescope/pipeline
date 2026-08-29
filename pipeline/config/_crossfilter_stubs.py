@@ -1,5 +1,5 @@
 # AUTO-GENERATED — do not edit manually.
-# Source: sciproc_base.yml
+# Source: crossfilter_base.yml
 # Run update_config_artifacts() to regenerate.
 from __future__ import annotations
 from typing import Any, TYPE_CHECKING
@@ -8,12 +8,9 @@ if TYPE_CHECKING:
     from pipeline.config.base import ConfigNode
 
     class FlagNode(ConfigNode):
-        astrometry: bool
-        single_photometry: bool
-        coadd: bool
-        coadd_photometry: bool
-        subtraction: bool
-        difference_photometry: bool
+        white_coadd: bool
+        phot7ds: bool
+        white_photometry: bool
 
     class InfoNode(ConfigNode):
         file: Any
@@ -27,13 +24,9 @@ if TYPE_CHECKING:
         is_too: bool
         is_pipeline: bool
         is_multi_epoch: bool
-        obsmode: Any
-        coadd: bool
         sanity_from_db: bool
+        config_suffix: Any
         factory_scratch: Any
-        factory_scratch_cap_gb: int
-        gpu_enabled: bool
-        verbose_gpu: bool
 
     class LoggingNode(ConfigNode):
         level: str
@@ -42,39 +35,21 @@ if TYPE_CHECKING:
         handlers: list
 
     class InputNode(ConfigNode):
-        calibrated_images: Any
-        processed_dir: Any
-        coadd_image: Any
-        difference_image: Any
-
-    class AstrometryNode(ConfigNode):
-        input_images: Any
-        runtime_version: Any
-        eval_match_radius: float
-        path: dict
-        ahead_file: str
-        local_astref: Any
-        scamp_timeout: str
-        solvefield_timeout: int
-
-    class PhotometryNode(ConfigNode):
-        input_images: Any
-        runtime_version: Any
-        use_weight_map: bool
-        ref_cat: Any
-        query_radius: float
-        match_radius: float
-        photfraction: float
-        refcatname: str
-        refqueryradius: float
-        ref_mag_lower: int
-        ref_mag_upper: float
-        ref_mag_err_upper: float
-        flagcut: int
-        check: bool
-        filters_to_check: Any
-        satur_margin: float
-        sex_vars: dict
+        science_configs: Any
+        expected_coadd_images: Any
+        coadd_images: Any
+        filters: Any
+        used_filters: Any
+        sanity_rejected_science_configs: Any
+        missing_coadd_images: Any
+        source_raw_images: Any
+        discovery_method: Any
+        discovery_datetime: Any
+        parents_changed: bool
+        minimum_filters: int
+        output_dir: Any
+        white_image: Any
+        white_catalog: Any
 
     class ImcoaddNode(ConfigNode):
         input_images: Any
@@ -83,6 +58,7 @@ if TYPE_CHECKING:
         coadd_mode: str
         coadd_weighting: str
         proper_coadd_weight_map_policy: str
+        match_swarp_size: bool
         image_selection: bool
         image_selection_cuts: Any
         image_selection_source: str
@@ -92,7 +68,7 @@ if TYPE_CHECKING:
         device: int
         zp_key: str
         zpscale: bool
-        bkgsub_type: Any
+        bkgsub_type: str
         sex_vars: dict
         source_mask: bool
         output_weight_map: bool
@@ -111,15 +87,23 @@ if TYPE_CHECKING:
         lean_factory: bool
         combine_lock_threshold: int
         combine_scratch: str
-        convolve: Any
+        convolve: bool
         target_seeing: Any
 
-    class ImsubtractNode(ConfigNode):
-        input_image: Any
+    class Phot7dsNode(ConfigNode):
         runtime_version: Any
-        reference_image: Any
+        catalog: Any
 
-    class SciProcNode(ConfigNode):
+    class PhotometryNode(ConfigNode):
+        input_images: Any
+        runtime_version: Any
+        use_weight_map: bool
+        refcatname: str
+        check: bool
+        satur_margin: float
+        sex_vars: dict
+
+    class CrossFilterNode(ConfigNode):
         name: Any
         process_id: Any
         sanity: Any
@@ -128,7 +112,6 @@ if TYPE_CHECKING:
         settings: SettingsNode
         logging: LoggingNode
         input: InputNode
-        astrometry: AstrometryNode
-        photometry: PhotometryNode
         imcoadd: ImcoaddNode
-        imsubtract: ImsubtractNode
+        phot7ds: Phot7dsNode
+        photometry: PhotometryNode

@@ -1,0 +1,50 @@
+#!/home/pipeline-stable/.conda/envs/pipeline/bin/python
+
+import argparse
+import os
+
+from pipeline.config import CrossFilterConfiguration
+from pipeline.path.path import CrossFilterPathHandler
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Create one cross-filter configuration from science configs")
+    parser.add_argument("science_configs", nargs="+")
+    parser.add_argument("--multi-epoch", action="store_true")
+    parser.add_argument("--suffix", type=str)
+    parser.add_argument("--config-file", type=str)
+    parser.add_argument("--working-dir", type=str)
+    parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--pipeline", action=argparse.BooleanOptionalAction, default=True)
+    args = parser.parse_args()
+
+    science_configs = sorted(os.path.abspath(path) for path in args.science_configs)
+    expected_coadds = CrossFilterConfiguration._science_config_coadds(science_configs)
+    output_yml = CrossFilterPathHandler(
+        expected_coadds,
+        config_file=args.config_file,
+        working_dir=args.working_dir,
+        is_pipeline=args.pipeline,
+        is_multi_epoch=args.multi_epoch,
+        config_suffix=args.suffix,
+    ).crossfilter.output_yml
+
+    if os.path.exists(output_yml) and not args.overwrite:
+        config = CrossFilterConfiguration(output_yml)
+        existing = sorted(os.path.abspath(path) for path in (config.node.input.science_configs or []))
+        if existing != science_configs:
+            raise FileExistsError(
+                f"{output_yml} has different source configs; use --overwrite or --suffix for a separate config"
+            )
+    else:
+        config = CrossFilterConfiguration(
+            science_configs,
+            config_file=args.config_file,
+            working_dir=args.working_dir,
+            overwrite=args.overwrite,
+            is_pipeline=args.pipeline,
+            is_multi_epoch=args.multi_epoch,
+            config_suffix=args.suffix,
+        )
+    print(config.config_file)
+    print(f"Expected filters: {', '.join(config.node.input.filters)}")

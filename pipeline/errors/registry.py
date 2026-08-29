@@ -86,8 +86,9 @@ class ErrorRegistry:
 
     @staticmethod
     def decode(error_code: int) -> Tuple[int, int]:
-        if not (0 <= error_code <= 999):
-            raise ValueError(f"error_code must be 0..999 (got {error_code})")
+        # encode allows process codes up to 99, so codes reach four digits (e.g. white_photometry 10xx)
+        if not (0 <= error_code <= 9999):
+            raise ValueError(f"error_code must be 0..9999 (got {error_code})")
         return error_code // 100, error_code % 100
 
     def exception_from_code(self, error_code: int, message: str = "", **data: Any) -> BaseException:

@@ -3,13 +3,14 @@
 Plan -- and optionally queue -- the reprocessing cascade of regenerated master frames.
 
 Give it master frames that were ALREADY regenerated; it walks image_qa_dependency and
-emits the work in four ordered batches:
+emits the work in five ordered batches:
 
   --phase 1 --sweep 1|2|3   rebuild chained masters (-master_frame_only, cumulative
                             -calib_types sweeps: bias / bias+dark / bias+dark+flat)
   --phase 2                 recalibrate the affected singles (overwrite=False)
   --phase 3 --execute       rerun the affected nightly science configs with -overwrite
   --phase 4 --execute       rerun the multi-epoch science configs, after 3 drained
+  --phase 5 --execute       rerun the crossfilter configs with -overwrite, after 4 drained
 
 Read-only by default. --submit queues ONE batch; without --execute, phases 1-2 queue a
 -dry_run sizing pass (a lower bound). Wait for each batch to drain before the next; if a
@@ -40,7 +41,7 @@ def main():
     parser.add_argument("--show-configs", action="store_true", help="list every config, not just the counts")
     parser.add_argument("--show-masters", action="store_true", help="list the chained master frames")
     parser.add_argument("--submit", action="store_true", help="queue the plan (default: print and stop)")
-    parser.add_argument("--phase", type=int, choices=[1, 2, 3, 4],
+    parser.add_argument("--phase", type=int, choices=[1, 2, 3, 4, 5],
                         help="which ONE phase to submit; the scheduler dedupes on config path, so "
                              "batches sharing configs must be queued one at a time, drained in between")
     parser.add_argument("--sweep", type=int, choices=[1, 2, 3],
@@ -75,6 +76,7 @@ def main():
             ("phase 2  singles", [c for c in p.preprocess_configs]),
             ("phase 3  science (nightly)", [(n, f) for n, f, _ in p.nightly_science]),
             ("phase 4  science (multi-epoch)", [(n, f) for n, f, _ in p.multiepoch_science]),
+            ("phase 5  crossfilter", [(n, f) for n, f, _ in p.crossfilter_configs]),
         ):
             if configs:
                 print(f"\n  {label}:")
@@ -94,6 +96,7 @@ def main():
             "    --phase 2                 recalibrate the singles\n"
             "    --phase 3 --execute       rerun the nightly science configs with -overwrite\n"
             "    --phase 4 --execute       rerun the multi-epoch science configs with -overwrite\n"
+            "    --phase 5 --execute       rerun the crossfilter configs with -overwrite\n"
             "  Wait for each batch to drain before submitting the next. If a task fails,\n"
             "  resubmit through this script -- it checks the drain discipline, which\n"
             "  rerun_failed_tasks (kwargs-preserving since v1.10.44) does not."
@@ -111,11 +114,10 @@ def main():
         )
 
     dry = not args.execute
-    if dry and args.phase in (3, 4):
+    if dry and args.phase in (3, 4, 5):
         print(
-            f"\n  Phase {args.phase} has no sizing pass -- cli/data_reduction takes no -dry_run, and a science\n"
-            "  rerun is all-or-nothing per config. The config count above is the size.\n"
-            "  Re-run with --execute to queue it."
+            f"\n  Phase {args.phase} has no sizing pass -- these reruns are all-or-nothing per config.\n"
+            "  The config count above is the size. Re-run with --execute to queue it."
         )
         sys.exit(2)
 

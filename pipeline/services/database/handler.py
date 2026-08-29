@@ -9,6 +9,7 @@ from .image_qa import ImageQA
 from .image_qa_dependency import ImageQADependency
 from .process_status_dependency import ProcessStatusDependency
 from ...errors import registry
+from ...const import AUTO_RECORD_PROCESS_STATUS_DEPENDENCIES
 
 if TYPE_CHECKING:
     from ...config import ConfigNode
@@ -164,7 +165,11 @@ class DatabaseHandler:
         dependency_role)``.  Never raises: the scheduler's own store remains
         authoritative, so a database outage must not break callers.
         """
-        if not self.is_connected or self.process_status_dependency is None:
+        if (
+            not AUTO_RECORD_PROCESS_STATUS_DEPENDENCIES
+            or not self.is_connected
+            or self.process_status_dependency is None
+        ):
             return 0
         try:
             n = self.process_status_dependency.replace_dependencies(edges)
@@ -182,7 +187,11 @@ class DatabaseHandler:
         reprocessing without depending on how the config was launched.  Never raises:
         dependency bookkeeping must not fail a run that produced good data.
         """
-        if not self.is_connected or self.process_status_dependency is None:
+        if (
+            not AUTO_RECORD_PROCESS_STATUS_DEPENDENCIES
+            or not self.is_connected
+            or self.process_status_dependency is None
+        ):
             return 0
         pid = process_status_id if process_status_id is not None else getattr(self, "process_status_id", None)
         if pid is None:
@@ -208,7 +217,7 @@ class DatabaseHandler:
         if rows is None:
             return None
 
-        if config_type == "science":
+        if config_type in ("science", "crossfilter"):
             dicts = [row.to_dict() for row in rows]
         else:
             dicts = []

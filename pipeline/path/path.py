@@ -42,7 +42,7 @@ class PathHandlerSettings:
     is_pipeline: bool = True  # vectorized is_pipeline has been deprecated
     is_too: bool = False
     is_multi_epoch: bool = False
-    config_file: str | Path | None = None  # explicit override for sciproc_output_yml
+    config_file: str | Path | None = None
     config_suffix: str | None = None  # appended to the auto-generated multi-epoch config stem
     factory_scratch: str | None = None  # local root replacing FACTORY_DIR for multi-epoch factories
 
@@ -583,6 +583,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         self.sciproc_base_yml = os.path.join(const.REF_DIR, "sciproc_base.yml")
         self.sciproc_too_override_yml = os.path.join(const.REF_DIR, "sciproc_override_ToO.yml")
         self.sciproc_multi_epoch_override_yml = os.path.join(const.REF_DIR, "sciproc_override_multiEpoch.yml")
+        self.crossfilter_base_yml = os.path.join(const.REF_DIR, "crossfilter_base.yml")
 
         self.changelog_dir = os.path.join(const.REF_DIR, "InstrumEvent")
         # self.instrum_status_dict = const.INSTRUM_STATUS_DICT
@@ -728,14 +729,14 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             # masterframe_dir: name-derived (nightdate+unit) when a parent disk is known;
             # only fall back to the file's own parent for user-mode master inputs, where
             # select_output_dir intentionally leaves masterframe parent unset.
-            if self._masterframe_parent_dir[i] is not None:
+            if self._masterframe_parent_dir[i] is not None and nightdate is not None and unit is not None:
                 self._masterframe_dir.append(os.path.join(self._masterframe_parent_dir[i], nightdate, unit))
             elif "master" in typ:
                 self._masterframe_dir.append(file_dir)
             else:
                 self._masterframe_dir.append(None)
 
-            config_stem = "_".join([nightdate, unit])  # for preproc config
+            config_stem = "_".join([nightdate, unit]) if nightdate is not None and unit is not None else None
             self._preproc_config_stem.append(config_stem)
 
             if "raw" in typ:
@@ -847,6 +848,14 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
     @cached_property
     def imcoadd(self):
         return PathImcoadd(self, self._config)
+
+    @cached_property
+    def crossfilter(self):
+        return PathCrossFilter(self)
+
+    @cached_property
+    def phot7ds(self):
+        return PathPhot7DS(self)
 
     @cached_property
     def imsubtract(self):
@@ -1738,6 +1747,138 @@ class PathImcoadd(AutoMkdirMixin, AutoCollapseMixin):
         return PathImcoaddFactory(self)
 
 
+class PathCrossFilter(AutoMkdirMixin, AutoCollapseMixin):
+    def __init__(self, parent: PathHandler):
+        self._parent = parent
+
+    @property
+    def config_stem(self) -> str:
+        obj = collapse(atleast_1d(self._parent.name.obj), raise_error=True)
+        stem = f"{obj}_{const.WHITE_FILTER}"
+        if not self._parent.settings.is_multi_epoch:
+            nightdate = collapse(atleast_1d(self._parent.name.nightdate), raise_error=True)
+            if not nightdate:
+                raise ValueError(f"Daily cross-filter stem for {obj} requires a nightdate")
+            stem = f"{stem}_{nightdate}"
+        suffix = str(self._parent.settings.config_suffix or "").strip("_")
+        if suffix:
+            if not suffix.replace("-", "").replace("_", "").isalnum():
+                raise ValueError(f"Invalid cross-filter config suffix: {suffix!r}")
+            stem = f"{stem}_{suffix}"
+        return stem
+
+    @property
+    def output_dir(self) -> str:
+        if self._parent.settings.config_file is not None:
+            return os.path.dirname(str(self._parent.settings.config_file))
+
+        obj = collapse(atleast_1d(self._parent.name.obj), raise_error=True)
+        if self._parent.settings.is_pipeline:
+            # working_dir never reroutes pipeline products (same rule as sciproc paths)
+            if self._parent.settings.is_multi_epoch:
+                common_parent = os.path.commonpath([os.path.dirname(path) for path in self._parent._input_files])
+                return os.path.join(common_parent, const.WHITE_FILTER)
+            processed_root = collapse(self._parent._output_parent_dir, raise_error=True)
+            nightdate = collapse(atleast_1d(self._parent.name.nightdate), raise_error=True)
+            return os.path.join(processed_root, nightdate, obj, const.WHITE_FILTER)
+
+        if self._parent.settings.working_dir is not None:
+            return os.path.join(str(Path(self._parent.settings.working_dir).absolute()), const.WHITE_FILTER)
+        common_parent = os.path.commonpath([os.path.dirname(path) for path in self._parent._input_files])
+        if not self._parent.settings.is_multi_epoch and os.path.basename(common_parent) == DAILY_COADD_DIRNAME:
+            common_parent = os.path.dirname(common_parent)
+        return os.path.join(common_parent, const.WHITE_FILTER)
+
+    @property
+    def factory_dir(self) -> str:
+        obj = collapse(atleast_1d(self._parent.name.obj), raise_error=True)
+        if self._parent.settings.is_pipeline:
+            if self._parent.settings.is_multi_epoch:
+                root = self._parent.settings.factory_scratch or const.FACTORY_DIR
+                base = os.path.join(root, MULTI_EPOCH_DIRNAME, obj, const.WHITE_FILTER)
+            else:
+                root = collapse(self._parent._factory_parent_dir, raise_error=True)
+                nightdate = collapse(atleast_1d(self._parent.name.nightdate), raise_error=True)
+                base = os.path.join(root, nightdate, obj, const.WHITE_FILTER)
+        else:
+            base = os.path.join(self.output_dir, TMP_DIRNAME)
+        return os.path.join(base, self.config_stem)
+
+    @property
+    def output_yml(self) -> str:
+        if self._parent.settings.config_file is not None:
+            return str(self._parent.settings.config_file)
+        return os.path.join(self.output_dir, f"{self.config_stem}.yml")
+
+    @property
+    def output_log(self) -> str:
+        return swap_ext(self.output_yml, "log")
+
+    @property
+    def white_image(self) -> str:
+        return os.path.join(self.output_dir, f"{self.config_stem}_coadd.fits")
+
+    @property
+    def source_catalog(self) -> str:
+        return add_suffix(self.white_image, "cat")
+
+
+class PathPhot7DS(AutoMkdirMixin, AutoCollapseMixin):
+    """phot7ds output paths; every sibling derives from the catalog stem, matching phot7ds itself."""
+
+    _mkdir_exclude = {"stem"}
+
+    def __init__(self, parent: PathHandler):
+        self._parent = parent
+
+    @property
+    def output_dir(self) -> str:
+        return os.path.join(self._parent.crossfilter.output_dir, "phot7ds")
+
+    @property
+    def stem(self) -> str:
+        obj = collapse(atleast_1d(self._parent.name.obj), raise_error=True)
+        suffix = str(self._parent.settings.config_suffix or "").strip("_")
+        return f"{obj}_7DS_phot" + (f"_{suffix}" if suffix else "")
+
+    @property
+    def catalog(self) -> str:
+        return os.path.join(self.output_dir, f"{self.stem}.fits")
+
+    @property
+    def raw_catalog(self) -> str:
+        return os.path.join(self.output_dir, f"{self.stem}_raw.fits")
+
+    @property
+    def mask(self) -> str:
+        return os.path.join(self.output_dir, f"{self.stem}_mask.fits")
+
+    @property
+    def manifest(self) -> str:
+        return os.path.join(self.output_dir, f"{self.stem}_manifest.json")
+
+    @property
+    def log(self) -> str:
+        return os.path.join(self.output_dir, f"{self.stem}.log")
+
+    @property
+    def sepp_script(self) -> str:
+        return os.path.join(self.output_dir, f"{self.stem}_sepp.py")
+
+
+class CrossFilterPathHandler(PathHandler):
+    _is_crossfilter = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.output_dir = self.crossfilter.output_dir
+        self.factory_dir = self.crossfilter.factory_dir
+        self.single_dir = self.crossfilter.factory_dir
+        self.daily_coadd_dir = self.crossfilter.output_dir
+        self.coadd_dir = self.crossfilter.output_dir
+        self.figure_dir = os.path.join(self.crossfilter.output_dir, FIGURES_DIRNAME)
+
+
 class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
     """Intermediate/output product paths for the ImCoadd stages.
 
@@ -1760,6 +1901,11 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
         return [os.path.basename(f) for f in self._input_files]
 
     @property
+    def _config_yml(self) -> str:
+        parent = self._parent._parent
+        return parent.crossfilter.output_yml if getattr(parent, "_is_crossfilter", False) else parent.sciproc_output_yml
+
+    @property
     def _config_scope(self) -> str:
         """Sub-path isolating stages whose output depends on imcoadd options.
 
@@ -1771,14 +1917,14 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
         """
         if not self._parent._parent.settings.is_multi_epoch:
             return ""
-        yml = collapse(self._parent._parent.sciproc_output_yml, force=True)
+        yml = collapse(self._config_yml, force=True)
         return os.path.splitext(os.path.basename(str(yml)))[0]
 
     # ---- stage directories (under imcoadd tmp_dir, scoped per config) ----
     @property
     def source_mask_dir(self) -> str:
         if self._parent._parent.settings.is_multi_epoch:
-            yml = self._parent._parent.sciproc_output_yml
+            yml = self._config_yml
             from ..utils import collapse as _collapse
 
             stem = os.path.splitext(os.path.basename(str(_collapse(yml, force=True))))[0]

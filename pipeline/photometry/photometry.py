@@ -31,6 +31,7 @@ from ..config.base import ConfigNode
 from .. import external
 from ..const import PIXSCALE, MEDIUM_FILTERS, BROAD_FILTERS, ALL_FILTERS
 from ..const.sciproc import (
+    COADD_PHOTOMETRY_SPEC,
     DIFFERENCE_PHOTOMETRY_SPEC,
     ProcessSpec,
     SCIPROCESS_REGISTRY,
@@ -75,13 +76,20 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         - difference_photometry
     """
 
+    _process_registry = SCIPROCESS_REGISTRY
+    _process_errors = {
+        SINGLE_PHOTOMETRY_SPEC: SinglePhotometryError,
+        COADD_PHOTOMETRY_SPEC: CoaddPhotometryError,
+        DIFFERENCE_PHOTOMETRY_SPEC: DifferencePhotometryError,
+    }
+
     def __init__(
         self,
         config: Any = None,
         logger: Any = None,
         queue: Union[bool, QueueManager] = False,
         images: Optional[List[str]] = None,
-        photometry_mode: Literal["single_photometry", "coadd_photometry", "difference_photometry"] = None,
+        photometry_mode: str = None,
         ref_cat_type: Optional[str] = None,
         overwrite: bool = False,
     ) -> None:
@@ -96,24 +104,25 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.ref_cat_type = ref_cat_type or self.config_node.photometry.refcatname
 
         if photometry_mode is not None:
-            self._photometry_mode = photometry_mode
+            self._process_spec = self._process_registry.get(photometry_mode)
         elif not self.config_node.flag.single_photometry:
-            self._photometry_mode = "single_photometry"
+            self._process_spec = SINGLE_PHOTOMETRY_SPEC
         elif not self.config_node.flag.coadd_photometry:
-            self._photometry_mode = "coadd_photometry"
+            self._process_spec = COADD_PHOTOMETRY_SPEC
         elif not self.config_node.flag.difference_photometry:
-            self._photometry_mode = "difference_photometry"
+            self._process_spec = DIFFERENCE_PHOTOMETRY_SPEC
         else:
             self.logger.debug(f"photometry mode undefined: {photometry_mode}")
             raise self.logger.process_error.exception(ValueError)(
                 "Unexpected photometry mode: check if flags are sequentially turned on for single_photometry, combined_photometry, and difference_photometry"
             )
 
-        self._process_spec = SCIPROCESS_REGISTRY.get(self._photometry_mode)
+        self._photometry_mode = self._process_spec.photometry_mode
+        self._process_error = self._process_errors[self._process_spec]
         self.overwrite = self.resolve_overwrite(overwrite)
 
-        if self._photometry_mode == "single_photometry":
-            self.logger.process_error = SinglePhotometryError
+        if self._process_spec is SINGLE_PHOTOMETRY_SPEC:
+            self.logger.process_error = self._process_error
             self.input_images = images or self.config_node.input.calibrated_images
             self.apply_sanity_filter_and_report(
                 current_process=self._process_spec,
@@ -121,20 +130,16 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             )
             self.config_node.photometry.input_images = self.input_images
             self.logger.debug("Running single photometry")
-        elif self._photometry_mode == "coadd_photometry":
-            self.logger.process_error = CoaddPhotometryError
-            self.config_node.photometry.input_images = (
-                images or [x] if (x := self.config_node.input.coadd_image) else None
-            )
-            self.input_images = self.config_node.photometry.input_images
-            self.logger.debug("Running coadd photometry")
         else:
-            self.logger.process_error = DifferencePhotometryError
+            self.logger.process_error = self._process_error
+            input_key = self._process_spec.input_key
+            if input_key is None:
+                raise ValueError(f"No input key registered for {self._process_spec.name}")
             self.config_node.photometry.input_images = (
-                images or [x] if (x := self.config_node.input.difference_image) else None
+                images or [x] if (x := get_key(self.config_node.input, input_key)) else None
             )
             self.input_images = self.config_node.photometry.input_images
-            self.logger.debug("Running difference photometry")
+            self.logger.debug(f"Running {self._photometry_mode}")
 
         self.logger.info(f"Photometry mode: {self._photometry_mode}")
 
@@ -159,7 +164,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     f"Initialized DatabaseHandler for pipeline and QA data management, Pipeline ID: {self.process_status_id}"
                 )
             self.update_progress(
-                SCIPROCESS_REGISTRY.configured_progress(self._process_spec),
+                self._process_registry.configured_progress(self._process_spec),
                 f"{self._photometry_mode}-configured",
             )
             # Align with astrometry: image_qa rows are created there; photometry must refresh them from the FITS
@@ -209,11 +214,11 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         if not self.input_images:  # exception for when input.difference_image is not set.
             self.logger.debug(f"input_images: {self.input_images}")
-            if self._photometry_mode == "difference_photometry":
+            if self._process_spec is DIFFERENCE_PHOTOMETRY_SPEC:
                 self.logger.info(f"No input images found. Skipping {self._photometry_mode}.")
 
                 self.update_progress(
-                    SCIPROCESS_REGISTRY.completed_progress(self._process_spec),
+                    self._process_registry.completed_progress(self._process_spec),
                     f"{self._photometry_mode}-completed",
                 )
                 if self.is_too and self.too_id is not None:
@@ -227,9 +232,9 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             else:
                 self.logger.error(
                     f"No input images found in {self._photometry_mode}.",
-                    SinglePhotometryError.EmptyInputAfterSanityRejection,
+                    self._process_error.EmptyInputAfterSanityRejection,
                 )
-                raise SinglePhotometryError.EmptyInputAfterSanityRejectionError(
+                raise self._process_error.EmptyInputAfterSanityRejectionError(
                     f"No input images found in {self._photometry_mode}."
                 )
         try:
@@ -252,11 +257,11 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     self.image_qa.update_data(qa_id, **qa_data.to_dict())
 
             self.update_progress(
-                SCIPROCESS_REGISTRY.completed_progress(self._process_spec),
+                self._process_registry.completed_progress(self._process_spec),
                 f"{self._photometry_mode}-completed",
             )
 
-            if self.is_too and self.too_id is not None and self._photometry_mode == "difference_photometry":
+            if self.is_too and self.too_id is not None and self._process_spec is DIFFERENCE_PHOTOMETRY_SPEC:
                 interim_notice = self.too_db.read_data_by_id(self.too_id).get("interim_notice")
 
                 if interim_notice == 0:
@@ -279,7 +284,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         for i, image in enumerate(self.input_images):
             process_name = f"{self.config_node.name} - single photometry - {i+1} of {len(self.input_images)}"
             single_config = self.config_node.extract_single_image_config(i)
-            diff_phot = self._photometry_mode == "difference_photometry"
+            diff_phot = self._process_spec is DIFFERENCE_PHOTOMETRY_SPEC
 
             phot_single = PhotometrySingle(
                 single_config,
@@ -304,7 +309,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         """Process images sequentially."""
         for i, image in enumerate(self.input_images):
             single_config = self.config_node.extract_single_image_config(i)
-            diff_phot = self._photometry_mode == "difference_photometry"
+            diff_phot = self._process_spec is DIFFERENCE_PHOTOMETRY_SPEC
             PhotometrySingle(
                 single_config,
                 logger=self.logger,
@@ -317,7 +322,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             ).run(overwrite=overwrite)
 
             self.update_progress(
-                SCIPROCESS_REGISTRY.step_progress(self._process_spec, i + 1, len(self.input_images)),
+                self._process_registry.step_progress(self._process_spec, i + 1, len(self.input_images)),
                 f"{self._photometry_mode}-{i}/{len(self.input_images)}",
             )
 
@@ -507,6 +512,16 @@ class PhotometrySingle:
         except Exception as e:
             self.logger.error(f"PhotometrySingle failed for the image [{self._id}]: {str(e)}", e, exc_info=True)
             raise
+
+    def run_source_catalog(self, overwrite=True) -> None:
+        """WhiteCatalog only"""
+        start_time = time.time()
+        self.logger.info(f"Start source catalog for the image {self.name} [{self._id}]")
+        obs_src_table = self.photometry_with_sextractor(overwrite=overwrite)
+        self.write_catalog(obs_src_table)
+        self.logger.info(
+            f"Source catalog is completed for the image [{self._id}] in {time_diff_in_seconds(start_time)} seconds"
+        )
 
     def calculate_seeing(
         self, phot_header: PhotometryHeader = None, use_header_seeing: bool = False, overwrite=False
@@ -868,9 +883,13 @@ class PhotometrySingle:
 
         if sex_preset == "main":
             phot_header = phot_header or self.phot_header
-            outcome = [s for s in outcome.split("\n") if "RMS" in s][0]
-            phot_header.SKYVAL = float(outcome.split("Background:")[1].split("RMS:")[0])
-            phot_header.SKYSIG = float(outcome.split("RMS:")[1].split("/")[0])
+            background_lines = [line for line in outcome.splitlines() if "Background:" in line and "RMS:" in line]
+            if background_lines:
+                background_line = background_lines[0]
+                phot_header.SKYVAL = float(background_line.split("Background:")[1].split("RMS:")[0])
+                phot_header.SKYSIG = float(background_line.split("RMS:")[1].split("/")[0])
+            else:
+                self.logger.warning("SExtractor emitted no Background/RMS summary; keeping existing sky headers")
 
         if fits_ldac:
             return Table.read(output, hdu=2)

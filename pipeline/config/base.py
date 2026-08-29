@@ -82,6 +82,8 @@ class BaseConfig(ABC):
             self._load_config(PathHandler().preproc_base_yml)
         elif cls.__name__ == "SciProcConfiguration":
             self._load_config(PathHandler().sciproc_base_yml)
+        elif cls.__name__ == "CrossFilterConfiguration":
+            self._load_config(PathHandler().crossfilter_base_yml)
         else:
             raise ValueError(f"Invalid class name: {cls.__name__}")
 

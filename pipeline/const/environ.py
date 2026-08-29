@@ -52,6 +52,7 @@ _storage_paths = _deployment_config.get("storage") or {}
 _reference_paths = _deployment_config.get("references") or {}
 _external_paths = _deployment_config.get("external") or {}
 _commands = _deployment_config.get("commands") or {}
+_database_settings = _deployment_config.get("database") or {}
 
 
 # Storage Configuration
@@ -100,6 +101,7 @@ ASTRM_CUSTOM_REF_DIR = _reference_paths.get(
 GAIA_ROOT_DIR = _reference_paths.get("GAIA_ROOT_DIR", "/lyman/data1/factory/catalog/gaia_source_dr3/healpix_nside64")
 SCAMP_QUERY_DIR = _reference_paths.get("SCAMP_QUERY_DIR", "/lyman/data2/py7dt_requisites/ref_scamp/queried")
 PHOT_REF_DIR = _reference_paths.get("PHOT_REF_DIR", "/lyman/data1/factory/ref_cat")
+SEPP_CONFIG = _reference_paths.get("SEPP_CONFIG", "/lyman/data1/7DS/RIS/config/7ds_sepp.config")
 GAIA_REF_DIR = _reference_paths.get("GAIA_REF_DIR", "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile")
 REF_IMAGE_DIR = _reference_paths.get("REF_IMAGE_DIR", "/lyman/data1/factory/ref_frame")
 
@@ -118,6 +120,12 @@ REQUISITE_DIRS = {
 SERVICES_TMP_DIR = _storage_paths.get("SERVICES_TMP_DIR") or "/tmp/pipeline"
 IS_PIPELINE_LOCK = _get_bool_env("IS_PIPELINE", False)
 PIPELINE_LOCK_WAIT_SECONDS = 60
+# One deployment-wide policy controls every automatic writer of the config graph.
+# Explicit maintenance tools remain available when this is disabled.
+AUTO_RECORD_PROCESS_STATUS_DEPENDENCIES = _get_bool_env(
+    "AUTO_RECORD_PROCESS_STATUS_DEPENDENCIES",
+    bool(_database_settings.get("AUTO_RECORD_PROCESS_STATUS_DEPENDENCIES", True)),
+)
 SLACK_TOKEN = os.environ.get("SLACK_TOKEN", None)
 INSTRUM_STATUS_DICT = _external_paths.get("INSTRUM_STATUS_DICT")
 SEXTRACTOR_COMMAND = os.environ.get("SEXTRACTOR_COMMAND") or _commands.get("SEXTRACTOR_COMMAND") or "source-extractor"

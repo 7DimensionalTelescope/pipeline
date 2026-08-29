@@ -198,6 +198,8 @@ class SciProcConfiguration(BaseConfig):
             update_too_times(self, self.input_files)
 
         self.node.input.output_dir = self.path.output_dir
+        self.node.imcoadd.coadd_image = self.path.imcoadd.coadd_image
+        self.node.input.coadd_image = self.node.imcoadd.coadd_image
 
         self.node.settings.is_pipeline = is_pipeline
         self.node.settings.is_too = is_too

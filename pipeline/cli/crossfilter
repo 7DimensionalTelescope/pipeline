@@ -1,0 +1,49 @@
+#!/home/pipeline-stable/.conda/envs/pipeline/bin/python
+
+import argparse
+import signal
+import sys
+
+from pipeline.const.run import (
+    DEFAULT_CROSSFILTER_PROCESSES,
+    EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE,
+    FAILURE_RETURN_CODE,
+    SUCCESS_RETURN_CODE,
+)
+from pipeline.errors.errors import EmptyInputAfterSanityRejectionError
+from pipeline.run import run_crossfilter_reduction
+from pipeline.services.database.process_status import set_input_type
+
+
+def signal_handler(sig, frame):
+    print("\nTerminate process")
+    sys.exit(SUCCESS_RETURN_CODE)
+
+
+signal.signal(signal.SIGINT, signal_handler)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run target-level cross-filter processing")
+    parser.add_argument("-config", type=str, required=True)
+    parser.add_argument("-processes", nargs="*")
+    parser.add_argument("-overwrite", action="store_true")
+    parser.add_argument("-input_type", type=str)
+    parser.add_argument("-is_too", action="store_true")
+    args = parser.parse_args()
+
+    set_input_type(args.input_type)
+    processes = DEFAULT_CROSSFILTER_PROCESSES if args.processes is None else args.processes
+
+    try:
+        run_crossfilter_reduction(
+            args.config,
+            processes=processes,
+            overwrite=args.overwrite,
+            is_too=args.is_too,
+        )
+    except EmptyInputAfterSanityRejectionError as error:
+        print(f"\nError: {error}")
+        sys.exit(EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE)
+    except Exception as error:
+        print(f"\nError: {error}")
+        sys.exit(FAILURE_RETURN_CODE)

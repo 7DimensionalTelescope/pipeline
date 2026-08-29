@@ -4,7 +4,7 @@ import glob
 import warnings
 import logging
 
-from ..config import PreprocConfiguration, SciProcConfiguration, ConfigNode
+from ..config import CrossFilterConfiguration, PreprocConfiguration, SciProcConfiguration, ConfigNode
 
 # from ..path.path import PathHandler
 from .logger import Logger, LockingFileHandler
@@ -41,7 +41,7 @@ class BaseSetup(ABC):
 
     def __init__(
         self,
-        config: Union[str, PreprocConfiguration, SciProcConfiguration] = None,
+        config: Union[str, PreprocConfiguration, SciProcConfiguration, CrossFilterConfiguration] = None,
         logger: Logger = None,
         queue: Union[bool, Any] = False,
         is_too: bool = False,
@@ -94,7 +94,7 @@ class BaseSetup(ABC):
         Raises:
             ValueError: If no valid configuration information is provided
         """
-        if isinstance(config, PreprocConfiguration | SciProcConfiguration):
+        if isinstance(config, PreprocConfiguration | SciProcConfiguration | CrossFilterConfiguration):
             return config.path
         # elif isinstance(config, ConfigurationInstance):  # circular import
         #     return PathHandler(config, is_too=is_too)
@@ -117,7 +117,7 @@ class BaseSetup(ABC):
         Raises:
             ValueError: If invalid configuration object is provided
         """
-        if isinstance(config, PreprocConfiguration) or isinstance(config, SciProcConfiguration):
+        if isinstance(config, PreprocConfiguration | SciProcConfiguration | CrossFilterConfiguration):
             return config.node
         elif isinstance(config, str):
             warnings.warn("String path is deprecated. Assume SciProcConfiguration.")

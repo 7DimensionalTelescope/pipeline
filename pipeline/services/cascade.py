@@ -1,7 +1,8 @@
 """Plan and queue the reprocessing cascade of regenerated master frames.
 
-Four drained batches: (1) chained masters via three cumulative calib_types sweeps,
-(2) singles, (3) nightly science with -overwrite, (4) multi-epoch science with -overwrite.
+Five drained batches: (1) chained masters via three cumulative calib_types sweeps,
+(2) singles, (3) nightly science with -overwrite, (4) multi-epoch science with -overwrite,
+(5) crossfilter with -overwrite.
 Read-only unless submit() is called; one phase (and sweep) per call.
 Rationale and measurements: .claude/memory/services.md "cascade.py".
 """
@@ -44,6 +45,7 @@ class CascadePlan:
     master_configs: List[tuple] = field(default_factory=list)  # phase 1: (name, config_file)
     preprocess_configs: List[tuple] = field(default_factory=list)  # phase 2: (name, config_file)
     science_configs: List[tuple] = field(default_factory=list)  # phase 3: (name, config_file, nightdate)
+    crossfilter_configs: List[tuple] = field(default_factory=list)  # phase 5: (name, config_file, nightdate)
     unregenerable: List[tuple] = field(default_factory=list)  # (config_stem, why)
     skipped: List[tuple] = field(default_factory=list)  # (config_name, why)
     counts: dict = field(default_factory=dict)
@@ -69,6 +71,7 @@ class CascadePlan:
             f"  phase 2  singles    {len(self.preprocess_configs)} preprocess configs",
             f"  phase 3  science    {len(self.nightly_science)} nightly configs",
             f"  phase 4  science    {len(self.multiepoch_science)} multi-epoch configs",
+            f"  phase 5  crossfilter {len(self.crossfilter_configs)} configs",
         ]
         if self.unregenerable:
             lines += ["", f"  CANNOT REGENERATE ({len(self.unregenerable)}) — the chain stops here and"
@@ -229,6 +232,37 @@ def plan(seed_images, max_depth: int = 12) -> CascadePlan:
         else:
             out.science_configs.append((name, config_file, nightdate))
 
+    # ---- phase 5: the crossfilter configs ----
+    # Primary: white rows in the closure own crossfilter process rows; secondary: the config
+    # graph catches crossfilter children of rerun science configs whose white was never built.
+    crossfilter = {}
+    if science_ps_ids:
+        for name, config_file, nightdate, sanity in free_query(
+            "SELECT name, config_file, nightdate, sanity FROM process_status"
+            " WHERE id = ANY(%s) AND config_type = 'crossfilter'",
+            (sorted(science_ps_ids),),
+        ):
+            crossfilter[name] = (config_file, nightdate, sanity)
+    if out.science_configs:
+        for name, config_file, nightdate, sanity in free_query(
+            "SELECT DISTINCT p.name, p.config_file, p.nightdate, p.sanity"
+            " FROM process_status_dependency d"
+            " JOIN process_status p ON p.name = d.derived_config_name"
+            " WHERE d.source_config_name = ANY(%s) AND p.config_type = 'crossfilter'",
+            ([n for n, _, _ in out.science_configs],),
+        ):
+            crossfilter.setdefault(name, (config_file, nightdate, sanity))
+
+    for name, (config_file, nightdate, sanity) in sorted(crossfilter.items()):
+        if sanity is False:
+            out.skipped.append((name, "human-rejected (sanity=False)"))
+        elif not config_file or not os.path.exists(config_file):
+            out.skipped.append((name, "config file is missing on disk"))
+        elif config_file.startswith("/home/"):
+            out.skipped.append((name, f"config under /home is unreadable by the queue daemon: {config_file}"))
+        else:
+            out.crossfilter_configs.append((name, config_file, nightdate))
+
     return out
 
 
@@ -283,8 +317,17 @@ def submit(
         configs = [f for _, f, _ in (plan.nightly_science if phase == 3 else plan.multiepoch_science)]
         extra = []
         priority, kw = base_priority, {"overwrite_science": True}
+    elif phase == 5:
+        # after phases 3 and 4 drained; -overwrite because crossfilter skipping is flag-based too
+        if dry_run:
+            raise ValueError(f"phase {phase} has no sizing pass; call with dry_run=False to queue the reruns")
+        configs = [f for _, f, _ in plan.crossfilter_configs]
+        extra = []
+        priority, kw = base_priority, {"overwrite_crossfilter": True}
     else:
-        raise ValueError(f"phase must be 1, 2, 3 (nightly science) or 4 (multi-epoch science), not {phase!r}")
+        raise ValueError(
+            f"phase must be 1, 2, 3 (nightly science), 4 (multi-epoch science) or 5 (crossfilter), not {phase!r}"
+        )
 
     if not configs:
         return None
@@ -297,7 +340,7 @@ def submit(
             "wait for the queue to drain before submitting the next batch"
         )
 
-    if dry_run:  # phase 3 already raised
+    if dry_run:  # phases 3-5 already raised
         extra = extra + ["-dry_run"]
 
     sc = Scheduler.from_list(

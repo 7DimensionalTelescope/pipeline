@@ -314,7 +314,8 @@ def get_sex_options(
     PHOT_APERTURES = ",".join(map(str, aperlist))
 
     sex_options = {}
-    sex_options["-PHOT_APERTURES"] = PHOT_APERTURES
+    if PHOT_APERTURES:
+        sex_options["-PHOT_APERTURES"] = PHOT_APERTURES
     sex_options["-SATUR_LEVEL"] = str(satur_level)
     sex_options["-GAIN"] = str(egain)
     sex_options["-PIXEL_SCALE"] = str(pixscale)

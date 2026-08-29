@@ -25,6 +25,7 @@ references:
   GAIA_ROOT_DIR: "/lyman/data1/factory/catalog/gaia_source_dr3/healpix_nside64"
   SCAMP_QUERY_DIR: "/lyman/data2/py7dt_requisites/ref_scamp/queried"
   PHOT_REF_DIR: "/lyman/data1/factory/ref_cat"
+  SEPP_CONFIG: "/lyman/data1/7DS/RIS/config/7ds_sepp.config"
   GAIA_REF_DIR: "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile"
   REF_IMAGE_DIR: "/lyman/data1/factory/ref_frame"
 
@@ -41,3 +42,8 @@ external:
 commands:
   SEXTRACTOR_COMMAND: "source-extractor"
   SWARP_COMMAND: "swarp"
+
+database:
+  # Covers scheduler mirrors and post-product config dependency recording,
+  # including ToO and in-memory scheduler runs.
+  AUTO_RECORD_PROCESS_STATUS_DEPENDENCIES: true

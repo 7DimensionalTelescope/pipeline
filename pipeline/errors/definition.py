@@ -3,6 +3,7 @@ from typing import Any, Tuple
 from .registry import ErrorRegistry, make_process_error
 from .errors import *
 from ..const.sciproc import SCIPROCESS_REGISTRY
+from ..const.crossfilter import CROSSFILTERPROCESS_REGISTRY
 
 # ---------------------------
 # Setup
@@ -19,6 +20,8 @@ registry.register_process("preprocess", 1)
 
 # Processes (2..7) - Specific science processes, such as astrometry, single_photometry, coadd ...
 for process_spec in SCIPROCESS_REGISTRY.specs:
+    registry.register_process(process_spec.name, process_spec.error_code)
+for process_spec in CROSSFILTERPROCESS_REGISTRY.specs:
     registry.register_process(process_spec.name, process_spec.error_code)
 
 # errors outside specific processes (orchestrator, config, PathHandler, user-input, etc.)
@@ -116,6 +119,7 @@ registry.register_kind("PreviousStageError", 85, PreviousStageError)
 registry.register_kind("EmptyInputError", 86, EmptyInputError)
 registry.register_kind("EmptyInputAfterSanityRejectionError", 87, EmptyInputAfterSanityRejectionError)
 registry.register_kind("NoSpaceLeftOnDeviceError", 88, NoSpaceLeftOnDeviceError)
+registry.register_kind("DependencyRegistrationError", 89, DependencyRegistrationError)
 
 
 # Reserved sentinel
@@ -131,6 +135,9 @@ CoaddError = make_process_error(registry, "coadd", class_name="CoaddError")
 CoaddPhotometryError = make_process_error(registry, "coadd_photometry", class_name="CoaddPhotometryError")
 SubtractionError = make_process_error(registry, "subtraction", class_name="SubtractionError")
 DifferencePhotometryError = make_process_error(registry, "difference_photometry", class_name="DifferencePhotometryError")  # fmt: skip
+WhiteImageError = make_process_error(registry, "white_coadd", class_name="WhiteImageError")
+WhiteCatalogError = make_process_error(registry, "white_photometry", class_name="WhiteCatalogError")
+Phot7DSError = make_process_error(registry, "phot7ds", class_name="Phot7DSError")
 # Non-process-specific exception classes
 UndefinedProcessError = make_process_error(registry, "undefined_process", class_name="UndefinedProcessError")
 SystemError = make_process_error(registry, "system", class_name="SystemError")

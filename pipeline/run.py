@@ -1,8 +1,9 @@
 import json
 from typing import List
 
-from .config import PreprocConfiguration, SciProcConfiguration
-from .const.run import DEFAULT_SCIDATA_PROCESSES
+from .config import CrossFilterConfiguration, PreprocConfiguration, SciProcConfiguration
+from .const.run import DEFAULT_CROSSFILTER_PROCESSES, DEFAULT_SCIDATA_PROCESSES
+from .const.crossfilter import CROSSFILTERPROCESS_REGISTRY, PHOT7DS_SPEC, WHITE_COADD_SPEC, WHITE_PHOTOMETRY_SPEC
 from .const.sciproc import (
     SCIPROCESS_REGISTRY,
     ASTROMETRY_SPEC,
@@ -12,11 +13,13 @@ from .const.sciproc import (
     SUBTRACTION_SPEC,
     DIFFERENCE_PHOTOMETRY_SPEC,
 )
+from .errors import WhiteImageError
 from .errors.errors import EmptyInputAfterSanityRejectionError
 from .preprocess import Preprocess
 from .astrometry import Astrometry
-from .photometry import Photometry
-from .imcoadd import ImCoadd
+from .photometry import Photometry, WhiteCatalog
+from .imcoadd import ImCoadd, WhiteImage
+from .py7dt import Phot7DS
 from .subtract import ImSubtract
 
 
@@ -64,21 +67,22 @@ def run_preprocess(
         raise e
 
 
-def _record_auto_sanity(config, sanity: bool = None) -> None:
+def _record_config_sanity(config, sanity: bool = None) -> None:
     """
     Config-level sanity from the run outcome: False when every input was sanity-rejected
     (return code 2), None to clear that once a run gets through. Best-effort, never raises,
-    and never overwrites a human verdict (ProcessStatus.set_auto_sanity).
+    and never overwrites a human verdict (ProcessStatus.set_config_sanity).
     """
     try:
-        if not isinstance(config, SciProcConfiguration):
+        if not isinstance(config, SciProcConfiguration | CrossFilterConfiguration):
             return
+        config.node.sanity = sanity
         if not config.node.settings.is_pipeline or config.node.settings.is_too:
             return
 
         from .services.database.process_status import ProcessStatus
 
-        ProcessStatus().set_auto_sanity(config.node.name, sanity)
+        ProcessStatus().set_config_sanity(config.node.name, sanity)
     except Exception as e:
         print(f"[WARNING] Failed to record config sanity: {e}")
 
@@ -113,7 +117,9 @@ def run_scidata_reduction(
             ast = Astrometry(config)
             ast.run(overwrite=overwrite)
             del ast
-        if SINGLE_PHOTOMETRY_SPEC.name in processes and (not getattr(config.node.flag, SINGLE_PHOTOMETRY_SPEC.name) or overwrite):
+        if SINGLE_PHOTOMETRY_SPEC.name in processes and (
+            not getattr(config.node.flag, SINGLE_PHOTOMETRY_SPEC.name) or overwrite
+        ):
             phot = Photometry(config, photometry_mode=SINGLE_PHOTOMETRY_SPEC.photometry_mode, overwrite=overwrite)
             phot.run(overwrite=overwrite)
             del phot
@@ -121,7 +127,9 @@ def run_scidata_reduction(
             coadd = ImCoadd(config, overwrite=overwrite)
             coadd.run()
             del coadd
-        if COADD_PHOTOMETRY_SPEC.name in processes and (not getattr(config.node.flag, COADD_PHOTOMETRY_SPEC.name) or overwrite):
+        if COADD_PHOTOMETRY_SPEC.name in processes and (
+            not getattr(config.node.flag, COADD_PHOTOMETRY_SPEC.name) or overwrite
+        ):
             phot = Photometry(config, photometry_mode=COADD_PHOTOMETRY_SPEC.photometry_mode, overwrite=overwrite)
             phot.run(overwrite=overwrite)
             del phot
@@ -129,7 +137,9 @@ def run_scidata_reduction(
             subt = ImSubtract(config, overwrite=overwrite)
             subt.run()
             del subt
-        if DIFFERENCE_PHOTOMETRY_SPEC.name in processes and (not getattr(config.node.flag, DIFFERENCE_PHOTOMETRY_SPEC.name) or overwrite):
+        if DIFFERENCE_PHOTOMETRY_SPEC.name in processes and (
+            not getattr(config.node.flag, DIFFERENCE_PHOTOMETRY_SPEC.name) or overwrite
+        ):
             phot = Photometry(config, photometry_mode=DIFFERENCE_PHOTOMETRY_SPEC.photometry_mode, overwrite=overwrite)
             phot.run(overwrite=overwrite)
             del phot
@@ -145,16 +155,89 @@ def run_scidata_reduction(
                 make_too_output(too_data.get("id"))
                 too_db.send_final_notice_email(too_data.get("id"))
 
-        _record_auto_sanity(config, None)  # inputs got through: drop a stale automatic rejection
+        _record_config_sanity(config, None)  # inputs got through: drop a stale automatic rejection
         del config
 
     except EmptyInputAfterSanityRejectionError:
         # Return code 2: not a failure. Record it so automatic reruns skip this config.
-        _record_auto_sanity(config, False)
+        _record_config_sanity(config, False)
         raise
 
     except Exception as e:
         raise e
+
+
+def run_crossfilter_reduction(
+    config: CrossFilterConfiguration | str,
+    processes: list[str] = DEFAULT_CROSSFILTER_PROCESSES,
+    overwrite: bool = False,
+    is_too: bool = False,
+):
+    try:
+        if isinstance(config, CrossFilterConfiguration):
+            pass
+        elif isinstance(config, str) and config.endswith(".yml"):
+            config = CrossFilterConfiguration(config, overwrite=overwrite)
+        else:
+            raise ValueError("Expected CrossFilterConfiguration or path to a .yml file")
+
+        if config.node.settings.is_too != is_too:
+            raise ValueError(f"is_too mismatch: node.settings.is_too={config.node.settings.is_too} != is_too={is_too}")
+
+        # Cold-start fallback for configs launched without a scheduler. The
+        # same idempotent write runs again after WhiteImage registers its output.
+        WhiteImage.record_config_dependencies(config.node, config.logger)
+
+        effective_overwrite = overwrite or bool(config.node.input.parents_changed)
+        if effective_overwrite:
+            for spec in CROSSFILTERPROCESS_REGISTRY.specs:
+                if spec.name in processes:
+                    setattr(config.node.flag, spec.name, False)
+
+        # WhiteImage.initialize confirms input completeness against the declared parents
+        # (and RawFrameQuery when is_pipeline) and records the confirmed inputs.
+        if WHITE_COADD_SPEC.name in processes and (
+            not getattr(config.node.flag, WHITE_COADD_SPEC.name) or effective_overwrite
+        ):
+            white = WhiteImage(config, overwrite=effective_overwrite)
+            white.run()
+            del white
+
+        if PHOT7DS_SPEC.name in processes and (
+            not getattr(config.node.flag, PHOT7DS_SPEC.name) or effective_overwrite
+        ):
+            if not getattr(config.node.flag, WHITE_COADD_SPEC.name):
+                raise WhiteImageError.PrerequisiteNotMetError("White image must complete before phot7ds photometry")
+            phot = Phot7DS(config, overwrite=effective_overwrite)
+            phot.run()
+            del phot
+
+        if WHITE_PHOTOMETRY_SPEC.name in processes and (
+            not getattr(config.node.flag, WHITE_PHOTOMETRY_SPEC.name) or effective_overwrite
+        ):
+            if not getattr(config.node.flag, WHITE_COADD_SPEC.name):
+                raise WhiteImageError.PrerequisiteNotMetError("White image must complete before its source catalog")
+            catalog = WhiteCatalog(config, overwrite=effective_overwrite)
+            catalog.run(overwrite=effective_overwrite)
+            del catalog
+
+        if all(
+            getattr(config.node.flag, spec.name)
+            for spec in CROSSFILTERPROCESS_REGISTRY.specs
+            if spec.name in processes
+        ):
+            config.node.input.parents_changed = False
+
+        _record_config_sanity(config, None)  # inputs got through: drop a stale automatic rejection
+        del config
+
+    except EmptyInputAfterSanityRejectionError:
+        # Return code 2: not a failure. Record it so automatic reruns skip this config.
+        _record_config_sanity(config, False)
+        raise
+
+    except Exception:
+        raise
 
 
 def query_observations(input_params: List[str], use_db=True, master_frame_only=False, **kwargs):

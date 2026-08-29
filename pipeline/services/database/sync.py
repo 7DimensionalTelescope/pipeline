@@ -3,16 +3,20 @@ reconciliation from config flags. Backs the ``db_sync`` CLI; importable directly
 
 import os
 
+from ...const.crossfilter import CROSSFILTERPROCESS_REGISTRY
 from ...const.sciproc import SCIPROCESS_REGISTRY
 
 # status strings the pipeline itself records when each stage completes
 COMPLETED_STATUS = {
     "astrometry": "astrometry",
     "single_photometry": "single_photometry-completed",
-    "coadd": "imcoadd-completed",
+    "coadd": "coadd-completed",
     "coadd_photometry": "coadd_photometry-completed",
     "subtraction": "imsubtract-completed",
     "difference_photometry": "difference_photometry-completed",
+    "white_coadd": "white_coadd-completed",
+    "phot7ds": "phot7ds-completed",
+    "white_photometry": "white_photometry-completed",
 }
 
 
@@ -42,6 +46,7 @@ def sync_images(images) -> dict:
     Returns {"configs": {yml: {...}}, "images": {path: {...}}, "errors": {path: repr}}.
     """
     from ...path import PathHandler
+    from ...path.name import NameHandler
     from ...utils import atleast_1d
     from .process_status_dependency import ProcessStatusDependency
 
@@ -91,18 +96,32 @@ def sync_images(images) -> dict:
                 report["errors"][image] = repr(exc)
 
         if yml is not None and ps_id is not None and synced:
-            report["configs"][yml]["n_rollup_edges"] = ProcessStatusDependency().sync_from_products(ps_id)
+            # crossfilter edges come from the declared science parents, never the image roll-up
+            if NameHandler(yml).config_properties["config_type"] == "crossfilter":
+                from ...config import CrossFilterConfiguration
+                from ...imcoadd.white import WhiteImage
+
+                node = CrossFilterConfiguration(yml, write=False, logger=False).node
+                report["configs"][yml]["n_rollup_edges"] = WhiteImage.record_config_dependencies(node, None)
+            else:
+                report["configs"][yml]["n_rollup_edges"] = ProcessStatusDependency().sync_from_products(ps_id)
 
     return report
 
 
 def last_completed_spec(config_file: str):
     """Furthest spec in chain order whose flag is set, or None if nothing completed."""
-    from ...config import SciProcConfiguration
+    from ...config import CrossFilterConfiguration, SciProcConfiguration
+    from ...path.name import NameHandler
 
-    flags = SciProcConfiguration(config_file, write=False, logger=False).node.flag
+    if NameHandler(config_file).config_properties["config_type"] == "crossfilter":
+        flags = CrossFilterConfiguration(config_file, write=False, logger=False).node.flag
+        registry = CROSSFILTERPROCESS_REGISTRY
+    else:
+        flags = SciProcConfiguration(config_file, write=False, logger=False).node.flag
+        registry = SCIPROCESS_REGISTRY
     done = None
-    for spec in SCIPROCESS_REGISTRY.specs:
+    for spec in registry.specs:
         if not getattr(flags, spec.name, False):
             break
         done = spec

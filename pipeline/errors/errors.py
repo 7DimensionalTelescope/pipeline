@@ -156,6 +156,12 @@ class NoSpaceLeftOnDeviceError(OSError):
     pass
 
 
+class DependencyRegistrationError(Exception):
+    """A derived product was valid but its dependency graph could not be recorded."""
+
+    pass
+
+
 class UnknownError(Exception):
     pass
 

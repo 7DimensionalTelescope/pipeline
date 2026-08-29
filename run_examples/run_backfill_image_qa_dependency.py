@@ -41,7 +41,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from pipeline.services.database.image_qa import ImageQA
 from pipeline.services.database.image_qa_dependency import ImageQADependency
 
-DERIVED_TYPES = ["dark", "flat", "single", "coadd", "diff"]
+DERIVED_TYPES = ["dark", "flat", "single", "coadd", "white", "diff"]
 
 _thread_local = threading.local()
 
