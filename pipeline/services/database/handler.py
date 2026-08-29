@@ -136,7 +136,11 @@ class DatabaseHandler:
             self.logger.warning(f"Skipping QA data creation: process_status_id is not set")
             return None
 
-        table = self.image_qa.pyTable.from_file(file, process_status_id)
+        try:
+            table = self.image_qa.pyTable.from_file(file, process_status_id)
+        except ValueError as e:
+            self.logger.error(f"image_qa registration refused: {e}")
+            raise
 
         if overwrite:
             self.image_qa.delete_data(table.id)

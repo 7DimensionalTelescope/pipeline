@@ -1210,6 +1210,8 @@ class PhotometrySingle:
         and calculated photometric values.
         """
 
+        phot_utils.rename_flux_radius_columns(obs_src_table)
+
         metadata = self.image_info.metadata
         obs_src_table.meta = metadata
         # self.obs_src_table.meta["comments"] = [

@@ -1,10 +1,11 @@
 import os
 import numpy as np
+from functools import lru_cache
 from numba import njit
 from astropy.table import Table, hstack, vstack, unique
 from astropy.coordinates import SkyCoord
 
-from ..const import GAIA_REF_DIR
+from ..const import GAIA_REF_DIR, REF_DIR
 from ..utils import add_suffix
 from ..config.base import ConfigNode
 
@@ -269,6 +270,25 @@ def get_aperture_dict(peeing: float | None, pixscale: float) -> dict:
         "APER_5": (10 / pixscale, """FIXED 10" APERTURE DIAMETER [pix]"""),
     }
     return aperture_dict
+
+
+@lru_cache(maxsize=1)
+def get_flux_fractions() -> tuple:
+    """PHOT_FLUXFRAC of main.sex, the flux fractions of FLUX_RADIUS."""
+    from ..imcoadd.utils import parse_sex_config
+
+    key = "PHOT_FLUXFRAC"
+    value = parse_sex_config(os.path.join(REF_DIR, "srcExt", "main.sex"), [key])[key]
+    return tuple(float(v) for v in value.split(","))
+
+
+def rename_flux_radius_columns(table: Table) -> None:
+    """FLUX_RADIUS, FLUX_RADIUS_1, ... -> FLUX_RADIUS_20, FLUX_RADIUS_50, ... in place."""
+    fractions = get_flux_fractions()
+    for i in reversed(range(len(fractions))):  # descending, so a new name never hits a pending old one
+        old_key = "FLUX_RADIUS" if i == 0 else f"FLUX_RADIUS_{i}"
+        if old_key in table.colnames:
+            table.rename_column(old_key, f"FLUX_RADIUS_{round(fractions[i] * 100)}")
 
 
 def get_aperture_suffix(aperture_key: str) -> str:

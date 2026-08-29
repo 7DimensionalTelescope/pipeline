@@ -35,6 +35,7 @@ PHOT_APERTURES   3,5,7          # MAG_APER aperture diameter(s) in pixels, 3", 5
 PHOT_AUTOPARAMS  2.5, 3.5       # MAG_AUTO parameters: <Kron_fact>,<min_radius>
 PHOT_PETROPARAMS 2.0, 3.5       # MAG_PETRO parameters: <Petrosian_fact>,
                                 # <min_radius>
+PHOT_FLUXFRAC    0.2,0.5,0.8            # flux fraction[s] used for FLUX_RADIUS
  
 SATUR_LEVEL      50000.0        # level (in ADUs) at which arises saturation
 SATUR_KEY        SATURATE       # keyword for saturation level (in ADUs)

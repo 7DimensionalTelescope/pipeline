@@ -8,7 +8,7 @@ MIN_PREPROC_RUNTIME_VERSION = "1.10.6"
 MIN_SCIPROC_RUNTIME_VERSION = "1.9.6"  # for sciprocess overall
 MIN_SCIPROC_RUNTIME_VERSION_MAP = {  # for individual modules
     "astrometry": "1.10.14",
-    "photometry": "1.8.14",
+    "photometry": "1.10.47",
     "imcoadd": "1.10.26",
     "imsubtract": "1.10.17",
 }

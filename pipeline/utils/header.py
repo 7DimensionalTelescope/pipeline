@@ -1,5 +1,6 @@
 import os
 import re
+import uuid
 import warnings
 import numpy as np
 from pathlib import Path
@@ -474,10 +475,19 @@ def _reset_header_core(header, override_header):
 
 
 def write_header_file(filename: str, header: fits.Header):
-    """Write a header sidecar, rendering before the target is truncated."""
+    """Write a header sidecar through a private temp file; a killed writer leaves the previous file intact."""
     text = header.tostring(sep="\n")  # a bad card must fail before open() empties the file
-    with open(filename, "w") as f:
-        f.write(text)
+    tmp = f"{filename}.{uuid.uuid4().hex}.tmp"  # per-call: a shared name lets a second writer publish a blend
+    try:
+        with open(tmp, "w") as f:
+            f.write(text)
+        os.replace(tmp, filename)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 ###############################################################################

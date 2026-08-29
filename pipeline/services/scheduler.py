@@ -1069,6 +1069,65 @@ class Scheduler:
 
         return self._row_to_dict(row) if row else None
 
+    def claim_next_dispatch_tasks(self, server_name, config_types=None, input_type=None, count=1):
+        """Claim up to `count` Ready tasks for a worker host in ONE transaction; same gates as the single claim."""
+        if not self.use_system_queue:
+            raise RuntimeError("claim_next_dispatch_tasks requires use_system_queue=True")
+
+        server_name = str(server_name).strip()
+        if not server_name:
+            raise ValueError("server_name must be non-empty")
+        count = max(0, int(count))
+        if count == 0:
+            return []
+
+        claimed = []
+        with self._db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("BEGIN IMMEDIATE")
+            try:
+                extra_sql, extra_params = "", ()
+                if config_types:
+                    extra_sql = f" AND config_type IN ({','.join('?' for _ in config_types)})"
+                    extra_params = tuple(config_types)
+                relabel = ", input_type = CASE WHEN LOWER(input_type) = 'too' THEN input_type ELSE ? END"
+                while len(claimed) < count:
+                    task_index = None
+                    for affinity in (server_name, None):
+                        task_index = self._select_ready_index(cursor, affinity, extra_sql, extra_params)
+                        if task_index is not None:
+                            break
+                    if task_index is None:
+                        break
+
+                    process_start = datetime.now().isoformat()
+                    update_params = ["Processing", server_name, process_start, ""]
+                    if input_type:
+                        update_params.append(input_type)
+                    update_params += [task_index, "Ready"]
+                    cursor.execute(
+                        f'UPDATE scheduler SET status = ?, dispatch = ?, pid = 0, process_start = ?, process_end = ?'
+                        f'{relabel if input_type else ""} '
+                        f'WHERE "index" = ? AND status = ?',
+                        tuple(update_params),
+                    )
+                    if cursor.rowcount == 0:
+                        break
+                    cursor.execute(
+                        f'SELECT {self._SELECT_COLUMNS} FROM scheduler WHERE "index" = ?',
+                        (task_index,),
+                    )
+                    row = cursor.fetchone()
+                    if row is None:
+                        break
+                    claimed.append(self._row_to_dict(row))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                return []
+
+        return claimed
+
     def set_dispatch_pid(self, index, server_name, pid):
         """
         Record the worker PID reported by a worker host for a borrowed task.

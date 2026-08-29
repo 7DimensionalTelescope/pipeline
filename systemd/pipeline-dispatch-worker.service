@@ -8,6 +8,9 @@ RequiresMountsFor=/lyman/data1 /lyman/data2
 [Service]
 UMask=0002
 Type=simple
+# Only the daemon gets SIGTERM; without this systemd kills every reduction in the cgroup at t=0,
+# which pre-empts the shutdown path below and makes a graceful drain impossible.
+KillMode=mixed
 User=@USER@
 Group=pipeline
 WorkingDirectory=@PIPELINE_ROOT@
@@ -24,6 +27,7 @@ EnvironmentFile=@PIPELINE_ROOT@/.env
 # the EnvironmentFile above. Keep them there, not here: systemd caches this file, so an Environment=
 # line needs `daemon-reload` to change, while .env is re-read on every start.
 ExecStart=@PYTHON_BIN_DIR@/python3 @PIPELINE_ROOT@/pipeline/cli/dispatch_worker_daemon
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=10
 # Stop path: settle -> SIGTERM + 10 s grace -> SIGKILL + 5 s reap -> settle, each RPC capped at
