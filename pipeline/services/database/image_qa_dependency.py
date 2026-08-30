@@ -58,18 +58,20 @@ imsubtract -- start an invalidation chain here.
 
 The complete dependency_role vocabulary:
 
-    role      | derived from                    | notes
-    ----------+---------------------------------+----------------------------------------------
-    bias      | NameHandler.type[1], master     | in use
-    dark      | NameHandler.type[1], master     | in use
-    flat      | NameHandler.type[1], master     | in use; a flat can be built from other flats
-    biassig   | NameHandler.type[1], master     | never resolves: no sig frame holds an image_qa
-    darksig   | NameHandler.type[1], master     |   row, so its ID card matches nothing
-    flatsig   | NameHandler.type[1], master     |
-    single    | NameHandler.type[2], calibrated | in use
-    coadd     | NameHandler.type[2], calibrated | in use; source is a coadd
-    science   | SCIIID card, not NameHandler    | in use, diff only
-    reference | REFIID card, not NameHandler    | in use, diff only
+    role      | derived from                   | notes
+    ----------+--------------------------------+-----------------------------------------------
+    bias      | NameType.exposure_type, master | in use
+    dark      | NameType.exposure_type, master | in use
+    flat      | NameType.exposure_type, master | in use; a flat can be built from other flats
+    biassig   | NameType.exposure_type, master | never resolves: no sig frame holds an image_qa
+    darksig   | NameType.exposure_type, master |   row, so its ID card matches nothing; also
+    flatsig   | NameType.exposure_type, master |   outside the CHECK constraint
+    single    | NameType.image_type, calibrated| in use
+    coadd     | NameType.image_type, calibrated| in use; source is a coadd
+    diff      | NameType.image_type, calibrated| allowed since 2026-08-30; no source is a diff yet
+    white     | NameType.image_type, calibrated| allowed since 2026-08-30; nothing coadds a white
+    science   | SCIIID card, not NameHandler   | in use, diff only
+    reference | REFIID card, not NameHandler   | in use, diff only
 """
 
 from __future__ import annotations
@@ -79,24 +81,20 @@ from typing import Dict, List, Optional
 
 from astropy.io import fits
 
+from ...const import (
+    COADD_DEPENDENCY_ROLE,
+    IMAGE_DEPENDENCY_ROLES,
+    IMAGE_TYPE_DIFF,
+    NAME_TYPE_CALIBRATED,
+    NAME_TYPE_MASTER,
+    REFERENCE_DEPENDENCY_ROLE,
+    SCIENCE_DEPENDENCY_ROLE,
+)
 from .base import BaseDatabase
 from ...utils import atleast_1d
 
-COADD_DEPENDENCY_ROLE = "coadd"
-SCIENCE_DEPENDENCY_ROLE = "science"
-REFERENCE_DEPENDENCY_ROLE = "reference"
-IMAGE_DEPENDENCY_ROLES = (
-    "bias",
-    "dark",
-    "flat",
-    "single",
-    COADD_DEPENDENCY_ROLE,
-    SCIENCE_DEPENDENCY_ROLE,
-    REFERENCE_DEPENDENCY_ROLE,
-)
-
 # A diff's two parents are both coadds, so NameHandler would call them both
-# "coadded"; only the card itself says which is the science one.
+# "coadd"; only the card itself says which is the science one.
 DIRECT_PARENT_KEYS = (
     ("SCIIID", SCIENCE_DEPENDENCY_ROLE),
     ("REFIID", REFERENCE_DEPENDENCY_ROLE),
@@ -150,7 +148,7 @@ def parse_ingredients(fits_file: str) -> List[Dict[str, str]]:
     # A diff carries IMG*/IID* cards inherited from its science coadd, naming that
     # coadd's singles. Never read those as the diff's own ingredients: a diff has
     # its parents in SCIIID/REFIID or it has nothing recordable.
-    if atleast_1d(NameHandler(fits_file).type)[0][3] == "difference":
+    if atleast_1d(NameHandler(fits_file).type)[0].image_type == IMAGE_TYPE_DIFF:
         return []
 
     pairs = []
@@ -170,11 +168,8 @@ def parse_ingredients(fits_file: str) -> List[Dict[str, str]]:
     out: List[Dict[str, str]] = []
     seen = set()
     for (_, imageid), typ in zip(pairs, types):
-        kind = typ[0]
-        if kind == "master":
-            role = typ[1]  # bias / dark / flat, or their sig variants
-        elif kind == "calibrated":
-            role = COADD_DEPENDENCY_ROLE if typ[2] == "coadded" else typ[2]
+        if typ.kind in (NAME_TYPE_MASTER, NAME_TYPE_CALIBRATED):
+            role = typ.image_type  # a master carries its exposure_type; a science product its image_type
         else:
             continue  # raw frame: no image_qa row
         if imageid not in seen:

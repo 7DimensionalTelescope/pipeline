@@ -4,6 +4,7 @@ import datetime
 from ..services.blueprint import Blueprint
 from ..services.pipeline_lock import enforce_pipeline_lock
 from ..services.scheduler import Scheduler
+from ..const import INPUT_TYPE_TOO
 
 
 def backfill_too(i, overwrite=False, use_system_queue=True, **kwargs):
@@ -52,7 +53,7 @@ def backfill_too(i, overwrite=False, use_system_queue=True, **kwargs):
 
             bp = Blueprint.from_list(list_of_images=list_of_images, is_pipeline=True, is_too=True)
             bp.create_config(overwrite=overwrite, is_too=True, is_pipeline=True)
-            bp.create_schedule(is_too=True, input_type="ToO")
+            bp.create_schedule(is_too=True, input_type=INPUT_TYPE_TOO)
 
             if len(bp.schedule) == 0:
                 print(f"Empty schedule created for TOO id = {i}")

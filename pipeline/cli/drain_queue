@@ -28,10 +28,16 @@ from pathlib import Path
 pipeline_dir = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(pipeline_dir))
 
-from pipeline.const import SCHEDULER_DB_PATH
+from pipeline.const import (
+    SCHEDULER_DB_PATH,
+    TASK_STATUS_READY,
+    TASK_STATUS_PENDING,
+    TASK_STATUS_PROCESSING,
+    TASK_STATUS_PAUSED,
+)
 from pipeline.services.scheduler import Scheduler
 
-TRACKED_STATUSES = ("Ready", "Pending", "Processing", "Paused")
+TRACKED_STATUSES = (TASK_STATUS_READY, TASK_STATUS_PENDING, TASK_STATUS_PROCESSING, TASK_STATUS_PAUSED)
 CHUNK = 500
 
 
@@ -74,9 +80,11 @@ def do_pause(db_path):
     """Ready -> Paused in one transaction, so nothing can be claimed between select and update."""
     with connect(db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
-        indices = [row[0] for row in conn.execute('SELECT "index" FROM scheduler WHERE status = ?', ("Ready",))]
+        indices = [
+            row[0] for row in conn.execute('SELECT "index" FROM scheduler WHERE status = ?', (TASK_STATUS_READY,))
+        ]
         if indices:
-            conn.execute("UPDATE scheduler SET status = ? WHERE status = ?", ("Paused", "Ready"))
+            conn.execute("UPDATE scheduler SET status = ? WHERE status = ?", (TASK_STATUS_PAUSED, TASK_STATUS_READY))
         conn.commit()
 
     if indices:
@@ -98,7 +106,7 @@ def do_resume(db_path):
             placeholders = ",".join("?" * len(chunk))
             cursor = conn.execute(
                 f'UPDATE scheduler SET status = ? WHERE "index" IN ({placeholders}) AND status = ?',
-                ("Ready", *chunk, "Paused"),
+                (TASK_STATUS_READY, *chunk, TASK_STATUS_PAUSED),
             )
             restored += cursor.rowcount
         conn.commit()
@@ -113,16 +121,16 @@ def do_wait(db_path, poll, timeout):
     deadline = time.monotonic() + timeout if timeout else None
     while True:
         current = counts(db_path)
-        processing = current.get("Processing", 0)
+        processing = current.get(TASK_STATUS_PROCESSING, 0)
 
-        if current.get("Ready", 0):  # newly claimable rows appeared; hold them too
+        if current.get(TASK_STATUS_READY, 0):  # newly claimable rows appeared; hold them too
             paused = do_pause(db_path)
             if paused:
                 print(f"  (paused {paused} newly claimable row(s))")
 
         print(
-            f"  processing={processing} ready={current.get('Ready', 0)} "
-            f"pending={current.get('Pending', 0)} paused={current.get('Paused', 0)}",
+            f"  processing={processing} ready={current.get(TASK_STATUS_READY, 0)} "
+            f"pending={current.get(TASK_STATUS_PENDING, 0)} paused={current.get(TASK_STATUS_PAUSED, 0)}",
             flush=True,
         )
 

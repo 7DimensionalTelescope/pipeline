@@ -38,10 +38,25 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from pipeline.const import (
+    CALIB_TYPE_DARK,
+    CALIB_TYPE_FLAT,
+    IMAGE_TYPE_COADD,
+    IMAGE_TYPE_DIFF,
+    IMAGE_TYPE_SINGLE,
+    IMAGE_TYPE_WHITE,
+)
 from pipeline.services.database.image_qa import ImageQA
 from pipeline.services.database.image_qa_dependency import ImageQADependency
 
-DERIVED_TYPES = ["dark", "flat", "single", "coadd", "white", "diff"]
+DERIVED_TYPES = [
+    CALIB_TYPE_DARK,
+    CALIB_TYPE_FLAT,
+    IMAGE_TYPE_SINGLE,
+    IMAGE_TYPE_COADD,
+    IMAGE_TYPE_WHITE,
+    IMAGE_TYPE_DIFF,
+]
 
 _thread_local = threading.local()
 

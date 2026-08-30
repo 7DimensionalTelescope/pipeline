@@ -34,6 +34,7 @@ from astropy.io import fits
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from pipeline.const import MASTER_IMAGE_TYPES
 from pipeline.services.database.image_qa import ImageQA
 from pipeline.utils.filesystem import swap_ext
 from pipeline.utils.header import read_header_file, write_header_file
@@ -61,7 +62,7 @@ def _select(args: argparse.Namespace) -> tuple[str, dict]:
         "image_path != ''",
         "pipe_ver IS NOT NULL",
     ]
-    params: dict = {"types": args.image_types or ["bias", "dark", "flat"]}
+    params: dict = {"types": args.image_types or list(MASTER_IMAGE_TYPES)}
     if args.nightdate_from:
         conditions.append("nightdate >= %(nd_from)s")
         params["nd_from"] = args.nightdate_from

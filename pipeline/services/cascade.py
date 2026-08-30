@@ -13,6 +13,20 @@ import os
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from ..const import (
+    CALIB_TYPE_BIAS,
+    CALIB_TYPE_DARK,
+    CALIB_TYPE_FLAT,
+    CONFIG_TYPE_CROSSFILTER,
+    CONFIG_TYPE_PREPROCESS,
+    CONFIG_TYPE_SCIENCE,
+    IMAGE_TYPE_SINGLE,
+    INPUT_TYPE_REPROCESS,
+    MASTER_IMAGE_TYPES,
+    TASK_STATUS_PAUSED,
+    TASK_STATUS_PROCESSING,
+    TASK_STATUS_READY,
+)
 from ..path.path import PathHandler
 from ..utils import atleast_1d
 from .database.query import free_query
@@ -33,7 +47,11 @@ down(id, depth) AS (
 )
 """
 
-MASTER_SWEEPS = (["bias"], ["bias", "dark"], ["bias", "dark", "flat"])
+MASTER_SWEEPS = (
+    [CALIB_TYPE_BIAS],
+    [CALIB_TYPE_BIAS, CALIB_TYPE_DARK],
+    [CALIB_TYPE_BIAS, CALIB_TYPE_DARK, CALIB_TYPE_FLAT],
+)
 
 
 @dataclass
@@ -66,7 +84,7 @@ class CascadePlan:
             "",
             "  affected products   " + ", ".join(f"{n} {k}" for k, n in sorted(self.counts.items())),
             f"  chained masters     {len(self.masters)}"
-            + (" (" + ", ".join(f"{sum(1 for m in self.masters if m[1] == k)} {k}" for k in ("bias", "dark", "flat")) + ")" if self.masters else ""),  # fmt: skip
+            + (" (" + ", ".join(f"{sum(1 for m in self.masters if m[1] == k)} {k}" for k in MASTER_IMAGE_TYPES) + ")" if self.masters else ""),  # fmt: skip
             f"  phase 1  masters    {len(self.master_configs)} preprocess configs × 3 sweeps",
             f"  phase 2  singles    {len(self.preprocess_configs)} preprocess configs",
             f"  phase 3  science    {len(self.nightly_science)} nightly configs",
@@ -116,8 +134,8 @@ def _resolve_configs(stems) -> tuple:
         name: (config_file, sanity)
         for name, config_file, sanity in free_query(
             "SELECT name, config_file, sanity FROM process_status"
-            " WHERE name = ANY(%s) AND config_type = 'preprocess'",
-            (stems,),
+            " WHERE name = ANY(%s) AND config_type = %s",
+            (stems, CONFIG_TYPE_PREPROCESS),
         )
     }
     runnable, blocked = {}, []
@@ -166,14 +184,14 @@ def plan(seed_images, max_depth: int = 12) -> CascadePlan:
         if name not in counted:
             counted.add(name)
             counts[image_type] = counts.get(image_type, 0) + 1
-            if image_type in ("bias", "dark", "flat"):
+            if image_type in MASTER_IMAGE_TYPES:
                 master_names.append((name, image_type))
-        if image_type not in ("bias", "dark", "flat"):
+        if image_type not in MASTER_IMAGE_TYPES:
             science_ps_ids.add(ps_id)
     out.counts = counts
 
     # ---- phase 1: the configs that can rebuild the chained masters ----
-    out.masters = sorted(master_names, key=lambda m: (("bias", "dark", "flat").index(m[1]), m[0]))
+    out.masters = sorted(master_names, key=lambda m: (MASTER_IMAGE_TYPES.index(m[1]), m[0]))
     stem_of = _master_config_stems([n for n, _ in out.masters])
     master_runnable, blocked = _resolve_configs(stem_of.values())
     out.master_configs = sorted(master_runnable.items())
@@ -186,9 +204,9 @@ def plan(seed_images, max_depth: int = 12) -> CascadePlan:
         + """
         SELECT DISTINCT i.nightdate, i.unit
         FROM down JOIN image_qa i ON i.id = down.id
-        WHERE i.image_type = 'single' AND i.nightdate IS NOT NULL AND i.unit IS NOT NULL
+        WHERE i.image_type = %s AND i.nightdate IS NOT NULL AND i.unit IS NOT NULL
         """,
-        (found, max_depth),
+        (found, max_depth, IMAGE_TYPE_SINGLE),
     )
     single_stems = {f"{nightdate}_{unit}" for nightdate, unit in affected_singles}
     single_runnable, single_blocked = _resolve_configs(single_stems)
@@ -202,8 +220,8 @@ def plan(seed_images, max_depth: int = 12) -> CascadePlan:
     if science_ps_ids:
         for name, config_file, nightdate, sanity in free_query(
             "SELECT name, config_file, nightdate, sanity FROM process_status"
-            " WHERE id = ANY(%s) AND config_type = 'science'",
-            (sorted(science_ps_ids),),
+            " WHERE id = ANY(%s) AND config_type = %s",
+            (sorted(science_ps_ids), CONFIG_TYPE_SCIENCE),
         ):
             science[name] = (config_file, nightdate, sanity)
 
@@ -213,12 +231,12 @@ def plan(seed_images, max_depth: int = 12) -> CascadePlan:
             "SELECT DISTINCT p.name, p.config_file, p.nightdate, p.sanity"
             " FROM process_status_dependency d"
             " JOIN process_status p ON p.name = d.derived_config_name"
-            " WHERE d.source_config_name = ANY(%s) AND p.config_type = 'science'"
+            " WHERE d.source_config_name = ANY(%s) AND p.config_type = %s"
             "   AND EXISTS (SELECT 1 FROM image_qa i"
-            "               WHERE i.process_status_id = p.id AND i.image_type = 'single'"
+            "               WHERE i.process_status_id = p.id AND i.image_type = %s"
             "                 AND NOT EXISTS (SELECT 1 FROM image_qa_dependency e"
             "                                 WHERE e.derived_image_id = i.id))",
-            ([n for n, _ in out.preprocess_configs],),
+            ([n for n, _ in out.preprocess_configs], CONFIG_TYPE_SCIENCE, IMAGE_TYPE_SINGLE),
         ):
             science.setdefault(name, (config_file, nightdate, sanity))
 
@@ -239,8 +257,8 @@ def plan(seed_images, max_depth: int = 12) -> CascadePlan:
     if science_ps_ids:
         for name, config_file, nightdate, sanity in free_query(
             "SELECT name, config_file, nightdate, sanity FROM process_status"
-            " WHERE id = ANY(%s) AND config_type = 'crossfilter'",
-            (sorted(science_ps_ids),),
+            " WHERE id = ANY(%s) AND config_type = %s",
+            (sorted(science_ps_ids), CONFIG_TYPE_CROSSFILTER),
         ):
             crossfilter[name] = (config_file, nightdate, sanity)
     if out.science_configs:
@@ -248,8 +266,8 @@ def plan(seed_images, max_depth: int = 12) -> CascadePlan:
             "SELECT DISTINCT p.name, p.config_file, p.nightdate, p.sanity"
             " FROM process_status_dependency d"
             " JOIN process_status p ON p.name = d.derived_config_name"
-            " WHERE d.source_config_name = ANY(%s) AND p.config_type = 'crossfilter'",
-            ([n for n, _, _ in out.science_configs],),
+            " WHERE d.source_config_name = ANY(%s) AND p.config_type = %s",
+            ([n for n, _, _ in out.science_configs], CONFIG_TYPE_CROSSFILTER),
         ):
             crossfilter.setdefault(name, (config_file, nightdate, sanity))
 
@@ -286,7 +304,7 @@ def submit(
     sweep: int = None,
     base_priority: int = 1,
     dry_run: bool = True,
-    input_type: str = "Reprocess",
+    input_type: str = INPUT_TYPE_REPROCESS,
 ):
     """Queue ONE phase of the plan -- and for phase 1, ONE calib_types sweep.
 
@@ -332,7 +350,9 @@ def submit(
     if not configs:
         return None
 
-    busy = [(c, s) for c, s in _queued_rows(configs) if s in ("Ready", "Processing", "Paused")]
+    busy = [
+        (c, s) for c, s in _queued_rows(configs) if s in (TASK_STATUS_READY, TASK_STATUS_PROCESSING, TASK_STATUS_PAUSED)
+    ]
     if busy:
         listing = ", ".join(f"{os.path.basename(c)} [{s}]" for c, s in busy[:5])
         raise RuntimeError(

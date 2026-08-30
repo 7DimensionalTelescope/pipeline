@@ -19,7 +19,7 @@ def atleast_1d(x):
     if isinstance(x, list):
         return x
 
-    # Don't revive it: causes problems with atleast_1d(nh.type)
+    # Don't revive it: it would expand any tuple-valued attribute (NameHandler.type was one until 2026-08-30)
     # if isinstance(x, (tuple, set, frozenset)):
     #     return list(x)
 

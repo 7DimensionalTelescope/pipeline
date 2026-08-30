@@ -59,7 +59,7 @@ class Checker:
 
     def apply_sanity_filter_and_report(
         self,
-        dtype: Literal["science", "masterframe"] = "science",  # Type of images for sanity check
+        dtype: Literal["science", "masterframe"] = const.IMAGE_GROUP_SCIENCE,  # Type of images for sanity check
         current_process: Optional[ProcessSpec] = None,
         overwrite: bool = False,
     ) -> bool:
@@ -156,7 +156,7 @@ class Checker:
     def _filter_by_sanity(
         self,
         images: List[str],
-        dtype: str = "science",
+        dtype: str = const.IMAGE_GROUP_SCIENCE,
         current_process: Optional[ProcessSpec] = None,
         overwrite: bool = False,
     ) -> tuple[List[str], dict[str, bool]]:
@@ -312,7 +312,7 @@ class Checker:
 
         return filtered_images, sanity_updates
 
-    def load_qa_criteria(self, category: Literal["masterframe", "science"] = "masterframe"):
+    def load_qa_criteria(self, category: Literal["masterframe", "science"] = const.IMAGE_GROUP_MASTERFRAME):
         try:
             category = self._dtype_to_category(category)  # in case input isnot category
             criteria_file = os.path.join(const.REF_DIR, "qa", f"{category.lower()}.json")
@@ -537,8 +537,8 @@ class Checker:
 
         masterframe_types = {"BIAS", "DARK", "FLAT", "MASTERFRAME"}
         if dtype is None:
-            return "masterframe"
-        return "masterframe" if dtype.upper() in masterframe_types else "science"
+            return const.IMAGE_GROUP_MASTERFRAME
+        return const.IMAGE_GROUP_MASTERFRAME if dtype.upper() in masterframe_types else const.IMAGE_GROUP_SCIENCE
 
     def _recreate_pathhandler_instance(self):
         """

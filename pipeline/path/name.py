@@ -1,4 +1,5 @@
 import os
+from dataclasses import dataclass
 from typing import List, Tuple
 from collections import defaultdict
 from pathlib import Path
@@ -15,6 +16,27 @@ from .db import unified_names_from_paths
 
 # auxiliary planes that live beside the images they describe, not science data
 MASK_SUFFIXES = ("_srcmask", "_fovmask", "_bpmask", "_footprint", "_bkg", "_bkgrms")
+
+
+@dataclass(frozen=True, slots=True)
+class NameType:
+    """What the filename says a file is; a config reuses kind for its config_type and exposure_type for ToO."""
+
+    kind: str | None = None  # raw / master / calibrated, or the config_type of a .yml
+    exposure_type: str | None = None  # bias / dark / flat / science (+ sig variants), or ToO for a config
+    image_type: str | None = None  # image_qa.image_type: single / coadd / diff / white, or a master's exposure_type
+    product_type: str | None = None  # image / weight / catalog / mask, or config for a .yml
+
+    def __iter__(self):
+        return iter((self.kind, self.exposure_type, self.image_type, self.product_type))
+
+    @property
+    def is_config(self) -> bool:
+        return self.product_type == const.NAME_TYPE_CONFIG
+
+    @property
+    def is_too(self) -> bool:
+        return self.is_config and bool(self.exposure_type)
 
 
 # # class Path7DS:
@@ -145,8 +167,9 @@ class NameHandler:
     CAVEAT: For NINA filenames, only raw -> processed supported
     """
 
-    def __init__(self, filenames: str | Path | list[str] | list[Path], nightdate_only: bool = False,
-                 type_only: bool = False):
+    def __init__(
+        self, filenames: str | Path | list[str] | list[Path], nightdate_only: bool = False, type_only: bool = False
+    ):
         # lapse("start NameHandler init", reset=True)
 
         # --- 1. Normalize input to a list of strings ---
@@ -199,7 +222,7 @@ class NameHandler:
         # image
         else:
             type_hints = [
-                "raw" if const.RAWDATA_DIR in p else None for p in self.abspath
+                const.NAME_TYPE_RAW if const.RAWDATA_DIR in p else None for p in self.abspath
             ]  # this is ad-hoc for <=2024 path parsing
             # lapse("for type hint construction")
 
@@ -216,20 +239,20 @@ class NameHandler:
         for i, (parts, typ, nightdate) in enumerate(zip(self.parts, self.type, self.nightdate)):
             parser_kwargs = {}
             # images
-            if typ[0] == "raw":
+            if typ.kind == const.NAME_TYPE_RAW:
                 parsing_func = self._parse_raw
-            elif typ[0] == "master":
+            elif typ.kind == const.NAME_TYPE_MASTER:
                 parsing_func = self._parse_master
-            elif typ[0] == "calibrated":
+            elif typ.kind == const.NAME_TYPE_CALIBRATED:
                 parsing_func = self._parse_processed
             # configs
-            elif typ[0] == "science":
-                parser_kwargs["is_too"] = bool(typ[1])
+            elif typ.kind == const.CONFIG_TYPE_SCIENCE:
+                parser_kwargs["is_too"] = typ.is_too
                 parsing_func = self._parse_sciproc_config
-            elif typ[0] == "preprocess":
-                parser_kwargs["is_too"] = bool(typ[1])
+            elif typ.kind == const.CONFIG_TYPE_PREPROCESS:
+                parser_kwargs["is_too"] = typ.is_too
                 parsing_func = self._parse_preproc_config
-            elif typ[0] == "crossfilter":
+            elif typ.kind == const.CONFIG_TYPE_CROSSFILTER:
                 parsing_func = self._parse_crossfilter_config
 
             if parsing_func is self._parse_raw:
@@ -252,7 +275,7 @@ class NameHandler:
             cameras.append(camera)
 
             # override date if nightdate available; vice versa. (some nightdates have multiple dates by TCSpy error)
-            if typ[0] == "crossfilter" and not nightdate and len(parts) >= 3:
+            if typ.kind == const.CONFIG_TYPE_CROSSFILTER and not nightdate and len(parts) >= 3:
                 nightdate = get_nightdate(parts[2])
                 self.nightdate[i] = nightdate
             if nightdate:
@@ -305,11 +328,11 @@ class NameHandler:
     def _handle_yml(self):
         self.type = [self._detect_config_type(parts) for parts in self.parts]
         for i, (typ, parts) in enumerate(zip(self.type, self.parts)):
-            if "preprocess" in typ:
+            if typ.kind == const.CONFIG_TYPE_PREPROCESS:
                 parsing_func = self._parse_preproc_config
-            elif "science" in typ:
+            elif typ.kind == const.CONFIG_TYPE_SCIENCE:
                 parsing_func = self._parse_sciproc_config
-            elif "crossfilter" in typ:
+            elif typ.kind == const.CONFIG_TYPE_CROSSFILTER:
                 parsing_func = self._parse_crossfilter_config
 
             unit, date, hms, obj, filte, nbin, exptime, gain, camera = parsing_func(parts)
@@ -328,90 +351,89 @@ class NameHandler:
             return [os.path.exists(p) for p in self.abspath]
 
     @staticmethod
-    def _detect_config_type(parts: list[str]) -> tuple:
+    def _detect_config_type(parts: list[str]) -> "NameType":
         """
-        TODO: change type to a slot dataclass
-        Tuple components:
-        0. preprocess / science / crossfilter
-        1. None / ToO
-        2. None
-        3. None
-        4. config
+        NameType fields:
+        kind:   preprocess / science / crossfilter
+        exposure_type: None / ToO
+        image_type:    None
+        product_type:  config
         """
         # is_too = "ToO" in parts
         is_crossfilter = len(parts) >= 2 and parts[1] == const.WHITE_FILTER
         is_too = len(parts) > 3 and not is_crossfilter
         if is_crossfilter:
-            kind = "crossfilter"
+            kind = const.CONFIG_TYPE_CROSSFILTER
         elif is_too:
-            kind = "preprocess" if get_nightdate(parts[0]) else "science"
+            kind = const.CONFIG_TYPE_PREPROCESS if get_nightdate(parts[0]) else const.CONFIG_TYPE_SCIENCE
         else:
             if len(parts) == 2:
                 # preprocess is {date}_{unit}; a multi-epoch sciproc config is {obj}_{filter}
-                kind = "preprocess" if get_nightdate(parts[0]) else "science"
+                kind = const.CONFIG_TYPE_PREPROCESS if get_nightdate(parts[0]) else const.CONFIG_TYPE_SCIENCE
             elif len(parts) == 3:
-                kind = "science"
+                kind = const.CONFIG_TYPE_SCIENCE
             else:
                 raise ValueError(f"Invalid number of parts for config: {parts}")
-        return (kind, "ToO" if is_too else None, None, None, "config")
+        return NameType(kind, const.NAME_TYPE_TOO if is_too else None, product_type=const.NAME_TYPE_CONFIG)
 
     @staticmethod
-    def _detect_image_type(stem: str, type_hint: str = None) -> tuple:
-        """Classify a filename stem into a 5-component tuple.
+    def _detect_image_type(stem: str, type_hint: str = None) -> "NameType":
+        """Classify a filename stem into a NameType.
 
-        Order of components:
-        0. raw / master / calibrated
-        1. bias / dark / flat / science
-        2. None / single / coadded       (None when a master frame)
-        3. None / difference             (None when not a diff)
-        4. image / weight / catalog
+        Fields:
+        kind:   raw / master / calibrated
+        exposure_type: bias / dark / flat / science (+ the sig variants)
+        image_type:    single / coadd / diff / white, or the exposure_type of a master
+        product_type:  image / weight / catalog / mask
         """
-        types = ()
-
         # raw/master/processed
         if stem.startswith(("7DT", "BIAS", "DARK", "FLAT", "LIGHT")):
-            types += ("raw",)
+            kind = const.NAME_TYPE_RAW
         elif stem.startswith(("bias", "dark", "bpmask", "flat")):
-            types += ("master",)
+            kind = const.NAME_TYPE_MASTER
         else:
-            types += (type_hint or "calibrated",)  # processed")
+            kind = type_hint or const.NAME_TYPE_CALIBRATED  # processed")
 
         # calib/sci
         def _calib_type(stem: str):
             lower = stem.lower()
-            for base in ("bias", "dark", "flat"):
+            for base in (const.NAME_TYPE_BIAS, const.NAME_TYPE_DARK, const.NAME_TYPE_FLAT):
                 if base in lower:
-                    return f"{base}{'sig' if 'sig' in lower else ''}"
-            return "science"
+                    return f"{base}{const.NAME_TYPE_SIGMA_SUFFIX if 'sig' in lower else ''}"
+            return const.NAME_TYPE_SCIENCE
 
-        types += (_calib_type(stem),)
+        exposure_type = _calib_type(stem)
 
-        # single/coadd
-        if "master" in types:
-            types += (None,)
+        # image_qa.image_type; a master carries its own exposure_type, sigma frames included
+        # any science image can be a difference, so it is read off the stem suffix and takes precedence
+        core = stem
+        for plane_suffix in ("_cat", "_weight") + MASK_SUFFIXES:
+            if core.endswith(plane_suffix):
+                core = core[: -len(plane_suffix)]
+                break
+        if kind == const.NAME_TYPE_MASTER:
+            image_type = exposure_type
+        elif core.endswith(f"_{const.IMAGE_TYPE_DIFF}"):
+            image_type = const.IMAGE_TYPE_DIFF  # subtracted")
         elif "coadd" in stem:
-            types += ("coadded",)
+            # the white product is a coadd whose filter token is the white filter
+            white = const.WHITE_FILTER in stem.split("_")
+            image_type = const.IMAGE_TYPE_WHITE if white else const.IMAGE_TYPE_COADD
         else:
-            types += ("single",)
-
-        # diff
-        if "diff" in stem:
-            types += ("difference",)  # subtracted")
-        else:
-            types += (None,)
+            image_type = const.IMAGE_TYPE_SINGLE
 
         # image/weight/cat/mask
         if stem.endswith("_cat"):
-            types += ("catalog",)
+            product_type = const.NAME_TYPE_CATALOG
         elif stem.endswith("_weight"):
-            types += ("weight",)
+            product_type = const.NAME_TYPE_WEIGHT
         elif stem.endswith(MASK_SUFFIXES):
             # without this, masks beside the frames they describe parse as science images
-            types += ("mask",)
+            product_type = const.NAME_TYPE_MASK
         else:
-            types += ("image",)
+            product_type = const.NAME_TYPE_IMAGE
 
-        return types
+        return NameType(kind, exposure_type, image_type, product_type)
 
     # @property
     # def types_str(self):
@@ -846,11 +868,17 @@ class NameHandler:
         """use nightdate + 1 instead of date, which can be either nightdate or nightdate + 1"""
         if getattr(self, "_single", False):
             return self._format_masterframe(
-                "bias", None, self.unit, add_a_day(self.nightdate), self.n_binning, self.gain, self.camera
+                const.CALIB_TYPE_BIAS,
+                None,
+                self.unit,
+                add_a_day(self.nightdate),
+                self.n_binning,
+                self.gain,
+                self.camera,
             )
         else:
             return [
-                self._format_masterframe("bias", None, unit, add_a_day(nightdate), nbin, gain, camera)
+                self._format_masterframe(const.CALIB_TYPE_BIAS, None, unit, add_a_day(nightdate), nbin, gain, camera)
                 for unit, nightdate, nbin, gain, camera in zip(
                     self.unit, self.nightdate, self.n_binning, self.gain, self.camera
                 )
@@ -861,12 +889,24 @@ class NameHandler:
         if getattr(self, "_single", False):
             quality = format_exptime(self.exptime, type="dark")
             return self._format_masterframe(
-                "dark", quality, self.unit, add_a_day(self.nightdate), self.n_binning, self.gain, self.camera
+                const.CALIB_TYPE_DARK,
+                quality,
+                self.unit,
+                add_a_day(self.nightdate),
+                self.n_binning,
+                self.gain,
+                self.camera,
             )
         else:
             return [
                 self._format_masterframe(
-                    "dark", format_exptime(exptime, type="dark"), unit, add_a_day(nightdate), nbin, gain, camera
+                    const.CALIB_TYPE_DARK,
+                    format_exptime(exptime, type="dark"),
+                    unit,
+                    add_a_day(nightdate),
+                    nbin,
+                    gain,
+                    camera,
                 )
                 for exptime, unit, nightdate, nbin, gain, camera in zip(
                     self.exptime, self.unit, self.nightdate, self.n_binning, self.gain, self.camera
@@ -877,11 +917,17 @@ class NameHandler:
     def mflat_basename(self):
         if getattr(self, "_single", False):
             return self._format_masterframe(
-                "flat", self.filter, self.unit, add_a_day(self.nightdate), self.n_binning, self.gain, self.camera
+                const.CALIB_TYPE_FLAT,
+                self.filter,
+                self.unit,
+                add_a_day(self.nightdate),
+                self.n_binning,
+                self.gain,
+                self.camera,
             )
         else:
             return [
-                self._format_masterframe("flat", filter, unit, add_a_day(nightdate), nbin, gain, camera)
+                self._format_masterframe(const.CALIB_TYPE_FLAT, filter, unit, add_a_day(nightdate), nbin, gain, camera)
                 for filter, unit, nightdate, nbin, gain, camera in zip(
                     self.filter, self.unit, self.nightdate, self.n_binning, self.gain, self.camera
                 )
@@ -900,27 +946,27 @@ class NameHandler:
         """sigma images can be input, but the output will be regular bias dark flat."""
 
         def _dispatch_for_index(i):
-            typ = self.type[i][1]  # 'bias', 'biassig', 'dark', 'darksig', ...
-            if "bias" in typ:
+            typ = self.type[i].exposure_type  # 'bias', 'biassig', 'dark', 'darksig', ...
+            if const.NAME_TYPE_BIAS in typ:
                 return self.mbias_basename[i]
-            elif "dark" in typ:
+            elif const.NAME_TYPE_DARK in typ:
                 return self.mdark_basename[i]
-            elif "flat" in typ:
+            elif const.NAME_TYPE_FLAT in typ:
                 return self.mflat_basename[i]
-            elif typ == "science":
+            elif typ == const.NAME_TYPE_SCIENCE:
                 return self._make_science_triplet(index=i)
             else:
                 raise ValueError(f"Invalid type '{typ}'")
 
         if getattr(self, "_single", False):
-            typ = self.type[1]
-            if "bias" in typ:
+            typ = self.type.exposure_type
+            if const.NAME_TYPE_BIAS in typ:
                 return self.mbias_basename
-            elif "dark" in typ:
+            elif const.NAME_TYPE_DARK in typ:
                 return self.mdark_basename
-            elif "flat" in typ:
+            elif const.NAME_TYPE_FLAT in typ:
                 return self.mflat_basename
-            elif typ == "science":
+            elif typ == const.NAME_TYPE_SCIENCE:
                 return self._make_science_triplet()
             else:
                 raise ValueError(f"Invalid type '{typ}'")
@@ -999,7 +1045,8 @@ class NameHandler:
 
         # pick the “other” basename for each entry
         conj_list = [
-            proc_bn if "raw" in typ else raw_bn for typ, raw_bn, proc_bn in zip(self.type, raw_list, proc_list)
+            proc_bn if typ.kind == const.NAME_TYPE_RAW else raw_bn
+            for typ, raw_bn, proc_bn in zip(atleast_1d(self.type), raw_list, proc_list)
         ]
 
         # unwrap for single-file mode
@@ -1027,28 +1074,28 @@ class NameHandler:
                 values = atleast_1d(values)  # [] when the property is None, e.g. a dateless coadd config
                 return values[i] if i < len(values) else None
 
-            if typ[0] == "science":
+            if typ.kind == const.CONFIG_TYPE_SCIENCE:
                 config_properties = {
-                    "config_type": "science",
+                    "config_type": const.CONFIG_TYPE_SCIENCE,
                     "object": at(self.obj),
                     "filter": at(self.filter),
                     "nightdate": at(self.nightdate),
                 }
-            elif typ[0] == "preprocess":
+            elif typ.kind == const.CONFIG_TYPE_PREPROCESS:
                 config_properties = {
-                    "config_type": "preprocess",
+                    "config_type": const.CONFIG_TYPE_PREPROCESS,
                     "nightdate": at(self.nightdate),
                     "unit": at(self.unit),
                 }
-            elif typ[0] == "crossfilter":
+            elif typ.kind == const.CONFIG_TYPE_CROSSFILTER:
                 config_properties = {
-                    "config_type": "crossfilter",
+                    "config_type": const.CONFIG_TYPE_CROSSFILTER,
                     "object": at(self.obj),
                     "filter": const.WHITE_FILTER,
                     "nightdate": at(self.nightdate),
                 }
             else:
-                raise ValueError(f"Invalid config type: {typ[0]}")
+                raise ValueError(f"Invalid config type: {typ.kind}")
             config_properties_list.append(config_properties)
         return config_properties_list[0] if self._single else config_properties_list
 
@@ -1092,11 +1139,10 @@ class NameHandler:
         """
         Input ex) 'dark', 'master_dark', ('master', 'dark')
 
-        0. raw / master / calibrated
-        1. bias / dark / flat / science
-        2. None / single / coadded       (None when a master frame)
-        3. None / difference             (None when not a diff)
-        4. image / weight / catalog
+        kind:   raw / master / calibrated
+        exposure_type: bias / dark / flat / science
+        image_type:    single / coadd / diff / white
+        product_type:  image / weight / catalog / mask
         """
 
         # Simpler version
@@ -1122,43 +1168,55 @@ class NameHandler:
         else:
             raise TypeError("`typ` must be a string, underscore-joined string, or tuple/list of strings")
 
-        # 2) Build a quick lookup: token -> its expected index in the 5-tuple
-        token_to_index: dict[str, int] = {}
+        # 2) Build a quick lookup: token -> the NameType field it belongs to
+        token_to_field: dict[str, str] = {}
         category_map = {
-            0: {"master", "raw", "calibrated"},
-            1: {"bias", "dark", "flat", "science", "calib", "calibration"},
-            2: {"single", "coadded"},
-            3: {"difference"},
-            4: {"image", "weight", "catalog", "mask"},
+            "kind": {const.NAME_TYPE_MASTER, const.NAME_TYPE_RAW, const.NAME_TYPE_CALIBRATED},
+            "exposure_type": {
+                const.NAME_TYPE_BIAS,
+                const.NAME_TYPE_DARK,
+                const.NAME_TYPE_FLAT,
+                const.NAME_TYPE_SCIENCE,
+                "calib",
+                "calibration",
+            },
+            "image_type": set(const.SCIENCE_IMAGE_TYPES),
+            "product_type": {
+                const.NAME_TYPE_IMAGE,
+                const.NAME_TYPE_WEIGHT,
+                const.NAME_TYPE_CATALOG,
+                const.NAME_TYPE_MASK,
+            },
         }
-        for idx, nameset in category_map.items():
+        for field, nameset in category_map.items():
             for name in nameset:
-                token_to_index[name] = idx
+                token_to_field[name] = field
 
-        calib_types = {"bias", "dark", "flat"}
+        calib_types = {const.NAME_TYPE_BIAS, const.NAME_TYPE_DARK, const.NAME_TYPE_FLAT}
 
-        # 3) For each requested token, verify it’s valid and record its index
-        requested: list[tuple[int, str]] = []
+        # 3) For each requested token, verify it’s valid and record its field
+        requested: list[tuple[str, str]] = []
         for tok in tokens:
-            if tok not in token_to_index:
+            if tok not in token_to_field:
                 raise ValueError(f"Unknown type token '{tok}'")
-            requested.append((token_to_index[tok], tok))
+            requested.append((token_to_field[tok], tok))
 
         # 4) Now filter: keep only those files where all (index,token) match
         matches: list[str] = []
         for i, file in enumerate(self.input):
             types = self.type  # not a list if self._single
-            typ_tuple = types[i] if isinstance(types, list) else types  # e.g. ("raw", "dark", "single", None, "image")
+            typ = types[i] if isinstance(types, list) else types
             ok = True
-            for idx, tok in requested:
+            for field, tok in requested:
+                value = getattr(typ, field)
                 if tok in ("calib", "calibration"):
                     # match any of bias/dark/flat
-                    if typ_tuple[idx] not in calib_types:
+                    if value not in calib_types:
                         ok = False
                         break
                 else:
                     # exact match
-                    if typ_tuple[idx] != tok:
+                    if value != tok:
                         ok = False
                         break
             if ok:
@@ -1200,14 +1258,14 @@ class NameHandler:
 
         bias, dark, flat, sci = {}, {}, {}, {}
 
-        for k, v in grouped_files.items():  # k[0] is file type tuple, k[1] is obs_param dict
-            if k[0][1] == "bias":
+        for k, v in grouped_files.items():  # k[0] is the file NameType, k[1] is obs_param dict
+            if k[0].exposure_type == const.NAME_TYPE_BIAS:
                 bias[k] = v
-            if k[0][1] == "dark":
+            if k[0].exposure_type == const.NAME_TYPE_DARK:
                 dark[k] = v
-            if k[0][1] == "flat":
+            if k[0].exposure_type == const.NAME_TYPE_FLAT:
                 flat[k] = v
-            if k[0][1] == "science":
+            if k[0].exposure_type == const.NAME_TYPE_SCIENCE:
                 sci[k] = v
 
         sci_files = []
@@ -1218,7 +1276,7 @@ class NameHandler:
 
         # Associated calib frames
         for key, val in sci.items():
-            key_sci = dict(key[1])  # key is a tuple of (type, obs_param)
+            key_sci = dict(key[1])  # key is a tuple of (NameType, obs_param)
             sci_files.append(val)
 
             # Associated calibration collection with group tracking

@@ -15,6 +15,7 @@ from ..const.run import (
     SUCCESS_RETURN_CODE,
     FAILURE_RETURN_CODE,
     EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE,
+    TASK_STATUS_COMPLETED,
 )
 from .memory import MemoryMonitor
 from .logger import Logger, log_orchestration_stop
@@ -773,7 +774,7 @@ def clear_completed_schedules():
     try:
         scheduler = Scheduler(use_system_queue=True)
         before_count = len(scheduler.schedule)
-        completed_count = len(scheduler.schedule[scheduler.schedule["status"] == "Completed"])
+        completed_count = len(scheduler.schedule[scheduler.schedule["status"] == TASK_STATUS_COMPLETED])
 
         scheduler.clear_schedule(all=False)  # Clear only completed schedules
 

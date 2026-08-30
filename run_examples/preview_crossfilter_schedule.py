@@ -2,6 +2,7 @@ import argparse
 import os
 
 from pipeline.config import CrossFilterConfiguration
+from pipeline.const import CONFIG_TYPE_CROSSFILTER, CONFIG_TYPE_SCIENCE, INPUT_TYPE_DAILY, TASK_STATUS_READY
 from pipeline.path.name import NameHandler
 from pipeline.services.database import RawFrameQuery
 from pipeline.services.scheduler import Scheduler
@@ -57,17 +58,17 @@ if __name__ == "__main__":
         crossfilter_suffix=args.suffix,
     )
     reduction.create_config(overwrite=args.overwrite_config)
-    reduction.blueprint.create_schedule(input_type="Daily")
+    reduction.blueprint.create_schedule(input_type=INPUT_TYPE_DAILY)
     schedule = reduction.schedule
     scheduler = Scheduler(schedule.copy(), use_system_queue=False)
 
-    cross_rows = schedule[schedule["config_type"] == "crossfilter"]
+    cross_rows = schedule[schedule["config_type"] == CONFIG_TYPE_CROSSFILTER]
     if not len(cross_rows):
         raise RuntimeError("No cross-filter row was generated")
     for cross_row in cross_rows:
         cross_index = int(cross_row["index"])
         parents = [row for row in schedule if cross_index in list(row["dependent_idx"] or [])]
-        science_parents = [row for row in parents if row["config_type"] == "science"]
+        science_parents = [row for row in parents if row["config_type"] == CONFIG_TYPE_SCIENCE]
         config = CrossFilterConfiguration(cross_row["config"], write=False, logger=False)
         scheduled = {row["config"] for row in science_parents}
         expected = set(config.node.input.science_configs)
@@ -98,7 +99,7 @@ if __name__ == "__main__":
         for row in science_parents:
             scheduler.mark_done(int(row["index"]), return_code=0)
         final = scheduler.schedule[scheduler.schedule["index"] == cross_index][0]
-        if not final["is_ready"] or final["status"] != "Ready":
+        if not final["is_ready"] or final["status"] != TASK_STATUS_READY:
             raise AssertionError("Completion notices from all science parents did not release the cross-filter row")
         print(f"  released in memory: status={final['status']}, readiness={final['readiness']}")
 

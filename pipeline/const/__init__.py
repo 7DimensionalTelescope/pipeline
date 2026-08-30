@@ -1,5 +1,6 @@
 from .environ import *
 from .observation import *
+from .products import *
 from .run import *
 from .system_resources import *
 

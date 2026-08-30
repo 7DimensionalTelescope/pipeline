@@ -2,7 +2,7 @@ import os
 from glob import glob
 from typing import Iterator
 
-from ..const import PROCESSED_DIR, MASTER_FRAME_DIR, TOO_PROCESSED_DIR
+from ..const import PROCESSED_DIR, MASTER_FRAME_DIR, NAME_TYPE_CATALOG, TOO_PROCESSED_DIR
 from .name import NameHandler
 
 
@@ -62,7 +62,7 @@ def iter_catalog(date_pattern: str, type_pattern: str = "singles", reverse: bool
         date_pattern=date_pattern,
         type_pattern=type_pattern,
         filename_pattern="*_cat.fits",
-        product="catalog",
+        product=NAME_TYPE_CATALOG,
         reverse=reverse,
         is_too=is_too,
     )
@@ -73,7 +73,7 @@ def _is_product(path: str, product: str) -> bool:
     from .name import NameHandler
 
     try:
-        return NameHandler(path).type[4] == product
+        return NameHandler(path).type.product_type == product
     except Exception:
         return False
 

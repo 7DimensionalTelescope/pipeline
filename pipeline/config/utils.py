@@ -1,6 +1,6 @@
 from functools import reduce
 import os
-from ..const import PROCESSED_DIR, TOO_PROCESSED_DIR
+from ..const import PROCESSED_DIR, TOO_PROCESSED_DIR, CONFIG_TYPE_PREPROCESS, CONFIG_TYPE_SCIENCE
 
 
 def find_config(config: str, is_too: bool = False, return_class=False, return_properties=False) -> dict:
@@ -34,7 +34,12 @@ def find_config(config: str, is_too: bool = False, return_class=False, return_pr
                 filt = before_parts[-1]  # Last part is filter
                 obj = "_".join(before_parts[:-1])  # Everything before filter is object
                 full_path = f"{BASE_DIR}/{date}/{obj}/{filt}/{config}.yml"
-                config_properties = {"config_type": "science", "object": obj, "filter": filt, "nightdate": date}
+                config_properties = {
+                    "config_type": CONFIG_TYPE_SCIENCE,
+                    "object": obj,
+                    "filter": filt,
+                    "nightdate": date,
+                }
                 if return_class:
                     from .sciprocess import SciProcConfiguration
 
@@ -42,7 +47,7 @@ def find_config(config: str, is_too: bool = False, return_class=False, return_pr
             else:
                 # Only one part before date - treat as filter, no object
                 filt = before_parts[0]
-                config_properties = {"config_type": "science", "filter": filt, "nightdate": date}
+                config_properties = {"config_type": CONFIG_TYPE_SCIENCE, "filter": filt, "nightdate": date}
                 full_path = f"{BASE_DIR}/{date}/{filt}/{config}.yml"
                 if return_class:
                     from .sciprocess import SciProcConfiguration
@@ -57,7 +62,7 @@ def find_config(config: str, is_too: bool = False, return_class=False, return_pr
                 unit = None
                 full_path = f"{BASE_DIR}/{date}/{config}.yml"
 
-            config_properties = {"config_type": "preprocess", "nightdate": date, "unit": unit}
+            config_properties = {"config_type": CONFIG_TYPE_PREPROCESS, "nightdate": date, "unit": unit}
 
             if return_class:
                 from .preprocess import PreprocConfiguration
@@ -68,7 +73,7 @@ def find_config(config: str, is_too: bool = False, return_class=False, return_pr
         args = config.split("_")
         if len(args) >= 3:
             obj, filt, date = args[:3]
-            config_properties = {"config_type": "science", "object": obj, "filter": filt, "nightdate": date}
+            config_properties = {"config_type": CONFIG_TYPE_SCIENCE, "object": obj, "filter": filt, "nightdate": date}
             full_path = f"{BASE_DIR}/{date}/{obj}/{filt}/{config}.yml"
             if return_class:
                 from .sciprocess import SciProcConfiguration
@@ -76,7 +81,7 @@ def find_config(config: str, is_too: bool = False, return_class=False, return_pr
                 return SciProcConfiguration(full_path, is_too=is_too)
         elif len(args) == 2:
             date, unit = args[:2]
-            config_properties = {"config_type": "preprocess", "nightdate": date, "unit": unit}
+            config_properties = {"config_type": CONFIG_TYPE_PREPROCESS, "nightdate": date, "unit": unit}
             full_path = f"{BASE_DIR}/{date}/{config}.yml"
             if return_class:
                 from .preprocess import PreprocConfiguration

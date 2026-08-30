@@ -3,7 +3,14 @@ import glob
 import os
 
 from pipeline.config import CrossFilterConfiguration
-from pipeline.const import COADD_DIR, PROCESSED_DIR, PROCESSED_DIR_2, TOO_PROCESSED_DIR, TOO_PROCESSED_DIR_2
+from pipeline.const import (
+    COADD_DIR,
+    CONFIG_TYPE_SCIENCE,
+    PROCESSED_DIR,
+    PROCESSED_DIR_2,
+    TOO_PROCESSED_DIR,
+    TOO_PROCESSED_DIR_2,
+)
 from pipeline.const.crossfilter import PHOT7DS_SPEC, WHITE_COADD_SPEC, WHITE_PHOTOMETRY_SPEC
 from pipeline.path.name import NameHandler
 from pipeline.path.path import CrossFilterPathHandler
@@ -40,22 +47,22 @@ def discover_science_configs_db(target, nightdate, is_multi_epoch=False):
             """
             SELECT DISTINCT ON (filter) config_file
             FROM process_status
-            WHERE config_type = 'science' AND object = %s AND nightdate IS NULL
+            WHERE config_type = %s AND object = %s AND nightdate IS NULL
               AND config_file LIKE %s AND config_file IS NOT NULL
             ORDER BY filter, updated_at DESC, id DESC
             """,
-            (target, f"{COADD_DIR}/{target}/%"),
+            (CONFIG_TYPE_SCIENCE, target, f"{COADD_DIR}/{target}/%"),
         )
     else:
         rows = free_query(
             """
             SELECT DISTINCT ON (filter) config_file
             FROM process_status
-            WHERE config_type = 'science' AND object = %s AND nightdate = %s
+            WHERE config_type = %s AND object = %s AND nightdate = %s
               AND config_file IS NOT NULL
             ORDER BY filter, updated_at DESC, id DESC
             """,
-            (target, nightdate),
+            (CONFIG_TYPE_SCIENCE, target, nightdate),
         )
     configs = sorted(row[0] for row in rows)
     if not configs:
@@ -85,7 +92,7 @@ def discover_science_configs_filesystem(target, nightdate, args):
             properties = NameHandler(path).config_properties
         except Exception:
             continue
-        if properties.get("config_type") != "science" or properties.get("object") != target:
+        if properties.get("config_type") != CONFIG_TYPE_SCIENCE or properties.get("object") != target:
             continue
         if not args.multi_epoch and str(properties.get("nightdate")) != str(nightdate):
             continue

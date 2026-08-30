@@ -37,6 +37,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from pipeline.const import CONFIG_TYPE_CROSSFILTER, CONFIG_TYPE_PREPROCESS, CONFIG_TYPE_SCIENCE
 from pipeline.services.database.process_status_dependency import ProcessStatusDependency
 
 _thread_local = threading.local()
@@ -52,8 +53,8 @@ def _dependency() -> ProcessStatusDependency:
 def select_configs(args) -> list:
     """Candidate (process_status_id, name) rows for the requested scope."""
     # crossfilter edges come from the declared science parents (WhiteImage), never the image roll-up
-    query = "SELECT id, name FROM process_status WHERE config_type IS DISTINCT FROM 'crossfilter'"
-    params = []
+    query = "SELECT id, name FROM process_status WHERE config_type IS DISTINCT FROM %s"
+    params = [CONFIG_TYPE_CROSSFILTER]
     if args.config_type:
         query += " AND config_type = %s"
         params.append(args.config_type)
@@ -81,7 +82,9 @@ def select_configs(args) -> list:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--config-type", choices=["preprocess", "science"], help="restrict to one config type")
+    parser.add_argument(
+        "--config-type", choices=[CONFIG_TYPE_PREPROCESS, CONFIG_TYPE_SCIENCE], help="restrict to one config type"
+    )
     parser.add_argument("--nightdate-from", help="earliest nightdate (YYYY-MM-DD)")
     parser.add_argument("--nightdate-to", help="latest nightdate (YYYY-MM-DD)")
     parser.add_argument("--name", help="a single config name")

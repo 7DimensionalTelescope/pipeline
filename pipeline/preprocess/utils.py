@@ -17,6 +17,15 @@ from ..path.name import NameHandler
 from ..services.checker import Checker
 from ..utils.header import write_header_file, get_header, add_padding
 from ..const.instrum_log import get_masterframe_walls
+from ..const import (
+    CALIB_TYPE_BIAS,
+    CALIB_TYPE_DARK,
+    CALIB_TYPE_FLAT,
+    NAME_TYPE_BIAS,
+    NAME_TYPE_DARK,
+    NAME_TYPE_FLAT,
+    NAME_TYPE_MASTER,
+)
 
 
 # current grouping scheme ensures a masterframe is generated only once even under parallelization.
@@ -79,11 +88,11 @@ def _build_lenient_template(template, dtype, ignore_binning=False):
         FLAT_GROUP_LENIENT_KEYS,
     )
 
-    if dtype == "bias":
+    if dtype == CALIB_TYPE_BIAS:
         lenient_keys = BIAS_GROUP_LENIENT_KEYS
-    elif dtype == "dark":
+    elif dtype == CALIB_TYPE_DARK:
         lenient_keys = DARK_GROUP_LENIENT_KEYS
-    elif dtype == "flat":
+    elif dtype == CALIB_TYPE_FLAT:
         lenient_keys = FLAT_GROUP_LENIENT_KEYS
     else:
         return None
@@ -142,7 +151,7 @@ def tolerant_search(
             return searched
 
         # Special routine for flat: ignore binning.
-        if dtype == "flat":
+        if dtype == CALIB_TYPE_FLAT:
             binning_flags = replace(flags, ignored_binning=True)
             binning_template = _build_binning_template(search_template)
             searched = _search(binning_template, ignore_sanity=ignore_sanity, **kwargs)
@@ -368,9 +377,9 @@ def get_zdf_from_header_IMCMB(image):
     zdf_candidates = [v for k, v in header.items() if "IMCMB" in k]  # [z, d, f]
     zdf = []
     candidate_types = NameHandler(zdf_candidates, type_only=True).type  # raw IMCMB entries cost a DB query if parsed
-    for master_frame_type in ["bias", "dark", "flat"]:
+    for master_frame_type in [NAME_TYPE_BIAS, NAME_TYPE_DARK, NAME_TYPE_FLAT]:
         for i, typ in enumerate(candidate_types):
-            if typ[0] in "master" and typ[1] == master_frame_type:
+            if typ.kind == NAME_TYPE_MASTER and typ.exposure_type == master_frame_type:
                 zdf.append(zdf_candidates[i])
                 break
         else:

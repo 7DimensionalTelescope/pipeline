@@ -3,6 +3,7 @@ reconciliation from config flags. Backs the ``db_sync`` CLI; importable directly
 
 import os
 
+from ...const import CONFIG_TYPE_CROSSFILTER
 from ...const.crossfilter import CROSSFILTERPROCESS_REGISTRY
 from ...const.sciproc import SCIPROCESS_REGISTRY
 
@@ -97,7 +98,7 @@ def sync_images(images) -> dict:
 
         if yml is not None and ps_id is not None and synced:
             # crossfilter edges come from the declared science parents, never the image roll-up
-            if NameHandler(yml).config_properties["config_type"] == "crossfilter":
+            if NameHandler(yml).config_properties["config_type"] == CONFIG_TYPE_CROSSFILTER:
                 from ...config import CrossFilterConfiguration
                 from ...imcoadd.white import WhiteImage
 
@@ -114,7 +115,7 @@ def last_completed_spec(config_file: str):
     from ...config import CrossFilterConfiguration, SciProcConfiguration
     from ...path.name import NameHandler
 
-    if NameHandler(config_file).config_properties["config_type"] == "crossfilter":
+    if NameHandler(config_file).config_properties["config_type"] == CONFIG_TYPE_CROSSFILTER:
         flags = CrossFilterConfiguration(config_file, write=False, logger=False).node.flag
         registry = CROSSFILTERPROCESS_REGISTRY
     else:

@@ -1,11 +1,14 @@
 #!/usr/bin/env python
 import argparse
 
-from pipeline.services.database.image_qa_dependency import (
+from pipeline.const import (
     COADD_DEPENDENCY_ROLE,
     IMAGE_DEPENDENCY_ROLES,
-    ImageQADependency,
+    IMAGE_TYPE_COADD,
+    IMAGE_TYPE_WHITE,
+    WHITE_FILTER,
 )
+from pipeline.services.database.image_qa_dependency import ImageQADependency
 
 
 parser = argparse.ArgumentParser(description="Register white images and their coadd source role in image_qa")
@@ -18,15 +21,18 @@ roles_sql = ", ".join(f"'{role}'" for role in IMAGE_DEPENDENCY_ROLES)
 
 with db.get_connection() as conn:
     with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM image_qa WHERE filter = 'white' AND image_type IS DISTINCT FROM 'white'")
+        cur.execute(
+            "SELECT COUNT(*) FROM image_qa WHERE filter = %s AND image_type IS DISTINCT FROM %s",
+            (WHITE_FILTER, IMAGE_TYPE_WHITE),
+        )
         white_rows = cur.fetchone()[0]
         cur.execute(
             "SELECT COUNT(*) FROM image_qa_dependency d"
             " JOIN image_qa derived ON derived.id = d.derived_image_id"
             " JOIN image_qa source ON source.id = d.source_image_id"
-            " WHERE derived.filter = 'white' AND source.image_type = 'coadd'"
+            " WHERE derived.filter = %s AND source.image_type = %s"
             " AND d.dependency_role IS DISTINCT FROM %s",
-            (COADD_DEPENDENCY_ROLE,),
+            (WHITE_FILTER, IMAGE_TYPE_COADD, COADD_DEPENDENCY_ROLE),
         )
         dependency_rows = cur.fetchone()[0]
 
@@ -48,17 +54,18 @@ with db.get_connection() as conn:
 with db.get_connection() as conn:
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE image_qa SET image_type = 'white'"
-            " WHERE filter = 'white' AND image_type IS DISTINCT FROM 'white'"
+            "UPDATE image_qa SET image_type = %s"
+            " WHERE filter = %s AND image_type IS DISTINCT FROM %s",
+            (IMAGE_TYPE_WHITE, WHITE_FILTER, IMAGE_TYPE_WHITE),
         )
         updated_white = cur.rowcount
         cur.execute(
             "UPDATE image_qa_dependency d SET dependency_role = %s"
             " FROM image_qa derived, image_qa source"
             " WHERE derived.id = d.derived_image_id AND source.id = d.source_image_id"
-            " AND derived.image_type = 'white' AND source.image_type = 'coadd'"
+            " AND derived.image_type = %s AND source.image_type = %s"
             " AND d.dependency_role IS DISTINCT FROM %s",
-            (COADD_DEPENDENCY_ROLE, COADD_DEPENDENCY_ROLE),
+            (COADD_DEPENDENCY_ROLE, IMAGE_TYPE_WHITE, IMAGE_TYPE_COADD, COADD_DEPENDENCY_ROLE),
         )
         updated_dependencies = cur.rowcount
     conn.commit()

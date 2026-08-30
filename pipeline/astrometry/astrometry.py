@@ -16,6 +16,7 @@ import astropy.units as u
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .. import external
+from ..const import IMAGE_GROUP_SCIENCE
 from ..const.environ import REF_DIR
 from ..const.observation import PIXSCALE, DEFAULT_EXPTIME
 from ..const.sciproc import ASTROMETRY_SPEC, REJECTION_PROCESS_HEADER_KEY, SCIPROCESS_REGISTRY
@@ -379,7 +380,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         idx_to_exclude = []
         for i, image_info in enumerate(self.images_info):
             image_info.set_early_qa_stats(sci_cat=image_info.prep_cat, ref_cat=self.config_node.astrometry.local_astref)
-            flag = self.apply_qa_criteria(header=fits.Header(image_info.early_qa_cards), dtype="science")
+            flag = self.apply_qa_criteria(header=fits.Header(image_info.early_qa_cards), dtype=IMAGE_GROUP_SCIENCE)
             image_info.SANITY = flag  # true if nothing to check
             if not image_info.sane:
                 idx_to_exclude.append(i)

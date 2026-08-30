@@ -2,6 +2,7 @@ from time import sleep
 import gc
 import traceback
 
+from pipeline.const import INPUT_TYPE_REPROCESS
 from pipeline.path import NameHandler
 from pipeline.config import PreprocConfiguration
 from pipeline.config import SciProcConfiguration
@@ -37,7 +38,7 @@ for date in dates[-2::-1]:
             overwrite_preprocess=OVERWRITE_PREPROCESS,
             overwrite_science=OVERWRITE_SCIENCE,
             use_system_queue=USE_SYSTEM_QUEUE,
-            input_type="Reprocess",
+            input_type=INPUT_TYPE_REPROCESS,
             base_priority=1,
         )
 

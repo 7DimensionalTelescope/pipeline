@@ -6,8 +6,9 @@ from astropy.table import Table
 from datetime import date, datetime, timedelta
 
 from .environ import REF_DIR
+from .products import CALIB_TYPES
 
-WALL_KINDS = ("bias", "dark", "flat")
+WALL_KINDS = CALIB_TYPES
 
 
 def get_changelog(unit: int) -> Table:

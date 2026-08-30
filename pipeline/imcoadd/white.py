@@ -2,7 +2,7 @@ import os
 
 from astropy.io import fits
 
-from ..const import AUTO_RECORD_PROCESS_STATUS_DEPENDENCIES, WHITE_FILTER
+from ..const import AUTO_RECORD_PROCESS_STATUS_DEPENDENCIES, IMAGE_GROUP_SCIENCE, WHITE_FILTER
 from ..const.crossfilter import CROSSFILTERPROCESS_REGISTRY, WHITE_COADD_SPEC
 from ..const.sciproc import COADD_PHOTOMETRY_SPEC, COADD_SPEC
 from ..config import CrossFilterConfiguration, SciProcConfiguration
@@ -154,7 +154,7 @@ class WhiteImage(ImCoadd):
             )
         return {str(row["filter"]) for row in rows if row.get("filter")}
 
-    def apply_sanity_filter_and_report(self, dtype="science", current_process=None, overwrite=False) -> bool:
+    def apply_sanity_filter_and_report(self, dtype=IMAGE_GROUP_SCIENCE, current_process=None, overwrite=False) -> bool:
         """Filter-only: exclude SANITY=False source coadds, never write or recompute their verdicts.
 
         The white stage is an optional add-on; coadd quality is judged by the

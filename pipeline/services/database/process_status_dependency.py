@@ -25,6 +25,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Iterable, List, Optional, Tuple
 
+from ...const import CONFIG_TYPE_PREPROCESS, MASTER_IMAGE_TYPES
 from .base import BaseDatabase
 
 # (derived_config_name, source_config_name, dependency_role)
@@ -39,8 +40,6 @@ SELECT DISTINCT qa_s.image_name, qa_s.image_type, ps_s.name, ps_s.config_type
   LEFT JOIN process_status ps_s ON ps_s.id = qa_s.process_status_id
  WHERE qa_d.process_status_id = %s
 """
-
-MASTER_IMAGE_TYPES = ("bias", "dark", "flat")
 
 
 class ProcessStatusDependency(BaseDatabase):
@@ -167,7 +166,7 @@ class ProcessStatusDependency(BaseDatabase):
             if image_type in MASTER_IMAGE_TYPES:
                 try:
                     name = NameHandler(image_name)
-                    source, role = f"{name.nightdate}_{name.unit}", "preprocess"
+                    source, role = f"{name.nightdate}_{name.unit}", CONFIG_TYPE_PREPROCESS
                 except Exception:
                     source, role = owner_name, owner_type
             else:

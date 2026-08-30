@@ -49,6 +49,7 @@ from pipeline.const import (
     SUCCESS_RETURN_CODE,
     EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE,
     MAIN_HOST_ADDRESS,
+    CONFIG_TYPE_SCIENCE,
 )
 from pipeline.services.scheduler import Scheduler
 
@@ -57,7 +58,7 @@ DEFAULT_MAX_WORKERS = 5
 # Claiming ahead marks rows Processing before they run; a SIGKILL then strands them, so default to none.
 DEFAULT_PREFETCH = 0
 # Deliberately narrow while a worker is new; no stage needs a GPU, so widen when ready.
-DEFAULT_CONFIG_TYPES = "science"
+DEFAULT_CONFIG_TYPES = CONFIG_TYPE_SCIENCE
 RPC_TIMEOUT = 60.0
 # Shutdown runs against TimeoutStopSec, so its RPCs get a much shorter leash than a live claim.
 SHUTDOWN_RPC_TIMEOUT = 10.0

@@ -29,7 +29,15 @@ from ..utils import time_diff_in_seconds, force_symlink, collapse
 from ..config import SciProcConfiguration
 from ..config.base import ConfigNode
 from .. import external
-from ..const import PIXSCALE, MEDIUM_FILTERS, BROAD_FILTERS, ALL_FILTERS
+from ..const import (
+    PIXSCALE,
+    MEDIUM_FILTERS,
+    BROAD_FILTERS,
+    ALL_FILTERS,
+    NAME_TYPE_RAW,
+    NAME_TYPE_FLAT,
+    NAME_TYPE_SCIENCE,
+)
 from ..const.sciproc import (
     COADD_PHOTOMETRY_SPEC,
     DIFFERENCE_PHOTOMETRY_SPEC,
@@ -1162,8 +1170,8 @@ class PhotometrySingle:
             ).conjugate
             self.logger.debug(f"Filter check glob template (PathHandler.conjugate): {template}")
             flist = glob(os.path.join(os.path.dirname(template), "*.fits"))
-            flats = NameHandler(flist).pick_type("raw_flat")
-            scis = NameHandler(flist).pick_type("raw_science")
+            flats = NameHandler(flist).pick_type(f"{NAME_TYPE_RAW}_{NAME_TYPE_FLAT}")
+            scis = NameHandler(flist).pick_type(f"{NAME_TYPE_RAW}_{NAME_TYPE_SCIENCE}")
             active_filters = set(NameHandler(flats + scis).filter)
             self.logger.debug(f"Fetched active filters from local filesystem: {active_filters}")
             return active_filters

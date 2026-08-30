@@ -9,6 +9,16 @@ from functools import lru_cache
 from astropy.io import fits
 
 from ..config.utils import get_key
+from ..const import (
+    CALIB_TYPE_BIAS,
+    CALIB_TYPE_DARK,
+    CALIB_TYPE_FLAT,
+    CALIB_TYPES,
+    NAME_TYPE_BIAS,
+    NAME_TYPE_DARK,
+    NAME_TYPE_FLAT,
+    NAME_TYPE_MASTER,
+)
 from ..errors import PreprocessError
 from ..path.name import NameHandler
 from .utils import get_image_id
@@ -39,7 +49,7 @@ def _resolve_master_path(basename: str, is_pipeline: bool = True) -> str | None:
     from ..utils import atleast_1d
 
     path = PathHandler(basename, is_pipeline=is_pipeline)
-    if "master" not in atleast_1d(path.name.type)[0]:
+    if atleast_1d(path.name.type)[0].kind != NAME_TYPE_MASTER:
         return None
     return atleast_1d(path._resolved_files)[0]
 
@@ -132,16 +142,14 @@ class ReprocessMixin:
             better_match=self._better_match,
             is_pipeline=self._is_pipeline,
             cache=self._ingredient_cache,
-            designated=self._designated_basenames.intersection(
-                os.path.basename(p) for p in selected if p
-            ),
+            designated=self._designated_basenames.intersection(os.path.basename(p) for p in selected if p),
         )
 
     def _master_change(self, dtype, output_file):
         """Why an existing master must be rebuilt, or None."""
-        if dtype == "dark":
+        if dtype == CALIB_TYPE_DARK:
             selected = (self.bias_output,)
-        elif dtype == "flat":
+        elif dtype == CALIB_TYPE_FLAT:
             selected = (self.bias_output, self.flatdark_output)
         else:
             return None  # a bias is combined from raw frames alone
@@ -158,11 +166,14 @@ class ReprocessMixin:
         """Why a science output must be (re)produced, or None."""
         if not os.path.exists(output_file):
             return "missing"
-        return self._ingredient_change(
-            output_file, (self.bias_output, self.dark_output, self.flat_output)
-        )
+        return self._ingredient_change(output_file, (self.bias_output, self.dark_output, self.flat_output))
 
-    _ROLE_DTYPE = {"bias": "bias", "dark": "dark", "flat": "flat", "flatdark": "dark"}
+    _ROLE_DTYPE = {
+        "bias": CALIB_TYPE_BIAS,
+        "dark": CALIB_TYPE_DARK,
+        "flat": CALIB_TYPE_FLAT,
+        "flatdark": CALIB_TYPE_DARK,
+    }
 
     def _load_designated_masterframes(self):
         """Validate `preprocess.designated_masterframes` into {dtype: [(path, NameHandler, role)]}.
@@ -191,13 +202,11 @@ class ReprocessMixin:
                 raise PreprocessError.ValueError(f"designated_masterframes: file not found: {path}")
             try:
                 name = NameHandler(path)
-                dtype = name.type[1] if name.type[0] == "master" else None
+                dtype = name.type.exposure_type if name.type.kind == NAME_TYPE_MASTER else None
             except Exception:
                 dtype = None
-            if dtype not in ("bias", "dark", "flat"):
-                raise PreprocessError.ValueError(
-                    f"designated_masterframes: not a master bias/dark/flat: {path}"
-                )
+            if dtype not in (NAME_TYPE_BIAS, NAME_TYPE_DARK, NAME_TYPE_FLAT):
+                raise PreprocessError.ValueError(f"designated_masterframes: not a master bias/dark/flat: {path}")
             if role is not None and self._ROLE_DTYPE[role] != dtype:
                 raise PreprocessError.ValueError(
                     f"designated_masterframes: role {role!r} needs a master "
@@ -224,9 +233,9 @@ class ReprocessMixin:
                 continue
             if str(name.n_binning) != str(target.n_binning):
                 continue
-            if dtype == "flat" and name.filter != target.filter:
+            if dtype == CALIB_TYPE_FLAT and name.filter != target.filter:
                 continue
-            if dtype == "dark" and str(name.exptime) != str(target.exptime):
+            if dtype == CALIB_TYPE_DARK and str(name.exptime) != str(target.exptime):
                 continue  # the reduction kernel subtracts the dark unscaled
             matches.append((path, name))
         if not matches:
@@ -254,18 +263,18 @@ class ReprocessMixin:
 
         for i in range(self._n_groups):
             templates = self.raw_groups[i][1]
-            for dtype in ("bias", "dark", "flat"):
+            for dtype in CALIB_TYPES:
                 path = self._designated_for(dtype, templates[self._key_to_index[dtype]], i)
                 if path:
                     self._designation_dispatch[(i, dtype)] = path
 
-            dark_template = templates[self._key_to_index["dark"]]
-            if dark_template and self._designated.get("dark"):
+            dark_template = templates[self._key_to_index[CALIB_TYPE_DARK]]
+            if dark_template and self._designated.get(CALIB_TYPE_DARK):
                 # flatdark role is exptime-free; an explicit `flatdark:` pin outranks plain darks (min exptime)
                 target = NameHandler(dark_template)
                 candidates = [
                     (name.exptime, path, role)
-                    for path, name, role in self._designated["dark"]
+                    for path, name, role in self._designated[CALIB_TYPE_DARK]
                     if role in (None, "flatdark") and str(name.n_binning) == str(target.n_binning)
                 ]
                 pinned = [c for c in candidates if c[2] == "flatdark"]

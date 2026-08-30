@@ -4,6 +4,7 @@ import argparse
 import sys
 import signal
 
+from pipeline.const import CALIB_TYPES
 from pipeline.services.database.process_status import set_input_type
 from pipeline.run import run_preprocess
 
@@ -40,7 +41,7 @@ if __name__ == "__main__":
         "-calib_types",
         nargs="*",
         default=None,
-        choices=["bias", "dark", "flat"],
+        choices=list(CALIB_TYPES),
         help="Master frame types to load (default: all three). Give them as a prefix of "
         "bias dark flat -- a later type needs the earlier ones loaded for PPFLAG to propagate.",
     )

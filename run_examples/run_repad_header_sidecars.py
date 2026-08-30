@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import yaml
 
-from pipeline.const import SCHEDULER_DB_PATH
+from pipeline.const import SCHEDULER_DB_PATH, TASK_STATUS_PENDING, TASK_STATUS_READY
 from pipeline.utils.header import read_header_file, write_header_file, add_padding
 
 LOG_DB = "/var/db/sidecar_fix.sqlite"
@@ -84,7 +84,8 @@ def queued_configs(scheduler_db):
     """Configs the scheduler still has queued."""
     con = sqlite3.connect(f"file:{scheduler_db}?mode=ro", uri=True, timeout=30)
     rows = con.execute(
-        'SELECT "index", config FROM scheduler WHERE status IN ("Ready","Pending") ORDER BY "index"'
+        'SELECT "index", config FROM scheduler WHERE status IN (?, ?) ORDER BY "index"',
+        (TASK_STATUS_READY, TASK_STATUS_PENDING),
     ).fetchall()
     con.close()
     return rows

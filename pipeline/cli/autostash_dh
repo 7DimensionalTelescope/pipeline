@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import argparse
 
+from pipeline.const import TASK_STATUS_FAILED, TASK_STATUS_STASHED
 from pipeline.services.database.handler import DatabaseHandler
 
 """ln -s /home/pipeline-stable/pipeline/pipeline/cli/autostash_dh /usr/local/bin/autostash_dh"""
@@ -16,7 +17,9 @@ sys.path.insert(0, str(pipeline_dir))
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Autostash failed scheduler entries")
-    parser.add_argument("--grep-status", type=str, default="Failed", help="Status to filter for (default: Failed)")
+    parser.add_argument(
+        "--grep-status", type=str, default=TASK_STATUS_FAILED, help="Status to filter for (default: Failed)"
+    )
     parser.add_argument(
         "--whitelist-error",
         type=int,
@@ -94,7 +97,7 @@ else:
         error_int = int(error) if error is not None else None
 
         if (error_int in WHITELIST_ERROR or obj in WHITELIST_OBJ) and obj not in BLACKLIST_OBJECT:
-            cur.execute("UPDATE scheduler SET status = 'Stashed' WHERE \"index\" = ?", (row["index"],))
+            cur.execute("UPDATE scheduler SET status = ? WHERE \"index\" = ?", (TASK_STATUS_STASHED, row["index"]))
             updated_count += 1
         else:
             print(f"Skipping {obj} (error: {error_int})")
@@ -108,7 +111,9 @@ else:
     print(f"  Skipped: {skipped_count} rows")
 
     # Verify the update
-    updated_rows = cur.execute("SELECT \"index\", status, config FROM scheduler WHERE status = 'Stashed'").fetchall()
+    updated_rows = cur.execute(
+        "SELECT \"index\", status, config FROM scheduler WHERE status = ?", (TASK_STATUS_STASHED,)
+    ).fetchall()
     print(f"  Verification: Found {len(updated_rows)} total rows with status 'Stashed'")
 
     con.close()

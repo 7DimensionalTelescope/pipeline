@@ -7,7 +7,18 @@ from ..utils import collapse, flatten
 from ..path import PathHandler
 from ..path.name import NameHandler
 from ..config.utils import get_filter_from_config
-from ..const.run import DEFAULT_CROSSFILTER_PROCESSES, DEFAULT_SCIDATA_PROCESSES
+from ..const.run import (
+    DEFAULT_CROSSFILTER_PROCESSES,
+    DEFAULT_SCIDATA_PROCESSES,
+    CONFIG_TYPE_PREPROCESS,
+    CONFIG_TYPE_SCIENCE,
+    CONFIG_TYPE_CROSSFILTER,
+    INPUT_TYPE_DAILY,
+    INPUT_TYPE_TOO,
+    INPUT_TYPE_USER,
+    TASK_STATUS_READY,
+    TASK_STATUS_PENDING,
+)
 from ..const.observation import BROAD_FILTERS
 
 from .logger import get_high_level_task_logger
@@ -273,16 +284,16 @@ class Blueprint:
 
         idx = 0
 
-        if base_priority is None and input_type in ["Daily", "ToO"]:
+        if base_priority is None and input_type in [INPUT_TYPE_DAILY, INPUT_TYPE_TOO]:
             if is_too:
                 base_priority = 6
-                input_type = "ToO"
+                input_type = INPUT_TYPE_TOO
             else:
                 base_priority = 3
-                input_type = "Daily"
+                input_type = INPUT_TYPE_DAILY
         else:
             base_priority = base_priority or 1
-            input_type = input_type or "User-input"
+            input_type = input_type or INPUT_TYPE_USER
 
         input_type = kwargs.get("input_type", input_type)
 
@@ -300,12 +311,12 @@ class Blueprint:
                 [
                     idx,
                     group.config,
-                    "preprocess",
+                    CONFIG_TYPE_PREPROCESS,
                     input_type,
                     True,
                     base_priority + 1,
                     100,
-                    "Ready",
+                    TASK_STATUS_READY,
                     [],
                     0,
                     "",
@@ -347,12 +358,12 @@ class Blueprint:
                     [
                         idx,
                         sci_group.config,
-                        "science",
+                        CONFIG_TYPE_SCIENCE,
                         input_type,
                         False,
                         priority,
                         99 - sci_group.multi_units,
-                        "Pending",
+                        TASK_STATUS_PENDING,
                         [],
                         0,
                         "",
@@ -379,12 +390,12 @@ class Blueprint:
                 [
                     idx,
                     group.config,
-                    "crossfilter",
+                    CONFIG_TYPE_CROSSFILTER,
                     input_type,
                     not parent_indices,
                     base_priority,
                     100 - len(parent_indices),
-                    "Ready" if not parent_indices else "Pending",
+                    TASK_STATUS_READY if not parent_indices else TASK_STATUS_PENDING,
                     [],
                     0,
                     "",

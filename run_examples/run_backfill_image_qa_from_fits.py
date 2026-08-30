@@ -35,6 +35,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from pipeline.const import IMAGE_GROUP_SCIENCE
 from pipeline.services.database.image_qa import ImageQA, ImageQATable
 
 _thread_local = threading.local()
@@ -56,7 +57,7 @@ def _build_select_sql(args: argparse.Namespace) -> tuple[str, dict]:
 
     if not args.include_masterframes:
         conditions.append("image_group = %(image_group)s")
-        params["image_group"] = "science"
+        params["image_group"] = IMAGE_GROUP_SCIENCE
 
     if args.image_types:
         conditions.append("image_type = ANY(%(image_types)s)")

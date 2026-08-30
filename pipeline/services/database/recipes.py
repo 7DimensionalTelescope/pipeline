@@ -18,6 +18,7 @@ from typing import List, Optional, Tuple
 
 import os
 
+from ...const import SINGLE_DEPENDENCY_ROLE
 from .query import free_query
 
 
@@ -30,11 +31,11 @@ def units_of(image) -> List[Tuple[str, int]]:
         JOIN image_qa_dependency d ON d.derived_image_id = c.id
         JOIN image_qa s            ON s.id = d.source_image_id
         WHERE c.image_name = ANY(%s)
-          AND d.dependency_role = 'single'
+          AND d.dependency_role = %s
         GROUP BY s.unit
         ORDER BY n_frames DESC, s.unit
         """,
-        (_registered(image_names(image)),),
+        (_registered(image_names(image)), SINGLE_DEPENDENCY_ROLE),
     )
 
 
@@ -45,7 +46,7 @@ def images_of_unit(unit: str, kind: str = "coadd", limit: Optional[int] = None) 
     is `right()` rather than LIKE: an escaped LIKE wildcard is a trap in a non-raw Python
     string, where ESCAPE '\' silently becomes ESCAPE ''.
     """
-    where, params = "", [unit]
+    where, params = "", [unit, SINGLE_DEPENDENCY_ROLE]
     if kind:
         suffix = f"_{kind}"
         where = "AND right(c.image_name, %s) = %s"
@@ -56,7 +57,7 @@ def images_of_unit(unit: str, kind: str = "coadd", limit: Optional[int] = None) 
         JOIN image_qa_dependency d ON d.source_image_id = s.id
         JOIN image_qa c            ON c.id = d.derived_image_id
         WHERE s.unit = %s
-          AND d.dependency_role = 'single'
+          AND d.dependency_role = %s
           {where}
         ORDER BY c.image_name
     """

@@ -4,6 +4,7 @@ import cupy as cp
 import numpy as np
 import fitsio
 
+from ..const import CALIB_TYPES
 from ..preprocess.calc import prepare_masterframe_header
 from ..preprocess.shifted_score import check_shifted_overscan, combined_shifted_score
 from ..preprocess.utils import prepare_raw_qa_header
@@ -111,7 +112,7 @@ if __name__ == "__main__":
     parser.add_argument("-device", type=int, default=0, help="CUDA device ID.")
     parser.add_argument(
         "-dtype",
-        choices=("bias", "dark", "flat"),
+        choices=CALIB_TYPES,
         default=None,
         help="Masterframe type; when set, compute per-dtype stats and stamp them into the sibling .header.",
     )

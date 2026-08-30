@@ -17,7 +17,7 @@ from ..utils import flatten, time_diff_in_seconds, atleast_1d
 from ..config import PreprocConfiguration
 from ..config.utils import get_key
 from ..services.setup import BaseSetup
-from ..const import HEADER_KEY_MAP
+from ..const import HEADER_KEY_MAP, CALIB_TYPE_BIAS, CALIB_TYPE_DARK, CALIB_TYPE_FLAT, CALIB_TYPES
 from ..services.utils import acquire_available_gpu
 from ..services.checker import Checker
 from ..services.database.image_qa import ImageQATable
@@ -73,8 +73,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         self.overwrite = overwrite
         self.master_frame_only = master_frame_only
 
-        self.calib_types = calib_types or ["bias", "dark", "flat"]
-        if list(self.calib_types) != ["bias", "dark", "flat"][: len(self.calib_types)]:
+        self.calib_types = calib_types or list(CALIB_TYPES)
+        if list(self.calib_types) != list(CALIB_TYPES)[: len(self.calib_types)]:
             raise PreprocessError.ValueError(
                 f"calib_types must be a cumulative prefix of ['bias', 'dark', 'flat'], not {self.calib_types}"
             )
@@ -308,7 +308,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
 
     @property
     def _key_to_index(self):
-        return {"bias": 0, "dark": 1, "flat": 2}
+        return {CALIB_TYPE_BIAS: 0, CALIB_TYPE_DARK: 1, CALIB_TYPE_FLAT: 2}
 
     def _get_raw_group(self, name, group_index):
         """This parses from the PathHandler.take_raw_inventory output, self.raw_groups"""
@@ -349,11 +349,11 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         """updates ingredient files"""
         header = fits.getheader(getattr(self, f"{dtype}_input")[0])
 
-        if dtype == "bias":
+        if dtype == CALIB_TYPE_BIAS:
             header = prep_utils.write_IMCMB_to_header(header, self.bias_input)
-        elif dtype == "dark":
+        elif dtype == CALIB_TYPE_DARK:
             header = prep_utils.write_IMCMB_to_header(header, [self.bias_output] + self.dark_input)
-        elif dtype == "flat":
+        elif dtype == CALIB_TYPE_FLAT:
             header = prep_utils.write_IMCMB_to_header(
                 header, [self.bias_output, self.flatdark_output] + self.flat_input
             )
@@ -393,7 +393,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             self.logger.debug(f"[Group {self._current_group+1}] {dtype}_input: {input_file}")
             self.logger.debug(f"[Group {self._current_group+1}] {dtype}_output: {output_file}")
 
-            if dtype == "dark":
+            if dtype == CALIB_TYPE_DARK:
                 self.logger.debug(f"[Group {self._current_group+1}] flatdark_output: {self.flatdark_output}")
 
             generated_now = False
@@ -425,7 +425,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 # raise MasterFrameNotFoundError(msg)
 
             # settle the flatdark once per group, only when a flat will be built
-            if dtype == "dark" and output_file and self.flat_output and "flat" in self.calib_types:
+            if dtype == CALIB_TYPE_DARK and output_file and self.flat_output and CALIB_TYPE_FLAT in self.calib_types:
                 try:
                     self._resolve_flatdark(output_file)
                 except MasterFrameNotFoundError:
@@ -494,10 +494,10 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
 
         if dry_run:
             outputs = [getattr(self, f"{dtype}_output"), getattr(self, f"{dtype}sig_output")]
-            if dtype == "dark":
+            if dtype == CALIB_TYPE_DARK:
                 outputs.append(self.bpmask_output)
             self.logger.info(f"[Group {self._current_group+1}] Would create master {dtype} files: {outputs} (DRY RUN)")
-            if dtype == "dark":
+            if dtype == CALIB_TYPE_DARK:
                 self.logger.info(f"[Group {self._current_group+1}] Flatdark will be resolved once the dark is settled (DRY RUN)")  # fmt: skip
             return True
 
@@ -507,7 +507,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         header = self.get_header(dtype)
         prep_utils.set_pipe_ver_in_header(header)
         outputs = [getattr(self, f"{dtype}_output"), getattr(self, f"{dtype}sig_output")]
-        if dtype == "dark":
+        if dtype == CALIB_TYPE_DARK:
             outputs.append(self.bpmask_output)
         for output_path in outputs:
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -528,7 +528,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 calc_function = combine_images_with_subprocess_gpu
                 self.logger.info(f"[Group {self._current_group+1}] Generating masterframe {dtype} in GPU device {device_id}")  # fmt: skip
 
-            if dtype == "bias":
+            if dtype == CALIB_TYPE_BIAS:
                 calc_function(
                     input_files,
                     device_id=device_id,
@@ -537,7 +537,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                     dtype=dtype,
                 )
 
-            elif dtype == "dark":
+            elif dtype == CALIB_TYPE_DARK:
                 calc_function(
                     input_files,
                     device_id=device_id,
@@ -551,7 +551,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 )
                 # flatdark comes from _resolve_flatdark, never from this group's dark
 
-            elif dtype == "flat":
+            elif dtype == CALIB_TYPE_FLAT:
                 dark_scale = self._calc_dark_scale(header[HEADER_KEY_MAP["exptime"]], self.dark_exptime)
                 calc_function(
                     input_files,
@@ -574,16 +574,18 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), header)
 
         # PPFLAG: propagate from dependencies (bias=0, dark=bias, flat=bias|flatdark)
-        if dtype == "bias":
+        if dtype == CALIB_TYPE_BIAS:
             ppflag_val = 0
             ingredient_ppflags = {}
-        elif dtype == "dark":
-            ppflag_val = self._ppflag.get("bias", 0)
-            ingredient_ppflags = {"bias": self._ppflag.get("bias", 0)}
-        elif dtype == "flat":
-            ppflag_val = ppflag.propagate_ppflag(self._ppflag.get("bias", 0), getattr(self, "_flatdark_ppflag", 0))
+        elif dtype == CALIB_TYPE_DARK:
+            ppflag_val = self._ppflag.get(CALIB_TYPE_BIAS, 0)
+            ingredient_ppflags = {"bias": self._ppflag.get(CALIB_TYPE_BIAS, 0)}
+        elif dtype == CALIB_TYPE_FLAT:
+            ppflag_val = ppflag.propagate_ppflag(
+                self._ppflag.get(CALIB_TYPE_BIAS, 0), getattr(self, "_flatdark_ppflag", 0)
+            )
             ingredient_ppflags = {
-                "bias": self._ppflag.get("bias", 0),
+                "bias": self._ppflag.get(CALIB_TYPE_BIAS, 0),
                 "flatdark": getattr(self, "_flatdark_ppflag", 0),
             }
         else:
@@ -648,7 +650,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
 
         ppflag.set_ppflag_in_header(header, ppflag_val)
 
-        if dtype == "dark":
+        if dtype == CALIB_TYPE_DARK:
             hotpix = self.update_bpmask(sanity=sanity_flag)
             header["NHOTPIX"] = (hotpix, "Number of hot pixels")
 
@@ -744,7 +746,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
 
         existing_flatdark_file, flatdark_relaxation_flags = prep_utils.tolerant_search(
             flatdark_template,
-            "dark",
+            CALIB_TYPE_DARK,
             max_offset=max_offset,
             future=True,
             ignore_sanity_if_no_match=get_key(self.config_node.preprocess, "ignore_sanity_if_no_match", False),
@@ -775,7 +777,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         )
 
     def _generated_binned_master_frame(self, existing_mframe_file, template, dtype):
-        if not (dtype == "flat"):
+        if not (dtype == CALIB_TYPE_FLAT):
             self.logger.error(
                 f"[Group {self._current_group+1}] Undefined behavior: _generated_binned_master_frame is called but dtype is not flat",
                 ValueError,
@@ -952,9 +954,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         n_head_blocks = get_key(self.config_node.preprocess, "n_head_blocks", 8)
 
         sci_ppflag = ppflag.propagate_ppflag(
-            self._ppflag.get("bias", ppflag.get_ppflag_from_header(bias)),
-            self._ppflag.get("dark", ppflag.get_ppflag_from_header(dark)),
-            self._ppflag.get("flat", ppflag.get_ppflag_from_header(flat)),
+            self._ppflag.get(CALIB_TYPE_BIAS, ppflag.get_ppflag_from_header(bias)),
+            self._ppflag.get(CALIB_TYPE_DARK, ppflag.get_ppflag_from_header(dark)),
+            self._ppflag.get(CALIB_TYPE_FLAT, ppflag.get_ppflag_from_header(flat)),
         )
 
         for raw_file, processed_file in pairs:
@@ -972,16 +974,16 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             prep_utils.write_header(processed_file, header)
 
     def make_masterframe_plots(self, file_path: str, dtype: str, group_index: int, dry_run: bool = False):
-        if dtype == "bias":
+        if dtype == CALIB_TYPE_BIAS:
             plot_bias(file_path, overwrite=self.overwrite, dry_run=dry_run)
-        elif dtype == "dark":
+        elif dtype == CALIB_TYPE_DARK:
             bpmask_file = file_path.replace("dark", "bpmask")
             plot_bpmask(bpmask_file, overwrite=self.overwrite, dry_run=dry_run)
             badpix = fits.getval(bpmask_file, "BADPIX", ext=1) or 1
             mask = fits.getdata(bpmask_file, ext=1) != badpix
             fmask = mask.ravel()
             plot_dark(file_path, fmask, overwrite=self.overwrite, dry_run=dry_run)
-        elif dtype == "flat":
+        elif dtype == CALIB_TYPE_FLAT:
             bpmask_file = self._get_raw_group("bpmask_output", group_index)
             badpix = fits.getval(bpmask_file, "BADPIX", ext=1) or 1
             mask = fits.getdata(bpmask_file, ext=1) != badpix
@@ -993,7 +995,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             self.logger.info(f"[Group {group_index+1}] Generating plots for master calibration frames")
 
             # bias
-            if "bias" in self.calib_types:
+            if CALIB_TYPE_BIAS in self.calib_types:
                 bias_file = self._get_raw_group("bias_output", group_index)
                 if os.path.exists(bias_file):
                     plot_bias(bias_file, overwrite=self.overwrite, dry_run=dry_run)
@@ -1007,7 +1009,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             bpmask_file = self._get_raw_group("bpmask_output", group_index)
 
             # bpmask
-            if "dark" in self.calib_types:
+            if CALIB_TYPE_DARK in self.calib_types:
                 if os.path.exists(bpmask_file):
                     plot_bpmask(bpmask_file, overwrite=self.overwrite, dry_run=dry_run)
                 else:
@@ -1016,7 +1018,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 self.logger.info(f"[Group {group_index+1}] Skipping bpmask plot")
 
             # dark
-            if "dark" in self.calib_types:
+            if CALIB_TYPE_DARK in self.calib_types:
                 if os.path.exists(dark_file):
                     plot_dark(
                         dark_file,
@@ -1030,7 +1032,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 self.logger.info(f"[Group {group_index+1}] Skipping dark plot")
 
             # flat
-            if "flat" in self.calib_types:
+            if CALIB_TYPE_FLAT in self.calib_types:
                 if os.path.exists(flat_file):
                     plot_flat(
                         flat_file,
@@ -1068,7 +1070,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             self.logger.debug(traceback.format_exc())
 
     def update_bpmask(self, sanity=True):
-        header = self.get_header("dark")
+        header = self.get_header(CALIB_TYPE_DARK)
         hot_mask = fits.getdata(self.bpmask_output)
         newhdu = fits.CompImageHDU(data=hot_mask)
         if header:

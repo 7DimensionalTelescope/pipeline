@@ -41,6 +41,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from astropy.io import fits
 
+from pipeline.const import CALIB_TYPE_BIAS, CALIB_TYPE_DARK, CALIB_TYPE_FLAT
 from pipeline.preprocess import ppflag
 from pipeline.utils.header import get_header, write_header_file
 from pipeline.path import PathHandler
@@ -297,19 +298,19 @@ def main():
             """Return 'bias', 'dark', or 'flat' if path looks like a master frame, else None."""
             b = os.path.basename(path)
             if b.startswith("bias_"):
-                return "bias"
+                return CALIB_TYPE_BIAS
             if b.startswith("dark_"):
-                return "dark"
+                return CALIB_TYPE_DARK
             if b.startswith("flat_"):
-                return "flat"
+                return CALIB_TYPE_FLAT
             return None
 
-        by_type: dict[str, list[str]] = {"bias": [], "dark": [], "flat": []}
+        by_type: dict[str, list[str]] = {CALIB_TYPE_BIAS: [], CALIB_TYPE_DARK: [], CALIB_TYPE_FLAT: []}
         for p in paths:
             t = _master_type(p)
             if t and t in by_type:
                 by_type[t].append(p)
-        ordered = by_type["bias"] + by_type["dark"] + by_type["flat"]
+        ordered = by_type[CALIB_TYPE_BIAS] + by_type[CALIB_TYPE_DARK] + by_type[CALIB_TYPE_FLAT]
         if not ordered:
             ordered = paths
         for p in ordered:

@@ -13,7 +13,17 @@ import os
 from astropy.io import fits
 import re
 
-from ...const import WHITE_FILTER
+from ...utils import atleast_1d, collapse
+from ...const import (
+    WHITE_FILTER,
+    CALIB_TYPE_BIAS,
+    CALIB_TYPE_DARK,
+    CALIB_TYPE_FLAT,
+    IMAGE_TYPE_WHITE,
+    SCIENCE_IMAGE_TYPES,
+    IMAGE_GROUP_SCIENCE,
+    IMAGE_GROUP_MASTERFRAME,
+)
 
 
 @dataclass
@@ -177,18 +187,18 @@ class ImageQATable:
 
         if header["IMAGETYP"] == "LIGHT":
             if str(header.get("FILTER", "")).lower() == WHITE_FILTER:
-                cls.image_type = "white"
-            elif "_coadd" in file:
-                cls.image_type = "coadd"
-            elif "_diff" in file:
-                cls.image_type = "diff"
+                cls.image_type = IMAGE_TYPE_WHITE
             else:
-                cls.image_type = "single"
+                from ...path.name import NameHandler  # deferred: path.db imports this package
 
-            cls.image_group = "science"
+                # no fallback on purpose: a wrong image_type is silent corruption, and from_file already
+                # fails fast on a missing IMAGEID, so an unresolvable name must stop the registration too
+                cls.image_type = collapse(atleast_1d(NameHandler(file).type), force=True).image_type
+
+            cls.image_group = IMAGE_GROUP_SCIENCE
         else:
             cls.image_type = header["IMAGETYP"].lower()
-            cls.image_group = "masterframe"
+            cls.image_group = IMAGE_GROUP_MASTERFRAME
 
         # multi-epoch coadds live in COADD_DIR/{obj}/{filter}/ -- dateless by design
         m = re.search(r"/\d{4}-\d{2}-\d{2}/", file)
@@ -279,26 +289,27 @@ class ImageQA(BaseDatabase):
         except Exception as e:
             raise DatabaseError(f"Failed to read {self.table_name} by process_status_id: {e}")
 
-    def classify_images(self, images, group="masterframe") -> List[str]:
+    def classify_images(self, images, group=IMAGE_GROUP_MASTERFRAME) -> List[str]:
 
         classified = {}
 
-        if group == "masterframe":
-            classified["bias"] = False
-            classified["dark"] = []
-            classified["flat"] = []
+        if group == IMAGE_GROUP_MASTERFRAME:
+            classified[CALIB_TYPE_BIAS] = False
+            classified[CALIB_TYPE_DARK] = []
+            classified[CALIB_TYPE_FLAT] = []
             for image in images:
-                if image.image_type == "bias":
-                    classified["bias"] = True
-                elif image.image_type == "dark":
-                    classified["dark"].append(image.exptime)
-                elif image.image_type == "flat":
-                    classified["flat"].append(image.filter)
+                if image.image_type == CALIB_TYPE_BIAS:
+                    classified[CALIB_TYPE_BIAS] = True
+                elif image.image_type == CALIB_TYPE_DARK:
+                    classified[CALIB_TYPE_DARK].append(image.exptime)
+                elif image.image_type == CALIB_TYPE_FLAT:
+                    classified[CALIB_TYPE_FLAT].append(image.filter)
 
-        elif group == "science":
+        elif group == IMAGE_GROUP_SCIENCE:
             for image in images:
-                if image.image_type == "science":
+                if image.image_type in SCIENCE_IMAGE_TYPES:
                     classified.setdefault(image.object, [])
-                    classified[image.object].append(image.filter)
+                    if image.filter not in classified[image.object]:
+                        classified[image.object].append(image.filter)
 
         return classified

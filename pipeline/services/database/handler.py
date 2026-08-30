@@ -9,7 +9,15 @@ from .image_qa import ImageQA
 from .image_qa_dependency import ImageQADependency
 from .process_status_dependency import ProcessStatusDependency
 from ...errors import registry
-from ...const import AUTO_RECORD_PROCESS_STATUS_DEPENDENCIES
+from ...const import (
+    AUTO_RECORD_PROCESS_STATUS_DEPENDENCIES,
+    CONFIG_TYPE_CROSSFILTER,
+    CONFIG_TYPE_SCIENCE,
+    CALIB_TYPE_BIAS,
+    CALIB_TYPE_DARK,
+    CALIB_TYPE_FLAT,
+    IMAGE_TYPE_SINGLE,
+)
 
 if TYPE_CHECKING:
     from ...config import ConfigNode
@@ -213,7 +221,7 @@ class DatabaseHandler:
         data.pop("id", None)
         self.image_qa.update_data(image_qa_id, **data)
 
-    def get_process_status(self, nightdate, config_type="science"):
+    def get_process_status(self, nightdate, config_type=CONFIG_TYPE_SCIENCE):
 
         rows = self.process_status.read_data_by_params(
             return_pyTable=True, nightdate=nightdate, config_type=config_type
@@ -221,21 +229,21 @@ class DatabaseHandler:
         if rows is None:
             return None
 
-        if config_type in ("science", "crossfilter"):
+        if config_type in (CONFIG_TYPE_SCIENCE, CONFIG_TYPE_CROSSFILTER):
             dicts = [row.to_dict() for row in rows]
         else:
             dicts = []
             for row in rows:
                 classify_images = self.image_qa.classify_images(self.image_qa.get_by_process_status_id(row.id))
                 temp_dict = row.to_dict()
-                temp_dict["bias"] = classify_images["bias"]
-                temp_dict["dark"] = classify_images["dark"]
-                temp_dict["flat"] = classify_images["flat"]
+                temp_dict[CALIB_TYPE_BIAS] = classify_images[CALIB_TYPE_BIAS]
+                temp_dict[CALIB_TYPE_DARK] = classify_images[CALIB_TYPE_DARK]
+                temp_dict[CALIB_TYPE_FLAT] = classify_images[CALIB_TYPE_FLAT]
                 dicts.append(temp_dict)
 
         return dicts
 
-    def get_image_qa(self, params, image_type="single", date_min=None, date_max=None):
+    def get_image_qa(self, params, image_type=IMAGE_TYPE_SINGLE, date_min=None, date_max=None):
         import numpy as np
 
         params = np.atleast_1d(params)

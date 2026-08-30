@@ -199,12 +199,12 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
 
             # all True if the boolean flag is_too is True
             self._is_too_vectorized = [is_too] * len(input) if isinstance(input, list) else [is_too]
-            for i, (input_file, typ) in enumerate(zip(self._input_files, self.name.type)):
-                if "raw" in typ:
+            for i, (input_file, typ) in enumerate(zip(self._input_files, atleast_1d(self.name.type))):
+                if typ.kind == const.NAME_TYPE_RAW:
                     if "_ToO_" in input_file:
                         self._is_too_vectorized[i] = True
 
-                if "calibrated" in typ:
+                if typ.kind == const.NAME_TYPE_CALIBRATED:
                     if const.TOO_PROCESSED_DIR in input_file:
                         self._is_too_vectorized[i] = True
 
@@ -463,7 +463,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             # Masterframe disk: system unless caller pinned working_dir (self-contained)
             mf = str(settings.working_dir) if settings.working_dir else self._system_masterframe(current_nightdate)
 
-            if "raw" in typ:
+            if typ.kind == const.NAME_TYPE_RAW:
                 anchor = str(settings.working_dir or os.getcwd())
                 self._top_dirs.append(
                     TopDirs(
@@ -472,9 +472,9 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                         masterframe=mf,
                     )
                 )
-            elif "calibrated" in typ:
+            elif typ.kind == const.NAME_TYPE_CALIBRATED:
                 self._top_dirs.append(TopDirs(processed=None, factory=None, masterframe=mf))
-            elif "master" in typ:
+            elif typ.kind == const.NAME_TYPE_MASTER:
                 self._top_dirs.append(TopDirs(processed=None, factory=None, masterframe=None))
             else:
                 raise ValueError(f"Unrecognized input type for {input_file}: {typ}")
@@ -731,7 +731,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             # select_output_dir intentionally leaves masterframe parent unset.
             if self._masterframe_parent_dir[i] is not None and nightdate is not None and unit is not None:
                 self._masterframe_dir.append(os.path.join(self._masterframe_parent_dir[i], nightdate, unit))
-            elif "master" in typ:
+            elif typ.kind == const.NAME_TYPE_MASTER:
                 self._masterframe_dir.append(file_dir)
             else:
                 self._masterframe_dir.append(None)
@@ -739,7 +739,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             config_stem = "_".join([nightdate, unit]) if nightdate is not None and unit is not None else None
             self._preproc_config_stem.append(config_stem)
 
-            if "raw" in typ:
+            if typ.kind == const.NAME_TYPE_RAW:
                 if self.is_pipeline:
                     # Within pipeline processing
                     relative_path = os.path.join(nightdate, obj, filte)
@@ -762,7 +762,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                 self._figure_dir.append(os.path.join(self._output_dir[-1], FIGURES_DIRNAME))
                 self._resolved_files.append(self._input_files[i])
 
-            elif "calibrated" in typ:
+            elif typ.kind == const.NAME_TYPE_CALIBRATED:
                 if self.is_pipeline:
                     # Pipeline mode unchanged.
                     relative_path = os.path.join(nightdate, obj, filte)
@@ -796,7 +796,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                 self._figure_dir.append(os.path.join(self._output_dir[-1], FIGURES_DIRNAME))
                 self._resolved_files.append(self._input_files[i])
 
-            elif "master" in typ:
+            elif typ.kind == const.NAME_TYPE_MASTER:
                 if self.is_pipeline:
                     self._output_dir.append(self._output_parent_dir[i])
                     self._factory_dir.append(self._factory_parent_dir[i])
@@ -880,11 +880,11 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             typ = self._get_namehandler_property_at_index("type", i)
             basename = self._get_namehandler_property_at_index("conjugate_basename", i)
 
-            if "raw" in typ[0]:
+            if typ.kind == const.NAME_TYPE_RAW:
                 # original was raw → conjugate is processed
                 root = self._single_dir[i]
                 paths.append(os.path.join(root, basename))
-            elif "calibrated" in typ[0]:
+            elif typ.kind == const.NAME_TYPE_CALIBRATED:
                 # original was processed → conjugate is raw
                 root = self._raw_dir(i, is_too=self._is_too_vectorized[i])
                 paths.append(os.path.join(root, basename))
@@ -930,14 +930,14 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         paths = []
         for i, input in enumerate(self._input_files):
             typ = self._get_namehandler_property_at_index("type", i)
-            if "calibrated" in typ:
+            if typ.kind == const.NAME_TYPE_CALIBRATED:
                 if self.is_pipeline:
                     anchor = self._single_dir[i]
                     basename = self._get_namehandler_property_at_index("processed_basename", i)
                     paths.append(os.path.join(anchor, basename))
                 else:
                     paths.append(input)
-            elif "raw" in typ:
+            elif typ.kind == const.NAME_TYPE_RAW:
                 anchor = self._single_dir[i]
                 if anchor is None:
                     raise ValueError(
@@ -945,7 +945,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                     )
                 basename = self._get_namehandler_property_at_index("processed_basename", i)
                 paths.append(os.path.join(anchor, basename))
-            elif "master" in typ:
+            elif typ.kind == const.NAME_TYPE_MASTER:
                 raise ValueError(f"Master input has no processed_image: {input!r}")
             else:
                 raise ValueError(f"Unrecognized input type: {typ}")
@@ -1197,8 +1197,8 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         z_m_file, d_m_file, f_m_file = cls(
             mzdf_list, is_pipeline=True
         ).preprocess._masterframe  # with vectorized PathHandler
-        sig_z_file = z_m_file.replace("bias", "biassig")
-        sig_f_file = f_m_file.replace("flat", "flatsig")
+        sig_z_file = z_m_file.replace(const.NAME_TYPE_BIAS, const.NAME_TYPE_BIAS + const.NAME_TYPE_SIGMA_SUFFIX)
+        sig_f_file = f_m_file.replace(const.NAME_TYPE_FLAT, const.NAME_TYPE_FLAT + const.NAME_TYPE_SIGMA_SUFFIX)
         return d_m_file, f_m_file, sig_z_file, sig_f_file
 
     @classmethod
@@ -1207,11 +1207,14 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
 
         if isinstance(input, str | Path):
             name = NameHandler(input)
-            if name.type[0] == "master" and (name.type[1] == "dark" or name.type[1] == "darksig"):
+            if name.type.kind == const.NAME_TYPE_MASTER and (
+                name.type.exposure_type == const.NAME_TYPE_DARK
+                or name.type.exposure_type == const.NAME_TYPE_DARK + const.NAME_TYPE_SIGMA_SUFFIX
+            ):
                 input = cls(input).preprocess._masterframe  # ensure full path to master dark, not darksig
                 return input.replace("dark", "bpmask")
 
-            elif name.type[0] == "calibrated":
+            elif name.type.kind == const.NAME_TYPE_CALIBRATED:
                 header = fits.getheader(input)
 
         elif isinstance(input, fits.Header):
@@ -1224,7 +1227,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             raise ValueError("Invalid input to find bpmask")
 
         calibs = [v for k, v in header.items() if "IMCMB" in k]
-        mdark = NameHandler(calibs).pick_type("master_dark")
+        mdark = NameHandler(calibs).pick_type(f"{const.NAME_TYPE_MASTER}_{const.NAME_TYPE_DARK}")
         assert isinstance(mdark, str)
         mdark = cls(mdark).preprocess._masterframe
         return mdark.replace("dark", "bpmask")
@@ -1337,7 +1340,7 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
         """
         if self._parent.name._single:
             typ = self._parent.name.type
-            if typ[1] == "science":
+            if typ.exposure_type == const.NAME_TYPE_SCIENCE:
                 return [os.path.join(self._masterframe_dir[0], s) for s in self._parent.name.masterframe_basename]
             return os.path.join(self._masterframe_dir[0], self._parent.name.masterframe_basename)
 
@@ -1345,7 +1348,7 @@ class PathPreprocess(AutoMkdirMixin, AutoCollapseMixin):
         for typ, mfdir, basename in zip(
             self._parent.name.type, self._masterframe_dir, self._parent.name.masterframe_basename
         ):
-            if typ[1] == "science":
+            if typ.exposure_type == const.NAME_TYPE_SCIENCE:
                 result.append([os.path.join(mfdir, s) for s in basename])
             else:
                 result.append(os.path.join(mfdir, basename))
@@ -1412,7 +1415,7 @@ class PathPreprocessFigures(PathFiguresBase):
         stored_figure_dirs = atleast_1d(getattr(self._parent._parent, "_figure_dir", []))
 
         for i, (resolved, typ) in enumerate(zip(resolved_files, atleast_1d(self._parent._parent.name.type))):
-            if "master" in typ:
+            if typ.kind == const.NAME_TYPE_MASTER:
                 dirs.append(os.path.join(os.path.dirname(resolved), FIGURES_DIRNAME))
             else:
                 dirs.append(stored_figure_dirs[i])

@@ -1,4 +1,5 @@
 import pandas as pd
+from pipeline.const import CONFIG_TYPE_PREPROCESS
 from pipeline.services.scheduler import Scheduler
 from pipeline.services.database import DatabaseHandler
 
@@ -11,7 +12,7 @@ OVERWRITE_DATA = False
 dh = DatabaseHandler()
 df = dh.process_status.export_to_table()
 
-preproc_df = df[df["config_type"] == "preprocess"]
+preproc_df = df[df["config_type"] == CONFIG_TYPE_PREPROCESS]
 df_errors = preproc_df[~pd.isna(preproc_df["errors"])]
 df_rerun = df_errors[df_errors["errors"] == 102]
 

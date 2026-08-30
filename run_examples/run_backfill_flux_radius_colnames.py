@@ -39,6 +39,7 @@ from packaging.version import Version
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from pipeline.config import SciProcConfiguration
+from pipeline.const import CONFIG_TYPE_SCIENCE
 from pipeline.photometry.utils import get_flux_fractions
 from pipeline.services.database.process_status import ProcessStatus
 
@@ -62,10 +63,10 @@ def _log(msg: str) -> None:
 def _select_configs(args: argparse.Namespace) -> list[str]:
     sql = (
         "SELECT config_file, pipeline_version FROM process_status "
-        "WHERE config_type = 'science' AND config_file IS NOT NULL AND config_file != '' "
+        "WHERE config_type = %s AND config_file IS NOT NULL AND config_file != '' "
         "ORDER BY id"
     )
-    rows = ProcessStatus().execute_query(sql, None)
+    rows = ProcessStatus().execute_query(sql, (CONFIG_TYPE_SCIENCE,))
     minimum = Version(args.min_version)
 
     def recent(version) -> bool:

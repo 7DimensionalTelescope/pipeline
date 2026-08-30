@@ -12,7 +12,7 @@ import logging
 import glob
 from pathlib import Path
 
-from pipeline.const import PIPELINE_TRIGGER_LOG_FILE, RAWDATA_DIR, RECENT_RAWDATA_TRANSFER_HISTORY
+from pipeline.const import INPUT_TYPE_DAILY, PIPELINE_TRIGGER_LOG_FILE, RAWDATA_DIR, RECENT_RAWDATA_TRANSFER_HISTORY
 from pipeline.services.batchtriggerlock import BatchTriggerLock
 from pipeline.services.pipeline_lock import enforce_pipeline_lock
 from pipeline.services.monitor import Monitor
@@ -97,7 +97,7 @@ def run_image_processing(image_paths, is_too=False):
     )
     br.create_schedule(
         is_too=is_too,
-        input_type="Daily",
+        input_type=INPUT_TYPE_DAILY,
     )
     sc = Scheduler(br.schedule, use_system_queue=True, overwrite_schedule=True)
     sc.start_system_queue()
