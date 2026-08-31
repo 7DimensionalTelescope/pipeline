@@ -2,7 +2,13 @@ import os
 
 from astropy.io import fits
 
-from ..const import AUTO_RECORD_PROCESS_STATUS_DEPENDENCIES, IMAGE_GROUP_SCIENCE, WHITE_FILTER
+from ..const import (
+    AUTO_RECORD_PROCESS_STATUS_DEPENDENCIES,
+    BROAD_FILTERS,
+    FIRST_MEDIUM_FILTERS,
+    IMAGE_GROUP_SCIENCE,
+    WHITE_FILTER,
+)
 from ..const.crossfilter import CROSSFILTERPROCESS_REGISTRY, WHITE_COADD_SPEC
 from ..const.sciproc import COADD_PHOTOMETRY_SPEC, COADD_SPEC
 from ..config import CrossFilterConfiguration, SciProcConfiguration
@@ -66,7 +72,7 @@ class WhiteImage(ImCoadd):
         self._confirm_input_completeness()
         super().initialize()
 
-    def _confirm_input_completeness(self):
+    def _confirm_input_completeness(self, counted_filters=tuple(BROAD_FILTERS + FIRST_MEDIUM_FILTERS)):
         """Coadd only when every available filter is ready: confirmed, proven-rejected, or hold.
 
         Per declared science parent, ready means flag.coadd and flag.coadd_photometry True and
@@ -74,8 +80,12 @@ class WhiteImage(ImCoadd):
         rejected only on config sanity False or FITS SANITY=False evidence; anything else holds
         the run. With is_pipeline, RawFrameQuery is the source of truth for the complete filter
         set. The confirmed list is recorded in node.imcoadd.input_images.
+
+        Inputs and the raw inventory are both cut to `counted_filters`, so a filter outside it
+        neither holds the run nor contributes pixels.
         """
         node = self.config_node
+        counted = set(counted_filters)
         science_configs = list(node.input.science_configs or [])
 
         confirmed, rejected, held = [], [], []
@@ -85,6 +95,9 @@ class WhiteImage(ImCoadd):
                     source = SciProcConfiguration(config_file, write=False, logger=False, verbose=False)
                 except Exception as e:
                     raise self._process_error.PrerequisiteNotMetError(f"Unreadable science parent {config_file}: {e}")
+                # the parent's own PathHandler, not its config stem: stems mis-parse objects whose name has "_"
+                if str(collapse(atleast_1d(source.path.name.filter), force=True)) not in counted:
+                    continue
                 coadd_image = collapse(atleast_1d(get_key(source.node.imcoadd, "coadd_image") or []), force=True)
                 complete = bool(get_key(source.node.flag, COADD_SPEC.name, False)) and bool(
                     get_key(source.node.flag, COADD_PHOTOMETRY_SPEC.name, False)
@@ -98,7 +111,7 @@ class WhiteImage(ImCoadd):
                 else:
                     held.append(config_file)
         else:
-            for image in list(node.input.expected_coadd_images or []):
+            for image in self._counted_entries(node.input.expected_coadd_images, counted):
                 if not os.path.exists(image):
                     held.append(image)
                 elif CrossFilterConfiguration._fits_sanity_is_false(image):
@@ -115,7 +128,7 @@ class WhiteImage(ImCoadd):
 
         used_filters = CrossFilterConfiguration._filters(confirmed) if confirmed else []
         if node.settings.is_pipeline:
-            raw_filters = self._raw_filter_inventory()
+            raw_filters = self._raw_filter_inventory() & counted
             covered = set(used_filters) | {
                 str(collapse(atleast_1d(NameHandler(entry).filter), force=True)) for entry in rejected
             }
@@ -138,6 +151,15 @@ class WhiteImage(ImCoadd):
                 f"Cross-filter stage found {len(used_filters)} usable filter coadd(s); minimum is {minimum}"
             )
         self.logger.info(f"Confirmed {len(used_filters)} filter coadd(s); {len(rejected)} rejected parent(s)")
+
+    @staticmethod
+    def _counted_entries(entries, counted_filters) -> list:
+        """Product filenames whose filter is in the counted set, order preserved."""
+        entries = list(entries or [])
+        if not entries:
+            return []
+        filters = [str(value) for value in atleast_1d(NameHandler(entries).filter)]
+        return [entry for entry, filter_name in zip(entries, filters) if filter_name in counted_filters]
 
     def _raw_filter_inventory(self) -> set:
         from ..services.database import RawFrameQuery

@@ -129,7 +129,7 @@ imcoadd:
   device: 0
   zp_key: 'ZP_AUTO'
   zpscale: True
-  bkgsub_type:  # 'constant' | 'dynamic' | 'individual'; leave empty for auto
+  bkgsub_type: 'dynamic'  # 'constant' | 'dynamic' | 'individual'; leave empty for auto
   sex_vars:  # SExtractor overrides for background subtraction
     BACK_SIZE:
     BACK_FILTERSIZE:

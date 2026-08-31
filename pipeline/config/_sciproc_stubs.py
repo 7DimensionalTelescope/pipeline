@@ -92,7 +92,7 @@ if TYPE_CHECKING:
         device: int
         zp_key: str
         zpscale: bool
-        bkgsub_type: Any
+        bkgsub_type: str
         sex_vars: dict
         source_mask: bool
         output_weight_map: bool
