@@ -4,6 +4,7 @@ import threading
 import time
 import shutil
 import warnings
+from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
@@ -17,7 +18,7 @@ from ..config import SciProcConfiguration
 from ..path.path import PathHandler
 from ..services.setup import BaseSetup
 from ..services.utils import acquire_available_gpu, conservative_worker_count
-from ..config.utils import get_key
+from ..config.utils import get_key, get_or_set_key
 from ..utils import collapse, add_suffix, time_diff_in_seconds, get_basename, atleast_1d, swap_ext
 from ..preprocess.utils import get_zdf_from_header_IMCMB
 from ..preprocess.plotting import save_fits_as_figures
@@ -35,6 +36,22 @@ from .calc import clipped_mean_coadd_numpy, mean_coadd_numpy, median_coadd_numpy
 
 
 warnings.filterwarnings("ignore")
+
+
+@dataclass(frozen=True, slots=True)
+class CoaddPlan:
+    """Resolved coadd run plan: bad-pixel handling, weighting, outputs, and what they imply."""
+
+    interpolate: bool
+    zero: bool
+    policy: str
+    weighting: str
+    smooth_weight: bool
+    weight_on_sci_pass: bool
+    output_weight_map: bool
+    output_footprint: bool
+    need_weights: bool
+    combine_lock_threshold: int
 
 
 class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
@@ -60,6 +77,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         super().__init__(config, logger, queue)
         self.overwrite = self.resolve_overwrite(overwrite)
+        self._plan = None  # resolved on first use and by run(): the config is editable until then
         self._device_id = None
         self._use_gpu = use_gpu
         self.logger.process_error = self._process_error
@@ -139,7 +157,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self._progress_status("zpscale-completed"),
         )
 
-        if self._coadd_plan()["need_weights"]:
+        if self.plan.need_weights:
             self.calculate_weight_map(images, device_id=device_id)
             self.update_progress(
                 self._process_registry.milestone_progress(self._process_spec, "calculate_weight_map"),
@@ -147,7 +165,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             )
 
         # replace hot pixels
-        if self._coadd_plan()["interpolate"]:
+        if self.plan.interpolate:
             images = self.apply_bpmask(images, device_id=device_id)
             self.update_progress(
                 self._process_registry.milestone_progress(self._process_spec, "apply_bpmask"),
@@ -198,8 +216,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         do_zpscale = bool(get_key(self.config_node.imcoadd, "zpscale", default=True))
         optional_steps = (
-            int(bool(self._coadd_plan()["need_weights"]))
-            + int(bool(self._coadd_plan()["interpolate"]))
+            int(bool(self.plan.need_weights))
+            + int(bool(self.plan.interpolate))
             + int(bool(self.config_node.imcoadd.joint_wcs))
             + int(bool(self.config_node.imcoadd.convolve))
             + int(do_zpscale)
@@ -211,8 +229,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         images = self.input_images
         weight_images = None
-        do_weight = bool(self._coadd_plan()["need_weights"])
-        do_bpmask = bool(self._coadd_plan()["interpolate"])
+        do_weight = bool(self.plan.need_weights)
+        do_bpmask = bool(self.plan.interpolate)
         if do_weight and do_bpmask:
             # fused: the weight map is handed to interpolation in memory, one read and one
             # write per image instead of three reads and two writes
@@ -336,14 +354,14 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         )
 
     def direct_coadd_routine(self, use_gpu: bool = False, device_id=None):
-        """Combine inputs already on one pixel grid without a SWarp pass."""
+        """Same RA-Dec plane, No SWarp reprojection"""
         self._use_gpu = all([use_gpu, self.config_node.imcoadd.gpu, self._use_gpu])
         if self.config_node.imcoadd.joint_wcs or self.config_node.imcoadd.convolve:
             raise self._process_error.ValueError("Direct coaddition requires joint_wcs=False and convolve=False")
 
-        plan = self._coadd_plan()
+        plan = self.plan
         do_zpscale = bool(get_key(self.config_node.imcoadd, "zpscale", default=True))
-        total_steps = 3 + int(plan["need_weights"]) + int(plan["interpolate"]) + int(do_zpscale)
+        total_steps = 3 + int(plan.need_weights) + int(plan.interpolate) + int(do_zpscale)
         step = 0
 
         self.initialize()
@@ -351,7 +369,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         images = self.input_images
         weight_images = None
 
-        if plan["need_weights"]:
+        if plan.need_weights:
             factory = self.path.imcoadd.factory
             weight_images = factory.stage_images(images, "weight", factory.weight_dir)
             weight_images = self.calculate_weight_map(images, device_id=device_id, out_weights=weight_images)
@@ -361,7 +379,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 self._progress_status("calculate-weight-map-completed"),
             )
 
-        if plan["interpolate"]:
+        if plan.interpolate:
             images = self.apply_bpmask(images, device_id=device_id, weight_images=weight_images)
             if weight_images is not None:
                 weight_images = [add_suffix(image, "weight") for image in images]
@@ -409,7 +427,15 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self._progress_status("completed"),
         )
 
+    @property
+    def plan(self) -> CoaddPlan:
+        """Run plan, resolved once and cached; ``run()`` re-resolves so config edits before it land."""
+        if self._plan is None:
+            self._plan = self._coadd_plan()
+        return self._plan
+
     def run(self, use_gpu: bool = False, device_id=None):
+        self._plan = self._coadd_plan()  # the config is write-through and editable until here
         try:
             routine = self.config_node.imcoadd.coadd_routine
             if "legacy" in routine.lower():
@@ -547,7 +573,10 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         # frames, in the snapshot. Any failure (unknown column, missing rows would just be
         # NaN, DB down) falls back to reading every header, as before.
         table = None
-        source = str(get_key(self.config_node.imcoadd, "image_selection_source", default="db")).lower()
+        default_image_selection_source = "db" if self.config_node.settings.is_pipeline else "headers"
+        source = str(
+            get_or_set_key(self.config_node.imcoadd, "image_selection_source", default=default_image_selection_source)
+        ).lower()
         if source == "db" and len(self.input_images) >= 20 and self.is_connected:
             try:
                 numeric_cuts, db_extra = resolve_fixed_cuts(fixed_cuts, metrics, extra)
@@ -586,7 +615,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         if not keep.any():
             self.logger.error(f"Quality cuts {cuts} reject all {len(keep)} images",
                               self._process_error.EmptyInputAfterSanityRejection)  # fmt: skip
-            raise self._process_error.EmptyInputAfterSanityRejection(f"Quality cuts {cuts} reject all {len(keep)} images")
+            raise self._process_error.EmptyInputAfterSanityRejection(
+                f"Quality cuts {cuts} reject all {len(keep)} images"
+            )
 
         self.input_images = [f for f, ok in zip(self.input_images, keep) if ok]
         # written back in the operator grammar, so a rerun pins exactly what this run applied
@@ -868,19 +899,20 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         """Config options that change the coadd, as coadd header cards."""
         node = self.config_node.imcoadd
         shown = lambda value: "NONE" if value is None or value is False else value  # noqa: E731
-        bp = self._coadd_plan()
-        interp = get_key(node, "interp_type") if bp["interpolate"] else None
+        bp = self.plan
+        interp = get_key(node, "interp_type") if bp.interpolate else None
         cards = {
             "COADDRTN": (shown(get_key(node, "coadd_routine")), "imcoadd.coadd_routine"),
             "COADDMOD": (shown(get_key(node, "coadd_mode")), "imcoadd.coadd_mode"),
             "COADDWGT": (shown(get_key(node, "coadd_weighting", default="global")), "imcoadd.coadd_weighting"),
-            "BPMPOL":   (shown(bp["policy"]), "imcoadd.badpix_reprojection_policy"),
-            "ZBPWGT":   (bool(bp["zero"]), "imcoadd.zero_badpix_weight"),
+            "BPMPOL":   (shown(bp.policy), "imcoadd.badpix_reprojection_policy"),
+            "ZBPWGT":   (bool(bp.zero), "imcoadd.zero_badpix_weight"),
             "ZPSCALE":  (bool(get_key(node, "zpscale")), "imcoadd.zpscale"),
             "INTERP":   (shown(interp), "imcoadd.interp_type"),
             "CONVOLVE": (shown(get_key(node, "convolve")), "imcoadd.convolve"),
             "JOINTWCS": (bool(get_key(node, "joint_wcs")), "imcoadd.joint_wcs"),
             "IMGSELEC": (shown(get_key(node, "image_selection")), "imcoadd.image_selection"),
+            "SMTHWGT":  (bool(bp.smooth_weight), "weight map smoothed (not coadd_weighting pixel-wise)"),
         }  # fmt: skip
         if str(get_key(node, "coadd_mode") or "").lower() == "proper":
             cards["PROPWMP"] = (self._proper_weight_policy().upper(), "imcoadd.proper_coadd_weight_map_policy")
@@ -1336,9 +1368,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                         calc_weight = calc_weight_with_cpu
                         self.logger.info(f"Calculate weight map with CPU [group {i + 1}/{len(groups)}]")
                         acquired = "CPU"
-                        bp = self._coadd_plan()
+                        bp = self.plan
                         zero_mask = None
-                        if bp["zero"] and not bp["interpolate"]:
+                        if bp.zero and not bp.interpolate:
                             # interpolation off but bad-pixel weights still zeroed
                             mask_file, badpix = self._get_bpmask(uncalculated_images[0])
                             zero_mask = fits.getdata(mask_file) == badpix
@@ -1351,10 +1383,16 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                             out_names=uncalculated_outputs,
                             weight_store=bool(get_key(self.config_node.imcoadd, "persist_weight_maps", default=False)),
                             zero_mask=zero_mask,
+                            source_catalogs=self._source_catalogs(uncalculated_images),
                         )
                     else:
-                        bp = self._coadd_plan()
-                        if bp["zero"] and not bp["interpolate"]:
+                        bp = self.plan
+                        if bp.smooth_weight:
+                            raise NotImplementedError(
+                                "smoothed weight maps are CPU-only (the GPU weight kernel has no smoothing "
+                                "pass); set imcoadd.gpu: False, or coadd_weighting: pixel-wise"
+                            )
+                        if bp.zero and not bp.interpolate:
                             raise NotImplementedError(
                                 "zero_badpix_weight without interpolation is CPU-only "
                                 "(the GPU weight kernel is untrusted anyway); set imcoadd.gpu: False"
@@ -1448,10 +1486,14 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         factory = self.path.imcoadd.factory
         base = os.path.splitext(get_basename(interp_im))[0]
         self._stagger_swarp()
-        for pass_type, args, use_w in (
-            ("sci", ["-RESAMPLING_TYPE", "LANCZOS3"], False),
-            ("wht", ["-RESAMPLING_TYPE", "NEAREST", "-WEIGHT_IMAGE", sidecar], True),
-        ):
+        if self.plan.weight_on_sci_pass:
+            passes = (("sci", ["-RESAMPLING_TYPE", "LANCZOS3", "-WEIGHT_IMAGE", sidecar], True),)
+        else:
+            passes = (
+                ("sci", ["-RESAMPLING_TYPE", "LANCZOS3"], False),
+                ("wht", ["-RESAMPLING_TYPE", "NEAREST", "-WEIGHT_IMAGE", sidecar], True),
+            )
+        for pass_type, args, use_w in passes:
             rdir = factory.swarp_resample_dir(pass_type)
             external.swarp(
                 input=[interp_im],
@@ -1484,7 +1526,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         at what is deleted -- `external.swarp` checks `<base>_resamp.fits` and, for a
         weighted pass, its companion; the sci pass here is unweighted, and the wht pass is
         guarded on its weights alone by `reproject_and_coadd_with_swarp`."""
-        if pass_type not in ("sci", "wht"):
+        if pass_type not in ("sci", "wht") or self.plan.weight_on_sci_pass:
             return
         images = atleast_1d(self.path.imcoadd.factory.resampled_images(swarp_inputs, pass_type=pass_type))
         doomed = images if pass_type == "wht" else [swap_ext(f, "weight.fits") for f in images]
@@ -1562,7 +1604,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         missing/stale entry costs a header read (INTERP card), which then heals it."""
         factory = self.path.imcoadd.factory
         sci = collapse(factory.resampled_images([interp_im], pass_type="sci"), force=True)
-        wht = collapse(factory.resampled_weight_images([sci], pass_type="wht"), force=True)
+        wht = collapse(factory.resampled_weight_images([sci], pass_type=self._weight_pass_type()), force=True)
         if not (os.path.exists(sci) and os.path.exists(wht)):
             return False
         entry = self._manifest_options(sci)
@@ -1592,7 +1634,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.config_node.imcoadd.interp_images = interp_images
 
         method = self.config_node.imcoadd.interp_type
-        zero_interp = bool(self._coadd_plan()["zero"])
+        zero_interp = bool(self.plan.zero)
 
         streamline = bool(get_key(self.config_node.imcoadd, "streamline_reprojection", default=False))
         # The reprojection tail used to run inline in the interp loop's single writer
@@ -1698,6 +1740,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     zero_interp_weight=zero_interp,
                     logger=self.logger,
                     post_frame=post_frame,
+                    source_catalogs=self._source_catalogs(group_in),
                 )
                 self.logger.info(
                     f"Weight+interp completed for group {group_id + 1}/{len(groups)} in "
@@ -1741,12 +1784,12 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         # bpmask_array, header = fits.getdata(self.config.preprocess.bpmask_file, header=True)
 
         method = self.config_node.imcoadd.interp_type
-        weight = self._coadd_plan()["need_weights"]  # derived: outputs or internal consumers
+        weight = self.plan.need_weights  # derived: outputs or internal consumers
         # Where this run wrote them, not wherever a sibling of the input happens to sit:
         # reproject-first writes weights to the factory, and a stale one next to the input
         # would be read in silence.
         weight_of = dict(zip(input_images, weight_images)) if weight_images is not None else {}
-        zero_interp = bool(self._coadd_plan()["zero"])
+        zero_interp = bool(self.plan.zero)
 
         # find images that need interpolation
         uncalculated_images = []
@@ -1990,7 +2033,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 # symlink images to conv output folder that don't need convolution
                 if delta_peeing is None:
                     force_symlink(input_images[i], self.config_node.imcoadd.conv_files[i])
-                    if weight and self._coadd_plan()["need_weights"]:
+                    if weight and self.plan.need_weights:
                         # Only when the weights genuinely travel with the conv files, i.e.
                         # when `run_convolution(weight=True)` writes the other half of the
                         # set for the frames that ARE convolved. Unconditionally it built
@@ -2110,7 +2153,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         the pipeline is allowed to use. `_drop_swarp_byproduct` now deletes it too."""
         factory = self.path.imcoadd.factory
         candidates = []
-        if os.path.dirname(image) == factory.swarp_resample_dir("sci"):
+        if os.path.dirname(image) == factory.swarp_resample_dir("sci") and not self.plan.weight_on_sci_pass:
             candidates.append(collapse(factory.resampled_weight_images([image], pass_type="wht"), force=True))
         candidates += [add_suffix(image, "weight"), swap_ext(image, "weight.fits")]
         for candidate in candidates:
@@ -2166,9 +2209,19 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.logger.debug(f"Total Exptime: {self.input_headers.total_exptime}")
 
         sci_resampling = ["-RESAMPLING_TYPE", "LANCZOS3"]
-        if not self._coadd_plan()["need_weights"]:
+        if not self.plan.need_weights:
             # no weight consumer anywhere: single pass, no wht division
             self._run_swarp("", coadd=coadd, swarp_args=sci_resampling + swarp_options_override)
+        elif self.plan.weight_on_sci_pass:
+            # a zero-free smooth surface survives LANCZOS3 intact (measured: no interior zeros, no
+            # dust), so it rides the sci pass and its companion IS the resampled weight -- one pass,
+            # and the science pixels come out bit-identical to the unweighted pass
+            self._run_swarp(
+                "sci",
+                coadd=coadd,
+                swarp_args=sci_resampling + swarp_options_override,
+                weight_images=weight_images,
+            )
         else:
             self._run_swarp(
                 "sci",
@@ -2206,7 +2259,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 atleast_1d(factory.resampled_images(input_images, pass_type="bpm")), pass_type="bpm"
             )
         )
-        bp_policy = self._coadd_plan()["policy"]
+        bp_policy = self.plan.policy
         if bp_policy == "conservative" and not self.overwrite and all(os.path.exists(m) for m in masks_predicted):
             # checked before get_bpmask: resolving 1000 bpmasks costs ~20 min
             self.logger.info(f"bpm pass outputs already exist ({len(masks_predicted)} masks), skipping")
@@ -2241,7 +2294,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             return self.config_node.imcoadd.coadd_image
 
         # reproject-only branch: predict resampled output paths (named by SWarp from its inputs)
-        pass_type = "sci" if self._coadd_plan()["need_weights"] else ""
+        pass_type = "sci" if self.plan.need_weights else ""
         resampled = atleast_1d(self.path.imcoadd.factory.resampled_images(input_images, pass_type=pass_type))
         self.config_node.imcoadd.resampled_images = resampled
         self._save_single_weight_products(resampled)
@@ -2258,7 +2311,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             return
         from .interpolate import write_weight_int16
 
-        sources = atleast_1d(self.path.imcoadd.factory.resampled_weight_images(resampled, pass_type="wht"))
+        sources = atleast_1d(
+            self.path.imcoadd.factory.resampled_weight_images(resampled, pass_type=self._weight_pass_type())
+        )
         targets = atleast_1d(self.path.weight)
         if not (len(sources) == len(targets) == len(atleast_1d(resampled))):
             self.logger.warning("Resampled weights do not map 1:1 onto the inputs; not saved as products")
@@ -2272,6 +2327,30 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             n += 1
         self.logger.info(f"Saved {n} resampled weight maps beside their singles")
 
+    def _source_catalogs(self, images) -> list[str | None] | None:
+        """Photometry catalogs aligned with *images*, or None when the weight is not smoothed."""
+        if not self.plan.smooth_weight:
+            return None
+        singles = list(atleast_1d(self.input_images))
+        try:
+            catalogs = list(atleast_1d(self.path.photometry.final_catalog))
+        except Exception as e:
+            catalogs = []
+            self.logger.warning(f"No photometry catalogs resolvable ({e})")
+        by_single = dict(zip(singles, catalogs)) if len(catalogs) == len(singles) else {}
+        resolved = [by_single.get(im) for im in atleast_1d(images)]
+        if not all(c and os.path.exists(c) for c in resolved):
+            self.logger.warning(
+                "Smoothing the weight map without source masks for "
+                f"{sum(1 for c in resolved if not (c and os.path.exists(c)))}/{len(resolved)} frames; "
+                "bright sources will pull their own block medians"
+            )
+        return resolved
+
+    def _weight_pass_type(self) -> str:
+        """Pass whose resampled weight the combine reads: the sci pass when it carries it, else wht."""
+        return "sci" if self.plan.weight_on_sci_pass else "wht"
+
     def _propagated_bpmasks(self) -> list[str] | None:
         """Per-frame resampled bad-pixel masks from the bpm pass, or None if it did not run.
 
@@ -2280,7 +2359,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         footprint product itself always exists; this only decides whether kernel-touched
         pixels count towards it.
         """
-        if self._coadd_plan()["policy"] != "conservative":
+        if self.plan.policy != "conservative":
             return None
         resampled = atleast_1d(get_key(self.config_node.imcoadd, "resampled_images") or [])
         masks = atleast_1d(self.path.imcoadd.factory.resampled_weight_images(resampled, pass_type="bpm"))
@@ -2331,7 +2410,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             coadd=coadd,
             log_file=log_file,
             logger=self.logger,
-            use_weight_map=self._coadd_plan()["need_weights"] and use_weight_map,
+            use_weight_map=self.plan.need_weights and use_weight_map,
             swarp_args=swarp_args,
         )
 
@@ -2391,7 +2470,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         `/` is excluded (filling the system disk is its own outage) as is the filesystem
         the inputs are already on."""
         n_frames = len({f for _g, f in files})
-        if n_frames < int(self._coadd_plan()["combine_lock_threshold"]):
+        if n_frames < int(self.plan.combine_lock_threshold):
             return None
         src_mnt, src_fstype = self._fstype_of(os.path.dirname(files[0][1]))
         if src_fstype in self._LOCAL_FSTYPES:
@@ -2501,11 +2580,18 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self.coadd_with_cupy(input_images, device_id=device_id)
             return self.config_node.imcoadd.coadd_image
 
-        plan = self._coadd_plan()
-        weighting = plan["weighting"]
-        policy = plan["policy"]
-        self.logger.info(f"Coadd weighting: {weighting}; badpix policy: {policy}")
-        if weighting == "pixelwise" and policy == "off" and self._coadd_plan()["zero"]:
+        plan = self.plan
+        weighting = plan.weighting
+        policy = plan.policy
+        smoothed = "smoothed" if plan.smooth_weight else "per-pixel"
+        self.logger.info(f"Coadd weighting: {weighting}; badpix policy: {policy}; weight maps: {smoothed}")
+        if plan.smooth_weight and not (plan.interpolate or plan.zero or policy == "conservative"):
+            # the fitted surface has no bad pixels, and nothing else is marking them either
+            self.logger.warning(
+                "Smoothed weight maps with no bad-pixel channel: set interpolate_badpix, "
+                "zero_badpix_weight, or badpix_reprojection_policy: conservative; bad pixels vote"
+            )
+        if weighting == "pixelwise" and policy == "off" and self.plan.zero:
             self.logger.info(
                 "pixel-wise weighting with zeroed bad-pixel weights: bad pixels cannot vote "
                 "regardless of policy 'off' (a zero-weight vote is no vote); set "
@@ -2513,18 +2599,18 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             )
 
         wht_maps = None
-        if self._coadd_plan()["need_weights"]:
+        if self.plan.need_weights:
             # NEAREST-resampled weights live next to the wht pass output; the
             # LANCZOS3 companions next to the sci resamp ring to ~0 almost
             # everywhere (99%+ zeros) and must NOT be used.
-            wht_dir = self.path.imcoadd.factory.swarp_resample_dir("wht")
+            wht_dir = self.path.imcoadd.factory.swarp_resample_dir(self._weight_pass_type())
             if weight_images is not None:
                 candidates = atleast_1d(weight_images)
             else:
                 # named after what SWarp resampled, not after the later bkgsub products
                 resampled = get_key(self.config_node.imcoadd, "resampled_images") or input_images
                 candidates = atleast_1d(
-                    self.path.imcoadd.factory.resampled_weight_images(resampled, pass_type="wht")
+                    self.path.imcoadd.factory.resampled_weight_images(resampled, pass_type=self._weight_pass_type())
                 )
             if all(os.path.exists(w) for w in candidates):
                 wht_maps = candidates
@@ -2540,10 +2626,16 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             weights = wht_maps
         elif weighting == "global":
             skysigs = self.input_headers.values("SKYSIG")
-            n_missing = sum(1 for s in skysigs if not s)
-            if n_missing:
-                self.logger.warning(f"SKYSIG missing on {n_missing}/{len(skysigs)} frames; weighting those 1.0")
-            weights = [1.0 / float(s) ** 2 if s else 1.0 for s in skysigs]
+            missing = [i for i, s in enumerate(skysigs) if not s]
+            if missing:
+                # 1.0 ADU^-2 against a typical 0.0086 is ~100x a normal frame: that frame would
+                # own the coadd. The card comes from single photometry, so this is its failure.
+                names = [get_basename(f) for f in atleast_1d(input_images)]
+                raise self._process_error.PreviousStageError(
+                    f"SKYSIG missing on {len(missing)}/{len(skysigs)} frames "
+                    f"(e.g. {[names[i] for i in missing[:3]]}); rerun single photometry"
+                )
+            weights = [1.0 / float(s) ** 2 for s in skysigs]
 
         if policy == "conservative":
             masks = self._propagated_bpmasks()
@@ -2576,7 +2668,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         # is_multi_epoch gate -- nightly-scale stacks fall under it naturally
         slot_ctx = (
             CombineSlot(anchor, logger=self.logger)
-            if len(atleast_1d(input_images)) >= plan["combine_lock_threshold"]
+            if len(atleast_1d(input_images)) >= plan.combine_lock_threshold
             else NullSlot()
         )
         try:
@@ -2589,8 +2681,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                         masks=masks,
                         var_maps=var_maps,
                         match_swarp_size=match_swarp_size,
-                        write_weight=plan["output_weight_map"],
-                        write_footprint=plan["output_footprint"],
+                        write_weight=plan.output_weight_map,
+                        write_footprint=plan.output_footprint,
                     )
                 elif mode == "clipped":
                     slot.lease(6 * 110_000_000 * 8)  # two-pass accumulators, ~5 GB
@@ -2600,8 +2692,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                         masks=masks,
                         var_maps=var_maps,
                         match_swarp_size=match_swarp_size,
-                        write_weight=plan["output_weight_map"],
-                        write_footprint=plan["output_footprint"],
+                        write_weight=plan.output_weight_map,
+                        write_footprint=plan.output_footprint,
                     )
                 elif mode == "median":
                     from ..services.combine_lock import memory_headroom_bytes
@@ -2621,8 +2713,8 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                         match_swarp_size=match_swarp_size,
                         reserved_bytes=reserved,
                         var_maps=var_maps,
-                        write_weight=plan["output_weight_map"],
-                        write_footprint=plan["output_footprint"],
+                        write_weight=plan.output_weight_map,
+                        write_footprint=plan.output_footprint,
                     )
                 else:
                     raise ValueError(f"Invalid coadd mode: {mode!r} (expected 'mean', 'median' or 'clipped')")
@@ -2635,13 +2727,13 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         from ..services.combine_lock import CombineSlot, NullSlot
         from .proper import proper_coadd_numpy
 
-        plan = self._coadd_plan()
+        plan = self.plan
         policy = self._proper_weight_policy()
         coadd_image = self.config_node.imcoadd.coadd_image
         anchor = os.path.dirname(collapse(atleast_1d(input_images)[0], force=True))
         slot_ctx = (
             CombineSlot(anchor, logger=self.logger)
-            if len(atleast_1d(input_images)) >= plan["combine_lock_threshold"]
+            if len(atleast_1d(input_images)) >= plan.combine_lock_threshold
             else NullSlot()
         )
         with slot_ctx as slot:
@@ -2655,7 +2747,7 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 flxscales=self._combine_flxscales(),
                 weight_map_policy=policy,
                 weight_output=add_suffix(coadd_image, "weight") if policy != "off" else False,
-                footprint_output=add_suffix(coadd_image, "footprint") if plan["output_footprint"] else False,
+                footprint_output=add_suffix(coadd_image, "footprint") if plan.output_footprint else False,
                 psf_output=add_suffix(coadd_image, "psf"),
                 holes=holes,
                 match_swarp_size=bool(get_key(self.config_node.imcoadd, "match_swarp_size", default=True)),
@@ -2686,7 +2778,9 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 f"No PEEING for {missing[:3]}; proper coadd needs a per-frame PSF",
                 self._process_error.KeyError,
             )
-            raise self._process_error.KeyError(f"No PEEING for {len(missing)} input(s); proper coadd needs a per-frame PSF")
+            raise self._process_error.KeyError(
+                f"No PEEING for {len(missing)} input(s); proper coadd needs a per-frame PSF"
+            )
         return [float(p) for p in peeings]
 
     def _validate_proper_mode(self):
@@ -2697,20 +2791,20 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             raise self._process_error.ValueError(
                 f"coadd_mode 'proper' requires coadd_routine 'reproject-first' or 'direct', not {routine!r}"
             )
-        plan = self._coadd_plan()
-        if plan["weighting"] == "pixelwise":
+        plan = self.plan
+        if plan.weighting == "pixelwise":
             raise self._process_error.ValueError(
                 "coadd_mode 'proper' is incompatible with pixel-wise weighting; use 'global' or False"
             )
-        if not plan["interpolate"] and self._proper_requires_interpolation:
+        if not plan.interpolate and self._proper_requires_interpolation:
             raise self._process_error.ValueError(
                 "coadd_mode 'proper' requires interpolate_badpix: True (a Fourier-domain vote cannot skip pixels)"
             )
         self._proper_weight_policy()
-        if plan["weighting"] == "off":
+        if plan.weighting == "off":
             self.logger.info("coadd_weighting has no effect under 'proper': frames are inverse-variance weighted by construction")  # fmt: skip
 
-    def _coadd_plan(self) -> dict:
+    def _coadd_plan(self) -> CoaddPlan:
         """Resolve the run plan: bad-pixel handling, weighting, outputs, derived needs.
 
         Active dispatcher, not a registry: `need_weights` decides whether intermediate
@@ -2739,6 +2833,10 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         if weighting not in ("off", "global", "pixelwise"):
             raise ValueError(f"Invalid imcoadd.coadd_weighting: {weighting!r} (False, 'global' or 'pixel-wise')")
 
+        # pixel-wise weighting votes with the map itself, so it needs every measured pixel;
+        # every other weighting consumes the map as a variance model, which is a smooth surface
+        smooth_weight = weighting != "pixelwise"
+
         output_weight_map = bool(opt("output_weight_map", "weight_map", True))
         output_footprint = bool(get_key(node, "output_footprint", default=True))
         # intermediate weight maps exist iff something consumes them; requesting
@@ -2753,16 +2851,24 @@ class ImCoadd(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 "deliberately unimplemented); zero the weights or use 'conservative'"
             )
 
-        return {
-            "interpolate": interpolate,
-            "zero": zero,
-            "policy": policy,
-            "weighting": weighting,
-            "output_weight_map": output_weight_map,
-            "output_footprint": output_footprint,
-            "need_weights": need_weights,
-            "combine_lock_threshold": int(get_key(node, "combine_lock_threshold", default=50)),
-        }
+        smooth_weight = smooth_weight and need_weights
+        # a zero-free surface survives LANCZOS3 intact, so it rides the sci pass and the wht pass
+        # goes. Bad-pixel zeros do NOT: only NEAREST keeps '1px' one pixel wide, so carrying them
+        # keeps the sci/wht division and leaves both policies meaning exactly what they say.
+        weight_on_sci_pass = smooth_weight and not zero
+
+        return CoaddPlan(
+            interpolate=interpolate,
+            zero=zero,
+            policy=policy,
+            weighting=weighting,
+            smooth_weight=smooth_weight,
+            weight_on_sci_pass=weight_on_sci_pass,
+            output_weight_map=output_weight_map,
+            output_footprint=output_footprint,
+            need_weights=need_weights,
+            combine_lock_threshold=int(get_key(node, "combine_lock_threshold", default=50)),
+        )
 
     def _combine_flxscales(self):
         """zpscale's snapshot values; with zpscale off, the stale photometry-era FLXSCALE

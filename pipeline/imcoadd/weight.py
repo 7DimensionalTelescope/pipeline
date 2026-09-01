@@ -1,10 +1,16 @@
+import os
+
 from astropy.io import fits
 from numba import njit, prange
+from ..calc.median import quickselect
 from ..utils import add_suffix
 from ..path.path import PathHandler
 import numpy as np
 import fitsio
 from ..cuda.weight_map import calc_weight as gpu_calc_weight
+
+SMOOTH_BLOCK = 64  # the background mesh size; a block median of sky pixels lands within ~1% of the surface
+SMOOTH_MIN_FRACTION = 0.25  # a cell masked beyond this is left to the nearest-neighbour fill
 
 
 def _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file):
@@ -24,6 +30,74 @@ def _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file):
     egain = np.float32(fits.getval(d_m_file, "EGAIN"))
 
     return sig_z, d_m, f_m, sig_f, p_z, p_d, p_f, egain
+
+
+@njit(parallel=True)
+def block_median(weight, valid, block, min_samples):
+    """Median of the valid pixels in each block x block cell; NaN where too few survive."""
+    h, w = weight.shape
+    ny = h // block
+    nx = w // block
+    out = np.full((ny, nx), np.nan, dtype=np.float64)
+    for by in prange(ny):
+        buf = np.empty(block * block, dtype=np.float32)
+        for bx in range(nx):
+            m = 0
+            for i in range(by * block, by * block + block):
+                for j in range(bx * block, bx * block + block):
+                    if valid[i, j]:
+                        buf[m] = weight[i, j]
+                        m += 1
+            if m < min_samples:
+                continue
+            if m % 2:
+                out[by, bx] = quickselect(buf, m, (m - 1) // 2)
+            else:
+                hi = quickselect(buf, m, m // 2)
+                lo = buf[0]
+                for k in range(1, m // 2):
+                    if buf[k] > lo:
+                        lo = buf[k]
+                out[by, bx] = 0.5 * (lo + hi)
+    return out
+
+
+def smooth_weight_surface(weight, exclude=None, block: int = SMOOTH_BLOCK) -> tuple[np.ndarray, int]:
+    """Bicubic surface through source-masked block medians: the vignetting trend without the one-sample noise."""
+    from scipy.interpolate import RectBivariateSpline
+    from scipy.ndimage import distance_transform_edt
+
+    h, w = weight.shape
+    valid = np.isfinite(weight) & (weight > 0)
+    if exclude is not None:
+        valid &= ~exclude
+    grid = block_median(weight, valid, block, int(SMOOTH_MIN_FRACTION * block * block))
+    missing = ~np.isfinite(grid)
+    if missing.all():
+        raise ValueError("no usable cell left to fit the smooth weight surface")
+    if missing.any():
+        grid = grid[tuple(distance_transform_edt(missing, return_distances=False, return_indices=True))]
+    ny, nx = grid.shape
+    spline = RectBivariateSpline((np.arange(ny) + 0.5) * block, (np.arange(nx) + 0.5) * block, grid, kx=3, ky=3, s=0)
+    surface = spline(np.arange(h), np.arange(w))
+    return np.maximum(surface, 0.0).astype(np.float32), int(missing.sum())
+
+
+def source_mask_on_frame(catalog, header, logger=None):
+    """Detector-geometry source mask from this frame's own photometry catalog; None when unusable."""
+    from .utils import build_source_mask, source_ellipses_on_frame
+
+    if not catalog or not os.path.exists(catalog):
+        return None
+    # the identity-WCS call is also what recovers B_IMAGE from ELLIPTICITY; build_source_mask
+    # handed the raw LDAC returns an empty mask without raising
+    ellipses = source_ellipses_on_frame(catalog, header, header, logger=logger)
+    if ellipses is None:
+        return None
+    return build_source_mask(
+        ellipses, (header["NAXIS2"], header["NAXIS1"]), star_scale=2.0, galaxy_scale=2.5,
+        class_star_cut=0.5, min_radius=3.0, logger=logger,
+    )  # fmt: skip
 
 
 def calc_weight_with_gpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, device_id=0, weight=True, out_names=None):
@@ -51,7 +125,7 @@ def calc_weight_with_gpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, dev
 
 
 def calc_weight_with_cpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, weight=True, out_names=None,
-                         weight_store=None, zero_mask=None, **kwargs):
+                         weight_store=None, zero_mask=None, source_catalogs=None, **kwargs):
     from .weight_store import load_single_weight, persist_single_weight
 
     # calibration masters load lazily: an all-reusable group never touches them
@@ -79,6 +153,12 @@ def calc_weight_with_cpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, wei
                 out[~np.isfinite(out)] = 0.0  # degenerate noise model -> weight 0, not inf
                 if weight_store:
                     pool.submit(persist_single_weight, PathHandler.single_weight_map(images[i]), out.copy(), masters)
+            if source_catalogs is not None:
+                # after the store write: the durable copy is the pristine model, smoothing is a
+                # campaign choice. Sources and bad pixels are excluded from the fit, not filled.
+                src = source_mask_on_frame(source_catalogs[i], fits.getheader(images[i]))
+                exclude = out <= 0 if src is None else (src | (out <= 0))
+                out, _ = smooth_weight_surface(out, exclude=exclude)
             if zero_mask is not None:
                 # zero_badpix_weight without interpolation: the factory copy carries the
                 # zeros; the persisted store copy above stays pristine by contract

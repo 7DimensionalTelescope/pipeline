@@ -167,6 +167,20 @@ def get_key(config, key, default=None):
     return result if result is not None else default
 
 
+def get_or_set_key(config, key, default=None):
+    """Sets default if the key is None, otherwise gets the value"""
+
+    def _get(o, attr):
+        return getattr(o, attr, None) if o is not None else None
+
+    result = reduce(_get, key.split("."), config)
+    if result is None:
+        setattr(config, key, default)
+        return default
+    else:
+        return result
+
+
 def merge_missing(dst, src, exclude_top_level=None, _path_prefix=""):
     """
     Recursively copy only missing keys from src -> dst.

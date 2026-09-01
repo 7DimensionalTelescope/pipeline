@@ -81,10 +81,10 @@ imcoadd:
   output_bkg_map: false
   persist_weight_maps: false
   joint_wcs: false
-  interpolate_badpix: false
+  interpolate_badpix: true
   interp_type: 'median'
-  zero_badpix_weight: true
-  badpix_reprojection_policy: '1px'
+  zero_badpix_weight: false
+  badpix_reprojection_policy: 'off'
   streamline_reprojection: true
   discard_interp: true
   lean_factory: false

@@ -85,7 +85,7 @@ if TYPE_CHECKING:
         proper_coadd_weight_map_policy: str
         image_selection: bool
         image_selection_cuts: Any
-        image_selection_source: str
+        image_selection_source: Any
         ppflag_bitmask: str
         coadd_image: Any
         gpu: bool

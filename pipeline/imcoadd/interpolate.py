@@ -541,7 +541,7 @@ def write_weight_float32(path, weight, header, n_holes=None):
 
 def weight_and_interpolate_cpu(
     images, mask_path, output_paths, calib, window=1, method="median", badpix=1,
-    zero_interp_weight=True, logger=None, post_frame=None, weight_store=None,
+    zero_interp_weight=True, logger=None, post_frame=None, weight_store=None, source_catalogs=None,
 ):
     """Fused weight calculation + bad-pixel interpolation, one read and one write per image.
 
@@ -556,7 +556,7 @@ def weight_and_interpolate_cpu(
     st_stage = _time.time()
     from concurrent.futures import ThreadPoolExecutor
 
-    from .weight import optimized_parallel
+    from .weight import optimized_parallel, smooth_weight_surface, source_mask_on_frame
 
     mask = fits.getdata(mask_path).astype(np.int32)
     hole = mask == badpix
@@ -601,6 +601,11 @@ def weight_and_interpolate_cpu(
                     wgt[nonfinite] = 0.0
                 if weight_store is not None:
                     pool.submit(persist_single_weight, store_paths[idx], wgt.copy(), store_masters)
+            if source_catalogs is not None:
+                # after the store write: the durable copy is the pristine model, smoothing is a
+                # campaign choice. Sources and bad pixels are excluded from the fit, not filled.
+                src = source_mask_on_frame(source_catalogs[idx], fits.getheader(images[idx]), logger)
+                wgt = smooth_weight_surface(wgt, exclude=hole if src is None else (src | hole))[0]
             t_weight = _time.time() - st_img - t_read
             interp_img, interp_wt = interpolate_masked_pixels_cpu_numba(
                 sci, mask, window=window, weight=wgt, use_median=(method == "median")
