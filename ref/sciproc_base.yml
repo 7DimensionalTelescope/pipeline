@@ -117,9 +117,17 @@ imcoadd:
   input_images:
   runtime_version:
   coadd_routine: 'reproject-first'  # legacy, reproject-first, or direct
-  coadd_mode: 'clipped'  # mean | median | clipped (two-pass 3-sigma clipped weighted mean) | proper (Zackay & Ofek 2015)
+  coadd_mode: 'clipped'  # mean | median | clipped | proper
   coadd_weighting: global  # false | global (1/SKYSIG^2 per image) | pixel-wise (weight maps)
-  proper_coadd_weight_map_policy: white-noise  # proper only: off | weighted-mean | white-noise | colored-noise (also whitens the resampling-colored noise)
+  coadd_options:
+    mean: {}
+    median: {}
+    clipped:
+      clip_sigma: 4.0
+      clip_ampfrac: 0.3
+    proper:
+      weight_map_policy: white-noise  # off | weighted-mean | white-noise | colored-noise
+  coverage_policy: union  # union | intersection; intersection keeps only the geometric overlap of every input
   image_selection: false  # False, 'auto' or 'interactive'; multi-epoch only
   image_selection_cuts:  # pinned cuts, e.g. {seeing: '<=2.8', bin2fwhm: '<=5.6'}; rest automatic
   image_selection_source:  # 'db' (image_qa, one query) or 'headers' (read every file)

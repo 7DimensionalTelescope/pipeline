@@ -27,6 +27,64 @@ class SwarpMixin:
     _swarp_launch_lock = threading.Lock()
     _swarp_last_launch = 0.0
 
+    def apply_legacy_coverage_policy(self, swarp_inputs: list[str]) -> None:
+        """Apply intersection coverage to a legacy SWarp coadd."""
+        if self.plan.coverage_policy == "union":
+            return
+        pass_type = "sci" if self.plan.need_weights else ""
+        resampled = atleast_1d(
+            self.path.imcoadd.factory.resampled_images(
+                swarp_inputs,
+                pass_type=pass_type,
+            )
+        )
+        coadd_path = self.config_node.imcoadd.coadd_image
+        coadd, header = fits.getdata(coadd_path, header=True, memmap=False)
+        geometric_count = np.zeros(coadd.shape, dtype=np.uint16)
+        for path in resampled:
+            data = fits.getdata(path, memmap=False)
+            if data.shape != coadd.shape:
+                raise ValueError(
+                    f"Legacy resample shape {data.shape} differs from coadd {coadd.shape}: {path}"
+                )
+            geometric_count += np.isfinite(data) & (data != 0)
+        keep = geometric_count == len(resampled)
+        coadd[~keep] = np.nan
+        fits.writeto(coadd_path, coadd, header=header, overwrite=True)
+
+        weight_path = add_suffix(coadd_path, "weight")
+        if os.path.exists(weight_path):
+            weight, weight_header = fits.getdata(weight_path, header=True, memmap=False)
+            weight[~keep] = 0
+            fits.writeto(weight_path, weight, header=weight_header, overwrite=True)
+        if self.plan.output_footprint:
+            footprint_path = add_suffix(coadd_path, "footprint")
+            if os.path.exists(footprint_path):
+                footprint, footprint_header = fits.getdata(
+                    footprint_path,
+                    header=True,
+                    memmap=False,
+                )
+                if footprint.shape != coadd.shape:
+                    raise ValueError(
+                        f"Legacy footprint shape {footprint.shape} differs from coadd {coadd.shape}: "
+                        f"{footprint_path}"
+                    )
+                footprint[~keep] = 0
+            else:
+                footprint = geometric_count.astype(np.int16)
+                footprint_header = header
+            fits.writeto(
+                footprint_path,
+                footprint,
+                header=footprint_header,
+                overwrite=True,
+            )
+        self.logger.info(
+            f"Intersection coverage retained {int(keep.sum())}/{keep.size} pixels "
+            f"({100 * keep.mean():.2f}%)"
+        )
+
     def _remove_reprojection_intermediates(self):
         """Remove unreprojected products unless their dump options are enabled."""
         dump_interp = bool(

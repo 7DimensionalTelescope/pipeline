@@ -625,11 +625,16 @@ class ImCoadd(
             "JOINTWCS": (bool(get_key(node, "joint_wcs")), "imcoadd.joint_wcs"),
             "IMGSELEC": (shown(get_key(node, "image_selection")), "imcoadd.image_selection"),
             "SMTHWGT":  (bool(bp.smooth_weight), "weight map smoothed (not coadd_weighting pixel-wise)"),
+            "COVPOL":   (bp.coverage_policy.upper(), "imcoadd.coverage_policy"),
         }  # fmt: skip
-        if str(get_key(node, "coadd_mode") or "").lower() == "proper":
+        mode = str(get_key(node, "coadd_mode") or "").lower()
+        if mode == "clipped":
+            cards["CLIPSIG"] = (bp.clip_sigma, "coadd_options.clipped.clip_sigma")
+            cards["CLIPAFR"] = (bp.clip_ampfrac, "coadd_options.clipped.clip_ampfrac")
+        if mode == "proper":
             cards["PROPWMP"] = (
                 self._proper_weight_policy().upper(),
-                "imcoadd.proper_coadd_weight_map_policy",
+                "coadd_options.proper.weight_map_policy",
             )
         return cards
 

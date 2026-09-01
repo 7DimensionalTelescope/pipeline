@@ -82,7 +82,8 @@ if TYPE_CHECKING:
         coadd_routine: str
         coadd_mode: str
         coadd_weighting: str
-        proper_coadd_weight_map_policy: str
+        coadd_options: dict
+        coverage_policy: str
         image_selection: bool
         image_selection_cuts: Any
         image_selection_source: Any

@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 
 from ..config.utils import get_key
@@ -14,6 +15,10 @@ class CoaddPlan:
     output_weight_map: bool
     output_footprint: bool
     combine_lock_threshold: int
+    coverage_policy: str
+    clip_sigma: float
+    clip_ampfrac: float
+    proper_weight_map_policy: str
 
     @property
     def need_weights(self) -> bool:
@@ -68,6 +73,46 @@ def resolve_coadd_plan(node) -> CoaddPlan:
             "The legacy routine uses SWarp's median coadd; set imcoadd.coadd_mode: median"
         )
 
+    options = get_key(node, "coadd_options", default={}) or {}
+    if not isinstance(options, dict):
+        raise ValueError("imcoadd.coadd_options must be a mapping")
+
+    def mode_options(name):
+        value = options.get(name, {}) or {}
+        if not isinstance(value, dict):
+            raise ValueError(f"imcoadd.coadd_options.{name} must be a mapping")
+        return value
+
+    clipped_options = mode_options("clipped")
+    proper_options = mode_options("proper")
+    clip_sigma = float(clipped_options.get("clip_sigma", 4.0))
+    clip_ampfrac = float(clipped_options.get("clip_ampfrac", 0.3))
+    if not math.isfinite(clip_sigma) or clip_sigma <= 0:
+        raise ValueError("imcoadd.coadd_options.clipped.clip_sigma must be positive")
+    if not math.isfinite(clip_ampfrac) or clip_ampfrac < 0:
+        raise ValueError("imcoadd.coadd_options.clipped.clip_ampfrac must be non-negative")
+
+    proper_raw = proper_options.get(
+        "weight_map_policy",
+        get_key(node, "proper_coadd_weight_map_policy", default="white-noise"),
+    )
+    proper_weight_map_policy = str(proper_raw or "off").lower().replace("_", "-")
+    proper_policies = ("off", "weighted-mean", "white-noise", "colored-noise")
+    if proper_weight_map_policy not in proper_policies:
+        raise ValueError(
+            "Invalid imcoadd.coadd_options.proper.weight_map_policy: "
+            f"{proper_raw!r} (expected one of {proper_policies})"
+        )
+
+    coverage_policy = str(
+        get_key(node, "coverage_policy", default="union") or "union"
+    ).strip().lower()
+    if coverage_policy not in ("union", "intersection"):
+        raise ValueError(
+            f"Invalid imcoadd.coverage_policy: {coverage_policy!r} "
+            "(expected 'union' or 'intersection')"
+        )
+
     policy = str(
         opt("badpix_reprojection_policy", "bpmask_policy", "1px") or "off"
     ).lower()
@@ -107,6 +152,10 @@ def resolve_coadd_plan(node) -> CoaddPlan:
         output_weight_map=bool(opt("output_weight_map", "weight_map", True)),
         output_footprint=bool(get_key(node, "output_footprint", default=True)),
         combine_lock_threshold=int(get_key(node, "combine_lock_threshold", default=50)),
+        coverage_policy=coverage_policy,
+        clip_sigma=clip_sigma,
+        clip_ampfrac=clip_ampfrac,
+        proper_weight_map_policy=proper_weight_map_policy,
     )
     if plan.policy == "1px" and not plan.zero:
         raise NotImplementedError(

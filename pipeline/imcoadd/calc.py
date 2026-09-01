@@ -17,12 +17,40 @@ from ..utils import time_diff_in_seconds, add_suffix
 from ..services.logger import Logger
 from .utils import determine_size, build_coadd_wcs_header
 
-# SWarp resampling turns exact-zero weights into float dust, so hole exclusion tests
-# against this rather than 0. Measured over 184-frame UDS resamps: dust peaks at 2.9e-15,
-# the smallest real weight is 2.6e-5, so this sits ~1000x above the dust and ~7 decades
-# below any physical weight. Not anchored to float32 eps: the dust is SWarp's arithmetic
-# residue, not an IEEE rounding limit, and 2-3x eps (~3e-7) would sit above real weights.
-WEIGHT_EPS = 1e-12
+def validate_coverage_policy(
+    policy: str,
+    allowed_policies: tuple[str, ...] = ("union", "intersection"),
+) -> str:
+    """Return a normalized output-coverage policy or raise."""
+    policy = str(policy or "union").lower()
+    if policy not in allowed_policies:
+        raise ValueError(f"Invalid coverage_policy: {policy!r} (expected one of {allowed_policies})")
+    return policy
+
+
+def apply_coverage_policy(
+    coadd: np.ndarray,
+    weight: np.ndarray | None,
+    footprint: np.ndarray,
+    geometric_count: np.ndarray,
+    n_images: int,
+    policy: str,
+    logger: Logger | None = None,
+) -> np.ndarray:
+    """Mask outputs to the union or full geometric intersection of the inputs."""
+    policy = validate_coverage_policy(policy)
+    keep = geometric_count > 0 if policy == "union" else geometric_count == n_images
+    if policy == "intersection":
+        coadd[~keep] = np.nan
+        if weight is not None:
+            weight[~keep] = 0
+        footprint[~keep] = 0
+        if logger is not None:
+            logger.info(
+                f"Intersection coverage retained {int(keep.sum())}/{keep.size} pixels "
+                f"({100 * keep.mean():.2f}%)"
+            )
+    return keep
 
 
 def _open_plain_float32(path: str) -> tuple[int, int, int, int]:
@@ -105,6 +133,7 @@ def mean_coadd_numpy(
     flxscales: list[float] | bool | None = None,
     match_swarp_size: bool = True,
     var_maps: list[str] | None = None,
+    coverage_policy: str = "union",
     logger: Logger | None = None,
 ) -> str:
     """Per-pixel flux-scaled mean coadd (simple or inverse-variance weighted).
@@ -115,6 +144,7 @@ def mean_coadd_numpy(
     output pixel -- taken from the same per-frame validity the combine uses, so it cannot
     disagree with the coadd. ``masks`` optionally narrows that validity (bad pixels).
     """
+    coverage_policy = validate_coverage_policy(coverage_policy)
     st = time.time()
     backend = "weighted" if weights is not None else "simple"
     grid = "swarp grid" if match_swarp_size else "tight bbox"
@@ -138,6 +168,11 @@ def mean_coadd_numpy(
     sum_arr = np.zeros((target_h, target_w), dtype=np.float64)
     norm_arr = np.zeros((target_h, target_w), dtype=np.float64 if weights is not None else np.int32)
     count_arr = np.zeros((target_h, target_w), dtype=np.int32)
+    geometric_count = (
+        np.zeros((target_h, target_w), dtype=np.uint16)
+        if coverage_policy == "intersection"
+        else None
+    )
     gain_denom = np.zeros((target_h, target_w), dtype=np.float64)  # sum w^2/g for the gain map
     gain_terms = []  # (typical weight, EGAIN/FLXSCALE) per contributing image
     all_egain = True
@@ -169,12 +204,15 @@ def mean_coadd_numpy(
         sx0 = tx0 - x0[i]; sx1 = tx1 - x0[i]  # fmt: skip
         sy0 = ty0 - y0[i]; sy1 = ty1 - y0[i]  # fmt: skip
         src = a[sy0:sy1, sx0:sx1]
-        valid = np.isfinite(src) & (src != 0.0)
+        support = np.isfinite(src) & (src != 0.0)
+        valid = support.copy()
+        if geometric_count is not None:
+            geometric_count[ty0:ty1, tx0:tx1] += support
         mask_strip = None
         if masks is not None:
             m_rows, scratch = _read_plain_float32(masks[i], sy0, sy1, scratch)
             mask_strip = m_rows[:, sx0:sx1]
-            valid &= mask_strip > WEIGHT_EPS
+            valid &= mask_strip > 0
 
         if weights is None:
             sum_arr[ty0:ty1, tx0:tx1] += np.where(valid, src * flxscale, 0.0)
@@ -191,7 +229,7 @@ def mean_coadd_numpy(
             # inverse-variance weight of the flux-normalised image.
             if isinstance(weights[i], str):
                 w_full, scratch = _read_plain_float32(weights[i], scratch=scratch)
-                w_full[w_full < WEIGHT_EPS] = 0.0
+                w_full[w_full <= 0] = 0.0
                 w_eff = w_full[sy0:sy1, sx0:sx1] / (flxscale * flxscale)
                 valid &= w_eff > 0
             else:
@@ -216,7 +254,7 @@ def mean_coadd_numpy(
             # combine weight on the flux-normalized scale (matches w_eff/norm_arr);
             # sigma_norm^2 = flxscale^2 / w_map
             se = 1.0 if weights is None else float(weights[i]) / (flxscale * flxscale)
-            ok = valid & (vm >= WEIGHT_EPS)
+            ok = valid & (vm > 0)
             var_den[ty0:ty1, tx0:tx1] += np.where(ok, se * se * flxscale * flxscale / np.where(ok, vm, np.float32(1.0)), 0.0)
 
     coadd = np.where(norm_arr > 0, sum_arr / np.where(norm_arr > 0, norm_arr, 1), np.nan).astype(np.float32)
@@ -224,6 +262,16 @@ def mean_coadd_numpy(
         weight_map_out = np.where(var_den > 0, norm_arr.astype(np.float64) ** 2 / np.where(var_den > 0, var_den, 1), 0.0)
     else:
         weight_map_out = norm_arr
+
+    apply_coverage_policy(
+        coadd,
+        weight_map_out,
+        count_arr,
+        geometric_count if geometric_count is not None else count_arr,
+        len(input_images),
+        coverage_policy,
+        logger,
+    )
 
     out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, coadd_header)
     covered = count_arr > 0
@@ -261,10 +309,6 @@ def mean_coadd_numpy(
     return output_path
 
 
-CLIP_KAPPA = 3.0  # clip threshold in units of each sample's own expected noise
-CLIP_FRAC = 0.1  # fractional tolerance: bright cores scatter with seeing, not with sky noise
-
-
 def clipped_mean_coadd_numpy(
     input_images: list[str],
     output_path: str,
@@ -275,26 +319,27 @@ def clipped_mean_coadd_numpy(
     masks: list[str] | None = None,
     flxscales: list[float] | bool | None = None,
     match_swarp_size: bool = True,
-    kappa: float = CLIP_KAPPA,
+    clip_sigma: float = 4.0,
+    clip_ampfrac: float = 0.3,
     reserved_bytes: int = 0,
     var_maps: list[str] | None = None,
+    coverage_policy: str = "union",
     logger: Logger | None = None,
 ) -> str:
-    """Median-centered kappa-sigma clipped weighted mean (Gruen+2014-style).
-
-    Pass 1 builds a median coadd (the existing strip machinery) as the robust center;
-    pass 2 streams the frames once more, keeping samples with
-    ``|x - c| <= kappa/sqrt(w) + CLIP_FRAC*|c|`` -- each sample judged against its OWN
-    expected noise, with the fractional term protecting bright cores whose frame-to-frame
-    scatter is seeing-driven, not sky-noise-driven -- then weighted-means the survivors.
-    An empirical-scatter criterion cannot do this job: a single outlier among n frames
-    caps at z = sqrt(n-1), inside kappa=3 for n <= 9. Requires weights.
-    """
+    """Median-centered Gruen-style clipped weighted mean."""
+    coverage_policy = validate_coverage_policy(coverage_policy)
+    if not np.isfinite(clip_sigma) or clip_sigma <= 0:
+        raise ValueError("clip_sigma must be positive")
+    if not np.isfinite(clip_ampfrac) or clip_ampfrac < 0:
+        raise ValueError("clip_ampfrac must be non-negative")
     if weights is None:
         raise ValueError("clipped mean needs weights (set coadd_weighting to 'global' or 'pixel-wise')")
     st = time.time()
     if logger is not None:
-        logger.info(f"Start in-memory numpy coaddition (clipped weighted mean, kappa={kappa:g})")
+        logger.info(
+            "Start in-memory numpy coaddition "
+            f"(clipped weighted mean, clip_sigma={clip_sigma:g}, clip_ampfrac={clip_ampfrac:g})"
+        )
     if len(weights) != len(input_images):
         raise ValueError(f"weights ({len(weights)}) and input_images ({len(input_images)}) length mismatch")
     if isinstance(flxscales, list) and len(flxscales) != len(input_images):
@@ -321,6 +366,11 @@ def clipped_mean_coadd_numpy(
     sum_arr = np.zeros((target_h, target_w), dtype=np.float64)
     norm_arr = np.zeros((target_h, target_w), dtype=np.float64)
     count_arr = np.zeros((target_h, target_w), dtype=np.int32)
+    geometric_count = (
+        np.zeros((target_h, target_w), dtype=np.uint16)
+        if coverage_policy == "intersection"
+        else None
+    )
     gain_denom = np.zeros((target_h, target_w), dtype=np.float64)
     gain_terms = []
     all_egain = True
@@ -348,15 +398,18 @@ def clipped_mean_coadd_numpy(
         sy0 = ty0 - y0[i]; sy1 = ty1 - y0[i]  # fmt: skip
         sl = (slice(ty0, ty1), slice(tx0, tx1))
         raw = a[sy0:sy1, sx0:sx1]
-        valid = np.isfinite(raw) & (raw != 0.0)
+        support = np.isfinite(raw) & (raw != 0.0)
+        valid = support.copy()
+        if geometric_count is not None:
+            geometric_count[sl] += support
         mask_strip = None
         if masks is not None:
             m_rows, scratch = _read_plain_float32(masks[i], sy0, sy1, scratch)
             mask_strip = m_rows[:, sx0:sx1]
-            valid &= mask_strip > WEIGHT_EPS
+            valid &= mask_strip > 0
         if isinstance(weights[i], str):
             w_full, scratch = _read_plain_float32(weights[i], scratch=scratch)
-            w_full[w_full < WEIGHT_EPS] = 0.0
+            w_full[w_full <= 0] = 0.0
             w_eff = w_full[sy0:sy1, sx0:sx1] / (flxscale * flxscale)
             valid &= w_eff > 0
         else:
@@ -365,7 +418,9 @@ def clipped_mean_coadd_numpy(
 
         c = center[sl]
         sigma_i = 1.0 / np.sqrt(np.where(valid, w_eff, 1.0) if not np.isscalar(w_eff) else w_eff)
-        keep = valid & (np.abs(src - c) <= kappa * sigma_i + CLIP_FRAC * np.abs(c))
+        keep = valid & (
+            np.abs(src - c) <= clip_sigma * sigma_i + clip_ampfrac * np.abs(c)
+        )
         n_total += int(valid.sum())
         n_clipped += int(valid.sum() - keep.sum())
 
@@ -386,13 +441,27 @@ def clipped_mean_coadd_numpy(
                 v_rows, scratch = _read_plain_float32(var_maps[i], sy0, sy1, scratch)
                 vm = v_rows[:, sx0:sx1]
             se = float(weights[i]) / (flxscale * flxscale)
-            ok = keep & (vm >= WEIGHT_EPS)
+            ok = keep & (vm > 0)
             var_den[sl] += np.where(ok, se * se * flxscale * flxscale / np.where(ok, vm, np.float32(1.0)), 0.0)
 
     coadd = np.where(norm_arr > 0, sum_arr / np.where(norm_arr > 0, norm_arr, 1), np.nan).astype(np.float32)
     if logger is not None:
         logger.info(f"Clipped {n_clipped} of {n_total} samples ({100 * n_clipped / max(n_total, 1):.3f}%)")
 
+    # survivors form a weighted mean: propagated (sum s)^2/sum(s^2 sigma^2), no penalty
+    if propagate:
+        weight_map_out = np.where(var_den > 0, norm_arr.astype(np.float64) ** 2 / np.where(var_den > 0, var_den, 1), 0.0)
+    else:
+        weight_map_out = norm_arr.astype(np.float64)
+    apply_coverage_policy(
+        coadd,
+        weight_map_out,
+        count_arr,
+        geometric_count if geometric_count is not None else count_arr,
+        len(input_images),
+        coverage_policy,
+        logger,
+    )
     out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, coadd_header)
     covered = count_arr > 0
     n_eff = float(count_arr[covered].mean()) if covered.any() else None
@@ -401,16 +470,10 @@ def clipped_mean_coadd_numpy(
     else:
         effective = coadd_effective_egain(gain_terms, mode="mean", n_eff=n_eff)
     if effective is not None:
-        # value-only: InputHeaderSet.coadd_header owns the card's comment
         out_header["EGAIN"] = effective
         if not out_header.comments["EGAIN"]:
             out_header.comments["EGAIN"] = "Effective EGAIN for coadded image (e-/ADU)"
     fits.writeto(output_path, coadd, header=out_header, overwrite=True)
-    # survivors form a weighted mean: propagated (sum s)^2/sum(s^2 sigma^2), no penalty
-    if propagate:
-        weight_map_out = np.where(var_den > 0, norm_arr.astype(np.float64) ** 2 / np.where(var_den > 0, var_den, 1), 0.0)
-    else:
-        weight_map_out = norm_arr.astype(np.float64)
     if weight_output is not False:
         weight_out = weight_output or add_suffix(output_path, "weight")
         fits.writeto(weight_out, weight_map_out.astype(np.float32), header=out_header, overwrite=True)
@@ -422,20 +485,10 @@ def clipped_mean_coadd_numpy(
     return output_path
 
 
-# Full-frame accumulators a median combine holds for its whole run, per output pixel:
-# coadd f32 + count_arr i32 + ginv_arr f64 + var_den f64. The post-loop weight-map
-# temporaries peak higher (~44 B/px) but by then no strip stack is alive.
-ACCUMULATOR_BYTES_PER_PIXEL = 24
-
-
 def plan_median_memory(n_images: int, width: int, height: int, budget_bytes: int,
-                       floor: int = 128) -> tuple[int, int]:
-    """Strip height and total bytes for a median combine held under ``budget_bytes``.
-
-    Requirement is analytic, not guessed: ``accumulators(width, height) +
-    n_images * chunk_h * width * 4``. Inverting it for chunk_h is what makes the same
-    model serve any frame count, any output grid and any ceiling."""
-    accumulators = height * width * ACCUMULATOR_BYTES_PER_PIXEL
+                       floor: int = 128, accumulator_bytes_per_pixel: int = 26) -> tuple[int, int]:
+    """Return strip height and total bytes under ``budget_bytes``."""
+    accumulators = height * width * accumulator_bytes_per_pixel
     per_row = n_images * width * 4  # one strip row across the stack, float32
     chunk = height if per_row <= 0 else int(max(0, budget_bytes - accumulators) // per_row)
     chunk = max(floor, min(chunk, height))
@@ -480,6 +533,7 @@ def median_coadd_numpy(
     chunk_h: int = 128,
     reserved_bytes: int = 0,
     var_maps: list[str] | None = None,
+    coverage_policy: str = "union",
     logger: Logger | None = None,
 ) -> str:
     """Per-pixel flux-scaled median coadd.
@@ -492,6 +546,7 @@ def median_coadd_numpy(
 
     Peak memory bounded by chunk_h.
     """
+    coverage_policy = validate_coverage_policy(coverage_policy)
     st = time.time()
     size = "swarp FOV size" if match_swarp_size else "tight bbox"
     if logger is not None:
@@ -524,6 +579,11 @@ def median_coadd_numpy(
 
     coadd = np.full((target_h, target_w), np.nan, dtype=np.float32)
     count_arr = np.zeros((target_h, target_w), dtype=np.int32)
+    geometric_count = (
+        np.zeros((target_h, target_w), dtype=np.uint16)
+        if coverage_policy == "intersection"
+        else None
+    )
     egains = [fits.getheader(f).get("EGAIN") for f in input_images]
     gain_terms = [(1.0, float(e) / flxscales[i]) for i, e in enumerate(egains) if e is not None]
     all_egain = all(e is not None for e in egains)
@@ -554,17 +614,20 @@ def median_coadd_numpy(
                 rows, scratch = _read_rows(handle, sy0, sy1, scratch)
                 src = rows[:, sx0:sx1] * flxscales[i]
                 src[(src == 0.0) | ~np.isfinite(src)] = np.nan
+                support = np.isfinite(src)
+                if geometric_count is not None:
+                    geometric_count[ty0:ty1, tx0:tx1] += support
                 m_strip = None
                 if mhandles is not None:
                     m_rows, scratch = _read_rows(mhandles[i], sy0, sy1, scratch)
                     m_strip = m_rows[:, sx0:sx1]
-                    src[m_strip <= WEIGHT_EPS] = np.nan
+                    src[m_strip <= 0] = np.nan
                 if whandles is not None:
                     # w is the inverse variance of the raw resampled data; the median is
                     # taken on flux-normalised pixels, whose variance scales by FLXSCALE^2
                     w_rows, scratch = _read_rows(whandles[i], sy0, sy1, scratch)
                     w = w_rows[:, sx0:sx1]
-                    w[w < WEIGHT_EPS] = 0.0
+                    w[w <= 0] = 0.0
                     w /= flxscales[i] * flxscales[i]
                     # zero weight (interpolated/bad pixel) never enters the stack,
                     # matching the mean path's w_eff > 0 test; footprint follows
@@ -584,7 +647,7 @@ def median_coadd_numpy(
                         v_rows, scratch = _read_rows(vhandles[i], sy0, sy1, scratch)
                         vm = v_rows[:, sx0:sx1]
                     fx = flxscales[i]
-                    ok = contributed & (vm >= WEIGHT_EPS)
+                    ok = contributed & (vm > 0)
                     var_den[ty0:ty1, tx0:tx1] += np.where(ok, fx * fx / np.where(ok, vm, np.float32(1.0)), 0.0)
                 elif whandles is not None:
                     ok = contributed & (w > 0)
@@ -606,6 +669,16 @@ def median_coadd_numpy(
     finally:
         for handle in handles + (whandles or []) + (mhandles or []) + (vhandles or []):
             os.close(handle[0])
+
+    apply_coverage_policy(
+        coadd,
+        None,
+        count_arr,
+        geometric_count if geometric_count is not None else count_arr,
+        len(input_images),
+        coverage_policy,
+        logger,
+    )
 
     out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, coadd_header)
     covered = count_arr > 0

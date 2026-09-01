@@ -56,7 +56,15 @@ imcoadd:
   coadd_routine: 'direct'
   coadd_mode: 'proper'
   coadd_weighting: global
-  proper_coadd_weight_map_policy: white-noise
+  coadd_options:
+    mean: {}
+    median: {}
+    clipped:
+      clip_sigma: 4.0
+      clip_ampfrac: 0.3
+    proper:
+      weight_map_policy: white-noise
+  coverage_policy: union
   match_swarp_size: false
   image_selection: false
   image_selection_cuts:

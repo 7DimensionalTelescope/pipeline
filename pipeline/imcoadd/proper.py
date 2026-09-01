@@ -13,12 +13,9 @@ from astropy.io import fits
 
 from ..services.logger import Logger
 from ..utils import add_suffix, get_basename, time_diff_in_seconds
-from .calc import WEIGHT_EPS
+from .calc import apply_coverage_policy, validate_coverage_policy
 from .utils import build_coadd_wcs_header, determine_size
 
-WEIGHT_MAP_POLICIES = ("off", "weighted-mean", "white-noise", "colored-noise")
-LANCZOS_PSD_FLOOR = 1e-3  # caps the colored-noise whitening gain where the kernel response dies
-FFT_WORKERS = 8
 _LANCZOS_PSD_CACHE: dict = {}
 
 
@@ -115,17 +112,30 @@ def proper_coadd_numpy(
     psf_output: str | bool | None = None,
     holes: list[str] | None = None,
     match_swarp_size: bool = True,
+    coverage_policy: str = "union",
     logger: Logger | None = None,
+    allowed_weight_map_policies: tuple[str, ...] = (
+        "off",
+        "weighted-mean",
+        "white-noise",
+        "colored-noise",
+    ),
+    lanczos_psd_floor: float = 1e-3,
+    fft_workers: int = 8,
 ) -> str:
     """Streaming proper coadd: flux-normalized, coverage-renormalized, O(1) memory in N."""
     import scipy.fft as sfft
     from scipy.ndimage import gaussian_filter
 
+    coverage_policy = validate_coverage_policy(coverage_policy)
     st = time.time()
     n = len(input_images)
     policy = str(weight_map_policy or "off").lower().replace("_", "-")
-    if policy not in WEIGHT_MAP_POLICIES:
-        raise ValueError(f"Invalid weight_map_policy: {weight_map_policy!r} (expected one of {WEIGHT_MAP_POLICIES})")
+    if policy not in allowed_weight_map_policies:
+        raise ValueError(
+            f"Invalid weight_map_policy: {weight_map_policy!r} "
+            f"(expected one of {allowed_weight_map_policies})"
+        )
     for name, seq in (("peeings", peeings), ("skysigs", skysigs)):
         if len(seq) != n:
             raise ValueError(f"{name} ({len(seq)}) and input_images ({n}) length mismatch")
@@ -177,6 +187,11 @@ def proper_coadd_numpy(
     num_arr = np.zeros((target_h, target_w), dtype=np.float64)
     resp_arr = np.zeros((target_h, target_w), dtype=np.float32)
     count_arr = np.zeros((target_h, target_w), dtype=np.int16)
+    geometric_count = (
+        np.zeros((target_h, target_w), dtype=np.uint16)
+        if coverage_policy == "intersection"
+        else None
+    )
     # 'weighted-mean' is the conventional product (holes not marked); the formulation
     # policies mark bad-pixel holes share-wise through a second coverage accumulator
     track_holes = holes is not None and policy in ("white-noise", "colored-noise")
@@ -186,6 +201,7 @@ def proper_coadd_numpy(
         st_img = time.time()
         data = np.ascontiguousarray(fits.getdata(path, memmap=False), dtype=np.float32)
         finite = np.isfinite(data)
+        support = finite & (data != 0.0)
         if not finite.all():
             data[~finite] = 0.0
         sigma_px = float(peeings[i]) / np.sqrt(8 * np.log(2))
@@ -211,13 +227,15 @@ def proper_coadd_numpy(
         sy0 = ty0 - y0[i]; sy1 = ty1 - y0[i]  # fmt: skip
         sl = (slice(ty0, ty1), slice(tx0, tx1))
 
+        if geometric_count is not None:
+            geometric_count[sl] += support[sy0:sy1, sx0:sx1]
         num_arr[sl] += (w[i] * f[i]) * matched[sy0:sy1, sx0:sx1]
         m = data[sy0:sy1, sx0:sx1] != 0.0
         resp_arr[sl] += np.float32(r_share[i]) * m
         count_arr[sl] += m
         if respw_arr is not None:
             with fits.open(holes[i], memmap=True) as mh:
-                respw_arr[sl] += np.float32(r_share[i]) * (m & (mh[0].data[sy0:sy1, sx0:sx1] > WEIGHT_EPS))
+                respw_arr[sl] += np.float32(r_share[i]) * (m & (mh[0].data[sy0:sy1, sx0:sx1] > 0))
         del data, matched
         if logger is not None:
             logger.debug(
@@ -225,18 +243,18 @@ def proper_coadd_numpy(
                 f"fwhm={peeings[i]:.2f}px in {time_diff_in_seconds(st_img)} seconds"
             )
 
-    den = sfft.rfft2(_corner_embedded(d_acf, (target_h, target_w)), workers=FFT_WORKERS).real
+    den = sfft.rfft2(_corner_embedded(d_acf, (target_h, target_w)), workers=fft_workers).real
     divisor = np.sqrt(np.maximum(den, den.max() * 1e-12))
     del den
     if colored:
         # colored noise rescales num and den by the same |L_hat|^2, leaving sqrt(|L_hat|^2)
         t2y = lanczos_psd_1d(np.fft.fftfreq(target_h))
         t2x = lanczos_psd_1d(np.fft.rfftfreq(target_w))
-        divisor *= np.sqrt(np.maximum(np.outer(t2y, t2x), LANCZOS_PSD_FLOOR))
-    num_hat = sfft.rfft2(num_arr, workers=FFT_WORKERS)
+        divisor *= np.sqrt(np.maximum(np.outer(t2y, t2x), lanczos_psd_floor))
+    num_hat = sfft.rfft2(num_arr, workers=fft_workers)
     num_hat /= divisor
     del divisor
-    proper = sfft.irfft2(num_hat, s=(target_h, target_w), workers=FFT_WORKERS)
+    proper = sfft.irfft2(num_hat, s=(target_h, target_w), workers=fft_workers)
     del num_hat, num_arr
 
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -244,6 +262,15 @@ def proper_coadd_numpy(
     coadd = proper.astype(np.float32)
     del proper
     coadd[count_arr == 0] = np.nan
+    coverage = apply_coverage_policy(
+        coadd,
+        None,
+        count_arr,
+        geometric_count if geometric_count is not None else count_arr,
+        n,
+        coverage_policy,
+        logger,
+    )
 
     out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, coadd_header)
     out_header["PROPFR"] = (f_r, "flux scale F_R of the proper coadd")
@@ -258,6 +285,7 @@ def proper_coadd_numpy(
         # F_R^2 at full coverage; the exact per-pixel diagonal is deliberately not shipped
         resp_w = respw_arr if respw_arr is not None else resp_arr
         weight_map = (f_r * f_r) * resp_w.astype(np.float64)
+        weight_map[~coverage] = 0
         fits.writeto(weight_out, weight_map.astype(np.float32), header=out_header, overwrite=True)
         if logger is not None:
             logger.debug(f"Wrote proper coadd weight map ({policy}): {weight_out}")

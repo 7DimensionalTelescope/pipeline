@@ -53,6 +53,7 @@ class LegacyCoaddMixin:
             )
 
         self.reproject_and_coadd_with_swarp(images, coadd=True)
+        self.apply_legacy_coverage_policy(images)
         self.update_progress(
             self._process_registry.milestone_progress(
                 self._process_spec, "coadd_with_swarp"

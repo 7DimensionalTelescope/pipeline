@@ -161,7 +161,8 @@ class InMemoryCoaddMixin:
         policy = plan.policy
         smoothed = "smoothed" if plan.smooth_weight else "per-pixel"
         self.logger.info(
-            f"Coadd weighting: {weighting}; badpix policy: {policy}; weight maps: {smoothed}"
+            f"Coadd weighting: {weighting}; badpix policy: {policy}; weight maps: {smoothed}; "
+            f"coverage: {plan.coverage_policy}"
         )
         if plan.smooth_weight and not (
             plan.interpolate or plan.zero or policy == "conservative"
@@ -226,9 +227,9 @@ class InMemoryCoaddMixin:
         if policy == "conservative":
             masks = self._propagated_bpmasks()
         elif policy == "1px" and weighting != "pixelwise":
-            masks = wht_maps  # NEAREST resamp: each hole is a single sub-eps pixel
+            masks = wht_maps
         else:
-            masks = None  # pixel-wise weights already exclude holes via calc.WEIGHT_EPS
+            masks = None
 
         if plan.mode == "proper":
             return self.coadd_proper_with_numpy(input_images, holes=masks)
@@ -325,7 +326,7 @@ class InMemoryCoaddMixin:
     def coadd_proper_with_numpy(
         self, input_images: list[str], holes: list[str] | None = None
     ) -> str:
-        """Zackay & Ofek proper coaddition; imcoadd.proper_coadd_weight_map_policy picks the weight product."""
+        """Run proper coaddition with its mode-specific options."""
         from ..services.combine_lock import CombineSlot, NullSlot
         from .proper import proper_coadd_numpy
 
@@ -363,24 +364,13 @@ class InMemoryCoaddMixin:
                 match_swarp_size=bool(
                     get_key(self.config_node.imcoadd, "match_swarp_size", default=True)
                 ),
+                coverage_policy=plan.coverage_policy,
                 logger=self.logger,
             )
 
     def _proper_weight_policy(self) -> str:
-        """Validated imcoadd.proper_coadd_weight_map_policy."""
-        from .proper import WEIGHT_MAP_POLICIES
-
-        raw = get_key(
-            self.config_node.imcoadd,
-            "proper_coadd_weight_map_policy",
-            default="white-noise",
-        )
-        policy = str(raw or "off").lower().replace("_", "-")
-        if policy not in WEIGHT_MAP_POLICIES:
-            raise self._process_error.ValueError(
-                f"Invalid imcoadd.proper_coadd_weight_map_policy: {raw!r} (expected one of {WEIGHT_MAP_POLICIES})"
-            )
-        return policy
+        """Validated proper-coadd weight-map policy."""
+        return self.plan.proper_weight_map_policy
 
     def _proper_peeings(self, input_images: list[str]) -> list[float]:
         """Per-frame PSF FWHM in pixels; the homogenized target when convolution ran."""
@@ -454,6 +444,7 @@ class InMemoryCoaddMixin:
             flxscales=self._combine_flxscales(),
             match_swarp_size=match_swarp_size,
             var_maps=var_maps,
+            coverage_policy=self.plan.coverage_policy,
             logger=self.logger,
         )
 
@@ -485,7 +476,10 @@ class InMemoryCoaddMixin:
             masks=masks,
             flxscales=self._combine_flxscales(),
             match_swarp_size=match_swarp_size,
+            clip_sigma=self.plan.clip_sigma,
+            clip_ampfrac=self.plan.clip_ampfrac,
             var_maps=var_maps,
+            coverage_policy=self.plan.coverage_policy,
             logger=self.logger,
         )
 
@@ -524,6 +518,7 @@ class InMemoryCoaddMixin:
             chunk_h=chunk_h,
             reserved_bytes=reserved_bytes,
             var_maps=var_maps,
+            coverage_policy=self.plan.coverage_policy,
             logger=self.logger,
         )
 
