@@ -1,0 +1,553 @@
+import os
+import time
+
+import numpy as np
+from astropy.io import fits
+
+from .. import external
+from ..config.utils import get_key
+from ..const import REF_DIR
+from ..services.utils import conservative_worker_count
+from ..utils import atleast_1d, collapse, get_basename, time_diff_in_seconds
+from ..utils.header import update_padded_header
+
+
+class BackgroundMixin:
+    def bkgsub(
+        self,
+        input_images: list[str] | None = None,
+        ignore_steppy_flag: bool = False,
+        skyval_cut: float = 40,
+        mask_out_of_fov: bool = False,
+        mask_sources: bool | str = False,
+        fov_masks: list | None = None,
+    ) -> list[str]:
+        """Subtract the configured scalar or mesh background from each image."""
+        if input_images is None:
+            input_images = self.input_images
+        st = time.time()
+
+        factory = self.path.imcoadd.factory
+        self.path_bkgsub = factory.bkgsub_dir
+
+        bkgsub_images = factory.stage_images(input_images, "bkgsub", self.path_bkgsub)
+        self.config_node.imcoadd.bkgsub_images = bkgsub_images
+
+        bkg_images = factory.stage_images(input_images, "bkg", self.path_bkgsub)
+        bkg_rms_images = factory.stage_images(input_images, "bkgrms", self.path_bkgsub)
+
+        # Convolution destroys SWarp's exactly-zero padding, so a prebuilt mask wins.
+        if fov_masks is not None:
+            fov_mask_images = list(fov_masks)
+        elif mask_out_of_fov:
+            fov_mask_images = factory.stage_images(
+                input_images, "fovmask", self.path_bkgsub
+            )
+        else:
+            fov_mask_images = [None] * len(input_images)
+
+        skyvalues = self.input_headers.values("SKYVAL")
+        methods = self.bkgsub_methods()
+        requested = get_key(self.config_node.imcoadd, "bkgsub_type")
+        if requested:
+            requested = str(requested).lower()
+        else:
+            requested = self._default_bkgsub_type(skyvalues, skyval_cut)
+            self.logger.debug(
+                f"bkgsub_type unset; filled in as {requested!r} for the group"
+            )
+        if requested != "individual" and requested not in methods:
+            raise ValueError(
+                f"bkgsub_type: {requested!r} is invalid (expected 'individual' or one of {sorted(methods)})"
+            )
+        types = [
+            self._resolve_bkgsub_type(requested, sv, skyval_cut) for sv in skyvalues
+        ]
+        self.config_node.imcoadd.bkgsub_type = requested
+
+        # The header snapshot aggregates a mixed group to BACKTYPE=MIXED.
+        for hdr, btype in zip(self.input_headers, types):
+            hdr["BACKTYPE"] = (btype.upper(), "Background subtraction type")
+
+        any_dynamic = "dynamic" in types
+        source_mask_images = (
+            factory.stage_images(input_images, "srcmask", self.path_bkgsub)
+            if (mask_sources and any_dynamic)
+            else [None] * len(input_images)
+        )
+        if mask_sources and not any_dynamic:
+            self.logger.info(
+                "No image takes a mesh background: source_mask has no effect"
+            )
+
+        # catalog reuse needs the inputs to be the singles' derivatives 1:1
+        singles = atleast_1d(self.input_images)
+        try:
+            catalogs = atleast_1d(self.path.photometry.final_catalog)
+        except Exception as e:  # an optimization must not become a new failure mode
+            self.logger.debug(
+                f"No photometry catalogs resolvable ({e}); detection pass it is"
+            )
+            catalogs = []
+        if not (len(singles) == len(catalogs) == len(input_images)):
+            singles = catalogs = [None] * len(input_images)
+
+        counts = {name: types.count(name) for name in sorted(set(types))}
+        self.logger.info(
+            f"Start background subtraction (bkgsub_type={requested!r}): {counts}"
+        )
+        if any_dynamic:
+            self.config_node.imcoadd.bkg_images = (
+                bkg_images
+                if get_key(self.config_node.imcoadd, "output_bkg_map", default=False)
+                else None
+            )
+            self.config_node.imcoadd.bkg_rms_images = (
+                bkg_rms_images
+                if get_key(
+                    self.config_node.imcoadd, "output_sky_rms_map", default=False
+                )
+                else None
+            )
+        else:
+            if get_key(self.config_node.imcoadd, "bkg_images"):
+                self.config_node.imcoadd.bkg_images = None
+            if get_key(self.config_node.imcoadd, "bkg_rms_images"):
+                self.config_node.imcoadd.bkg_rms_images = None
+
+        def _bkgsub_one(
+            i,
+            inim,
+            outim,
+            bkg,
+            bkg_rms,
+            skyvalue,
+            fov_mask,
+            src_mask,
+            btype,
+            single,
+            phot_cat,
+        ):
+            st_loop = time.time()
+            # memmap=False on purpose: page-fault reads measure ~2x slower over NFS.
+            data, header = fits.getdata(inim, header=True, memmap=False)
+            data = np.ascontiguousarray(data, dtype=np.float32)
+
+            if fov_mask is None:
+                fov_valid = None
+            elif fov_masks is not None and os.path.exists(fov_mask):
+                fov_valid = fits.getdata(fov_mask, memmap=False).astype(bool)
+            else:
+                fov_valid = self._fov_valid(data, get_basename(inim))
+            exclude = None if fov_valid is None else ~fov_valid
+            if src_mask is not None and btype == "dynamic":
+                valid, usable = self._source_mask(
+                    inim, header, fov_valid, src_mask, fov_mask,
+                    photometry_catalog=phot_cat, source_image=single,
+                )  # fmt: skip
+                if usable < 20.0:
+                    # A mesh based mostly on interpolated pixels is not a sky estimate.
+                    self.logger.warning(
+                        f"{get_basename(inim)}: source mask leaves {usable:.0f}% of the FOV; "
+                        f"falling back to constant background subtraction"
+                    )
+                    btype = "constant"
+                else:
+                    exclude = ~valid
+            is_steppy = methods[btype](
+                inim,
+                outim,
+                data=data,
+                header=header,
+                bkg=bkg,
+                bkg_rms=bkg_rms,
+                skyval=skyvalue,
+                ignore_steppy_flag=ignore_steppy_flag,
+                exclude=exclude,
+                fov_valid=fov_valid,
+            )
+
+            # if is_steppy and not ignore_steppy_flag:
+            #     self.logger.warning(f"Background subtraction failed for {get_basename(outim)}")
+            #     self.logger.warning(f"Re-running background subtraction with constant value")
+            #     self._const_bkgsub(inim, outim, skyval=skyvalue)
+
+            self.logger.info(
+                f"Background subtraction ({btype}) completed for {get_basename(outim)} [image {i+1}/{len(input_images)}] in {time_diff_in_seconds(st_loop)} seconds"
+            )
+
+        jobs = list(enumerate(zip(input_images, bkgsub_images, bkg_images, bkg_rms_images, skyvalues,
+                                  fov_mask_images, source_mask_images, types, singles, catalogs)))  # fmt: skip
+        if not self.overwrite:
+            n_all = len(jobs)
+            jobs = [(i, job) for i, job in jobs if not os.path.exists(job[1])]
+            if len(jobs) < n_all:
+                self.logger.info(
+                    f"{n_all - len(jobs)} existing bkgsub products skipped, {len(jobs)} to compute"
+                )
+        n_workers = conservative_worker_count(len(jobs))
+        if n_workers <= 1:
+            for i, job in jobs:
+                _bkgsub_one(i, *job)
+        else:
+            self.logger.info(f"Background subtraction with {n_workers} workers")
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                futures = [pool.submit(_bkgsub_one, i, *job) for i, job in jobs]
+                for f in futures:
+                    f.result()
+
+        self.logger.info(
+            f"Background subtraction is completed in {time_diff_in_seconds(st)} ({time_diff_in_seconds(st, return_float=True)/len(input_images):.1f} s/image)"
+        )
+
+        self.images_to_coadd = bkgsub_images
+        return bkgsub_images
+
+    def bkgsub_methods(self) -> dict:
+        """Map configured background names to per-image routines."""
+        return {"constant": self._const_bkgsub, "dynamic": self._dynamic_bkgsub}
+
+    def _default_bkgsub_type(self, skyvalues, skyval_cut: float) -> str:
+        """Choose one background routine for a group without an explicit setting."""
+        return (
+            "constant"
+            if any(sv is not None and sv < skyval_cut for sv in skyvalues)
+            else "dynamic"
+        )
+
+    def _resolve_bkgsub_type(self, requested: str, skyval, skyval_cut: float) -> str:
+        """Which routine one image gets. Only 'individual' decides per image."""
+        if requested != "individual":
+            return requested
+        if skyval is None:
+            return "dynamic"
+        # a nearly-empty sky quantises into a step-like mesh background, so prefer the
+        # scalar SKYVAL there
+        return "constant" if skyval < skyval_cut else "dynamic"
+
+    def _source_mask(
+        self,
+        inim: str,
+        header,
+        fov_valid: np.ndarray | None,
+        outmask: str,
+        fov_mask: str | None = None,
+        star_scale: float = 2.0,
+        galaxy_scale: float = 2.5,
+        class_star_cut: float = 0.5,
+        min_radius: float = 3.0,
+        min_usable: float = 20.0,
+        photometry_catalog: str | None = None,
+        source_image: str | None = None,
+    ) -> tuple[np.ndarray, float]:
+        """Build the in-FOV, off-source mask used for background estimation."""
+        from .utils import (
+            build_source_mask,
+            read_mask_plio,
+            source_ellipses_on_frame,
+            write_mask_plio,
+        )
+
+        param_file = os.path.join(REF_DIR, "srcExt", "bkgdet.param")
+
+        base = os.path.splitext(get_basename(inim))[0]
+        catalog = os.path.join(self.path_bkgsub, f"{base}_bkgdet.cat")
+
+        shape = (header["NAXIS2"], header["NAXIS1"])
+        persist = os.path.join(
+            collapse(self.path.imcoadd.factory.source_mask_dir, force=True),
+            get_basename(outmask),
+        )
+        if not self.overwrite:
+            valid = read_mask_plio(persist)
+            if valid is not None and valid.shape == shape:
+                return valid, float(100 * valid.mean())
+
+        # reuse photometry's catalog: its DETECT_THRESH 3.0 is accepted over a 1.5 pass to save the run
+        detection_override = self._detection_override()
+        ellipses = None
+        if (
+            photometry_catalog
+            and os.path.exists(photometry_catalog)
+            and not detection_override
+        ):
+            ellipses = source_ellipses_on_frame(
+                photometry_catalog,
+                fits.getheader(source_image or inim),
+                header,
+                logger=self.logger,
+            )
+            if ellipses is not None:
+                self.logger.debug(
+                    f"{len(ellipses)} source ellipses from {get_basename(photometry_catalog)}"
+                )
+        if ellipses is None:
+            sex_options = {
+                "-CATALOG_TYPE": "ASCII_HEAD",
+                "-PARAMETERS_NAME": param_file,
+                "-CHECKIMAGE_TYPE": "NONE",
+            }
+            sex_options.update({f"-{k}": str(v) for k, v in detection_override.items()})
+            # SExtractor cannot be handed an array; this is the one caller that still
+            # needs the FOV mask on disk, so it is written here and only here
+            if fov_mask is not None and fov_valid is not None:
+                fits.writeto(fov_mask, fov_valid.astype(np.uint8), overwrite=True)
+                sex_options.update({"-WEIGHT_TYPE": "MAP_WEIGHT", "-WEIGHT_IMAGE": f"{fov_mask}", "-WEIGHT_THRESH": "0"})  # fmt: skip
+            external.sextractor(
+                inim,
+                outcat=catalog,
+                sex_options=sex_options,
+                log_file=os.path.join(
+                    self.path_bkgsub, f"{base}_bkgdet_sextractor.log"
+                ),
+                overwrite=self.overwrite,
+                logger=self.logger,
+            )
+            ellipses = catalog
+
+        sources = build_source_mask(
+            ellipses,
+            shape,
+            star_scale=star_scale,
+            galaxy_scale=galaxy_scale,
+            class_star_cut=class_star_cut,
+            min_radius=min_radius,
+            logger=self.logger,
+        )
+
+        valid = ~sources if fov_valid is None else (fov_valid & ~sources)
+        write_mask_plio(
+            persist, valid
+        )  # durable copy next to the config, survives factory cleanup
+        usable = float(100 * valid.mean())
+        self.logger.debug(
+            f"Source mask ({usable:.1f}% usable) saved as {get_basename(persist)}"
+        )
+        if usable < min_usable:
+            self.logger.warning(
+                f"Only {usable:.1f}% of {get_basename(inim)} is left to estimate the background on; "
+                f"SExtractor will interpolate most meshes. Consider lowering the source-mask scales."
+            )
+        return valid, usable
+
+    def build_fov_masks(
+        self, resampled_images, erode_iter: int = 3
+    ) -> list[str | None]:
+        """Build background masks from pristine resampled footprints."""
+        factory = self.path.imcoadd.factory
+        outputs = factory.stage_images(resampled_images, "fovmask", factory.bkgsub_dir)
+        self._fov_masks = []
+        for inim, outmask in zip(atleast_1d(resampled_images), outputs):
+            if os.path.exists(outmask) and not self.overwrite:
+                # a written mask means the frame needed one; frames that needed none wrote
+                # nothing and re-derive below (they pay one resamp read, nothing else)
+                self._fov_masks.append(outmask)
+            else:
+                self._fov_masks.append(
+                    outmask
+                    if self._write_fov_mask(inim, outmask, erode_iter=erode_iter)
+                    is not None
+                    else None
+                )
+        return self._fov_masks
+
+    def shrink_fov_masks(
+        self, delta_peeings, kernel_extent: float = 4.0
+    ) -> list[str | None]:
+        """Shrink stored footprints by the convolution kernel's reach."""
+        from scipy.ndimage import binary_erosion
+
+        for i, (mask, delta) in enumerate(
+            zip(getattr(self, "_fov_masks", []), atleast_1d(delta_peeings))
+        ):
+            if mask is None or not delta:
+                continue
+            extra = int(np.ceil(kernel_extent * float(delta) / np.sqrt(8 * np.log(2))))
+            if extra < 1:
+                continue
+            valid = fits.getdata(mask).astype(bool)
+            valid = binary_erosion(
+                valid, np.ones((3, 3), dtype=bool), iterations=extra, border_value=0
+            )
+            fits.writeto(mask, valid.astype(np.uint8), overwrite=True)
+            self.logger.debug(
+                f"Shrank {get_basename(mask)} by {extra} px for a {delta:.2f} px kernel"
+            )
+        return self._fov_masks
+
+    def _fov_valid(
+        self, data: np.ndarray, name: str, erode_iter: int = 3
+    ) -> np.ndarray | None:
+        """Return the eroded valid-pixel mask of a reprojected frame."""
+        from scipy.ndimage import binary_erosion
+
+        valid = data != 0
+        if valid.all():
+            self.logger.debug(f"No out-of-FOV pixels in {name}; skipping FOV mask")
+            return None
+
+        # border_value=1: the array bound is not an FOV edge, only the zero padding is
+        valid = binary_erosion(
+            valid, np.ones((3, 3), dtype=bool), iterations=erode_iter, border_value=1
+        )
+        self.logger.debug(f"FOV mask ({100 * valid.mean():.1f}% valid) for {name}")
+        return valid
+
+    def _write_fov_mask(
+        self, inim: str, outmask: str, erode_iter: int = 3
+    ) -> np.ndarray | None:
+        """`_fov_valid` on a frame read from disk, persisted for a later stage to reuse."""
+        valid = self._fov_valid(
+            fits.getdata(inim, memmap=False), get_basename(inim), erode_iter=erode_iter
+        )
+        if valid is None:
+            return None
+        fits.writeto(outmask, valid.astype(np.uint8), overwrite=True)
+        self.logger.debug(f"FOV mask saved as {get_basename(outmask)}")
+        return valid
+
+    def _sex_vars(self, section: str = "imcoadd") -> dict:
+        """main.sex settings under a section's sex_vars override; empty override = inherit."""
+        from .utils import parse_sex_config
+
+        keys = ("BACK_SIZE", "BACK_FILTERSIZE", "DETECT_THRESH", "DETECT_MINAREA")
+        values = parse_sex_config(os.path.join(REF_DIR, "srcExt", "main.sex"), keys)
+        overrides = get_key(getattr(self.config_node, section), "sex_vars") or {}
+        for key in keys:
+            if overrides.get(key) is not None:
+                values[key] = overrides[key]
+        return values
+
+    def _background_mesh(self) -> tuple[int, int]:
+        """(BACK_SIZE, BACK_FILTERSIZE) for the dynamic background."""
+        values = self._sex_vars()
+        return int(values["BACK_SIZE"]), int(values["BACK_FILTERSIZE"])
+
+    def _detection_override(self) -> dict:
+        """Explicit sex_vars detection keys, or {} to take the photometry catalog as detected."""
+        overrides = get_key(self.config_node.imcoadd, "sex_vars") or {}
+        wanted = {k: overrides.get(k) for k in ("DETECT_THRESH", "DETECT_MINAREA")}
+        wanted = {k: v for k, v in wanted.items() if v is not None}
+        if not wanted:
+            return {}
+        # a catalog already detected at these values needs no second pass
+        photometry = self._sex_vars("photometry")
+        if all(float(v) == float(photometry[k]) for k, v in wanted.items()):
+            return {}
+        return wanted
+
+    def _guard_sky_rms_propagation(self):
+        """Raise if a coadd sky-noise map is asked for; propagation is unimplemented."""
+        if get_key(self.config_node.imcoadd, "output_sky_rms_map", default=False):
+            raise NotImplementedError(
+                "imcoadd.output_sky_rms_map: the per-frame sky-RMS models are written, but "
+                "propagating them into a coadd sky-noise map (the source-free counterpart of "
+                "the current weight map) is not implemented yet"
+            )
+
+    def _const_bkgsub(
+        self,
+        inim,
+        outim,
+        skyval,
+        data=None,
+        header=None,
+        skyval_cut=40,
+        fov_valid=None,
+        **kwargs,
+    ):
+
+        if os.path.exists(outim):
+            try:
+                _backtype = fits.getval(outim, "BACKTYPE")
+            except KeyError:
+                _backtype = ""
+            if _backtype.upper() == "CONSTANT":
+                if not self.overwrite:
+                    self.logger.info(
+                        f"Background subtraction result exists; skipping: {get_basename(outim)}"
+                    )
+                    return
+
+        is_steppy = skyval < skyval_cut
+
+        _data, _hdr = self._read_frame(inim, data, header)
+        _hdr["BACKTYPE"] = ("CONSTANT", "Background subtraction type")
+        # _hdr["BKG_STEP"] = (is_steppy, "SE Background can be step-like")
+        _data -= skyval
+        if fov_valid is not None:
+            _data[~fov_valid] = 0.0  # keep out-of-FOV at 0: the coadd's validity marker
+        self.logger.debug(f"Using SKYVAL: {skyval:.3f}")
+        fits.writeto(outim, _data, header=_hdr, overwrite=True)
+
+        return False  # is_steppy is False by definition for constant background subtraction
+
+    def _dynamic_bkgsub(self, inim, outim, bkg, bkg_rms, data=None, header=None, ignore_steppy_flag=False, exclude=None, fov_valid=None, **kwargs):  # fmt: skip
+        from .utils import estimate_background
+
+        # from .bkg_step import step_background_check
+
+        back_size, filter_size = self._background_mesh()
+        _data, _hdr = self._read_frame(inim, data, header)
+        bkg_data, bkg_rms_data = estimate_background(
+            _data, mask=exclude, back_size=back_size, filter_size=filter_size
+        )
+        if get_key(self.config_node.imcoadd, "output_sky_rms_map", default=False):
+            fits.writeto(bkg_rms, bkg_rms_data, overwrite=True)
+        del bkg_rms_data  # do not hold a second full frame past its write
+        if get_key(self.config_node.imcoadd, "output_bkg_map", default=False):
+            fits.writeto(bkg, bkg_data, overwrite=True)
+
+        # if ignore_steppy_flag:
+        #     is_steppy = False
+        # else:
+        #     h, w = bkg_data.shape
+        #     stripe = np.mean(bkg_data[h // 2 - 100 : h // 2 + 100, :], axis=0)  # already smooth bkg: mean is okay?
+        #     is_steppy, info = step_background_check(stripe)
+        #     if is_steppy:
+        #         self.logger.warning(f"Background is steppy in {get_basename(outim)}")
+        #         self.logger.debug(f"Background is steppy: {info}")
+        #         return True
+        #     else:
+        #         self.logger.debug(f"Background is not steppy in {get_basename(outim)}: {info}")
+
+        _hdr["BACKTYPE"] = ("DYNAMIC", "Background subtraction type")
+        # _hdr["BKG_STEP"] = (is_steppy, "Background is step-like; likely quantization artifact")
+        _data -= bkg_data
+        if fov_valid is not None:
+            _data[~fov_valid] = 0.0  # keep out-of-FOV at 0: the coadd's validity marker
+        fits.writeto(outim, _data, header=_hdr, overwrite=True)
+
+        # return is_steppy
+
+    @staticmethod
+    def _read_frame(inim, data, header):
+        """The frame the caller already read, or read it now for a direct routine call."""
+        if data is not None and header is not None:
+            return data, header
+        data, header = fits.getdata(inim, header=True, memmap=False)
+        return np.ascontiguousarray(data, dtype=np.float32), header
+
+    # # TODO:
+    # def _bkg_qa(self, bkgsub_type: str = "dynamic"):
+    #     if bkgsub_type == "dynamic":
+    #         # do assessment below
+    #         for f in self.config_node.imcoadd.bkg_images:
+    #             data = fits.getdata(f)
+    #             H, W = data.shape
+    #             stripe = np.mean(data[H // 2 - 100 : H // 2 + 100, :], axis=0)
+
+    #         pass
+    #     elif bkgsub_type == "constant":
+    #         # add dummy key
+    #         for f in self.input_images:
+    #             update_padded_header(f, {"BACKARTF": (False, "Dynamic bkgsub will cause artifacts")})
+    #     else:
+    #         raise ValueError(f"_bkg_qa - Invalid bkgsub_type: {bkgsub_type}")
+
+    #     update_padded_header(f, {"BACKARTF": (False, "Dynamic bkgsub will cause artifacts")})
+
+    #     recommenced_bkgsub_type = "constant"  # BACKTYPE "Recommended bkgsub type"
+    #     return recommenced_bkgsub_type

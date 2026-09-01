@@ -7,8 +7,6 @@ imcoadd:
   interp_type: 'median'
   convolve: False
   target_seeing:  # auto if it's empty or smaller than max seeing
-  streamline_reprojection: True
-  discard_interp: True
   image_selection: 'auto'
 
 settings:

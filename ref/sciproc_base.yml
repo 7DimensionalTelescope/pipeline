@@ -116,7 +116,7 @@ photometry:
 imcoadd:
   input_images:
   runtime_version:
-  coadd_routine: 'reproject-first'  # legacy or reproject-first
+  coadd_routine: 'reproject-first'  # legacy, reproject-first, or direct
   coadd_mode: 'clipped'  # mean | median | clipped (two-pass 3-sigma clipped weighted mean) | proper (Zackay & Ofek 2015)
   coadd_weighting: global  # false | global (1/SKYSIG^2 per image) | pixel-wise (weight maps)
   proper_coadd_weight_map_policy: white-noise  # proper only: off | weighted-mean | white-noise | colored-noise (also whitens the resampling-colored noise)
@@ -147,8 +147,8 @@ imcoadd:
   interp_type: 'median'
   zero_badpix_weight: False  # set weight to 0 for bad pixels; carrying them costs the NEAREST wht SWarp pass
   badpix_reprojection_policy: 'off'  # off | 1px | conservative (resamp kernel size): how many weight pixels to zero out
-  streamline_reprojection: true  # (interp + weight + reproject) in one go, per-image; less I/O
-  discard_interp: true  # delete interp pairs once their reprojected products exist
+  dump_unreprojected_interp: false  # keep the interpolated science image before SWarp
+  dump_unreprojected_weight: false  # keep its weight map before SWarp
   lean_factory: False  # delete sci resamps + bkg/bkgrms once bkgsub products exist; resumes recompute
   combine_lock_threshold: 20  # combines with >= this many inputs take the per-filesystem flock
   combine_scratch: auto  # local dir to stage combine inputs off NFS; 'auto' picks one only when the inputs are on a network fs and the combine is >= combine_lock_threshold frames; empty = off (moot when factory_scratch set)

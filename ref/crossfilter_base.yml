@@ -85,8 +85,8 @@ imcoadd:
   interp_type: 'median'
   zero_badpix_weight: false
   badpix_reprojection_policy: 'off'
-  streamline_reprojection: true
-  discard_interp: true
+  dump_unreprojected_interp: false
+  dump_unreprojected_weight: false
   lean_factory: false
   combine_lock_threshold: 20
   combine_scratch: auto

@@ -106,8 +106,8 @@ if TYPE_CHECKING:
         interp_type: str
         zero_badpix_weight: bool
         badpix_reprojection_policy: str
-        streamline_reprojection: bool
-        discard_interp: bool
+        dump_unreprojected_interp: bool
+        dump_unreprojected_weight: bool
         lean_factory: bool
         combine_lock_threshold: int
         combine_scratch: str
