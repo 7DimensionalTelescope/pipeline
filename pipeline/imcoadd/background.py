@@ -10,6 +10,7 @@ from ..const import REF_DIR
 from ..services.utils import conservative_worker_count
 from ..utils import atleast_1d, collapse, get_basename, time_diff_in_seconds
 from ..utils.header import update_padded_header
+from .const import MaskBit
 
 
 class BackgroundMixin:
@@ -28,10 +29,13 @@ class BackgroundMixin:
         st = time.time()
 
         factory = self.path.imcoadd.factory
-        self.path_bkgsub = factory.bkgsub_dir
+        self.path_bkgsub = getattr(self, "_bkgsub_dir", factory.bkgsub_dir)
 
         bkgsub_images = factory.stage_images(input_images, "bkgsub", self.path_bkgsub)
         self.config_node.imcoadd.bkgsub_images = bkgsub_images
+        if getattr(self, "_intermediate_policy", "disk") == "memory":
+            durable = factory.stage_images(input_images, "bkgsub", factory.bkgsub_dir)
+            self._memory_bkgsub_dump_pairs = list(zip(bkgsub_images, durable))
 
         bkg_images = factory.stage_images(input_images, "bkg", self.path_bkgsub)
         bkg_rms_images = factory.stage_images(input_images, "bkgrms", self.path_bkgsub)
@@ -129,9 +133,16 @@ class BackgroundMixin:
             phot_cat,
         ):
             st_loop = time.time()
-            # memmap=False on purpose: page-fault reads measure ~2x slower over NFS.
-            data, header = fits.getdata(inim, header=True, memmap=False)
-            data = np.ascontiguousarray(data, dtype=np.float32)
+            cached = getattr(self, "_frame_cache", {}).pop(inim, None)
+            if cached is None:
+                data, header = fits.getdata(inim, header=True, memmap=False)
+                data = np.ascontiguousarray(data, dtype=np.float32)
+            else:
+                data, header = cached
+
+            quality_mask = None
+            if getattr(self, "_quality_masks", None) is not None:
+                quality_mask = self.quality_mask(i)
 
             if fov_mask is None:
                 fov_valid = None
@@ -154,6 +165,9 @@ class BackgroundMixin:
                     btype = "constant"
                 else:
                     exclude = ~valid
+            if quality_mask is not None:
+                trail = (quality_mask & int(MaskBit.SATELLITE)) != 0
+                exclude = trail if exclude is None else (exclude | trail)
             is_steppy = methods[btype](
                 inim,
                 outim,
@@ -165,6 +179,7 @@ class BackgroundMixin:
                 ignore_steppy_flag=ignore_steppy_flag,
                 exclude=exclude,
                 fov_valid=fov_valid,
+                quality_mask=quality_mask,
             )
 
             # if is_steppy and not ignore_steppy_flag:
@@ -456,6 +471,7 @@ class BackgroundMixin:
         header=None,
         skyval_cut=40,
         fov_valid=None,
+        quality_mask=None,
         **kwargs,
     ):
 
@@ -479,12 +495,14 @@ class BackgroundMixin:
         _data -= skyval
         if fov_valid is not None:
             _data[~fov_valid] = 0.0  # keep out-of-FOV at 0: the coadd's validity marker
+        if quality_mask is not None:
+            _data[(quality_mask & int(MaskBit.SATELLITE)) != 0] = 0.0
         self.logger.debug(f"Using SKYVAL: {skyval:.3f}")
         fits.writeto(outim, _data, header=_hdr, overwrite=True)
 
         return False  # is_steppy is False by definition for constant background subtraction
 
-    def _dynamic_bkgsub(self, inim, outim, bkg, bkg_rms, data=None, header=None, ignore_steppy_flag=False, exclude=None, fov_valid=None, **kwargs):  # fmt: skip
+    def _dynamic_bkgsub(self, inim, outim, bkg, bkg_rms, data=None, header=None, ignore_steppy_flag=False, exclude=None, fov_valid=None, quality_mask=None, **kwargs):  # fmt: skip
         from .utils import estimate_background
 
         # from .bkg_step import step_background_check
@@ -518,6 +536,8 @@ class BackgroundMixin:
         _data -= bkg_data
         if fov_valid is not None:
             _data[~fov_valid] = 0.0  # keep out-of-FOV at 0: the coadd's validity marker
+        if quality_mask is not None:
+            _data[(quality_mask & int(MaskBit.SATELLITE)) != 0] = 0.0
         fits.writeto(outim, _data, header=_hdr, overwrite=True)
 
         # return is_steppy

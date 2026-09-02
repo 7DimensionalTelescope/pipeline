@@ -120,10 +120,8 @@ imcoadd:
   coadd_mode: 'clipped'  # mean | median | clipped | proper
   coadd_weighting: global  # false | global (1/SKYSIG^2 per image) | pixel-wise (weight maps)
   coadd_options:
-    mean: {}
-    median: {}
     clipped:
-      clip_sigma: 4.0
+      clip_sigma: 5.0
       clip_ampfrac: 0.3
     proper:
       weight_map_policy: white-noise  # off | weighted-mean | white-noise | colored-noise
@@ -133,6 +131,7 @@ imcoadd:
   image_selection_source:  # 'db' (image_qa, one query) or 'headers' (read every file)
   ppflag_bitmask: '110000'  # one digit per PPFLAG bit:'110100' tolerates bits 1, 2 and 8.
   coadd_image:  # output coadd image
+  coadd_mask_image:
   gpu: True
   device: 0
   zp_key: 'ZP_AUTO'
@@ -147,6 +146,31 @@ imcoadd:
   output_weight_map: true  # write the coadd weight product
   output_single_weight_map: false  # keep each frame's resampled weight in singles/ (int16)
   output_footprint: true  # write the coadd footprint product
+  output_mask_map: true
+  dump_reprojected_masks: false
+  satellite_mask:
+    enabled: false
+    bin_factor: 4
+    background_box: 65
+    star_clip_sigma: 3.0
+    low_sigma: 2.0
+    high_sigma: 8.0
+    canny_sigma: 1.0
+    canny_low_threshold: 0.157
+    canny_high_threshold: 0.471
+    theta_step: 0.25
+    hough_threshold: 50
+    min_length_fraction: 0.08
+    max_gap: 20
+    merge_angle: 1.0
+    merge_distance: 12.0
+    min_support_fraction: 0.08
+    width_sigma: 1.0
+    width_profile_percentile: 50
+    min_half_width: 2
+    max_half_width: 24
+    width_padding: 1
+    endpoint_padding: 8
   output_sky_rms_map: false  # BACKGROUND_RMS model of source-free sky
   output_bkg_map: false  # keep each frame's mesh background model (262 MB/frame, read by nobody)
   persist_weight_maps: False  # durable per-single maps; costs 1.71 s/frame to save a 0.04 s kernel
@@ -157,6 +181,9 @@ imcoadd:
   badpix_reprojection_policy: 'off'  # off | 1px | conservative (resamp kernel size): how many weight pixels to zero out
   dump_unreprojected_interp: false  # keep the interpolated science image before SWarp
   dump_unreprojected_weight: false  # keep its weight map before SWarp
+  intermediate_policy: auto  # memory for groups up to memory_image_limit, disk otherwise
+  memory_image_limit: 6
+  dump_bkgsub: false
   lean_factory: False  # delete sci resamps + bkg/bkgrms once bkgsub products exist; resumes recompute
   combine_lock_threshold: 20  # combines with >= this many inputs take the per-filesystem flock
   combine_scratch: auto  # local dir to stage combine inputs off NFS; 'auto' picks one only when the inputs are on a network fs and the combine is >= combine_lock_threshold frames; empty = off (moot when factory_scratch set)

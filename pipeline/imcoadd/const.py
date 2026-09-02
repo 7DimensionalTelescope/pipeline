@@ -1,4 +1,26 @@
+from enum import IntFlag
+
+
 ZP_KEY = "ZP_AUTO"
+
+
+class MaskBit(IntFlag):
+    BAD = 1
+    SATURATED = 2
+    SATELLITE = 4
+    OUTLIER = 8
+    HOT = 16
+    DEAD = 32
+
+
+MASK_HEADER_CARDS = {
+    "MASKBAD": (int(MaskBit.BAD), "BAD: generic detector bad pixel"),
+    "MASKSAT": (int(MaskBit.SATURATED), "SATURATED: detector saturation"),
+    "MASKTRAI": (int(MaskBit.SATELLITE), "SATELLITE: Hough trail mask"),
+    "MASKOUT": (int(MaskBit.OUTLIER), "OUTLIER: clipped-mean rejection"),
+    "MASKHOT": (int(MaskBit.HOT), "HOT: reserved"),
+    "MASKDEAD": (int(MaskBit.DEAD), "DEAD: reserved"),
+}
 
 IC_KEYS = [
     "EGAIN",

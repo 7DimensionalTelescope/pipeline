@@ -37,6 +37,7 @@ from .header_set import InputHeaderSet
 from .background import BackgroundMixin
 from .combine import InMemoryCoaddMixin
 from .legacy import LegacyCoaddMixin
+from .masks import MaskMixin
 from .swarp import SwarpMixin
 
 
@@ -47,6 +48,7 @@ class ImCoadd(
     LegacyCoaddMixin,
     SwarpMixin,
     BackgroundMixin,
+    MaskMixin,
     InMemoryCoaddMixin,
     BaseSetup,
     DatabaseHandler,
@@ -151,6 +153,9 @@ class ImCoadd(
         self.initialize()
         self._validate_direct_grid()
         images = self.input_images
+        self._prepare_intermediate_storage(images)
+        if self.plan.output_mask_map or self.plan.dump_reprojected_masks:
+            self.prepare_quality_masks(images, detector_images=self.input_images)
         weight_images = None
 
         if plan.need_weights:
@@ -193,6 +198,8 @@ class ImCoadd(
             )
 
         self.coadd_in_memory(images, device_id=device_id, weight_images=weight_images)
+        self._coadd_completed = True
+        self.finalize_quality_masks()
         step += 1
         self.update_progress(
             self._process_registry.step_progress(self._process_spec, step, total_steps),
@@ -283,6 +290,13 @@ class ImCoadd(
             images = self.reproject_and_coadd_with_swarp(
                 images, coadd=False, weight_images=weight_images
             )
+        self._prepare_intermediate_storage(images)
+        if (
+            self.plan.output_mask_map
+            or self.plan.dump_reprojected_masks
+            or self.plan.satellite_mask_enabled
+        ):
+            self.prepare_quality_masks(images, detector_images=self.input_images)
         if self.config_node.imcoadd.convolve:
             self.build_fov_masks(images)
         self._remove_reprojection_intermediates()
@@ -293,6 +307,7 @@ class ImCoadd(
         )
 
         if self.config_node.imcoadd.convolve:
+            self.discard_cached_frames()
             self.prepare_convolution(images)
             images = self.run_convolution(images, device_id=device_id)
             self.shrink_fov_masks(self.delta_peeings)
@@ -324,6 +339,8 @@ class ImCoadd(
             )
 
         self.coadd_in_memory(images, device_id=device_id)
+        self._coadd_completed = True
+        self.finalize_quality_masks()
         step += 1
         self.update_progress(
             self._process_registry.step_progress(self._process_spec, step, total_steps),
@@ -352,6 +369,9 @@ class ImCoadd(
         return self._plan
 
     def run(self, overwrite=False, use_gpu: bool = False, device_id=None):
+        self._coadd_completed = False
+        self._quality_masks = None
+        self._coadd_mask_builder = None
         try:
             self.overwrite = self.resolve_overwrite(overwrite)
             self._plan = self._coadd_plan()  # the config is write-through and editable until here
@@ -369,6 +389,8 @@ class ImCoadd(
             self.logger.error(f"Error during imcoadd processing: {str(e)}", e, exc_info=True)
 
             raise
+        finally:
+            self._cleanup_imcoadd_intermediates()
         # self.logger.debug(MemoryMonitor.log_memory_usage)
 
     def initialize(self, overwrite=False):

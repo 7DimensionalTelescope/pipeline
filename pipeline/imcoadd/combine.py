@@ -290,6 +290,11 @@ class InMemoryCoaddMixin:
                         match_swarp_size=match_swarp_size,
                         write_weight=plan.output_weight_map,
                         write_footprint=plan.output_footprint,
+                        outlier_callback=(
+                            self._coadd_mask_builder.mark_outliers
+                            if getattr(self, "_coadd_mask_builder", None) is not None
+                            else None
+                        ),
                     )
                 elif mode == "median":
                     from ..services.combine_lock import memory_headroom_bytes
@@ -457,6 +462,7 @@ class InMemoryCoaddMixin:
         var_maps: list[str] | None = None,
         write_weight: bool = True,
         write_footprint: bool = True,
+        outlier_callback=None,
     ) -> str:
         return clipped_mean_coadd_numpy(
             input_images,
@@ -480,6 +486,7 @@ class InMemoryCoaddMixin:
             clip_ampfrac=self.plan.clip_ampfrac,
             var_maps=var_maps,
             coverage_policy=self.plan.coverage_policy,
+            outlier_callback=outlier_callback,
             logger=self.logger,
         )
 

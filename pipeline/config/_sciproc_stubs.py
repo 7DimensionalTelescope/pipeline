@@ -89,6 +89,7 @@ if TYPE_CHECKING:
         image_selection_source: Any
         ppflag_bitmask: str
         coadd_image: Any
+        coadd_mask_image: Any
         gpu: bool
         device: int
         zp_key: str
@@ -99,6 +100,9 @@ if TYPE_CHECKING:
         output_weight_map: bool
         output_single_weight_map: bool
         output_footprint: bool
+        output_mask_map: bool
+        dump_reprojected_masks: bool
+        satellite_mask: dict
         output_sky_rms_map: bool
         output_bkg_map: bool
         persist_weight_maps: bool
@@ -109,6 +113,9 @@ if TYPE_CHECKING:
         badpix_reprojection_policy: str
         dump_unreprojected_interp: bool
         dump_unreprojected_weight: bool
+        intermediate_policy: str
+        memory_image_limit: int
+        dump_bkgsub: bool
         lean_factory: bool
         combine_lock_threshold: int
         combine_scratch: str

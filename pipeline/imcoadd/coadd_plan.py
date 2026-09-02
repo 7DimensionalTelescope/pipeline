@@ -19,6 +19,12 @@ class CoaddPlan:
     clip_sigma: float
     clip_ampfrac: float
     proper_weight_map_policy: str
+    output_mask_map: bool
+    dump_reprojected_masks: bool
+    satellite_mask_enabled: bool
+    intermediate_policy: str
+    memory_image_limit: int
+    dump_bkgsub: bool
 
     @property
     def need_weights(self) -> bool:
@@ -85,7 +91,7 @@ def resolve_coadd_plan(node) -> CoaddPlan:
 
     clipped_options = mode_options("clipped")
     proper_options = mode_options("proper")
-    clip_sigma = float(clipped_options.get("clip_sigma", 4.0))
+    clip_sigma = float(clipped_options.get("clip_sigma", 5.0))
     clip_ampfrac = float(clipped_options.get("clip_ampfrac", 0.3))
     if not math.isfinite(clip_sigma) or clip_sigma <= 0:
         raise ValueError("imcoadd.coadd_options.clipped.clip_sigma must be positive")
@@ -112,6 +118,27 @@ def resolve_coadd_plan(node) -> CoaddPlan:
             f"Invalid imcoadd.coverage_policy: {coverage_policy!r} "
             "(expected 'union' or 'intersection')"
         )
+
+    satellite_options = get_key(node, "satellite_mask", default={}) or {}
+    if not isinstance(satellite_options, dict):
+        raise ValueError("imcoadd.satellite_mask must be a mapping")
+    satellite_mask_enabled = bool(satellite_options.get("enabled", False))
+    if satellite_mask_enabled and routine != "reproject-first":
+        raise ValueError(
+            "imcoadd.satellite_mask.enabled requires coadd_routine: reproject-first"
+        )
+
+    intermediate_policy = str(
+        get_key(node, "intermediate_policy", default="auto") or "auto"
+    ).strip().lower()
+    if intermediate_policy not in ("auto", "memory", "disk"):
+        raise ValueError(
+            f"Invalid imcoadd.intermediate_policy: {intermediate_policy!r} "
+            "(expected 'auto', 'memory', or 'disk')"
+        )
+    memory_image_limit = int(get_key(node, "memory_image_limit", default=6))
+    if memory_image_limit < 1:
+        raise ValueError("imcoadd.memory_image_limit must be at least 1")
 
     policy = str(
         opt("badpix_reprojection_policy", "bpmask_policy", "1px") or "off"
@@ -156,7 +183,19 @@ def resolve_coadd_plan(node) -> CoaddPlan:
         clip_sigma=clip_sigma,
         clip_ampfrac=clip_ampfrac,
         proper_weight_map_policy=proper_weight_map_policy,
+        output_mask_map=bool(get_key(node, "output_mask_map", default=True)),
+        dump_reprojected_masks=bool(
+            get_key(node, "dump_reprojected_masks", default=False)
+        ),
+        satellite_mask_enabled=satellite_mask_enabled,
+        intermediate_policy=intermediate_policy,
+        memory_image_limit=memory_image_limit,
+        dump_bkgsub=bool(get_key(node, "dump_bkgsub", default=False)),
     )
+    if plan.dump_reprojected_masks and plan.routine != "reproject-first":
+        raise ValueError(
+            "imcoadd.dump_reprojected_masks requires coadd_routine: reproject-first"
+        )
     if plan.policy == "1px" and not plan.zero:
         raise NotImplementedError(
             "badpix_reprojection_policy '1px' requires zero_badpix_weight: True; "

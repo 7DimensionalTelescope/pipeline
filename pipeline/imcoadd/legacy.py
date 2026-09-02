@@ -3,6 +3,7 @@ class LegacyCoaddMixin:
         self._use_gpu = all([use_gpu, self.config_node.imcoadd.gpu, self._use_gpu])
 
         self.initialize()
+        self._prepare_intermediate_storage(self.input_images)
 
         images = self.bkgsub(self.input_images)
         self.update_progress(
@@ -54,6 +55,14 @@ class LegacyCoaddMixin:
 
         self.reproject_and_coadd_with_swarp(images, coadd=True)
         self.apply_legacy_coverage_policy(images)
+        if self.plan.output_mask_map:
+            pass_type = "sci" if self.plan.need_weights else ""
+            resampled = self.path.imcoadd.factory.resampled_images(
+                images, pass_type=pass_type
+            )
+            self.prepare_quality_masks(resampled, detector_images=self.input_images)
+        self._coadd_completed = True
+        self.finalize_quality_masks()
         self.update_progress(
             self._process_registry.milestone_progress(
                 self._process_spec, "coadd_with_swarp"

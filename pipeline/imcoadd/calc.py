@@ -319,11 +319,12 @@ def clipped_mean_coadd_numpy(
     masks: list[str] | None = None,
     flxscales: list[float] | bool | None = None,
     match_swarp_size: bool = True,
-    clip_sigma: float = 4.0,
+    clip_sigma: float = 5.0,
     clip_ampfrac: float = 0.3,
     reserved_bytes: int = 0,
     var_maps: list[str] | None = None,
     coverage_policy: str = "union",
+    outlier_callback=None,
     logger: Logger | None = None,
 ) -> str:
     """Median-centered Gruen-style clipped weighted mean."""
@@ -423,6 +424,13 @@ def clipped_mean_coadd_numpy(
         )
         n_total += int(valid.sum())
         n_clipped += int(valid.sum() - keep.sum())
+        rejected = valid & ~keep
+        if outlier_callback is not None and rejected.any():
+            outlier_callback(
+                i,
+                (tx0, tx1, ty0, ty1, sx0, sx1, sy0, sy1),
+                rejected,
+            )
 
         wv = np.where(keep, w_eff, 0.0)
         sum_arr[sl] += wv * np.where(keep, src, 0.0)

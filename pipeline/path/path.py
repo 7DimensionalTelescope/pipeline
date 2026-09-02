@@ -1954,6 +1954,10 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
         return os.path.join(self._parent.tmp_dir, self._config_scope, "bkgsub")
 
     @property
+    def mask_dir(self) -> str:
+        return os.path.join(self._parent.tmp_dir, self._config_scope, "mask")
+
+    @property
     def conv_dir(self) -> str:
         return os.path.join(self._parent.tmp_dir, self._config_scope, "conv")
 
@@ -1980,6 +1984,10 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
         bad-pixel-touched samples are excluded from the count is
         `imcoadd.badpix_reprojection_policy`'s decision."""
         return add_suffix(self._parent.coadd_image, "footprint")
+
+    @property
+    def coadd_mask_image(self) -> str:
+        return add_suffix(self._parent.coadd_image, "mask")
 
     # ---- inverted bpmask staged in tmp_dir for the bpm SWarp pass ----
     def bpmask_inverted(self, bpmask_file) -> str:
