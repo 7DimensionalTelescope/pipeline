@@ -137,7 +137,8 @@ class SwarpMixin:
         )
         freed = n = 0
         for resamp, bkgsub in zip(resampled, bkgsub_images):
-            if not os.path.exists(bkgsub):
+            exists = getattr(self, "_stage_frame_exists", os.path.exists)
+            if not exists(bkgsub):
                 continue
             # bkg/bkgrms are staged off the resamp name (stage_images suffix convention)
             doomed = [add_suffix(resamp, "bkg"), add_suffix(resamp, "bkgrms"), resamp]

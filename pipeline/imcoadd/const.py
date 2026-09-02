@@ -5,7 +5,7 @@ ZP_KEY = "ZP_AUTO"
 
 
 class MaskBit(IntFlag):
-    BAD = 1
+    BADPIX = 1
     SATURATED = 2
     SATELLITE = 4
     OUTLIER = 8
@@ -14,7 +14,7 @@ class MaskBit(IntFlag):
 
 
 MASK_HEADER_CARDS = {
-    "MASKBAD": (int(MaskBit.BAD), "BAD: generic detector bad pixel"),
+    "MASKBAD": (int(MaskBit.BADPIX), "BADPIX: generic detector bad pixel"),
     "MASKSAT": (int(MaskBit.SATURATED), "SATURATED: detector saturation"),
     "MASKTRAI": (int(MaskBit.SATELLITE), "SATELLITE: Hough trail mask"),
     "MASKOUT": (int(MaskBit.OUTLIER), "OUTLIER: clipped-mean rejection"),

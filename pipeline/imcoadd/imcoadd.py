@@ -38,6 +38,7 @@ from .background import BackgroundMixin
 from .combine import InMemoryCoaddMixin
 from .legacy import LegacyCoaddMixin
 from .masks import MaskMixin
+from .storage import IntermediateStorageMixin
 from .swarp import SwarpMixin
 
 
@@ -48,6 +49,7 @@ class ImCoadd(
     LegacyCoaddMixin,
     SwarpMixin,
     BackgroundMixin,
+    IntermediateStorageMixin,
     MaskMixin,
     InMemoryCoaddMixin,
     BaseSetup,
@@ -160,7 +162,7 @@ class ImCoadd(
 
         if plan.need_weights:
             factory = self.path.imcoadd.factory
-            weight_images = factory.stage_images(images, "weight", factory.weight_dir)
+            weight_images = factory.stage_images(images, "weight", self._weight_dir)
             weight_images = self.calculate_weight_map(images, device_id=device_id, out_weights=weight_images)
             step += 1
             self.update_progress(
@@ -850,7 +852,8 @@ class ImCoadd(
         self.logger.info("Start the interpolation for bad pixels")
 
         factory = self.path.imcoadd.factory
-        interp_images = factory.stage_images(input_images, "interp", factory.interp_dir)
+        interp_dir = getattr(self, "_interp_dir", factory.interp_dir)
+        interp_images = factory.stage_images(input_images, "interp", interp_dir)
         self.config_node.imcoadd.interp_images = interp_images
 
         # bpmask_array, header = fits.getdata(self.config.preprocess.bpmask_file, header=True)
@@ -1049,7 +1052,8 @@ class ImCoadd(
             from ..utils import force_symlink
 
             factory = self.path.imcoadd.factory
-            self.config_node.imcoadd.conv_files = factory.stage_images(input_images, "conv", factory.conv_dir)
+            conv_dir = getattr(self, "_conv_dir", factory.conv_dir)
+            self.config_node.imcoadd.conv_files = factory.stage_images(input_images, "conv", conv_dir)
 
             # Get peeings for convolution. Read them off the snapshot, not the files:
             # under reproject-first these inputs are SWarp resamp products, and PEEING is

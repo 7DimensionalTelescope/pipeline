@@ -100,6 +100,8 @@ class InMemoryCoaddMixin:
 
     def _stage_for_combine(self, groups: dict[str, list[str] | None]):
         """Stage combine inputs locally and return remapped groups plus cleanup."""
+        if getattr(self, "_intermediate_policy", "disk") == "memory":
+            return groups, lambda: None
         scratch = get_key(self.config_node.imcoadd, "combine_scratch")
         files = [(g, f) for g, lst in groups.items() if lst for f in lst]
         if not files:
@@ -239,6 +241,11 @@ class InMemoryCoaddMixin:
         var_is_mask = (
             var_maps is not None and masks is not None and list(var_maps) == list(masks)
         )
+        if getattr(self, "_intermediate_policy", "disk") == "memory":
+            cached_paths = set(wht_maps or [])
+            cached_paths.update(masks or [])
+            for path in cached_paths:
+                self._read_stage_frame(path)
         staged, cleanup = self._stage_for_combine(
             {
                 "sci": input_images,
@@ -450,6 +457,7 @@ class InMemoryCoaddMixin:
             match_swarp_size=match_swarp_size,
             var_maps=var_maps,
             coverage_policy=self.plan.coverage_policy,
+            frame_cache=getattr(self, "_frame_cache", None),
             logger=self.logger,
         )
 
@@ -487,6 +495,7 @@ class InMemoryCoaddMixin:
             var_maps=var_maps,
             coverage_policy=self.plan.coverage_policy,
             outlier_callback=outlier_callback,
+            frame_cache=getattr(self, "_frame_cache", None),
             logger=self.logger,
         )
 
@@ -526,6 +535,7 @@ class InMemoryCoaddMixin:
             reserved_bytes=reserved_bytes,
             var_maps=var_maps,
             coverage_policy=self.plan.coverage_policy,
+            frame_cache=getattr(self, "_frame_cache", None),
             logger=self.logger,
         )
 

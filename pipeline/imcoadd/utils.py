@@ -65,7 +65,7 @@ def move_file(src, dst):
 
 
 def determine_size(
-    input_images: list[str], match_swarp_size: bool
+    input_images: list[str], match_swarp_size: bool, frame_cache: dict | None = None
 ) -> tuple[int, int, float, float, np.ndarray, np.ndarray, np.ndarray]:
     """Compute the coadd target grid and per-frame numpy offsets.
     Returns ``(target_w, target_h, target_cx, target_cy, x0, y0, shapes)``."""
@@ -73,10 +73,16 @@ def determine_size(
     crpix = []
     shapes = []
     for f in input_images:
-        with fits.open(f, memmap=True) as hdul:
-            hdr = hdul[0].header
+        cached = frame_cache.get(f) if frame_cache is not None else None
+        if cached is not None:
+            data, hdr = cached
             crpix.append((hdr["CRPIX1"], hdr["CRPIX2"]))
-            shapes.append(hdul[0].data.shape)  # (h, w)
+            shapes.append(data.shape)
+        else:
+            with fits.open(f, memmap=True) as hdul:
+                hdr = hdul[0].header
+                crpix.append((hdr["CRPIX1"], hdr["CRPIX2"]))
+                shapes.append(hdul[0].data.shape)
     crpix = np.array(crpix, dtype=float)
     shapes = np.array(shapes, dtype=int)
 
@@ -100,14 +106,19 @@ def determine_size(
 
 
 def build_coadd_wcs_header(
-    wcs_source: str, target_cx: float, target_cy: float, coadd_header: InputHeaderSet
+    wcs_source: str,
+    target_cx: float,
+    target_cy: float,
+    coadd_header: InputHeaderSet,
+    frame_cache: dict | None = None,
 ) -> fits.Header:
     """Build the coadd output header from a reference frame's WCS + coadd_header.
 
     Clean WCS via astropy.wcs drops per-frame keys like FLXSCALE/SKYVAL/BACKTYPE
     that would otherwise leak from any single input; ``self.input_headers.coadd_header``
     carries the aggregated coadd metadata on top."""
-    wcs = WCS(fits.getheader(wcs_source))
+    cached = frame_cache.get(wcs_source) if frame_cache is not None else None
+    wcs = WCS(cached[1] if cached is not None else fits.getheader(wcs_source))
     wcs.wcs.crpix = [target_cx, target_cy]
     out_header = wcs.to_header(relax=True)
     for card in coadd_header.cards:
@@ -115,15 +126,19 @@ def build_coadd_wcs_header(
     return out_header
 
 
-def write_mask_plio(path, mask) -> str:
+def write_mask_plio(path, mask, header=None) -> str:
     """Binary mask as PLIO_1-compressed FITS (~1-3 MB for a 61 Mpx frame).
 
     PLIO is FITS-standard tile compression designed for pixel masks; any compliant
     reader sees an ordinary integer image. Plain uint8 working copies are still
     written wherever SExtractor must read the mask (it cannot read tile-compressed)."""
-    hdu = fits.CompImageHDU(data=np.asarray(mask, dtype=np.uint8), compression_type="PLIO_1")
+    hdu = fits.CompImageHDU(
+        data=np.asarray(mask, dtype=np.uint8),
+        header=header,
+        compression_type="PLIO_1",
+    )
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    fits.HDUList([fits.PrimaryHDU(), hdu]).writeto(path, overwrite=True)
+    fits.HDUList([fits.PrimaryHDU(header=header), hdu]).writeto(path, overwrite=True)
     return path
 
 

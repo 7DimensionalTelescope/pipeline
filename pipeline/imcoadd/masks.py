@@ -1,6 +1,4 @@
 import os
-import shutil
-import tempfile
 
 import numpy as np
 from astropy.io import fits
@@ -9,7 +7,7 @@ from astropy.wcs import WCS
 from ..config.utils import get_key
 from ..utils import add_suffix, atleast_1d, get_basename
 from .const import MASK_HEADER_CARDS, MaskBit
-from .utils import determine_size
+from .utils import determine_size, write_mask_plio
 
 
 def _robust_stats(image: np.ndarray, stride: int = 8) -> tuple[float, float]:
@@ -68,11 +66,21 @@ def _merge_segments(segments, angle_limit: float, distance_limit: float):
     return clusters
 
 
-def _measure_trail_width(image, segment, noise, factor, **options):
+def _measure_trail_width(
+    image,
+    segment,
+    noise,
+    factor,
+    width_sigma=1.0,
+    width_scale=1.0,
+    profile_percentile=50.0,
+    min_half_width=2.0,
+    max_half_width=24.0,
+):
     from scipy.ndimage import gaussian_filter1d, map_coordinates
 
-    minimum = float(options.get("min_half_width", 2.0)) / factor
-    maximum = float(options.get("max_half_width", 24.0)) / factor
+    minimum = float(min_half_width) / factor
+    maximum = float(max_half_width) / factor
     if minimum < 0 or maximum < minimum:
         raise ValueError("satellite_mask half-width limits are invalid")
     p0, p1 = np.asarray(segment[:2]), np.asarray(segment[2:])
@@ -95,19 +103,19 @@ def _measure_trail_width(image, segment, noise, factor, **options):
         mode="constant",
         cval=np.nan,
     )
-    percentile = float(options.get("width_profile_percentile", 50.0))
-    if not 0 <= percentile <= 100:
-        raise ValueError("satellite_mask.width_profile_percentile must be between 0 and 100")
-    profile = np.nanpercentile(values, percentile, axis=1)
+    if not 0 <= profile_percentile <= 100:
+        raise ValueError("profile_percentile must be between 0 and 100")
+    profile = np.nanpercentile(values, profile_percentile, axis=1)
     profile = gaussian_filter1d(profile, 0.75, mode="nearest")
     outer = np.abs(offsets) >= maximum + 1.0
     baseline = float(np.nanmedian(profile[outer]))
     signal = profile - baseline
     search = np.abs(offsets) <= maximum
     peak = int(np.nanargmax(np.where(search, signal, np.nan)))
-    width_sigma = float(options.get("width_sigma", 1.0))
     if width_sigma <= 0:
         raise ValueError("satellite_mask.width_sigma must be positive")
+    if width_scale <= 0:
+        raise ValueError("satellite_mask.width_scale must be positive")
     above = signal >= width_sigma * noise
     if not above[peak]:
         center = float(offsets[peak]) if signal[peak] > 0 else 0.0
@@ -120,10 +128,8 @@ def _measure_trail_width(image, segment, noise, factor, **options):
         while right + 1 < len(above) and above[right + 1]:
             right += 1
         center = float(offsets[peak])
-        half_width = float(
-            max(center - offsets[left], offsets[right] - center) + 0.125
-        )
-        half_width = min(maximum, max(minimum, half_width))
+        half_width = float(max(center - offsets[left], offsets[right] - center) + 0.125)
+        half_width = min(maximum, max(minimum, half_width * width_scale))
     shifted = np.r_[p0 + center * normal, p1 + center * normal]
     return shifted, half_width
 
@@ -169,9 +175,7 @@ def detect_satellite_trails(image: np.ndarray, **options) -> tuple[np.ndarray, n
         theta=theta,
         rng=np.random.default_rng(0),
     )
-    segments = np.asarray(
-        [(p0[0], p0[1], p1[0], p1[1]) for p0, p1 in raw], dtype=np.float64
-    ).reshape(-1, 4)
+    segments = np.asarray([(p0[0], p0[1], p1[0], p1[1]) for p0, p1 in raw], dtype=np.float64).reshape(-1, 4)
     accepted = []
     if segments.size:
         clusters = _merge_segments(
@@ -197,17 +201,23 @@ def detect_satellite_trails(image: np.ndarray, **options) -> tuple[np.ndarray, n
             t1 = projection.max() + padding
             segment = np.r_[point + t0 * direction, point + t1 * direction]
             accepted.append(
-                _measure_trail_width(flat, segment, flat_sigma, factor, **options)
+                _measure_trail_width(
+                    flat,
+                    segment,
+                    flat_sigma,
+                    factor,
+                    width_sigma=float(options.get("width_sigma", 1.0)),
+                    width_scale=float(options.get("width_scale", 1.0)),
+                )
             )
 
     canvas = Image.new("1", (image.shape[1], image.shape[0]))
     draw = ImageDraw.Draw(canvas)
-    padding = float(options.get("width_padding", 1.0))
     center_offset = (factor - 1) / 2
     scaled = []
     for segment, half_width in accepted:
         x1, y1, x2, y2 = segment * factor + center_offset
-        radius = max(1, int(np.ceil(half_width * factor + padding)))
+        radius = max(1, int(np.ceil(half_width * factor + 1.0)))
         draw.line((x1, y1, x2, y2), fill=1, width=2 * radius + 1)
         for x, y in ((x1, y1), (x2, y2)):
             draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=1)
@@ -221,9 +231,7 @@ def detect_satellite_trails(image: np.ndarray, **options) -> tuple[np.ndarray, n
 class CoaddMaskBuilder:
     def __init__(self, images, output_path, match_swarp_size, keep_frames):
         self.images = list(images)
-        target_w, target_h, _, _, self.x0, self.y0, self.shapes = determine_size(
-            self.images, match_swarp_size
-        )
+        target_w, target_h, _, _, self.x0, self.y0, self.shapes = determine_size(self.images, match_swarp_size)
         self.output_path = output_path
         self.output = np.zeros((target_h, target_w), dtype=np.uint8)
         self.frames = [None] * len(self.images)
@@ -263,19 +271,14 @@ class CoaddMaskBuilder:
 
     def write_frames(self):
         for index, (image, stored) in enumerate(zip(self.images, self.frames)):
-            frame_header = (
-                self.headers[index]
-                if self.headers[index] is not None
-                else fits.getheader(image)
-            )
+            frame_header = self.headers[index] if self.headers[index] is not None else fits.getheader(image)
             frame_header["BUNIT"] = "bitmask"
             for key, value in MASK_HEADER_CARDS.items():
                 frame_header[key] = value
-            fits.writeto(
+            write_mask_plio(
                 add_suffix(image, "mask"),
                 self.frame(index) if isinstance(stored, str) else stored,
                 header=frame_header,
-                overwrite=True,
             )
 
     def write(self, dump_frames=False):
@@ -284,77 +287,19 @@ class CoaddMaskBuilder:
         for key, value in MASK_HEADER_CARDS.items():
             header[key] = value
         mask_path = add_suffix(self.output_path, "mask")
-        fits.writeto(mask_path, self.output, header=header, overwrite=True)
+        write_mask_plio(mask_path, self.output, header=header)
         if dump_frames:
             self.write_frames()
         return mask_path
 
 
 class MaskMixin:
-    def _prepare_intermediate_storage(self, images):
-        if getattr(self, "_intermediate_policy_ready", False):
-            return
-        requested = self.plan.intermediate_policy
-        use_memory = requested == "memory" or (
-            requested == "auto" and len(atleast_1d(images)) <= self.plan.memory_image_limit
-        )
-        durable_models = bool(
-            get_key(self.config_node.imcoadd, "output_bkg_map", default=False)
-            or get_key(self.config_node.imcoadd, "output_sky_rms_map", default=False)
-        )
-        if use_memory and durable_models:
-            if requested == "memory":
-                raise ValueError(
-                    "intermediate_policy 'memory' is incompatible with output_bkg_map or output_sky_rms_map"
-                )
-            use_memory = False
-        if use_memory:
-            root = "/dev/shm"
-            need = int(2.5 * sum(os.path.getsize(path) for path in atleast_1d(images)))
-            usable = os.path.isdir(root) and os.access(root, os.W_OK)
-            free = shutil.disk_usage(root).free if usable else 0
-            if not usable or free < need:
-                if requested == "memory":
-                    raise OSError(
-                        f"intermediate_policy 'memory' needs {need / 1e9:.1f} GB in {root}; "
-                        f"{free / 1e9:.1f} GB is available"
-                    )
-                use_memory = False
-        self._intermediate_policy = "memory" if use_memory else "disk"
-        self._frame_cache = {}
-        self._working_mask_paths = []
-        self._memory_bkgsub_dump_pairs = []
-        if use_memory:
-            self._memory_intermediate_dir = tempfile.mkdtemp(prefix="pipeline_imcoadd_", dir="/dev/shm")
-            self._bkgsub_dir = os.path.join(self._memory_intermediate_dir, "bkgsub")
-            os.makedirs(self._bkgsub_dir, exist_ok=True)
-        else:
-            self._memory_intermediate_dir = None
-            self._bkgsub_dir = self.path.imcoadd.factory.bkgsub_dir
-        self._intermediate_policy_ready = True
-        self.logger.info(
-            f"Intermediate policy: {self._intermediate_policy} "
-            f"({len(atleast_1d(images))} images, memory limit {self.plan.memory_image_limit})"
-        )
-
-    def _read_stage_frame(self, image):
-        cached = getattr(self, "_frame_cache", {}).get(image)
-        if cached is not None:
-            return cached
-        data, header = fits.getdata(image, header=True, memmap=False)
-        value = np.ascontiguousarray(data, dtype=np.float32), header
-        if getattr(self, "_intermediate_policy", "disk") == "memory":
-            self._frame_cache[image] = value
-        return value
-
     @staticmethod
     def _project_pixels(xs, ys, input_header, output_header, shape):
         output = np.zeros(shape, dtype=bool)
         if not len(xs):
             return output
-        ra, dec = WCS(input_header).all_pix2world(
-            xs.astype(np.float64), ys.astype(np.float64), 0
-        )
+        ra, dec = WCS(input_header).all_pix2world(xs.astype(np.float64), ys.astype(np.float64), 0)
         x, y = WCS(output_header).all_world2pix(ra, dec, 0)
         finite = np.isfinite(x) & np.isfinite(y)
         xi = np.zeros(x.shape, dtype=np.int64)
@@ -371,13 +316,11 @@ class MaskMixin:
         mask_file, badpix = self._get_bpmask(detector_image)
         ys, xs = np.nonzero(fits.getdata(mask_file, memmap=False) == badpix)
         bad = self._project_pixels(xs, ys, input_header, output_header, output_shape)
-        output[bad] |= int(MaskBit.BAD)
+        output[bad] |= int(MaskBit.BADPIX)
         saturation = input_header.get("SATURATE")
         if saturation is not None:
             if detector_data is not None:
-                ys, xs = np.nonzero(
-                    np.isfinite(detector_data) & (detector_data >= float(saturation))
-                )
+                ys, xs = np.nonzero(np.isfinite(detector_data) & (detector_data >= float(saturation)))
                 if detector_data.shape == output_shape:
                     saturated = np.zeros(output_shape, dtype=bool)
                     saturated[ys, xs] = True
@@ -408,9 +351,7 @@ class MaskMixin:
         for index, (image, detector) in enumerate(zip(images, detector_images)):
             data, header = self._read_stage_frame(image)
             same_file = os.path.abspath(image) == os.path.abspath(detector)
-            mask = self._detector_mask_bits(
-                detector, header, data.shape, detector_data=data if same_file else None
-            )
+            mask = self._detector_mask_bits(detector, header, data.shape, detector_data=data if same_file else None)
             if self.plan.satellite_mask_enabled:
                 trail, lines = detect_satellite_trails(data, **satellite_options)
                 mask[trail] |= int(MaskBit.SATELLITE)
@@ -421,10 +362,8 @@ class MaskMixin:
             if self._intermediate_policy == "memory":
                 quality_masks.append(mask)
             else:
-                path = self.path.imcoadd.factory.stage_images(
-                    [image], "mask", self.path.imcoadd.factory.mask_dir
-                )[0]
-                fits.writeto(path, mask, header=header, overwrite=True)
+                path = self.path.imcoadd.factory.stage_images([image], "mask", self.path.imcoadd.factory.mask_dir)[0]
+                write_mask_plio(path, mask, header=header)
                 self._working_mask_paths.append(path)
                 quality_masks.append(path)
         builder.frames = quality_masks
@@ -438,9 +377,6 @@ class MaskMixin:
             return fits.getdata(value, memmap=False).astype(np.uint8, copy=False)
         return value
 
-    def discard_cached_frames(self):
-        getattr(self, "_frame_cache", {}).clear()
-
     def finalize_quality_masks(self):
         builder = getattr(self, "_coadd_mask_builder", None)
         if builder is None:
@@ -453,29 +389,3 @@ class MaskMixin:
         if self.plan.dump_reprojected_masks:
             builder.write_frames()
         return None
-
-    def _cleanup_imcoadd_intermediates(self):
-        root = getattr(self, "_memory_intermediate_dir", None)
-        plan = getattr(self, "_plan", None)
-        if root and plan is not None and plan.dump_bkgsub and getattr(self, "_coadd_completed", False):
-            for source, destination in getattr(self, "_memory_bkgsub_dump_pairs", []):
-                if os.path.exists(source):
-                    os.makedirs(os.path.dirname(destination), exist_ok=True)
-                    shutil.copy2(source, destination)
-        if root:
-            shutil.rmtree(root, ignore_errors=True)
-            destinations = [
-                destination
-                for _, destination in getattr(self, "_memory_bkgsub_dump_pairs", [])
-            ]
-            self.config_node.imcoadd.bkgsub_images = (
-                destinations if plan is not None and plan.dump_bkgsub else None
-            )
-            self.images_to_coadd = None
-        for path in getattr(self, "_working_mask_paths", []):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-        self.discard_cached_frames()
-        self._intermediate_policy_ready = False

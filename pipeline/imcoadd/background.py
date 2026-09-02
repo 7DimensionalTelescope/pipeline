@@ -14,6 +14,17 @@ from .const import MaskBit
 
 
 class BackgroundMixin:
+    def _background_output_exists(self, image):
+        storage_check = getattr(self, "_stage_frame_exists", None)
+        return storage_check(image) if storage_check is not None else os.path.exists(image)
+
+    def _write_background_output(self, image, data, header):
+        storage_write = getattr(self, "_store_stage_frame", None)
+        if storage_write is not None:
+            storage_write(image, data, header)
+        else:
+            fits.writeto(image, data, header=header, overwrite=True)
+
     def bkgsub(
         self,
         input_images: list[str] | None = None,
@@ -195,7 +206,7 @@ class BackgroundMixin:
                                   fov_mask_images, source_mask_images, types, singles, catalogs)))  # fmt: skip
         if not self.overwrite:
             n_all = len(jobs)
-            jobs = [(i, job) for i, job in jobs if not os.path.exists(job[1])]
+            jobs = [(i, job) for i, job in jobs if not self._background_output_exists(job[1])]
             if len(jobs) < n_all:
                 self.logger.info(
                     f"{n_all - len(jobs)} existing bkgsub products skipped, {len(jobs)} to compute"
@@ -475,9 +486,10 @@ class BackgroundMixin:
         **kwargs,
     ):
 
-        if os.path.exists(outim):
+        if self._background_output_exists(outim):
             try:
-                _backtype = fits.getval(outim, "BACKTYPE")
+                cached = getattr(self, "_frame_cache", {}).get(outim)
+                _backtype = cached[1].get("BACKTYPE") if cached else fits.getval(outim, "BACKTYPE")
             except KeyError:
                 _backtype = ""
             if _backtype.upper() == "CONSTANT":
@@ -498,7 +510,7 @@ class BackgroundMixin:
         if quality_mask is not None:
             _data[(quality_mask & int(MaskBit.SATELLITE)) != 0] = 0.0
         self.logger.debug(f"Using SKYVAL: {skyval:.3f}")
-        fits.writeto(outim, _data, header=_hdr, overwrite=True)
+        self._write_background_output(outim, _data, _hdr)
 
         return False  # is_steppy is False by definition for constant background subtraction
 
@@ -538,7 +550,7 @@ class BackgroundMixin:
             _data[~fov_valid] = 0.0  # keep out-of-FOV at 0: the coadd's validity marker
         if quality_mask is not None:
             _data[(quality_mask & int(MaskBit.SATELLITE)) != 0] = 0.0
-        fits.writeto(outim, _data, header=_hdr, overwrite=True)
+        self._write_background_output(outim, _data, _hdr)
 
         # return is_steppy
 
