@@ -143,6 +143,7 @@ imcoadd:
     DETECT_THRESH:  # empty reuses the photometry catalog; a differing value forces own run
     DETECT_MINAREA:
   source_mask: True  # False, True or 'iterative'; only affects dynamic bkgsub
+  dump_source_masks: false  # retain source masks beside config under source_masks/config_stem
   output_weight_map: true  # write the coadd weight product
   output_single_weight_map: false  # keep each frame's resampled weight in singles/ (int16)
   output_footprint: true  # write the coadd footprint product

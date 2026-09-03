@@ -252,7 +252,7 @@ class SciProcConfiguration(BaseConfig):
         - verbose: verbose level
         - is_pipeline: you want it False unless trying to modify existing pipeline product
         - is_too: flag for ToO observations, which have a dedicated save location
-        - config_suffix: appended to the auto-generated multi-epoch config stem, e.g. "median"
+        - config_suffix: appended to the auto-generated config stem, e.g. "median"
         - config_name_policy: "error" to raise an error, other options to resolve the degeneracy
         """
 

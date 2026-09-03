@@ -43,7 +43,7 @@ class PathHandlerSettings:
     is_too: bool = False
     is_multi_epoch: bool = False
     config_file: str | Path | None = None
-    config_suffix: str | None = None  # appended to the auto-generated multi-epoch config stem
+    config_suffix: str | None = None  # appended to the auto-generated config stem
     factory_scratch: str | None = None  # local root replacing FACTORY_DIR for multi-epoch factories
 
 
@@ -663,7 +663,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             nightdate = self._get_namehandler_property_at_index("nightdate", i)
 
             stem_keys = [obj, filte] if self.settings.is_multi_epoch else [obj, filte, nightdate]
-            if self.settings.is_multi_epoch and self.settings.config_suffix:
+            if self.settings.config_suffix:
                 stem_keys = stem_keys + [str(self.settings.config_suffix)]
             yml_stem = "_".join(stem_keys)
             if self._is_too_vectorized[i]:
@@ -1722,17 +1722,22 @@ class PathImcoadd(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def _config_suffix(self) -> str:
-        """Whatever distinguishes this config's stem from a plain ``{obj}_{filter}``.
+        """Whatever distinguishes this config's stem from its default stem.
 
         Taken from the config name rather than kept as a config key, so a reloaded config
         still produces the same coadd name; the stem is the differentiator everywhere else.
         """
-        if not self._parent.settings.is_multi_epoch:
-            return ""
         yml = collapse(self._parent.sciproc_output_yml, force=True)
         stem = os.path.splitext(os.path.basename(str(yml)))[0]
-        prefix = f"{self._parent.name.obj_collapse}_{self._parent.name.filter_collapse}_"
-        return stem[len(prefix) :] if stem.startswith(prefix) else ""
+        prefix = f"{self._parent.name.obj_collapse}_{self._parent.name.filter_collapse}"
+        if not self._parent.settings.is_multi_epoch:
+            nightdate = collapse(atleast_1d(self._parent.name.nightdate), raise_error=True)
+            prefix = f"{prefix}_{nightdate}"
+        prefix = f"{prefix}_"
+        suffix = stem[len(prefix) :] if stem.startswith(prefix) else ""
+        if suffix.startswith("ToO_"):
+            return ""
+        return suffix.split("_ToO_", 1)[0]
 
     @property
     def coadd_image(self):
@@ -1909,6 +1914,11 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
         return parent.crossfilter.output_yml if getattr(parent, "_is_crossfilter", False) else parent.sciproc_output_yml
 
     @property
+    def _config_stem(self) -> str:
+        yml = collapse(self._config_yml, force=True)
+        return os.path.splitext(os.path.basename(str(yml)))[0]
+
+    @property
     def _config_scope(self) -> str:
         """Sub-path isolating stages whose output depends on imcoadd options.
 
@@ -1916,25 +1926,27 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
         carry identical names, so every stage is scoped rather than a hand-picked subset:
         which stages an option affects is not a fact this module can keep in sync as
         options are added, and getting it wrong reuses another config's products silently.
-        Single-epoch runs already have a per-nightdate factory dir.
+        Canonical single-epoch runs already have a per-nightdate factory dir.
         """
-        if not self._parent._parent.settings.is_multi_epoch:
+        parent = self._parent._parent
+        if parent.settings.is_multi_epoch:
+            return self._config_stem
+        if getattr(parent, "_is_crossfilter", False):
             return ""
-        yml = collapse(self._config_yml, force=True)
-        return os.path.splitext(os.path.basename(str(yml)))[0]
+        obj = collapse(atleast_1d(parent.name.obj), raise_error=True)
+        filte = collapse(atleast_1d(parent.name.filter), raise_error=True)
+        nightdate = collapse(atleast_1d(parent.name.nightdate), raise_error=True)
+        return "" if self._config_stem == f"{obj}_{filte}_{nightdate}" else self._config_stem
 
     # ---- stage directories (under imcoadd tmp_dir, scoped per config) ----
     @property
     def source_mask_dir(self) -> str:
-        if self._parent._parent.settings.is_multi_epoch:
-            yml = self._config_yml
-            from ..utils import collapse as _collapse
+        return os.path.join(self._parent.tmp_dir, self._config_scope, "srcmask")
 
-            stem = os.path.splitext(os.path.basename(str(_collapse(yml, force=True))))[0]
-            single_dir = _collapse(self._parent._parent.single_dir, force=True)
-            return os.path.join(str(single_dir), "source_masks", stem)
-        else:
-            return self._parent._parent.single_dir
+    @property
+    def source_mask_dump_dir(self) -> str:
+        yml = collapse(self._config_yml, force=True)
+        return os.path.join(os.path.dirname(str(yml)), "source_masks", self._config_stem)
 
     @property
     def manifest_file(self) -> str:

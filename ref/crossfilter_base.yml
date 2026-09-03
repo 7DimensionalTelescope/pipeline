@@ -81,6 +81,7 @@ imcoadd:
     DETECT_THRESH:
     DETECT_MINAREA:
   source_mask: true
+  dump_source_masks: false
   output_weight_map: true
   output_single_weight_map: false
   output_footprint: true

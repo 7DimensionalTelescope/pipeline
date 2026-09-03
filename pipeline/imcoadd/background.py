@@ -8,7 +8,7 @@ from .. import external
 from ..config.utils import get_key
 from ..const import REF_DIR
 from ..services.utils import conservative_worker_count
-from ..utils import atleast_1d, collapse, get_basename, time_diff_in_seconds
+from ..utils import atleast_1d, get_basename, time_diff_in_seconds
 from ..utils.header import update_padded_header
 from .const import MaskBit
 
@@ -86,7 +86,7 @@ class BackgroundMixin:
 
         any_dynamic = "dynamic" in types
         source_mask_images = (
-            factory.stage_images(input_images, "srcmask", self.path_bkgsub)
+            factory.stage_images(input_images, "srcmask", self._source_mask_dir)
             if (mask_sources and any_dynamic)
             else [None] * len(input_images)
         )
@@ -271,7 +271,6 @@ class BackgroundMixin:
         """Build the in-FOV, off-source mask used for background estimation."""
         from .utils import (
             build_source_mask,
-            read_mask_plio,
             source_ellipses_on_frame,
             write_mask_plio,
         )
@@ -282,14 +281,6 @@ class BackgroundMixin:
         catalog = os.path.join(self.path_bkgsub, f"{base}_bkgdet.cat")
 
         shape = (header["NAXIS2"], header["NAXIS1"])
-        persist = os.path.join(
-            collapse(self.path.imcoadd.factory.source_mask_dir, force=True),
-            get_basename(outmask),
-        )
-        if not self.overwrite:
-            valid = read_mask_plio(persist)
-            if valid is not None and valid.shape == shape:
-                return valid, float(100 * valid.mean())
 
         # reuse photometry's catalog: its DETECT_THRESH 3.0 is accepted over a 1.5 pass to save the run
         detection_override = self._detection_override()
@@ -344,13 +335,17 @@ class BackgroundMixin:
         )
 
         valid = ~sources if fov_valid is None else (fov_valid & ~sources)
-        write_mask_plio(
-            persist, valid
-        )  # durable copy next to the config, survives factory cleanup
+        saved = []
+        if getattr(self, "_intermediate_policy", "disk") == "disk":
+            write_mask_plio(outmask, valid)
+            saved.append(outmask)
+        if get_key(self.config_node.imcoadd, "dump_source_masks", default=False):
+            dump = os.path.join(self.path.imcoadd.factory.source_mask_dump_dir, get_basename(outmask))
+            write_mask_plio(dump, valid)
+            saved.append(dump)
         usable = float(100 * valid.mean())
-        self.logger.debug(
-            f"Source mask ({usable:.1f}% usable) saved as {get_basename(persist)}"
-        )
+        destination = ", ".join(saved) if saved else "memory"
+        self.logger.debug(f"Source mask ({usable:.1f}% usable): {destination}")
         if usable < min_usable:
             self.logger.warning(
                 f"Only {usable:.1f}% of {get_basename(inim)} is left to estimate the background on; "

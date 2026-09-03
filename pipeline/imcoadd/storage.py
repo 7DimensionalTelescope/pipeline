@@ -49,6 +49,7 @@ class IntermediateStorageMixin:
             self._conv_dir = os.path.join(root, "conv")
             self._weight_dir = os.path.join(root, "weight")
             self._interp_dir = os.path.join(root, "interp")
+            self._source_mask_dir = os.path.join(root, "srcmask")
             os.makedirs(self._bkgsub_dir, exist_ok=True)
             os.makedirs(self._conv_dir, exist_ok=True)
             os.makedirs(self._weight_dir, exist_ok=True)
@@ -59,6 +60,7 @@ class IntermediateStorageMixin:
             self._conv_dir = self.path.imcoadd.factory.conv_dir
             self._weight_dir = self.path.imcoadd.factory.weight_dir
             self._interp_dir = self.path.imcoadd.factory.interp_dir
+            self._source_mask_dir = self.path.imcoadd.factory.source_mask_dir
         self._intermediate_policy_ready = True
         self.logger.info(
             f"Intermediate policy: {self._intermediate_policy} "

@@ -97,6 +97,7 @@ if TYPE_CHECKING:
         bkgsub_type: str
         sex_vars: dict
         source_mask: bool
+        dump_source_masks: bool
         output_weight_map: bool
         output_single_weight_map: bool
         output_footprint: bool
