@@ -124,8 +124,8 @@ def run_scidata_reduction(
             phot.run(overwrite=overwrite)
             del phot
         if COADD_SPEC.name in processes and (not getattr(config.node.flag, COADD_SPEC.name) or overwrite):
-            coadd = ImCoadd(config, overwrite=overwrite)
-            coadd.run()
+            coadd = ImCoadd(config)
+            coadd.run(overwrite=overwrite)
             del coadd
         if COADD_PHOTOMETRY_SPEC.name in processes and (
             not getattr(config.node.flag, COADD_PHOTOMETRY_SPEC.name) or overwrite
@@ -199,8 +199,8 @@ def run_crossfilter_reduction(
         if WHITE_COADD_SPEC.name in processes and (
             not getattr(config.node.flag, WHITE_COADD_SPEC.name) or effective_overwrite
         ):
-            white = WhiteImage(config, overwrite=effective_overwrite)
-            white.run()
+            white = WhiteImage(config)
+            white.run(overwrite=effective_overwrite)
             del white
 
         if PHOT7DS_SPEC.name in processes and (

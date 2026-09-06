@@ -84,6 +84,7 @@ if TYPE_CHECKING:
         coadd_weighting: str
         coadd_options: dict
         coverage_policy: str
+        match_swarp_size: bool
         image_selection: bool
         image_selection_cuts: Any
         image_selection_source: Any

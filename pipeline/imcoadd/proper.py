@@ -201,7 +201,7 @@ def proper_coadd_numpy(
         st_img = time.time()
         data = np.ascontiguousarray(fits.getdata(path, memmap=False), dtype=np.float32)
         finite = np.isfinite(data)
-        support = finite & (data != 0.0)
+        support = data != 0.0  # geometric footprint; NaN marks a masked pixel inside it
         if not finite.all():
             data[~finite] = 0.0
         sigma_px = float(peeings[i]) / np.sqrt(8 * np.log(2))

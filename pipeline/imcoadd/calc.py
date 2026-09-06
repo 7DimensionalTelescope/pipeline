@@ -235,8 +235,8 @@ def mean_coadd_numpy(
         sx0 = tx0 - x0[i]; sx1 = tx1 - x0[i]  # fmt: skip
         sy0 = ty0 - y0[i]; sy1 = ty1 - y0[i]  # fmt: skip
         src = a[sy0:sy1, sx0:sx1]
-        support = np.isfinite(src) & (src != 0.0)
-        valid = support.copy()
+        support = src != 0.0  # geometric footprint; NaN marks a masked pixel inside it
+        valid = support & np.isfinite(src)
         if geometric_count is not None:
             geometric_count[ty0:ty1, tx0:tx1] += support
         mask_strip = None
@@ -260,8 +260,9 @@ def mean_coadd_numpy(
             # inverse-variance weight of the flux-normalised image.
             if isinstance(weights[i], str):
                 w_full, scratch = _read_frame(weights[i], frame_cache, scratch=scratch)
-                w_full[w_full <= 0] = 0.0
+                # divide first: the cached frame must stay pristine (memory policy shares it)
                 w_eff = w_full[sy0:sy1, sx0:sx1] / (flxscale * flxscale)
+                w_eff[w_eff <= 0] = 0.0
                 valid &= w_eff > 0
             else:
                 # scalar per-image weight (e.g. 1/SKYSIG^2); same FLXSCALE^2 rule
@@ -428,8 +429,8 @@ def clipped_mean_coadd_numpy(
         sy0 = ty0 - y0[i]; sy1 = ty1 - y0[i]  # fmt: skip
         sl = (slice(ty0, ty1), slice(tx0, tx1))
         raw = a[sy0:sy1, sx0:sx1]
-        support = np.isfinite(raw) & (raw != 0.0)
-        valid = support.copy()
+        support = raw != 0.0
+        valid = support & np.isfinite(raw)
         if geometric_count is not None:
             geometric_count[sl] += support
         mask_strip = None
@@ -439,8 +440,8 @@ def clipped_mean_coadd_numpy(
             valid &= mask_strip > 0
         if isinstance(weights[i], str):
             w_full, scratch = _read_frame(weights[i], frame_cache, scratch=scratch)
-            w_full[w_full <= 0] = 0.0
             w_eff = w_full[sy0:sy1, sx0:sx1] / (flxscale * flxscale)
+            w_eff[w_eff <= 0] = 0.0
             valid &= w_eff > 0
         else:
             w_eff = float(weights[i]) / (flxscale * flxscale)
@@ -656,8 +657,8 @@ def median_coadd_numpy(
                 sy0 = ty0 - y0[i]; sy1 = ty1 - y0[i]  # fmt: skip
                 rows, scratch = _read_frame_rows(handle, sy0, sy1, scratch)
                 src = rows[:, sx0:sx1] * flxscales[i]
+                support = src != 0.0
                 src[(src == 0.0) | ~np.isfinite(src)] = np.nan
-                support = np.isfinite(src)
                 if geometric_count is not None:
                     geometric_count[ty0:ty1, tx0:tx1] += support
                 m_strip = None
@@ -669,9 +670,8 @@ def median_coadd_numpy(
                     # w is the inverse variance of the raw resampled data; the median is
                     # taken on flux-normalised pixels, whose variance scales by FLXSCALE^2
                     w_rows, scratch = _read_frame_rows(whandles[i], sy0, sy1, scratch)
-                    w = w_rows[:, sx0:sx1]
+                    w = w_rows[:, sx0:sx1] / (flxscales[i] * flxscales[i])
                     w[w <= 0] = 0.0
-                    w /= flxscales[i] * flxscales[i]
                     # zero weight (interpolated/bad pixel) never enters the stack,
                     # matching the mean path's w_eff > 0 test; footprint follows
                     src[w <= 0] = np.nan

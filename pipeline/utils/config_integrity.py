@@ -136,14 +136,18 @@ def _infer_annotation(value) -> str:
     return "Any"
 
 
-def gen_config_stubs(yml_path: Path, output_path: Path, root_class: str) -> None:
-    """Generate TYPE_CHECKING stub classes from a base config YAML."""
-    with open(yml_path) as f:
-        data = yaml.safe_load(f) or {}
+def gen_config_stubs(source: Path | dict, output_path: Path, root_class: str, source_name: str = None) -> None:
+    """Generate TYPE_CHECKING stub classes from a base config YAML or an already composed mapping."""
+    if isinstance(source, dict):
+        data = source
+    else:
+        with open(source) as f:
+            data = yaml.safe_load(f) or {}
+        source_name = source_name or source.name
 
     lines = [
         "# AUTO-GENERATED — do not edit manually.",
-        f"# Source: {yml_path.name}",
+        f"# Source: {source_name}",
         "# Run update_config_artifacts() to regenerate.",
         "from __future__ import annotations",
         "from typing import Any, TYPE_CHECKING",
@@ -229,7 +233,7 @@ def write_config_hashes(
 
 
 def gen_all_stubs() -> None:
-    """Regenerate all TYPE_CHECKING stub files from their source YAMLs."""
+    """Regenerate all TYPE_CHECKING stub files from their source YAMLs (needs current hashes)."""
     config_dir = Path(ROOT_DIR) / "pipeline" / "config"
     gen_config_stubs(
         Path(REF_DIR) / "sciproc_base.yml",
@@ -241,10 +245,13 @@ def gen_all_stubs() -> None:
         config_dir / "_preproc_stubs.py",
         "PreprocNode",
     )
+    from ..config.utils import crossfilter_template  # pipeline.config is heavy; import only when generating
+
     gen_config_stubs(
-        Path(REF_DIR) / "crossfilter_base.yml",
+        crossfilter_template(),
         config_dir / "_crossfilter_stubs.py",
         "CrossFilterNode",
+        source_name="crossfilter_base.yml composed on sciproc_base.yml (crossfilter_template)",
     )
 
 

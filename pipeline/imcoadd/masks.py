@@ -71,26 +71,37 @@ def _measure_trail_width(
     segment,
     noise,
     factor,
+    members=None,
+    distance_limit=0.0,
+    padding=0.0,
     width_sigma=1.0,
     width_scale=1.0,
     profile_percentile=50.0,
     min_half_width=2.0,
     max_half_width=24.0,
 ):
+    """Perpendicular-profile components of a merged cluster, one (segment, half_width) per trail."""
     from scipy.ndimage import gaussian_filter1d, map_coordinates
 
     minimum = float(min_half_width) / factor
     maximum = float(max_half_width) / factor
     if minimum < 0 or maximum < minimum:
         raise ValueError("satellite_mask half-width limits are invalid")
+    if not 0 <= profile_percentile <= 100:
+        raise ValueError("profile_percentile must be between 0 and 100")
+    if width_sigma <= 0:
+        raise ValueError("satellite_mask.width_sigma must be positive")
+    if width_scale <= 0:
+        raise ValueError("satellite_mask.width_scale must be positive")
     p0, p1 = np.asarray(segment[:2]), np.asarray(segment[2:])
     direction = p1 - p0
     length = float(np.hypot(*direction))
     if length == 0:
-        return np.asarray(segment), minimum
+        return [(np.asarray(segment), minimum)]
     direction /= length
     normal = np.array([-direction[1], direction[0]])
-    radius = maximum + max(3.0, 8.0 / factor)
+    reach = float(distance_limit) + maximum
+    radius = reach + max(3.0, 8.0 / factor)
     offsets = np.arange(-radius, radius + 0.125, 0.25)
     samples = max(32, min(1024, int(np.ceil(length * 2))))
     along = np.linspace(0.05, 0.95, samples) * length
@@ -103,35 +114,55 @@ def _measure_trail_width(
         mode="constant",
         cval=np.nan,
     )
-    if not 0 <= profile_percentile <= 100:
-        raise ValueError("profile_percentile must be between 0 and 100")
-    profile = np.nanpercentile(values, profile_percentile, axis=1)
-    profile = gaussian_filter1d(profile, 0.75, mode="nearest")
-    outer = np.abs(offsets) >= maximum + 1.0
-    baseline = float(np.nanmedian(profile[outer]))
-    signal = profile - baseline
-    search = np.abs(offsets) <= maximum
-    peak = int(np.nanargmax(np.where(search, signal, np.nan)))
-    if width_sigma <= 0:
-        raise ValueError("satellite_mask.width_sigma must be positive")
-    if width_scale <= 0:
-        raise ValueError("satellite_mask.width_scale must be positive")
-    above = signal >= width_sigma * noise
-    if not above[peak]:
-        center = float(offsets[peak]) if signal[peak] > 0 else 0.0
-        half_width = minimum
-    else:
-        left = peak
-        right = peak
+    outer = np.abs(offsets) >= reach + 1.0
+    threshold = width_sigma * noise
+
+    def component(columns, target):
+        """Above-threshold component around target offset (None: the strongest within the cluster)."""
+        profile = np.nanpercentile(values[:, columns], profile_percentile, axis=1)
+        profile = gaussian_filter1d(profile, 0.75, mode="nearest")
+        signal = profile - float(np.nanmedian(profile[outer]))
+        window = np.abs(offsets) <= maximum if target is None else np.abs(offsets - target) <= max(1.0, minimum)
+        peak = int(np.nanargmax(np.where(window, signal, np.nan)))
+        above = signal >= threshold
+        if not above[peak]:
+            if target is not None:
+                return None
+            return (float(offsets[peak]) if signal[peak] > 0 else 0.0), minimum
+        left = right = peak
         while left > 0 and above[left - 1]:
             left -= 1
         while right + 1 < len(above) and above[right + 1]:
             right += 1
-        center = float(offsets[peak])
-        half_width = float(max(center - offsets[left], offsets[right] - center) + 0.125)
-        half_width = min(maximum, max(minimum, half_width * width_scale))
-    shifted = np.r_[p0 + center * normal, p1 + center * normal]
-    return shifted, half_width
+        center = 0.5 * float(offsets[left] + offsets[right])
+        half_width = 0.5 * float(offsets[right] - offsets[left]) + 0.125
+        if half_width * width_scale > maximum:
+            center = float(offsets[peak])  # capped mask stays on the ridge, not a lopsided run's midpoint
+        return center, min(maximum, max(minimum, half_width * width_scale))
+
+    found = [(*component(slice(None), None), 0.0, length)]
+    for member in np.asarray(members if members is not None else []).reshape(-1, 2, 2):
+        # a member is one Hough edge: its own along-track range keeps a shorter trail visible
+        relative = member - p0
+        track = relative @ direction
+        t0, t1 = max(0.0, float(track.min()) - padding), min(length, float(track.max()) + padding)
+        columns = (along >= t0) & (along <= t1)
+        if columns.sum() < 8:
+            continue
+        hit = component(columns, float(np.mean(relative @ normal)))
+        if hit is not None:
+            found.append((*hit, t0, t1))
+    merged = []
+    for center, half_width, t0, t1 in sorted(found):
+        if merged and abs(center - merged[-1][0]) <= 0.5 and abs(half_width - merged[-1][1]) <= 0.5:
+            last = merged[-1]
+            merged[-1] = (last[0], max(last[1], half_width), min(last[2], t0), max(last[3], t1))
+        else:
+            merged.append((center, half_width, t0, t1))
+    return [
+        (np.r_[p0 + t0 * direction + center * normal, p0 + t1 * direction + center * normal], half_width)
+        for center, half_width, t0, t1 in merged
+    ]
 
 
 def detect_satellite_trails(image: np.ndarray, **options) -> tuple[np.ndarray, np.ndarray]:
@@ -200,12 +231,15 @@ def detect_satellite_trails(image: np.ndarray, **options) -> tuple[np.ndarray, n
             t0 = projection.min() - padding
             t1 = projection.max() + padding
             segment = np.r_[point + t0 * direction, point + t1 * direction]
-            accepted.append(
+            accepted.extend(
                 _measure_trail_width(
                     flat,
                     segment,
                     flat_sigma,
                     factor,
+                    members=members,
+                    distance_limit=float(options.get("merge_distance", 12.0)),
+                    padding=padding,
                     width_sigma=float(options.get("width_sigma", 1.0)),
                     width_scale=float(options.get("width_scale", 1.0)),
                 )
@@ -296,11 +330,18 @@ class CoaddMaskBuilder:
 class MaskMixin:
     @staticmethod
     def _project_pixels(xs, ys, input_header, output_header, shape):
-        output = np.zeros(shape, dtype=bool)
         if not len(xs):
-            return output
+            return np.zeros(shape, dtype=bool)
         ra, dec = WCS(input_header).all_pix2world(xs.astype(np.float64), ys.astype(np.float64), 0)
-        x, y = WCS(output_header).all_world2pix(ra, dec, 0)
+        return MaskMixin._project_sky(ra, dec, output_header, shape)
+
+    @staticmethod
+    def _project_sky(ra, dec, output_header, shape):
+        """Nearest output pixel of each sky position (one-to-one, no kernel dilation)."""
+        output = np.zeros(shape, dtype=bool)
+        if not len(ra):
+            return output
+        x, y = WCS(output_header).all_world2pix(np.asarray(ra, np.float64), np.asarray(dec, np.float64), 0)
         finite = np.isfinite(x) & np.isfinite(y)
         xi = np.zeros(x.shape, dtype=np.int64)
         yi = np.zeros(y.shape, dtype=np.int64)
@@ -310,6 +351,36 @@ class MaskMixin:
         output[yi[inside], xi[inside]] = True
         return output
 
+    def _saturated_catalog(self, detector_image) -> str:
+        factory = self.path.imcoadd.factory
+        return factory.stage_images([detector_image], "satpix", factory.mask_dir)[0]
+
+    def _record_saturated_pixels(self, detector_image, data, header) -> None:
+        """Sky positions of the pixels at or above SATURATE, from the frame already in memory."""
+        saturation = header.get("SATURATE")
+        if saturation is None:
+            return
+        ys, xs = np.nonzero(np.isfinite(data) & (data >= float(saturation)))
+        ra, dec = WCS(header).all_pix2world(xs.astype(np.float64), ys.astype(np.float64), 0)
+        table = fits.BinTableHDU.from_columns(
+            [fits.Column(name="RA", format="D", array=ra), fits.Column(name="DEC", format="D", array=dec)]
+        )
+        table.header["SATURATE"] = (float(saturation), "Saturation level of the source frame")
+        table.header["NSATPIX"] = (int(len(xs)), "Number of saturated pixels")
+        path = self._saturated_catalog(detector_image)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        table.writeto(path, overwrite=True)
+
+    @staticmethod
+    def _saturated_catalog_current(catalog, detector_image, saturation) -> bool:
+        """A catalog no older than its frame and recorded at the same SATURATE level."""
+        try:
+            if os.path.getmtime(catalog) < os.path.getmtime(detector_image):
+                return False
+            return fits.getheader(catalog, 1).get("SATURATE") == float(saturation)
+        except OSError:
+            return False
+
     def _detector_mask_bits(self, detector_image, output_header, output_shape, detector_data=None):
         input_header = fits.getheader(detector_image)
         output = np.zeros(output_shape, dtype=np.uint8)
@@ -318,7 +389,14 @@ class MaskMixin:
         bad = self._project_pixels(xs, ys, input_header, output_header, output_shape)
         output[bad] |= int(MaskBit.BADPIX)
         saturation = input_header.get("SATURATE")
-        if saturation is not None:
+        catalog = self._saturated_catalog(detector_image)
+        if saturation is not None and detector_data is None and self._saturated_catalog_current(
+            catalog, detector_image, saturation
+        ):
+            table = fits.getdata(catalog)
+            saturated = self._project_sky(table["RA"], table["DEC"], output_header, output_shape)
+            output[saturated] |= int(MaskBit.SATURATED)
+        elif saturation is not None:
             if detector_data is not None:
                 ys, xs = np.nonzero(np.isfinite(detector_data) & (detector_data >= float(saturation)))
                 if detector_data.shape == output_shape:

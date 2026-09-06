@@ -27,6 +27,10 @@ class IntermediateStorageMixin:
                     "intermediate_policy 'memory' is incompatible with output_bkg_map or output_sky_rms_map"
                 )
             use_memory = False
+        if use_memory and self.plan.routine == "legacy":
+            if requested == "memory":
+                raise ValueError("intermediate_policy 'memory' is incompatible with coadd_routine 'legacy' (SWarp reads files)")
+            use_memory = False
         if use_memory:
             need = int(4.5 * sum(os.path.getsize(path) for path in atleast_1d(images)))
             usable = os.path.isdir("/dev/shm") and os.access("/dev/shm", os.W_OK)
@@ -55,17 +59,21 @@ class IntermediateStorageMixin:
             os.makedirs(self._weight_dir, exist_ok=True)
             os.makedirs(self._interp_dir, exist_ok=True)
         else:
-            self._memory_intermediate_dir = None
-            self._bkgsub_dir = self.path.imcoadd.factory.bkgsub_dir
-            self._conv_dir = self.path.imcoadd.factory.conv_dir
-            self._weight_dir = self.path.imcoadd.factory.weight_dir
-            self._interp_dir = self.path.imcoadd.factory.interp_dir
-            self._source_mask_dir = self.path.imcoadd.factory.source_mask_dir
+            self._use_factory_dirs()
         self._intermediate_policy_ready = True
         self.logger.info(
             f"Intermediate policy: {self._intermediate_policy} "
             f"({len(atleast_1d(images))} images, memory limit {self.plan.memory_image_limit})"
         )
+
+    def _use_factory_dirs(self):
+        factory = self.path.imcoadd.factory
+        self._memory_intermediate_dir = None
+        self._bkgsub_dir = factory.bkgsub_dir
+        self._conv_dir = factory.conv_dir
+        self._weight_dir = factory.weight_dir
+        self._interp_dir = factory.interp_dir
+        self._source_mask_dir = factory.source_mask_dir
 
     def _read_stage_frame(self, image):
         cached = getattr(self, "_frame_cache", {}).get(image)
@@ -95,7 +103,8 @@ class IntermediateStorageMixin:
     def _cleanup_imcoadd_intermediates(self):
         root = getattr(self, "_memory_intermediate_dir", None)
         plan = getattr(self, "_plan", None)
-        if root and plan is not None and plan.dump_bkgsub and getattr(self, "_coadd_completed", False):
+        dumped = root and plan is not None and plan.dump_bkgsub and getattr(self, "_coadd_completed", False)
+        if dumped:
             for source, destination in self._memory_bkgsub_dump_pairs:
                 os.makedirs(os.path.dirname(destination), exist_ok=True)
                 cached = self._frame_cache.get(source)
@@ -106,11 +115,14 @@ class IntermediateStorageMixin:
         if root:
             shutil.rmtree(root, ignore_errors=True)
             destinations = [destination for _, destination in self._memory_bkgsub_dump_pairs]
-            self.config_node.imcoadd.bkgsub_images = (
-                destinations if plan is not None and plan.dump_bkgsub else None
-            )
+            self.config_node.imcoadd.bkgsub_images = destinations if dumped else None
             self.config_node.imcoadd.conv_files = None
             self.images_to_coadd = None
+            for key in ("interp_images", "bkgsub_weight_images"):
+                if any(str(p).startswith(root) for p in atleast_1d(get_key(self.config_node.imcoadd, key) or [])):
+                    setattr(self.config_node.imcoadd, key, None)
+            self._use_factory_dirs()
+            self._intermediate_policy = "disk"
         for path in getattr(self, "_working_mask_paths", []):
             try:
                 os.remove(path)

@@ -563,23 +563,24 @@ def weight_and_interpolate_cpu(
     n_holes = int(hole.sum())
 
     def _load(idx):
-        return fits.getdata(images[idx]).astype(np.float32)
+        with fits.open(images[idx], memmap=False) as hdul:
+            return hdul[0].data.astype(np.float32), hdul[0].header
 
-    def _write(idx, interp_img, interp_wt):
+    def _write(idx, sci, sci_hdr, interp_img, interp_wt):
         sci_out = output_paths[idx]
-        hdr = add_bpx_method(fits.getheader(images[idx]), method)
+        hdr = add_bpx_method(sci_hdr.copy(), method)
         fits.writeto(sci_out, interp_img, header=hdr, overwrite=True)
         write_weight_float32(add_suffix(sci_out, "weight"), interp_wt, hdr,
                              n_holes=n_holes if zero_interp_weight else 0)
         if post_frame is not None:
-            post_frame(sci_out)  # e.g. per-image reprojection (+ optional interp discard)
+            post_frame(sci_out, sci, sci_hdr)  # e.g. per-image reprojection (+ optional interp discard)
 
     with ThreadPoolExecutor(max_workers=3) as pool:
         pending_write = None
         ahead = [pool.submit(_load, i) for i in range(min(2, len(images)))]
         for idx in range(len(images)):
             st_img = _time.time()
-            sci = ahead.pop(0).result()
+            sci, sci_hdr = ahead.pop(0).result()
             if idx + 2 < len(images):
                 ahead.append(pool.submit(_load, idx + 2))
             t_read = _time.time() - st_img
@@ -604,7 +605,7 @@ def weight_and_interpolate_cpu(
             if source_catalogs is not None:
                 # after the store write: the durable copy is the pristine model, smoothing is a
                 # campaign choice. Sources and bad pixels are excluded from the fit, not filled.
-                src = source_mask_on_frame(source_catalogs[idx], fits.getheader(images[idx]), logger)
+                src = source_mask_on_frame(source_catalogs[idx], sci_hdr, logger)
                 wgt = smooth_weight_surface(wgt, exclude=hole if src is None else (src | hole))[0]
             t_weight = _time.time() - st_img - t_read
             interp_img, interp_wt = interpolate_masked_pixels_cpu_numba(
@@ -616,7 +617,7 @@ def weight_and_interpolate_cpu(
 
             if pending_write is not None:
                 pending_write.result()
-            pending_write = pool.submit(_write, idx, interp_img, interp_wt)
+            pending_write = pool.submit(_write, idx, sci, sci_hdr, interp_img, interp_wt)
             if logger is not None:
                 # per-image detail at DEBUG; INFO gets one summary line per 25 frames
                 logger.debug(

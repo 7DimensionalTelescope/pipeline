@@ -50,100 +50,20 @@ input:
   white_image:
   white_catalog:
 
+# imcoadd and photometry inherit sciproc_base.yml (pipeline.config.utils.crossfilter_template); list only crossfilter overrides here
 imcoadd:
-  input_images:
-  runtime_version:
-  coadd_routine: 'direct'
+  coadd_routine: 'direct'  # source coadds already share the SWarp grid: no reprojection
   coadd_mode: 'proper'
-  coadd_weighting: global
-  coadd_options:
-    clipped:
-      clip_sigma: 5.0
-      clip_ampfrac: 0.3
-    proper:
-      weight_map_policy: white-noise
-  coverage_policy: union
+  coverage_policy: intersection  # white pixels only where every source coadd contributes
   match_swarp_size: false
-  image_selection: false
-  image_selection_cuts:
   image_selection_source: db
-  ppflag_bitmask: '110000'
-  coadd_image:
-  coadd_mask_image:
-  gpu: true
-  device: 0
-  zp_key: 'ZP_AUTO'
-  zpscale: true
-  bkgsub_type: dynamic
-  sex_vars:
-    BACK_SIZE:
-    BACK_FILTERSIZE:
-    DETECT_THRESH:
-    DETECT_MINAREA:
-  source_mask: true
-  dump_source_masks: false
-  output_weight_map: true
-  output_single_weight_map: false
-  output_footprint: true
-  output_mask_map: true
-  dump_reprojected_masks: false
-  satellite_mask:
-    enabled: false
-    bin_factor: 4
-    background_box: 65
-    star_clip_sigma: 3.0
-    low_sigma: 2.0
-    high_sigma: 8.0
-    canny_sigma: 1.0
-    canny_low_threshold: 0.157
-    canny_high_threshold: 0.471
-    theta_step: 0.25
-    hough_threshold: 50
-    min_length_fraction: 0.08
-    max_gap: 20
-    merge_angle: 1.0
-    merge_distance: 12.0
-    min_support_fraction: 0.08
-    width_sigma: 1.0
-    width_scale: 1.0
-    endpoint_padding: 8
-  output_sky_rms_map: false
-  output_bkg_map: false
-  persist_weight_maps: false
-  joint_wcs: false
-  interpolate_badpix: true
-  interp_type: 'median'
-  zero_badpix_weight: false
-  badpix_reprojection_policy: 'off'
-  dump_unreprojected_interp: false
-  dump_unreprojected_weight: false
-  intermediate_policy: auto
-  memory_image_limit: 6
-  dump_bkgsub: false
-  lean_factory: false
-  combine_lock_threshold: 20
-  combine_scratch: auto
+  interpolate_badpix: false  # source coadds carry no bad pixel mask to interpolate
+  output_mask_map: false  # BADPIX/SATURATED bits come from a detector bpmask; source coadds have none
   convolve: false
-  target_seeing:
 
 phot7ds:
   runtime_version:
   catalog:
 
 photometry:
-  input_images:
-  runtime_version:
   use_weight_map: true
-  refcatname: GaiaXP
-  check: false
-  satur_margin: 0.99
-  sex_vars:
-    PHOT_APERTURES:
-    PHOT_AUTOPARAMS:
-    DETECT_MINAREA: 5
-    DETECT_THRESH: 3.0
-    DEBLEND_NTHRESH: 64
-    DEBLEND_MINCONT: 0.0001
-    BACK_SIZE: 64
-    BACK_FILTERSIZE: 3
-    BACKPHOTO_TYPE: LOCAL

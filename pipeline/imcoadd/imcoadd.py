@@ -77,6 +77,7 @@ class ImCoadd(
     ) -> None:
 
         super().__init__(config, logger, queue)
+        self.overwrite = None  # resolved by run(overwrite=...), or by initialize() when used standalone
         self._plan = None  # resolved on first use and by run(): the config is editable until then
         self._device_id = None
         self._use_gpu = use_gpu
@@ -374,6 +375,12 @@ class ImCoadd(
         self._coadd_completed = False
         self._quality_masks = None
         self._coadd_mask_builder = None
+        # per-run caches; a second run() on the same object must not inherit them
+        self._fov_masks = None
+        self._bpm_resampled_masks = None
+        self._manifest = None
+        self._conv_inputs = None
+        self._zdf_cache = None
         try:
             self.overwrite = self.resolve_overwrite(overwrite)
             self._plan = self._coadd_plan()  # the config is write-through and editable until here
@@ -397,6 +404,8 @@ class ImCoadd(
 
     def initialize(self, overwrite=False):
         self._st = time.time()
+        if overwrite or self.overwrite is None:
+            self.overwrite = self.resolve_overwrite(overwrite)
         self.logger.info(f"Start 'ImCoadd'")
         local_input_images = get_key(self.config_node.imcoadd, "input_images")
         self.input_images = (
@@ -650,6 +659,8 @@ class ImCoadd(
             "IMGSELEC": (shown(get_key(node, "image_selection")), "imcoadd.image_selection"),
             "SMTHWGT":  (bool(bp.smooth_weight), "weight map smoothed (not coadd_weighting pixel-wise)"),
             "COVPOL":   (bp.coverage_policy.upper(), "imcoadd.coverage_policy"),
+            "SATMASK":  (bool(bp.satellite_mask_enabled), "imcoadd.satellite_mask.enabled"),
+            "SRCMASK":  (shown(get_key(node, "source_mask", default=True)), "imcoadd.source_mask"),
         }  # fmt: skip
         mode = str(get_key(node, "coadd_mode") or "").lower()
         if mode == "clipped":
@@ -758,7 +769,7 @@ class ImCoadd(
                         acquired = "CPU"
                         bp = self.plan
                         zero_mask = None
-                        if bp.zero and not bp.interpolate and not bp.catalog_badpix_zeros:
+                        if bp.zero_before_reprojection and not bp.interpolate:
                             # interpolation off but bad-pixel weights still zeroed
                             mask_file, badpix = self._get_bpmask(uncalculated_images[0])
                             zero_mask = fits.getdata(mask_file) == badpix
@@ -864,7 +875,7 @@ class ImCoadd(
         # reproject-first writes weights to the factory, and a stale one next to the input
         # would be read in silence.
         weight_of = dict(zip(input_images, weight_images)) if weight_images is not None else {}
-        zero_interp = bool(self.plan.zero) and not self.plan.catalog_badpix_zeros
+        zero_interp = self.plan.zero_before_reprojection
 
         uncalculated_images = []
         calculated_outputs = []

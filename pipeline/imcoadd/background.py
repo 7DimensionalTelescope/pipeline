@@ -8,7 +8,7 @@ from .. import external
 from ..config.utils import get_key
 from ..const import REF_DIR
 from ..services.utils import conservative_worker_count
-from ..utils import atleast_1d, get_basename, time_diff_in_seconds
+from ..utils import add_suffix, atleast_1d, get_basename, time_diff_in_seconds
 from ..utils.header import update_padded_header
 from .const import MaskBit
 
@@ -174,6 +174,7 @@ class BackgroundMixin:
                         f"falling back to constant background subtraction"
                     )
                     btype = "constant"
+                    self.input_headers[i]["BACKTYPE"] = ("CONSTANT", "Background subtraction type")
                 else:
                     exclude = ~valid
             if quality_mask is not None:
@@ -206,7 +207,20 @@ class BackgroundMixin:
                                   fov_mask_images, source_mask_images, types, singles, catalogs)))  # fmt: skip
         if not self.overwrite:
             n_all = len(jobs)
-            jobs = [(i, job) for i, job in jobs if not self._background_output_exists(job[1])]
+            pending = []
+            for i, job in jobs:
+                if not self._background_output_exists(job[1]):
+                    pending.append((i, job))
+                    continue
+                # the header snapshot must follow what the kept product did (fallback CONSTANT)
+                cached = getattr(self, "_frame_cache", {}).get(job[1])
+                try:
+                    backtype = cached[1].get("BACKTYPE") if cached else fits.getval(job[1], "BACKTYPE")
+                except (KeyError, OSError):
+                    backtype = None
+                if backtype:
+                    self.input_headers[i]["BACKTYPE"] = (str(backtype).upper(), "Background subtraction type")
+            jobs = pending
             if len(jobs) < n_all:
                 self.logger.info(
                     f"{n_all - len(jobs)} existing bkgsub products skipped, {len(jobs)} to compute"
@@ -392,7 +406,10 @@ class BackgroundMixin:
             valid = binary_erosion(
                 valid, np.ones((3, 3), dtype=bool), iterations=extra, border_value=0
             )
-            fits.writeto(mask, valid.astype(np.uint8), overwrite=True)
+            shrunk = add_suffix(mask, "shrunk")  # the pristine mask is what a resume reuses
+            fits.writeto(shrunk, valid.astype(np.uint8), overwrite=True)
+            self._fov_masks[i] = shrunk
+            getattr(self, "_working_mask_paths", []).append(shrunk)  # removed with the run's masks
             self.logger.debug(
                 f"Shrank {get_basename(mask)} by {extra} px for a {delta:.2f} px kernel"
             )
@@ -404,7 +421,7 @@ class BackgroundMixin:
         """Return the eroded valid-pixel mask of a reprojected frame."""
         from scipy.ndimage import binary_erosion
 
-        valid = data != 0
+        valid = np.isfinite(data) & (data != 0)  # NaN pads a coadd used as direct input
         if valid.all():
             self.logger.debug(f"No out-of-FOV pixels in {name}; skipping FOV mask")
             return None
@@ -503,7 +520,9 @@ class BackgroundMixin:
         if fov_valid is not None:
             _data[~fov_valid] = 0.0  # keep out-of-FOV at 0: the coadd's validity marker
         if quality_mask is not None:
-            _data[(quality_mask & int(MaskBit.SATELLITE)) != 0] = 0.0
+            # NaN, not 0: the pixel stays inside the geometric footprint for coverage_policy
+            trail = (quality_mask & int(MaskBit.SATELLITE)) != 0
+            _data[trail if fov_valid is None else (trail & fov_valid)] = np.nan
         self.logger.debug(f"Using SKYVAL: {skyval:.3f}")
         self._write_background_output(outim, _data, _hdr)
 
@@ -544,7 +563,9 @@ class BackgroundMixin:
         if fov_valid is not None:
             _data[~fov_valid] = 0.0  # keep out-of-FOV at 0: the coadd's validity marker
         if quality_mask is not None:
-            _data[(quality_mask & int(MaskBit.SATELLITE)) != 0] = 0.0
+            # NaN, not 0: the pixel stays inside the geometric footprint for coverage_policy
+            trail = (quality_mask & int(MaskBit.SATELLITE)) != 0
+            _data[trail if fov_valid is None else (trail & fov_valid)] = np.nan
         self._write_background_output(outim, _data, _hdr)
 
         # return is_steppy

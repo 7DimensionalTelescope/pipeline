@@ -29,17 +29,11 @@ class CoaddPlan:
     @property
     def need_weights(self) -> bool:
         output_needs_maps = self.output_weight_map and self.mode != "proper"
-        return (
-            output_needs_maps or self.weighting == "pixelwise" or self.policy == "1px"
-        )
+        return output_needs_maps or self.weighting == "pixelwise" or self.policy == "1px"
 
     @property
     def smooth_weight(self) -> bool:
-        return (
-            self.need_weights
-            and self.weighting != "pixelwise"
-            and self.routine != "legacy"
-        )
+        return self.need_weights and self.weighting != "pixelwise" and self.routine != "legacy"
 
     @property
     def weight_on_sci_pass(self) -> bool:
@@ -47,7 +41,16 @@ class CoaddPlan:
 
     @property
     def catalog_badpix_zeros(self) -> bool:
-        return self.weight_on_sci_pass and self.zero
+        return self.weight_on_sci_pass and self.zero and self.policy == "1px"
+
+    @property
+    def propagate_mask_on_sci_pass(self) -> bool:
+        """Conservative holes come from the sci pass: SWarp zeroes the kernel support of a zero-weight input."""
+        return self.routine == "reproject-first" and self.policy == "conservative" and self.need_weights
+
+    @property
+    def zero_before_reprojection(self) -> bool:
+        return self.propagate_mask_on_sci_pass or (self.zero and not self.catalog_badpix_zeros)
 
     @property
     def weight_pass(self) -> str:
@@ -61,23 +64,15 @@ def resolve_coadd_plan(node) -> CoaddPlan:
         value = get_key(node, new)
         return get_key(node, old, default=default) if value is None else value
 
-    routine = (
-        str(get_key(node, "coadd_routine") or "").strip().lower().replace("_", "-")
-    )
+    routine = str(get_key(node, "coadd_routine") or "").strip().lower().replace("_", "-")
     if routine not in ("legacy", "reproject-first", "direct"):
-        raise ValueError(
-            f"Invalid coadd routine: {routine!r} (expected 'legacy', 'reproject-first', or 'direct')"
-        )
+        raise ValueError(f"Invalid coadd routine: {routine!r} (expected 'legacy', 'reproject-first', or 'direct')")
 
     mode = str(get_key(node, "coadd_mode") or "").strip().lower()
     if mode not in ("mean", "median", "clipped", "proper"):
-        raise ValueError(
-            f"Invalid coadd mode: {mode!r} (expected 'mean', 'median', 'clipped', or 'proper')"
-        )
+        raise ValueError(f"Invalid coadd mode: {mode!r} (expected 'mean', 'median', 'clipped', or 'proper')")
     if routine == "legacy" and mode != "median":
-        raise ValueError(
-            "The legacy routine uses SWarp's median coadd; set imcoadd.coadd_mode: median"
-        )
+        raise ValueError("The legacy routine uses SWarp's median coadd; set imcoadd.coadd_mode: median")
 
     options = get_key(node, "coadd_options", default={}) or {}
     if not isinstance(options, dict):
@@ -110,13 +105,10 @@ def resolve_coadd_plan(node) -> CoaddPlan:
             f"{proper_raw!r} (expected one of {proper_policies})"
         )
 
-    coverage_policy = str(
-        get_key(node, "coverage_policy", default="union") or "union"
-    ).strip().lower()
+    coverage_policy = str(get_key(node, "coverage_policy", default="union") or "union").strip().lower()
     if coverage_policy not in ("union", "intersection"):
         raise ValueError(
-            f"Invalid imcoadd.coverage_policy: {coverage_policy!r} "
-            "(expected 'union' or 'intersection')"
+            f"Invalid imcoadd.coverage_policy: {coverage_policy!r} " "(expected 'union' or 'intersection')"
         )
 
     satellite_options = get_key(node, "satellite_mask", default={}) or {}
@@ -124,78 +116,57 @@ def resolve_coadd_plan(node) -> CoaddPlan:
         raise ValueError("imcoadd.satellite_mask must be a mapping")
     satellite_mask_enabled = bool(satellite_options.get("enabled", False))
     if satellite_mask_enabled and routine != "reproject-first":
-        raise ValueError(
-            "imcoadd.satellite_mask.enabled requires coadd_routine: reproject-first"
-        )
+        raise ValueError("imcoadd.satellite_mask.enabled requires coadd_routine: reproject-first")
 
-    intermediate_policy = str(
-        get_key(node, "intermediate_policy", default="auto") or "auto"
-    ).strip().lower()
+    intermediate_policy = str(get_key(node, "intermediate_policy", default="auto") or "auto").strip().lower()
     if intermediate_policy not in ("auto", "memory", "disk"):
         raise ValueError(
-            f"Invalid imcoadd.intermediate_policy: {intermediate_policy!r} "
-            "(expected 'auto', 'memory', or 'disk')"
+            f"Invalid imcoadd.intermediate_policy: {intermediate_policy!r} " "(expected 'auto', 'memory', or 'disk')"
         )
     memory_image_limit = int(get_key(node, "memory_image_limit", default=6))
     if memory_image_limit < 1:
         raise ValueError("imcoadd.memory_image_limit must be at least 1")
 
-    policy = str(
-        opt("badpix_reprojection_policy", "bpmask_policy", "1px") or "off"
-    ).lower()
+    policy = str(opt("badpix_reprojection_policy", "bpmask_policy", "off") or "off").lower()
     policy = {"false": "off", "none": "off", "no": "off"}.get(policy, policy)
     if policy not in ("off", "1px", "conservative"):
-        raise ValueError(
-            f"Invalid badpix_reprojection_policy: {policy!r} ('off', '1px' or 'conservative')"
-        )
+        raise ValueError(f"Invalid badpix_reprojection_policy: {policy!r} ('off', '1px' or 'conservative')")
     if routine == "direct" and policy == "conservative":
-        raise ValueError(
-            "The direct routine has no resampling kernel; use badpix_reprojection_policy: 1px"
-        )
+        raise ValueError("The direct routine has no resampling kernel; use badpix_reprojection_policy: 1px")
 
     weighting = str(get_key(node, "coadd_weighting", default="global") or "off").lower()
     weighting = weighting.replace("-", "").replace("_", "")
     weighting = {"false": "off", "none": "off", "no": "off"}.get(weighting, weighting)
     if weighting not in ("off", "global", "pixelwise"):
-        raise ValueError(
-            f"Invalid imcoadd.coadd_weighting: {weighting!r} (False, 'global' or 'pixel-wise')"
-        )
+        raise ValueError(f"Invalid imcoadd.coadd_weighting: {weighting!r} (False, 'global' or 'pixel-wise')")
     if mode == "clipped" and weighting == "off":
-        raise ValueError(
-            "coadd_mode 'clipped' requires coadd_weighting 'global' or 'pixel-wise'"
-        )
+        raise ValueError("coadd_mode 'clipped' requires coadd_weighting 'global' or 'pixel-wise'")
     if mode == "proper" and weighting == "pixelwise":
-        raise ValueError(
-            "coadd_mode 'proper' is incompatible with pixel-wise weighting"
-        )
+        raise ValueError("coadd_mode 'proper' is incompatible with pixel-wise weighting")
 
     plan = CoaddPlan(
         routine=routine,
         mode=mode,
-        interpolate=bool(opt("interpolate_badpix", "apply_bpmask", False)),
-        zero=bool(opt("zero_badpix_weight", "zero_interp_weight", True)),
+        interpolate=bool(opt("interpolate_badpix", "apply_bpmask", True)),
+        zero=bool(opt("zero_badpix_weight", "zero_interp_weight", False)),
         policy=policy,
         weighting=weighting,
         output_weight_map=bool(opt("output_weight_map", "weight_map", True)),
         output_footprint=bool(get_key(node, "output_footprint", default=True)),
-        combine_lock_threshold=int(get_key(node, "combine_lock_threshold", default=50)),
+        combine_lock_threshold=int(get_key(node, "combine_lock_threshold", default=20)),
         coverage_policy=coverage_policy,
         clip_sigma=clip_sigma,
         clip_ampfrac=clip_ampfrac,
         proper_weight_map_policy=proper_weight_map_policy,
         output_mask_map=bool(get_key(node, "output_mask_map", default=True)),
-        dump_reprojected_masks=bool(
-            get_key(node, "dump_reprojected_masks", default=False)
-        ),
+        dump_reprojected_masks=bool(get_key(node, "dump_reprojected_masks", default=False)),
         satellite_mask_enabled=satellite_mask_enabled,
         intermediate_policy=intermediate_policy,
         memory_image_limit=memory_image_limit,
         dump_bkgsub=bool(get_key(node, "dump_bkgsub", default=False)),
     )
     if plan.dump_reprojected_masks and plan.routine != "reproject-first":
-        raise ValueError(
-            "imcoadd.dump_reprojected_masks requires coadd_routine: reproject-first"
-        )
+        raise ValueError("imcoadd.dump_reprojected_masks requires coadd_routine: reproject-first")
     if plan.policy == "1px" and not plan.zero:
         raise NotImplementedError(
             "badpix_reprojection_policy '1px' requires zero_badpix_weight: True; "

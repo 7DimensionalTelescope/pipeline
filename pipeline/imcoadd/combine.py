@@ -186,6 +186,8 @@ class InMemoryCoaddMixin:
             # NEAREST-resampled weights live next to the wht pass output; the
             # LANCZOS3 companions next to the sci resamp ring to ~0 almost
             # everywhere (99%+ zeros) and must NOT be used.
+            # (that was the raw-weight era: under smooth_weight the sci-pass companion is a
+            # smooth zero-free surface and _weight_pass_type() selects it on purpose)
             wht_dir = self.path.imcoadd.factory.swarp_resample_dir(
                 self._weight_pass_type()
             )

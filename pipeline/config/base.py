@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 # from typing import Self
 
 from .. import __version__
-from .utils import merge_dicts, merge_missing
+from .utils import crossfilter_template, merge_dicts, merge_missing
 from ..path.path import PathHandler
 from ..services.logger import Logger
 
@@ -83,7 +83,7 @@ class BaseConfig(ABC):
         elif cls.__name__ == "SciProcConfiguration":
             self._load_config(PathHandler().sciproc_base_yml)
         elif cls.__name__ == "CrossFilterConfiguration":
-            self._load_config(PathHandler().crossfilter_base_yml)
+            self._load_config(crossfilter_template())
         else:
             raise ValueError(f"Invalid class name: {cls.__name__}")
 
@@ -238,9 +238,9 @@ class BaseConfig(ABC):
         # return BaseConfig(config_source=config_dict, write=False)
         return SciProcConfiguration.from_dict(config_dict)
 
-    def fill_missing_from_yaml(self, base_yaml: str = None, exclude_top_level=None):
+    def fill_missing_from_yaml(self, base_yaml: str | dict = None, exclude_top_level=None):
         """
-        Add ONLY missing keys to the current config from a YAML file of defaults.
+        Add ONLY missing keys to the current config from a YAML file (or mapping) of defaults.
         Returns a list of dotted-key paths that were added.
         """
 
@@ -248,11 +248,14 @@ class BaseConfig(ABC):
             exclude_top_level = {"name", "process_id", "info", "logging"}
 
         base_yaml = base_yaml or getattr(self.path, "sciproc_base_yml", None)
-        if not base_yaml or not os.path.exists(base_yaml):
-            return
+        if isinstance(base_yaml, dict):
+            base_defaults = base_yaml
+        else:
+            if not base_yaml or not os.path.exists(base_yaml):
+                return
 
-        with open(base_yaml, "r") as f:
-            base_defaults = yaml.load(f, Loader=yaml.FullLoader) or {}
+            with open(base_yaml, "r") as f:
+                base_defaults = yaml.load(f, Loader=yaml.FullLoader) or {}
 
         # mutate backing dict in place
         merge_missing(self._config_in_dict, base_defaults, exclude_top_level=exclude_top_level)

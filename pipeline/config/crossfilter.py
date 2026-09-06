@@ -15,7 +15,7 @@ from ..services.logger import Logger
 from ..utils import atleast_1d, collapse, time_diff_in_seconds
 from .base import BaseConfig
 from .sciprocess import SciProcConfiguration
-from .utils import get_key
+from .utils import crossfilter_template, get_key
 
 if TYPE_CHECKING:
     from ._crossfilter_stubs import CrossFilterNode
@@ -72,7 +72,7 @@ class CrossFilterConfiguration(BaseConfig):
             self.logger.info(f"Writing configuration to file: {os.path.basename(self.config_file)}")
             self.logger.debug(f"Full path to the configuration file: {self.config_file}")
 
-        self.fill_missing_from_yaml(self.path.crossfilter_base_yml)
+        self.fill_missing_from_yaml(crossfilter_template())
         if not os.path.exists(self.config_file) or overwrite:
             self.write_config()
         self.logger.info("Completed to load configuration")
@@ -88,9 +88,8 @@ class CrossFilterConfiguration(BaseConfig):
     @staticmethod
     def _science_config_coadd(config_file: str) -> str:
         config = SciProcConfiguration(config_file, write=False, logger=False)
-        configured = get_key(config.node.imcoadd, "coadd_image")
-        if not configured:
-            raise ValueError(f"Science config has no imcoadd.coadd_image: {config_file}")
+        # a science config records imcoadd.coadd_image only once ImCoadd.initialize ran; PathHandler names it before
+        configured = get_key(config.node.imcoadd, "coadd_image") or config.path.imcoadd.coadd_image
         return collapse(atleast_1d(configured), raise_error=True)
 
     @classmethod
@@ -135,7 +134,7 @@ class CrossFilterConfiguration(BaseConfig):
                 config_suffix=config_suffix,
                 factory_scratch=factory_scratch,
             )
-            config_source = self.path.crossfilter_base_yml
+            config_source = crossfilter_template()
             self.config_file = self.path.crossfilter.output_yml
             log_file = self.path.crossfilter.output_log
             if self.write and os.path.exists(self.config_file) and not overwrite:

@@ -1,6 +1,8 @@
 from functools import reduce
+import copy
 import os
-from ..const import PROCESSED_DIR, TOO_PROCESSED_DIR, CONFIG_TYPE_PREPROCESS, CONFIG_TYPE_SCIENCE
+import yaml
+from ..const import PROCESSED_DIR, TOO_PROCESSED_DIR, CONFIG_TYPE_PREPROCESS, CONFIG_TYPE_SCIENCE, REF_DIR
 
 
 def find_config(config: str, is_too: bool = False, return_class=False, return_properties=False) -> dict:
@@ -179,6 +181,19 @@ def get_or_set_key(config, key, default=None):
         return default
     else:
         return result
+
+
+def crossfilter_template(inherited_sections=("imcoadd", "photometry")) -> dict:
+    """crossfilter_base.yml with its inherited stage sections composed on top of sciproc_base.yml."""
+
+    def _read(name):
+        with open(os.path.join(REF_DIR, name), "r") as f:
+            return yaml.load(f, Loader=yaml.FullLoader) or {}
+
+    sciproc, template = _read("sciproc_base.yml"), _read("crossfilter_base.yml")
+    for section in inherited_sections:
+        template[section] = merge_dicts(copy.deepcopy(sciproc.get(section) or {}), template.get(section) or {})
+    return template
 
 
 def merge_missing(dst, src, exclude_top_level=None, _path_prefix=""):

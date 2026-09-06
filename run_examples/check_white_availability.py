@@ -37,8 +37,7 @@ def check_target(target, nightdate, working_dir):
     config = CrossFilterConfiguration(
         science_configs, write=False, logger=False, working_dir=working_dir, is_pipeline=False
     )
-    # overwrite=True only to skip the version-escalation notice; the guard itself ignores it
-    white = WhiteImage(config, overwrite=True)
+    white = WhiteImage(config)
     # constructed DB-free, then flipped so only the read-only RawFrameQuery branch of the guard runs
     config.node.settings.is_pipeline = True
 

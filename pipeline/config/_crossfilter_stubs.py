@@ -1,5 +1,5 @@
 # AUTO-GENERATED — do not edit manually.
-# Source: crossfilter_base.yml
+# Source: crossfilter_base.yml composed on sciproc_base.yml (crossfilter_template)
 # Run update_config_artifacts() to regenerate.
 from __future__ import annotations
 from typing import Any, TYPE_CHECKING
@@ -107,8 +107,18 @@ if TYPE_CHECKING:
         input_images: Any
         runtime_version: Any
         use_weight_map: bool
+        ref_cat: Any
+        query_radius: float
+        match_radius: float
+        photfraction: float
         refcatname: str
+        refqueryradius: float
+        ref_mag_lower: int
+        ref_mag_upper: float
+        ref_mag_err_upper: float
+        flagcut: int
         check: bool
+        filters_to_check: Any
         satur_margin: float
         sex_vars: dict
 
