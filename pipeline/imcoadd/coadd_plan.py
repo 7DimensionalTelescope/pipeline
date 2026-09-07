@@ -25,6 +25,20 @@ class CoaddPlan:
     intermediate_policy: str
     memory_image_limit: int
     dump_bkgsub: bool
+    output_bkg_map: bool
+    output_sky_rms_map: bool
+    zpscale: bool
+    joint_wcs: bool
+    convolve: bool | str | None
+    source_mask: bool | str
+    interp_type: str
+    match_swarp_size: bool
+    dump_unreprojected_interp: bool
+    dump_unreprojected_weight: bool
+    lean_factory: bool
+    combine_scratch: str | None
+    persist_weight_maps: bool
+    output_single_weight_map: bool
 
     @property
     def need_weights(self) -> bool:
@@ -58,12 +72,12 @@ class CoaddPlan:
             return ""
         return "sci" if self.weight_on_sci_pass else "wht"
 
+    @property
+    def fused_reprojection(self) -> bool:
+        return self.routine == "reproject-first" and self.need_weights and self.interpolate and not self.joint_wcs
+
 
 def resolve_coadd_plan(node) -> CoaddPlan:
-    def opt(new, old, default):
-        value = get_key(node, new)
-        return get_key(node, old, default=default) if value is None else value
-
     routine = str(get_key(node, "coadd_routine") or "").strip().lower().replace("_", "-")
     if routine not in ("legacy", "reproject-first", "direct"):
         raise ValueError(f"Invalid coadd routine: {routine!r} (expected 'legacy', 'reproject-first', or 'direct')")
@@ -74,67 +88,50 @@ def resolve_coadd_plan(node) -> CoaddPlan:
     if routine == "legacy" and mode != "median":
         raise ValueError("The legacy routine uses SWarp's median coadd; set imcoadd.coadd_mode: median")
 
-    options = get_key(node, "coadd_options", default={}) or {}
-    if not isinstance(options, dict):
-        raise ValueError("imcoadd.coadd_options must be a mapping")
-
-    def mode_options(name):
-        value = options.get(name, {}) or {}
-        if not isinstance(value, dict):
-            raise ValueError(f"imcoadd.coadd_options.{name} must be a mapping")
-        return value
-
-    clipped_options = mode_options("clipped")
-    proper_options = mode_options("proper")
-    clip_sigma = float(clipped_options.get("clip_sigma", 5.0))
-    clip_ampfrac = float(clipped_options.get("clip_ampfrac", 0.3))
+    mode_options = node.coadd_mode_options
+    clip_sigma = float(mode_options["clipped"]["clip_sigma"])
+    clip_ampfrac = float(mode_options["clipped"]["clip_ampfrac"])
     if not math.isfinite(clip_sigma) or clip_sigma <= 0:
-        raise ValueError("imcoadd.coadd_options.clipped.clip_sigma must be positive")
+        raise ValueError("imcoadd.coadd_mode_options.clipped.clip_sigma must be positive")
     if not math.isfinite(clip_ampfrac) or clip_ampfrac < 0:
-        raise ValueError("imcoadd.coadd_options.clipped.clip_ampfrac must be non-negative")
+        raise ValueError("imcoadd.coadd_mode_options.clipped.clip_ampfrac must be non-negative")
 
-    proper_raw = proper_options.get(
-        "weight_map_policy",
-        get_key(node, "proper_coadd_weight_map_policy", default="white-noise"),
-    )
+    proper_raw = mode_options["proper"]["weight_map_policy"]
     proper_weight_map_policy = str(proper_raw or "off").lower().replace("_", "-")
     proper_policies = ("off", "weighted-mean", "white-noise", "colored-noise")
     if proper_weight_map_policy not in proper_policies:
         raise ValueError(
-            "Invalid imcoadd.coadd_options.proper.weight_map_policy: "
+            "Invalid imcoadd.coadd_mode_options.proper.weight_map_policy: "
             f"{proper_raw!r} (expected one of {proper_policies})"
         )
 
-    coverage_policy = str(get_key(node, "coverage_policy", default="union") or "union").strip().lower()
+    coverage_policy = str(node.coverage_policy).strip().lower()
     if coverage_policy not in ("union", "intersection"):
         raise ValueError(
             f"Invalid imcoadd.coverage_policy: {coverage_policy!r} " "(expected 'union' or 'intersection')"
         )
 
-    satellite_options = get_key(node, "satellite_mask", default={}) or {}
-    if not isinstance(satellite_options, dict):
-        raise ValueError("imcoadd.satellite_mask must be a mapping")
-    satellite_mask_enabled = bool(satellite_options.get("enabled", False))
+    satellite_mask_enabled = bool(node.satellite_mask["enabled"])
     if satellite_mask_enabled and routine != "reproject-first":
         raise ValueError("imcoadd.satellite_mask.enabled requires coadd_routine: reproject-first")
 
-    intermediate_policy = str(get_key(node, "intermediate_policy", default="auto") or "auto").strip().lower()
+    intermediate_policy = str(node.intermediate_policy).strip().lower()
     if intermediate_policy not in ("auto", "memory", "disk"):
         raise ValueError(
             f"Invalid imcoadd.intermediate_policy: {intermediate_policy!r} " "(expected 'auto', 'memory', or 'disk')"
         )
-    memory_image_limit = int(get_key(node, "memory_image_limit", default=6))
+    memory_image_limit = int(node.memory_image_limit)
     if memory_image_limit < 1:
         raise ValueError("imcoadd.memory_image_limit must be at least 1")
 
-    policy = str(opt("badpix_reprojection_policy", "bpmask_policy", "off") or "off").lower()
+    policy = str(node.badpix_reprojection_policy).lower()
     policy = {"false": "off", "none": "off", "no": "off"}.get(policy, policy)
     if policy not in ("off", "1px", "conservative"):
         raise ValueError(f"Invalid badpix_reprojection_policy: {policy!r} ('off', '1px' or 'conservative')")
     if routine == "direct" and policy == "conservative":
         raise ValueError("The direct routine has no resampling kernel; use badpix_reprojection_policy: 1px")
 
-    weighting = str(get_key(node, "coadd_weighting", default="global") or "off").lower()
+    weighting = str(node.coadd_weighting).lower()
     weighting = weighting.replace("-", "").replace("_", "")
     weighting = {"false": "off", "none": "off", "no": "off"}.get(weighting, weighting)
     if weighting not in ("off", "global", "pixelwise"):
@@ -147,23 +144,37 @@ def resolve_coadd_plan(node) -> CoaddPlan:
     plan = CoaddPlan(
         routine=routine,
         mode=mode,
-        interpolate=bool(opt("interpolate_badpix", "apply_bpmask", True)),
-        zero=bool(opt("zero_badpix_weight", "zero_interp_weight", False)),
+        interpolate=bool(node.interpolate_badpix),
+        zero=bool(node.zero_badpix_weight),
         policy=policy,
         weighting=weighting,
-        output_weight_map=bool(opt("output_weight_map", "weight_map", True)),
-        output_footprint=bool(get_key(node, "output_footprint", default=True)),
-        combine_lock_threshold=int(get_key(node, "combine_lock_threshold", default=20)),
+        output_weight_map=bool(node.output_weight_map),
+        output_footprint=bool(node.output_footprint),
+        combine_lock_threshold=int(node.combine_lock_threshold),
         coverage_policy=coverage_policy,
         clip_sigma=clip_sigma,
         clip_ampfrac=clip_ampfrac,
         proper_weight_map_policy=proper_weight_map_policy,
-        output_mask_map=bool(get_key(node, "output_mask_map", default=True)),
-        dump_reprojected_masks=bool(get_key(node, "dump_reprojected_masks", default=False)),
+        output_mask_map=bool(node.output_mask_map),
+        dump_reprojected_masks=bool(node.dump_reprojected_masks),
         satellite_mask_enabled=satellite_mask_enabled,
         intermediate_policy=intermediate_policy,
         memory_image_limit=memory_image_limit,
-        dump_bkgsub=bool(get_key(node, "dump_bkgsub", default=False)),
+        dump_bkgsub=bool(node.dump_bkgsub),
+        output_bkg_map=bool(node.output_bkg_map),
+        output_sky_rms_map=bool(node.output_sky_rms_map),
+        zpscale=bool(node.zpscale),
+        joint_wcs=bool(node.joint_wcs),
+        convolve=node.convolve,
+        source_mask=node.source_mask,
+        interp_type=str(node.interp_type),
+        match_swarp_size=bool(node.match_swarp_size),
+        dump_unreprojected_interp=bool(node.dump_unreprojected_interp),
+        dump_unreprojected_weight=bool(node.dump_unreprojected_weight),
+        lean_factory=bool(node.lean_factory),
+        combine_scratch=node.combine_scratch,
+        persist_weight_maps=bool(node.persist_weight_maps),
+        output_single_weight_map=bool(node.output_single_weight_map),
     )
     if plan.dump_reprojected_masks and plan.routine != "reproject-first":
         raise ValueError("imcoadd.dump_reprojected_masks requires coadd_routine: reproject-first")

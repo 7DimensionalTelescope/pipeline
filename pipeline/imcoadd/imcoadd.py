@@ -57,6 +57,10 @@ class ImCoadd(
     Checker,
     RuntimeVersionMixin,
 ):
+    path: PathHandler
+    _conv_inputs: list[str] | None
+    _zdf_cache: dict[str, tuple[str, str, str]]
+
     _process_spec = COADD_SPEC
     _process_registry = SCIPROCESS_REGISTRY
     _process_error = CoaddError
@@ -77,6 +81,7 @@ class ImCoadd(
     ) -> None:
 
         super().__init__(config, logger, queue)
+        self.intermediate_storage = None
         self.overwrite = None  # resolved by run(overwrite=...), or by initialize() when used standalone
         self._plan = None  # resolved on first use and by run(): the config is editable until then
         self._device_id = None
@@ -145,13 +150,16 @@ class ImCoadd(
     def direct_coadd_routine(self, use_gpu: bool = False, device_id=None):
         """Same RA-Dec plane, No SWarp reprojection"""
         self._use_gpu = all([use_gpu, self.config_node.imcoadd.gpu, self._use_gpu])
-        if self.config_node.imcoadd.joint_wcs or self.config_node.imcoadd.convolve:
+        if self.plan.joint_wcs or self.plan.convolve:
             raise self._process_error.ValueError("Direct coaddition requires joint_wcs=False and convolve=False")
 
         plan = self.plan
-        do_zpscale = bool(get_key(self.config_node.imcoadd, "zpscale", default=True))
-        total_steps = 3 + int(plan.need_weights) + int(plan.interpolate) + int(do_zpscale)
+        total_steps = 3 + int(plan.need_weights) + int(plan.interpolate) + int(plan.zpscale)
         step = 0
+        self._coadd_completed = False
+        self._quality_masks = None
+        self._coadd_mask_builder = None
+        self._zdf_cache = {}
 
         self.initialize()
         self._validate_direct_grid()
@@ -163,7 +171,7 @@ class ImCoadd(
 
         if plan.need_weights:
             factory = self.path.imcoadd.factory
-            weight_images = factory.stage_images(images, "weight", self._weight_dir)
+            weight_images = factory.stage_images(images, "weight", self.storage.weight_dir)
             weight_images = self.calculate_weight_map(images, device_id=device_id, out_weights=weight_images)
             step += 1
             self.update_progress(
@@ -184,7 +192,7 @@ class ImCoadd(
         images = self.bkgsub(
             images,
             mask_out_of_fov=True,
-            mask_sources=get_key(self.config_node.imcoadd, "source_mask", default=True),
+            mask_sources=plan.source_mask,
         )
         step += 1
         self.update_progress(
@@ -193,7 +201,7 @@ class ImCoadd(
         )
 
         self.zpscale(images, write_headers=False)
-        if do_zpscale:
+        if plan.zpscale:
             step += 1
             self.update_progress(
                 self._process_registry.step_progress(self._process_spec, step, total_steps),
@@ -225,26 +233,28 @@ class ImCoadd(
         """Reproject with SWarp, then coadd in memory."""
         self._use_gpu = all([use_gpu, self.config_node.imcoadd.gpu, self._use_gpu])
 
-        do_zpscale = bool(get_key(self.config_node.imcoadd, "zpscale", default=True))
+        plan = self.plan
         optional_steps = (
-            int(bool(self.plan.need_weights))
-            + int(bool(self.plan.interpolate))
-            + int(bool(self.config_node.imcoadd.joint_wcs))
-            + int(bool(self.config_node.imcoadd.convolve))
-            + int(do_zpscale)
+            int(plan.need_weights)
+            + int(plan.interpolate)
+            + int(plan.joint_wcs)
+            + int(bool(plan.convolve))
+            + int(plan.zpscale)
         )
         total_steps = 4 + optional_steps
         step = 0
+        self._coadd_completed = False
+        self._quality_masks = None
+        self._coadd_mask_builder = None
+        self._zdf_cache = {}
+        self._manifest = None
 
         self.initialize()
 
         images = self.input_images
         weight_images = None
-        do_weight = bool(self.plan.need_weights)
-        do_bpmask = bool(self.plan.interpolate)
-        joint_wcs = bool(self.config_node.imcoadd.joint_wcs)
-        fused_reprojection = do_weight and do_bpmask and not joint_wcs
-        if fused_reprojection:
+        fov_masks = None
+        if plan.fused_reprojection:
             images = self.weight_and_interpolate(images)
             step += 1
             self.update_progress(
@@ -257,7 +267,8 @@ class ImCoadd(
                 self._progress_status("apply-bpmask-completed"),
             )
         else:
-            if do_weight:
+            self._prepare_intermediate_storage(images)
+            if plan.need_weights:
                 # weights come from the pristine frames: the Poisson term must see the measured
                 # pixel, not an interpolated one (masked pixels are zeroed at interp anyway).
                 # Hence the names cannot follow a later stage product nor sit next to the inputs.
@@ -270,7 +281,7 @@ class ImCoadd(
                     self._progress_status("calculate-weight-map-completed"),
                 )
 
-            if do_bpmask:
+            if plan.interpolate:
                 images = self.apply_bpmask(images, device_id=device_id, weight_images=weight_images)
                 if weight_images is not None:
                     # hand the interp sidecars onward: they carry the zeroed bad-pixel holes
@@ -281,7 +292,7 @@ class ImCoadd(
                     self._progress_status("apply-bpmask-completed"),
                 )
 
-        if joint_wcs:
+        if plan.joint_wcs:
             images = self.joint_registration(images)
             step += 1
             self.update_progress(
@@ -289,19 +300,20 @@ class ImCoadd(
                 self._progress_status("joint-registration-completed"),
             )
 
-        if not fused_reprojection:
+        if not plan.fused_reprojection:
             images = self.reproject_and_coadd_with_swarp(
                 images, coadd=False, weight_images=weight_images
             )
-        self._prepare_intermediate_storage(images)
+        else:
+            self._prepare_intermediate_storage(images)
         if (
             self.plan.output_mask_map
             or self.plan.dump_reprojected_masks
             or self.plan.satellite_mask_enabled
         ):
             self.prepare_quality_masks(images, detector_images=self.input_images)
-        if self.config_node.imcoadd.convolve:
-            self.build_fov_masks(images)
+        if plan.convolve:
+            fov_masks = self.build_fov_masks(images)
         self._remove_reprojection_intermediates()
         step += 1
         self.update_progress(
@@ -309,11 +321,11 @@ class ImCoadd(
             self._progress_status("reproject-completed"),
         )
 
-        if self.config_node.imcoadd.convolve:
+        if plan.convolve:
             self.discard_cached_frames()
             self.prepare_convolution(images)
             images = self.run_convolution(images, device_id=device_id)
-            self.shrink_fov_masks(self.delta_peeings)
+            fov_masks = self.shrink_fov_masks(self.delta_peeings)
             step += 1
             self.update_progress(
                 self._process_registry.step_progress(self._process_spec, step, total_steps),
@@ -323,8 +335,8 @@ class ImCoadd(
         images = self.bkgsub(
             images,
             mask_out_of_fov=True,
-            mask_sources=get_key(self.config_node.imcoadd, "source_mask", default=True),
-            fov_masks=getattr(self, "_fov_masks", None),
+            mask_sources=plan.source_mask,
+            fov_masks=fov_masks,
         )
         self._discard_consumed_bkgsub_inputs()
         step += 1
@@ -334,7 +346,7 @@ class ImCoadd(
         )
 
         self.zpscale(images, write_headers=False)
-        if do_zpscale:
+        if plan.zpscale:
             step += 1
             self.update_progress(
                 self._process_registry.step_progress(self._process_spec, step, total_steps),
@@ -372,15 +384,6 @@ class ImCoadd(
         return self._plan
 
     def run(self, overwrite=False, use_gpu: bool = False, device_id=None):
-        self._coadd_completed = False
-        self._quality_masks = None
-        self._coadd_mask_builder = None
-        # per-run caches; a second run() on the same object must not inherit them
-        self._fov_masks = None
-        self._bpm_resampled_masks = None
-        self._manifest = None
-        self._conv_inputs = None
-        self._zdf_cache = None
         try:
             self.overwrite = self.resolve_overwrite(overwrite)
             self._plan = self._coadd_plan()  # the config is write-through and editable until here
@@ -433,7 +436,7 @@ class ImCoadd(
         self.input_headers.input_label = self._input_label
         self.input_headers.extra_core_keys = self._extra_header_keys
         self.input_headers.max_core_keys = self._max_header_keys
-        self.input_headers.selection_metrics = getattr(self, "_selection_meta", {})
+        self.input_headers.selection_metrics = self._selection_meta
         self.input_headers.coadd_provenance = self._coadd_provenance()
         self.input_headers.multi_epoch = bool(self.config_node.settings.is_multi_epoch)
 
@@ -652,24 +655,24 @@ class ImCoadd(
             "COADDWGT": (shown(get_key(node, "coadd_weighting", default="global")), "imcoadd.coadd_weighting"),
             "BPMPOL":   (shown(bp.policy), "imcoadd.badpix_reprojection_policy"),
             "ZBPWGT":   (bool(bp.zero), "imcoadd.zero_badpix_weight"),
-            "ZPSCALE":  (bool(get_key(node, "zpscale")), "imcoadd.zpscale"),
+            "ZPSCALE":  (bp.zpscale, "imcoadd.zpscale"),
             "INTERP":   (shown(interp), "imcoadd.interp_type"),
-            "CONVOLVE": (shown(get_key(node, "convolve")), "imcoadd.convolve"),
-            "JOINTWCS": (bool(get_key(node, "joint_wcs")), "imcoadd.joint_wcs"),
+            "CONVOLVE": (shown(bp.convolve), "imcoadd.convolve"),
+            "JOINTWCS": (bp.joint_wcs, "imcoadd.joint_wcs"),
             "IMGSELEC": (shown(get_key(node, "image_selection")), "imcoadd.image_selection"),
             "SMTHWGT":  (bool(bp.smooth_weight), "weight map smoothed (not coadd_weighting pixel-wise)"),
             "COVPOL":   (bp.coverage_policy.upper(), "imcoadd.coverage_policy"),
             "SATMASK":  (bool(bp.satellite_mask_enabled), "imcoadd.satellite_mask.enabled"),
-            "SRCMASK":  (shown(get_key(node, "source_mask", default=True)), "imcoadd.source_mask"),
+            "SRCMASK":  (shown(bp.source_mask), "imcoadd.source_mask"),
         }  # fmt: skip
         mode = str(get_key(node, "coadd_mode") or "").lower()
         if mode == "clipped":
-            cards["CLIPSIG"] = (bp.clip_sigma, "coadd_options.clipped.clip_sigma")
-            cards["CLIPAFR"] = (bp.clip_ampfrac, "coadd_options.clipped.clip_ampfrac")
+            cards["CLIPSIG"] = (bp.clip_sigma, "coadd_mode_options.clipped.clip_sigma")
+            cards["CLIPAFR"] = (bp.clip_ampfrac, "coadd_mode_options.clipped.clip_ampfrac")
         if mode == "proper":
             cards["PROPWMP"] = (
                 self._proper_weight_policy().upper(),
-                "coadd_options.proper.weight_map_policy",
+                "coadd_mode_options.proper.weight_map_policy",
             )
         return cards
 
@@ -679,9 +682,7 @@ class ImCoadd(
         """Group images by the master frames recorded in IMCMB."""
         # construct zdf bundles for dict keys; cached per instance so the header reads
         # (~80 ms each over NFS) are paid once per run, not once per stage
-        cache = getattr(self, "_zdf_cache", None)
-        if cache is None:
-            cache = self._zdf_cache = {}
+        cache = self._zdf_cache
         calibs = []
         for image in input_images:
             if image not in cache:
@@ -780,13 +781,7 @@ class ImCoadd(
                             sig_z_file,
                             sig_f_file,
                             out_names=uncalculated_outputs,
-                            weight_store=bool(
-                                get_key(
-                                    self.config_node.imcoadd,
-                                    "persist_weight_maps",
-                                    default=False,
-                                )
-                            ),
+                            weight_store=self.plan.persist_weight_maps,
                             zero_mask=zero_mask,
                             source_catalogs=self._source_catalogs(uncalculated_images),
                         )
@@ -863,7 +858,7 @@ class ImCoadd(
         self.logger.info("Start the interpolation for bad pixels")
 
         factory = self.path.imcoadd.factory
-        interp_dir = getattr(self, "_interp_dir", factory.interp_dir)
+        interp_dir = self.storage.interp_dir
         interp_images = factory.stage_images(input_images, "interp", interp_dir)
         self.config_node.imcoadd.interp_images = interp_images
 
@@ -970,7 +965,7 @@ class ImCoadd(
         """Stamp or scrub FLXSCALE in the snapshot and optional file headers."""
         if input_images is None:
             input_images = self.images_to_coadd
-        if not get_key(self.config_node.imcoadd, "zpscale", default=True):
+        if not self.plan.zpscale:
             # Nothing scales the pixels (combine gets flxscales=False, SWarp gets
             # -FSCALE_KEYWORD NOFSCALE), so the snapshot must not carry a factor either.
             for hdr in self.input_headers:
@@ -1052,7 +1047,7 @@ class ImCoadd(
         if input_images is None:
             input_images = self.images_to_coadd
 
-        method = self.config_node.imcoadd.convolve.lower()
+        method = self.plan.convolve.lower()
         self.conv_method = method
         self.logger.info(f"Prepare the convolution with {method} method")
 
@@ -1063,7 +1058,7 @@ class ImCoadd(
             from ..utils import force_symlink
 
             factory = self.path.imcoadd.factory
-            conv_dir = getattr(self, "_conv_dir", factory.conv_dir)
+            conv_dir = self.storage.conv_dir
             self.config_node.imcoadd.conv_files = factory.stage_images(input_images, "conv", conv_dir)
 
             # Get peeings for convolution. Read them off the snapshot, not the files:
@@ -1131,7 +1126,7 @@ class ImCoadd(
         weight=False,
     ) -> list[str]:
         if input_images is None:
-            input_images = getattr(self, "_conv_inputs", None) or self.images_to_coadd
+            input_images = self._conv_inputs or self.images_to_coadd
         st = time.time()
         method = self.conv_method
         self._use_gpu = all([use_gpu, self.config_node.imcoadd.gpu, self._use_gpu])

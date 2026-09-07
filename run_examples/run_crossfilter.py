@@ -13,7 +13,7 @@ from pipeline.const import (
 )
 from pipeline.const.crossfilter import PHOT7DS_SPEC, WHITE_COADD_SPEC, WHITE_PHOTOMETRY_SPEC
 from pipeline.path.name import NameHandler
-from pipeline.path.path import CrossFilterPathHandler
+from pipeline.path.path import PathHandler
 from pipeline.run import run_crossfilter_reduction
 from pipeline.services.database import RawFrameQuery, free_query
 from pipeline.utils import atleast_1d
@@ -113,7 +113,7 @@ def discover_science_configs_filesystem(target, nightdate, args):
 def config_from_science_configs(science_configs, args):
     science_configs = sorted(os.path.abspath(path) for path in science_configs)
     expected_coadds = CrossFilterConfiguration._science_config_coadds(science_configs)
-    output_yml = CrossFilterPathHandler(
+    output_yml = PathHandler.for_crossfilter(
         expected_coadds,
         working_dir=args.working_dir,
         is_pipeline=args.pipeline,
@@ -140,7 +140,7 @@ def config_from_science_configs(science_configs, args):
 
 def config_from_coadd_images(coadd_images, args):
     coadd_images = sorted(os.path.abspath(path) for path in coadd_images)
-    output_yml = CrossFilterPathHandler(
+    output_yml = PathHandler.for_crossfilter(
         coadd_images,
         working_dir=args.working_dir,
         is_pipeline=args.pipeline,

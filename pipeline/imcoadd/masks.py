@@ -4,8 +4,10 @@ import numpy as np
 from astropy.io import fits
 from astropy.wcs import WCS
 
-from ..config.utils import get_key
+from ..path.path import PathHandler
 from ..utils import add_suffix, atleast_1d, get_basename
+from .coadd_plan import CoaddPlan
+from .storage import IntermediateStorage
 from .const import MASK_HEADER_CARDS, MaskBit
 from .utils import determine_size, write_mask_plio
 
@@ -328,6 +330,12 @@ class CoaddMaskBuilder:
 
 
 class MaskMixin:
+    path: PathHandler
+    plan: CoaddPlan
+    storage: IntermediateStorage
+    _coadd_mask_builder: CoaddMaskBuilder | None
+    _quality_masks: list | None
+
     @staticmethod
     def _project_pixels(xs, ys, input_header, output_header, shape):
         if not len(xs):
@@ -416,15 +424,13 @@ class MaskMixin:
         detector_images = list(atleast_1d(detector_images or self.input_images))
         if len(images) != len(detector_images):
             raise ValueError("quality-mask images and detector images differ in length")
-        self._prepare_intermediate_storage(images)
-        match_swarp_size = bool(get_key(self.config_node.imcoadd, "match_swarp_size", default=True))
         builder = CoaddMaskBuilder(
             images,
             self.config_node.imcoadd.coadd_image,
-            match_swarp_size,
+            self.plan.match_swarp_size,
             self.plan.dump_reprojected_masks,
         )
-        satellite_options = get_key(self.config_node.imcoadd, "satellite_mask", default={}) or {}
+        satellite_options = self.config_node.imcoadd.satellite_mask
         quality_masks = []
         for index, (image, detector) in enumerate(zip(images, detector_images)):
             data, header = self._read_stage_frame(image)
@@ -437,12 +443,12 @@ class MaskMixin:
                     f"Satellite mask: {len(lines)} line(s), {int(trail.sum())} pixels in {get_basename(image)}"
                 )
             builder.set_frame(index, mask, header=header)
-            if self._intermediate_policy == "memory":
+            if self.storage.policy == "memory":
                 quality_masks.append(mask)
             else:
                 path = self.path.imcoadd.factory.stage_images([image], "mask", self.path.imcoadd.factory.mask_dir)[0]
                 write_mask_plio(path, mask, header=header)
-                self._working_mask_paths.append(path)
+                self.storage.working_mask_paths.append(path)
                 quality_masks.append(path)
         builder.frames = quality_masks
         self._coadd_mask_builder = builder
@@ -456,7 +462,7 @@ class MaskMixin:
         return value
 
     def finalize_quality_masks(self):
-        builder = getattr(self, "_coadd_mask_builder", None)
+        builder = self._coadd_mask_builder
         if builder is None:
             return None
         if self.plan.output_mask_map:

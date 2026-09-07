@@ -29,6 +29,9 @@ class SwarpMixin:
     _swarp_last_launch = 0.0
 
     plan: CoaddPlan
+    path: PathHandler
+    _bpm_resampled_masks: list[str]
+    _manifest: dict | None
 
     def apply_legacy_coverage_policy(self, swarp_inputs: list[str]) -> None:
         """Apply intersection coverage to a legacy SWarp coadd."""
@@ -87,20 +90,8 @@ class SwarpMixin:
 
     def _remove_reprojection_intermediates(self):
         """Remove unreprojected products unless their dump options are enabled."""
-        dump_interp = bool(
-            get_key(
-                self.config_node.imcoadd,
-                "dump_unreprojected_interp",
-                default=False,
-            )
-        )
-        dump_weight = bool(
-            get_key(
-                self.config_node.imcoadd,
-                "dump_unreprojected_weight",
-                default=False,
-            )
-        )
+        dump_interp = self.plan.dump_unreprojected_interp
+        dump_weight = self.plan.dump_unreprojected_weight
         if dump_interp and dump_weight:
             return
         interp_images = atleast_1d(get_key(self.config_node.imcoadd, "interp_images") or [])
@@ -125,17 +116,14 @@ class SwarpMixin:
 
     def _discard_consumed_bkgsub_inputs(self):
         """Delete reconstructible inputs after background subtraction."""
-        if not get_key(self.config_node.imcoadd, "lean_factory", default=False):
+        if not self.plan.lean_factory:
             return
         bkgsub_images = atleast_1d(get_key(self.config_node.imcoadd, "bkgsub_images") or [])
         resampled = atleast_1d(get_key(self.config_node.imcoadd, "resampled_images") or [])
-        keep_models = [
-            get_key(self.config_node.imcoadd, key, default=False) for key in ("output_bkg_map", "output_sky_rms_map")
-        ]
+        keep_models = [self.plan.output_bkg_map, self.plan.output_sky_rms_map]
         freed = n = 0
         for resamp, bkgsub in zip(resampled, bkgsub_images):
-            exists = getattr(self, "_stage_frame_exists", os.path.exists)
-            if not exists(bkgsub):
+            if not self._stage_frame_exists(bkgsub):
                 continue
             # bkg/bkgrms are staged off the resamp name (stage_images suffix convention)
             # into the bkgsub dir (background.py stages them beside the bkgsub product)
@@ -168,7 +156,7 @@ class SwarpMixin:
             if self.plan.propagate_mask_on_sci_pass:
                 sci_args += ["-WEIGHT_IMAGE", sidecar]
             passes = (
-                ("sci", sci_args, self.plan.mask_on_sci_pass),
+                ("sci", sci_args, self.plan.propagate_mask_on_sci_pass),
                 (
                     "wht",
                     ["-RESAMPLING_TYPE", "NEAREST", "-WEIGHT_IMAGE", sidecar],
@@ -215,7 +203,7 @@ class SwarpMixin:
                 os.remove(f)
 
     def _manifest_load(self) -> dict:
-        if getattr(self, "_manifest", None) is None:
+        if self._manifest is None:
             try:
                 with open(self.path.imcoadd.factory.manifest_file) as fp:
                     self._manifest = json.load(fp)
@@ -224,7 +212,7 @@ class SwarpMixin:
         return self._manifest
 
     def _manifest_flush(self) -> None:
-        if getattr(self, "_manifest", None) is None:
+        if self._manifest is None:
             return
         manifest_file = self.path.imcoadd.factory.manifest_file
         os.makedirs(os.path.dirname(manifest_file), exist_ok=True)
@@ -297,6 +285,7 @@ class SwarpMixin:
         """Calculate weights, interpolate bad pixels, and return their resampled products."""
         if input_images is None:
             input_images = self.input_images
+        self._manifest = None
         st = time.time()
         self.logger.info("Start fused weight-map calculation + bad-pixel interpolation")
 
@@ -315,20 +304,8 @@ class SwarpMixin:
         self._manifest_load()  # before the tail threads: two first misses would both start from {}
         tail_pool = ThreadPoolExecutor(max_workers=n_tail)
         tail_futures = deque()
-        dump_interp = bool(
-            get_key(
-                self.config_node.imcoadd,
-                "dump_unreprojected_interp",
-                default=False,
-            )
-        )
-        dump_weight = bool(
-            get_key(
-                self.config_node.imcoadd,
-                "dump_unreprojected_weight",
-                default=False,
-            )
-        )
+        dump_interp = self.plan.dump_unreprojected_interp
+        dump_weight = self.plan.dump_unreprojected_weight
         self.logger.info(f"Reprojection tail on {n_tail} workers")
 
         def _reproject_frame(sci_out):
@@ -372,7 +349,7 @@ class SwarpMixin:
 
             groups = self._group_IMCMB(todo_in, todo_out)
             self.logger.info(f"{len(groups)} groups for fused weight+interpolation.")
-            persist = bool(get_key(self.config_node.imcoadd, "persist_weight_maps", default=False))
+            persist = self.plan.persist_weight_maps
             for group_id, ((z, d, f), [group_in, group_out]) in enumerate(groups.items()):
                 st_group = time.time()
                 mask_file, badpix = self._get_bpmask(group_in[0])
@@ -457,7 +434,7 @@ class SwarpMixin:
 
         swarp_options_override_from_config = get_key(self.config_node.imcoadd, "swarp_options_override", default=[])
         swarp_options_override = swarp_options_override_from_config + swarp_options_override
-        if not get_key(self.config_node.imcoadd, "zpscale", default=True):
+        if not self.plan.zpscale:
             # zpscale off: stale FLXSCALE cards on the files must not flux-scale the combine
             swarp_options_override = swarp_options_override + [
                 "-FSCALE_KEYWORD",
@@ -598,7 +575,7 @@ class SwarpMixin:
 
     def _save_single_weight_products(self, resampled: list[str]) -> None:
         """Keep each frame's resampled weight beside its single."""
-        if not get_key(self.config_node.imcoadd, "output_single_weight_map", default=False):
+        if not self.plan.output_single_weight_map:
             return
         from .interpolate import write_weight_int16
 
@@ -688,7 +665,7 @@ class SwarpMixin:
         """Return per-frame resampled masks for conservative rejection."""
         if self.plan.policy != "conservative":
             return None
-        masks = atleast_1d(getattr(self, "_bpm_resampled_masks", []))
+        masks = atleast_1d(self._bpm_resampled_masks)
         missing = [m for m in masks if not os.path.exists(m)]
         if not masks or missing:
             raise self._process_error.FileNotFoundError(

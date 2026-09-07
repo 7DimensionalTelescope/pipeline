@@ -1,26 +1,48 @@
 import os
 import shutil
 import tempfile
+from dataclasses import dataclass
 
 import numpy as np
 from astropy.io import fits
 
 from ..config.utils import get_key
+from ..path.path import PathHandler
 from ..utils import atleast_1d
+from .coadd_plan import CoaddPlan
+
+
+@dataclass(slots=True)
+class IntermediateStorage:
+    policy: str
+    root: str | None
+    bkgsub_dir: str
+    conv_dir: str
+    weight_dir: str
+    interp_dir: str
+    source_mask_dir: str
+    frame_cache: dict[str, tuple[np.ndarray, fits.Header]]
+    working_mask_paths: list[str]
+    bkgsub_dump_pairs: list[tuple[str, str]]
 
 
 class IntermediateStorageMixin:
+    path: PathHandler
+    plan: CoaddPlan
+    intermediate_storage: IntermediateStorage | None
+
+    @property
+    def storage(self) -> IntermediateStorage:
+        if self.intermediate_storage is None:
+            raise RuntimeError("Intermediate storage has not been prepared")
+        return self.intermediate_storage
+
     def _prepare_intermediate_storage(self, images):
-        if getattr(self, "_intermediate_policy_ready", False):
-            return
         requested = self.plan.intermediate_policy
         use_memory = requested == "memory" or (
             requested == "auto" and len(atleast_1d(images)) <= self.plan.memory_image_limit
         )
-        durable_models = bool(
-            get_key(self.config_node.imcoadd, "output_bkg_map", default=False)
-            or get_key(self.config_node.imcoadd, "output_sky_rms_map", default=False)
-        )
+        durable_models = self.plan.output_bkg_map or self.plan.output_sky_rms_map
         if use_memory and durable_models:
             if requested == "memory":
                 raise ValueError(
@@ -29,7 +51,9 @@ class IntermediateStorageMixin:
             use_memory = False
         if use_memory and self.plan.routine == "legacy":
             if requested == "memory":
-                raise ValueError("intermediate_policy 'memory' is incompatible with coadd_routine 'legacy' (SWarp reads files)")
+                raise ValueError(
+                    "intermediate_policy 'memory' is incompatible with coadd_routine 'legacy' (SWarp reads files)"
+                )
             use_memory = False
         if use_memory:
             need = int(4.5 * sum(os.path.getsize(path) for path in atleast_1d(images)))
@@ -42,91 +66,100 @@ class IntermediateStorageMixin:
                         f"{free / 1e9:.1f} GB is available"
                     )
                 use_memory = False
-        self._intermediate_policy = "memory" if use_memory else "disk"
-        self._frame_cache = {}
-        self._working_mask_paths = []
-        self._memory_bkgsub_dump_pairs = []
+        policy = "memory" if use_memory else "disk"
         if use_memory:
             root = tempfile.mkdtemp(prefix="pipeline_imcoadd_", dir="/dev/shm")
-            self._memory_intermediate_dir = root
-            self._bkgsub_dir = os.path.join(root, "bkgsub")
-            self._conv_dir = os.path.join(root, "conv")
-            self._weight_dir = os.path.join(root, "weight")
-            self._interp_dir = os.path.join(root, "interp")
-            self._source_mask_dir = os.path.join(root, "srcmask")
-            os.makedirs(self._bkgsub_dir, exist_ok=True)
-            os.makedirs(self._conv_dir, exist_ok=True)
-            os.makedirs(self._weight_dir, exist_ok=True)
-            os.makedirs(self._interp_dir, exist_ok=True)
+            bkgsub_dir = os.path.join(root, "bkgsub")
+            conv_dir = os.path.join(root, "conv")
+            weight_dir = os.path.join(root, "weight")
+            interp_dir = os.path.join(root, "interp")
+            source_mask_dir = os.path.join(root, "srcmask")
+            os.makedirs(bkgsub_dir, exist_ok=True)
+            os.makedirs(conv_dir, exist_ok=True)
+            os.makedirs(weight_dir, exist_ok=True)
+            os.makedirs(interp_dir, exist_ok=True)
         else:
-            self._use_factory_dirs()
-        self._intermediate_policy_ready = True
+            factory = self.path.imcoadd.factory
+            root = None
+            bkgsub_dir = factory.bkgsub_dir
+            conv_dir = factory.conv_dir
+            weight_dir = factory.weight_dir
+            interp_dir = factory.interp_dir
+            source_mask_dir = factory.source_mask_dir
+        self.intermediate_storage = IntermediateStorage(
+            policy=policy,
+            root=root,
+            bkgsub_dir=bkgsub_dir,
+            conv_dir=conv_dir,
+            weight_dir=weight_dir,
+            interp_dir=interp_dir,
+            source_mask_dir=source_mask_dir,
+            frame_cache={},
+            working_mask_paths=[],
+            bkgsub_dump_pairs=[],
+        )
         self.logger.info(
-            f"Intermediate policy: {self._intermediate_policy} "
+            f"Intermediate policy: {policy} "
             f"({len(atleast_1d(images))} images, memory limit {self.plan.memory_image_limit})"
         )
 
-    def _use_factory_dirs(self):
-        factory = self.path.imcoadd.factory
-        self._memory_intermediate_dir = None
-        self._bkgsub_dir = factory.bkgsub_dir
-        self._conv_dir = factory.conv_dir
-        self._weight_dir = factory.weight_dir
-        self._interp_dir = factory.interp_dir
-        self._source_mask_dir = factory.source_mask_dir
-
     def _read_stage_frame(self, image):
-        cached = getattr(self, "_frame_cache", {}).get(image)
+        storage = self.storage
+        cached = storage.frame_cache.get(image)
         if cached is not None:
             return cached
         data, header = fits.getdata(image, header=True, memmap=False)
         value = np.ascontiguousarray(data, dtype=np.float32), header
-        if getattr(self, "_intermediate_policy", "disk") == "memory":
-            self._frame_cache[image] = value
+        if storage.policy == "memory":
+            storage.frame_cache[image] = value
         return value
 
     def _store_stage_frame(self, image, data, header):
+        storage = self.storage
         value = np.ascontiguousarray(data, dtype=np.float32), header.copy()
-        if getattr(self, "_intermediate_policy", "disk") == "memory":
-            self._frame_cache[image] = value
+        if storage.policy == "memory":
+            storage.frame_cache[image] = value
             if self.plan.mode == "proper":
                 fits.writeto(image, value[0], header=value[1], overwrite=True)
         else:
             fits.writeto(image, value[0], header=value[1], overwrite=True)
 
     def _stage_frame_exists(self, image):
-        return image in getattr(self, "_frame_cache", {}) or os.path.exists(image)
+        return image in self.storage.frame_cache or os.path.exists(image)
 
     def discard_cached_frames(self):
-        getattr(self, "_frame_cache", {}).clear()
+        self.storage.frame_cache.clear()
 
     def _cleanup_imcoadd_intermediates(self):
-        root = getattr(self, "_memory_intermediate_dir", None)
-        plan = getattr(self, "_plan", None)
-        dumped = root and plan is not None and plan.dump_bkgsub and getattr(self, "_coadd_completed", False)
+        storage = self.intermediate_storage
+        if storage is None:
+            return
+        root = storage.root
+        dumped = root and self.plan.dump_bkgsub and self._coadd_completed
         if dumped:
-            for source, destination in self._memory_bkgsub_dump_pairs:
+            for source, destination in storage.bkgsub_dump_pairs:
                 os.makedirs(os.path.dirname(destination), exist_ok=True)
-                cached = self._frame_cache.get(source)
+                cached = storage.frame_cache.get(source)
                 if cached is not None:
                     fits.writeto(destination, cached[0], header=cached[1], overwrite=True)
                 elif os.path.exists(source):
                     shutil.copy2(source, destination)
         if root:
             shutil.rmtree(root, ignore_errors=True)
-            destinations = [destination for _, destination in self._memory_bkgsub_dump_pairs]
+            destinations = [destination for _, destination in storage.bkgsub_dump_pairs]
             self.config_node.imcoadd.bkgsub_images = destinations if dumped else None
             self.config_node.imcoadd.conv_files = None
             self.images_to_coadd = None
-            for key in ("interp_images", "bkgsub_weight_images"):
-                if any(str(p).startswith(root) for p in atleast_1d(get_key(self.config_node.imcoadd, key) or [])):
-                    setattr(self.config_node.imcoadd, key, None)
-            self._use_factory_dirs()
-            self._intermediate_policy = "disk"
-        for path in getattr(self, "_working_mask_paths", []):
+            interp_images = atleast_1d(get_key(self.config_node.imcoadd, "interp_images") or [])
+            if any(str(path).startswith(root) for path in interp_images):
+                self.config_node.imcoadd.interp_images = None
+            weight_images = atleast_1d(get_key(self.config_node.imcoadd, "bkgsub_weight_images") or [])
+            if any(str(path).startswith(root) for path in weight_images):
+                self.config_node.imcoadd.bkgsub_weight_images = None
+        for path in storage.working_mask_paths:
             try:
                 os.remove(path)
             except OSError:
                 pass
-        self.discard_cached_frames()
-        self._intermediate_policy_ready = False
+        storage.frame_cache.clear()
+        self.intermediate_storage = None

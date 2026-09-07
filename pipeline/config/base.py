@@ -113,8 +113,6 @@ class BaseConfig(ABC):
         else:
             raise TypeError("Invalid config_source type: must be str or dict")
 
-        self._migrate_imcoadd_options(input_dict)
-
         self._config_in_dict = input_dict
 
         self.node = ConfigNode(self)
@@ -122,24 +120,6 @@ class BaseConfig(ABC):
         self._update_with_kwargs(**kwargs)
 
         self._make_nodes()
-
-    @staticmethod
-    def _migrate_imcoadd_options(config):
-        """Move retired flat imcoadd options into their mode-specific mappings."""
-        imcoadd = config.get("imcoadd") if isinstance(config, dict) else None
-        if not isinstance(imcoadd, dict):
-            return
-        options = imcoadd.get("coadd_options")
-        if not isinstance(options, dict):
-            options = {}
-            imcoadd["coadd_options"] = options
-        proper = options.get("proper")
-        if not isinstance(proper, dict):
-            proper = {}
-            options["proper"] = proper
-        old = imcoadd.pop("proper_coadd_weight_map_policy", None)
-        if old is not None and proper.get("weight_map_policy") is None:
-            proper["weight_map_policy"] = old
 
     def _update_with_kwargs(self, **kwargs):
         """Merge additional configuration parameters."""

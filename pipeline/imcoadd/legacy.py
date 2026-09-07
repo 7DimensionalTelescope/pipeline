@@ -1,6 +1,17 @@
+from ..path.path import PathHandler
+from .coadd_plan import CoaddPlan
+
+
 class LegacyCoaddMixin:
+    path: PathHandler
+    plan: CoaddPlan
+
     def legacy_coadd_routine(self, use_gpu: bool = False, device_id=None):
         self._use_gpu = all([use_gpu, self.config_node.imcoadd.gpu, self._use_gpu])
+        self._coadd_completed = False
+        self._quality_masks = None
+        self._coadd_mask_builder = None
+        self._zdf_cache = {}
 
         self.initialize()
         self._prepare_intermediate_storage(self.input_images)
@@ -34,7 +45,7 @@ class LegacyCoaddMixin:
                 self._progress_status("apply-bpmask-completed"),
             )
 
-        if self.config_node.imcoadd.joint_wcs:
+        if self.plan.joint_wcs:
             images = self.joint_registration(images)
             self.update_progress(
                 self._process_registry.milestone_progress(
@@ -43,7 +54,7 @@ class LegacyCoaddMixin:
                 self._progress_status("joint-registration-completed"),
             )
 
-        if self.config_node.imcoadd.convolve:
+        if self.plan.convolve:
             self.prepare_convolution(images)
             images = self.run_convolution(images, device_id=device_id)
             self.update_progress(

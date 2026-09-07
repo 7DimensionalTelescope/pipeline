@@ -9,7 +9,7 @@ from pipeline.const import CONFIG_TYPE_SCIENCE
 from pipeline.const.crossfilter import WHITE_COADD_SPEC
 from pipeline.const.run import DEFAULT_CROSSFILTER_PROCESSES
 from pipeline.errors.errors import EmptyInputAfterSanityRejectionError, PrerequisiteNotMetError
-from pipeline.path.path import CrossFilterPathHandler
+from pipeline.path.path import PathHandler
 from pipeline.run import run_crossfilter_reduction
 from pipeline.services.database import free_query
 
@@ -38,7 +38,7 @@ def science_configs_of(target, nightdate):
 def load_or_create_config(science_configs, args):
     """The target's cross-filter config: the existing YAML when its parents match, otherwise a new one."""
     expected_coadds = CrossFilterConfiguration._science_config_coadds(science_configs)
-    output_yml = CrossFilterPathHandler(
+    output_yml = PathHandler.for_crossfilter(
         expected_coadds,
         working_dir=args.working_dir,
         is_pipeline=args.pipeline,

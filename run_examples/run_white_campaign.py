@@ -20,7 +20,7 @@ from pipeline.const.sciproc import (
 )
 from pipeline.errors.errors import EmptyInputAfterSanityRejectionError, PrerequisiteNotMetError
 from pipeline.imcoadd.white import WhiteImage
-from pipeline.path.path import CrossFilterPathHandler
+from pipeline.path.path import PathHandler
 from pipeline.run import run_crossfilter_reduction, run_scidata_reduction
 from pipeline.services.database import free_query
 from pipeline.services.pipeline_lock import enforce_pipeline_lock
@@ -178,7 +178,7 @@ def coadd_parents(plan, overwrite=False):
 def load_or_create_config(science_configs, working_dir=None, is_pipeline=True, suffix=None, overwrite=False):
     """The target's cross-filter config, its parent list rewritten whenever the campaign's set differs."""
     expected_coadds = CrossFilterConfiguration._science_config_coadds(science_configs)
-    output_yml = CrossFilterPathHandler(
+    output_yml = PathHandler.for_crossfilter(
         expected_coadds,
         working_dir=working_dir,
         is_pipeline=is_pipeline,

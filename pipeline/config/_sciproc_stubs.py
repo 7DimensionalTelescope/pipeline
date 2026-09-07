@@ -82,7 +82,7 @@ if TYPE_CHECKING:
         coadd_routine: str
         coadd_mode: str
         coadd_weighting: str
-        coadd_options: dict
+        coadd_mode_options: dict
         coverage_policy: str
         match_swarp_size: bool
         image_selection: bool

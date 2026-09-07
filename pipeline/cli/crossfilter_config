@@ -4,7 +4,7 @@ import argparse
 import os
 
 from pipeline.config import CrossFilterConfiguration
-from pipeline.path.path import CrossFilterPathHandler
+from pipeline.path.path import PathHandler
 
 
 if __name__ == "__main__":
@@ -20,7 +20,7 @@ if __name__ == "__main__":
 
     science_configs = sorted(os.path.abspath(path) for path in args.science_configs)
     expected_coadds = CrossFilterConfiguration._science_config_coadds(science_configs)
-    output_yml = CrossFilterPathHandler(
+    output_yml = PathHandler.for_crossfilter(
         expected_coadds,
         config_file=args.config_file,
         working_dir=args.working_dir,

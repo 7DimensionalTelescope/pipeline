@@ -45,6 +45,7 @@ class PathHandlerSettings:
     config_file: str | Path | None = None
     config_suffix: str | None = None  # appended to the auto-generated config stem
     factory_scratch: str | None = None  # local root replacing FACTORY_DIR for multi-epoch factories
+    config_type: str | None = None
 
 
 @dataclass
@@ -94,6 +95,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         config_file: str | Path | None = None,
         config_suffix: str | None = None,
         factory_scratch: str | None = None,
+        config_type: str | None = None,
         top_dirs: TopDirs | None = None,
     ):
         self._name_cache = {}  # Cache for NameHandler properties
@@ -120,6 +122,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             config_file=config_file,
             config_suffix=config_suffix,
             factory_scratch=factory_scratch,
+            config_type=config_type,
         )
         # When provided, every input file shares this TopDirs (skips per-file dispatch).
         self._user_top_dirs = top_dirs
@@ -130,7 +133,10 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
 
         if not self._file_dep_initialized and self._input_files:
             self.select_output_dir()
-            self.define_file_dependent_paths()
+            if self.settings.config_type == const.CONFIG_TYPE_CROSSFILTER:
+                self.define_crossfilter_paths()
+            else:
+                self.define_file_dependent_paths()
         elif self._user_top_dirs is not None:
             # No input, but caller pinned the TopDirs explicitly.
             self._top_dirs = [self._user_top_dirs]
@@ -164,8 +170,13 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             config_file=s.config_file,
             config_suffix=s.config_suffix,
             factory_scratch=s.factory_scratch,
+            config_type=s.config_type,
             top_dirs=self._user_top_dirs,
         )
+
+    @classmethod
+    def for_crossfilter(cls, input=None, **kwargs) -> PathHandler:
+        return cls(input, config_type=const.CONFIG_TYPE_CROSSFILTER, **kwargs)
 
     def _handle_input(self, input, is_too=False, working_dir=None):
         """init with obs_parmas and config are ad-hoc. Will be changed to always take filenames"""
@@ -830,6 +841,34 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         if self._metadata_dir:
             self.metadata_dir = self._metadata_dir
 
+        self._file_dep_initialized = True
+
+    def define_crossfilter_paths(self):
+        output_dir = self.crossfilter.output_dir
+        factory_dir = self.crossfilter.factory_dir
+        figure_dir = os.path.join(output_dir, FIGURES_DIRNAME)
+        count = len(self._input_files)
+
+        self._output_dir = [output_dir] * count
+        self._factory_dir = [factory_dir] * count
+        self._single_dir = [os.path.dirname(path) for path in self._input_files]
+        self._masterframe_dir = [None] * count
+        self._figure_dir = [figure_dir] * count
+        self._daily_coadd_dir = [output_dir] * count
+        self._subtracted_dir = [None] * count
+        self._coadd_dir = [output_dir] * count
+        self._metadata_dir = [None] * count
+        self._resolved_files = list(self._input_files)
+
+        self.output_dir = output_dir
+        self.factory_dir = factory_dir
+        self.single_dir = collapse(self._single_dir)
+        self.figure_dir = figure_dir
+        self.masterframe_dir = None
+        self.daily_coadd_dir = output_dir
+        self.subtracted_dir = None
+        self.coadd_dir = output_dir
+        self.metadata_dir = None
         self._file_dep_initialized = True
 
     # lazy, cached
@@ -1874,19 +1913,6 @@ class PathPhot7DS(AutoMkdirMixin, AutoCollapseMixin):
         return os.path.join(self.output_dir, f"{self.stem}_sepp.py")
 
 
-class CrossFilterPathHandler(PathHandler):
-    _is_crossfilter = True
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.output_dir = self.crossfilter.output_dir
-        self.factory_dir = self.crossfilter.factory_dir
-        self.single_dir = self.crossfilter.factory_dir
-        self.daily_coadd_dir = self.crossfilter.output_dir
-        self.coadd_dir = self.crossfilter.output_dir
-        self.figure_dir = os.path.join(self.crossfilter.output_dir, FIGURES_DIRNAME)
-
-
 class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
     """Intermediate/output product paths for the ImCoadd stages.
 
@@ -1911,7 +1937,11 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
     @property
     def _config_yml(self) -> str:
         parent = self._parent._parent
-        return parent.crossfilter.output_yml if getattr(parent, "_is_crossfilter", False) else parent.sciproc_output_yml
+        return (
+            parent.crossfilter.output_yml
+            if parent.settings.config_type == const.CONFIG_TYPE_CROSSFILTER
+            else parent.sciproc_output_yml
+        )
 
     @property
     def _config_stem(self) -> str:
@@ -1931,7 +1961,7 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
         parent = self._parent._parent
         if parent.settings.is_multi_epoch:
             return self._config_stem
-        if getattr(parent, "_is_crossfilter", False):
+        if parent.settings.config_type == const.CONFIG_TYPE_CROSSFILTER:
             return ""
         obj = collapse(atleast_1d(parent.name.obj), raise_error=True)
         filte = collapse(atleast_1d(parent.name.filter), raise_error=True)

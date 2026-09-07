@@ -10,7 +10,7 @@ from astropy.io import fits
 from .. import __version__
 from ..const.crossfilter import CROSSFILTERPROCESS_REGISTRY
 from ..path.name import NameHandler
-from ..path.path import CrossFilterPathHandler, PathHandler
+from ..path.path import PathHandler
 from ..services.logger import Logger
 from ..utils import atleast_1d, collapse, time_diff_in_seconds
 from .base import BaseConfig
@@ -22,6 +22,8 @@ if TYPE_CHECKING:
 
 
 class CrossFilterConfiguration(BaseConfig):
+    path: PathHandler
+
     if TYPE_CHECKING:
         node: CrossFilterNode
 
@@ -124,7 +126,7 @@ class CrossFilterConfiguration(BaseConfig):
             else:
                 raise ValueError("Cross-filter inputs must be all science configs or all FITS images")
 
-            self.path = CrossFilterPathHandler(
+            self.path = PathHandler.for_crossfilter(
                 self.input_files,
                 working_dir=working_dir,
                 is_pipeline=is_pipeline,
@@ -201,7 +203,7 @@ class CrossFilterConfiguration(BaseConfig):
             raise ValueError("Cross-filter configuration has no source coadd images")
         self.science_configs = science_configs
         self.input_files = expected
-        return CrossFilterPathHandler(
+        return PathHandler.for_crossfilter(
             expected,
             working_dir=working_dir,
             is_pipeline=is_pipeline,

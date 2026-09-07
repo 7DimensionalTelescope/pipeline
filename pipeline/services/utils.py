@@ -864,12 +864,12 @@ class CrossFilterGroup:
         **kwargs,
     ):
         from ..config import CrossFilterConfiguration
-        from ..path.path import CrossFilterPathHandler
+        from ..path.path import PathHandler
 
         science_configs = sorted(group.config for group in self.source_groups)
         expected_coadds = CrossFilterConfiguration._science_config_coadds(science_configs)
         output_yml = collapse(
-            CrossFilterPathHandler(
+            PathHandler.for_crossfilter(
                 expected_coadds,
                 is_too=is_too,
                 is_pipeline=is_pipeline,

@@ -7,23 +7,26 @@ from astropy.io import fits
 from .. import external
 from ..config.utils import get_key
 from ..const import REF_DIR
+from ..path.path import PathHandler
 from ..services.utils import conservative_worker_count
 from ..utils import add_suffix, atleast_1d, get_basename, time_diff_in_seconds
 from ..utils.header import update_padded_header
 from .const import MaskBit
+from .coadd_plan import CoaddPlan
+from .storage import IntermediateStorage
 
 
 class BackgroundMixin:
+    path: PathHandler
+    plan: CoaddPlan
+    storage: IntermediateStorage
+    _fov_masks: list[str | None] | None
+
     def _background_output_exists(self, image):
-        storage_check = getattr(self, "_stage_frame_exists", None)
-        return storage_check(image) if storage_check is not None else os.path.exists(image)
+        return self._stage_frame_exists(image)
 
     def _write_background_output(self, image, data, header):
-        storage_write = getattr(self, "_store_stage_frame", None)
-        if storage_write is not None:
-            storage_write(image, data, header)
-        else:
-            fits.writeto(image, data, header=header, overwrite=True)
+        self._store_stage_frame(image, data, header)
 
     def bkgsub(
         self,
@@ -40,13 +43,13 @@ class BackgroundMixin:
         st = time.time()
 
         factory = self.path.imcoadd.factory
-        self.path_bkgsub = getattr(self, "_bkgsub_dir", factory.bkgsub_dir)
+        self.path_bkgsub = self.storage.bkgsub_dir
 
         bkgsub_images = factory.stage_images(input_images, "bkgsub", self.path_bkgsub)
         self.config_node.imcoadd.bkgsub_images = bkgsub_images
-        if getattr(self, "_intermediate_policy", "disk") == "memory":
+        if self.storage.policy == "memory":
             durable = factory.stage_images(input_images, "bkgsub", factory.bkgsub_dir)
-            self._memory_bkgsub_dump_pairs = list(zip(bkgsub_images, durable))
+            self.storage.bkgsub_dump_pairs = list(zip(bkgsub_images, durable))
 
         bkg_images = factory.stage_images(input_images, "bkg", self.path_bkgsub)
         bkg_rms_images = factory.stage_images(input_images, "bkgrms", self.path_bkgsub)
@@ -86,7 +89,7 @@ class BackgroundMixin:
 
         any_dynamic = "dynamic" in types
         source_mask_images = (
-            factory.stage_images(input_images, "srcmask", self._source_mask_dir)
+            factory.stage_images(input_images, "srcmask", self.storage.source_mask_dir)
             if (mask_sources and any_dynamic)
             else [None] * len(input_images)
         )
@@ -114,14 +117,12 @@ class BackgroundMixin:
         if any_dynamic:
             self.config_node.imcoadd.bkg_images = (
                 bkg_images
-                if get_key(self.config_node.imcoadd, "output_bkg_map", default=False)
+                if self.plan.output_bkg_map
                 else None
             )
             self.config_node.imcoadd.bkg_rms_images = (
                 bkg_rms_images
-                if get_key(
-                    self.config_node.imcoadd, "output_sky_rms_map", default=False
-                )
+                if self.plan.output_sky_rms_map
                 else None
             )
         else:
@@ -144,7 +145,7 @@ class BackgroundMixin:
             phot_cat,
         ):
             st_loop = time.time()
-            cached = getattr(self, "_frame_cache", {}).pop(inim, None)
+            cached = self.storage.frame_cache.pop(inim, None)
             if cached is None:
                 data, header = fits.getdata(inim, header=True, memmap=False)
                 data = np.ascontiguousarray(data, dtype=np.float32)
@@ -152,7 +153,7 @@ class BackgroundMixin:
                 data, header = cached
 
             quality_mask = None
-            if getattr(self, "_quality_masks", None) is not None:
+            if self._quality_masks is not None:
                 quality_mask = self.quality_mask(i)
 
             if fov_mask is None:
@@ -213,7 +214,7 @@ class BackgroundMixin:
                     pending.append((i, job))
                     continue
                 # the header snapshot must follow what the kept product did (fallback CONSTANT)
-                cached = getattr(self, "_frame_cache", {}).get(job[1])
+                cached = self.storage.frame_cache.get(job[1])
                 try:
                     backtype = cached[1].get("BACKTYPE") if cached else fits.getval(job[1], "BACKTYPE")
                 except (KeyError, OSError):
@@ -350,7 +351,7 @@ class BackgroundMixin:
 
         valid = ~sources if fov_valid is None else (fov_valid & ~sources)
         saved = []
-        if getattr(self, "_intermediate_policy", "disk") == "disk":
+        if self.storage.policy == "disk":
             write_mask_plio(outmask, valid)
             saved.append(outmask)
         if get_key(self.config_node.imcoadd, "dump_source_masks", default=False):
@@ -372,7 +373,7 @@ class BackgroundMixin:
     ) -> list[str | None]:
         """Build background masks from pristine resampled footprints."""
         factory = self.path.imcoadd.factory
-        outputs = factory.stage_images(resampled_images, "fovmask", factory.bkgsub_dir)
+        outputs = factory.stage_images(resampled_images, "fovmask", self.storage.bkgsub_dir)
         self._fov_masks = []
         for inim, outmask in zip(atleast_1d(resampled_images), outputs):
             if os.path.exists(outmask) and not self.overwrite:
@@ -395,7 +396,7 @@ class BackgroundMixin:
         from scipy.ndimage import binary_erosion
 
         for i, (mask, delta) in enumerate(
-            zip(getattr(self, "_fov_masks", []), atleast_1d(delta_peeings))
+            zip(self._fov_masks, atleast_1d(delta_peeings))
         ):
             if mask is None or not delta:
                 continue
@@ -409,7 +410,7 @@ class BackgroundMixin:
             shrunk = add_suffix(mask, "shrunk")  # the pristine mask is what a resume reuses
             fits.writeto(shrunk, valid.astype(np.uint8), overwrite=True)
             self._fov_masks[i] = shrunk
-            getattr(self, "_working_mask_paths", []).append(shrunk)  # removed with the run's masks
+            self.storage.working_mask_paths.append(shrunk)  # removed with the run's masks
             self.logger.debug(
                 f"Shrank {get_basename(mask)} by {extra} px for a {delta:.2f} px kernel"
             )
@@ -478,7 +479,7 @@ class BackgroundMixin:
 
     def _guard_sky_rms_propagation(self):
         """Raise if a coadd sky-noise map is asked for; propagation is unimplemented."""
-        if get_key(self.config_node.imcoadd, "output_sky_rms_map", default=False):
+        if self.plan.output_sky_rms_map:
             raise NotImplementedError(
                 "imcoadd.output_sky_rms_map: the per-frame sky-RMS models are written, but "
                 "propagating them into a coadd sky-noise map (the source-free counterpart of "
@@ -500,7 +501,7 @@ class BackgroundMixin:
 
         if self._background_output_exists(outim):
             try:
-                cached = getattr(self, "_frame_cache", {}).get(outim)
+                cached = self.storage.frame_cache.get(outim)
                 _backtype = cached[1].get("BACKTYPE") if cached else fits.getval(outim, "BACKTYPE")
             except KeyError:
                 _backtype = ""
@@ -538,10 +539,10 @@ class BackgroundMixin:
         bkg_data, bkg_rms_data = estimate_background(
             _data, mask=exclude, back_size=back_size, filter_size=filter_size
         )
-        if get_key(self.config_node.imcoadd, "output_sky_rms_map", default=False):
+        if self.plan.output_sky_rms_map:
             fits.writeto(bkg_rms, bkg_rms_data, overwrite=True)
         del bkg_rms_data  # do not hold a second full frame past its write
-        if get_key(self.config_node.imcoadd, "output_bkg_map", default=False):
+        if self.plan.output_bkg_map:
             fits.writeto(bkg, bkg_data, overwrite=True)
 
         # if ignore_steppy_flag:

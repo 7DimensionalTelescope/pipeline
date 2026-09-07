@@ -119,7 +119,7 @@ imcoadd:
   coadd_routine: 'reproject-first'  # legacy, reproject-first, or direct
   coadd_mode: 'clipped'  # mean | median | clipped | proper
   coadd_weighting: global  # false | global (1/SKYSIG^2 per image) | pixel-wise (weight maps)
-  coadd_options:
+  coadd_mode_options:
     clipped:
       clip_sigma: 5.0
       clip_ampfrac: 0.3

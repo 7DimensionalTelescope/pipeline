@@ -6,12 +6,18 @@ import numpy as np
 
 from ..config.utils import get_key
 from ..const import REF_DIR
+from ..path.path import PathHandler
 from ..utils import add_suffix, atleast_1d, collapse, get_basename, time_diff_in_seconds
 from .calc import clipped_mean_coadd_numpy, mean_coadd_numpy, median_coadd_numpy
 from .coadd_plan import CoaddPlan, resolve_coadd_plan
+from .storage import IntermediateStorage
 
 
 class InMemoryCoaddMixin:
+    path: PathHandler
+    plan: CoaddPlan
+    storage: IntermediateStorage
+
     _LOCAL_FSTYPES = {
         "ext2",
         "ext3",
@@ -100,9 +106,9 @@ class InMemoryCoaddMixin:
 
     def _stage_for_combine(self, groups: dict[str, list[str] | None]):
         """Stage combine inputs locally and return remapped groups plus cleanup."""
-        if getattr(self, "_intermediate_policy", "disk") == "memory":
+        if self.storage.policy == "memory":
             return groups, lambda: None
-        scratch = get_key(self.config_node.imcoadd, "combine_scratch")
+        scratch = self.plan.combine_scratch
         files = [(g, f) for g, lst in groups.items() if lst for f in lst]
         if not files:
             return groups, lambda: None
@@ -243,7 +249,7 @@ class InMemoryCoaddMixin:
         var_is_mask = (
             var_maps is not None and masks is not None and list(var_maps) == list(masks)
         )
-        if getattr(self, "_intermediate_policy", "disk") == "memory":
+        if self.storage.policy == "memory":
             cached_paths = set(wht_maps or [])
             cached_paths.update(masks or [])
             for path in cached_paths:
@@ -262,9 +268,7 @@ class InMemoryCoaddMixin:
         var_maps = masks if var_is_mask else staged["var"]
 
         mode = plan.mode
-        match_swarp_size = bool(
-            get_key(self.config_node.imcoadd, "match_swarp_size", default=True)
-        )
+        match_swarp_size = self.plan.match_swarp_size
         # Serialize high-demand combines per filesystem and lease their planned memory.
         from ..services.combine_lock import CombineSlot, NullSlot
 
@@ -301,7 +305,7 @@ class InMemoryCoaddMixin:
                         write_footprint=plan.output_footprint,
                         outlier_callback=(
                             self._coadd_mask_builder.mark_outliers
-                            if getattr(self, "_coadd_mask_builder", None) is not None
+                            if self._coadd_mask_builder is not None
                             else None
                         ),
                     )
@@ -375,9 +379,7 @@ class InMemoryCoaddMixin:
                 ),
                 psf_output=add_suffix(coadd_image, "psf"),
                 holes=holes,
-                match_swarp_size=bool(
-                    get_key(self.config_node.imcoadd, "match_swarp_size", default=True)
-                ),
+                match_swarp_size=self.plan.match_swarp_size,
                 coverage_policy=plan.coverage_policy,
                 logger=self.logger,
             )
@@ -389,7 +391,7 @@ class InMemoryCoaddMixin:
     def _proper_peeings(self, input_images: list[str]) -> list[float]:
         """Per-frame PSF FWHM in pixels; the homogenized target when convolution ran."""
         n = len(atleast_1d(input_images))
-        if self.config_node.imcoadd.convolve and getattr(self, "_max_peeing", None):
+        if self.plan.convolve:
             return [float(self._max_peeing)] * n
         peeings = self.input_headers.values("PEEING")
         if len(peeings) != n or any(p is None for p in peeings):
@@ -425,7 +427,7 @@ class InMemoryCoaddMixin:
 
     def _combine_flxscales(self):
         """Return snapshot flux scales, or False when scaling is disabled."""
-        if get_key(self.config_node.imcoadd, "zpscale", default=True):
+        if self.plan.zpscale:
             return self.input_headers.values("FLXSCALE")
         return False
 
@@ -459,7 +461,7 @@ class InMemoryCoaddMixin:
             match_swarp_size=match_swarp_size,
             var_maps=var_maps,
             coverage_policy=self.plan.coverage_policy,
-            frame_cache=getattr(self, "_frame_cache", None),
+            frame_cache=self.storage.frame_cache,
             logger=self.logger,
         )
 
@@ -497,7 +499,7 @@ class InMemoryCoaddMixin:
             var_maps=var_maps,
             coverage_policy=self.plan.coverage_policy,
             outlier_callback=outlier_callback,
-            frame_cache=getattr(self, "_frame_cache", None),
+            frame_cache=self.storage.frame_cache,
             logger=self.logger,
         )
 
@@ -537,7 +539,7 @@ class InMemoryCoaddMixin:
             reserved_bytes=reserved_bytes,
             var_maps=var_maps,
             coverage_policy=self.plan.coverage_policy,
-            frame_cache=getattr(self, "_frame_cache", None),
+            frame_cache=self.storage.frame_cache,
             logger=self.logger,
         )
 
