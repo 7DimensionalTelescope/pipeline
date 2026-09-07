@@ -138,6 +138,7 @@ class CrossFilterConfiguration(BaseConfig):
             )
             config_source = crossfilter_template()
             self.config_file = self.path.crossfilter.output_yml
+            self.path = self.path.replace(config_file=self.config_file)
             log_file = self.path.crossfilter.output_log
             if self.write and os.path.exists(self.config_file) and not overwrite:
                 raise FileExistsError(
@@ -170,6 +171,7 @@ class CrossFilterConfiguration(BaseConfig):
                 self.config_file = config_source
             else:
                 self.config_file = self.path.crossfilter.output_yml
+                self.path = self.path.replace(config_file=self.config_file)
             self.node.logging.file = self.path.crossfilter.output_log
             self.logger = self._setup_logger(
                 logger,

@@ -18,6 +18,7 @@ class CoaddPlan:
     coverage_policy: str
     clip_sigma: float
     clip_ampfrac: float
+    clip_two_sample_fallback: str
     proper_weight_map_policy: str
     output_mask_map: bool
     dump_reprojected_masks: bool
@@ -36,22 +37,26 @@ class CoaddPlan:
     dump_unreprojected_interp: bool
     dump_unreprojected_weight: bool
     lean_factory: bool
-    combine_scratch: str | None
+    coadd_scratch: str | None
     persist_weight_maps: bool
     output_single_weight_map: bool
 
     @property
     def need_weights(self) -> bool:
         output_needs_maps = self.output_weight_map and self.mode != "proper"
-        return output_needs_maps or self.weighting == "pixelwise" or self.policy == "1px"
+        return output_needs_maps or self.weighting == "pixelwise" or self.policy in ("1px", "conservative")
 
     @property
     def smooth_weight(self) -> bool:
         return self.need_weights and self.weighting != "pixelwise" and self.routine != "legacy"
 
     @property
+    def reproject(self) -> bool:
+        return self.routine == "reproject-first"
+
+    @property
     def weight_on_sci_pass(self) -> bool:
-        return self.routine == "reproject-first" and self.smooth_weight
+        return self.reproject and self.smooth_weight
 
     @property
     def catalog_badpix_zeros(self) -> bool:
@@ -60,11 +65,15 @@ class CoaddPlan:
     @property
     def propagate_mask_on_sci_pass(self) -> bool:
         """Conservative holes come from the sci pass: SWarp zeroes the kernel support of a zero-weight input."""
-        return self.routine == "reproject-first" and self.policy == "conservative" and self.need_weights
+        return self.reproject and self.policy == "conservative" and self.need_weights
 
     @property
     def zero_before_reprojection(self) -> bool:
         return self.propagate_mask_on_sci_pass or (self.zero and not self.catalog_badpix_zeros)
+
+    @property
+    def sci_pass(self) -> str:
+        return "sci" if self.need_weights else ""
 
     @property
     def weight_pass(self) -> str:
@@ -72,9 +81,6 @@ class CoaddPlan:
             return ""
         return "sci" if self.weight_on_sci_pass else "wht"
 
-    @property
-    def fused_reprojection(self) -> bool:
-        return self.routine == "reproject-first" and self.need_weights and self.interpolate and not self.joint_wcs
 
 
 def resolve_coadd_plan(node) -> CoaddPlan:
@@ -95,6 +101,12 @@ def resolve_coadd_plan(node) -> CoaddPlan:
         raise ValueError("imcoadd.coadd_mode_options.clipped.clip_sigma must be positive")
     if not math.isfinite(clip_ampfrac) or clip_ampfrac < 0:
         raise ValueError("imcoadd.coadd_mode_options.clipped.clip_ampfrac must be non-negative")
+    clip_two_sample_fallback = str(mode_options["clipped"]["two_sample_fallback"]).strip().lower()
+    if clip_two_sample_fallback not in ("mean", "min"):
+        raise ValueError(
+            "Invalid imcoadd.coadd_mode_options.clipped.two_sample_fallback: "
+            f"{clip_two_sample_fallback!r} (expected 'mean' or 'min')"
+        )
 
     proper_raw = mode_options["proper"]["weight_map_policy"]
     proper_weight_map_policy = str(proper_raw or "off").lower().replace("_", "-")
@@ -154,6 +166,7 @@ def resolve_coadd_plan(node) -> CoaddPlan:
         coverage_policy=coverage_policy,
         clip_sigma=clip_sigma,
         clip_ampfrac=clip_ampfrac,
+        clip_two_sample_fallback=clip_two_sample_fallback,
         proper_weight_map_policy=proper_weight_map_policy,
         output_mask_map=bool(node.output_mask_map),
         dump_reprojected_masks=bool(node.dump_reprojected_masks),
@@ -172,12 +185,21 @@ def resolve_coadd_plan(node) -> CoaddPlan:
         dump_unreprojected_interp=bool(node.dump_unreprojected_interp),
         dump_unreprojected_weight=bool(node.dump_unreprojected_weight),
         lean_factory=bool(node.lean_factory),
-        combine_scratch=node.combine_scratch,
+        coadd_scratch=node.coadd_scratch,
         persist_weight_maps=bool(node.persist_weight_maps),
         output_single_weight_map=bool(node.output_single_weight_map),
     )
-    if plan.dump_reprojected_masks and plan.routine != "reproject-first":
+    if plan.dump_reprojected_masks and not plan.reproject:
         raise ValueError("imcoadd.dump_reprojected_masks requires coadd_routine: reproject-first")
+    if plan.reproject and not plan.interpolate:
+        raise ValueError(
+            "coadd_routine 'reproject-first' interpolates bad pixels in every frame; "
+            "set interpolate_badpix: True (or coadd_routine: direct for pre-aligned inputs)"
+        )
+    if plan.joint_wcs:
+        raise NotImplementedError("imcoadd.joint_wcs: joint registration is not implemented; set it to False")
+    if plan.routine == "direct" and plan.convolve:
+        raise ValueError("The direct routine does not convolve; set imcoadd.convolve: False")
     if plan.policy == "1px" and not plan.zero:
         raise NotImplementedError(
             "badpix_reprojection_policy '1px' requires zero_badpix_weight: True; "

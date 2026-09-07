@@ -5,6 +5,7 @@ from astropy.io import fits
 from astropy.wcs import WCS
 
 from ..path.path import PathHandler
+from ..services.logger import Logger
 from ..utils import add_suffix, atleast_1d, get_basename
 from .coadd_plan import CoaddPlan
 from .storage import IntermediateStorage
@@ -330,6 +331,7 @@ class CoaddMaskBuilder:
 
 
 class MaskMixin:
+    logger: Logger
     path: PathHandler
     plan: CoaddPlan
     storage: IntermediateStorage
@@ -398,8 +400,10 @@ class MaskMixin:
         output[bad] |= int(MaskBit.BADPIX)
         saturation = input_header.get("SATURATE")
         catalog = self._saturated_catalog(detector_image)
-        if saturation is not None and detector_data is None and self._saturated_catalog_current(
-            catalog, detector_image, saturation
+        if (
+            saturation is not None
+            and detector_data is None
+            and self._saturated_catalog_current(catalog, detector_image, saturation)
         ):
             table = fits.getdata(catalog)
             saturated = self._project_sky(table["RA"], table["DEC"], output_header, output_shape)

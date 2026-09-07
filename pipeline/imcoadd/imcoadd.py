@@ -35,7 +35,7 @@ from .coadd_plan import CoaddPlan
 from .const import ZP_KEY
 from .header_set import InputHeaderSet
 from .background import BackgroundMixin
-from .combine import InMemoryCoaddMixin
+from .reproject_first import ReprojectFirstCoaddMixin
 from .legacy import LegacyCoaddMixin
 from .masks import MaskMixin
 from .storage import IntermediateStorageMixin
@@ -51,13 +51,12 @@ class ImCoadd(
     BackgroundMixin,
     IntermediateStorageMixin,
     MaskMixin,
-    InMemoryCoaddMixin,
+    ReprojectFirstCoaddMixin,
     BaseSetup,
     DatabaseHandler,
     Checker,
     RuntimeVersionMixin,
 ):
-    path: PathHandler
     _conv_inputs: list[str] | None
     _zdf_cache: dict[str, tuple[str, str, str]]
 
@@ -147,235 +146,6 @@ class ImCoadd(
         #     (10, "coadd_with_swarp", False),
         # ]
 
-    def direct_coadd_routine(self, use_gpu: bool = False, device_id=None):
-        """Same RA-Dec plane, No SWarp reprojection"""
-        self._use_gpu = all([use_gpu, self.config_node.imcoadd.gpu, self._use_gpu])
-        if self.plan.joint_wcs or self.plan.convolve:
-            raise self._process_error.ValueError("Direct coaddition requires joint_wcs=False and convolve=False")
-
-        plan = self.plan
-        total_steps = 3 + int(plan.need_weights) + int(plan.interpolate) + int(plan.zpscale)
-        step = 0
-        self._coadd_completed = False
-        self._quality_masks = None
-        self._coadd_mask_builder = None
-        self._zdf_cache = {}
-
-        self.initialize()
-        self._validate_direct_grid()
-        images = self.input_images
-        self._prepare_intermediate_storage(images)
-        if self.plan.output_mask_map or self.plan.dump_reprojected_masks:
-            self.prepare_quality_masks(images, detector_images=self.input_images)
-        weight_images = None
-
-        if plan.need_weights:
-            factory = self.path.imcoadd.factory
-            weight_images = factory.stage_images(images, "weight", self.storage.weight_dir)
-            weight_images = self.calculate_weight_map(images, device_id=device_id, out_weights=weight_images)
-            step += 1
-            self.update_progress(
-                self._process_registry.step_progress(self._process_spec, step, total_steps),
-                self._progress_status("calculate-weight-map-completed"),
-            )
-
-        if plan.interpolate:
-            images = self.apply_bpmask(images, device_id=device_id, weight_images=weight_images)
-            if weight_images is not None:
-                weight_images = [add_suffix(image, "weight") for image in images]
-            step += 1
-            self.update_progress(
-                self._process_registry.step_progress(self._process_spec, step, total_steps),
-                self._progress_status("apply-bpmask-completed"),
-            )
-
-        images = self.bkgsub(
-            images,
-            mask_out_of_fov=True,
-            mask_sources=plan.source_mask,
-        )
-        step += 1
-        self.update_progress(
-            self._process_registry.step_progress(self._process_spec, step, total_steps),
-            self._progress_status("bkgsub-completed"),
-        )
-
-        self.zpscale(images, write_headers=False)
-        if plan.zpscale:
-            step += 1
-            self.update_progress(
-                self._process_registry.step_progress(self._process_spec, step, total_steps),
-                self._progress_status("zpscale-completed"),
-            )
-
-        self.coadd_in_memory(images, device_id=device_id, weight_images=weight_images)
-        self._coadd_completed = True
-        self.finalize_quality_masks()
-        step += 1
-        self.update_progress(
-            self._process_registry.step_progress(self._process_spec, step, total_steps),
-            self._progress_status("coadd-completed"),
-        )
-
-        self.plot_coadd_image()
-        step += 1
-        self.update_progress(
-            self._process_registry.step_progress(self._process_spec, step, total_steps),
-            self._progress_status("plot-completed"),
-        )
-        self.register_coadd_qa()
-        self.update_progress(
-            self._process_registry.completed_progress(self._process_spec),
-            self._progress_status("completed"),
-        )
-
-    def reproject_first_coadd_routine(self, use_gpu: bool = False, device_id=None):
-        """Reproject with SWarp, then coadd in memory."""
-        self._use_gpu = all([use_gpu, self.config_node.imcoadd.gpu, self._use_gpu])
-
-        plan = self.plan
-        optional_steps = (
-            int(plan.need_weights)
-            + int(plan.interpolate)
-            + int(plan.joint_wcs)
-            + int(bool(plan.convolve))
-            + int(plan.zpscale)
-        )
-        total_steps = 4 + optional_steps
-        step = 0
-        self._coadd_completed = False
-        self._quality_masks = None
-        self._coadd_mask_builder = None
-        self._zdf_cache = {}
-        self._manifest = None
-
-        self.initialize()
-
-        images = self.input_images
-        weight_images = None
-        fov_masks = None
-        if plan.fused_reprojection:
-            images = self.weight_and_interpolate(images)
-            step += 1
-            self.update_progress(
-                self._process_registry.step_progress(self._process_spec, step, total_steps),
-                self._progress_status("calculate-weight-map-completed"),
-            )
-            step += 1
-            self.update_progress(
-                self._process_registry.step_progress(self._process_spec, step, total_steps),
-                self._progress_status("apply-bpmask-completed"),
-            )
-        else:
-            self._prepare_intermediate_storage(images)
-            if plan.need_weights:
-                # weights come from the pristine frames: the Poisson term must see the measured
-                # pixel, not an interpolated one (masked pixels are zeroed at interp anyway).
-                # Hence the names cannot follow a later stage product nor sit next to the inputs.
-                factory = self.path.imcoadd.factory
-                weight_images = factory.stage_images(images, "weight", factory.weight_dir)
-                self.calculate_weight_map(images, device_id=device_id, out_weights=weight_images)
-                step += 1
-                self.update_progress(
-                    self._process_registry.step_progress(self._process_spec, step, total_steps),
-                    self._progress_status("calculate-weight-map-completed"),
-                )
-
-            if plan.interpolate:
-                images = self.apply_bpmask(images, device_id=device_id, weight_images=weight_images)
-                if weight_images is not None:
-                    # hand the interp sidecars onward: they carry the zeroed bad-pixel holes
-                    weight_images = [add_suffix(im, "weight") for im in images]
-                step += 1
-                self.update_progress(
-                    self._process_registry.step_progress(self._process_spec, step, total_steps),
-                    self._progress_status("apply-bpmask-completed"),
-                )
-
-        if plan.joint_wcs:
-            images = self.joint_registration(images)
-            step += 1
-            self.update_progress(
-                self._process_registry.step_progress(self._process_spec, step, total_steps),
-                self._progress_status("joint-registration-completed"),
-            )
-
-        if not plan.fused_reprojection:
-            images = self.reproject_and_coadd_with_swarp(
-                images, coadd=False, weight_images=weight_images
-            )
-        else:
-            self._prepare_intermediate_storage(images)
-        if (
-            self.plan.output_mask_map
-            or self.plan.dump_reprojected_masks
-            or self.plan.satellite_mask_enabled
-        ):
-            self.prepare_quality_masks(images, detector_images=self.input_images)
-        if plan.convolve:
-            fov_masks = self.build_fov_masks(images)
-        self._remove_reprojection_intermediates()
-        step += 1
-        self.update_progress(
-            self._process_registry.step_progress(self._process_spec, step, total_steps),
-            self._progress_status("reproject-completed"),
-        )
-
-        if plan.convolve:
-            self.discard_cached_frames()
-            self.prepare_convolution(images)
-            images = self.run_convolution(images, device_id=device_id)
-            fov_masks = self.shrink_fov_masks(self.delta_peeings)
-            step += 1
-            self.update_progress(
-                self._process_registry.step_progress(self._process_spec, step, total_steps),
-                self._progress_status("run-convolution-completed"),
-            )
-
-        images = self.bkgsub(
-            images,
-            mask_out_of_fov=True,
-            mask_sources=plan.source_mask,
-            fov_masks=fov_masks,
-        )
-        self._discard_consumed_bkgsub_inputs()
-        step += 1
-        self.update_progress(
-            self._process_registry.step_progress(self._process_spec, step, total_steps),
-            self._progress_status("bkgsub-completed"),
-        )
-
-        self.zpscale(images, write_headers=False)
-        if plan.zpscale:
-            step += 1
-            self.update_progress(
-                self._process_registry.step_progress(self._process_spec, step, total_steps),
-                self._progress_status("zpscale-completed"),
-            )
-
-        self.coadd_in_memory(images, device_id=device_id)
-        self._coadd_completed = True
-        self.finalize_quality_masks()
-        step += 1
-        self.update_progress(
-            self._process_registry.step_progress(self._process_spec, step, total_steps),
-            self._progress_status("coadd-completed"),
-        )
-
-        self.plot_coadd_image()
-        step += 1
-        self.update_progress(
-            self._process_registry.step_progress(self._process_spec, step, total_steps),
-            self._progress_status("plot-completed"),
-        )
-
-        self.register_coadd_qa()
-
-        self.update_progress(
-            self._process_registry.completed_progress(self._process_spec),
-            self._progress_status("completed"),
-        )
-
     @property
     def plan(self) -> CoaddPlan:
         """Run plan, resolved once and cached; ``run()`` re-resolves so config edits before it land."""
@@ -389,10 +159,8 @@ class ImCoadd(
             self._plan = self._coadd_plan()  # the config is write-through and editable until here
             if self.plan.routine == "legacy":
                 self.legacy_coadd_routine(use_gpu=use_gpu, device_id=device_id)
-            elif self.plan.routine == "reproject-first":
-                self.reproject_first_coadd_routine(use_gpu=use_gpu, device_id=device_id)
             else:
-                self.direct_coadd_routine(use_gpu=use_gpu, device_id=device_id)
+                self.reproject_first_coadd_routine(use_gpu=use_gpu, device_id=device_id)
 
             setattr(self.config_node.flag, self._process_spec.name, True)
             self.record_runtime_version()
@@ -407,6 +175,12 @@ class ImCoadd(
 
     def initialize(self, overwrite=False):
         self._st = time.time()
+        # per-run state: a second run() on the same object must not inherit it
+        self._coadd_completed = False
+        self._quality_masks = None
+        self._coadd_mask_builder = None
+        self._zdf_cache = {}
+        self._manifest = None
         if overwrite or self.overwrite is None:
             self.overwrite = self.resolve_overwrite(overwrite)
         self.logger.info(f"Start 'ImCoadd'")
@@ -486,10 +260,10 @@ class ImCoadd(
 
     def select_input_images(self, nsigma: float = 1.0, metrics=None, extra=None) -> list[str]:
         """Cull multi-epoch inputs by seeing, ellipticity, and depth."""
-        # default mirrors sciproc_base.yml: a config predating the key must not silently
-        # gain a filtering step. New multi-epoch configs get 'auto' from the override yml.
+        # a config predating the key gets the base False at load, never a silent filtering step;
+        # multi-epoch configs get 'auto' from the override yml.
         self._selection_meta = {}
-        mode = get_key(self.config_node.imcoadd, "image_selection", default=False)
+        mode = self.config_node.imcoadd.image_selection
         if not (mode and self.config_node.settings.is_multi_epoch):
             return self.input_images
 
@@ -504,7 +278,7 @@ class ImCoadd(
         )
         # PPFLAG is a bitmask: the "cut" is an allow-list of bits, not a threshold
         fixed_cuts = {
-            "ppflag": ppflag_mask(get_key(self.config_node.imcoadd, "ppflag_bitmask", default="110000")),
+            "ppflag": ppflag_mask(self.config_node.imcoadd.ppflag_bitmask),
             **(get_key(self.config_node.imcoadd, "image_selection_cuts") or {}),
         }
 
@@ -607,7 +381,7 @@ class ImCoadd(
         scratch = get_key(self.config_node.settings, "factory_scratch")
         if not scratch:
             return
-        cap = float(get_key(self.config_node.settings, "factory_scratch_cap_gb", default=1200)) * 1e9
+        cap = float(self.config_node.settings.factory_scratch_cap_gb) * 1e9
         own = os.path.abspath(collapse(self.path.factory_dir, force=True))
         trees = []
         total = 0
@@ -652,7 +426,7 @@ class ImCoadd(
         cards = {
             "COADDRTN": (shown(get_key(node, "coadd_routine")), "imcoadd.coadd_routine"),
             "COADDMOD": (shown(get_key(node, "coadd_mode")), "imcoadd.coadd_mode"),
-            "COADDWGT": (shown(get_key(node, "coadd_weighting", default="global")), "imcoadd.coadd_weighting"),
+            "COADDWGT": (shown(node.coadd_weighting), "imcoadd.coadd_weighting"),
             "BPMPOL":   (shown(bp.policy), "imcoadd.badpix_reprojection_policy"),
             "ZBPWGT":   (bool(bp.zero), "imcoadd.zero_badpix_weight"),
             "ZPSCALE":  (bp.zpscale, "imcoadd.zpscale"),
@@ -669,6 +443,7 @@ class ImCoadd(
         if mode == "clipped":
             cards["CLIPSIG"] = (bp.clip_sigma, "coadd_mode_options.clipped.clip_sigma")
             cards["CLIPAFR"] = (bp.clip_ampfrac, "coadd_mode_options.clipped.clip_ampfrac")
+            cards["CLIPTWO"] = (bp.clip_two_sample_fallback, "coadd_mode_options.clipped.two_sample_fallback")
         if mode == "proper":
             cards["PROPWMP"] = (
                 self._proper_weight_policy().upper(),
@@ -1035,12 +810,6 @@ class ImCoadd(
         # self.zpscaled_images = zpscaled_images
         # _delt = time.time() - _st
         # self.logger.debug(f"--> Done ({_delt:.1f}sec)")
-
-    def joint_registration(self, input_images: list[str] | None = None) -> list[str] | None:
-        """Return images awaiting a future joint-registration implementation."""
-        if input_images is None:
-            input_images = self.images_to_coadd
-        return input_images
 
     def prepare_convolution(self, input_images: list[str] | None = None, weight: bool = False):
         """Prepare seeing-match kernels and output paths."""

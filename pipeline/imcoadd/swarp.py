@@ -10,6 +10,7 @@ from astropy.io import fits
 from astropy.wcs import WCS
 
 from .. import external
+from ..services.logger import Logger
 from ..config.utils import get_key
 from ..path.path import PathHandler
 from ..services.utils import conservative_worker_count
@@ -28,8 +29,9 @@ class SwarpMixin:
     _swarp_launch_lock = threading.Lock()
     _swarp_last_launch = 0.0
 
-    plan: CoaddPlan
+    logger: Logger
     path: PathHandler
+    plan: CoaddPlan
     _bpm_resampled_masks: list[str]
     _manifest: dict | None
 
@@ -37,11 +39,10 @@ class SwarpMixin:
         """Apply intersection coverage to a legacy SWarp coadd."""
         if self.plan.coverage_policy == "union":
             return
-        pass_type = "sci" if self.plan.need_weights else ""
         resampled = atleast_1d(
             self.path.imcoadd.factory.resampled_images(
                 swarp_inputs,
-                pass_type=pass_type,
+                pass_type=self.plan.sci_pass,
             )
         )
         coadd_path = self.config_node.imcoadd.coadd_image
@@ -155,14 +156,9 @@ class SwarpMixin:
             sci_args = ["-RESAMPLING_TYPE", "LANCZOS3"]
             if self.plan.propagate_mask_on_sci_pass:
                 sci_args += ["-WEIGHT_IMAGE", sidecar]
-            passes = (
-                ("sci", sci_args, self.plan.propagate_mask_on_sci_pass),
-                (
-                    "wht",
-                    ["-RESAMPLING_TYPE", "NEAREST", "-WEIGHT_IMAGE", sidecar],
-                    True,
-                ),
-            )
+            passes = [(self.plan.sci_pass, sci_args, self.plan.propagate_mask_on_sci_pass)]
+            if self.plan.need_weights:
+                passes.append(("wht", ["-RESAMPLING_TYPE", "NEAREST", "-WEIGHT_IMAGE", sidecar], True))
         for pass_type, args, use_w in passes:
             rdir = factory.swarp_resample_dir(pass_type)
             external.swarp(
@@ -178,7 +174,7 @@ class SwarpMixin:
                 swarp_args=args,
             )
             self._drop_swarp_byproduct([interp_im], pass_type)  # as it appears, not in a storm at the end
-        sci = collapse(factory.resampled_images([interp_im], pass_type="sci"), force=True)
+        sci = collapse(factory.resampled_images([interp_im], pass_type=self.plan.sci_pass), force=True)
         if self.plan.catalog_badpix_zeros:
             self._zero_badpix_in_resampled_weight(
                 [interp_im],
@@ -259,13 +255,13 @@ class SwarpMixin:
     def _lookahead_done(self, interp_im: str, method: str) -> bool:
         """Return whether reusable resamples already represent this interpolation."""
         factory = self.path.imcoadd.factory
-        sci = collapse(factory.resampled_images([interp_im], pass_type="sci"), force=True)
-        wht = collapse(
-            factory.resampled_weight_images([sci], pass_type=self._weight_pass_type()),
-            force=True,
-        )
-        if not (os.path.exists(sci) and os.path.exists(wht)):
+        sci = collapse(factory.resampled_images([interp_im], pass_type=self.plan.sci_pass), force=True)
+        if not os.path.exists(sci):
             return False
+        if self.plan.need_weights:
+            wht = collapse(factory.resampled_weight_images([sci], pass_type=self._weight_pass_type()), force=True)
+            if not os.path.exists(wht):
+                return False
         entry = self._manifest_options(sci)
         if entry is not None:
             return (
@@ -416,26 +412,18 @@ class SwarpMixin:
         self.logger.info(f"Fused weight+interp completed in {time_diff_in_seconds(st)} seconds")
         return self._record_resampled_products(interp_images)
 
-    def reproject_and_coadd_with_swarp(
-        self,
-        input_images: list[str] | None = None,
-        coadd: bool = True,
-        swarp_options_override: list[str] = [],
-        weight_images: list[str] | None = None,
-    ) -> str | list[str]:
-        """Run SWarp for either coaddition or per-input reprojection."""
+    def coadd_with_swarp(self, input_images: list[str] | None = None, swarp_options_override: list[str] = []) -> str:
+        """Legacy routine: SWarp reprojects and coadds in one run."""
         st = time.time()
-        action = "coadding" if coadd else "reprojecting"
-        self.logger.info(f"Start to run swarp for {action} images")
+        self.logger.info("Start to run swarp for coadding images")
 
         if input_images is None:
             input_images = self.images_to_coadd
         self.logger.debug(f"input_images: {input_images}")
 
-        swarp_options_override_from_config = get_key(self.config_node.imcoadd, "swarp_options_override", default=[])
-        swarp_options_override = swarp_options_override_from_config + swarp_options_override
+        swarp_options_override = list(self.config_node.imcoadd.swarp_options_override or []) + swarp_options_override
         if not self.plan.zpscale:
-            # zpscale off: stale FLXSCALE cards on the files must not flux-scale the combine
+            # zpscale off: stale FLXSCALE cards on the files must not flux-scale the coadd
             swarp_options_override = swarp_options_override + [
                 "-FSCALE_KEYWORD",
                 "NOFSCALE",
@@ -452,81 +440,31 @@ class SwarpMixin:
 
         sci_resampling = ["-RESAMPLING_TYPE", "LANCZOS3"]
         if not self.plan.need_weights:
-            self._run_swarp(
-                "",
-                coadd=coadd,
-                swarp_args=sci_resampling + swarp_options_override,
-                use_weight_map=False,
-            )
-        elif self.plan.weight_on_sci_pass:
-            # a zero-free smooth surface survives LANCZOS3 intact (measured: no interior zeros, no
-            # dust), so it rides the sci pass and its companion IS the resampled weight -- one pass,
-            # and the science pixels come out bit-identical to the unweighted pass
-            self._run_swarp(
-                "sci",
-                coadd=coadd,
-                swarp_args=sci_resampling + swarp_options_override,
-                weight_images=weight_images,
-            )
-            if not coadd and self.plan.catalog_badpix_zeros:
-                factory = self.path.imcoadd.factory
-                resampled = atleast_1d(factory.resampled_images(input_images, pass_type="sci"))
-                self._zero_badpix_in_resampled_weight(
-                    self.input_images,
-                    atleast_1d(factory.resampled_weight_images(resampled, pass_type="sci")),
-                )
+            self._run_swarp("", swarp_args=sci_resampling + swarp_options_override, use_weight_map=False)
         else:
             self._run_swarp(
-                "sci",
-                coadd=coadd,
-                swarp_args=sci_resampling + swarp_options_override,
-                use_weight_map=self.plan.propagate_mask_on_sci_pass,
-                weight_images=weight_images if self.plan.propagate_mask_on_sci_pass else None,
+                "sci", swarp_args=sci_resampling + swarp_options_override, use_weight_map=False
             )  # Disable weight in the sci pass
-            if not coadd:
-                self._drop_swarp_byproduct(input_images, "sci")
-            # The wht pass is skipped on its weights alone, the same shape as the bpm guard
-            # below: `external.swarp` would also demand the NEAREST-resampled science that
-            # `_drop_swarp_byproduct` deletes, and re-resample every frame on every rerun.
-            factory = self.path.imcoadd.factory
-            wht_predicted = atleast_1d(
-                factory.resampled_weight_images(
-                    atleast_1d(factory.resampled_images(input_images, pass_type="sci")),
-                    pass_type="wht",
-                )
-            )
-            if not coadd and not self.overwrite and all(os.path.exists(w) for w in wht_predicted):
-                self.logger.info(f"wht pass outputs already exist ({len(wht_predicted)} weights), skipping")
-            else:
-                self._run_swarp(
-                    "wht",
-                    coadd=coadd,
-                    swarp_args=["-RESAMPLING_TYPE", "NEAREST"] + swarp_options_override,
-                    weight_images=weight_images,
-                )
-                if not coadd:
-                    self._drop_swarp_byproduct(input_images, "wht")
+            self._run_swarp("wht", swarp_args=["-RESAMPLING_TYPE", "NEAREST"] + swarp_options_override)
 
         factory = self.path.imcoadd.factory
-        bpm_inputs = self.input_images if self.plan.routine == "reproject-first" else input_images
         masks_predicted = atleast_1d(
             factory.resampled_weight_images(
-                atleast_1d(factory.resampled_images(bpm_inputs, pass_type="bpm")),
+                atleast_1d(factory.resampled_images(input_images, pass_type="bpm")),
                 pass_type="bpm",
             )
         )
-        bp_policy = self.plan.policy
-        bpm_pass = bp_policy == "conservative" and not self.plan.propagate_mask_on_sci_pass
+        bpm_pass = self.plan.policy == "conservative"
         if bpm_pass and not self.overwrite and all(os.path.exists(m) for m in masks_predicted):
             # checked before get_bpmask: resolving 1000 bpmasks costs ~20 min
             self.logger.info(f"bpm pass outputs already exist ({len(masks_predicted)} masks), skipping")
         elif bpm_pass:
             # bpmask_file = self.config.preprocess.bpmask_file
-            per_image = atleast_1d(PathHandler.get_bpmask(bpm_inputs))
-            if len(per_image) != len(bpm_inputs):
-                per_image = per_image * len(bpm_inputs)
+            per_image = atleast_1d(PathHandler.get_bpmask(input_images))
+            if len(per_image) != len(input_images):
+                per_image = per_image * len(input_images)
             by_mask: dict[str, list[str]] = {}
-            for inim, mfile in zip(bpm_inputs, per_image):
+            for inim, mfile in zip(input_images, per_image):
                 by_mask.setdefault(mfile, []).append(inim)
             self.logger.info(f"bpm pass over {len(by_mask)} distinct bpmask(s)")
             for k, (bpmask_file, group_frames) in enumerate(by_mask.items()):
@@ -541,27 +479,19 @@ class SwarpMixin:
                 # The resampling follows the sci pass rather than being pinned here: a mask
                 # resampled differently from the image it describes would not line up with it.
                 args = ["-WEIGHT_IMAGE", bpmask_inverted_file] + sci_resampling
-                self._run_swarp("bpm", coadd=coadd, swarp_args=args + swarp_options_override,
-                                input_list=group_list)  # fmt: skip
+                self._run_swarp("bpm", swarp_args=args + swarp_options_override, input_list=group_list)
         if bpm_pass:
             self._bpm_resampled_masks = masks_predicted
 
-        if coadd:
-            self._guard_sky_rms_propagation()
-            self._update_header()
-            self.logger.info(f"Running swarp is completed in {time_diff_in_seconds(st)} seconds")
-            return self.config_node.imcoadd.coadd_image
-
-        resampled = self._record_resampled_products(input_images)
-        self.logger.info(f"SWarp reprojection completed in {time_diff_in_seconds(st)} seconds")
-        return resampled
+        self._guard_sky_rms_propagation()
+        self._update_header()
+        self.logger.info(f"Running swarp is completed in {time_diff_in_seconds(st)} seconds")
+        return self.config_node.imcoadd.coadd_image
 
     def _record_resampled_products(self, swarp_inputs: list[str]) -> list[str]:
         """Register and return the science and weight products of reprojection."""
         factory = self.path.imcoadd.factory
-        resampled = atleast_1d(
-            factory.resampled_images(swarp_inputs, pass_type="sci" if self.plan.need_weights else "")
-        )
+        resampled = atleast_1d(factory.resampled_images(swarp_inputs, pass_type=self.plan.sci_pass))
         self.config_node.imcoadd.resampled_images = resampled
         if self.plan.need_weights:
             self.config_node.imcoadd.bkgsub_weight_images = atleast_1d(

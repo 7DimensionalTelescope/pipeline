@@ -8,6 +8,7 @@ from .. import external
 from ..config.utils import get_key
 from ..const import REF_DIR
 from ..path.path import PathHandler
+from ..services.logger import Logger
 from ..services.utils import conservative_worker_count
 from ..utils import add_suffix, atleast_1d, get_basename, time_diff_in_seconds
 from ..utils.header import update_padded_header
@@ -17,6 +18,7 @@ from .storage import IntermediateStorage
 
 
 class BackgroundMixin:
+    logger: Logger
     path: PathHandler
     plan: CoaddPlan
     storage: IntermediateStorage
@@ -58,9 +60,7 @@ class BackgroundMixin:
         if fov_masks is not None:
             fov_mask_images = list(fov_masks)
         elif mask_out_of_fov:
-            fov_mask_images = factory.stage_images(
-                input_images, "fovmask", self.path_bkgsub
-            )
+            fov_mask_images = factory.stage_images(input_images, "fovmask", self.path_bkgsub)
         else:
             fov_mask_images = [None] * len(input_images)
 
@@ -71,16 +71,12 @@ class BackgroundMixin:
             requested = str(requested).lower()
         else:
             requested = self._default_bkgsub_type(skyvalues, skyval_cut)
-            self.logger.debug(
-                f"bkgsub_type unset; filled in as {requested!r} for the group"
-            )
+            self.logger.debug(f"bkgsub_type unset; filled in as {requested!r} for the group")
         if requested != "individual" and requested not in methods:
             raise ValueError(
                 f"bkgsub_type: {requested!r} is invalid (expected 'individual' or one of {sorted(methods)})"
             )
-        types = [
-            self._resolve_bkgsub_type(requested, sv, skyval_cut) for sv in skyvalues
-        ]
+        types = [self._resolve_bkgsub_type(requested, sv, skyval_cut) for sv in skyvalues]
         self.config_node.imcoadd.bkgsub_type = requested
 
         # The header snapshot aggregates a mixed group to BACKTYPE=MIXED.
@@ -94,37 +90,23 @@ class BackgroundMixin:
             else [None] * len(input_images)
         )
         if mask_sources and not any_dynamic:
-            self.logger.info(
-                "No image takes a mesh background: source_mask has no effect"
-            )
+            self.logger.info("No image takes a mesh background: source_mask has no effect")
 
         # catalog reuse needs the inputs to be the singles' derivatives 1:1
         singles = atleast_1d(self.input_images)
         try:
             catalogs = atleast_1d(self.path.photometry.final_catalog)
         except Exception as e:  # an optimization must not become a new failure mode
-            self.logger.debug(
-                f"No photometry catalogs resolvable ({e}); detection pass it is"
-            )
+            self.logger.debug(f"No photometry catalogs resolvable ({e}); detection pass it is")
             catalogs = []
         if not (len(singles) == len(catalogs) == len(input_images)):
             singles = catalogs = [None] * len(input_images)
 
         counts = {name: types.count(name) for name in sorted(set(types))}
-        self.logger.info(
-            f"Start background subtraction (bkgsub_type={requested!r}): {counts}"
-        )
+        self.logger.info(f"Start background subtraction (bkgsub_type={requested!r}): {counts}")
         if any_dynamic:
-            self.config_node.imcoadd.bkg_images = (
-                bkg_images
-                if self.plan.output_bkg_map
-                else None
-            )
-            self.config_node.imcoadd.bkg_rms_images = (
-                bkg_rms_images
-                if self.plan.output_sky_rms_map
-                else None
-            )
+            self.config_node.imcoadd.bkg_images = bkg_images if self.plan.output_bkg_map else None
+            self.config_node.imcoadd.bkg_rms_images = bkg_rms_images if self.plan.output_sky_rms_map else None
         else:
             if get_key(self.config_node.imcoadd, "bkg_images"):
                 self.config_node.imcoadd.bkg_images = None
@@ -223,9 +205,7 @@ class BackgroundMixin:
                     self.input_headers[i]["BACKTYPE"] = (str(backtype).upper(), "Background subtraction type")
             jobs = pending
             if len(jobs) < n_all:
-                self.logger.info(
-                    f"{n_all - len(jobs)} existing bkgsub products skipped, {len(jobs)} to compute"
-                )
+                self.logger.info(f"{n_all - len(jobs)} existing bkgsub products skipped, {len(jobs)} to compute")
         n_workers = conservative_worker_count(len(jobs))
         if n_workers <= 1:
             for i, job in jobs:
@@ -252,11 +232,7 @@ class BackgroundMixin:
 
     def _default_bkgsub_type(self, skyvalues, skyval_cut: float) -> str:
         """Choose one background routine for a group without an explicit setting."""
-        return (
-            "constant"
-            if any(sv is not None and sv < skyval_cut for sv in skyvalues)
-            else "dynamic"
-        )
+        return "constant" if any(sv is not None and sv < skyval_cut for sv in skyvalues) else "dynamic"
 
     def _resolve_bkgsub_type(self, requested: str, skyval, skyval_cut: float) -> str:
         """Which routine one image gets. Only 'individual' decides per image."""
@@ -300,11 +276,7 @@ class BackgroundMixin:
         # reuse photometry's catalog: its DETECT_THRESH 3.0 is accepted over a 1.5 pass to save the run
         detection_override = self._detection_override()
         ellipses = None
-        if (
-            photometry_catalog
-            and os.path.exists(photometry_catalog)
-            and not detection_override
-        ):
+        if photometry_catalog and os.path.exists(photometry_catalog) and not detection_override:
             ellipses = source_ellipses_on_frame(
                 photometry_catalog,
                 fits.getheader(source_image or inim),
@@ -312,9 +284,7 @@ class BackgroundMixin:
                 logger=self.logger,
             )
             if ellipses is not None:
-                self.logger.debug(
-                    f"{len(ellipses)} source ellipses from {get_basename(photometry_catalog)}"
-                )
+                self.logger.debug(f"{len(ellipses)} source ellipses from {get_basename(photometry_catalog)}")
         if ellipses is None:
             sex_options = {
                 "-CATALOG_TYPE": "ASCII_HEAD",
@@ -331,9 +301,7 @@ class BackgroundMixin:
                 inim,
                 outcat=catalog,
                 sex_options=sex_options,
-                log_file=os.path.join(
-                    self.path_bkgsub, f"{base}_bkgdet_sextractor.log"
-                ),
+                log_file=os.path.join(self.path_bkgsub, f"{base}_bkgdet_sextractor.log"),
                 overwrite=self.overwrite,
                 logger=self.logger,
             )
@@ -354,7 +322,7 @@ class BackgroundMixin:
         if self.storage.policy == "disk":
             write_mask_plio(outmask, valid)
             saved.append(outmask)
-        if get_key(self.config_node.imcoadd, "dump_source_masks", default=False):
+        if self.config_node.imcoadd.dump_source_masks:
             dump = os.path.join(self.path.imcoadd.factory.source_mask_dump_dir, get_basename(outmask))
             write_mask_plio(dump, valid)
             saved.append(dump)
@@ -368,9 +336,7 @@ class BackgroundMixin:
             )
         return valid, usable
 
-    def build_fov_masks(
-        self, resampled_images, erode_iter: int = 3
-    ) -> list[str | None]:
+    def build_fov_masks(self, resampled_images, erode_iter: int = 3) -> list[str | None]:
         """Build background masks from pristine resampled footprints."""
         factory = self.path.imcoadd.factory
         outputs = factory.stage_images(resampled_images, "fovmask", self.storage.bkgsub_dir)
@@ -382,43 +348,30 @@ class BackgroundMixin:
                 self._fov_masks.append(outmask)
             else:
                 self._fov_masks.append(
-                    outmask
-                    if self._write_fov_mask(inim, outmask, erode_iter=erode_iter)
-                    is not None
-                    else None
+                    outmask if self._write_fov_mask(inim, outmask, erode_iter=erode_iter) is not None else None
                 )
         return self._fov_masks
 
-    def shrink_fov_masks(
-        self, delta_peeings, kernel_extent: float = 4.0
-    ) -> list[str | None]:
+    def shrink_fov_masks(self, delta_peeings, kernel_extent: float = 4.0) -> list[str | None]:
         """Shrink stored footprints by the convolution kernel's reach."""
         from scipy.ndimage import binary_erosion
 
-        for i, (mask, delta) in enumerate(
-            zip(self._fov_masks, atleast_1d(delta_peeings))
-        ):
+        for i, (mask, delta) in enumerate(zip(self._fov_masks, atleast_1d(delta_peeings))):
             if mask is None or not delta:
                 continue
             extra = int(np.ceil(kernel_extent * float(delta) / np.sqrt(8 * np.log(2))))
             if extra < 1:
                 continue
             valid = fits.getdata(mask).astype(bool)
-            valid = binary_erosion(
-                valid, np.ones((3, 3), dtype=bool), iterations=extra, border_value=0
-            )
+            valid = binary_erosion(valid, np.ones((3, 3), dtype=bool), iterations=extra, border_value=0)
             shrunk = add_suffix(mask, "shrunk")  # the pristine mask is what a resume reuses
             fits.writeto(shrunk, valid.astype(np.uint8), overwrite=True)
             self._fov_masks[i] = shrunk
             self.storage.working_mask_paths.append(shrunk)  # removed with the run's masks
-            self.logger.debug(
-                f"Shrank {get_basename(mask)} by {extra} px for a {delta:.2f} px kernel"
-            )
+            self.logger.debug(f"Shrank {get_basename(mask)} by {extra} px for a {delta:.2f} px kernel")
         return self._fov_masks
 
-    def _fov_valid(
-        self, data: np.ndarray, name: str, erode_iter: int = 3
-    ) -> np.ndarray | None:
+    def _fov_valid(self, data: np.ndarray, name: str, erode_iter: int = 3) -> np.ndarray | None:
         """Return the eroded valid-pixel mask of a reprojected frame."""
         from scipy.ndimage import binary_erosion
 
@@ -428,19 +381,13 @@ class BackgroundMixin:
             return None
 
         # border_value=1: the array bound is not an FOV edge, only the zero padding is
-        valid = binary_erosion(
-            valid, np.ones((3, 3), dtype=bool), iterations=erode_iter, border_value=1
-        )
+        valid = binary_erosion(valid, np.ones((3, 3), dtype=bool), iterations=erode_iter, border_value=1)
         self.logger.debug(f"FOV mask ({100 * valid.mean():.1f}% valid) for {name}")
         return valid
 
-    def _write_fov_mask(
-        self, inim: str, outmask: str, erode_iter: int = 3
-    ) -> np.ndarray | None:
+    def _write_fov_mask(self, inim: str, outmask: str, erode_iter: int = 3) -> np.ndarray | None:
         """`_fov_valid` on a frame read from disk, persisted for a later stage to reuse."""
-        valid = self._fov_valid(
-            fits.getdata(inim, memmap=False), get_basename(inim), erode_iter=erode_iter
-        )
+        valid = self._fov_valid(fits.getdata(inim, memmap=False), get_basename(inim), erode_iter=erode_iter)
         if valid is None:
             return None
         fits.writeto(outmask, valid.astype(np.uint8), overwrite=True)
@@ -507,9 +454,7 @@ class BackgroundMixin:
                 _backtype = ""
             if _backtype.upper() == "CONSTANT":
                 if not self.overwrite:
-                    self.logger.info(
-                        f"Background subtraction result exists; skipping: {get_basename(outim)}"
-                    )
+                    self.logger.info(f"Background subtraction result exists; skipping: {get_basename(outim)}")
                     return
 
         is_steppy = skyval < skyval_cut
@@ -536,9 +481,7 @@ class BackgroundMixin:
 
         back_size, filter_size = self._background_mesh()
         _data, _hdr = self._read_frame(inim, data, header)
-        bkg_data, bkg_rms_data = estimate_background(
-            _data, mask=exclude, back_size=back_size, filter_size=filter_size
-        )
+        bkg_data, bkg_rms_data = estimate_background(_data, mask=exclude, back_size=back_size, filter_size=filter_size)
         if self.plan.output_sky_rms_map:
             fits.writeto(bkg_rms, bkg_rms_data, overwrite=True)
         del bkg_rms_data  # do not hold a second full frame past its write

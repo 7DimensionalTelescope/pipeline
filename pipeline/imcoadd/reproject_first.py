@@ -7,13 +7,16 @@ import numpy as np
 from ..config.utils import get_key
 from ..const import REF_DIR
 from ..path.path import PathHandler
+from ..services.logger import Logger
 from ..utils import add_suffix, atleast_1d, collapse, get_basename, time_diff_in_seconds
 from .calc import clipped_mean_coadd_numpy, mean_coadd_numpy, median_coadd_numpy
 from .coadd_plan import CoaddPlan, resolve_coadd_plan
 from .storage import IntermediateStorage
 
 
-class InMemoryCoaddMixin:
+class ReprojectFirstCoaddMixin:
+
+    logger: Logger
     path: PathHandler
     plan: CoaddPlan
     storage: IntermediateStorage
@@ -29,6 +32,82 @@ class InMemoryCoaddMixin:
         "reiserfs",
     }
 
+    def reproject_first_coadd_routine(self, use_gpu: bool = False, device_id=None):
+        """Reproject with SWarp unless the inputs already share a grid, then coadd in memory."""
+        self._use_gpu = all([use_gpu, self.config_node.imcoadd.gpu, self._use_gpu])
+
+        plan = self.plan
+        if plan.reproject:
+            total_steps = 6 + int(bool(plan.convolve)) + int(plan.zpscale)
+        else:
+            total_steps = 3 + int(plan.need_weights) + int(plan.interpolate) + int(plan.zpscale)
+        step = 0
+
+        def advance(status: str):
+            nonlocal step
+            step += 1
+            self.update_progress(
+                self._process_registry.step_progress(self._process_spec, step, total_steps),
+                self._progress_status(status),
+            )
+
+        self.initialize()
+        images = self.input_images
+        weight_images = None
+        fov_masks = None
+        if plan.reproject:
+            images = self.weight_and_interpolate(images)
+            advance("calculate-weight-map-completed")
+            advance("apply-bpmask-completed")
+            self._prepare_intermediate_storage(images)
+        else:
+            self._validate_direct_grid()
+            self._prepare_intermediate_storage(images)
+            if plan.need_weights:
+                weight_images = self.path.imcoadd.factory.stage_images(images, "weight", self.storage.weight_dir)
+                weight_images = self.calculate_weight_map(images, device_id=device_id, out_weights=weight_images)
+                advance("calculate-weight-map-completed")
+            if plan.interpolate:
+                images = self.apply_bpmask(images, device_id=device_id, weight_images=weight_images)
+                if weight_images is not None:
+                    weight_images = [add_suffix(image, "weight") for image in images]
+                advance("apply-bpmask-completed")
+
+        if plan.output_mask_map or plan.dump_reprojected_masks or plan.satellite_mask_enabled:
+            self.prepare_quality_masks(images, detector_images=self.input_images)
+        if plan.reproject:
+            if plan.convolve:
+                fov_masks = self.build_fov_masks(images)
+            self._remove_reprojection_intermediates()
+            advance("reproject-completed")
+            if plan.convolve:
+                self.discard_cached_frames()
+                self.prepare_convolution(images)
+                images = self.run_convolution(images, device_id=device_id)
+                fov_masks = self.shrink_fov_masks(self.delta_peeings)
+                advance("run-convolution-completed")
+
+        images = self.bkgsub(images, mask_out_of_fov=True, mask_sources=plan.source_mask, fov_masks=fov_masks)
+        self._discard_consumed_bkgsub_inputs()
+        advance("bkgsub-completed")
+
+        self.zpscale(images, write_headers=False)
+        if plan.zpscale:
+            advance("zpscale-completed")
+
+        self.coadd_in_memory(images, device_id=device_id, weight_images=weight_images)
+        self._coadd_completed = True
+        self.finalize_quality_masks()
+        advance("coadd-completed")
+
+        self.plot_coadd_image()
+        advance("plot-completed")
+        self.register_coadd_qa()
+        self.update_progress(
+            self._process_registry.completed_progress(self._process_spec),
+            self._progress_status("completed"),
+        )
+
     @staticmethod
     def _fstype_of(path: str) -> tuple[str, str]:
         """(mount point, fstype) of the filesystem holding *path*, longest prefix wins."""
@@ -40,22 +119,18 @@ class InMemoryCoaddMixin:
         except OSError:
             return best
         for _dev, mnt, fstype in entries:
-            if (real == mnt or real.startswith(mnt.rstrip("/") + "/")) and len(
-                mnt
-            ) > len(best[0]):
+            if (real == mnt or real.startswith(mnt.rstrip("/") + "/")) and len(mnt) > len(best[0]):
                 best = (mnt, fstype)
         return best
 
-    def _pick_combine_scratch(self, files) -> str | None:
-        """Choose local scratch for a large network-backed combine."""
+    def _pick_coadd_scratch(self, files) -> str | None:
+        """Choose local scratch for a large network-backed coadd."""
         n_frames = len({f for _g, f in files})
         if n_frames < int(self.plan.combine_lock_threshold):
             return None
         src_mnt, src_fstype = self._fstype_of(os.path.dirname(files[0][1]))
         if src_fstype in self._LOCAL_FSTYPES:
-            self.logger.debug(
-                f"combine_scratch auto: inputs already local on {src_mnt} ({src_fstype})"
-            )
+            self.logger.debug(f"coadd_scratch auto: inputs already local on {src_mnt} ({src_fstype})")
             return None
 
         need = sum(os.path.getsize(f) for _g, f in files if os.path.exists(f)) * 1.1
@@ -69,16 +144,10 @@ class InMemoryCoaddMixin:
         for _dev, mnt, fstype in entries:
             # never the system disk, never a home directory: /home is often the same
             # physical disk as a scratch mount anyway, and filling either is an outage
-            if (
-                fstype not in self._LOCAL_FSTYPES
-                or mnt == "/"
-                or mnt.startswith(("/home", "/root", "/boot"))
-            ):
+            if fstype not in self._LOCAL_FSTYPES or mnt == "/" or mnt.startswith(("/home", "/root", "/boot")):
                 continue
             try:
-                dev = os.stat(
-                    mnt
-                ).st_dev  # one entry per physical filesystem, not per mount
+                dev = os.stat(mnt).st_dev  # one entry per physical filesystem, not per mount
                 if dev in seen_dev:
                     continue
                 seen_dev.add(dev)
@@ -86,34 +155,32 @@ class InMemoryCoaddMixin:
                 os.makedirs(root, exist_ok=True)
                 free = shutil.disk_usage(mnt).free
             except OSError as e:
-                self.logger.debug(
-                    f"combine_scratch auto: {mnt} ({fstype}) unusable -- {e}"
-                )
+                self.logger.debug(f"coadd_scratch auto: {mnt} ({fstype}) unusable -- {e}")
                 continue
             if free > need and (best is None or free > best[1]):
                 best = (root, free)
         if best is None:
             self.logger.warning(
-                f"combine_scratch auto: inputs are on {src_fstype} ({src_mnt}) and no local "
-                f"filesystem has the {need/1e9:.0f} GB needed; combining over the network"
+                f"coadd_scratch auto: inputs are on {src_fstype} ({src_mnt}) and no local "
+                f"filesystem has the {need/1e9:.0f} GB needed; coadding over the network"
             )
             return None
         self.logger.info(
-            f"combine_scratch auto: inputs on {src_fstype} ({src_mnt}); staging "
+            f"coadd_scratch auto: inputs on {src_fstype} ({src_mnt}); staging "
             f"{need/1e9:.0f} GB to {best[0]} ({best[1]/1e12:.1f} TB free)"
         )
         return best[0]
 
-    def _stage_for_combine(self, groups: dict[str, list[str] | None]):
-        """Stage combine inputs locally and return remapped groups plus cleanup."""
+    def _stage_for_coadd(self, groups: dict[str, list[str] | None]):
+        """Stage coadd inputs locally and return remapped groups plus cleanup."""
         if self.storage.policy == "memory":
             return groups, lambda: None
-        scratch = self.plan.combine_scratch
+        scratch = self.plan.coadd_scratch
         files = [(g, f) for g, lst in groups.items() if lst for f in lst]
         if not files:
             return groups, lambda: None
         if str(scratch).lower() == "auto":
-            scratch = self._pick_combine_scratch(files)
+            scratch = self._pick_coadd_scratch(files)
         if not scratch:
             return groups, lambda: None
 
@@ -121,7 +188,7 @@ class InMemoryCoaddMixin:
         free = shutil.disk_usage(scratch).free
         if need * 1.05 > free:
             self.logger.warning(
-                f"combine_scratch {scratch}: need {need/1e9:.0f} GB, only {free/1e9:.0f} GB free; combining from NFS"
+                f"coadd_scratch {scratch}: need {need/1e9:.0f} GB, only {free/1e9:.0f} GB free; coadding from NFS"
             )
             return groups, lambda: None
 
@@ -144,9 +211,7 @@ class InMemoryCoaddMixin:
             f"Staged in {time_diff_in_seconds(st)} seconds "
             f"({need/1e9/max(time.time()-st, 1):.2f} GB/s sequential from NFS)"
         )
-        remapped = {
-            g: ([mapping[f] for f in lst] if lst else lst) for g, lst in groups.items()
-        }
+        remapped = {g: ([mapping[f] for f in lst] if lst else lst) for g, lst in groups.items()}
         return remapped, lambda: shutil.rmtree(base, ignore_errors=True)
 
     def coadd_in_memory(
@@ -172,9 +237,7 @@ class InMemoryCoaddMixin:
             f"Coadd weighting: {weighting}; badpix policy: {policy}; weight maps: {smoothed}; "
             f"coverage: {plan.coverage_policy}"
         )
-        if plan.smooth_weight and not (
-            plan.interpolate or plan.zero or policy == "conservative"
-        ):
+        if plan.smooth_weight and not (plan.interpolate or plan.zero or policy == "conservative"):
             # the fitted surface has no bad pixels, and nothing else is marking them either
             self.logger.warning(
                 "Smoothed weight maps with no bad-pixel channel: set interpolate_badpix, "
@@ -194,21 +257,14 @@ class InMemoryCoaddMixin:
             # everywhere (99%+ zeros) and must NOT be used.
             # (that was the raw-weight era: under smooth_weight the sci-pass companion is a
             # smooth zero-free surface and _weight_pass_type() selects it on purpose)
-            wht_dir = self.path.imcoadd.factory.swarp_resample_dir(
-                self._weight_pass_type()
-            )
+            wht_dir = self.path.imcoadd.factory.swarp_resample_dir(self._weight_pass_type())
             if weight_images is not None:
                 candidates = atleast_1d(weight_images)
             else:
                 # named after what SWarp resampled, not after the later bkgsub products
-                resampled = (
-                    get_key(self.config_node.imcoadd, "resampled_images")
-                    or input_images
-                )
+                resampled = get_key(self.config_node.imcoadd, "resampled_images") or input_images
                 candidates = atleast_1d(
-                    self.path.imcoadd.factory.resampled_weight_images(
-                        resampled, pass_type=self._weight_pass_type()
-                    )
+                    self.path.imcoadd.factory.resampled_weight_images(resampled, pass_type=self._weight_pass_type())
                 )
             if all(os.path.exists(w) for w in candidates):
                 wht_maps = candidates
@@ -246,15 +302,13 @@ class InMemoryCoaddMixin:
 
         var_maps = wht_maps if weighting != "pixelwise" else None
         stage_wht = weights if weighting == "pixelwise" else None
-        var_is_mask = (
-            var_maps is not None and masks is not None and list(var_maps) == list(masks)
-        )
+        var_is_mask = var_maps is not None and masks is not None and list(var_maps) == list(masks)
         if self.storage.policy == "memory":
             cached_paths = set(wht_maps or [])
             cached_paths.update(masks or [])
             for path in cached_paths:
                 self._read_stage_frame(path)
-        staged, cleanup = self._stage_for_combine(
+        staged, cleanup = self._stage_for_coadd(
             {
                 "sci": input_images,
                 "wht": stage_wht,
@@ -268,6 +322,13 @@ class InMemoryCoaddMixin:
         var_maps = masks if var_is_mask else staged["var"]
 
         mode = plan.mode
+        n_inputs = len(atleast_1d(input_images))
+        if mode == "clipped" and n_inputs < 3:
+            self.logger.info(
+                f"Clipped mean needs at least 3 inputs; {n_inputs} inputs are coadded with the weighted mean"
+            )
+            self.input_headers.run_cards["CLIPSKIP"] = (True, "clipping skipped: fewer than 3 inputs, weighted mean")
+            mode = "mean"
         match_swarp_size = self.plan.match_swarp_size
         # Serialize high-demand combines per filesystem and lease their planned memory.
         from ..services.combine_lock import CombineSlot, NullSlot
@@ -281,9 +342,7 @@ class InMemoryCoaddMixin:
         try:
             with slot_ctx as slot:
                 if mode == "mean":
-                    slot.lease(
-                        4 * 110_000_000 * 8
-                    )  # sum/norm/count/gain accumulators, ~3.5 GB
+                    slot.lease(4 * 110_000_000 * 8)  # sum/norm/count/gain accumulators, ~3.5 GB
                     self.coadd_with_numpy(
                         input_images,
                         weights=weights,
@@ -294,7 +353,8 @@ class InMemoryCoaddMixin:
                         write_footprint=plan.output_footprint,
                     )
                 elif mode == "clipped":
-                    slot.lease(6 * 110_000_000 * 8)  # two-pass accumulators, ~5 GB
+                    reserved = slot.reserved_bytes
+                    slot.lease(7 * 110_000_000 * 8)  # two-pass accumulators + two-sample bookkeeping, ~6 GB
                     self.coadd_clipped_with_numpy(
                         input_images,
                         weights=weights,
@@ -303,10 +363,9 @@ class InMemoryCoaddMixin:
                         match_swarp_size=match_swarp_size,
                         write_weight=plan.output_weight_map,
                         write_footprint=plan.output_footprint,
+                        reserved_bytes=reserved,
                         outlier_callback=(
-                            self._coadd_mask_builder.mark_outliers
-                            if self._coadd_mask_builder is not None
-                            else None
+                            self._coadd_mask_builder.mark_outliers if self._coadd_mask_builder is not None else None
                         ),
                     )
                 elif mode == "median":
@@ -315,13 +374,9 @@ class InMemoryCoaddMixin:
                     from .utils import _parse_swarp_image_size
 
                     reserved = slot.reserved_bytes
-                    grid_w, grid_h = _parse_swarp_image_size(
-                        os.path.join(REF_DIR, "7dt.swarp")
-                    )
+                    grid_w, grid_h = _parse_swarp_image_size(os.path.join(REF_DIR, "7dt.swarp"))
                     budget = int(0.3 * memory_headroom_bytes(reserved))
-                    _, planned = plan_median_memory(
-                        len(atleast_1d(input_images)), grid_w, grid_h, budget
-                    )
+                    _, planned = plan_median_memory(len(atleast_1d(input_images)), grid_w, grid_h, budget)
                     slot.lease(planned)
                     self.coadd_median_with_numpy(
                         input_images,
@@ -334,16 +389,12 @@ class InMemoryCoaddMixin:
                         write_footprint=plan.output_footprint,
                     )
                 else:
-                    raise ValueError(
-                        f"Invalid coadd mode: {mode!r} (expected 'mean', 'median' or 'clipped')"
-                    )
+                    raise ValueError(f"Invalid coadd mode: {mode!r} (expected 'mean', 'median' or 'clipped')")
         finally:
             cleanup()
         return self.config_node.imcoadd.coadd_image
 
-    def coadd_proper_with_numpy(
-        self, input_images: list[str], holes: list[str] | None = None
-    ) -> str:
+    def coadd_proper_with_numpy(self, input_images: list[str], holes: list[str] | None = None) -> str:
         """Run proper coaddition with its mode-specific options."""
         from ..services.combine_lock import CombineSlot, NullSlot
         from .proper import proper_coadd_numpy
@@ -358,25 +409,17 @@ class InMemoryCoaddMixin:
             else NullSlot()
         )
         with slot_ctx as slot:
-            slot.lease(
-                5 * 110_000_000 * 8
-            )  # numerator + share accumulators + final FFT pair, ~4.4 GB
+            slot.lease(5 * 110_000_000 * 8)  # numerator + share accumulators + final FFT pair, ~4.4 GB
             return proper_coadd_numpy(
                 input_images,
                 output_path=coadd_image,
                 coadd_header=self.input_headers.coadd_header,
                 peeings=self._proper_peeings(input_images),
                 skysigs=self.input_headers.values("SKYSIG"),
-                flxscales=self._combine_flxscales(),
+                flxscales=self._coadd_flxscales(),
                 weight_map_policy=policy,
-                weight_output=(
-                    add_suffix(coadd_image, "weight") if policy != "off" else False
-                ),
-                footprint_output=(
-                    add_suffix(coadd_image, "footprint")
-                    if plan.output_footprint
-                    else False
-                ),
+                weight_output=(add_suffix(coadd_image, "weight") if policy != "off" else False),
+                footprint_output=(add_suffix(coadd_image, "footprint") if plan.output_footprint else False),
                 psf_output=add_suffix(coadd_image, "psf"),
                 holes=holes,
                 match_swarp_size=self.plan.match_swarp_size,
@@ -395,9 +438,7 @@ class InMemoryCoaddMixin:
             return [float(self._max_peeing)] * n
         peeings = self.input_headers.values("PEEING")
         if len(peeings) != n or any(p is None for p in peeings):
-            missing = [
-                name for name, p in zip(self.input_headers.names, peeings) if p is None
-            ]
+            missing = [name for name, p in zip(self.input_headers.names, peeings) if p is None]
             self.logger.error(
                 f"No PEEING for {missing[:3]}; proper coadd needs a per-frame PSF",
                 self._process_error.KeyError,
@@ -425,7 +466,7 @@ class InMemoryCoaddMixin:
     def _coadd_plan(self) -> CoaddPlan:
         return resolve_coadd_plan(self.config_node.imcoadd)
 
-    def _combine_flxscales(self):
+    def _coadd_flxscales(self):
         """Return snapshot flux scales, or False when scaling is disabled."""
         if self.plan.zpscale:
             return self.input_headers.values("FLXSCALE")
@@ -446,18 +487,12 @@ class InMemoryCoaddMixin:
             output_path=self.config_node.imcoadd.coadd_image,
             coadd_header=self.input_headers.coadd_header,
             weights=weights,
-            weight_output=(
-                add_suffix(self.config_node.imcoadd.coadd_image, "weight")
-                if write_weight
-                else False
-            ),
+            weight_output=(add_suffix(self.config_node.imcoadd.coadd_image, "weight") if write_weight else False),
             footprint_output=(
-                add_suffix(self.config_node.imcoadd.coadd_image, "footprint")
-                if write_footprint
-                else False
+                add_suffix(self.config_node.imcoadd.coadd_image, "footprint") if write_footprint else False
             ),
             masks=masks,
-            flxscales=self._combine_flxscales(),
+            flxscales=self._coadd_flxscales(),
             match_swarp_size=match_swarp_size,
             var_maps=var_maps,
             coverage_policy=self.plan.coverage_policy,
@@ -474,6 +509,7 @@ class InMemoryCoaddMixin:
         var_maps: list[str] | None = None,
         write_weight: bool = True,
         write_footprint: bool = True,
+        reserved_bytes: int = 0,
         outlier_callback=None,
     ) -> str:
         return clipped_mean_coadd_numpy(
@@ -481,21 +517,17 @@ class InMemoryCoaddMixin:
             output_path=self.config_node.imcoadd.coadd_image,
             coadd_header=self.input_headers.coadd_header,
             weights=weights,
-            weight_output=(
-                add_suffix(self.config_node.imcoadd.coadd_image, "weight")
-                if write_weight
-                else False
-            ),
+            weight_output=(add_suffix(self.config_node.imcoadd.coadd_image, "weight") if write_weight else False),
             footprint_output=(
-                add_suffix(self.config_node.imcoadd.coadd_image, "footprint")
-                if write_footprint
-                else False
+                add_suffix(self.config_node.imcoadd.coadd_image, "footprint") if write_footprint else False
             ),
             masks=masks,
-            flxscales=self._combine_flxscales(),
+            flxscales=self._coadd_flxscales(),
             match_swarp_size=match_swarp_size,
             clip_sigma=self.plan.clip_sigma,
             clip_ampfrac=self.plan.clip_ampfrac,
+            two_sample_fallback=self.plan.clip_two_sample_fallback,
+            reserved_bytes=reserved_bytes,
             var_maps=var_maps,
             coverage_policy=self.plan.coverage_policy,
             outlier_callback=outlier_callback,
@@ -509,9 +541,7 @@ class InMemoryCoaddMixin:
         weights: list[str] | None = None,
         masks: list[str] | None = None,
         match_swarp_size: bool = True,
-        chunk_h: (
-            int | None
-        ) = None,  # None: auto-sized from idle memory (see calc._auto_chunk_h)
+        chunk_h: int | None = None,  # None: auto-sized from idle memory (see calc._auto_chunk_h)
         reserved_bytes: int = 0,
         var_maps: list[str] | None = None,
         write_weight: bool = True,
@@ -522,18 +552,12 @@ class InMemoryCoaddMixin:
             output_path=self.config_node.imcoadd.coadd_image,
             coadd_header=self.input_headers.coadd_header,
             weights=weights,
-            weight_output=(
-                add_suffix(self.config_node.imcoadd.coadd_image, "weight")
-                if write_weight
-                else False
-            ),
+            weight_output=(add_suffix(self.config_node.imcoadd.coadd_image, "weight") if write_weight else False),
             footprint_output=(
-                add_suffix(self.config_node.imcoadd.coadd_image, "footprint")
-                if write_footprint
-                else False
+                add_suffix(self.config_node.imcoadd.coadd_image, "footprint") if write_footprint else False
             ),
             masks=masks,
-            flxscales=self._combine_flxscales(),
+            flxscales=self._coadd_flxscales(),
             match_swarp_size=match_swarp_size,
             chunk_h=chunk_h,
             reserved_bytes=reserved_bytes,

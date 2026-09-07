@@ -58,6 +58,7 @@ class InputHeaderSet:
         self.max_core_keys: tuple = ()
         # kept out of coadd_provenance: that dict feeds _guard_coadd_identity
         self.multi_epoch: bool | None = None
+        self.run_cards: dict[str, tuple] = {}  # input-dependent cards, likewise not identity
 
     @classmethod
     def from_files(cls, paths: list[str]) -> "InputHeaderSet":
@@ -353,6 +354,7 @@ class InputHeaderSet:
         }  # fmt: skip
         keywords_to_update.update(self.coadd_provenance)
         keywords_to_update.update(self.coadd_selection_extrema)
+        keywords_to_update.update(self.run_cards)
         for key, (value, comment) in keywords_to_update.items():
             if value is not None:
                 header[key] = (value, comment)

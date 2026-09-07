@@ -99,8 +99,8 @@ class WhiteImage(ImCoadd):
                 if str(collapse(atleast_1d(source.path.name.filter), force=True)) not in counted:
                     continue
                 coadd_image = collapse(atleast_1d(get_key(source.node.imcoadd, "coadd_image") or []), force=True)
-                complete = bool(get_key(source.node.flag, COADD_SPEC.name, False)) and bool(
-                    get_key(source.node.flag, COADD_PHOTOMETRY_SPEC.name, False)
+                complete = bool(getattr(source.node.flag, COADD_SPEC.name)) and bool(
+                    getattr(source.node.flag, COADD_PHOTOMETRY_SPEC.name)
                 )
                 if get_key(source.node, "sanity") is False or CrossFilterConfiguration._source_rejection_is_proven(
                     source, coadd_image or ""

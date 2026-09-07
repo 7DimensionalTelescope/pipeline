@@ -120,7 +120,8 @@ if TYPE_CHECKING:
         dump_bkgsub: bool
         lean_factory: bool
         combine_lock_threshold: int
-        combine_scratch: str
+        coadd_scratch: str
+        swarp_options_override: Any
         convolve: Any
         target_seeing: Any
 

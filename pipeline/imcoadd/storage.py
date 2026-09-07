@@ -8,6 +8,7 @@ from astropy.io import fits
 
 from ..config.utils import get_key
 from ..path.path import PathHandler
+from ..services.logger import Logger
 from ..utils import atleast_1d
 from .coadd_plan import CoaddPlan
 
@@ -27,6 +28,7 @@ class IntermediateStorage:
 
 
 class IntermediateStorageMixin:
+    logger: Logger
     path: PathHandler
     plan: CoaddPlan
     intermediate_storage: IntermediateStorage | None

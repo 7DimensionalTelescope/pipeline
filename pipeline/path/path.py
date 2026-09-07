@@ -1800,6 +1800,8 @@ class PathCrossFilter(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def config_stem(self) -> str:
+        if self._parent.settings.config_file is not None:
+            return os.path.splitext(os.path.basename(str(self._parent.settings.config_file)))[0]
         obj = collapse(atleast_1d(self._parent.name.obj), raise_error=True)
         stem = f"{obj}_{const.WHITE_FILTER}"
         if not self._parent.settings.is_multi_epoch:

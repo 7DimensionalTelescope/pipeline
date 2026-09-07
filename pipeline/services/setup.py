@@ -1,4 +1,5 @@
-from typing import Any, Union
+from __future__ import annotations
+from typing import TYPE_CHECKING, Any, Union
 from abc import ABC, abstractmethod
 import glob
 import warnings
@@ -7,6 +8,8 @@ import logging
 from ..config import CrossFilterConfiguration, PreprocConfiguration, SciProcConfiguration, ConfigNode
 
 # from ..path.path import PathHandler
+if TYPE_CHECKING:
+    from ..path.path import PathHandler
 from .logger import Logger, LockingFileHandler
 from .queue import QueueManager
 
@@ -38,6 +41,8 @@ class BaseSetup(ABC):
         ...     queue=True
         ... )
     """
+
+    path: PathHandler
 
     def __init__(
         self,

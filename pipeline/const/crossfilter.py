@@ -12,7 +12,6 @@ WHITE_COADD_SPEC = ProcessSpec(
         ("zpscale", 20),
         ("calculate_weight_map", 30),
         ("apply_bpmask", 40),
-        ("joint_registration", 50),
         ("run_convolution", 60),
         ("coadd_with_swarp", 70),
         ("plot_coadd_image", 78),

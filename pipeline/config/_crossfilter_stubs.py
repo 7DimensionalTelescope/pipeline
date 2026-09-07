@@ -27,6 +27,7 @@ if TYPE_CHECKING:
         sanity_from_db: bool
         config_suffix: Any
         factory_scratch: Any
+        factory_scratch_cap_gb: int
 
     class LoggingNode(ConfigNode):
         level: str
@@ -95,7 +96,8 @@ if TYPE_CHECKING:
         dump_bkgsub: bool
         lean_factory: bool
         combine_lock_threshold: int
-        combine_scratch: str
+        coadd_scratch: str
+        swarp_options_override: Any
         convolve: bool
         target_seeing: Any
 

@@ -119,7 +119,6 @@ COADD_SPEC = ProcessSpec(
         ("zpscale", 62),
         ("calculate_weight_map", 63),
         ("apply_bpmask", 64),
-        ("joint_registration", 65),
         ("run_convolution", 66),
         ("coadd_with_swarp", 68),
         ("plot_coadd_image", 69),

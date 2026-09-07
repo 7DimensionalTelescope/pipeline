@@ -3,6 +3,10 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..logger import Logger
 from .too import TooDB
 from .process_status import ProcessStatus, dispatch_host
 from .image_qa import ImageQA
@@ -30,7 +34,7 @@ class DatabaseHandler:
         db_params=None,
         use_database: bool = True,
         is_too: bool = False,
-        logger=None,
+        logger: Logger = None,
     ):
         self.is_too = is_too
         self.use_database = use_database

@@ -24,6 +24,7 @@ settings:
   sanity_from_db: true
   config_suffix:
   factory_scratch:
+  factory_scratch_cap_gb: 1200  # rotate oldest idle scratch trees above this total
 
 logging:
   level: INFO

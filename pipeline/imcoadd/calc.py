@@ -57,7 +57,7 @@ def _open_plain_float32(path: str) -> tuple[int, int, int, int]:
     """Open a plain float32 2D primary-HDU FITS for raw row reads: (fd, data offset, width, height)."""
     hdr = fits.getheader(path)
     if hdr["NAXIS"] != 2 or hdr["BITPIX"] != -32 or hdr.get("BSCALE", 1) != 1 or hdr.get("BZERO", 0) != 0:
-        raise ValueError(f"combine raw reader expects an unscaled float32 2D primary HDU: {path}")
+        raise ValueError(f"coadd raw reader expects an unscaled float32 2D primary HDU: {path}")
     fd = os.open(path, os.O_RDONLY)
     try:
         os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_SEQUENTIAL)
@@ -355,6 +355,7 @@ def clipped_mean_coadd_numpy(
     match_swarp_size: bool = True,
     clip_sigma: float = 5.0,
     clip_ampfrac: float = 0.3,
+    two_sample_fallback: str = "mean",
     reserved_bytes: int = 0,
     var_maps: list[str] | None = None,
     coverage_policy: str = "union",
@@ -370,18 +371,21 @@ def clipped_mean_coadd_numpy(
         raise ValueError("clip_ampfrac must be non-negative")
     if weights is None:
         raise ValueError("clipped mean needs weights (set coadd_weighting to 'global' or 'pixel-wise')")
+    if two_sample_fallback not in ("mean", "min"):
+        raise ValueError("two_sample_fallback must be 'mean' or 'min'")
     st = time.time()
     if logger is not None:
         logger.info(
             "Start in-memory numpy coaddition "
-            f"(clipped weighted mean, clip_sigma={clip_sigma:g}, clip_ampfrac={clip_ampfrac:g})"
+            f"(clipped weighted mean, clip_sigma={clip_sigma:g}, clip_ampfrac={clip_ampfrac:g}, "
+            f"two-sample fallback {two_sample_fallback})"
         )
     if len(weights) != len(input_images):
         raise ValueError(f"weights ({len(weights)}) and input_images ({len(input_images)}) length mismatch")
     if isinstance(flxscales, list) and len(flxscales) != len(input_images):
         raise ValueError(f"flxscales ({len(flxscales)}) and input_images ({len(input_images)}) length mismatch")
 
-    center = median_coadd_numpy(
+    center, valid_count = median_coadd_numpy(
         input_images, output_path, coadd_header, weights=weights,
         weight_output=False, footprint_output=False,
         masks=masks, flxscales=flxscales, match_swarp_size=match_swarp_size,
@@ -389,6 +393,8 @@ def clipped_mean_coadd_numpy(
         frame_cache=frame_cache, logger=logger,
     )
     center = np.where(np.isfinite(center), center, 0.0)
+    two = valid_count == 2
+    del valid_count
 
     target_w, target_h, target_cx, target_cy, x0, y0, shapes = determine_size(
         input_images, match_swarp_size, frame_cache=frame_cache
@@ -407,6 +413,12 @@ def clipped_mean_coadd_numpy(
     all_egain = True
     propagate = var_maps is not None and not isinstance(weights[0], str)
     var_den = np.zeros((target_h, target_w), dtype=np.float64) if propagate else None
+    two_rejected = np.zeros((target_h, target_w), dtype=bool)
+    if two_sample_fallback == "min":
+        min_val = np.full((target_h, target_w), np.inf, dtype=np.float32)
+        min_w = np.zeros((target_h, target_w), dtype=np.float32)
+        min_ivar = np.zeros((target_h, target_w), dtype=np.float32)
+        min_gain = np.zeros((target_h, target_w), dtype=np.float64)
     n_clipped = n_total = 0
     scratch = None
     for i, f in enumerate(input_images):
@@ -449,9 +461,11 @@ def clipped_mean_coadd_numpy(
 
         c = center[sl]
         sigma_i = 1.0 / np.sqrt(np.where(valid, w_eff, 1.0) if not np.isscalar(w_eff) else w_eff)
-        keep = valid & (
-            np.abs(src - c) <= clip_sigma * sigma_i + clip_ampfrac * np.abs(c)
-        )
+        clip_ok = np.abs(src - c) <= clip_sigma * sigma_i + clip_ampfrac * np.abs(c)
+        two_here = two[sl]
+        # two samples cannot judge each other: never clipped here, the fallback rule decides after the loop
+        keep = valid & (clip_ok | two_here)
+        two_rejected[sl] |= valid & two_here & ~clip_ok
         n_total += int(valid.sum())
         n_clipped += int(valid.sum() - keep.sum())
         rejected = valid & ~keep
@@ -481,16 +495,34 @@ def clipped_mean_coadd_numpy(
             se = float(weights[i]) / (flxscale * flxscale)
             ok = keep & (vm > 0)
             var_den[sl] += np.where(ok, se * se * flxscale * flxscale / np.where(ok, vm, np.float32(1.0)), 0.0)
+        if two_sample_fallback == "min":
+            lower = valid & two_here & (src < min_val[sl])
+            ivar = vm / (flxscale * flxscale) if propagate else w_eff
+            min_val[sl] = np.where(lower, src, min_val[sl])
+            min_w[sl] = np.where(lower, w_eff, min_w[sl])
+            min_ivar[sl] = np.where(lower, ivar, min_ivar[sl])
+            if egain is not None:
+                min_gain[sl] = np.where(lower, w_eff * w_eff * flxscale / float(egain), min_gain[sl])
 
+    n_two = int(two_rejected.sum())
+    if two_sample_fallback == "min" and n_two:
+        sum_arr[two_rejected] = min_val[two_rejected].astype(np.float64) * min_w[two_rejected]
+        norm_arr[two_rejected] = min_w[two_rejected]
+        count_arr[two_rejected] = 1
+        gain_denom[two_rejected] = min_gain[two_rejected]
     coadd = np.where(norm_arr > 0, sum_arr / np.where(norm_arr > 0, norm_arr, 1), np.nan).astype(np.float32)
     if logger is not None:
         logger.info(f"Clipped {n_clipped} of {n_total} samples ({100 * n_clipped / max(n_total, 1):.3f}%)")
+        if n_two:
+            logger.info(f"{n_two} two-sample pixels where clipping would reject took the {two_sample_fallback}")
 
     # survivors form a weighted mean: propagated (sum s)^2/sum(s^2 sigma^2), no penalty
     if propagate:
         weight_map_out = np.where(var_den > 0, norm_arr.astype(np.float64) ** 2 / np.where(var_den > 0, var_den, 1), 0.0)
     else:
         weight_map_out = norm_arr.astype(np.float64)
+    if two_sample_fallback == "min" and n_two:
+        weight_map_out[two_rejected] = min_ivar[two_rejected]
     apply_coverage_policy(
         coadd,
         weight_map_out,
@@ -547,13 +579,13 @@ def _auto_chunk_h(n_images: int, width: int, height: int, budget_fraction: float
     chunk, total = plan_median_memory(n_images, width, height, budget, floor)
     if logger is not None:
         n_strips = -(-height // chunk)
-        logger.info(f"Median combine: chunk_h={chunk} ({n_strips} strips, "
+        logger.info(f"Median coadd: chunk_h={chunk} ({n_strips} strips, "
                     f"~{total / 2**30:.0f} GiB for {n_images} frames on {width}x{height}, "
                     f"budget {budget / 2**30:.0f} GiB)")
         if total > budget:
             # the floor cannot go lower: this frame count on this grid does not fit
             logger.warning(
-                f"Median combine needs {total / 2**30:.0f} GiB at the {floor}-row floor but only "
+                f"Median coadd needs {total / 2**30:.0f} GiB at the {floor}-row floor but only "
                 f"{budget / 2**30:.0f} GiB is available; expect memory pressure. Raise the memory "
                 f"ceiling for this account, or coadd fewer frames at once."
             )
@@ -577,7 +609,7 @@ def median_coadd_numpy(
     return_array: bool = False,
     frame_cache: dict | None = None,
     logger: Logger | None = None,
-) -> str | np.ndarray:
+) -> str | tuple[np.ndarray, np.ndarray]:
     """Per-pixel flux-scaled median coadd.
 
     Works on SWarp-resampled images that are centered differently.
@@ -726,7 +758,7 @@ def median_coadd_numpy(
     )
 
     if return_array:
-        return coadd
+        return coadd, count_arr
 
     out_header = build_coadd_wcs_header(
         input_images[0], target_cx, target_cy, coadd_header, frame_cache=frame_cache

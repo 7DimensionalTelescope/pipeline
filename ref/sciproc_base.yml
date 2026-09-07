@@ -123,10 +123,11 @@ imcoadd:
     clipped:
       clip_sigma: 5.0
       clip_ampfrac: 0.3
+      two_sample_fallback: mean  # mean | min: a pixel with only two valid samples cannot clip; take their mean or the smaller one
     proper:
       weight_map_policy: white-noise  # off | weighted-mean | white-noise | colored-noise
   coverage_policy: union  # union | intersection; intersection keeps only the geometric overlap of every input
-  match_swarp_size: true  # in-memory combine grid (reproject-first and direct): SWarp IMAGE_SIZE from 7dt.swarp; false = tight bounding box of the inputs
+  match_swarp_size: true  # in-memory coadd grid (reproject-first and direct): SWarp IMAGE_SIZE from 7dt.swarp; false = tight bounding box of the inputs
   image_selection: false  # False, 'auto' or 'interactive'; multi-epoch only
   image_selection_cuts:  # pinned cuts, e.g. {seeing: '<=2.8', bin2fwhm: '<=5.6'}; rest automatic
   image_selection_source:  # 'db' (image_qa, one query) or 'headers' (read every file)
@@ -167,7 +168,8 @@ imcoadd:
   dump_bkgsub: false
   lean_factory: False  # delete sci resamps + bkg/bkgrms once bkgsub products exist; resumes recompute
   combine_lock_threshold: 20  # combines with >= this many inputs take the per-filesystem flock
-  combine_scratch: auto  # local dir to stage combine inputs off NFS; 'auto' picks one only when the inputs are on a network fs and the combine is >= combine_lock_threshold frames; empty = off (moot when factory_scratch set)
+  coadd_scratch: auto  # local dir to stage coadd inputs off NFS; 'auto' picks one only when the inputs are on a network fs and the coadd is >= combine_lock_threshold frames; empty = off (moot when factory_scratch set)
+  swarp_options_override:  # extra SWarp arguments for the legacy routine, e.g. ['-BACK_SIZE', '128']
   convolve: 
   target_seeing:  # auto if it's empty or smaller than max seeing
 

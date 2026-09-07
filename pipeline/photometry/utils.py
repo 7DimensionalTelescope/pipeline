@@ -7,7 +7,7 @@ from astropy.coordinates import SkyCoord
 
 from ..const import GAIA_REF_DIR, REF_DIR
 from ..utils import add_suffix
-from ..config.base import ConfigNode
+from ..config._sciproc_stubs import PhotometryNode
 
 
 @njit
@@ -307,7 +307,7 @@ def get_mag_key(aperture_key: str) -> tuple:
 
 def get_sex_options(
     image: str,
-    phot_conf: ConfigNode,
+    phot_conf: PhotometryNode,
     egain: float,
     peeing: float,
     pixscale: float,
