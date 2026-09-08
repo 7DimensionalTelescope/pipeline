@@ -1,13 +1,17 @@
+from __future__ import annotations
 import os
 import numpy as np
 from functools import lru_cache
+from typing import TYPE_CHECKING
 from numba import njit
 from astropy.table import Table, hstack, vstack, unique
 from astropy.coordinates import SkyCoord
 
 from ..const import GAIA_REF_DIR, REF_DIR
 from ..utils import add_suffix
-from ..config._sciproc_stubs import PhotometryNode
+
+if TYPE_CHECKING:
+    from ..config._sciproc_stubs import PhotometryNode
 
 
 @njit
