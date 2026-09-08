@@ -181,6 +181,7 @@ class ImCoadd(
         self._coadd_mask_builder = None
         self._zdf_cache = {}
         self._manifest = None
+        self._joint_wcs_head_of = {}
         if overwrite or self.overwrite is None:
             self.overwrite = self.resolve_overwrite(overwrite)
         self.logger.info(f"Start 'ImCoadd'")
@@ -866,6 +867,10 @@ class ImCoadd(
             self.logger.debug(f"PEEINGs: {peeings}")
 
             for i, delta_peeing in enumerate(delta_peeings):
+                if input_images[i] in self._joint_wcs_head_of:  # the joint WCS follows the frame SWarp will read
+                    self._joint_wcs_head_of[self.config_node.imcoadd.conv_files[i]] = self._joint_wcs_head_of[
+                        input_images[i]
+                    ]
                 if delta_peeing is None:
                     force_symlink(input_images[i], self.config_node.imcoadd.conv_files[i])
                     if weight and self.plan.need_weights:

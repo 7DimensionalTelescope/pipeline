@@ -2005,6 +2005,30 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
     def conv_dir(self) -> str:
         return os.path.join(self._parent.tmp_dir, self._config_scope, "conv")
 
+    # ---- joint WCS (SCAMP over every input's catalog; one .head per single, read by SWarp) ----
+    @property
+    def joint_wcs_dir(self) -> str:
+        return os.path.join(self._parent.tmp_dir, self._config_scope, "joint_wcs")
+
+    @property
+    def joint_wcs_manifest(self) -> str:
+        return os.path.join(self.joint_wcs_dir, "scamp_input.cat")
+
+    @property
+    def joint_wcs_heads(self) -> List[str]:
+        return [os.path.join(self.joint_wcs_dir, swap_ext(b, "head")) for b in self._basenames]
+
+    @property
+    def joint_wcs_eval_cards(self) -> List[str]:
+        return [
+            os.path.join(self.joint_wcs_dir, swap_ext(add_suffix(b, "joint_wcs_eval_cards"), "txt"))
+            for b in self._basenames
+        ]
+
+    @property
+    def joint_wcs_matched(self) -> List[str]:
+        return [os.path.join(self.joint_wcs_dir, add_suffix(b, "joint_wcs_matched")) for b in self._basenames]
+
     # ---- stage products, named after what that stage actually consumed ----
     def stage_images(self, stage_inputs, suffix: str, subdir: str) -> List[str]:
         """``<subdir>/<basename of each input>_<suffix>.fits``.

@@ -371,28 +371,31 @@ class MaskMixin:
         if saturation is None:
             return
         ys, xs = np.nonzero(np.isfinite(data) & (data >= float(saturation)))
-        ra, dec = WCS(header).all_pix2world(xs.astype(np.float64), ys.astype(np.float64), 0)
+        wcs = WCS(self._single_wcs_header(detector_image, header))
+        ra, dec = wcs.all_pix2world(xs.astype(np.float64), ys.astype(np.float64), 0)
         table = fits.BinTableHDU.from_columns(
             [fits.Column(name="RA", format="D", array=ra), fits.Column(name="DEC", format="D", array=dec)]
         )
         table.header["SATURATE"] = (float(saturation), "Saturation level of the source frame")
         table.header["NSATPIX"] = (int(len(xs)), "Number of saturated pixels")
+        table.header["JOINTWCS"] = (bool(self.plan.joint_wcs), "Sky positions from the joint WCS")
         path = self._saturated_catalog(detector_image)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         table.writeto(path, overwrite=True)
 
     @staticmethod
-    def _saturated_catalog_current(catalog, detector_image, saturation) -> bool:
+    def _saturated_catalog_current(catalog, detector_image, saturation, joint_wcs: bool) -> bool:
         """A catalog no older than its frame and recorded at the same SATURATE level."""
         try:
             if os.path.getmtime(catalog) < os.path.getmtime(detector_image):
                 return False
-            return fits.getheader(catalog, 1).get("SATURATE") == float(saturation)
+            header = fits.getheader(catalog, 1)
+            return header.get("SATURATE") == float(saturation) and bool(header.get("JOINTWCS", False)) == joint_wcs
         except OSError:
             return False
 
     def _detector_mask_bits(self, detector_image, output_header, output_shape, detector_data=None):
-        input_header = fits.getheader(detector_image)
+        input_header = self._single_wcs_header(detector_image)
         output = np.zeros(output_shape, dtype=np.uint8)
         mask_file, badpix = self._get_bpmask(detector_image)
         ys, xs = np.nonzero(fits.getdata(mask_file, memmap=False) == badpix)
@@ -403,7 +406,7 @@ class MaskMixin:
         if (
             saturation is not None
             and detector_data is None
-            and self._saturated_catalog_current(catalog, detector_image, saturation)
+            and self._saturated_catalog_current(catalog, detector_image, saturation, self.plan.joint_wcs)
         ):
             table = fits.getdata(catalog)
             saturated = self._project_sky(table["RA"], table["DEC"], output_header, output_shape)

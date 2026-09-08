@@ -14,14 +14,14 @@ PARAMETERS_NAME  ../../targetphot.param  # name of the file containing catalog c
 DETECT_TYPE      CCD            # CCD (linear) or PHOTO (with gamma correction)
 DETECT_MINAREA   5              # min. # of pixels above threshold
 DETECT_MAXAREA   0              # no maximum limit if 0.
-DETECT_THRESH    1.5            # <sigmas> or <threshold>,<ZP> in mag.arcsec-2
+DETECT_THRESH    3#1.5            # <sigmas> or <threshold>,<ZP> in mag.arcsec-2
 ANALYSIS_THRESH  1.5            # <sigmas> or <threshold>,<ZP> in mag.arcsec-2
  
 FILTER           Y              # apply filter for detection (Y or N)?
 FILTER_NAME      ../../targetphot.conv   # name of the file containing the filter
  
-DEBLEND_NTHRESH  64             # Number of deblending sub-thresholds
-DEBLEND_MINCONT  0.0001          # Minimum contrast parameter for deblending
+DEBLEND_NTHRESH  32#64             # Number of deblending sub-thresholds
+DEBLEND_MINCONT  0.001#0.0001          # Minimum contrast parameter for deblending
  
 CLEAN            Y              # Clean spurious detections? (Y or N)?
 CLEAN_PARAM      1.0            # Cleaning efficiency

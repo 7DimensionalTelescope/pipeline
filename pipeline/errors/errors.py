@@ -60,6 +60,10 @@ class AstrometryReferenceGenerationError(Exception):
     pass
 
 
+class JointWcsError(Exception):
+    pass
+
+
 class SolutionEvaluationFailedError(Exception):
     pass
 

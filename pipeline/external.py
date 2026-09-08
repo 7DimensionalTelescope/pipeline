@@ -525,6 +525,15 @@ def scamp(
         else:
             print(f"[scamp:{level.upper()}] {msg}")
 
+    def strip_photom(heads: List[str]) -> List[str]:
+        # SWarp merges a -HEADER_NAME file over the frame's own cards, so SCAMP's photometric ones must not survive
+        from .astrometry.utils import strip_scamp_photom_cards
+
+        for head in heads:
+            if os.path.exists(head):
+                strip_scamp_photom_cards(head)
+        return heads
+
     scampconfig = scampconfig or os.path.join(REF_DIR, f"scamp_7dt_{scamp_preset}.config")
     # "/data/pipeline_reform/dhhyun_lab/scamptest/7dt.scamp"
 
@@ -541,7 +550,7 @@ def scamp(
     output_list = [swap_ext(input_cat, "head") for input_cat in input_cat_list]
     if all([os.path.exists(head) for head in output_list]) and not overwrite:
         chatter(f"SCAMP output (.head) already exists: {output_list}\nSkipping...")
-        return output_list
+        return strip_photom(output_list)
 
     # scampcom = f’scamp {catname} -c {os.path.join(path_cfg, “kmtnet.scamp”)} -ASTREF_CATALOG FILE -ASTREFCAT_NAME {gaialdac} -POSITION_MAXERR 20.0 -CROSSID_RADIUS 5.0 -DISTORT_DEGREES 3 -PROJECTION_TYPE TPV -AHEADER_GLOBAL {ahead} -STABILITY_TYPE INSTRUMENT’
     scampcom = f"scamp -c {scampconfig} {input}"
@@ -637,6 +646,7 @@ def scamp(
 
     finally:
         t.join(timeout=5)
+        strip_photom(output_list)  # SCAMP has written by now; a later raise must not leave an unstripped head
 
     # =============== sanity check ===============
 

@@ -37,6 +37,13 @@ class LegacyCoaddMixin:
                 self._progress_status("apply-bpmask-completed"),
             )
 
+        if self.plan.joint_wcs:
+            images = self.joint_registration(images)
+            self.update_progress(
+                self._process_registry.milestone_progress(self._process_spec, "joint_registration"),
+                self._progress_status("joint-registration-completed"),
+            )
+
         if self.plan.convolve:
             self.prepare_convolution(images)
             images = self.run_convolution(images, device_id=device_id)

@@ -85,6 +85,7 @@ if TYPE_CHECKING:
         output_bkg_map: bool
         persist_weight_maps: bool
         joint_wcs: bool
+        joint_wcs_catalog: str
         interpolate_badpix: bool
         interp_type: str
         zero_badpix_weight: bool

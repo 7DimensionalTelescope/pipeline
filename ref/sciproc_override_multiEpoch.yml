@@ -2,9 +2,6 @@
 # notably stack convolution is on
 
 imcoadd:
-  joint_wcs: false  # true
-  interpolate_badpix: True
-  interp_type: 'median'
   convolve: False
   target_seeing:  # auto if it's empty or smaller than max seeing
   image_selection: 'auto'

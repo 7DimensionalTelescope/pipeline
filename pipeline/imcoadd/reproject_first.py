@@ -38,7 +38,7 @@ class ReprojectFirstCoaddMixin:
 
         plan = self.plan
         if plan.reproject:
-            total_steps = 6 + int(bool(plan.convolve)) + int(plan.zpscale)
+            total_steps = 6 + int(plan.joint_wcs) + int(bool(plan.convolve)) + int(plan.zpscale)
         else:
             total_steps = 3 + int(plan.need_weights) + int(plan.interpolate) + int(plan.zpscale)
         step = 0
@@ -56,6 +56,10 @@ class ReprojectFirstCoaddMixin:
         weight_images = None
         fov_masks = None
         if plan.reproject:
+            if plan.joint_wcs:
+                factory = self.path.imcoadd.factory
+                self.joint_registration(factory.stage_images(images, "interp", factory.interp_dir))
+                advance("joint-registration-completed")
             images = self.weight_and_interpolate(images)
             advance("calculate-weight-map-completed")
             advance("apply-bpmask-completed")

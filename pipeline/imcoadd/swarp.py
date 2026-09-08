@@ -7,9 +7,11 @@ from typing import Literal
 
 import numpy as np
 from astropy.io import fits
+from astropy.table import Table
 from astropy.wcs import WCS
 
 from .. import external
+from ..errors import AstrometryError, ScampError
 from ..services.logger import Logger
 from ..config.utils import get_key
 from ..path.path import PathHandler
@@ -18,6 +20,7 @@ from ..utils import (
     add_suffix,
     atleast_1d,
     collapse,
+    force_symlink,
     get_basename,
     swap_ext,
     time_diff_in_seconds,
@@ -34,6 +37,7 @@ class SwarpMixin:
     plan: CoaddPlan
     _bpm_resampled_masks: list[str]
     _manifest: dict | None
+    _joint_wcs_head_of: dict[str, str]
 
     def apply_legacy_coverage_policy(self, swarp_inputs: list[str]) -> None:
         """Apply intersection coverage to a legacy SWarp coadd."""
@@ -88,6 +92,156 @@ class SwarpMixin:
         self.logger.info(
             f"Intersection coverage retained {int(keep.sum())}/{keep.size} pixels " f"({100 * keep.mean():.2f}%)"
         )
+
+    def _joint_wcs_catalogs(self) -> tuple[list[str], str]:
+        """SCAMP input per single: the astrometry factory catalogs when complete, else the main catalogs beside the singles."""
+        choice = self.plan.joint_wcs_catalog
+        prep = list(atleast_1d(self.path.astrometry.factory.catalog))
+        main = list(atleast_1d(self.path.photometry.final_catalog))
+        missing_prep = [c for c in prep if not os.path.exists(c)]
+        if choice == "prep" or (choice == "auto" and not missing_prep):
+            if missing_prep:
+                raise self._process_error.FileNotFoundError(
+                    f"joint_wcs_catalog 'prep': {len(missing_prep)} astrometry catalog(s) missing (e.g. {missing_prep[:2]})"
+                )
+            return prep, "prep"
+        missing_main = [c for c in main if not os.path.exists(c)]
+        if missing_main:
+            raise self._process_error.FileNotFoundError(
+                f"joint_wcs: {len(missing_main)} main catalog(s) missing (e.g. {missing_main[:2]})"
+            )
+        if choice == "auto":
+            self.logger.info(
+                f"joint_wcs_catalog auto: {len(missing_prep)} astrometry catalog(s) missing; using the main catalogs"
+            )
+        return main, "main"
+
+    def _joint_wcs_astrefcat(self) -> str:
+        """This config's astrometry reference catalog, generated around the first single when missing."""
+        from ..astrometry.astrometry import Astrometry
+
+        try:
+            astrefcat = self.config_node.astrometry.local_astref or self.path.astrometry.astrefcat
+            Astrometry.ensure_astrefcat(astrefcat, self.input_images[0], self.path, self.logger)
+        except Exception as e:
+            raise AstrometryError.JointWcsError(
+                f"No astrometry reference catalog for the joint WCS (set astrometry.local_astref): {e}"
+            ) from e
+        self.config_node.astrometry.local_astref = astrefcat
+        return astrefcat
+
+    def joint_registration(self, swarp_inputs: list[str]) -> list[str]:
+        """Joint SCAMP over the inputs' catalogs: one .head per single in the joint_wcs factory dir, evaluated and summarised."""
+        from ..astrometry.astrometry import Astrometry
+        from ..astrometry.evaluation_helpers import bad_wcs_cards
+        from ..astrometry.utils import get_adaptive_scamp_timeout
+
+        swarp_inputs = list(atleast_1d(swarp_inputs))
+        singles = list(atleast_1d(self.input_images))
+        if len(swarp_inputs) != len(singles):
+            raise ValueError(f"joint_wcs: {len(swarp_inputs)} SWarp inputs for {len(singles)} singles")
+        factory = self.path.imcoadd.factory
+        heads = list(atleast_1d(factory.joint_wcs_heads))
+        cards_files = list(atleast_1d(factory.joint_wcs_eval_cards))
+        self._joint_wcs_head_of = {**dict(zip(singles, heads)), **dict(zip(swarp_inputs, heads))}
+        catalogs, source = self._joint_wcs_catalogs()
+        st = time.time()
+        if not self.overwrite and all(os.path.exists(f) for f in heads + cards_files):
+            self.logger.info(f"Joint WCS: .head and evaluation cards exist for all {len(heads)} frames; reused")
+            cards = [[(c.keyword, c.value, c.comment) for c in fits.Header.fromtextfile(f).cards] for f in cards_files]
+        else:
+            # SCAMP writes <input>.head beside the catalog path it is given: link each catalog under the single's stem
+            links = [swap_ext(head, "cat") for head in heads]
+            try:
+                for catalog, link in zip(catalogs, links):
+                    force_symlink(catalog, link)
+                n_det = sum(int(fits.getheader(catalog, 2).get("NAXIS2", 0)) for catalog in catalogs)
+                timeout = get_adaptive_scamp_timeout(
+                    self.config_node.astrometry.scamp_timeout, n_det, n_catalogs=len(catalogs)
+                )
+                astrefcat = self._joint_wcs_astrefcat()
+                self.logger.info(
+                    f"Start joint SCAMP over {len(catalogs)} {source} catalogs ({n_det} detections, timeout {timeout} s)"
+                )
+                Astrometry.scamp_catalogs(
+                    links,
+                    factory.joint_wcs_manifest,
+                    timeout=timeout,
+                    path_ref_scamp=self.path.astrometry.ref_query_dir,
+                    astrefcat=astrefcat,
+                    scamp_preset="main",
+                    logger=self.logger,
+                    overwrite=True,
+                )
+            except ScampError as e:
+                raise AstrometryError.JointWcsError(f"Joint SCAMP over {len(catalogs)} catalogs failed: {e}") from e
+            finally:
+                for link in links:
+                    if os.path.islink(link):
+                        os.remove(link)
+            headers = [self._single_wcs_header(single) for single in singles]
+            refcat = Table.read(astrefcat, hdu=2)
+            cards = Astrometry.evaluate_wcs_headers(
+                singles,
+                catalogs,
+                headers,
+                refcat,
+                matched_catalog_paths=list(atleast_1d(factory.joint_wcs_matched)),
+                match_radius=self.config_node.astrometry.eval_match_radius,
+                logger=self.logger,
+            )
+            for frame_cards, path in zip(cards, cards_files):
+                fits.Header(frame_cards).totextfile(path, overwrite=True)
+        rejected = [get_basename(single) for single, c in zip(singles, cards) if bad_wcs_cards(c)]
+        if rejected:
+            raise AstrometryError.JointWcsError(
+                f"Joint WCS rejected for {len(rejected)}/{len(singles)} frames "
+                f"(UNMATCH > 0.9 or RSEP_Q2 > 2 * PIXSCALE arcsec), e.g. {rejected[:3]}"
+            )
+        self._summarize_joint_wcs(cards)
+        self.logger.info(f"Joint WCS for {len(heads)} frames completed in {time_diff_in_seconds(st)} seconds")
+        return swarp_inputs
+
+    def _summarize_joint_wcs(self, cards_per_frame) -> None:
+        """Medians over the inputs of every numeric per-frame card, under the singles' own key names."""
+        values, comments = {}, {}
+        for frame_cards in cards_per_frame:
+            for key, value, comment in frame_cards:
+                if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
+                    continue
+                values.setdefault(key, []).append(float(value))
+                comments.setdefault(key, comment)
+        for key, series in values.items():
+            self.input_headers.run_cards[key] = (float(np.median(series)), ("input median: " + comments[key])[:47])
+        for key in ("RSEP_RMS", "ISEP_RMS", "I_RECALL", "UNMATCH"):
+            prior = [
+                v for v in self.input_headers.values(key) if isinstance(v, (int, float)) and not isinstance(v, bool)
+            ]
+            if prior and key in values:
+                self.logger.info(
+                    f"Joint WCS {key}: median of the input headers {np.median(prior):.4g} -> joint {np.median(values[key]):.4g}"
+                )
+
+    def _joint_wcs_head_args(self, images: list[str], list_name: str) -> list[str]:
+        """SWarp's -HEADER_NAME @list of the images' joint .head files in their order; empty without joint_wcs."""
+        if not self.plan.joint_wcs:
+            return []
+        head_list = os.path.join(self.path.imcoadd.tmp_dir, list_name)
+        with open(head_list, "w") as fp:
+            fp.write("\n".join(self._joint_wcs_head_of[image] for image in images) + "\n")
+        return ["-HEADER_NAME", f"@{head_list}"]
+
+    def _single_wcs_header(self, single: str, header: fits.Header | None = None) -> fits.Header:
+        """The single's header, carrying the joint WCS when one was solved for it."""
+        header = fits.getheader(single) if header is None else header
+        head = self._joint_wcs_head_of.get(single)
+        if head is None or not os.path.exists(head):
+            return header
+        from ..astrometry.utils import read_scamp_header, strip_wcs
+
+        merged = strip_wcs(header.copy())
+        merged.update(read_scamp_header(head))
+        return merged
 
     def _remove_reprojection_intermediates(self):
         """Remove unreprojected products unless their dump options are enabled."""
@@ -159,7 +313,10 @@ class SwarpMixin:
             passes = [(self.plan.sci_pass, sci_args, self.plan.propagate_mask_on_sci_pass)]
             if self.plan.need_weights:
                 passes.append(("wht", ["-RESAMPLING_TYPE", "NEAREST", "-WEIGHT_IMAGE", sidecar], True))
+        head = self._joint_wcs_head_of.get(interp_im)
         for pass_type, args, use_w in passes:
+            if head is not None:
+                args = args + ["-HEADER_NAME", head]
             rdir = factory.swarp_resample_dir(pass_type)
             external.swarp(
                 input=[interp_im],
@@ -184,6 +341,7 @@ class SwarpMixin:
             sci,
             interp=str(self.config_node.imcoadd.interp_type).upper(),
             badpix=self.plan.policy,
+            joint_wcs=self.plan.joint_wcs,
         )
 
     def _drop_swarp_byproduct(self, swarp_inputs, pass_type: str) -> None:
@@ -265,16 +423,18 @@ class SwarpMixin:
         entry = self._manifest_options(sci)
         if entry is not None:
             return (
-                str(entry.get("interp", "")).upper() == str(method).upper() and entry.get("badpix") == self.plan.policy
+                str(entry.get("interp", "")).upper() == str(method).upper()
+                and entry.get("badpix") == self.plan.policy
+                and bool(entry.get("joint_wcs", False)) == self.plan.joint_wcs
             )
-        if self.plan.policy != "off":
-            return False  # a header can vouch for INTERP but not for the weight's badpix zeros
+        if self.plan.policy != "off" or self.plan.joint_wcs or os.path.exists(factory.joint_wcs_manifest):
+            return False  # a header can vouch for INTERP but not for the weight's badpix zeros or the joint WCS
         try:
             ok = str(fits.getheader(sci).get("INTERP", "")).upper() == str(method).upper()
         except OSError:
             return False
         if ok:
-            self._manifest_note(sci, interp=str(method).upper(), badpix=self.plan.policy)
+            self._manifest_note(sci, interp=str(method).upper(), badpix=self.plan.policy, joint_wcs=self.plan.joint_wcs)
         return ok
 
     def weight_and_interpolate(self, input_images: list[str] | None = None) -> list[str]:
@@ -431,6 +591,8 @@ class SwarpMixin:
         if swarp_options_override:
             self.logger.warning(f"SWarp options override: {swarp_options_override}")
 
+        head_args = self._joint_wcs_head_args(input_images, "joint_wcs_heads.txt")
+
         self.path_imagelist = os.path.join(self.path.imcoadd.tmp_dir, "images_to_coadd.txt")
         with open(self.path_imagelist, "w") as f:
             for inim in input_images:
@@ -440,12 +602,12 @@ class SwarpMixin:
 
         sci_resampling = ["-RESAMPLING_TYPE", "LANCZOS3"]
         if not self.plan.need_weights:
-            self._run_swarp("", swarp_args=sci_resampling + swarp_options_override, use_weight_map=False)
+            self._run_swarp("", swarp_args=sci_resampling + swarp_options_override + head_args, use_weight_map=False)
         else:
             self._run_swarp(
-                "sci", swarp_args=sci_resampling + swarp_options_override, use_weight_map=False
+                "sci", swarp_args=sci_resampling + swarp_options_override + head_args, use_weight_map=False
             )  # Disable weight in the sci pass
-            self._run_swarp("wht", swarp_args=["-RESAMPLING_TYPE", "NEAREST"] + swarp_options_override)
+            self._run_swarp("wht", swarp_args=["-RESAMPLING_TYPE", "NEAREST"] + swarp_options_override + head_args)
 
         factory = self.path.imcoadd.factory
         masks_predicted = atleast_1d(
@@ -455,7 +617,14 @@ class SwarpMixin:
             )
         )
         bpm_pass = self.plan.policy == "conservative"
-        if bpm_pass and not self.overwrite and all(os.path.exists(m) for m in masks_predicted):
+        if (
+            bpm_pass
+            and not self.overwrite
+            and all(
+                os.path.exists(m) and (self._manifest_options(m) or {}).get("joint_wcs") == self.plan.joint_wcs
+                for m in masks_predicted
+            )
+        ):
             # checked before get_bpmask: resolving 1000 bpmasks costs ~20 min
             self.logger.info(f"bpm pass outputs already exist ({len(masks_predicted)} masks), skipping")
         elif bpm_pass:
@@ -479,8 +648,12 @@ class SwarpMixin:
                 # The resampling follows the sci pass rather than being pinned here: a mask
                 # resampled differently from the image it describes would not line up with it.
                 args = ["-WEIGHT_IMAGE", bpmask_inverted_file] + sci_resampling
-                self._run_swarp("bpm", swarp_args=args + swarp_options_override, input_list=group_list)
+                head_args = self._joint_wcs_head_args(group_frames, f"joint_wcs_heads_bpm_{k}.txt")
+                self._run_swarp("bpm", swarp_args=args + swarp_options_override + head_args, input_list=group_list)
         if bpm_pass:
+            for mask in masks_predicted:
+                self._manifest_note(mask, joint_wcs=self.plan.joint_wcs)
+            self._manifest_flush()
             self._bpm_resampled_masks = masks_predicted
 
         self._guard_sky_rms_propagation()
@@ -570,7 +743,7 @@ class SwarpMixin:
             if mask_file not in detector:
                 detector[mask_file] = np.nonzero(fits.getdata(mask_file) == badpix)
             ys, xs = detector[mask_file]
-            ra, dec = WCS(fits.getheader(image)).all_pix2world(xs.astype(np.float64), ys.astype(np.float64), 0)
+            ra, dec = WCS(self._single_wcs_header(image)).all_pix2world(xs.astype(np.float64), ys.astype(np.float64), 0)
             x, y = WCS(out_header).all_world2pix(ra, dec, 0)
             h, w = data.shape
             finite = np.isfinite(x) & np.isfinite(y)

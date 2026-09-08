@@ -102,16 +102,9 @@ photometry:
   check: False
   filters_to_check:
   satur_margin: 0.99  # factor multiplied to the propagated hardware upper limit
-  sex_vars:
-    PHOT_APERTURES:
-    PHOT_AUTOPARAMS:
-    DETECT_MINAREA: 5
-    DETECT_THRESH: 3.0
-    DEBLEND_NTHRESH: 64
-    DEBLEND_MINCONT: 0.0001
-    BACK_SIZE: 64
-    BACK_FILTERSIZE: 3
-    BACKPHOTO_TYPE: LOCAL
+  sex_vars:  # only non-empty keys are passed to SExtractor; empty inherits ref/srcExt/main.sex
+    DETECT_THRESH:
+    DEBLEND_MINCONT:
 
 imcoadd:
   input_images:
@@ -156,11 +149,12 @@ imcoadd:
   output_sky_rms_map: false  # BACKGROUND_RMS model of source-free sky
   output_bkg_map: false  # keep each frame's mesh background model (262 MB/frame, read by nobody)
   persist_weight_maps: False  # durable per-single maps; costs 1.71 s/frame to save a 0.04 s kernel
-  joint_wcs: False
+  joint_wcs: False  # joint SCAMP solution over all inputs before reprojection; one .head per single in the factory, read by SWarp
+  joint_wcs_catalog: auto  # auto | prep | main: SCAMP inputs; prep = astrometry factory catalogs (raise when one is missing), main = catalogs beside the processed singles, auto = prep when complete else main
   interpolate_badpix: True  # interpolate bad pixels in the sci frames (was apply_bpmask)
   interp_type: 'median'
-  zero_badpix_weight: False  # set weight to 0 for bad pixels; carrying them costs the NEAREST wht SWarp pass
-  badpix_reprojection_policy: 'off'  # off | 1px | conservative (resamp kernel size): how many weight pixels to zero out
+  zero_badpix_weight: true  # set weight to 0 for bad pixels; carrying them costs the NEAREST wht SWarp pass
+  badpix_reprojection_policy: '1px'  # off | 1px | conservative (resamp kernel size): how many weight pixels to zero out
   dump_unreprojected_interp: false  # keep the interpolated science image before SWarp
   dump_unreprojected_weight: false  # keep its weight map before SWarp
   intermediate_policy: auto  # memory for groups up to memory_image_limit, disk otherwise

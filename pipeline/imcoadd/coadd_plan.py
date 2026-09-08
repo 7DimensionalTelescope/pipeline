@@ -30,6 +30,7 @@ class CoaddPlan:
     output_sky_rms_map: bool
     zpscale: bool
     joint_wcs: bool
+    joint_wcs_catalog: str
     convolve: bool | str | None
     source_mask: bool | str
     interp_type: str
@@ -143,6 +144,12 @@ def resolve_coadd_plan(node) -> CoaddPlan:
     if routine == "direct" and policy == "conservative":
         raise ValueError("The direct routine has no resampling kernel; use badpix_reprojection_policy: 1px")
 
+    joint_wcs_catalog = str(node.joint_wcs_catalog).strip().lower()
+    if joint_wcs_catalog not in ("auto", "prep", "main"):
+        raise ValueError(
+            f"Invalid imcoadd.joint_wcs_catalog: {joint_wcs_catalog!r} (expected 'auto', 'prep' or 'main')"
+        )
+
     weighting = str(node.coadd_weighting).lower()
     weighting = weighting.replace("-", "").replace("_", "")
     weighting = {"false": "off", "none": "off", "no": "off"}.get(weighting, weighting)
@@ -178,6 +185,7 @@ def resolve_coadd_plan(node) -> CoaddPlan:
         output_sky_rms_map=bool(node.output_sky_rms_map),
         zpscale=bool(node.zpscale),
         joint_wcs=bool(node.joint_wcs),
+        joint_wcs_catalog=joint_wcs_catalog,
         convolve=node.convolve,
         source_mask=node.source_mask,
         interp_type=str(node.interp_type),
@@ -196,8 +204,8 @@ def resolve_coadd_plan(node) -> CoaddPlan:
             "coadd_routine 'reproject-first' interpolates bad pixels in every frame; "
             "set interpolate_badpix: True (or coadd_routine: direct for pre-aligned inputs)"
         )
-    if plan.joint_wcs:
-        raise NotImplementedError("imcoadd.joint_wcs: joint registration is not implemented; set it to False")
+    if plan.joint_wcs and plan.routine == "direct":
+        raise ValueError("imcoadd.joint_wcs registers frames for reprojection; the direct routine has none")
     if plan.routine == "direct" and plan.convolve:
         raise ValueError("The direct routine does not convolve; set imcoadd.convolve: False")
     if plan.policy == "1px" and not plan.zero:

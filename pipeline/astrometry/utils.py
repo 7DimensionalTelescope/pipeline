@@ -50,6 +50,14 @@ def read_scamp_header(file: str, return_wcs=False):
     return hdr
 
 
+def strip_scamp_photom_cards(head: str, keys=("FLXSCALE", "MAGZEROP", "PHOTIRMS", "PHOTINST", "PHOTLINK")) -> None:
+    """Drop SCAMP's photometric cards from a .head file: SWarp would apply its FLXSCALE over the frame's own."""
+    with open(head, "r", encoding="utf-8") as f:
+        cards = [line for line in f.read().splitlines() if line[:8].strip() not in keys]
+    with open(head, "w", encoding="utf-8") as f:
+        f.write("\n".join(cards) + "\n")
+
+
 def extract_from_scamp_log(filename: str) -> None:
     """
     Open a text file, read it line by line,
@@ -403,7 +411,7 @@ def get_3x3_stars(
 def find_id_rows(matched_catalog: Table, matched_ids: list[int], id_col: str = "id") -> Table:
     """This can't handle None in matched_ids"""
     order = np.array(matched_ids)  # Make an indexer array that preserves order
-    mask = np.in1d(order, matched_catalog[id_col])
+    mask = np.isin(order, matched_catalog[id_col])
     order = order[mask]
     id_to_idx = {id_: i for i, id_ in enumerate(matched_catalog[id_col])}
     return matched_catalog[[id_to_idx[_id] for _id in order]]
@@ -548,12 +556,18 @@ def get_plateau_end(flags: Table.Column, w=15, thr=0.5) -> int:
 
 
 def get_adaptive_scamp_timeout(
-    setting: int | str, n_det_sci: int, min_timeout: int = 60, max_timeout: int = 300, pivot_n_det: int = 10000
+    setting: int | str,
+    n_det_sci: int,
+    min_timeout: int = 60,
+    max_timeout: int = 300,
+    pivot_n_det: int = 10000,
+    n_catalogs: int = 1,
 ) -> int:
-    """numbers hard-coded"""
+    """numbers hard-coded; a joint run over n_catalogs scales the bounds and pivot by that count"""
     if type(setting) == int:
         return setting
     else:
+        min_timeout, max_timeout, pivot_n_det = (n_catalogs * v for v in (min_timeout, max_timeout, pivot_n_det))
         linear_timeout = min_timeout + (n_det_sci / pivot_n_det - 1) * 0.5 * (max_timeout - min_timeout)
         # const until pivot_n_det, hits max_timeout at pivot_n_det * 3
         return min(max(min_timeout, linear_timeout), max_timeout)

@@ -87,6 +87,7 @@ registry.register_kind("SolveFieldGenericError", 35, SolveFieldGenericError)
 registry.register_kind("ScampGenericError", 36, ScampGenericError)
 registry.register_kind("AstrometryReferenceGenerationError", 37, AstrometryReferenceGenerationError)
 registry.register_kind("SolutionEvaluationFailedError", 38, SolutionEvaluationFailedError)
+registry.register_kind("JointWcsError", 39, JointWcsError)
 
 # photometry from 50
 registry.register_kind("NotEnoughSourcesError", 50, NotEnoughSourcesError)

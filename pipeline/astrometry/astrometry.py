@@ -53,6 +53,7 @@ from .evaluation import (
     RSEPStats,
     RadialStats,
 )
+from .evaluation_helpers import wcs_eval_cards, bad_wcs_cards
 from .generate_refcat_gaia import get_refcat_gaia
 
 
@@ -217,15 +218,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             try:
                 self.logger.info(f"Local astrefcat {local_astref} does not exist. Generating from image header...")
                 # Extract necessary info from first image
-                image_info = self.images_info[0]
-                get_refcat_gaia(
-                    output_path=local_astref,
-                    ra=image_info.racent,
-                    dec=image_info.decent,
-                    naxis1=image_info.naxis1,
-                    naxis2=image_info.naxis2,
-                    pixscale=image_info.pixscale,
-                )
+                self.ensure_astrefcat(local_astref, self.images_info[0].image_path, self.path, self.logger)
                 self.logger.info(f"Generated reference catalog: {local_astref}")
             except Exception as e:
                 self.logger.error(
@@ -923,6 +916,126 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         return solvefield_success
 
+    @staticmethod
+    def scamp_catalogs(
+        catalogs: List[str],
+        manifest: str,
+        *,
+        timeout: int,
+        path_ref_scamp: str = None,
+        astrefcat: str = None,
+        scampconfig: str = None,
+        scamp_args: str = None,
+        scamp_preset: Literal["prep", "main"] = "main",
+        logger: Logger = None,
+        overwrite: bool = False,
+    ) -> List[str]:
+        """One SCAMP run over every catalog listed in *manifest* (a joint solution); returns the .head beside each."""
+        with open(manifest, "w") as f:
+            for catalog in catalogs:
+                f.write(f"{catalog}\n")
+        return external.scamp(
+            manifest,
+            path_ref_scamp=path_ref_scamp,
+            local_astref=astrefcat,
+            scampconfig=scampconfig,
+            scamp_args=scamp_args,
+            scamp_preset=scamp_preset,
+            timeout=timeout,
+            logger=logger,
+            overwrite=overwrite,
+        )
+
+    @staticmethod
+    def ensure_astrefcat(astrefcat: str, image: str, path: PathHandler, logger: Logger = None) -> str:
+        """Generate the Gaia reference catalog at *astrefcat* around the image center when it does not exist."""
+        if not os.path.exists(astrefcat):
+            image_info = ImageInfo.from_fits(image, path, logger)
+            get_refcat_gaia(
+                output_path=astrefcat,
+                ra=image_info.racent,
+                dec=image_info.decent,
+                naxis1=image_info.naxis1,
+                naxis2=image_info.naxis2,
+                pixscale=image_info.pixscale,
+            )
+        return astrefcat
+
+    @staticmethod
+    def evaluate_wcs_headers(
+        images: List[str],
+        catalogs: List[str],
+        headers: List[fits.Header],
+        refcat: Table,
+        *,
+        matched_catalog_paths: List[str],
+        match_radius: float,
+        logger: Logger = None,
+        num_sci: int = 200,
+        num_ref: int = 200,
+        isep: bool = True,
+        use_threading: bool = True,
+    ) -> List[List[Tuple[str, Any, str]]]:
+        """WCS quality cards per frame for the WCS carried by *headers*: reference separations, then internal ones."""
+
+        def _one(idx: int):
+            header = headers[idx]
+            wcs = WCS(header)
+            H, W = int(header["NAXIS2"]), int(header["NAXIS1"])
+            fov_ra, fov_dec = get_fov_quad(wcs, W, H)
+            # the catalog's ALPHA/DELTA carry the frame's own WCS; the evaluated one must set the sky positions
+            objects = Table(fits.getdata(catalogs[idx], ext=2))
+            objects["ALPHA_J2000"], objects["DELTA_J2000"] = wcs.all_pix2world(
+                objects["X_IMAGE"], objects["Y_IMAGE"], 1
+            )
+            return idx, evaluate_single_wcs(
+                image=images[idx],
+                ref_cat=refcat,
+                source_cat=objects,
+                date_obs=header["DATE-OBS"],
+                wcs=wcs,
+                H=H,
+                W=W,
+                match_radius=match_radius,
+                fov_ra=fov_ra,
+                fov_dec=fov_dec,
+                matched_catalog_path=matched_catalog_paths[idx],
+                plot_save_path=None,
+                num_sci=num_sci,
+                num_ref=num_ref,
+                ds9_region=False,
+                logger=logger,
+                overwrite=True,
+                id=os.path.basename(images[idx]),
+            )
+
+        results = [None] * len(images)
+        if use_threading and len(images) > 1:
+            workers = min(len(images), max(1, int(os.cpu_count() / 2)))
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="wcs_eval") as ex:
+                for idx, result in ex.map(_one, range(len(images))):
+                    results[idx] = result
+        else:
+            for idx in range(len(images)):
+                results[idx] = _one(idx)[1]
+        internal = [(None, None)] * len(images)
+        if isep and len(images) > 1:
+            sep_stats_list, match_stats_list = evaluate_joint_wcs([r.matched for r in results])
+            internal = list(zip(sep_stats_list, match_stats_list))
+        return [
+            wcs_eval_cards(
+                r.rsep_stats,
+                r.image_stats,
+                r.corner_stats,
+                r.radial_stats,
+                sep,
+                match,
+                name=os.path.basename(image),
+                logger=logger,
+            )  # fmt: skip
+            for r, (sep, match), image in zip(results, internal, images)
+        ]
+
     def run_scamp(
         self,
         images_info: ImageInfo | List[ImageInfo] = None,
@@ -983,17 +1096,12 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         # joint scamp
         if joint:
-            # write target files into a text file
-            cat_to_scamp = self.path.astrometry.factory.scamp_input_manifest
-            with open(cat_to_scamp, "w") as f:
-                for precat in input_catalogs:
-                    f.write(f"{precat}\n")
-
             try:
-                solved_heads = external.scamp(
-                    cat_to_scamp,
+                solved_heads = self.scamp_catalogs(
+                    input_catalogs,
+                    self.path.astrometry.factory.scamp_input_manifest,
                     path_ref_scamp=path_ref_scamp,
-                    local_astref=astrefcat,
+                    astrefcat=astrefcat,
                     scampconfig=scampconfig,
                     scamp_args=scamp_args,
                     scamp_preset=scamp_preset,
@@ -1474,6 +1582,8 @@ class ImageInfo:
     internal_match_recall: Optional[list] = field(default=None)
 
     _joint_cards_are_up_to_date = False  # prevent single and joint eval cards coming from different solutions
+    _internal_sep_stats: Optional[dict] = field(default=None)
+    _internal_match_stats: Optional[dict] = field(default=None)
 
     # early qa
     num_frac: Optional[float] = field(default=None)
@@ -1568,6 +1678,7 @@ class ImageInfo:
 
     def set_internal_sep_stats(self, sep_stats: dict) -> None:
         self._joint_cards_are_up_to_date = True
+        self._internal_sep_stats = sep_stats
         self.internal_sep_rms_x = sep_stats["rms_x"] if sep_stats["rms_x"] is not None else None
         self.internal_sep_rms_y = sep_stats["rms_y"] if sep_stats["rms_y"] is not None else None
         self.internal_sep_rms = sep_stats["rms"] if sep_stats["rms"] is not None else None
@@ -1580,6 +1691,7 @@ class ImageInfo:
         self.internal_sep_max = sep_stats["max"] if sep_stats["max"] is not None else None
 
     def set_internal_match_stats(self, match_stats: dict) -> None:
+        self._internal_match_stats = match_stats
         self.internal_match_counts = match_stats["counts_by_group_size"]  # ex) {2: 70, 3: 180, 1: 16}
         self.internal_match_recall = match_stats["recall"]
 
@@ -1641,116 +1753,31 @@ class ImageInfo:
 
     @property
     def wcs_eval_cards(self) -> List[Tuple[str, float]]:
-
-        cards = (
-            self._single_wcs_eval_cards + self._joint_wcs_eval_cards
-            if self._joint_cards_are_up_to_date
-            else self._single_wcs_eval_cards
+        joint = self._joint_cards_are_up_to_date
+        return wcs_eval_cards(
+            self.rsep_stats,
+            self.image_stats,
+            self.corner_stats,
+            self.radial_stats,
+            self._internal_sep_stats if joint else None,
+            self._internal_match_stats if joint else None,
+            name=self.path.name.basename,
+            logger=self.logger,
         )
-        # Clean invalid values
-        import numpy.ma as ma
-
-        for i, (k, v, c) in enumerate(cards):
-            # Handle MaskedConstant (from numpy masked arrays)
-            error_types = [[], [], []]
-            if isinstance(v, ma.core.MaskedConstant):
-                error_types[0].append(k)
-                cards[i] = (k, None, c)
-            elif isinstance(v, (float, np.floating)) and np.isnan(v):
-                error_types[1].append(k)
-                cards[i] = (k, None, c)
-            elif not isinstance(v, (float, int, str, np.float32, np.int32, type(None))):
-                # Convert other invalid types to None
-                error_types[0].append(k)
-                cards[i] = (k, None, c)
-
-        if len(error_types[0]) > 0:
-            self.logger.error(f"WCS statistics contains masked value for {error_types[0]}, converting to None")
-
-        if len(error_types[1]) > 0:
-            self.logger.error(f"WCS statistics contains nan for {error_types[1]}, converting to None")
-
-        if len(error_types[2]) > 0:
-            self.logger.error(f"WCS statistics contains type {type(v)} {v} for {error_types[2]}, converting to None")
-
-        return cards
 
     @property
     def _single_wcs_eval_cards(self) -> List[Tuple[str, float]]:
-
-        rsep_stats_cards = self.rsep_stats.fits_header_cards_for_metadata
-        if not rsep_stats_cards:
-            self.logger.warning(f"No RSEPStats metadata ({self.path.name.basename})")
-
-        ref_sep_cards = self.rsep_stats.separation_stats.fits_header_cards
-        if not ref_sep_cards:
-            self.logger.warning(f"No reference_sep ({self.path.name.basename})")
-
-        image_stats_cards = self.image_stats.fits_header_cards
-        if not image_stats_cards:
-            self.logger.warning(f"No image_stats ({self.path.name.basename})")
-
-        if self.corner_stats is not None:
-            corner_stats_cards = self.corner_stats.fits_header_cards
-            if not corner_stats_cards:
-                self.logger.warning(f"No corner_stats ({self.path.name.basename})")
-        else:
-            corner_stats_cards = []
-
-        if self.radial_stats is not None:
-            radial_stats_cards = self.radial_stats.fits_header_cards
-            if not radial_stats_cards:
-                self.logger.warning(f"No radial_stats ({self.path.name.basename})")
-        else:
-            radial_stats_cards = []
-
-        cards = rsep_stats_cards + ref_sep_cards + image_stats_cards + corner_stats_cards + radial_stats_cards
-
-        if cards is None:
-            self.logger.warning(f"No single wcs eval cards ({self.path.name.basename})")
-            return []
-        return cards
+        return wcs_eval_cards(
+            self.rsep_stats, self.image_stats, self.corner_stats, self.radial_stats,
+            name=self.path.name.basename, logger=self.logger,
+        )  # fmt: skip
 
     @property
     def _joint_wcs_eval_cards(self) -> List[Tuple[str, float]]:
-        # Include internal separation statistics if they exist on the instance.
-        cards: List[Tuple[str, float]] = []
-        internal_vals = {
-            "ISEPRMSX": getattr(self, "internal_sep_rms_x", None),
-            "ISEPRMSY": getattr(self, "internal_sep_rms_y", None),
-            "ISEP_RMS": getattr(self, "internal_sep_rms", None),
-            "ISEP_MIN": getattr(self, "internal_sep_min", None),
-            "ISEP_Q1": getattr(self, "internal_sep_q1", None),
-            "ISEP_Q2": getattr(self, "internal_sep_q2", None),
-            "ISEP_Q3": getattr(self, "internal_sep_q3", None),
-            "ISEP_MAX": getattr(self, "internal_sep_max", None),
-            "ISEP_P95": getattr(self, "internal_sep_p95", None),
-            "ISEP_P99": getattr(self, "internal_sep_p99", None),
-            # "IMATCH_COUNTS": getattr(self, "internal_match_counts", None),
-            "I_RECALL": getattr(self, "internal_match_recall", None),
-        }
-        descriptions = {
-            "ISEPRMSX": "RMS x internal sep of outer-matched [arcsec]",
-            "ISEPRMSY": "RMS y internal sep of outer-matched [arcsec]",
-            "ISEP_RMS": "RMS internal sep of outer-matched [arcsec]",
-            "ISEP_MIN": "Min internal sep of outer-matched [arcsec]",
-            "ISEP_Q1": "Q1 internal sep of outer-matched [arcsec]",
-            "ISEP_Q2": "Q2 internal sep of outer-matched [arcsec]",
-            "ISEP_Q3": "Q3 internal sep of outer-matched [arcsec]",
-            "ISEP_MAX": "Max internal sep of outer-matched [arcsec]",
-            "ISEP_P95": "95 percentile of outer-matched [arcsec]",
-            "ISEP_P99": "99 percentile of outer-matched [arcsec]",
-            # "IMATCH_COUNTS": "Counts of matched sources by group size",
-            "I_RECALL": "Recovery fraction in outer-matched cat",
-        }
-        for key, val in internal_vals.items():
-            if val is not None:
-                if isinstance(val, u.Quantity):
-                    v = val.to(u.arcsec).value
-                else:
-                    v = val
-                cards.append((key, v, descriptions[key]))
-        return cards
+        return wcs_eval_cards(
+            None, None, internal_sep_stats=self._internal_sep_stats, internal_match_stats=self._internal_match_stats,
+            name=self.path.name.basename, logger=self.logger,
+        )  # fmt: skip
 
     # @cached_property  # cache prevents update
     @property

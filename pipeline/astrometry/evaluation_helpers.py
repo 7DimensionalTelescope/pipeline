@@ -1,13 +1,17 @@
 from __future__ import annotations
 from dataclasses import dataclass, field, fields
-from typing import Optional, TypedDict, List, Tuple
+from typing import Any, Optional, TypedDict, List, Tuple, TYPE_CHECKING
 import numpy as np
 import astropy.units as u
 from astropy.table import Table
 from collections import Counter
 
+from ..const import PIXSCALE
 from ..tools.angle import pa_alignment, azimuth_deg_from_center, pa_quadrupole_alignment
 from .utils import find_id_rows
+
+if TYPE_CHECKING:
+    from ..services.logger import Logger
 
 
 @dataclass(frozen=True)
@@ -424,3 +428,80 @@ def well_matchedness_stats(merged, n_cats=3):
         "counts_by_group_size": counts_by_group_size,
         "recall": recall,
     }
+
+
+def wcs_eval_cards(
+    rsep_stats,
+    image_stats,
+    corner_stats=None,
+    radial_stats=None,
+    internal_sep_stats: dict | None = None,
+    internal_match_stats: dict | None = None,
+    *,
+    name: str = "",
+    logger: Logger | None = None,
+) -> List[Tuple[str, Any, str]]:
+    """(KEY, value, comment) cards of one frame's WCS quality; masked or NaN values become None."""
+    import numpy.ma as ma
+
+    def chatter(msg: str, level: str = "warning"):
+        if logger is not None:
+            getattr(logger, level)(msg)
+
+    def part(label, stats, attr="fits_header_cards"):
+        if stats is None:
+            return []
+        cards = getattr(stats, attr)
+        if not cards:
+            chatter(f"No {label} ({name})")
+        return list(cards)
+
+    cards = part("RSEPStats metadata", rsep_stats, "fits_header_cards_for_metadata")
+    cards += part("reference_sep", rsep_stats.separation_stats if rsep_stats is not None else None)
+    cards += part("image_stats", image_stats) + part("corner_stats", corner_stats) + part("radial_stats", radial_stats)
+    if internal_sep_stats is not None:
+        for key, field_name, comment in (
+            ("ISEPRMSX", "rms_x", "RMS x internal sep of outer-matched [arcsec]"),
+            ("ISEPRMSY", "rms_y", "RMS y internal sep of outer-matched [arcsec]"),
+            ("ISEP_RMS", "rms", "RMS internal sep of outer-matched [arcsec]"),
+            ("ISEP_MIN", "min", "Min internal sep of outer-matched [arcsec]"),
+            ("ISEP_Q1", "q1", "Q1 internal sep of outer-matched [arcsec]"),
+            ("ISEP_Q2", "q2", "Q2 internal sep of outer-matched [arcsec]"),
+            ("ISEP_Q3", "q3", "Q3 internal sep of outer-matched [arcsec]"),
+            ("ISEP_MAX", "max", "Max internal sep of outer-matched [arcsec]"),
+            ("ISEP_P95", "p95", "95 percentile of outer-matched [arcsec]"),
+            ("ISEP_P99", "p99", "99 percentile of outer-matched [arcsec]"),
+        ):
+            value = internal_sep_stats.get(field_name)
+            if value is not None:
+                cards.append((key, value.to(u.arcsec).value if isinstance(value, u.Quantity) else value, comment))
+    if internal_match_stats is not None and internal_match_stats.get("recall") is not None:
+        cards.append(("I_RECALL", internal_match_stats["recall"], "Recovery fraction in outer-matched cat"))
+
+    masked, nans, odd = [], [], []
+    for i, (k, v, c) in enumerate(cards):
+        if isinstance(v, ma.core.MaskedConstant):
+            masked.append(k)
+            cards[i] = (k, None, c)
+        elif isinstance(v, (float, np.floating)) and np.isnan(v):
+            nans.append(k)
+            cards[i] = (k, None, c)
+        elif not isinstance(v, (float, int, str, np.float32, np.int32, type(None))):
+            odd.append(k)
+            cards[i] = (k, None, c)
+    if masked:
+        chatter(f"WCS statistics contains masked value for {masked}, converting to None", "error")
+    if nans:
+        chatter(f"WCS statistics contains nan for {nans}, converting to None", "error")
+    if odd:
+        chatter(f"WCS statistics contains unsupported types for {odd}, converting to None", "error")
+    return cards
+
+
+def bad_wcs_cards(cards: List[Tuple[str, Any, str]]) -> bool:
+    """ImageInfo.bad's rejection criterion applied to one frame's evaluation cards."""
+    numeric = {
+        k: v for k, v, _ in cards if isinstance(v, (int, float, np.integer, np.floating)) and not isinstance(v, bool)
+    }
+    unmatch, median_sep = numeric.get("UNMATCH"), numeric.get("RSEP_Q2")
+    return (unmatch is not None and unmatch > 0.9) or (median_sep is not None and median_sep > 2 * PIXSCALE)
