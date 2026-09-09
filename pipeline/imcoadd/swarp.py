@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import shutil
@@ -11,6 +12,7 @@ from astropy.table import Table
 from astropy.wcs import WCS
 
 from .. import external
+from ..const import REF_DIR
 from ..errors import AstrometryError, ScampError
 from ..services.logger import Logger
 from ..config.utils import get_key
@@ -38,34 +40,71 @@ class SwarpMixin:
     _bpm_resampled_masks: list[str]
     _manifest: dict | None
     _joint_wcs_head_of: dict[str, str]
+    _single_of: dict[str, str]
+    _bpmid_of: dict[str, str]
 
-    def apply_legacy_coverage_policy(self, swarp_inputs: list[str]) -> None:
-        """Apply intersection coverage to a legacy SWarp coadd."""
-        if self.plan.coverage_policy == "union":
-            return
+    def legacy_coverage_counts(self, swarp_inputs: list[str]) -> tuple[np.ndarray, np.ndarray, int]:
+        """One pass over the legacy resamples: (NGEOM, NUSED, n_resamples) on the coadd grid."""
+        st = time.time()
         resampled = atleast_1d(
             self.path.imcoadd.factory.resampled_images(
                 swarp_inputs,
                 pass_type=self.plan.sci_pass,
             )
         )
-        coadd_path = self.config_node.imcoadd.coadd_image
-        coadd, header = fits.getdata(coadd_path, header=True, memmap=False)
-        geometric_count = np.zeros(coadd.shape, dtype=np.uint16)
+        header = fits.getheader(self.config_node.imcoadd.coadd_image)
+        shape = (int(header["NAXIS2"]), int(header["NAXIS1"]))
+        geometric = np.zeros(shape, dtype=np.uint16)
+        used = np.zeros(shape, dtype=np.uint16)
         for path in resampled:
             data = fits.getdata(path, memmap=False)
-            if data.shape != coadd.shape:
-                raise ValueError(f"Legacy resample shape {data.shape} differs from coadd {coadd.shape}: {path}")
-            geometric_count += np.isfinite(data) & (data != 0)
-        keep = geometric_count == len(resampled)
-        coadd[~keep] = np.nan
-        fits.writeto(coadd_path, coadd, header=header, overwrite=True)
+            if data.shape != shape:
+                raise ValueError(f"Legacy resample shape {data.shape} differs from coadd {shape}: {path}")
+            geometric += data != 0
+            used += np.isfinite(data) & (data != 0)
+        self.logger.info(
+            f"Legacy coverage counts over {len(resampled)} resamples in {time_diff_in_seconds(st)} seconds"
+        )
+        return geometric, used, len(resampled)
 
-        weight_path = add_suffix(coadd_path, "weight")
-        if os.path.exists(weight_path):
-            weight, weight_header = fits.getdata(weight_path, header=True, memmap=False)
-            weight[~keep] = 0
-            fits.writeto(weight_path, weight, header=weight_header, overwrite=True)
+    def apply_legacy_coverage_policy(self, swarp_inputs: list[str]) -> None:
+        """Apply intersection coverage to a legacy SWarp coadd and record its coverage counts."""
+        intersection = self.plan.coverage_policy != "union"
+        if not (intersection or self.plan.output_counts_map or self.plan.output_footprint):
+            return
+        resampled = atleast_1d(
+            self.path.imcoadd.factory.resampled_images(swarp_inputs, pass_type=self.plan.sci_pass)
+        )
+        missing = [path for path in resampled if not os.path.exists(path)]
+        if missing:
+            if intersection:
+                raise self._process_error.FileNotFoundError(
+                    f"Intersection coverage needs every legacy resample (e.g. {missing[:2]})"
+                )
+            # counts alone are not worth failing a finished coadd for
+            self.logger.warning(
+                f"{len(missing)} legacy resample(s) missing (e.g. {missing[:2]}); coverage counts not computed"
+            )
+            return
+        geometric, geometric_count, n_resamples = self.legacy_coverage_counts(swarp_inputs)
+        coadd_path = self.config_node.imcoadd.coadd_image
+        header = fits.getheader(coadd_path)
+        keep = None
+        if intersection:
+            coadd, header = fits.getdata(coadd_path, header=True, memmap=False)
+            keep = geometric_count == n_resamples
+            coadd[~keep] = np.nan
+            fits.writeto(coadd_path, coadd, header=header, overwrite=True)
+
+            weight_path = add_suffix(coadd_path, "weight")
+            if os.path.exists(weight_path):
+                weight, weight_header = fits.getdata(weight_path, header=True, memmap=False)
+                weight[~keep] = 0
+                fits.writeto(weight_path, weight, header=weight_header, overwrite=True)
+        if self.plan.output_counts_map:
+            # NUSED follows the coadd, the way apply_coverage_policy zeroes the numpy backends' count
+            used = geometric_count if keep is None else np.where(keep, geometric_count, 0)
+            self._coadd_counts.geometric, self._coadd_counts.used = geometric, used
         if self.plan.output_footprint:
             footprint_path = add_suffix(coadd_path, "footprint")
             if os.path.exists(footprint_path):
@@ -74,12 +113,13 @@ class SwarpMixin:
                     header=True,
                     memmap=False,
                 )
-                if footprint.shape != coadd.shape:
+                if footprint.shape != geometric_count.shape:
                     raise ValueError(
-                        f"Legacy footprint shape {footprint.shape} differs from coadd {coadd.shape}: "
+                        f"Legacy footprint shape {footprint.shape} differs from coadd {geometric_count.shape}: "
                         f"{footprint_path}"
                     )
-                footprint[~keep] = 0
+                if keep is not None:
+                    footprint[~keep] = 0
             else:
                 footprint = geometric_count.astype(np.int16)
                 footprint_header = header
@@ -89,9 +129,10 @@ class SwarpMixin:
                 header=footprint_header,
                 overwrite=True,
             )
-        self.logger.info(
-            f"Intersection coverage retained {int(keep.sum())}/{keep.size} pixels " f"({100 * keep.mean():.2f}%)"
-        )
+        if keep is not None:
+            self.logger.info(
+                f"Intersection coverage retained {int(keep.sum())}/{keep.size} pixels " f"({100 * keep.mean():.2f}%)"
+            )
 
     def _joint_wcs_catalogs(self) -> tuple[list[str], str]:
         """SCAMP input per single: the astrometry factory catalogs when complete, else the main catalogs beside the singles."""
@@ -332,17 +373,13 @@ class SwarpMixin:
             )
             self._drop_swarp_byproduct([interp_im], pass_type)  # as it appears, not in a storm at the end
         sci = collapse(factory.resampled_images([interp_im], pass_type=self.plan.sci_pass), force=True)
-        if self.plan.catalog_badpix_zeros:
-            self._zero_badpix_in_resampled_weight(
-                [interp_im],
-                atleast_1d(factory.resampled_weight_images([sci], pass_type="sci")),
+        options = self._resample_options(interp_im)
+        self._manifest_note(sci, **options)
+        if self.plan.need_weights:
+            wht = collapse(
+                factory.resampled_weight_images([sci], pass_type=self._weight_pass_type()), force=True
             )
-        self._manifest_note(
-            sci,
-            interp=str(self.config_node.imcoadd.interp_type).upper(),
-            badpix=self.plan.policy,
-            joint_wcs=self.plan.joint_wcs,
-        )
+            self._manifest_note(wht, **options)
 
     def _drop_swarp_byproduct(self, swarp_inputs, pass_type: str) -> None:
         """Remove the unused image or weight emitted by a reproject-only SWarp pass."""
@@ -422,11 +459,14 @@ class SwarpMixin:
                 return False
         entry = self._manifest_options(sci)
         if entry is not None:
-            return (
-                str(entry.get("interp", "")).upper() == str(method).upper()
-                and entry.get("badpix") == self.plan.policy
-                and bool(entry.get("joint_wcs", False)) == self.plan.joint_wcs
-            )
+            wanted = self._resample_options(interp_im)
+            if any(entry.get(key) != value for key, value in wanted.items()):
+                return False
+            if not self.plan.need_weights:
+                return True
+            # the weight is a product in its own right: validate its stat and identity too
+            weight_entry = self._manifest_options(wht)
+            return weight_entry is not None and not any(weight_entry.get(k) != v for k, v in wanted.items())
         if self.plan.policy != "off" or self.plan.joint_wcs or os.path.exists(factory.joint_wcs_manifest):
             return False  # a header can vouch for INTERP but not for the weight's badpix zeros or the joint WCS
         try:
@@ -434,7 +474,7 @@ class SwarpMixin:
         except OSError:
             return False
         if ok:
-            self._manifest_note(sci, interp=str(method).upper(), badpix=self.plan.policy, joint_wcs=self.plan.joint_wcs)
+            self._manifest_note(sci, **self._resample_options(interp_im))
         return ok
 
     def weight_and_interpolate(self, input_images: list[str] | None = None) -> list[str]:
@@ -449,6 +489,8 @@ class SwarpMixin:
         interp_images = factory.stage_images(input_images, "interp", factory.interp_dir)
         self.config_node.imcoadd.interp_images = interp_images
         single_of = dict(zip(interp_images, input_images))
+        self._single_of = single_of
+        self._record_bpmids()
 
         method = self.config_node.imcoadd.interp_type
         zero_interp = self.plan.zero_before_reprojection
@@ -483,7 +525,12 @@ class SwarpMixin:
             if not self.overwrite and self._lookahead_done(outim, method):
                 n_lookahead += 1
                 self.logger.debug(f"Resamps exist with matching options; nothing to do for {outim}")
-            elif os.path.exists(outim) and os.path.exists(add_suffix(outim, "weight")) and not self.overwrite:
+            elif (
+                os.path.exists(outim)
+                and os.path.exists(add_suffix(outim, "weight"))
+                and not self.overwrite
+                and self._interp_current(outim)
+            ):
                 reproject_only.append(outim)
             else:
                 todo_in.append(inim)
@@ -508,7 +555,7 @@ class SwarpMixin:
             persist = self.plan.persist_weight_maps
             for group_id, ((z, d, f), [group_in, group_out]) in enumerate(groups.items()):
                 st_group = time.time()
-                mask_file, badpix = self._get_bpmask(group_in[0])
+                mask_file, badpix, bpmid = self._bpmask_info(group_in[0])
                 d_m_file, f_m_file, sig_z_file, sig_f_file = PathHandler.resolve_weight_map_input_abspath([z, d, f])
                 weight_store = None
                 calib = None
@@ -554,6 +601,10 @@ class SwarpMixin:
                     logger=self.logger,
                     post_frame=post_frame,
                     source_catalogs=self._source_catalogs(group_in),
+                    bpmid=bpmid,
+                    saturated_mask=(
+                        self._saturated_detector_mask if self.plan.zero_saturated_before_reprojection else None
+                    ),
                 )
                 self.logger.info(
                     f"Weight+interp completed for group {group_id + 1}/{len(groups)} in "
@@ -690,11 +741,16 @@ class SwarpMixin:
             self.logger.warning("Resampled weights do not map 1:1 onto the inputs; not saved as products")
             return
         n = 0
-        for src, dst in zip(sources, targets):
+        badpix = self.badpix_positions(atleast_1d(resampled))
+        for i, (src, dst) in enumerate(zip(sources, targets)):
             if not os.path.exists(src):
                 continue
             with fits.open(src, memmap=True) as hdul:
-                write_weight_int16(dst, hdul[0].data, hdul[0].header)
+                data, header = np.array(hdul[0].data, dtype=np.float32), hdul[0].header
+            # the factory copy stays the pristine SWarp result; this product keeps the 1px holes
+            if badpix is not None and badpix[i] is not None:
+                badpix[i].apply(data, 0, data.shape[0], 0, data.shape[1], 0.0)
+            write_weight_int16(dst, data, header)
             n += 1
         self.logger.info(f"Saved {n} resampled weight maps beside their singles")
 
@@ -721,48 +777,70 @@ class SwarpMixin:
     def _weight_pass_type(self) -> str:
         return self.plan.weight_pass
 
-    def _zero_badpix_in_resampled_weight(self, input_images, resampled_weights) -> int:
-        """Set the nearest resampled weight pixel to zero for each detector bad pixel."""
-        _BPX_CARD = "BPXZERO"
-        st = time.time()
-        detector: dict[str, tuple] = {}
-        n_done = n_holes = 0
-        images = list(atleast_1d(input_images))
-        weights = list(atleast_1d(resampled_weights))
-        if len(images) != len(weights):
-            raise ValueError(f"input images ({len(images)}) and resampled weights ({len(weights)}) differ")
-        for image, weight in zip(images, weights):
-            if not os.path.exists(weight):
-                self.logger.warning(f"No resampled weight to zero bad pixels in: {get_basename(weight)}")
-                continue
-            with fits.open(weight, memmap=False) as hdul:
-                data, out_header = hdul[0].data, hdul[0].header.copy()
-            if out_header.get(_BPX_CARD) and not self.overwrite:
-                continue
-            mask_file, badpix = self._get_bpmask(image)
-            if mask_file not in detector:
-                detector[mask_file] = np.nonzero(fits.getdata(mask_file) == badpix)
-            ys, xs = detector[mask_file]
-            ra, dec = WCS(self._single_wcs_header(image)).all_pix2world(xs.astype(np.float64), ys.astype(np.float64), 0)
-            x, y = WCS(out_header).all_world2pix(ra, dec, 0)
-            h, w = data.shape
-            finite = np.isfinite(x) & np.isfinite(y)
-            xi = np.zeros(x.shape, dtype=np.int64)
-            yi = np.zeros(y.shape, dtype=np.int64)
-            xi[finite] = np.rint(x[finite]).astype(np.int64)
-            yi[finite] = np.rint(y[finite]).astype(np.int64)
-            inside = finite & (xi >= 0) & (xi < w) & (yi >= 0) & (yi < h)
-            data[yi[inside], xi[inside]] = 0.0
-            out_header[_BPX_CARD] = (True, "bad pixels zeroed from their sky positions")
-            fits.writeto(weight, data, header=out_header, overwrite=True)
-            n_done += 1
-            n_holes += int(inside.sum())
-        if n_done:
-            self.logger.info(
-                f"Zeroed bad pixels in {n_done} resampled weight map(s) from their sky positions "
-                f"({n_holes // max(n_done, 1)} px/frame) in {time_diff_in_seconds(st)} seconds"
-            )
-        return n_done
+    def _swarp_output_wcs_id(self) -> str:
+        """Identity of the reprojection output grid: the SWarp config bytes plus this run's center."""
+        if self._output_wcs_id is None:
+            with open(os.path.join(REF_DIR, "7dt.swarp"), "rb") as fp:
+                digest = hashlib.sha1(fp.read())
+            digest.update(str(self.center).encode())
+            self._output_wcs_id = digest.hexdigest()[:12]
+        return self._output_wcs_id
+
+    def _interp_current(self, interp_im: str) -> bool:
+        """Whether the interpolated frame on disk came from this run's method, mask, input and weight policy."""
+        wanted = self._resample_options(interp_im)
+        try:
+            header = fits.getheader(interp_im)
+            sidecar = fits.getheader(add_suffix(interp_im, "weight"))
+        except OSError:
+            return False
+        if str(header.get("INTERP", "") or "").upper() != wanted["interp"]:
+            return False
+        # interpolation happens before SWarp: the mask, the input frame and the sidecar's zero policy
+        # all decide the interp products, so a reproject-only reuse must check them, not just the resamp
+        for card, value in (("BPMID", wanted["bpmid"]), ("IMAGEID", wanted["imageid"])):
+            if value and str(header.get(card, "") or "").strip() != str(value):
+                return False
+        if ("SATZERO" in sidecar) != bool(self.plan.zero_saturated_before_reprojection):
+            return False
+        holes = sidecar.get("WGTHOLES")
+        return holes is None or bool(holes) == bool(self.plan.zero_before_reprojection)
+
+    def _resample_options(self, interp_im: str) -> dict:
+        """Everything one frame's interpolated and resampled products depend on."""
+        single = self._single_of.get(interp_im, interp_im)
+        return {
+            "interp": str(self.config_node.imcoadd.interp_type).upper(),
+            "badpix": self.plan.policy,
+            "zero": bool(self.plan.zero),
+            "joint_wcs": bool(self.plan.joint_wcs),
+            "satzero": bool(self.plan.zero_saturated_before_reprojection),
+            "wcsid": self._swarp_output_wcs_id(),
+            "imageid": self._imageid_of.get(single),
+            "bpmid": self._bpmid_of.get(single),
+        }
+
+    def _bpmask_ids(self, input_images) -> dict[str, str]:
+        """BPMID per input, resolved once per IMCMB group: get_bpmask costs ~1 s a frame."""
+        if not self._has_detector_bpm:
+            return {}
+        mapping = {}
+        for group in self._group_IMCMB(list(atleast_1d(input_images))).values():
+            bpmid = self._bpmask_info(group[0])[2]
+            mapping.update({image: bpmid for image in group})
+        return mapping
+
+    def _record_bpmids(self) -> dict[str, str]:
+        """Resolve every input's BPMID and stamp it on the header snapshot for coadd provenance."""
+        if self._bpmid_of:
+            return self._bpmid_of
+        self._bpmid_of = self._bpmask_ids(self.input_images)
+        names = set(self.input_headers.names)
+        for image, bpmid in self._bpmid_of.items():
+            name = get_basename(image)
+            if name in names:
+                self.input_headers[name]["BPMID"] = (bpmid, "IMAGEID of the bad-pixel mask")
+        return self._bpmid_of
 
     def _propagated_bpmasks(self) -> list[str] | None:
         """Return per-frame resampled masks for conservative rejection."""

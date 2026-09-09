@@ -31,6 +31,7 @@ class WhiteImage(ImCoadd):
     _extra_header_keys = ("SEEING", "PEEING", "ELLIP", "ELONG")
     _max_header_keys = ("SEEING", "PEEING")
     _proper_requires_interpolation = False
+    _has_detector_bpm = False  # inputs are per-filter coadds; PathHandler.get_bpmask has no master dark to resolve
 
     @classmethod
     def record_config_dependencies(cls, config_node, logger) -> int:

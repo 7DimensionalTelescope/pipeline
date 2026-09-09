@@ -1070,6 +1070,10 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             self.logger.debug(traceback.format_exc())
 
     def update_bpmask(self, sanity=True):
+        with prep_utils.bpmask_id_lock(self.bpmask_output):
+            return self._update_bpmask(sanity=sanity)
+
+    def _update_bpmask(self, sanity=True):
         header = self.get_header(CALIB_TYPE_DARK)
         hot_mask = fits.getdata(self.bpmask_output)
         newhdu = fits.CompImageHDU(data=hot_mask)
@@ -1093,6 +1097,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         newhdu.header["SIGMAC"] = (self.config_node.preprocess.n_sigma, "HP threshold in clipped sigma")
         newhdu.header["BADPIX"] = (1, "Pixel Value for Bad pixels")
         newhdu.header["SANITY"] = (sanity, "Sanity flag")
+        # a bpmask is its own product: its threshold and algorithm move independently of the dark's
+        prep_utils.add_image_id(newhdu.header)
         prep_utils.set_pipe_ver_in_header(newhdu.header)
         primary_hdu = fits.PrimaryHDU()
         newhdul = fits.HDUList([primary_hdu, newhdu])

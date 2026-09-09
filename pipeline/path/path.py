@@ -2057,6 +2057,11 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
     def coadd_mask_image(self) -> str:
         return add_suffix(self._parent.coadd_image, "mask")
 
+    @property
+    def coadd_counts_image(self) -> str:
+        """Canonical coverage/provenance product: integer count planes, one per rejection reason."""
+        return add_suffix(self._parent.coadd_image, "counts")
+
     # ---- inverted bpmask staged in tmp_dir for the bpm SWarp pass ----
     def bpmask_inverted(self, bpmask_file) -> str:
         return os.path.join(self._parent.tmp_dir, os.path.basename(bpmask_file))

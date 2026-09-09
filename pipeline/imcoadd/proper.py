@@ -111,6 +111,9 @@ def proper_coadd_numpy(
     footprint_output: str | bool | None = None,
     psf_output: str | bool | None = None,
     holes: list[str] | None = None,
+    badpix: list | None = None,
+    saturated: list | None = None,
+    counts: dict | None = None,
     match_swarp_size: bool = True,
     coverage_policy: str = "union",
     logger: Logger | None = None,
@@ -141,6 +144,10 @@ def proper_coadd_numpy(
             raise ValueError(f"{name} ({len(seq)}) and input_images ({n}) length mismatch")
     if holes is not None and len(holes) != n:
         raise ValueError(f"holes ({len(holes)}) and input_images ({n}) length mismatch")
+    if badpix is not None and len(badpix) != n:
+        raise ValueError(f"badpix ({len(badpix)}) and input_images ({n}) length mismatch")
+    if saturated is not None and len(saturated) != n:
+        raise ValueError(f"saturated ({len(saturated)}) and input_images ({n}) length mismatch")
     colored = policy == "colored-noise"
     if logger is not None:
         logger.info(f"Start proper coaddition (Zackay & Ofek 2015): weight-map policy {policy!r}")
@@ -187,15 +194,17 @@ def proper_coadd_numpy(
     num_arr = np.zeros((target_h, target_w), dtype=np.float64)
     resp_arr = np.zeros((target_h, target_w), dtype=np.float32)
     count_arr = np.zeros((target_h, target_w), dtype=np.int16)
-    geometric_count = (
-        np.zeros((target_h, target_w), dtype=np.uint16)
-        if coverage_policy == "intersection"
-        else None
-    )
+    geometric_count = np.zeros((target_h, target_w), dtype=np.uint16)
     # 'weighted-mean' is the conventional product (holes not marked); the formulation
     # policies mark bad-pixel holes share-wise through a second coverage accumulator
-    track_holes = holes is not None and policy in ("white-noise", "colored-noise")
+    supplied = holes is not None or badpix is not None or saturated is not None
+    track_holes = supplied and policy in ("white-noise", "colored-noise")
     respw_arr = np.zeros((target_h, target_w), dtype=np.float32) if track_holes else None
+    if supplied and not track_holes and logger is not None:
+        logger.warning(
+            f"weight_map_policy {policy!r} ignores the bad-pixel channel: the weight map is written from the "
+            "plain coverage share, so nothing in this coadd records the projected bad pixels"
+        )
 
     for i, path in enumerate(input_images):
         st_img = time.time()
@@ -227,15 +236,23 @@ def proper_coadd_numpy(
         sy0 = ty0 - y0[i]; sy1 = ty1 - y0[i]  # fmt: skip
         sl = (slice(ty0, ty1), slice(tx0, tx1))
 
-        if geometric_count is not None:
-            geometric_count[sl] += support[sy0:sy1, sx0:sx1]
+        geometric_count[sl] += support[sy0:sy1, sx0:sx1]
         num_arr[sl] += (w[i] * f[i]) * matched[sy0:sy1, sx0:sx1]
         m = data[sy0:sy1, sx0:sx1] != 0.0
         resp_arr[sl] += np.float32(r_share[i]) * m
         count_arr[sl] += m
         if respw_arr is not None:
-            with fits.open(holes[i], memmap=True) as mh:
-                respw_arr[sl] += np.float32(r_share[i]) * (m & (mh[0].data[sy0:sy1, sx0:sx1] > 0))
+            # the Fourier estimator cannot drop one sample: the interpolated value stays in the
+            # numerator and in the footprint, only its weight response is discounted
+            ok = m
+            if holes is not None:
+                with fits.open(holes[i], memmap=True) as mh:
+                    ok = ok & (mh[0].data[sy0:sy1, sx0:sx1] > 0)
+            for sparse in (badpix, saturated):
+                if sparse is not None and sparse[i] is not None:
+                    ok = ok if ok is not m else m.copy()
+                    sparse[i].apply(ok, sy0, sy1, sx0, sx1, False)
+            respw_arr[sl] += np.float32(r_share[i]) * ok
         del data, matched
         if logger is not None:
             logger.debug(
@@ -266,11 +283,13 @@ def proper_coadd_numpy(
         coadd,
         None,
         count_arr,
-        geometric_count if geometric_count is not None else count_arr,
+        geometric_count,
         n,
         coverage_policy,
         logger,
     )
+    if counts is not None:
+        counts.geometric, counts.used = geometric_count, count_arr
 
     out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, coadd_header)
     out_header["PROPFR"] = (f_r, "flux scale F_R of the proper coadd")

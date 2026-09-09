@@ -5,13 +5,16 @@ ZP_KEY = "ZP_AUTO"
 
 
 class MaskBit(IntFlag):
-    BADPIX = 1
-    SATURATED = 2
-    SATELLITE = 4
-    OUTLIER = 8
-    HOT = 16
-    DEAD = 32
+    OUTLIER = 1
+    BADPIX = 2
+    STRAY = 4
+    SATELLITE = 8
+    SATURATED = 16
+    HOT = 32
+    DEAD = 64
 
+
+# the canonical coverage/provenance product's planes are declared in counts.py, not here
 
 MASK_HEADER_CARDS = {
     "MASKBAD": (int(MaskBit.BADPIX), "BADPIX: generic detector bad pixel"),
@@ -20,6 +23,7 @@ MASK_HEADER_CARDS = {
     "MASKOUT": (int(MaskBit.OUTLIER), "OUTLIER: clipped-mean rejection"),
     "MASKHOT": (int(MaskBit.HOT), "HOT: reserved"),
     "MASKDEAD": (int(MaskBit.DEAD), "DEAD: reserved"),
+    "MASKSTRY": (int(MaskBit.STRAY), "STRAY: reserved diffuse stray-light artifact"),
 }
 
 IC_KEYS = [

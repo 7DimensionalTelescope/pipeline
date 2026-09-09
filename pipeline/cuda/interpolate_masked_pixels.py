@@ -6,7 +6,7 @@ import os
 
 
 def interpolate_masked_pixels(
-    images, mask, window=1, method=None, badpix=None, output_paths=None, weight: bool = True, device=None
+    images, mask, window=1, method=None, badpix=None, output_paths=None, weight: bool = True, device=None, bpmid=None
 ):
     data = []
     data_weight = []
@@ -48,7 +48,7 @@ def interpolate_masked_pixels(
         fits.writeto(
             sci_out,
             data=data[idx],
-            header=add_bpx_method(fits.getheader(images[idx][0]), method),
+            header=add_bpx_method(fits.getheader(images[idx][0]), method, bpmid),
             overwrite=True,
         )
         # write weight if applicable
@@ -56,7 +56,7 @@ def interpolate_masked_pixels(
             fits.writeto(
                 wgt_out,
                 data=data_weight[idx],
-                header=add_bpx_method(fits.getheader(images[idx][1]), method),
+                header=add_bpx_method(fits.getheader(images[idx][1]), method, bpmid),
                 overwrite=True,
             )
 
@@ -168,8 +168,10 @@ def interpolate_masked_pixels_gpu_vectorized_weight(
         return result, None
 
 
-def add_bpx_method(header, method):
+def add_bpx_method(header, method, bpmid=None):
     header["INTERP"] = (method.upper(), "Method for bad pixel interpolation")
+    if bpmid:
+        header["BPMID"] = (str(bpmid), "IMAGEID of the bad-pixel mask")
     return header
 
 
@@ -200,6 +202,7 @@ def parse_args():
     parser.add_argument("-device", type=int, default=0, help="GPU device ID")
     parser.add_argument("-no-weight", dest="weight", action="store_false", help="Disable weight map processing")
     parser.add_argument("-weight-input", nargs="+", default=None, help="Input weight maps, one per -input")
+    parser.add_argument("-bpmid", default=None, help="IMAGEID of the bad-pixel mask, recorded in the outputs")
     return parser.parse_args()
 
 
@@ -227,4 +230,5 @@ if __name__ == "__main__":
         output_paths=output_paths,
         weight=args.weight,
         device=args.device,
+        bpmid=args.bpmid,
     )

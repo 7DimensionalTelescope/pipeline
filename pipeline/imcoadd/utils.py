@@ -142,6 +142,49 @@ def write_mask_plio(path, mask, header=None) -> str:
     return path
 
 
+def count_dtype(n_inputs: int):
+    """Smallest exact unsigned integer type that holds a count of *n_inputs* frames."""
+    for dtype in (np.uint8, np.uint16, np.uint32):
+        if n_inputs <= np.iinfo(dtype).max:
+            return dtype
+    raise ValueError(f"{n_inputs} inputs exceed the largest supported count plane (uint32)")
+
+
+def write_count_planes(path, planes: dict[str, np.ndarray], header=None, legend=None) -> str:
+    """Integer count planes as one losslessly tile-compressed multi-extension FITS, one plane per EXTNAME."""
+    from .counts import LEGEND
+
+    legend = LEGEND if legend is None else legend
+    shapes = {name: tuple(np.shape(plane)) for name, plane in planes.items()}
+    if len(set(shapes.values())) > 1:
+        raise ValueError(f"count planes must share one shape: {shapes}")
+    primary = fits.PrimaryHDU(header=header)
+    primary.header["NCOUNTPL"] = (len(planes), "Number of count planes in this file")
+    for i, name in enumerate(planes, 1):
+        primary.header[f"COUNTPL{i}"] = (name, legend.get(name, "count plane"))
+    # the planes carry the WCS only; the full coadd provenance stays on the primary
+    plane_header = WCS(header).to_header(relax=True) if header is not None else None
+    hdus = [primary]
+    for name, plane in planes.items():
+        hdu = fits.CompImageHDU(
+            data=np.ascontiguousarray(plane),
+            header=plane_header.copy() if plane_header is not None else None,
+            compression_type="RICE_1",
+            name=name,
+        )
+        hdu.header["BUNIT"] = ("count", legend.get(name, "count plane"))
+        hdus.append(hdu)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fits.HDUList(hdus).writeto(path, overwrite=True)
+    return path
+
+
+def read_count_planes(path) -> dict[str, np.ndarray]:
+    """Count planes of a coverage product, keyed by EXTNAME."""
+    with fits.open(path, memmap=False) as hdul:
+        return {hdu.name: hdu.data for hdu in hdul[1:]}
+
+
 def read_mask_plio(path):
     """Persisted mask -> bool array, or None when absent/unreadable."""
     if not os.path.exists(path):

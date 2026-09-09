@@ -59,6 +59,8 @@ imcoadd:
   match_swarp_size: false
   image_selection_source: db
   interpolate_badpix: false  # source coadds carry no bad pixel mask to interpolate
+  zero_badpix_weight: false  # no detector bad pixels to exclude
+  badpix_reprojection_policy: 'off'  # quoted: bare off is YAML 1.1 false
   output_mask_map: false  # BADPIX/SATURATED bits come from a detector bpmask; source coadds have none
   convolve: false
 

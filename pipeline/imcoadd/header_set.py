@@ -365,6 +365,9 @@ class InputHeaderSet:
             image_id = str(input_header.get("IMAGEID") or "").strip()
             if image_id:
                 header[f"IID{nn:0>5}"] = (image_id, f"IMAGEID of IMG{nn:0>5}")
+            bpmid = str(input_header.get("BPMID") or "").strip()
+            if bpmid:
+                header[f"BPM{nn:0>5}"] = (bpmid, f"BPMID of IMG{nn:0>5}")
 
         units = sorted({u for h in self.headers if (u := str(h.get("TELESCOP") or "").strip())})
         if units:

@@ -91,6 +91,7 @@ if TYPE_CHECKING:
         ppflag_bitmask: str
         coadd_image: Any
         coadd_mask_image: Any
+        coadd_counts_image: Any
         gpu: bool
         device: int
         zp_key: str
@@ -102,6 +103,7 @@ if TYPE_CHECKING:
         output_weight_map: bool
         output_single_weight_map: bool
         output_footprint: bool
+        output_counts_map: bool
         output_mask_map: bool
         dump_reprojected_masks: bool
         satellite_mask: dict

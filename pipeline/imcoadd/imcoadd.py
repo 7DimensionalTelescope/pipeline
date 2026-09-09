@@ -32,6 +32,7 @@ from ..services.checker import Checker
 from ..services.version_check import RuntimeVersionMixin
 
 from .coadd_plan import CoaddPlan
+from .counts import CoaddCounts
 from .const import ZP_KEY
 from .header_set import InputHeaderSet
 from .background import BackgroundMixin
@@ -59,6 +60,8 @@ class ImCoadd(
 ):
     _conv_inputs: list[str] | None
     _zdf_cache: dict[str, tuple[str, str, str]]
+    _bpmask_cache: dict[str, tuple[str, int, str]]
+    _has_detector_bpm = True  # False on stages whose inputs are coadds: there is no detector mask to resolve
 
     _process_spec = COADD_SPEC
     _process_registry = SCIPROCESS_REGISTRY
@@ -173,15 +176,28 @@ class ImCoadd(
             self._cleanup_imcoadd_intermediates()
         # self.logger.debug(MemoryMonitor.log_memory_usage)
 
-    def initialize(self, overwrite=False):
-        self._st = time.time()
-        # per-run state: a second run() on the same object must not inherit it
+    def _reset_run_state(self):
+        """Every per-run attribute, in one place: a second run() on the same object must not inherit any of it."""
         self._coadd_completed = False
         self._quality_masks = None
         self._coadd_mask_builder = None
         self._zdf_cache = {}
+        self._bpmask_cache = {}
+        self._bpmask_coords_cache = {}
+        self._badpix_positions_cache = {}
+        self._saturated_positions_cache = {}
+        self._saturation_map_cache = {}
+        self._coadd_counts = CoaddCounts()
         self._manifest = None
         self._joint_wcs_head_of = {}
+        self._single_of = {}
+        self._bpmid_of = {}
+        self._imageid_of = {}
+        self._output_wcs_id = None
+
+    def initialize(self, overwrite=False):
+        self._st = time.time()
+        self._reset_run_state()
         if overwrite or self.overwrite is None:
             self.overwrite = self.resolve_overwrite(overwrite)
         self.logger.info(f"Start 'ImCoadd'")
@@ -214,6 +230,7 @@ class ImCoadd(
         self.input_headers.selection_metrics = self._selection_meta
         self.input_headers.coadd_provenance = self._coadd_provenance()
         self.input_headers.multi_epoch = bool(self.config_node.settings.is_multi_epoch)
+        self._imageid_of = dict(zip(self.input_images, self.input_headers.values("IMAGEID")))
 
         self._recreate_pathhandler_instance()  # resync
         self.config_node.imcoadd.input_images = self.input_images
@@ -602,12 +619,19 @@ class ImCoadd(
 
         return self.config_node.imcoadd.bkgsub_weight_images
 
-    def _get_bpmask(self, image) -> tuple[str, int]:
+    def _bpmask_info(self, image) -> tuple[str, int, str]:
+        """Bad-pixel mask file, its bad-pixel value and its BPMID, resolved once per distinct mask."""
         mask_file = PathHandler.get_bpmask(image)
+        cached = self._bpmask_cache.get(mask_file)
+        if cached is not None:
+            return cached
+        from ..preprocess.utils import bpmask_id_hdu, ensure_bpmask_image_id
+
         with fits.open(mask_file, memmap=True) as hdul:
-            mask_header = next((hdu.header for hdu in hdul if hdu.data is not None), hdul[0].header)
-        if "BADPIX" in mask_header:
-            badpix = mask_header["BADPIX"]
+            mask_header = hdul[bpmask_id_hdu(hdul)].header
+            badpix = mask_header.get("BADPIX")
+            bpmid = str(mask_header.get("IMAGEID") or "").strip()
+        if badpix is not None:
             self.logger.debug(f"BADPIX found in header. Using badpix {badpix}.")
         else:
             badpix = 1
@@ -615,6 +639,15 @@ class ImCoadd(
                 "BADPIX not found in header. Using default value 1.",
                 self._process_error.KeyError,
             )
+        if not bpmid:
+            bpmid = ensure_bpmask_image_id(mask_file)
+            self.logger.info(f"Minted IMAGEID {bpmid} into the legacy bad-pixel mask {get_basename(mask_file)}")
+        info = (mask_file, int(badpix), bpmid)
+        self._bpmask_cache[mask_file] = info
+        return info
+
+    def _get_bpmask(self, image) -> tuple[str, int]:
+        mask_file, badpix, _ = self._bpmask_info(image)
         return mask_file, badpix
 
     def apply_bpmask(
@@ -632,6 +665,7 @@ class ImCoadd(
         device_id = device_id if self._use_gpu else "CPU"
 
         self.logger.info("Start the interpolation for bad pixels")
+        self._record_bpmids()
 
         factory = self.path.imcoadd.factory
         interp_dir = self.storage.interp_dir
@@ -672,7 +706,7 @@ class ImCoadd(
             self.logger.debug(f"apply_bpmask groups: {groups}")
 
             for group_id, ((z, d, f), [input_images, output_images]) in enumerate(groups.items()):
-                mask_file, badpix = self._get_bpmask(input_images[0])
+                mask_file, badpix, bpmid = self._bpmask_info(input_images[0])
 
                 with acquire_available_gpu(device_id=device_id) as acquired:
                     if acquired is None:
@@ -700,6 +734,7 @@ class ImCoadd(
                             weight=group_weights,
                             zero_interp_weight=zero_interp,
                             device=acquired,
+                            bpmid=bpmid,
                             **({"logger": self.logger} if acquired is None else {}),
                         )
                     except Exception as e:
@@ -722,6 +757,7 @@ class ImCoadd(
                             zero_interp_weight=zero_interp,
                             device=None,
                             logger=self.logger,
+                            bpmid=bpmid,
                         )
                 self.logger.info(
                     f"Interpolation completed for group {group_id + 1}/{len(groups)} in "

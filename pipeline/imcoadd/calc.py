@@ -161,6 +161,9 @@ def mean_coadd_numpy(
     flxscales: list[float] | bool | None = None,
     match_swarp_size: bool = True,
     var_maps: list[str] | None = None,
+    saturated: list | None = None,
+    badpix: list | None = None,
+    counts: dict | None = None,
     coverage_policy: str = "union",
     frame_cache: dict | None = None,
     logger: Logger | None = None,
@@ -199,11 +202,7 @@ def mean_coadd_numpy(
     sum_arr = np.zeros((target_h, target_w), dtype=np.float64)
     norm_arr = np.zeros((target_h, target_w), dtype=np.float64 if weights is not None else np.int32)
     count_arr = np.zeros((target_h, target_w), dtype=np.int32)
-    geometric_count = (
-        np.zeros((target_h, target_w), dtype=np.uint16)
-        if coverage_policy == "intersection"
-        else None
-    )
+    geometric_count = np.zeros((target_h, target_w), dtype=np.uint16)
     gain_denom = np.zeros((target_h, target_w), dtype=np.float64)  # sum w^2/g for the gain map
     gain_terms = []  # (typical weight, EGAIN/FLXSCALE) per contributing image
     all_egain = True
@@ -237,13 +236,16 @@ def mean_coadd_numpy(
         src = a[sy0:sy1, sx0:sx1]
         support = src != 0.0  # geometric footprint; NaN marks a masked pixel inside it
         valid = support & np.isfinite(src)
-        if geometric_count is not None:
-            geometric_count[ty0:ty1, tx0:tx1] += support
+        geometric_count[ty0:ty1, tx0:tx1] += support
         mask_strip = None
         if masks is not None:
             m_rows, scratch = _read_frame(masks[i], frame_cache, sy0, sy1, scratch)
             mask_strip = m_rows[:, sx0:sx1]
             valid &= mask_strip > 0
+        if badpix is not None and badpix[i] is not None:
+            badpix[i].apply(valid, sy0, sy1, sx0, sx1, False)
+        if saturated is not None and saturated[i] is not None:
+            saturated[i].apply(valid, sy0, sy1, sx0, sx1, False)
 
         if weights is None:
             sum_arr[ty0:ty1, tx0:tx1] += np.where(valid, src * flxscale, 0.0)
@@ -299,11 +301,13 @@ def mean_coadd_numpy(
         coadd,
         weight_map_out,
         count_arr,
-        geometric_count if geometric_count is not None else count_arr,
+        geometric_count,
         len(input_images),
         coverage_policy,
         logger,
     )
+    if counts is not None:
+        counts.geometric, counts.used = geometric_count, count_arr
 
     out_header = build_coadd_wcs_header(
         input_images[0], target_cx, target_cy, coadd_header, frame_cache=frame_cache
@@ -358,6 +362,9 @@ def clipped_mean_coadd_numpy(
     two_sample_fallback: str = "mean",
     reserved_bytes: int = 0,
     var_maps: list[str] | None = None,
+    saturated: list | None = None,
+    badpix: list | None = None,
+    counts: dict | None = None,
     coverage_policy: str = "union",
     outlier_callback=None,
     frame_cache: dict | None = None,
@@ -390,7 +397,7 @@ def clipped_mean_coadd_numpy(
         weight_output=False, footprint_output=False,
         masks=masks, flxscales=flxscales, match_swarp_size=match_swarp_size,
         chunk_h=None, reserved_bytes=reserved_bytes, return_array=True,
-        frame_cache=frame_cache, logger=logger,
+        badpix=badpix, saturated=saturated, frame_cache=frame_cache, logger=logger,
     )
     center = np.where(np.isfinite(center), center, 0.0)
     two = valid_count == 2
@@ -403,11 +410,7 @@ def clipped_mean_coadd_numpy(
     sum_arr = np.zeros((target_h, target_w), dtype=np.float64)
     norm_arr = np.zeros((target_h, target_w), dtype=np.float64)
     count_arr = np.zeros((target_h, target_w), dtype=np.int32)
-    geometric_count = (
-        np.zeros((target_h, target_w), dtype=np.uint16)
-        if coverage_policy == "intersection"
-        else None
-    )
+    geometric_count = np.zeros((target_h, target_w), dtype=np.uint16)
     gain_denom = np.zeros((target_h, target_w), dtype=np.float64)
     gain_terms = []
     all_egain = True
@@ -443,13 +446,16 @@ def clipped_mean_coadd_numpy(
         raw = a[sy0:sy1, sx0:sx1]
         support = raw != 0.0
         valid = support & np.isfinite(raw)
-        if geometric_count is not None:
-            geometric_count[sl] += support
+        geometric_count[sl] += support
         mask_strip = None
         if masks is not None:
             m_rows, scratch = _read_frame(masks[i], frame_cache, sy0, sy1, scratch)
             mask_strip = m_rows[:, sx0:sx1]
             valid &= mask_strip > 0
+        if badpix is not None and badpix[i] is not None:
+            badpix[i].apply(valid, sy0, sy1, sx0, sx1, False)
+        if saturated is not None and saturated[i] is not None:
+            saturated[i].apply(valid, sy0, sy1, sx0, sx1, False)
         if isinstance(weights[i], str):
             w_full, scratch = _read_frame(weights[i], frame_cache, scratch=scratch)
             w_eff = w_full[sy0:sy1, sx0:sx1] / (flxscale * flxscale)
@@ -527,11 +533,13 @@ def clipped_mean_coadd_numpy(
         coadd,
         weight_map_out,
         count_arr,
-        geometric_count if geometric_count is not None else count_arr,
+        geometric_count,
         len(input_images),
         coverage_policy,
         logger,
     )
+    if counts is not None:
+        counts.geometric, counts.used = geometric_count, count_arr
     out_header = build_coadd_wcs_header(
         input_images[0], target_cx, target_cy, coadd_header, frame_cache=frame_cache
     )
@@ -605,6 +613,9 @@ def median_coadd_numpy(
     chunk_h: int = 128,
     reserved_bytes: int = 0,
     var_maps: list[str] | None = None,
+    saturated: list | None = None,
+    badpix: list | None = None,
+    counts: dict | None = None,
     coverage_policy: str = "union",
     return_array: bool = False,
     frame_cache: dict | None = None,
@@ -655,11 +666,7 @@ def median_coadd_numpy(
 
     coadd = np.full((target_h, target_w), np.nan, dtype=np.float32)
     count_arr = np.zeros((target_h, target_w), dtype=np.int32)
-    geometric_count = (
-        np.zeros((target_h, target_w), dtype=np.uint16)
-        if coverage_policy == "intersection"
-        else None
-    )
+    geometric_count = np.zeros((target_h, target_w), dtype=np.uint16)
     egains = [_frame_header(f, frame_cache).get("EGAIN") for f in input_images]
     gain_terms = [(1.0, float(e) / flxscales[i]) for i, e in enumerate(egains) if e is not None]
     all_egain = all(e is not None for e in egains)
@@ -691,13 +698,16 @@ def median_coadd_numpy(
                 src = rows[:, sx0:sx1] * flxscales[i]
                 support = src != 0.0
                 src[(src == 0.0) | ~np.isfinite(src)] = np.nan
-                if geometric_count is not None:
-                    geometric_count[ty0:ty1, tx0:tx1] += support
+                geometric_count[ty0:ty1, tx0:tx1] += support
                 m_strip = None
                 if mhandles is not None:
                     m_rows, scratch = _read_frame_rows(mhandles[i], sy0, sy1, scratch)
                     m_strip = m_rows[:, sx0:sx1]
                     src[m_strip <= 0] = np.nan
+                if badpix is not None and badpix[i] is not None:
+                    badpix[i].apply(src, sy0, sy1, sx0, sx1, np.nan)
+                if saturated is not None and saturated[i] is not None:
+                    saturated[i].apply(src, sy0, sy1, sx0, sx1, np.nan)
                 if whandles is not None:
                     # w is the inverse variance of the raw resampled data; the median is
                     # taken on flux-normalised pixels, whose variance scales by FLXSCALE^2
@@ -751,11 +761,13 @@ def median_coadd_numpy(
         coadd,
         None,
         count_arr,
-        geometric_count if geometric_count is not None else count_arr,
+        geometric_count,
         len(input_images),
         coverage_policy,
         logger,
     )
+    if counts is not None:
+        counts.geometric, counts.used = geometric_count, count_arr
 
     if return_array:
         return coadd, count_arr

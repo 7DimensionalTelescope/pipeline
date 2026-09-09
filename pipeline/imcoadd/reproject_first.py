@@ -77,7 +77,7 @@ class ReprojectFirstCoaddMixin:
                     weight_images = [add_suffix(image, "weight") for image in images]
                 advance("apply-bpmask-completed")
 
-        if plan.output_mask_map or plan.dump_reprojected_masks or plan.satellite_mask_enabled:
+        if self._need_quality_masks:
             self.prepare_quality_masks(images, detector_images=self.input_images)
         if plan.reproject:
             if plan.convolve:
@@ -296,13 +296,29 @@ class ReprojectFirstCoaddMixin:
 
         if policy == "conservative":
             masks = self._propagated_bpmasks()
-        elif policy == "1px" and weighting != "pixelwise":
+        elif weighting != "pixelwise" and (policy == "1px" or plan.zero_saturated_before_reprojection):
+            # the resampled weight carries an exclusion channel (1px bad pixels, saturation, or both): read it
             masks = wht_maps
         else:
             masks = None
 
+        # the resampled weight stays the pristine SWarp result; the 1px holes ride these instead
+        badpix = self.badpix_positions(input_images)
+        # a saturated pixel is not a measurement; proper cannot drop a sample, so it never pays a read pass for one.
+        # Under reproject-first the zeros already rode the weight sidecar through SWarp's kernel, so the
+        # resampled weight the backends read as `masks` carries them and the sparse channel would be a subset.
+        saturated = (
+            None
+            if plan.zero_saturated_before_reprojection
+            else self.saturated_positions(input_images, compute=plan.mode != "proper")
+        )
+        badpix_bytes = sum(p.nbytes for p in (badpix or []) + (saturated or []))
+        counts = self._coadd_counts if plan.output_counts_map else None
+
         if plan.mode == "proper":
-            return self.coadd_proper_with_numpy(input_images, holes=masks)
+            return self.coadd_proper_with_numpy(
+                input_images, holes=masks, badpix=badpix, saturated=saturated, counts=counts
+            )
 
         var_maps = wht_maps if weighting != "pixelwise" else None
         stage_wht = weights if weighting == "pixelwise" else None
@@ -346,7 +362,7 @@ class ReprojectFirstCoaddMixin:
         try:
             with slot_ctx as slot:
                 if mode == "mean":
-                    slot.lease(4 * 110_000_000 * 8)  # sum/norm/count/gain accumulators, ~3.5 GB
+                    slot.lease(4 * 110_000_000 * 8 + badpix_bytes)  # sum/norm/count/gain accumulators, ~3.5 GB
                     self.coadd_with_numpy(
                         input_images,
                         weights=weights,
@@ -355,10 +371,13 @@ class ReprojectFirstCoaddMixin:
                         match_swarp_size=match_swarp_size,
                         write_weight=plan.output_weight_map,
                         write_footprint=plan.output_footprint,
+                        badpix=badpix,
+                        saturated=saturated,
+                        counts=counts,
                     )
                 elif mode == "clipped":
-                    reserved = slot.reserved_bytes
-                    slot.lease(7 * 110_000_000 * 8)  # two-pass accumulators + two-sample bookkeeping, ~6 GB
+                    reserved = slot.reserved_bytes + badpix_bytes
+                    slot.lease(7 * 110_000_000 * 8 + badpix_bytes)  # two-pass accumulators + two-sample maps, ~6 GB
                     self.coadd_clipped_with_numpy(
                         input_images,
                         weights=weights,
@@ -371,17 +390,20 @@ class ReprojectFirstCoaddMixin:
                         outlier_callback=(
                             self._coadd_mask_builder.mark_outliers if self._coadd_mask_builder is not None else None
                         ),
+                        badpix=badpix,
+                        saturated=saturated,
+                        counts=counts,
                     )
                 elif mode == "median":
                     from ..services.combine_lock import memory_headroom_bytes
                     from .calc import plan_median_memory
                     from .utils import _parse_swarp_image_size
 
-                    reserved = slot.reserved_bytes
+                    reserved = slot.reserved_bytes + badpix_bytes
                     grid_w, grid_h = _parse_swarp_image_size(os.path.join(REF_DIR, "7dt.swarp"))
                     budget = int(0.3 * memory_headroom_bytes(reserved))
                     _, planned = plan_median_memory(len(atleast_1d(input_images)), grid_w, grid_h, budget)
-                    slot.lease(planned)
+                    slot.lease(planned + badpix_bytes)
                     self.coadd_median_with_numpy(
                         input_images,
                         weights=weights,
@@ -391,6 +413,9 @@ class ReprojectFirstCoaddMixin:
                         var_maps=var_maps,
                         write_weight=plan.output_weight_map,
                         write_footprint=plan.output_footprint,
+                        badpix=badpix,
+                        saturated=saturated,
+                        counts=counts,
                     )
                 else:
                     raise ValueError(f"Invalid coadd mode: {mode!r} (expected 'mean', 'median' or 'clipped')")
@@ -398,7 +423,14 @@ class ReprojectFirstCoaddMixin:
             cleanup()
         return self.config_node.imcoadd.coadd_image
 
-    def coadd_proper_with_numpy(self, input_images: list[str], holes: list[str] | None = None) -> str:
+    def coadd_proper_with_numpy(
+        self,
+        input_images: list[str],
+        holes: list[str] | None = None,
+        badpix: list | None = None,
+        saturated: list | None = None,
+        counts: dict | None = None,
+    ) -> str:
         """Run proper coaddition with its mode-specific options."""
         from ..services.combine_lock import CombineSlot, NullSlot
         from .proper import proper_coadd_numpy
@@ -426,6 +458,9 @@ class ReprojectFirstCoaddMixin:
                 footprint_output=(add_suffix(coadd_image, "footprint") if plan.output_footprint else False),
                 psf_output=add_suffix(coadd_image, "psf"),
                 holes=holes,
+                badpix=badpix,
+                saturated=saturated,
+                counts=counts,
                 match_swarp_size=self.plan.match_swarp_size,
                 coverage_policy=plan.coverage_policy,
                 logger=self.logger,
@@ -485,6 +520,9 @@ class ReprojectFirstCoaddMixin:
         var_maps: list[str] | None = None,
         write_weight: bool = True,
         write_footprint: bool = True,
+        badpix: list | None = None,
+        saturated: list | None = None,
+        counts: dict | None = None,
     ) -> str:
         return mean_coadd_numpy(
             input_images,
@@ -500,6 +538,9 @@ class ReprojectFirstCoaddMixin:
             match_swarp_size=match_swarp_size,
             var_maps=var_maps,
             coverage_policy=self.plan.coverage_policy,
+            badpix=badpix,
+            saturated=saturated,
+            counts=counts,
             frame_cache=self.storage.frame_cache,
             logger=self.logger,
         )
@@ -515,6 +556,9 @@ class ReprojectFirstCoaddMixin:
         write_footprint: bool = True,
         reserved_bytes: int = 0,
         outlier_callback=None,
+        badpix: list | None = None,
+        saturated: list | None = None,
+        counts: dict | None = None,
     ) -> str:
         return clipped_mean_coadd_numpy(
             input_images,
@@ -535,6 +579,9 @@ class ReprojectFirstCoaddMixin:
             var_maps=var_maps,
             coverage_policy=self.plan.coverage_policy,
             outlier_callback=outlier_callback,
+            badpix=badpix,
+            saturated=saturated,
+            counts=counts,
             frame_cache=self.storage.frame_cache,
             logger=self.logger,
         )
@@ -550,6 +597,9 @@ class ReprojectFirstCoaddMixin:
         var_maps: list[str] | None = None,
         write_weight: bool = True,
         write_footprint: bool = True,
+        badpix: list | None = None,
+        saturated: list | None = None,
+        counts: dict | None = None,
     ) -> str:
         return median_coadd_numpy(
             input_images,
@@ -567,6 +617,9 @@ class ReprojectFirstCoaddMixin:
             reserved_bytes=reserved_bytes,
             var_maps=var_maps,
             coverage_policy=self.plan.coverage_policy,
+            badpix=badpix,
+            saturated=saturated,
+            counts=counts,
             frame_cache=self.storage.frame_cache,
             logger=self.logger,
         )

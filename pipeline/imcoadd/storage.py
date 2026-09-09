@@ -11,6 +11,7 @@ from ..path.path import PathHandler
 from ..services.logger import Logger
 from ..utils import atleast_1d
 from .coadd_plan import CoaddPlan
+from .counts import CoaddCounts
 
 
 @dataclass(slots=True)
@@ -164,4 +165,12 @@ class IntermediateStorageMixin:
             except OSError:
                 pass
         storage.frame_cache.clear()
+        # the count planes and the per-frame bit masks are grid-sized and already written by now
+        self._coadd_counts = CoaddCounts()
+        self._coadd_mask_builder = None
+        self._quality_masks = None
+        self._badpix_positions_cache = {}
+        self._saturated_positions_cache = {}
+        self._saturation_map_cache = {}
+        self._bpmask_coords_cache = {}
         self.intermediate_storage = None

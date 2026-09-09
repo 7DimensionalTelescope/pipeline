@@ -10,6 +10,7 @@ import fitsio
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from datetime import datetime
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 
 from ..path.path import PathHandler
@@ -400,6 +401,70 @@ def set_pipe_ver_in_header(header, comment: str = "Preprocess version that produ
 
     header["PIPE_VER"] = (str(__version__), comment)
     return header
+
+
+def bpmask_id_hdu(hdul) -> int:
+    """Index of the bad-pixel mask's data-bearing HDU, the one that carries BADPIX and IMAGEID."""
+    # by header, never by touching .data: probing a CompImageHDU's data decompresses the whole mask
+    return next((i for i, hdu in enumerate(hdul) if hdu.header.get("NAXIS", 0)), 0)
+
+
+@contextmanager
+def bpmask_id_lock(bpmask_file: str):
+    """Exclusive per-file lock shared by bpmask generation and the IMAGEID write-on-read migration."""
+    import fcntl
+
+    with open(bpmask_file + ".idlock", "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def ensure_bpmask_image_id(bpmask_file: str, key: str = "IMAGEID") -> str:
+    """Persisted IMAGEID of a bad-pixel mask, minted into the file on first load when absent."""
+    import tempfile
+
+    def _read() -> str:
+        with fits.open(bpmask_file, memmap=False) as hdul:
+            return str(hdul[bpmask_id_hdu(hdul)].header.get(key, "") or "").strip()
+
+    image_id = _read()
+    if image_id:
+        return image_id
+    # write-on-read is exceptional here: a legacy bpmask has no other moment to gain an
+    # identity, and regenerating it would change the pixels every product depends on
+    with bpmask_id_lock(bpmask_file):
+        tmp = None
+        before = os.stat(bpmask_file)
+        try:
+            if not _read():
+                with fits.open(bpmask_file, memmap=False) as hdul:
+                    index = bpmask_id_hdu(hdul)
+                    original = np.asarray(hdul[index].data)
+                    add_image_id(hdul[index].header, key=key)
+                    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(bpmask_file)), suffix=".idtmp")
+                    os.close(fd)
+                    hdul.writeto(tmp, overwrite=True)
+                    # the mask is re-encoded by writeto; refuse to publish it unless the pixels round-trip
+                    with fits.open(tmp, memmap=False) as check:
+                        if not np.array_equal(np.asarray(check[bpmask_id_hdu(check)].data), original):
+                            raise ValueError(f"{key} injection would change the pixels of {bpmask_file}")
+                os.chmod(tmp, before.st_mode)
+                after = os.stat(bpmask_file)
+                if (after.st_mtime_ns, after.st_size) != (before.st_mtime_ns, before.st_size):
+                    # regenerated under us despite the lock: never publish the pixels we read
+                    raise ValueError(f"{bpmask_file} changed while its {key} was being minted; reload it")
+                os.replace(tmp, bpmask_file)
+                tmp = None
+        finally:
+            if tmp is not None and os.path.exists(tmp):
+                os.remove(tmp)
+    image_id = _read()
+    if not image_id:
+        raise ValueError(f"Could not persist {key} into the bad-pixel mask {bpmask_file}")
+    return image_id
 
 
 def get_image_id(image, key="IMAGEID"):

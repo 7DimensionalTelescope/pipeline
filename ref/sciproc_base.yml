@@ -127,6 +127,7 @@ imcoadd:
   ppflag_bitmask: '110000'  # one digit per PPFLAG bit:'110100' tolerates bits 1, 2 and 8.
   coadd_image:  # output coadd image
   coadd_mask_image:
+  coadd_counts_image:  # integer coverage/provenance count planes (NGEOM/NUSED/NBAD/NSAT/NTRAIL/NOUTLIER)
   gpu: True
   device: 0
   zp_key: 'ZP_AUTO'
@@ -141,8 +142,9 @@ imcoadd:
   dump_source_masks: false  # retain source masks beside config under source_masks/config_stem
   output_weight_map: true  # write the coadd weight product
   output_single_weight_map: false  # keep each frame's resampled weight in singles/ (int16)
-  output_footprint: true  # write the coadd footprint product
-  output_mask_map: true
+  output_footprint: false  # write the standalone coadd footprint product; superseded by the NUSED count plane
+  output_counts_map: true  # write the coadd coverage/provenance count planes (canonical)
+  output_mask_map: false  # write the legacy OR bitmask; derivable from the count planes
   dump_reprojected_masks: false
   satellite_mask:
     enabled: false  # detector thresholds default in detect_satellite_trails; override keys here only when tuning

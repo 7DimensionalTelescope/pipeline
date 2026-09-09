@@ -16,6 +16,7 @@ def interpolate_masked_pixels_subprocess(
     device: int = 0,
     weight: bool = True,
     zero_interp_weight: bool = True,
+    bpmid: str | None = None,
 ):
     # base command
     cmd = [
@@ -43,6 +44,8 @@ def interpolate_masked_pixels_subprocess(
         cmd += ["-no-weight"]
     if not zero_interp_weight:
         cmd += ["-keep-interp-weight"]
+    if bpmid:
+        cmd += ["-bpmid", str(bpmid)]
 
     result = subprocess.run(cmd, capture_output=True, text=True)
 
@@ -54,7 +57,7 @@ def interpolate_masked_pixels_subprocess(
 
 def interpolate_masked_pixels_cpu(
     images, mask_path, output_paths, window=1, method="median", badpix=1, weight=True, device=None,
-    zero_interp_weight=True, logger=None,
+    zero_interp_weight=True, logger=None, bpmid=None,
 ):
     """
     High-level function: reads FITS images, applies numba interpolation, and writes output.
@@ -81,7 +84,9 @@ def interpolate_masked_pixels_cpu(
 
     def _write(idx, interp_img, interp_wt):
         sci_out = output_paths[idx]
-        fits.writeto(sci_out, interp_img, header=add_bpx_method(fits.getheader(images[idx]), method), overwrite=True)
+        fits.writeto(
+            sci_out, interp_img, header=add_bpx_method(fits.getheader(images[idx]), method, bpmid), overwrite=True
+        )
         if weight and interp_wt is not None:
             if zero_interp_weight:
                 # an interpolated value is a copy of its neighbours: no independent information
@@ -89,7 +94,7 @@ def interpolate_masked_pixels_cpu(
             fits.writeto(
                 add_suffix(sci_out, "weight"),
                 interp_wt,
-                header=add_bpx_method(fits.getheader(_wgt_in(idx)), method),
+                header=add_bpx_method(fits.getheader(_wgt_in(idx)), method, bpmid),
                 overwrite=True,
             )
 
@@ -286,8 +291,10 @@ def interpolate_masked_pixels_cpu_numba_no_weight(image, mask, window=1):
     return result, None
 
 
-def add_bpx_method(header, method):
+def add_bpx_method(header, method, bpmid=None):
     header["INTERP"] = (method.upper(), "Method for bad pixel interpolation")
+    if bpmid:
+        header["BPMID"] = (str(bpmid), "IMAGEID of the bad-pixel mask")
     # swarp can't propage HIERARCH keywords
     # header["BPX_INTERP"] = (method.upper(), "Method for bad pixel interpolation")
     return header
@@ -541,7 +548,8 @@ def write_weight_float32(path, weight, header, n_holes=None):
 
 def weight_and_interpolate_cpu(
     images, mask_path, output_paths, calib, window=1, method="median", badpix=1,
-    zero_interp_weight=True, logger=None, post_frame=None, weight_store=None, source_catalogs=None,
+    zero_interp_weight=True, logger=None, post_frame=None, weight_store=None, source_catalogs=None, bpmid=None,
+    saturated_mask=None,
 ):
     """Fused weight calculation + bad-pixel interpolation, one read and one write per image.
 
@@ -566,11 +574,14 @@ def weight_and_interpolate_cpu(
         with fits.open(images[idx], memmap=False) as hdul:
             return hdul[0].data.astype(np.float32), hdul[0].header
 
-    def _write(idx, sci, sci_hdr, interp_img, interp_wt):
+    def _write(idx, sci, sci_hdr, interp_img, interp_wt, n_saturated=None):
         sci_out = output_paths[idx]
-        hdr = add_bpx_method(sci_hdr.copy(), method)
+        hdr = add_bpx_method(sci_hdr.copy(), method, bpmid)
         fits.writeto(sci_out, interp_img, header=hdr, overwrite=True)
-        write_weight_float32(add_suffix(sci_out, "weight"), interp_wt, hdr,
+        weight_hdr = hdr.copy()
+        if n_saturated is not None:
+            weight_hdr["SATZERO"] = (int(n_saturated), "saturated detector pixels zeroed before reprojection")
+        write_weight_float32(add_suffix(sci_out, "weight"), interp_wt, weight_hdr,
                              n_holes=n_holes if zero_interp_weight else 0)
         if post_frame is not None:
             post_frame(sci_out, sci, sci_hdr)  # e.g. per-image reprojection (+ optional interp discard)
@@ -613,11 +624,18 @@ def weight_and_interpolate_cpu(
             )
             if zero_interp_weight:
                 interp_wt[hole] = 0.0
+            n_saturated = None
+            if saturated_mask is not None:
+                # zero before SWarp reads it: the resampling kernel then spreads the hole over its own support
+                saturated = saturated_mask(images[idx], sci, sci_hdr)
+                n_saturated = 0 if saturated is None else int(saturated.sum())
+                if saturated is not None:
+                    interp_wt[saturated] = 0.0
             t_interp = _time.time() - st_img - t_read - t_weight
 
             if pending_write is not None:
                 pending_write.result()
-            pending_write = pool.submit(_write, idx, sci, sci_hdr, interp_img, interp_wt)
+            pending_write = pool.submit(_write, idx, sci, sci_hdr, interp_img, interp_wt, n_saturated)
             if logger is not None:
                 # per-image detail at DEBUG; INFO gets one summary line per 25 frames
                 logger.debug(

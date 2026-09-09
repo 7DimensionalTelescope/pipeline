@@ -21,6 +21,7 @@ class CoaddPlan:
     clip_two_sample_fallback: str
     proper_weight_map_policy: str
     output_mask_map: bool
+    output_counts_map: bool
     dump_reprojected_masks: bool
     satellite_mask_enabled: bool
     intermediate_policy: str
@@ -64,6 +65,11 @@ class CoaddPlan:
         return self.weight_on_sci_pass and self.zero and self.policy == "1px"
 
     @property
+    def need_quality_masks(self) -> bool:
+        """Config-only reasons to build the per-frame bit masks; MaskMixin adds the count-plane reason."""
+        return self.output_mask_map or self.dump_reprojected_masks or self.satellite_mask_enabled
+
+    @property
     def propagate_mask_on_sci_pass(self) -> bool:
         """Conservative holes come from the sci pass: SWarp zeroes the kernel support of a zero-weight input."""
         return self.reproject and self.policy == "conservative" and self.need_weights
@@ -71,6 +77,14 @@ class CoaddPlan:
     @property
     def zero_before_reprojection(self) -> bool:
         return self.propagate_mask_on_sci_pass or (self.zero and not self.catalog_badpix_zeros)
+
+    @property
+    def zero_saturated_before_reprojection(self) -> bool:
+        """Saturation rides the weight sidecar so SWarp spreads it over the resampling kernel, never 1 pixel.
+
+        Only where a sidecar exists and is otherwise zero-free: a zero there would be unattributable, and a
+        weight nothing reads would carry the holes nowhere."""
+        return self.reproject and self.need_weights and not self.zero_before_reprojection
 
     @property
     def sci_pass(self) -> str:
@@ -176,6 +190,7 @@ def resolve_coadd_plan(node) -> CoaddPlan:
         clip_two_sample_fallback=clip_two_sample_fallback,
         proper_weight_map_policy=proper_weight_map_policy,
         output_mask_map=bool(node.output_mask_map),
+        output_counts_map=bool(node.output_counts_map),
         dump_reprojected_masks=bool(node.dump_reprojected_masks),
         satellite_mask_enabled=satellite_mask_enabled,
         intermediate_policy=intermediate_policy,
@@ -197,6 +212,19 @@ def resolve_coadd_plan(node) -> CoaddPlan:
         persist_weight_maps=bool(node.persist_weight_maps),
         output_single_weight_map=bool(node.output_single_weight_map),
     )
+    if plan.reproject and plan.zero_before_reprojection:
+        raise NotImplementedError(
+            "saturation is propagated conservatively by zeroing the pre-reprojection weight sidecar, and this "
+            f"combination (badpix_reprojection_policy: {plan.policy!r}, coadd_weighting: {plan.weighting!r}) "
+            "already puts the bad-pixel zeros there, so a zero weight would not say which of the two it is; "
+            "use badpix_reprojection_policy: '1px' with coadd_weighting: 'global'"
+        )
+    if plan.routine == "legacy" and not (plan.interpolate and plan.zero and plan.policy == "1px"):
+        raise ValueError(
+            "coadd_routine 'legacy' offers only its sci/wht double SWarp pass, the nearest equivalent of '1px'; "
+            "set interpolate_badpix: True, zero_badpix_weight: True and badpix_reprojection_policy: '1px', "
+            "or use coadd_routine: reproject-first"
+        )
     if plan.dump_reprojected_masks and not plan.reproject:
         raise ValueError("imcoadd.dump_reprojected_masks requires coadd_routine: reproject-first")
     if plan.reproject and not plan.interpolate:

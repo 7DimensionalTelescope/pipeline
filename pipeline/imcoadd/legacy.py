@@ -7,6 +7,10 @@ class LegacyCoaddMixin:
     plan: CoaddPlan
 
     def legacy_coadd_routine(self, use_gpu: bool = False, device_id=None):
+        """
+        Uses sci/wht double pass for LANCZOS3 sci reprojection & NEAREST weight reprojection (~1px)
+        But the interpolated pixel values contribute in SWarp median coadd.
+        """
         self._use_gpu = all([use_gpu, self.config_node.imcoadd.gpu, self._use_gpu])
 
         self.initialize()
@@ -54,7 +58,7 @@ class LegacyCoaddMixin:
 
         self.coadd_with_swarp(images)
         self.apply_legacy_coverage_policy(images)
-        if self.plan.output_mask_map:
+        if self._need_quality_masks:
             resampled = self.path.imcoadd.factory.resampled_images(images, pass_type=self.plan.sci_pass)
             self.prepare_quality_masks(resampled, detector_images=self.input_images)
         self._coadd_completed = True
