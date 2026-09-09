@@ -88,6 +88,12 @@ class CoaddPlan:
         return self.reproject and self.need_weights and not self.zero_before_reprojection
 
     @property
+    def saturation_from_resampled_weight(self) -> bool:
+        """NSAT is read back from SWarp's own resampled weight, so the plane carries the kernel-dilated
+        footprint the estimator actually rejected instead of the 1-pixel projection it used to carry."""
+        return self.zero_saturated_before_reprojection
+
+    @property
     def sci_pass(self) -> str:
         return "sci" if self.need_weights else ""
 

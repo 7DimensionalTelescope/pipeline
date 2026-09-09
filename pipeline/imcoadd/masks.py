@@ -636,21 +636,46 @@ class MaskMixin:
         self._saturated_positions_cache[detector_image] = positions
         return positions
 
-    def _detector_mask_bits(self, detector_image, output_header, output_shape, detector_data=None):
+    def _saturated_from_weight(self, weight_image, frame_data):
+        """Where SWarp's resampled weight is zero inside the frame's own footprint.
+
+        This is the kernel-dilated saturation the estimator rejects, taken from SWarp's output rather than
+        redilated here, so the NSAT plane and the rejection cannot disagree."""
+        weight, _ = self._read_stage_frame(weight_image)
+        if weight.shape != frame_data.shape:
+            self.logger.warning(
+                f"Resampled weight {get_basename(weight_image)} does not match its frame; NSAT not set from it"
+            )
+            return None
+        return (weight == 0) & (frame_data != 0)
+
+    def _detector_mask_bits(self, detector_image, output_header, output_shape, detector_data=None,
+                            weight_image=None, frame_data=None):  # fmt: skip
         output = np.zeros(output_shape, dtype=np.uint8)
         positions = self._badpix_positions(detector_image, output_header, output_shape)
         if positions is not None:
             output[positions.block_mask(0, output_shape[0], 0, output_shape[1])] |= int(MaskBit.BADPIX)
-        saturated = self._saturated_positions(detector_image, output_header, output_shape, detector_data)
-        if saturated.size:
-            output[saturated.block_mask(0, output_shape[0], 0, output_shape[1])] |= int(MaskBit.SATURATED)
+        saturated = None
+        if weight_image is not None and self.plan.saturation_from_resampled_weight and frame_data is not None:
+            saturated = self._saturated_from_weight(weight_image, frame_data)
+        if saturated is not None:
+            output[saturated] |= int(MaskBit.SATURATED)
+            return output
+        # Superseded on 2026-09-10 wherever the resampled weight carries saturation, and kept for the routines
+        # that have no such weight (direct, legacy) and for reference: the 1-pixel nearest-output projection.
+        projected = self._saturated_positions(detector_image, output_header, output_shape, detector_data)
+        if projected.size:
+            output[projected.block_mask(0, output_shape[0], 0, output_shape[1])] |= int(MaskBit.SATURATED)
         return output
 
-    def prepare_quality_masks(self, images, detector_images=None):
+    def prepare_quality_masks(self, images, detector_images=None, weight_images=None):
         images = list(atleast_1d(images))
         detector_images = list(atleast_1d(detector_images or self.input_images))
         if len(images) != len(detector_images):
             raise ValueError("quality-mask images and detector images differ in length")
+        weights = list(atleast_1d(weight_images or get_key(self.config_node.imcoadd, "bkgsub_weight_images") or []))
+        if len(weights) != len(images):
+            weights = [None] * len(images)
         builder = CoaddMaskBuilder(
             images,
             self.config_node.imcoadd.coadd_image,
@@ -663,7 +688,10 @@ class MaskMixin:
         for index, (image, detector) in enumerate(zip(images, detector_images)):
             data, header = self._read_stage_frame(image)
             same_file = os.path.abspath(image) == os.path.abspath(detector)
-            mask = self._detector_mask_bits(detector, header, data.shape, detector_data=data if same_file else None)
+            mask = self._detector_mask_bits(
+                detector, header, data.shape, detector_data=data if same_file else None,
+                weight_image=weights[index], frame_data=data,
+            )  # fmt: skip
             if self.plan.satellite_mask_enabled:
                 trail, lines = detect_satellite_trails(data, **satellite_options)
                 mask[trail] |= int(MaskBit.SATELLITE)

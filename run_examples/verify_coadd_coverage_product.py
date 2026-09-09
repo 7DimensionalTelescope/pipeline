@@ -374,6 +374,57 @@ def check_orientation(root):
     return ok
 
 
+
+def check_saturation_from_weight(root, work, images, weights):
+    """NSAT is read back from the resampled weight, so it carries SWarp's kernel dilation, not one pixel."""
+    print("NSAT from the resampled weight (LANCZOS3 dilation):")
+    ok = True
+    case = os.path.join(root, "sat_weight")
+    shutil.copytree(work, case)
+    case_images = [os.path.join(case, os.path.basename(f)) for f in images]
+    case_weights = [os.path.join(case, os.path.basename(f)) for f in weights]
+
+    # SWarp spreads a zeroed weight pixel over the resampling kernel; stand in for that with a 3x3 block
+    for i, weight in enumerate(case_weights[:3]):
+        data, hdr = fits.getdata(weight, header=True)
+        data[4:7, 4:7] = 0.0
+        fits.writeto(weight, data, header=hdr, overwrite=True)
+
+    plan = make_plan(coadd_routine="reproject-first", output_counts_map=True)
+    ok &= check(
+        "reproject-first with a weight sidecar reads NSAT back from it",
+        plan.saturation_from_resampled_weight and make_plan(coadd_routine="direct").saturation_from_resampled_weight is False,  # fmt: skip
+        f"reproject-first {plan.saturation_from_resampled_weight}, "
+        f"direct {make_plan(coadd_routine='direct').saturation_from_resampled_weight}",
+    )
+
+    stub = Stub(case, plan, case_images)
+    stub.prepare_quality_masks(case_images, detector_images=case_images, weight_images=case_weights)
+    stub.coadd_in_memory(case_images, weight_images=case_weights)
+    stub.finalize_quality_masks()
+    planes = read_count_planes(stub.config_node.imcoadd.coadd_image.replace(".fits", "_counts.fits"))
+    nsat, nused, ngeom = planes["NSAT"], planes["NUSED"], planes["NGEOM"]
+    ok &= check(
+        "NSAT covers the whole zeroed block, not the single saturated pixel",
+        int(nsat[5, 5]) == 3 and int(nsat[4, 4]) == 3 and int(nsat[6, 6]) == 3 and int(nsat[3, 3]) == 0,
+        f"NSAT at the block corner {int(nsat[4, 4])}, centre {int(nsat[5, 5])}, just outside {int(nsat[3, 3])}",
+    )
+    block = np.s_[4:7, 4:7]
+    ok &= check(
+        "NUSED drops over exactly the same footprint",
+        bool(((ngeom[block].astype(int) - nused[block].astype(int)) == nsat[block].astype(int)).all())
+        and int(nused[5, 5]) == N_FRAMES - 3 and int(ngeom[5, 5]) == N_FRAMES,
+        f"over the block NGEOM - NUSED == NSAT; at its centre NGEOM {int(ngeom[5, 5])}, "
+        f"NSAT {int(nsat[5, 5])}, NUSED {int(nused[5, 5])}",
+    )
+    ok &= check(
+        "the 1px catalog projection is no longer consulted for NSAT",
+        stub._saturated_positions_cache == {},
+        "nothing was projected: the plane came from the weight SWarp already wrote",
+    )
+    return ok
+
+
 def main():
     root = tempfile.mkdtemp(prefix="verify_coverage_")
     ok = True
@@ -699,6 +750,7 @@ def main():
         )
         ok &= check_plots(root)
         ok &= check_orientation(root)
+        ok &= check_saturation_from_weight(root, work, images, weights)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
