@@ -22,6 +22,7 @@ class CoaddPlan:
     proper_weight_map_policy: str
     output_mask_map: bool
     output_counts_map: bool
+    fill_nan: bool
     dump_reprojected_masks: bool
     satellite_mask_enabled: bool
     intermediate_policy: str
@@ -191,6 +192,7 @@ def resolve_coadd_plan(node) -> CoaddPlan:
         proper_weight_map_policy=proper_weight_map_policy,
         output_mask_map=bool(node.output_mask_map),
         output_counts_map=bool(node.output_counts_map),
+        fill_nan=bool(node.fill_nan),
         dump_reprojected_masks=bool(node.dump_reprojected_masks),
         satellite_mask_enabled=satellite_mask_enabled,
         intermediate_policy=intermediate_policy,

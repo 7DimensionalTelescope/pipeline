@@ -25,6 +25,7 @@ from ..utils import (
 )
 from ..preprocess.utils import get_zdf_from_header_IMCMB
 from ..preprocess.plotting import save_fits_as_figures
+from .plotting import display_flips, orient_for_raster
 from .. import external
 from ..services.database.handler import DatabaseHandler
 from ..services.database.image_qa import ImageQATable
@@ -1068,11 +1069,69 @@ class ImCoadd(
 
         self.sync_config_dependencies()
 
+    def _intended_coverage(self, shape):
+        """Where this coadd was supposed to carry a value, by the coverage policy's own test on NGEOM."""
+        geometric = self._coadd_counts.geometric
+        if geometric is None or tuple(geometric.shape) != tuple(shape):
+            from scipy.ndimage import binary_fill_holes
+
+            self.logger.debug("No NGEOM plane; the coadd's coverage is taken from the finite region's topology")
+            return None, binary_fill_holes
+        n_inputs = len(atleast_1d(self.input_images))
+        keep = geometric == n_inputs if self.plan.coverage_policy == "intersection" else geometric > 0
+        return keep, None
+
+    def fill_coadd_nan(self) -> int:
+        """Fill holes inside the coadd's coverage and zero what lies outside it, so the image carries no NaN.
+
+        The weight and the count planes are deliberately left alone: they still record that those pixels
+        carried no information. Only the science image is made NaN-free, for readers that cannot take one."""
+        if not self.plan.fill_nan:
+            return 0
+        st = time.time()
+        coadd_image = collapse(self.config_node.imcoadd.coadd_image, force=True)
+        data, header = fits.getdata(coadd_image, header=True, memmap=False)
+        holes = ~np.isfinite(data)
+        if not holes.any():
+            return 0
+        keep, topology = self._intended_coverage(data.shape)
+        keep = topology(~holes) if keep is None else keep
+        interior, outside = holes & keep, holes & ~keep
+        n_interior, n_outside = int(interior.sum()), int(outside.sum())
+        method = False
+        if n_interior:
+            try:
+                from maskfill import maskfill
+            except ImportError as e:
+                # a cosmetic fill is not worth failing a finished coadd for; say so and leave the holes
+                self.logger.warning(f"maskfill unavailable ({e}); {n_interior} interior NaN pixels are kept")
+                n_interior = 0
+            else:
+                rows, cols = np.flatnonzero(keep.any(axis=1)), np.flatnonzero(keep.any(axis=0))
+                box = np.s_[rows[0] : rows[-1] + 1, cols[0] : cols[-1] + 1]
+                # only inside the coverage box: over the exterior the iteration runs for minutes and invents data
+                filled, _ = maskfill(data[box].copy(), holes[box].astype(np.uint8), size=3, operator="median")
+                patch = data[box]
+                patch[interior[box]] = filled[interior[box]]
+                method = "MASKFILL"
+        data[outside] = 0.0
+        header["NANFILL"] = (method, "Interior holes filled (maskfill, van Dokkum & Pasha)")
+        header["NNANFILL"] = (n_interior, "Interior hole pixels filled")
+        header["NNANEDGE"] = (n_outside, "Pixels outside the coadd coverage, set to 0")
+        fits.writeto(coadd_image, data, header=header, overwrite=True)
+        self.logger.info(
+            f"NaN fill: {n_interior} interior hole pixels filled, {n_outside} outside the coverage zeroed "
+            f"in {time_diff_in_seconds(st)} seconds"
+        )
+        return n_interior
+
     def plot_coadd_image(self):
         coadd_img = self.config_node.imcoadd.coadd_image
         basename = os.path.basename(coadd_img)
         path_to_plot = os.path.join(collapse(self.path.figure_dir, force=True), swap_ext(basename, "jpg"))
-        save_fits_as_figures(fits.getdata(coadd_img), path_to_plot)
+        data, header = fits.getdata(coadd_img, header=True)
+        # same orientation as the check plots, so this and <coadd>_counts.jpg blink against each other
+        save_fits_as_figures(orient_for_raster(data, display_flips(header)), path_to_plot, overwrite=True)
         self.logger.info(f"Coadd image is plotted and saved in {path_to_plot}.")
 
     def _update_header(self):

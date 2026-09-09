@@ -19,19 +19,30 @@ class CountPlane:
     name: str  # the FITS EXTNAME, and the key of the written product
     attr: str  # the CoaddCounts attribute a producer assigns or accumulates into
     legend: str  # the card comment; keep it inside the 68-character FITS value budget
-    bit: MaskBit | None = None  # set: accumulated per frame from the quality bit masks
+    short: str = ""  # check-plot legend caption
+    bit: MaskBit | None = None  # the OR-bitmask bit this plane counts; also its check-plot draw order
+    color: str = ""  # check-plot colour of this reason
+    from_frame_mask: bool = False  # accumulated in set_frame from each frame's own bit mask
     accumulated: bool = False  # needs a zeroed array up front, rather than one array assigned whole
     needs_detector: bool = False  # omitted on a stage whose inputs carry no detector bad-pixel mask
 
 
 COUNT_PLANES = (
-    CountPlane("NGEOM", "geometric", "inputs with geometric support before quality rejection"),
-    CountPlane("NUSED", "used", "inputs that entered the estimator"),
+    CountPlane(
+        "NGEOM",
+        "geometric",
+        "inputs with geometric support before quality rejection",
+        short="geometric support",
+    ),
+    CountPlane("NUSED", "used", "inputs that entered the estimator", short="used by the estimator"),
     CountPlane(
         "NBAD",
         "bad",
         "inputs whose detector bad-pixel mask projects here",
+        short="detector bad pixel",
         bit=MaskBit.BADPIX,
+        color="#3fb950",
+        from_frame_mask=True,
         accumulated=True,
         needs_detector=True,
     ),
@@ -39,17 +50,31 @@ COUNT_PLANES = (
         "NSAT",
         "saturated",
         "inputs saturated here",
+        short="saturated",
         bit=MaskBit.SATURATED,
+        color="#e5484d",
+        from_frame_mask=True,
         accumulated=True,
     ),
     CountPlane(
         "NTRAIL",
         "trail",
         "inputs carrying an enabled satellite-trail mask",
+        short="satellite trail",
         bit=MaskBit.SATELLITE,
+        color="#f0a202",
+        from_frame_mask=True,
         accumulated=True,
     ),
-    CountPlane("NOUTLIER", "outlier", "samples rejected by clipped coaddition (0 in other modes)", accumulated=True),
+    CountPlane(
+        "NOUTLIER",
+        "outlier",
+        "samples rejected by clipped coaddition (0 in other modes)",
+        short="clipped as an outlier",
+        bit=MaskBit.OUTLIER,  # written by mark_outliers, not by set_frame
+        color="#4c9be8",
+        accumulated=True,
+    ),
 )
 
 # Reserved names are deliberately not part of COUNT_PLANES until a producer sets their mask bits.
@@ -59,7 +84,10 @@ RESERVED_COUNT_PLANES = (
         "NHOT",
         "hot",
         "inputs carrying a classified hot detector pixel",
+        short="hot detector pixel",
         bit=MaskBit.HOT,
+        color="#00c2c7",
+        from_frame_mask=True,
         accumulated=True,
         needs_detector=True,
     ),
@@ -67,7 +95,10 @@ RESERVED_COUNT_PLANES = (
         "NDEAD",
         "dead",
         "inputs carrying a classified dead detector pixel",
+        short="dead detector pixel",
         bit=MaskBit.DEAD,
+        color="#8b949e",
+        from_frame_mask=True,
         accumulated=True,
         needs_detector=True,
     ),
@@ -75,7 +106,10 @@ RESERVED_COUNT_PLANES = (
         "NSTRAY",
         "stray",
         "inputs affected by a diffuse stray-light artifact",
+        short="stray light",
         bit=MaskBit.STRAY,
+        color="#a371f7",
+        from_frame_mask=True,
         accumulated=True,
     ),
 )
@@ -103,7 +137,7 @@ class CoaddCounts:
         return [
             (getattr(self, plane.attr), plane.bit)
             for plane in COUNT_PLANES
-            if plane.bit is not None and getattr(self, plane.attr) is not None
+            if plane.from_frame_mask and getattr(self, plane.attr) is not None
         ]
 
     def produced(self, has_detector: bool = True) -> dict:

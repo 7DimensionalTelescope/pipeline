@@ -63,6 +63,7 @@ class LegacyCoaddMixin:
             self.prepare_quality_masks(resampled, detector_images=self.input_images)
         self._coadd_completed = True
         self.finalize_quality_masks()
+        self.fill_coadd_nan()
         self.update_progress(
             self._process_registry.milestone_progress(self._process_spec, "coadd_with_swarp"),
             self._progress_status("coadd-with-swarp-completed"),

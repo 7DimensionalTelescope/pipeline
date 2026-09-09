@@ -2062,6 +2062,22 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
         """Canonical coverage/provenance product: integer count planes, one per rejection reason."""
         return add_suffix(self._parent.coadd_image, "counts")
 
+    # ---- check plots (JPEG), beside the coadd's own figure ----
+    @property
+    def figure_dir(self) -> str:
+        return collapse(self._parent._parent.figure_dir, force=True)
+
+    @property
+    def coadd_counts_figure(self) -> str:
+        return os.path.join(self.figure_dir, swap_ext(os.path.basename(self.coadd_counts_image), "jpg"))
+
+    def source_mask_figures(self, stage_inputs) -> List[str]:
+        """One background-mask check plot per frame, scoped like the source masks themselves."""
+        return [
+            os.path.join(self.figure_dir, "srcmask", self._config_scope, swap_ext(add_suffix(os.path.basename(f), "srcmask"), "jpg"))  # fmt: skip
+            for f in atleast_1d(stage_inputs)
+        ]
+
     # ---- inverted bpmask staged in tmp_dir for the bpm SWarp pass ----
     def bpmask_inverted(self, bpmask_file) -> str:
         return os.path.join(self._parent.tmp_dir, os.path.basename(bpmask_file))

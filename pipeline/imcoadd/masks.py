@@ -5,6 +5,7 @@ import numpy as np
 from astropy.io import fits
 from astropy.wcs import WCS
 
+from ..config.utils import get_key
 from ..path.path import PathHandler
 from ..services.logger import Logger
 from ..utils import add_suffix, atleast_1d, get_basename
@@ -13,6 +14,7 @@ from .coadd_plan import CoaddPlan
 from .storage import IntermediateStorage
 from .const import MASK_HEADER_CARDS, MaskBit
 from .counts import CoaddCounts
+from .plotting import plot_coadd_counts
 from .utils import count_dtype, determine_size, write_count_planes, write_mask_plio
 
 
@@ -726,9 +728,20 @@ class MaskMixin:
                 f"Coverage counts written without {', '.join(missing)}: this run does not produce "
                 f"{'them' if len(missing) > 1 else 'it'}; NCOUNTPL/COUNTPLn name the planes that are present"
             )
-        path = write_count_planes(
-            self.path.imcoadd.factory.coadd_counts_image, planes, header=fits.getheader(coadd_image)
-        )
+        factory = self.path.imcoadd.factory
+        header = fits.getheader(coadd_image)
+        path = write_count_planes(factory.coadd_counts_image, planes, header=header)
         self.config_node.imcoadd.coadd_counts_image = path
         self.logger.info(f"Coadd coverage counts ({', '.join(planes)}) saved as {path}")
+        figure = plot_coadd_counts(
+            planes,
+            factory.coadd_counts_figure,
+            os.path.basename(coadd_image),
+            subtitle=f"{n_inputs} input frames, coverage_policy: {self.plan.coverage_policy}, "
+            f"coadd_mode: {get_key(self.config_node.imcoadd, 'coadd_mode')}",
+            n_inputs=n_inputs,
+            header=header,
+        )
+        if figure:
+            self.logger.info(f"Coadd coverage check plot saved as {figure}")
         return path

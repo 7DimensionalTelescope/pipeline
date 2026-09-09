@@ -105,6 +105,7 @@ if TYPE_CHECKING:
         output_footprint: bool
         output_counts_map: bool
         output_mask_map: bool
+        fill_nan: bool
         dump_reprojected_masks: bool
         satellite_mask: dict
         output_sky_rms_map: bool

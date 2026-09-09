@@ -14,6 +14,7 @@ from ..utils import add_suffix, atleast_1d, get_basename, time_diff_in_seconds
 from ..utils.header import update_padded_header
 from .const import MaskBit
 from .coadd_plan import CoaddPlan
+from .plotting import plot_source_mask
 from .storage import IntermediateStorage
 
 
@@ -150,6 +151,15 @@ class BackgroundMixin:
                     inim, header, fov_valid, src_mask, fov_mask,
                     photometry_catalog=phot_cat, source_image=single,
                 )  # fmt: skip
+                plot_source_mask(
+                    data,
+                    ~valid,
+                    factory.source_mask_figures(inim)[0],
+                    os.path.splitext(get_basename(inim))[0],
+                    subtitle=f"{100 - usable:.2f}% excluded by the source and FOV masks, "
+                    f"{usable:.2f}% usable for the background mesh",
+                    header=header,
+                )
                 if usable < 20.0:
                     # A mesh based mostly on interpolated pixels is not a sky estimate.
                     self.logger.warning(

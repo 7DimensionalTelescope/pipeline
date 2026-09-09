@@ -102,6 +102,7 @@ class ReprojectFirstCoaddMixin:
         self.coadd_in_memory(images, device_id=device_id, weight_images=weight_images)
         self._coadd_completed = True
         self.finalize_quality_masks()
+        self.fill_coadd_nan()
         advance("coadd-completed")
 
         self.plot_coadd_image()

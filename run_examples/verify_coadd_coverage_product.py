@@ -6,7 +6,9 @@ Synthetic data only: tiny FITS frames in a temporary directory, no PathHandler p
 database, no production tree. Named outside test/ because .gitignore drops test*.py and test/.
 
 Covers the four output_counts_map x output_mask_map combinations, a coadd with no detector
-bad-pixel mask (the cross-filter shape), and the legacy routine's NGEOM/NUSED pass.
+bad-pixel mask (the cross-filter shape), the legacy routine's NGEOM/NUSED pass, the two
+check plots (colour per MaskBit, draw order, tint scaled by lost samples rather than set by a flag) and
+their sky orientation.
 """
 
 import copy
@@ -34,6 +36,7 @@ from pipeline.imcoadd.utils import read_count_planes
 
 H, W, N_FRAMES = 48, 60, 5
 BAD_Y, BAD_X = 20, 30
+HOLE_Y, HOLE_X = 30, 44
 OUTLIER_Y, OUTLIER_X = 10, 12
 
 
@@ -90,6 +93,8 @@ class Stub(ReprojectFirstCoaddMixin, MaskMixin, SwarpMixin):
     # resolved on ImCoadd itself, not on a mixin; bound here so the test exercises the real body
     _bpmask_info = imcoadd_module.ImCoadd._bpmask_info
     _get_bpmask = imcoadd_module.ImCoadd._get_bpmask
+    _intended_coverage = imcoadd_module.ImCoadd._intended_coverage
+    fill_coadd_nan = imcoadd_module.ImCoadd.fill_coadd_nan
     _process_error = imcoadd_module.CoaddError
 
     def __init__(self, work, plan, images, has_detector_bpm=True):
@@ -116,6 +121,7 @@ class Stub(ReprojectFirstCoaddMixin, MaskMixin, SwarpMixin):
                 os.path.join(subdir, os.path.basename(f).replace(".fits", f"_{suffix}.fits")) for f in imgs
             ],
             coadd_counts_image=coadd_image.replace(".fits", "_counts.fits"),
+            coadd_counts_figure=os.path.join(work, "figures", "obj_coadd_counts.jpg"),
             resampled_images=lambda imgs, pass_type="": list(imgs),
             swarp_resample_dir=lambda pass_type="": work,
             resampled_weight_images=lambda imgs, pass_type="": [
@@ -176,6 +182,198 @@ def check(label, condition, detail=""):
     return bool(condition)
 
 
+def _rgb_distance(image, color):
+    from matplotlib.colors import to_rgb
+
+    target = np.array(to_rgb(color), dtype=np.float32) * 255.0
+    pixels = np.asarray(image, dtype=np.float32).reshape(-1, 3)
+    return np.sqrt(((pixels - target) ** 2).sum(axis=1))
+
+
+def nearest_pixel_distance(image, color):
+    """Smallest RGB distance between any rendered pixel and *color*."""
+    return float(_rgb_distance(image, color).min())
+
+
+def pixels_near(image, color, tolerance):
+    """How many rendered pixels sit within *tolerance* of *color* in RGB."""
+    return int((_rgb_distance(image, color) < tolerance).sum())
+
+
+def check_plots(root):
+    """Both check plots: a colour per MaskBit, the rarest bit on top, and the tint scaled by lost samples."""
+    from PIL import Image
+
+    from pipeline.imcoadd.counts import COUNT_PLANES
+    from pipeline.imcoadd.plotting import _percent, plot_coadd_counts, plot_source_mask
+
+    print("Check plots:")
+    ok = True
+    figures = os.path.join(root, "figures")
+    ph, pw, n = 400, 600, 5
+    size = (pw, ph)  # full-bleed: the figure is exactly the reduced array
+    planes = {
+        "NGEOM": np.full((ph, pw), n, np.uint8),
+        "NUSED": np.full((ph, pw), n, np.uint8),
+        "NBAD": np.zeros((ph, pw), np.uint8),
+        "NSAT": np.zeros((ph, pw), np.uint8),
+        "NTRAIL": np.zeros((ph, pw), np.uint8),
+        "NOUTLIER": np.zeros((ph, pw), np.uint8),
+    }
+    planes["NBAD"][40:120, 40:200] = n
+    planes["NSAT"][200:280, 120:280] = n
+    planes["NTRAIL"][320:340, :] = n
+    planes["NOUTLIER"][360:380, 40:560] = n
+    by_name = {plane.name: plane for plane in COUNT_PLANES}
+
+    path = plot_coadd_counts(
+        planes, os.path.join(figures, "obj_coadd_counts.jpg"), "obj_m600_7DT01_20250101_coadd.fits",
+        subtitle=f"{n} input frames, union coverage, clipped combination", n_inputs=n, max_width=pw,
+    )  # fmt: skip
+    image = Image.open(path).convert("RGB")
+    ok &= check(
+        "counts check plot written as a light JPEG",
+        os.path.exists(path) and image.size == size and 3_000 < os.path.getsize(path) < 900_000,
+        f"{image.size[0]}x{image.size[1]} px, {os.path.getsize(path) / 1e3:.0f} kB",
+    )
+    distances = {name: nearest_pixel_distance(image, by_name[name].color) for name in
+                 ("NBAD", "NSAT", "NTRAIL", "NOUTLIER")}  # fmt: skip
+    ok &= check(
+        "every flagged reason is drawn in its own colour",
+        all(d < 40 for d in distances.values()),
+        ", ".join(f"{k} {v:.0f}" for k, v in distances.items()) + " (RGB distance to the declared colour)",
+    )
+    # a rare reason must not print as "0.00%": 641 saturated pixels in 69 Mpx once did exactly that
+    rare = 100 * 641 / 69_360_000
+    ok &= check(
+        "a rare reason keeps its digits in the legend",
+        _percent(rare) not in ("0%", "0.00%") and _percent(0) == "0%" and _percent(88.1) == "88%",
+        f"641 px in 69 Mpx renders as {_percent(rare)}, an empty plane as {_percent(0)}",
+    )
+    # the tint is the share of LOST SAMPLES, not a flag: one input in five must render fainter than five in five
+    graded = {name: np.zeros((ph, pw), np.uint8) for name in planes}
+    graded["NUSED"][:] = n
+    graded["NBAD"][50:150, 50:550] = 1
+    graded["NBAD"][250:350, 50:550] = n
+    faint = Image.open(
+        plot_coadd_counts(graded, os.path.join(figures, "graded.jpg"), "graded", n_inputs=n, max_width=pw)
+    ).convert("RGB")
+    ok &= check(
+        "the tint follows the share of lost samples, not a flag",
+        pixels_near(faint, by_name["NBAD"].color, 30) > 5_000
+        and pixels_near(faint, by_name["NBAD"].color, 30) < pixels_near(faint, by_name["NBAD"].color, 120),
+        f"{pixels_near(faint, by_name['NBAD'].color, 30)} px near the full-strength colour vs "
+        f"{pixels_near(faint, by_name['NBAD'].color, 120)} px tinted at all (1/{n} inputs stays pale)",
+    )
+    # a region flagged by both NBAD (bit 2) and NSAT (bit 16) must render as NSAT: higher bit, drawn later
+    stacked = {name: np.zeros((ph, pw), np.uint8) for name in planes}
+    stacked["NUSED"][:] = n
+    stacked["NBAD"][100:300, 100:500] = n
+    stacked["NSAT"][100:300, 100:500] = n
+    covered = Image.open(
+        plot_coadd_counts(stacked, os.path.join(figures, "order.jpg"), "order", n_inputs=n, max_width=pw)
+    ).convert("RGB")
+    n_green = pixels_near(covered, by_name["NBAD"].color, 60)
+    n_red = pixels_near(covered, by_name["NSAT"].color, 60)
+    ok &= check(
+        "MaskBit order decides the overlap: NSAT (16) covers NBAD (2)",
+        n_red > 20 * max(n_green, 1),
+        f"{n_red} red px vs {n_green} green px (green is left only in the legend swatch)",
+    )
+    ok &= check(
+        "no counts plot without a depth plane",
+        plot_coadd_counts({"NBAD": planes["NBAD"]}, os.path.join(figures, "nope.jpg"), "x") is None
+        and not os.path.exists(os.path.join(figures, "nope.jpg")),
+        "the grey frame is NGEOM, or NUSED when a stage has no NGEOM; with neither there is nothing to draw",
+    )
+    only_used = {"NUSED": planes["NUSED"], "NBAD": planes["NBAD"]}
+    ok &= check(
+        "NGEOM is the grey frame, NUSED only when NGEOM is absent",
+        plot_coadd_counts(only_used, os.path.join(figures, "fallback.jpg"), "x", n_inputs=n, max_width=pw)
+        is not None
+        and os.path.exists(os.path.join(figures, "fallback.jpg")),
+        "a legacy/white stage that publishes NGEOM gets NGEOM; the fallback keeps the figure alive either way",
+    )
+
+    rng = np.random.default_rng(3)
+    data = (100 + rng.normal(0, 2, (ph, pw))).astype(np.float32)
+    excluded = np.zeros((ph, pw), np.uint8)
+    excluded[100:200, 100:300] = n
+    data[excluded > 0] += 60
+    name = "T00139_m600_7DT01_20250101_000000_100s"
+    usable = float(100 * (excluded == 0).mean())
+    path = plot_source_mask(
+        data, excluded > 0, os.path.join(figures, f"{name}_srcmask.jpg"), name,
+        subtitle=f"{100 - usable:.2f}% excluded by the source and FOV masks, "
+        f"{usable:.2f}% usable for the background mesh", max_width=pw,
+    )  # fmt: skip
+    image = Image.open(path).convert("RGB")
+    ok &= check(
+        "source-mask check plot written as a light JPEG carrying the frame name",
+        os.path.exists(path) and image.size == size and os.path.basename(path).startswith(name)
+        and 3_000 < os.path.getsize(path) < 900_000,
+        f"{os.path.basename(path)}, {image.size[0]}x{image.size[1]} px, {os.path.getsize(path) / 1e3:.0f} kB",
+    )
+    ok &= check(
+        "the excluded area is washed in the overlay colour",
+        nearest_pixel_distance(image, "#e5484d") < 90,
+        f"RGB distance {nearest_pixel_distance(image, '#e5484d'):.0f} to the wash colour "
+        f"({100 - usable:.2f}% of the frame excluded)",
+    )
+    return ok
+
+
+
+def check_orientation(root):
+    """RA to the right, Dec upwards, and the coadd JPEG mirrored the same way as the counts figure."""
+    from PIL import Image
+
+    from pipeline.imcoadd.plotting import display_flips, orient_for_raster, plot_coadd_counts
+
+    print("Sky orientation (RA right, Dec up):")
+    ok = True
+    figures = os.path.join(root, "figures")
+
+    normal = frame_header()  # CD1_1 < 0, CD2_2 > 0: the 7DT convention, RA falls with x
+    flipped = frame_header()
+    flipped["CD1_1"], flipped["CD2_2"] = 1.4e-4, -1.4e-4
+    ok &= check(
+        "the flips follow the WCS, and a header without one asks for none",
+        display_flips(normal) == (True, False)
+        and display_flips(flipped) == (False, True)
+        and display_flips(fits.Header()) == (False, False),
+        f"normal {display_flips(normal)}, reversed {display_flips(flipped)}, no WCS {display_flips(fits.Header())}",
+    )
+
+    ph, pw, n = 400, 600, 5
+    planes = {"NGEOM": np.full((ph, pw), n, np.uint8), "NSAT": np.zeros((ph, pw), np.uint8)}
+    planes["NSAT"][20:80, 20:120] = n  # low y, low x: array origin corner
+    path = plot_coadd_counts(planes, os.path.join(figures, "orient.jpg"), "orient", n_inputs=n,
+                             header=normal, max_width=pw)  # fmt: skip
+    rgb = np.asarray(Image.open(path).convert("RGB"), dtype=np.float32)
+    half = rgb.shape[1] // 2
+    left = pixels_near(Image.fromarray(rgb[:, :half].astype(np.uint8)), "#e5484d", 60)
+    right = pixels_near(Image.fromarray(rgb[:, half:].astype(np.uint8)), "#e5484d", 60)
+    bottom = pixels_near(Image.fromarray(rgb[rgb.shape[0] // 2 :].astype(np.uint8)), "#e5484d", 60)
+    ok &= check(
+        "the array's origin corner lands bottom-RIGHT once RA runs rightwards",
+        right > 10 * max(left, 1) and bottom > 1000,
+        f"{right} red px in the right half vs {left} in the left, {bottom} in the bottom half",
+    )
+
+    data = np.zeros((ph, pw), np.float32)
+    data[20:80, 20:120] = 1.0
+    raster = orient_for_raster(data, display_flips(normal))
+    ok &= check(
+        "the coadd JPEG takes the same transform, so the two figures blink",
+        bool(raster[ph - 80 : ph - 20, pw - 120 : pw - 20].all())
+        and not bool(raster[:20].any())
+        and np.array_equal(orient_for_raster(data, (False, False)), data[::-1]),
+        "the corner marked at low x, low y ends bottom-right in the PIL raster too",
+    )
+    return ok
+
+
 def main():
     root = tempfile.mkdtemp(prefix="verify_coverage_")
     ok = True
@@ -198,10 +396,14 @@ def main():
                 coadd = stub.config_node.imcoadd.coadd_image
                 counts_path, mask_path = coadd.replace(".fits", "_counts.fits"), coadd.replace(".fits", "_mask.fits")
                 label = f"counts={counts_on!s:5s} mask={mask_on!s:5s}"
+                figure_path = os.path.join(case, "figures", "obj_coadd_counts.jpg")
                 ok &= check(
                     f"{label} -> products",
-                    os.path.exists(counts_path) == counts_on and os.path.exists(mask_path) == mask_on,
-                    f"counts_file={os.path.exists(counts_path)} mask_file={os.path.exists(mask_path)}",
+                    os.path.exists(counts_path) == counts_on
+                    and os.path.exists(mask_path) == mask_on
+                    and os.path.exists(figure_path) == counts_on,
+                    f"counts_file={os.path.exists(counts_path)} mask_file={os.path.exists(mask_path)} "
+                    f"counts_figure={os.path.exists(figure_path)}",
                 )
                 if counts_on:
                     planes = read_count_planes(counts_path)
@@ -390,6 +592,79 @@ def main():
                 f"sidecar[sat]={float(sidecar[5, 5]):.3f} sidecar[clean]={float(sidecar[20, 20]):.3f}",
             )
 
+        print("The final coadd is made NaN-free (maskfill inside the coverage, 0 outside):")
+        for policy, label in (("union", "union"), ("intersection", "intersection")):
+            nan_case = os.path.join(root, f"nanfill_{policy}")
+            shutil.copytree(work, nan_case)
+            nan_images = [os.path.join(nan_case, os.path.basename(f)) for f in images]
+            nan_weights = [os.path.join(nan_case, os.path.basename(f)) for f in weights]
+            # a star core saturated in EVERY input: no sample survives, so the coadd has a real interior hole
+            for f in nan_images:
+                frame = fits.getdata(f)
+                frame[HOLE_Y - 1 : HOLE_Y + 2, HOLE_X - 1 : HOLE_X + 2] = 70000.0
+                fits.writeto(f, frame, header=fits.getheader(f), overwrite=True)
+            path_module.PathHandler.get_bpmask = classmethod(lambda cls, image: bpmask)
+            imcoadd_module.PathHandler.get_bpmask = path_module.PathHandler.get_bpmask
+            plan = make_plan(coverage_policy=policy, output_counts_map=True, output_mask_map=False)
+            stub = run_coadd(nan_case, plan, nan_images, nan_weights)
+            coadd = stub.config_node.imcoadd.coadd_image
+            before = fits.getdata(coadd)
+            geometric = stub._coadd_counts.geometric
+            keep = (geometric == N_FRAMES) if policy == "intersection" else (geometric > 0)
+            interior = ~np.isfinite(before) & keep
+            outside = ~np.isfinite(before) & ~keep
+            n_int, n_out = int(interior.sum()), int(outside.sum())
+            stub.fill_coadd_nan()
+            after, hdr = fits.getdata(coadd, header=True)
+            ok &= check(
+                f"{label}: no NaN survives",
+                bool(np.isfinite(after).all()),
+                f"NaN before={int((~np.isfinite(before)).sum())} after={int((~np.isfinite(after)).sum())} "
+                f"(interior {n_int}, outside {n_out})",
+            )
+            ok &= check(
+                f"{label}: interior holes carry a filled value, the outside carries 0",
+                (not n_int or np.all(np.isfinite(after[interior])))
+                and (not n_out or np.all(after[outside] == 0.0))
+                and hdr["NNANFILL"] == n_int and hdr["NNANEDGE"] == n_out
+                and (hdr["NANFILL"] == "MASKFILL" if n_int else hdr["NANFILL"] is False),
+                f"NANFILL={hdr['NANFILL']!r} NNANFILL={hdr['NNANFILL']} NNANEDGE={hdr['NNANEDGE']}",
+            )
+            ok &= check(
+                f"{label}: pixels that had data are untouched",
+                np.array_equal(after[np.isfinite(before)], before[np.isfinite(before)]),
+                "every finite pixel is bit-identical before and after",
+            )
+            counts_after = read_count_planes(coadd.replace(".fits", "_counts.fits"))
+            ok &= check(
+                f"{label}: the all-saturated core became an interior hole and was filled",
+                n_int >= 9 and bool(interior[HOLE_Y, HOLE_X]) and np.isfinite(after[HOLE_Y, HOLE_X])
+                and abs(float(after[HOLE_Y, HOLE_X]) - 100.0) < 5.0,
+                f"interior px={n_int}, filled value at the core={float(after[HOLE_Y, HOLE_X]):.3f} "
+                f"(surrounding background ~100, the rejected samples were 70000)",
+            )
+            ok &= check(
+                f"{label}: the counts still record the holes",
+                int(counts_after["NUSED"][interior][0]) == 0 if n_int else True,
+                "NUSED stays 0 where the image was filled" if n_int else "no interior hole in this case",
+            )
+
+        off_case = os.path.join(root, "nanfill_off")
+        shutil.copytree(work, off_case)
+        off_images = [os.path.join(off_case, os.path.basename(f)) for f in images]
+        off_weights = [os.path.join(off_case, os.path.basename(f)) for f in weights]
+        stub = run_coadd(off_case, make_plan(fill_nan=False), off_images, off_weights)
+        coadd = stub.config_node.imcoadd.coadd_image
+        before = fits.getdata(coadd)
+        stub.fill_coadd_nan()
+        after, hdr = fits.getdata(coadd, header=True)
+        ok &= check(
+            "fill_nan false leaves the coadd exactly as it was",
+            np.array_equal(np.nan_to_num(before, nan=-7.0), np.nan_to_num(after, nan=-7.0))
+            and "NANFILL" not in hdr and bool((~np.isfinite(after)).sum()),
+            f"NaN kept={int((~np.isfinite(after)).sum())}, no NANFILL card={'NANFILL' not in hdr}",
+        )
+
         print("Legacy routine NGEOM/NUSED from its resamples:")
         case = os.path.join(root, "legacy")
         shutil.copytree(work, case)
@@ -422,6 +697,8 @@ def main():
             and int(planes["NGEOM"][0, 0]) == 0,
             f"planes={list(planes)} NGEOM@nan={int(planes['NGEOM'][12, 13])} NUSED@nan={int(planes['NUSED'][12, 13])}",
         )
+        ok &= check_plots(root)
+        ok &= check_orientation(root)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
