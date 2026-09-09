@@ -26,6 +26,7 @@ from ..utils import (
 from ..preprocess.utils import get_zdf_from_header_IMCMB
 from ..preprocess.plotting import save_fits_as_figures
 from .plotting import display_flips, orient_for_raster
+from .utils import fill_masked_tiles
 from .. import external
 from ..services.database.handler import DatabaseHandler
 from ..services.database.image_qa import ImageQATable
@@ -1101,19 +1102,17 @@ class ImCoadd(
         method = False
         if n_interior:
             try:
-                from maskfill import maskfill
+                import maskfill  # noqa: F401  presence check only; fill_masked_tiles does the work
             except ImportError as e:
                 # a cosmetic fill is not worth failing a finished coadd for; say so and leave the holes
                 self.logger.warning(f"maskfill unavailable ({e}); {n_interior} interior NaN pixels are kept")
                 n_interior = 0
             else:
-                rows, cols = np.flatnonzero(keep.any(axis=1)), np.flatnonzero(keep.any(axis=0))
-                box = np.s_[rows[0] : rows[-1] + 1, cols[0] : cols[-1] + 1]
-                # only inside the coverage box: over the exterior the iteration runs for minutes and invents data
-                filled, _ = maskfill(data[box].copy(), holes[box].astype(np.uint8), size=3, operator="median")
-                patch = data[box]
-                patch[interior[box]] = filled[interior[box]]
+                # tile by tile, never the whole grid: maskfill reallocates and reconvolves everything it is
+                # handed, once per pixel of hole depth, which cost 68 s for 1818 pixels on a 10200x6800 coadd
+                tiles, n_interior = fill_masked_tiles(data, holes, interior, logger=self.logger)
                 method = "MASKFILL"
+                self.logger.debug(f"NaN fill: {n_interior} pixels over {tiles} tiles")
         data[outside] = 0.0
         header["NANFILL"] = (method, "Interior holes filled (maskfill, van Dokkum & Pasha)")
         header["NNANFILL"] = (n_interior, "Interior hole pixels filled")

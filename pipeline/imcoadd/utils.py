@@ -379,3 +379,68 @@ def _parse_swarp_image_size(config_path: str) -> tuple[int, int]:
                 nx, ny = tokens[1].split(",")
                 return int(nx), int(ny)
     raise ValueError(f"IMAGE_SIZE not found in {config_path}")
+
+
+def fill_masked_tiles(data, holes, targets, tile=512, max_margin=4096, logger=None):
+    """Fill *targets* tile by tile with maskfill's own kernel, never over the whole grid.
+
+    `maskfill.maskfill` is unusable at coadd scale here for two reasons: every pass reallocates and
+    reconvolves the WHOLE array it is handed, and its loop fills every NaN it can see rather than the mask it
+    was given, so it also pays for the uncovered exterior, which is thousands of pixels deep. Measured on a
+    10200x6800 coadd, 1818 hole pixels cost 68 s. This drives `process_masked_pixels` -- maskfill's own
+    3x3 nanmedian step, and its nanmean smoothing pass -- over a padded tile, filling only what it was asked
+    to. A pixel at depth d is decided on pass d by the good pixels within d of it, so padding past the deepest
+    target reproduces the whole-grid values exactly wherever no exterior lies inside that radius.
+
+    Where one does -- a hole at the very rim of the coverage -- the two differ ON PURPOSE: the exterior stays
+    NaN and `nanmedian` ignores it, so the hole is filled from covered data alone, while the whole-grid call
+    propagated invented exterior values inward. Returns (tiles, pixels written)."""
+    from maskfill.maskfill import process_masked_pixels
+    from scipy.ndimage import binary_dilation, distance_transform_edt
+
+    neighbourhood = np.ones((3, 3), dtype=bool)
+    height, width = data.shape
+    rows, cols = np.flatnonzero(targets.any(axis=1)), np.flatnonzero(targets.any(axis=0))
+    if not rows.size:
+        return 0, 0
+    tiles = written = stalled = 0
+    for y0 in range(rows[0] // tile * tile, rows[-1] + 1, tile):
+        for x0 in range(cols[0] // tile * tile, cols[-1] + 1, tile):
+            y1, x1 = min(y0 + tile, height), min(x0 + tile, width)
+            core = targets[y0:y1, x0:x1]
+            if not core.any():
+                continue
+            margin = 8
+            while True:
+                by0, bx0 = max(y0 - margin, 0), max(x0 - margin, 0)
+                by1, bx1 = min(y1 + margin, height), min(x1 + margin, width)
+                mask = targets[by0:by1, bx0:bx1]
+                depth = distance_transform_edt(mask)
+                need = int(np.ceil(depth[y0 - by0 : y1 - by0, x0 - bx0 : x1 - bx0][core].max())) + 2
+                if need <= margin or margin >= max_margin:
+                    break
+                margin = min(max(need, 2 * margin), max_margin)
+            block = data[by0:by1, bx0:bx1].copy()
+            block[holes[by0:by1, bx0:bx1]] = np.nan  # every hole is NaN; only `mask` will be written
+            remaining = mask.copy()
+            while remaining.any():
+                frontier = remaining & binary_dilation(~np.isnan(block), neighbourhood)
+                if not frontier.any():
+                    # nothing covered is reachable; the caller promised a NaN-free image, so settle for a level
+                    stalled += int(remaining.sum())
+                    finite = block[~np.isnan(block)]
+                    block[remaining] = np.median(finite) if finite.size else 0.0
+                    break
+                process_masked_pixels(block, 1, mask=frontier, operator_func=np.nanmedian)
+                remaining &= ~frontier
+            process_masked_pixels(block, 1, mask=mask, operator_func=np.nanmean)  # maskfill's smoothing pass
+            patch = data[y0:y1, x0:x1]
+            patch[core] = filled_core = block[y0 - by0 : y1 - by0, x0 - bx0 : x1 - bx0][core]
+            tiles += 1
+            written += int(filled_core.size)
+    if stalled and logger is not None:
+        logger.warning(
+            f"NaN fill: {stalled} hole pixels had no covered pixel reachable inside their tile and took the "
+            f"tile median instead"
+        )
+    return tiles, written

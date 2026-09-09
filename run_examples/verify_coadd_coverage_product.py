@@ -425,6 +425,79 @@ def check_saturation_from_weight(root, work, images, weights):
     return ok
 
 
+
+def check_tiled_maskfill(root):
+    """The tiled fill equals the whole-grid one away from the exterior, and is tile-size independent."""
+    from scipy import ndimage
+
+    from pipeline.imcoadd.utils import fill_masked_tiles
+
+    print("Tiled maskfill:")
+    ok = True
+    try:
+        from maskfill import maskfill
+    except ImportError as e:
+        print(f"  [SKIP] maskfill is not installed here ({e})")
+        return ok
+
+    rng = np.random.default_rng(5)
+    h, w = 300, 400
+    yy, xx = np.mgrid[0:h, 0:w]
+    data = (100.0 + 0.02 * xx + 0.01 * yy + rng.normal(0, 0.5, (h, w))).astype(np.float32)
+    interior = np.zeros((h, w), bool)
+    interior[(yy - 150) ** 2 + (xx - 90) ** 2 <= 81] = True          # a saturated core, 9 px deep
+    for x in range(w):                                                # a satellite trail across every tile
+        y = 40 + x // 3
+        if 0 <= y < h - 2:
+            interior[y : y + 3, x] = True
+    interior[190:196, 126:134] = True                                 # straddling a 64 px tile boundary
+    exterior = np.zeros((h, w), bool)
+    exterior[:6] = exterior[-6:] = exterior[:, :6] = exterior[:, -6:] = True
+    holes = interior | exterior
+    data[holes] = np.nan
+
+    reference = data.copy()
+    filled, _ = maskfill(reference.copy(), holes.astype(np.uint8), size=3, operator="median")
+    reference[interior] = filled[interior]
+
+    # a hole is decided by the pixels within its own depth, so only those near the exterior can differ
+    depth = ndimage.distance_transform_edt(interior)
+    to_exterior = ndimage.distance_transform_edt(~exterior)
+    inland = interior & (to_exterior > depth + 2)
+    results = {}
+    for tile in (64, 128):
+        trial = data.copy()
+        tiles, written = fill_masked_tiles(trial, holes, interior, tile=tile)
+        results[tile] = trial
+        ok &= check(
+            f"tile={tile}: identical to the whole-grid fill away from the exterior",
+            np.array_equal(trial[inland], reference[inland]) and written == int(interior.sum()),
+            f"{tiles} tiles, {written} px written, {int(inland.sum())} of them clear of the exterior, "
+            f"max|difference| there {float(np.max(np.abs(trial[inland] - reference[inland]))):.3g}",
+        )
+    ok &= check(
+        "the tile size does not change any value",
+        np.array_equal(results[64][interior], results[128][interior]),
+        "64 px and 128 px tiles agree exactly, so the padding rule covers every dependency",
+    )
+    rim = interior & ~inland
+    differs = int((results[64][rim] != reference[rim]).sum())
+    ok &= check(
+        "holes at the coverage rim are filled from covered data alone, by design",
+        differs > 0 and np.isfinite(results[64][rim]).all(),
+        f"{differs} of {int(rim.sum())} rim pixels differ from the whole-grid fill, which reached them with "
+        f"values propagated from the uncovered exterior",
+    )
+    trial = data.copy()
+    fill_masked_tiles(trial, holes, interior, tile=64)
+    ok &= check(
+        "nothing outside the interior holes is touched",
+        np.array_equal(np.nan_to_num(trial[~interior], nan=-1.0), np.nan_to_num(data[~interior], nan=-1.0)),
+        "the exterior stays NaN for the caller to zero, and measured pixels are untouched",
+    )
+    return ok
+
+
 def main():
     root = tempfile.mkdtemp(prefix="verify_coverage_")
     ok = True
@@ -751,6 +824,7 @@ def main():
         ok &= check_plots(root)
         ok &= check_orientation(root)
         ok &= check_saturation_from_weight(root, work, images, weights)
+        ok &= check_tiled_maskfill(root)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
