@@ -43,6 +43,11 @@ class CoaddPlan:
     coadd_scratch: str | None
     persist_weight_maps: bool
     output_single_weight_map: bool
+    background_box_size: int
+    background_filter_size: int
+    background_exclude_percentile: float
+    background_min_usable: float
+    background_max_dropped_boxes: float
 
     @property
     def need_weights(self) -> bool:
@@ -54,12 +59,12 @@ class CoaddPlan:
         return self.need_weights and self.weighting != "pixelwise" and self.routine != "legacy"
 
     @property
-    def reproject(self) -> bool:
+    def is_reproject_first(self) -> bool:
         return self.routine == "reproject-first"
 
     @property
     def weight_on_sci_pass(self) -> bool:
-        return self.reproject and self.smooth_weight
+        return self.is_reproject_first and self.smooth_weight
 
     @property
     def catalog_badpix_zeros(self) -> bool:
@@ -73,7 +78,7 @@ class CoaddPlan:
     @property
     def propagate_mask_on_sci_pass(self) -> bool:
         """Conservative holes come from the sci pass: SWarp zeroes the kernel support of a zero-weight input."""
-        return self.reproject and self.policy == "conservative" and self.need_weights
+        return self.is_reproject_first and self.policy == "conservative" and self.need_weights
 
     @property
     def zero_before_reprojection(self) -> bool:
@@ -85,7 +90,7 @@ class CoaddPlan:
 
         Only where a sidecar exists and is otherwise zero-free: a zero there would be unattributable, and a
         weight nothing reads would carry the holes nowhere."""
-        return self.reproject and self.need_weights and not self.zero_before_reprojection
+        return self.is_reproject_first and self.need_weights and not self.zero_before_reprojection
 
     @property
     def saturation_from_resampled_weight(self) -> bool:
@@ -102,7 +107,6 @@ class CoaddPlan:
         if not self.need_weights:
             return ""
         return "sci" if self.weight_on_sci_pass else "wht"
-
 
 
 def resolve_coadd_plan(node) -> CoaddPlan:
@@ -148,6 +152,23 @@ def resolve_coadd_plan(node) -> CoaddPlan:
     satellite_mask_enabled = bool(node.satellite_mask["enabled"])
     if satellite_mask_enabled and routine != "reproject-first":
         raise ValueError("imcoadd.satellite_mask.enabled requires coadd_routine: reproject-first")
+
+    background = node.background
+    background_box_size = int(background["box_size"])
+    background_filter_size = int(background["filter_size"])
+    background_exclude_percentile = float(background["exclude_percentile"])
+    background_min_usable = float(background["min_usable"])
+    background_max_dropped_boxes = float(background["max_dropped_boxes"])
+    if background_box_size < 8:
+        raise ValueError("imcoadd.background.box_size must be at least 8 pixels")
+    if background_filter_size < 1 or background_filter_size % 2 == 0:
+        raise ValueError("imcoadd.background.filter_size must be a positive odd number of mesh nodes")
+    if not 0 <= background_exclude_percentile <= 100:
+        raise ValueError("imcoadd.background.exclude_percentile must be between 0 and 100")
+    if not 0 <= background_min_usable <= 100:
+        raise ValueError("imcoadd.background.min_usable must be between 0 and 100")
+    if not 0 <= background_max_dropped_boxes <= 100:
+        raise ValueError("imcoadd.background.max_dropped_boxes must be between 0 and 100")
 
     intermediate_policy = str(node.intermediate_policy).strip().lower()
     if intermediate_policy not in ("auto", "memory", "disk"):
@@ -219,8 +240,13 @@ def resolve_coadd_plan(node) -> CoaddPlan:
         coadd_scratch=node.coadd_scratch,
         persist_weight_maps=bool(node.persist_weight_maps),
         output_single_weight_map=bool(node.output_single_weight_map),
+        background_box_size=background_box_size,
+        background_filter_size=background_filter_size,
+        background_exclude_percentile=background_exclude_percentile,
+        background_min_usable=background_min_usable,
+        background_max_dropped_boxes=background_max_dropped_boxes,
     )
-    if plan.reproject and plan.zero_before_reprojection:
+    if plan.is_reproject_first and plan.zero_before_reprojection:
         raise NotImplementedError(
             "saturation is propagated conservatively by zeroing the pre-reprojection weight sidecar, and this "
             f"combination (badpix_reprojection_policy: {plan.policy!r}, coadd_weighting: {plan.weighting!r}) "
@@ -233,9 +259,9 @@ def resolve_coadd_plan(node) -> CoaddPlan:
             "set interpolate_badpix: True, zero_badpix_weight: True and badpix_reprojection_policy: '1px', "
             "or use coadd_routine: reproject-first"
         )
-    if plan.dump_reprojected_masks and not plan.reproject:
+    if plan.dump_reprojected_masks and not plan.is_reproject_first:
         raise ValueError("imcoadd.dump_reprojected_masks requires coadd_routine: reproject-first")
-    if plan.reproject and not plan.interpolate:
+    if plan.is_reproject_first and not plan.interpolate:
         raise ValueError(
             "coadd_routine 'reproject-first' interpolates bad pixels in every frame; "
             "set interpolate_badpix: True (or coadd_routine: direct for pre-aligned inputs)"

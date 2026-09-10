@@ -95,8 +95,8 @@ def source_mask_on_frame(catalog, header, logger=None):
     if ellipses is None:
         return None
     return build_source_mask(
-        ellipses, (header["NAXIS2"], header["NAXIS1"]), star_scale=2.0, galaxy_scale=2.5,
-        class_star_cut=0.5, min_radius=3.0, logger=logger,
+        ellipses, (header["NAXIS2"], header["NAXIS1"]), skysig=header.get("SKYSIG"), star_scale=2.0,
+        galaxy_scale=2.5, class_star_cut=0.5, min_radius=3.0, logger=logger,
     )  # fmt: skip
 
 

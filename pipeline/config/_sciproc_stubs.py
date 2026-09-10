@@ -97,7 +97,7 @@ if TYPE_CHECKING:
         zp_key: str
         zpscale: bool
         bkgsub_type: str
-        sex_vars: dict
+        background: dict
         source_mask: bool
         dump_source_masks: bool
         output_weight_map: bool

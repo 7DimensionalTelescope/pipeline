@@ -12,7 +12,6 @@ configs_to_check = [
     "srcExt/prep.sex",
     "srcExt/main.sex",
     "srcExt/prep.param",
-    "srcExt/bkgdet.param",
     "srcExt/main.param",
     "srcExt/prep.conv",
     "srcExt/main.conv",

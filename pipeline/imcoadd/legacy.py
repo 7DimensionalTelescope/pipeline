@@ -1,10 +1,25 @@
+from typing import TYPE_CHECKING
+
 from ..path.path import PathHandler
+from ..services.logger import Logger
 from .coadd_plan import CoaddPlan
+
+if TYPE_CHECKING:
+    from ..config._crossfilter_stubs import CrossFilterNode
+    from ..config._sciproc_stubs import SciProcNode
+
+    ConfigNodeT = SciProcNode | CrossFilterNode  # ImCoadd runs on the first, WhiteImage on the second
 
 
 class LegacyCoaddMixin:
+    config_node: "ConfigNodeT"
+    logger: Logger
     path: PathHandler
     plan: CoaddPlan
+    input_images: list[str]
+    images_to_coadd: list[str] | None
+    _use_gpu: bool
+    _coadd_completed: bool
 
     def legacy_coadd_routine(self, use_gpu: bool = False, device_id=None):
         """

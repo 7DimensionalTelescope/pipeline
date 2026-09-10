@@ -4,6 +4,7 @@ import tempfile
 from dataclasses import dataclass
 
 import numpy as np
+from typing import TYPE_CHECKING
 from astropy.io import fits
 
 from ..config.utils import get_key
@@ -12,6 +13,13 @@ from ..services.logger import Logger
 from ..utils import atleast_1d
 from .coadd_plan import CoaddPlan
 from .counts import CoaddCounts
+
+
+if TYPE_CHECKING:
+    from ..config._crossfilter_stubs import CrossFilterNode
+    from ..config._sciproc_stubs import SciProcNode
+
+    ConfigNodeT = SciProcNode | CrossFilterNode  # ImCoadd runs on the first, WhiteImage on the second
 
 
 @dataclass(slots=True)
@@ -29,9 +37,12 @@ class IntermediateStorage:
 
 
 class IntermediateStorageMixin:
+    config_node: "ConfigNodeT"
     logger: Logger
     path: PathHandler
     plan: CoaddPlan
+    input_images: list[str]
+    images_to_coadd: list[str] | None
     intermediate_storage: IntermediateStorage | None
 
     @property

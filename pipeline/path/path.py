@@ -21,6 +21,7 @@ from .const import (
     ASTRM_DIRNAME,
     DIFFIM_DIRNAME,
     FIGURES_DIRNAME,
+    IMCOADD_DIRNAME,
     IMCOADD_TMP_DIRNAME,
     IMSUBTRACT_TMP_DIRNAME,
     MULTI_EPOCH_DIRNAME,
@@ -2062,19 +2063,33 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
         """Canonical coverage/provenance product: integer count planes, one per rejection reason."""
         return add_suffix(self._parent.coadd_image, "counts")
 
-    # ---- check plots (JPEG), beside the coadd's own figure ----
+    # ---- check plots (JPEG) ----
     @property
     def figure_dir(self) -> str:
+        """The coadd's own figure sits here, beside the counts check plot it is blinked against."""
         return collapse(self._parent._parent.figure_dir, force=True)
+
+    @property
+    def check_plot_dir(self) -> str:
+        """Per-frame check plots, flat under figures/imcoadd unless a config_suffix scopes the run."""
+        scope = self._config_scope
+        return os.path.join(self.figure_dir, IMCOADD_DIRNAME, scope) if scope else os.path.join(self.figure_dir, IMCOADD_DIRNAME)
 
     @property
     def coadd_counts_figure(self) -> str:
         return os.path.join(self.figure_dir, swap_ext(os.path.basename(self.coadd_counts_image), "jpg"))
 
     def source_mask_figures(self, stage_inputs) -> List[str]:
-        """One background-mask check plot per frame, scoped like the source masks themselves."""
+        """One background-mask check plot per frame."""
+        return self._check_plots(stage_inputs, "srcmask")
+
+    def background_figures(self, stage_inputs) -> List[str]:
+        """One mesh-background check plot per frame."""
+        return self._check_plots(stage_inputs, "bkg")
+
+    def _check_plots(self, stage_inputs, suffix: str) -> List[str]:
         return [
-            os.path.join(self.figure_dir, "srcmask", self._config_scope, swap_ext(add_suffix(os.path.basename(f), "srcmask"), "jpg"))  # fmt: skip
+            os.path.join(self.check_plot_dir, swap_ext(add_suffix(os.path.basename(f), suffix), "jpg"))
             for f in atleast_1d(stage_inputs)
         ]
 

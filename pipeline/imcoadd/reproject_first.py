@@ -3,6 +3,7 @@ import shutil
 import time
 
 import numpy as np
+from typing import TYPE_CHECKING
 
 from ..config.utils import get_key
 from ..const import REF_DIR
@@ -12,14 +13,32 @@ from ..utils import add_suffix, atleast_1d, collapse, get_basename, time_diff_in
 from .calc import clipped_mean_coadd_numpy, mean_coadd_numpy, median_coadd_numpy
 from .coadd_plan import CoaddPlan, resolve_coadd_plan
 from .storage import IntermediateStorage
+from .header_set import InputHeaderSet
+from .counts import CoaddCounts
+
+
+if TYPE_CHECKING:
+    from ..config._crossfilter_stubs import CrossFilterNode
+    from ..config._sciproc_stubs import SciProcNode
+
+    ConfigNodeT = SciProcNode | CrossFilterNode  # ImCoadd runs on the first, WhiteImage on the second
 
 
 class ReprojectFirstCoaddMixin:
 
+    config_node: "ConfigNodeT"
     logger: Logger
     path: PathHandler
     plan: CoaddPlan
     storage: IntermediateStorage
+    input_images: list[str]
+    input_headers: InputHeaderSet
+    images_to_coadd: list[str] | None
+    overwrite: bool | None
+    delta_peeings: list[float | None]
+    _use_gpu: bool
+    _coadd_completed: bool
+    _coadd_counts: CoaddCounts
 
     _LOCAL_FSTYPES = {
         "ext2",
@@ -37,7 +56,7 @@ class ReprojectFirstCoaddMixin:
         self._use_gpu = all([use_gpu, self.config_node.imcoadd.gpu, self._use_gpu])
 
         plan = self.plan
-        if plan.reproject:
+        if plan.is_reproject_first:
             total_steps = 6 + int(plan.joint_wcs) + int(bool(plan.convolve)) + int(plan.zpscale)
         else:
             total_steps = 3 + int(plan.need_weights) + int(plan.interpolate) + int(plan.zpscale)
@@ -55,7 +74,7 @@ class ReprojectFirstCoaddMixin:
         images = self.input_images
         weight_images = None
         fov_masks = None
-        if plan.reproject:
+        if plan.is_reproject_first:
             if plan.joint_wcs:
                 factory = self.path.imcoadd.factory
                 self.joint_registration(factory.stage_images(images, "interp", factory.interp_dir))
@@ -79,7 +98,7 @@ class ReprojectFirstCoaddMixin:
 
         if self._need_quality_masks:
             self.prepare_quality_masks(images, detector_images=self.input_images)
-        if plan.reproject:
+        if plan.is_reproject_first:
             if plan.convolve:
                 fov_masks = self.build_fov_masks(images)
             self._remove_reprojection_intermediates()
@@ -283,14 +302,14 @@ class ReprojectFirstCoaddMixin:
         if weighting == "pixelwise":
             weights = wht_maps
         elif weighting == "global":
-            skysigs = self.input_headers.values("SKYSIG")
+            skysigs = self.input_headers.values_any("BACKSIG", "SKYSIG")
             missing = [i for i, s in enumerate(skysigs) if not s]
             if missing:
                 # 1.0 ADU^-2 against a typical 0.0086 is ~100x a normal frame: that frame would
                 # own the coadd. The card comes from single photometry, so this is its failure.
                 names = [get_basename(f) for f in atleast_1d(input_images)]
                 raise self._process_error.PreviousStageError(
-                    f"SKYSIG missing on {len(missing)}/{len(skysigs)} frames "
+                    f"BACKSIG/SKYSIG missing on {len(missing)}/{len(skysigs)} frames "
                     f"(e.g. {[names[i] for i in missing[:3]]}); rerun single photometry"
                 )
             weights = [1.0 / float(s) ** 2 for s in skysigs]
@@ -452,7 +471,7 @@ class ReprojectFirstCoaddMixin:
                 output_path=coadd_image,
                 coadd_header=self.input_headers.coadd_header,
                 peeings=self._proper_peeings(input_images),
-                skysigs=self.input_headers.values("SKYSIG"),
+                skysigs=self.input_headers.values_any("BACKSIG", "SKYSIG"),
                 flxscales=self._coadd_flxscales(),
                 weight_map_policy=policy,
                 weight_output=(add_suffix(coadd_image, "weight") if policy != "off" else False),

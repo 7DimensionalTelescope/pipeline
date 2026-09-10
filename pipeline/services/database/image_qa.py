@@ -102,6 +102,9 @@ class ImageQATable:
     rotang: Optional[float] = None
     skyval: Optional[float] = None
     skysig: Optional[float] = None
+    backval: Optional[float] = None
+    backsig: Optional[float] = None
+    backfrac: Optional[float] = None
     zp_auto: Optional[float] = None
     ezp_auto: Optional[float] = None
     ul5_5: Optional[float] = None

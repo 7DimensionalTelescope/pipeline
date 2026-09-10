@@ -25,7 +25,7 @@ from ..services.database.image_qa import ImageQATable
 from ..services.checker import Checker
 
 from ..config.utils import get_key
-from ..utils import time_diff_in_seconds, force_symlink, collapse
+from ..utils import time_diff_in_seconds, force_symlink, collapse, get_basename
 from ..config import SciProcConfiguration
 from ..config.base import ConfigNode
 from .. import external
@@ -404,6 +404,7 @@ class PhotometrySingle:
 
         self._trust_header_seeing = difference_photometry
         self._trust_header_zp = difference_photometry
+        self._difference_photometry = difference_photometry
         self._check_filter = check_filter and not difference_photometry
         if current_process is not None:
             self._sciproc_rejection_process_name = current_process.name
@@ -504,6 +505,8 @@ class PhotometrySingle:
                     self.update_image_header()
 
             self.write_catalog(obs_src_table)
+            if self.measure_sky(overwrite=overwrite):  # off the written catalog, the one ImCoadd will re-read
+                self.update_image_header()
 
             self.logger.debug(MemoryMonitor.log_memory_usage)
             self.logger.info(
@@ -842,6 +845,48 @@ class PhotometrySingle:
             obs_src_table[f"SNR_{suffix}"] = obs_src_table[f"FLUX_{suffix}"] / obs_src_table[f"FLUXERR_{suffix}"]
 
         return obs_src_table
+
+    def measure_sky(self, overwrite: bool = True, phot_header: PhotometryHeader = None) -> bool:
+        """Re-derive the sky level and noise on the pixels the source mask leaves, and record the fraction used."""
+        from ..imcoadd.utils import build_source_mask, sky_statistics, source_ellipses_on_frame
+
+        phot_header = phot_header or self.phot_header
+        if self._difference_photometry:  # a residual image has no sky of its own to publish
+            return False
+        if not overwrite and phot_header.BACKSIG is not None:
+            self.logger.debug("Off-source sky already on the frame; keeping it")
+            return False
+        if not phot_header.SKYSIG:
+            self.logger.warning("No SKYSIG to set the mask threshold with; skipping the off-source sky measurement")
+            return False
+        start_time = time.time()
+        catalog = self.path.photometry.final_catalog
+        data, header = fits.getdata(self.input_image, header=True, memmap=False)
+        data = np.ascontiguousarray(data, dtype=np.float32)
+        # the identity-WCS call is what recovers B_IMAGE from ELLIPTICITY; main.param comments B_IMAGE out
+        ellipses = source_ellipses_on_frame(catalog, header, header, logger=self.logger)
+        if ellipses is None:
+            self.logger.warning(f"{get_basename(catalog)} lacks the ellipse columns; no off-source sky measured")
+            return False
+        sources = build_source_mask(ellipses, data.shape, skysig=phot_header.SKYSIG, logger=self.logger)
+        no_data = data == 0  # dead columns and overscan; a single carries no reprojection padding
+        # the same mesh ImCoadd will fit, so the two stages cannot disagree about what the sky is
+        mesh = self.config_node.imcoadd.background
+        phot_header.BACKVAL, phot_header.BACKSIG = sky_statistics(
+            data,
+            mask=sources,
+            coverage_mask=no_data,
+            box_size=mesh["box_size"],
+            filter_size=mesh["filter_size"],
+            exclude_percentile=mesh["exclude_percentile"],
+        )
+        phot_header.BACKFRAC = round(float((~sources & ~no_data).mean()), 4)
+        self.logger.info(
+            f"Off-source sky: BACKVAL {phot_header.BACKVAL:.3f}, BACKSIG {phot_header.BACKSIG:.3f} on "
+            f"{100 * phot_header.BACKFRAC:.1f}% of the frame (SExtractor SKYVAL {phot_header.SKYVAL}, "
+            f"SKYSIG {phot_header.SKYSIG}) in {time_diff_in_seconds(start_time)} seconds"
+        )
+        return True
 
     def _run_sextractor(
         self,
@@ -1451,6 +1496,9 @@ class PhotometryHeader:
     ELONG: float = None
     SKYSIG: float = None
     SKYVAL: float = None
+    BACKSIG: float = None
+    BACKVAL: float = None
+    BACKFRAC: float = None
     REFCAT: str = None  # "GaiaXP"
     MAGLOW: float = None
     MAGUP: float = None
@@ -1572,6 +1620,9 @@ class PhotometryHeader:
             "ELONG": (round(self.ELONG, 3) if self.ELONG is not None else 0, "ELONGATION A/B [1-]"),
             "SKYSIG": (round(self.SKYSIG, 3) if self.SKYSIG is not None else 0, "SKY SIGMA VALUE"),
             "SKYVAL": (round(self.SKYVAL, 3) if self.SKYVAL is not None else 0, "SKY MEDIAN VALUE"),
+            "BACKSIG": (round(self.BACKSIG, 3) if self.BACKSIG is not None else None, "SKY SIGMA OFF SOURCE"),
+            "BACKVAL": (round(self.BACKVAL, 3) if self.BACKVAL is not None else None, "SKY MEDIAN OFF SOURCE"),
+            "BACKFRAC": (self.BACKFRAC, "Fraction of pixels used for the sky estimate"),
             "REFCAT": (self.REFCAT, "REFERENCE CATALOG TYPE"),
             "MAGLOW": (self.MAGLOW, "REF MAG RANGE, LOWER LIMIT"),
             "MAGUP": (self.MAGUP, "REF MAG RANGE, UPPER LIMIT"),

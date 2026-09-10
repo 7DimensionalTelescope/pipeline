@@ -198,22 +198,33 @@ def read_mask_plio(path):
 def build_source_mask(
     catalog: str,
     shape: tuple[int, int],
-    star_scale: float,
-    galaxy_scale: float,
-    class_star_cut: float,
-    min_radius: float,
+    skysig: float | None = None,
+    star_scale: float = 2.0,
+    galaxy_scale: float = 2.5,
+    class_star_cut: float = 0.1,
+    min_radius: float = 3.0,
     bright_flux_adu: float = 3.0e5,
     bright_radius_per_dex: float = 90.0,
     logger=None,
 ) -> np.ndarray:
-    """Elliptical source mask from a SExtractor catalog; extended sources get a wider ellipse.
+    """Elliptical source mask from a SExtractor catalog, one ellipse per detection, unioned.
 
-    Each source is masked out to its Kron ellipse (``A_IMAGE``/``B_IMAGE`` scaled by
-    ``KRON_RADIUS``) times a class-dependent factor, so the low-surface-brightness wings
-    a segmentation map would miss are covered too."""
+    With ``skysig`` and the law's catalog columns each source is masked out to where its own
+    double-Moffat profile falls to ``skysig / K_THRESH``, extended sources additionally out to a
+    catalog-predicted dilation of their MAG_AUTO ellipse; otherwise the class-dependent constant
+    scales apply. ``MASK_SCALE_MAJOR``/``MASK_SCALE_MINOR``, when present, carry the axis-wise pixel
+    scale onto another frame's grid."""
+    from .source_mask import FLUX_BRANCH_COLUMNS, has_columns, mask_semi_major
+
+    from ..photometry.utils import rename_flux_radius_columns
+
     mask = np.zeros(shape, dtype=bool)
     try:
-        cat = catalog if isinstance(catalog, Table) else Table.read(catalog, format="ascii.sextractor")
+        if isinstance(catalog, Table):
+            cat = catalog
+        else:
+            cat = Table.read(catalog, format="ascii.sextractor")
+            rename_flux_radius_columns(cat)  # a fresh ASCII catalog carries FLUX_RADIUS, FLUX_RADIUS_1, ...
     except Exception as e:
         # transient SExtractor failures ("no key to print in table OBJECTS") leave a
         # 0-byte catalog; one bad frame must not kill a 1000-frame run
@@ -226,12 +237,13 @@ def build_source_mask(
             logger.warning(f"No source detected in {name}; source mask is empty")
         return mask
 
-    # KRON_RADIUS is 0 when SExtractor's Kron measurement failed; 1 keeps the isophotal ellipse
-    kron = np.clip(np.asarray(cat["KRON_RADIUS"], dtype=float), 1.0, None)
     is_extended = np.asarray(cat["CLASS_STAR"], dtype=float) < class_star_cut
-    scale = np.where(is_extended, galaxy_scale, star_scale)
-    a = np.maximum(np.asarray(cat["A_IMAGE"], dtype=float) * kron * scale, min_radius)
-    b = np.maximum(np.asarray(cat["B_IMAGE"], dtype=float) * kron * scale, min_radius)
+    semi_major = mask_semi_major(cat, skysig, star_scale, galaxy_scale, class_star_cut, logger=logger)
+    axis_ratio = np.asarray(cat["B_IMAGE"], dtype=float) / np.asarray(cat["A_IMAGE"], dtype=float)
+    scale_major = np.asarray(cat["MASK_SCALE_MAJOR"], float) if "MASK_SCALE_MAJOR" in cat.colnames else 1.0
+    scale_minor = np.asarray(cat["MASK_SCALE_MINOR"], float) if "MASK_SCALE_MINOR" in cat.colnames else 1.0
+    a = np.maximum(semi_major * scale_major, min_radius)
+    b = np.maximum(semi_major * axis_ratio * scale_minor, min_radius)
     theta = np.radians(np.asarray(cat["THETA_IMAGE"], dtype=float))
     # SExtractor image coordinates are 1-indexed
     xc = np.asarray(cat["X_IMAGE"], dtype=float) - 1.0
@@ -242,7 +254,8 @@ def build_source_mask(
     # purpose: single-exposure PAs differ, so spikes cannot line up on the reprojected
     # plane. r grows per decade of flux; constants are first-guess pending wing-profile
     # calibration on a deep coadd.
-    if "FLUX_AUTO" in cat.colnames:
+    flux_branch = bool(skysig) and has_columns(cat, FLUX_BRANCH_COLUMNS)
+    if not flux_branch and "FLUX_AUTO" in cat.colnames:
         flux = np.asarray(cat["FLUX_AUTO"], dtype=float)
         bright = np.isfinite(flux) & (flux > bright_flux_adu)
         if bright.any():
@@ -252,10 +265,12 @@ def build_source_mask(
             a = np.where(bright, np.maximum(a, r_bright), a)
             b = np.where(bright, np.maximum(b, r_bright), b)
             if logger is not None:
-                logger.debug(f"{int(bright.sum())} bright stars got circular wing masks "
-                             f"(max r {float(r_bright.max()):.0f} px)")
-    elif logger is not None:
-        logger.debug("catalog has no FLUX_AUTO (pre-2026-08-11 bkgdet cat); bright-star tier skipped")
+                logger.debug(
+                    f"{int(bright.sum())} bright stars got circular wing masks "
+                    f"(max r {float(r_bright.max()):.0f} px)"
+                )
+    elif not flux_branch and logger is not None:
+        logger.debug("catalog has no FLUX_AUTO; bright-star tier skipped")
 
     cos_t, sin_t = np.cos(theta), np.sin(theta)
     # half-sizes of each ellipse's axis-aligned bounding box
@@ -277,17 +292,24 @@ def build_source_mask(
     if logger is not None:
         logger.debug(
             f"Source mask from {len(cat)} sources ({int(is_extended.sum())} extended, "
-            f"x{galaxy_scale} vs x{star_scale}): {100 * mask.mean():.1f}% of pixels masked"
+            f"{'flux branch' if flux_branch else 'Kron ellipse only'}, median a {np.median(a):.1f} px): "
+            f"{100 * mask.mean():.1f}% of pixels masked"
         )
     return mask
 
 
 # B_IMAGE is derivable; the rest must be in the catalog
 _ELLIPSE_KEYS = ["ALPHA_J2000", "DELTA_J2000", "A_IMAGE", "THETA_IMAGE", "KRON_RADIUS", "CLASS_STAR", "FLUX_AUTO"]
+# the mask law's own columns: carried through when present, never required
+_LAW_KEYS = ["AWIN_IMAGE", "FWHM_IMAGE", "FLUX_RADIUS_50", "FLUX_RADIUS_80"]
 
 
 def source_ellipses_on_frame(catalog, source_header, target_header, logger=None):
-    """Catalog ellipses on another frame's pixels; None if the catalog lacks a column."""
+    """Catalog ellipses on another frame's pixels; None if the catalog lacks a column.
+
+    A_IMAGE/B_IMAGE and the law's columns stay in the SOURCE frame's pixels, where SKYSIG and
+    FLUX_AUTO were measured; ``MASK_SCALE_MAJOR``/``MASK_SCALE_MINOR`` carry the axis-wise scale
+    onto the target grid, and ``build_source_mask`` applies them to the radius it computes."""
     from astropy.wcs import WCS
 
     try:
@@ -332,16 +354,22 @@ def source_ellipses_on_frame(catalog, source_header, target_header, logger=None)
     vx, vy = step(-np.sin(theta), np.cos(theta))  # along the minor axis
     a_src = np.asarray(cat["A_IMAGE"], float)
 
-    return Table({
+    ellipses = Table({
         "X_IMAGE": x_t + 1.0,  # build_source_mask subtracts 1: SExtractor is 1-indexed
         "Y_IMAGE": y_t + 1.0,
-        "A_IMAGE": a_src * np.hypot(ux, uy),
-        "B_IMAGE": a_src * axis_ratio * np.hypot(vx, vy),
+        "A_IMAGE": a_src,
+        "B_IMAGE": a_src * axis_ratio,
+        "MASK_SCALE_MAJOR": np.hypot(ux, uy),
+        "MASK_SCALE_MINOR": np.hypot(vx, vy),
         "THETA_IMAGE": np.degrees(np.arctan2(uy, ux)),
         "KRON_RADIUS": np.asarray(cat["KRON_RADIUS"], float),
         "CLASS_STAR": np.asarray(cat["CLASS_STAR"], float),
         "FLUX_AUTO": np.asarray(cat["FLUX_AUTO"], float),
     })  # fmt: skip
+    for key in _LAW_KEYS:
+        if key in cat.colnames:
+            ellipses[key] = np.asarray(cat[key], float)
+    return ellipses
 
 
 def parse_sex_config(config_path: str, keys) -> dict:
@@ -358,16 +386,65 @@ def parse_sex_config(config_path: str, keys) -> dict:
     return values
 
 
-def estimate_background(data, mask=None, back_size: int = 64, filter_size: int = 3):
-    """Mesh background + RMS via sep; ``mask`` marks pixels to EXCLUDE."""
-    import sep
+def background_mesh(
+    data,
+    mask=None,
+    coverage_mask=None,
+    box_size: int = 128,
+    filter_size: int = 3,
+    exclude_percentile: float = 50.0,
+    sigma: float = 3.0,
+    maxiters: int = 10,
+):
+    """The fitted photutils Background2D; ``mask`` = source pixels, ``coverage_mask`` = pixels with no data.
 
-    # sep rejects the big-endian arrays FITS hands back; this also gives it C-contiguity.
-    # ascontiguousarray, not astype: a caller that already converted pays no second copy
-    arr = np.ascontiguousarray(data, dtype=np.float32)
-    bkg = sep.Background(arr, mask=mask, bw=back_size, bh=back_size,
-                         fw=filter_size, fh=filter_size, fthresh=0.0)  # fmt: skip
-    return bkg.back(), bkg.rms()
+    The two masks are kept apart on purpose: both are excluded from the box statistics, but only
+    ``coverage_mask`` pixels are overwritten in the output, so off-footprint padding cannot bias a box.
+    A box that loses ``exclude_percentile`` per cent of its pixels is dropped and refilled from the ten
+    nearest surviving mesh nodes, and the mesh is upsampled with the output clipped to its own range."""
+    from astropy.stats import SigmaClip
+    from photutils.background import Background2D, SExtractorBackground
+
+    return Background2D(
+        np.ascontiguousarray(data, dtype=np.float32),
+        int(box_size),
+        mask=None if mask is None else np.asarray(mask, bool),
+        coverage_mask=None if coverage_mask is None else np.asarray(coverage_mask, bool),
+        fill_value=0.0,
+        exclude_percentile=float(exclude_percentile),
+        filter_size=int(filter_size),
+        sigma_clip=SigmaClip(sigma=sigma, maxiters=maxiters),
+        bkg_estimator=SExtractorBackground(sigma_clip=None),
+    )
+
+
+def estimate_background(data, mask=None, coverage_mask=None, with_rms: bool = False, **mesh_options):
+    """Full-resolution mesh background (+ RMS) for subtraction."""
+    bkg = background_mesh(data, mask=mask, coverage_mask=coverage_mask, **mesh_options)
+    # both are properties that recompute a full-frame array on every access
+    return bkg.background, (bkg.background_rms if with_rms else None)
+
+
+def sky_statistics(data, mask=None, coverage_mask=None, **mesh_options) -> tuple[float, float]:
+    """Sky level and noise off-source: the medians of the mesh and of its RMS, mesh-only so no frame is upsampled.
+
+    Same pair of quantities SExtractor summarises as ``Background: ... RMS: ...`` and the pipeline stores as
+    SKYVAL/SKYSIG — measured through the source mask, and so free of the source flux that inflates those two."""
+    bkg = background_mesh(data, mask=mask, coverage_mask=coverage_mask, **mesh_options)
+    return float(bkg.background_median), float(bkg.background_rms_median)
+
+
+def boxes_dropped(excluded, box_size: int, exclude_percentile: float) -> float:
+    """% of whole mesh boxes Background2D will drop and interpolate over; a lower bound.
+
+    Only the mask is counted here: photutils counts sigma-clipped pixels and edge padding toward
+    the same threshold, so the real figure is never smaller."""
+    box = int(box_size)
+    ny, nx = excluded.shape[0] // box, excluded.shape[1] // box
+    if ny == 0 or nx == 0:
+        return 0.0
+    frac = excluded[: ny * box, : nx * box].reshape(ny, box, nx, box).mean(axis=(1, 3))
+    return float((frac * 100 >= exclude_percentile).mean() * 100)
 
 
 def _parse_swarp_image_size(config_path: str) -> tuple[int, int]:

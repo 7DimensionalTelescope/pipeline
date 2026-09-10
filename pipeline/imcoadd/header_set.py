@@ -117,6 +117,14 @@ class InputHeaderSet:
         """Per-image values of ``key`` over the unmasked set (None where missing)."""
         return [h.get(key) for h in self.headers]
 
+    def values_any(self, *keys: str) -> list:
+        """Per-image value of the first of ``keys`` the header carries (None when it carries none)."""
+        return [value for value, _ in self.values_any_with_key(*keys)]
+
+    def values_any_with_key(self, *keys: str) -> list[tuple]:
+        """Per-image ``(value, key)`` of the first of ``keys`` the header carries; ``(None, None)`` for neither."""
+        return [next(((h[k], k) for k in keys if h.get(k) is not None), (None, None)) for h in self.headers]
+
     def unique(self, key: str) -> list:
         """Distinct non-None values of ``key`` across unmasked inputs."""
         return list(set(v for v in self.values(key) if v is not None))

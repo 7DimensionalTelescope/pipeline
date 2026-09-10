@@ -43,6 +43,7 @@
 FIGURES_DIRNAME = "figures"
 ASTRM_DIRNAME = "astrometry"
 PHOTOMETRY_DIRNAME = "photometry"
+IMCOADD_DIRNAME = "imcoadd"
 SINGLES_DIRNAME = "singles"
 DAILY_COADD_DIRNAME = "coadd"
 MULTI_EPOCH_DIRNAME = "coadd"  # factory mirror of COADD_DIR

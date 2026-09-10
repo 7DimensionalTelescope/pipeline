@@ -4,7 +4,7 @@ import os
 import shutil
 import threading
 import time
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 from astropy.io import fits
@@ -28,15 +28,33 @@ from ..utils import (
     time_diff_in_seconds,
 )
 from .coadd_plan import CoaddPlan
+from .header_set import InputHeaderSet
+from .storage import IntermediateStorage
+
+
+if TYPE_CHECKING:
+    from ..config._crossfilter_stubs import CrossFilterNode
+    from ..config._sciproc_stubs import SciProcNode
+
+    ConfigNodeT = SciProcNode | CrossFilterNode  # ImCoadd runs on the first, WhiteImage on the second
 
 
 class SwarpMixin:
     _swarp_launch_lock = threading.Lock()
     _swarp_last_launch = 0.0
 
+    config_node: "ConfigNodeT"
     logger: Logger
     path: PathHandler
     plan: CoaddPlan
+    storage: IntermediateStorage
+    input_images: list[str]
+    input_headers: InputHeaderSet
+    images_to_coadd: list[str] | None
+    overwrite: bool | None
+    center: str | None
+    _use_gpu: bool
+    _output_wcs_id: str | None
     _bpm_resampled_masks: list[str]
     _manifest: dict | None
     _joint_wcs_head_of: dict[str, str]

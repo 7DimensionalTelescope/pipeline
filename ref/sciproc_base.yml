@@ -133,11 +133,12 @@ imcoadd:
   zp_key: 'ZP_AUTO'
   zpscale: True
   bkgsub_type: 'dynamic'  # 'constant' | 'dynamic' | 'individual'; leave empty for auto
-  sex_vars:  # SExtractor overrides for background subtraction
-    BACK_SIZE:
-    BACK_FILTERSIZE:
-    DETECT_THRESH:  # empty reuses the photometry catalog; a differing value forces own run
-    DETECT_MINAREA:
+  background:  # photutils Background2D mesh; the source mask is per-pixel and no value here enters it
+    box_size: 128
+    filter_size: 3  # median filter over this many mesh nodes per axis
+    exclude_percentile: 50  # a box losing this % of its pixels is dropped and refilled from its 10 nearest nodes
+    min_usable: 20  # below this % of the frame left unmasked, the frame takes a constant sky instead
+    max_dropped_boxes: 50  # above this % of dropped mesh boxes, the frame takes a constant sky instead
   source_mask: True  # False, True or 'iterative'; only affects dynamic bkgsub
   dump_source_masks: false  # retain source masks beside config under source_masks/config_stem
   output_weight_map: true  # write the coadd weight product
@@ -149,6 +150,8 @@ imcoadd:
   dump_reprojected_masks: false
   satellite_mask:
     enabled: false  # detector thresholds default in detect_satellite_trails; override keys here only when tuning
+    width_sigma: 1.0  # perpendicular-profile threshold in units of the frame noise; lower widens the trail mask
+    width_scale: 1.0  # multiplies the measured trail half-width before the 2-24 px clamp
   output_sky_rms_map: false  # BACKGROUND_RMS model of source-free sky
   output_bkg_map: false  # keep each frame's mesh background model (262 MB/frame, read by nobody)
   persist_weight_maps: False  # durable per-single maps; costs 1.71 s/frame to save a 0.04 s kernel

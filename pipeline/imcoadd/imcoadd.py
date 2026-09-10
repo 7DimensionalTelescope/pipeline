@@ -458,6 +458,9 @@ class ImCoadd(
             "COVPOL":   (bp.coverage_policy.upper(), "imcoadd.coverage_policy"),
             "SATMASK":  (bool(bp.satellite_mask_enabled), "imcoadd.satellite_mask.enabled"),
             "SRCMASK":  (shown(bp.source_mask), "imcoadd.source_mask"),
+            "BKGBOX":   (bp.background_box_size, "imcoadd.background.box_size"),
+            "BKGFILT":  (bp.background_filter_size, "imcoadd.background.filter_size"),
+            "BKGEXCL":  (bp.background_exclude_percentile, "imcoadd.background.exclude_percentile"),
         }  # fmt: skip
         mode = str(get_key(node, "coadd_mode") or "").lower()
         if mode == "clipped":

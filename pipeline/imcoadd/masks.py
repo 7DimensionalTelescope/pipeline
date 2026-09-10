@@ -1,5 +1,7 @@
+from __future__ import annotations
 import os
 import threading
+from typing import TYPE_CHECKING
 
 import numpy as np
 from astropy.io import fits
@@ -16,6 +18,14 @@ from .const import MASK_HEADER_CARDS, MaskBit
 from .counts import CoaddCounts
 from .plotting import plot_coadd_counts
 from .utils import count_dtype, determine_size, write_count_planes, write_mask_plio
+from .header_set import InputHeaderSet
+
+
+if TYPE_CHECKING:
+    from ..config._crossfilter_stubs import CrossFilterNode
+    from ..config._sciproc_stubs import SciProcNode
+
+    ConfigNodeT = SciProcNode | CrossFilterNode  # ImCoadd runs on the first, WhiteImage on the second
 
 
 def _robust_stats(image: np.ndarray, stride: int = 8) -> tuple[float, float]:
@@ -347,10 +357,17 @@ class CoaddMaskBuilder:
 class MaskMixin:
     _saturation_map_lock = threading.Lock()  # the fused loop records saturation from its writer threads
 
+    config_node: ConfigNodeT
     logger: Logger
     path: PathHandler
     plan: CoaddPlan
     storage: IntermediateStorage
+    intermediate_storage: IntermediateStorage | None
+    input_images: list[str]
+    input_headers: InputHeaderSet
+    _has_detector_bpm: bool
+    _coadd_counts: CoaddCounts
+    _zdf_cache: dict[str, tuple[str, str, str]]
     _coadd_mask_builder: CoaddMaskBuilder | None
     _quality_masks: list | None
     _badpix_positions_cache: dict[str, ProjectedBadPixels]
@@ -394,9 +411,7 @@ class MaskMixin:
         if coords is None:
             coords = detector_badpixels(mask_file, badpix)
             self._bpmask_coords_cache[mask_file] = coords
-        positions = project_badpixels(
-            *coords, self._single_wcs_header(detector_image), output_header, output_shape
-        )
+        positions = project_badpixels(*coords, self._single_wcs_header(detector_image), output_header, output_shape)
         self._badpix_positions_cache[detector_image] = positions
         return positions
 
@@ -450,9 +465,7 @@ class MaskMixin:
                 if not compute:
                     return None
                 header = self._frame_shape_header(image)
-                cached = self._saturated_positions(
-                    detector, header, (int(header["NAXIS2"]), int(header["NAXIS1"]))
-                )
+                cached = self._saturated_positions(detector, header, (int(header["NAXIS2"]), int(header["NAXIS1"])))
             positions.append(cached)
         total = sum(p.size for p in positions)
         if not total:
@@ -536,11 +549,15 @@ class MaskMixin:
                     )
                     level = float(saturation)
                 value = (level, str(get_image_id(flat_file) or get_basename(flat_file)))
-                self.logger.info(
-                    f"Saturation map from {get_basename(flat_file)}: {float(saturation):.0f} at the flat's "
-                    f"central median, {float(np.nanmin(level[usable])):.0f} to "
-                    f"{float(np.nanmax(level[usable])):.0f} across the field ({level.nbytes / 1e6:.0f} MB)"
-                ) if not np.isscalar(level) else None
+                (
+                    self.logger.info(
+                        f"Saturation map from {get_basename(flat_file)}: {float(saturation):.0f} at the flat's "
+                        f"central median, {float(np.nanmin(level[usable])):.0f} to "
+                        f"{float(np.nanmax(level[usable])):.0f} across the field ({level.nbytes / 1e6:.0f} MB)"
+                    )
+                    if not np.isscalar(level)
+                    else None
+                )
             self._saturation_map_cache[key] = value
             return value
 
@@ -685,6 +702,7 @@ class MaskMixin:
         )
         satellite_options = self.config_node.imcoadd.satellite_mask
         quality_masks = []
+        trailed_frames = 0
         for index, (image, detector) in enumerate(zip(images, detector_images)):
             data, header = self._read_stage_frame(image)
             same_file = os.path.abspath(image) == os.path.abspath(detector)
@@ -695,6 +713,7 @@ class MaskMixin:
             if self.plan.satellite_mask_enabled:
                 trail, lines = detect_satellite_trails(data, **satellite_options)
                 mask[trail] |= int(MaskBit.SATELLITE)
+                trailed_frames += int(trail.any())
                 self.logger.info(
                     f"Satellite mask: {len(lines)} line(s), {int(trail.sum())} pixels in {get_basename(image)}"
                 )
@@ -707,6 +726,11 @@ class MaskMixin:
                 self.storage.working_mask_paths.append(path)
                 quality_masks.append(path)
         builder.frames = quality_masks
+        if self.plan.satellite_mask_enabled:  # absent card = never evaluated, 0 = evaluated and clear
+            self.input_headers.run_cards["NTRAILIM"] = (
+                trailed_frames,
+                "Inputs with satellite-trail pixels masked",
+            )
         self._coadd_mask_builder = builder
         self._quality_masks = quality_masks
         return quality_masks
