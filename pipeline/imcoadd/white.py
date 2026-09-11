@@ -4,8 +4,9 @@ from astropy.io import fits
 
 from ..const import (
     AUTO_RECORD_PROCESS_STATUS_DEPENDENCIES,
-    BROAD_FILTERS,
-    FIRST_MEDIUM_FILTERS,
+    # BROAD_FILTERS,
+    # FIRST_MEDIUM_FILTERS,
+    ALL_FILTERS,
     IMAGE_GROUP_SCIENCE,
     WHITE_FILTER,
 )
@@ -73,7 +74,9 @@ class WhiteImage(ImCoadd):
         self._confirm_input_completeness()
         super().initialize()
 
-    def _confirm_input_completeness(self, counted_filters=tuple(BROAD_FILTERS + FIRST_MEDIUM_FILTERS)):
+    def _confirm_input_completeness(
+        self, counted_filters=tuple(ALL_FILTERS)
+    ):  # (BROAD_FILTERS + FIRST_MEDIUM_FILTERS)):
         """Coadd only when every available filter is ready: confirmed, proven-rejected, or hold.
 
         Per declared science parent, ready means flag.coadd and flag.coadd_photometry True and
