@@ -849,12 +849,17 @@ class PhotometrySingle:
     def measure_sky(self, overwrite: bool = True, phot_header: PhotometryHeader = None) -> bool:
         """Re-derive the sky level and noise on the pixels the source mask leaves, and record the fraction used."""
         from ..imcoadd.utils import background_mesh, build_source_mask, source_ellipses_on_frame
-        from ..imcoadd.background_qa import measure_background_residuals, RESIDUAL_KEYS
+        from ..imcoadd.background_qa import measure_background_residuals, RESIDUAL_KEYS, RESIDUAL_BOX_SIZE
 
         phot_header = phot_header or self.phot_header
         if self._difference_photometry:  # a residual image has no sky of its own to publish
             return False
-        if not overwrite and phot_header.BACKSIG is not None and phot_header.BACKMETH is not None:
+        if (
+            not overwrite
+            and phot_header.BACKSIG is not None
+            and phot_header.BACKSCL == RESIDUAL_BOX_SIZE
+            and all(getattr(phot_header, key.upper()) is not None for key in RESIDUAL_KEYS)
+        ):
             self.logger.debug("Off-source sky already on the frame; keeping it")
             return False
         if not phot_header.SKYSIG:
@@ -905,7 +910,9 @@ class PhotometrySingle:
                 coverage &= ~no_data
         residual = data if is_coadd else data - fitted.background
         result = measure_background_residuals(
-            residual, exclude=sources, coverage=coverage, box_size=max(16, int(mesh["box_size"]) // 2),
+            residual,
+            exclude=sources,
+            coverage=coverage,
         )
         for key in RESIDUAL_KEYS:
             setattr(phot_header, key.upper(), getattr(result, key))
@@ -1531,14 +1538,8 @@ class PhotometryHeader:
     BACKFRAC: float = None
     BACKOFF: float = None
     BACKSYS: float = None
-    BACKRMS: float = None
-    BACKERR: float = None
-    BKSERR: float = None
-    BACKNOI: float = None
     BACKSCL: int = None
     BACKN: int = None
-    BACKLAG: int = None
-    BACKMETH: str = None
     BACKREF: str = None
     REFCAT: str = None  # "GaiaXP"
     MAGLOW: float = None
@@ -1686,7 +1687,7 @@ class PhotometryHeader:
 
         # Filter out entries where the value is None
         return {k: v for k, v in phot_header_dict.items() if v[0] is not None} | (
-            residual.cards(include_missing=True) if self.BACKMETH is not None else {}
+            residual.cards(include_missing=True) if self.BACKN is not None else {}
         )
 
     def __repr__(self) -> str:

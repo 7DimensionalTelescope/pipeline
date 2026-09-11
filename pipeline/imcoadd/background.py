@@ -615,7 +615,7 @@ class BackgroundMixin:
             return
         exclude = sources if quality is None else (sources | (quality != 0))
         result = measure_background_residuals(
-            data, exclude=exclude, coverage=coverage, box_size=max(16, self.plan.background_box_size // 2),
+            data, exclude=exclude, coverage=coverage,
         )
         header.update(result.cards())
         self.logger.debug(f"Residual sky: {result}")
