@@ -30,6 +30,7 @@ from ..utils import (
 from .coadd_plan import CoaddPlan
 from .header_set import InputHeaderSet
 from .storage import IntermediateStorage
+from .flat_weight import WEIGHT_MODEL, copy_weight_fit_header
 
 
 if TYPE_CHECKING:
@@ -397,6 +398,8 @@ class SwarpMixin:
             wht = collapse(
                 factory.resampled_weight_images([sci], pass_type=self._weight_pass_type()), force=True
             )
+            if self.plan.smooth_weight:
+                copy_weight_fit_header(sidecar, wht)
             self._manifest_note(wht, **options)
 
     def _drop_swarp_byproduct(self, swarp_inputs, pass_type: str) -> None:
@@ -485,7 +488,7 @@ class SwarpMixin:
             # the weight is a product in its own right: validate its stat and identity too
             weight_entry = self._manifest_options(wht)
             return weight_entry is not None and not any(weight_entry.get(k) != v for k, v in wanted.items())
-        if self.plan.policy != "off" or self.plan.joint_wcs or os.path.exists(factory.joint_wcs_manifest):
+        if self.plan.smooth_weight or self.plan.policy != "off" or self.plan.joint_wcs or os.path.exists(factory.joint_wcs_manifest):
             return False  # a header can vouch for INTERP but not for the weight's badpix zeros or the joint WCS
         try:
             ok = str(fits.getheader(sci).get("INTERP", "")).upper() == str(method).upper()
@@ -613,6 +616,7 @@ class SwarpMixin:
                     group_out,
                     calib,
                     weight_store=weight_store,
+                    flat_file=f_m_file,
                     method=method,
                     badpix=badpix,
                     zero_interp_weight=zero_interp,
@@ -821,6 +825,8 @@ class SwarpMixin:
                 return False
         if ("SATZERO" in sidecar) != bool(self.plan.zero_saturated_before_reprojection):
             return False
+        if sidecar.get("WGTMODEL") != wanted["weight_model"]:
+            return False
         holes = sidecar.get("WGTHOLES")
         return holes is None or bool(holes) == bool(self.plan.zero_before_reprojection)
 
@@ -833,6 +839,7 @@ class SwarpMixin:
             "zero": bool(self.plan.zero),
             "joint_wcs": bool(self.plan.joint_wcs),
             "satzero": bool(self.plan.zero_saturated_before_reprojection),
+            "weight_model": WEIGHT_MODEL if self.plan.smooth_weight else "PIXEL",
             "wcsid": self._swarp_output_wcs_id(),
             "imageid": self._imageid_of.get(single),
             "bpmid": self._bpmid_of.get(single),

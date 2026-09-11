@@ -549,7 +549,7 @@ def write_weight_float32(path, weight, header, n_holes=None):
 def weight_and_interpolate_cpu(
     images, mask_path, output_paths, calib, window=1, method="median", badpix=1,
     zero_interp_weight=True, logger=None, post_frame=None, weight_store=None, source_catalogs=None, bpmid=None,
-    saturated_mask=None,
+    saturated_mask=None, flat_file=None,
 ):
     """Fused weight calculation + bad-pixel interpolation, one read and one write per image.
 
@@ -565,20 +565,30 @@ def weight_and_interpolate_cpu(
     from concurrent.futures import ThreadPoolExecutor
 
     from .weight import optimized_parallel, smooth_weight_surface, source_mask_on_frame
+    from .flat_weight import WEIGHT_MODEL, WEIGHT_QA_COMMENTS, smooth_flat_surface
 
     mask = fits.getdata(mask_path).astype(np.int32)
     hole = mask == badpix
     n_holes = int(hole.sum())
+    flat_surface = None
+    if source_catalogs is not None:
+        flat = calib[2] if calib is not None else fits.getdata(flat_file)
+        flat_surface = smooth_flat_surface(flat, exclude=hole)
 
     def _load(idx):
         with fits.open(images[idx], memmap=False) as hdul:
             return hdul[0].data.astype(np.float32), hdul[0].header
 
-    def _write(idx, sci, sci_hdr, interp_img, interp_wt, n_saturated=None):
+    def _write(idx, sci, sci_hdr, interp_img, interp_wt, n_saturated=None, coefficients=None, fit_qa=None):
         sci_out = output_paths[idx]
         hdr = add_bpx_method(sci_hdr.copy(), method, bpmid)
         fits.writeto(sci_out, interp_img, header=hdr, overwrite=True)
         weight_hdr = hdr.copy()
+        weight_hdr["WGTMODEL"] = WEIGHT_MODEL if coefficients is not None else "PIXEL"
+        if coefficients is not None:
+            weight_hdr["WGTB"], weight_hdr["WGTC"] = coefficients
+            for key, value in fit_qa.items():
+                weight_hdr[key] = (value, WEIGHT_QA_COMMENTS[key])
         if n_saturated is not None:
             weight_hdr["SATZERO"] = (int(n_saturated), "saturated detector pixels zeroed before reprojection")
         write_weight_float32(add_suffix(sci_out, "weight"), interp_wt, weight_hdr,
@@ -613,11 +623,16 @@ def weight_and_interpolate_cpu(
                     wgt[nonfinite] = 0.0
                 if weight_store is not None:
                     pool.submit(persist_single_weight, store_paths[idx], wgt.copy(), store_masters)
+            coefficients = None
+            fit_qa = {}
             if source_catalogs is not None:
                 # after the store write: the durable copy is the pristine model, smoothing is a
                 # campaign choice. Sources and bad pixels are excluded from the fit, not filled.
                 src = source_mask_on_frame(source_catalogs[idx], sci_hdr, logger)
-                wgt = smooth_weight_surface(wgt, exclude=hole if src is None else (src | hole))[0]
+                wgt, coefficients = smooth_weight_surface(
+                    wgt, flat_surface, exclude=hole if src is None else (src | hole), logger=logger,
+                    qa=fit_qa, image_name=_os.path.basename(images[idx]),
+                )
             t_weight = _time.time() - st_img - t_read
             interp_img, interp_wt = interpolate_masked_pixels_cpu_numba(
                 sci, mask, window=window, weight=wgt, use_median=(method == "median")
@@ -635,7 +650,7 @@ def weight_and_interpolate_cpu(
 
             if pending_write is not None:
                 pending_write.result()
-            pending_write = pool.submit(_write, idx, sci, sci_hdr, interp_img, interp_wt, n_saturated)
+            pending_write = pool.submit(_write, idx, sci, sci_hdr, interp_img, interp_wt, n_saturated, coefficients, fit_qa)
             if logger is not None:
                 # per-image detail at DEBUG; INFO gets one summary line per 25 frames
                 logger.debug(

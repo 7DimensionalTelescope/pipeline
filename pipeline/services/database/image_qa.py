@@ -62,7 +62,6 @@ class ImageQATable:
     err_msgs: Optional[List[str]] = None
     ppflag: Optional[int] = None
 
-    clipped: Optional[float] = None
     clipmed: Optional[float] = None
     clipstd: Optional[float] = None
     clipmin: Optional[float] = None

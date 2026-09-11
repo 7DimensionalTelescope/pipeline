@@ -8,9 +8,10 @@ from ..path.path import PathHandler
 import numpy as np
 import fitsio
 from ..cuda.weight_map import calc_weight as gpu_calc_weight
+from .flat_weight import WEIGHT_MODEL, WEIGHT_QA_COMMENTS, smooth_flat_surface, smooth_weight_surface
 
 SMOOTH_BLOCK = 64  # the background mesh size; a block median of sky pixels lands within ~1% of the surface
-SMOOTH_MIN_FRACTION = 0.25  # a cell masked beyond this is left to the nearest-neighbour fill
+SMOOTH_MIN_FRACTION = 0.25  # minimum usable fraction of a measured cell
 
 
 def _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file):
@@ -36,19 +37,22 @@ def _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file):
 def block_median(weight, valid, block, min_samples):
     """Median of the valid pixels in each block x block cell; NaN where too few survive."""
     h, w = weight.shape
-    ny = h // block
-    nx = w // block
+    ny = (h + block - 1) // block
+    nx = (w + block - 1) // block
     out = np.full((ny, nx), np.nan, dtype=np.float64)
     for by in prange(ny):
         buf = np.empty(block * block, dtype=np.float32)
         for bx in range(nx):
             m = 0
-            for i in range(by * block, by * block + block):
-                for j in range(bx * block, bx * block + block):
+            y1 = min((by + 1) * block, h)
+            x1 = min((bx + 1) * block, w)
+            for i in range(by * block, y1):
+                for j in range(bx * block, x1):
                     if valid[i, j]:
                         buf[m] = weight[i, j]
                         m += 1
-            if m < min_samples:
+            area = (y1 - by * block) * (x1 - bx * block)
+            if m < max(1, int(np.ceil(min_samples * area / (block * block)))):
                 continue
             if m % 2:
                 out[by, bx] = quickselect(buf, m, (m - 1) // 2)
@@ -60,27 +64,6 @@ def block_median(weight, valid, block, min_samples):
                         lo = buf[k]
                 out[by, bx] = 0.5 * (lo + hi)
     return out
-
-
-def smooth_weight_surface(weight, exclude=None, block: int = SMOOTH_BLOCK) -> tuple[np.ndarray, int]:
-    """Bicubic surface through source-masked block medians: the vignetting trend without the one-sample noise."""
-    from scipy.interpolate import RectBivariateSpline
-    from scipy.ndimage import distance_transform_edt
-
-    h, w = weight.shape
-    valid = np.isfinite(weight) & (weight > 0)
-    if exclude is not None:
-        valid &= ~exclude
-    grid = block_median(weight, valid, block, int(SMOOTH_MIN_FRACTION * block * block))
-    missing = ~np.isfinite(grid)
-    if missing.all():
-        raise ValueError("no usable cell left to fit the smooth weight surface")
-    if missing.any():
-        grid = grid[tuple(distance_transform_edt(missing, return_distances=False, return_indices=True))]
-    ny, nx = grid.shape
-    spline = RectBivariateSpline((np.arange(ny) + 0.5) * block, (np.arange(nx) + 0.5) * block, grid, kx=3, ky=3, s=0)
-    surface = spline(np.arange(h), np.arange(w))
-    return np.maximum(surface, 0.0).astype(np.float32), int(missing.sum())
 
 
 def source_mask_on_frame(catalog, header, logger=None):
@@ -137,12 +120,15 @@ def calc_weight_with_cpu(
     weight_store=None,
     zero_mask=None,
     source_catalogs=None,
+    fit_mask=None,
+    logger=None,
     **kwargs
 ):
     from .weight_store import load_single_weight, persist_single_weight
 
     # calibration masters load lazily: an all-reusable group never touches them
     output = None
+    flat_surface = None
     masters = {"d": d_m_file, "f": f_m_file, "sz": sig_z_file, "sf": sig_f_file}
 
     out_names = out_names if out_names is not None else add_suffix(images, suffix="weight")
@@ -169,9 +155,20 @@ def calc_weight_with_cpu(
             if source_catalogs is not None:
                 # after the store write: the durable copy is the pristine model, smoothing is a
                 # campaign choice. Sources and bad pixels are excluded from the fit, not filled.
-                src = source_mask_on_frame(source_catalogs[i], fits.getheader(images[i]))
+                if flat_surface is None:
+                    flat = output[2] if output is not None else fitsio.read(f_m_file)
+                    flat_surface = smooth_flat_surface(flat, exclude=fit_mask)
+                src = source_mask_on_frame(source_catalogs[i], fits.getheader(images[i]), logger)
                 exclude = out <= 0 if src is None else (src | (out <= 0))
-                out, _ = smooth_weight_surface(out, exclude=exclude)
+                if fit_mask is not None:
+                    exclude |= fit_mask
+                header = {"WGTMODEL": WEIGHT_MODEL}
+                out, (b, c) = smooth_weight_surface(
+                    out, flat_surface, exclude=exclude, logger=logger, qa=header, image_name=os.path.basename(images[i])
+                )
+                header.update(WGTB=b, WGTC=c)
+            else:
+                header = {"WGTMODEL": "PIXEL"}
             if zero_mask is not None:
                 # zero_badpix_weight without interpolation: the factory copy carries the
                 # zeros; the persisted store copy above stays pristine by contract
@@ -179,7 +176,8 @@ def calc_weight_with_cpu(
                 out[zero_mask] = 0.0
             if pending is not None:
                 pending.result()
-            pending = pool.submit(fitsio.write, outname, out.astype(np.float32), clobber=True)
+            cards = [{"name": k, "value": v, "comment": WEIGHT_QA_COMMENTS.get(k, "")} for k, v in header.items()]
+            pending = pool.submit(fitsio.write, outname, out.astype(np.float32), header=cards, clobber=True)
         if pending is not None:
             pending.result()
 

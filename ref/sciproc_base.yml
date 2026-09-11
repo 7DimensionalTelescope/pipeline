@@ -114,7 +114,7 @@ imcoadd:
   coadd_weighting: global  # false | global (1/SKYSIG^2 per image) | pixel-wise (weight maps)
   coadd_mode_options:
     clipped:
-      clip_sigma: 5.0
+      clip_sigma: 4.0
       clip_ampfrac: 0.3
       two_sample_fallback: mean  # mean | min: a pixel with only two valid samples cannot clip; take their mean or the smaller one
     proper:

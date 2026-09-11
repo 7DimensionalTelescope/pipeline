@@ -439,6 +439,7 @@ class ImCoadd(
 
     def _coadd_provenance(self) -> dict[str, tuple]:
         """Config options that change the coadd, as coadd header cards."""
+        from .flat_weight import WEIGHT_MODEL
         node = self.config_node.imcoadd
         shown = lambda value: ("NONE" if value is None or value is False else value)  # noqa: E731
         bp = self.plan
@@ -462,6 +463,7 @@ class ImCoadd(
             "BKGFILT":  (bp.background_filter_size, "imcoadd.background.filter_size"),
             "BKGEXCL":  (bp.background_exclude_percentile, "imcoadd.background.exclude_percentile"),
         }  # fmt: skip
+        cards["WGTMODEL"] = (WEIGHT_MODEL if bp.smooth_weight else "PIXEL", "single-frame weight model")
         mode = str(get_key(node, "coadd_mode") or "").lower()
         if mode == "clipped":
             cards["CLIPSIG"] = (bp.clip_sigma, "coadd_mode_options.clipped.clip_sigma")
@@ -546,11 +548,14 @@ class ImCoadd(
 
             for vimg, oname in zip(group_values, group_outputs):
                 if os.path.exists(oname) and not self.overwrite:
-                    self.logger.debug(f"Already exists; skip generating {oname}")
-                    continue
-                else:
-                    uncalculated_images.append(vimg)
-                    uncalculated_outputs.append(oname)
+                    from .flat_weight import WEIGHT_MODEL
+
+                    expected = WEIGHT_MODEL if self.plan.smooth_weight else "PIXEL"
+                    if fits.getheader(oname).get("WGTMODEL") == expected:
+                        self.logger.debug(f"Already exists; skip generating {oname}")
+                        continue
+                uncalculated_images.append(vimg)
+                uncalculated_outputs.append(oname)
             if len(uncalculated_images) < len(group_values):
                 self.logger.info(
                     f"Group {i + 1}: {len(group_values) - len(uncalculated_images)} existing weight maps "
@@ -568,10 +573,13 @@ class ImCoadd(
                         acquired = "CPU"
                         bp = self.plan
                         zero_mask = None
-                        if bp.zero_before_reprojection and not bp.interpolate:
+                        fit_mask = None
+                        if bp.smooth_weight or (bp.zero_before_reprojection and not bp.interpolate):
                             # interpolation off but bad-pixel weights still zeroed
                             mask_file, badpix = self._get_bpmask(uncalculated_images[0])
-                            zero_mask = fits.getdata(mask_file) == badpix
+                            fit_mask = fits.getdata(mask_file) == badpix
+                            if bp.zero_before_reprojection and not bp.interpolate:
+                                zero_mask = fit_mask
                         calc_weight(
                             uncalculated_images,
                             d_m_file,
@@ -582,6 +590,8 @@ class ImCoadd(
                             weight_store=self.plan.persist_weight_maps,
                             zero_mask=zero_mask,
                             source_catalogs=self._source_catalogs(uncalculated_images),
+                            fit_mask=fit_mask,
+                            logger=self.logger,
                         )
                     else:
                         bp = self.plan
@@ -691,11 +701,15 @@ class ImCoadd(
         calculated_outputs = []
         for input_image_file, output_file in zip(input_images, interp_images):
             if os.path.exists(output_file) and not self.overwrite:
-                self.logger.debug(f"Already exists; skip generating {output_file}")
-                continue
-            else:
-                uncalculated_images.append(input_image_file)
-                calculated_outputs.append(output_file)
+                from .flat_weight import WEIGHT_MODEL
+
+                sidecar = add_suffix(output_file, "weight")
+                expected = WEIGHT_MODEL if self.plan.smooth_weight else "PIXEL"
+                if not weight or (os.path.exists(sidecar) and fits.getheader(sidecar).get("WGTMODEL") == expected):
+                    self.logger.debug(f"Already exists; skip generating {output_file}")
+                    continue
+            uncalculated_images.append(input_image_file)
+            calculated_outputs.append(output_file)
 
         if 0 < len(uncalculated_images) < len(input_images):
             self.logger.info(
