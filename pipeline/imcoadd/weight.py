@@ -94,8 +94,11 @@ def source_mask_on_frame(catalog, header, logger=None):
     ellipses = source_ellipses_on_frame(catalog, header, header, logger=logger)
     if ellipses is None:
         return None
+    skysig = header.get("BACKSIG") or header.get("SKYSIG")  # the same threshold bkgsub cuts its own mask at
+    if skysig is None:
+        raise ValueError("Cannot build source mask: No sky noise value or SKYSIG keyword in the header")
     return build_source_mask(
-        ellipses, (header["NAXIS2"], header["NAXIS1"]), skysig=header.get("SKYSIG"), star_scale=2.0,
+        ellipses, (header["NAXIS2"], header["NAXIS1"]), skysig=skysig, star_scale=2.0,
         galaxy_scale=2.5, class_star_cut=0.5, min_radius=3.0, logger=logger,
     )  # fmt: skip
 
@@ -124,8 +127,18 @@ def calc_weight_with_gpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, dev
     )
 
 
-def calc_weight_with_cpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, weight=True, out_names=None,
-                         weight_store=None, zero_mask=None, source_catalogs=None, **kwargs):
+def calc_weight_with_cpu(
+    images,
+    d_m_file,
+    f_m_file,
+    sig_z_file,
+    sig_f_file,
+    out_names=None,
+    weight_store=None,
+    zero_mask=None,
+    source_catalogs=None,
+    **kwargs
+):
     from .weight_store import load_single_weight, persist_single_weight
 
     # calibration masters load lazily: an all-reusable group never touches them

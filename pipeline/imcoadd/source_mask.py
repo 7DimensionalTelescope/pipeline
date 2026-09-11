@@ -1,10 +1,20 @@
-"""Per-source mask radius: double-Moffat flux branch for every source, catalog-ratio Kron floor for extended ones."""
+"""Calibrated per-source mask-radius law.
+
+For every source the flux branch solves ``FLUX_AUTO * profile(R) = skysig / K_THRESH``.
+For an extended source the final semi-major radius is::
+
+    max(R_flux, GALAXY_SAFETY_MARGIN * f(x1, x2) * max(KRON_RADIUS, 1) * A_IMAGE)
+
+where ``f`` is the fitted two-ratio dilation returned by :func:`galaxy_dilation`.
+Point sources use ``R_flux`` alone.  The fitted constants below come from the external calibration
+artifacts named beside each block; keep their provenance here with the executable formula.
+"""
 
 import threading
 
 import numpy as np
 
-# Fixed point of the two interleaved fits (double_moffat_law_converged.json).
+# double Moffat profile fit for point sources; coeffs predetermined from external calibration.
 ALPHA_SLOPE = 1.5067571888356017
 ALPHA_INTERCEPT = 0.7765939512685198
 BETA_CORE = 2.0380495854589302
@@ -13,9 +23,11 @@ F_WING = 0.14267918102994284
 K_ALPHA = 1.0
 RNORM_PX = 1000.0
 
-K_THRESH = 64.0
+K_THRESH = 32  # 64  # TODO: tune
 
-# Ridge fit of ln f on two catalog radius ratios; the clips are the predictors' 1st and 99th percentiles.
+# The clips are the predictors' 1st and 99th percentiles.  The safety margin is exp(-p10) of
+# ln(R_fit / R_opt), so the Kron branch reaches or exceeds the measured R_opt for 90% of the
+# calibration galaxies rather than being merely median-unbiased.
 DILATION_COEFFS = (
     1.2863216529093424,
     -0.9227011965816579,
@@ -25,6 +37,7 @@ DILATION_COEFFS = (
 )
 CONCENTRATION_CLIP = (1.035181160986305, 2.8625749365907764)
 OUTER_RATIO_CLIP = (1.3463635627688317, 1.9722462032777797)
+GALAXY_SAFETY_MARGIN = 1.47
 
 RMIN, RMAX, NGRID = 0.02, 2e4, 8192
 N_ALPHA, ALPHA_GRID = 2048, (0.5, 500.0)
@@ -95,14 +108,14 @@ def _invert(target, alpha):
     return (1.0 - weight) * at(lo) + weight * at(hi)
 
 
-def flux_branch_radius(flux, awin, skysig):
-    """Semi-major axis where the source's own profile falls to SKYSIG / K_THRESH."""
+def optimized_radius_for_point_sources_with_known_profile(flux, awin, skysig):
+    """Semi-major axis where the source's profile falls to the supplied sky noise / K_THRESH."""
     flux = np.maximum(np.asarray(flux, float), 1.0)
     return _invert(float(skysig) / K_THRESH / flux, core_width(awin))
 
 
 def galaxy_dilation(cat, fallback):
-    """Dilation on KRON_RADIUS x A_IMAGE for extended sources; `fallback` where the predictors are unusable."""
+    """Fitted (pre-safety-margin) dilation on the MAG_AUTO semi-major axis."""
     r50 = np.asarray(cat["FLUX_RADIUS_50"], float)
     usable = np.isfinite(r50) & (r50 > 0)
     r50 = np.where(usable, r50, 1.0)
@@ -113,12 +126,23 @@ def galaxy_dilation(cat, fallback):
     return np.where(usable & np.isfinite(f), f, fallback)
 
 
+def dilated_kron_based_radius_for_galaxies(kron_axis, dilation):
+    """Safety-margined extended-source radius from the MAG_AUTO axis and fitted dilation."""
+    return GALAXY_SAFETY_MARGIN * np.asarray(dilation, float) * np.asarray(kron_axis, float)
+
+
 def has_columns(cat, columns):
     return all(name in cat.colnames for name in columns)
 
 
 def mask_semi_major(cat, skysig, star_scale, galaxy_scale, class_star_cut, logger=None):
-    """Mask semi-major axis per source, in the pixels of the frame the catalog was measured on."""
+    """Final mask semi-major axis in the catalog frame's pixels.
+
+    Point: ``R_flux``.  Extended: ``max(R_flux, margin * f * Kron axis)``.  Without a usable
+    flux branch, the point-source radius falls back to ``star_scale * Kron axis`` while the
+    extended-source radius remains the safety-margined fitted (or ``galaxy_scale`` fallback)
+    Kron branch.
+    """
     kron_axis = np.clip(np.asarray(cat["KRON_RADIUS"], float), 1.0, None) * np.asarray(cat["A_IMAGE"], float)
     is_extended = np.asarray(cat["CLASS_STAR"], float) < class_star_cut
 
@@ -127,12 +151,17 @@ def mask_semi_major(cat, skysig, star_scale, galaxy_scale, class_star_cut, logge
     else:
         dilation = np.full(len(cat), galaxy_scale, dtype=float)
         if logger is not None:
-            logger.debug(f"Catalog lacks {DILATION_COLUMNS}; extended sources keep the constant x{galaxy_scale}")
+            logger.debug(
+                f"Catalog lacks {DILATION_COLUMNS}; extended sources use "
+                f"the safety-margined constant x{galaxy_scale * GALAXY_SAFETY_MARGIN:g}"
+            )
+
+    dilated_kron_radius = dilated_kron_based_radius_for_galaxies(kron_axis, dilation)
 
     if skysig and has_columns(cat, FLUX_BRANCH_COLUMNS):
-        flux_radius = flux_branch_radius(cat["FLUX_AUTO"], cat["AWIN_IMAGE"], skysig)
-        return np.where(is_extended, np.maximum(flux_radius, dilation * kron_axis), flux_radius)
+        r_opt = optimized_radius_for_point_sources_with_known_profile(cat["FLUX_AUTO"], cat["AWIN_IMAGE"], skysig)
+        return np.where(is_extended, np.maximum(r_opt, dilated_kron_radius), r_opt)
 
     if logger is not None:
-        logger.debug(f"No SKYSIG or {FLUX_BRANCH_COLUMNS}; mask radius from the Kron ellipse alone")
-    return np.where(is_extended, dilation, star_scale) * kron_axis
+        logger.debug(f"No sky-noise value or {FLUX_BRANCH_COLUMNS}; mask radius from the Kron ellipse alone")
+    return np.where(is_extended, dilated_kron_radius, star_scale * kron_axis)
