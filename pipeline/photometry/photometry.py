@@ -848,12 +848,13 @@ class PhotometrySingle:
 
     def measure_sky(self, overwrite: bool = True, phot_header: PhotometryHeader = None) -> bool:
         """Re-derive the sky level and noise on the pixels the source mask leaves, and record the fraction used."""
-        from ..imcoadd.utils import build_source_mask, sky_statistics, source_ellipses_on_frame
+        from ..imcoadd.utils import background_mesh, build_source_mask, source_ellipses_on_frame
+        from ..imcoadd.background_qa import measure_background_residuals, RESIDUAL_KEYS
 
         phot_header = phot_header or self.phot_header
         if self._difference_photometry:  # a residual image has no sky of its own to publish
             return False
-        if not overwrite and phot_header.BACKSIG is not None:
+        if not overwrite and phot_header.BACKSIG is not None and phot_header.BACKMETH is not None:
             self.logger.debug("Off-source sky already on the frame; keeping it")
             return False
         if not phot_header.SKYSIG:
@@ -872,7 +873,7 @@ class PhotometrySingle:
         no_data = data == 0  # dead columns and overscan; a single carries no reprojection padding
         # the same mesh ImCoadd will fit, so the two stages cannot disagree about what the sky is
         mesh = self.config_node.imcoadd.background
-        phot_header.BACKVAL, phot_header.BACKSIG = sky_statistics(
+        fitted = background_mesh(
             data,
             mask=sources,
             coverage_mask=no_data,
@@ -880,7 +881,36 @@ class PhotometrySingle:
             filter_size=mesh["filter_size"],
             exclude_percentile=mesh["exclude_percentile"],
         )
+        phot_header.BACKVAL, phot_header.BACKSIG = float(fitted.background_median), float(fitted.background_rms_median)
         phot_header.BACKFRAC = round(float((~sources & ~no_data).mean()), 4)
+        is_coadd = "IMG00000" in header
+        coverage = np.isfinite(data) if is_coadd else ~no_data
+        if is_coadd:
+            weight = self.path.imcoadd.coadd_weight_image
+            counts = self.path.imcoadd.factory.coadd_counts_image
+            have_coverage = False
+            if os.path.exists(counts):
+                with fits.open(counts, memmap=True) as hdul:
+                    if "NUSED" in hdul:
+                        coverage &= hdul["NUSED"].data > 0
+                        have_coverage = True
+            if not have_coverage and os.path.exists(weight):
+                weights = fits.getdata(weight, memmap=False)
+                coverage &= np.isfinite(weights) & (weights > 0)
+                have_coverage = True
+            if not have_coverage and header.get("NNANFILL", 0):
+                coverage[:] = False
+                self.logger.warning("No coverage product to exclude filled coadd pixels; residual QA unavailable")
+            elif not have_coverage:
+                coverage &= ~no_data
+        residual = data if is_coadd else data - fitted.background
+        result = measure_background_residuals(
+            residual, exclude=sources, coverage=coverage, box_size=max(16, int(mesh["box_size"]) // 2),
+        )
+        for key in RESIDUAL_KEYS:
+            setattr(phot_header, key.upper(), getattr(result, key))
+        phot_header.BACKREF = "COADD" if is_coadd else "MODEL"
+        self.logger.debug(f"Residual sky ({phot_header.BACKREF}): {result}")
         self.logger.info(
             f"Off-source sky: BACKVAL {phot_header.BACKVAL:.3f}, BACKSIG {phot_header.BACKSIG:.3f} on "
             f"{100 * phot_header.BACKFRAC:.1f}% of the frame (SExtractor SKYVAL {phot_header.SKYVAL}, "
@@ -1499,6 +1529,17 @@ class PhotometryHeader:
     BACKSIG: float = None
     BACKVAL: float = None
     BACKFRAC: float = None
+    BACKOFF: float = None
+    BACKSYS: float = None
+    BACKRMS: float = None
+    BACKERR: float = None
+    BKSERR: float = None
+    BACKNOI: float = None
+    BACKSCL: int = None
+    BACKN: int = None
+    BACKLAG: int = None
+    BACKMETH: str = None
+    BACKREF: str = None
     REFCAT: str = None  # "GaiaXP"
     MAGLOW: float = None
     MAGUP: float = None
@@ -1629,6 +1670,10 @@ class PhotometryHeader:
             "STDNUMB": (self.STDNUMB, "# OF STD STARS TO CALIBRATE ZP"),
         }
 
+        from ..imcoadd.background_qa import BackgroundResiduals, RESIDUAL_KEYS
+
+        residual = BackgroundResiduals(**{key: getattr(self, key.upper()) for key in RESIDUAL_KEYS})
+        phot_header_dict.update(residual.cards())
         phot_header_dict.update(misc_dict)
         if self.SANITY is not None:
             phot_header_dict["SANITY"] = (self.SANITY, None)
@@ -1640,7 +1685,9 @@ class PhotometryHeader:
         phot_header_dict.update({k: (round(v[0], 3), v[1]) for k, v in self.zp_dict.items()})
 
         # Filter out entries where the value is None
-        return {k: v for k, v in phot_header_dict.items() if v[0] is not None}
+        return {k: v for k, v in phot_header_dict.items() if v[0] is not None} | (
+            residual.cards(include_missing=True) if self.BACKMETH is not None else {}
+        )
 
     def __repr__(self) -> str:
         # return ",\n".join(f"  {k}: {v}" for k, v in self.__dict__.items() if not k.startswith("_"))

@@ -113,11 +113,11 @@ class BackgroundMixin:
         any_dynamic = "dynamic" in types
         source_mask_images = (
             factory.stage_images(input_images, "srcmask", self.storage.source_mask_dir)
-            if (mask_sources and any_dynamic)
+            if mask_sources
             else [None] * len(input_images)
         )
         if mask_sources and not any_dynamic:
-            self.logger.info("No image takes a mesh background: source_mask has no effect")
+            self.logger.info("Constant background: source_mask is used for residual QA only")
 
         # the source mask comes from the singles' own catalogs, so the inputs must be their derivatives 1:1
         singles = atleast_1d(self.input_images)
@@ -173,7 +173,8 @@ class BackgroundMixin:
             else:
                 fov_valid = self._fov_valid(data, get_basename(inim))
             exclude = None
-            if src_mask is not None and btype == "dynamic":
+            qa_mask = None
+            if src_mask is not None:
                 sources, valid, usable = self._source_mask(
                     inim, header, fov_valid, src_mask, skysig=skysigma,
                     photometry_catalog=phot_cat, source_image=single,
@@ -182,6 +183,7 @@ class BackgroundMixin:
                     btype = self._fall_back_to_constant(i, inim, btype, skyvalue, "no source mask")
                 else:
                     exclude = sources
+                    qa_mask = sources
                     plot_source_mask(
                         data,
                         ~valid,
@@ -215,6 +217,8 @@ class BackgroundMixin:
                 fov_valid=fov_valid,
                 quality_mask=quality_mask,
                 index=i,
+                qa_mask=qa_mask,
+                qa_coverage=fov_valid if fov_valid is not None else (np.isfinite(data) & (data != 0)),
             )
 
             # if is_steppy and not ignore_steppy_flag:
@@ -496,6 +500,7 @@ class BackgroundMixin:
             trail = (quality_mask & int(MaskBit.SATELLITE)) != 0
             _data[trail if fov_valid is None else (trail & fov_valid)] = np.nan
         self.logger.debug(f"Using SKYVAL: {skyval:.3f}")
+        self._record_background_residuals(_data, _hdr, kwargs.get("qa_mask"), kwargs.get("qa_coverage", fov_valid), quality_mask)
         self._write_background_output(outim, _data, _hdr)
 
         return False  # is_steppy is False by definition for constant background subtraction
@@ -525,7 +530,8 @@ class BackgroundMixin:
             if index is not None:
                 self.input_headers[index]["BACKTYPE"] = ("CONSTANT", "Background subtraction type")
             return self._const_bkgsub(inim, outim, skyval=skyval, data=_data, header=_hdr,
-                                      fov_valid=fov_valid, quality_mask=quality_mask)  # fmt: skip
+                                      fov_valid=fov_valid, quality_mask=quality_mask, qa_mask=kwargs.get("qa_mask"),
+                                      qa_coverage=kwargs.get("qa_coverage", fov_valid))  # fmt: skip
         if self.plan.output_sky_rms_map:
             fits.writeto(bkg_rms, bkg_rms_data, overwrite=True)
         del bkg_rms_data  # do not hold a second full frame past its write
@@ -565,6 +571,7 @@ class BackgroundMixin:
             # NaN, not 0: the pixel stays inside the geometric footprint for coverage_policy
             trail = (quality_mask & int(MaskBit.SATELLITE)) != 0
             _data[trail if fov_valid is None else (trail & fov_valid)] = np.nan
+        self._record_background_residuals(_data, _hdr, kwargs.get("qa_mask"), kwargs.get("qa_coverage", fov_valid), quality_mask)
         self._write_background_output(outim, _data, _hdr)
 
         # return is_steppy
@@ -598,3 +605,17 @@ class BackgroundMixin:
 
     #     recommenced_bkgsub_type = "constant"  # BACKTYPE "Recommended bkgsub type"
     #     return recommenced_bkgsub_type
+
+    def _record_background_residuals(self, data, header, sources, coverage, quality=None):
+        from .background_qa import clear_residual_cards, measure_background_residuals
+
+        clear_residual_cards(header)
+        if sources is None:
+            self.logger.debug("No source mask; residual sky QA not measured")
+            return
+        exclude = sources if quality is None else (sources | (quality != 0))
+        result = measure_background_residuals(
+            data, exclude=exclude, coverage=coverage, box_size=max(16, self.plan.background_box_size // 2),
+        )
+        header.update(result.cards())
+        self.logger.debug(f"Residual sky: {result}")

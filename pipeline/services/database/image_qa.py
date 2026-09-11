@@ -105,6 +105,17 @@ class ImageQATable:
     backval: Optional[float] = None
     backsig: Optional[float] = None
     backfrac: Optional[float] = None
+    backoff: Optional[float] = None
+    backsys: Optional[float] = None
+    backrms: Optional[float] = None
+    backerr: Optional[float] = None
+    bkserr: Optional[float] = None
+    backnoi: Optional[float] = None
+    backscl: Optional[int] = None
+    backn: Optional[int] = None
+    # backlag: Optional[int] = None
+    # backmeth: Optional[str] = None
+    backref: Optional[str] = None
     zp_auto: Optional[float] = None
     ezp_auto: Optional[float] = None
     ul5_5: Optional[float] = None
