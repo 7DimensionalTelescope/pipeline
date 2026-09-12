@@ -2,6 +2,7 @@ from enum import IntFlag
 
 
 ZP_KEY = "ZP_AUTO"
+LANCZOS3_HALFWIDTH = 3.0  # SWarp's LANCZOS3 kernel is nonzero for |offset| < 3 input pixels, per axis
 
 
 class MaskBit(IntFlag):

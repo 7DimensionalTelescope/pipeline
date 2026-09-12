@@ -162,7 +162,7 @@ class ImCoadd(
         try:
             self.overwrite = self.resolve_overwrite(overwrite)
             self._plan = self._coadd_plan()  # the config is write-through and editable until here
-            if self.plan.routine == "legacy":
+            if self.plan.coadd_routine == "legacy":
                 self.legacy_coadd_routine(use_gpu=use_gpu, device_id=device_id)
             else:
                 self.reproject_first_coadd_routine(use_gpu=use_gpu, device_id=device_id)
@@ -243,7 +243,7 @@ class ImCoadd(
         # self.define_paths(working_dir=self.config.path.path_processed)
 
         self.input_headers.check_uniqueness(self._homogeneous_header_keys, self.logger)
-        self.center = None if self.plan.routine == "direct" else self.input_headers.deprojection_center
+        self.center = None if self.plan.coadd_routine == "direct" else self.input_headers.deprojection_center
         self.logger.debug(f"Deprojection center: {self.center}")
 
         if not get_key(self.config_node.imcoadd, "coadd_image"):
@@ -443,19 +443,20 @@ class ImCoadd(
         node = self.config_node.imcoadd
         shown = lambda value: ("NONE" if value is None or value is False else value)  # noqa: E731
         bp = self.plan
-        interp = get_key(node, "interp_type") if bp.interpolate else None
+        interp = get_key(node, "interp_type") if bp.interpolate_badpix else None
         cards = {
             "COADDRTN": (shown(get_key(node, "coadd_routine")), "imcoadd.coadd_routine"),
             "COADDMOD": (shown(get_key(node, "coadd_mode")), "imcoadd.coadd_mode"),
             "COADDWGT": (shown(node.coadd_weighting), "imcoadd.coadd_weighting"),
-            "BPMPOL":   (shown(bp.policy), "imcoadd.badpix_reprojection_policy"),
-            "ZBPWGT":   (bool(bp.zero), "imcoadd.zero_badpix_weight"),
+            "BPMPOL":   (shown(bp.badpix_propagation_policy_across_astrometric_reprojection), "imcoadd.badpix_reprojection_policy"),
+            "ZBPWGT":   (bool(bp.zero_badpix_coadd_weight), "imcoadd.zero_badpix_coadd_weight"),
+            "SATPOL":   (bp.saturation_reprojection_policy, "imcoadd.saturation_reprojection_policy"),
             "ZPSCALE":  (bp.zpscale, "imcoadd.zpscale"),
             "INTERP":   (shown(interp), "imcoadd.interp_type"),
             "CONVOLVE": (shown(bp.convolve), "imcoadd.convolve"),
             "JOINTWCS": (bp.joint_wcs, "imcoadd.joint_wcs"),
             "IMGSELEC": (shown(get_key(node, "image_selection")), "imcoadd.image_selection"),
-            "SMTHWGT":  (bool(bp.smooth_weight), "weight map smoothed (not coadd_weighting pixel-wise)"),
+            "SMTHWGT":  (bool(bp.use_smooth_weight_during_coaddition), "weight map smoothed (not coadd_weighting pixel-wise)"),
             "COVPOL":   (bp.coverage_policy.upper(), "imcoadd.coverage_policy"),
             "SATMASK":  (bool(bp.satellite_mask_enabled), "imcoadd.satellite_mask.enabled"),
             "SRCMASK":  (shown(bp.source_mask), "imcoadd.source_mask"),
@@ -463,7 +464,7 @@ class ImCoadd(
             "BKGFILT":  (bp.background_filter_size, "imcoadd.background.filter_size"),
             "BKGEXCL":  (bp.background_exclude_percentile, "imcoadd.background.exclude_percentile"),
         }  # fmt: skip
-        cards["WGTMODEL"] = (WEIGHT_MODEL if bp.smooth_weight else "PIXEL", "single-frame weight model")
+        cards["WGTMODEL"] = (WEIGHT_MODEL if bp.use_smooth_weight_during_coaddition else "PIXEL", "single-frame weight model")
         mode = str(get_key(node, "coadd_mode") or "").lower()
         if mode == "clipped":
             cards["CLIPSIG"] = (bp.clip_sigma, "coadd_mode_options.clipped.clip_sigma")
@@ -550,7 +551,7 @@ class ImCoadd(
                 if os.path.exists(oname) and not self.overwrite:
                     from .flat_weight import WEIGHT_MODEL
 
-                    expected = WEIGHT_MODEL if self.plan.smooth_weight else "PIXEL"
+                    expected = WEIGHT_MODEL if self.plan.use_smooth_weight_during_coaddition else "PIXEL"
                     if fits.getheader(oname).get("WGTMODEL") == expected:
                         self.logger.debug(f"Already exists; skip generating {oname}")
                         continue
@@ -574,11 +575,11 @@ class ImCoadd(
                         bp = self.plan
                         zero_mask = None
                         fit_mask = None
-                        if bp.smooth_weight or (bp.zero_before_reprojection and not bp.interpolate):
+                        if bp.use_smooth_weight_during_coaddition or (bp.zero_badpix_in_single_weight_map and not bp.interpolate_badpix):
                             # interpolation off but bad-pixel weights still zeroed
                             mask_file, badpix = self._get_bpmask(uncalculated_images[0])
                             fit_mask = fits.getdata(mask_file) == badpix
-                            if bp.zero_before_reprojection and not bp.interpolate:
+                            if bp.zero_badpix_in_single_weight_map and not bp.interpolate_badpix:
                                 zero_mask = fit_mask
                         calc_weight(
                             uncalculated_images,
@@ -595,14 +596,14 @@ class ImCoadd(
                         )
                     else:
                         bp = self.plan
-                        if bp.smooth_weight:
+                        if bp.use_smooth_weight_during_coaddition:
                             raise NotImplementedError(
                                 "smoothed weight maps are CPU-only (the GPU weight kernel has no smoothing "
                                 "pass); set imcoadd.gpu: False, or coadd_weighting: pixel-wise"
                             )
-                        if bp.zero and not bp.interpolate:
+                        if bp.zero_badpix_in_single_weight_map and not bp.interpolate_badpix:
                             raise NotImplementedError(
-                                "zero_badpix_weight without interpolation is CPU-only "
+                                "zero_badpix_coadd_weight without interpolation is CPU-only "
                                 "(the GPU weight kernel is untrusted anyway); set imcoadd.gpu: False"
                             )
                         from .weight import calc_weight_with_gpu
@@ -690,12 +691,12 @@ class ImCoadd(
         # bpmask_array, header = fits.getdata(self.config.preprocess.bpmask_file, header=True)
 
         method = self.config_node.imcoadd.interp_type
-        weight = self.plan.need_weights  # derived: outputs or internal consumers
+        weight = self.plan.compute_single_weight_maps  # derived: outputs or internal consumers
         # Where this run wrote them, not wherever a sibling of the input happens to sit:
         # reproject-first writes weights to the factory, and a stale one next to the input
         # would be read in silence.
         weight_of = dict(zip(input_images, weight_images)) if weight_images is not None else {}
-        zero_interp = self.plan.zero_before_reprojection
+        zero_interp = self.plan.zero_badpix_in_single_weight_map
 
         uncalculated_images = []
         calculated_outputs = []
@@ -704,7 +705,7 @@ class ImCoadd(
                 from .flat_weight import WEIGHT_MODEL
 
                 sidecar = add_suffix(output_file, "weight")
-                expected = WEIGHT_MODEL if self.plan.smooth_weight else "PIXEL"
+                expected = WEIGHT_MODEL if self.plan.use_smooth_weight_during_coaddition else "PIXEL"
                 if not weight or (os.path.exists(sidecar) and fits.getheader(sidecar).get("WGTMODEL") == expected):
                     self.logger.debug(f"Already exists; skip generating {output_file}")
                     continue
@@ -928,7 +929,7 @@ class ImCoadd(
                     ]
                 if delta_peeing is None:
                     force_symlink(input_images[i], self.config_node.imcoadd.conv_files[i])
-                    if weight and self.plan.need_weights:
+                    if weight and self.plan.compute_single_weight_maps:
                         # Only when the weights genuinely travel with the conv files, i.e.
                         # when `run_convolution(weight=True)` writes the other half of the
                         # set for the frames that ARE convolved. Unconditionally it built
@@ -1037,7 +1038,7 @@ class ImCoadd(
         """Resolve an image's valid weight companion under either naming convention."""
         factory = self.path.imcoadd.factory
         candidates = []
-        if os.path.dirname(image) == factory.swarp_resample_dir("sci") and not self.plan.weight_on_sci_pass:
+        if os.path.dirname(image) == factory.swarp_resample_dir("sci") and not self.plan.resample_weight_in_sci_pass:
             candidates.append(
                 collapse(
                     factory.resampled_weight_images([image], pass_type="wht"),

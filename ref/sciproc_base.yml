@@ -159,8 +159,9 @@ imcoadd:
   joint_wcs_catalog: auto  # auto | prep | main: SCAMP inputs; prep = astrometry factory catalogs (raise when one is missing), main = catalogs beside the processed singles, auto = prep when complete else main
   interpolate_badpix: True  # interpolate bad pixels in the sci frames (was apply_bpmask)
   interp_type: 'median'
-  zero_badpix_weight: true  # set weight to 0 for bad pixels; carrying them costs the NEAREST wht SWarp pass
-  badpix_reprojection_policy: '1px'  # off | 1px | conservative (resamp kernel size): how many weight pixels to zero out
+  zero_badpix_coadd_weight: true  # bad pixels get zero weight in the coadd; the coadd weight map drops there (0 where every input is bad)
+  badpix_reprojection_policy: '1px'  # 1px | conservative (resamp kernel support): footprint of that exclusion on the output grid
+  saturation_reprojection_policy: 'conservative'  # 1px | conservative: footprint of the saturated-pixel rejection; conservative rides the weight sidecar through SWarp
   dump_unreprojected_interp: false  # keep the interpolated science image before SWarp
   dump_unreprojected_weight: false  # keep its weight map before SWarp
   intermediate_policy: auto  # memory for groups up to memory_image_limit, disk otherwise

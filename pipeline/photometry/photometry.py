@@ -878,14 +878,18 @@ class PhotometrySingle:
         no_data = data == 0  # dead columns and overscan; a single carries no reprojection padding
         # the same mesh ImCoadd will fit, so the two stages cannot disagree about what the sky is
         mesh = self.config_node.imcoadd.background
-        fitted = background_mesh(
-            data,
-            mask=sources,
-            coverage_mask=no_data,
-            box_size=mesh["box_size"],
-            filter_size=mesh["filter_size"],
-            exclude_percentile=mesh["exclude_percentile"],
-        )
+        try:
+            fitted = background_mesh(
+                data,
+                mask=sources,
+                coverage_mask=no_data,
+                box_size=mesh["box_size"],
+                filter_size=mesh["filter_size"],
+                exclude_percentile=mesh["exclude_percentile"],
+            )
+        except ValueError as e:  # no mesh box survives the source mask: a crowded field has no off-source sky to publish
+            self.logger.warning(f"Off-source sky not measured: {e}")
+            return False
         phot_header.BACKVAL, phot_header.BACKSIG = float(fitted.background_median), float(fitted.background_rms_median)
         phot_header.BACKFRAC = round(float((~sources & ~no_data).mean()), 4)
         is_coadd = "IMG00000" in header

@@ -6,11 +6,26 @@ to whatever validity array a coadd backend already holds. Coordinates are in the
 own pixel grid, which is what every backend slices with x0/y0.
 """
 
+import os
 from dataclasses import dataclass
 
 import numpy as np
 from astropy.io import fits
 from astropy.wcs import WCS
+
+from ..const import REF_DIR
+from ..errors.definition import CoaddError
+from .const import LANCZOS3_HALFWIDTH
+
+
+def swarp_resampling_type(config=os.path.join(REF_DIR, "7dt.swarp")) -> str:
+    """RESAMPLING_TYPE of the SWarp configuration the reprojection runs with."""
+    with open(config) as fp:
+        for line in fp:
+            fields = line.split("#", 1)[0].split()
+            if fields and fields[0] == "RESAMPLING_TYPE":
+                return fields[1].upper() if len(fields) > 1 else ""
+    return ""
 
 
 def nearest_output_pixels(ra, dec, output_header, shape) -> tuple[np.ndarray, np.ndarray]:
@@ -73,9 +88,52 @@ def detector_badpixels(mask_file: str, badpix: int) -> tuple[np.ndarray, np.ndar
     return np.nonzero(fits.getdata(mask_file, memmap=False) == badpix)
 
 
-def project_badpixels(ys, xs, input_header, output_header, shape) -> ProjectedBadPixels:
-    """Project detector bad pixels onto an output grid, one output pixel per detector bad pixel."""
-    ra, dec = WCS(input_header).all_pix2world(np.asarray(xs, np.float64), np.asarray(ys, np.float64), 0)
-    yi, xi = nearest_output_pixels(ra, dec, output_header, shape)
+def kernel_support_positions(ys, xs, input_wcs, output_wcs, shape, halfwidth=LANCZOS3_HALFWIDTH):
+    """Output pixels whose resampling kernel reaches a detector bad pixel: SWarp zeroes exactly these.
+
+    An output pixel is affected when its centre, mapped back onto the detector, lies within `halfwidth` of the
+    bad pixel along both axes. Candidates are the (2*halfwidth + 1)^2 output pixels around each projection;
+    their centres are inverse-mapped once each (they overlap heavily where bad pixels cluster)."""
+    resampling = swarp_resampling_type()
+    if resampling != "LANCZOS3":
+        raise CoaddError.AssumptionFailedError(
+            f"the kernel support of {halfwidth} px assumes RESAMPLING_TYPE LANCZOS3; ref/7dt.swarp says {resampling!r}"
+        )
+    xs = np.asarray(xs, np.float64)
+    ys = np.asarray(ys, np.float64)
+    if not xs.size:
+        return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
+    ra, dec = input_wcs.all_pix2world(xs, ys, 0)
+    xo, yo = output_wcs.all_world2pix(ra, dec, 0)
+    finite = np.isfinite(xo) & np.isfinite(yo)
+    xs, ys, xo, yo = xs[finite], ys[finite], xo[finite], yo[finite]
+    reach = int(np.ceil(halfwidth))
+    offsets = np.arange(-reach, reach + 1)
+    di, dj = (a.ravel() for a in np.meshgrid(offsets, offsets))
+    cx = (np.rint(xo)[:, None] + di).astype(np.int64)
+    cy = (np.rint(yo)[:, None] + dj).astype(np.int64)
+    inside = (cx >= 0) & (cx < shape[1]) & (cy >= 0) & (cy < shape[0])
+    width = int(shape[1])
+    linear = cy * width + cx
+    unique, inverse = np.unique(linear[inside], return_inverse=True)
+    r, d = output_wcs.all_pix2world((unique % width).astype(np.float64), (unique // width).astype(np.float64), 0)
+    px, py = input_wcs.all_world2pix(r, d, 0)
+    dx = np.full(cx.shape, np.inf)
+    dy = np.full(cy.shape, np.inf)
+    dx[inside] = px[inverse] - np.repeat(xs, cx.shape[1]).reshape(cx.shape)[inside]
+    dy[inside] = py[inverse] - np.repeat(ys, cy.shape[1]).reshape(cy.shape)[inside]
+    keep = (np.abs(dx) < halfwidth) & (np.abs(dy) < halfwidth)
+    hit = np.unique(linear[keep])
+    return hit // width, hit % width
+
+
+def project_badpixels(ys, xs, input_header, output_header, shape, footprint: str = "1px") -> ProjectedBadPixels:
+    """Project detector bad pixels onto an output grid: the nearest output pixel ('1px'), or every output pixel
+    whose LANCZOS3 resampling kernel touches the bad pixel ('conservative')."""
+    if footprint == "conservative":
+        yi, xi = kernel_support_positions(ys, xs, WCS(input_header), WCS(output_header), shape)
+    else:
+        ra, dec = WCS(input_header).all_pix2world(np.asarray(xs, np.float64), np.asarray(ys, np.float64), 0)
+        yi, xi = nearest_output_pixels(ra, dec, output_header, shape)
     index = np.unique(yi * int(shape[1]) + xi).astype(np.int32, copy=False)
     return ProjectedBadPixels(index=index, shape=(int(shape[0]), int(shape[1])))

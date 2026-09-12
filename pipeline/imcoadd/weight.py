@@ -170,7 +170,7 @@ def calc_weight_with_cpu(
             else:
                 header = {"WGTMODEL": "PIXEL"}
             if zero_mask is not None:
-                # zero_badpix_weight without interpolation: the factory copy carries the
+                # zero_badpix_coadd_weight without interpolation: the factory copy carries the
                 # zeros; the persisted store copy above stays pristine by contract
                 out = out.copy()
                 out[zero_mask] = 0.0

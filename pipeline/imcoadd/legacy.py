@@ -29,6 +29,8 @@ class LegacyCoaddMixin:
         self._use_gpu = all([use_gpu, self.config_node.imcoadd.gpu, self._use_gpu])
 
         self.initialize()
+        if not self.plan.reject_saturated_pixels:
+            self.logger.info("Legacy coadds in SWarp: saturated pixels are not rejected (saturation_reprojection_policy ignored)")
         self._prepare_intermediate_storage(self.input_images)
 
         images = self.bkgsub(self.input_images)
@@ -42,14 +44,14 @@ class LegacyCoaddMixin:
             self._progress_status("zpscale-completed"),
         )
 
-        if self.plan.need_weights:
+        if self.plan.compute_single_weight_maps:
             self.calculate_weight_map(images, device_id=device_id)
             self.update_progress(
                 self._process_registry.milestone_progress(self._process_spec, "calculate_weight_map"),
                 self._progress_status("calculate-weight-map-completed"),
             )
 
-        if self.plan.interpolate:
+        if self.plan.interpolate_badpix:
             images = self.apply_bpmask(images, device_id=device_id)
             self.update_progress(
                 self._process_registry.milestone_progress(self._process_spec, "apply_bpmask"),
@@ -74,7 +76,7 @@ class LegacyCoaddMixin:
         self.coadd_with_swarp(images)
         self.apply_legacy_coverage_policy(images)
         if self._need_quality_masks:
-            resampled = self.path.imcoadd.factory.resampled_images(images, pass_type=self.plan.sci_pass)
+            resampled = self.path.imcoadd.factory.resampled_images(images, pass_type=self.plan.sci_pass_type)
             self.prepare_quality_masks(resampled, detector_images=self.input_images)
         self._coadd_completed = True
         self.finalize_quality_masks()

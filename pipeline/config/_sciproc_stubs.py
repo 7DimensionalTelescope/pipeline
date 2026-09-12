@@ -115,8 +115,9 @@ if TYPE_CHECKING:
         joint_wcs_catalog: str
         interpolate_badpix: bool
         interp_type: str
-        zero_badpix_weight: bool
+        zero_badpix_coadd_weight: bool
         badpix_reprojection_policy: str
+        saturation_reprojection_policy: str
         dump_unreprojected_interp: bool
         dump_unreprojected_weight: bool
         intermediate_policy: str

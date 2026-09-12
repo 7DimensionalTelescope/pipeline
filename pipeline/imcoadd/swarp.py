@@ -68,7 +68,7 @@ class SwarpMixin:
         resampled = atleast_1d(
             self.path.imcoadd.factory.resampled_images(
                 swarp_inputs,
-                pass_type=self.plan.sci_pass,
+                pass_type=self.plan.sci_pass_type,
             )
         )
         header = fits.getheader(self.config_node.imcoadd.coadd_image)
@@ -92,7 +92,7 @@ class SwarpMixin:
         if not (intersection or self.plan.output_counts_map or self.plan.output_footprint):
             return
         resampled = atleast_1d(
-            self.path.imcoadd.factory.resampled_images(swarp_inputs, pass_type=self.plan.sci_pass)
+            self.path.imcoadd.factory.resampled_images(swarp_inputs, pass_type=self.plan.sci_pass_type)
         )
         missing = [path for path in resampled if not os.path.exists(path)]
         if missing:
@@ -358,7 +358,7 @@ class SwarpMixin:
         factory = self.path.imcoadd.factory
         base = os.path.splitext(get_basename(interp_im))[0]
         self._stagger_swarp()
-        if self.plan.weight_on_sci_pass:
+        if self.plan.resample_weight_in_sci_pass:
             passes = (
                 (
                     "sci",
@@ -367,11 +367,8 @@ class SwarpMixin:
                 ),
             )
         else:
-            sci_args = ["-RESAMPLING_TYPE", "LANCZOS3"]
-            if self.plan.propagate_mask_on_sci_pass:
-                sci_args += ["-WEIGHT_IMAGE", sidecar]
-            passes = [(self.plan.sci_pass, sci_args, self.plan.propagate_mask_on_sci_pass)]
-            if self.plan.need_weights:
+            passes = [(self.plan.sci_pass_type, ["-RESAMPLING_TYPE", "LANCZOS3"], False)]
+            if self.plan.compute_single_weight_maps:
                 passes.append(("wht", ["-RESAMPLING_TYPE", "NEAREST", "-WEIGHT_IMAGE", sidecar], True))
         head = self._joint_wcs_head_of.get(interp_im)
         for pass_type, args, use_w in passes:
@@ -391,22 +388,20 @@ class SwarpMixin:
                 swarp_args=args,
             )
             self._drop_swarp_byproduct([interp_im], pass_type)  # as it appears, not in a storm at the end
-        sci = collapse(factory.resampled_images([interp_im], pass_type=self.plan.sci_pass), force=True)
+        sci = collapse(factory.resampled_images([interp_im], pass_type=self.plan.sci_pass_type), force=True)
         options = self._resample_options(interp_im)
         self._manifest_note(sci, **options)
-        if self.plan.need_weights:
+        if self.plan.compute_single_weight_maps:
             wht = collapse(
                 factory.resampled_weight_images([sci], pass_type=self._weight_pass_type()), force=True
             )
-            if self.plan.smooth_weight:
+            if self.plan.use_smooth_weight_during_coaddition:
                 copy_weight_fit_header(sidecar, wht)
             self._manifest_note(wht, **options)
 
     def _drop_swarp_byproduct(self, swarp_inputs, pass_type: str) -> None:
         """Remove the unused image or weight emitted by a reproject-only SWarp pass."""
-        if pass_type not in ("sci", "wht") or self.plan.weight_on_sci_pass:
-            return
-        if pass_type == "sci" and self.plan.propagate_mask_on_sci_pass:
+        if pass_type not in ("sci", "wht") or self.plan.resample_weight_in_sci_pass:
             return
         images = atleast_1d(self.path.imcoadd.factory.resampled_images(swarp_inputs, pass_type=pass_type))
         doomed = images if pass_type == "wht" else [swap_ext(f, "weight.fits") for f in images]
@@ -471,10 +466,10 @@ class SwarpMixin:
     def _lookahead_done(self, interp_im: str, method: str) -> bool:
         """Return whether reusable resamples already represent this interpolation."""
         factory = self.path.imcoadd.factory
-        sci = collapse(factory.resampled_images([interp_im], pass_type=self.plan.sci_pass), force=True)
+        sci = collapse(factory.resampled_images([interp_im], pass_type=self.plan.sci_pass_type), force=True)
         if not os.path.exists(sci):
             return False
-        if self.plan.need_weights:
+        if self.plan.compute_single_weight_maps:
             wht = collapse(factory.resampled_weight_images([sci], pass_type=self._weight_pass_type()), force=True)
             if not os.path.exists(wht):
                 return False
@@ -483,12 +478,12 @@ class SwarpMixin:
             wanted = self._resample_options(interp_im)
             if any(entry.get(key) != value for key, value in wanted.items()):
                 return False
-            if not self.plan.need_weights:
+            if not self.plan.compute_single_weight_maps:
                 return True
             # the weight is a product in its own right: validate its stat and identity too
             weight_entry = self._manifest_options(wht)
             return weight_entry is not None and not any(weight_entry.get(k) != v for k, v in wanted.items())
-        if self.plan.smooth_weight or self.plan.policy != "off" or self.plan.joint_wcs or os.path.exists(factory.joint_wcs_manifest):
+        if self.plan.use_smooth_weight_during_coaddition or self.plan.badpix_propagation_policy_across_astrometric_reprojection != "off" or self.plan.joint_wcs or os.path.exists(factory.joint_wcs_manifest):
             return False  # a header can vouch for INTERP but not for the weight's badpix zeros or the joint WCS
         try:
             ok = str(fits.getheader(sci).get("INTERP", "")).upper() == str(method).upper()
@@ -514,7 +509,7 @@ class SwarpMixin:
         self._record_bpmids()
 
         method = self.config_node.imcoadd.interp_type
-        zero_interp = self.plan.zero_before_reprojection
+        zero_interp = self.plan.zero_badpix_in_single_weight_map
 
         from collections import deque
         from concurrent.futures import ThreadPoolExecutor
@@ -625,7 +620,7 @@ class SwarpMixin:
                     source_catalogs=self._source_catalogs(group_in),
                     bpmid=bpmid,
                     saturated_mask=(
-                        self._saturated_detector_mask if self.plan.zero_saturated_before_reprojection else None
+                        self._saturated_detector_mask if self.plan.zero_saturated_in_weight_before_reprojection else None
                     ),
                 )
                 self.logger.info(
@@ -674,7 +669,7 @@ class SwarpMixin:
         self.logger.debug(f"Total Exptime: {self.input_headers.total_exptime}")
 
         sci_resampling = ["-RESAMPLING_TYPE", "LANCZOS3"]
-        if not self.plan.need_weights:
+        if not self.plan.compute_single_weight_maps:
             self._run_swarp("", swarp_args=sci_resampling + swarp_options_override + head_args, use_weight_map=False)
         else:
             self._run_swarp(
@@ -689,7 +684,7 @@ class SwarpMixin:
                 pass_type="bpm",
             )
         )
-        bpm_pass = self.plan.policy == "conservative"
+        bpm_pass = self.plan.badpix_propagation_policy_across_astrometric_reprojection == "conservative"
         if (
             bpm_pass
             and not self.overwrite
@@ -737,14 +732,12 @@ class SwarpMixin:
     def _record_resampled_products(self, swarp_inputs: list[str]) -> list[str]:
         """Register and return the science and weight products of reprojection."""
         factory = self.path.imcoadd.factory
-        resampled = atleast_1d(factory.resampled_images(swarp_inputs, pass_type=self.plan.sci_pass))
+        resampled = atleast_1d(factory.resampled_images(swarp_inputs, pass_type=self.plan.sci_pass_type))
         self.config_node.imcoadd.resampled_images = resampled
-        if self.plan.need_weights:
+        if self.plan.compute_single_weight_maps:
             self.config_node.imcoadd.bkgsub_weight_images = atleast_1d(
                 factory.resampled_weight_images(resampled, pass_type=self._weight_pass_type())
             )
-        if self.plan.propagate_mask_on_sci_pass:
-            self._bpm_resampled_masks = atleast_1d(factory.resampled_weight_images(resampled, pass_type="sci"))
         self._save_single_weight_products(resampled)
         self.images_to_coadd = resampled
         return resampled
@@ -778,7 +771,7 @@ class SwarpMixin:
 
     def _source_catalogs(self, images) -> list[str | None] | None:
         """Photometry catalogs aligned with *images*, or None when the weight is not smoothed."""
-        if not self.plan.smooth_weight:
+        if not self.plan.use_smooth_weight_during_coaddition:
             return None
         singles = list(atleast_1d(self.input_images))
         try:
@@ -797,7 +790,7 @@ class SwarpMixin:
         return resolved
 
     def _weight_pass_type(self) -> str:
-        return self.plan.weight_pass
+        return self.plan.weight_pass_type
 
     def _swarp_output_wcs_id(self) -> str:
         """Identity of the reprojection output grid: the SWarp config bytes plus this run's center."""
@@ -823,23 +816,24 @@ class SwarpMixin:
         for card, value in (("BPMID", wanted["bpmid"]), ("IMAGEID", wanted["imageid"])):
             if value and str(header.get(card, "") or "").strip() != str(value):
                 return False
-        if ("SATZERO" in sidecar) != bool(self.plan.zero_saturated_before_reprojection):
+        if ("SATZERO" in sidecar) != bool(self.plan.zero_saturated_in_weight_before_reprojection):
             return False
         if sidecar.get("WGTMODEL") != wanted["weight_model"]:
             return False
         holes = sidecar.get("WGTHOLES")
-        return holes is None or bool(holes) == bool(self.plan.zero_before_reprojection)
+        return holes is None or bool(holes) == bool(self.plan.zero_badpix_in_single_weight_map)
 
     def _resample_options(self, interp_im: str) -> dict:
         """Everything one frame's interpolated and resampled products depend on."""
         single = self._single_of.get(interp_im, interp_im)
         return {
             "interp": str(self.config_node.imcoadd.interp_type).upper(),
-            "badpix": self.plan.policy,
-            "zero": bool(self.plan.zero),
+            "badpix": self.plan.badpix_propagation_policy_across_astrometric_reprojection,
+            "zero": bool(self.plan.zero_badpix_coadd_weight),
             "joint_wcs": bool(self.plan.joint_wcs),
-            "satzero": bool(self.plan.zero_saturated_before_reprojection),
-            "weight_model": WEIGHT_MODEL if self.plan.smooth_weight else "PIXEL",
+            "satzero": bool(self.plan.zero_saturated_in_weight_before_reprojection),
+            "satpol": self.plan.saturation_reprojection_policy,
+            "weight_model": WEIGHT_MODEL if self.plan.use_smooth_weight_during_coaddition else "PIXEL",
             "wcsid": self._swarp_output_wcs_id(),
             "imageid": self._imageid_of.get(single),
             "bpmid": self._bpmid_of.get(single),
@@ -869,7 +863,7 @@ class SwarpMixin:
 
     def _propagated_bpmasks(self) -> list[str] | None:
         """Return per-frame resampled masks for conservative rejection."""
-        if self.plan.policy != "conservative":
+        if self.plan.badpix_propagation_policy_across_astrometric_reprojection != "conservative":
             return None
         masks = atleast_1d(self._bpm_resampled_masks)
         missing = [m for m in masks if not os.path.exists(m)]

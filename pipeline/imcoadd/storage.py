@@ -63,7 +63,7 @@ class IntermediateStorageMixin:
                     "intermediate_policy 'memory' is incompatible with output_bkg_map or output_sky_rms_map"
                 )
             use_memory = False
-        if use_memory and self.plan.routine == "legacy":
+        if use_memory and self.plan.coadd_routine == "legacy":
             if requested == "memory":
                 raise ValueError(
                     "intermediate_policy 'memory' is incompatible with coadd_routine 'legacy' (SWarp reads files)"
@@ -133,7 +133,7 @@ class IntermediateStorageMixin:
         value = np.ascontiguousarray(data, dtype=np.float32), header.copy()
         if storage.policy == "memory":
             storage.frame_cache[image] = value
-            if self.plan.mode == "proper":
+            if self.plan.coadd_mode == "proper":
                 fits.writeto(image, value[0], header=value[1], overwrite=True)
         else:
             fits.writeto(image, value[0], header=value[1], overwrite=True)

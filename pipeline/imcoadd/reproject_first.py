@@ -56,10 +56,10 @@ class ReprojectFirstCoaddMixin:
         self._use_gpu = all([use_gpu, self.config_node.imcoadd.gpu, self._use_gpu])
 
         plan = self.plan
-        if plan.is_reproject_first:
+        if plan.reproject_with_swarp:
             total_steps = 6 + int(plan.joint_wcs) + int(bool(plan.convolve)) + int(plan.zpscale)
         else:
-            total_steps = 3 + int(plan.need_weights) + int(plan.interpolate) + int(plan.zpscale)
+            total_steps = 3 + int(plan.compute_single_weight_maps) + int(plan.interpolate_badpix) + int(plan.zpscale)
         step = 0
 
         def advance(status: str):
@@ -74,11 +74,16 @@ class ReprojectFirstCoaddMixin:
         images = self.input_images
         weight_images = None
         fov_masks = None
-        if plan.is_reproject_first:
+        if plan.reproject_with_swarp:
             if plan.joint_wcs:
                 factory = self.path.imcoadd.factory
                 self.joint_registration(factory.stage_images(images, "interp", factory.interp_dir))
                 advance("joint-registration-completed")
+            if plan.sidecar_only_for_saturation:
+                self.logger.info(
+                    "Weight sidecars are computed and resampled only to carry the saturation footprint through the "
+                    "LANCZOS3 kernel (saturation_reprojection_policy: conservative); '1px' skips them"
+                )
             images = self.weight_and_interpolate(images)
             advance("calculate-weight-map-completed")
             advance("apply-bpmask-completed")
@@ -86,11 +91,11 @@ class ReprojectFirstCoaddMixin:
         else:
             self._validate_direct_grid()
             self._prepare_intermediate_storage(images)
-            if plan.need_weights:
+            if plan.compute_single_weight_maps:
                 weight_images = self.path.imcoadd.factory.stage_images(images, "weight", self.storage.weight_dir)
                 weight_images = self.calculate_weight_map(images, device_id=device_id, out_weights=weight_images)
                 advance("calculate-weight-map-completed")
-            if plan.interpolate:
+            if plan.interpolate_badpix:
                 images = self.apply_bpmask(images, device_id=device_id, weight_images=weight_images)
                 if weight_images is not None:
                     weight_images = [add_suffix(image, "weight") for image in images]
@@ -98,7 +103,7 @@ class ReprojectFirstCoaddMixin:
 
         if self._need_quality_masks:
             self.prepare_quality_masks(images, detector_images=self.input_images)
-        if plan.is_reproject_first:
+        if plan.reproject_with_swarp:
             if plan.convolve:
                 fov_masks = self.build_fov_masks(images)
             self._remove_reprojection_intermediates()
@@ -254,34 +259,27 @@ class ReprojectFirstCoaddMixin:
             return self.config_node.imcoadd.coadd_image
 
         plan = self.plan
-        weighting = plan.weighting
-        policy = plan.policy
-        smoothed = "smoothed" if plan.smooth_weight else "per-pixel"
+        weighting = plan.coadd_weighting
+        policy = plan.badpix_propagation_policy_across_astrometric_reprojection
+        smoothed = "smoothed" if plan.use_smooth_weight_during_coaddition else "per-pixel"
         self.logger.info(
-            f"Coadd weighting: {weighting}; badpix policy: {policy}; weight maps: {smoothed}; "
-            f"coverage: {plan.coverage_policy}"
+            f"Coadd weighting: {weighting}; badpix policy: {policy}; saturation policy: "
+            f"{plan.saturation_reprojection_policy}; weight maps: {smoothed}; coverage: {plan.coverage_policy}"
         )
-        if plan.smooth_weight and not (plan.interpolate or plan.zero or policy == "conservative"):
+        if plan.use_smooth_weight_during_coaddition and not (plan.interpolate_badpix or plan.zero_badpix_coadd_weight):
             # the fitted surface has no bad pixels, and nothing else is marking them either
             self.logger.warning(
-                "Smoothed weight maps with no bad-pixel channel: set interpolate_badpix, "
-                "zero_badpix_weight, or badpix_reprojection_policy: conservative; bad pixels vote"
-            )
-        if weighting == "pixelwise" and policy == "off" and self.plan.zero:
-            self.logger.info(
-                "pixel-wise weighting with zeroed bad-pixel weights: bad pixels cannot vote "
-                "regardless of policy 'off' (a zero-weight vote is no vote); set "
-                "zero_badpix_weight: False to let interpolated pixels vote"
+                "Smoothed weight maps with no bad-pixel channel: set interpolate_badpix or "
+                "zero_badpix_coadd_weight; bad pixels vote"
             )
 
         wht_maps = None
-        if self.plan.need_weights:
+        if self.plan.compute_single_weight_maps:
             # NEAREST-resampled weights live next to the wht pass output; the
             # LANCZOS3 companions next to the sci resamp ring to ~0 almost
             # everywhere (99%+ zeros) and must NOT be used.
-            # (that was the raw-weight era: under smooth_weight the sci-pass companion is a
+            # (that was the raw-weight era: under use_smooth_weight_during_coaddition the sci-pass companion is a
             # smooth zero-free surface and _weight_pass_type() selects it on purpose)
-            wht_dir = self.path.imcoadd.factory.swarp_resample_dir(self._weight_pass_type())
             if weight_images is not None:
                 candidates = atleast_1d(weight_images)
             else:
@@ -295,7 +293,7 @@ class ReprojectFirstCoaddMixin:
             else:
                 missing = [w for w in candidates if not os.path.exists(w)][:3]
                 raise self._process_error.FileNotFoundError(
-                    f"Required resampled weight maps not found in {wht_dir} (e.g. {missing})"
+                    f"Required resampled weight maps not found (e.g. {missing})"
                 )
 
         weights = None
@@ -314,13 +312,8 @@ class ReprojectFirstCoaddMixin:
                 )
             weights = [1.0 / float(s) ** 2 for s in skysigs]
 
-        if policy == "conservative":
-            masks = self._propagated_bpmasks()
-        elif weighting != "pixelwise" and (policy == "1px" or plan.zero_saturated_before_reprojection):
-            # the resampled weight carries an exclusion channel (1px bad pixels, saturation, or both): read it
-            masks = wht_maps
-        else:
-            masks = None
+        # the resampled weight's zeros are the saturation footprint SWarp spread over its kernel: read it as the mask
+        masks = wht_maps if plan.read_resampled_weight_as_exclusion_mask else None
 
         # the resampled weight stays the pristine SWarp result; the 1px holes ride these instead
         badpix = self.badpix_positions(input_images)
@@ -328,19 +321,19 @@ class ReprojectFirstCoaddMixin:
         # Under reproject-first the zeros already rode the weight sidecar through SWarp's kernel, so the
         # resampled weight the backends read as `masks` carries them and the sparse channel would be a subset.
         saturated = (
-            None
-            if plan.zero_saturated_before_reprojection
-            else self.saturated_positions(input_images, compute=plan.mode != "proper")
+            self.saturated_positions(input_images, compute=plan.coadd_mode != "proper")
+            if plan.exclude_saturated_by_projected_index
+            else None
         )
         badpix_bytes = sum(p.nbytes for p in (badpix or []) + (saturated or []))
         counts = self._coadd_counts if plan.output_counts_map else None
 
-        if plan.mode == "proper":
+        if plan.coadd_mode == "proper":
             return self.coadd_proper_with_numpy(
                 input_images, holes=masks, badpix=badpix, saturated=saturated, counts=counts
             )
 
-        var_maps = wht_maps if weighting != "pixelwise" else None
+        var_maps = wht_maps if plan.output_smooth_weight_map_for_coadd_image else None
         stage_wht = weights if weighting == "pixelwise" else None
         var_is_mask = var_maps is not None and masks is not None and list(var_maps) == list(masks)
         if self.storage.policy == "memory":
@@ -361,7 +354,7 @@ class ReprojectFirstCoaddMixin:
             weights = staged["wht"]
         var_maps = masks if var_is_mask else staged["var"]
 
-        mode = plan.mode
+        mode = plan.coadd_mode
         n_inputs = len(atleast_1d(input_images))
         if mode == "clipped" and n_inputs < 3:
             self.logger.info(
@@ -509,21 +502,21 @@ class ReprojectFirstCoaddMixin:
 
     def _validate_proper_mode(self):
         """Fail fast on option combinations the Fourier-domain combine cannot honor."""
-        if self.plan.routine not in ("reproject-first", "direct"):
+        if self.plan.coadd_routine not in ("reproject-first", "direct"):
             raise self._process_error.ValueError(
                 "coadd_mode 'proper' requires coadd_routine 'reproject-first' or 'direct'"
             )
         plan = self.plan
-        if not plan.interpolate and self._proper_requires_interpolation:
+        if not plan.interpolate_badpix and self._proper_requires_interpolation:
             raise self._process_error.ValueError(
                 "coadd_mode 'proper' requires interpolate_badpix: True (a Fourier-domain vote cannot skip pixels)"
             )
         self._proper_weight_policy()
-        if plan.weighting == "off":
+        if plan.coadd_weighting == "off":
             self.logger.info("coadd_weighting has no effect under 'proper': frames are inverse-variance weighted by construction")  # fmt: skip
 
     def _coadd_plan(self) -> CoaddPlan:
-        return resolve_coadd_plan(self.config_node.imcoadd)
+        return resolve_coadd_plan(self.config_node.imcoadd, errors=self._process_error)
 
     def _coadd_flxscales(self):
         """Return snapshot flux scales, or False when scaling is disabled."""

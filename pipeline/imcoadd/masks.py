@@ -411,16 +411,21 @@ class MaskMixin:
         if coords is None:
             coords = detector_badpixels(mask_file, badpix)
             self._bpmask_coords_cache[mask_file] = coords
-        positions = project_badpixels(*coords, self._single_wcs_header(detector_image), output_header, output_shape)
+        positions = project_badpixels(
+            *coords,
+            self._single_wcs_header(detector_image),
+            output_header,
+            output_shape,
+            footprint=self.plan.badpix_propagation_policy_across_astrometric_reprojection,
+        )
         self._badpix_positions_cache[detector_image] = positions
         return positions
 
     def badpix_positions(self, images, detector_images=None) -> list | None:
         """Sparse projected bad pixels aligned with *images*, for the policy that has no file channel.
 
-        Only `catalog_badpix_zeros` needs them: everywhere else (direct, pixel-wise, conservative) the
-        zeros already ride the weight map the backends read as `masks`."""
-        if not (self.plan.catalog_badpix_zeros and self._has_detector_bpm):
+        Only `exclude_badpix_by_projected_index` needs them; legacy alone carries its zeros in the weight file."""
+        if not (self.plan.exclude_badpix_by_projected_index and self._has_detector_bpm):
             return None
         images = list(atleast_1d(images))
         detector_images = list(atleast_1d(detector_images if detector_images is not None else self.input_images))
@@ -484,8 +489,8 @@ class MaskMixin:
     @property
     def _need_quality_masks(self) -> bool:
         """Whether this run must build the per-frame bit masks, for the OR product or for a reason plane."""
-        reason_planes = self._has_detector_bpm or self.plan.mode == "clipped"  # NBAD/NSAT, or NOUTLIER
-        return self.plan.need_quality_masks or (self.plan.output_counts_map and reason_planes)
+        reason_planes = self._has_detector_bpm or self.plan.coadd_mode == "clipped"  # NBAD/NSAT, or NOUTLIER
+        return self.plan.build_per_frame_quality_masks or (self.plan.output_counts_map and reason_planes)
 
     def _imcmb_key(self, detector_image):
         """This frame's (bias, dark, flat) master triple, or None when the header cannot give one."""
@@ -673,7 +678,7 @@ class MaskMixin:
         if positions is not None:
             output[positions.block_mask(0, output_shape[0], 0, output_shape[1])] |= int(MaskBit.BADPIX)
         saturated = None
-        if weight_image is not None and self.plan.saturation_from_resampled_weight and frame_data is not None:
+        if weight_image is not None and self.plan.nsat_from_resampled_weight and frame_data is not None:
             saturated = self._saturated_from_weight(weight_image, frame_data)
         if saturated is not None:
             output[saturated] |= int(MaskBit.SATURATED)

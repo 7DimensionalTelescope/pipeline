@@ -192,7 +192,7 @@ class BackgroundMixin:
                         subtitle=f"{100 - usable:.2f}% excluded by the source and FOV masks, "
                         f"{usable:.2f}% usable for the background mesh",
                         header=header,
-                        reprojected=self.plan.is_reproject_first,
+                        reprojected=self.plan.inputs_are_reprojected,
                     )
             if quality_mask is not None:
                 trail = (quality_mask & int(MaskBit.SATELLITE)) != 0
@@ -546,7 +546,7 @@ class BackgroundMixin:
             f"exclude_percentile {plan.background_exclude_percentile:g}%; "
             f"median {np.median(inside):.2f}, peak to peak {np.ptp(inside):.2f} ADU/pixel",
             header=_hdr,
-            reprojected=self.plan.is_reproject_first,
+            reprojected=self.plan.inputs_are_reprojected,
         )
 
         # if ignore_steppy_flag:
