@@ -13,6 +13,7 @@ artifacts named beside each block; keep their provenance here with the executabl
 import threading
 
 import numpy as np
+from scipy.special import betainc, beta as beta_function
 
 # double Moffat profile fit for point sources; coeffs predetermined from external calibration.
 ALPHA_SLOPE = 1.5067571888356017
@@ -112,6 +113,33 @@ def optimized_radius_for_point_sources_with_known_profile(flux, awin, skysig):
     """Semi-major axis where the source's profile falls to the supplied sky noise / K_THRESH."""
     flux = np.maximum(np.asarray(flux, float), 1.0)
     return _invert(float(skysig) / K_THRESH / flux, core_width(awin))
+
+
+def _line_component(d, alpha, beta):
+    """Unit-flux Moffat component integrated along a chord at perpendicular distance d, inside RNORM_PX."""
+    d = np.asarray(d, float)
+    alpha = np.asarray(alpha, float)
+    a2 = alpha**2 + d**2
+    x2 = np.clip(RNORM_PX**2 - d**2, 0.0, None) / a2
+    half = 0.5 * beta_function(0.5, beta - 0.5) * betainc(0.5, beta - 0.5, x2 / (1.0 + x2))
+    return 2.0 * half * np.sqrt(a2) * (alpha**2 / a2) ** beta / _component_integral(alpha, beta)
+
+
+def line_profile(d, alpha_core):
+    """Double-Moffat line-spread function: ADU/px at perpendicular distance d per unit flux per pixel of track."""
+    core = _line_component(d, alpha_core, BETA_CORE)
+    wing = _line_component(d, K_ALPHA * np.asarray(alpha_core, float), BETA_WING)
+    return (1.0 - F_WING) * core + F_WING * wing
+
+
+def optimized_half_width_for_trails_with_known_profile(flux_per_length, awin, skysig, threshold_scale=1.0):
+    """Perpendicular half-width where the trail's line-spread profile falls to skysig / K_THRESH * threshold_scale."""
+    flux_per_length = np.maximum(np.asarray(flux_per_length, float), 1.0)
+    dgrid = np.geomspace(RMIN, RNORM_PX, NGRID)
+    lgrid = line_profile(dgrid, core_width(awin))
+    target = float(skysig) / K_THRESH * float(threshold_scale) / flux_per_length
+    # the line-spread function decreases with d, so both tabulations are reversed for np.interp
+    return np.interp(target, lgrid[::-1], dgrid[::-1], left=RNORM_PX, right=0.0)
 
 
 def galaxy_dilation(cat, fallback):

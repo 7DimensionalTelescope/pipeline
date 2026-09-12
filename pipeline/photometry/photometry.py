@@ -857,6 +857,7 @@ class PhotometrySingle:
         if (
             not overwrite
             and phot_header.BACKSIG is not None
+            and phot_header.SRCFRAC is not None
             and phot_header.BACKSCL == RESIDUAL_BOX_SIZE
             and all(getattr(phot_header, key.upper()) is not None for key in RESIDUAL_KEYS)
         ):
@@ -892,6 +893,7 @@ class PhotometrySingle:
             return False
         phot_header.BACKVAL, phot_header.BACKSIG = float(fitted.background_median), float(fitted.background_rms_median)
         phot_header.BACKFRAC = round(float((~sources & ~no_data).mean()), 4)
+        phot_header.SRCFRAC = round(float(sources.mean()), 4)
         is_coadd = "IMG00000" in header
         coverage = np.isfinite(data) if is_coadd else ~no_data
         if is_coadd:
@@ -924,7 +926,8 @@ class PhotometrySingle:
         self.logger.debug(f"Residual sky ({phot_header.BACKREF}): {result}")
         self.logger.info(
             f"Off-source sky: BACKVAL {phot_header.BACKVAL:.3f}, BACKSIG {phot_header.BACKSIG:.3f} on "
-            f"{100 * phot_header.BACKFRAC:.1f}% of the frame (SExtractor SKYVAL {phot_header.SKYVAL}, "
+            f"{100 * phot_header.BACKFRAC:.1f}% of the frame, {100 * phot_header.SRCFRAC:.1f}% source-masked "
+            f"(SExtractor SKYVAL {phot_header.SKYVAL}, "
             f"SKYSIG {phot_header.SKYSIG}) in {time_diff_in_seconds(start_time)} seconds"
         )
         return True
@@ -1540,6 +1543,7 @@ class PhotometryHeader:
     BACKSIG: float = None
     BACKVAL: float = None
     BACKFRAC: float = None
+    SRCFRAC: float = None
     BACKOFF: float = None
     BACKSYS: float = None
     BACKSCL: int = None
@@ -1669,6 +1673,7 @@ class PhotometryHeader:
             "BACKSIG": (round(self.BACKSIG, 3) if self.BACKSIG is not None else None, "SKY SIGMA OFF SOURCE"),
             "BACKVAL": (round(self.BACKVAL, 3) if self.BACKVAL is not None else None, "SKY MEDIAN OFF SOURCE"),
             "BACKFRAC": (self.BACKFRAC, "Fraction of pixels used for the sky estimate"),
+            "SRCFRAC": (self.SRCFRAC, "Fraction of pixels covered by the source mask"),
             "REFCAT": (self.REFCAT, "REFERENCE CATALOG TYPE"),
             "MAGLOW": (self.MAGLOW, "REF MAG RANGE, LOWER LIMIT"),
             "MAGUP": (self.MAGUP, "REF MAG RANGE, UPPER LIMIT"),

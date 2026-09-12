@@ -17,6 +17,7 @@ from .storage import IntermediateStorage
 from .const import MASK_HEADER_CARDS, MaskBit
 from .counts import CoaddCounts
 from .plotting import plot_coadd_counts
+from .source_mask import line_profile, core_width, optimized_half_width_for_trails_with_known_profile
 from .utils import count_dtype, determine_size, write_count_planes, write_mask_plio
 from .header_set import InputHeaderSet
 
@@ -92,14 +93,16 @@ def _measure_trail_width(
     members=None,
     distance_limit=0.0,
     padding=0.0,
-    width_sigma=1.0,
-    width_scale=1.0,
+    skysig=None,
+    psf_fwhm=None,
+    threshold_scale=1.0,
+    aperture_sigma=1.0,
     profile_percentile=50.0,
     min_half_width=2.0,
     max_half_width=24.0,
 ):
-    """Perpendicular-profile components of a merged cluster, one (segment, half_width) per trail."""
-    from scipy.ndimage import gaussian_filter1d, map_coordinates
+    """Perpendicular-profile components of a merged cluster, one (segment, half_width, flux_per_length) per trail."""
+    from scipy.ndimage import gaussian_filter1d, map_coordinates, uniform_filter1d
 
     minimum = float(min_half_width) / factor
     maximum = float(max_half_width) / factor
@@ -107,20 +110,21 @@ def _measure_trail_width(
         raise ValueError("satellite_mask half-width limits are invalid")
     if not 0 <= profile_percentile <= 100:
         raise ValueError("profile_percentile must be between 0 and 100")
-    if width_sigma <= 0:
-        raise ValueError("satellite_mask.width_sigma must be positive")
-    if width_scale <= 0:
-        raise ValueError("satellite_mask.width_scale must be positive")
+    if aperture_sigma <= 0:
+        raise ValueError("aperture_sigma must be positive")
+    if threshold_scale <= 0:
+        raise ValueError("satellite_mask.threshold_scale must be positive")
     p0, p1 = np.asarray(segment[:2]), np.asarray(segment[2:])
     direction = p1 - p0
     length = float(np.hypot(*direction))
     if length == 0:
-        return [(np.asarray(segment), minimum)]
+        return [(np.asarray(segment), minimum, 0.0)]
     direction /= length
     normal = np.array([-direction[1], direction[0]])
     reach = float(distance_limit) + maximum
     radius = reach + max(3.0, 8.0 / factor)
-    offsets = np.arange(-radius, radius + 0.125, 0.25)
+    step = 0.25
+    offsets = np.arange(-radius, radius + step / 2, step)
     samples = max(32, min(1024, int(np.ceil(length * 2))))
     along = np.linspace(0.05, 0.95, samples) * length
     points = p0[None, :] + along[:, None] * direction
@@ -133,30 +137,55 @@ def _measure_trail_width(
         cval=np.nan,
     )
     outer = np.abs(offsets) >= reach + 1.0
-    threshold = width_sigma * noise
+    threshold = aperture_sigma * noise
+    law = bool(skysig) and bool(psf_fwhm)
+    if law:
+        awin = float(psf_fwhm) / np.sqrt(8.0 * np.log(2.0))
+        alpha = float(core_width(awin))
+
+    def binned_model(center):
+        """Unit-flux line-spread profile centred on the run, after the block mean, interpolation and smoothing."""
+        model = line_profile(np.abs(offsets - center) * factor, alpha)
+        model = gaussian_filter1d(uniform_filter1d(uniform_filter1d(model, 4), 4), 0.75)
+        return model - float(np.median(model[outer]))  # the same baseline removal the data profile gets
 
     def component(columns, target):
         """Above-threshold component around target offset (None: the strongest within the cluster)."""
         profile = np.nanpercentile(values[:, columns], profile_percentile, axis=1)
         profile = gaussian_filter1d(profile, 0.75, mode="nearest")
-        signal = profile - float(np.nanmedian(profile[outer]))
+        # the lower side is the baseline: a parallel trail can sit on the other side's annulus
+        signal = profile - min(
+            float(np.nanmedian(profile[outer & (offsets < 0)])), float(np.nanmedian(profile[outer & (offsets > 0)]))
+        )
         window = np.abs(offsets) <= maximum if target is None else np.abs(offsets - target) <= max(1.0, minimum)
         peak = int(np.nanargmax(np.where(window, signal, np.nan)))
         above = signal >= threshold
         if not above[peak]:
             if target is not None:
                 return None
-            return (float(offsets[peak]) if signal[peak] > 0 else 0.0), minimum
+            return (float(offsets[peak]) if signal[peak] > 0 else 0.0), minimum, 0.0
         left = right = peak
         while left > 0 and above[left - 1]:
             left -= 1
         while right + 1 < len(above) and above[right + 1]:
             right += 1
         center = 0.5 * float(offsets[left] + offsets[right])
-        half_width = 0.5 * float(offsets[right] - offsets[left]) + 0.125
-        if half_width * width_scale > maximum:
+        half_width = 0.5 * float(offsets[right] - offsets[left]) + step / 2
+        if half_width > maximum:
             center = float(offsets[peak])  # capped mask stays on the ridge, not a lopsided run's midpoint
-        return center, min(maximum, max(minimum, half_width * width_scale))
+        half_width = min(maximum, max(minimum, half_width))
+        if not law:
+            return center, half_width, 0.0
+        pad = int(round(8.0 / factor / step))  # 8 detector px beyond the run, where the smoothing spread the core flux
+        inside = slice(max(0, left - pad), min(len(offsets), right + 1 + pad))
+        flux_per_length = float(np.nansum(signal[inside])) * step * factor
+        model_fraction = float(np.sum(binned_model(center)[inside])) * step * factor  # flux outside the aperture
+        flux_per_length /= max(model_fraction, 1e-3)
+        law_half_width = (
+            float(optimized_half_width_for_trails_with_known_profile(flux_per_length, awin, skysig, threshold_scale))
+            / factor
+        )
+        return center, max(half_width, law_half_width), flux_per_length
 
     found = [(*component(slice(None), None), 0.0, length)]
     for member in np.asarray(members if members is not None else []).reshape(-1, 2, 2):
@@ -171,19 +200,30 @@ def _measure_trail_width(
         if hit is not None:
             found.append((*hit, t0, t1))
     merged = []
-    for center, half_width, t0, t1 in sorted(found):
+    for center, half_width, flux_per_length, t0, t1 in sorted(found):
         if merged and abs(center - merged[-1][0]) <= 0.5 and abs(half_width - merged[-1][1]) <= 0.5:
             last = merged[-1]
-            merged[-1] = (last[0], max(last[1], half_width), min(last[2], t0), max(last[3], t1))
+            merged[-1] = (
+                last[0],
+                max(last[1], half_width),
+                max(last[2], flux_per_length),
+                min(last[3], t0),
+                max(last[4], t1),
+            )
         else:
-            merged.append((center, half_width, t0, t1))
+            merged.append((center, half_width, flux_per_length, t0, t1))
     return [
-        (np.r_[p0 + t0 * direction + center * normal, p0 + t1 * direction + center * normal], half_width)
-        for center, half_width, t0, t1 in merged
+        (
+            np.r_[p0 + t0 * direction + center * normal, p0 + t1 * direction + center * normal],
+            half_width,
+            flux_per_length,
+        )
+        for center, half_width, flux_per_length, t0, t1 in merged
     ]
 
 
-def detect_satellite_trails(image: np.ndarray, **options) -> tuple[np.ndarray, np.ndarray]:
+def detect_satellite_trails(image: np.ndarray, skysig=None, psf_fwhm=None, **options) -> tuple[np.ndarray, np.ndarray]:
+    """Trail mask and one (x1, y1, x2, y2, half_width_px, flux_per_length) row per masked component."""
     from PIL import Image, ImageDraw
     from scipy.ndimage import uniform_filter
     from skimage.feature import canny
@@ -251,15 +291,16 @@ def detect_satellite_trails(image: np.ndarray, **options) -> tuple[np.ndarray, n
             segment = np.r_[point + t0 * direction, point + t1 * direction]
             accepted.extend(
                 _measure_trail_width(
-                    flat,
+                    filled - median,  # the box background still holds the trail, by a chord that depends on its angle
                     segment,
                     flat_sigma,
                     factor,
                     members=members,
                     distance_limit=float(options.get("merge_distance", 12.0)),
                     padding=padding,
-                    width_sigma=float(options.get("width_sigma", 1.0)),
-                    width_scale=float(options.get("width_scale", 1.0)),
+                    skysig=skysig,
+                    psf_fwhm=psf_fwhm,
+                    threshold_scale=float(options.get("threshold_scale", 1.0)),
                 )
             )
 
@@ -267,16 +308,16 @@ def detect_satellite_trails(image: np.ndarray, **options) -> tuple[np.ndarray, n
     draw = ImageDraw.Draw(canvas)
     center_offset = (factor - 1) / 2
     scaled = []
-    for segment, half_width in accepted:
+    for segment, half_width, flux_per_length in accepted:
         x1, y1, x2, y2 = segment * factor + center_offset
         radius = max(1, int(np.ceil(half_width * factor + 1.0)))
         draw.line((x1, y1, x2, y2), fill=1, width=2 * radius + 1)
         for x, y in ((x1, y1), (x2, y2)):
             draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=1)
-        scaled.append((x1, y1, x2, y2))
+        scaled.append((x1, y1, x2, y2, half_width * factor, flux_per_length))
     mask = np.asarray(canvas, dtype=bool).copy()
     mask &= valid
-    lines = np.asarray(scaled, dtype=np.float64).reshape(-1, 4)
+    lines = np.asarray(scaled, dtype=np.float64).reshape(-1, 6)
     return mask, lines
 
 
@@ -706,6 +747,8 @@ class MaskMixin:
             counts=self._coadd_counts,
         )
         satellite_options = self.config_node.imcoadd.satellite_mask
+        skysigs = self.input_headers.values_any("BACKSIG", "SKYSIG")
+        psf_fwhms = self.input_headers.values("PEEING")
         quality_masks = []
         trailed_frames = 0
         for index, (image, detector) in enumerate(zip(images, detector_images)):
@@ -716,11 +759,18 @@ class MaskMixin:
                 weight_image=weights[index], frame_data=data,
             )  # fmt: skip
             if self.plan.satellite_mask_enabled:
-                trail, lines = detect_satellite_trails(data, **satellite_options)
+                if not skysigs[index] or not psf_fwhms[index]:
+                    self.logger.warning(
+                        f"No sky noise or PEEING for {get_basename(image)}; trail width from the profile alone"
+                    )
+                trail, lines = detect_satellite_trails(
+                    data, skysig=skysigs[index], psf_fwhm=psf_fwhms[index], **satellite_options
+                )
                 mask[trail] |= int(MaskBit.SATELLITE)
                 trailed_frames += int(trail.any())
+                widths = ", half-width " + "/".join(f"{w:.0f}" for w in lines[:, 4]) + " px" if len(lines) else ""
                 self.logger.info(
-                    f"Satellite mask: {len(lines)} line(s), {int(trail.sum())} pixels in {get_basename(image)}"
+                    f"Satellite mask: {len(lines)} line(s){widths}, {int(trail.sum())} pixels in {get_basename(image)}"
                 )
             builder.set_frame(index, mask, header=header)
             if self.storage.policy == "memory":
