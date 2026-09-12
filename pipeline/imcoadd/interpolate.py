@@ -639,6 +639,10 @@ def weight_and_interpolate_cpu(
             )
             if zero_interp_weight:
                 interp_wt[hole] = 0.0
+            elif coefficients is not None:
+                # the fitted surface is the variance model at a bad pixel too; the kernel's neighbour rule (0 with no
+                # valid neighbour) is for the per-pixel model, and a zero here would ride the sidecar into SWarp
+                interp_wt[hole] = wgt[hole]
             n_saturated = None
             if saturated_mask is not None:
                 # zero before SWarp reads it: the resampling kernel then spreads the hole over its own support
