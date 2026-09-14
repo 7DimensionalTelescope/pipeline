@@ -341,10 +341,17 @@ def resolve_coadd_plan(node, errors=builtins) -> CoaddPlan:
         )
     if plan.dump_reprojected_masks and not plan.reproject_with_swarp:
         raise errors.ValueError("imcoadd.dump_reprojected_masks requires coadd_routine: reproject-first")
-    if plan.reproject_with_swarp and not plan.interpolate_badpix:
+    if plan.reproject_with_swarp and not plan.interpolate_badpix and policy == "1px":
         raise errors.ValueError(
-            "coadd_routine 'reproject-first' interpolates bad pixels in every frame; "
-            "set interpolate_badpix: True (or coadd_routine: direct for pre-aligned inputs)"
+            "interpolate_badpix: False leaves the bad pixel's value in the frame, and LANCZOS3 spreads it over its "
+            "kernel support, which a '1px' exclusion does not cover; set interpolate_badpix: True, "
+            "badpix_reprojection_policy: conservative, or zero_badpix_coadd_weight: False (bad pixels vote)"
+        )
+    if plan.reproject_with_swarp and not plan.interpolate_badpix and policy == "conservative" and plan.convolve:
+        raise errors.ValueError(
+            "interpolate_badpix: False with badpix_reprojection_policy: conservative excludes the LANCZOS3 support only, "
+            "and the seeing-match convolution spreads the bad pixel's value beyond it; set interpolate_badpix: True "
+            "or convolve: False"
         )
     if plan.joint_wcs and routine == "direct":
         raise errors.ValueError("imcoadd.joint_wcs registers frames for reprojection; the direct routine has none")

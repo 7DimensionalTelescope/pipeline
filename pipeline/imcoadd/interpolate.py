@@ -549,7 +549,7 @@ def write_weight_float32(path, weight, header, n_holes=None):
 def weight_and_interpolate_cpu(
     images, mask_path, output_paths, calib, window=1, method="median", badpix=1,
     zero_interp_weight=True, logger=None, post_frame=None, weight_store=None, source_catalogs=None, bpmid=None,
-    saturated_mask=None, flat_file=None,
+    saturated_mask=None, flat_file=None, interpolate=True,
 ):
     """Fused weight calculation + bad-pixel interpolation, one read and one write per image.
 
@@ -634,9 +634,12 @@ def weight_and_interpolate_cpu(
                     qa=fit_qa, image_name=_os.path.basename(images[idx]),
                 )
             t_weight = _time.time() - st_img - t_read
-            interp_img, interp_wt = interpolate_masked_pixels_cpu_numba(
-                sci, mask, window=window, weight=wgt, use_median=(method == "median")
-            )
+            if interpolate:
+                interp_img, interp_wt = interpolate_masked_pixels_cpu_numba(
+                    sci, mask, window=window, weight=wgt, use_median=(method == "median")
+                )
+            else:
+                interp_img, interp_wt = sci, wgt  # interpolate_badpix: False; the frame is staged as measured
             if zero_interp_weight:
                 interp_wt[hole] = 0.0
             elif coefficients is not None:

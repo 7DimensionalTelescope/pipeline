@@ -310,7 +310,7 @@ class SwarpMixin:
         if dump_interp and dump_weight:
             return
         interp_images = atleast_1d(get_key(self.config_node.imcoadd, "interp_images") or [])
-        method = self.config_node.imcoadd.interp_type
+        method = self._interp_method()
         freed = n_interp = n_weight = 0
         for outim in interp_images:
             sidecar = add_suffix(outim, "weight")
@@ -508,7 +508,7 @@ class SwarpMixin:
         self._single_of = single_of
         self._record_bpmids()
 
-        method = self.config_node.imcoadd.interp_type
+        method = self._interp_method()
         zero_interp = self.plan.zero_badpix_in_single_weight_map
 
         from collections import deque
@@ -622,6 +622,7 @@ class SwarpMixin:
                     saturated_mask=(
                         self._saturated_detector_mask if self.plan.zero_saturated_in_weight_before_reprojection else None
                     ),
+                    interpolate=self.plan.interpolate_badpix,
                 )
                 self.logger.info(
                     f"Weight+interp completed for group {group_id + 1}/{len(groups)} in "
@@ -823,11 +824,15 @@ class SwarpMixin:
         holes = sidecar.get("WGTHOLES")
         return holes is None or bool(holes) == bool(self.plan.zero_badpix_in_single_weight_map)
 
+    def _interp_method(self) -> str:
+        """INTERP card value: imcoadd.interp_type, or 'none' when interpolate_badpix is False."""
+        return str(self.config_node.imcoadd.interp_type) if self.plan.interpolate_badpix else "none"
+
     def _resample_options(self, interp_im: str) -> dict:
         """Everything one frame's interpolated and resampled products depend on."""
         single = self._single_of.get(interp_im, interp_im)
         return {
-            "interp": str(self.config_node.imcoadd.interp_type).upper(),
+            "interp": self._interp_method().upper(),
             "badpix": self.plan.badpix_propagation_policy_across_astrometric_reprojection,
             "zero": bool(self.plan.zero_badpix_coadd_weight),
             "joint_wcs": bool(self.plan.joint_wcs),

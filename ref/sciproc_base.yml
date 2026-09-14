@@ -144,8 +144,8 @@ imcoadd:
   output_weight_map: true  # write the coadd weight product
   output_single_weight_map: false  # keep each frame's resampled weight in singles/ (int16)
   output_footprint: false  # write the standalone coadd footprint product; superseded by the NUSED count plane
-  output_counts_map: true  # write the coadd coverage/provenance count planes (canonical)
   output_mask_map: false  # write the legacy OR bitmask; derivable from the count planes
+  output_counts_map: true  # write the coadd coverage/provenance count planes (canonical)
   fill_nan: true  # fill holes inside the coverage of the final coadd (maskfill, van Dokkum & Pasha 2024)
   dump_reprojected_masks: false
   satellite_mask:
