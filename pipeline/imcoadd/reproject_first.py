@@ -313,7 +313,7 @@ class ReprojectFirstCoaddMixin:
             weights = [1.0 / float(s) ** 2 for s in skysigs]
 
         # the resampled weight's zeros are the saturation footprint SWarp spread over its kernel: read it as the mask
-        masks = wht_maps if plan.read_resampled_weight_as_exclusion_mask else None
+        masks = wht_maps if plan.read_resampled_weight_as_exclusion_mask and weighting != "pixelwise" else None
 
         # the resampled weight stays the pristine SWarp result; the 1px holes ride these instead
         badpix = self.badpix_positions(input_images)
@@ -333,7 +333,7 @@ class ReprojectFirstCoaddMixin:
                 input_images, holes=masks, badpix=badpix, saturated=saturated, counts=counts
             )
 
-        var_maps = wht_maps if plan.output_smooth_weight_map_for_coadd_image else None
+        var_maps = wht_maps if plan.output_smooth_weight_map_for_coadd_image and weighting != "pixelwise" else None
         stage_wht = weights if weighting == "pixelwise" else None
         var_is_mask = var_maps is not None and masks is not None and list(var_maps) == list(masks)
         if self.storage.policy == "memory":

@@ -549,7 +549,7 @@ def write_weight_float32(path, weight, header, n_holes=None):
 def weight_and_interpolate_cpu(
     images, mask_path, output_paths, calib, window=1, method="median", badpix=1,
     zero_interp_weight=True, logger=None, post_frame=None, weight_store=None, source_catalogs=None, bpmid=None,
-    saturated_mask=None, flat_file=None, interpolate=True,
+    saturated_mask=None, flat_file=None, interpolate=True, ivar_out=None,
 ):
     """Fused weight calculation + bad-pixel interpolation, one read and one write per image.
 
@@ -564,7 +564,7 @@ def weight_and_interpolate_cpu(
     st_stage = _time.time()
     from concurrent.futures import ThreadPoolExecutor
 
-    from .weight import optimized_parallel, smooth_weight_surface, source_mask_on_frame
+    from .weight import optimized_parallel, smooth_weight_surface, source_mask_on_frame, write_ivar_map
     from .flat_weight import WEIGHT_MODEL, WEIGHT_QA_COMMENTS, smooth_flat_surface
 
     mask = fits.getdata(mask_path).astype(np.int32)
@@ -623,6 +623,8 @@ def weight_and_interpolate_cpu(
                     wgt[nonfinite] = 0.0
                 if weight_store is not None:
                     pool.submit(persist_single_weight, store_paths[idx], wgt.copy(), store_masters)
+            if ivar_out is not None:
+                pool.submit(write_ivar_map, ivar_out[idx], wgt.copy(), sci_hdr)
             coefficients = None
             fit_qa = {}
             if source_catalogs is not None:

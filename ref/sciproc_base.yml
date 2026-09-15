@@ -163,6 +163,7 @@ imcoadd:
   saturation_reprojection_policy: 'conservative'  # 1px | conservative: footprint of the saturated-pixel rejection; conservative rides the weight sidecar through SWarp
   dump_unreprojected_interp: false  # keep the interpolated science image before SWarp
   dump_unreprojected_weight: false  # keep its weight map before SWarp
+  dump_unsmoothed_single_weight_map: false  # write <single>_ivar.fits, the per-pixel inverse variance before smoothing, on the detector grid; frames whose resamples are reused on resume are skipped
   intermediate_policy: auto  # memory for groups up to memory_image_limit, disk otherwise
   memory_image_limit: 6
   dump_bkgsub: false

@@ -163,6 +163,11 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         return add_suffix(image_path, "weight")
 
     @staticmethod
+    def ivar_map(image_path: str | list) -> str | list:
+        """Per-pixel inverse variance of a single before smoothing (imcoadd.dump_unsmoothed_single_weight_map)."""
+        return add_suffix(image_path, "ivar")
+
+    @staticmethod
     def footprint(image_path: str | list) -> str | list:
         return add_suffix(image_path, "footprint")
 

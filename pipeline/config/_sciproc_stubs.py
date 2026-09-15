@@ -120,6 +120,7 @@ if TYPE_CHECKING:
         saturation_reprojection_policy: str
         dump_unreprojected_interp: bool
         dump_unreprojected_weight: bool
+        dump_unsmoothed_single_weight_map: bool
         intermediate_policy: str
         memory_image_limit: int
         dump_bkgsub: bool

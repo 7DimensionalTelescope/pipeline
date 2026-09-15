@@ -622,6 +622,7 @@ class SwarpMixin:
                         self._saturated_detector_mask if self.plan.zero_saturated_in_weight_before_reprojection else None
                     ),
                     interpolate=self.plan.interpolate_badpix,
+                    ivar_out=PathHandler.ivar_map(group_in) if self.plan.dump_unsmoothed_single_weight_map else None,
                 )
                 self.logger.info(
                     f"Weight+interp completed for group {group_id + 1}/{len(groups)} in "

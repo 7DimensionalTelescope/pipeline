@@ -109,6 +109,16 @@ def calc_weight_with_gpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, dev
     )
 
 
+def write_ivar_map(path, weight, header):
+    """Per-pixel inverse variance of a single before smoothing, detector grid, float32, under the single's own header."""
+    hdr = header.copy()
+    hdr.strip()
+    hdr["WGTMODEL"] = ("PIXEL", "single-frame weight model")
+    hdr["BUNIT"] = ("ADU**-2", "inverse variance before smoothing")
+    weight = np.where(np.isfinite(weight) & (weight >= 0), weight, 0.0).astype(np.float32)
+    fits.PrimaryHDU(weight, header=hdr).writeto(path, overwrite=True)
+
+
 def calc_weight_with_cpu(
     images,
     d_m_file,
@@ -121,6 +131,7 @@ def calc_weight_with_cpu(
     source_catalogs=None,
     fit_mask=None,
     logger=None,
+    ivar_out=None,
     **kwargs
 ):
     from .weight_store import load_single_weight, persist_single_weight
@@ -151,6 +162,8 @@ def calc_weight_with_cpu(
                 out[~np.isfinite(out)] = 0.0  # degenerate noise model -> weight 0, not inf
                 if weight_store:
                     pool.submit(persist_single_weight, PathHandler.weight_map(images[i]), out.copy(), masters)
+            if ivar_out is not None:
+                pool.submit(write_ivar_map, ivar_out[i], out.copy(), fits.getheader(images[i]))
             if source_catalogs is not None:
                 # after the store write: the durable copy is the pristine model, smoothing is a
                 # campaign choice. Sources and bad pixels are excluded from the fit, not filled.

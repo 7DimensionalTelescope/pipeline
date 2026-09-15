@@ -15,7 +15,7 @@ from .cam_tracker import get_camera_serial
 from .db import unified_names_from_paths
 
 # auxiliary planes that live beside the images they describe, not science data
-AUXILIARY_FILE_SUFFIXES = ("_srcmask", "_fovmask", "_bpmask", "_footprint", "_counts", "_mask", "_bkg", "_bkgrms")
+AUXILIARY_FILE_SUFFIXES = ("_srcmask", "_fovmask", "_bpmask", "_footprint", "_counts", "_mask", "_bkg", "_bkgrms", "_ivar")
 
 
 @dataclass(frozen=True, slots=True)

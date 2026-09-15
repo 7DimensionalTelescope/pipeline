@@ -455,7 +455,6 @@ class ImCoadd(
             "CONVOLVE": (shown(bp.convolve), "imcoadd.convolve"),
             "JOINTWCS": (bp.joint_wcs, "imcoadd.joint_wcs"),
             "IMGSELEC": (shown(get_key(node, "image_selection")), "imcoadd.image_selection"),
-            "SMTHWGT":  (bool(bp.use_smooth_weight_during_coaddition), "weight map smoothed (not coadd_weighting pixel-wise)"),
             "COVPOL":   (bp.coverage_policy.upper(), "imcoadd.coverage_policy"),
             "SATMASK":  (bool(bp.satellite_mask_enabled), "imcoadd.satellite_mask.enabled"),
             "SRCMASK":  (shown(bp.source_mask), "imcoadd.source_mask"),
@@ -592,18 +591,23 @@ class ImCoadd(
                             source_catalogs=self._source_catalogs(uncalculated_images),
                             fit_mask=fit_mask,
                             logger=self.logger,
+                            ivar_out=PathHandler.ivar_map(uncalculated_images) if bp.dump_unsmoothed_single_weight_map else None,
                         )
                     else:
                         bp = self.plan
                         if bp.use_smooth_weight_during_coaddition:
                             raise NotImplementedError(
                                 "smoothed weight maps are CPU-only (the GPU weight kernel has no smoothing "
-                                "pass); set imcoadd.gpu: False, or coadd_weighting: pixel-wise"
+                                "pass); set imcoadd.gpu: False"
                             )
                         if bp.zero_badpix_in_single_weight_map and not bp.interpolate_badpix:
                             raise NotImplementedError(
                                 "zero_badpix_coadd_weight without interpolation is CPU-only "
                                 "(the GPU weight kernel is untrusted anyway); set imcoadd.gpu: False"
+                            )
+                        if bp.dump_unsmoothed_single_weight_map:
+                            raise NotImplementedError(
+                                "dump_unsmoothed_single_weight_map is written by the CPU weight path; set imcoadd.gpu: False"
                             )
                         from .weight import calc_weight_with_gpu
 

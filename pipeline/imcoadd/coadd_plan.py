@@ -17,7 +17,7 @@ class CoaddPlan:
                                     ├─► inputs_are_reprojected (not legacy)    │     = and use_smooth_weight_during_coaddition
                                     └─► reject_saturated_pixels (not legacy)   │
         coadd_weighting ────────────┬──────────────────────────────────────────┼─► use_smooth_weight_during_coaddition
-        output_weight_map ──────────┼─► compute_single_weight_maps ───────────┘     = weights computed, not pixel-wise, not legacy
+        output_weight_map ──────────┼─► compute_single_weight_maps ───────────┘     = weights computed, not legacy
         coadd_mode ─────────────────┤     = output map (not proper), pixel-wise,     └─► output_smooth_weight_map_for_coadd_image
         saturation_reprojection_ ───┤       or the saturation sidecar below                 = and output_weight_map and not proper
           policy                    │     └─► sidecar_only_for_saturation (the sidecar exists for nothing else: logged)
@@ -68,6 +68,7 @@ class CoaddPlan:
     match_swarp_size: bool
     dump_unreprojected_interp: bool
     dump_unreprojected_weight: bool
+    dump_unsmoothed_single_weight_map: bool
     lean_factory: bool
     coadd_scratch: str | None
     persist_weight_maps: bool
@@ -110,7 +111,7 @@ class CoaddPlan:
     def use_smooth_weight_during_coaddition(self) -> bool:
         """The per-frame weight is the fitted vignetting surface, not the per-pixel noise model."""
         return (
-            self.compute_single_weight_maps and self.coadd_weighting != "pixelwise" and self.coadd_routine != "legacy"
+            self.compute_single_weight_maps and self.coadd_routine != "legacy"
         )
 
     @property
@@ -317,6 +318,7 @@ def resolve_coadd_plan(node, errors=builtins) -> CoaddPlan:
         match_swarp_size=bool(node.match_swarp_size),
         dump_unreprojected_interp=bool(node.dump_unreprojected_interp),
         dump_unreprojected_weight=bool(node.dump_unreprojected_weight),
+        dump_unsmoothed_single_weight_map=bool(node.dump_unsmoothed_single_weight_map),
         lean_factory=bool(node.lean_factory),
         coadd_scratch=node.coadd_scratch,
         persist_weight_maps=bool(node.persist_weight_maps),
@@ -330,8 +332,8 @@ def resolve_coadd_plan(node, errors=builtins) -> CoaddPlan:
     if plan.zero_saturated_in_weight_before_reprojection and not plan.resample_weight_in_sci_pass:
         raise errors.NotImplementedError(
             "saturation_reprojection_policy 'conservative' propagates the saturation zeros through the LANCZOS3 sci "
-            "pass, which pixel-wise weighting does not run (its weights take the NEAREST wht pass); "
-            "use saturation_reprojection_policy: '1px' with coadd_weighting: pixel-wise"
+            "pass and requires a smooth weight sidecar; "
+            "use a modern coadd routine or saturation_reprojection_policy: '1px'"
         )
     if routine == "legacy" and not (plan.interpolate_badpix and zero_badpix_coadd_weight and policy == "1px"):
         raise errors.ValueError(
