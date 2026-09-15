@@ -1,4 +1,4 @@
-from ..utils import add_suffix
+from ..path.path import PathHandler
 from numba import njit, prange
 import numpy as np
 from astropy.io import fits
@@ -75,7 +75,7 @@ def interpolate_masked_pixels_cpu(
     weight = bool(weight)
 
     def _wgt_in(idx):
-        return weight_paths[idx] if weight_paths is not None else add_suffix(images[idx], "weight")
+        return weight_paths[idx] if weight_paths is not None else PathHandler.weight_map(images[idx])
 
     def _load(idx):
         sci = fits.getdata(images[idx]).astype(np.float32)
@@ -92,7 +92,7 @@ def interpolate_masked_pixels_cpu(
                 # an interpolated value is a copy of its neighbours: no independent information
                 interp_wt[mask == badpix] = 0.0
             fits.writeto(
-                add_suffix(sci_out, "weight"),
+                PathHandler.weight_map(sci_out),
                 interp_wt,
                 header=add_bpx_method(fits.getheader(_wgt_in(idx)), method, bpmid),
                 overwrite=True,
@@ -591,7 +591,7 @@ def weight_and_interpolate_cpu(
                 weight_hdr[key] = (value, WEIGHT_QA_COMMENTS[key])
         if n_saturated is not None:
             weight_hdr["SATZERO"] = (int(n_saturated), "saturated detector pixels zeroed before reprojection")
-        write_weight_float32(add_suffix(sci_out, "weight"), interp_wt, weight_hdr,
+        write_weight_float32(PathHandler.weight_map(sci_out), interp_wt, weight_hdr,
                              n_holes=n_holes if zero_interp_weight else 0)
         if post_frame is not None:
             post_frame(sci_out, sci, sci_hdr)  # e.g. per-image reprojection (+ optional interp discard)

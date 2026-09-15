@@ -1,0 +1,29 @@
+{
+  "include": [
+    ".",
+    "pipeline/cli/archive_multitelescopes_dict",
+    "pipeline/cli/autostash",
+    "pipeline/cli/autostash_dh",
+    "pipeline/cli/cat2reg",
+    "pipeline/cli/clear_completed_schedules",
+    "pipeline/cli/crossfilter",
+    "pipeline/cli/crossfilter_config",
+    "pipeline/cli/data_reduction",
+    "pipeline/cli/db_sync",
+    "pipeline/cli/debug",
+    "pipeline/cli/dispatch_worker_daemon",
+    "pipeline/cli/drain_queue",
+    "pipeline/cli/preprocess",
+    "pipeline/cli/queue_daemon",
+    "pipeline/cli/rerun_failed_tasks",
+    "pipeline/cli/reset_config",
+    "pipeline/cli/resume_scheduler_tasks",
+    "pipeline/cli/run_config",
+    "pipeline/cli/run_date",
+    "pipeline/cli/run_dates",
+    "pipeline/cli/run_trigger",
+    "pipeline/cli/scheduler_rpc",
+    "pipeline/cli/terminate_scheduler_tasks"
+  ],
+  "typeCheckingMode": "off"
+}

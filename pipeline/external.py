@@ -8,6 +8,7 @@ from astropy.io import fits
 from typing import List, Tuple, Dict
 
 from .errors import SolveFieldError, ScampError
+from .path.path import PathHandler
 from .services.logger import Logger
 from .const.environ import REF_DIR, SEXTRACTOR_COMMAND, SWARP_COMMAND
 from .const.observation import IMAGE_SIZE_X, IMAGE_SIZE_Y
@@ -743,7 +744,7 @@ def swarp(
     os.makedirs(resample_dir, exist_ok=True)
     comim = output or os.path.join(dump_dir, "coadd.fits")
     # weightim = swap_ext(comim, "weight.fits")
-    weightim = add_suffix(comim, "weight")
+    weightim = PathHandler.weight_map(comim)
 
     # Skipping logic when all outputs already exist
     if coadd:

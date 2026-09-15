@@ -8,7 +8,7 @@ from astropy.table import Table, hstack, vstack, unique
 from astropy.coordinates import SkyCoord
 
 from ..const import GAIA_REF_DIR, REF_DIR
-from ..utils import add_suffix
+from ..path.path import PathHandler
 
 if TYPE_CHECKING:
     from ..config._sciproc_stubs import PhotometryNode
@@ -352,7 +352,7 @@ def get_sex_options(
 
     # 	Add Weight Map (opt-in: weightless coadd photometry was deliberate)
     if getattr(phot_conf, "use_weight_map", False):
-        weightim = add_suffix(image, "weight")
+        weightim = PathHandler.weight_map(image)
         if os.path.exists(weightim):
             sex_options["-WEIGHT_TYPE"] = "MAP_WEIGHT"
             sex_options["-WEIGHT_IMAGE"] = weightim

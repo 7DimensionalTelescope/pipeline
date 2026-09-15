@@ -19,7 +19,6 @@ from ..config.utils import get_key
 from ..path.path import PathHandler
 from ..services.utils import conservative_worker_count
 from ..utils import (
-    add_suffix,
     atleast_1d,
     collapse,
     force_symlink,
@@ -115,7 +114,7 @@ class SwarpMixin:
             coadd[~keep] = np.nan
             fits.writeto(coadd_path, coadd, header=header, overwrite=True)
 
-            weight_path = add_suffix(coadd_path, "weight")
+            weight_path = PathHandler.weight_map(coadd_path)
             if os.path.exists(weight_path):
                 weight, weight_header = fits.getdata(weight_path, header=True, memmap=False)
                 weight[~keep] = 0
@@ -125,7 +124,7 @@ class SwarpMixin:
             used = geometric_count if keep is None else np.where(keep, geometric_count, 0)
             self._coadd_counts.geometric, self._coadd_counts.used = geometric, used
         if self.plan.output_footprint:
-            footprint_path = add_suffix(coadd_path, "footprint")
+            footprint_path = PathHandler.footprint(coadd_path)
             if os.path.exists(footprint_path):
                 footprint, footprint_header = fits.getdata(
                     footprint_path,
@@ -313,7 +312,7 @@ class SwarpMixin:
         method = self._interp_method()
         freed = n_interp = n_weight = 0
         for outim in interp_images:
-            sidecar = add_suffix(outim, "weight")
+            sidecar = PathHandler.weight_map(outim)
             if self._lookahead_done(outim, method):
                 if not dump_interp and os.path.exists(outim):
                     freed += os.path.getsize(outim)
@@ -523,7 +522,7 @@ class SwarpMixin:
         self.logger.info(f"Reprojection tail on {n_tail} workers")
 
         def _reproject_frame(sci_out):
-            sidecar = add_suffix(sci_out, "weight")
+            sidecar = PathHandler.weight_map(sci_out)
             self._reproject_single(sci_out, sidecar)
             if not dump_interp:
                 os.remove(sci_out)
@@ -543,7 +542,7 @@ class SwarpMixin:
                 self.logger.debug(f"Resamps exist with matching options; nothing to do for {outim}")
             elif (
                 os.path.exists(outim)
-                and os.path.exists(add_suffix(outim, "weight"))
+                and os.path.exists(PathHandler.weight_map(outim))
                 and not self.overwrite
                 and self._interp_current(outim)
             ):
@@ -584,7 +583,7 @@ class SwarpMixin:
                         "sz": sig_z_file,
                         "sf": sig_f_file,
                     }
-                    store_paths = [PathHandler.single_weight_map(im) for im in group_in]
+                    store_paths = [PathHandler.weight_map(im) for im in group_in]
                     weight_store = (store_paths, masters)
                     n_reusable = sum(check_single_weight(p, masters) for p in store_paths)
                     if n_reusable:
@@ -807,7 +806,7 @@ class SwarpMixin:
         wanted = self._resample_options(interp_im)
         try:
             header = fits.getheader(interp_im)
-            sidecar = fits.getheader(add_suffix(interp_im, "weight"))
+            sidecar = fits.getheader(PathHandler.weight_map(interp_im))
         except OSError:
             return False
         if str(header.get("INTERP", "") or "").upper() != wanted["interp"]:
@@ -928,14 +927,14 @@ class SwarpMixin:
                 shutil.move(output_file, self.config_node.imcoadd.coadd_image)
             elif type == "wht":
                 shutil.move(
-                    add_suffix(output_file, "weight"),
-                    add_suffix(self.config_node.imcoadd.coadd_image, "weight"),
+                    PathHandler.weight_map(output_file),
+                    PathHandler.weight_map(self.config_node.imcoadd.coadd_image),
                 )
             elif type == "bpm":
                 # legacy: SWarp's own combine produced the summed good-pixel coverage
                 shutil.move(
-                    add_suffix(output_file, "weight"),
-                    add_suffix(self.config_node.imcoadd.coadd_image, "footprint"),
+                    PathHandler.weight_map(output_file),
+                    PathHandler.footprint(self.config_node.imcoadd.coadd_image),
                 )
 
         return resample_dir

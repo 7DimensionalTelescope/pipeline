@@ -15,7 +15,7 @@ from .cam_tracker import get_camera_serial
 from .db import unified_names_from_paths
 
 # auxiliary planes that live beside the images they describe, not science data
-MASK_SUFFIXES = ("_srcmask", "_fovmask", "_bpmask", "_footprint", "_counts", "_mask", "_bkg", "_bkgrms")
+AUXILIARY_FILE_SUFFIXES = ("_srcmask", "_fovmask", "_bpmask", "_footprint", "_counts", "_mask", "_bkg", "_bkgrms")
 
 
 @dataclass(frozen=True, slots=True)
@@ -407,7 +407,7 @@ class NameHandler:
         # image_qa.image_type; a master carries its own exposure_type, sigma frames included
         # any science image can be a difference, so it is read off the stem suffix and takes precedence
         core = stem
-        for plane_suffix in ("_cat", "_weight") + MASK_SUFFIXES:
+        for plane_suffix in ("_cat", "_weight") + AUXILIARY_FILE_SUFFIXES:
             if core.endswith(plane_suffix):
                 core = core[: -len(plane_suffix)]
                 break
@@ -427,7 +427,7 @@ class NameHandler:
             product_type = const.NAME_TYPE_CATALOG
         elif stem.endswith("_weight"):
             product_type = const.NAME_TYPE_WEIGHT
-        elif stem.endswith(MASK_SUFFIXES):
+        elif stem.endswith(AUXILIARY_FILE_SUFFIXES):
             # without this, masks beside the frames they describe parse as science images
             product_type = const.NAME_TYPE_MASK
         else:

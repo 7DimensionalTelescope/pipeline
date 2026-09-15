@@ -98,7 +98,7 @@ class ReprojectFirstCoaddMixin:
             if plan.interpolate_badpix:
                 images = self.apply_bpmask(images, device_id=device_id, weight_images=weight_images)
                 if weight_images is not None:
-                    weight_images = [add_suffix(image, "weight") for image in images]
+                    weight_images = [PathHandler.weight_map(image) for image in images]
                 advance("apply-bpmask-completed")
 
         if self._need_quality_masks:
@@ -467,9 +467,9 @@ class ReprojectFirstCoaddMixin:
                 skysigs=self.input_headers.values_any("BACKSIG", "SKYSIG"),
                 flxscales=self._coadd_flxscales(),
                 weight_map_policy=policy,
-                weight_output=(add_suffix(coadd_image, "weight") if policy != "off" else False),
-                footprint_output=(add_suffix(coadd_image, "footprint") if plan.output_footprint else False),
-                psf_output=add_suffix(coadd_image, "psf"),
+                weight_output=(PathHandler.weight_map(coadd_image) if policy != "off" else False),
+                footprint_output=(PathHandler.footprint(coadd_image) if plan.output_footprint else False),
+                psf_output=PathHandler.psfmodel(coadd_image),
                 holes=holes,
                 badpix=badpix,
                 saturated=saturated,
@@ -542,9 +542,9 @@ class ReprojectFirstCoaddMixin:
             output_path=self.config_node.imcoadd.coadd_image,
             coadd_header=self.input_headers.coadd_header,
             weights=weights,
-            weight_output=(add_suffix(self.config_node.imcoadd.coadd_image, "weight") if write_weight else False),
+            weight_output=(PathHandler.weight_map(self.config_node.imcoadd.coadd_image) if write_weight else False),
             footprint_output=(
-                add_suffix(self.config_node.imcoadd.coadd_image, "footprint") if write_footprint else False
+                PathHandler.footprint(self.config_node.imcoadd.coadd_image) if write_footprint else False
             ),
             masks=masks,
             flxscales=self._coadd_flxscales(),
@@ -578,9 +578,9 @@ class ReprojectFirstCoaddMixin:
             output_path=self.config_node.imcoadd.coadd_image,
             coadd_header=self.input_headers.coadd_header,
             weights=weights,
-            weight_output=(add_suffix(self.config_node.imcoadd.coadd_image, "weight") if write_weight else False),
+            weight_output=(PathHandler.weight_map(self.config_node.imcoadd.coadd_image) if write_weight else False),
             footprint_output=(
-                add_suffix(self.config_node.imcoadd.coadd_image, "footprint") if write_footprint else False
+                PathHandler.footprint(self.config_node.imcoadd.coadd_image) if write_footprint else False
             ),
             masks=masks,
             flxscales=self._coadd_flxscales(),
@@ -619,9 +619,9 @@ class ReprojectFirstCoaddMixin:
             output_path=self.config_node.imcoadd.coadd_image,
             coadd_header=self.input_headers.coadd_header,
             weights=weights,
-            weight_output=(add_suffix(self.config_node.imcoadd.coadd_image, "weight") if write_weight else False),
+            weight_output=(PathHandler.weight_map(self.config_node.imcoadd.coadd_image) if write_weight else False),
             footprint_output=(
-                add_suffix(self.config_node.imcoadd.coadd_image, "footprint") if write_footprint else False
+                PathHandler.footprint(self.config_node.imcoadd.coadd_image) if write_footprint else False
             ),
             masks=masks,
             flxscales=self._coadd_flxscales(),

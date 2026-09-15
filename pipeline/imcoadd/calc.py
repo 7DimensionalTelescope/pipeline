@@ -13,7 +13,8 @@ from astropy.io import fits
 from astropy.wcs import WCS
 
 from ..calc.median import median_variance_ratio, nanmedian_axis0, _median_penalty
-from ..utils import time_diff_in_seconds, add_suffix
+from ..utils import time_diff_in_seconds
+from ..path.path import PathHandler
 from ..services.logger import Logger
 from .utils import determine_size, build_coadd_wcs_header
 
@@ -332,10 +333,10 @@ def mean_coadd_numpy(
     # propagated: (sum s)^2 / sum(s^2 sigma_p^2) -- the coadd's own per-pixel inverse
     # variance; otherwise summed inverse variance (pixel-wise) or frame count (simple).
     if weight_output is not False:
-        weight_out = weight_output or add_suffix(output_path, "weight")
+        weight_out = weight_output or PathHandler.weight_map(output_path)
         fits.writeto(weight_out, weight_map_out.astype(np.float32), header=out_header, overwrite=True)
     if footprint_output is not False:
-        footprint_out = footprint_output or add_suffix(output_path, "footprint")
+        footprint_out = footprint_output or PathHandler.footprint(output_path)
         fits.writeto(footprint_out, count_arr.astype(np.int16), header=out_header, overwrite=True)
     if logger is not None and weight_output is not False:
         logger.debug(f"Wrote coadd weight map ({backend}): {weight_out}")
@@ -555,10 +556,10 @@ def clipped_mean_coadd_numpy(
             out_header.comments["EGAIN"] = "Effective EGAIN for coadded image (e-/ADU)"
     fits.writeto(output_path, coadd, header=out_header, overwrite=True)
     if weight_output is not False:
-        weight_out = weight_output or add_suffix(output_path, "weight")
+        weight_out = weight_output or PathHandler.weight_map(output_path)
         fits.writeto(weight_out, weight_map_out.astype(np.float32), header=out_header, overwrite=True)
     if footprint_output is not False:
-        footprint_out = footprint_output or add_suffix(output_path, "footprint")
+        footprint_out = footprint_output or PathHandler.footprint(output_path)
         fits.writeto(footprint_out, count_arr.astype(np.int16), header=out_header, overwrite=True)
     if logger is not None:
         logger.info(f"Numpy clipped-mean coaddition completed in {time_diff_in_seconds(st)} seconds")
@@ -806,10 +807,10 @@ def median_coadd_numpy(
         base_w = count_arr.astype(np.float64)  # no sigma source: frame count
     weight_map_out = base_w / _median_penalty(count_arr)
     if weight_output is not False:
-        weight_out = weight_output or add_suffix(output_path, "weight")
+        weight_out = weight_output or PathHandler.weight_map(output_path)
         fits.writeto(weight_out, weight_map_out.astype(np.float32), header=out_header, overwrite=True)
     if footprint_output is not False:
-        footprint_out = footprint_output or add_suffix(output_path, "footprint")
+        footprint_out = footprint_output or PathHandler.footprint(output_path)
         fits.writeto(footprint_out, count_arr.astype(np.int16), header=out_header, overwrite=True)
     if logger is not None:
         if footprint_output is not False:

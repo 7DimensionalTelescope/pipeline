@@ -17,7 +17,6 @@ from ..services.utils import acquire_available_gpu, conservative_worker_count
 from ..config.utils import get_key, get_or_set_key
 from ..utils import (
     collapse,
-    add_suffix,
     time_diff_in_seconds,
     get_basename,
     atleast_1d,
@@ -704,7 +703,7 @@ class ImCoadd(
             if os.path.exists(output_file) and not self.overwrite:
                 from .flat_weight import WEIGHT_MODEL
 
-                sidecar = add_suffix(output_file, "weight")
+                sidecar = PathHandler.weight_map(output_file)
                 expected = WEIGHT_MODEL if self.plan.use_smooth_weight_during_coaddition else "PIXEL"
                 if not weight or (os.path.exists(sidecar) and fits.getheader(sidecar).get("WGTMODEL") == expected):
                     self.logger.debug(f"Already exists; skip generating {output_file}")
@@ -939,7 +938,7 @@ class ImCoadd(
                         # its weights from the wht pass via `resampled_images`).
                         force_symlink(
                             self._resolve_weight_companion(input_images[i]),
-                            add_suffix(self.config_node.imcoadd.conv_files[i], "weight"),
+                            PathHandler.weight_map(self.config_node.imcoadd.conv_files[i]),
                         )
                     self.kernels.append(None)
                 else:
@@ -1005,7 +1004,7 @@ class ImCoadd(
                 # SWarp resamp outputs); the outputs are named to match what
                 # prepare_convolution symlinks for the frames it skips
                 weight_list = [self._resolve_weight_companion(f) for f, k in zip(input_images, self.kernels) if k is not None]  # fmt: skip
-                outwim_list = [add_suffix(f, "weight") for f, k in zip(self.config_node.imcoadd.conv_files, self.kernels) if k is not None]  # fmt: skip
+                outwim_list = [PathHandler.weight_map(f) for f, k in zip(self.config_node.imcoadd.conv_files, self.kernels) if k is not None]  # fmt: skip
                 self.logger.debug(f"weight_list {weight_list}")
                 self.logger.debug(f"outwim_list {outwim_list}")
 
@@ -1045,7 +1044,7 @@ class ImCoadd(
                     force=True,
                 )
             )
-        candidates += [add_suffix(image, "weight"), swap_ext(image, "weight.fits")]
+        candidates += [PathHandler.weight_map(image), swap_ext(image, "weight.fits")]
         for candidate in candidates:
             if candidate and os.path.exists(candidate):
                 return candidate

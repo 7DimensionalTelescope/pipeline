@@ -150,6 +150,7 @@ class Scheduler:
         overwrite_preprocess=False,
         overwrite_science=False,
         overwrite_crossfilter=False,
+        overwrite_config_sections=None,
         input_type=None,
         processes=None,
         crossfilter_processes=None,
@@ -178,6 +179,8 @@ class Scheduler:
                 scheduler_kwargs = ["-processes"] + list(processes) if processes is not None else []
                 if overwrite or overwrite_data or overwrite_science:
                     scheduler_kwargs.append("-overwrite")
+                if overwrite_config_sections:
+                    scheduler_kwargs += ["-overwrite_config_sections"] + list(overwrite_config_sections)
             elif task_type == CONFIG_TYPE_CROSSFILTER:
                 scheduler_kwargs = (
                     ["-processes"] + list(crossfilter_processes)

@@ -9,10 +9,11 @@ from datetime import datetime, timedelta
 
 from .. import external
 from ..const.sciproc import SCIPROCESS_REGISTRY, SUBTRACTION_SPEC
-from ..utils import add_suffix, swap_ext, collapse, time_diff_in_seconds, atleast_1d
+from ..utils import swap_ext, collapse, time_diff_in_seconds, atleast_1d
 from ..tools.table import match_two_catalogs
 from ..config.utils import get_key
 from ..errors import SubtractionError
+from ..path.path import PathHandler
 from ..preprocess.plotting import save_fits_as_figures
 from ..tools.ds9 import create_ds9_region_file
 
@@ -352,7 +353,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
     def _save_mask(self, mask, image_file):
         image_name = os.path.basename(image_file)
-        filename = os.path.join(self.path_tmp, add_suffix(image_name, "mask"))
+        filename = os.path.join(self.path_tmp, PathHandler.mask(image_name))
         fits.writeto(filename, data=mask, overwrite=True)
         return filename
 

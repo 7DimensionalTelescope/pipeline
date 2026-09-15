@@ -2,6 +2,7 @@ from __future__ import annotations
 import os
 import glob
 import time
+from copy import deepcopy
 from pathlib import Path
 from datetime import datetime
 from typing import TYPE_CHECKING, Literal
@@ -12,9 +13,10 @@ from ..utils import clean_up_folder, clean_up_sciproduct, atleast_1d, time_diff_
 from ..utils.header import get_header
 from ..path.path import PathHandler
 from ..services.logger import Logger
+from ..const.sciproc import SCIPROCESS_REGISTRY
 
 from .base import BaseConfig
-from .utils import get_key
+from .utils import get_key, merge_dicts
 
 if TYPE_CHECKING:
     from ._sciproc_stubs import SciProcNode
@@ -35,6 +37,7 @@ class SciProcConfiguration(BaseConfig):
         is_pipeline=False,
         is_too=False,
         is_multi_epoch=False,
+        overwrite_config_sections: list[str] = None,
         **kwargs,
     ):
         st = time.time()
@@ -61,6 +64,9 @@ class SciProcConfiguration(BaseConfig):
 
         # fill in missing keys, even though initialized
         self.fill_missing_from_yaml()
+
+        if overwrite_config_sections:
+            self.overwrite_config_sections(overwrite_config_sections)
 
         if not os.path.exists(self.config_file) or overwrite:
             self.write_config()
@@ -176,12 +182,8 @@ class SciProcConfiguration(BaseConfig):
     def initialize(self, write=False, is_pipeline=False, is_too=False, is_multi_epoch=False):
         """Fill in universal info, filenames, settings."""
 
-        if is_too:
-            override_yml = self.path.sciproc_too_override_yml
-            self.logger.info(f"Overriding base configuration with {override_yml}")
-            self.override_from_yaml(override_yml)
-        elif is_multi_epoch:
-            override_yml = self.path.sciproc_multi_epoch_override_yml
+        override_yml = self._override_yml(is_too, is_multi_epoch)
+        if override_yml:
             self.logger.info(f"Overriding base configuration with {override_yml}")
             self.override_from_yaml(override_yml)
 
@@ -208,6 +210,54 @@ class SciProcConfiguration(BaseConfig):
         # self.input_files = self.node.input.calibrated_images
 
         self._initialized = True
+
+    def _override_yml(self, is_too=False, is_multi_epoch=False) -> str | None:
+        if is_too:
+            return self.path.sciproc_too_override_yml
+        if is_multi_epoch:
+            return self.path.sciproc_multi_epoch_override_yml
+        return None
+
+    def overwrite_config_sections(self, sections: list[str]) -> bool:
+        """Rebuild the named science sections from the template, keeping input_images and runtime_version; clear flags from the first affected stage onward."""
+        sections = list(atleast_1d(sections))
+        known = [spec.config_section for spec in SCIPROCESS_REGISTRY.specs]
+        if unknown := [s for s in sections if s not in known]:
+            raise ConfigurationError.ValueError(f"Unknown config sections {unknown}; choose from {sorted(set(known))}")
+        if not (self.write and get_key(self.node.settings, "is_pipeline", False)):
+            self.logger.warning("overwrite_config_sections skipped: requires write=True and settings.is_pipeline=True")
+            return False
+        template = self.read_config(collapse(self.path.sciproc_base_yml, raise_error=True))
+        override_yml = self._override_yml(
+            get_key(self.node.settings, "is_too", False), get_key(self.node.settings, "is_multi_epoch", False)
+        )
+        if override_yml and os.path.exists(override_yml):
+            merge_dicts(template, self.read_config(override_yml))  # same layering as initialize
+        before = deepcopy(self._config_in_dict)
+        for section in sections:
+            old = self._config_in_dict.get(section) or {}
+            fresh = deepcopy(template[section])
+            if "input_images" in fresh:
+                fresh["input_images"] = old.get("input_images")
+            fresh["runtime_version"] = old.get("runtime_version") or get_key(self.node.info, "runtime_version")
+            self._config_in_dict[section] = fresh
+        specs = SCIPROCESS_REGISTRY.specs
+        first = min(i for i, spec in enumerate(specs) if spec.config_section in sections)
+        for spec in specs[first:]:
+            self._config_in_dict["flag"][spec.name] = False
+        if self._config_in_dict == before:
+            return False
+        self._rebuilding = True
+        try:
+            self._make_nodes()
+        finally:
+            self._rebuilding = False
+        self.write_config()
+        for section in sections:
+            self.logger.info(
+                f"Overwrote '{section}' from the template (recorded runtime_version={self._config_in_dict[section]['runtime_version']!r})"
+            )
+        return True
 
     def _define_settings(self, input_file_sample):
         try:

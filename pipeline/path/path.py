@@ -151,13 +151,32 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
     #         is_too=instance._is_too,
     #     )
 
+    # ---- companion products: one definition per suffix, and nowhere else.
+    # The rule is the same for a single, a coadd, a difference and a white image, so each
+    # takes the image's own path and needs to know nothing else about it.
     @staticmethod
-    def single_weight_map(single_path: str) -> str:
+    def weight_map(image_path: str | list) -> str | list:
         # """Durable per-single weight map: <dir>/weight_maps/<stem>_wmap.fits (RICE inside)."""
         # base = os.path.basename(str(single_path))
         # stem = base[:-5] if base.endswith(".fits") else base
         # return os.path.join(os.path.dirname(str(single_path)), "weight_maps", f"{stem}_wmap.fits")
-        return add_suffix(single_path, "weight")
+        return add_suffix(image_path, "weight")
+
+    @staticmethod
+    def footprint(image_path: str | list) -> str | list:
+        return add_suffix(image_path, "footprint")
+
+    @staticmethod
+    def mask(image_path: str | list) -> str | list:
+        return add_suffix(image_path, "mask")
+
+    @staticmethod
+    def counts(image_path: str | list) -> str | list:
+        return add_suffix(image_path, "counts")
+
+    @staticmethod
+    def psfmodel(image_path: str | list) -> str | list:
+        return add_suffix(image_path, "psfmodel")
 
     def replace(self, input=None, **setting_overrides) -> PathHandler:
         """A method to create a new PathHandler instance with the same settings but different input files."""
@@ -1000,7 +1019,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
     @property
     def weight(self):
         # return add_suffix(self.processed_images, "weight")
-        return add_suffix(self._input_files, "weight")
+        return PathHandler.weight_map(self._input_files)
 
     @property
     def obs_params(self):
@@ -1781,6 +1800,9 @@ class PathImcoadd(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def coadd_image(self):
+        # cross-filter: the white product is named from the config stem, not from the inputs
+        if self._parent.settings.config_type == const.CONFIG_TYPE_CROSSFILTER:
+            return self._parent.crossfilter.white_image
         # multi-epoch: global coadd dir; single-epoch: daily dir (working_dir/cwd fallback when not pipeline)
         if self._parent.settings.is_multi_epoch:
             return bjoin(self._parent.coadd_dir, self.coadd_image_basename)
@@ -1788,7 +1810,7 @@ class PathImcoadd(AutoMkdirMixin, AutoCollapseMixin):
 
     @property
     def coadd_weight_image(self):
-        return add_suffix(self.coadd_image, "weight")
+        return PathHandler.weight_map(self.coadd_image)
 
     @cached_property
     def factory(self):
@@ -2052,16 +2074,21 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
         """How many frames contributed to each output pixel. Not a mask: whether
         bad-pixel-touched samples are excluded from the count is
         `imcoadd.badpix_reprojection_policy`'s decision."""
-        return add_suffix(self._parent.coadd_image, "footprint")
+        return PathHandler.footprint(self._parent.coadd_image)
 
     @property
     def coadd_mask_image(self) -> str:
-        return add_suffix(self._parent.coadd_image, "mask")
+        return PathHandler.mask(self._parent.coadd_image)
 
     @property
     def coadd_counts_image(self) -> str:
         """Canonical coverage/provenance product: integer count planes, one per rejection reason."""
-        return add_suffix(self._parent.coadd_image, "counts")
+        return PathHandler.counts(self._parent.coadd_image)
+
+    @property
+    def coadd_psfmodel_image(self) -> str:
+        """Proper-coadd PSF stamp: a persistent product beside the coadd, not an auxiliary plane."""
+        return PathHandler.psfmodel(self._parent.coadd_image)
 
     # ---- check plots (JPEG) ----
     @property

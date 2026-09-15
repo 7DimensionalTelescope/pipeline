@@ -10,7 +10,7 @@ from astropy.wcs import WCS
 from ..config.utils import get_key
 from ..path.path import PathHandler
 from ..services.logger import Logger
-from ..utils import add_suffix, atleast_1d, get_basename
+from ..utils import atleast_1d, get_basename
 from .badpix import ProjectedBadPixels, detector_badpixels, nearest_output_pixels, project_badpixels
 from .coadd_plan import CoaddPlan
 from .storage import IntermediateStorage
@@ -378,7 +378,7 @@ class CoaddMaskBuilder:
             for key, value in MASK_HEADER_CARDS.items():
                 frame_header[key] = value
             write_mask_plio(
-                add_suffix(image, "mask"),
+                PathHandler.mask(image),
                 self.frame(index) if isinstance(stored, str) else stored,
                 header=frame_header,
             )
@@ -388,7 +388,7 @@ class CoaddMaskBuilder:
         header["BUNIT"] = "bitmask"
         for key, value in MASK_HEADER_CARDS.items():
             header[key] = value
-        mask_path = add_suffix(self.output_path, "mask")
+        mask_path = PathHandler.mask(self.output_path)
         write_mask_plio(mask_path, self.output, header=header)
         if dump_frames:
             self.write_frames()

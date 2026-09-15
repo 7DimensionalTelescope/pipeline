@@ -92,12 +92,16 @@ def run_scidata_reduction(
     processes: list[str] = DEFAULT_SCIDATA_PROCESSES,
     overwrite: bool = False,
     is_too: bool = False,
+    overwrite_config_sections: list[str] = None,
 ):
     try:
         if isinstance(config, SciProcConfiguration):
-            pass
+            if overwrite_config_sections:
+                config.overwrite_config_sections(overwrite_config_sections)
         elif isinstance(config, str) and config.endswith(".yml"):
-            config = SciProcConfiguration(config, is_too=is_too, overwrite=overwrite)
+            config = SciProcConfiguration(
+                config, is_too=is_too, overwrite=overwrite, overwrite_config_sections=overwrite_config_sections
+            )
         else:
             raise ValueError("Invalid configuration type. Expected SciProcConfiguration or path to .yml file.")
 

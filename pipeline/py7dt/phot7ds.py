@@ -1,3 +1,6 @@
+import os
+
+from ..config import CrossFilterConfiguration
 from ..const import SEPP_CONFIG
 from ..const.crossfilter import CROSSFILTERPROCESS_REGISTRY, PHOT7DS_SPEC
 from ..errors import Phot7DSError
@@ -56,6 +59,18 @@ class Phot7DS(BaseSetup, DatabaseHandler, RuntimeVersionMixin):
                 self._process_registry.configured_progress(self._process_spec),
                 f"{self._process_spec.name}-configured",
             )
+
+    @classmethod
+    def from_list(cls, input_images, working_dir=None):
+        for image in input_images:
+            if not os.path.exists(image):
+                raise FileNotFoundError(f"Input file does not exist: {image}")
+        config = CrossFilterConfiguration.user_config(
+            input_images=input_images,
+            working_dir=working_dir,
+            logger=True,
+        )
+        return cls(config=config)
 
     def run(self, overwrite: bool = False):
         import time

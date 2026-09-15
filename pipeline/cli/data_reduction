@@ -38,6 +38,12 @@ if __name__ == "__main__":
         help="Processes to run (default: all). Pass -processes with no args to skip all.",
     )
     parser.add_argument("-overwrite", action="store_true", help="Overwrite existing results")
+    parser.add_argument(
+        "-overwrite_config_sections",
+        nargs="+",
+        metavar="SECTION",
+        help="Science config sections to rebuild from the ref/ template before running, e.g. imcoadd photometry",
+    )
     parser.add_argument("-is_too", action="store_true", help="Use TOO processing")
     parser.add_argument("-input_type", type=str, help="Scheduler input_type recorded on the process_status row")
     args = parser.parse_args()
@@ -53,7 +59,13 @@ if __name__ == "__main__":
         sys.exit(FAILURE_RETURN_CODE)
 
     try:
-        run_scidata_reduction(args.config, processes=args.processes, overwrite=args.overwrite, is_too=args.is_too)
+        run_scidata_reduction(
+            args.config,
+            processes=args.processes,
+            overwrite=args.overwrite,
+            is_too=args.is_too,
+            overwrite_config_sections=args.overwrite_config_sections,
+        )
 
     # Empty inputs due to AstrometryError.EarlyQARejectionError is a normal pipeline procedure
     # Mostly at SinglePhotometry and Coadd

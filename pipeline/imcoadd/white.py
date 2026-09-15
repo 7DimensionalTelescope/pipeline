@@ -16,8 +16,9 @@ from ..config import CrossFilterConfiguration, SciProcConfiguration
 from ..config.utils import get_key
 from ..errors import WhiteImageError
 from ..path.name import NameHandler
+from ..path.path import PathHandler
 from ..services.database.process_status_dependency import ProcessStatusDependency
-from ..utils import add_suffix, atleast_1d, collapse, force_symlink
+from ..utils import atleast_1d, collapse, force_symlink
 from .imcoadd import ImCoadd
 
 
@@ -241,7 +242,7 @@ class WhiteImage(ImCoadd):
                 else factory.stage_images(input_images, "weight", factory.bkgsub_dir)
             )
         )
-        source_weights = [add_suffix(image, "weight") for image in self.input_images]
+        source_weights = [PathHandler.weight_map(image) for image in self.input_images]
         missing = [weight for weight in source_weights if not os.path.exists(weight)]
         if missing:
             raise self._process_error.FileNotFoundError(

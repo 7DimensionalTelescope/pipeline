@@ -84,6 +84,7 @@ class DataReduction:
         overwrite_science=False,
         overwrite_crossfilter=False,
         overwrite_schedule=False,
+        overwrite_config_sections=None,
         max_workers=50,
         base_priority=None,
         processes=DEFAULT_SCIDATA_PROCESSES,
@@ -105,6 +106,8 @@ class DataReduction:
         overwrite_preprocess: Add -overwrite for preprocess tasks only
         overwrite_science: Add -overwrite for science tasks only (astrometry, photometry, coadd, subtract).
         overwrite_schedule: Harmless; overwrites stale entries in scheduler DB
+        overwrite_config_sections: Science config sections to rebuild from the ref/ template before each run,
+            e.g. ['imcoadd', 'photometry'] (keeps input_images; clears flags from the first affected stage onward)
         """
 
         overwrite_config = overwrite_config or overwrite
@@ -141,6 +144,7 @@ class DataReduction:
             overwrite_preprocess=overwrite_preprocess,
             overwrite_science=overwrite_science,
             overwrite_crossfilter=overwrite_crossfilter,
+            overwrite_config_sections=overwrite_config_sections,
             preprocess_kwargs=preprocess_kwargs,
             **({"crossfilter_processes": crossfilter_processes} if crossfilter_processes is not None else {}),
             input_type=input_type,

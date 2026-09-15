@@ -154,6 +154,12 @@ if __name__ == "__main__":
         help="Overwrite existing schedule in the database",
     )
     parser.add_argument(
+        "--overwrite-config-sections",
+        nargs="+",
+        metavar="SECTION",
+        help="Science config sections to rebuild from the ref/ template before each run, e.g. imcoadd photometry (keeps input_images, clears flags from the first affected stage onward)",
+    )
+    parser.add_argument(
         "--use-db",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -204,6 +210,7 @@ if __name__ == "__main__":
             overwrite_science=args.overwrite or args.overwrite_data or args.overwrite_science,
             overwrite_crossfilter=args.overwrite or args.overwrite_data or args.overwrite_crossfilter,
             overwrite_schedule=overwrite_schedule,
+            overwrite_config_sections=args.overwrite_config_sections,
         )
     except Exception as e:
         print(f"\nError: {e}")

@@ -214,6 +214,7 @@ class Blueprint:
         overwrite_preprocess=False,
         overwrite_science=False,
         overwrite_crossfilter=False,
+        overwrite_config_sections=None,
         preprocess_kwargs=None,
         processes=DEFAULT_SCIDATA_PROCESSES,
         crossfilter_processes=DEFAULT_CROSSFILTER_PROCESSES,
@@ -351,6 +352,8 @@ class Blueprint:
                     schedule["priority"][parent_idx] = 12  # preprocess
 
                 scheduler_kwargs = ["-overwrite"] if overwrite or overwrite_science else []
+                if overwrite_config_sections:
+                    scheduler_kwargs += ["-overwrite_config_sections"] + list(overwrite_config_sections)
                 if processes != DEFAULT_SCIDATA_PROCESSES:
                     scheduler_kwargs = scheduler_kwargs + ["-processes"] + processes
 

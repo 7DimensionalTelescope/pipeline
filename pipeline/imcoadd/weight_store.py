@@ -19,7 +19,7 @@ from astropy.io import fits
 from ..path.path import PathHandler
 from ..version import __version__
 
-single_weight_path = PathHandler.single_weight_map
+single_weight_path = PathHandler.weight_map
 
 _PROV_CARDS = {"d": "WMDARK", "f": "WMFLAT", "sz": "WMBSIG", "sf": "WMFSIG"}
 

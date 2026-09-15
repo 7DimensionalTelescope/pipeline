@@ -11,8 +11,9 @@ import time
 import numpy as np
 from astropy.io import fits
 
+from ..path.path import PathHandler
 from ..services.logger import Logger
-from ..utils import add_suffix, get_basename, time_diff_in_seconds
+from ..utils import get_basename, time_diff_in_seconds
 from .calc import apply_coverage_policy, validate_coverage_policy
 from .utils import build_coadd_wcs_header, determine_size
 
@@ -299,7 +300,7 @@ def proper_coadd_numpy(
         logger.info(f"Proper coadd written (F_R {f_r:.4f}, expected sky sigma {1.0 / f_r:.4f})")
 
     if weight_output is not False and policy != "off":
-        weight_out = weight_output or add_suffix(output_path, "weight")
+        weight_out = weight_output or PathHandler.weight_map(output_path)
         # aperture-scale inverse variance: F_R^2 c(x) = sum of covering w_j, the note's
         # F_R^2 at full coverage; the exact per-pixel diagonal is deliberately not shipped
         resp_w = respw_arr if respw_arr is not None else resp_arr
@@ -310,13 +311,13 @@ def proper_coadd_numpy(
             logger.debug(f"Wrote proper coadd weight map ({policy}): {weight_out}")
 
     if footprint_output is not False:
-        footprint_out = footprint_output or add_suffix(output_path, "footprint")
+        footprint_out = footprint_output or PathHandler.footprint(output_path)
         fits.writeto(footprint_out, count_arr, header=out_header, overwrite=True)
         if logger is not None:
             logger.debug(f"Wrote coadd footprint (max {int(count_arr.max())} frames): {footprint_out}")
 
     if psf_output is not False:
-        psf_out = psf_output or add_suffix(output_path, "psf")
+        psf_out = psf_output or PathHandler.psfmodel(output_path)
         stamp = _coadd_psf_stamp(acfs, w, q)
         psf_header = fits.Header()
         psf_header["PROPFR"] = (f_r, "flux scale F_R of the proper coadd")
