@@ -571,7 +571,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                     f"[Group {self._current_group+1}] _generate_masterframe: unknown dtype {dtype!r}"
                 )
 
-        prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), header)
+        sig_header = header.copy()
+        sig_header[prep_utils.MEDIAN_PENALTY_KEY] = prep_utils.median_penalty_card(header["NFRAMES"])
+        prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), sig_header)
 
         # PPFLAG: propagate from dependencies (bias=0, dark=bias, flat=bias|flatdark)
         if dtype == CALIB_TYPE_BIAS:
@@ -958,6 +960,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             self._ppflag.get(CALIB_TYPE_DARK, ppflag.get_ppflag_from_header(dark)),
             self._ppflag.get(CALIB_TYPE_FLAT, ppflag.get_ppflag_from_header(flat)),
         )
+        if not ppflag.bias_shared_with_dark(bias, dark):
+            sci_ppflag |= ppflag.PPFLAG_BIAS_NOT_SHARED  # the weight model must charge both bias masters
 
         for raw_file, processed_file in pairs:
             header = get_header(raw_file)

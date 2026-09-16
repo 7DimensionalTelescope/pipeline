@@ -17,6 +17,9 @@ def _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file):
     """
     Load calibration arrays and metadata shared by CPU and GPU paths.
     """
+    from ..calc.median import median_variance_ratio
+    from ..preprocess.ppflag import bias_shared_with_dark
+    from ..preprocess.utils import ensure_median_penalty
 
     sig_z = fitsio.read(sig_z_file).astype(np.float32)
     # sig_z can seldom be exactly zero: floor at LSB/sqrt(12)
@@ -28,8 +31,16 @@ def _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file):
     p_d = np.float32(fits.getval(d_m_file, "NFRAMES"))
     p_f = np.float32(fits.getval(f_m_file, "NFRAMES"))
     egain = np.float32(fits.getval(d_m_file, "EGAIN"))
+    # MEDPNTLY of each master from its sigma file; from NFRAMES when the master dark has no darksig
+    sig_d_file = PathHandler.master_sigma(d_m_file)
+    pen_z = np.float32(ensure_median_penalty(sig_z_file))
+    pen_f = np.float32(ensure_median_penalty(sig_f_file))
+    pen_d = np.float32(ensure_median_penalty(sig_d_file) if os.path.exists(sig_d_file) else median_variance_ratio(int(p_d)))
+    # 1.0 when the science frame's bias master is the one inside its dark master (PPFLAG bit 64 unset), else 0.0
+    z_m_file = PathHandler.sigma_master(sig_z_file)
+    bias_shared = np.float32(1.0 if bias_shared_with_dark(z_m_file, d_m_file) else 0.0)
 
-    return sig_z, d_m, f_m, sig_f, p_z, p_d, p_f, egain
+    return sig_z, d_m, f_m, sig_f, p_z, p_d, p_f, egain, pen_z, pen_d, pen_f, bias_shared
 
 
 @njit(parallel=True)
@@ -91,7 +102,7 @@ def calc_weight_with_gpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, dev
     """
     from ..cuda.weight_map import calc_weight as gpu_calc_weight
 
-    sig_z, d_m, f_m, sig_f, p_z, p_d, p_f, egain = _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file)
+    sig_z, d_m, f_m, sig_f, p_z, p_d, p_f, egain, *_ = _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file)
 
     gpu_calc_weight(
         images,
@@ -195,8 +206,8 @@ def calc_weight_with_cpu(
 
 
 @njit(parallel=True)
-def optimized_parallel(image, sig_z, dark, flat, sig_f, num_z, num_d, num_f, egain):
-    """Pixel weight per paper appendix D, both Poisson terms clipped; r_p stays signed."""
+def optimized_parallel(image, sig_z, dark, flat, sig_f, num_z, num_d, num_f, egain, pen_z, pen_d, pen_f, bias_shared):
+    """Pixel weight per paper appendix D, MEDPNTLY penalties, Cov(z_m, d_m); Poisson terms clipped, r_p signed."""
     out = np.empty_like(flat)
     h, w = flat.shape
     for i in prange(h):
@@ -204,11 +215,12 @@ def optimized_parallel(image, sig_z, dark, flat, sig_f, num_z, num_d, num_f, ega
             r_p = image[i, j]
             f_m = flat[i, j]
             sz2 = sig_z[i, j] * sig_z[i, j]
-            sig_zm2 = sz2 / num_z  # D1
-            sig_dm2 = (max(dark[i, j], 0.0) / egain + (1 + 1 / num_z) * sz2) / num_d  # D2
-            sig_fm2 = sig_f[i, j] * sig_f[i, j] / num_f  # D3
+            sig_zm2 = pen_z * sz2 / num_z  # D1
+            sig_dm2 = pen_d * (max(dark[i, j], 0.0) / egain + sz2) / num_d + sig_zm2  # D2, its bias master in full
+            c_zd = -bias_shared * sig_zm2  # Cov(z_m, d_m): nonzero only when that bias master is z_m itself
+            sig_fm2 = pen_f * sig_f[i, j] * sig_f[i, j] / num_f  # D3
             sig_r2 = max(r_p * f_m + dark[i, j], 0.0) / egain + sz2  # D4
-            sig_rp2 = (sig_r2 + sig_zm2 + sig_dm2) / (f_m * f_m) + r_p * r_p * sig_fm2 / (f_m * f_m)  # D5
+            sig_rp2 = (sig_r2 + sig_zm2 + sig_dm2 + 2 * c_zd) / (f_m * f_m) + r_p * r_p * sig_fm2 / (f_m * f_m)  # D5
             out[i, j] = 1.0 / sig_rp2  # D6, sig_b ~ 0
     return out
 

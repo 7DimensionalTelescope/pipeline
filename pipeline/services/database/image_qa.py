@@ -115,7 +115,7 @@ class ImageQATable:
     stdnumb: Optional[float] = None
 
     inf_filt: Optional[str] = None
-    bkg_step: Optional[bool] = None
+    # bkg_step: Optional[bool] = None  # stale
 
     @classmethod
     def from_row(cls, row: tuple, columns: List[str] = None):

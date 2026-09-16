@@ -2,9 +2,10 @@
 # notably stack convolution is on
 
 imcoadd:
+  image_selection: 'auto'
+  coadd_weighting: pixel-wise  # false | global (1/SKYSIG^2 per image) | pixel-wise (weight maps)
   convolve: False
   target_seeing:  # auto if it's empty or smaller than max seeing
-  image_selection: 'auto'
 
 settings:
   factory_scratch:

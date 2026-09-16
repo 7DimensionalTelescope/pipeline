@@ -94,7 +94,9 @@ class BackgroundMixin:
         self.logger.debug(f"Sky level from {_key_tally(sky_levels)}; sky noise from {_key_tally(sky_sigmas)}")
         methods = self.bkgsub_methods()
         requested = get_key(self.config_node.imcoadd, "bkgsub_type")
-        if requested:
+        if requested is False:
+            requested = "none"  # YAML `false` spells the same switch as 'none'; empty stays auto
+        elif requested:
             requested = str(requested).lower()
         else:
             requested = self._default_bkgsub_type(skyvalues, skyval_cut)
@@ -105,6 +107,9 @@ class BackgroundMixin:
             )
         types = [self._resolve_bkgsub_type(requested, sv, skyval_cut) for sv in skyvalues]
         self.config_node.imcoadd.bkgsub_type = requested
+        if requested == "none":
+            mask_sources = False  # no mesh to protect from sources, and no fallback may reinstate one
+            self.logger.info("bkgsub_type 'none': staging the frames unchanged, no sky model subtracted")
 
         # The header snapshot aggregates a mixed group to BACKTYPE=MIXED.
         for hdr, btype in zip(self.input_headers, types):
@@ -245,6 +250,15 @@ class BackgroundMixin:
                     kept = cached[1] if cached else fits.getheader(job[1])
                 except OSError:
                     kept = {}
+                # a product subtracted the other way cannot stand in, or toggling bkgsub would be a no-op
+                kept_type = str(kept.get("BACKTYPE") or "").upper()
+                if kept_type and kept_type != types[i].upper() and not (types[i] == "dynamic" and kept_type == "CONSTANT"):
+                    self.logger.info(
+                        f"{get_basename(job[1])} was made with BACKTYPE={kept_type}, this run wants "
+                        f"{types[i].upper()}; recomputing"
+                    )
+                    pending.append((i, job))
+                    continue
                 if kept.get("BACKTYPE"):
                     self.input_headers[i]["BACKTYPE"] = (str(kept["BACKTYPE"]).upper(), "Background subtraction type")
                 for key, comment in (("BACKFRAC", "Fraction of pixels used for the sky estimate"),
@@ -281,7 +295,21 @@ class BackgroundMixin:
 
     def bkgsub_methods(self) -> dict:
         """Map configured background names to per-image routines."""
-        return {"constant": self._const_bkgsub, "dynamic": self._dynamic_bkgsub}
+        return {"none": self._no_bkgsub, "constant": self._const_bkgsub, "dynamic": self._dynamic_bkgsub}
+
+    def _no_bkgsub(self, inim, outim, data=None, header=None, fov_valid=None, quality_mask=None, **kwargs):
+        """Stage the frame with no sky model removed; mask exactly as the subtracting routines do."""
+        _data, _hdr = self._read_frame(inim, data, header)
+        _hdr["BACKTYPE"] = ("NONE", "Background subtraction type")
+        if fov_valid is not None:
+            _data[~fov_valid] = 0.0  # keep out-of-FOV at 0: the coadd's validity marker
+        if quality_mask is not None:
+            # NaN, not 0: the pixel stays inside the geometric footprint for coverage_policy
+            trail = (quality_mask & int(MaskBit.SATELLITE)) != 0
+            _data[trail if fov_valid is None else (trail & fov_valid)] = np.nan
+        self._record_background_residuals(_data, _hdr, kwargs.get("qa_mask"), kwargs.get("qa_coverage", fov_valid), quality_mask)
+        self._write_background_output(outim, _data, _hdr)
+        return False
 
     def _default_bkgsub_type(self, skyvalues, skyval_cut: float) -> str:
         """Choose one background routine for a group without an explicit setting."""

@@ -467,6 +467,60 @@ def ensure_bpmask_image_id(bpmask_file: str, key: str = "IMAGEID") -> str:
     return image_id
 
 
+MEDIAN_PENALTY_KEY = "MEDPNTLY"
+
+
+def median_penalty_card(nframes: int) -> tuple:
+    """The MEDPNTLY card of a master sigma file: Var(median)/Var(mean) of NFRAMES combined frames."""
+    from ..calc.median import median_variance_ratio
+
+    return (round(float(median_variance_ratio(int(nframes))), 6), "Var(median)/Var(mean) of NFRAMES frames")
+
+
+def ensure_median_penalty(sig_file: str, key: str = MEDIAN_PENALTY_KEY) -> float:
+    """MEDPNTLY of a master sigma file, computed from its NFRAMES, written into the file on first load when absent."""
+    import tempfile
+
+    def _read():
+        return fits.getheader(sig_file).get(key)
+
+    value = _read()
+    if value is not None:
+        return float(value)
+    # write-on-read, the second sanctioned one (owner, 2026-09-16): sigma files made before the card
+    # existed gain it here, under the same lock, atomic replace and pixel round-trip check as the bpmask id
+    with bpmask_id_lock(sig_file):
+        tmp = None
+        before = os.stat(sig_file)
+        try:
+            if _read() is None:
+                with fits.open(sig_file, memmap=False) as hdul:
+                    nframes = hdul[0].header.get("NFRAMES")
+                    if nframes is None:
+                        raise ValueError(f"{sig_file} carries neither {key} nor NFRAMES")
+                    original = np.asarray(hdul[0].data)
+                    hdul[0].header[key] = median_penalty_card(nframes)
+                    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(sig_file)), suffix=".idtmp")
+                    os.close(fd)
+                    hdul.writeto(tmp, overwrite=True)
+                    with fits.open(tmp, memmap=False) as check:
+                        if not np.array_equal(np.asarray(check[0].data), original, equal_nan=True):
+                            raise ValueError(f"{key} injection would change the pixels of {sig_file}")
+                os.chmod(tmp, before.st_mode)
+                after = os.stat(sig_file)
+                if (after.st_mtime_ns, after.st_size) != (before.st_mtime_ns, before.st_size):
+                    raise ValueError(f"{sig_file} changed while its {key} was being written; reload it")
+                os.replace(tmp, sig_file)
+                tmp = None
+        finally:
+            if tmp is not None and os.path.exists(tmp):
+                os.remove(tmp)
+    value = _read()
+    if value is None:
+        raise ValueError(f"Could not persist {key} into {sig_file}")
+    return float(value)
+
+
 def get_image_id(image, key="IMAGEID"):
     """Unique image ID of an existing image; None if absent."""
     try:

@@ -91,7 +91,7 @@ def compute_median_rms(values: np.ndarray) -> tuple:
 
 
 @njit
-def limitmag(n_sigma: np.ndarray, zp: float, aper: float, skysigma: float) -> np.ndarray:
+def limitmag(n_sigma: np.ndarray, zp: float, aper: float, skysigma: float, noise_factor: float = 1.0) -> np.ndarray:
     """
     Calculate limiting magnitude.
 
@@ -100,14 +100,80 @@ def limitmag(n_sigma: np.ndarray, zp: float, aper: float, skysigma: float) -> np
         zp: Zero point
         aper: Aperture diameter
         skysigma: Sky background sigma
+        noise_factor: aperture noise / (skysigma * sqrt(pi R^2)); 1.0 assumes independent pixels
 
     Returns:
         Array of limiting magnitudes
     """
     R = aper / 2.0
-    braket = n_sigma * skysigma * np.sqrt(np.pi * R**2)
+    braket = n_sigma * skysigma * np.sqrt(np.pi * R**2) * noise_factor
     upperlimit = zp - 2.5 * np.log10(braket)
     return np.round(upperlimit, 3)
+
+
+def aperture_weight_squared(aperture: float, phases: int = 16) -> float:
+    """Sum of the squared exact-aperture pixel weights, averaged over sub-pixel phase.
+
+    An exact aperture sums w_i x_i with fractional weights on the rim, so for INDEPENDENT pixels its
+    variance is sigma^2 sum w_i^2, not sigma^2 sum w_i = sigma^2 pi R^2. The two differ by 3% at a
+    20-pixel diameter and 11% at 6."""
+    from photutils.aperture import CircularAperture
+
+    r = 0.5 * float(aperture)
+    span = int(np.ceil(r)) + 2
+    shape = (2 * span + 1, 2 * span + 1)
+    offsets = np.linspace(0.0, 1.0, phases, endpoint=False)
+    total = 0.0
+    for dx in offsets:
+        for dy in offsets:
+            weights = CircularAperture([(span + dx, span + dy)], r=r).to_mask(method="exact")[0].to_image(shape)
+            total += float(np.sum(weights**2))
+    return total / phases**2
+
+
+def aperture_noise_factor(acf, aperture: float) -> float:
+    """Aperture noise over the independent-pixel value sigma*sqrt(pi R^2), from a measured autocorrelation.
+
+    Var(sum w_i x_i) = sigma^2 sum_h rho(h) O(h), with O the area two copies of the aperture share at
+    lag h -- analytic for a circle, and sum w_i^2 at zero lag. Returns 1.0 for a missing autocorrelation
+    so the caller keeps the historical white-noise definition."""
+    if acf is None:
+        return 1.0
+    acf = np.asarray(acf, dtype=float)
+    half = acf.shape[0] // 2
+    radius = 0.5 * float(aperture)
+    ly, lx = np.mgrid[-half : half + 1, -half : half + 1]
+    separation = np.hypot(lx, ly)
+    overlap = np.zeros_like(separation)
+    inside = separation < 2 * radius
+    t = np.clip(separation[inside] / (2 * radius), 0.0, 1.0)
+    overlap[inside] = 2 * radius**2 * np.arccos(t) - 0.5 * separation[inside] * np.sqrt(
+        np.maximum(4 * radius**2 - separation[inside] ** 2, 0.0)
+    )
+    overlap[half, half] = aperture_weight_squared(aperture)
+    variance = float(np.sum(acf * overlap))
+    if not np.isfinite(variance) or variance <= 0:
+        return 1.0
+    return float(np.sqrt(variance / (np.pi * radius**2)))
+
+
+def bin_noise_factor(acf, box: int) -> float:
+    """Noise of a box x box binned pixel over the independent-pixel value sqrt(box^2)*sigma.
+
+    For a top-hat block O(h) = (box-|hx|)(box-|hy|), so at box = 2 this is exactly
+    sqrt(1 + rho(1,0) + rho(0,1) + rho(1,1)) -- the number an IFU-style 2x2 rebin needs."""
+    if acf is None:
+        return 1.0
+    acf = np.asarray(acf, dtype=float)
+    half = acf.shape[0] // 2
+    box = int(box)
+    lags = np.arange(-(box - 1), box)
+    if lags.max() > half:
+        return float("nan")
+    hy, hx = np.meshgrid(lags, lags, indexing="ij")
+    overlap = (box - np.abs(hx)) * (box - np.abs(hy))
+    window = acf[np.ix_(lags + half, lags + half)]
+    return float(np.sqrt(np.sum(window * overlap) / box**2))
 
 
 @njit

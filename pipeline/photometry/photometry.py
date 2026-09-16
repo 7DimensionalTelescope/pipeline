@@ -848,7 +848,7 @@ class PhotometrySingle:
 
     def measure_sky(self, overwrite: bool = True, phot_header: PhotometryHeader = None) -> bool:
         """Re-derive the sky level and noise on the pixels the source mask leaves, and record the fraction used."""
-        from ..imcoadd.utils import background_mesh, build_source_mask, source_ellipses_on_frame
+        from ..imcoadd.utils import background_mesh, build_source_mask, noise_autocorrelation, source_ellipses_on_frame
         from ..imcoadd.background_qa import measure_background_residuals, RESIDUAL_KEYS, RESIDUAL_BOX_SIZE
 
         phot_header = phot_header or self.phot_header
@@ -876,13 +876,40 @@ class PhotometrySingle:
             self.logger.warning(f"{get_basename(catalog)} lacks the ellipse columns; no off-source sky measured")
             return False
         sources = build_source_mask(ellipses, data.shape, skysig=phot_header.SKYSIG, logger=self.logger)
-        no_data = data == 0  # dead columns and overscan; a single carries no reprojection padding
+        # no_data = data == 0  # dead columns and overscan; a single carries no reprojection padding
+        no_data = ~np.isfinite(data)  # an exact 0 is sky on a single (k = 0 raw ADU above bias + dark)
+        is_coadd = "IMG00000" in header
+        excluded = sources
+        if is_coadd:  # uncovered and NaN-filled pixels are the ones no input entered the estimator at
+            weight = self.path.imcoadd.coadd_weight_image
+            counts = self.path.imcoadd.factory.coadd_counts_image
+            have_coverage = False
+            if os.path.exists(counts):
+                with fits.open(counts, memmap=True) as hdul:
+                    if "NUSED" in hdul:
+                        no_data |= hdul["NUSED"].data == 0
+                        have_coverage = True
+            if not have_coverage and os.path.exists(weight):
+                weights = fits.getdata(weight, memmap=False)
+                no_data |= ~(np.isfinite(weights) & (weights > 0))
+                del weights
+                have_coverage = True
+            if not have_coverage and (header.get("NNANFILL", 0) or header.get("NNANEDGE", 0)):
+                self.logger.warning("No coverage product to locate filled coadd pixels; no off-source sky measured")
+                return False
+        if not is_coadd:  # a coadd has no detector bad-pixel mask
+            try:
+                bpm, bpm_header = fits.getdata(PathHandler.get_bpmask(header), header=True, memmap=False)
+                excluded = sources | (bpm == int(bpm_header.get("BADPIX", 1)))
+                del bpm  # do not hold the full-frame mask through the mesh fit
+            except Exception as e:
+                self.logger.warning(f"No bad-pixel mask for {self.name} ({e}); sky statistics include bad pixels")
         # the same mesh ImCoadd will fit, so the two stages cannot disagree about what the sky is
         mesh = self.config_node.imcoadd.background
         try:
             fitted = background_mesh(
                 data,
-                mask=sources,
+                mask=excluded,
                 coverage_mask=no_data,
                 box_size=mesh["box_size"],
                 filter_size=mesh["filter_size"],
@@ -892,38 +919,20 @@ class PhotometrySingle:
             self.logger.warning(f"Off-source sky not measured: {e}")
             return False
         phot_header.BACKVAL, phot_header.BACKSIG = float(fitted.background_median), float(fitted.background_rms_median)
-        phot_header.BACKFRAC = round(float((~sources & ~no_data).mean()), 4)
+        phot_header.BACKFRAC = round(float((~excluded & ~no_data).mean()), 4)
         phot_header.SRCFRAC = round(float(sources.mean()), 4)
-        is_coadd = "IMG00000" in header
-        coverage = np.isfinite(data) if is_coadd else ~no_data
-        if is_coadd:
-            weight = self.path.imcoadd.coadd_weight_image
-            counts = self.path.imcoadd.factory.coadd_counts_image
-            have_coverage = False
-            if os.path.exists(counts):
-                with fits.open(counts, memmap=True) as hdul:
-                    if "NUSED" in hdul:
-                        coverage &= hdul["NUSED"].data > 0
-                        have_coverage = True
-            if not have_coverage and os.path.exists(weight):
-                weights = fits.getdata(weight, memmap=False)
-                coverage &= np.isfinite(weights) & (weights > 0)
-                have_coverage = True
-            if not have_coverage and header.get("NNANFILL", 0):
-                coverage[:] = False
-                self.logger.warning("No coverage product to exclude filled coadd pixels; residual QA unavailable")
-            elif not have_coverage:
-                coverage &= ~no_data
+        coverage = ~no_data
         residual = data if is_coadd else data - fitted.background
         result = measure_background_residuals(
             residual,
-            exclude=sources,
+            exclude=excluded,
             coverage=coverage,
         )
         for key in RESIDUAL_KEYS:
             setattr(phot_header, key.upper(), getattr(result, key))
         phot_header.BACKREF = "COADD" if is_coadd else "MODEL"
         self.logger.debug(f"Residual sky ({phot_header.BACKREF}): {result}")
+        self._measure_sky_covariance(phot_header, residual, excluded | ~coverage)
         self.logger.info(
             f"Off-source sky: BACKVAL {phot_header.BACKVAL:.3f}, BACKSIG {phot_header.BACKSIG:.3f} on "
             f"{100 * phot_header.BACKFRAC:.1f}% of the frame, {100 * phot_header.SRCFRAC:.1f}% source-masked "
@@ -931,6 +940,53 @@ class PhotometrySingle:
             f"SKYSIG {phot_header.SKYSIG}) in {time_diff_in_seconds(start_time)} seconds"
         )
         return True
+
+    def _measure_sky_covariance(self, phot_header: PhotometryHeader, residual, excluded) -> None:
+        """Sky-noise covariance from the same residual, and the limiting magnitudes it implies.
+
+        BACKSIG is a per-pixel width and is blind to covariance by construction, so it under-states the
+        noise of any sum of pixels whenever reprojection, interpolation or coaddition has correlated them.
+        The normalised autocorrelation measured here is what turns it into the noise of an actual
+        measurement: Var(sum w_i x_i) = BACKSIG^2 * sum_h rho(h) O_w(h)."""
+        from ..imcoadd.utils import noise_autocorrelation
+
+        # the circle-overlap kernel is exactly zero beyond one aperture diameter, so the lag window is the
+        # largest aperture the frame carries, not a tuning choice
+        diameters = [b.get("value") or 0.0 for b in phot_header.aperture_info.values()]
+        maxlag = max(16, int(np.ceil(max(diameters))) if diameters else 0)
+        stats = {}
+        acf = noise_autocorrelation(residual, mask=excluded, maxlag=maxlag, stats=stats)
+        if acf is not None and stats.get("variance", 0) > 0:
+            phot_header.BACKC0 = float(np.sqrt(stats["variance"]))
+        if acf is None:
+            self.logger.warning("Sky covariance not measured; limiting magnitudes keep the white-noise definition")
+            return
+        half = acf.shape[0] // 2
+        phot_header.BACKCR = int(half)
+        phot_header.BACKCOV = float(np.sum(acf))
+        phot_header.BACKR10 = float(0.5 * (acf[half, half + 1] + acf[half, half - 1]))
+        phot_header.BACKR01 = float(0.5 * (acf[half + 1, half] + acf[half - 1, half]))
+        phot_header.BACKR11 = float(
+            0.25 * (acf[half + 1, half + 1] + acf[half + 1, half - 1] + acf[half - 1, half + 1] + acf[half - 1, half - 1])
+        )
+        phot_header.BACKC2 = float(phot_utils.bin_noise_factor(acf, 2))
+
+        for aperture_key, bundle in phot_header.aperture_info.items():
+            diameter = bundle.get("value") or 0.0
+            if diameter <= 0 or bundle.get("ZP") is None:  # MAG_AUTO has no fixed aperture
+                continue
+            factor = phot_utils.aperture_noise_factor(acf, diameter)
+            bundle["COV"] = factor
+            if phot_header.SKYSIG:
+                ul_3sig, ul_5sig = phot_utils.limitmag(
+                    np.array([3, 5]), bundle["ZP"], diameter, phot_header.SKYSIG, factor
+                )
+                bundle["UL3"], bundle["UL5"] = float(ul_3sig), float(ul_5sig)
+        self.logger.info(
+            f"Sky covariance: BACKCOV {phot_header.BACKCOV:.4f} to {half} px, "
+            f"rho(1,0) {phot_header.BACKR10:+.4f}, rho(0,1) {phot_header.BACKR01:+.4f}, "
+            f"2x2 bin factor {phot_header.BACKC2:.4f}"
+        )
 
     def _run_sextractor(
         self,
@@ -1544,6 +1600,13 @@ class PhotometryHeader:
     BACKVAL: float = None
     BACKFRAC: float = None
     SRCFRAC: float = None
+    BACKC0: float = None
+    BACKCOV: float = None
+    BACKC2: float = None
+    BACKCR: int = None
+    BACKR10: float = None
+    BACKR01: float = None
+    BACKR11: float = None
     BACKOFF: float = None
     BACKSYS: float = None
     BACKSCL: int = None
@@ -1650,6 +1713,9 @@ class PhotometryHeader:
                     f"UL5_{suffix}": (ul_5sig, f"5 SIGMA LIMITING MAG FOR {mag_key}"),
                 }
             )
+            cov = bundle.get("COV")
+            if cov is not None:
+                temp[f"COV_{suffix}"] = (round(cov, 4), "blank-sky aper noise / SKYSIG*sqrt(piR^2)")
         return temp
 
     @property
@@ -1674,6 +1740,31 @@ class PhotometryHeader:
             "BACKVAL": (round(self.BACKVAL, 3) if self.BACKVAL is not None else None, "SKY MEDIAN OFF SOURCE"),
             "BACKFRAC": (self.BACKFRAC, "Fraction of pixels used for the sky estimate"),
             "SRCFRAC": (self.SRCFRAC, "Fraction of pixels covered by the source mask"),
+            "BACKC0": (
+                round(self.BACKC0, 3) if self.BACKC0 is not None else None,
+                "[ADU] sky sigma the BACKR*/BACKCOV rho use",
+            ),
+            "BACKCOV": (
+                round(self.BACKCOV, 4) if self.BACKCOV is not None else None,
+                "sum of rho to BACKCR px; big-sum var inflation",
+            ),
+            "BACKCR": (self.BACKCR, "[pixel] Lag radius BACKCOV/BACKC2 are summed to"),
+            "BACKC2": (
+                round(self.BACKC2, 4) if self.BACKC2 is not None else None,
+                "sigma(2x2 bin sum) / (2*BACKC0)",
+            ),
+            "BACKR10": (
+                round(self.BACKR10, 5) if self.BACKR10 is not None else None,
+                "Sky noise correlation at lag (1,0)",
+            ),
+            "BACKR01": (
+                round(self.BACKR01, 5) if self.BACKR01 is not None else None,
+                "Sky noise correlation at lag (0,1)",
+            ),
+            "BACKR11": (
+                round(self.BACKR11, 5) if self.BACKR11 is not None else None,
+                "Sky noise correlation at lag (1,1), 4-fold mean",
+            ),
             "REFCAT": (self.REFCAT, "REFERENCE CATALOG TYPE"),
             "MAGLOW": (self.MAGLOW, "REF MAG RANGE, LOWER LIMIT"),
             "MAGUP": (self.MAGUP, "REF MAG RANGE, UPPER LIMIT"),

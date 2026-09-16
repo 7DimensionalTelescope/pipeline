@@ -55,26 +55,33 @@ def smooth_flat_surface(flat: np.ndarray, exclude=None, block: int = 64) -> np.n
     return surface
 
 
-def smooth_weight_surface(weight, flat, exclude=None, block: int = 64, logger=None, qa=None, image_name=None):
-    """Robust nonnegative B/F + C/F² variance fit on measured cells; return weight and (B, C)."""
+def smooth_weight_surface(weight, flat, exclude=None, block: int = 64, logger=None, qa=None, image_name=None, sky=None):
+    """Robust nonnegative B/F + C/F² variance fit on measured cells; return weight and (B, C). With ``sky``, a smooth sky
+    template on the same grid, the photon term is B·sky/F so the fit follows the frame's own sky gradient."""
     from .weight import block_median
 
     if weight.shape != flat.shape or weight.ndim != 2 or block < 1:
         raise ValueError("weight and illumination template must have the same 2D shape; block must be positive")
     if not np.all(np.isfinite(flat) & (flat > 0)):
         raise ValueError("illumination template must be finite and positive")
+    if sky is not None and (sky.shape != flat.shape or not np.all(np.isfinite(sky) & (sky > 0))):
+        raise ValueError("sky template must be finite and positive on the same grid")
     valid = np.isfinite(weight) & (weight > 0)
     if exclude is not None:
         valid &= ~exclude
     minimum = max(1, block * block // 4)
     wg = block_median(weight, valid, block, minimum)
     fg = block_median(flat, valid, block, minimum)
+    sg = None if sky is None else block_median(np.asarray(sky, dtype=np.float32), valid, block, minimum)
     usable = np.isfinite(wg) & (wg > 0) & np.isfinite(fg) & (fg > 0)
+    if sg is not None:
+        usable &= np.isfinite(sg) & (sg > 0)
     if not usable.any():
         raise ValueError("no usable cells for the flat-based weight fit")
     variance = 1.0 / wg[usable]
     inverse_flat = 1.0 / fg[usable]
-    design = np.column_stack((inverse_flat, inverse_flat * inverse_flat))
+    photon = inverse_flat if sg is None else sg[usable] * inverse_flat
+    design = np.column_stack((photon, inverse_flat * inverse_flat))
     relative_design = design / variance[:, None]
     scale = np.linalg.norm(relative_design, axis=0)
     keep = np.ones(variance.size, dtype=bool)
@@ -94,7 +101,8 @@ def smooth_weight_surface(weight, flat, exclude=None, block: int = 64, logger=No
     surface = np.empty_like(flat, dtype=np.float32)
     for y0 in range(0, flat.shape[0], 256):
         f = flat[y0:y0 + 256].astype(np.float64)
-        surface[y0:y0 + 256] = f * f / (b * f + c)
+        photon = f if sky is None else sky[y0:y0 + 256].astype(np.float64) * f
+        surface[y0:y0 + 256] = f * f / (b * photon + c)
     if not np.all(np.isfinite(surface) & (surface > 0)):
         raise ValueError("flat-based weight fit is not finite and positive")
     errors, error_status = weight_fit_uncertainty(relative_design[keep], coefficients)

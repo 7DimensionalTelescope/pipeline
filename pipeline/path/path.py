@@ -1265,6 +1265,26 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         sig_f_file = f_m_file.replace(const.NAME_TYPE_FLAT, const.NAME_TYPE_FLAT + const.NAME_TYPE_SIGMA_SUFFIX)
         return d_m_file, f_m_file, sig_z_file, sig_f_file
 
+    @staticmethod
+    def master_sigma(master_file: str) -> str:
+        """Sigma frame beside a master bias/dark/flat."""
+        typ = NameHandler(master_file).type
+        if typ.kind != const.NAME_TYPE_MASTER or typ.exposure_type not in const.CALIB_TYPES:
+            raise ValueError(f"Not a master bias/dark/flat: {master_file}")
+        base = os.path.basename(master_file)
+        sigma = typ.exposure_type + const.NAME_TYPE_SIGMA_SUFFIX + base[len(typ.exposure_type) :]
+        return os.path.join(os.path.dirname(master_file), sigma)
+
+    @staticmethod
+    def sigma_master(sigma_file: str) -> str:
+        """Master bias/dark/flat beside its sigma frame."""
+        typ = NameHandler(sigma_file).type
+        calib = typ.exposure_type.removesuffix(const.NAME_TYPE_SIGMA_SUFFIX)
+        if typ.kind != const.NAME_TYPE_MASTER or calib == typ.exposure_type or calib not in const.CALIB_TYPES:
+            raise ValueError(f"Not a master bias/dark/flat sigma frame: {sigma_file}")
+        base = os.path.basename(sigma_file)
+        return os.path.join(os.path.dirname(sigma_file), calib + base[len(typ.exposure_type) :])
+
     @classmethod
     def get_bpmask(cls, input: Union[str, Path, Header]) -> str | list[str]:
         from astropy.io import fits

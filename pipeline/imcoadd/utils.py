@@ -434,6 +434,50 @@ def sky_statistics(data, mask=None, coverage_mask=None, **mesh_options) -> tuple
     return float(bkg.background_median), float(bkg.background_rms_median)
 
 
+def noise_autocorrelation(residual, mask=None, maxlag: int = 8, size: int = 2048, clip: float = 5.0, stats=None):
+    """Normalised noise autocorrelation of blank sky out to +-maxlag pixels, by masked FFT.
+
+    Two details are load-bearing. The field is centred on its MEAN, not its median: the residual is
+    skewed, and a leftover offset m raises every lag by m^2/C(0), which on a single 7DT frame exceeds the
+    signal being measured. Pixels beyond ``clip`` robust sigma are excluded as detector defects, which
+    also makes C(0) the sky's own variance so the result composes with a robust per-pixel width.
+    Pass a dict as ``stats`` to receive the zero-lag variance and the pixel count it was measured on:
+    that variance is the one the normalised rho closes Var = C(0) * sum_h rho(h) O_w(h) with, so a caller
+    publishing rho must publish it too rather than pairing rho with a width from another footprint.
+    Returns None when too little blank sky survives."""
+    from astropy.stats import mad_std
+    from scipy import fft as sfft
+
+    residual = np.asarray(residual)
+    height, width = residual.shape
+    y0, x0 = (height - min(size, height)) // 2, (width - min(size, width)) // 2
+    cut = (slice(y0, y0 + min(size, height)), slice(x0, x0 + min(size, width)))
+    patch = np.ascontiguousarray(residual[cut], dtype=np.float64)
+    bad = np.zeros(patch.shape, dtype=bool) if mask is None else np.asarray(mask[cut], dtype=bool)
+    bad |= ~np.isfinite(patch)
+    if bad.all() or (~bad).sum() < 16 * patch.size // 100:
+        return None
+    if clip:
+        scale = mad_std(patch[~bad])
+        if not np.isfinite(scale) or scale <= 0:
+            return None
+        bad |= np.abs(patch - np.median(patch[~bad])) > clip * scale
+    good = (~bad).astype(np.float64)
+    field = np.where(bad, 0.0, patch - patch[~bad].mean())
+    shape = [sfft.next_fast_len(n) for n in field.shape]
+    ft, gt = sfft.rfft2(field, s=shape), sfft.rfft2(good, s=shape)
+    pairs = sfft.irfft2(gt * np.conj(gt), s=shape)
+    product = sfft.irfft2(ft * np.conj(ft), s=shape)
+    lags = np.arange(-maxlag, maxlag + 1)
+    window = (product / np.maximum(pairs, 1.0))[np.ix_(lags, lags)]
+    if not np.isfinite(window[maxlag, maxlag]) or window[maxlag, maxlag] <= 0:
+        return None
+    if stats is not None:
+        stats["variance"] = float(window[maxlag, maxlag])
+        stats["pixels"] = int((~bad).sum())
+    return window / window[maxlag, maxlag]
+
+
 def boxes_dropped(excluded, box_size: int, exclude_percentile: float) -> float:
     """% of whole mesh boxes Background2D will drop and interpolate over; a lower bound.
 

@@ -54,6 +54,8 @@ input:
 # imcoadd and photometry inherit sciproc_base.yml (pipeline.config.utils.crossfilter_template); list only crossfilter overrides here
 imcoadd:
   coadd_routine: 'direct'  # source coadds already share the SWarp grid: no reprojection
+  bkgsub_type: 'none'  # inputs are already sky-subtracted coadds; a second mesh would fit their residual
+  zpscale: true  # scale each filter coadd to ZP=23.9 by its coadd_photometry ZP_AUTO
   coadd_mode: 'proper'
   coverage_policy: intersection  # white pixels only where every source coadd contributes
   match_swarp_size: false
@@ -62,7 +64,6 @@ imcoadd:
   zero_badpix_coadd_weight: false  # no detector bad pixels to exclude
   badpix_reprojection_policy: 'off'  # quoted: bare off is YAML 1.1 false
   saturation_reprojection_policy: '1px'  # direct has no resampling kernel
-  output_mask_map: false  # BADPIX/SATURATED bits come from a detector bpmask; source coadds have none
   convolve: false
 
 phot7ds:

@@ -37,6 +37,7 @@ from typing import Literal
 
 import numpy as np
 from astropy.table import Table
+from ..preprocess.ppflag import PPFLAG_INFORMATIONAL
 
 # (metric, candidate keys in priority order, better direction)
 #
@@ -85,6 +86,7 @@ PPFLAG_BITS = (
     (8, "lenient grouping keys ignored"),
     (16, "masterframe date wall ignored"),
     (32, "hard keys ignored"),
+    (64, "bias master not shared with the dark master (informational, never rejects)"),
 )
 
 CATEGORICAL_DEFAULT_CUTS = {"ppflag": 3.0}  # "110000"
@@ -334,6 +336,7 @@ def apply_cuts(table: Table, cuts: dict[str, float]) -> np.ndarray:
             # was allowed
             allowed = int(cuts[metric])
             bits = np.where(np.isfinite(values), values, 0).astype(np.int64)
+            allowed |= PPFLAG_INFORMATIONAL  # a fact about the reduction, not a compromise: no mask can reject on it
             passes = (bits & ~allowed) == 0
         else:
             passes = values <= cuts[metric] if direction == "lower" else values >= cuts[metric]

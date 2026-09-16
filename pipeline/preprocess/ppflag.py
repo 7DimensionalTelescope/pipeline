@@ -9,8 +9,11 @@ Bit definitions (combined with bitwise OR):
     8: Strict search failed; match found by ignoring lenient keys (unit for bias/dark, gain/camera for flat)
     16: Strict search failed; match found by ignoring masterframe walls (ref/InstrumEvent/changelog_unit{unit}.txt)
     32: Hard keys had to be ignored (not set by pipeline; exists just for completeness)
+    64: The bias master applied to the science frame is not the one inside its dark master, so the
+        master-bias error does not cancel between them (INFORMATIONAL: the weight model charges it,
+        image selection never rejects on it)
 
-Range: 0-63 when all bits set.
+Range: 0-127 when all bits set.
 """
 
 import os
@@ -27,10 +30,12 @@ PPFLAG_SANITY_F_USED = 4
 PPFLAG_LENIENT_KEYS_IGNORED = 8
 PPFLAG_MASTERFRAME_WALL_IGNORED = 16
 PPFLAG_HARD_KEYS_IGNORED = 32
+PPFLAG_BIAS_NOT_SHARED = 64
+PPFLAG_INFORMATIONAL = PPFLAG_BIAS_NOT_SHARED  # bits that record a fact about the reduction, not a compromise
 
 
 PPFLAG_KEY = "PPFLAG"
-PPFLAG_MAX = 63
+PPFLAG_MAX = 127
 
 
 def get_ppflag_from_header(header_or_path, raise_if_missing: bool = False):
@@ -113,6 +118,19 @@ def compute_fetch_ppflag(
         result |= PPFLAG_MASTERFRAME_WALL_IGNORED
 
     return result
+
+
+def bias_shared_with_dark(bias_path: str, dark_path: str) -> bool:
+    """Whether the bias master applied to a science frame is the very one inside its dark master (by IMAGEID; by name
+    when either side predates the id), so that the master-bias error cancels in r - z_m - (median(D) - z_m)."""
+    from .utils import get_image_id
+
+    header = fits.getheader(dark_path)
+    dark_bias_id, dark_bias_name = header.get("IMCID001"), header.get("IMCMB001")
+    bias_id = get_image_id(bias_path)
+    if dark_bias_id and bias_id:
+        return str(dark_bias_id).strip() == str(bias_id).strip()
+    return bool(dark_bias_name) and os.path.basename(str(dark_bias_name)) == os.path.basename(str(bias_path))
 
 
 def propagate_ppflag(*ppflags: int) -> int:

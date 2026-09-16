@@ -4,6 +4,7 @@ from ..config import CrossFilterConfiguration
 from ..const import SEPP_CONFIG
 from ..const.crossfilter import CROSSFILTERPROCESS_REGISTRY, PHOT7DS_SPEC
 from ..errors import Phot7DSError
+from ..path.path import PathHandler
 from ..services.database.handler import DatabaseHandler
 from ..services.setup import BaseSetup
 from ..services.version_check import RuntimeVersionMixin
@@ -24,6 +25,7 @@ def run_phot7ds(config_node, path, overwrite=False, thread_count=None):
         reference_catalog=path.photometry.get_ref_cat(obj, ref_cat_type="GaiaXP"),
         catalog_path=path.phot7ds.catalog,
         coverage_mask=None,
+        count_masks=PathHandler.counts(science_images),
         sepp_config_file=str(ensure_sepp_config(SEPP_CONFIG)),
         detection_label="7DT",
         overwrite=overwrite,
