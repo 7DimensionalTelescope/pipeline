@@ -129,6 +129,7 @@ if TYPE_CHECKING:
         filters_to_check: Any
         satur_margin: float
         sex_vars: dict
+        satellite_mask: dict
 
     class CrossFilterNode(ConfigNode):
         name: Any

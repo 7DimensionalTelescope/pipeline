@@ -65,6 +65,8 @@ imcoadd:
   badpix_reprojection_policy: 'off'  # quoted: bare off is YAML 1.1 false
   saturation_reprojection_policy: '1px'  # direct has no resampling kernel
   convolve: false
+  satellite_mask:
+    enabled: false  # direct routine; source coadds already carry the NTRAIL rejection
 
 phot7ds:
   runtime_version:

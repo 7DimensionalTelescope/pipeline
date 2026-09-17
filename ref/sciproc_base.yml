@@ -84,6 +84,9 @@ astrometry:
   local_astref: 
   scamp_timeout: auto  # auto or seconds. auto starts from 60s and goes up to 300s for dense fields
   solvefield_timeout: 60  # seconds
+  satellite_mask:  # masked out of the prep SExtractor run via a /dev/shm zero-weight map; writes NTRAILPX
+    enabled: true
+    threshold_scale: 1.0
 
 photometry:
   input_images:
@@ -105,6 +108,9 @@ photometry:
   sex_vars:  # only non-empty keys are passed to SExtractor; empty inherits ref/srcExt/main.sex
     DETECT_THRESH:
     DEBLEND_MINCONT:
+  satellite_mask:  # singles only; skipped when NTRAILPX = 0 is already on the frame
+    enabled: true
+    threshold_scale: 1.0
 
 imcoadd:
   input_images:
@@ -149,7 +155,7 @@ imcoadd:
   fill_nan: true  # fill holes inside the coverage of the final coadd (maskfill, van Dokkum & Pasha 2024)
   dump_reprojected_masks: false
   satellite_mask:
-    enabled: false  # detector thresholds default in detect_satellite_trails; override keys here only when tuning
+    enabled: true  # detector thresholds default in detect_satellite_trails; override keys here only when tuning
     threshold_scale: 1.0  # trail mask cut at SKYSIG / K_THRESH * this; K_THRESH follows imcoadd/source_mask.py; > 1 narrows
   output_sky_rms_map: false  # BACKGROUND_RMS model of source-free sky
   output_bkg_map: false  # keep each frame's mesh background model (262 MB/frame, read by nobody)

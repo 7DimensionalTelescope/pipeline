@@ -56,6 +56,7 @@ if TYPE_CHECKING:
         local_astref: Any
         scamp_timeout: str
         solvefield_timeout: int
+        satellite_mask: dict
 
     class PhotometryNode(ConfigNode):
         input_images: Any
@@ -75,6 +76,7 @@ if TYPE_CHECKING:
         filters_to_check: Any
         satur_margin: float
         sex_vars: dict
+        satellite_mask: dict
 
     class ImcoaddNode(ConfigNode):
         input_images: Any

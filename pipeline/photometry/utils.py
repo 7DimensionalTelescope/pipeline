@@ -1,6 +1,8 @@
 from __future__ import annotations
 import os
+import tempfile
 import numpy as np
+from contextlib import contextmanager
 from functools import lru_cache
 from typing import TYPE_CHECKING
 from numba import njit
@@ -432,6 +434,65 @@ def get_sex_options(
         pass
 
     return sex_options
+
+
+def parse_sex_background(sexout: str) -> tuple[float, float] | None:
+    """SExtractor's global Background and RMS from its run summary; None when the line is absent."""
+    for line in sexout.splitlines():
+        if "Background:" in line and "RMS:" in line:
+            return float(line.split("Background:")[1].split("RMS:")[0]), float(line.split("RMS:")[1].split("/")[0])
+    return None
+
+
+def detector_bad_pixels(image) -> np.ndarray:
+    """Detector bad pixels of a calibrated single frame, from the mask PathHandler.get_bpmask resolves."""
+    from astropy.io import fits
+    from ..preprocess.utils import bpmask_id_hdu
+
+    with fits.open(PathHandler.get_bpmask(image), memmap=False) as hdul:
+        hdu = hdul[bpmask_id_hdu(hdul)]
+        return hdu.data == hdu.header.get("BADPIX", 1)
+
+
+@contextmanager
+def sextractor_zero_weight(
+    image, satellite_options=None, bad_pixels=None, skysig=None, psf_fwhm=None, weight_image=None, logger=None
+):
+    """Trail pixel count and SExtractor options over a /dev/shm weight map zeroing satellite trails and bad pixels."""
+    from astropy.io import fits
+    from ..imcoadd.masks import detect_satellite_trails
+
+    zero, npix = bad_pixels, 0
+    if satellite_options is not None:
+        data = fits.getdata(image, memmap=False)
+        trail, lines = detect_satellite_trails(data, skysig=skysig, psf_fwhm=psf_fwhm, **satellite_options)
+        del data
+        npix = int(trail.sum())
+        if logger is not None:
+            widths = ", half-width " + "/".join(f"{w:.0f}" for w in lines[:, 4]) + " px" if len(lines) else ""
+            logger.info(f"Satellite mask: {len(lines)} line(s){widths}, {npix} pixels in {os.path.basename(image)}")
+        zero = trail if zero is None else zero | trail
+    if zero is None or not zero.any():
+        yield npix, {}
+        return
+    if weight_image:
+        weight = fits.getdata(weight_image, memmap=False).astype(np.float32)
+        weight[zero] = 0
+    else:
+        weight = (~zero).astype(np.uint8)
+    fd, path = tempfile.mkstemp(prefix="zero_weight_", suffix=".fits", dir="/dev/shm")
+    os.close(fd)
+    try:
+        fits.writeto(path, weight, overwrite=True)
+        del weight
+        # INTERP_TYPE NONE: the default ALL refills zero-weight runs up to 16 px from their neighbours
+        options = {"-WEIGHT_TYPE": "MAP_WEIGHT", "-WEIGHT_IMAGE": path, "-INTERP_TYPE": "NONE"}
+        if bad_pixels is not None:
+            # ALL refills a bad pixel from its neighbours; a 2 px lag leaves wider zero-weight runs such as trails empty
+            options.update({"-INTERP_TYPE": "ALL", "-INTERP_MAXXLAG": "2", "-INTERP_MAXYLAG": "2"})
+        yield npix, options
+    finally:
+        os.remove(path)
 
 
 def dicts_to_lists(dicts):

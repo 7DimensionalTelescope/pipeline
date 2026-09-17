@@ -14,6 +14,7 @@ from astropy.wcs import WCS
 from astropy.table import Table
 import astropy.units as u
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import ExitStack
 
 from .. import external
 from ..const import IMAGE_GROUP_SCIENCE
@@ -34,6 +35,7 @@ from ..services.database.image_qa import ImageQATable
 from ..services.checker import Checker
 from ..services.logger import Logger
 from ..services.version_check import RuntimeVersionMixin
+from ..photometry.utils import parse_sex_background, sextractor_zero_weight
 
 from .utils import (
     polygon_info_header,
@@ -755,6 +757,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         # parallelize if queue=True
         self.logger.info("Start pre-sextractor")
         self.logger.debug(MemoryMonitor.log_memory_usage)
+        images_info = [ii for ii in self.images_info if ii.sane] if input_images is None else None
+        satellite_options = self.config_node.astrometry.satellite_mask
         input_images = input_images or [ii.soft_link_to_input_image for ii in self.images_info if ii.sane]
         output_catalogs = output_catalogs or [ii.prep_cat for ii in self.images_info if ii.sane]
 
@@ -773,15 +777,30 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         # Run sextractor sequentially
         for i, (solved_image, prep_cat) in enumerate(zip(input_images, output_catalogs)):
             try:
-                external.sextractor(
-                    solved_image,
-                    outcat=prep_cat,
-                    sex_preset=sex_preset,
-                    logger=self.logger,
-                    sex_options=sex_options,
-                    fits_ldac=True,
-                    overwrite=overwrite,
-                )
+                with ExitStack() as stack:
+                    options = dict(sex_options or {})
+                    if satellite_options["enabled"]:
+                        ntrailpx, weight_options = stack.enter_context(
+                            sextractor_zero_weight(solved_image, satellite_options, logger=self.logger)
+                        )
+                        options.update(weight_options)
+                        if images_info is not None:
+                            images_info[i].ntrailpx = ntrailpx
+                    _, sexout = external.sextractor(
+                        solved_image,
+                        outcat=prep_cat,
+                        sex_preset=sex_preset,
+                        logger=self.logger,
+                        sex_options=options,
+                        fits_ldac=True,
+                        overwrite=overwrite,
+                        return_sex_output=True,
+                    )
+                background = parse_sex_background(sexout)
+                if background is None:
+                    self.logger.warning(f"SExtractor emitted no Background/RMS summary for {solved_image}")
+                elif images_info is not None:
+                    images_info[i].skyval, images_info[i].skysig = background
                 self.logger.info(f"Completed sextractor (prep) [{i+1}/{len(input_images)}]")
                 self.logger.debug(f"{solved_image}")
             except Exception as e:
@@ -1471,6 +1490,13 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 # solved_header.update(polygon_header)
                 solved_header.extend(polygon_header)
 
+            if image_info.ntrailpx is not None:  # absent card = never evaluated, 0 = evaluated and clear
+                solved_header.append(("NTRAILPX", image_info.ntrailpx, "Pixels masked as satellite trail"))
+
+            if image_info.skysig is not None:  # prep-run values; single photometry's main run overwrites both
+                solved_header.append(("SKYVAL", round(image_info.skyval, 3), "SKY MEDIAN VALUE"))
+                solved_header.append(("SKYSIG", round(image_info.skysig, 3), "SKY SIGMA VALUE"))
+
             # reset the image header after preparing the new content
             if reset_image_header:
                 self.reset_headers(target_fits)
@@ -1589,6 +1615,9 @@ class ImageInfo:
     num_frac: Optional[float] = field(default=None)
     n_det: Optional[int] = field(default=None)
     SANITY: Optional[bool] = field(default=True)
+    ntrailpx: Optional[int] = field(default=None)
+    skyval: Optional[float] = field(default=None)
+    skysig: Optional[float] = field(default=None)
     # late qa
     # UNMATCH, PA_ALIGN, ELLIPMN, ELLIPSTD
 

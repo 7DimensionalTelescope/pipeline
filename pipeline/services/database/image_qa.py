@@ -109,6 +109,8 @@ class ImageQATable:
     backscl: Optional[int] = None
     backn: Optional[int] = None
     backref: Optional[str] = None
+    ntrailpx: Optional[int] = None
+    ntrailim: Optional[int] = None
     zp_auto: Optional[float] = None
     ezp_auto: Optional[float] = None
     ul5_5: Optional[float] = None

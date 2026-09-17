@@ -6,6 +6,7 @@ import datetime
 import numpy as np
 import itertools
 import time
+from contextlib import ExitStack
 from dataclasses import dataclass, fields
 
 # astropy
@@ -412,6 +413,7 @@ class PhotometrySingle:
             self._sciproc_rejection_process_name = (
                 DIFFERENCE_PHOTOMETRY_SPEC.name if difference_photometry else SINGLE_PHOTOMETRY_SPEC.name
             )
+        self._single_frame = self._sciproc_rejection_process_name == SINGLE_PHOTOMETRY_SPEC.name
 
     def _setup_logger(self, config: Any) -> Any:
         """Initialize logger instance."""
@@ -827,16 +829,47 @@ class PhotometrySingle:
         )
 
         # If hot pixels are present, do not convolve the image
-        if not self.image_info.bpx_interp:
-            self.logger.debug("Hot pixels present. Skip SEx conv.")
-            sex_options["-FILTER"] = "N"
+        # if not self.image_info.bpx_interp:
+        #     self.logger.debug("Hot pixels present. Skip SEx conv.")
+        #     sex_options["-FILTER"] = "N"
+        bad_pixels = None
+        if not self.image_info.bpx_interp:  # uninterpolated hot pixels are zero-weighted, never hidden by FILTER N
+            if not self._single_frame:
+                raise self.logger.process_error.PreviousStageError(
+                    f"{self.input_image} has no INTERP card; only a single frame's bad pixels can be zero-weighted"
+                )
+            try:
+                bad_pixels = phot_utils.detector_bad_pixels(self.input_image)
+            except Exception as e:
+                raise self.logger.process_error.MasterFrameNotFoundError(
+                    f"No bad-pixel mask to zero-weight the uninterpolated {self.input_image}: {e}"
+                ) from e
+            self.logger.debug(f"Zero-weighting {int(bad_pixels.sum())} detector bad pixels for SExtractor")
 
         # run sextractor with 'main' preset
-        obs_src_table = self._run_sextractor(
-            sex_preset="main",
-            sex_options=sex_options,
-            overwrite=overwrite,
-        )
+        with ExitStack() as stack:
+            satellite_options = self.phot_conf.satellite_mask
+            detect_trails = self._single_frame and satellite_options["enabled"] and self.phot_header.NTRAILPX != 0
+            if detect_trails or bad_pixels is not None:
+                ntrailpx, weight_options = stack.enter_context(
+                    phot_utils.sextractor_zero_weight(
+                        self.input_image,
+                        satellite_options if detect_trails else None,
+                        bad_pixels=bad_pixels,
+                        skysig=self.phot_header.BACKSIG or self.phot_header.SKYSIG,
+                        psf_fwhm=self.phot_header.PEEING,
+                        weight_image=sex_options.get("-WEIGHT_IMAGE"),
+                        logger=self.logger,
+                    )
+                )
+                if detect_trails:
+                    self.phot_header.NTRAILPX = ntrailpx
+                sex_options.update(weight_options)
+            obs_src_table = self._run_sextractor(
+                sex_preset="main",
+                sex_options=sex_options,
+                overwrite=overwrite,
+            )
 
         # add snr columns
         self.logger.debug("Adding columns to the sextracted table")
@@ -1036,11 +1069,9 @@ class PhotometrySingle:
 
         if sex_preset == "main":
             phot_header = phot_header or self.phot_header
-            background_lines = [line for line in outcome.splitlines() if "Background:" in line and "RMS:" in line]
-            if background_lines:
-                background_line = background_lines[0]
-                phot_header.SKYVAL = float(background_line.split("Background:")[1].split("RMS:")[0])
-                phot_header.SKYSIG = float(background_line.split("RMS:")[1].split("/")[0])
+            background = phot_utils.parse_sex_background(outcome)
+            if background is not None:
+                phot_header.SKYVAL, phot_header.SKYSIG = background
             else:
                 self.logger.warning("SExtractor emitted no Background/RMS summary; keeping existing sky headers")
 
@@ -1612,6 +1643,7 @@ class PhotometryHeader:
     BACKSCL: int = None
     BACKN: int = None
     BACKREF: str = None
+    NTRAILPX: int = None
     REFCAT: str = None  # "GaiaXP"
     MAGLOW: float = None
     MAGUP: float = None
@@ -1765,6 +1797,7 @@ class PhotometryHeader:
                 round(self.BACKR11, 5) if self.BACKR11 is not None else None,
                 "Sky noise correlation at lag (1,1), 4-fold mean",
             ),
+            "NTRAILPX": (self.NTRAILPX, "Pixels masked as satellite trail"),
             "REFCAT": (self.REFCAT, "REFERENCE CATALOG TYPE"),
             "MAGLOW": (self.MAGLOW, "REF MAG RANGE, LOWER LIMIT"),
             "MAGUP": (self.MAGUP, "REF MAG RANGE, UPPER LIMIT"),
