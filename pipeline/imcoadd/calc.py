@@ -155,7 +155,18 @@ def _write_egain_map(path, norm_arr, gain_denom, covered, header, logger=None):
     """Per-pixel effective gain norm^2 / sum(w^2 FLXSCALE/EGAIN); 0 outside coverage."""
     egain_map = np.zeros(norm_arr.shape, dtype=np.float32)
     egain_map[covered] = norm_arr[covered].astype(np.float64) ** 2 / gain_denom[covered]
-    fits.writeto(path, egain_map, header=header, overwrite=True)
+    # lossy: absolute quantization step 1e-3 of the smallest gain (max relative error 5e-4); NO_DITHER keeps 0 exact
+    step = 1e-3 * float(egain_map[covered].min()) if covered.any() else 1.0
+    hdu = fits.CompImageHDU(
+        data=egain_map,
+        header=WCS(header).to_header(relax=True),
+        compression_type="GZIP_2",
+        quantize_level=-step,
+        quantize_method=-1,
+        name="EGAIN",
+    )
+    hdu.header["BUNIT"] = ("e-/ADU", "Per-pixel effective gain")
+    fits.HDUList([fits.PrimaryHDU(header=header), hdu]).writeto(path, overwrite=True)
     if logger is not None:
         logger.debug(f"Wrote coadd EGAIN map: {path}")
 

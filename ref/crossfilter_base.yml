@@ -57,6 +57,7 @@ imcoadd:
   bkgsub_type: 'none'  # inputs are already sky-subtracted coadds; a second mesh would fit their residual
   zpscale: true  # scale each filter coadd to ZP=23.9 by its coadd_photometry ZP_AUTO
   coadd_mode: 'proper'
+  output_egain_map: false  # proper has no per-pixel gain map
   coverage_policy: intersection  # white pixels only where every source coadd contributes
   match_swarp_size: false
   image_selection_source: db

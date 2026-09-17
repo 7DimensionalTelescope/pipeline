@@ -152,7 +152,7 @@ imcoadd:
   output_footprint: false  # write the standalone coadd footprint product; superseded by the NUSED count plane
   output_mask_map: false  # write the legacy OR bitmask; derivable from the count planes
   output_counts_map: true  # write the coadd coverage/provenance count planes (canonical)
-  output_egain_map: false  # write <coadd>_egain.fits, the per-pixel effective gain (e-/ADU) behind the EGAIN card; mean and clipped modes only
+  output_egain_map: true  # write <coadd>_egain.fits, the per-pixel effective gain (e-/ADU) behind the EGAIN card; mean and clipped modes only
   fill_nan: true  # fill holes inside the coverage of the final coadd (maskfill, van Dokkum & Pasha 2024)
   dump_reprojected_masks: false
   satellite_mask:
