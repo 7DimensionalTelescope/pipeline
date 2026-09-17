@@ -168,6 +168,11 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         return add_suffix(image_path, "ivar")
 
     @staticmethod
+    def egain_map(image_path: str | list) -> str | list:
+        """Per-pixel effective gain of a coadd (imcoadd.output_egain_map)."""
+        return add_suffix(image_path, "egain")
+
+    @staticmethod
     def footprint(image_path: str | list) -> str | list:
         return add_suffix(image_path, "footprint")
 
@@ -879,9 +884,9 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         self._single_dir = [os.path.dirname(path) for path in self._input_files]
         self._masterframe_dir = [None] * count
         self._figure_dir = [figure_dir] * count
-        self._daily_coadd_dir = [output_dir] * count
+        self._daily_coadd_dir = [self.crossfilter.coadd_dir] * count
         self._subtracted_dir = [None] * count
-        self._coadd_dir = [output_dir] * count
+        self._coadd_dir = [self.crossfilter.coadd_dir] * count
         self._metadata_dir = [None] * count
         self._resolved_files = list(self._input_files)
 
@@ -890,9 +895,9 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         self.single_dir = collapse(self._single_dir)
         self.figure_dir = figure_dir
         self.masterframe_dir = None
-        self.daily_coadd_dir = output_dir
+        self.daily_coadd_dir = self.crossfilter.coadd_dir
         self.subtracted_dir = None
-        self.coadd_dir = output_dir
+        self.coadd_dir = self.crossfilter.coadd_dir
         self.metadata_dir = None
         self._file_dep_initialized = True
 
@@ -1912,8 +1917,15 @@ class PathCrossFilter(AutoMkdirMixin, AutoCollapseMixin):
         return swap_ext(self.output_yml, "log")
 
     @property
+    def coadd_dir(self) -> str:
+        # mirrors the per-filter layout: daily <filter>/coadd/, multi-epoch flat
+        if self._parent.settings.is_multi_epoch:
+            return self.output_dir
+        return os.path.join(self.output_dir, DAILY_COADD_DIRNAME)
+
+    @property
     def white_image(self) -> str:
-        return os.path.join(self.output_dir, f"{self.config_stem}_coadd.fits")
+        return os.path.join(self.coadd_dir, f"{self.config_stem}_coadd.fits")
 
     @property
     def source_catalog(self) -> str:

@@ -6,6 +6,7 @@ imcoadd:
   coadd_weighting: pixel-wise  # false | global (1/SKYSIG^2 per image) | pixel-wise (weight maps)
   convolve: False
   target_seeing:  # auto if it's empty or smaller than max seeing
+  output_egain_map: true
 
 settings:
   factory_scratch:

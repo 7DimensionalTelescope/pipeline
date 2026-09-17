@@ -384,6 +384,7 @@ class ReprojectFirstCoaddMixin:
                         match_swarp_size=match_swarp_size,
                         write_weight=plan.output_weight_map,
                         write_footprint=plan.output_footprint,
+                        write_egain=plan.output_egain_map,
                         badpix=badpix,
                         saturated=saturated,
                         counts=counts,
@@ -399,6 +400,7 @@ class ReprojectFirstCoaddMixin:
                         match_swarp_size=match_swarp_size,
                         write_weight=plan.output_weight_map,
                         write_footprint=plan.output_footprint,
+                        write_egain=plan.output_egain_map,
                         reserved_bytes=reserved,
                         outlier_callback=(
                             self._coadd_mask_builder.mark_outliers if self._coadd_mask_builder is not None else None
@@ -533,6 +535,7 @@ class ReprojectFirstCoaddMixin:
         var_maps: list[str] | None = None,
         write_weight: bool = True,
         write_footprint: bool = True,
+        write_egain: bool = False,
         badpix: list | None = None,
         saturated: list | None = None,
         counts: dict | None = None,
@@ -546,6 +549,7 @@ class ReprojectFirstCoaddMixin:
             footprint_output=(
                 PathHandler.footprint(self.config_node.imcoadd.coadd_image) if write_footprint else False
             ),
+            egain_output=(PathHandler.egain_map(self.config_node.imcoadd.coadd_image) if write_egain else False),
             masks=masks,
             flxscales=self._coadd_flxscales(),
             match_swarp_size=match_swarp_size,
@@ -567,6 +571,7 @@ class ReprojectFirstCoaddMixin:
         var_maps: list[str] | None = None,
         write_weight: bool = True,
         write_footprint: bool = True,
+        write_egain: bool = False,
         reserved_bytes: int = 0,
         outlier_callback=None,
         badpix: list | None = None,
@@ -582,6 +587,7 @@ class ReprojectFirstCoaddMixin:
             footprint_output=(
                 PathHandler.footprint(self.config_node.imcoadd.coadd_image) if write_footprint else False
             ),
+            egain_output=(PathHandler.egain_map(self.config_node.imcoadd.coadd_image) if write_egain else False),
             masks=masks,
             flxscales=self._coadd_flxscales(),
             match_swarp_size=match_swarp_size,

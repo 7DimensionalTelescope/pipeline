@@ -151,6 +151,15 @@ def coadd_effective_egain(gain_terms, mode: str = "mean", n_eff: float | None = 
     return float(gain)
 
 
+def _write_egain_map(path, norm_arr, gain_denom, covered, header, logger=None):
+    """Per-pixel effective gain norm^2 / sum(w^2 FLXSCALE/EGAIN); 0 outside coverage."""
+    egain_map = np.zeros(norm_arr.shape, dtype=np.float32)
+    egain_map[covered] = norm_arr[covered].astype(np.float64) ** 2 / gain_denom[covered]
+    fits.writeto(path, egain_map, header=header, overwrite=True)
+    if logger is not None:
+        logger.debug(f"Wrote coadd EGAIN map: {path}")
+
+
 def mean_coadd_numpy(
     input_images: list[str],
     output_path: str,
@@ -158,6 +167,7 @@ def mean_coadd_numpy(
     weights: list[str] | list[float] | None = None,
     weight_output: str | None = None,
     footprint_output: str | None = None,
+    egain_output: str | bool | None = False,
     masks: list[str] | None = None,
     flxscales: list[float] | bool | None = None,
     match_swarp_size: bool = True,
@@ -315,7 +325,10 @@ def mean_coadd_numpy(
     )
     covered = count_arr > 0
     n_eff = float(count_arr[covered].mean()) if covered.any() else None
-    if all_egain and covered.any() and (gain_denom[covered] > 0).all():
+    egain_complete = all_egain and covered.any() and (gain_denom[covered] > 0).all()
+    if egain_output is not False and not egain_complete:
+        raise ValueError(f"EGAIN map requested but an input lacks EGAIN over the coadd footprint: {output_path}")
+    if egain_complete:
         # footprint-exact: median of the per-pixel effective gain map norm^2 / sum(w^2/g),
         # well defined under any coverage; the frame-level formula needs uniform coverage
         effective = float(np.median(norm_arr[covered] ** 2 / gain_denom[covered]))
@@ -338,6 +351,9 @@ def mean_coadd_numpy(
     if footprint_output is not False:
         footprint_out = footprint_output or PathHandler.footprint(output_path)
         fits.writeto(footprint_out, count_arr.astype(np.int16), header=out_header, overwrite=True)
+    if egain_output is not False:
+        _write_egain_map(egain_output or PathHandler.egain_map(output_path), norm_arr, gain_denom, covered,
+                         out_header, logger)
     if logger is not None and weight_output is not False:
         logger.debug(f"Wrote coadd weight map ({backend}): {weight_out}")
     if logger is not None and footprint_output is not False:
@@ -355,6 +371,7 @@ def clipped_mean_coadd_numpy(
     weights: list[str] | list[float] | None = None,
     weight_output: str | None = None,
     footprint_output: str | None = None,
+    egain_output: str | bool | None = False,
     masks: list[str] | None = None,
     flxscales: list[float] | bool | None = None,
     match_swarp_size: bool = True,
@@ -546,7 +563,10 @@ def clipped_mean_coadd_numpy(
     )
     covered = count_arr > 0
     n_eff = float(count_arr[covered].mean()) if covered.any() else None
-    if all_egain and covered.any() and (gain_denom[covered] > 0).all():
+    egain_complete = all_egain and covered.any() and (gain_denom[covered] > 0).all()
+    if egain_output is not False and not egain_complete:
+        raise ValueError(f"EGAIN map requested but an input lacks EGAIN over the coadd footprint: {output_path}")
+    if egain_complete:
         effective = float(np.median(norm_arr[covered] ** 2 / gain_denom[covered]))
     else:
         effective = coadd_effective_egain(gain_terms, mode="mean", n_eff=n_eff)
@@ -561,6 +581,9 @@ def clipped_mean_coadd_numpy(
     if footprint_output is not False:
         footprint_out = footprint_output or PathHandler.footprint(output_path)
         fits.writeto(footprint_out, count_arr.astype(np.int16), header=out_header, overwrite=True)
+    if egain_output is not False:
+        _write_egain_map(egain_output or PathHandler.egain_map(output_path), norm_arr, gain_denom, covered,
+                         out_header, logger)
     if logger is not None:
         logger.info(f"Numpy clipped-mean coaddition completed in {time_diff_in_seconds(st)} seconds")
     return output_path

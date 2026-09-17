@@ -51,6 +51,7 @@ class CoaddPlan:
     proper_weight_map_policy: str
     output_mask_map: bool
     output_counts_map: bool
+    output_egain_map: bool
     fill_nan: bool
     dump_reprojected_masks: bool
     satellite_mask_enabled: bool
@@ -306,6 +307,7 @@ def resolve_coadd_plan(node, errors=builtins) -> CoaddPlan:
         proper_weight_map_policy=proper_weight_map_policy,
         output_mask_map=bool(node.output_mask_map),
         output_counts_map=bool(node.output_counts_map),
+        output_egain_map=bool(node.output_egain_map),
         fill_nan=bool(node.fill_nan),
         dump_reprojected_masks=bool(node.dump_reprojected_masks),
         satellite_mask_enabled=satellite_mask_enabled,
@@ -368,5 +370,10 @@ def resolve_coadd_plan(node, errors=builtins) -> CoaddPlan:
         raise errors.ValueError(
             "imcoadd.output_single_weight_map has no weight map to save; enable output_weight_map, pixel-wise "
             "weighting, or saturation_reprojection_policy: conservative"
+        )
+    if plan.output_egain_map and mode not in ("mean", "clipped"):
+        raise errors.ValueError(
+            f"imcoadd.output_egain_map is not supported for coadd_mode {mode!r}; use 'mean' or 'clipped', "
+            "or set output_egain_map: False"
         )
     return plan
