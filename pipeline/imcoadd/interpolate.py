@@ -549,7 +549,7 @@ def write_weight_float32(path, weight, header, n_holes=None):
 def weight_and_interpolate_cpu(
     images, mask_path, output_paths, calib, window=1, method="median", badpix=1,
     zero_interp_weight=True, logger=None, post_frame=None, weight_store=None, source_catalogs=None, bpmid=None,
-    saturated_mask=None, flat_file=None, interpolate=True, ivar_out=None,
+    saturated_mask=None, flat_file=None, interpolate=True, ivar_out=None, background=None,
 ):
     """Fused weight calculation + bad-pixel interpolation, one read and one write per image.
 
@@ -579,7 +579,10 @@ def weight_and_interpolate_cpu(
         with fits.open(images[idx], memmap=False) as hdul:
             return hdul[0].data.astype(np.float32), hdul[0].header
 
-    def _write(idx, sci, sci_hdr, interp_img, interp_wt, n_saturated=None, coefficients=None, fit_qa=None):
+    def _write(idx, sci, sci_hdr, interp_img, interp_wt, n_saturated=None, coefficients=None, fit_qa=None, src=None):
+        if background is not None:
+            # the sky model comes off the frame SWarp reads, overlapping the next frame's kernels; `sci` stays as measured
+            interp_img = background(idx, sci_hdr, sci.copy() if interp_img is sci else interp_img, hole, src)
         sci_out = output_paths[idx]
         hdr = add_bpx_method(sci_hdr.copy(), method, bpmid)
         fits.writeto(sci_out, interp_img, header=hdr, overwrite=True)
@@ -627,6 +630,7 @@ def weight_and_interpolate_cpu(
                 pool.submit(write_ivar_map, ivar_out[idx], wgt.copy(), sci_hdr)
             coefficients = None
             fit_qa = {}
+            src = None
             if source_catalogs is not None:
                 # after the store write: the durable copy is the pristine model, smoothing is a
                 # campaign choice. Sources and bad pixels are excluded from the fit, not filled.
@@ -659,7 +663,7 @@ def weight_and_interpolate_cpu(
 
             if pending_write is not None:
                 pending_write.result()
-            pending_write = pool.submit(_write, idx, sci, sci_hdr, interp_img, interp_wt, n_saturated, coefficients, fit_qa)
+            pending_write = pool.submit(_write, idx, sci, sci_hdr, interp_img, interp_wt, n_saturated, coefficients, fit_qa, src)
             if logger is not None:
                 # per-image detail at DEBUG; INFO gets one summary line per 25 frames
                 logger.debug(

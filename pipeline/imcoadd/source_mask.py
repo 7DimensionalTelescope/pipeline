@@ -29,16 +29,17 @@ K_THRESH = 32  # 64  # TODO: tune
 # The clips are the predictors' 1st and 99th percentiles.  The safety margin is exp(-p10) of
 # ln(R_fit / R_opt), so the Kron branch reaches or exceeds the measured R_opt for 90% of the
 # calibration galaxies rather than being merely median-unbiased.
+# Calibration notebook: /home/pipeline/dhhyun/source_mask/20260917_new_sextractor_settings/final_law/final_law.ipynb
 DILATION_COEFFS = (
-    1.2863216529093424,
-    -0.9227011965816579,
-    0.5494693078776561,
-    0.0688760733182969,
-    0.0351545653431481,
+    0.26117388685776866,
+    -0.7166131201398028,
+    1.0985458188017985,
+    0.07336389879641333,
+    -0.17484680403528452,
 )
-CONCENTRATION_CLIP = (1.035181160986305, 2.8625749365907764)
-OUTER_RATIO_CLIP = (1.3463635627688317, 1.9722462032777797)
-GALAXY_SAFETY_MARGIN = 1.47
+CONCENTRATION_CLIP = (0.9650415557908615, 3.344471180884902)
+OUTER_RATIO_CLIP = (1.5078492051082328, 2.139434198912187)
+GALAXY_SAFETY_MARGIN = 1.33
 
 RMIN, RMAX, NGRID = 0.02, 2e4, 8192
 N_ALPHA, ALPHA_GRID = 2048, (0.5, 500.0)

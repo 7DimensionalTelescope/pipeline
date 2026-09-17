@@ -482,15 +482,7 @@ class SwarpMixin:
             # the weight is a product in its own right: validate its stat and identity too
             weight_entry = self._manifest_options(wht)
             return weight_entry is not None and not any(weight_entry.get(k) != v for k, v in wanted.items())
-        if self.plan.use_smooth_weight_during_coaddition or self.plan.badpix_propagation_policy_across_astrometric_reprojection != "off" or self.plan.joint_wcs or os.path.exists(factory.joint_wcs_manifest):
-            return False  # a header can vouch for INTERP but not for the weight's badpix zeros or the joint WCS
-        try:
-            ok = str(fits.getheader(sci).get("INTERP", "")).upper() == str(method).upper()
-        except OSError:
-            return False
-        if ok:
-            self._manifest_note(sci, **self._resample_options(interp_im))
-        return ok
+        return False  # a header can vouch for INTERP but not for the sky model that came off the frame before SWarp
 
     def weight_and_interpolate(self, input_images: list[str] | None = None) -> list[str]:
         """Calculate weights, interpolate bad pixels, and return their resampled products."""
@@ -519,6 +511,8 @@ class SwarpMixin:
         tail_futures = deque()
         dump_interp = self.plan.dump_unreprojected_interp
         dump_weight = self.plan.dump_unreprojected_weight
+        if self.plan.background_before_reprojection:
+            self.prepare_background_before_reprojection()
         self.logger.info(f"Reprojection tail on {n_tail} workers")
 
         def _reproject_frame(sci_out):
@@ -604,6 +598,15 @@ class SwarpMixin:
                     _drain_tail(keep=2 * n_tail)
                     tail_futures.append(tail_pool.submit(_reproject_frame, sci_out))
 
+                background = None
+                if self.plan.background_before_reprojection:
+                    catalogs = self._photometry_catalogs(group_in)
+
+                    def background(idx, header, data, hole, src):
+                        return self.subtract_background_before_reprojection(
+                            group_in[idx], header, data, hole=hole, sources=src, catalog=catalogs[idx]
+                        )
+
                 weight_and_interpolate_cpu(
                     group_in,
                     mask_file,
@@ -623,6 +626,7 @@ class SwarpMixin:
                     ),
                     interpolate=self.plan.interpolate_badpix,
                     ivar_out=PathHandler.ivar_map(group_in) if self.plan.dump_unsmoothed_single_weight_map else None,
+                    background=background,
                 )
                 self.logger.info(
                     f"Weight+interp completed for group {group_id + 1}/{len(groups)} in "
@@ -637,6 +641,9 @@ class SwarpMixin:
         finally:
             tail_pool.shutdown()
 
+        if self.plan.background_before_reprojection:
+            self.config_node.imcoadd.bkg_images = self._prereprojection_models or None
+            self.config_node.imcoadd.bkg_rms_images = None
         self._manifest_flush()
         self.logger.info(f"Fused weight+interp completed in {time_diff_in_seconds(st)} seconds")
         return self._record_resampled_products(interp_images)
@@ -770,10 +777,8 @@ class SwarpMixin:
             n += 1
         self.logger.info(f"Saved {n} resampled weight maps beside their singles")
 
-    def _source_catalogs(self, images) -> list[str | None] | None:
-        """Photometry catalogs aligned with *images*, or None when the weight is not smoothed."""
-        if not self.plan.use_smooth_weight_during_coaddition:
-            return None
+    def _photometry_catalogs(self, images) -> list[str | None]:
+        """Photometry catalogs aligned with *images*; None where a single has none."""
         singles = list(atleast_1d(self.input_images))
         try:
             catalogs = list(atleast_1d(self.path.photometry.final_catalog))
@@ -781,7 +786,13 @@ class SwarpMixin:
             catalogs = []
             self.logger.warning(f"No photometry catalogs resolvable ({e})")
         by_single = dict(zip(singles, catalogs)) if len(catalogs) == len(singles) else {}
-        resolved = [by_single.get(im) for im in atleast_1d(images)]
+        return [by_single.get(im) for im in atleast_1d(images)]
+
+    def _source_catalogs(self, images) -> list[str | None] | None:
+        """Photometry catalogs aligned with *images*, or None when the weight is not smoothed."""
+        if not self.plan.use_smooth_weight_during_coaddition:
+            return None
+        resolved = self._photometry_catalogs(images)
         if not all(c and os.path.exists(c) for c in resolved):
             self.logger.warning(
                 "Smoothing the weight map without source masks for "
@@ -821,6 +832,8 @@ class SwarpMixin:
             return False
         if sidecar.get("WGTMODEL") != wanted["weight_model"]:
             return False
+        if header.get("BKGMESH") != wanted["bkgmesh"]:
+            return False
         holes = sidecar.get("WGTHOLES")
         return holes is None or bool(holes) == bool(self.plan.zero_badpix_in_single_weight_map)
 
@@ -839,6 +852,7 @@ class SwarpMixin:
             "satzero": bool(self.plan.zero_saturated_in_weight_before_reprojection),
             "satpol": self.plan.saturation_reprojection_policy,
             "weight_model": WEIGHT_MODEL if self.plan.use_smooth_weight_during_coaddition else "PIXEL",
+            "bkgmesh": self._prereprojection_fingerprint(single),
             "wcsid": self._swarp_output_wcs_id(),
             "imageid": self._imageid_of.get(single),
             "bpmid": self._bpmid_of.get(single),

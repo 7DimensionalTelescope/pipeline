@@ -85,6 +85,11 @@ class CoaddPlan:
         return self.coadd_routine == "reproject-first"
 
     @property
+    def background_before_reprojection(self) -> bool:
+        """The sky model comes off each detector-grid frame in the fused loop; the resample stage only masks and measures."""
+        return self.reproject_with_swarp
+
+    @property
     def inputs_are_reprojected(self) -> bool:
         """The frames bkgsub and the check plots handle sit on the sky grid; only legacy works on detector frames."""
         return self.coadd_routine != "legacy"

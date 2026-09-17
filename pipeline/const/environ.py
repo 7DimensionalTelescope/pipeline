@@ -18,6 +18,7 @@ def _get_bool_env(name, default=False):
         return default
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
+
 # Internal paths
 SOURCE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ROOT_DIR = os.path.abspath(os.path.join(SOURCE_DIR, ".."))
@@ -101,7 +102,8 @@ ASTRM_CUSTOM_REF_DIR = _reference_paths.get(
 GAIA_ROOT_DIR = _reference_paths.get("GAIA_ROOT_DIR", "/lyman/data1/factory/catalog/gaia_source_dr3/healpix_nside64")
 SCAMP_QUERY_DIR = _reference_paths.get("SCAMP_QUERY_DIR", "/lyman/data2/py7dt_requisites/ref_scamp/queried")
 PHOT_REF_DIR = _reference_paths.get("PHOT_REF_DIR", "/lyman/data1/factory/ref_cat")
-SEPP_CONFIG = _reference_paths.get("SEPP_CONFIG", "/lyman/data1/7DS/RIS/config/7ds_sepp.config")
+SEPP_CONFIG = os.path.join(REF_DIR, "7ds_sepp.config")
+# _reference_paths.get("SEPP_CONFIG", "/lyman/data1/7DS/RIS/config/7ds_sepp.config")
 GAIA_REF_DIR = _reference_paths.get("GAIA_REF_DIR", "/lyman/data1/Calibration/7DT-Calibration/output/Calibration_Tile")
 REF_IMAGE_DIR = _reference_paths.get("REF_IMAGE_DIR", "/lyman/data1/factory/ref_frame")
 
@@ -132,11 +134,9 @@ SEXTRACTOR_COMMAND = os.environ.get("SEXTRACTOR_COMMAND") or _commands.get("SEXT
 SWARP_COMMAND = os.environ.get("SWARP_COMMAND") or _commands.get("SWARP_COMMAND") or "swarp"
 RECENT_RAWDATA_TRANSFER_HISTORY = _external_paths.get("RECENT_RAWDATA_TRANSFER_HISTORY")
 PIPELINE_LOG_DIR = _external_paths.get("PIPELINE_LOG_DIR") or "/var/log/pipeline"
-PIPELINE_TRIGGER_LOG_FILE = (
-    _external_paths.get("PIPELINE_TRIGGER_LOG_FILE") or "/var/log/pipeline-trigger.log"
-)
-HIGH_LEVEL_TASK_LOG_FILE = (
-    _external_paths.get("HIGH_LEVEL_TASK_LOG_FILE") or os.path.join(PIPELINE_LOG_DIR, "high_level_tasks.log")
+PIPELINE_TRIGGER_LOG_FILE = _external_paths.get("PIPELINE_TRIGGER_LOG_FILE") or "/var/log/pipeline-trigger.log"
+HIGH_LEVEL_TASK_LOG_FILE = _external_paths.get("HIGH_LEVEL_TASK_LOG_FILE") or os.path.join(
+    PIPELINE_LOG_DIR, "high_level_tasks.log"
 )
 
 

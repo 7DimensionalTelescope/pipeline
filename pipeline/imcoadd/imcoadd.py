@@ -195,6 +195,9 @@ class ImCoadd(
         self._bpmid_of = {}
         self._imageid_of = {}
         self._output_wcs_id = None
+        self._prereprojection_types = {}
+        self._prereprojection_done = {}
+        self._prereprojection_models = []
 
     def initialize(self, overwrite=False):
         self._st = time.time()

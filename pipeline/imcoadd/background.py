@@ -45,6 +45,9 @@ class BackgroundMixin:
     path_bkgsub: str
     _fov_masks: list[str | None] | None
     _quality_masks: list[np.ndarray | str] | None
+    _prereprojection_types: dict[str, str]  # the routine each frame is due before reprojection, per bkgsub_type
+    _prereprojection_done: dict[str, str]  # the routine the detector-grid step gave it, after the fallbacks
+    _prereprojection_models: list[str]
 
     def _background_output_exists(self, image):
         return self._stage_frame_exists(image)
@@ -93,20 +96,13 @@ class BackgroundMixin:
         skysigmas = [value for value, _ in sky_sigmas]
         self.logger.debug(f"Sky level from {_key_tally(sky_levels)}; sky noise from {_key_tally(sky_sigmas)}")
         methods = self.bkgsub_methods()
-        requested = get_key(self.config_node.imcoadd, "bkgsub_type")
-        if requested is False:
-            requested = "none"  # YAML `false` spells the same switch as 'none'; empty stays auto
-        elif requested:
-            requested = str(requested).lower()
-        else:
-            requested = self._default_bkgsub_type(skyvalues, skyval_cut)
-            self.logger.debug(f"bkgsub_type unset; filled in as {requested!r} for the group")
-        if requested != "individual" and requested not in methods:
-            raise ValueError(
-                f"bkgsub_type: {requested!r} is invalid (expected 'individual' or one of {sorted(methods)})"
-            )
-        types = [self._resolve_bkgsub_type(requested, sv, skyval_cut) for sv in skyvalues]
-        self.config_node.imcoadd.bkgsub_type = requested
+        requested, types = self._resolve_bkgsub_types(skyvalues, skyval_cut)
+        before = self.plan.background_before_reprojection
+        if before:  # the model came off the detector-grid frame; each frame's routine is what that step decided
+            types = [
+                self._prereprojection_done.get(name, self._prereprojection_types.get(name, t))
+                for name, t in zip(self.input_headers.names, types)
+            ]
         if requested == "none":
             mask_sources = False  # no mesh to protect from sources, and no fallback may reinstate one
             self.logger.info("bkgsub_type 'none': staging the frames unchanged, no sky model subtracted")
@@ -136,7 +132,9 @@ class BackgroundMixin:
 
         counts = {name: types.count(name) for name in sorted(set(types))}
         self.logger.info(f"Start background subtraction (bkgsub_type={requested!r}): {counts}")
-        if any_dynamic:
+        if before:
+            pass  # bkg_images names the detector-grid models the pre-reprojection step wrote
+        elif any_dynamic:
             self.config_node.imcoadd.bkg_images = bkg_images if self.plan.output_bkg_map else None
             self.config_node.imcoadd.bkg_rms_images = bkg_rms_images if self.plan.output_sky_rms_map else None
         else:
@@ -179,13 +177,14 @@ class BackgroundMixin:
                 fov_valid = self._fov_valid(data, get_basename(inim))
             exclude = None
             qa_mask = None
-            if src_mask is not None:
+            if src_mask is not None and not before:  # the detector-grid step painted the mask and measured the residual
                 sources, valid, usable = self._source_mask(
                     inim, header, fov_valid, src_mask, skysig=skysigma,
                     photometry_catalog=phot_cat, source_image=single,
                 )  # fmt: skip
                 if sources is None:
-                    btype = self._fall_back_to_constant(i, inim, btype, skyvalue, "no source mask")
+                    if not before:
+                        btype = self._fall_back_to_constant(i, inim, btype, skyvalue, "no source mask")
                 else:
                     exclude = sources
                     qa_mask = sources
@@ -205,11 +204,15 @@ class BackgroundMixin:
                 if self.plan.satellite_mask_enabled:  # absent card = never evaluated, 0 = evaluated and clear
                     card = (int(trail.sum()), "Pixels masked as satellite trail")
                     header["NTRAILPX"], self.input_headers[i]["NTRAILPX"] = card, card
-            if btype == "dynamic" and exclude is not None:
+            if btype == "dynamic" and exclude is not None and not before:
                 btype = self._crowding_fallback(i, inim, exclude, fov_valid, btype, skyvalue)
-            frac_card = (self._usable_fraction(exclude, fov_valid), "Fraction of pixels used for the sky estimate")
-            header["BACKFRAC"], self.input_headers[i]["BACKFRAC"] = frac_card, frac_card
-            is_steppy = methods[btype](
+            if not before:
+                frac_card = (self._usable_fraction(exclude, fov_valid), "Fraction of pixels used for the sky estimate")
+                header["BACKFRAC"], self.input_headers[i]["BACKFRAC"] = frac_card, frac_card
+            elif self.input_headers[i].get("BACKFRAC") is not None:  # the detector-grid fit's card
+                header["BACKFRAC"] = (self.input_headers[i]["BACKFRAC"], "Fraction of pixels used for the sky estimate")
+            routine = self._no_bkgsub if before else methods[btype]
+            is_steppy = routine(
                 inim,
                 outim,
                 data=data,
@@ -224,6 +227,7 @@ class BackgroundMixin:
                 index=i,
                 qa_mask=qa_mask,
                 qa_coverage=fov_valid if fov_valid is not None else (np.isfinite(data) & (data != 0)),
+                btype=btype,
             )
 
             # if is_steppy and not ignore_steppy_flag:
@@ -231,8 +235,9 @@ class BackgroundMixin:
             #     self.logger.warning(f"Re-running background subtraction with constant value")
             #     self._const_bkgsub(inim, outim, skyval=skyvalue)
 
+            done = f"{btype}, subtracted before reprojection" if before else btype
             self.logger.info(
-                f"Background subtraction ({btype}) completed for {get_basename(outim)} [image {i+1}/{len(input_images)}] in {time_diff_in_seconds(st_loop)} seconds"
+                f"Background subtraction ({done}) completed for {get_basename(outim)} [image {i+1}/{len(input_images)}] in {time_diff_in_seconds(st_loop)} seconds"
             )
 
         jobs = list(enumerate(zip(input_images, bkgsub_images, bkg_images, bkg_rms_images, skyvalues, skysigmas,
@@ -257,6 +262,10 @@ class BackgroundMixin:
                         f"{get_basename(job[1])} was made with BACKTYPE={kept_type}, this run wants "
                         f"{types[i].upper()}; recomputing"
                     )
+                    pending.append((i, job))
+                    continue
+                if kept_type and bool(kept.get("BKGPRERP", False)) != before:
+                    self.logger.info(f"{get_basename(job[1])} was subtracted on the other grid; recomputing")
                     pending.append((i, job))
                     continue
                 if kept.get("BACKTYPE"):
@@ -297,10 +306,12 @@ class BackgroundMixin:
         """Map configured background names to per-image routines."""
         return {"none": self._no_bkgsub, "constant": self._const_bkgsub, "dynamic": self._dynamic_bkgsub}
 
-    def _no_bkgsub(self, inim, outim, data=None, header=None, fov_valid=None, quality_mask=None, **kwargs):
-        """Stage the frame with no sky model removed; mask exactly as the subtracting routines do."""
+    def _no_bkgsub(self, inim, outim, data=None, header=None, fov_valid=None, quality_mask=None, btype="none", **kwargs):
+        """Stage the frame with no sky model removed here; mask exactly as the subtracting routines do."""
         _data, _hdr = self._read_frame(inim, data, header)
-        _hdr["BACKTYPE"] = ("NONE", "Background subtraction type")
+        _hdr["BACKTYPE"] = (str(btype).upper(), "Background subtraction type")
+        if self.plan.background_before_reprojection:
+            _hdr["BKGPRERP"] = (True, "Sky model subtracted before reprojection")
         if fov_valid is not None:
             _data[~fov_valid] = 0.0  # keep out-of-FOV at 0: the coadd's validity marker
         if quality_mask is not None:
@@ -308,8 +319,32 @@ class BackgroundMixin:
             trail = (quality_mask & int(MaskBit.SATELLITE)) != 0
             _data[trail if fov_valid is None else (trail & fov_valid)] = np.nan
         self._record_background_residuals(_data, _hdr, kwargs.get("qa_mask"), kwargs.get("qa_coverage", fov_valid), quality_mask)
+        if self.plan.background_before_reprojection and kwargs.get("index") is not None:
+            from .background_qa import RESIDUAL_KEYS
+
+            snapshot = self.input_headers[kwargs["index"]]  # the residual cards measured on the detector-grid frame
+            _hdr.update({k: (snapshot[k], snapshot.comments[k]) for k in map(str.upper, RESIDUAL_KEYS) if k in snapshot})
         self._write_background_output(outim, _data, _hdr)
         return False
+
+    def _resolve_bkgsub_types(self, skyvalues, skyval_cut: float = 40) -> tuple[str, list[str]]:
+        """The configured background routine, validated and written back, and the routine of each frame."""
+        methods = self.bkgsub_methods()
+        requested = get_key(self.config_node.imcoadd, "bkgsub_type")
+        if requested is False:
+            requested = "none"  # YAML `false` spells the same switch as 'none'; empty stays auto
+        elif requested:
+            requested = str(requested).lower()
+        else:
+            requested = self._default_bkgsub_type(skyvalues, skyval_cut)
+            self.logger.debug(f"bkgsub_type unset; filled in as {requested!r} for the group")
+        if requested != "individual" and requested not in methods:
+            raise ValueError(
+                f"bkgsub_type: {requested!r} is invalid (expected 'individual' or one of {sorted(methods)})"
+            )
+        types = [self._resolve_bkgsub_type(requested, sv, skyval_cut) for sv in skyvalues]
+        self.config_node.imcoadd.bkgsub_type = requested
+        return requested, types
 
     def _default_bkgsub_type(self, skyvalues, skyval_cut: float) -> str:
         """Choose one background routine for a group without an explicit setting."""
@@ -603,6 +638,112 @@ class BackgroundMixin:
         self._write_background_output(outim, _data, _hdr)
 
         # return is_steppy
+
+    def prepare_background_before_reprojection(self, skyval_cut: float = 40) -> None:
+        """Decide each frame's routine for the detector-grid subtraction, from the same cards bkgsub reads."""
+        skyvalues = [value for value, _ in self.input_headers.values_any_with_key("BACKVAL", "SKYVAL")]
+        requested, types = self._resolve_bkgsub_types(skyvalues, skyval_cut)
+        self._prereprojection_types = dict(zip(self.input_headers.names, types))
+        self._prereprojection_done = {}
+        self._prereprojection_models = []
+        counts = {name: types.count(name) for name in sorted(set(types))}
+        self.logger.info(f"Background subtraction before reprojection (bkgsub_type={requested!r}): {counts}")
+
+    def _prereprojection_fingerprint(self, single: str) -> str | None:
+        """What one frame's detector-grid subtraction depends on (its routine and the mesh keys), None when it is off."""
+        plan = self.plan
+        if not plan.background_before_reprojection:
+            return None
+        routine = self._prereprojection_types.get(get_basename(single))
+        return (
+            f"{routine}/{plan.background_box_size}/{plan.background_filter_size}/{plan.background_exclude_percentile:g}/"
+            f"{plan.background_min_usable:g}/{plan.background_max_dropped_boxes:g}"
+        )
+
+    def subtract_background_before_reprojection(self, single, header, data, hole=None, sources=None, catalog=None):
+        """The interpolated detector-grid frame minus its sky model, fitted on a step-free copy; cards on the header."""
+        from .background_qa import RESIDUAL_KEYS
+        from .utils import estimate_background, step_free
+        from .weight import source_mask_on_frame
+
+        plan = self.plan
+        factory = self.path.imcoadd.factory
+        name = get_basename(single)
+        btype = self._prereprojection_types[name]
+        skyval = header.get("BACKVAL")
+        if skyval is None:
+            skyval = header.get("SKYVAL")
+        exclude = hole
+        if btype == "dynamic" and plan.source_mask:
+            if sources is None and catalog:
+                sources = source_mask_on_frame(catalog, header, self.logger)
+            if sources is None:
+                btype = self._fall_back_to_constant(name, single, btype, skyval, "no source mask")
+            else:
+                exclude = sources if hole is None else (sources | hole)
+                btype = self._crowding_fallback(name, single, exclude, None, btype, skyval)
+        model = None
+        if btype == "dynamic":
+            try:
+                model, _ = estimate_background(
+                    step_free(data),
+                    mask=exclude,
+                    coverage_mask=None,
+                    box_size=plan.background_box_size,
+                    filter_size=plan.background_filter_size,
+                    exclude_percentile=plan.background_exclude_percentile,
+                )
+            except ValueError as e:
+                if skyval is None:
+                    raise
+                self.logger.warning(f"{name}: no mesh box survived ({e}); constant background instead")
+                btype = "constant"
+        if btype == "constant":
+            model = skyval
+        self._prereprojection_done[name] = btype  # bkgsub routes and stamps from what this frame actually got
+        cards = {
+            "BACKTYPE": (btype.upper(), "Background subtraction type"),
+            "BKGPRERP": (True, "Sky model subtracted before reprojection"),
+            "BKGMESH": (self._prereprojection_fingerprint(single), "Detector-grid sky fit: routine and mesh keys"),
+            "BACKFRAC": (self._usable_fraction(exclude, None), "Fraction of pixels used for the sky estimate"),
+        }
+        header.update(cards)
+        self.input_headers[name].update(cards)
+        if btype == "none":
+            return data
+        if isinstance(model, np.ndarray):
+            interp = factory.stage_images(single, "interp", factory.interp_dir)[0]
+            stem = os.path.splitext(get_basename(interp))[0]
+            if plan.output_bkg_map:
+                bkg = factory.stage_images(interp, "bkg", factory.bkgsub_dir)[0]
+                fits.writeto(bkg, model, overwrite=True)
+                self._prereprojection_models.append(bkg)
+            plot_source_mask(
+                data,
+                exclude,
+                factory.source_mask_figures(interp)[0],
+                stem,
+                subtitle=f"{100 - 100 * cards['BACKFRAC'][0]:.2f}% excluded by the source and bad-pixel masks, "
+                f"{100 * cards['BACKFRAC'][0]:.2f}% usable for the background mesh",
+                header=header,
+                reprojected=False,
+            )
+            plot_background(
+                model,
+                factory.background_figures(interp)[0],
+                stem,
+                subtitle=f"box {plan.background_box_size} x filter {plan.background_filter_size}, "
+                f"exclude_percentile {plan.background_exclude_percentile:g}%; fitted on the step-free copy; "
+                f"median {np.median(model):.2f}, peak to peak {np.ptp(model):.2f} ADU/pixel",
+                header=header,
+                reprojected=False,
+            )
+        else:
+            self.logger.debug(f"{name}: constant sky {model:.3f} subtracted before reprojection")
+        data -= model
+        self._record_background_residuals(data, header, sources if sources is None else exclude, np.isfinite(data))
+        self.input_headers[name].update({k: (header[k], header.comments[k]) for k in map(str.upper, RESIDUAL_KEYS) if k in header})
+        return data
 
     @staticmethod
     def _read_frame(inim, data, header):

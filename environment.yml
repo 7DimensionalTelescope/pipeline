@@ -16,6 +16,7 @@ dependencies:
   - matplotlib=3.10
   - astropy=7.2
   - numba=0.64.0
+  - scikit-image=0.26  # satellite-trail detection (canny + probabilistic Hough), default-on in astrometry, photometry and imcoadd
   - spherical-geometry
   - psutil
   - tqdm

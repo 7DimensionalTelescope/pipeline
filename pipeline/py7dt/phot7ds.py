@@ -1,7 +1,7 @@
 import os
 
 from ..config import CrossFilterConfiguration
-from ..const import SEPP_CONFIG
+from ..const import REF_DIR, SEPP_CONFIG
 from ..const.crossfilter import CROSSFILTERPROCESS_REGISTRY, PHOT7DS_SPEC
 from ..errors import Phot7DSError
 from ..path.path import PathHandler
@@ -27,6 +27,7 @@ def run_phot7ds(config_node, path, overwrite=False, thread_count=None):
         coverage_mask=None,
         count_masks=PathHandler.counts(science_images),
         sepp_config_file=str(ensure_sepp_config(SEPP_CONFIG)),
+        # segmentation_filter=os.path.join(REF_DIR, "srcExt", "phot7ds.conv"),  # needs phot7ds branch segmentation-filter
         detection_label="7DT",
         overwrite=overwrite,
         thread_count=thread_count,

@@ -138,7 +138,7 @@ imcoadd:
   device: 0
   zp_key: 'ZP_AUTO'
   zpscale: True
-  bkgsub_type: 'dynamic'  # 'none' (or false) | 'constant' | 'dynamic' | 'individual'; leave empty for auto
+  bkgsub_type: 'dynamic'  # 'none' (or false) | 'constant' | 'dynamic' | 'individual'; leave empty for auto; under reproject-first the model comes off each detector-grid frame before SWarp
   background:  # photutils Background2D mesh; the source mask is per-pixel and no value here enters it
     box_size: 128
     filter_size: 3  # median filter over this many mesh nodes per axis

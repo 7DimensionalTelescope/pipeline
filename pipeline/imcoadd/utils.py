@@ -403,7 +403,7 @@ def background_mesh(
     A box that loses ``exclude_percentile`` per cent of its pixels is dropped and refilled from the ten
     nearest surviving mesh nodes, and the mesh is upsampled with the output clipped to its own range."""
     from astropy.stats import SigmaClip
-    from photutils.background import Background2D, SExtractorBackground
+    from photutils.background import Background2D, MMMBackground
 
     return Background2D(
         np.ascontiguousarray(data, dtype=np.float32),
@@ -414,7 +414,7 @@ def background_mesh(
         exclude_percentile=float(exclude_percentile),
         filter_size=int(filter_size),
         sigma_clip=SigmaClip(sigma=sigma, maxiters=maxiters),
-        bkg_estimator=SExtractorBackground(sigma_clip=None),
+        bkg_estimator=MMMBackground(sigma_clip=None),  # 3 median - 2 mean, the mode estimate with no tuned factor
     )
 
 
@@ -423,6 +423,19 @@ def estimate_background(data, mask=None, coverage_mask=None, with_rms: bool = Fa
     bkg = background_mesh(data, mask=mask, coverage_mask=coverage_mask, **mesh_options)
     # both are properties that recompute a full-frame array on every access
     return bkg.background, (bkg.background_rms if with_rms else None)
+
+
+# centre 1 + a, neighbours +-0.05 shifted by -a / 8, a solving sum k^3 = sum k^2: the lattice leaves the clipped median, not the level
+STEP_FREE_KERNEL = np.array([[-1, 1, -1], [1, 0, 1], [-1, 1, -1]], dtype=np.float64) * 0.05 - 0.01943060490470727 / 8
+STEP_FREE_KERNEL[1, 1] = 1.01943060490470727
+STEP_FREE_KERNEL = STEP_FREE_KERNEL.astype(np.float32)
+
+
+def step_free(data):
+    """The frame correlated with STEP_FREE_KERNEL: a low-sky detector frame's quantization steps leave the mesh."""
+    from scipy.ndimage import correlate
+
+    return correlate(np.ascontiguousarray(data, dtype=np.float32), STEP_FREE_KERNEL, mode="nearest")
 
 
 def sky_statistics(data, mask=None, coverage_mask=None, **mesh_options) -> tuple[float, float]:
