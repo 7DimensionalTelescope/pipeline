@@ -5,6 +5,7 @@ from scipy.interpolate import LSQBivariateSpline
 from scipy.optimize import nnls
 
 WEIGHT_MODEL = "FLAT2_V1"
+WEIGHT_MODEL_SKY = "FLAT2S_V1"  # the photon term follows the frame's own sky model: b S(x)/F + C/F^2
 FLAT_KNOT_SPACING = 512
 WEIGHT_QA_COMMENTS = {
     "WGTNPTS": "Detector fit: measured cells before clipping",
@@ -132,7 +133,7 @@ def copy_weight_fit_header(source: str, target: str) -> None:
     from astropy.io import fits
 
     header = fits.getheader(source)
-    if header.get("WGTMODEL") != WEIGHT_MODEL:
+    if header.get("WGTMODEL") not in (WEIGHT_MODEL, WEIGHT_MODEL_SKY):
         return
     with fits.open(target, mode="update") as hdul:
         for key in ("WGTMODEL", "WGTB", "WGTC", *WEIGHT_QA_COMMENTS):

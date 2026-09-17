@@ -441,7 +441,6 @@ class ImCoadd(
 
     def _coadd_provenance(self) -> dict[str, tuple]:
         """Config options that change the coadd, as coadd header cards."""
-        from .flat_weight import WEIGHT_MODEL
         node = self.config_node.imcoadd
         shown = lambda value: ("NONE" if value is None or value is False else value)  # noqa: E731
         bp = self.plan
@@ -465,7 +464,7 @@ class ImCoadd(
             "BKGFILT":  (bp.background_filter_size, "imcoadd.background.filter_size"),
             "BKGEXCL":  (bp.background_exclude_percentile, "imcoadd.background.exclude_percentile"),
         }  # fmt: skip
-        cards["WGTMODEL"] = (WEIGHT_MODEL if bp.use_smooth_weight_during_coaddition else "PIXEL", "single-frame weight model")
+        cards["WGTMODEL"] = (self.weight_model(), "single-frame weight model")
         mode = str(get_key(node, "coadd_mode") or "").lower()
         if mode == "clipped":
             cards["CLIPSIG"] = (bp.clip_sigma, "coadd_mode_options.clipped.clip_sigma")
@@ -550,10 +549,7 @@ class ImCoadd(
 
             for vimg, oname in zip(group_values, group_outputs):
                 if os.path.exists(oname) and not self.overwrite:
-                    from .flat_weight import WEIGHT_MODEL
-
-                    expected = WEIGHT_MODEL if self.plan.use_smooth_weight_during_coaddition else "PIXEL"
-                    if fits.getheader(oname).get("WGTMODEL") == expected:
+                    if fits.getheader(oname).get("WGTMODEL") == self.weight_model():
                         self.logger.debug(f"Already exists; skip generating {oname}")
                         continue
                 uncalculated_images.append(vimg)
@@ -708,11 +704,8 @@ class ImCoadd(
         calculated_outputs = []
         for input_image_file, output_file in zip(input_images, interp_images):
             if os.path.exists(output_file) and not self.overwrite:
-                from .flat_weight import WEIGHT_MODEL
-
                 sidecar = PathHandler.weight_map(output_file)
-                expected = WEIGHT_MODEL if self.plan.use_smooth_weight_during_coaddition else "PIXEL"
-                if not weight or (os.path.exists(sidecar) and fits.getheader(sidecar).get("WGTMODEL") == expected):
+                if not weight or (os.path.exists(sidecar) and fits.getheader(sidecar).get("WGTMODEL") == self.weight_model()):
                     self.logger.debug(f"Already exists; skip generating {output_file}")
                     continue
             uncalculated_images.append(input_image_file)

@@ -29,7 +29,7 @@ from ..utils import (
 from .coadd_plan import CoaddPlan
 from .header_set import InputHeaderSet
 from .storage import IntermediateStorage
-from .flat_weight import WEIGHT_MODEL, copy_weight_fit_header
+from .flat_weight import WEIGHT_MODEL, WEIGHT_MODEL_SKY, copy_weight_fit_header
 
 
 if TYPE_CHECKING:
@@ -598,14 +598,17 @@ class SwarpMixin:
                     _drain_tail(keep=2 * n_tail)
                     tail_futures.append(tail_pool.submit(_reproject_frame, sci_out))
 
-                background = None
+                background_model = background = None
                 if self.plan.background_before_reprojection:
                     catalogs = self._photometry_catalogs(group_in)
 
-                    def background(idx, header, data, hole, src):
-                        return self.subtract_background_before_reprojection(
+                    def background_model(idx, header, data, hole, src):
+                        return self.fit_background_before_reprojection(
                             group_in[idx], header, data, hole=hole, sources=src, catalog=catalogs[idx]
                         )
+
+                    def background(idx, header, data, model, exclude):
+                        return self.subtract_background_before_reprojection(group_in[idx], header, data, model, exclude)
 
                 weight_and_interpolate_cpu(
                     group_in,
@@ -626,6 +629,7 @@ class SwarpMixin:
                     ),
                     interpolate=self.plan.interpolate_badpix,
                     ivar_out=PathHandler.ivar_map(group_in) if self.plan.dump_unsmoothed_single_weight_map else None,
+                    background_model=background_model,
                     background=background,
                 )
                 self.logger.info(
@@ -837,6 +841,15 @@ class SwarpMixin:
         holes = sidecar.get("WGTHOLES")
         return holes is None or bool(holes) == bool(self.plan.zero_badpix_in_single_weight_map)
 
+    def weight_model(self) -> str:
+        """WGTMODEL of this run's single weights: the sky-template fit wherever a sky model comes off the frame before SWarp."""
+        if not self.plan.use_smooth_weight_during_coaddition:
+            return "PIXEL"
+        requested = get_key(self.config_node.imcoadd, "bkgsub_type")
+        if self.plan.background_before_reprojection and requested is not False and str(requested or "").lower() != "none":
+            return WEIGHT_MODEL_SKY
+        return WEIGHT_MODEL
+
     def _interp_method(self) -> str:
         """INTERP card value: imcoadd.interp_type, or 'none' when interpolate_badpix is False."""
         return str(self.config_node.imcoadd.interp_type) if self.plan.interpolate_badpix else "none"
@@ -851,7 +864,7 @@ class SwarpMixin:
             "joint_wcs": bool(self.plan.joint_wcs),
             "satzero": bool(self.plan.zero_saturated_in_weight_before_reprojection),
             "satpol": self.plan.saturation_reprojection_policy,
-            "weight_model": WEIGHT_MODEL if self.plan.use_smooth_weight_during_coaddition else "PIXEL",
+            "weight_model": self.weight_model(),
             "bkgmesh": self._prereprojection_fingerprint(single),
             "wcsid": self._swarp_output_wcs_id(),
             "imageid": self._imageid_of.get(single),

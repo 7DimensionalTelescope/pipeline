@@ -660,9 +660,10 @@ class BackgroundMixin:
             f"{plan.background_min_usable:g}/{plan.background_max_dropped_boxes:g}"
         )
 
-    def subtract_background_before_reprojection(self, single, header, data, hole=None, sources=None, catalog=None):
-        """The interpolated detector-grid frame minus its sky model, fitted on a step-free copy; cards on the header."""
-        from .background_qa import RESIDUAL_KEYS
+    def fit_background_before_reprojection(self, single, header, data, hole=None, sources=None, catalog=None):
+        """The frame's detector-grid sky model, fitted on a step-free copy with the bad pixels held at the sky level, and its
+        cards on the header; returns (model, mask): an array, a constant, or None for no subtraction, and the exclusion the
+        residual cards are measured through (None without a source mask)."""
         from .utils import estimate_background, step_free
         from .weight import source_mask_on_frame
 
@@ -685,8 +686,10 @@ class BackgroundMixin:
         model = None
         if btype == "dynamic":
             try:
+                # the frame as measured: a bad pixel would leak into its neighbours through the step-free kernel
+                source = data if hole is None or skyval is None else np.where(hole, np.float32(skyval), data)
                 model, _ = estimate_background(
-                    step_free(data),
+                    step_free(source),
                     mask=exclude,
                     coverage_mask=None,
                     box_size=plan.background_box_size,
@@ -709,8 +712,6 @@ class BackgroundMixin:
         }
         header.update(cards)
         self.input_headers[name].update(cards)
-        if btype == "none":
-            return data
         if isinstance(model, np.ndarray):
             interp = factory.stage_images(single, "interp", factory.interp_dir)[0]
             stem = os.path.splitext(get_basename(interp))[0]
@@ -738,10 +739,19 @@ class BackgroundMixin:
                 header=header,
                 reprojected=False,
             )
-        else:
+        elif btype == "constant":
             self.logger.debug(f"{name}: constant sky {model:.3f} subtracted before reprojection")
+        return model, (None if sources is None else exclude)
+
+    def subtract_background_before_reprojection(self, single, header, data, model, exclude=None):
+        """The interpolated detector-grid frame minus the model fit_background_before_reprojection returned; residual cards."""
+        from .background_qa import RESIDUAL_KEYS
+
+        if model is None:
+            return data
+        name = get_basename(single)
         data -= model
-        self._record_background_residuals(data, header, sources if sources is None else exclude, np.isfinite(data))
+        self._record_background_residuals(data, header, exclude, np.isfinite(data))
         self.input_headers[name].update({k: (header[k], header.comments[k]) for k in map(str.upper, RESIDUAL_KEYS) if k in header})
         return data
 
