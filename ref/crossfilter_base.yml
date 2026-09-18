@@ -7,7 +7,7 @@ sanity:
 flag:
   white_coadd: false
   phot7ds: false
-  white_photometry: false
+  # white_photometry: false
 
 info:
   file:

@@ -74,12 +74,16 @@ def _patch_noise(valid, covariance, projection):
     return float(np.sum(pairs * covariance)) / (n**2 * (1 - response))
 
 
-def measure_background_residuals(data, exclude=None, coverage=None, box_size: int = RESIDUAL_BOX_SIZE) -> BackgroundResiduals:
+def measure_background_residuals(
+    data, exclude=None, coverage=None, box_size: int = RESIDUAL_BOX_SIZE, mesh_box: int | None = None
+) -> BackgroundResiduals:
     """Residual offset and excess patch scatter, with covariance estimated on larger spatial tiles."""
     data = np.asarray(data)
     size = int(box_size)
     if data.ndim != 2 or size < 16:
         raise ValueError("Residual sky requires a 2D image and box_size >= 16")
+    # the noise tile stays inside one mesh box, so its quadratic fit does not absorb the model's own error
+    group = 4 if mesh_box is None else max(2, min(4, int(mesh_box) // size))
     if exclude is not None and np.shape(exclude) != data.shape:
         raise ValueError("Source mask shape differs from the residual image")
     if coverage is not None and np.shape(coverage) != data.shape:
@@ -88,13 +92,13 @@ def measure_background_residuals(data, exclude=None, coverage=None, box_size: in
     if ny * nx < MIN_PATCHES:
         return BackgroundResiduals(backscl=size)
     means, noises = [], []
-    group_nx = (nx + 3) // 4
-    group_ids = np.arange(((ny + 3) // 4) * group_nx)
+    group_nx = (nx + group - 1) // group
+    group_ids = np.arange(((ny + group - 1) // group) * group_nx)
     np.random.default_rng(73519).shuffle(group_ids)
-    for group in group_ids:
-        gy, gx = divmod(int(group), group_nx)
-        sy = slice(gy * 4 * size, min((gy * 4 + 4), ny) * size)
-        sx = slice(gx * 4 * size, min((gx * 4 + 4), nx) * size)
+    for group_id in group_ids:
+        gy, gx = divmod(int(group_id), group_nx)
+        sy = slice(gy * group * size, min((gy * group + group), ny) * size)
+        sx = slice(gx * group * size, min((gx * group + group), nx) * size)
         pixels = data[sy, sx]
         valid = np.isfinite(pixels)
         if exclude is not None:

@@ -15,6 +15,7 @@ from .const.sciproc import (
 )
 from .errors import WhiteImageError
 from .errors.errors import EmptyInputAfterSanityRejectionError
+from .services.version_check import floor_version, is_stale, recorded_version
 from .preprocess import Preprocess
 from .astrometry import Astrometry
 from .photometry import Photometry, WhiteCatalog
@@ -87,21 +88,77 @@ def _record_config_sanity(config, sanity: bool = None) -> None:
         print(f"[WARNING] Failed to record config sanity: {e}")
 
 
+def _plan_stages(config_node, specs, processes, overwrite, stale, rebuilt, keep_downstream_flags, logger):
+    """Registry-order plan: (spec, overwrite) to run, and the specs whose flag is cleared up front."""
+    to_run, to_clear, force = [], [], False
+    for spec in specs:
+        if overwrite:
+            trigger = "overwrite"
+        elif stale[spec.name]:
+            trigger = "stale"
+        elif spec.config_section in rebuilt:
+            trigger = "rebuilt"
+        else:
+            trigger = None
+
+        if spec.name not in processes:
+            if force and not keep_downstream_flags:
+                to_clear.append(spec)  # its product no longer descends from the regenerated input
+            elif trigger == "stale":
+                logger.warning(
+                    f"{spec.name}: recorded runtime_version "
+                    f"{recorded_version(config_node, spec.config_section)!r} below floor "
+                    f"{floor_version(spec.config_section)!r}, but not selected; not run"
+                )
+            continue
+
+        if trigger is None and not force and getattr(config_node.flag, spec.name):
+            logger.info(
+                f"{spec.name}: flag True, recorded runtime_version "
+                f"{recorded_version(config_node, spec.config_section)!r} >= floor "
+                f"{floor_version(spec.config_section)!r}; skipped"
+            )
+            continue
+
+        spec_overwrite = bool(trigger) or force
+        to_run.append((spec, spec_overwrite))
+        to_clear.append(spec)
+        force = force or spec_overwrite
+    return to_run, to_clear
+
+
+def _clear_flags(config, specs) -> None:
+    # set flag False for the processes this run regenerates and for the trailing ones it invalidates
+    for spec in specs:
+        setattr(config.node.flag, spec.name, False)
+
+
+def _run_sciproc_stage(config, spec, overwrite) -> None:
+    if spec is ASTROMETRY_SPEC:
+        Astrometry(config).run(overwrite=overwrite)
+    elif spec is COADD_SPEC:
+        ImCoadd(config).run(overwrite=overwrite)
+    elif spec is SUBTRACTION_SPEC:
+        ImSubtract(config).run(overwrite=overwrite)
+    elif spec in (SINGLE_PHOTOMETRY_SPEC, COADD_PHOTOMETRY_SPEC, DIFFERENCE_PHOTOMETRY_SPEC):
+        Photometry(config, photometry_mode=spec.photometry_mode).run(overwrite=overwrite)
+    else:
+        raise ValueError(f"No stage dispatch for {spec.name}")
+
+
 def run_scidata_reduction(
     config: SciProcConfiguration | str,
     processes: list[str] = DEFAULT_SCIDATA_PROCESSES,
     overwrite: bool = False,
     is_too: bool = False,
     overwrite_config_sections: list[str] = None,
+    keep_downstream_flags: bool = False,
 ):
     try:
         if isinstance(config, SciProcConfiguration):
-            if overwrite_config_sections:
-                config.overwrite_config_sections(overwrite_config_sections)
+            pass
         elif isinstance(config, str) and config.endswith(".yml"):
-            config = SciProcConfiguration(
-                config, is_too=is_too, overwrite=overwrite, overwrite_config_sections=overwrite_config_sections
-            )
+            config = SciProcConfiguration(config, is_too=is_too, overwrite=overwrite)
         else:
             raise ValueError("Invalid configuration type. Expected SciProcConfiguration or path to .yml file.")
 
@@ -109,44 +166,28 @@ def run_scidata_reduction(
             print(f"[ERROR] is_too mismatch: node.settings.is_too={config.node.settings.is_too} != is_too={is_too}")
             raise ValueError("is_too mismatch")
 
-        if overwrite:
-            # Invalidate the flags for every stage this run will (re)produce, up front,
-            # so an interrupted overwrite run never leaves stale downstream flags = True.
-            for spec in SCIPROCESS_REGISTRY.specs:
-                if spec.name in processes:
-                    setattr(config.node.flag, spec.name, False)
-            config.write_config()
+        specs = SCIPROCESS_REGISTRY.specs
+        # before write_config refreshes info.runtime_version
+        stale = {spec.name: is_stale(config.node, spec.config_section) for spec in specs}
 
-        if ASTROMETRY_SPEC.name in processes and (not getattr(config.node.flag, ASTROMETRY_SPEC.name) or overwrite):
-            ast = Astrometry(config)
-            ast.run(overwrite=overwrite)
-            del ast
-        if SINGLE_PHOTOMETRY_SPEC.name in processes and (
-            not getattr(config.node.flag, SINGLE_PHOTOMETRY_SPEC.name) or overwrite
-        ):
-            phot = Photometry(config, photometry_mode=SINGLE_PHOTOMETRY_SPEC.photometry_mode, overwrite=overwrite)
-            phot.run(overwrite=overwrite)
-            del phot
-        if COADD_SPEC.name in processes and (not getattr(config.node.flag, COADD_SPEC.name) or overwrite):
-            coadd = ImCoadd(config)
-            coadd.run(overwrite=overwrite)
-            del coadd
-        if COADD_PHOTOMETRY_SPEC.name in processes and (
-            not getattr(config.node.flag, COADD_PHOTOMETRY_SPEC.name) or overwrite
-        ):
-            phot = Photometry(config, photometry_mode=COADD_PHOTOMETRY_SPEC.photometry_mode, overwrite=overwrite)
-            phot.run(overwrite=overwrite)
-            del phot
-        if SUBTRACTION_SPEC.name in processes and (not getattr(config.node.flag, SUBTRACTION_SPEC.name) or overwrite):
-            subt = ImSubtract(config, overwrite=overwrite)
-            subt.run()
-            del subt
-        if DIFFERENCE_PHOTOMETRY_SPEC.name in processes and (
-            not getattr(config.node.flag, DIFFERENCE_PHOTOMETRY_SPEC.name) or overwrite
-        ):
-            phot = Photometry(config, photometry_mode=DIFFERENCE_PHOTOMETRY_SPEC.photometry_mode, overwrite=overwrite)
-            phot.run(overwrite=overwrite)
-            del phot
+        if overwrite_config_sections:
+            config.overwrite_config_sections(overwrite_config_sections)
+
+        to_run, to_clear = _plan_stages(
+            config.node,
+            specs,
+            processes,
+            overwrite,
+            stale,
+            set(overwrite_config_sections or []),
+            keep_downstream_flags,
+            config.logger,
+        )
+        _clear_flags(config, to_clear)
+
+        # run processing modules
+        for spec, spec_overwrite in to_run:
+            _run_sciproc_stage(config, spec, spec_overwrite)
 
         if is_too:
             from .services.database.too import TooDB
@@ -171,11 +212,27 @@ def run_scidata_reduction(
         raise e
 
 
+def _run_crossfilter_stage(config, spec, overwrite) -> None:
+    if spec is WHITE_COADD_SPEC:
+        WhiteImage(config).run(overwrite=overwrite)
+    elif spec is PHOT7DS_SPEC:
+        if not getattr(config.node.flag, WHITE_COADD_SPEC.name):
+            raise WhiteImageError.PrerequisiteNotMetError("White image must complete before phot7ds photometry")
+        Phot7DS(config).run(overwrite=overwrite)
+    elif spec is WHITE_PHOTOMETRY_SPEC:
+        if not getattr(config.node.flag, WHITE_COADD_SPEC.name):
+            raise WhiteImageError.PrerequisiteNotMetError("White image must complete before its source catalog")
+        WhiteCatalog(config).run(overwrite=overwrite)
+    else:
+        raise ValueError(f"No stage dispatch for {spec.name}")
+
+
 def run_crossfilter_reduction(
     config: CrossFilterConfiguration | str,
     processes: list[str] = DEFAULT_CROSSFILTER_PROCESSES,
     overwrite: bool = False,
     is_too: bool = False,
+    keep_downstream_flags: bool = False,
 ):
     try:
         if isinstance(config, CrossFilterConfiguration):
@@ -188,47 +245,27 @@ def run_crossfilter_reduction(
         if config.node.settings.is_too != is_too:
             raise ValueError(f"is_too mismatch: node.settings.is_too={config.node.settings.is_too} != is_too={is_too}")
 
+        specs = CROSSFILTERPROCESS_REGISTRY.specs
+        stale = {spec.name: is_stale(config.node, spec.config_section) for spec in specs}
+
         # Cold-start fallback for configs launched without a scheduler. The
         # same idempotent write runs again after WhiteImage registers its output.
         WhiteImage.record_config_dependencies(config.node, config.logger)
 
         effective_overwrite = overwrite or bool(config.node.input.parents_changed)
-        if effective_overwrite:
-            for spec in CROSSFILTERPROCESS_REGISTRY.specs:
-                if spec.name in processes:
-                    setattr(config.node.flag, spec.name, False)
 
         # WhiteImage.initialize confirms input completeness against the declared parents
         # (and RawFrameQuery when is_pipeline) and records the confirmed inputs.
-        if WHITE_COADD_SPEC.name in processes and (
-            not getattr(config.node.flag, WHITE_COADD_SPEC.name) or effective_overwrite
-        ):
-            white = WhiteImage(config)
-            white.run(overwrite=effective_overwrite)
-            del white
+        to_run, to_clear = _plan_stages(
+            config.node, specs, processes, effective_overwrite, stale, set(), keep_downstream_flags, config.logger
+        )
+        _clear_flags(config, to_clear)
 
-        if PHOT7DS_SPEC.name in processes and (
-            not getattr(config.node.flag, PHOT7DS_SPEC.name) or effective_overwrite
-        ):
-            if not getattr(config.node.flag, WHITE_COADD_SPEC.name):
-                raise WhiteImageError.PrerequisiteNotMetError("White image must complete before phot7ds photometry")
-            phot = Phot7DS(config, overwrite=effective_overwrite)
-            phot.run()
-            del phot
-
-        if WHITE_PHOTOMETRY_SPEC.name in processes and (
-            not getattr(config.node.flag, WHITE_PHOTOMETRY_SPEC.name) or effective_overwrite
-        ):
-            if not getattr(config.node.flag, WHITE_COADD_SPEC.name):
-                raise WhiteImageError.PrerequisiteNotMetError("White image must complete before its source catalog")
-            catalog = WhiteCatalog(config, overwrite=effective_overwrite)
-            catalog.run(overwrite=effective_overwrite)
-            del catalog
+        for spec, spec_overwrite in to_run:
+            _run_crossfilter_stage(config, spec, spec_overwrite)
 
         if all(
-            getattr(config.node.flag, spec.name)
-            for spec in CROSSFILTERPROCESS_REGISTRY.specs
-            if spec.name in processes
+            getattr(config.node.flag, spec.name) for spec in CROSSFILTERPROCESS_REGISTRY.specs if spec.name in processes
         ):
             config.node.input.parents_changed = False
 

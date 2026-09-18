@@ -36,12 +36,10 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         config=None,
         logger=None,
         queue=None,
-        overwrite=False,
     ) -> None:
 
         super().__init__(config, logger, queue)
         self.logger.process_error = SubtractionError
-        self.overwrite = self.resolve_overwrite(overwrite)
         self.name = self.config_node.name
         self.reference_images = None
 
@@ -90,6 +88,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         return [(1, "run", False)]
 
     def run(self, overwrite=False):
+        overwrite = self.resolve_overwrite(overwrite)
         st = time.time()
         self.logger.info(f"Start 'ImSubtract'")
         try:
@@ -100,13 +99,13 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 self.update_progress(SCIPROCESS_REGISTRY.completed_progress("subtraction"), "imsubtract-completed")
                 return
 
-            self.define_paths()
+            self.define_paths(overwrite)
             self.update_progress(
                 SCIPROCESS_REGISTRY.milestone_progress("subtraction", "define_paths"),
                 "imsubtract-define-paths-completed",
             )
 
-            if not (overwrite or self.overwrite) and os.path.exists(self.subt_image_file):
+            if not overwrite and os.path.exists(self.subt_image_file):
                 self.logger.info(f"Subtracted image already exists: {self.subt_image_file}; Skipping subtraction.")
                 self.logger.info(f"'ImSubtract' is Completed in {time_diff_in_seconds(st)} seconds")
                 self.update_progress(SCIPROCESS_REGISTRY.completed_progress("subtraction"), "imsubtract-completed")
@@ -220,7 +219,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 SubtractionError.ReferenceImageNotFoundError,
             )
 
-    def define_paths(self):
+    def define_paths(self, overwrite=False):
         # always consider a single coadd image as input, not a list of images
         local_input_images = atleast_1d(get_key(self.config_node, "imsubtract.input_image"))
         # set from the common input if not set locally
@@ -239,7 +238,7 @@ class ImSubtract(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 resolved.append(p_str if os.path.isabs(p_str) else os.path.join(base_dir, p_str))
             self.input_images = resolved
 
-        self.apply_sanity_filter_and_report(current_process=SUBTRACTION_SPEC, overwrite=self.overwrite)
+        self.apply_sanity_filter_and_report(current_process=SUBTRACTION_SPEC, overwrite=overwrite)
         input_image = collapse(self.input_images, raise_error=True)
         self.config_node.imsubtract.input_image = input_image
 

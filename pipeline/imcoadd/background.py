@@ -12,6 +12,7 @@ from ..services.logger import Logger
 from ..services.utils import conservative_worker_count
 from ..utils import add_suffix, atleast_1d, get_basename, time_diff_in_seconds
 from ..utils.header import update_padded_header
+from .background_qa import RESIDUAL_KEYS
 from .const import MaskBit
 from .coadd_plan import CoaddPlan
 from .plotting import plot_background, plot_source_mask
@@ -24,6 +25,8 @@ if TYPE_CHECKING:
     from ..config._sciproc_stubs import SciProcNode
 
     ConfigNodeT = SciProcNode | CrossFilterNode  # ImCoadd runs on the first, WhiteImage on the second
+
+CARRIED_CARDS = tuple(map(str.upper, RESIDUAL_KEYS)) + ("BACKPEAK", "BACKPKSN")  # measured before reprojection, copied after
 
 
 def _key_tally(chosen: list[tuple]) -> str:
@@ -320,10 +323,8 @@ class BackgroundMixin:
             _data[trail if fov_valid is None else (trail & fov_valid)] = np.nan
         self._record_background_residuals(_data, _hdr, kwargs.get("qa_mask"), kwargs.get("qa_coverage", fov_valid), quality_mask)
         if self.plan.background_before_reprojection and kwargs.get("index") is not None:
-            from .background_qa import RESIDUAL_KEYS
-
             snapshot = self.input_headers[kwargs["index"]]  # the residual cards measured on the detector-grid frame
-            _hdr.update({k: (snapshot[k], snapshot.comments[k]) for k in map(str.upper, RESIDUAL_KEYS) if k in snapshot})
+            _hdr.update({k: (snapshot[k], snapshot.comments[k]) for k in CARRIED_CARDS if k in snapshot})
         self._write_background_output(outim, _data, _hdr)
         return False
 
@@ -569,22 +570,23 @@ class BackgroundMixin:
         return False  # is_steppy is False by definition for constant background subtraction
 
     def _dynamic_bkgsub(self, inim, outim, bkg, bkg_rms, skyval=None, data=None, header=None, ignore_steppy_flag=False, exclude=None, fov_valid=None, quality_mask=None, index=None, **kwargs):  # fmt: skip
-        from .utils import estimate_background
+        from .utils import background_mesh, mesh_peak, mesh_peak_cards
 
         # from .bkg_step import step_background_check
 
         plan = self.plan
         _data, _hdr = self._read_frame(inim, data, header)
         try:
-            bkg_data, bkg_rms_data = estimate_background(
+            bkg = background_mesh(
                 _data,
                 mask=exclude,
                 coverage_mask=None if fov_valid is None else ~fov_valid,
                 box_size=plan.background_box_size,
                 filter_size=plan.background_filter_size,
                 exclude_percentile=plan.background_exclude_percentile,
-                with_rms=plan.output_sky_rms_map,
             )
+            bkg_data, bkg_rms_data = bkg.background, (bkg.background_rms if plan.output_sky_rms_map else None)
+            _hdr.update(mesh_peak_cards(mesh_peak(bkg)))
         except ValueError as e:
             # Background2D raises when every box is below the good-pixel threshold; sep used to return zeros
             if skyval is None:
@@ -664,7 +666,7 @@ class BackgroundMixin:
         """The frame's detector-grid sky model, fitted on a step-free copy with the bad pixels held at the sky level, and its
         cards on the header; returns (model, mask): an array, a constant, or None for no subtraction, and the exclusion the
         residual cards are measured through (None without a source mask)."""
-        from .utils import estimate_background, step_free
+        from .utils import background_mesh, mesh_peak, mesh_peak_cards, step_free
         from .weight import source_mask_on_frame
 
         plan = self.plan
@@ -688,7 +690,7 @@ class BackgroundMixin:
             try:
                 # the frame as measured: a bad pixel would leak into its neighbours through the step-free kernel
                 source = data if hole is None or skyval is None else np.where(hole, np.float32(skyval), data)
-                model, _ = estimate_background(
+                bkg = background_mesh(
                     step_free(source),
                     mask=exclude,
                     coverage_mask=None,
@@ -696,6 +698,7 @@ class BackgroundMixin:
                     filter_size=plan.background_filter_size,
                     exclude_percentile=plan.background_exclude_percentile,
                 )
+                model, peak = bkg.background, mesh_peak(bkg)
             except ValueError as e:
                 if skyval is None:
                     raise
@@ -710,6 +713,8 @@ class BackgroundMixin:
             "BKGMESH": (self._prereprojection_fingerprint(single), "Detector-grid sky fit: routine and mesh keys"),
             "BACKFRAC": (self._usable_fraction(exclude, None), "Fraction of pixels used for the sky estimate"),
         }
+        if btype == "dynamic":
+            cards.update(mesh_peak_cards(peak))
         header.update(cards)
         self.input_headers[name].update(cards)
         if isinstance(model, np.ndarray):
@@ -735,7 +740,8 @@ class BackgroundMixin:
                 stem,
                 subtitle=f"box {plan.background_box_size} x filter {plan.background_filter_size}, "
                 f"exclude_percentile {plan.background_exclude_percentile:g}%; fitted on the step-free copy; "
-                f"median {np.median(model):.2f}, peak to peak {np.ptp(model):.2f} ADU/pixel",
+                f"median {np.median(model):.2f}, peak to peak {np.ptp(model):.2f} ADU/pixel, "
+                f"largest node excursion {peak[0]:.2f} ADU ({peak[1]:.1f} sigma)",
                 header=header,
                 reprojected=False,
             )
@@ -745,14 +751,12 @@ class BackgroundMixin:
 
     def subtract_background_before_reprojection(self, single, header, data, model, exclude=None):
         """The interpolated detector-grid frame minus the model fit_background_before_reprojection returned; residual cards."""
-        from .background_qa import RESIDUAL_KEYS
-
         if model is None:
             return data
         name = get_basename(single)
         data -= model
         self._record_background_residuals(data, header, exclude, np.isfinite(data))
-        self.input_headers[name].update({k: (header[k], header.comments[k]) for k in map(str.upper, RESIDUAL_KEYS) if k in header})
+        self.input_headers[name].update({k: (header[k], header.comments[k]) for k in CARRIED_CARDS if k in header})
         return data
 
     @staticmethod
@@ -794,7 +798,7 @@ class BackgroundMixin:
             return
         exclude = sources if quality is None else (sources | (quality != 0))
         result = measure_background_residuals(
-            data, exclude=exclude, coverage=coverage,
+            data, exclude=exclude, coverage=coverage, mesh_box=self.plan.background_box_size,
         )
         header.update(result.cards())
         self.logger.debug(f"Residual sky: {result}")

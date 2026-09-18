@@ -44,6 +44,11 @@ if __name__ == "__main__":
         metavar="SECTION",
         help="Science config sections to rebuild from the ref/ template before running, e.g. imcoadd photometry",
     )
+    parser.add_argument(
+        "-keep_downstream_flags",
+        action="store_true",
+        help="Do not clear the flags of stages after a regenerated one (surgical rerun)",
+    )
     parser.add_argument("-is_too", action="store_true", help="Use TOO processing")
     parser.add_argument("-input_type", type=str, help="Scheduler input_type recorded on the process_status row")
     args = parser.parse_args()
@@ -65,6 +70,7 @@ if __name__ == "__main__":
             overwrite=args.overwrite,
             is_too=args.is_too,
             overwrite_config_sections=args.overwrite_config_sections,
+            keep_downstream_flags=args.keep_downstream_flags,
         )
 
     # Empty inputs due to AstrometryError.EarlyQARejectionError is a normal pipeline procedure

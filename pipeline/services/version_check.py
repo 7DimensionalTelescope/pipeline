@@ -4,6 +4,23 @@ from ..version import MIN_SCIPROC_RUNTIME_VERSION, MIN_SCIPROC_RUNTIME_VERSION_M
 from ..config.utils import get_key
 
 
+def recorded_version(config_node, section: str) -> str | None:
+    """Section's recorded runtime_version, falling back to info."""
+    return get_key(getattr(config_node, section, None), "runtime_version") or get_key(
+        config_node.info, "runtime_version"
+    )
+
+
+def floor_version(section: str) -> str:
+    """Minimum runtime_version accepted for a config section."""
+    return MIN_SCIPROC_RUNTIME_VERSION_MAP.get(section, MIN_SCIPROC_RUNTIME_VERSION)
+
+
+def is_stale(config_node, section: str) -> bool:
+    """True when the section's recorded runtime_version is missing or below its floor."""
+    return is_below_min(recorded_version(config_node, section), floor_version(section))
+
+
 class RuntimeVersionMixin:
     """Force overwrite=True when the last processed version is too old."""
 
@@ -12,11 +29,10 @@ class RuntimeVersionMixin:
             return True
 
         spec = self._process_spec
-        section = getattr(self.config_node, spec.config_section, None)
-        recorded = get_key(section, "runtime_version") or get_key(self.config_node.info, "runtime_version")
-        minimum = MIN_SCIPROC_RUNTIME_VERSION_MAP.get(spec.config_section, MIN_SCIPROC_RUNTIME_VERSION)
+        recorded = recorded_version(self.config_node, spec.config_section)
+        minimum = floor_version(spec.config_section)
 
-        if is_below_min(recorded, minimum):
+        if is_stale(self.config_node, spec.config_section):
             logger = getattr(self, "logger", None)
             msg = (
                 f"Escalating overwrite=True for {spec.name}: "

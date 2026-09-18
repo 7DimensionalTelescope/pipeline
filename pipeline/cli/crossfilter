@@ -27,6 +27,7 @@ if __name__ == "__main__":
     parser.add_argument("-config", type=str, required=True)
     parser.add_argument("-processes", nargs="*")
     parser.add_argument("-overwrite", action="store_true")
+    parser.add_argument("-keep_downstream_flags", action="store_true")
     parser.add_argument("-input_type", type=str)
     parser.add_argument("-is_too", action="store_true")
     args = parser.parse_args()
@@ -40,6 +41,7 @@ if __name__ == "__main__":
             processes=processes,
             overwrite=args.overwrite,
             is_too=args.is_too,
+            keep_downstream_flags=args.keep_downstream_flags,
         )
     except EmptyInputAfterSanityRejectionError as error:
         print(f"\nError: {error}")

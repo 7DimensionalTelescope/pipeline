@@ -100,7 +100,6 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         images: Optional[List[str]] = None,
         photometry_mode: str = None,
         ref_cat_type: Optional[str] = None,
-        overwrite: bool = False,
     ) -> None:
         """
         Initialize the Photometry class.
@@ -128,16 +127,10 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         self._photometry_mode = self._process_spec.photometry_mode
         self._process_error = self._process_errors[self._process_spec]
-        self.overwrite = self.resolve_overwrite(overwrite)
 
         if self._process_spec is SINGLE_PHOTOMETRY_SPEC:
             self.logger.process_error = self._process_error
             self.input_images = images or self.config_node.input.calibrated_images
-            self.apply_sanity_filter_and_report(
-                current_process=self._process_spec,
-                overwrite=self.overwrite,
-            )
-            self.config_node.photometry.input_images = self.input_images
             self.logger.debug("Running single photometry")
         else:
             self.logger.process_error = self._process_error
@@ -176,15 +169,18 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 self._process_registry.configured_progress(self._process_spec),
                 f"{self._photometry_mode}-configured",
             )
-            # Align with astrometry: image_qa rows are created there; photometry must refresh them from the FITS
-            # header after SEEING / photometry keywords are written. Without these IDs, run() never calls update_data.
-            if self.process_status_id is not None and self.image_qa is not None and self.input_images:
-                for image in self.input_images:
-                    image_name = os.path.basename(image).replace(".fits", "")
-                    qa_id = self.image_qa.read_data_by_params(
-                        image_name=image_name, process_status_id=self.process_status_id
-                    )
-                    self.qa_ids.append(qa_id)
+    def _collect_qa_ids(self) -> None:
+        # Align with astrometry: image_qa rows are created there; photometry must refresh them from the FITS
+        # header after SEEING / photometry keywords are written. Without these IDs, run() never calls update_data.
+        # Collected after the sanity filter, so the ids stay aligned with self.input_images.
+        self.qa_ids = []
+        if self.process_status_id is not None and self.image_qa is not None and self.input_images:
+            for image in self.input_images:
+                image_name = os.path.basename(image).replace(".fits", "")
+                qa_id = self.image_qa.read_data_by_params(
+                    image_name=image_name, process_status_id=self.process_status_id
+                )
+                self.qa_ids.append(qa_id)
 
     @classmethod
     def from_list(cls, images: List[str], working_dir=None) -> Optional["Photometry"]:
@@ -218,8 +214,18 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         Overwrite does nothing for now. Overwrite all by default
         """
+        overwrite = self.resolve_overwrite(overwrite)
         st = time.time()
         self.logger.info(f"Start 'Photometry'")
+
+        if self._process_spec is SINGLE_PHOTOMETRY_SPEC:
+            # the filter needs the resolved overwrite, and redefines self.path and self.input_images
+            self.apply_sanity_filter_and_report(
+                current_process=self._process_spec,
+                overwrite=overwrite,
+            )
+            self.config_node.photometry.input_images = self.input_images
+        self._collect_qa_ids()
 
         if not self.input_images:  # exception for when input.difference_image is not set.
             self.logger.debug(f"input_images: {self.input_images}")
@@ -881,7 +887,7 @@ class PhotometrySingle:
 
     def measure_sky(self, overwrite: bool = True, phot_header: PhotometryHeader = None) -> bool:
         """Re-derive the sky level and noise on the pixels the source mask leaves, and record the fraction used."""
-        from ..imcoadd.utils import background_mesh, build_source_mask, noise_autocorrelation, source_ellipses_on_frame
+        from ..imcoadd.utils import background_mesh, build_source_mask, mesh_peak, noise_autocorrelation, source_ellipses_on_frame
         from ..imcoadd.background_qa import measure_background_residuals, RESIDUAL_KEYS, RESIDUAL_BOX_SIZE
 
         phot_header = phot_header or self.phot_header
@@ -954,12 +960,14 @@ class PhotometrySingle:
         phot_header.BACKVAL, phot_header.BACKSIG = float(fitted.background_median), float(fitted.background_rms_median)
         phot_header.BACKFRAC = round(float((~excluded & ~no_data).mean()), 4)
         phot_header.SRCFRAC = round(float(sources.mean()), 4)
+        phot_header.BACKPEAK, phot_header.BACKPKSN = (round(v, 4) for v in mesh_peak(fitted))
         coverage = ~no_data
         residual = data if is_coadd else data - fitted.background
         result = measure_background_residuals(
             residual,
             exclude=excluded,
             coverage=coverage,
+            mesh_box=mesh["box_size"],
         )
         for key in RESIDUAL_KEYS:
             setattr(phot_header, key.upper(), getattr(result, key))
@@ -1631,6 +1639,8 @@ class PhotometryHeader:
     BACKVAL: float = None
     BACKFRAC: float = None
     SRCFRAC: float = None
+    BACKPEAK: float = None
+    BACKPKSN: float = None
     BACKC0: float = None
     BACKCOV: float = None
     BACKC2: float = None
@@ -1772,6 +1782,8 @@ class PhotometryHeader:
             "BACKVAL": (round(self.BACKVAL, 3) if self.BACKVAL is not None else None, "SKY MEDIAN OFF SOURCE"),
             "BACKFRAC": (self.BACKFRAC, "Fraction of pixels used for the sky estimate"),
             "SRCFRAC": (self.SRCFRAC, "Fraction of pixels covered by the source mask"),
+            "BACKPEAK": (self.BACKPEAK, "[ADU] Largest mesh node excursion from its neighbours"),
+            "BACKPKSN": (round(self.BACKPKSN, 2) if self.BACKPKSN is not None else None, "BACKPEAK over the node excursions' robust scatter"),
             "BACKC0": (
                 round(self.BACKC0, 3) if self.BACKC0 is not None else None,
                 "[ADU] sky sigma the BACKR*/BACKCOV rho use",

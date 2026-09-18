@@ -7,13 +7,12 @@ class WhiteCatalog(Photometry):
     _process_registry = CROSSFILTERPROCESS_REGISTRY
     _process_errors = {WHITE_PHOTOMETRY_SPEC: WhiteCatalogError}
 
-    def __init__(self, config, logger=None, queue=False, overwrite=False):
+    def __init__(self, config, logger=None, queue=False):
         super().__init__(
             config=config,
             logger=logger,
             queue=queue,
             photometry_mode=WHITE_PHOTOMETRY_SPEC.photometry_mode,
-            overwrite=overwrite,
         )
         if not self.input_images:
             raise self._process_error.PrerequisiteNotMetError("input.white_image is not set on this config")

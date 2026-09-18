@@ -10,7 +10,6 @@ if TYPE_CHECKING:
     class FlagNode(ConfigNode):
         white_coadd: bool
         phot7ds: bool
-        white_photometry: bool
 
     class InfoNode(ConfigNode):
         file: Any

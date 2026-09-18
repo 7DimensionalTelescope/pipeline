@@ -1,4 +1,6 @@
+from __future__ import annotations
 import os, sys
+from typing import TYPE_CHECKING
 import numpy as np
 from astropy.io import fits
 from astropy.table import Table
@@ -8,6 +10,9 @@ from ..const.environ import REF_DIR
 
 from .header_set import InputHeaderSet
 from ..io.ldac import read_catalog
+
+if TYPE_CHECKING:
+    from photutils.background import Background2D
 
 
 def extract_date_and_time(date_obs_str, round_seconds=False):
@@ -395,7 +400,7 @@ def background_mesh(
     exclude_percentile: float = 50.0,
     sigma: float = 3.0,
     maxiters: int = 10,
-):
+) -> Background2D:
     """The fitted photutils Background2D; ``mask`` = source pixels, ``coverage_mask`` = pixels with no data.
 
     The two masks are kept apart on purpose: both are excluded from the box statistics, but only
@@ -416,6 +421,34 @@ def background_mesh(
         sigma_clip=SigmaClip(sigma=sigma, maxiters=maxiters),
         bkg_estimator=MMMBackground(sigma_clip=None),  # 3 median - 2 mean, the mode estimate with no tuned factor
     )
+
+
+def mesh_peak(bkg: Background2D, window: int | None = None) -> tuple[float, float]:
+    """(ADU, sigma units) largest excursion of a filtered mesh node from the median of its window x window neighbours.
+
+    One node = one box (128 px at the base settings). The mesh's filter_size x filter_size median (3 x 3 = 384 px) has
+    already removed blobs of fewer than half its nodes (<= 4), so the window is filter_size + 2 (5 x 5 = 640 px): its
+    median stays on the sky for blobs of up to 12 nodes (3 x 4 boxes = 384 x 512 px); wider structure counts as sky."""
+    from scipy.ndimage import median_filter
+
+    if window is None:
+        window = int(max(np.atleast_1d(bkg.filter_size))) + 2
+    mesh = np.asarray(bkg.background_mesh, dtype=np.float64)
+    finite = np.isfinite(mesh)
+    if finite.sum() < window**2:
+        return float("nan"), float("nan")
+    filled = np.where(finite, mesh, np.nanmedian(mesh))
+    excursion = (mesh - median_filter(filled, size=window, mode="nearest"))[finite]
+    peak = float(np.max(np.abs(excursion)))
+    scatter = 1.4826 * float(np.median(np.abs(excursion - np.median(excursion))))
+    return peak, (peak / scatter if scatter > 0 else float("nan"))
+
+
+def mesh_peak_cards(peak) -> dict:
+    return {
+        "BACKPEAK": (round(float(peak[0]), 4), "[ADU] Largest mesh node excursion from its neighbours"),
+        "BACKPKSN": (round(float(peak[1]), 2), "BACKPEAK over the node excursions' robust scatter"),
+    }
 
 
 def estimate_background(data, mask=None, coverage_mask=None, with_rms: bool = False, **mesh_options):

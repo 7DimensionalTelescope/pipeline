@@ -41,9 +41,8 @@ class Phot7DS(BaseSetup, DatabaseHandler, RuntimeVersionMixin):
     _process_registry = CROSSFILTERPROCESS_REGISTRY
     _process_error = Phot7DSError
 
-    def __init__(self, config=None, logger=None, queue=False, overwrite=False, thread_count=None):
+    def __init__(self, config=None, logger=None, queue=False, thread_count=None):
         super().__init__(config, logger, queue)
-        self.overwrite = self.resolve_overwrite(overwrite)
         self.thread_count = thread_count
         self.logger.process_error = self._process_error
 
@@ -78,12 +77,13 @@ class Phot7DS(BaseSetup, DatabaseHandler, RuntimeVersionMixin):
     def run(self, overwrite: bool = False):
         import time
 
+        overwrite = self.resolve_overwrite(overwrite)
         st = time.time()
         try:
             result = run_phot7ds(
                 self.config_node,
                 self.path,
-                overwrite=self.overwrite or overwrite,
+                overwrite=overwrite,
                 thread_count=self.thread_count,
             )
             self.config_node.phot7ds.catalog = str(result.catalog_path)
