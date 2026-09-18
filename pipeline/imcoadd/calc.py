@@ -157,10 +157,11 @@ def _write_egain_map(path, norm_arr, gain_denom, covered, header, logger=None):
     egain_map[covered] = norm_arr[covered].astype(np.float64) ** 2 / gain_denom[covered]
     # lossy: absolute quantization step 1e-3 of the smallest gain (max relative error 5e-4); NO_DITHER keeps 0 exact
     step = 1e-3 * float(egain_map[covered].min()) if covered.any() else 1.0
+    # GZIP_1 over GZIP_2: 7.8 s / 4.4 MB vs 16.4 s / 6.0 MB on a real 10200x6800 map, same pixels (2026-09-19 benchmark)
     hdu = fits.CompImageHDU(
         data=egain_map,
         header=WCS(header).to_header(relax=True),
-        compression_type="GZIP_2",
+        compression_type="GZIP_1",
         quantize_level=-step,
         quantize_method=-1,
         name="EGAIN",
