@@ -55,3 +55,4 @@ dependencies:
       - premailer
       # conda healpy needs cfitsio 4.6.x but SourceXtractor++ pins 4.3.1; the wheel bundles its own
       - healpy==1.20.0
+      - maskfill==1.1.1
