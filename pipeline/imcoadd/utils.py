@@ -424,11 +424,13 @@ def background_mesh(
 
 
 def mesh_peak(bkg: Background2D, window: int | None = None) -> tuple[float, float]:
-    """(ADU, sigma units) largest excursion of a filtered mesh node from the median of its window x window neighbours.
+    """(ADU, and the same over 1.4826 x MAD of all node excursions) largest excursion of a filtered mesh node from the median of its window x window neighbours.
 
     One node = one box (128 px at the base settings). The mesh's filter_size x filter_size median (3 x 3 = 384 px) has
     already removed blobs of fewer than half its nodes (<= 4), so the window is filter_size + 2 (5 x 5 = 640 px): its
-    median stays on the sky for blobs of up to 12 nodes (3 x 4 boxes = 384 x 512 px); wider structure counts as sky."""
+    median stays on the sky for blobs of up to 12 nodes (3 x 4 boxes = 384 x 512 px); wider structure counts as sky.
+    Past the frame edge the mesh is extrapolated linearly (odd reflection), so a smooth vignetting fall-off reads ~0 at
+    the border nodes and only a genuine edge or corner deviation counts."""
     from scipy.ndimage import median_filter
 
     if window is None:
@@ -437,8 +439,9 @@ def mesh_peak(bkg: Background2D, window: int | None = None) -> tuple[float, floa
     finite = np.isfinite(mesh)
     if finite.sum() < window**2:
         return float("nan"), float("nan")
-    filled = np.where(finite, mesh, np.nanmedian(mesh))
-    excursion = (mesh - median_filter(filled, size=window, mode="nearest"))[finite]
+    pad = window // 2
+    filled = np.pad(np.where(finite, mesh, np.nanmedian(mesh)), pad, mode="reflect", reflect_type="odd")
+    excursion = (mesh - median_filter(filled, size=window)[pad:-pad, pad:-pad])[finite]
     peak = float(np.max(np.abs(excursion)))
     scatter = 1.4826 * float(np.median(np.abs(excursion - np.median(excursion))))
     return peak, (peak / scatter if scatter > 0 else float("nan"))
@@ -447,7 +450,7 @@ def mesh_peak(bkg: Background2D, window: int | None = None) -> tuple[float, floa
 def mesh_peak_cards(peak) -> dict:
     return {
         "BACKPEAK": (round(float(peak[0]), 4), "[ADU] Largest mesh node excursion from its neighbours"),
-        "BACKPKSN": (round(float(peak[1]), 2), "BACKPEAK over the node excursions' robust scatter"),
+        "BACKPKSN": (round(float(peak[1]), 2), "BACKPEAK / (1.4826 MAD of node excursions)"),
     }
 
 

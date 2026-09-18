@@ -1783,7 +1783,7 @@ class PhotometryHeader:
             "BACKFRAC": (self.BACKFRAC, "Fraction of pixels used for the sky estimate"),
             "SRCFRAC": (self.SRCFRAC, "Fraction of pixels covered by the source mask"),
             "BACKPEAK": (self.BACKPEAK, "[ADU] Largest mesh node excursion from its neighbours"),
-            "BACKPKSN": (round(self.BACKPKSN, 2) if self.BACKPKSN is not None else None, "BACKPEAK over the node excursions' robust scatter"),
+            "BACKPKSN": (round(self.BACKPKSN, 2) if self.BACKPKSN is not None else None, "BACKPEAK / (1.4826 MAD of node excursions)"),
             "BACKC0": (
                 round(self.BACKC0, 3) if self.BACKC0 is not None else None,
                 "[ADU] sky sigma the BACKR*/BACKCOV rho use",
