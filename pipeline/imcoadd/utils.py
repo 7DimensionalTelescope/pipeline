@@ -462,16 +462,16 @@ def estimate_background(data, mask=None, coverage_mask=None, with_rms: bool = Fa
 
 
 # centre 1 + a, neighbours +-0.05 shifted by -a / 8, a solving sum k^3 = sum k^2: the lattice leaves the clipped median, not the level
-STEP_FREE_KERNEL = np.array([[-1, 1, -1], [1, 0, 1], [-1, 1, -1]], dtype=np.float64) * 0.05 - 0.01943060490470727 / 8
-STEP_FREE_KERNEL[1, 1] = 1.01943060490470727
-STEP_FREE_KERNEL = STEP_FREE_KERNEL.astype(np.float32)
+DEQUANT_KERNEL = np.array([[-1, 1, -1], [1, 0, 1], [-1, 1, -1]], dtype=np.float64) * 0.05 - 0.01943060490470727 / 8
+DEQUANT_KERNEL[1, 1] = 1.01943060490470727
+DEQUANT_KERNEL = DEQUANT_KERNEL.astype(np.float32)
 
 
-def step_free(data):
-    """The frame correlated with STEP_FREE_KERNEL: a low-sky detector frame's quantization steps leave the mesh."""
+def dequantize(data):
+    """The frame correlated with DEQUANT_KERNEL: a low-sky detector frame's quantization steps leave the mesh."""
     from scipy.ndimage import correlate
 
-    return correlate(np.ascontiguousarray(data, dtype=np.float32), STEP_FREE_KERNEL, mode="nearest")
+    return correlate(np.ascontiguousarray(data, dtype=np.float32), DEQUANT_KERNEL, mode="nearest")
 
 
 def sky_statistics(data, mask=None, coverage_mask=None, **mesh_options) -> tuple[float, float]:

@@ -79,6 +79,7 @@ class CoaddPlan:
     background_exclude_percentile: float
     background_min_usable: float
     background_max_dropped_boxes: float
+    dequantize_background_below: float
 
     # ---------------------------------------------------------------- routine
     @property
@@ -231,6 +232,7 @@ def resolve_coadd_plan(node, errors=builtins) -> CoaddPlan:
     background_exclude_percentile = float(background["exclude_percentile"])
     background_min_usable = float(background["min_usable"])
     background_max_dropped_boxes = float(background["max_dropped_boxes"])
+    dequantize_background_below = float(background["dequantize_background_below"])  # SKYVAL gate shared with Photometry's measure_sky
     if background_box_size < 8:
         raise errors.ValueError("imcoadd.background.box_size must be at least 8 pixels")
     if background_filter_size < 1 or background_filter_size % 2 == 0:
@@ -335,6 +337,7 @@ def resolve_coadd_plan(node, errors=builtins) -> CoaddPlan:
         background_exclude_percentile=background_exclude_percentile,
         background_min_usable=background_min_usable,
         background_max_dropped_boxes=background_max_dropped_boxes,
+        dequantize_background_below=dequantize_background_below,
     )
     if plan.zero_saturated_in_weight_before_reprojection and not plan.resample_weight_in_sci_pass:
         raise errors.NotImplementedError(

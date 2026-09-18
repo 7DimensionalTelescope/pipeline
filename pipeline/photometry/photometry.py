@@ -886,9 +886,20 @@ class PhotometrySingle:
         return obs_src_table
 
     def measure_sky(self, overwrite: bool = True, phot_header: PhotometryHeader = None) -> bool:
-        """Re-derive the sky level and noise on the pixels the source mask leaves, and record the fraction used."""
-        from ..imcoadd.utils import background_mesh, build_source_mask, mesh_peak, noise_autocorrelation, source_ellipses_on_frame
-        from ..imcoadd.background_qa import measure_background_residuals, RESIDUAL_KEYS, RESIDUAL_BOX_SIZE
+        """Re-derive the sky level and noise on the pixels the source mask leaves, and record the fraction used.
+
+        Below ``imcoadd.background.dequantize_background_below`` ADU of SKYVAL (the steppy regime, where the box median snaps to the ADC
+        lattice and MMM triples the snap) the mesh is fitted on the dequantized copy, exactly as ImCoadd's detector-grid fit
+        gates it on the same key; the copy is convolved once and used only for the mesh. Its noise is the frame's times sqrt(sum k^2) of the kernel (white noise:
+        Var(sum k_i x_i) = sigma^2 sum k_i^2, the measured lag-1 correlation being ~0.006), so BACKSIG is the mesh's rms
+        median divided by sqrt(BACKKSQ); the residual cards are measured on the frame itself against that mesh."""
+        from ..imcoadd.utils import (
+            DEQUANT_KERNEL, background_mesh, build_source_mask, mesh_peak, noise_autocorrelation, source_ellipses_on_frame, dequantize,
+        )
+        from ..imcoadd.background_qa import (
+            measure_background_residuals, modal_offset, sigma_quantiles, RESIDUAL_KEYS, RESIDUAL_BOX_SIZE,
+        )
+        from dataclasses import replace
 
         phot_header = phot_header or self.phot_header
         if self._difference_photometry:  # a residual image has no sky of its own to publish
@@ -945,9 +956,11 @@ class PhotometrySingle:
                 self.logger.warning(f"No bad-pixel mask for {self.name} ({e}); sky statistics include bad pixels")
         # the same mesh ImCoadd will fit, so the two stages cannot disagree about what the sky is
         mesh = self.config_node.imcoadd.background
+        dequantized = not is_coadd and phot_header.SKYVAL is not None and phot_header.SKYVAL < float(mesh["dequantize_background_below"])
+        ksq = float(np.sum(DEQUANT_KERNEL**2)) if dequantized else 1.0
         try:
             fitted = background_mesh(
-                data,
+                dequantize(data) if dequantized else data,
                 mask=excluded,
                 coverage_mask=no_data,
                 box_size=mesh["box_size"],
@@ -957,7 +970,9 @@ class PhotometrySingle:
         except ValueError as e:  # no mesh box survives the source mask: a crowded field has no off-source sky to publish
             self.logger.warning(f"Off-source sky not measured: {e}")
             return False
-        phot_header.BACKVAL, phot_header.BACKSIG = float(fitted.background_median), float(fitted.background_rms_median)
+        phot_header.BACKVAL = float(fitted.background_median)
+        phot_header.BACKSIG = float(fitted.background_rms_median) / np.sqrt(ksq)
+        phot_header.DEQUANT, phot_header.BACKKSQ = dequantized, round(ksq, 5)
         phot_header.BACKFRAC = round(float((~excluded & ~no_data).mean()), 4)
         phot_header.SRCFRAC = round(float(sources.mean()), 4)
         phot_header.BACKPEAK, phot_header.BACKPKSN = (round(v, 4) for v in mesh_peak(fitted))
@@ -969,6 +984,12 @@ class PhotometrySingle:
             coverage=coverage,
             mesh_box=mesh["box_size"],
         )
+        reference = self._noise_reference(header, fitted, is_coadd)
+        if reference is None:
+            self.logger.warning("No noise reference (EGAIN; INEGAIN and INSKY on a coadd): BACKOFF not measured")
+        else:
+            backoff, kind = modal_offset(residual, excluded | ~coverage, sigmas=sigma_quantiles(header), **reference)
+            result = replace(result, backoff=round(float(backoff), 4), backnref=kind)
         for key in RESIDUAL_KEYS:
             setattr(phot_header, key.upper(), getattr(result, key))
         phot_header.BACKREF = "COADD" if is_coadd else "MODEL"
@@ -981,6 +1002,24 @@ class PhotometrySingle:
             f"SKYSIG {phot_header.SKYSIG}) in {time_diff_in_seconds(start_time)} seconds"
         )
         return True
+
+    @staticmethod
+    def _noise_reference(header, fitted, is_coadd: bool) -> dict | None:
+        """Gain, sky levels and taps the BACKOFF reference is built from: a single's own EGAIN at its mesh's level quantiles; a
+        coadd's inputs' EGAIN and sky through n_inputs copies of the resampling kernel at the flux scale n EGAIN_in / EGAIN."""
+        from ..imcoadd.background_qa import coadd_taps, SIGMA_QUANTILES
+
+        if not is_coadd:
+            if not header.get("EGAIN"):
+                return None
+            mesh = np.asarray(fitted.background_mesh, dtype=np.float64)
+            levels = np.quantile(mesh[np.isfinite(mesh)], (np.arange(SIGMA_QUANTILES) + 0.5) / SIGMA_QUANTILES)
+            return dict(gain=float(header["EGAIN"]), levels=levels)
+        gain, sky, egain = header.get("INEGAIN"), header.get("INSKY"), header.get("EGAIN")
+        n_inputs = sum(1 for key in header if key.startswith("IMG") and key[3:].isdigit())
+        if not (gain and egain and n_inputs) or sky is None:
+            return None
+        return dict(gain=float(gain), levels=[float(sky)], taps=coadd_taps(n_inputs, n_inputs * float(gain) / float(egain)))
 
     def _measure_sky_covariance(self, phot_header: PhotometryHeader, residual, excluded) -> None:
         """Sky-noise covariance from the same residual, and the limiting magnitudes it implies.
@@ -1637,6 +1676,8 @@ class PhotometryHeader:
     SKYVAL: float = None
     BACKSIG: float = None
     BACKVAL: float = None
+    DEQUANT: bool = None
+    BACKKSQ: float = None
     BACKFRAC: float = None
     SRCFRAC: float = None
     BACKPEAK: float = None
@@ -1653,6 +1694,7 @@ class PhotometryHeader:
     BACKSCL: int = None
     BACKN: int = None
     BACKREF: str = None
+    BACKNREF: str = None
     NTRAILPX: int = None
     REFCAT: str = None  # "GaiaXP"
     MAGLOW: float = None
@@ -1780,6 +1822,8 @@ class PhotometryHeader:
             "SKYVAL": (round(self.SKYVAL, 3) if self.SKYVAL is not None else 0, "SKY MEDIAN VALUE"),
             "BACKSIG": (round(self.BACKSIG, 3) if self.BACKSIG is not None else None, "SKY SIGMA OFF SOURCE"),
             "BACKVAL": (round(self.BACKVAL, 3) if self.BACKVAL is not None else None, "SKY MEDIAN OFF SOURCE"),
+            "DEQUANT": (self.DEQUANT, "Sky mesh fitted on the dequantized copy (SKYVAL < cut)"),
+            "BACKKSQ": (self.BACKKSQ, "sum k^2 of that kernel; BACKSIG = measured / sqrt"),
             "BACKFRAC": (self.BACKFRAC, "Fraction of pixels used for the sky estimate"),
             "SRCFRAC": (self.SRCFRAC, "Fraction of pixels covered by the source mask"),
             "BACKPEAK": (self.BACKPEAK, "[ADU] Largest mesh node excursion from its neighbours"),

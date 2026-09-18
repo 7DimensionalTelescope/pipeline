@@ -9,6 +9,7 @@ NOISE_LAG = 8
 MIN_PATCHES = 16
 MIN_FRACTION = 0.75
 MAX_PATCHES = 1024
+SIGMA_QUANTILES = 9  # NOISQ01..NOISQ09: the master dark writes them, the BACKOFF reference mixes over them
 
 
 @dataclass(frozen=True)
@@ -18,14 +19,16 @@ class BackgroundResiduals:
     backscl: int = RESIDUAL_BOX_SIZE
     backn: int = 0
     backref: str = "SUBTRACT"
+    backnref: str | None = None
 
     def cards(self, include_missing: bool = False) -> dict:
         descriptions = (
-            ("backoff", "[ADU] Mean residual sky; positive = under-subtracted"),
+            ("backoff", "[ADU] Sky true mode minus model; positive = under-subtracted"),
             ("backsys", "[ADU] Excess spatial RMS of patch mean residuals"),
             ("backscl", "[pixel] Residual measurement square width"),
             ("backn", "Number of valid residual sky patches measured"),
             ("backref", "Residual reference: MODEL, SUBTRACT, or COADD"),
+            ("backnref", "BACKOFF noise reference: SIGMAQ cards or WIDTH"),
         )
         return {key.upper(): (getattr(self, key), comment) for key, comment in descriptions
                 if include_missing or getattr(self, key) is not None}
@@ -37,6 +40,86 @@ RESIDUAL_KEYS = tuple(BackgroundResiduals.__dataclass_fields__)
 def clear_residual_cards(header) -> None:
     for key in RESIDUAL_KEYS:
         header.pop(key.upper(), None)
+
+
+def sigma_quantile_cards(sigma, n: int = SIGMA_QUANTILES) -> dict:
+    """NOISQ01..NOISQnn: the additive noise sigma map's quantiles at (k - 1/2) / n, the BACKOFF reference's noise mixture."""
+    values = np.asarray(sigma, dtype=np.float32).ravel()
+    values = values[np.isfinite(values) & (values > 0)]
+    quantiles = np.quantile(values, (np.arange(n) + 0.5) / n)
+    return {f"NOISQ{k + 1:02d}": (round(float(q), 4), f"[ADU] Additive noise sigma, quantile {2 * k + 1}/{2 * n}")
+            for k, q in enumerate(quantiles)}
+
+
+def sigma_quantiles(header, n: int = SIGMA_QUANTILES):
+    """The NOISQ cards as an array; None when any is missing."""
+    values = [header.get(f"NOISQ{k + 1:02d}") for k in range(n)]
+    if any(v is None for v in values):
+        return None
+    return np.array(values, dtype=np.float64)
+
+
+def coadd_taps(n_inputs: int, scale: float, kernel=None):
+    """The weights one coadd pixel puts on input pixels: n_inputs frames at scale / n_inputs each through the resampling kernel
+    (default SWarp LANCZOS3's phase-averaged noise-equivalent kernel: sum k^2 = 0.803, sum k^3 / sum k^2 = 0.867 in 2-D)."""
+    if kernel is None:
+        taps = np.array([-0.003497, 0.015380, -0.039026, 0.056460, 0.941366, 0.056460, -0.039026, 0.015380, -0.003497])
+        kernel = np.outer(taps, taps)
+    return np.tile(np.asarray(kernel, dtype=np.float64).ravel() * scale / n_inputs, n_inputs)
+
+
+def mixture_density(taps, gain: float, sigmas, levels, dx: float = 0.01, span: float = 40.0):
+    """Density, about its mean, of sum_j taps_j x_j with x_j = Poisson(level gain e-) / gain + N(0, sigma) in ADU, each x_j drawn
+    from the equal-weight mixture over every (sigma, level) pair: the noise-only distribution of a sky pixel (single: taps [1])."""
+    taps = np.asarray(taps, dtype=np.float64).ravel()
+    sig, lev = (a.ravel() for a in np.meshgrid(np.asarray(sigmas, dtype=np.float64), np.asarray(levels, dtype=np.float64)))
+    lam = lev * gain
+    width = np.sqrt(np.sum(taps**2) * (np.mean(lev) / gain + np.mean(sig**2)))
+    n = int(2 ** np.ceil(np.log2(span * width / dx)))
+    x = (np.arange(n) - n // 2) * dx
+    t = 2 * np.pi * np.fft.fftfreq(n, dx)
+    cf = np.ones(n, dtype=np.complex128)
+    values, counts = np.unique(np.round(taps[taps != 0], 12), return_counts=True)
+    for tap, m in zip(values, counts):
+        u = tap * t / gain
+        component = np.zeros(n, dtype=np.complex128)
+        for i in range(0, lam.size, 16):  # chunked: n_pairs x n grid points of complex exponentials
+            component += np.exp(lam[i:i + 16, None] * (np.expm1(1j * u)[None, :] - 1j * u[None, :])
+                                - 0.5 * (sig[i:i + 16, None] * gain * u[None, :]) ** 2).sum(axis=0)
+        cf *= (component / lam.size) ** m
+    p = np.real(np.fft.fft(cf * np.exp(-1j * t * x[0]))) / (n * dx)
+    return x, np.clip(p, 0, None)
+
+
+def density_gap(x, p) -> float:
+    """Median minus mode of a density on a grid; the mode from the parabola through the peak and its neighbours."""
+    w = p / p.sum()
+    median = float(np.interp(0.5, np.cumsum(w) - 0.5 * w, x))
+    i = int(np.argmax(p))
+    if 0 < i < p.size - 1 and p[i - 1] > 0 and p[i + 1] > 0:
+        y0, y1, y2 = np.log(p[i - 1:i + 2])
+        mode = float(x[i] + 0.5 * (x[1] - x[0]) * (y0 - y2) / (y0 - 2 * y1 + y2))
+    else:
+        mode = float(x[i])
+    return median - mode
+
+
+def modal_offset(residual, exclude, gain: float, levels, sigmas=None, taps=None) -> tuple[float, str]:
+    """BACKOFF: the median of the residual's sky pixels minus the reference noise mixture's median - mode, i.e. the sky's true mode
+    minus the model; positive = under-subtracted. ``levels`` are the sky levels the pixels sit at (the model's quantiles for a
+    single, the inputs' sky for a coadd) and ``sigmas`` the NOISQ additive-noise quantiles; without them the reference is one
+    Gaussian whose width is the residual's own robust width less the Poisson part. Returns (backoff, noise reference kind)."""
+    sky = np.asarray(residual)[~np.asarray(exclude, bool) & np.isfinite(residual)].astype(np.float64)
+    taps = np.array([1.0]) if taps is None else np.asarray(taps, dtype=np.float64)
+    levels = np.atleast_1d(np.asarray(levels, dtype=np.float64))
+    median = float(np.median(sky))
+    if sigmas is None:
+        width = 1.4826 * float(np.median(np.abs(sky - median)))
+        sigmas = [np.sqrt(max(width**2 / np.sum(taps**2) - np.mean(levels) / gain, 1e-3))]
+        kind = "WIDTH"
+    else:
+        kind = "SIGMAQ"
+    return median - density_gap(*mixture_density(taps, gain, sigmas, levels)), kind
 
 
 def _autocorrelation(values):
@@ -128,6 +211,5 @@ def measure_background_residuals(
         return BackgroundResiduals(backscl=size, backn=n)
     variance = float(np.var(means, ddof=1))
     noise = max(0.0, float(np.mean(noises)))
-    return BackgroundResiduals(
-        backoff=float(np.mean(means)), backsys=float(np.sqrt(max(0.0, variance - noise))), backscl=size, backn=n,
-    )
+    # backoff is the caller's: modal_offset against the frame's noise reference, not the patch means' mean
+    return BackgroundResiduals(backsys=float(np.sqrt(max(0.0, variance - noise))), backscl=size, backn=n)

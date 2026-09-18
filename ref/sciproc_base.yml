@@ -145,6 +145,7 @@ imcoadd:
     exclude_percentile: 50  # a box losing this % of its pixels is dropped and refilled from its 10 nearest nodes
     min_usable: 20  # below this % of the frame left unmasked, the frame takes a constant sky instead
     max_dropped_boxes: 50  # above this % of dropped mesh boxes, the frame takes a constant sky instead
+    dequantize_background_below: 60  # [ADU] SKYVAL below which the mesh is fitted on the dequantized copy (ADC-lattice snapping of the box median, tripled by MMM; measured gone by ~50 ADU): Photometry's BACKVAL/BACKSIG and ImCoadd's detector-grid model both gate on it
   source_mask: True  # False, True or 'iterative'; only affects dynamic bkgsub
   dump_source_masks: false  # retain source masks beside config under source_masks/config_stem
   output_weight_map: true  # write the coadd weight product

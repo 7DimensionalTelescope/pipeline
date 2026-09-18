@@ -574,6 +574,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         sig_header = header.copy()
         sig_header[prep_utils.MEDIAN_PENALTY_KEY] = prep_utils.median_penalty_card(header["NFRAMES"])
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), sig_header)
+        if dtype == CALIB_TYPE_DARK:  # the BACKOFF noise reference every science frame reduced with this dark carries
+            header.update(prep_utils.additive_sigma_quantile_cards(self.darksig_output, self.biassig_output, self.bpmask_output))
 
         # PPFLAG: propagate from dependencies (bias=0, dark=bias, flat=bias|flatdark)
         if dtype == CALIB_TYPE_BIAS:
@@ -967,6 +969,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             header = get_header(raw_file)
             header["SATURATE"] = prep_utils.get_saturation_level(header, bias, dark, flat)
             header = prep_utils.write_IMCMB_to_header(header, [bias, dark, flat, raw_file])
+            header.update(self._noise_quantile_cards(dark, bias))
             ppflag.set_ppflag_in_header(header, sci_ppflag)
             header = prep_utils.ensure_mjd_in_header(header, logger=self.logger)
             header = prep_utils.sanitize_header(header)
@@ -976,6 +979,25 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 f"Header size: {(x := len(header.tostring()))} bytes, {x//2880} blocks + {(x%2880)/80} lines"
             )
             prep_utils.write_header(processed_file, header)
+
+    def _noise_quantile_cards(self, dark: str, bias: str) -> dict:
+        """The master dark's NOISQ cards for its science frames; a dark that predates them gets them from its sigma maps, once."""
+        from ..imcoadd.background_qa import SIGMA_QUANTILES
+
+        if getattr(self, "_noise_cards_for", None) != dark:
+            keys = [f"NOISQ{k + 1:02d}" for k in range(SIGMA_QUANTILES)]
+            header = fits.getheader(dark)
+            if all(key in header for key in keys):
+                cards = {key: (header[key], header.comments[key]) for key in keys}
+            else:
+                sig = lambda path, kind: os.path.join(os.path.dirname(path), os.path.basename(path).replace(f"{kind}_", f"{kind}sig_", 1))
+                try:
+                    cards = prep_utils.additive_sigma_quantile_cards(sig(dark, "dark"), sig(bias, "bias"), PathHandler.get_bpmask(dark))
+                except Exception as e:
+                    self.logger.warning(f"No additive-noise quantiles for {os.path.basename(dark)} ({e}); BACKOFF falls back to the frame's width")
+                    cards = {}
+            self._noise_cards_for, self._noise_cards = dark, cards
+        return self._noise_cards
 
     def make_masterframe_plots(self, file_path: str, dtype: str, group_index: int, dry_run: bool = False):
         if dtype == CALIB_TYPE_BIAS:

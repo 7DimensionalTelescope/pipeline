@@ -477,6 +477,24 @@ def median_penalty_card(nframes: int) -> tuple:
     return (round(float(median_variance_ratio(int(nframes))), 6), "Var(median)/Var(mean) of NFRAMES frames")
 
 
+def additive_sigma_quantile_cards(darksig_file: str, biassig_file: str, bpmask_file: str | None = None) -> dict:
+    """The NOISQ cards of a master dark: quantiles of a science pixel's additive noise sigma — its own read and dark noise
+    (the dark sigma map) plus the median noise the master bias and dark carry into it — over the pixels the bad-pixel mask keeps."""
+    from ..calc.median import median_variance_ratio
+    from ..imcoadd.background_qa import sigma_quantile_cards
+
+    darksig, dark_header = fits.getdata(darksig_file, header=True)
+    biassig, bias_header = fits.getdata(biassig_file, header=True)
+    n_bias, n_dark = int(bias_header["NFRAMES"]), int(dark_header["NFRAMES"])
+    var = np.asarray(darksig, dtype=np.float32) ** 2 * np.float32(1 + median_variance_ratio(n_dark) / n_dark)
+    var += np.asarray(biassig, dtype=np.float32) ** 2 * np.float32(2 * median_variance_ratio(n_bias) / n_bias)
+    if bpmask_file and os.path.exists(bpmask_file):
+        with fits.open(bpmask_file) as hdul:
+            bad = hdul[-1].data == int(hdul[-1].header.get("BADPIX", 1))
+        var[bad] = np.nan
+    return sigma_quantile_cards(np.sqrt(var))
+
+
 def ensure_median_penalty(sig_file: str, key: str = MEDIAN_PENALTY_KEY) -> float:
     """MEDPNTLY of a master sigma file, computed from its NFRAMES, written into the file on first load when absent."""
     import tempfile

@@ -22,6 +22,7 @@ from ..const import REF_DIR
 from ..utils import get_basename
 from ..utils.tile import is_ris_tile, find_ris_tile
 from .const import CORE_KEYS, HOMOGENEOUS_KEYS
+from .background_qa import SIGMA_QUANTILES
 
 
 _EXTREMA_CARDS = {"seeing": "SEEMAX", "ellipticity": "ELLMAX", "depth": "DEPMIN"}
@@ -359,7 +360,11 @@ class InputHeaderSet:
             "BACKTYPE": (self.coadd_backtype, "Background subtraction type for coadded image"),
             "PPFLAG":   (self.coadd_ppflag, "Preprocessing quality flag (OR of coadded inputs)"),
             "M_EPOCH":  (self.multi_epoch, "Multi-epoch (deep) coadd"),
+            "INEGAIN":  (self.aggregate("EGAIN"), "[e-/ADU] EGAIN of the inputs (mean)"),  # the BACKOFF noise reference of the coadd
+            "INSKY":    (self.aggregate("BACKVAL"), "[ADU] BACKVAL of the inputs (mean)"),
         }  # fmt: skip
+        for k in range(SIGMA_QUANTILES):  # the inputs' additive-noise quantiles, the same reference's mixture
+            keywords_to_update[f"NOISQ{k + 1:02d}"] = (self.aggregate(f"NOISQ{k + 1:02d}"), f"[ADU] Inputs' additive noise sigma, quantile {2 * k + 1}/{2 * SIGMA_QUANTILES}")
         keywords_to_update.update(self.coadd_provenance)
         keywords_to_update.update(self.coadd_selection_extrema)
         keywords_to_update.update(self.run_cards)

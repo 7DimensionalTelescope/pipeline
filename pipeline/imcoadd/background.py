@@ -659,14 +659,15 @@ class BackgroundMixin:
         routine = self._prereprojection_types.get(get_basename(single))
         return (
             f"{routine}/{plan.background_box_size}/{plan.background_filter_size}/{plan.background_exclude_percentile:g}/"
-            f"{plan.background_min_usable:g}/{plan.background_max_dropped_boxes:g}"
+            f"{plan.background_min_usable:g}/{plan.background_max_dropped_boxes:g}/{plan.dequantize_background_below:g}"
         )
 
     def fit_background_before_reprojection(self, single, header, data, hole=None, sources=None, catalog=None):
-        """The frame's detector-grid sky model, fitted on a step-free copy with the bad pixels held at the sky level, and its
+        """The frame's detector-grid sky model, fitted with the bad pixels held at the sky level — on a dequantized copy below
+        imcoadd.background.dequantize_background_below ADU of SKYVAL, the gate Photometry's measure_sky shares — and its
         cards on the header; returns (model, mask): an array, a constant, or None for no subtraction, and the exclusion the
         residual cards are measured through (None without a source mask)."""
-        from .utils import background_mesh, mesh_peak, mesh_peak_cards, step_free
+        from .utils import background_mesh, mesh_peak, mesh_peak_cards, dequantize
         from .weight import source_mask_on_frame
 
         plan = self.plan
@@ -688,10 +689,12 @@ class BackgroundMixin:
         model = None
         if btype == "dynamic":
             try:
-                # the frame as measured: a bad pixel would leak into its neighbours through the step-free kernel
+                # the frame as measured: a bad pixel would leak into its neighbours through the dequantizing kernel
                 source = data if hole is None or skyval is None else np.where(hole, np.float32(skyval), data)
+                gate = header.get("SKYVAL", skyval)  # the same SKYVAL gate as Photometry's measure_sky
+                dequantized = gate is not None and gate < plan.dequantize_background_below
                 bkg = background_mesh(
-                    step_free(source),
+                    dequantize(source) if dequantized else source,
                     mask=exclude,
                     coverage_mask=None,
                     box_size=plan.background_box_size,
@@ -739,7 +742,7 @@ class BackgroundMixin:
                 factory.background_figures(interp)[0],
                 stem,
                 subtitle=f"box {plan.background_box_size} x filter {plan.background_filter_size}, "
-                f"exclude_percentile {plan.background_exclude_percentile:g}%; fitted on the step-free copy; "
+                f"exclude_percentile {plan.background_exclude_percentile:g}%; fitted on the {'dequantized copy' if dequantized else 'frame'}; "
                 f"median {np.median(model):.2f}, peak to peak {np.ptp(model):.2f} ADU/pixel, "
                 f"largest node excursion {peak[0]:.2f} ADU ({peak[1]:.1f} sigma)",
                 header=header,
@@ -755,7 +758,7 @@ class BackgroundMixin:
             return data
         name = get_basename(single)
         data -= model
-        self._record_background_residuals(data, header, exclude, np.isfinite(data))
+        self._record_background_residuals(data, header, exclude, np.isfinite(data), model=model)
         self.input_headers[name].update({k: (header[k], header.comments[k]) for k in CARRIED_CARDS if k in header})
         return data
 
@@ -789,8 +792,13 @@ class BackgroundMixin:
     #     recommenced_bkgsub_type = "constant"  # BACKTYPE "Recommended bkgsub type"
     #     return recommenced_bkgsub_type
 
-    def _record_background_residuals(self, data, header, sources, coverage, quality=None):
-        from .background_qa import clear_residual_cards, measure_background_residuals
+    def _record_background_residuals(self, data, header, sources, coverage, quality=None, model=None):
+        """Residual cards on the frame; BACKOFF only with the detector-grid model, against the frame's own noise reference."""
+        from dataclasses import replace
+
+        from .background_qa import (
+            SIGMA_QUANTILES, clear_residual_cards, measure_background_residuals, modal_offset, sigma_quantiles,
+        )
 
         clear_residual_cards(header)
         if sources is None:
@@ -800,5 +808,11 @@ class BackgroundMixin:
         result = measure_background_residuals(
             data, exclude=exclude, coverage=coverage, mesh_box=self.plan.background_box_size,
         )
+        if model is not None and header.get("EGAIN"):
+            valid = exclude | ~coverage if coverage is not None else exclude
+            levels = (np.quantile(np.asarray(model)[::32, ::32], (np.arange(SIGMA_QUANTILES) + 0.5) / SIGMA_QUANTILES)
+                      if np.ndim(model) else [float(model)])
+            backoff, kind = modal_offset(data, valid, float(header["EGAIN"]), levels, sigmas=sigma_quantiles(header))
+            result = replace(result, backoff=round(float(backoff), 4), backnref=kind)
         header.update(result.cards())
         self.logger.debug(f"Residual sky: {result}")
