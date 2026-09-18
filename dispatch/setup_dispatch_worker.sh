@@ -39,7 +39,15 @@ done
 echo "=== 2. Host directories ==="
 sudo install -d -m 0775 -o root -g pipeline /var/log/pipeline
 sudo install -d -m 0775 -o root -g pipeline /var/lock/py7dt
-sudo install -d -m 1777 /tmp/pipeline
+sudo install -d -m 2775 -g pipeline /tmp/pipeline
+# Every cli/ script's shebang is this absolute path on every host, and build_command() execs those
+# scripts bare. Point it at this account's own env so they run here without editing a shebang per host.
+SHEBANG_ENV=/home/pipeline-stable/.conda/envs/pipeline
+if [ ! -e "$SHEBANG_ENV" ]; then
+  sudo install -d -o "$WORKER_USER" -g pipeline "$(dirname "$SHEBANG_ENV")"
+  sudo ln -sfn "$(dirname "$PYTHON_BIN_DIR")" "$SHEBANG_ENV"
+fi
+echo "  cli/ shebang interpreter: $SHEBANG_ENV -> $(readlink -f "$SHEBANG_ENV")"
 
 echo "=== 3. ssh to the main host (key-based, no password) ==="
 test -f ~/.ssh/id_ed25519 || ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519
