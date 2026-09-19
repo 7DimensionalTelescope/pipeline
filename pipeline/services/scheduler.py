@@ -12,6 +12,7 @@ from astropy.table import Table, vstack
 
 from ..const import (
     SCRIPTS_DIR,
+    MAIN_HOST,
     NUM_GPUS,
     SCHEDULER_DB_PATH,
     QUEUE_SOCKET_PATH,
@@ -78,13 +79,15 @@ class Scheduler:
         "process_end",
     )
     _SELECT_COLUMNS = ", ".join(f'"{col}"' if col == "index" else col for col in _DB_COLUMNS)
-    _LOCAL_TASK_FILTER = "(dispatch IS NULL OR dispatch = '')"
-    # The origin's own identity in `dispatch`. Legacy NULL rows COALESCE to it, so never write 'proton'.
-    _LOCAL_DISPATCH = ""
+    # dispatch = the host a row's work belongs to (a whole crossfilter group is stamped at its first claim); '' = unclaimed
+    _LOCAL_DISPATCH = MAIN_HOST
+    _UNCLAIMED = ""
+    # Rows whose pid, if any, lives on this host; legacy rows predate the origin stamping its own name.
+    _LOCAL_TASK_FILTER = f"COALESCE(dispatch, '') IN ('', '{MAIN_HOST}')"
     _AFFINITY_FILTER = "COALESCE(dispatch, '') = ?"
-    # `= 1` is what lets ix_scheduler_foreign match; a bare `<> ''` full-scans the Ready partition.
-    _FOREIGN_FILTER = "(COALESCE(dispatch, '') <> '') = 1"
-    _FOREIGN = object()  # _select_ready_index tier meaning "claimed last by some other host"
+    # `= 1` is what lets ix_scheduler_foreign match; a bare NOT IN full-scans the Ready partition.
+    _FOREIGN_FILTER = f"(COALESCE(dispatch, '') NOT IN ('', '{MAIN_HOST}')) = 1"
+    _FOREIGN = object()  # _select_ready_index tier meaning "owned by some other host"
 
     # Constants
     # Counts Processing preprocess rows across EVERY host, so it is an origin-side gate:
@@ -243,7 +246,8 @@ class Scheduler:
                     dispatch TEXT,
                     kwargs TEXT,
                     process_start TEXT,
-                    process_end TEXT
+                    process_end TEXT,
+                    group_idx INTEGER
                 )
             """
             )
@@ -257,6 +261,8 @@ class Scheduler:
                     cursor.execute("ALTER TABLE scheduler RENAME COLUMN external TO dispatch")
                 else:
                     cursor.execute("ALTER TABLE scheduler ADD COLUMN dispatch TEXT")
+            if "group_idx" not in columns:
+                self._add_group_idx(conn)
 
             # Without these the claim scans the whole table under the write lock.
             cursor.execute(
@@ -274,10 +280,65 @@ class Scheduler:
             )
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS ix_scheduler_foreign "
-                "ON scheduler(status, COALESCE(dispatch, '') <> '', is_ready DESC, priority DESC, readiness DESC, \"index\")"
+                f"ON scheduler(status, COALESCE(dispatch, '') NOT IN ('', '{MAIN_HOST}'), group_idx, "
+                'is_ready DESC, priority DESC, readiness DESC, "index")'
             )
+            cursor.execute("CREATE INDEX IF NOT EXISTS ix_scheduler_group ON scheduler(group_idx)")
 
             conn.commit()
+
+    def _add_group_idx(self, conn):
+        """One-time migration: derive group_idx from dependent_idx and stamp every single-owner group on all its rows."""
+        cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+        try:
+            cursor.execute("PRAGMA table_info(scheduler)")
+            if "group_idx" in [row[1] for row in cursor.fetchall()]:
+                conn.rollback()
+                return
+            cursor.execute("ALTER TABLE scheduler ADD COLUMN group_idx INTEGER")
+            cursor.execute("SELECT \"index\", config_type, dependent_idx, status, COALESCE(dispatch, '') FROM scheduler")
+            rows = cursor.fetchall()
+            config_types = {row[0]: row[1] for row in rows}
+            groups = {}
+            for index, config_type, dependent_idx, status, dispatch in rows:
+                group = self._group_index(index, config_type, dependent_idx, config_types)
+                if group is not None:
+                    groups.setdefault(group, []).append((index, status, dispatch))
+            cursor.executemany(
+                'UPDATE scheduler SET group_idx = ? WHERE "index" = ?',
+                [(group, index) for group, members in groups.items() for index, _, _ in members],
+            )
+            # before this column the origin wrote '' for itself, so a claimed '' row is the origin's
+            for group, members in groups.items():
+                owners = {
+                    dispatch or self._LOCAL_DISPATCH
+                    for _, status, dispatch in members
+                    if dispatch or status not in (TASK_STATUS_READY, TASK_STATUS_PENDING)
+                }
+                if len(owners) == 1:
+                    cursor.execute(
+                        f"UPDATE scheduler SET dispatch = ? WHERE group_idx = ? AND {self._AFFINITY_FILTER}",
+                        (owners.pop(), group, self._UNCLAIMED),
+                    )
+            cursor.execute("DROP INDEX IF EXISTS ix_scheduler_foreign")  # its expression predates the origin's name
+            conn.commit()
+        except sqlite3.OperationalError as e:
+            conn.rollback()
+            if "duplicate column" not in str(e):  # lost the race to another first caller
+                raise
+
+    @staticmethod
+    def _group_index(index, config_type, dependent_idx, config_types):
+        """Crossfilter row -> its own index; science row -> its crossfilter child's index; anything else -> None."""
+        if str(config_type) == CONFIG_TYPE_CROSSFILTER:
+            return int(index)
+        if isinstance(dependent_idx, str):
+            dependent_idx = json.loads(dependent_idx)
+        for child in dependent_idx or []:
+            if config_types.get(int(child)) == CONFIG_TYPE_CROSSFILTER:
+                return int(child)
+        return None
 
     def start_system_queue(self):
         """Send wake message to queue socket."""
@@ -391,12 +452,12 @@ class Scheduler:
         return query, params
 
     def _select_ready_index(self, cursor, affinity, extra_sql="", extra_params=()):
-        """One claim tier; _FOREIGN restricts to other hosts' rows, None applies no host filter."""
+        """One claim tier: rows owned by host `affinity` ('' = unclaimed), or _FOREIGN for other hosts' ungrouped rows."""
         query = 'SELECT "index" FROM scheduler WHERE status = ?'
         params = [TASK_STATUS_READY]
         if affinity is self._FOREIGN:
-            query += f" AND {self._FOREIGN_FILTER}"
-        elif affinity is not None:
+            query += f" AND {self._FOREIGN_FILTER} AND group_idx IS NULL"
+        else:
             query += f" AND {self._AFFINITY_FILTER}"
             params.append(affinity)
         query += extra_sql
@@ -411,6 +472,14 @@ class Scheduler:
         """True when this origin claim should try other hosts' rows before its own."""
         self._claim_tick += 1
         return self.FALLBACK_EVERY > 0 and self._claim_tick % self.FALLBACK_EVERY == 0
+
+    def _claim_group(self, cursor, index, host):
+        """Stamp every unclaimed row of the claimed row's crossfilter group with `host`; a no-op for an ungrouped row."""
+        cursor.execute(
+            f'UPDATE scheduler SET dispatch = ? WHERE group_idx = (SELECT group_idx FROM scheduler WHERE "index" = ?) '
+            f"AND {self._AFFINITY_FILTER}",
+            (host, index, self._UNCLAIMED),
+        )
 
     @staticmethod
     def _config_stem(config):
@@ -649,10 +718,10 @@ class Scheduler:
             cursor = conn.cursor()
             cursor.execute("BEGIN IMMEDIATE")
             try:
-                # A fallback turn must name other hosts explicitly; "any Ready row" just re-picks a local one.
-                tiers = (
-                    (self._FOREIGN, self._LOCAL_DISPATCH) if self._take_foreign_turn() else (self._LOCAL_DISPATCH, None)
-                )
+                # A fallback turn must name other hosts explicitly; the unclaimed pool would just re-pick a local one.
+                tiers = (self._LOCAL_DISPATCH, self._UNCLAIMED)
+                if self._take_foreign_turn():
+                    tiers = (self._FOREIGN,) + tiers
                 task_index = None
                 for affinity in tiers:
                     task_index = self._select_ready_index(cursor, affinity)
@@ -671,6 +740,7 @@ class Scheduler:
                 if cursor.rowcount == 0:
                     conn.rollback()
                     return None, None
+                self._claim_group(cursor, task_index, self._LOCAL_DISPATCH)
 
                 cursor.execute(
                     f'SELECT {self._SELECT_COLUMNS} FROM scheduler WHERE "index" = ?',
@@ -818,7 +888,7 @@ class Scheduler:
                     return 0
 
                 cursor.execute(
-                    f'UPDATE scheduler SET status = ?, pid = 0, process_start = ?, dispatch = NULL '
+                    f'UPDATE scheduler SET status = ?, pid = 0, process_start = ? '
                     f'WHERE "index" IN ({placeholders}) AND status = ? AND {self._LOCAL_TASK_FILTER}',
                     (TASK_STATUS_READY, "", *indices, TASK_STATUS_PROCESSING),
                 )
@@ -1025,6 +1095,16 @@ class Scheduler:
         else:
             self._schedule["pid"][self._schedule["index"] == index] = pid
 
+    @staticmethod
+    def _worker_claim_filter(config_types):
+        """SQL for a worker's config_type whitelist; a worker that cannot run crossfilter rows must not enter a group."""
+        if not config_types:
+            return "", ()
+        extra_sql = f" AND config_type IN ({','.join('?' for _ in config_types)})"
+        if CONFIG_TYPE_CROSSFILTER not in config_types:
+            extra_sql += " AND group_idx IS NULL"
+        return extra_sql, tuple(config_types)
+
     def claim_next_dispatch_task(self, server_name, config_types=None, input_type=None):
         """
         Claim one Ready task for a worker host.
@@ -1051,12 +1131,9 @@ class Scheduler:
             cursor = conn.cursor()
             cursor.execute("BEGIN IMMEDIATE")
             try:
-                extra_sql, extra_params = "", ()
-                if config_types:
-                    extra_sql = f" AND config_type IN ({','.join('?' for _ in config_types)})"
-                    extra_params = tuple(config_types)
+                extra_sql, extra_params = self._worker_claim_filter(config_types)
                 task_index = None
-                for affinity in (server_name, None):
+                for affinity in (server_name, self._UNCLAIMED):
                     task_index = self._select_ready_index(cursor, affinity, extra_sql, extra_params)
                     if task_index is not None:
                         break
@@ -1079,6 +1156,7 @@ class Scheduler:
                 if cursor.rowcount == 0:
                     conn.rollback()
                     return None
+                self._claim_group(cursor, task_index, server_name)
 
                 cursor.execute(
                     f'SELECT {self._SELECT_COLUMNS} FROM scheduler WHERE "index" = ?',
@@ -1109,14 +1187,11 @@ class Scheduler:
             cursor = conn.cursor()
             cursor.execute("BEGIN IMMEDIATE")
             try:
-                extra_sql, extra_params = "", ()
-                if config_types:
-                    extra_sql = f" AND config_type IN ({','.join('?' for _ in config_types)})"
-                    extra_params = tuple(config_types)
+                extra_sql, extra_params = self._worker_claim_filter(config_types)
                 relabel = ", input_type = CASE WHEN LOWER(input_type) = ? THEN input_type ELSE ? END"
                 while len(claimed) < count:
                     task_index = None
-                    for affinity in (server_name, None):
+                    for affinity in (server_name, self._UNCLAIMED):
                         task_index = self._select_ready_index(cursor, affinity, extra_sql, extra_params)
                         if task_index is not None:
                             break
@@ -1136,6 +1211,7 @@ class Scheduler:
                     )
                     if cursor.rowcount == 0:
                         break
+                    self._claim_group(cursor, task_index, server_name)
                     cursor.execute(
                         f'SELECT {self._SELECT_COLUMNS} FROM scheduler WHERE "index" = ?',
                         (task_index,),
@@ -1578,6 +1654,7 @@ class Scheduler:
                 # No rows to insert
                 return
 
+            config_types = {int(row["index"]): str(row["config_type"]) for row in table_to_insert}
             for row in table_to_insert:
                 try:
                     # Convert dependent_idx to list of Python ints (handle numpy int64)
@@ -1586,6 +1663,7 @@ class Scheduler:
                         # Convert numpy int64 to Python int for JSON serialization
                         dependent_idx = [int(idx) for idx in dependent_idx]
                     dependent_idx_json = json.dumps(dependent_idx) if dependent_idx else None
+                    group_idx = self._group_index(row["index"], row["config_type"], dependent_idx, config_types)
 
                     pid = row.get("pid") if "pid" in row.colnames else 0
                     dispatch = row.get("dispatch") if "dispatch" in row.colnames else ""
@@ -1595,8 +1673,8 @@ class Scheduler:
 
                     cursor.execute(
                         """INSERT INTO scheduler 
-                           ("index", config, config_type, input_type, is_ready, priority, readiness, status, dependent_idx, pid, dispatch, kwargs, process_start, process_end)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           ("index", config, config_type, input_type, is_ready, priority, readiness, status, dependent_idx, pid, dispatch, kwargs, process_start, process_end, group_idx)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             int(row["index"]),
                             str(row["config"]),
@@ -1612,6 +1690,7 @@ class Scheduler:
                             str(kwargs) if kwargs is not None else None,
                             str(process_start) if process_start is not None else None,
                             str(process_end) if process_end is not None else None,
+                            group_idx,
                         ),
                     )
                 except Exception as e:
