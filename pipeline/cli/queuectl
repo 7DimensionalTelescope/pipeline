@@ -1,0 +1,142 @@
+#!/home/pipeline-stable/.conda/envs/pipeline/bin/python
+"""
+queuectl — control the reduction queue on THIS host without killing anything.
+
+    queuectl drain              stop claiming; running tasks finish and are recorded
+    queuectl resume             claim again
+    queuectl reload             re-read .env (proton: QUEUE_MAX_WORKERS + claim gates; worker: DISPATCH_* settings)
+    queuectl status             daemon state, and Processing per host from the scheduler DB
+    queuectl wait [--host H]    block until this host (or H) has nothing running; pauses no row
+
+On proton the verbs go to the queue daemon's socket (QUEUE_SOCKET_PATH, group pipeline, no sudo). On a
+worker host they signal pipeline-dispatch-worker (SIGUSR1 / SIGUSR2 / SIGHUP, its own contract). The
+all-hosts row-level pause is still `drain_queue pause | wait | resume`.
+"""
+
+import argparse
+import json
+import os
+import signal
+import socket
+import sqlite3
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+pipeline_dir = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(pipeline_dir))
+
+from pipeline.const import MAIN_HOST, QUEUE_SOCKET_PATH, SCHEDULER_DB_PATH, TASK_STATUS_PROCESSING
+from pipeline.services.scheduler import Scheduler
+
+WORKER_UNIT = "pipeline-dispatch-worker"
+WORKER_SIGNALS = {"drain": signal.SIGUSR1, "resume": signal.SIGUSR2, "reload": signal.SIGHUP}
+
+
+def daemon_call(socket_path, command):
+    """One command to the queue daemon; its JSON state, or None when nothing listens there."""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(5.0)
+            sock.connect(socket_path)
+            sock.sendall(f"{command}\n".encode())
+            reply = sock.recv(4096)
+    except (FileNotFoundError, ConnectionRefusedError, OSError):
+        return None
+    return json.loads(reply) if reply else {}
+
+
+def worker_pid():
+    """MainPID of the local dispatch worker, 0 when it is not running here."""
+    try:
+        out = subprocess.run(["systemctl", "show", "-p", "MainPID", "--value", WORKER_UNIT], capture_output=True, text=True)
+        return int(out.stdout.strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def host_filter(host):
+    """Rows one host owns; the origin also owns the legacy '' rows."""
+    if host == MAIN_HOST:
+        return Scheduler._LOCAL_TASK_FILTER, ()
+    return Scheduler._AFFINITY_FILTER, (host,)
+
+
+def processing(db_path, host=None):
+    """Processing rows per host, or the count for one host."""
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=Scheduler.DB_BUSY_TIMEOUT) as conn:
+        if host:
+            where, params = host_filter(host)
+            return conn.execute(
+                f"SELECT COUNT(*) FROM scheduler WHERE status = ? AND {where}", (TASK_STATUS_PROCESSING, *params)
+            ).fetchone()[0]
+        return dict(
+            conn.execute(
+                "SELECT COALESCE(NULLIF(dispatch, ''), ?), COUNT(*) FROM scheduler WHERE status = ? GROUP BY 1",
+                (MAIN_HOST, TASK_STATUS_PROCESSING),
+            ).fetchall()
+        )
+
+
+def describe(state):
+    return f"{'draining' if state['draining'] else 'claiming'}, {state['running']} running / {state['slots']} slots"
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Drain, resume, reload or watch the reduction queue on this host.")
+    parser.add_argument("action", choices=["drain", "resume", "reload", "status", "wait"])
+    parser.add_argument("--host", help=f"'wait'/'status' for this host's rows ('{MAIN_HOST}' = the origin; default: this host)")
+    parser.add_argument("--poll", type=float, default=5.0, help="seconds between checks while waiting")
+    parser.add_argument("--timeout", type=float, default=0, help="give up waiting after N seconds (0 = never)")
+    parser.add_argument("--socket", default=QUEUE_SOCKET_PATH, help="queue daemon socket (default: configured path)")
+    parser.add_argument("--db", default=SCHEDULER_DB_PATH, help="scheduler DB (default: configured path)")
+    args = parser.parse_args()
+
+    state = daemon_call(args.socket, "status") if args.socket else None
+    on_origin = state is not None
+    host = args.host or (MAIN_HOST if on_origin else socket.gethostname().split(".")[0])
+
+    if args.action in WORKER_SIGNALS:
+        if on_origin:
+            state = daemon_call(args.socket, args.action)
+            print(f"{MAIN_HOST}: {args.action} -> {describe(state)}")
+            return 0
+        pid = worker_pid()
+        if not pid:
+            print(f"ERROR: no queue daemon on {args.socket} and no running {WORKER_UNIT} here", file=sys.stderr)
+            return 1
+        try:
+            os.kill(pid, WORKER_SIGNALS[args.action])
+        except PermissionError:
+            print(f"ERROR: {WORKER_UNIT} runs as another user; run this as that user", file=sys.stderr)
+            return 1
+        print(f"{host}: {args.action} -> {WORKER_UNIT} (pid {pid}); watch journalctl -u {WORKER_UNIT} for 'Drained'")
+        return 0
+
+    if not (args.db and os.path.exists(args.db)):
+        print(f"ERROR: no scheduler DB on this host ({args.db}); run `queuectl {args.action} --host {host}` on {MAIN_HOST}", file=sys.stderr)
+        return 1
+
+    if args.action == "status":
+        if on_origin:
+            print(f"{MAIN_HOST} queue daemon: {describe(state)}")
+        by_host = processing(args.db)
+        print("processing by host: " + (", ".join(f"{h}={n}" for h, n in sorted(by_host.items())) or "nothing"))
+        return 0
+
+    deadline = time.monotonic() + args.timeout if args.timeout else None
+    while True:
+        running = processing(args.db, host)
+        print(f"  {host}: processing={running}", flush=True)
+        if running == 0:
+            print(f"{host} is drained. Safe to update or restart it.")
+            return 0
+        if deadline and time.monotonic() > deadline:
+            print(f"Timed out with {running} task(s) still processing on {host}.", file=sys.stderr)
+            return 1
+        time.sleep(args.poll)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

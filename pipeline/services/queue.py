@@ -1,3 +1,4 @@
+import json
 import multiprocess as mp
 import queue
 import threading
@@ -215,11 +216,11 @@ class QueueManager:
                     sock.settimeout(1.0)  # Check stop event periodically
                     conn, addr = sock.accept()
                     with conn:
-                        data = conn.recv(1024)
-                        if data and b"wake" in data:
-                            self.logger.debug("Received wake message")
-                            self._wake_event.set()
-                            self._wake_event.clear()  # Reset immediately for next wake
+                        reply = self._handle_control_message(conn.recv(1024))
+                        try:
+                            conn.sendall(reply)
+                        except OSError:
+                            pass  # a wake sender closes without reading
                 except socket.timeout:
                     continue
                 except OSError:
@@ -236,6 +237,27 @@ class QueueManager:
                         os.unlink(socket_path)
                 except OSError:
                     pass
+
+    def _handle_control_message(self, data):
+        """The wake socket is also the control channel of cli/queuectl: wake / drain / resume / reload / status."""
+        words = data.split() if data else []
+        command = words[0].decode(errors="replace") if words else ""
+        if command == "wake":
+            self.logger.debug("Received wake message")
+            self._wake_event.set()
+            self._wake_event.clear()  # Reset immediately for next wake
+        elif command == "drain":
+            self.drain()
+        elif command == "resume":
+            self.resume()
+        elif command == "reload":
+            self.request_reload()
+        elif command != "status":
+            return json.dumps({"error": f"unknown command {command!r}"}).encode() + b"\n"
+        with self.lock:
+            running = len(self._active_processes)
+        state = {"draining": self._drain, "running": running, "slots": self.total_cpu_worker}
+        return json.dumps(state).encode() + b"\n"
 
     def __enter__(self):
         """
