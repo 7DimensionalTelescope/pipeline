@@ -88,6 +88,8 @@ class Scheduler:
     # `= 1` is what lets ix_scheduler_foreign match; a bare NOT IN full-scans the Ready partition.
     _FOREIGN_FILTER = f"(COALESCE(dispatch, '') NOT IN ('', '{MAIN_HOST}')) = 1"
     _FOREIGN = object()  # _select_ready_index tier meaning "owned by some other host"
+    # Statuses that prove a host ran or is running a row; a Paused or Stashed row may never have been claimed.
+    _CLAIMED_STATES = (TASK_STATUS_PROCESSING, TASK_STATUS_COMPLETED, TASK_STATUS_FAILED, TASK_STATUS_REJECTED)
 
     # Constants
     # Counts Processing preprocess rows across EVERY host, so it is an origin-side gate:
@@ -264,28 +266,33 @@ class Scheduler:
             if "group_idx" not in columns:
                 self._add_group_idx(conn)
 
-            # Without these the claim scans the whole table under the write lock.
-            cursor.execute(
-                'CREATE INDEX IF NOT EXISTS ix_scheduler_claim '
-                'ON scheduler(status, is_ready DESC, priority DESC, readiness DESC, "index")'
-            )
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS ix_scheduler_gate "
-                "ON scheduler(status, config_type, priority, input_type)"
-            )
-            # Expressions must match _AFFINITY_FILTER / _FOREIGN_FILTER verbatim or those tiers fall back to a scan.
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS ix_scheduler_affinity "
-                "ON scheduler(status, COALESCE(dispatch, ''), is_ready DESC, priority DESC, readiness DESC, \"index\")"
-            )
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS ix_scheduler_foreign "
-                f"ON scheduler(status, COALESCE(dispatch, '') NOT IN ('', '{MAIN_HOST}'), group_idx, "
-                'is_ready DESC, priority DESC, readiness DESC, "index")'
-            )
-            cursor.execute("CREATE INDEX IF NOT EXISTS ix_scheduler_group ON scheduler(group_idx)")
+            self._create_indexes(cursor)
 
             conn.commit()
+            self._repair_group_idx(conn)
+
+    @staticmethod
+    def _create_indexes(cursor):
+        """Without these the claim scans the whole table under the write lock."""
+        cursor.execute(
+            'CREATE INDEX IF NOT EXISTS ix_scheduler_claim '
+            'ON scheduler(status, is_ready DESC, priority DESC, readiness DESC, "index")'
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS ix_scheduler_gate "
+            "ON scheduler(status, config_type, priority, input_type)"
+        )
+        # Expressions must match _AFFINITY_FILTER / _FOREIGN_FILTER verbatim or those tiers fall back to a scan.
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS ix_scheduler_affinity "
+            "ON scheduler(status, COALESCE(dispatch, ''), is_ready DESC, priority DESC, readiness DESC, \"index\")"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS ix_scheduler_foreign "
+            f"ON scheduler(status, COALESCE(dispatch, '') NOT IN ('', '{MAIN_HOST}'), group_idx, "
+            'is_ready DESC, priority DESC, readiness DESC, "index")'
+        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS ix_scheduler_group ON scheduler(group_idx)")
 
     def _add_group_idx(self, conn):
         """One-time migration: derive group_idx from dependent_idx and stamp every single-owner group on all its rows."""
@@ -309,19 +316,21 @@ class Scheduler:
                 'UPDATE scheduler SET group_idx = ? WHERE "index" = ?',
                 [(group, index) for group, members in groups.items() for index, _, _ in members],
             )
+            cursor.execute("DROP INDEX IF EXISTS ix_scheduler_foreign")  # its expression predates the origin's name
+            self._create_indexes(cursor)  # inside the transaction: the stamps below seek ix_scheduler_group
             # before this column the origin wrote '' for itself, so a claimed '' row is the origin's
             for group, members in groups.items():
                 owners = {
                     dispatch or self._LOCAL_DISPATCH
                     for _, status, dispatch in members
-                    if dispatch or status not in (TASK_STATUS_READY, TASK_STATUS_PENDING)
+                    if dispatch or status in self._CLAIMED_STATES
                 }
                 if len(owners) == 1:
                     cursor.execute(
                         f"UPDATE scheduler SET dispatch = ? WHERE group_idx = ? AND {self._AFFINITY_FILTER}",
                         (owners.pop(), group, self._UNCLAIMED),
                     )
-            cursor.execute("DROP INDEX IF EXISTS ix_scheduler_foreign")  # its expression predates the origin's name
+            cursor.execute(f"PRAGMA user_version = {max(config_types, default=0)}")
             conn.commit()
         except sqlite3.OperationalError as e:
             conn.rollback()
@@ -339,6 +348,26 @@ class Scheduler:
             if config_types.get(int(child)) == CONFIG_TYPE_CROSSFILTER:
                 return int(child)
         return None
+
+    def _repair_group_idx(self, conn):
+        """Derive group_idx for rows an older code path inserted without it: everything above the user_version watermark."""
+        cursor = conn.cursor()
+        watermark = cursor.execute("PRAGMA user_version").fetchone()[0]
+        top = cursor.execute('SELECT COALESCE(MAX("index"), 0) FROM scheduler').fetchone()[0]
+        if top <= watermark:
+            return
+        cursor.execute("BEGIN IMMEDIATE")
+        cursor.execute('SELECT "index", config_type, dependent_idx, group_idx FROM scheduler WHERE "index" > ?', (watermark,))
+        rows = cursor.fetchall()
+        config_types = {row[0]: row[1] for row in rows}
+        updates = []
+        for index, config_type, dependent_idx, group_idx in rows:
+            group = self._group_index(index, config_type, dependent_idx, config_types) if group_idx is None else None
+            if group is not None:
+                updates.append((group, index))
+        cursor.executemany('UPDATE scheduler SET group_idx = ? WHERE "index" = ?', updates)
+        cursor.execute(f"PRAGMA user_version = {int(top)}")
+        conn.commit()
 
     def start_system_queue(self):
         """Send wake message to queue socket."""
@@ -451,15 +480,24 @@ class Scheduler:
 
         return query, params
 
-    def _select_ready_index(self, cursor, affinity, extra_sql="", extra_params=()):
-        """One claim tier: rows owned by host `affinity` ('' = unclaimed), or _FOREIGN for other hosts' ungrouped rows."""
-        query = 'SELECT "index" FROM scheduler WHERE status = ?'
+    def _tier_top(self, cursor, column, affinity, host, extra_sql="", extra_params=(), enter_groups=True):
+        """`column` of the row one tier would claim: rows owned by `affinity` ('' = unclaimed), or _FOREIGN for other hosts'."""
+        query = f"SELECT {column} FROM scheduler WHERE status = ?"
         params = [TASK_STATUS_READY]
         if affinity is self._FOREIGN:
             query += f" AND {self._FOREIGN_FILTER} AND group_idx IS NULL"
         else:
             query += f" AND {self._AFFINITY_FILTER}"
             params.append(affinity)
+        if affinity == self._UNCLAIMED and not enter_groups:
+            query += " AND group_idx IS NULL"
+        elif affinity == self._UNCLAIMED:
+            # a stray unclaimed row inside a group another host already owns stays that host's
+            query += (
+                " AND (group_idx IS NULL OR NOT EXISTS (SELECT 1 FROM scheduler g WHERE g.group_idx = scheduler.group_idx"
+                " AND COALESCE(g.dispatch, '') NOT IN ('', ?)))"
+            )
+            params.append(host)
         query += extra_sql
         params.extend(extra_params)
         query, params = self._append_ready_task_constraints(cursor, query, params)
@@ -468,17 +506,29 @@ class Scheduler:
         row = cursor.fetchone()
         return row[0] if row else None
 
+    def _select_ready_index(self, cursor, affinity, host, extra_sql="", extra_params=(), enter_groups=True):
+        """Index of the row one claim tier would take; see _tier_top."""
+        return self._tier_top(cursor, '"index"', affinity, host, extra_sql, extra_params, enter_groups)
+
+    def _claim_tiers(self, cursor, host, extra_sql="", extra_params=(), enter_groups=True):
+        """Own rows before the unclaimed pool, unless the pool's best row outranks them: the priority ladder still wins."""
+        own = self._tier_top(cursor, "priority", host, host, extra_sql, extra_params, enter_groups)
+        pool = self._tier_top(cursor, "priority", self._UNCLAIMED, host, extra_sql, extra_params, enter_groups)
+        if pool is not None and (own is None or pool > own):
+            return (self._UNCLAIMED, host)
+        return (host, self._UNCLAIMED)
+
     def _take_foreign_turn(self):
         """True when this origin claim should try other hosts' rows before its own."""
         self._claim_tick += 1
         return self.FALLBACK_EVERY > 0 and self._claim_tick % self.FALLBACK_EVERY == 0
 
     def _claim_group(self, cursor, index, host):
-        """Stamp every unclaimed row of the claimed row's crossfilter group with `host`; a no-op for an ungrouped row."""
+        """Stamp the claimed row's crossfilter group with `host`: every unclaimed row not running elsewhere; no-op if ungrouped."""
         cursor.execute(
             f'UPDATE scheduler SET dispatch = ? WHERE group_idx = (SELECT group_idx FROM scheduler WHERE "index" = ?) '
-            f"AND {self._AFFINITY_FILTER}",
-            (host, index, self._UNCLAIMED),
+            f"AND {self._AFFINITY_FILTER} AND status <> ?",
+            (host, index, self._UNCLAIMED, TASK_STATUS_PROCESSING),
         )
 
     @staticmethod
@@ -719,12 +769,12 @@ class Scheduler:
             cursor.execute("BEGIN IMMEDIATE")
             try:
                 # A fallback turn must name other hosts explicitly; the unclaimed pool would just re-pick a local one.
-                tiers = (self._LOCAL_DISPATCH, self._UNCLAIMED)
+                tiers = self._claim_tiers(cursor, self._LOCAL_DISPATCH)
                 if self._take_foreign_turn():
                     tiers = (self._FOREIGN,) + tiers
                 task_index = None
                 for affinity in tiers:
-                    task_index = self._select_ready_index(cursor, affinity)
+                    task_index = self._select_ready_index(cursor, affinity, self._LOCAL_DISPATCH)
                     if task_index is not None:
                         break
                 if task_index is None:
@@ -1097,13 +1147,11 @@ class Scheduler:
 
     @staticmethod
     def _worker_claim_filter(config_types):
-        """SQL for a worker's config_type whitelist; a worker that cannot run crossfilter rows must not enter a group."""
+        """A worker's config_type whitelist as SQL, and whether it may enter a crossfilter group (it must run the white)."""
         if not config_types:
-            return "", ()
+            return "", (), True
         extra_sql = f" AND config_type IN ({','.join('?' for _ in config_types)})"
-        if CONFIG_TYPE_CROSSFILTER not in config_types:
-            extra_sql += " AND group_idx IS NULL"
-        return extra_sql, tuple(config_types)
+        return extra_sql, tuple(config_types), CONFIG_TYPE_CROSSFILTER in config_types
 
     def claim_next_dispatch_task(self, server_name, config_types=None, input_type=None):
         """
@@ -1131,10 +1179,10 @@ class Scheduler:
             cursor = conn.cursor()
             cursor.execute("BEGIN IMMEDIATE")
             try:
-                extra_sql, extra_params = self._worker_claim_filter(config_types)
+                extra_sql, extra_params, enter_groups = self._worker_claim_filter(config_types)
                 task_index = None
-                for affinity in (server_name, self._UNCLAIMED):
-                    task_index = self._select_ready_index(cursor, affinity, extra_sql, extra_params)
+                for affinity in self._claim_tiers(cursor, server_name, extra_sql, extra_params, enter_groups):
+                    task_index = self._select_ready_index(cursor, affinity, server_name, extra_sql, extra_params, enter_groups)
                     if task_index is not None:
                         break
                 if task_index is None:
@@ -1187,12 +1235,14 @@ class Scheduler:
             cursor = conn.cursor()
             cursor.execute("BEGIN IMMEDIATE")
             try:
-                extra_sql, extra_params = self._worker_claim_filter(config_types)
+                extra_sql, extra_params, enter_groups = self._worker_claim_filter(config_types)
                 relabel = ", input_type = CASE WHEN LOWER(input_type) = ? THEN input_type ELSE ? END"
                 while len(claimed) < count:
                     task_index = None
-                    for affinity in (server_name, self._UNCLAIMED):
-                        task_index = self._select_ready_index(cursor, affinity, extra_sql, extra_params)
+                    for affinity in self._claim_tiers(cursor, server_name, extra_sql, extra_params, enter_groups):
+                        task_index = self._select_ready_index(
+                            cursor, affinity, server_name, extra_sql, extra_params, enter_groups
+                        )
                         if task_index is not None:
                             break
                     if task_index is None:
