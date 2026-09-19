@@ -140,7 +140,7 @@ class Blueprint:
                 self.groups[mfg_key].add_images(flattened_images)
                 self.groups[mfg_key].add_sci_keys(key)
 
-        if self.enable_crossfilter and not self.master_frame_only:
+        if self.enable_crossfilter and not self.is_too and not self.master_frame_only:
             science_groups = [group for group in self.groups.values() if isinstance(group, ScienceGroup)]
             for science_group in science_groups:
                 name = NameHandler(science_group.image_files[0])

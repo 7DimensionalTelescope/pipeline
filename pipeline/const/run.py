@@ -23,6 +23,9 @@ INPUT_TYPE_TOO = "ToO"
 INPUT_TYPE_REPROCESS = "Reprocess"
 INPUT_TYPE_USER = "User-input"
 
+# cross-filter discovery provenance; only Blueprint's CrossFilterGroup writes it, which is what makes it trustworthy
+DISCOVERY_RAW_INVENTORY = "raw_inventory"
+
 # scheduler task status, unrelated to the free-form process_status.status progress string
 TASK_STATUS_READY = "Ready"
 TASK_STATUS_PENDING = "Pending"

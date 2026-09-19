@@ -7,6 +7,7 @@ from ..const import (
     # BROAD_FILTERS,
     # FIRST_MEDIUM_FILTERS,
     ALL_FILTERS,
+    DISCOVERY_RAW_INVENTORY,
     IMAGE_GROUP_SCIENCE,
     WHITE_FILTER,
 )
@@ -167,6 +168,12 @@ class WhiteImage(ImCoadd):
         return [entry for entry, filter_name in zip(entries, filters) if filter_name in counted_filters]
 
     def _raw_filter_inventory(self) -> set:
+        """Observed filter set: the Blueprint's own raw inventory when it made this config, else the raw DB."""
+        if self.config_node.input.discovery_method == DISCOVERY_RAW_INVENTORY:
+            declared = {str(value) for value in (self.config_node.input.filters or [])}
+            self.logger.info(f"Filter inventory from the Blueprint raw inventory: {len(declared)} filter(s)")
+            return declared
+
         from ..services.database import RawFrameQuery
 
         obj = collapse(atleast_1d(self.path.name.obj), raise_error=True)

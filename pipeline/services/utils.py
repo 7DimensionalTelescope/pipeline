@@ -17,7 +17,7 @@ import getpass
 from collections import UserDict
 from itertools import chain
 
-from ..const import SERVICES_TMP_DIR
+from ..const import DISCOVERY_RAW_INVENTORY, SERVICES_TMP_DIR
 from ..utils import collapse
 
 
@@ -891,10 +891,8 @@ class CrossFilterGroup:
                 is_multi_epoch=is_multi_epoch,
                 config_suffix=config_suffix,
             )
-        source_raw_images = sorted(
-            {image for group in self.source_groups for image in group.image_files}
-        )
-        config.record_discovery(source_raw_images, "raw_inventory")
+        source_raw_images = sorted({image for group in self.source_groups for image in group.image_files})
+        config.record_discovery(source_raw_images, DISCOVERY_RAW_INVENTORY)  # skip input completeness check
         self._config = config.config_file
 
         try:
