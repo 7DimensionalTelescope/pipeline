@@ -11,6 +11,12 @@ back exactly as it was. For restarting the daemons without killing running reduc
     sudo systemctl restart pipeline-trigger
     drain_queue resume     # Paused -> Ready, only the rows this tool paused
 
+One host at a time, without pausing any row (the other hosts keep claiming): drain that host's
+daemon with SIGUSR1, wait for ITS rows only, update, then SIGUSR2 or restart it.
+
+    sudo systemctl kill -s SIGUSR1 --kill-who=main pipeline-queue     # proton; a worker: pipeline-dispatch-worker there
+    drain_queue wait --host proton
+
 `pause` records the rows it changed in a state file next to the scheduler DB; `resume`
 restores only those, and only if they are still Paused. Rows paused by anything else are
 left alone. `wait` re-pauses anything that becomes claimable meanwhile (newly ingested
@@ -29,6 +35,7 @@ pipeline_dir = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(pipeline_dir))
 
 from pipeline.const import (
+    MAIN_HOST,
     SCHEDULER_DB_PATH,
     TASK_STATUS_READY,
     TASK_STATUS_PENDING,
@@ -49,12 +56,29 @@ def connect(db_path):
     return sqlite3.connect(db_path, timeout=Scheduler.DB_BUSY_TIMEOUT)
 
 
-def counts(db_path):
+def host_filter(host):
+    """SQL and params selecting the rows one host owns; the origin also owns the legacy '' rows."""
+    if host == MAIN_HOST:
+        return f" AND {Scheduler._LOCAL_TASK_FILTER}", ()
+    return f" AND {Scheduler._AFFINITY_FILTER}", (host,)
+
+
+def counts(db_path, host=None):
     placeholders = ",".join("?" * len(TRACKED_STATUSES))
+    extra_sql, extra_params = host_filter(host) if host else ("", ())
     with connect(db_path) as conn:
         rows = conn.execute(
-            f"SELECT status, COUNT(*) FROM scheduler WHERE status IN ({placeholders}) GROUP BY status",
-            TRACKED_STATUSES,
+            f"SELECT status, COUNT(*) FROM scheduler WHERE status IN ({placeholders}){extra_sql} GROUP BY status",
+            (*TRACKED_STATUSES, *extra_params),
+        ).fetchall()
+    return dict(rows)
+
+
+def processing_by_host(db_path):
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT COALESCE(NULLIF(dispatch, ''), ?), COUNT(*) FROM scheduler WHERE status = ? GROUP BY 1",
+            (MAIN_HOST, TASK_STATUS_PROCESSING),
         ).fetchall()
     return dict(rows)
 
@@ -117,13 +141,13 @@ def do_resume(db_path):
     return restored
 
 
-def do_wait(db_path, poll, timeout):
+def do_wait(db_path, poll, timeout, host=None):
     deadline = time.monotonic() + timeout if timeout else None
     while True:
-        current = counts(db_path)
+        current = counts(db_path, host)
         processing = current.get(TASK_STATUS_PROCESSING, 0)
 
-        if current.get(TASK_STATUS_READY, 0):  # newly claimable rows appeared; hold them too
+        if not host and current.get(TASK_STATUS_READY, 0):  # newly claimable rows appeared; hold them too
             paused = do_pause(db_path)
             if paused:
                 print(f"  (paused {paused} newly claimable row(s))")
@@ -135,7 +159,7 @@ def do_wait(db_path, poll, timeout):
         )
 
         if processing == 0:
-            print("Queue is drained. Safe to restart.")
+            print(f"{host} is drained. Safe to update or restart it." if host else "Queue is drained. Safe to restart.")
             return 0
 
         if deadline and time.monotonic() > deadline:
@@ -154,6 +178,11 @@ def main():
     parser.add_argument("--db", default=SCHEDULER_DB_PATH, help="scheduler DB (default: configured path)")
     parser.add_argument("--poll", type=float, default=30.0, help="seconds between checks while waiting")
     parser.add_argument("--timeout", type=float, default=0, help="give up waiting after N seconds (0 = never)")
+    parser.add_argument(
+        "--host",
+        help=f"only the rows this host owns ('{MAIN_HOST}' = the origin); 'wait' then pauses nothing: drain that "
+        "host's daemon with SIGUSR1 first",
+    )
     args = parser.parse_args()
 
     if not args.db:
@@ -161,8 +190,11 @@ def main():
         return 1
 
     if args.action == "status":
-        current = counts(args.db)
+        current = counts(args.db, args.host)
         print(f"{args.db}: " + (", ".join(f"{k}={v}" for k, v in sorted(current.items())) or "nothing outstanding"))
+        by_host = processing_by_host(args.db)
+        if by_host:
+            print("  processing by host: " + ", ".join(f"{h}={n}" for h, n in sorted(by_host.items())))
         recorded = load_state(args.db)
         if recorded:
             print(f"  {len(recorded)} row(s) recorded as paused by this tool; 'resume' will restore them")
@@ -177,7 +209,7 @@ def main():
         do_resume(args.db)
         return 0
 
-    return do_wait(args.db, args.poll, args.timeout)
+    return do_wait(args.db, args.poll, args.timeout, args.host)
 
 
 if __name__ == "__main__":

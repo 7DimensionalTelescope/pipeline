@@ -22,6 +22,8 @@ EnvironmentFile=/home/pipeline-stable/pipeline/.env
 # /run is root-owned: without this the daemon cannot create /run/queue and the socket wake listener disables itself.
 RuntimeDirectory=queue
 ExecStart=/home/pipeline-stable/.conda/envs/pipeline/bin/python3 /home/pipeline-stable/pipeline/pipeline/cli/queue_daemon
+# SIGHUP re-reads .env (QUEUE_MAX_WORKERS and the claim gates); SIGUSR1 drains, SIGUSR2 resumes — see services/queue.py.
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=10
 # Graceful stop is designed to finish in <=25 s (SHUTDOWN_* budgets in services/queue.py);

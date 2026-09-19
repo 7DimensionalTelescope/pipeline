@@ -92,11 +92,13 @@ class Scheduler:
     _CLAIMED_STATES = (TASK_STATUS_PROCESSING, TASK_STATUS_COMPLETED, TASK_STATUS_FAILED, TASK_STATUS_REJECTED)
 
     # Constants
+    DEFAULT_MAX_PREPROCESS = 3
+    DEFAULT_FALLBACK_EVERY = 10
     # Counts Processing preprocess rows across EVERY host, so it is an origin-side gate:
     # set QUEUE_MAX_PREPROCESS in the origin's .env, where the claim actually runs.
-    MAX_PREPROCESS = int(os.environ.get("QUEUE_MAX_PREPROCESS") or 3)
+    MAX_PREPROCESS = int(os.environ.get("QUEUE_MAX_PREPROCESS") or DEFAULT_MAX_PREPROCESS)
     # Every Nth origin claim looks at other hosts' rows first, so a down worker's rows are not stranded.
-    FALLBACK_EVERY = int(os.environ.get("QUEUE_FALLBACK_EVERY") or 10)
+    FALLBACK_EVERY = int(os.environ.get("QUEUE_FALLBACK_EVERY") or DEFAULT_FALLBACK_EVERY)
     HIGH_PRIORITY_THRESHOLD = 10
     # Seconds a statement waits for a competing writer before raising "database is locked".
     # A bulk submission must never make the queue daemon drop a completion.
@@ -522,6 +524,18 @@ class Scheduler:
         """True when this origin claim should try other hosts' rows before its own."""
         self._claim_tick += 1
         return self.FALLBACK_EVERY > 0 and self._claim_tick % self.FALLBACK_EVERY == 0
+
+    def reload_settings(self):
+        """Re-read the .env-backed claim gates onto this instance (the queue daemon's SIGHUP); returns old -> new."""
+        changes = {}
+        for name, variable, default in (
+            ("MAX_PREPROCESS", "QUEUE_MAX_PREPROCESS", self.DEFAULT_MAX_PREPROCESS),
+            ("FALLBACK_EVERY", "QUEUE_FALLBACK_EVERY", self.DEFAULT_FALLBACK_EVERY),
+        ):
+            value = int(os.environ.get(variable) or default)
+            changes[name] = (getattr(self, name), value)
+            setattr(self, name, value)
+        return changes
 
     def _claim_group(self, cursor, index, host):
         """Stamp the claimed row's crossfilter group with `host`: every unclaimed row not running elsewhere; no-op if ungrouped."""

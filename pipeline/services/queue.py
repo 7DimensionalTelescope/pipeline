@@ -10,7 +10,7 @@ from datetime import datetime
 import subprocess
 
 from ..utils import time_diff_in_seconds
-from ..const.environ import PIPELINE_LOG_DIR, QUEUE_SOCKET_PATH
+from ..const.environ import PIPELINE_LOG_DIR, QUEUE_SOCKET_PATH, ROOT_DIR, load_dotenv
 from ..const.run import (
     SUCCESS_RETURN_CODE,
     FAILURE_RETURN_CODE,
@@ -110,10 +110,18 @@ class QueueManager:
         # Wake event for socket-based wake mechanism
         self._wake_event = threading.Event()
 
+        self._drain = False
+        self._drained_logged = False
+        self._reload_requested = False
+
         # Register signal handlers
         if threading.current_thread() is threading.main_thread():
             signal.signal(signal.SIGTERM, self._handle_keyboard_interrupt)
             signal.signal(signal.SIGINT, self._handle_keyboard_interrupt)
+            # The dispatch worker's operator contract: SIGUSR1 drains, SIGUSR2 resumes, SIGHUP re-reads .env.
+            signal.signal(signal.SIGUSR1, self.drain)
+            signal.signal(signal.SIGUSR2, self.resume)
+            signal.signal(signal.SIGHUP, self.request_reload)
 
         # Optional: Jupyter notebook interrupt handling
         try:
@@ -319,6 +327,9 @@ class QueueManager:
         while not self._abrupt_stop_requested.is_set():
             try:
                 self._check_abrupt_stop()
+                if self._reload_requested:
+                    self._reload_requested = False
+                    self._reload_config()
 
                 task = None
                 cmd = None
@@ -327,6 +338,12 @@ class QueueManager:
                 with self.lock:
                     current_usage = len(self._active_processes)
 
+                if self._drain:
+                    if current_usage == 0 and not self._drained_logged:
+                        self._drained_logged = True
+                        self.logger.info("Drained: 0 running. Safe to stop or restart this unit.")
+                    self._wake_event.wait(timeout=DEFAULT_SOCKET_LISTENER_TIMEOUT)
+                    continue
                 if current_usage >= self.total_cpu_worker:
                     time.sleep(DEFAULT_WORKER_SLEEP_TIME)
                     continue
@@ -756,6 +773,42 @@ class QueueManager:
         self.logger.warning("Jupyter notebook interrupt detected. Initiating abrupt stop...")
         self.abrupt_stop()
         raise KeyboardInterrupt()
+
+    def drain(self, *_args):
+        """Stop claiming; let every running task finish. The daemon stays up and idle."""
+        if not self._drain:
+            self._drain = True
+            self._drained_logged = False
+            self.logger.info(f"Drain requested: no new claims; {len(self._active_processes)} running task(s) will finish")
+
+    def resume(self, *_args):
+        if self._drain:
+            self._drain = False
+            self._drained_logged = False
+            self.logger.info("Drain cleared: claiming resumed")
+
+    def request_reload(self, *_args):
+        """Schedule a .env reload; signal handlers must not perform I/O or mutate worker state."""
+        self._reload_requested = True
+
+    def _reload_config(self):
+        """Apply .env at a loop boundary: QUEUE_MAX_WORKERS here, the claim gates on the scheduler."""
+        if load_dotenv is not None:
+            load_dotenv(os.path.join(ROOT_DIR, ".env"), override=True)
+        try:
+            max_workers = int(os.environ.get("QUEUE_MAX_WORKERS") or DEFAULT_MAX_WORKERS)
+            if max_workers < 0:
+                raise ValueError("QUEUE_MAX_WORKERS must be >= 0")
+        except (TypeError, ValueError) as e:
+            self.logger.error(f"Queue reload rejected; retaining current settings: {e}")
+            return
+        old = self.total_cpu_worker
+        self.total_cpu_worker = max_workers
+        gates = self.scheduler.reload_settings() if self.scheduler is not None else {}
+        self.logger.info(
+            f"Queue reload applied: max_workers {old} -> {max_workers}"
+            + "".join(f", {name} {before} -> {after}" for name, (before, after) in gates.items())
+        )
 
 
 def clear_completed_schedules():
