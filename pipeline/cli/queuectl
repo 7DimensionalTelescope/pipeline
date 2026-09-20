@@ -2,20 +2,21 @@
 """
 queuectl — control the reduction queue on THIS host without killing anything.
 
-    queuectl drain              stop claiming; running tasks finish and are recorded
-    queuectl resume             claim again
-    queuectl reload             re-read .env (proton: QUEUE_MAX_WORKERS + claim gates; worker: DISPATCH_* settings)
-    queuectl status             daemon state, and Processing per host from the scheduler DB
-    queuectl wait [--host H]    block until this host (or H) has nothing running; pauses no row
+    queuectl drain [--report-every S]   stop claiming; running tasks finish. Prints "host: N running" every S seconds
+                                        (default 5) until N is 0; S=0 returns at once
+    queuectl resume                     claim again
+    queuectl reload                     re-read .env (proton: QUEUE_MAX_WORKERS + claim gates; worker: DISPATCH_*)
+    queuectl status                     daemon state and Processing per host (proton) / running processes (worker)
 
-On proton the verbs go to the queue daemon's socket (QUEUE_SOCKET_PATH, group pipeline, no sudo). On a
-worker host they signal pipeline-dispatch-worker (SIGUSR1 / SIGUSR2 / SIGHUP, its own contract). The
-all-hosts row-level pause is still `drain_queue pause | wait | resume`.
+On proton the verbs go to the queue daemon's socket (QUEUE_SOCKET_PATH, group pipeline, no sudo); a daemon that
+predates the channel gets its signal contract instead (SIGUSR1 / SIGUSR2 / SIGHUP) when the caller may signal it.
+On a worker host they signal pipeline-dispatch-worker. The all-hosts row pause is still `drain_queue`.
 """
 
 import argparse
 import json
 import os
+import re
 import signal
 import socket
 import sqlite3
@@ -32,12 +33,13 @@ from pipeline.services.scheduler import Scheduler
 
 QUEUE_UNIT = "pipeline-queue"
 WORKER_UNIT = "pipeline-dispatch-worker"
-WORKER_SIGNALS = {"drain": signal.SIGUSR1, "resume": signal.SIGUSR2, "reload": signal.SIGHUP}
+SIGNALS = {"drain": signal.SIGUSR1, "resume": signal.SIGUSR2, "reload": signal.SIGHUP}
+TASK_CMD = re.compile(r"python\S* \S*cli/(data_reduction|crossfilter|preprocess) ")
 
 
 def daemon_call(socket_path, command):
-    """One command to the queue daemon: its JSON state; {} when a daemon listens but predates the control channel
-    (it answers only `wake`, with nothing); None when nothing listens there."""
+    """One command to the queue daemon: its JSON state; {} when a daemon listens but predates the control channel;
+    None when nothing listens there."""
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(5.0)
@@ -53,49 +55,40 @@ def daemon_call(socket_path, command):
     return state if isinstance(state, dict) else {}
 
 
-def unit_pid(unit):
-    """MainPID of a local systemd unit, 0 when it is not running here."""
-    try:
-        out = subprocess.run(["systemctl", "show", "-p", "MainPID", "--value", unit], capture_output=True, text=True)
-        return int(out.stdout.strip() or 0)
-    except (OSError, ValueError):
-        return 0
-
-
 def send_signal(unit, action):
-    """Fallback for a daemon without the socket control channel: the signal contract, if we may send it."""
-    pid = unit_pid(unit)
+    """The signal contract for a daemon without the socket channel; "ERROR ..." when it could not be sent."""
+    try:
+        pid = int(subprocess.run(["systemctl", "show", "-p", "MainPID", "--value", unit], capture_output=True, text=True).stdout.strip() or 0)
+    except (OSError, ValueError):
+        pid = 0
     if not pid:
         return f"ERROR: no running {unit} here"
     try:
-        os.kill(pid, WORKER_SIGNALS[action])
+        os.kill(pid, SIGNALS[action])
     except PermissionError:
-        return (f"ERROR: {unit} (pid {pid}) runs as another user: "
-                f"sudo systemctl kill -s {WORKER_SIGNALS[action].name} --kill-who=main {unit}")
-    return f"{action} -> {unit} (pid {pid}) by {WORKER_SIGNALS[action].name}; its log confirms"
+        return f"ERROR: {unit} (pid {pid}) runs as another user: sudo systemctl kill -s {SIGNALS[action].name} --kill-who=main {unit}"
+    return f"{action} -> {unit} (pid {pid}) by {SIGNALS[action].name}"
 
 
-def host_filter(host):
-    """Rows one host owns; the origin also owns the legacy '' rows."""
-    if host == MAIN_HOST:
-        return Scheduler._LOCAL_TASK_FILTER, ()
-    return Scheduler._AFFINITY_FILTER, (host,)
-
-
-def processing(db_path, host=None):
-    """Processing rows per host, or the count for one host."""
+def db_processing(db_path):
+    """Processing rows per host from the scheduler DB (the origin's '' rows count as the origin)."""
     with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=Scheduler.DB_BUSY_TIMEOUT) as conn:
-        if host:
-            where, params = host_filter(host)
-            return conn.execute(
-                f"SELECT COUNT(*) FROM scheduler WHERE status = ? AND {where}", (TASK_STATUS_PROCESSING, *params)
-            ).fetchone()[0]
-        return dict(
-            conn.execute(
-                "SELECT COALESCE(NULLIF(dispatch, ''), ?), COUNT(*) FROM scheduler WHERE status = ? GROUP BY 1",
-                (MAIN_HOST, TASK_STATUS_PROCESSING),
-            ).fetchall()
-        )
+        return dict(conn.execute(
+            "SELECT COALESCE(NULLIF(dispatch, ''), ?), COUNT(*) FROM scheduler WHERE status = ? GROUP BY 1",
+            (MAIN_HOST, TASK_STATUS_PROCESSING)).fetchall())
+
+
+def local_running():
+    """Reduction processes on this host — a worker has no scheduler DB."""
+    n = 0
+    for pid in os.listdir("/proc"):
+        if pid.isdigit():
+            try:
+                with open(f"/proc/{pid}/cmdline", "rb") as f:
+                    n += bool(TASK_CMD.search(f.read().replace(b"\0", b" ").decode(errors="replace")))
+            except OSError:
+                pass
+    return n
 
 
 def describe(state):
@@ -103,64 +96,58 @@ def describe(state):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Drain, resume, reload or watch the reduction queue on this host.")
-    parser.add_argument("action", choices=["drain", "resume", "reload", "status", "wait"])
-    parser.add_argument("--host", help=f"'wait'/'status' for this host's rows ('{MAIN_HOST}' = the origin; default: this host)")
-    parser.add_argument("--poll", type=float, default=5.0, help="seconds between checks while waiting")
-    parser.add_argument("--timeout", type=float, default=0, help="give up waiting after N seconds (0 = never)")
+    parser = argparse.ArgumentParser(description="Drain, resume, reload or inspect the reduction queue on this host.")
+    parser.add_argument("action", choices=["drain", "resume", "reload", "status"])
+    parser.add_argument("--report-every", type=float, default=5.0, metavar="S", help="drain: seconds between report lines, 0 = none (default 5)")
     parser.add_argument("--socket", default=QUEUE_SOCKET_PATH, help="queue daemon socket (default: configured path)")
     parser.add_argument("--db", default=SCHEDULER_DB_PATH, help="scheduler DB (default: configured path)")
     args = parser.parse_args()
 
     state = daemon_call(args.socket, "status") if args.socket else None
-    on_origin = state is not None                 # a queue daemon listens on the socket: this is the origin
-    has_channel = bool(state) and "draining" in state   # and it understands more than `wake`
-    host = args.host or (MAIN_HOST if on_origin else socket.gethostname().split(".")[0])
-
-    if args.action in WORKER_SIGNALS:
-        if has_channel:
-            state = daemon_call(args.socket, args.action)
-            if not state or "draining" not in state:
-                print(f"ERROR: queue daemon replied {state!r}", file=sys.stderr)
-                return 1
-            print(f"{MAIN_HOST}: {args.action} -> {describe(state)}")
-            return 0
-        if on_origin:
-            print(f"queue daemon on {args.socket} predates the socket control channel (started before 47b76f8 was "
-                  f"deployed): falling back to its signal contract; restart pipeline-queue after the pull to enable it",
-                  flush=True)
-            message = send_signal(QUEUE_UNIT, args.action)
-        else:
-            message = send_signal(WORKER_UNIT, args.action)
-            if message.startswith("ERROR: no running"):
-                message = f"ERROR: no queue daemon on {args.socket} and no running {WORKER_UNIT} here"
-        print(f"{host}: {message}", file=sys.stderr if message.startswith("ERROR") else sys.stdout)
-        return 1 if message.startswith("ERROR") else 0
-
-    if not (args.db and os.path.exists(args.db)):
-        print(f"ERROR: no scheduler DB on this host ({args.db}); run `queuectl {args.action} --host {host}` on {MAIN_HOST}", file=sys.stderr)
-        return 1
+    on_origin = state is not None                        # a queue daemon listens on the socket: this is the origin
+    has_channel = bool(state) and "draining" in state    # and it understands more than `wake`
+    host = MAIN_HOST if on_origin else socket.gethostname().split(".")[0]
+    have_db = bool(args.db) and os.path.exists(args.db)
+    running = (lambda: db_processing(args.db).get(host, 0)) if have_db else local_running
 
     if args.action == "status":
         if has_channel:
             print(f"{MAIN_HOST} queue daemon: {describe(state)}")
         elif on_origin:
-            print(f"{MAIN_HOST} queue daemon: listening, but without the socket control channel (restart it after the pull)")
-        by_host = processing(args.db)
-        print("processing by host: " + (", ".join(f"{h}={n}" for h, n in sorted(by_host.items())) or "nothing"))
+            print(f"{MAIN_HOST} queue daemon: listening, without the socket control channel (restart it after the update)")
+        if have_db:
+            print("processing by host: " + (", ".join(f"{h}={n}" for h, n in sorted(db_processing(args.db).items())) or "nothing"))
+        else:
+            print(f"{host}: {local_running()} reduction process(es) running")
         return 0
 
-    deadline = time.monotonic() + args.timeout if args.timeout else None
-    while True:
-        running = processing(args.db, host)
-        print(f"  {host}: processing={running}", flush=True)
-        if running == 0:
-            print(f"{host} is drained. Safe to update or restart it.")
-            return 0
-        if deadline and time.monotonic() > deadline:
-            print(f"Timed out with {running} task(s) still processing on {host}.", file=sys.stderr)
+    if has_channel:
+        reply = daemon_call(args.socket, args.action)
+        if not reply or "draining" not in reply:
+            print(f"ERROR: queue daemon replied {reply!r}", file=sys.stderr)
             return 1
-        time.sleep(args.poll)
+        print(f"{MAIN_HOST}: {args.action} -> {describe(reply)}", flush=True)
+    else:
+        if on_origin:
+            print(f"queue daemon predates the socket control channel: using its signal contract; restart {QUEUE_UNIT} after the update", flush=True)
+        message = send_signal(QUEUE_UNIT if on_origin else WORKER_UNIT, args.action)
+        if message.startswith("ERROR: no running") and not on_origin:
+            message = f"ERROR: no queue daemon on {args.socket} and no running {WORKER_UNIT} here"
+        if message.startswith("ERROR"):
+            print(message, file=sys.stderr)
+            return 1
+        print(f"{host}: {message}", flush=True)
+
+    if args.action == "drain" and args.report_every > 0:
+        t0 = time.monotonic()
+        while True:
+            n = running()
+            print(f"  [{int((time.monotonic() - t0) // 60):02d}:{int((time.monotonic() - t0) % 60):02d}] {host}: {n} running", flush=True)
+            if n == 0:
+                print(f"{host}: drained")
+                break
+            time.sleep(args.report_every)
+    return 0
 
 
 if __name__ == "__main__":
