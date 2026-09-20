@@ -948,10 +948,11 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             # must stay the same predicate as data_reduction: this stages the sidecar it bakes in
             pairs = [(i, o) for i, o in zip(self.sci_input, self.sci_output) if self._sci_change(o)]
 
-        if self.sci_input and not pairs:
-            self.logger.info(
-                f"[Group {self._current_group+1}] All science outputs already exist; skipping header preparation"
-            )
+        if not pairs:
+            if self.sci_input:
+                self.logger.info(
+                    f"[Group {self._current_group+1}] All science outputs already exist; skipping header preparation"
+                )
             return
 
         bias, dark, flat = self.bias_output, self.dark_output, self.flat_output

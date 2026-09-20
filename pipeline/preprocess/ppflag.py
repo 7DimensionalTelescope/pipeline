@@ -158,4 +158,7 @@ def compute_ppflag_for_science_image(bias_path: str, dark_path: str, flat_path: 
             ppflags.append(get_ppflag_from_header(p))
         else:
             ppflags.append(0)
-    return propagate_ppflag(*ppflags)
+    result = propagate_ppflag(*ppflags)
+    if all(p and os.path.exists(p) for p in (bias_path, dark_path)) and not bias_shared_with_dark(bias_path, dark_path):
+        result |= PPFLAG_BIAS_NOT_SHARED
+    return result

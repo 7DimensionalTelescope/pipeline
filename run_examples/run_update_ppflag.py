@@ -6,6 +6,7 @@ Update PPFLAG in preprocessed science images and master frames
 PPFLAG is computed from dependencies in IMCMB:
   - Science: bias | dark | flat (propagated) | bit 1 when any master has different
     nightdate than the science frame | bit 4 when any master has SANITY=False
+    | bit 64 when the bias master is not the one inside the dark master
   - Master bias: 0 (no master dependencies)
   - Master dark: bias
   - Master flat: bias | flatdark
@@ -195,6 +196,11 @@ def update_ppflag(path: str, dry_run: bool = False) -> int | None:
         if _is_science_image(path):
             if any(not ppflag.is_same_nightdate(m, path) for m in master_paths):
                 extras.append(ppflag.PPFLAG_DIFFERENT_DATE)
+            # Bit 64 when the bias master is not the one inside the dark master
+            bias = next((m for m in master_paths if os.path.basename(m).startswith("bias_")), None)
+            dark = next((m for m in master_paths if os.path.basename(m).startswith("dark_")), None)
+            if bias and dark and not ppflag.bias_shared_with_dark(bias, dark):
+                extras.append(ppflag.PPFLAG_BIAS_NOT_SHARED)
         # Bit 4 when any master has SANITY=False
         if any(_sanity_is_false(m) for m in master_paths):
             extras.append(ppflag.PPFLAG_SANITY_F_USED)

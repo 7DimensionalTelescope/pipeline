@@ -89,7 +89,7 @@ PPFLAG_BITS = (
     (64, "bias master not shared with the dark master (informational, never rejects)"),
 )
 
-CATEGORICAL_DEFAULT_CUTS = {"ppflag": 3.0}  # "110000"
+CATEGORICAL_DEFAULT_CUTS = {"ppflag": 67.0}  # "1100001"
 
 
 def ppflag_mask(spec) -> int:

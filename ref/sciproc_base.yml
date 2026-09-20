@@ -130,7 +130,7 @@ imcoadd:
   image_selection: false  # False, 'auto' or 'interactive'; multi-epoch only
   image_selection_cuts:  # pinned cuts, e.g. {seeing: '<=2.8', bin2fwhm: '<=5.6'}; rest automatic
   image_selection_source:  # 'db' (image_qa, one query) or 'headers' (read every file)
-  ppflag_bitmask: '110000'  # one digit per PPFLAG bit:'110100' tolerates bits 1, 2 and 8.
+  ppflag_bitmask: '1100001'  # one digit per PPFLAG bit:'110100' tolerates bits 1, 2 and 8.
   coadd_image:  # output coadd image
   coadd_mask_image:
   coadd_counts_image:  # integer coverage/provenance count planes (NGEOM/NUSED/NBAD/NSAT/NTRAIL/NOUTLIER)
