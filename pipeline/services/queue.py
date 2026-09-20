@@ -110,6 +110,7 @@ class QueueManager:
 
         # Wake event for socket-based wake mechanism
         self._wake_event = threading.Event()
+        self._stop_event = threading.Event()  # the socket listener reads it before _start_workers runs with auto_start=False
 
         self._drain = False
         self._drained_logged = False

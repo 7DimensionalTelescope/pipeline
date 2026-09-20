@@ -30,12 +30,14 @@ sys.path.insert(0, str(pipeline_dir))
 from pipeline.const import MAIN_HOST, QUEUE_SOCKET_PATH, SCHEDULER_DB_PATH, TASK_STATUS_PROCESSING
 from pipeline.services.scheduler import Scheduler
 
+QUEUE_UNIT = "pipeline-queue"
 WORKER_UNIT = "pipeline-dispatch-worker"
 WORKER_SIGNALS = {"drain": signal.SIGUSR1, "resume": signal.SIGUSR2, "reload": signal.SIGHUP}
 
 
 def daemon_call(socket_path, command):
-    """One command to the queue daemon; its JSON state, or None when nothing listens there."""
+    """One command to the queue daemon: its JSON state; {} when a daemon listens but predates the control channel
+    (it answers only `wake`, with nothing); None when nothing listens there."""
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(5.0)
@@ -44,16 +46,33 @@ def daemon_call(socket_path, command):
             reply = sock.recv(4096)
     except (FileNotFoundError, ConnectionRefusedError, OSError):
         return None
-    return json.loads(reply) if reply else {}
-
-
-def worker_pid():
-    """MainPID of the local dispatch worker, 0 when it is not running here."""
     try:
-        out = subprocess.run(["systemctl", "show", "-p", "MainPID", "--value", WORKER_UNIT], capture_output=True, text=True)
+        state = json.loads(reply) if reply else {}
+    except ValueError:
+        state = {}
+    return state if isinstance(state, dict) else {}
+
+
+def unit_pid(unit):
+    """MainPID of a local systemd unit, 0 when it is not running here."""
+    try:
+        out = subprocess.run(["systemctl", "show", "-p", "MainPID", "--value", unit], capture_output=True, text=True)
         return int(out.stdout.strip() or 0)
     except (OSError, ValueError):
         return 0
+
+
+def send_signal(unit, action):
+    """Fallback for a daemon without the socket control channel: the signal contract, if we may send it."""
+    pid = unit_pid(unit)
+    if not pid:
+        return f"ERROR: no running {unit} here"
+    try:
+        os.kill(pid, WORKER_SIGNALS[action])
+    except PermissionError:
+        return (f"ERROR: {unit} (pid {pid}) runs as another user: "
+                f"sudo systemctl kill -s {WORKER_SIGNALS[action].name} --kill-who=main {unit}")
+    return f"{action} -> {unit} (pid {pid}) by {WORKER_SIGNALS[action].name}; its log confirms"
 
 
 def host_filter(host):
@@ -94,33 +113,39 @@ def main():
     args = parser.parse_args()
 
     state = daemon_call(args.socket, "status") if args.socket else None
-    on_origin = state is not None
+    on_origin = state is not None                 # a queue daemon listens on the socket: this is the origin
+    has_channel = bool(state) and "draining" in state   # and it understands more than `wake`
     host = args.host or (MAIN_HOST if on_origin else socket.gethostname().split(".")[0])
 
     if args.action in WORKER_SIGNALS:
-        if on_origin:
+        if has_channel:
             state = daemon_call(args.socket, args.action)
+            if not state or "draining" not in state:
+                print(f"ERROR: queue daemon replied {state!r}", file=sys.stderr)
+                return 1
             print(f"{MAIN_HOST}: {args.action} -> {describe(state)}")
             return 0
-        pid = worker_pid()
-        if not pid:
-            print(f"ERROR: no queue daemon on {args.socket} and no running {WORKER_UNIT} here", file=sys.stderr)
-            return 1
-        try:
-            os.kill(pid, WORKER_SIGNALS[args.action])
-        except PermissionError:
-            print(f"ERROR: {WORKER_UNIT} runs as another user; run this as that user", file=sys.stderr)
-            return 1
-        print(f"{host}: {args.action} -> {WORKER_UNIT} (pid {pid}); watch journalctl -u {WORKER_UNIT} for 'Drained'")
-        return 0
+        if on_origin:
+            print(f"queue daemon on {args.socket} predates the socket control channel (started before 47b76f8 was "
+                  f"deployed): falling back to its signal contract; restart pipeline-queue after the pull to enable it",
+                  flush=True)
+            message = send_signal(QUEUE_UNIT, args.action)
+        else:
+            message = send_signal(WORKER_UNIT, args.action)
+            if message.startswith("ERROR: no running"):
+                message = f"ERROR: no queue daemon on {args.socket} and no running {WORKER_UNIT} here"
+        print(f"{host}: {message}", file=sys.stderr if message.startswith("ERROR") else sys.stdout)
+        return 1 if message.startswith("ERROR") else 0
 
     if not (args.db and os.path.exists(args.db)):
         print(f"ERROR: no scheduler DB on this host ({args.db}); run `queuectl {args.action} --host {host}` on {MAIN_HOST}", file=sys.stderr)
         return 1
 
     if args.action == "status":
-        if on_origin:
+        if has_channel:
             print(f"{MAIN_HOST} queue daemon: {describe(state)}")
+        elif on_origin:
+            print(f"{MAIN_HOST} queue daemon: listening, but without the socket control channel (restart it after the pull)")
         by_host = processing(args.db)
         print("processing by host: " + (", ".join(f"{h}={n}" for h, n in sorted(by_host.items())) or "nothing"))
         return 0
