@@ -158,6 +158,8 @@ def _measure_trail_width(
             float(np.nanmedian(profile[outer & (offsets < 0)])), float(np.nanmedian(profile[outer & (offsets > 0)]))
         )
         window = np.abs(offsets) <= maximum if target is None else np.abs(offsets - target) <= max(1.0, minimum)
+        if not np.isfinite(signal[window]).any():  # the profile has no data here (outside coverage): nothing to measure
+            return None if target is not None else (0.0, minimum, 0.0)
         peak = int(np.nanargmax(np.where(window, signal, np.nan)))
         above = signal >= threshold
         if not above[peak]:
