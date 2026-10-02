@@ -166,7 +166,7 @@ class CoaddPlan:
     @property
     def read_resampled_weight_as_exclusion_mask(self) -> bool:
         """The in-memory backends read each frame's resampled weight as its validity mask (its zeros are saturation)."""
-        return self.zero_saturated_in_weight_before_reprojection
+        return self.compute_single_weight_maps  # a zero weight is a non-measurement under every coadd_weighting
 
     @property
     def exclude_saturated_by_projected_index(self) -> bool:
