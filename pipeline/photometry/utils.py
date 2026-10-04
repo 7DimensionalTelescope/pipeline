@@ -93,7 +93,7 @@ def compute_median_rms(values: np.ndarray) -> tuple:
 
 
 @njit
-def limitmag(n_sigma: np.ndarray, zp: float, aper: float, skysigma: float, noise_factor: float = 1.0) -> np.ndarray:
+def limitmag(n_sigma: np.ndarray, zp: float, aper: float, skysigma: float, noise_factor: float) -> np.ndarray:
     """
     Calculate limiting magnitude.
 
@@ -137,10 +137,10 @@ def aperture_noise_factor(acf, aperture: float) -> float:
     """Aperture noise over the independent-pixel value sigma*sqrt(pi R^2), from a measured autocorrelation.
 
     Var(sum w_i x_i) = sigma^2 sum_h rho(h) O(h), with O the area two copies of the aperture share at
-    lag h -- analytic for a circle, and sum w_i^2 at zero lag. Returns 1.0 for a missing autocorrelation
-    so the caller keeps the historical white-noise definition."""
+    lag h -- analytic for a circle, and sum w_i^2 at zero lag. A missing or invalid
+    autocorrelation cannot define a limiting magnitude."""
     if acf is None:
-        return 1.0
+        raise ValueError("A measured sky autocorrelation is required for aperture depth")
     acf = np.asarray(acf, dtype=float)
     half = acf.shape[0] // 2
     radius = 0.5 * float(aperture)
@@ -155,7 +155,7 @@ def aperture_noise_factor(acf, aperture: float) -> float:
     overlap[half, half] = aperture_weight_squared(aperture)
     variance = float(np.sum(acf * overlap))
     if not np.isfinite(variance) or variance <= 0:
-        return 1.0
+        raise ValueError("Invalid aperture variance from sky autocorrelation")
     return float(np.sqrt(variance / (np.pi * radius**2)))
 
 

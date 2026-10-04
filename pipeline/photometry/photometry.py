@@ -515,6 +515,8 @@ class PhotometrySingle:
             self.write_catalog(obs_src_table)
             if self.measure_sky(overwrite=overwrite):  # off the written catalog, the one ImCoadd will re-read
                 self.update_image_header()
+            if not self._difference_photometry and not self.phot_header.covariance_depth_complete:
+                raise RuntimeError("Photometry depth requires measured sky covariance; cannot publish new UL keys")
 
             self.logger.debug(MemoryMonitor.log_memory_usage)
             self.logger.info(
@@ -910,6 +912,7 @@ class PhotometrySingle:
             and phot_header.SRCFRAC is not None
             and phot_header.BACKSCL == RESIDUAL_BOX_SIZE
             and all(getattr(phot_header, key.upper()) is not None for key in RESIDUAL_KEYS)
+            and phot_header.covariance_depth_complete
         ):
             self.logger.debug("Off-source sky already on the frame; keeping it")
             return False
@@ -1027,7 +1030,7 @@ class PhotometrySingle:
         BACKSIG is a per-pixel width and is blind to covariance by construction, so it under-states the
         noise of any sum of pixels whenever reprojection, interpolation or coaddition has correlated them.
         The normalised autocorrelation measured here is what turns it into the noise of an actual
-        measurement: Var(sum w_i x_i) = BACKSIG^2 * sum_h rho(h) O_w(h)."""
+        measurement: Var(sum w_i x_i) = BACKC0^2 * sum_h rho(h) O_w(h)."""
         from ..imcoadd.utils import noise_autocorrelation
 
         # the circle-overlap kernel is exactly zero beyond one aperture diameter, so the lag window is the
@@ -1036,11 +1039,9 @@ class PhotometrySingle:
         maxlag = max(16, int(np.ceil(max(diameters))) if diameters else 0)
         stats = {}
         acf = noise_autocorrelation(residual, mask=excluded, maxlag=maxlag, stats=stats)
-        if acf is not None and stats.get("variance", 0) > 0:
-            phot_header.BACKC0 = float(np.sqrt(stats["variance"]))
-        if acf is None:
-            self.logger.warning("Sky covariance not measured; limiting magnitudes keep the white-noise definition")
-            return
+        if acf is None or not np.isfinite(stats.get("variance", 0)) or stats["variance"] <= 0:
+            raise RuntimeError("Sky covariance not measured; cannot calculate limiting magnitudes")
+        phot_header.BACKC0 = float(np.sqrt(stats["variance"]))
         half = acf.shape[0] // 2
         phot_header.BACKCR = int(half)
         phot_header.BACKCOV = float(np.sum(acf))
@@ -1186,13 +1187,15 @@ class PhotometrySingle:
                 continue
             zp, zperr = phot_utils.compute_median_nmad(input_arr, normalize=True)
 
-            if mag_key == "MAG_AUTO":
-                ul_3sig, ul_5sig = 0.0, 0.0
-            else:
+            factor = phot_header.aperture_info.get(aperture_key, {}).get("COV")
+            if factor is not None and (not np.isfinite(factor) or factor <= 0):
+                factor = None
+            ul_3sig, ul_5sig = None, None
+            if mag_key != "MAG_AUTO" and factor is not None:
                 aperture_size, _ = aperture_dict[aperture_key]
-                ul_3sig, ul_5sig = phot_utils.limitmag(np.array([3, 5]), zp, aperture_size, phot_header.SKYSIG)
-                self.logger.debug(f"filter: {ref_mag_key}, aper: {aperture_size}, SKYSIG: {phot_header.SKYSIG}")
-                self.logger.debug(f"filter: {ref_mag_key}, ul_3sig: {ul_3sig}, ul_5sig: {ul_5sig}")
+                ul_3sig, ul_5sig = phot_utils.limitmag(
+                    np.array([3, 5]), zp, aperture_size, phot_header.SKYSIG, factor
+                )
 
             phot_header.aperture_info[aperture_key] = {
                 "value": aperture_dict[aperture_key][0],
@@ -1202,6 +1205,7 @@ class PhotometrySingle:
                 "ZPERR": zperr,
                 "UL3": ul_3sig,
                 "UL5": ul_5sig,
+                "COV": factor,
             }
 
             if save_plots:
@@ -1645,7 +1649,7 @@ class ImageInfo:
                 phot_header_keys[key] = hdr[key]
 
         for key in hdr.keys():
-            if key.startswith(("AUTO", "APER", "ZP", "EZP", "UL3", "UL5")):
+            if key.startswith(("AUTO", "APER", "ZP", "EZP", "UL3", "UL5", "COV_")):
                 phot_header_keys[key] = hdr[key]
 
         kwargs["phot_header_keys"] = phot_header_keys
@@ -1761,8 +1765,8 @@ class PhotometryHeader:
             if mag_key == "MAG_AUTO":
                 ul_3sig, ul_5sig = 0.0, 0.0
             else:
-                ul_3sig = phot_header_keys[f"UL3_{suffix}"]
-                ul_5sig = phot_header_keys[f"UL5_{suffix}"]
+                ul_3sig = phot_header_keys.get(f"UL3_{suffix}")
+                ul_5sig = phot_header_keys.get(f"UL5_{suffix}")
 
             self.aperture_info[aperture_key] = {
                 "value": aperture_dict[aperture_key][0],
@@ -1772,6 +1776,7 @@ class PhotometryHeader:
                 "ZPERR": zperr,
                 "UL3": ul_3sig,
                 "UL5": ul_5sig,
+                "COV": phot_header_keys.get(f"COV_{suffix}"),
             }
 
     @property
@@ -1789,18 +1794,34 @@ class PhotometryHeader:
             zperr = bundle["ZPERR"]
             ul_3sig = bundle["UL3"]
             ul_5sig = bundle["UL5"]
-            temp.update(
-                {
-                    f"ZP_{suffix}": (zp, f"ZERO POINT for {mag_key}"),
-                    f"EZP_{suffix}": (zperr, f"ZERO POINT ERROR for {mag_key}"),
-                    f"UL3_{suffix}": (ul_3sig, f"3 SIGMA LIMITING MAG FOR {mag_key}"),
-                    f"UL5_{suffix}": (ul_5sig, f"5 SIGMA LIMITING MAG FOR {mag_key}"),
-                }
-            )
+            temp[f"ZP_{suffix}"] = (zp, f"ZERO POINT for {mag_key}")
+            temp[f"EZP_{suffix}"] = (zperr, f"ZERO POINT ERROR for {mag_key}")
             cov = bundle.get("COV")
+            if cov is not None and ul_3sig is not None and ul_5sig is not None:
+                temp[f"UL3_{suffix}"] = (ul_3sig, f"3 SIGMA LIMITING MAG FOR {mag_key}")
+                temp[f"UL5_{suffix}"] = (ul_5sig, f"5 SIGMA LIMITING MAG FOR {mag_key}")
             if cov is not None:
                 temp[f"COV_{suffix}"] = (round(cov, 4), "blank-sky aper noise / SKYSIG*sqrt(piR^2)")
         return temp
+
+    @property
+    def covariance_depth_complete(self) -> bool:
+        cards = ("BACKC0", "BACKCOV", "BACKCR", "BACKC2", "BACKR10", "BACKR01", "BACKR11")
+        if any(getattr(self, key) is None or not np.isfinite(getattr(self, key)) for key in cards):
+            return False
+        if self.BACKC0 <= 0 or self.BACKC2 <= 0 or self.BACKCR < 1:
+            return False
+        return all(
+            bundle.get("COV") is not None
+            and np.isfinite(bundle["COV"])
+            and bundle["COV"] > 0
+            and bundle.get("UL3") is not None
+            and bundle.get("UL5") is not None
+            and np.isfinite(bundle["UL3"])
+            and np.isfinite(bundle["UL5"])
+            for bundle in self.aperture_info.values()
+            if bundle.get("value", 0) > 0 and bundle.get("ZP") is not None
+        )
 
     @property
     def dict(self) -> Dict[str, Tuple[Any, str]]:
@@ -1872,7 +1893,7 @@ class PhotometryHeader:
 
         # round float values to .3f
         phot_header_dict.update({k: (round(v[0], 3), v[1]) for k, v in self.aperture_dict.items()})
-        phot_header_dict.update({k: (round(v[0], 3), v[1]) for k, v in self.zp_dict.items()})
+        phot_header_dict.update({k: (round(v[0], 3), v[1]) for k, v in self.zp_dict.items() if v[0] is not None})
 
         # Filter out entries where the value is None
         return {k: v for k, v in phot_header_dict.items() if v[0] is not None} | (
