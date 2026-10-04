@@ -162,9 +162,10 @@ class Scheduler:
         processes=None,
         crossfilter_processes=None,
         extra_kwargs=None,
+        link_crossfilter=True,
         **kwargs,
     ):
-        """Create a scheduler from a list of configs. `extra_kwargs`: plain flags appended to every task's command line; never JSON (the kwargs round-trip mangles quotes)."""
+        """Create a scheduler from a list of configs. `extra_kwargs`: plain flags appended to every task's command line; never JSON (the kwargs round-trip mangles quotes). `link_crossfilter`: a crossfilter config waits for the science configs of its target-night (same object and nightdate by name) that are in the same list."""
         import copy
         from ..path.name import NameHandler
 
@@ -221,7 +222,36 @@ class Scheduler:
                 ]
             )
 
+        if link_crossfilter:
+            cls._link_crossfilter_rows(table)
+
         return cls(schedule=table, use_system_queue=use_system_queue, overwrite_schedule=overwrite_schedule, **kwargs)
+
+    @staticmethod
+    def _link_crossfilter_rows(table):
+        """Pending at 100 - N behind the N science rows of the same target-night (object, nightdate by name): the key Blueprint groups by, no I/O."""
+        from ..path.name import NameHandler
+
+        if len(table) == 0:
+            return
+        props = NameHandler([str(config) for config in table["config"]]).config_properties
+        props = [props] if isinstance(props, dict) else props
+        position = {int(row["index"]): i for i, row in enumerate(table)}
+        science = {}
+        for row, prop in zip(table, props):
+            if str(row["config_type"]) == CONFIG_TYPE_SCIENCE:
+                science.setdefault((prop["object"], prop["nightdate"]), []).append(int(row["index"]))
+        for i, (row, prop) in enumerate(zip(table, props)):
+            if str(row["config_type"]) != CONFIG_TYPE_CROSSFILTER:
+                continue
+            parents = science.get((prop["object"], prop["nightdate"]), [])
+            if not parents:
+                continue
+            table["is_ready"][i] = False
+            table["status"][i] = TASK_STATUS_PENDING
+            table["readiness"][i] = 100 - len(parents)
+            for parent in parents:
+                table["dependent_idx"][position[parent]].append(int(row["index"]))
 
     def _connection_check(self):
         """Create scheduler table if it doesn't exist."""

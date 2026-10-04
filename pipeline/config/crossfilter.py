@@ -286,6 +286,8 @@ class CrossFilterConfiguration(BaseConfig):
             self.node.input.parents_changed = True
             self.node.imcoadd.input_images = []
             self.node.photometry.input_images = []
+            self.node.input.source_raw_images = []
+            self.node.input.discovery_method = "explicit_science_configs"
 
     def record_discovery(self, raw_images: list[str] | None, method: str) -> None:
         raw_images = sorted(os.path.abspath(os.fspath(path)) for path in (raw_images or []))
@@ -306,6 +308,44 @@ class CrossFilterConfiguration(BaseConfig):
     @classmethod
     def user_config(cls, input_images: list[str] | str = None, **kwargs):
         return cls(list(atleast_1d(input_images)), **kwargs)
+
+    @classmethod
+    def from_science_configs(
+        cls,
+        science_configs: list[str] | str,
+        overwrite: bool = False,
+        logger: bool | Logger = None,
+        working_dir: str | None = None,
+        is_pipeline: bool = False,
+        is_too: bool = False,
+        is_multi_epoch: bool = False,
+        config_suffix: str | None = None,
+    ):
+        """Load-or-create from one target-night's science configs; the parents become exactly this list."""
+        science_configs = sorted(os.path.abspath(os.fspath(path)) for path in atleast_1d(science_configs))
+        output_yml = PathHandler.for_crossfilter(
+            cls._science_config_coadds(science_configs),
+            working_dir=working_dir,
+            is_pipeline=is_pipeline,
+            is_too=is_too,
+            is_multi_epoch=is_multi_epoch,
+            config_suffix=config_suffix,
+        ).crossfilter.output_yml
+        if os.path.exists(output_yml) and not overwrite:
+            config = cls(output_yml, logger=logger)
+            if list(config.node.input.science_configs or []) != science_configs:
+                config.set_science_configs(science_configs)
+            return config
+        return cls(
+            science_configs,
+            overwrite=overwrite,
+            logger=logger,
+            working_dir=working_dir,
+            is_pipeline=is_pipeline,
+            is_too=is_too,
+            is_multi_epoch=is_multi_epoch,
+            config_suffix=config_suffix,
+        )
 
     @staticmethod
     def _filters(images: list[str]) -> list[str]:

@@ -219,6 +219,8 @@ class NameHandler:
         # config
         if all(ext == ".yml" for ext in self.ext):
             self.type = [self._detect_config_type(parts) for parts in self.parts]
+            # a config stem names its night, so the search may run past the directory (an image's date token is not one)
+            self.nightdate = [get_nightdate(p, use_dirname=False) for p in self.input]
         # image
         else:
             type_hints = [
@@ -275,9 +277,6 @@ class NameHandler:
             cameras.append(camera)
 
             # override date if nightdate available; vice versa. (some nightdates have multiple dates by TCSpy error)
-            if typ.kind == const.CONFIG_TYPE_CROSSFILTER and not nightdate and len(parts) >= 3:
-                nightdate = get_nightdate(parts[2])
-                self.nightdate[i] = nightdate
             if nightdate:
                 pass
                 # date = add_half_day(nightdate)  # this can mutate the true date crossing midnight
@@ -360,21 +359,26 @@ class NameHandler:
         product_type:  config
         """
         # is_too = "ToO" in parts
-        is_crossfilter = len(parts) >= 2 and parts[1] == const.WHITE_FILTER
-        is_too = len(parts) > 3 and not is_crossfilter
-        if is_crossfilter:
+        if len(parts) < 2:
+            raise ValueError(f"Invalid number of parts for config: {parts}")
+        is_too = const.NAME_TYPE_TOO in parts
+        if get_nightdate(parts[0]):
+            # preprocess is {date}_{unit}; a multi-epoch sciproc config is {obj}_{filter}
+            kind = const.CONFIG_TYPE_PREPROCESS
+        elif const.WHITE_FILTER in parts[1:]:
             kind = const.CONFIG_TYPE_CROSSFILTER
-        elif is_too:
-            kind = const.CONFIG_TYPE_PREPROCESS if get_nightdate(parts[0]) else const.CONFIG_TYPE_SCIENCE
         else:
-            if len(parts) == 2:
-                # preprocess is {date}_{unit}; a multi-epoch sciproc config is {obj}_{filter}
-                kind = const.CONFIG_TYPE_PREPROCESS if get_nightdate(parts[0]) else const.CONFIG_TYPE_SCIENCE
-            elif len(parts) == 3:
-                kind = const.CONFIG_TYPE_SCIENCE
-            else:
-                raise ValueError(f"Invalid number of parts for config: {parts}")
+            kind = const.CONFIG_TYPE_SCIENCE
         return NameType(kind, const.NAME_TYPE_TOO if is_too else None, product_type=const.NAME_TYPE_CONFIG)
+
+    @staticmethod
+    def _config_filter_index(parts: list[str]) -> int:
+        """Filter token of a science or white config stem: the one before the nightdate, else the first filter name after the object, else parts[1]."""
+        for k in range(2, len(parts)):
+            if get_nightdate(parts[k]):
+                return k - 1
+        known = set(const.ALL_FILTERS) | {const.WHITE_FILTER}
+        return next((k for k in range(1, len(parts)) if parts[k] in known), 1)
 
     @staticmethod
     def _detect_image_type(stem: str, type_hint: str = None) -> "NameType":
@@ -732,9 +736,10 @@ class NameHandler:
         # nightdate = parts[0]
         unit = parts[1]
         if is_too:
-            obj = parts[2]
-            date = parts[4]
-            hms = parts[5]
+            t = parts.index(const.NAME_TYPE_TOO)
+            obj = "_".join(parts[2:t])  # for objects containing "_"
+            date = parts[t + 1]
+            hms = parts[t + 2]
         return unit, date, hms, obj, filt, nb, exptime, gain, camera
 
     @staticmethod
@@ -748,17 +753,19 @@ class NameHandler:
         gain = None
         camera = None
 
-        obj = parts[0]
-        filt = parts[1]
+        k = NameHandler._config_filter_index(parts)
+        obj = "_".join(parts[:k])  # for objects containing "_"
+        filt = parts[k]
         # nightdate = parts[2]
         if is_too:
-            date = parts[4]
-            hms = parts[5]
+            t = parts.index(const.NAME_TYPE_TOO)
+            date = parts[t + 1]
+            hms = parts[t + 2]
         return unit, date, hms, obj, filt, nb, exptime, gain, camera
 
     @staticmethod
     def _parse_crossfilter_config(parts):
-        obj = parts[0]
+        obj = "_".join(parts[: NameHandler._config_filter_index(parts)])  # for objects containing "_"
         return None, None, None, obj, const.WHITE_FILTER, None, None, None, None
 
     # @property

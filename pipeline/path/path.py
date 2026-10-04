@@ -1884,12 +1884,8 @@ class PathCrossFilter(AutoMkdirMixin, AutoCollapseMixin):
             nightdate = collapse(atleast_1d(self._parent.name.nightdate), raise_error=True)
             return os.path.join(processed_root, nightdate, obj, const.WHITE_FILTER)
 
-        if self._parent.settings.working_dir is not None:
-            return os.path.join(str(Path(self._parent.settings.working_dir).absolute()), const.WHITE_FILTER)
-        common_parent = os.path.commonpath([os.path.dirname(path) for path in self._parent._input_files])
-        if not self._parent.settings.is_multi_epoch and os.path.basename(common_parent) == DAILY_COADD_DIRNAME:
-            common_parent = os.path.dirname(common_parent)
-        return os.path.join(common_parent, const.WHITE_FILTER)
+        anchor = str(Path(self._parent.settings.working_dir or os.getcwd()).absolute())
+        return os.path.join(anchor, const.WHITE_FILTER)
 
     @property
     def factory_dir(self) -> str:
@@ -2137,7 +2133,11 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
     def check_plot_dir(self) -> str:
         """Per-frame check plots, flat under figures/imcoadd unless a config_suffix scopes the run."""
         scope = self._config_scope
-        return os.path.join(self.figure_dir, IMCOADD_DIRNAME, scope) if scope else os.path.join(self.figure_dir, IMCOADD_DIRNAME)
+        return (
+            os.path.join(self.figure_dir, IMCOADD_DIRNAME, scope)
+            if scope
+            else os.path.join(self.figure_dir, IMCOADD_DIRNAME)
+        )
 
     @property
     def coadd_counts_figure(self) -> str:

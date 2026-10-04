@@ -864,33 +864,15 @@ class CrossFilterGroup:
         **kwargs,
     ):
         from ..config import CrossFilterConfiguration
-        from ..path.path import PathHandler
 
-        science_configs = sorted(group.config for group in self.source_groups)
-        expected_coadds = CrossFilterConfiguration._science_config_coadds(science_configs)
-        output_yml = collapse(
-            PathHandler.for_crossfilter(
-                expected_coadds,
-                is_too=is_too,
-                is_pipeline=is_pipeline,
-                is_multi_epoch=is_multi_epoch,
-                config_suffix=config_suffix,
-            ).crossfilter.output_yml,
-            raise_error=True,
+        config = CrossFilterConfiguration.from_science_configs(
+            sorted(group.config for group in self.source_groups),
+            overwrite=overwrite,
+            is_too=is_too,
+            is_pipeline=is_pipeline,
+            is_multi_epoch=is_multi_epoch,
+            config_suffix=config_suffix,
         )
-        if os.path.exists(output_yml) and not overwrite:
-            config = CrossFilterConfiguration(output_yml, write=True)
-            if list(config.node.input.science_configs or []) != science_configs:
-                config.set_science_configs(science_configs)
-        else:
-            config = CrossFilterConfiguration(
-                science_configs,
-                overwrite=overwrite,
-                is_too=is_too,
-                is_pipeline=is_pipeline,
-                is_multi_epoch=is_multi_epoch,
-                config_suffix=config_suffix,
-            )
         source_raw_images = sorted({image for group in self.source_groups for image in group.image_files})
         config.record_discovery(source_raw_images, DISCOVERY_RAW_INVENTORY)  # skip input completeness check
         self._config = config.config_file

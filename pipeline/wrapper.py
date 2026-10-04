@@ -52,6 +52,10 @@ class DataReduction:
     def crossfilter_configs(self):
         return self.blueprint.crossfilter_configs
 
+    @property
+    def science_configs(self):
+        return self.blueprint.science_configs
+
     def create_config(
         self,
         overwrite=False,

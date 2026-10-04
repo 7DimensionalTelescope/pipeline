@@ -84,6 +84,10 @@ class Blueprint:
     def crossfilter_configs(self) -> list[str]:
         return [group.config for group in self.groups.values() if isinstance(group, CrossFilterGroup)]
 
+    @property
+    def science_configs(self) -> list[str]:
+        return [group.config for group in self.groups.values() if isinstance(group, ScienceGroup)]
+
     @classmethod
     def from_list(cls, list_of_images: list[str], is_too: bool = False, is_pipeline: bool = False, **kwargs):
         # if not all(f.endswith(".fits") for f in list_of_images):
