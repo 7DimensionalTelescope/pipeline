@@ -22,7 +22,6 @@ MAX_WORKERS="${MAX_WORKERS:-$(env_get DISPATCH_MAX_WORKERS)}"; MAX_WORKERS="${MA
 POLL_INTERVAL="${POLL_INTERVAL:-$(env_get DISPATCH_POLL_INTERVAL)}"; POLL_INTERVAL="${POLL_INTERVAL:-5}"
 # Narrow while a worker is new; no stage needs a GPU, so "any" is safe when you want it.
 CONFIG_TYPES="${CONFIG_TYPES:-$(env_get DISPATCH_CONFIG_TYPES)}"; CONFIG_TYPES="${CONFIG_TYPES:-science}"
-INPUT_TYPE="${INPUT_TYPE:-$(env_get DISPATCH_INPUT_TYPE)}"  # relabels each claimed row, e.g. single-reduction-balmer
 
 NFSOPT="rw,noatime,nodiratime,vers=4.1,rsize=1048576,wsize=1048576,hard,proto=tcp,timeo=600,_netdev 0 0"
 UNIT_TEMPLATE="$PIPELINE_ROOT/systemd/pipeline-dispatch-worker.service"
@@ -71,7 +70,7 @@ echo "  OK: ssh $MAIN_SSH"
 echo "=== 4. Pipeline env ==="
 for kv in "PROTON_SSH=${MAIN_SSH}" "PROTON_SSH_PORT=${MAIN_SSH_PORT}" \
           "PROTON_SCHEDULER_RPC=${MAIN_SCHEDULER_RPC}" "DISPATCH_SERVER_NAME=${SERVER_NAME}" \
-          "DISPATCH_CONFIG_TYPES=${CONFIG_TYPES}" "DISPATCH_INPUT_TYPE=${INPUT_TYPE}" \
+          "DISPATCH_CONFIG_TYPES=${CONFIG_TYPES}" \
           "DISPATCH_MAX_WORKERS=${MAX_WORKERS}" "DISPATCH_POLL_INTERVAL=${POLL_INTERVAL}"; do
   # upsert, so re-running with a new value actually changes it
   if grep -q "^${kv%%=*}=" "$PIPELINE_ROOT/.env" 2>/dev/null; then
@@ -80,6 +79,8 @@ for kv in "PROTON_SSH=${MAIN_SSH}" "PROTON_SSH_PORT=${MAIN_SSH_PORT}" \
     echo "$kv" >> "$PIPELINE_ROOT/.env"
   fi
 done
+# DISPATCH_INPUT_TYPE retired 2026-10-05: rows keep the Blueprint's input_type; dispatch names the host
+sed -i '/^DISPATCH_INPUT_TYPE=/d' "$PIPELINE_ROOT/.env" 2>/dev/null || true
 grep -q "^DB_BACKEND=" "$PIPELINE_ROOT/.env" 2>/dev/null \
   || echo "  Postgres runs on the main host: add DB_BACKEND=remote and REMOTE_DBHOST to .env."
 

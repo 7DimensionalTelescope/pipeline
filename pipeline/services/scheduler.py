@@ -1197,14 +1197,12 @@ class Scheduler:
         extra_sql = f" AND config_type IN ({','.join('?' for _ in config_types)})"
         return extra_sql, tuple(config_types), CONFIG_TYPE_CROSSFILTER in config_types
 
-    def claim_next_dispatch_task(self, server_name, config_types=None, input_type=None):
+    def claim_next_dispatch_task(self, server_name, config_types=None):
         """
         Claim one Ready task for a worker host.
 
         ``config_types``: restrict to these config_type values, for a worker that cannot run
         every kind of task (a GPU-less host must never claim preprocess or coadd work).
-        ``input_type``: relabel the claimed row, so both databases attribute it to this worker.
-        A ToO row keeps its own label: `is_too` and the ToO exclusivity gate both key off it.
 
         Marks the row Processing, sets ``dispatch`` to ``server_name``, and leaves
         ``pid`` at 0 until :meth:`set_dispatch_pid` is called.
@@ -1234,16 +1232,10 @@ class Scheduler:
                     return None
 
                 process_start = datetime.now().isoformat()
-                relabel = ", input_type = CASE WHEN LOWER(input_type) = ? THEN input_type ELSE ? END"
-                update_params = [TASK_STATUS_PROCESSING, server_name, process_start, ""]
-                if input_type:
-                    update_params += [INPUT_TYPE_TOO.lower(), input_type]
-                update_params += [task_index, TASK_STATUS_READY]
                 cursor.execute(
-                    f'UPDATE scheduler SET status = ?, dispatch = ?, pid = 0, process_start = ?, process_end = ?'
-                    f'{relabel if input_type else ""} '
-                    f'WHERE "index" = ? AND status = ?',
-                    tuple(update_params),
+                    'UPDATE scheduler SET status = ?, dispatch = ?, pid = 0, process_start = ?, process_end = ? '
+                    'WHERE "index" = ? AND status = ?',
+                    (TASK_STATUS_PROCESSING, server_name, process_start, "", task_index, TASK_STATUS_READY),
                 )
                 if cursor.rowcount == 0:
                     conn.rollback()
@@ -1262,7 +1254,7 @@ class Scheduler:
 
         return self._row_to_dict(row) if row else None
 
-    def claim_next_dispatch_tasks(self, server_name, config_types=None, input_type=None, count=1):
+    def claim_next_dispatch_tasks(self, server_name, config_types=None, count=1):
         """Claim up to `count` Ready tasks for a worker host in ONE transaction; same gates as the single claim."""
         if not self.use_system_queue:
             raise RuntimeError("claim_next_dispatch_tasks requires use_system_queue=True")
@@ -1280,7 +1272,6 @@ class Scheduler:
             cursor.execute("BEGIN IMMEDIATE")
             try:
                 extra_sql, extra_params, enter_groups = self._worker_claim_filter(config_types)
-                relabel = ", input_type = CASE WHEN LOWER(input_type) = ? THEN input_type ELSE ? END"
                 while len(claimed) < count:
                     task_index = None
                     for affinity in self._claim_tiers(cursor, server_name, extra_sql, extra_params, enter_groups):
@@ -1293,15 +1284,10 @@ class Scheduler:
                         break
 
                     process_start = datetime.now().isoformat()
-                    update_params = [TASK_STATUS_PROCESSING, server_name, process_start, ""]
-                    if input_type:
-                        update_params += [INPUT_TYPE_TOO.lower(), input_type]
-                    update_params += [task_index, TASK_STATUS_READY]
                     cursor.execute(
-                        f'UPDATE scheduler SET status = ?, dispatch = ?, pid = 0, process_start = ?, process_end = ?'
-                        f'{relabel if input_type else ""} '
-                        f'WHERE "index" = ? AND status = ?',
-                        tuple(update_params),
+                        'UPDATE scheduler SET status = ?, dispatch = ?, pid = 0, process_start = ?, process_end = ? '
+                        'WHERE "index" = ? AND status = ?',
+                        (TASK_STATUS_PROCESSING, server_name, process_start, "", task_index, TASK_STATUS_READY),
                     )
                     if cursor.rowcount == 0:
                         break

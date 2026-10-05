@@ -15,14 +15,12 @@ Environment:
   PROTON_SCHEDULER_RPC    path to cli/scheduler_rpc on proton
   DISPATCH_SERVER_NAME    worker name stored in the origin dispatch column (default: hostname)
   DISPATCH_CONFIG_TYPES   comma-separated config_type whitelist (default "science"; "any" for no limit)
-  DISPATCH_INPUT_TYPE     relabel each claimed row with this scheduler input_type (default: leave it alone)
   DISPATCH_MAX_WORKERS    parallel jobs (default 5)
   DISPATCH_POLL_INTERVAL  seconds between polls (default 5)
   DISPATCH_PREFETCH       extra tasks to claim ahead of a free slot (default 0 = never claim ahead)
 
-Signals: SIGHUP reloads DISPATCH_MAX_WORKERS, DISPATCH_INPUT_TYPE and
-DISPATCH_POLL_INTERVAL from .env; SIGUSR1 drains (stop claiming, let running configs
-finish), SIGUSR2 resumes, SIGTERM/SIGINT stop now (running configs are terminated and
+Signals: SIGHUP reloads DISPATCH_MAX_WORKERS and DISPATCH_POLL_INTERVAL from .env; SIGUSR1 drains (stop
+claiming, let running configs finish), SIGUSR2 resumes, SIGTERM/SIGINT stop now (running configs are terminated and
 their rows released).
 
 Startup preflight: a worker allowed to claim crossfilter rows (DISPATCH_CONFIG_TYPES naming
@@ -102,11 +100,11 @@ class ProtonScheduler:
                 return response["result"]
         raise RuntimeError(f"scheduler_rpc {method}: no response (rc={proc.returncode}) {proc.stderr.strip()[:300]}")
 
-    def claim(self, server, config_types, input_type):
-        return self._call("claim", server=server, config_types=config_types, input_type=input_type)
+    def claim(self, server, config_types):
+        return self._call("claim", server=server, config_types=config_types)
 
-    def claim_many(self, server, config_types, input_type, count):
-        return self._call("claim_many", server=server, config_types=config_types, input_type=input_type, count=count)
+    def claim_many(self, server, config_types, count):
+        return self._call("claim_many", server=server, config_types=config_types, count=count)
 
     def set_pid(self, index, server, pid):
         return self._call("set_pid", index=index, server=server, pid=pid)
@@ -120,14 +118,12 @@ class ProtonScheduler:
 
 class DispatchWorker:
     def __init__(
-        self, scheduler, server_name, max_workers, config_types=None, input_type=None, prefetch=0,
-        poll_interval=DEFAULT_POLL_INTERVAL,
+        self, scheduler, server_name, max_workers, config_types=None, prefetch=0, poll_interval=DEFAULT_POLL_INTERVAL,
     ):
         self.scheduler = scheduler
         self.server_name = server_name
         self.max_workers = max_workers
         self.config_types = config_types
-        self.input_type = input_type
         self.prefetch = max(0, int(prefetch))
         self.poll_interval = poll_interval
         self._stop = False
@@ -185,9 +181,8 @@ class DispatchWorker:
         tasks, self._pending = self._pending, []
         if len(tasks) < free:
             try:
-                tasks += self.scheduler.claim_many(
-                    self.server_name, self.config_types, self.input_type, free - len(tasks) + self.prefetch
-                ) or []
+                want = free - len(tasks) + self.prefetch
+                tasks += self.scheduler.claim_many(self.server_name, self.config_types, want) or []
             except Exception:
                 self._pending = tasks
                 raise
@@ -238,15 +233,12 @@ class DispatchWorker:
             logger.exception("Dispatch reload rejected; retaining current settings")
             return
 
-        input_type = os.environ.get("DISPATCH_INPUT_TYPE", "") or None
-        old = (self.max_workers, self.input_type, self.poll_interval)
+        old = (self.max_workers, self.poll_interval)
         self.max_workers = max_workers
-        self.input_type = input_type
         self.poll_interval = poll_interval
         logger.info(
-            "Dispatch reload applied: max_workers %s -> %s, input_type %s -> %s, poll_interval %s -> %s",
-            old[0], self.max_workers, old[1] or "(unchanged)", self.input_type or "(unchanged)",
-            old[2], self.poll_interval,
+            "Dispatch reload applied: max_workers %s -> %s, poll_interval %s -> %s",
+            old[0], self.max_workers, old[1], self.poll_interval,
         )
 
     def request_reload(self, *_args):
@@ -255,11 +247,10 @@ class DispatchWorker:
 
     def run_forever(self):
         logger.info(
-            "Dispatch worker started (server=%s, max_workers=%d, config_types=%s, input_type=%s)",
+            "Dispatch worker started (server=%s, max_workers=%d, config_types=%s)",
             self.server_name,
             self.max_workers,
             self.config_types or "any",
-            self.input_type or "(unchanged)",
         )
         if self.prefetch:
             logger.warning("Prefetch is %d: rows are claimed before a slot frees and strand if this host is killed",
@@ -353,8 +344,6 @@ def parse_args():
         default=os.environ.get("PROTON_SCHEDULER_RPC", "/home/pipeline-stable/pipeline/pipeline/cli/scheduler_rpc"),
     )
     parser.add_argument("--server-name", default=os.environ.get("DISPATCH_SERVER_NAME", socket.gethostname()))
-    parser.add_argument("--input-type", default=os.environ.get("DISPATCH_INPUT_TYPE", "") or None,
-                        help="Relabel each claimed row with this scheduler input_type")
     parser.add_argument("--config-types", default=os.environ.get("DISPATCH_CONFIG_TYPES", DEFAULT_CONFIG_TYPES))
     parser.add_argument(
         "--max-workers", type=int, default=int(os.environ.get("DISPATCH_MAX_WORKERS", DEFAULT_MAX_WORKERS))
@@ -382,13 +371,12 @@ def main():
 
     if args.check:
         # A claim of a config_type nothing uses proves the whole path without taking work.
-        scheduler.claim(args.server_name, ["__connection_check__"], None)
+        scheduler.claim(args.server_name, ["__connection_check__"])
         print(f"OK: scheduler_rpc reachable on {args.ssh}")
         return
 
     worker = DispatchWorker(
-        scheduler, args.server_name, args.max_workers, config_types, args.input_type, args.prefetch,
-        args.poll_interval,
+        scheduler, args.server_name, args.max_workers, config_types, args.prefetch, args.poll_interval
     )
     signal.signal(signal.SIGTERM, worker.stop)
     signal.signal(signal.SIGINT, worker.stop)
