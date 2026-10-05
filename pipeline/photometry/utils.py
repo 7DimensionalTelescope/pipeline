@@ -110,60 +110,41 @@ def limitmag(n_sigma: np.ndarray, zp: float, aper: float, skysigma: float, noise
     R = aper / 2.0
     braket = n_sigma * skysigma * np.sqrt(np.pi * R**2) * noise_factor
     upperlimit = zp - 2.5 * np.log10(braket)
-    return np.round(upperlimit, 3)
-
-
-def aperture_weight_squared(aperture: float, phases: int = 16) -> float:
-    """Sum of the squared exact-aperture pixel weights, averaged over sub-pixel phase.
-
-    An exact aperture sums w_i x_i with fractional weights on the rim, so for INDEPENDENT pixels its
-    variance is sigma^2 sum w_i^2, not sigma^2 sum w_i = sigma^2 pi R^2. The two differ by 3% at a
-    20-pixel diameter and 11% at 6."""
-    from photutils.aperture import CircularAperture
-
-    r = 0.5 * float(aperture)
-    span = int(np.ceil(r)) + 2
-    shape = (2 * span + 1, 2 * span + 1)
-    offsets = np.linspace(0.0, 1.0, phases, endpoint=False)
-    total = 0.0
-    for dx in offsets:
-        for dy in offsets:
-            weights = CircularAperture([(span + dx, span + dy)], r=r).to_mask(method="exact")[0].to_image(shape)
-            total += float(np.sum(weights**2))
-    return total / phases**2
+    return np.round(upperlimit, 6)
 
 
 def aperture_noise_factor(acf, aperture: float) -> float:
-    """Aperture noise over the independent-pixel value sigma*sqrt(pi R^2), from a measured autocorrelation.
+    """sqrt(sum_h acf(h) O(h) / (pi r^2)), O the exact-weight aperture overlap averaged over sub-pixel phases."""
+    from scipy.signal import fftconvolve
+    from photutils.aperture import CircularAperture
 
-    Var(sum w_i x_i) = sigma^2 sum_h rho(h) O(h), with O the area two copies of the aperture share at
-    lag h -- analytic for a circle, and sum w_i^2 at zero lag. A missing or invalid
-    autocorrelation cannot define a limiting magnitude."""
     if acf is None:
         raise ValueError("A measured sky autocorrelation is required for aperture depth")
     acf = np.asarray(acf, dtype=float)
     half = acf.shape[0] // 2
+    if half < np.ceil(float(aperture)):  # exact weights overlap out to ceil(diameter) px on each axis
+        raise ValueError(f"Lag window +-{half} px is narrower than the {aperture:.2f} px aperture's overlap")
     radius = 0.5 * float(aperture)
-    ly, lx = np.mgrid[-half : half + 1, -half : half + 1]
-    separation = np.hypot(lx, ly)
-    overlap = np.zeros_like(separation)
-    inside = separation < 2 * radius
-    t = np.clip(separation[inside] / (2 * radius), 0.0, 1.0)
-    overlap[inside] = 2 * radius**2 * np.arccos(t) - 0.5 * separation[inside] * np.sqrt(
-        np.maximum(4 * radius**2 - separation[inside] ** 2, 0.0)
-    )
-    overlap[half, half] = aperture_weight_squared(aperture)
-    variance = float(np.sum(acf * overlap))
+    span = int(np.ceil(radius)) + 2
+    shape = (2 * span + 1, 2 * span + 1)
+    reach = min(half, shape[0] - 1)
+    overlap = np.zeros_like(acf)
+    offsets = np.linspace(0.0, 1.0, 16, endpoint=False)
+    for dx in offsets:
+        for dy in offsets:
+            weights = CircularAperture([(span + dx, span + dy)], r=radius).to_mask(method="exact")[0].to_image(shape)
+            correlation = fftconvolve(weights, weights[::-1, ::-1], mode="full")
+            overlap[half - reach:half + reach + 1, half - reach:half + reach + 1] += (
+                correlation[shape[0] - 1 - reach:shape[0] + reach, shape[1] - 1 - reach:shape[1] + reach]
+            )
+    variance = float(np.sum(acf * overlap)) / offsets.size**2
     if not np.isfinite(variance) or variance <= 0:
         raise ValueError("Invalid aperture variance from sky autocorrelation")
     return float(np.sqrt(variance / (np.pi * radius**2)))
 
 
 def bin_noise_factor(acf, box: int) -> float:
-    """Noise of a box x box binned pixel over the independent-pixel value sqrt(box^2)*sigma.
-
-    For a top-hat block O(h) = (box-|hx|)(box-|hy|), so at box = 2 this is exactly
-    sqrt(1 + rho(1,0) + rho(0,1) + rho(1,1)) -- the number an IFU-style 2x2 rebin needs."""
+    """sqrt(sum_h acf(h) O(h)) / box for a box x box pixel sum, O(h) = (box - |hx|)(box - |hy|)."""
     if acf is None:
         return 1.0
     acf = np.asarray(acf, dtype=float)

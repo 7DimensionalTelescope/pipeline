@@ -804,7 +804,13 @@ def swarp(
     monitor_stop = None
     # imagelist inputs only: for a direct FITS path the line count would read the
     # whole binary file, and a per-image call is over before the first 60 s tick
-    if logger is not None and resample_dir and not input_was_list and str(input).startswith("@") is False and os.path.isfile(input):
+    if (
+        logger is not None
+        and resample_dir
+        and not input_was_list
+        and str(input).startswith("@") is False
+        and os.path.isfile(input)
+    ):
         # one directory scan a minute against the imagelist length; the resamp files SWarp
         # writes are the only progress signal it emits at file granularity
         import threading
@@ -872,7 +878,7 @@ def hotpants(
     header = fits.getheader(inim)
 
     # input Image
-    il = il or header["SKYVAL"] - n_sigma * header["SKYSIG"]
+    il = il or header["BACKVAL"] - n_sigma * header["BACKSIG"]
     iu = iu or 60000
 
     # Template

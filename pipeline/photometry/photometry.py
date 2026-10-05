@@ -632,8 +632,8 @@ class PhotometrySingle:
 
             phot_header.SEEING = np.median(post_match_table["FWHM_WORLD"] * 3600)
             phot_header.PEEING = phot_header.SEEING / self.image_info.pixscale
-            phot_header.ELLIP = round(np.median(post_match_table["ELLIPTICITY"]), 3)
-            phot_header.ELONG = round(np.median(post_match_table["ELONGATION"]), 3)
+            phot_header.ELLIP = round(np.median(post_match_table["ELLIPTICITY"]), 6)
+            phot_header.ELONG = round(np.median(post_match_table["ELONGATION"]), 6)
 
             self.logger.debug(f"{len(post_match_table)} Star-like Sources Found")
 
@@ -913,6 +913,7 @@ class PhotometrySingle:
             and phot_header.BACKSCL == RESIDUAL_BOX_SIZE
             and all(getattr(phot_header, key.upper()) is not None for key in RESIDUAL_KEYS)
             and phot_header.covariance_depth_complete
+            and self._acf_current()
         ):
             self.logger.debug("Off-source sky already on the frame; keeping it")
             return False
@@ -997,7 +998,8 @@ class PhotometrySingle:
             setattr(phot_header, key.upper(), getattr(result, key))
         phot_header.BACKREF = "COADD" if is_coadd else "MODEL"
         self.logger.debug(f"Residual sky ({phot_header.BACKREF}): {result}")
-        self._measure_sky_covariance(phot_header, residual, excluded | ~coverage)
+        sky_noise = data - fitted.background if is_coadd else residual  # blank sky about BACKSIG's own mesh
+        self._measure_sky_covariance(phot_header, sky_noise, excluded | ~coverage, coverage, header if is_coadd else None)
         self.logger.info(
             f"Off-source sky: BACKVAL {phot_header.BACKVAL:.3f}, BACKSIG {phot_header.BACKSIG:.3f} on "
             f"{100 * phot_header.BACKFRAC:.1f}% of the frame, {100 * phot_header.SRCFRAC:.1f}% source-masked "
@@ -1024,50 +1026,89 @@ class PhotometrySingle:
             return None
         return dict(gain=float(gain), levels=[float(sky)], taps=coadd_taps(n_inputs, n_inputs * float(gain) / float(egain)))
 
-    def _measure_sky_covariance(self, phot_header: PhotometryHeader, residual, excluded) -> None:
-        """Sky-noise covariance from the same residual, and the limiting magnitudes it implies.
-
-        BACKSIG is a per-pixel width and is blind to covariance by construction, so it under-states the
-        noise of any sum of pixels whenever reprojection, interpolation or coaddition has correlated them.
-        The normalised autocorrelation measured here is what turns it into the noise of an actual
-        measurement: Var(sum w_i x_i) = BACKC0^2 * sum_h rho(h) O_w(h)."""
+    def _measure_sky_covariance(self, phot_header: PhotometryHeader, residual, excluded, coverage, coadd_header=None) -> None:
+        """Field-wide sky covariance, its BACKSIG-relative COV_n and BACKC2, and the limiting magnitudes they give."""
         from ..imcoadd.utils import noise_autocorrelation
 
-        # the circle-overlap kernel is exactly zero beyond one aperture diameter, so the lag window is the
-        # largest aperture the frame carries, not a tuning choice
+        # exact-weight apertures overlap out to ceil(diameter) px per axis, so the window spans the largest aperture
         diameters = [b.get("value") or 0.0 for b in phot_header.aperture_info.values()]
         maxlag = max(16, int(np.ceil(max(diameters))) if diameters else 0)
         stats = {}
-        acf = noise_autocorrelation(residual, mask=excluded, maxlag=maxlag, stats=stats)
+        acf = noise_autocorrelation(residual, mask=excluded, maxlag=maxlag, stats=stats, coverage=coverage)
         if acf is None or not np.isfinite(stats.get("variance", 0)) or stats["variance"] <= 0:
             raise RuntimeError("Sky covariance not measured; cannot calculate limiting magnitudes")
-        phot_header.BACKC0 = float(np.sqrt(stats["variance"]))
+        if stats["represented"] <= 0.5:
+            raise RuntimeError(
+                f"Sky covariance sub-areas span {stats['represented']:.1%} of the covered field (needs > 50%); "
+                "cannot calculate limiting magnitudes"
+            )
+        if phot_header.BACKSIG is None or not np.isfinite(phot_header.BACKSIG) or phot_header.BACKSIG <= 0:
+            raise RuntimeError("BACKSIG is required for covariance correction factors")
+        relative_acf = acf * (stats["variance"] / phot_header.BACKSIG**2)
+        phot_header.BACKC2 = float(phot_utils.bin_noise_factor(relative_acf, 2))
         half = acf.shape[0] // 2
-        phot_header.BACKCR = int(half)
-        phot_header.BACKCOV = float(np.sum(acf))
-        phot_header.BACKR10 = float(0.5 * (acf[half, half + 1] + acf[half, half - 1]))
-        phot_header.BACKR01 = float(0.5 * (acf[half + 1, half] + acf[half - 1, half]))
-        phot_header.BACKR11 = float(
-            0.25 * (acf[half + 1, half + 1] + acf[half + 1, half - 1] + acf[half - 1, half + 1] + acf[half - 1, half - 1])
+        lag_cards = dict(
+            BACKCR=int(half),
+            BACKCOV=float(np.sum(acf)),
+            BACKR10=float(0.5 * (acf[half, half + 1] + acf[half, half - 1])),
+            BACKR01=float(0.5 * (acf[half + 1, half] + acf[half - 1, half])),
+            BACKR11=float(
+                0.25 * (acf[half + 1, half + 1] + acf[half + 1, half - 1] + acf[half - 1, half + 1] + acf[half - 1, half - 1])
+            ),
         )
-        phot_header.BACKC2 = float(phot_utils.bin_noise_factor(acf, 2))
+        if coadd_header is None:
+            for key, value in lag_cards.items():
+                setattr(phot_header, key, value)
+        else:  # the lag cards would only repeat pixels of the written map
+            self._write_acf(acf * stats["variance"], stats["pixels"], stats["represented"], coadd_header["IMAGEID"])
+        phot_header.BACKCPIX, phot_header.BACKCREP = stats["pixels"], round(stats["represented"], 4)
 
         for aperture_key, bundle in phot_header.aperture_info.items():
             diameter = bundle.get("value") or 0.0
             if diameter <= 0 or bundle.get("ZP") is None:  # MAG_AUTO has no fixed aperture
                 continue
-            factor = phot_utils.aperture_noise_factor(acf, diameter)
+            factor = phot_utils.aperture_noise_factor(relative_acf, diameter)
             bundle["COV"] = factor
-            if phot_header.SKYSIG:
+            if phot_header.BACKSIG:
                 ul_3sig, ul_5sig = phot_utils.limitmag(
-                    np.array([3, 5]), bundle["ZP"], diameter, phot_header.SKYSIG, factor
+                    np.array([3, 5]), bundle["ZP"], diameter, phot_header.BACKSIG, factor
                 )
                 bundle["UL3"], bundle["UL5"] = float(ul_3sig), float(ul_5sig)
         self.logger.info(
-            f"Sky covariance: BACKCOV {phot_header.BACKCOV:.4f} to {half} px, "
-            f"rho(1,0) {phot_header.BACKR10:+.4f}, rho(0,1) {phot_header.BACKR01:+.4f}, "
-            f"2x2 bin factor {phot_header.BACKC2:.4f}"
+            f"Sky covariance: BACKCOV {lag_cards['BACKCOV']:.4f} to {half} px, "
+            f"rho(1,0) {lag_cards['BACKR10']:+.4f}, rho(0,1) {lag_cards['BACKR01']:+.4f}, "
+            f"2x2 bin factor {phot_header.BACKC2:.4f}, from {stats['pixels']} sky pixels "
+            f"in {stats['sub_areas']} sub-areas spanning {stats['represented']:.1%} of the covered field"
         )
+
+    def _write_acf(self, autocov, npix: int, represented: float, imageid: str) -> None:
+        """Coadd's unnormalised sky-noise autocovariance beside it, published atomically."""
+        path = PathHandler.acf(self.input_image)
+        header = fits.Header()
+        header["BUNIT"] = ("adu**2", "Sky-noise autocovariance C(dx,dy)")
+        header["IMAGEID"] = (imageid, "Coadd this map was measured on")
+        header["ACFNPIX"] = (npix, "Blank-sky pixels the map was measured on")
+        header["ACFREP"] = (round(represented, 4), "Covered fraction spanned by the sky sub-areas")
+        header["COMMENT"] = "C(dx,dy) at pixel (R+1+dx, R+1+dy), R = (NAXIS1-1)/2, dx along NAXIS1"
+        tmp = f"{path}.tmp"
+        try:
+            fits.PrimaryHDU(autocov.astype(np.float32), header=header).writeto(tmp, overwrite=True)
+            os.replace(tmp, path)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        self.logger.info(f"Sky autocovariance map is written in {os.path.basename(path)}")
+
+    def _acf_current(self) -> bool:
+        """A single needs no map; a coadd needs one measured on this version of it."""
+        header = fits.getheader(self.input_image)
+        if "IMG00000" not in header:
+            return True
+        path = PathHandler.acf(self.input_image)
+        if not os.path.exists(path):
+            return False
+        acf_header = fits.getheader(path)
+        return acf_header.get("IMAGEID") == header.get("IMAGEID") and acf_header.get("ACFREP") is not None
 
     def _run_sextractor(
         self,
@@ -1194,7 +1235,7 @@ class PhotometrySingle:
             if mag_key != "MAG_AUTO" and factor is not None:
                 aperture_size, _ = aperture_dict[aperture_key]
                 ul_3sig, ul_5sig = phot_utils.limitmag(
-                    np.array([3, 5]), zp, aperture_size, phot_header.SKYSIG, factor
+                    np.array([3, 5]), zp, aperture_size, phot_header.BACKSIG, factor
                 )
 
             phot_header.aperture_info[aperture_key] = {
@@ -1686,9 +1727,10 @@ class PhotometryHeader:
     SRCFRAC: float = None
     BACKPEAK: float = None
     BACKPKSN: float = None
-    BACKC0: float = None
     BACKCOV: float = None
     BACKC2: float = None
+    BACKCPIX: int = None
+    BACKCREP: float = None
     BACKCR: int = None
     BACKR10: float = None
     BACKR01: float = None
@@ -1801,15 +1843,14 @@ class PhotometryHeader:
                 temp[f"UL3_{suffix}"] = (ul_3sig, f"3 SIGMA LIMITING MAG FOR {mag_key}")
                 temp[f"UL5_{suffix}"] = (ul_5sig, f"5 SIGMA LIMITING MAG FOR {mag_key}")
             if cov is not None:
-                temp[f"COV_{suffix}"] = (round(cov, 4), "blank-sky aper noise / SKYSIG*sqrt(piR^2)")
+                temp[f"COV_{suffix}"] = (round(cov, 4), "Aperture noise / (BACKSIG * sqrt(pi R^2))")
         return temp
 
     @property
     def covariance_depth_complete(self) -> bool:
-        cards = ("BACKC0", "BACKCOV", "BACKCR", "BACKC2", "BACKR10", "BACKR01", "BACKR11")
-        if any(getattr(self, key) is None or not np.isfinite(getattr(self, key)) for key in cards):
+        if not self.BACKCPIX:  # cards measured before the field-wide estimate are not the current definition
             return False
-        if self.BACKC0 <= 0 or self.BACKC2 <= 0 or self.BACKCR < 1:
+        if self.BACKC2 is None or not np.isfinite(self.BACKC2) or self.BACKC2 <= 0:
             return False
         return all(
             bundle.get("COV") is not None
@@ -1835,44 +1876,42 @@ class PhotometryHeader:
             "INF_FILT": (self.INF_FILT, "BEST-MATCHING FILTER INFERRED BY PIPELINE"),
             "JD": (self.JD, "Julian Date of the observation"),
             "MJD": (self.MJD, "Modified Julian Date of the observation"),
-            "SEEING": (round(self.SEEING, 3) if self.SEEING is not None else 0, "SEEING [arcsec]"),
-            "PEEING": (round(self.PEEING, 3) if self.PEEING is not None else 0, "SEEING [pixel]"),
-            "ELLIP": (round(self.ELLIP, 3) if self.ELLIP is not None else 0, "ELLIPTICITY 1-B/A [0-1]"),
-            "ELONG": (round(self.ELONG, 3) if self.ELONG is not None else 0, "ELONGATION A/B [1-]"),
-            "SKYSIG": (round(self.SKYSIG, 3) if self.SKYSIG is not None else 0, "SKY SIGMA VALUE"),
-            "SKYVAL": (round(self.SKYVAL, 3) if self.SKYVAL is not None else 0, "SKY MEDIAN VALUE"),
-            "BACKSIG": (round(self.BACKSIG, 3) if self.BACKSIG is not None else None, "SKY SIGMA OFF SOURCE"),
-            "BACKVAL": (round(self.BACKVAL, 3) if self.BACKVAL is not None else None, "SKY MEDIAN OFF SOURCE"),
+            "SEEING": (round(self.SEEING, 6) if self.SEEING is not None else 0, "SEEING [arcsec]"),
+            "PEEING": (round(self.PEEING, 6) if self.PEEING is not None else 0, "SEEING [pixel]"),
+            "ELLIP": (round(self.ELLIP, 6) if self.ELLIP is not None else 0, "ELLIPTICITY 1-B/A [0-1]"),
+            "ELONG": (round(self.ELONG, 6) if self.ELONG is not None else 0, "ELONGATION A/B [1-]"),
+            "SKYSIG": (round(self.SKYSIG, 6) if self.SKYSIG is not None else 0, "SKY SIGMA VALUE"),
+            "SKYVAL": (round(self.SKYVAL, 6) if self.SKYVAL is not None else 0, "SKY MEDIAN VALUE"),
+            "BACKSIG": (float(f"{self.BACKSIG:.6g}") if self.BACKSIG is not None else None, "SKY SIGMA OFF SOURCE"),
+            "BACKVAL": (round(self.BACKVAL, 6) if self.BACKVAL is not None else None, "SKY MEDIAN OFF SOURCE"),
             "DEQUANT": (self.DEQUANT, "Sky mesh fitted on the dequantized copy (SKYVAL < cut)"),
             "BACKKSQ": (self.BACKKSQ, "sum k^2 of that kernel; BACKSIG = measured / sqrt"),
             "BACKFRAC": (self.BACKFRAC, "Fraction of pixels used for the sky estimate"),
             "SRCFRAC": (self.SRCFRAC, "Fraction of pixels covered by the source mask"),
             "BACKPEAK": (self.BACKPEAK, "[ADU] Largest mesh node excursion from its neighbours"),
             "BACKPKSN": (round(self.BACKPKSN, 2) if self.BACKPKSN is not None else None, "BACKPEAK / (1.4826 MAD of node excursions)"),
-            "BACKC0": (
-                round(self.BACKC0, 3) if self.BACKC0 is not None else None,
-                "[ADU] sky sigma the BACKR*/BACKCOV rho use",
-            ),
+            "BACKCPIX": (self.BACKCPIX, "Blank-sky pixels behind the covariance cards"),
+            "BACKCREP": (self.BACKCREP, "Covered fraction spanned by the sky sub-areas"),
             "BACKCOV": (
                 round(self.BACKCOV, 4) if self.BACKCOV is not None else None,
-                "sum of rho to BACKCR px; big-sum var inflation",
+                "Sum of C(h)/C(0) over |dx|,|dy| <= BACKCR",
             ),
-            "BACKCR": (self.BACKCR, "[pixel] Lag radius BACKCOV/BACKC2 are summed to"),
+            "BACKCR": (self.BACKCR, "[pixel] Half-width of the measured lag square"),
             "BACKC2": (
                 round(self.BACKC2, 4) if self.BACKC2 is not None else None,
-                "sigma(2x2 bin sum) / (2*BACKC0)",
+                "sigma(2x2 bin sum) / (2 * BACKSIG)",
             ),
             "BACKR10": (
                 round(self.BACKR10, 5) if self.BACKR10 is not None else None,
-                "Sky noise correlation at lag (1,0)",
+                "Blank-sky correlation C(1,0)/C(0)",
             ),
             "BACKR01": (
                 round(self.BACKR01, 5) if self.BACKR01 is not None else None,
-                "Sky noise correlation at lag (0,1)",
+                "Blank-sky correlation C(0,1)/C(0)",
             ),
             "BACKR11": (
                 round(self.BACKR11, 5) if self.BACKR11 is not None else None,
-                "Sky noise correlation at lag (1,1), 4-fold mean",
+                "C(+-1,+-1)/C(0) of blank sky, 4-fold mean",
             ),
             "NTRAILPX": (self.NTRAILPX, "Pixels masked as satellite trail"),
             "REFCAT": (self.REFCAT, "REFERENCE CATALOG TYPE"),
@@ -1892,8 +1931,8 @@ class PhotometryHeader:
             phot_header_dict["REJ_PROC"] = (self.REJ_PROC, "Sci-process that set SANITY to False")
 
         # round float values to .3f
-        phot_header_dict.update({k: (round(v[0], 3), v[1]) for k, v in self.aperture_dict.items()})
-        phot_header_dict.update({k: (round(v[0], 3), v[1]) for k, v in self.zp_dict.items() if v[0] is not None})
+        phot_header_dict.update({k: (round(v[0], 6), v[1]) for k, v in self.aperture_dict.items()})
+        phot_header_dict.update({k: (round(v[0], 6), v[1]) for k, v in self.zp_dict.items() if v[0] is not None})
 
         # Filter out entries where the value is None
         return {k: v for k, v in phot_header_dict.items() if v[0] is not None} | (

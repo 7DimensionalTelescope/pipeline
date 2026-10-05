@@ -22,15 +22,8 @@ def get_pool():
     global _global_pool
 
     # Return existing pool if it exists and is not closed
-    if _global_pool is not None:
-        try:
-            # Check if pool is still open by trying to get a connection
-            with _global_pool.connection() as conn:
-                pass
-            return _global_pool
-        except Exception:
-            # Pool is closed or invalid, create a new one
-            _global_pool = None
+    if _global_pool is not None and not _global_pool.closed:
+        return _global_pool
 
     # Create new pool
     try:

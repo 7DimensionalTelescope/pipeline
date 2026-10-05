@@ -167,7 +167,7 @@ def proper_coadd_numpy(
         else:
             s[i] = robust_sky_sigma(path)
             if logger is not None:
-                logger.warning(f"{get_basename(path)}: no SKYSIG; measured robust sigma {s[i]:.3f}")
+                logger.warning(f"{get_basename(path)}: no BACKSIG; measured robust sigma {s[i]:.3f}")
     if not np.all(np.isfinite(s) & (s > 0)):
         bad = [get_basename(p) for p, ok in zip(input_images, np.isfinite(s) & (s > 0)) if not ok]
         raise ValueError(f"No usable sky sigma for {bad[:3]} ({len(bad)} total)")

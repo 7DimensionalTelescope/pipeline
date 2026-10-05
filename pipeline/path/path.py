@@ -188,6 +188,11 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
     def psfmodel(image_path: str | list) -> str | list:
         return add_suffix(image_path, "psfmodel")
 
+    @staticmethod
+    def acf(image_path: str | list) -> str | list:
+        """Sky-noise autocorrelation map of a coadd, written by coadd photometry."""
+        return add_suffix(image_path, "acf")
+
     def replace(self, input=None, **setting_overrides) -> PathHandler:
         """A method to create a new PathHandler instance with the same settings but different input files."""
         s = dc_replaces(self.settings, **setting_overrides) if setting_overrides else self.settings

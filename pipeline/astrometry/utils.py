@@ -243,8 +243,8 @@ def make_polygon_header(
     ra, dec = get_fov_center(wcs, naxis1, naxis2)
     # FOV Center
     cards = [
-        ("RACENT", round(ra, 3), "RA CENTER [deg]"),
-        ("DECCENT", round(dec, 3), "DEC CENTER [deg]"),
+        ("RACENT", round(ra, 6), "RA CENTER [deg]"),
+        ("DECCENT", round(dec, 6), "DEC CENTER [deg]"),
     ]
 
     # FOV Polygon

@@ -299,15 +299,15 @@ class ReprojectFirstCoaddMixin:
         weights = None
         if weighting == "pixelwise":
             weights = wht_maps
-        elif weighting == "global":
-            skysigs = self.input_headers.values_any("BACKSIG", "SKYSIG")
+        elif weighting == "global" and plan.coadd_mode != "proper":  # proper weighs by its own skysigs
+            skysigs = self.input_headers.values("BACKSIG")
             missing = [i for i, s in enumerate(skysigs) if not s]
             if missing:
                 # 1.0 ADU^-2 against a typical 0.0086 is ~100x a normal frame: that frame would
                 # own the coadd. The card comes from single photometry, so this is its failure.
                 names = [get_basename(f) for f in atleast_1d(input_images)]
                 raise self._process_error.PreviousStageError(
-                    f"BACKSIG/SKYSIG missing on {len(missing)}/{len(skysigs)} frames "
+                    f"BACKSIG missing on {len(missing)}/{len(skysigs)} frames "
                     f"(e.g. {[names[i] for i in missing[:3]]}); rerun single photometry"
                 )
             weights = [1.0 / float(s) ** 2 for s in skysigs]
@@ -466,7 +466,7 @@ class ReprojectFirstCoaddMixin:
                 output_path=coadd_image,
                 coadd_header=self.input_headers.coadd_header,
                 peeings=self._proper_peeings(input_images),
-                skysigs=self.input_headers.values_any("BACKSIG", "SKYSIG"),
+                skysigs=self.input_headers.values("BACKSIG"),
                 flxscales=self._coadd_flxscales(),
                 weight_map_policy=policy,
                 weight_output=(PathHandler.weight_map(coadd_image) if policy != "off" else False),

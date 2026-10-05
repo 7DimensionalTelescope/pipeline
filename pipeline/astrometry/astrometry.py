@@ -1494,8 +1494,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 solved_header.append(("NTRAILPX", image_info.ntrailpx, "Pixels masked as satellite trail"))
 
             if image_info.skysig is not None:  # prep-run values; single photometry's main run overwrites both
-                solved_header.append(("SKYVAL", round(image_info.skyval, 3), "SKY MEDIAN VALUE"))
-                solved_header.append(("SKYSIG", round(image_info.skysig, 3), "SKY SIGMA VALUE"))
+                solved_header.append(("SKYVAL", round(image_info.skyval, 6), "SKY MEDIAN VALUE"))
+                solved_header.append(("SKYSIG", round(image_info.skysig, 6), "SKY SIGMA VALUE"))
 
             # reset the image header after preparing the new content
             if reset_image_header:

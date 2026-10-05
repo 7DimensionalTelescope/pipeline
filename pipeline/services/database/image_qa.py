@@ -116,6 +116,7 @@ class ImageQATable:
     zp_auto: Optional[float] = None
     ezp_auto: Optional[float] = None
     ul5_5: Optional[float] = None
+    cov_5: Optional[float] = None
     stdnumb: Optional[float] = None
 
     inf_filt: Optional[str] = None

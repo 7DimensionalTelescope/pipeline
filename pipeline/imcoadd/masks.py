@@ -749,7 +749,7 @@ class MaskMixin:
             counts=self._coadd_counts,
         )
         satellite_options = self.config_node.imcoadd.satellite_mask
-        skysigs = self.input_headers.values_any("BACKSIG", "SKYSIG")
+        skysigs = self.input_headers.values("BACKSIG")
         psf_fwhms = self.input_headers.values("PEEING")
         quality_masks = []
         trailed_frames = 0

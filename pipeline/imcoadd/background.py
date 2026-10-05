@@ -94,7 +94,7 @@ class BackgroundMixin:
 
         # the off-source pair when photometry measured it, the SExtractor pair otherwise
         sky_levels = self.input_headers.values_any_with_key("BACKVAL", "SKYVAL")
-        sky_sigmas = self.input_headers.values_any_with_key("BACKSIG", "SKYSIG")  # the mask law's threshold
+        sky_sigmas = self.input_headers.values_any_with_key("BACKSIG")  # the mask law's threshold
         skyvalues = [value for value, _ in sky_levels]
         skysigmas = [value for value, _ in sky_sigmas]
         self.logger.debug(f"Sky level from {_key_tally(sky_levels)}; sky noise from {_key_tally(sky_sigmas)}")

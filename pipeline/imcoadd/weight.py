@@ -87,9 +87,9 @@ def source_mask_on_frame(catalog, header, logger=None):
     ellipses = source_ellipses_on_frame(catalog, header, header, logger=logger)
     if ellipses is None:
         return None
-    skysig = header.get("BACKSIG") or header.get("SKYSIG")  # the same threshold bkgsub cuts its own mask at
+    skysig = header.get("BACKSIG")  # the same threshold bkgsub cuts its own mask at
     if skysig is None:
-        raise ValueError("Cannot build source mask: No sky noise value or SKYSIG keyword in the header")
+        raise ValueError(f"No BACKSIG for the source mask of {os.path.basename(catalog)}; rerun single photometry")
     return build_source_mask(
         ellipses, (header["NAXIS2"], header["NAXIS1"]), skysig=skysig, star_scale=2.0,
         galaxy_scale=2.5, class_star_cut=0.5, min_radius=3.0, logger=logger,
