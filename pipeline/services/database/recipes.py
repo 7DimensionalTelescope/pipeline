@@ -18,7 +18,15 @@ from typing import List, Optional, Tuple
 
 import os
 
-from ...const import SINGLE_DEPENDENCY_ROLE
+from ...const import (
+    ALL_FILTERS,
+    SCHEDULER_DB_PATH,
+    SINGLE_DEPENDENCY_ROLE,
+    TASK_STATUS_PENDING,
+    TASK_STATUS_PROCESSING,
+    TASK_STATUS_READY,
+)
+from ...version import MIN_SCIPROC_RUNTIME_VERSION_MAP
 from .query import free_query
 
 
@@ -159,6 +167,111 @@ def configs_missing_products(nightdate: Optional[str] = None, min_progress: int 
         """,
         params,
     )
+
+
+def select_configs_by_min_version(include_errors: bool = False, exclude_queued: bool = True) -> List[Tuple[str, str]]:
+    """ONE selection, by the min-version floors: science configs below a floor or short of coadd_photometry, as (config_file, first stage to run); astrometry done, not rejected, not queued. Which selection a run uses is an operational decision."""
+    rows = free_query(
+        """
+        WITH ps AS (
+            SELECT config_file, object, nightdate, filter, progress, errors,
+                   string_to_array(pipeline_version, '.')::int[] AS v
+            FROM process_status
+            WHERE config_type = 'science' AND progress >= 40 AND sanity IS NOT FALSE AND config_file IS NOT NULL
+        )
+        SELECT config_file,
+               CASE WHEN v IS NULL OR v < string_to_array(%s, '.')::int[] OR progress < 60 THEN 'single_photometry'
+                    WHEN v < string_to_array(%s, '.')::int[] OR progress < 70 THEN 'coadd'
+                    ELSE 'coadd_photometry' END AS stage
+        FROM ps
+        WHERE (errors IS NULL OR %s)
+          AND NOT (v >= string_to_array(%s, '.')::int[] AND progress >= 80)
+        ORDER BY count(*) OVER (PARTITION BY object, nightdate) >= 3 DESC, nightdate DESC NULLS LAST, object, filter
+        """,
+        (
+            MIN_SCIPROC_RUNTIME_VERSION_MAP["photometry"],
+            MIN_SCIPROC_RUNTIME_VERSION_MAP["imcoadd"],
+            include_errors,
+            MIN_SCIPROC_RUNTIME_VERSION_MAP["imcoadd"],
+        ),
+        statement_timeout_ms=600000,
+    )
+    if exclude_queued and SCHEDULER_DB_PATH and os.path.exists(SCHEDULER_DB_PATH):
+        import sqlite3
+
+        con = sqlite3.connect(f"file:{SCHEDULER_DB_PATH}?mode=ro", uri=True)
+        try:
+            live = (TASK_STATUS_READY, TASK_STATUS_PENDING, TASK_STATUS_PROCESSING)
+            queued = {r[0] for r in con.execute("SELECT config FROM scheduler WHERE status IN (?, ?, ?)", live)}
+        finally:
+            con.close()
+        rows = [row for row in rows if row[0] not in queued]
+    return [(config_file, stage) for config_file, stage in rows]
+
+
+def select_white_target_nights_by_min_version(min_filters: int = 3) -> List[Tuple[str, str, List[str], bool]]:
+    """ONE selection, by the min-version floors: target-nights with every science config at the floors and every observed counted filter covered, white missing or stale, as (object, nightdate, parents, overwrite); overwrite when a parent coadd is newer than the white."""
+    from .gwportal import RawFrameQuery
+
+    floor = MIN_SCIPROC_RUNTIME_VERSION_MAP["imcoadd"]
+    rows = free_query(
+        """
+        WITH sci AS (
+            SELECT object, nightdate, filter, config_file,
+                   (string_to_array(pipeline_version, '.')::int[] >= string_to_array(%s, '.')::int[]
+                    AND progress >= 80 AND errors IS NULL) AS current
+            FROM process_status
+            WHERE config_type = 'science' AND nightdate IS NOT NULL AND sanity IS NOT FALSE AND config_file IS NOT NULL
+        ),
+        tn AS (
+            SELECT object, nightdate, bool_and(current) AS all_current,
+                   count(*) FILTER (WHERE filter = ANY(%s)) AS n_counted,
+                   array_agg(config_file ORDER BY config_file) AS parents, array_agg(filter) AS filters
+            FROM sci GROUP BY 1, 2
+        ),
+        white AS (
+            SELECT DISTINCT ON (ps.object, ps.nightdate) ps.object, ps.nightdate, ps.status,
+                   string_to_array(ps.pipeline_version, '.')::int[] >= string_to_array(%s, '.')::int[] AS at_floor,
+                   w.created_at AS white_at
+            FROM process_status ps
+            LEFT JOIN (SELECT DISTINCT ON (process_status_id) process_status_id, created_at FROM image_qa
+                       WHERE image_type = 'white' ORDER BY process_status_id, created_at DESC) w
+                   ON w.process_status_id = ps.id
+            WHERE ps.config_type = 'crossfilter' AND ps.nightdate IS NOT NULL
+            ORDER BY ps.object, ps.nightdate, ps.updated_at DESC
+        ),
+        coadd AS (
+            SELECT object, nightdate, max(created_at) AS coadd_at FROM image_qa
+            WHERE image_type = 'coadd' AND m_epoch IS NOT TRUE GROUP BY 1, 2
+        )
+        SELECT tn.object, tn.nightdate::text, tn.parents, tn.filters,
+               coalesce(coadd.coadd_at > white.white_at, false) AS parents_newer
+        FROM tn LEFT JOIN white USING (object, nightdate) LEFT JOIN coadd USING (object, nightdate)
+        WHERE tn.all_current AND tn.n_counted >= %s
+          AND NOT coalesce(white.status = 'phot7ds-completed' AND white.at_floor
+                           AND NOT coalesce(coadd.coadd_at > white.white_at, false), false)
+        ORDER BY tn.nightdate DESC, tn.object
+        """,
+        (floor, list(ALL_FILTERS), floor, min_filters),
+        statement_timeout_ms=600000,
+    )
+    # the raw inventory, aggregated by the builder's own SQL: 2M frames are too many to fetch row by row
+    inventory = free_query(
+        f"SELECT object_name, night::text, filter, bool_or(is_too) FROM ({RawFrameQuery().full_table().sql()}) r GROUP BY 1, 2, 3",
+        statement_timeout_ms=600000,
+    )
+    observed, too = {}, set()
+    for obj, night, filt, is_too in inventory:
+        if is_too:
+            too.add((obj, night))
+        elif filt in ALL_FILTERS:
+            observed.setdefault((obj, night), set()).add(filt)
+    due = []
+    for obj, night, parents, filters, parents_newer in rows:
+        if (obj, night) in too or not observed.get((obj, night), set()) <= set(filters):
+            continue
+        due.append((obj, night, list(parents), bool(parents_newer)))
+    return due
 
 
 def image_names(images) -> List[str]:
