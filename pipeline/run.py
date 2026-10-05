@@ -13,9 +13,10 @@ from .const.sciproc import (
     SUBTRACTION_SPEC,
     DIFFERENCE_PHOTOMETRY_SPEC,
 )
-from .errors import WhiteImageError
+from .errors import Phot7DSError, WhiteImageError
 from .errors.errors import EmptyInputAfterSanityRejectionError
-from .services.version_check import floor_version, is_stale, recorded_version
+from .services.preflight import check_phot7ds_version
+from .services.version_check import floor_version, recorded_version, stale_reason
 from .preprocess import Preprocess
 from .astrometry import Astrometry
 from .photometry import Photometry, WhiteCatalog
@@ -88,6 +89,22 @@ def _record_config_sanity(config, sanity: bool = None) -> None:
         print(f"[WARNING] Failed to record config sanity: {e}")
 
 
+def _record_stageless_error(config, error) -> None:
+    """An error raised before any stage exists: put its code on the process_status row as a stage's logger would."""
+    try:
+        config.logger.error(str(error))
+        if not config.node.settings.is_pipeline or config.node.settings.is_too:
+            return
+
+        from .services.database.handler import DatabaseHandler, ExceptionHandler
+
+        process_status_id = DatabaseHandler(use_database=True, logger=config.logger).create_process_data(config.node)
+        if process_status_id is not None:
+            ExceptionHandler(process_status_id).add_exception_code("error", error.error_code)
+    except Exception as e:
+        print(f"[WARNING] Failed to record the error in process_status: {e}")
+
+
 def _plan_stages(config_node, specs, processes, overwrite, stale, rebuilt, keep_downstream_flags, logger):
     """Registry-order plan: (spec, overwrite) to run, and the specs whose flag is cleared up front."""
     to_run, to_clear, force = [], [], False
@@ -105,11 +122,7 @@ def _plan_stages(config_node, specs, processes, overwrite, stale, rebuilt, keep_
             if force and not keep_downstream_flags:
                 to_clear.append(spec)  # its product no longer descends from the regenerated input
             elif trigger == "stale":
-                logger.warning(
-                    f"{spec.name}: recorded runtime_version "
-                    f"{recorded_version(config_node, spec.config_section)!r} below floor "
-                    f"{floor_version(spec.config_section)!r}, but not selected; not run"
-                )
+                logger.warning(f"{spec.name}: {stale[spec.name]}, but not selected; not run")
             continue
 
         if trigger is None and not force and getattr(config_node.flag, spec.name):
@@ -168,7 +181,7 @@ def run_scidata_reduction(
 
         specs = SCIPROCESS_REGISTRY.specs
         # before write_config refreshes info.runtime_version
-        stale = {spec.name: is_stale(config.node, spec.config_section) for spec in specs}
+        stale = {spec.name: stale_reason(config.node, spec.config_section) for spec in specs}
 
         if overwrite_config_sections:
             config.overwrite_config_sections(overwrite_config_sections)
@@ -246,7 +259,7 @@ def run_crossfilter_reduction(
             raise ValueError(f"is_too mismatch: node.settings.is_too={config.node.settings.is_too} != is_too={is_too}")
 
         specs = CROSSFILTERPROCESS_REGISTRY.specs
-        stale = {spec.name: is_stale(config.node, spec.config_section) for spec in specs}
+        stale = {spec.name: stale_reason(config.node, spec.config_section) for spec in specs}
 
         # Cold-start fallback for configs launched without a scheduler. The
         # same idempotent write runs again after WhiteImage registers its output.
@@ -259,6 +272,12 @@ def run_crossfilter_reduction(
         to_run, to_clear = _plan_stages(
             config.node, specs, processes, effective_overwrite, stale, set(), keep_downstream_flags, config.logger
         )
+        if any(spec is PHOT7DS_SPEC for spec, _ in to_run):
+            try:
+                check_phot7ds_version()  # fail here, before the white coadd runs, not at the phot7ds stage
+            except Phot7DSError as error:
+                _record_stageless_error(config, error)
+                raise
         _clear_flags(config, to_clear)
 
         for spec, spec_overwrite in to_run:

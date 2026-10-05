@@ -19,6 +19,7 @@ WORKER_USER="${WORKER_USER:-$(id -un)}"
 env_get() { grep -E "^$1=" "$PIPELINE_ROOT/.env" 2>/dev/null | tail -1 | cut -d= -f2-; }
 SERVER_NAME="${SERVER_NAME:-$(env_get DISPATCH_SERVER_NAME)}"; SERVER_NAME="${SERVER_NAME:-$(hostname -s)}"
 MAX_WORKERS="${MAX_WORKERS:-$(env_get DISPATCH_MAX_WORKERS)}"; MAX_WORKERS="${MAX_WORKERS:-6}"
+POLL_INTERVAL="${POLL_INTERVAL:-$(env_get DISPATCH_POLL_INTERVAL)}"; POLL_INTERVAL="${POLL_INTERVAL:-5}"
 # Narrow while a worker is new; no stage needs a GPU, so "any" is safe when you want it.
 CONFIG_TYPES="${CONFIG_TYPES:-$(env_get DISPATCH_CONFIG_TYPES)}"; CONFIG_TYPES="${CONFIG_TYPES:-science}"
 INPUT_TYPE="${INPUT_TYPE:-$(env_get DISPATCH_INPUT_TYPE)}"  # relabels each claimed row, e.g. single-reduction-balmer
@@ -71,7 +72,7 @@ echo "=== 4. Pipeline env ==="
 for kv in "PROTON_SSH=${MAIN_SSH}" "PROTON_SSH_PORT=${MAIN_SSH_PORT}" \
           "PROTON_SCHEDULER_RPC=${MAIN_SCHEDULER_RPC}" "DISPATCH_SERVER_NAME=${SERVER_NAME}" \
           "DISPATCH_CONFIG_TYPES=${CONFIG_TYPES}" "DISPATCH_INPUT_TYPE=${INPUT_TYPE}" \
-          "DISPATCH_MAX_WORKERS=${MAX_WORKERS}" "DISPATCH_POLL_INTERVAL=5"; do
+          "DISPATCH_MAX_WORKERS=${MAX_WORKERS}" "DISPATCH_POLL_INTERVAL=${POLL_INTERVAL}"; do
   # upsert, so re-running with a new value actually changes it
   if grep -q "^${kv%%=*}=" "$PIPELINE_ROOT/.env" 2>/dev/null; then
     sed -i "s|^${kv%%=*}=.*|${kv}|" "$PIPELINE_ROOT/.env"

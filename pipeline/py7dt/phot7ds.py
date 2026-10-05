@@ -6,6 +6,7 @@ from ..const.crossfilter import CROSSFILTERPROCESS_REGISTRY, PHOT7DS_SPEC
 from ..errors import Phot7DSError
 from ..path.path import PathHandler
 from ..services.database.handler import DatabaseHandler
+from ..services.preflight import check_phot7ds_version
 from ..services.setup import BaseSetup
 from ..services.version_check import RuntimeVersionMixin
 from ..utils import atleast_1d, collapse, time_diff_in_seconds
@@ -80,6 +81,7 @@ class Phot7DS(BaseSetup, DatabaseHandler, RuntimeVersionMixin):
         overwrite = self.resolve_overwrite(overwrite)
         st = time.time()
         try:
+            phot7ds_version = check_phot7ds_version()
             result = run_phot7ds(
                 self.config_node,
                 self.path,
@@ -87,6 +89,7 @@ class Phot7DS(BaseSetup, DatabaseHandler, RuntimeVersionMixin):
                 thread_count=self.thread_count,
             )
             self.config_node.phot7ds.catalog = str(result.catalog_path)
+            self.config_node.phot7ds.phot7ds_version = phot7ds_version
             setattr(self.config_node.flag, self._process_spec.name, True)
             self.record_runtime_version()
             self.update_progress(

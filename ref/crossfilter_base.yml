@@ -71,6 +71,7 @@ imcoadd:
 
 phot7ds:
   runtime_version:
+  phot7ds_version:
   catalog:
 
 photometry:

@@ -24,6 +24,12 @@ Signals: SIGHUP reloads DISPATCH_MAX_WORKERS, DISPATCH_INPUT_TYPE and
 DISPATCH_POLL_INTERVAL from .env; SIGUSR1 drains (stop claiming, let running configs
 finish), SIGUSR2 resumes, SIGTERM/SIGINT stop now (running configs are terminated and
 their rows released).
+
+Startup preflight: a worker allowed to claim crossfilter rows (DISPATCH_CONFIG_TYPES naming
+crossfilter, or "any") exits 78 before its first claim when the installed phot7ds is below the
+pipeline's MIN_PHOT7DS_VERSION. Under the Type=notify unit in systemd/ READY=1 is sent only after
+that, so `systemctl restart` fails loudly instead of restart-looping; a unit still installed as
+Type=simple is warned about in the journal. --check runs the same preflight.
 """
 
 from __future__ import annotations
@@ -49,8 +55,10 @@ from pipeline.const import (
     SUCCESS_RETURN_CODE,
     EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE,
     MAIN_HOST_ADDRESS,
+    CONFIG_TYPE_CROSSFILTER,
     CONFIG_TYPE_SCIENCE,
 )
+from pipeline.services.preflight import notify_ready, phot7ds_preflight
 from pipeline.services.scheduler import Scheduler
 
 DEFAULT_POLL_INTERVAL = 5.0
@@ -369,6 +377,8 @@ def main():
     config_types = [t.strip() for t in args.config_types.split(",") if t.strip()] or None
     if config_types == ["any"]:
         config_types = None
+    if config_types is None or CONFIG_TYPE_CROSSFILTER in config_types:
+        phot7ds_preflight(logger)  # before the first claim: a claim stamps whole crossfilter groups as this host's
 
     if args.check:
         # A claim of a config_type nothing uses proves the whole path without taking work.
@@ -385,6 +395,7 @@ def main():
     signal.signal(signal.SIGHUP, worker.request_reload)
     signal.signal(signal.SIGUSR1, worker.drain)
     signal.signal(signal.SIGUSR2, worker.resume)
+    notify_ready(logger)
     worker.run_forever()
 
 

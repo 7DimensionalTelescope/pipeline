@@ -19,6 +19,7 @@ MIN_SCIPROC_RUNTIME_VERSION = str(
         Version(MIN_SCIPROC_RUNTIME_VERSION),
     )
 )
+MIN_PHOT7DS_VERSION = "0.8.0"  # phot7ds package floor: checked before a crossfilter run, stamped as phot7ds_version
 
 
 def is_below_min(recorded, minimum: str) -> bool:

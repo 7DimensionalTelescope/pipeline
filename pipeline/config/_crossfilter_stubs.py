@@ -109,6 +109,7 @@ if TYPE_CHECKING:
 
     class Phot7dsNode(ConfigNode):
         runtime_version: Any
+        phot7ds_version: Any
         catalog: Any
 
     class PhotometryNode(ConfigNode):

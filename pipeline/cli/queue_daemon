@@ -16,6 +16,7 @@ from pathlib import Path
 pipeline_dir = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(pipeline_dir))
 
+from pipeline.services.preflight import notify_ready, phot7ds_preflight
 from pipeline.services.queue import QueueManager
 from pipeline.services.scheduler import Scheduler
 from pipeline.const import SCHEDULER_DB_PATH
@@ -30,6 +31,9 @@ def main():
     # Create QueueManager
     queue = QueueManager(auto_start=True, monitor=True)
     queue.logger.info("Queue Manager daemon started")
+
+    phot7ds_preflight(queue.logger)  # the origin claims whites: refuse before anything can be claimed
+    notify_ready(queue.logger)  # before the reclaim pass below, which has no bound against TimeoutStartSec
 
     # Create Scheduler with system queue mode
     scheduler = Scheduler(use_system_queue=True)

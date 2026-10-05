@@ -7,7 +7,9 @@ RequiresMountsFor=/lyman/data1 /lyman/data2
 
 [Service]
 UMask=0002
-Type=simple
+# notify: READY=1 is sent only after the startup preflight in cli/dispatch_worker_daemon, so a refused start
+# is reported to the caller of systemctl instead of surfacing as a restart loop.
+Type=notify
 # Only the daemon gets SIGTERM; without this systemd kills every reduction in the cgroup at t=0,
 # which pre-empts the shutdown path below and makes a graceful drain impossible.
 KillMode=mixed
@@ -30,6 +32,8 @@ ExecStart=@PYTHON_BIN_DIR@/python3 @PIPELINE_ROOT@/pipeline/cli/dispatch_worker_
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=10
+# 78 = refused by the preflight (phot7ds below MIN_PHOT7DS_VERSION): stay failed instead of restart-looping.
+RestartPreventExitStatus=78
 # Stop path: settle -> SIGTERM + 10 s grace -> SIGKILL + 5 s reap -> settle, each RPC capped at
 # SHUTDOWN_RPC_TIMEOUT and abandoned wholesale once the main host stops answering.
 TimeoutStopSec=120

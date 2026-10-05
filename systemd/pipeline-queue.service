@@ -5,7 +5,9 @@ PartOf=pipeline-trigger.service
 
 [Service]
 UMask=0002
-Type=simple
+# notify: READY=1 is sent only after the startup preflight in cli/queue_daemon, so a refused start
+# is reported to the caller of systemctl instead of surfacing as a restart loop.
+Type=notify
 User=pipeline-stable
 Group=pipeline
 WorkingDirectory=/home/pipeline-stable/pipeline
@@ -26,6 +28,8 @@ ExecStart=/home/pipeline-stable/.conda/envs/pipeline/bin/python3 /home/pipeline-
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=10
+# 78 = refused by the preflight (phot7ds below MIN_PHOT7DS_VERSION): stay failed instead of restart-looping.
+RestartPreventExitStatus=78
 # Graceful stop is designed to finish in <=25 s (SHUTDOWN_* budgets in services/queue.py);
 # 45 s covers it with margin and halves the wait when the daemon is beyond saving.
 TimeoutStopSec=45
