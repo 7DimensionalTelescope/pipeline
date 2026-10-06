@@ -41,15 +41,24 @@ def main():
     parser.add_argument("--show-configs", action="store_true", help="list every config, not just the counts")
     parser.add_argument("--show-masters", action="store_true", help="list the chained master frames")
     parser.add_argument("--submit", action="store_true", help="queue the plan (default: print and stop)")
-    parser.add_argument("--phase", type=int, choices=[1, 2, 3, 4, 5],
-                        help="which ONE phase to submit; the scheduler dedupes on config path, so "
-                             "batches sharing configs must be queued one at a time, drained in between")
-    parser.add_argument("--sweep", type=int, choices=[1, 2, 3],
-                        help="with --phase 1: which cumulative calib_types sweep ("
-                             + "; ".join(f"{i+1}=" + "+".join(s) for i, s in enumerate(MASTER_SWEEPS))
-                             + "), run in order and drained in between")
-    parser.add_argument("--execute", action="store_true",
-                        help="with --submit, do the real work instead of a -dry_run sizing pass")
+    parser.add_argument(
+        "--phase",
+        type=int,
+        choices=[1, 2, 3, 4, 5],
+        help="which ONE phase to submit; the scheduler dedupes on config path, so "
+        "batches sharing configs must be queued one at a time, drained in between",
+    )
+    parser.add_argument(
+        "--sweep",
+        type=int,
+        choices=[1, 2, 3],
+        help="with --phase 1: which cumulative calib_types sweep ("
+        + "; ".join(f"{i+1}=" + "+".join(s) for i, s in enumerate(MASTER_SWEEPS))
+        + "), run in order and drained in between",
+    )
+    parser.add_argument(
+        "--execute", action="store_true", help="with --submit, do the real work instead of a -dry_run sizing pass"
+    )
     parser.add_argument("--base-priority", type=int, default=1, help="scheduler base priority (default 1)")
     args = parser.parse_args()
 

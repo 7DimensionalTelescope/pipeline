@@ -15,9 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-DEFAULT_SOURCE_PATH = Path(
-    "/home/7dt/7dt_too/backend/data/7dt/sync/multitelescopes.dict"
-)
+DEFAULT_SOURCE_PATH = Path("/home/7dt/7dt_too/backend/data/7dt/sync/multitelescopes.dict")
 DEFAULT_DB_PATH = Path("/var/db/multitelescopes_dict_archive.sqlite")
 
 
@@ -46,29 +44,18 @@ def _ensure_table(conn: sqlite3.Connection, table_name: str) -> None:
         )
         """
     )
-    conn.execute(
-        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_captured_at ON {quoted_table}(captured_at)"
-    )
-    conn.execute(
-        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_sha256 ON {quoted_table}(sha256)"
-    )
+    conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_captured_at ON {quoted_table}(captured_at)")
+    conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_sha256 ON {quoted_table}(sha256)")
 
 
-def _ensure_columns(
-    conn: sqlite3.Connection, table_name: str, columns: dict[str, str]
-) -> None:
+def _ensure_columns(conn: sqlite3.Connection, table_name: str, columns: dict[str, str]) -> None:
     quoted_table = _quote_identifier(table_name)
-    existing = {
-        row[1]
-        for row in conn.execute(f"PRAGMA table_info({quoted_table})").fetchall()
-    }
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({quoted_table})").fetchall()}
     for col_name, col_type in columns.items():
         if col_name in existing:
             continue
         quoted_col = _quote_identifier(col_name)
-        conn.execute(
-            f"ALTER TABLE {quoted_table} ADD COLUMN {quoted_col} {col_type}"
-        )
+        conn.execute(f"ALTER TABLE {quoted_table} ADD COLUMN {quoted_col} {col_type}")
 
 
 def _upsert_archive(
@@ -85,9 +72,7 @@ def _upsert_archive(
     quoted_columns = ", ".join(_quote_identifier(col) for col in column_names)
     placeholders = ", ".join(["?"] * len(column_names))
     update_set = ", ".join(
-        f"{_quote_identifier(col)} = excluded.{_quote_identifier(col)}"
-        for col in column_names
-        if col != "date"
+        f"{_quote_identifier(col)} = excluded.{_quote_identifier(col)}" for col in column_names if col != "date"
     )
     values = [date_str, captured_at, sha256, *columns.values()]
     conn.execute(
@@ -146,9 +131,8 @@ def _flatten_columns(telescope_payload: dict) -> dict[str, str]:
             columns[key] = json.dumps(value, separators=(",", ":"))
     return columns
 
-def archive_file(
-    source_path: Path, db_path: Path, skip_unchanged: bool, verbose: bool
-) -> None:
+
+def archive_file(source_path: Path, db_path: Path, skip_unchanged: bool, verbose: bool) -> None:
     if not source_path.exists():
         raise FileNotFoundError(f"Source file not found: {source_path}")
 
@@ -212,9 +196,7 @@ def archive_file(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Archive multitelescopes.dict into sqlite."
-    )
+    parser = argparse.ArgumentParser(description="Archive multitelescopes.dict into sqlite.")
     parser.add_argument(
         "--source",
         default=str(DEFAULT_SOURCE_PATH),

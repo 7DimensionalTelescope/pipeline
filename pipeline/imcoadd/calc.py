@@ -18,6 +18,7 @@ from ..path.path import PathHandler
 from ..services.logger import Logger
 from .utils import determine_size, build_coadd_wcs_header
 
+
 def validate_coverage_policy(
     policy: str,
     allowed_policies: tuple[str, ...] = ("union", "intersection"),
@@ -48,8 +49,7 @@ def apply_coverage_policy(
         footprint[~keep] = 0
         if logger is not None:
             logger.info(
-                f"Intersection coverage retained {int(keep.sum())}/{keep.size} pixels "
-                f"({100 * keep.mean():.2f}%)"
+                f"Intersection coverage retained {int(keep.sum())}/{keep.size} pixels " f"({100 * keep.mean():.2f}%)"
             )
     return keep
 
@@ -217,7 +217,9 @@ def mean_coadd_numpy(
     # Flux-scaling source (logged once): False disables; an explicit list is the
     # snapshot source of truth; None falls back to each file's FLXSCALE header.
     scale_mode = (
-        "disabled" if flxscales is False else ("from in-memory values" if flxscales is not None else "from FLXSCALE headers")
+        "disabled"
+        if flxscales is False
+        else ("from in-memory values" if flxscales is not None else "from FLXSCALE headers")
     )
     if logger is not None:
         logger.info(f"Flux scaling during coadd: {scale_mode}")
@@ -316,11 +318,15 @@ def mean_coadd_numpy(
             # sigma_norm^2 = flxscale^2 / w_map
             se = 1.0 if weights is None else float(weights[i]) / (flxscale * flxscale)
             ok = valid & (vm > 0)
-            var_den[ty0:ty1, tx0:tx1] += np.where(ok, se * se * flxscale * flxscale / np.where(ok, vm, np.float32(1.0)), 0.0)
+            var_den[ty0:ty1, tx0:tx1] += np.where(
+                ok, se * se * flxscale * flxscale / np.where(ok, vm, np.float32(1.0)), 0.0
+            )
 
     coadd = np.where(norm_arr > 0, sum_arr / np.where(norm_arr > 0, norm_arr, 1), np.nan).astype(np.float32)
     if propagate:
-        weight_map_out = np.where(var_den > 0, norm_arr.astype(np.float64) ** 2 / np.where(var_den > 0, var_den, 1), 0.0)
+        weight_map_out = np.where(
+            var_den > 0, norm_arr.astype(np.float64) ** 2 / np.where(var_den > 0, var_den, 1), 0.0
+        )
     else:
         weight_map_out = norm_arr
 
@@ -336,9 +342,7 @@ def mean_coadd_numpy(
     if counts is not None:
         counts.geometric, counts.used = geometric_count, count_arr
 
-    out_header = build_coadd_wcs_header(
-        input_images[0], target_cx, target_cy, coadd_header, frame_cache=frame_cache
-    )
+    out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, coadd_header, frame_cache=frame_cache)
     covered = count_arr > 0
     n_eff = float(count_arr[covered].mean()) if covered.any() else None
     egain_complete = all_egain and covered.any() and (gain_denom[covered] > 0).all()
@@ -368,8 +372,9 @@ def mean_coadd_numpy(
         footprint_out = footprint_output or PathHandler.footprint(output_path)
         fits.writeto(footprint_out, count_arr.astype(np.int16), header=out_header, overwrite=True)
     if egain_output is not False:
-        _write_egain_map(egain_output or PathHandler.egain_map(output_path), norm_arr, gain_denom, covered,
-                         out_header, logger)
+        _write_egain_map(
+            egain_output or PathHandler.egain_map(output_path), norm_arr, gain_denom, covered, out_header, logger
+        )
     if logger is not None and weight_output is not False:
         logger.debug(f"Wrote coadd weight map ({backend}): {weight_out}")
     if logger is not None and footprint_output is not False:
@@ -427,11 +432,22 @@ def clipped_mean_coadd_numpy(
         raise ValueError(f"flxscales ({len(flxscales)}) and input_images ({len(input_images)}) length mismatch")
 
     center, valid_count = median_coadd_numpy(
-        input_images, output_path, coadd_header, weights=weights,
-        weight_output=False, footprint_output=False,
-        masks=masks, flxscales=flxscales, match_swarp_size=match_swarp_size,
-        chunk_h=None, reserved_bytes=reserved_bytes, return_array=True,
-        badpix=badpix, saturated=saturated, frame_cache=frame_cache, logger=logger,
+        input_images,
+        output_path,
+        coadd_header,
+        weights=weights,
+        weight_output=False,
+        footprint_output=False,
+        masks=masks,
+        flxscales=flxscales,
+        match_swarp_size=match_swarp_size,
+        chunk_h=None,
+        reserved_bytes=reserved_bytes,
+        return_array=True,
+        badpix=badpix,
+        saturated=saturated,
+        frame_cache=frame_cache,
+        logger=logger,
     )
     center = np.where(np.isfinite(center), center, 0.0)
     two = valid_count == 2
@@ -558,7 +574,9 @@ def clipped_mean_coadd_numpy(
 
     # survivors form a weighted mean: propagated (sum s)^2/sum(s^2 sigma^2), no penalty
     if propagate:
-        weight_map_out = np.where(var_den > 0, norm_arr.astype(np.float64) ** 2 / np.where(var_den > 0, var_den, 1), 0.0)
+        weight_map_out = np.where(
+            var_den > 0, norm_arr.astype(np.float64) ** 2 / np.where(var_den > 0, var_den, 1), 0.0
+        )
     else:
         weight_map_out = norm_arr.astype(np.float64)
     if two_sample_fallback == "min" and n_two:
@@ -574,9 +592,7 @@ def clipped_mean_coadd_numpy(
     )
     if counts is not None:
         counts.geometric, counts.used = geometric_count, count_arr
-    out_header = build_coadd_wcs_header(
-        input_images[0], target_cx, target_cy, coadd_header, frame_cache=frame_cache
-    )
+    out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, coadd_header, frame_cache=frame_cache)
     covered = count_arr > 0
     n_eff = float(count_arr[covered].mean()) if covered.any() else None
     egain_complete = all_egain and covered.any() and (gain_denom[covered] > 0).all()
@@ -598,15 +614,17 @@ def clipped_mean_coadd_numpy(
         footprint_out = footprint_output or PathHandler.footprint(output_path)
         fits.writeto(footprint_out, count_arr.astype(np.int16), header=out_header, overwrite=True)
     if egain_output is not False:
-        _write_egain_map(egain_output or PathHandler.egain_map(output_path), norm_arr, gain_denom, covered,
-                         out_header, logger)
+        _write_egain_map(
+            egain_output or PathHandler.egain_map(output_path), norm_arr, gain_denom, covered, out_header, logger
+        )
     if logger is not None:
         logger.info(f"Numpy clipped-mean coaddition completed in {time_diff_in_seconds(st)} seconds")
     return output_path
 
 
-def plan_median_memory(n_images: int, width: int, height: int, budget_bytes: int,
-                       floor: int = 128, accumulator_bytes_per_pixel: int = 26) -> tuple[int, int]:
+def plan_median_memory(
+    n_images: int, width: int, height: int, budget_bytes: int, floor: int = 128, accumulator_bytes_per_pixel: int = 26
+) -> tuple[int, int]:
     """Return strip height and total bytes under ``budget_bytes``."""
     accumulators = height * width * accumulator_bytes_per_pixel
     per_row = n_images * width * 4  # one strip row across the stack, float32
@@ -615,8 +633,15 @@ def plan_median_memory(n_images: int, width: int, height: int, budget_bytes: int
     return chunk, accumulators + chunk * per_row
 
 
-def _auto_chunk_h(n_images: int, width: int, height: int, budget_fraction: float = 0.3,
-                  floor: int = 128, reserved_bytes: int = 0, logger: Logger | None = None) -> int:
+def _auto_chunk_h(
+    n_images: int,
+    width: int,
+    height: int,
+    budget_fraction: float = 0.3,
+    floor: int = 128,
+    reserved_bytes: int = 0,
+    logger: Logger | None = None,
+) -> int:
     """Strip height from idle memory: strip count scales the NFS slice round-trips, so
     RAM buys taller strips and directly cuts the latency-bound I/O. ``reserved_bytes``
     subtracts other combines' leased stacks (services.combine_lock) so concurrent
@@ -627,9 +652,11 @@ def _auto_chunk_h(n_images: int, width: int, height: int, budget_fraction: float
     chunk, total = plan_median_memory(n_images, width, height, budget, floor)
     if logger is not None:
         n_strips = -(-height // chunk)
-        logger.info(f"Median coadd: chunk_h={chunk} ({n_strips} strips, "
-                    f"~{total / 2**30:.0f} GiB for {n_images} frames on {width}x{height}, "
-                    f"budget {budget / 2**30:.0f} GiB)")
+        logger.info(
+            f"Median coadd: chunk_h={chunk} ({n_strips} strips, "
+            f"~{total / 2**30:.0f} GiB for {n_images} frames on {width}x{height}, "
+            f"budget {budget / 2**30:.0f} GiB)"
+        )
         if total > budget:
             # the floor cannot go lower: this frame count on this grid does not fit
             logger.warning(
@@ -812,9 +839,7 @@ def median_coadd_numpy(
     if return_array:
         return coadd, count_arr
 
-    out_header = build_coadd_wcs_header(
-        input_images[0], target_cx, target_cy, coadd_header, frame_cache=frame_cache
-    )
+    out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, coadd_header, frame_cache=frame_cache)
     covered = count_arr > 0
     n_eff = float(count_arr[covered].mean()) if covered.any() else None
     if all_egain and covered.any():
@@ -839,9 +864,7 @@ def median_coadd_numpy(
     # folded in, so 1/sqrt(weight) is THE per-pixel sigma of this median image. The
     # penalty is exact for homogeneous stacks and conservative for heterogeneous ones.
     if have_sigma:
-        base_w = np.where(
-            var_den > 0, count_arr.astype(np.float64) ** 2 / np.where(var_den > 0, var_den, 1), 0.0
-        )
+        base_w = np.where(var_den > 0, count_arr.astype(np.float64) ** 2 / np.where(var_den > 0, var_den, 1), 0.0)
     else:
         base_w = count_arr.astype(np.float64)  # no sigma source: frame count
     weight_map_out = base_w / _median_penalty(count_arr)

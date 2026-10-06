@@ -134,9 +134,9 @@ def aperture_noise_factor(acf, aperture: float) -> float:
         for dy in offsets:
             weights = CircularAperture([(span + dx, span + dy)], r=radius).to_mask(method="exact")[0].to_image(shape)
             correlation = fftconvolve(weights, weights[::-1, ::-1], mode="full")
-            overlap[half - reach:half + reach + 1, half - reach:half + reach + 1] += (
-                correlation[shape[0] - 1 - reach:shape[0] + reach, shape[1] - 1 - reach:shape[1] + reach]
-            )
+            overlap[half - reach : half + reach + 1, half - reach : half + reach + 1] += correlation[
+                shape[0] - 1 - reach : shape[0] + reach, shape[1] - 1 - reach : shape[1] + reach
+            ]
     variance = float(np.sum(acf * overlap)) / offsets.size**2
     if not np.isfinite(variance) or variance <= 0:
         raise ValueError("Invalid aperture variance from sky autocorrelation")

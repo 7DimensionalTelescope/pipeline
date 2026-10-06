@@ -54,8 +54,7 @@ with db.get_connection() as conn:
 with db.get_connection() as conn:
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE image_qa SET image_type = %s"
-            " WHERE filter = %s AND image_type IS DISTINCT FROM %s",
+            "UPDATE image_qa SET image_type = %s" " WHERE filter = %s AND image_type IS DISTINCT FROM %s",
             (IMAGE_TYPE_WHITE, WHITE_FILTER, IMAGE_TYPE_WHITE),
         )
         updated_white = cur.rowcount

@@ -77,6 +77,7 @@ class CascadePlan:
         return [c for c in self.science_configs if c[2] is None]
 
     def report(self) -> str:
+        # fmt: off
         lines = [
             f"Cascade from {len(self.seeds)} regenerated master frame(s): "
             + ", ".join(self.seeds[:4])
@@ -91,9 +92,13 @@ class CascadePlan:
             f"  phase 4  science    {len(self.multiepoch_science)} multi-epoch configs",
             f"  phase 5  crossfilter {len(self.crossfilter_configs)} configs",
         ]
+        # fmt: on
         if self.unregenerable:
-            lines += ["", f"  CANNOT REGENERATE ({len(self.unregenerable)}) — the chain stops here and"
-                          " everything below stays stale:"]
+            lines += [
+                "",
+                f"  CANNOT REGENERATE ({len(self.unregenerable)}) — the chain stops here and"
+                " everything below stays stale:",
+            ]
             lines += [f"    {name}: {why}" for name, why in self.unregenerable[:20]]
             if len(self.unregenerable) > 20:
                 lines.append(f"    ... and {len(self.unregenerable) - 20} more")
@@ -133,8 +138,7 @@ def _resolve_configs(stems) -> tuple:
     known = {
         name: (config_file, sanity)
         for name, config_file, sanity in free_query(
-            "SELECT name, config_file, sanity FROM process_status"
-            " WHERE name = ANY(%s) AND config_type = %s",
+            "SELECT name, config_file, sanity FROM process_status" " WHERE name = ANY(%s) AND config_type = %s",
             (stems, CONFIG_TYPE_PREPROCESS),
         )
     }

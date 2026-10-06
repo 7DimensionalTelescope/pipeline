@@ -479,7 +479,8 @@ def median_penalty_card(nframes: int) -> tuple:
 
 def additive_sigma_quantile_cards(darksig_file: str, biassig_file: str, bpmask_file: str | None = None) -> dict:
     """The NOISQ cards of a master dark: quantiles of a science pixel's additive noise sigma — its own read and dark noise
-    (the dark sigma map) plus the median noise the master bias and dark carry into it — over the pixels the bad-pixel mask keeps."""
+    (the dark sigma map) plus the median noise the master bias and dark carry into it — over the pixels the bad-pixel mask keeps.
+    """
     from ..calc.median import median_variance_ratio
     from ..imcoadd.background_qa import sigma_quantile_cards
 

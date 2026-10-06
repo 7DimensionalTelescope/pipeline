@@ -222,7 +222,7 @@ def plot_cutouts_and_sed(
     gs = fig.add_gridspec(2, 1, height_ratios=[4, k_with_headers * figsize_per_subplot[1]], hspace=0.05)
 
     ax_sed = fig.add_subplot(gs[0])
-    
+
     for s in sed_data:
         print(s)
 

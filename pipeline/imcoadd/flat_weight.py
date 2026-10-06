@@ -45,12 +45,18 @@ def smooth_flat_surface(flat: np.ndarray, exclude=None, block: int = 64) -> np.n
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
         spline = LSQBivariateSpline(
-            yy[usable], xx[usable], np.log(grid[usable]), ty, tx,
-            bbox=[0, h - 1, 0, w - 1], kx=ky, ky=kx,
+            yy[usable],
+            xx[usable],
+            np.log(grid[usable]),
+            ty,
+            tx,
+            bbox=[0, h - 1, 0, w - 1],
+            kx=ky,
+            ky=kx,
         )
     surface = np.empty(flat.shape, dtype=np.float32)
     for y0 in range(0, h, 256):
-        surface[y0:y0 + 256] = np.exp(spline(np.arange(y0, min(y0 + 256, h)), np.arange(w)))
+        surface[y0 : y0 + 256] = np.exp(spline(np.arange(y0, min(y0 + 256, h)), np.arange(w)))
     if not np.all(np.isfinite(surface) & (surface > 0)):
         raise ValueError("master-flat illumination fit is not finite and positive")
     return surface
@@ -101,9 +107,9 @@ def smooth_weight_surface(weight, flat, exclude=None, block: int = 64, logger=No
     b, c = coefficients
     surface = np.empty_like(flat, dtype=np.float32)
     for y0 in range(0, flat.shape[0], 256):
-        f = flat[y0:y0 + 256].astype(np.float64)
-        photon = f if sky is None else sky[y0:y0 + 256].astype(np.float64) * f
-        surface[y0:y0 + 256] = f * f / (b * photon + c)
+        f = flat[y0 : y0 + 256].astype(np.float64)
+        photon = f if sky is None else sky[y0 : y0 + 256].astype(np.float64) * f
+        surface[y0 : y0 + 256] = f * f / (b * photon + c)
     if not np.all(np.isfinite(surface) & (surface > 0)):
         raise ValueError("flat-based weight fit is not finite and positive")
     errors, error_status = weight_fit_uncertainty(relative_design[keep], coefficients)
@@ -118,7 +124,8 @@ def smooth_weight_surface(weight, flat, exclude=None, block: int = 64, logger=No
         label = f" for {image_name}" if image_name else ""
         uncertainty = (
             f"formal 1-sigma errors B={errors[0]:.6g}, C={errors[1]:.6g}, corr(B,C)={errors[2]:.6f}"
-            if errors is not None else f"B/C uncertainties unavailable: {error_status}"
+            if errors is not None
+            else f"B/C uncertainties unavailable: {error_status}"
         )
         logger.debug(
             f"Weight fit succeeded{label}: B/F+C/F^2, B={b:.8g}, C={c:.8g}; "

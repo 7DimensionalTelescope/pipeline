@@ -121,6 +121,7 @@ def ppflag_spec(mask) -> str:
     """11 -> ``"110100"``; the inverse of `ppflag_mask`, always full width."""
     return "".join("1" if int(mask) & bit else "0" for bit, _ in PPFLAG_BITS)
 
+
 # Key families where photometry writes 0 to mean "no value" instead of dropping the card.
 # Only these treat 0 as missing: for an arbitrary key (SKYVAL on a subtracted frame,
 # say) 0 is a real measurement and must not silently disappear.
@@ -686,8 +687,13 @@ def apply_edits(table: Table, cuts: dict, text: str, headers: list | None = None
     return changed
 
 
-def prompt_cuts(table: Table, cuts: dict[str, float], headers: list | None = None, nsigma: float = 1.0,
-                fixed: dict[str, float] | None = None) -> dict:
+def prompt_cuts(
+    table: Table,
+    cuts: dict[str, float],
+    headers: list | None = None,
+    nsigma: float = 1.0,
+    fixed: dict[str, float] | None = None,
+) -> dict:
     """Show the suggestion, take edits, redraw, repeat until nothing changes.
 
     Every round asks exactly once, for the whole set of cuts at once, and **the prompt
@@ -867,7 +873,12 @@ def select_images(
     if used_keys and logger is not None:
         logger.info(f"Quality selection on {', '.join(f'{m}={k}' for m, k in used_keys.items())}")
     keep, cuts = select_from_table(
-        table, mode=mode, nsigma=nsigma, plot_path=plot_path, logger=logger, headers=headers,
+        table,
+        mode=mode,
+        nsigma=nsigma,
+        plot_path=plot_path,
+        logger=logger,
+        headers=headers,
         fixed_cuts=fixed_cuts,
     )
     return keep, cuts, table

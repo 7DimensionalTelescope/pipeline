@@ -45,9 +45,7 @@ from pipeline.services.database.image_qa_dependency import ImageQADependency
 
 def seeds_from_staleness(dep, args):
     """Images whose ingredients have since been regenerated."""
-    edges = dep.find_stale_edges(
-        nightdate_from=args.nightdate_from, nightdate_to=args.nightdate_to
-    )
+    edges = dep.find_stale_edges(nightdate_from=args.nightdate_from, nightdate_to=args.nightdate_to)
     if not edges:
         return [], []
     seeds = sorted({row[0] for row in edges})
@@ -57,9 +55,7 @@ def seeds_from_staleness(dep, args):
 def seeds_from_config(dep, config_name):
     """Images produced by one config."""
     rows = dep.execute_query(
-        "SELECT qa.id FROM image_qa qa"
-        " JOIN process_status ps ON ps.id = qa.process_status_id"
-        " WHERE ps.name = %s",
+        "SELECT qa.id FROM image_qa qa" " JOIN process_status ps ON ps.id = qa.process_status_id" " WHERE ps.name = %s",
         (config_name,),
     )
     return [r[0] for r in rows]

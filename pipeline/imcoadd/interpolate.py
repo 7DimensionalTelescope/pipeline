@@ -56,8 +56,17 @@ def interpolate_masked_pixels_subprocess(
 
 
 def interpolate_masked_pixels_cpu(
-    images, mask_path, output_paths, window=1, method="median", badpix=1, weight=True, device=None,
-    zero_interp_weight=True, logger=None, bpmid=None,
+    images,
+    mask_path,
+    output_paths,
+    window=1,
+    method="median",
+    badpix=1,
+    weight=True,
+    device=None,
+    zero_interp_weight=True,
+    logger=None,
+    bpmid=None,
 ):
     """
     High-level function: reads FITS images, applies numba interpolation, and writes output.
@@ -531,7 +540,8 @@ def write_weight_float32(path, weight, header, n_holes=None):
 
 def sky_template(model, shape):
     """The frame's sky model as the photon-term template of the smooth weight fit: the fitted array, a constant sky as a
-    constant array, None when there is no model or it is not positive everywhere (the fit then keeps one photon term)."""
+    constant array, None when there is no model or it is not positive everywhere (the fit then keeps one photon term).
+    """
     if model is None:
         return None
     if not isinstance(model, np.ndarray):
@@ -540,9 +550,24 @@ def sky_template(model, shape):
 
 
 def weight_and_interpolate_cpu(
-    images, mask_path, output_paths, calib, window=1, method="median", badpix=1,
-    zero_interp_weight=True, logger=None, post_frame=None, weight_out=None, source_catalogs=None, bpmid=None,
-    saturated_mask=None, interpolate=True, ivar_out=None, background_model=None, background=None,
+    images,
+    mask_path,
+    output_paths,
+    calib,
+    window=1,
+    method="median",
+    badpix=1,
+    zero_interp_weight=True,
+    logger=None,
+    post_frame=None,
+    weight_out=None,
+    source_catalogs=None,
+    bpmid=None,
+    saturated_mask=None,
+    interpolate=True,
+    ivar_out=None,
+    background_model=None,
+    background=None,
 ):
     """Fused weight calculation + bad-pixel interpolation, one read and one write per image.
 
@@ -571,8 +596,19 @@ def weight_and_interpolate_cpu(
         with fits.open(images[idx], memmap=False) as hdul:
             return hdul[0].data.astype(np.float32), hdul[0].header
 
-    def _write(idx, sci, sci_hdr, interp_img, interp_wt, n_saturated=None, coefficients=None, fit_qa=None, model=None,
-               exclude=None, weight_model=WEIGHT_MODEL):
+    def _write(
+        idx,
+        sci,
+        sci_hdr,
+        interp_img,
+        interp_wt,
+        n_saturated=None,
+        coefficients=None,
+        fit_qa=None,
+        model=None,
+        exclude=None,
+        weight_model=WEIGHT_MODEL,
+    ):
         if background is not None:
             # the sky model comes off the frame SWarp reads, overlapping the next frame's kernels; `sci` stays as measured
             interp_img = background(idx, sci_hdr, sci.copy() if interp_img is sci else interp_img, model, exclude)
@@ -587,8 +623,9 @@ def weight_and_interpolate_cpu(
                 weight_hdr[key] = (value, WEIGHT_QA_COMMENTS[key])
         if n_saturated is not None:
             weight_hdr["SATZERO"] = (int(n_saturated), "saturated detector pixels zeroed before reprojection")
-        write_weight_float32(PathHandler.weight_map(sci_out), interp_wt, weight_hdr,
-                             n_holes=n_holes if zero_interp_weight else 0)
+        write_weight_float32(
+            PathHandler.weight_map(sci_out), interp_wt, weight_hdr, n_holes=n_holes if zero_interp_weight else 0
+        )
         if post_frame is not None:
             post_frame(sci_out, sci, sci_hdr)  # e.g. per-image reprojection (+ optional interp discard)
 
@@ -627,10 +664,17 @@ def weight_and_interpolate_cpu(
                 if sky is not None:
                     weight_model = WEIGHT_MODEL_SKY
                 elif model is not None and logger is not None:
-                    logger.warning(f"{_os.path.basename(images[idx])}: sky model not positive everywhere; one photon term kept")
+                    logger.warning(
+                        f"{_os.path.basename(images[idx])}: sky model not positive everywhere; one photon term kept"
+                    )
                 wgt, coefficients = smooth_weight_surface(
-                    wgt, flat_surface, exclude=hole if src is None else (src | hole), logger=logger,
-                    qa=fit_qa, image_name=_os.path.basename(images[idx]), sky=sky,
+                    wgt,
+                    flat_surface,
+                    exclude=hole if src is None else (src | hole),
+                    logger=logger,
+                    qa=fit_qa,
+                    image_name=_os.path.basename(images[idx]),
+                    sky=sky,
                 )
                 del sky
                 if weight_out is not None:
@@ -664,7 +708,18 @@ def weight_and_interpolate_cpu(
             if pending_write is not None:
                 pending_write.result()
             pending_write = pool.submit(
-                _write, idx, sci, sci_hdr, interp_img, interp_wt, n_saturated, coefficients, fit_qa, model, exclude, weight_model
+                _write,
+                idx,
+                sci,
+                sci_hdr,
+                interp_img,
+                interp_wt,
+                n_saturated,
+                coefficients,
+                fit_qa,
+                model,
+                exclude,
+                weight_model,
             )
             if logger is not None:
                 # per-image detail at DEBUG; INFO gets one summary line per 25 frames

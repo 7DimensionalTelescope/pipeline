@@ -15,6 +15,7 @@ from ..path import PathHandler
 def plot_outputs_exist(output_paths) -> bool:
     return all(os.path.exists(output_path) for output_path in output_paths)
 
+
 def save_fits_as_figures(image_data, output_path, stretch=True, log_scale=False, max_width=1000, overwrite=False):
     if os.path.exists(output_path) and not overwrite:
         return

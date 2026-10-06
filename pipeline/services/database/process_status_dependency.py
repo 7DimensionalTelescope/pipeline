@@ -20,6 +20,7 @@ new type that depends on science needs no schema change.
 
 The legacy ``origin`` column is retained for schema compatibility but ignored.
 """
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -83,12 +84,10 @@ class ProcessStatusDependency(BaseDatabase):
                     " ADD COLUMN IF NOT EXISTS origin VARCHAR DEFAULT 'schedule'"
                 )
                 cur.execute(
-                    "CREATE INDEX IF NOT EXISTS ix_psd_source"
-                    " ON process_status_dependency (source_config_name)"
+                    "CREATE INDEX IF NOT EXISTS ix_psd_source" " ON process_status_dependency (source_config_name)"
                 )
                 cur.execute(
-                    "CREATE INDEX IF NOT EXISTS ix_psd_derived"
-                    " ON process_status_dependency (derived_config_name)"
+                    "CREATE INDEX IF NOT EXISTS ix_psd_derived" " ON process_status_dependency (derived_config_name)"
                 )
             conn.commit()
         type(self)._table_ready = True

@@ -364,7 +364,10 @@ class InputHeaderSet:
             "INSKY":    (self.aggregate("BACKVAL"), "[ADU] BACKVAL of the inputs (mean)"),
         }  # fmt: skip
         for k in range(SIGMA_QUANTILES):  # the inputs' additive-noise quantiles, the same reference's mixture
-            keywords_to_update[f"NOISQ{k + 1:02d}"] = (self.aggregate(f"NOISQ{k + 1:02d}"), f"[ADU] Inputs' additive noise sigma, quantile {2 * k + 1}/{2 * SIGMA_QUANTILES}")
+            keywords_to_update[f"NOISQ{k + 1:02d}"] = (
+                self.aggregate(f"NOISQ{k + 1:02d}"),
+                f"[ADU] Inputs' additive noise sigma, quantile {2 * k + 1}/{2 * SIGMA_QUANTILES}",
+            )
         keywords_to_update.update(self.coadd_provenance)
         keywords_to_update.update(self.coadd_selection_extrema)
         keywords_to_update.update(self.run_cards)

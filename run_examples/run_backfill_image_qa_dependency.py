@@ -176,7 +176,9 @@ def main() -> int:
         " (default: dependency_problems.log in the working directory).",
     )
     default_workers = min(32, max(4, (os.cpu_count() or 8) * 2))
-    parser.add_argument("--workers", type=int, default=default_workers, help=f"Parallel threads (default {default_workers}).")
+    parser.add_argument(
+        "--workers", type=int, default=default_workers, help=f"Parallel threads (default {default_workers})."
+    )
     args = parser.parse_args()
 
     sql, params = _build_select_sql(args)

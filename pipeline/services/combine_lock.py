@@ -41,9 +41,21 @@ def _lease_dir() -> str:
     return d
 
 
-_MEMINFO_KEYS = ("MemTotal", "MemFree", "MemAvailable", "Cached", "Committed_AS",
-                 "AnonPages", "Shmem", "Unevictable", "SUnreclaim", "KernelStack",
-                 "PageTables", "SwapTotal", "SwapFree")
+_MEMINFO_KEYS = (
+    "MemTotal",
+    "MemFree",
+    "MemAvailable",
+    "Cached",
+    "Committed_AS",
+    "AnonPages",
+    "Shmem",
+    "Unevictable",
+    "SUnreclaim",
+    "KernelStack",
+    "PageTables",
+    "SwapTotal",
+    "SwapFree",
+)
 
 
 def meminfo_bytes(keys=_MEMINFO_KEYS) -> dict:
@@ -103,8 +115,15 @@ def host_irreclaimable_bytes(mem: dict | None = None) -> int:
     pages that may return. Planned-but-untouched combine allocations are deliberately not
     in here -- the lease files carry those."""
     mem = mem or meminfo_bytes()
-    return (mem["AnonPages"] + mem["Shmem"] + mem["Unevictable"] + mem["SUnreclaim"]
-            + mem["KernelStack"] + mem["PageTables"] + (mem["SwapTotal"] - mem["SwapFree"]))
+    return (
+        mem["AnonPages"]
+        + mem["Shmem"]
+        + mem["Unevictable"]
+        + mem["SUnreclaim"]
+        + mem["KernelStack"]
+        + mem["PageTables"]
+        + (mem["SwapTotal"] - mem["SwapFree"])
+    )
 
 
 def memory_headroom_bytes(reserved_bytes: int = 0) -> int:

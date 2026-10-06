@@ -578,7 +578,9 @@ class ImCoadd(
                         bp = self.plan
                         zero_mask = None
                         fit_mask = None
-                        if bp.use_smooth_weight_during_coaddition or (bp.zero_badpix_in_single_weight_map and not bp.interpolate_badpix):
+                        if bp.use_smooth_weight_during_coaddition or (
+                            bp.zero_badpix_in_single_weight_map and not bp.interpolate_badpix
+                        ):
                             # interpolation off but bad-pixel weights still zeroed
                             mask_file, badpix = self._get_bpmask(uncalculated_images[0])
                             fit_mask = fits.getdata(mask_file) == badpix
@@ -599,7 +601,11 @@ class ImCoadd(
                             source_catalogs=self._source_catalogs(uncalculated_images),
                             fit_mask=fit_mask,
                             logger=self.logger,
-                            ivar_out=PathHandler.ivar_map(uncalculated_images) if bp.dump_unsmoothed_single_weight_map else None,
+                            ivar_out=(
+                                PathHandler.ivar_map(uncalculated_images)
+                                if bp.dump_unsmoothed_single_weight_map
+                                else None
+                            ),
                         )
                     else:
                         bp = self.plan
@@ -714,7 +720,9 @@ class ImCoadd(
         for input_image_file, output_file in zip(input_images, interp_images):
             if os.path.exists(output_file) and not self.overwrite:
                 sidecar = PathHandler.weight_map(output_file)
-                if not weight or (os.path.exists(sidecar) and fits.getheader(sidecar).get("WGTMODEL") == self.weight_model()):
+                if not weight or (
+                    os.path.exists(sidecar) and fits.getheader(sidecar).get("WGTMODEL") == self.weight_model()
+                ):
                     self.logger.debug(f"Already exists; skip generating {output_file}")
                     continue
             uncalculated_images.append(input_image_file)

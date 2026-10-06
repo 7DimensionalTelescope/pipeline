@@ -122,9 +122,7 @@ class TransferHistoryIndex:
         except FileNotFoundError:
             return []
 
-    def _present_batch_keys(
-        self, expected_dirs: set[str]
-    ) -> tuple[set[str], set[Path]]:
+    def _present_batch_keys(self, expected_dirs: set[str]) -> tuple[set[str], set[Path]]:
         """
         Check batch completeness by dirname only, independent of unit.
 

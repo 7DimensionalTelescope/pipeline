@@ -70,7 +70,7 @@ def _read_pipe_ver(row: tuple) -> tuple[int, str, str | None]:
         return (rid, "missing", None)
     except Exception as e:
         return (rid, "error", f"{type(e).__name__}: {e}")
-    return ((rid, "ok", value) if value else (rid, "no_version", None))
+    return (rid, "ok", value) if value else (rid, "no_version", None)
 
 
 def _flush(iq: ImageQA, batch: list[tuple[int, str]]) -> None:

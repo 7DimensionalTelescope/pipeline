@@ -30,7 +30,9 @@ class LegacyCoaddMixin:
 
         self.initialize()
         if not self.plan.reject_saturated_pixels:
-            self.logger.info("Legacy coadds in SWarp: saturated pixels are not rejected (saturation_reprojection_policy ignored)")
+            self.logger.info(
+                "Legacy coadds in SWarp: saturated pixels are not rejected (saturation_reprojection_policy ignored)"
+            )
         self._prepare_intermediate_storage(self.input_images)
 
         images = self.bkgsub(self.input_images)

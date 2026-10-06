@@ -35,7 +35,9 @@ def _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file):
     sig_d_file = PathHandler.master_sigma(d_m_file)
     pen_z = np.float32(ensure_median_penalty(sig_z_file))
     pen_f = np.float32(ensure_median_penalty(sig_f_file))
-    pen_d = np.float32(ensure_median_penalty(sig_d_file) if os.path.exists(sig_d_file) else median_variance_ratio(int(p_d)))
+    pen_d = np.float32(
+        ensure_median_penalty(sig_d_file) if os.path.exists(sig_d_file) else median_variance_ratio(int(p_d))
+    )
     # 1.0 when the science frame's bias master is the one inside its dark master (PPFLAG bit 64 unset), else 0.0
     z_m_file = PathHandler.sigma_master(sig_z_file)
     bias_shared = np.float32(1.0 if bias_shared_with_dark(z_m_file, d_m_file) else 0.0)
@@ -102,7 +104,9 @@ def calc_weight_with_gpu(images, d_m_file, f_m_file, sig_z_file, sig_f_file, dev
     """
     from ..cuda.weight_map import calc_weight as gpu_calc_weight
 
-    sig_z, d_m, f_m, sig_f, p_z, p_d, p_f, egain, *_ = _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file)
+    sig_z, d_m, f_m, sig_f, p_z, p_d, p_f, egain, *_ = _load_calibration_data(
+        d_m_file, f_m_file, sig_z_file, sig_f_file
+    )
 
     gpu_calc_weight(
         images,
@@ -143,7 +147,7 @@ def calc_weight_with_cpu(
     fit_mask=None,
     logger=None,
     ivar_out=None,
-    **kwargs
+    **kwargs,
 ):
     from .weight_store import persist_single_weight
 

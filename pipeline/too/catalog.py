@@ -3,6 +3,7 @@ import numpy as np
 from astropy.coordinates import SkyCoord
 from astroquery.vizier import Vizier
 
+
 class SkyCatalogHistory:
     HISTORY_FIELDS = ["objname", "ra", "dec", "fov_ra", "fov_dec", "cat_type"]
 
@@ -140,7 +141,7 @@ class SkyCatalog:
             raise ValueError(f"{self.objname} does not exist in {catalog_name}")
 
         self.catalog_type = catalog_name
-        
+
         config = self.CATALOG_CONFIGS[catalog_name]
         data = _vizier_query(
             ra_deg=float(self.ra),

@@ -3,6 +3,7 @@ from enum import Enum
 from datetime import datetime
 import itertools
 
+
 class Priority(Enum):
     """
     Task priority levels for workload management.
@@ -15,19 +16,21 @@ class Priority(Enum):
 
     Allows fine-grained control over task scheduling and resource allocation.
     """
+
     PREPROCESS = 0
     HIGH = 1
     MEDIUM = 5
     LOW = 10
 
+
 class Task:
     """
     A task container for pipeline processing with execution tracking.
-    
+
     This class encapsulates a function call with its arguments, metadata,
     and execution state. It provides a standardized interface for task
     management in the pipeline system.
-    
+
     Features:
     - Function execution with arguments
     - Priority-based scheduling
@@ -35,7 +38,7 @@ class Task:
     - Result and error storage
     - Timing information
     - Unique task identification
-    
+
     Args:
         func: Function to be executed
         args (tuple, optional): Positional arguments for the function
@@ -48,7 +51,7 @@ class Task:
         status (str): Initial task status (default: "pending")
         result (Any): Task execution result
         error (Exception, optional): Exception if task failed
-    
+
     Example:
         >>> task = Task(
         ...     func=process_image,
@@ -59,7 +62,7 @@ class Task:
         ... )
         >>> result = task.execute()
     """
-    
+
     _id_counter = itertools.count(0)
 
     def __init__(
@@ -83,7 +86,7 @@ class Task:
         # Store arguments
         self.args = args or ()
         self.kwargs = kwargs or {}
-        
+
         # Task metadata
         self.id = id or f"task_{next(self._id_counter)}"
         self.priority = priority
@@ -96,13 +99,13 @@ class Task:
     def execute(self):
         """
         Execute the task's function with the provided arguments.
-        
+
         Executes the stored function with the specified arguments and
         updates the task status, timing, and result information.
-        
+
         Returns:
             Any: The result of the function execution
-            
+
         Raises:
             Exception: If task execution fails (stored in self.error)
         """
@@ -115,6 +118,7 @@ class Task:
             self.error = e
             try:
                 import logging
+
                 tmp_logger = logging.getLogger(self.task_name)
                 tmp_logger.error(f"Task {self.id} failed with error: {str(e)}")
             except:
@@ -127,7 +131,7 @@ class Task:
     def __repr__(self):
         """
         Return a string representation of the task.
-        
+
         Returns:
             str: String representation including ID, name, status, and priority
         """
@@ -137,4 +141,3 @@ class Task:
             f"status={self.status}, "
             f"priority={self.priority.name if self.priority else 'N/A'})"
         )
-        

@@ -48,7 +48,12 @@ def iter_config(date_pattern: str, reverse: bool = False, is_too: bool = False):
     #     )
 
     return iter_processed(
-        date_pattern=date_pattern, type_pattern="", filename_pattern="*.yml", product=None, reverse=reverse, is_too=is_too
+        date_pattern=date_pattern,
+        type_pattern="",
+        filename_pattern="*.yml",
+        product=None,
+        reverse=reverse,
+        is_too=is_too,
     )
 
 

@@ -16,7 +16,7 @@ def query_raw(target, nightdate, target_field):
         "target": query.for_target,
         "tile": query.for_tile,
         "object": query.object_name_contains,
-    }[target_field](target)
+    }[target_field](target)  # fmt: skip
     query.fetch()
     return query.files()
 
@@ -87,9 +87,7 @@ if __name__ == "__main__":
         rejected_probe.mark_done(int(science_parents[0]["index"]), return_code=2)
         for row in science_parents[1:]:
             rejected_probe.mark_done(int(row["index"]), return_code=0)
-        released_after_rejection = rejected_probe.schedule[
-            rejected_probe.schedule["index"] == cross_index
-        ][0]
+        released_after_rejection = rejected_probe.schedule[rejected_probe.schedule["index"] == cross_index][0]
         if not released_after_rejection["is_ready"]:
             raise AssertionError("A sanity-rejected science parent did not count as resolved")
 

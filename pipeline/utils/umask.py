@@ -2,7 +2,7 @@ import os
 from typing import Optional, Tuple, Union
 
 
-def set_umask(mask: Union[int, str]="0002") -> Optional[Tuple[int, int]]:
+def set_umask(mask: Union[int, str] = "0002") -> Optional[Tuple[int, int]]:
     """
     Set process umask. Accepts:
       - int like 0o022 / 0o002

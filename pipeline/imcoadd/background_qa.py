@@ -30,8 +30,11 @@ class BackgroundResiduals:
             ("backref", "Residual reference: MODEL, SUBTRACT, or COADD"),
             ("backnref", "BACKOFF noise reference: SIGMAQ cards or WIDTH"),
         )
-        return {key.upper(): (getattr(self, key), comment) for key, comment in descriptions
-                if include_missing or getattr(self, key) is not None}
+        return {
+            key.upper(): (getattr(self, key), comment)
+            for key, comment in descriptions
+            if include_missing or getattr(self, key) is not None
+        }
 
 
 RESIDUAL_KEYS = tuple(BackgroundResiduals.__dataclass_fields__)
@@ -47,8 +50,10 @@ def sigma_quantile_cards(sigma, n: int = SIGMA_QUANTILES) -> dict:
     values = np.asarray(sigma, dtype=np.float32).ravel()
     values = values[np.isfinite(values) & (values > 0)]
     quantiles = np.quantile(values, (np.arange(n) + 0.5) / n)
-    return {f"NOISQ{k + 1:02d}": (round(float(q), 4), f"[ADU] Additive noise sigma, quantile {2 * k + 1}/{2 * n}")
-            for k, q in enumerate(quantiles)}
+    return {
+        f"NOISQ{k + 1:02d}": (round(float(q), 4), f"[ADU] Additive noise sigma, quantile {2 * k + 1}/{2 * n}")
+        for k, q in enumerate(quantiles)
+    }
 
 
 def sigma_quantiles(header, n: int = SIGMA_QUANTILES):
@@ -61,7 +66,8 @@ def sigma_quantiles(header, n: int = SIGMA_QUANTILES):
 
 def coadd_taps(n_inputs: int, scale: float, kernel=None):
     """The weights one coadd pixel puts on input pixels: n_inputs frames at scale / n_inputs each through the resampling kernel
-    (default SWarp LANCZOS3's phase-averaged noise-equivalent kernel: sum k^2 = 0.803, sum k^3 / sum k^2 = 0.867 in 2-D)."""
+    (default SWarp LANCZOS3's phase-averaged noise-equivalent kernel: sum k^2 = 0.803, sum k^3 / sum k^2 = 0.867 in 2-D).
+    """
     if kernel is None:
         taps = np.array([-0.003497, 0.015380, -0.039026, 0.056460, 0.941366, 0.056460, -0.039026, 0.015380, -0.003497])
         kernel = np.outer(taps, taps)
@@ -70,9 +76,12 @@ def coadd_taps(n_inputs: int, scale: float, kernel=None):
 
 def mixture_density(taps, gain: float, sigmas, levels, dx: float = 0.01, span: float = 40.0):
     """Density, about its mean, of sum_j taps_j x_j with x_j = Poisson(level gain e-) / gain + N(0, sigma) in ADU, each x_j drawn
-    from the equal-weight mixture over every (sigma, level) pair: the noise-only distribution of a sky pixel (single: taps [1])."""
+    from the equal-weight mixture over every (sigma, level) pair: the noise-only distribution of a sky pixel (single: taps [1]).
+    """
     taps = np.asarray(taps, dtype=np.float64).ravel()
-    sig, lev = (a.ravel() for a in np.meshgrid(np.asarray(sigmas, dtype=np.float64), np.asarray(levels, dtype=np.float64)))
+    sig, lev = (
+        a.ravel() for a in np.meshgrid(np.asarray(sigmas, dtype=np.float64), np.asarray(levels, dtype=np.float64))
+    )
     lam = lev * gain
     width = np.sqrt(np.sum(taps**2) * (np.mean(lev) / gain + np.mean(sig**2)))
     n = int(2 ** np.ceil(np.log2(span * width / dx)))
@@ -84,8 +93,10 @@ def mixture_density(taps, gain: float, sigmas, levels, dx: float = 0.01, span: f
         u = tap * t / gain
         component = np.zeros(n, dtype=np.complex128)
         for i in range(0, lam.size, 16):  # chunked: n_pairs x n grid points of complex exponentials
-            component += np.exp(lam[i:i + 16, None] * (np.expm1(1j * u)[None, :] - 1j * u[None, :])
-                                - 0.5 * (sig[i:i + 16, None] * gain * u[None, :]) ** 2).sum(axis=0)
+            component += np.exp(
+                lam[i : i + 16, None] * (np.expm1(1j * u)[None, :] - 1j * u[None, :])
+                - 0.5 * (sig[i : i + 16, None] * gain * u[None, :]) ** 2
+            ).sum(axis=0)
         cf *= (component / lam.size) ** m
     p = np.real(np.fft.fft(cf * np.exp(-1j * t * x[0]))) / (n * dx)
     return x, np.clip(p, 0, None)
@@ -97,7 +108,7 @@ def density_gap(x, p) -> float:
     median = float(np.interp(0.5, np.cumsum(w) - 0.5 * w, x))
     i = int(np.argmax(p))
     if 0 < i < p.size - 1 and p[i - 1] > 0 and p[i + 1] > 0:
-        y0, y1, y2 = np.log(p[i - 1:i + 2])
+        y0, y1, y2 = np.log(p[i - 1 : i + 2])
         mode = float(x[i] + 0.5 * (x[1] - x[0]) * (y0 - y2) / (y0 - 2 * y1 + y2))
     else:
         mode = float(x[i])
@@ -108,7 +119,8 @@ def modal_offset(residual, exclude, gain: float, levels, sigmas=None, taps=None)
     """BACKOFF: the median of the residual's sky pixels minus the reference noise mixture's median - mode, i.e. the sky's true mode
     minus the model; positive = under-subtracted. ``levels`` are the sky levels the pixels sit at (the model's quantiles for a
     single, the inputs' sky for a coadd) and ``sigmas`` the NOISQ additive-noise quantiles; without them the reference is one
-    Gaussian whose width is the residual's own robust width less the Poisson part. Returns (backoff, noise reference kind)."""
+    Gaussian whose width is the residual's own robust width less the Poisson part. Returns (backoff, noise reference kind).
+    """
     sky = np.asarray(residual)[~np.asarray(exclude, bool) & np.isfinite(residual)].astype(np.float64)
     taps = np.array([1.0]) if taps is None else np.asarray(taps, dtype=np.float64)
     levels = np.atleast_1d(np.asarray(levels, dtype=np.float64))
@@ -125,12 +137,12 @@ def modal_offset(residual, exclude, gain: float, levels, sigmas=None, taps=None)
 def _autocorrelation(values):
     correlation = fftconvolve(values, values[::-1, ::-1], mode="full")
     y, x = np.array(values.shape) - 1
-    return correlation[y - NOISE_LAG:y + NOISE_LAG + 1, x - NOISE_LAG:x + NOISE_LAG + 1]
+    return correlation[y - NOISE_LAG : y + NOISE_LAG + 1, x - NOISE_LAG : x + NOISE_LAG + 1]
 
 
 def _noise_covariance(pixels, valid):
-    yy, xx = np.mgrid[:pixels.shape[0], :pixels.shape[1]] / max(pixels.shape) - 0.5
-    design = np.column_stack([a[valid] for a in (np.ones(pixels.shape), xx, yy, xx**2, xx*yy, yy**2)])
+    yy, xx = np.mgrid[: pixels.shape[0], : pixels.shape[1]] / max(pixels.shape) - 0.5
+    design = np.column_stack([a[valid] for a in (np.ones(pixels.shape), xx, yy, xx**2, xx * yy, yy**2)])
     if np.linalg.matrix_rank(design) < design.shape[1]:
         return None
     basis, _ = np.linalg.qr(design, mode="reduced")
@@ -195,7 +207,7 @@ def measure_background_residuals(
             continue
         for iy in range(pixels.shape[0] // size):
             for ix in range(pixels.shape[1] // size):
-                patch = np.s_[iy * size:(iy + 1) * size, ix * size:(ix + 1) * size]
+                patch = np.s_[iy * size : (iy + 1) * size, ix * size : (ix + 1) * size]
                 usable = valid[patch]
                 if usable.sum() < MIN_FRACTION * size**2:
                     continue

@@ -110,7 +110,7 @@ class QueueManager:
 
         # Wake event for socket-based wake mechanism
         self._wake_event = threading.Event()
-        self._stop_event = threading.Event()  # the socket listener reads it before _start_workers runs with auto_start=False
+        self._stop_event = threading.Event()  # the socket listener reads it before _start_workers runs with auto_start=False  # fmt: skip
 
         self._drain = False
         self._drained_logged = False
@@ -802,7 +802,9 @@ class QueueManager:
         if not self._drain:
             self._drain = True
             self._drained_logged = False
-            self.logger.info(f"Drain requested: no new claims; {len(self._active_processes)} running task(s) will finish")
+            self.logger.info(
+                f"Drain requested: no new claims; {len(self._active_processes)} running task(s) will finish"
+            )
 
     def resume(self, *_args):
         if self._drain:
@@ -882,9 +884,7 @@ def terminate_all_scheduler_tasks():
     try:
         scheduler = Scheduler(use_system_queue=True)
         n = scheduler.terminate_scheduler_tasks()
-        logger.info(
-            f"Sent SIGTERM for {n} scheduler task(s); affected rows set to Paused (use resume to run again)"
-        )
+        logger.info(f"Sent SIGTERM for {n} scheduler task(s); affected rows set to Paused (use resume to run again)")
         return n
     except Exception as e:
         logger.error(f"Error terminating scheduler tasks: {e}", exc_info=True)

@@ -391,9 +391,7 @@ class SwarpMixin:
         options = self._resample_options(interp_im)
         self._manifest_note(sci, **options)
         if self.plan.compute_single_weight_maps:
-            wht = collapse(
-                factory.resampled_weight_images([sci], pass_type=self._weight_pass_type()), force=True
-            )
+            wht = collapse(factory.resampled_weight_images([sci], pass_type=self._weight_pass_type()), force=True)
             if self.plan.use_smooth_weight_during_coaddition:
                 copy_weight_fit_header(sidecar, wht)
             self._manifest_note(wht, **options)
@@ -600,7 +598,9 @@ class SwarpMixin:
                     source_catalogs=self._source_catalogs(group_in),
                     bpmid=bpmid,
                     saturated_mask=(
-                        self._saturated_detector_mask if self.plan.zero_saturated_in_weight_before_reprojection else None
+                        self._saturated_detector_mask
+                        if self.plan.zero_saturated_in_weight_before_reprojection
+                        else None
                     ),
                     interpolate=self.plan.interpolate_badpix,
                     ivar_out=PathHandler.ivar_map(group_in) if self.plan.dump_unsmoothed_single_weight_map else None,
@@ -793,7 +793,11 @@ class SwarpMixin:
         if not self.plan.use_smooth_weight_during_coaddition:
             return "PIXEL"
         requested = get_key(self.config_node.imcoadd, "bkgsub_type")
-        if self.plan.background_before_reprojection and requested is not False and str(requested or "").lower() != "none":
+        if (
+            self.plan.background_before_reprojection
+            and requested is not False
+            and str(requested or "").lower() != "none"
+        ):
             return WEIGHT_MODEL_SKY
         return WEIGHT_MODEL
 

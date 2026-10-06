@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
     ConfigNodeT = SciProcNode | CrossFilterNode  # ImCoadd runs on the first, WhiteImage on the second
 
-CARRIED_CARDS = tuple(map(str.upper, RESIDUAL_KEYS)) + ("BACKPEAK", "BACKPKSN")  # measured before reprojection, copied after
+CARRIED_CARDS = tuple(map(str.upper, RESIDUAL_KEYS)) + ("BACKPEAK", "BACKPKSN")  # measured before reprojection, copied after  # fmt: skip
 
 
 def _key_tally(chosen: list[tuple]) -> str:
@@ -260,7 +260,11 @@ class BackgroundMixin:
                     kept = {}
                 # a product subtracted the other way cannot stand in, or toggling bkgsub would be a no-op
                 kept_type = str(kept.get("BACKTYPE") or "").upper()
-                if kept_type and kept_type != types[i].upper() and not (types[i] == "dynamic" and kept_type == "CONSTANT"):
+                if (
+                    kept_type
+                    and kept_type != types[i].upper()
+                    and not (types[i] == "dynamic" and kept_type == "CONSTANT")
+                ):
                     self.logger.info(
                         f"{get_basename(job[1])} was made with BACKTYPE={kept_type}, this run wants "
                         f"{types[i].upper()}; recomputing"
@@ -309,7 +313,9 @@ class BackgroundMixin:
         """Map configured background names to per-image routines."""
         return {"none": self._no_bkgsub, "constant": self._const_bkgsub, "dynamic": self._dynamic_bkgsub}
 
-    def _no_bkgsub(self, inim, outim, data=None, header=None, fov_valid=None, quality_mask=None, btype="none", **kwargs):
+    def _no_bkgsub(
+        self, inim, outim, data=None, header=None, fov_valid=None, quality_mask=None, btype="none", **kwargs
+    ):
         """Stage the frame with no sky model removed here; mask exactly as the subtracting routines do."""
         _data, _hdr = self._read_frame(inim, data, header)
         _hdr["BACKTYPE"] = (str(btype).upper(), "Background subtraction type")
@@ -321,7 +327,9 @@ class BackgroundMixin:
             # NaN, not 0: the pixel stays inside the geometric footprint for coverage_policy
             trail = (quality_mask & int(MaskBit.SATELLITE)) != 0
             _data[trail if fov_valid is None else (trail & fov_valid)] = np.nan
-        self._record_background_residuals(_data, _hdr, kwargs.get("qa_mask"), kwargs.get("qa_coverage", fov_valid), quality_mask)
+        self._record_background_residuals(
+            _data, _hdr, kwargs.get("qa_mask"), kwargs.get("qa_coverage", fov_valid), quality_mask
+        )
         if self.plan.background_before_reprojection and kwargs.get("index") is not None:
             snapshot = self.input_headers[kwargs["index"]]  # the residual cards measured on the detector-grid frame
             _hdr.update({k: (snapshot[k], snapshot.comments[k]) for k in CARRIED_CARDS if k in snapshot})
@@ -564,7 +572,9 @@ class BackgroundMixin:
             trail = (quality_mask & int(MaskBit.SATELLITE)) != 0
             _data[trail if fov_valid is None else (trail & fov_valid)] = np.nan
         self.logger.debug(f"Using SKYVAL: {skyval:.3f}")
-        self._record_background_residuals(_data, _hdr, kwargs.get("qa_mask"), kwargs.get("qa_coverage", fov_valid), quality_mask)
+        self._record_background_residuals(
+            _data, _hdr, kwargs.get("qa_mask"), kwargs.get("qa_coverage", fov_valid), quality_mask
+        )
         self._write_background_output(outim, _data, _hdr)
 
         return False  # is_steppy is False by definition for constant background subtraction
@@ -636,7 +646,9 @@ class BackgroundMixin:
             # NaN, not 0: the pixel stays inside the geometric footprint for coverage_policy
             trail = (quality_mask & int(MaskBit.SATELLITE)) != 0
             _data[trail if fov_valid is None else (trail & fov_valid)] = np.nan
-        self._record_background_residuals(_data, _hdr, kwargs.get("qa_mask"), kwargs.get("qa_coverage", fov_valid), quality_mask)
+        self._record_background_residuals(
+            _data, _hdr, kwargs.get("qa_mask"), kwargs.get("qa_coverage", fov_valid), quality_mask
+        )
         self._write_background_output(outim, _data, _hdr)
 
         # return is_steppy
@@ -797,7 +809,11 @@ class BackgroundMixin:
         from dataclasses import replace
 
         from .background_qa import (
-            SIGMA_QUANTILES, clear_residual_cards, measure_background_residuals, modal_offset, sigma_quantiles,
+            SIGMA_QUANTILES,
+            clear_residual_cards,
+            measure_background_residuals,
+            modal_offset,
+            sigma_quantiles,
         )
 
         clear_residual_cards(header)
@@ -806,12 +822,18 @@ class BackgroundMixin:
             return
         exclude = sources if quality is None else (sources | (quality != 0))
         result = measure_background_residuals(
-            data, exclude=exclude, coverage=coverage, mesh_box=self.plan.background_box_size,
+            data,
+            exclude=exclude,
+            coverage=coverage,
+            mesh_box=self.plan.background_box_size,
         )
         if model is not None and header.get("EGAIN"):
             valid = exclude | ~coverage if coverage is not None else exclude
-            levels = (np.quantile(np.asarray(model)[::32, ::32], (np.arange(SIGMA_QUANTILES) + 0.5) / SIGMA_QUANTILES)
-                      if np.ndim(model) else [float(model)])
+            levels = (
+                np.quantile(np.asarray(model)[::32, ::32], (np.arange(SIGMA_QUANTILES) + 0.5) / SIGMA_QUANTILES)
+                if np.ndim(model)
+                else [float(model)]
+            )
             backoff, kind = modal_offset(data, valid, float(header["EGAIN"]), levels, sigmas=sigma_quantiles(header))
             result = replace(result, backoff=round(float(backoff), 4), backnref=kind)
         header.update(result.cards())

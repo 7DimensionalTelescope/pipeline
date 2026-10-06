@@ -26,7 +26,7 @@ def discover_raw_frames(target, nightdate, target_field):
         "target": query.for_target,
         "tile": query.for_tile,
         "object": query.object_name_contains,
-    }[target_field](target)
+    }[target_field](target)  # fmt: skip
     query.fetch()
     raw_files = query.files()
     if not raw_files:

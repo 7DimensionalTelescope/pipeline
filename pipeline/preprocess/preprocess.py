@@ -402,11 +402,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             elif (
                 input_file
                 and (output_file not in self._generated_masterframes)
-                and (
-                    not os.path.exists(output_file)
-                    or self.overwrite
-                    or self._master_change(dtype, output_file)
-                )
+                and (not os.path.exists(output_file) or self.overwrite or self._master_change(dtype, output_file))
             ):
                 norminal = self._generate_masterframe(dtype, device_id, dry_run=dry_run)
                 if not norminal:
@@ -575,7 +571,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         sig_header[prep_utils.MEDIAN_PENALTY_KEY] = prep_utils.median_penalty_card(header["NFRAMES"])
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), sig_header)
         if dtype == CALIB_TYPE_DARK:  # the BACKOFF noise reference every science frame reduced with this dark carries
-            header.update(prep_utils.additive_sigma_quantile_cards(self.darksig_output, self.biassig_output, self.bpmask_output))
+            header.update(
+                prep_utils.additive_sigma_quantile_cards(self.darksig_output, self.biassig_output, self.bpmask_output)
+            )
 
         # PPFLAG: propagate from dependencies (bias=0, dark=bias, flat=bias|flatdark)
         if dtype == CALIB_TYPE_BIAS:
@@ -597,9 +595,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 f"[Group {self._current_group+1}] Undefined behavior: _generate_masterframe is called but dtype is not bias, dark, or flat"
             )
         self._ppflag[dtype] = ppflag_val
-        sanity_f_ingredients = [
-            name for name, val in ingredient_ppflags.items() if val & ppflag.PPFLAG_SANITY_F_USED
-        ]
+        sanity_f_ingredients = [name for name, val in ingredient_ppflags.items() if val & ppflag.PPFLAG_SANITY_F_USED]
 
         sanity_flag = self._assess_masterframe_quality_and_update_header(
             header=header,
@@ -991,11 +987,17 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             if all(key in header for key in keys):
                 cards = {key: (header[key], header.comments[key]) for key in keys}
             else:
-                sig = lambda path, kind: os.path.join(os.path.dirname(path), os.path.basename(path).replace(f"{kind}_", f"{kind}sig_", 1))
+                sig = lambda path, kind: os.path.join(
+                    os.path.dirname(path), os.path.basename(path).replace(f"{kind}_", f"{kind}sig_", 1)
+                )
                 try:
-                    cards = prep_utils.additive_sigma_quantile_cards(sig(dark, "dark"), sig(bias, "bias"), PathHandler.get_bpmask(dark))
+                    cards = prep_utils.additive_sigma_quantile_cards(
+                        sig(dark, "dark"), sig(bias, "bias"), PathHandler.get_bpmask(dark)
+                    )
                 except Exception as e:
-                    self.logger.warning(f"No additive-noise quantiles for {os.path.basename(dark)} ({e}); BACKOFF falls back to the frame's width")
+                    self.logger.warning(
+                        f"No additive-noise quantiles for {os.path.basename(dark)} ({e}); BACKOFF falls back to the frame's width"
+                    )
                     cards = {}
             self._noise_cards_for, self._noise_cards = dark, cards
         return self._noise_cards

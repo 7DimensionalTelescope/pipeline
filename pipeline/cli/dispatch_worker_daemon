@@ -118,7 +118,13 @@ class ProtonScheduler:
 
 class DispatchWorker:
     def __init__(
-        self, scheduler, server_name, max_workers, config_types=None, prefetch=0, poll_interval=DEFAULT_POLL_INTERVAL,
+        self,
+        scheduler,
+        server_name,
+        max_workers,
+        config_types=None,
+        prefetch=0,
+        poll_interval=DEFAULT_POLL_INTERVAL,
     ):
         self.scheduler = scheduler
         self.server_name = server_name
@@ -238,7 +244,10 @@ class DispatchWorker:
         self.poll_interval = poll_interval
         logger.info(
             "Dispatch reload applied: max_workers %s -> %s, poll_interval %s -> %s",
-            old[0], self.max_workers, old[1], self.poll_interval,
+            old[0],
+            self.max_workers,
+            old[1],
+            self.poll_interval,
         )
 
     def request_reload(self, *_args):
@@ -253,8 +262,9 @@ class DispatchWorker:
             self.config_types or "any",
         )
         if self.prefetch:
-            logger.warning("Prefetch is %d: rows are claimed before a slot frees and strand if this host is killed",
-                           self.prefetch)
+            logger.warning(
+                "Prefetch is %d: rows are claimed before a slot frees and strand if this host is killed", self.prefetch
+            )
         while not self._stop:
             if self._reload_requested:
                 self._reload_requested = False
@@ -351,9 +361,7 @@ def parse_args():
     parser.add_argument(
         "--poll-interval", type=float, default=float(os.environ.get("DISPATCH_POLL_INTERVAL", DEFAULT_POLL_INTERVAL))
     )
-    parser.add_argument(
-        "--prefetch", type=int, default=int(os.environ.get("DISPATCH_PREFETCH", DEFAULT_PREFETCH))
-    )
+    parser.add_argument("--prefetch", type=int, default=int(os.environ.get("DISPATCH_PREFETCH", DEFAULT_PREFETCH)))
     parser.add_argument("--check", action="store_true", help="Verify the proton connection and exit")
     return parser.parse_args()
 

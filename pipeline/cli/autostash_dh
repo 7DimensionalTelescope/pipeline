@@ -97,7 +97,7 @@ else:
         error_int = int(error) if error is not None else None
 
         if (error_int in WHITELIST_ERROR or obj in WHITELIST_OBJ) and obj not in BLACKLIST_OBJECT:
-            cur.execute("UPDATE scheduler SET status = ? WHERE \"index\" = ?", (TASK_STATUS_STASHED, row["index"]))
+            cur.execute('UPDATE scheduler SET status = ? WHERE "index" = ?', (TASK_STATUS_STASHED, row["index"]))
             updated_count += 1
         else:
             print(f"Skipping {obj} (error: {error_int})")
@@ -112,7 +112,7 @@ else:
 
     # Verify the update
     updated_rows = cur.execute(
-        "SELECT \"index\", status, config FROM scheduler WHERE status = ?", (TASK_STATUS_STASHED,)
+        'SELECT "index", status, config FROM scheduler WHERE status = ?', (TASK_STATUS_STASHED,)
     ).fetchall()
     print(f"  Verification: Found {len(updated_rows)} total rows with status 'Stashed'")
 

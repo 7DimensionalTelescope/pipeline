@@ -280,10 +280,7 @@ _LEAN_COLS_RAW_CALIB = """
 _LEAN_CALIB_EXTRAS = {
     "bias": "cf.median_level, cf.noise_level, cf.std_deviation",
     "dark": "cf.dark_current, cf.hotpix_count, cf.median_level",
-    "flat": (
-        "cf.median_counts, cf.uniformity_rms, "
-        "cf.vignetting_level, cf.illumination_gradient"
-    ),
+    "flat": ("cf.median_counts, cf.uniformity_rms, " "cf.vignetting_level, cf.illumination_gradient"),
 }
 
 _LEAN_COLS_TILE = """
@@ -507,6 +504,7 @@ class _SqlBackend:
             return ""
         try:
             from psycopg import ClientCursor
+
             with self.pool.connection() as conn:
                 with ClientCursor(conn) as cur:
                     return cur.mogrify(sql, tuple(params or ()))
@@ -1122,8 +1120,12 @@ class _SqlBackend:
         params: List[Any] = []
 
         self._apply_date_filters(
-            clauses, params, col="cf.obstime",
-            date_start=date_start, date_end=date_end, days=days,
+            clauses,
+            params,
+            col="cf.obstime",
+            date_start=date_start,
+            date_end=date_end,
+            days=days,
         )
         if night_date is not None:
             clauses.append("n.date = %s")
@@ -1158,9 +1160,7 @@ class _SqlBackend:
             if filter_name is not None:
                 self._apply_in(clauses, params, "f.name", _as_list(filter_name))
         elif filter_name is not None:
-            raise ValueError(
-                f"{kind!r} frames have no filter; drop filter_name."
-            )
+            raise ValueError(f"{kind!r} frames have no filter; drop filter_name.")
 
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
 
@@ -1178,7 +1178,7 @@ class _SqlBackend:
                 f"{_LEAN_COLS_RAW_CALIB.rstrip()},"
                 f"\n                {_LEAN_CALIB_EXTRAS[kind]}"
                 f"{filter_select}"
-            )
+            )  # fmt: skip
         sql = f"""
             SELECT
                 {cols}
@@ -1365,11 +1365,7 @@ class _SqlBackend:
 
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
 
-        join_filter = (
-            "LEFT JOIN facility_filter f ON m.filter_id = f.id"
-            if kind == "flat"
-            else ""
-        )
+        join_filter = "LEFT JOIN facility_filter f ON m.filter_id = f.id" if kind == "flat" else ""
         if full_table:
             m_cols = self._star(alias="m", table=table)
             if kind == "flat":
@@ -1435,6 +1431,7 @@ class _HttpBackend:
             return ""
         try:
             from urllib.parse import urlencode
+
             qs = urlencode(self.last_params or {}, doseq=True)
         except Exception:
             qs = repr(self.last_params)

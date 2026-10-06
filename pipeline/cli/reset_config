@@ -38,7 +38,7 @@ if __name__ == "__main__":
             "  %(prog)s /path/to/config1.yml /path/to/config2.yml"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
+    )  # fmt: skip
     parser.add_argument(
         "configs",
         nargs="+",

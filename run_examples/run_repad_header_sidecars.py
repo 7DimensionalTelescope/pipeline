@@ -154,22 +154,40 @@ def one_config(index, config, target, apply_writes, done):
 
 
 def _blank(index, config, image):
-    return dict(image=image, header_file=image.replace(".fits", ".header"), config=config,
-                scheduler_index=index, pipeline_version=None, fits_blocks=None, cards_before=None,
-                blocks_before=None, cards_after=None, blocks_after=None, sidecar_mtime=None,
-                action=None, error=None, ts=datetime.now().isoformat())
+    return dict(
+        image=image,
+        header_file=image.replace(".fits", ".header"),
+        config=config,
+        scheduler_index=index,
+        pipeline_version=None,
+        fits_blocks=None,
+        cards_before=None,
+        blocks_before=None,
+        cards_after=None,
+        blocks_after=None,
+        sidecar_mtime=None,
+        action=None,
+        error=None,
+        ts=datetime.now().isoformat(),
+    )
 
 
-INSERT = ("INSERT OR REPLACE INTO sidecar_fix VALUES "
-          "(:image,:header_file,:config,:scheduler_index,:pipeline_version,:fits_blocks,"
-          ":cards_before,:blocks_before,:cards_after,:blocks_after,:sidecar_mtime,:action,:error,:ts)")
+INSERT = (
+    "INSERT OR REPLACE INTO sidecar_fix VALUES "
+    "(:image,:header_file,:config,:scheduler_index,:pipeline_version,:fits_blocks,"
+    ":cards_before,:blocks_before,:cards_after,:blocks_after,:sidecar_mtime,:action,:error,:ts)"
+)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--limit", type=int, default=0, help="stop after this many configs (0 = all queued)")
-    ap.add_argument("--blocks", type=int, default=8,
-                    help="target header blocks; 8 = n_head_blocks, the size a reduced frame settles at")
+    ap.add_argument(
+        "--blocks",
+        type=int,
+        default=8,
+        help="target header blocks; 8 = n_head_blocks, the size a reduced frame settles at",
+    )
     ap.add_argument("--apply", action="store_true", help="write the sidecars; otherwise dry run")
     ap.add_argument("--workers", type=int, default=32, help="concurrent configs; this is NFS wait, not CPU")
     ap.add_argument("--redo", action="store_true", help="re-examine images a previous pass settled")
@@ -186,8 +204,11 @@ def main():
     if args.limit:
         configs = configs[: args.limit]
     versions = process_status_versions()
-    print(f"{len(configs)} queued configs | {len(done)} images already settled | "
-          f"{len(versions)} process_status versions | {args.workers} workers", flush=True)
+    print(
+        f"{len(configs)} queued configs | {len(done)} images already settled | "
+        f"{len(versions)} process_status versions | {args.workers} workers",
+        flush=True,
+    )
 
     counts, n_rows, t0 = {}, 0, time.time()
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
@@ -201,8 +222,11 @@ def main():
             if n_cfg % 2000 == 0:
                 log.commit()
                 rate = n_rows / max(time.time() - t0, 1e-9)
-                print(f"  {n_cfg}/{len(configs)} configs, {n_rows} frames ({rate:.0f}/s): "
-                      + " ".join(f"{k}={v}" for k, v in sorted(counts.items())), flush=True)
+                print(
+                    f"  {n_cfg}/{len(configs)} configs, {n_rows} frames ({rate:.0f}/s): "
+                    + " ".join(f"{k}={v}" for k, v in sorted(counts.items())),
+                    flush=True,
+                )
     log.commit()
 
     for action, n in sorted(counts.items()):

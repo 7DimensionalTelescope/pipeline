@@ -58,7 +58,12 @@ def daemon_call(socket_path, command):
 def send_signal(unit, action):
     """The signal contract for a daemon without the socket channel; "ERROR ..." when it could not be sent."""
     try:
-        pid = int(subprocess.run(["systemctl", "show", "-p", "MainPID", "--value", unit], capture_output=True, text=True).stdout.strip() or 0)
+        pid = int(
+            subprocess.run(
+                ["systemctl", "show", "-p", "MainPID", "--value", unit], capture_output=True, text=True
+            ).stdout.strip()
+            or 0
+        )
     except (OSError, ValueError):
         pid = 0
     if not pid:
@@ -73,9 +78,12 @@ def send_signal(unit, action):
 def db_processing(db_path):
     """Processing rows per host from the scheduler DB (the origin's '' rows count as the origin)."""
     with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=Scheduler.DB_BUSY_TIMEOUT) as conn:
-        return dict(conn.execute(
-            "SELECT COALESCE(NULLIF(dispatch, ''), ?), COUNT(*) FROM scheduler WHERE status = ? GROUP BY 1",
-            (MAIN_HOST, TASK_STATUS_PROCESSING)).fetchall())
+        return dict(
+            conn.execute(
+                "SELECT COALESCE(NULLIF(dispatch, ''), ?), COUNT(*) FROM scheduler WHERE status = ? GROUP BY 1",
+                (MAIN_HOST, TASK_STATUS_PROCESSING),
+            ).fetchall()
+        )
 
 
 def local_running():
@@ -98,14 +106,22 @@ def describe(state):
 def main():
     parser = argparse.ArgumentParser(description="Drain, resume, reload or inspect the reduction queue on this host.")
     parser.add_argument("action", choices=["drain", "resume", "reload", "status"])
-    parser.add_argument("--report-every", type=float, default=5.0, metavar="S", help="drain: seconds between report lines, 0 = none (default 5)")
+    parser.add_argument(
+        "--report-every",
+        type=float,
+        default=5.0,
+        metavar="S",
+        help="drain: seconds between report lines, 0 = none (default 5)",
+    )
     parser.add_argument("--socket", default=QUEUE_SOCKET_PATH, help="queue daemon socket (default: configured path)")
     parser.add_argument("--db", default=SCHEDULER_DB_PATH, help="scheduler DB (default: configured path)")
     args = parser.parse_args()
 
     state = daemon_call(args.socket, "status") if args.socket else None
+    # fmt: off
     on_origin = state is not None                        # a queue daemon listens on the socket: this is the origin
     has_channel = bool(state) and "draining" in state    # and it understands more than `wake`
+    # fmt: on
     host = MAIN_HOST if on_origin else socket.gethostname().split(".")[0]
     have_db = bool(args.db) and os.path.exists(args.db)
     running = (lambda: db_processing(args.db).get(host, 0)) if have_db else local_running
@@ -114,9 +130,14 @@ def main():
         if has_channel:
             print(f"{MAIN_HOST} queue daemon: {describe(state)}")
         elif on_origin:
-            print(f"{MAIN_HOST} queue daemon: listening, without the socket control channel (restart it after the update)")
+            print(
+                f"{MAIN_HOST} queue daemon: listening, without the socket control channel (restart it after the update)"
+            )
         if have_db:
-            print("processing by host: " + (", ".join(f"{h}={n}" for h, n in sorted(db_processing(args.db).items())) or "nothing"))
+            print(
+                "processing by host: "
+                + (", ".join(f"{h}={n}" for h, n in sorted(db_processing(args.db).items())) or "nothing")
+            )
         else:
             print(f"{host}: {local_running()} reduction process(es) running")
         return 0
@@ -129,7 +150,10 @@ def main():
         print(f"{MAIN_HOST}: {args.action} -> {describe(reply)}", flush=True)
     else:
         if on_origin:
-            print(f"queue daemon predates the socket control channel: using its signal contract; restart {QUEUE_UNIT} after the update", flush=True)
+            print(
+                f"queue daemon predates the socket control channel: using its signal contract; restart {QUEUE_UNIT} after the update",
+                flush=True,
+            )
         message = send_signal(QUEUE_UNIT if on_origin else WORKER_UNIT, args.action)
         if message.startswith("ERROR: no running") and not on_origin:
             message = f"ERROR: no queue daemon on {args.socket} and no running {WORKER_UNIT} here"
@@ -142,7 +166,10 @@ def main():
         t0 = time.monotonic()
         while True:
             n = running()
-            print(f"  [{int((time.monotonic() - t0) // 60):02d}:{int((time.monotonic() - t0) % 60):02d}] {host}: {n} running", flush=True)
+            print(
+                f"  [{int((time.monotonic() - t0) // 60):02d}:{int((time.monotonic() - t0) % 60):02d}] {host}: {n} running",
+                flush=True,
+            )
             if n == 0:
                 print(f"{host}: drained")
                 break

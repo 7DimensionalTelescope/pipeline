@@ -63,9 +63,11 @@ def display_flips(header, reprojected: bool = True) -> tuple[bool, bool]:
     determinant = d_ra[0] * d_dec[1] - d_ra[1] * d_dec[0]
     parity = (True, False) if determinant > 0 else (False, False)  # one mirror undoes a positive determinant
     candidates = [parity, (not parity[0], not parity[1])]
+
     def score(flips):
         x, y = (-1.0 if flips[0] else 1.0), (-1.0 if flips[1] else 1.0)
         return (-x * d_ra[0] + y * d_dec[1], -y * d_ra[1] + x * d_dec[0])  # RA leftwards, Dec upwards
+
     return max(candidates, key=score)
 
 

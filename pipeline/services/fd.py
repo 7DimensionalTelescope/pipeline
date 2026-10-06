@@ -132,9 +132,7 @@ def get_fd_info(detailed: bool = False, top_n: int = 5) -> dict:
         fd_count = _fast_count()
         targets = None
 
-    percent_used = (
-        (fd_count / soft_limit * 100) if (fd_count > 0 and soft_limit > 0) else -1
-    )
+    percent_used = (fd_count / soft_limit * 100) if (fd_count > 0 and soft_limit > 0) else -1
 
     info: dict = {
         "current": fd_count,
@@ -159,8 +157,7 @@ def get_fd_info(detailed: bool = False, top_n: int = 5) -> dict:
 def _format_msg(info: dict, prefix: str = "", delta: Optional[int] = None) -> str:
     """Compose a one-line summary from an ``info`` dict (with optional delta)."""
     parts = [
-        f"{prefix}FD: {info['current']}/{info['soft_limit']} "
-        f"({info['percent_used']:.1f}%) [PID: {info['pid']}]"
+        f"{prefix}FD: {info['current']}/{info['soft_limit']} " f"({info['percent_used']:.1f}%) [PID: {info['pid']}]"
     ]
     if delta is not None:
         parts[0] += f" Δ={delta:+d}"
@@ -271,9 +268,7 @@ class FDTracker:
         prefix = f"[{label} <- {self._label}] "
         msg = _format_msg(info, prefix=prefix, delta=delta)
 
-        is_warn = (
-            info["percent_used"] >= warn_threshold or delta >= delta_warn
-        )
+        is_warn = info["percent_used"] >= warn_threshold or delta >= delta_warn
         if logger is not None:
             if is_warn and hasattr(logger, "warning"):
                 logger.warning(msg)
@@ -357,9 +352,7 @@ class PeakFDSampler:
         self._peak_at = self._start_time
         if self._capture:
             self._peak_targets = _read_fd_targets()
-        self._thread = threading.Thread(
-            target=self._run, name="PeakFDSampler", daemon=True
-        )
+        self._thread = threading.Thread(target=self._run, name="PeakFDSampler", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
@@ -403,11 +396,7 @@ class PeakFDSampler:
     def peak_info(self) -> dict:
         """Build an info-dict in the same shape as ``get_fd_info``."""
         soft, hard = _get_limits()
-        percent = (
-            (self._peak_count / soft * 100)
-            if (self._peak_count > 0 and soft > 0)
-            else -1
-        )
+        percent = (self._peak_count / soft * 100) if (self._peak_count > 0 and soft > 0) else -1
         info: dict = {
             "current": self._peak_count,
             "soft_limit": soft,
@@ -415,11 +404,7 @@ class PeakFDSampler:
             "percent_used": percent,
             "pid": os.getpid(),
             "samples": self._sample_count,
-            "elapsed_s": (
-                (self._peak_at or 0) - (self._start_time or 0)
-                if self._start_time
-                else -1
-            ),
+            "elapsed_s": ((self._peak_at or 0) - (self._start_time or 0) if self._start_time else -1),
         }
         targets = self._peak_targets
         if targets:
@@ -439,11 +424,7 @@ class PeakFDSampler:
         """Log a one-line peak summary and return the info dict."""
         info = self.peak_info()
         elapsed = info.get("elapsed_s", -1)
-        suffix = (
-            f" (peak at +{elapsed:.2f}s, {info['samples']} samples)"
-            if elapsed and elapsed >= 0
-            else ""
-        )
+        suffix = f" (peak at +{elapsed:.2f}s, {info['samples']} samples)" if elapsed and elapsed >= 0 else ""
         msg = _format_msg(info, prefix=f"{prefix}PEAK ") + suffix
 
         is_warn = info["percent_used"] >= warn_threshold

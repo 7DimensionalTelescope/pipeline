@@ -130,7 +130,9 @@ def evaluate_single_wcs(
             print(f"[evaluate_single_wcs:{level.upper()}] {msg}")
 
     if matched_catalog_path is None:
-        matched_catalog_path = add_suffix(source_cat if isinstance(source_cat, str) else "table_evaluated.fits", "matched")
+        matched_catalog_path = add_suffix(
+            source_cat if isinstance(source_cat, str) else "table_evaluated.fits", "matched"
+        )
 
     # Failed attempt to skip if matched catalog already exists
     # if os.path.exists(matched_catalog_path) and not overwrite:

@@ -22,6 +22,7 @@ try:
 except OSError as e:
     # If loading fails, try with explicit library path
     import ctypes.util
+
     # Try to find cfitsio library
     cfitsio_lib = None
     for path in cfitsio_paths:
@@ -29,7 +30,7 @@ except OSError as e:
         if os.path.exists(cfitsio_candidate):
             cfitsio_lib = cfitsio_candidate
             break
-    
+
     if cfitsio_lib:
         # Preload cfitsio to satisfy dependencies
         ctypes.CDLL(cfitsio_lib, mode=ctypes.RTLD_GLOBAL)

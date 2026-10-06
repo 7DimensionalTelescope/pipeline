@@ -483,7 +483,9 @@ def sky_statistics(data, mask=None, coverage_mask=None, **mesh_options) -> tuple
     return float(bkg.background_median), float(bkg.background_rms_median)
 
 
-def noise_autocorrelation(residual, mask=None, maxlag: int = 8, size: int = 1024, clip: float = 10.0, stats=None, coverage=None):
+def noise_autocorrelation(
+    residual, mask=None, maxlag: int = 8, size: int = 1024, clip: float = 10.0, stats=None, coverage=None
+):
     """Blank-sky autocorrelation to +-maxlag px across the frame, normalised to C(0); stats gets C(0) and counts."""
     from astropy.stats import mad_std
     from scipy import fft as sfft

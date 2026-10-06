@@ -104,7 +104,11 @@ class CoaddPlan:
     @property
     def compute_single_weight_maps(self) -> bool:
         output_needs_maps = self.output_weight_map and self.coadd_mode != "proper"
-        return output_needs_maps or self.coadd_weighting == "pixelwise" or self.zero_saturated_in_weight_before_reprojection
+        return (
+            output_needs_maps
+            or self.coadd_weighting == "pixelwise"
+            or self.zero_saturated_in_weight_before_reprojection
+        )
 
     @property
     def sidecar_only_for_saturation(self) -> bool:
@@ -116,9 +120,7 @@ class CoaddPlan:
     @property
     def use_smooth_weight_during_coaddition(self) -> bool:
         """The per-frame weight is the fitted vignetting surface, not the per-pixel noise model."""
-        return (
-            self.compute_single_weight_maps and self.coadd_routine != "legacy"
-        )
+        return self.compute_single_weight_maps and self.coadd_routine != "legacy"
 
     @property
     def output_smooth_weight_map_for_coadd_image(self) -> bool:
@@ -144,7 +146,9 @@ class CoaddPlan:
     @property
     def exclude_badpix_by_projected_index(self) -> bool:
         """Bad pixels excluded through the sparse in-memory index ('1px' nearest pixel, 'conservative' kernel support)."""
-        return self.coadd_routine != "legacy" and self.badpix_propagation_policy_across_astrometric_reprojection != "off"
+        return (
+            self.coadd_routine != "legacy" and self.badpix_propagation_policy_across_astrometric_reprojection != "off"
+        )
 
     @property
     def zero_badpix_in_single_weight_map(self) -> bool:
@@ -231,7 +235,7 @@ def resolve_coadd_plan(node, errors=builtins) -> CoaddPlan:
     background_exclude_percentile = float(background["exclude_percentile"])
     background_min_usable = float(background["min_usable"])
     background_max_dropped_boxes = float(background["max_dropped_boxes"])
-    dequantize_background_below = float(background["dequantize_background_below"])  # SKYVAL gate shared with Photometry's measure_sky
+    dequantize_background_below = float(background["dequantize_background_below"])  # SKYVAL gate shared with Photometry's measure_sky  # fmt: skip
     if background_box_size < 8:
         raise errors.ValueError("imcoadd.background.box_size must be at least 8 pixels")
     if background_filter_size < 1 or background_filter_size % 2 == 0:

@@ -137,8 +137,7 @@ def proper_coadd_numpy(
     policy = str(weight_map_policy or "off").lower().replace("_", "-")
     if policy not in allowed_weight_map_policies:
         raise ValueError(
-            f"Invalid weight_map_policy: {weight_map_policy!r} "
-            f"(expected one of {allowed_weight_map_policies})"
+            f"Invalid weight_map_policy: {weight_map_policy!r} " f"(expected one of {allowed_weight_map_policies})"
         )
     for name, seq in (("peeings", peeings), ("skysigs", skysigs)):
         if len(seq) != n:

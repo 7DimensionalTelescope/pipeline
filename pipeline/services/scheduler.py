@@ -191,9 +191,7 @@ class Scheduler:
                     scheduler_kwargs += ["-overwrite_config_sections"] + list(overwrite_config_sections)
             elif task_type == CONFIG_TYPE_CROSSFILTER:
                 scheduler_kwargs = (
-                    ["-processes"] + list(crossfilter_processes)
-                    if crossfilter_processes is not None
-                    else []
+                    ["-processes"] + list(crossfilter_processes) if crossfilter_processes is not None else []
                 )
                 if overwrite or overwrite_data or overwrite_crossfilter:
                     scheduler_kwargs.append("-overwrite")
@@ -307,12 +305,11 @@ class Scheduler:
     def _create_indexes(cursor):
         """Without these the claim scans the whole table under the write lock."""
         cursor.execute(
-            'CREATE INDEX IF NOT EXISTS ix_scheduler_claim '
+            "CREATE INDEX IF NOT EXISTS ix_scheduler_claim "
             'ON scheduler(status, is_ready DESC, priority DESC, readiness DESC, "index")'
         )
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS ix_scheduler_gate "
-            "ON scheduler(status, config_type, priority, input_type)"
+            "CREATE INDEX IF NOT EXISTS ix_scheduler_gate " "ON scheduler(status, config_type, priority, input_type)"
         )
         # Expressions must match _AFFINITY_FILTER / _FOREIGN_FILTER verbatim or those tiers fall back to a scan.
         cursor.execute(
@@ -336,7 +333,9 @@ class Scheduler:
                 conn.rollback()
                 return
             cursor.execute("ALTER TABLE scheduler ADD COLUMN group_idx INTEGER")
-            cursor.execute("SELECT \"index\", config_type, dependent_idx, status, COALESCE(dispatch, '') FROM scheduler")
+            cursor.execute(
+                "SELECT \"index\", config_type, dependent_idx, status, COALESCE(dispatch, '') FROM scheduler"
+            )
             rows = cursor.fetchall()
             config_types = {row[0]: row[1] for row in rows}
             groups = {}
@@ -389,7 +388,9 @@ class Scheduler:
         if top <= watermark:
             return
         cursor.execute("BEGIN IMMEDIATE")
-        cursor.execute('SELECT "index", config_type, dependent_idx, group_idx FROM scheduler WHERE "index" > ?', (watermark,))
+        cursor.execute(
+            'SELECT "index", config_type, dependent_idx, group_idx FROM scheduler WHERE "index" > ?', (watermark,)
+        )
         rows = cursor.fetchall()
         config_types = {row[0]: row[1] for row in rows}
         updates = []
@@ -426,9 +427,7 @@ class Scheduler:
     def _db_connection(self, timeout=None):
         """Context manager for database connections. `timeout` overrides DB_BUSY_TIMEOUT."""
         with Scheduler._SQLITE_OPEN_CLOSE_LOCK:
-            conn = sqlite3.connect(
-                self._db_path, timeout=self.DB_BUSY_TIMEOUT if timeout is None else timeout
-            )
+            conn = sqlite3.connect(self._db_path, timeout=self.DB_BUSY_TIMEOUT if timeout is None else timeout)
             conn.row_factory = sqlite3.Row
         try:
             yield conn
@@ -630,9 +629,7 @@ class Scheduler:
             ProcessStatusDependency().replace_dependencies(edges)
         except Exception as e:
             try:
-                get_high_level_task_logger(__name__).debug(
-                    f"process_status_dependency mirror skipped: {e}"
-                )
+                get_high_level_task_logger(__name__).debug(f"process_status_dependency mirror skipped: {e}")
             except Exception:
                 pass
 
@@ -827,7 +824,7 @@ class Scheduler:
 
                 process_start = datetime.now().isoformat()
                 cursor.execute(
-                    'UPDATE scheduler SET status = ?, dispatch = ?, pid = 0, process_start = ?, process_end = ? '
+                    "UPDATE scheduler SET status = ?, dispatch = ?, pid = 0, process_start = ?, process_end = ? "
                     'WHERE "index" = ? AND status = ?',
                     (TASK_STATUS_PROCESSING, self._LOCAL_DISPATCH, process_start, "", task_index, TASK_STATUS_READY),
                 )
@@ -974,7 +971,7 @@ class Scheduler:
                 cursor = conn.cursor()
                 cursor.execute(
                     f'SELECT config FROM scheduler WHERE "index" IN ({placeholders}) AND status = ? '
-                    f'AND {self._LOCAL_TASK_FILTER}',
+                    f"AND {self._LOCAL_TASK_FILTER}",
                     (*indices, TASK_STATUS_PROCESSING),
                 )
                 configs = [row[0] for row in cursor.fetchall()]
@@ -982,7 +979,7 @@ class Scheduler:
                     return 0
 
                 cursor.execute(
-                    f'UPDATE scheduler SET status = ?, pid = 0, process_start = ? '
+                    f"UPDATE scheduler SET status = ?, pid = 0, process_start = ? "
                     f'WHERE "index" IN ({placeholders}) AND status = ? AND {self._LOCAL_TASK_FILTER}',
                     (TASK_STATUS_READY, "", *indices, TASK_STATUS_PROCESSING),
                 )
@@ -1036,25 +1033,23 @@ class Scheduler:
             # the WHERE's done-status guard is a compare-and-swap: one of two racing mark_done calls wins and promotes
             done_guard = " AND status NOT IN (?, ?, ?)"
             done_states = (TASK_STATUS_COMPLETED, TASK_STATUS_FAILED, TASK_STATUS_REJECTED)
-            if return_code==SUCCESS_RETURN_CODE:
+            if return_code == SUCCESS_RETURN_CODE:
 
                 cursor.execute(
-                    'UPDATE scheduler SET status = ?, pid = 0, '
-                    'process_end = ? WHERE "index" = ?' + done_guard,
+                    "UPDATE scheduler SET status = ?, pid = 0, " 'process_end = ? WHERE "index" = ?' + done_guard,
                     (TASK_STATUS_COMPLETED, process_end, index, *done_states),
                 )
-            elif return_code==FAILURE_RETURN_CODE:
+            elif return_code == FAILURE_RETURN_CODE:
 
                 cursor.execute(
-                    'UPDATE scheduler SET status = ?, readiness = ?, is_ready = ?, pid = 0, '
+                    "UPDATE scheduler SET status = ?, readiness = ?, is_ready = ?, pid = 0, "
                     'process_end = ? WHERE "index" = ?' + done_guard,
                     (TASK_STATUS_FAILED, 0, 0, process_end, index, *done_states),
                 )
-            elif return_code==EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE:
+            elif return_code == EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE:
                 process_end = datetime.now().isoformat()
                 cursor.execute(
-                    'UPDATE scheduler SET status = ?, pid = 0, '
-                    'process_end = ? WHERE "index" = ?' + done_guard,
+                    "UPDATE scheduler SET status = ?, pid = 0, " 'process_end = ? WHERE "index" = ?' + done_guard,
                     (TASK_STATUS_REJECTED, process_end, index, *done_states),
                 )
             else:
@@ -1062,7 +1057,7 @@ class Scheduler:
                 # killer) or an exit code no stage produces. Orchestration, not science —
                 # fail it here, because leaving it Processing strands the row forever.
                 cursor.execute(
-                    'UPDATE scheduler SET status = ?, readiness = ?, is_ready = ?, pid = 0, '
+                    "UPDATE scheduler SET status = ?, readiness = ?, is_ready = ?, pid = 0, "
                     'process_end = ? WHERE "index" = ?' + done_guard,
                     (TASK_STATUS_FAILED, 0, 0, process_end, index, *done_states),
                 )
@@ -1090,7 +1085,7 @@ class Scheduler:
 
                         if new_readiness == 100:
                             cursor.execute(
-                                'UPDATE scheduler SET readiness = ?, status = ?, is_ready = ? '
+                                "UPDATE scheduler SET readiness = ?, status = ?, is_ready = ? "
                                 'WHERE "index" = ? AND status = ?',
                                 (new_readiness, TASK_STATUS_READY, 1, dep_idx, TASK_STATUS_PENDING),
                             )
@@ -1129,7 +1124,7 @@ class Scheduler:
             if self.processing_preprocess < 0:
                 self.processing_preprocess = 0
 
-        if return_code==SUCCESS_RETURN_CODE:
+        if return_code == SUCCESS_RETURN_CODE:
             self._schedule["status"][mask] = TASK_STATUS_COMPLETED
             self._schedule["pid"][mask] = 0
             self._schedule["process_end"][mask] = datetime.now().isoformat()
@@ -1174,9 +1169,7 @@ class Scheduler:
         if self.use_system_queue:
             with self._db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    f"SELECT {self._SELECT_COLUMNS} FROM scheduler WHERE is_ready = 1 {self._ORDER_BY}"
-                )
+                cursor.execute(f"SELECT {self._SELECT_COLUMNS} FROM scheduler WHERE is_ready = 1 {self._ORDER_BY}")
                 return self._rows_to_table(cursor.fetchall())
         return self.schedule[self.schedule["is_ready"]]
 
@@ -1224,7 +1217,9 @@ class Scheduler:
                 extra_sql, extra_params, enter_groups = self._worker_claim_filter(config_types)
                 task_index = None
                 for affinity in self._claim_tiers(cursor, server_name, extra_sql, extra_params, enter_groups):
-                    task_index = self._select_ready_index(cursor, affinity, server_name, extra_sql, extra_params, enter_groups)
+                    task_index = self._select_ready_index(
+                        cursor, affinity, server_name, extra_sql, extra_params, enter_groups
+                    )
                     if task_index is not None:
                         break
                 if task_index is None:
@@ -1233,7 +1228,7 @@ class Scheduler:
 
                 process_start = datetime.now().isoformat()
                 cursor.execute(
-                    'UPDATE scheduler SET status = ?, dispatch = ?, pid = 0, process_start = ?, process_end = ? '
+                    "UPDATE scheduler SET status = ?, dispatch = ?, pid = 0, process_start = ?, process_end = ? "
                     'WHERE "index" = ? AND status = ?',
                     (TASK_STATUS_PROCESSING, server_name, process_start, "", task_index, TASK_STATUS_READY),
                 )
@@ -1285,7 +1280,7 @@ class Scheduler:
 
                     process_start = datetime.now().isoformat()
                     cursor.execute(
-                        'UPDATE scheduler SET status = ?, dispatch = ?, pid = 0, process_start = ?, process_end = ? '
+                        "UPDATE scheduler SET status = ?, dispatch = ?, pid = 0, process_start = ?, process_end = ? "
                         'WHERE "index" = ? AND status = ?',
                         (TASK_STATUS_PROCESSING, server_name, process_start, "", task_index, TASK_STATUS_READY),
                     )
@@ -1340,7 +1335,7 @@ class Scheduler:
         with self._db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                'UPDATE scheduler SET status = ?, pid = 0, process_start = ?, process_end = ? '
+                "UPDATE scheduler SET status = ?, pid = 0, process_start = ?, process_end = ? "
                 'WHERE "index" = ? AND dispatch = ? AND status = ?',
                 (TASK_STATUS_READY, "", "", int(index), str(server_name), TASK_STATUS_PROCESSING),
             )
@@ -1468,9 +1463,7 @@ class Scheduler:
 
                 # Get PIDs of tasks to be cleared before deleting
                 if all:
-                    cursor.execute(
-                        f"SELECT pid FROM scheduler WHERE pid IS NOT NULL AND {self._LOCAL_TASK_FILTER}"
-                    )
+                    cursor.execute(f"SELECT pid FROM scheduler WHERE pid IS NOT NULL AND {self._LOCAL_TASK_FILTER}")
                 else:
                     cursor.execute(
                         f"SELECT pid FROM scheduler WHERE status IN (?, ?) AND pid IS NOT NULL AND {self._LOCAL_TASK_FILTER}",
@@ -1664,8 +1657,8 @@ class Scheduler:
                         ]
                         placeholders = ",".join(["?"] * len(duplicate_configs))
                         cursor.execute(
-                            f'SELECT pid FROM scheduler WHERE status = ? AND pid IS NOT NULL AND config IN ({placeholders}) '
-                            f'AND {self._LOCAL_TASK_FILTER}',
+                            f"SELECT pid FROM scheduler WHERE status = ? AND pid IS NOT NULL AND config IN ({placeholders}) "
+                            f"AND {self._LOCAL_TASK_FILTER}",
                             (TASK_STATUS_PROCESSING, *duplicate_configs),
                         )
                         for (pid,) in cursor.fetchall():
@@ -1799,7 +1792,7 @@ class Scheduler:
             # Get all tasks with PIDs that are in Processing status
             cursor.execute(
                 f'SELECT "index", pid, config_type, config FROM scheduler '
-                f'WHERE status = ? AND pid IS NOT NULL AND {self._LOCAL_TASK_FILTER}',
+                f"WHERE status = ? AND pid IS NOT NULL AND {self._LOCAL_TASK_FILTER}",
                 (TASK_STATUS_PROCESSING,),
             )
             processing_tasks = cursor.fetchall()
@@ -1833,10 +1826,10 @@ class Scheduler:
         """Check and revert killed processes for in-memory mode."""
         reverted_count = 0
         # Get all tasks with PIDs that are in Processing status
-        processing_mask = (self._schedule["status"] == TASK_STATUS_PROCESSING) & (
-            (self._schedule["pid"] != 0) & (self._schedule["pid"] != None)  # noqa: E711
-        ) & (
-            (self._schedule["dispatch"] == "") | (self._schedule["dispatch"] == None)  # noqa: E711
+        processing_mask = (
+            (self._schedule["status"] == TASK_STATUS_PROCESSING)
+            & ((self._schedule["pid"] != 0) & (self._schedule["pid"] != None))  # noqa: E711
+            & ((self._schedule["dispatch"] == "") | (self._schedule["dispatch"] == None))  # noqa: E711
         )
         processing_tasks = self._schedule[processing_mask]
 
@@ -1871,7 +1864,7 @@ class Scheduler:
                 cursor = conn.cursor()
                 cursor.execute(
                     f'SELECT "index", pid FROM scheduler WHERE pid IS NOT NULL AND pid != 0 '
-                    f'AND {self._LOCAL_TASK_FILTER}'
+                    f"AND {self._LOCAL_TASK_FILTER}"
                 )
                 for task_index, pid in cursor.fetchall():
                     self._terminate_process(pid)
@@ -1886,7 +1879,7 @@ class Scheduler:
         terminated = 0
         mask = (self._schedule["pid"] != 0) & (self._schedule["pid"] != None) & (  # noqa: E711
             (self._schedule["dispatch"] == "") | (self._schedule["dispatch"] == None)  # noqa: E711
-        )
+        )  # fmt: skip
         for task in self._schedule[mask]:
             self._terminate_process(task["pid"])
             idx_mask = self._schedule["index"] == task["index"]

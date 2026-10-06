@@ -92,17 +92,14 @@ class GWPortalClient:
     ) -> Dict[str, Any]:
         url = urljoin(self.base_url, "api/" + endpoint.lstrip("/"))
         try:
-            resp = self.session.get(
-                url, params=params or {}, timeout=timeout or self.timeout
-            )
+            resp = self.session.get(url, params=params or {}, timeout=timeout or self.timeout)
             resp.raise_for_status()
             if not resp.content:
                 return {}
             return resp.json()
         except JSONDecodeError:
             raise RequestException(
-                f"Non-JSON response from {url}. Status={resp.status_code}. "
-                f"Body={resp.text[:200]}"
+                f"Non-JSON response from {url}. Status={resp.status_code}. " f"Body={resp.text[:200]}"
             )
         except RequestException as exc:
             if exc.response is not None:
@@ -110,9 +107,7 @@ class GWPortalClient:
                     detail = exc.response.json().get("error", "Unknown API Error")
                 except Exception:
                     detail = exc.response.text[:200]
-                raise RequestException(
-                    f"API Error ({exc.response.status_code}): {detail} [{url}]"
-                ) from exc
+                raise RequestException(f"API Error ({exc.response.status_code}): {detail} [{url}]") from exc
             raise
 
     # ------------------------------------------------------------------ #
@@ -126,9 +121,7 @@ class GWPortalClient:
         try:
             path = self.ENDPOINTS[entity]
         except KeyError as exc:
-            raise ValueError(
-                f"Unknown entity {entity!r}. Valid: {sorted(self.ENDPOINTS)}"
-            ) from exc
+            raise ValueError(f"Unknown entity {entity!r}. Valid: {sorted(self.ENDPOINTS)}") from exc
         # Drop None values; they would be sent as the literal string "None".
         cleaned = {k: v for k, v in params.items() if v is not None}
         return self._request(path, params=cleaned)
@@ -180,9 +173,7 @@ class GWPortalClient:
                 params["page"] = page
                 resp = self.query(entity, **params)
             except RequestException as exc:
-                print(
-                    f"[gwportal] page {page} fetch failed: {exc}", file=sys.stderr
-                )
+                print(f"[gwportal] page {page} fetch failed: {exc}", file=sys.stderr)
                 break
             rows: List[Dict[str, Any]] = resp.get("results", [])
             if not rows:
