@@ -169,6 +169,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 self._process_registry.configured_progress(self._process_spec),
                 f"{self._photometry_mode}-configured",
             )
+
     def _collect_qa_ids(self) -> None:
         # Align with astrometry: image_qa rows are created there; photometry must refresh them from the FITS
         # header after SEEING / photometry keywords are written. Without these IDs, run() never calls update_data.
@@ -896,10 +897,20 @@ class PhotometrySingle:
         Var(sum k_i x_i) = sigma^2 sum k_i^2, the measured lag-1 correlation being ~0.006), so BACKSIG is the mesh's rms
         median divided by sqrt(BACKKSQ); the residual cards are measured on the frame itself against that mesh."""
         from ..imcoadd.utils import (
-            DEQUANT_KERNEL, background_mesh, build_source_mask, mesh_peak, noise_autocorrelation, source_ellipses_on_frame, dequantize,
+            DEQUANT_KERNEL,
+            background_mesh,
+            build_source_mask,
+            mesh_peak,
+            noise_autocorrelation,
+            source_ellipses_on_frame,
+            dequantize,
         )
         from ..imcoadd.background_qa import (
-            measure_background_residuals, modal_offset, sigma_quantiles, RESIDUAL_KEYS, RESIDUAL_BOX_SIZE,
+            measure_background_residuals,
+            modal_offset,
+            sigma_quantiles,
+            RESIDUAL_KEYS,
+            RESIDUAL_BOX_SIZE,
         )
         from dataclasses import replace
 
@@ -960,7 +971,11 @@ class PhotometrySingle:
                 self.logger.warning(f"No bad-pixel mask for {self.name} ({e}); sky statistics include bad pixels")
         # the same mesh ImCoadd will fit, so the two stages cannot disagree about what the sky is
         mesh = self.config_node.imcoadd.background
-        dequantized = not is_coadd and phot_header.SKYVAL is not None and phot_header.SKYVAL < float(mesh["dequantize_background_below"])
+        dequantized = (
+            not is_coadd
+            and phot_header.SKYVAL is not None
+            and phot_header.SKYVAL < float(mesh["dequantize_background_below"])
+        )
         ksq = float(np.sum(DEQUANT_KERNEL**2)) if dequantized else 1.0
         try:
             fitted = background_mesh(
@@ -971,7 +986,9 @@ class PhotometrySingle:
                 filter_size=mesh["filter_size"],
                 exclude_percentile=mesh["exclude_percentile"],
             )
-        except ValueError as e:  # no mesh box survives the source mask: a crowded field has no off-source sky to publish
+        except (
+            ValueError
+        ) as e:  # no mesh box survives the source mask: a crowded field has no off-source sky to publish
             self.logger.warning(f"Off-source sky not measured: {e}")
             return False
         phot_header.BACKVAL = float(fitted.background_median)
@@ -999,7 +1016,9 @@ class PhotometrySingle:
         phot_header.BACKREF = "COADD" if is_coadd else "MODEL"
         self.logger.debug(f"Residual sky ({phot_header.BACKREF}): {result}")
         sky_noise = data - fitted.background if is_coadd else residual  # blank sky about BACKSIG's own mesh
-        self._measure_sky_covariance(phot_header, sky_noise, excluded | ~coverage, coverage, header if is_coadd else None)
+        self._measure_sky_covariance(
+            phot_header, sky_noise, excluded | ~coverage, coverage, header if is_coadd else None
+        )
         self.logger.info(
             f"Off-source sky: BACKVAL {phot_header.BACKVAL:.3f}, BACKSIG {phot_header.BACKSIG:.3f} on "
             f"{100 * phot_header.BACKFRAC:.1f}% of the frame, {100 * phot_header.SRCFRAC:.1f}% source-masked "
@@ -1011,7 +1030,8 @@ class PhotometrySingle:
     @staticmethod
     def _noise_reference(header, fitted, is_coadd: bool) -> dict | None:
         """Gain, sky levels and taps the BACKOFF reference is built from: a single's own EGAIN at its mesh's level quantiles; a
-        coadd's inputs' EGAIN and sky through n_inputs copies of the resampling kernel at the flux scale n EGAIN_in / EGAIN."""
+        coadd's inputs' EGAIN and sky through n_inputs copies of the resampling kernel at the flux scale n EGAIN_in / EGAIN.
+        """
         from ..imcoadd.background_qa import coadd_taps, SIGMA_QUANTILES
 
         if not is_coadd:
@@ -1024,9 +1044,13 @@ class PhotometrySingle:
         n_inputs = sum(1 for key in header if key.startswith("IMG") and key[3:].isdigit())
         if not (gain and egain and n_inputs) or sky is None:
             return None
-        return dict(gain=float(gain), levels=[float(sky)], taps=coadd_taps(n_inputs, n_inputs * float(gain) / float(egain)))
+        return dict(
+            gain=float(gain), levels=[float(sky)], taps=coadd_taps(n_inputs, n_inputs * float(gain) / float(egain))
+        )
 
-    def _measure_sky_covariance(self, phot_header: PhotometryHeader, residual, excluded, coverage, coadd_header=None) -> None:
+    def _measure_sky_covariance(
+        self, phot_header: PhotometryHeader, residual, excluded, coverage, coadd_header=None
+    ) -> None:
         """Field-wide sky covariance, its BACKSIG-relative COV_n and BACKC2, and the limiting magnitudes they give."""
         from ..imcoadd.utils import noise_autocorrelation
 
@@ -1053,7 +1077,13 @@ class PhotometrySingle:
             BACKR10=float(0.5 * (acf[half, half + 1] + acf[half, half - 1])),
             BACKR01=float(0.5 * (acf[half + 1, half] + acf[half - 1, half])),
             BACKR11=float(
-                0.25 * (acf[half + 1, half + 1] + acf[half + 1, half - 1] + acf[half - 1, half + 1] + acf[half - 1, half - 1])
+                0.25
+                * (
+                    acf[half + 1, half + 1]
+                    + acf[half + 1, half - 1]
+                    + acf[half - 1, half + 1]
+                    + acf[half - 1, half - 1]
+                )
             ),
         )
         if coadd_header is None:
@@ -1234,9 +1264,7 @@ class PhotometrySingle:
             ul_3sig, ul_5sig = None, None
             if mag_key != "MAG_AUTO" and factor is not None:
                 aperture_size, _ = aperture_dict[aperture_key]
-                ul_3sig, ul_5sig = phot_utils.limitmag(
-                    np.array([3, 5]), zp, aperture_size, phot_header.BACKSIG, factor
-                )
+                ul_3sig, ul_5sig = phot_utils.limitmag(np.array([3, 5]), zp, aperture_size, phot_header.BACKSIG, factor)
 
             phot_header.aperture_info[aperture_key] = {
                 "value": aperture_dict[aperture_key][0],
@@ -1292,6 +1320,7 @@ class PhotometrySingle:
 
     def determine_filter(self, phot_headers: Dict[str, PhotometryHeader], save_plot=True) -> str:
         """Updates PhotometryHeader.INF_FILT with the best-matching filter inferred by the pipeline"""
+        self.phot_header.INF_DEZP = self.phot_header.INF_FIL2 = self.phot_header.INF_DEZF = None
         zp_cut = 27.2  # 26.8
         alleged_filter = self.image_info.filter
         filters_checked = [k for k in phot_headers.keys()]
@@ -1365,6 +1394,12 @@ class PhotometrySingle:
                 )
                 test_dicts.pop(inferred_filter)
             else:
+                others = [
+                    (e - zperr, f)
+                    for f, z, e in zip(narrowed_filters, zps, zperrs)
+                    if f != inferred_filter and not (f in MEDIUM_FILTERS and z > zp_cut)
+                ]
+                self.phot_header.INF_DEZP, self.phot_header.INF_FIL2 = min(others) if others else (None, None)
                 self.logger.debug(
                     f"Found the best-matching filter, '{inferred_filter}', with zp = {zp}+/-{zperr}. Breaking the loop."
                 )
@@ -1394,6 +1429,7 @@ class PhotometrySingle:
             self.logger.info(f"The inferred filter matches the original filter, '{alleged_filter}'")
 
         self.phot_header.INF_FILT = inferred_filter
+        self.phot_header.INF_DEZF = orig_zperr - zperr if alleged_filter != inferred_filter else 0.0
 
         return inferred_filter
 
@@ -1711,6 +1747,9 @@ class PhotometryHeader:
     AUTHOR: str = getpass.getuser()  # "pipeline"
     PHOTIME: str = None
     INF_FILT: str = None
+    INF_DEZP: float = None
+    INF_FIL2: str = None
+    INF_DEZF: float = None
     JD: float = None
     MJD: float = None
     SEEING: float = None
@@ -1874,6 +1913,15 @@ class PhotometryHeader:
             "AUTHOR": (self.AUTHOR, "user who last updated photometry header"),
             "PHOTIME": (self.PHOTIME, "PHOTOMETRY TIME [KST]"),
             "INF_FILT": (self.INF_FILT, "BEST-MATCHING FILTER INFERRED BY PIPELINE"),
+            "INF_DEZP": (
+                round(self.INF_DEZP, 6) if self.INF_DEZP is not None else None,
+                "[mag] EZP_AUTO of 2nd-best filter - INF_FILT's",
+            ),
+            "INF_FIL2": (self.INF_FIL2, "Second-best-matching filter after INF_FILT"),
+            "INF_DEZF": (
+                round(self.INF_DEZF, 6) if self.INF_DEZF is not None else None,
+                "[mag] EZP_AUTO of FILTER - INF_FILT's",
+            ),
             "JD": (self.JD, "Julian Date of the observation"),
             "MJD": (self.MJD, "Modified Julian Date of the observation"),
             "SEEING": (round(self.SEEING, 6) if self.SEEING is not None else 0, "SEEING [arcsec]"),
@@ -1889,7 +1937,10 @@ class PhotometryHeader:
             "BACKFRAC": (self.BACKFRAC, "Fraction of pixels used for the sky estimate"),
             "SRCFRAC": (self.SRCFRAC, "Fraction of pixels covered by the source mask"),
             "BACKPEAK": (self.BACKPEAK, "[ADU] Largest mesh node excursion from its neighbours"),
-            "BACKPKSN": (round(self.BACKPKSN, 2) if self.BACKPKSN is not None else None, "BACKPEAK / (1.4826 MAD of node excursions)"),
+            "BACKPKSN": (
+                round(self.BACKPKSN, 2) if self.BACKPKSN is not None else None,
+                "BACKPEAK / (1.4826 MAD of node excursions)",
+            ),
             "BACKCPIX": (self.BACKCPIX, "Blank-sky pixels behind the covariance cards"),
             "BACKCREP": (self.BACKCREP, "Covered fraction spanned by the sky sub-areas"),
             "BACKCOV": (
@@ -1935,8 +1986,11 @@ class PhotometryHeader:
         phot_header_dict.update({k: (round(v[0], 6), v[1]) for k, v in self.zp_dict.items() if v[0] is not None})
 
         # Filter out entries where the value is None
-        return {k: v for k, v in phot_header_dict.items() if v[0] is not None} | (
-            residual.cards(include_missing=True) if self.BACKN is not None else {}
+        return (
+            {k: v for k, v in phot_header_dict.items() if v[0] is not None}
+            | (residual.cards(include_missing=True) if self.BACKN is not None else {})
+            # undefined INF_* cards replace the values a previous run left beside INF_FILT
+            | ({k: misc_dict[k] for k in ("INF_DEZP", "INF_FIL2", "INF_DEZF")} if self.INF_FILT is not None else {})
         )
 
     def __repr__(self) -> str:
