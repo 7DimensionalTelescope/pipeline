@@ -157,6 +157,12 @@ class ImCoadd(
             self._plan = self._coadd_plan()
         return self._plan
 
+    @property
+    def _output_single_weight_maps(self) -> bool:
+        """Only a daily pipeline run writes the persistent weight beside its singles."""
+        settings = self.config_node.settings
+        return self.plan.output_single_weight_maps and bool(settings.is_pipeline) and not settings.is_multi_epoch
+
     def run(self, overwrite=False, use_gpu: bool = False, device_id=None):
         try:
             self.overwrite = self.resolve_overwrite(overwrite)
@@ -578,6 +584,9 @@ class ImCoadd(
                             fit_mask = fits.getdata(mask_file) == badpix
                             if bp.zero_badpix_in_single_weight_map and not bp.interpolate_badpix:
                                 zero_mask = fit_mask
+                        weight_out = (
+                            PathHandler.weight_map(uncalculated_images) if self._output_single_weight_maps else None
+                        )
                         calc_weight(
                             uncalculated_images,
                             d_m_file,
@@ -585,7 +594,7 @@ class ImCoadd(
                             sig_z_file,
                             sig_f_file,
                             out_names=uncalculated_outputs,
-                            weight_store=self.plan.persist_weight_maps,
+                            weight_out=weight_out,
                             zero_mask=zero_mask,
                             source_catalogs=self._source_catalogs(uncalculated_images),
                             fit_mask=fit_mask,

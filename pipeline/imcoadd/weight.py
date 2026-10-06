@@ -137,7 +137,7 @@ def calc_weight_with_cpu(
     sig_z_file,
     sig_f_file,
     out_names=None,
-    weight_store=None,
+    weight_out=None,
     zero_mask=None,
     source_catalogs=None,
     fit_mask=None,
@@ -145,12 +145,10 @@ def calc_weight_with_cpu(
     ivar_out=None,
     **kwargs
 ):
-    from .weight_store import load_single_weight, persist_single_weight
+    from .weight_store import persist_single_weight
 
-    # calibration masters load lazily: an all-reusable group never touches them
     output = None
     flat_surface = None
-    masters = {"d": d_m_file, "f": f_m_file, "sz": sig_z_file, "sf": sig_f_file}
 
     out_names = out_names if out_names is not None else PathHandler.weight_map(images)
 
@@ -160,27 +158,22 @@ def calc_weight_with_cpu(
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         pending = None
+        persisted = []
         nxt = pool.submit(fitsio.read, images[0])
         for i, outname in enumerate(out_names):
             image = nxt.result().astype(np.float32)
             if i + 1 < len(images):
                 nxt = pool.submit(fitsio.read, images[i + 1])
-            out = load_single_weight(PathHandler.weight_map(images[i]), masters) if weight_store else None
-            if out is None:
-                if output is None:
-                    output = _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file)
-                out = optimized_parallel(image, *output)
-                out[~np.isfinite(out)] = 0.0  # degenerate noise model -> weight 0, not inf
-                if weight_store:
-                    pool.submit(persist_single_weight, PathHandler.weight_map(images[i]), out.copy(), masters)
+            if output is None:
+                output = _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file)
+            out = optimized_parallel(image, *output)
+            out[~np.isfinite(out)] = 0.0  # degenerate noise model -> weight 0, not inf
             if ivar_out is not None:
                 pool.submit(write_ivar_map, ivar_out[i], out.copy(), fits.getheader(images[i]))
             if source_catalogs is not None:
-                # after the store write: the durable copy is the pristine model, smoothing is a
-                # campaign choice. Sources and bad pixels are excluded from the fit, not filled.
+                # sources and bad pixels are excluded from the fit, not filled
                 if flat_surface is None:
-                    flat = output[2] if output is not None else fitsio.read(f_m_file)
-                    flat_surface = smooth_flat_surface(flat, exclude=fit_mask)
+                    flat_surface = smooth_flat_surface(output[2], exclude=fit_mask)
                 src = source_mask_on_frame(source_catalogs[i], fits.getheader(images[i]), logger)
                 exclude = out <= 0 if src is None else (src | (out <= 0))
                 if fit_mask is not None:
@@ -190,11 +183,15 @@ def calc_weight_with_cpu(
                     out, flat_surface, exclude=exclude, logger=logger, qa=header, image_name=os.path.basename(images[i])
                 )
                 header.update(WGTB=b, WGTC=c)
+                if weight_out is not None:
+                    cards = {key: (value, WEIGHT_QA_COMMENTS.get(key, "")) for key, value in header.items()}
+                    persisted.append(
+                        pool.submit(persist_single_weight, weight_out[i], out.copy(), fits.getheader(images[i]), cards)
+                    )
             else:
                 header = {"WGTMODEL": "PIXEL"}
             if zero_mask is not None:
-                # zero_badpix_coadd_weight without interpolation: the factory copy carries the
-                # zeros; the persisted store copy above stays pristine by contract
+                # zero_badpix_coadd_weight without interpolation: only the factory copy carries the zeros
                 out = out.copy()
                 out[zero_mask] = 0.0
             if pending is not None:
@@ -203,6 +200,8 @@ def calc_weight_with_cpu(
             pending = pool.submit(fitsio.write, outname, out.astype(np.float32), header=cards, clobber=True)
         if pending is not None:
             pending.result()
+        for future in persisted:
+            future.result()
 
 
 @njit(parallel=True)

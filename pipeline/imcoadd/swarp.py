@@ -561,35 +561,11 @@ class SwarpMixin:
 
             groups = self._group_IMCMB(todo_in, todo_out)
             self.logger.info(f"{len(groups)} groups for fused weight+interpolation.")
-            persist = self.plan.persist_weight_maps
             for group_id, ((z, d, f), [group_in, group_out]) in enumerate(groups.items()):
                 st_group = time.time()
                 mask_file, badpix, bpmid = self._bpmask_info(group_in[0])
                 d_m_file, f_m_file, sig_z_file, sig_f_file = PathHandler.resolve_weight_map_input_abspath([z, d, f])
-                weight_store = None
-                calib = None
-                if persist:
-                    from .weight_store import check_single_weight
-
-                    masters = {
-                        "d": d_m_file,
-                        "f": f_m_file,
-                        "sz": sig_z_file,
-                        "sf": sig_f_file,
-                    }
-                    store_paths = [PathHandler.weight_map(im) for im in group_in]
-                    weight_store = (store_paths, masters)
-                    n_reusable = sum(check_single_weight(p, masters) for p in store_paths)
-                    if n_reusable:
-                        self.logger.info(
-                            f"Group {group_id + 1}: {n_reusable}/{len(group_in)} single weight maps reusable"
-                        )
-                    if n_reusable == len(group_in):
-                        calib = "skip"  # every frame verified: masters never touched
-                if calib != "skip":
-                    calib = _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file)
-                else:
-                    calib = None
+                calib = _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file)
 
                 def post_frame(sci_out, sci=None, header=None):
                     if sci is not None:
@@ -615,8 +591,7 @@ class SwarpMixin:
                     mask_file,
                     group_out,
                     calib,
-                    weight_store=weight_store,
-                    flat_file=f_m_file,
+                    weight_out=PathHandler.weight_map(group_in) if self._output_single_weight_maps else None,
                     method=method,
                     badpix=badpix,
                     zero_interp_weight=zero_interp,
@@ -750,36 +725,8 @@ class SwarpMixin:
             self.config_node.imcoadd.bkgsub_weight_images = atleast_1d(
                 factory.resampled_weight_images(resampled, pass_type=self._weight_pass_type())
             )
-        self._save_single_weight_products(resampled)
         self.images_to_coadd = resampled
         return resampled
-
-    def _save_single_weight_products(self, resampled: list[str]) -> None:
-        """Keep each frame's resampled weight beside its single."""
-        if not self.plan.output_single_weight_map:
-            return
-        from .interpolate import write_weight_int16
-
-        sources = atleast_1d(
-            self.path.imcoadd.factory.resampled_weight_images(resampled, pass_type=self._weight_pass_type())
-        )
-        targets = atleast_1d(self.path.weight)
-        if not (len(sources) == len(targets) == len(atleast_1d(resampled))):
-            self.logger.warning("Resampled weights do not map 1:1 onto the inputs; not saved as products")
-            return
-        n = 0
-        badpix = self.badpix_positions(atleast_1d(resampled))
-        for i, (src, dst) in enumerate(zip(sources, targets)):
-            if not os.path.exists(src):
-                continue
-            with fits.open(src, memmap=True) as hdul:
-                data, header = np.array(hdul[0].data, dtype=np.float32), hdul[0].header
-            # the factory copy stays the pristine SWarp result; this product keeps the 1px holes
-            if badpix is not None and badpix[i] is not None:
-                badpix[i].apply(data, 0, data.shape[0], 0, data.shape[1], 0.0)
-            write_weight_int16(dst, data, header)
-            n += 1
-        self.logger.info(f"Saved {n} resampled weight maps beside their singles")
 
     def _photometry_catalogs(self, images) -> list[str | None]:
         """Photometry catalogs aligned with *images*; None where a single has none."""

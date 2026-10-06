@@ -72,8 +72,7 @@ class CoaddPlan:
     dump_unsmoothed_single_weight_map: bool
     lean_factory: bool
     coadd_scratch: str | None
-    persist_weight_maps: bool
-    output_single_weight_map: bool
+    output_single_weight_maps: bool
     background_box_size: int
     background_filter_size: int
     background_exclude_percentile: float
@@ -330,8 +329,7 @@ def resolve_coadd_plan(node, errors=builtins) -> CoaddPlan:
         dump_unsmoothed_single_weight_map=bool(node.dump_unsmoothed_single_weight_map),
         lean_factory=bool(node.lean_factory),
         coadd_scratch=node.coadd_scratch,
-        persist_weight_maps=bool(node.persist_weight_maps),
-        output_single_weight_map=bool(node.output_single_weight_map),
+        output_single_weight_maps=bool(node.output_single_weight_maps),
         background_box_size=background_box_size,
         background_filter_size=background_filter_size,
         background_exclude_percentile=background_exclude_percentile,
@@ -369,10 +367,11 @@ def resolve_coadd_plan(node, errors=builtins) -> CoaddPlan:
         raise errors.ValueError("imcoadd.joint_wcs registers frames for reprojection; the direct routine has none")
     if routine == "direct" and plan.convolve:
         raise errors.ValueError("The direct routine does not convolve; set imcoadd.convolve: False")
-    if plan.output_single_weight_map and not plan.compute_single_weight_maps:
+    if plan.output_single_weight_maps and not plan.use_smooth_weight_during_coaddition:
         raise errors.ValueError(
-            "imcoadd.output_single_weight_map has no weight map to save; enable output_weight_map, pixel-wise "
-            "weighting, or saturation_reprojection_policy: conservative"
+            "imcoadd.output_single_weight_maps saves the smooth single weight, which this plan does not compute; "
+            "enable output_weight_map, pixel-wise weighting or saturation_reprojection_policy: conservative outside "
+            "legacy, or set output_single_weight_maps: False"
         )
     if plan.output_egain_map and mode not in ("mean", "clipped"):
         raise errors.ValueError(

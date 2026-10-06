@@ -103,7 +103,7 @@ if TYPE_CHECKING:
         source_mask: bool
         dump_source_masks: bool
         output_weight_map: bool
-        output_single_weight_map: bool
+        output_single_weight_maps: bool
         output_footprint: bool
         output_mask_map: bool
         output_counts_map: bool
@@ -113,7 +113,6 @@ if TYPE_CHECKING:
         satellite_mask: dict
         output_sky_rms_map: bool
         output_bkg_map: bool
-        persist_weight_maps: bool
         joint_wcs: bool
         joint_wcs_catalog: str
         interpolate_badpix: bool

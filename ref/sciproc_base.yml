@@ -149,7 +149,7 @@ imcoadd:
   source_mask: True  # False, True or 'iterative'; only affects dynamic bkgsub
   dump_source_masks: false  # retain source masks beside config under source_masks/config_stem
   output_weight_map: true  # write the coadd weight product
-  output_single_weight_map: false  # keep each frame's resampled weight in singles/ (int16)
+  output_single_weight_maps: true  # write <single>_weight.fits, each single's smooth weight before reprojection (lossy GZIP_2, ~1.3 %)
   output_footprint: false  # write the standalone coadd footprint product; superseded by the NUSED count plane
   output_mask_map: false  # write the legacy OR bitmask; derivable from the count planes
   output_counts_map: true  # write the coadd coverage/provenance count planes (canonical)
@@ -161,7 +161,6 @@ imcoadd:
     threshold_scale: 1.0  # trail mask cut at SKYSIG / K_THRESH * this; K_THRESH follows imcoadd/source_mask.py; > 1 narrows
   output_sky_rms_map: false  # BACKGROUND_RMS model of source-free sky
   output_bkg_map: false  # keep each frame's mesh background model (262 MB/frame, read by nobody)
-  persist_weight_maps: False  # durable per-single maps; costs 1.71 s/frame to save a 0.04 s kernel
   joint_wcs: False  # joint SCAMP solution over all inputs before reprojection; one .head per single in the factory, read by SWarp
   joint_wcs_catalog: auto  # auto | prep | main: SCAMP inputs; prep = astrometry factory catalogs (raise when one is missing), main = catalogs beside the processed singles, auto = prep when complete else main
   interpolate_badpix: True  # interpolate bad pixels in the sci frames (was apply_bpmask)

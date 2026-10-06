@@ -514,24 +514,7 @@ def add_bpx_method(header, method, bpmid=None):
 # #     return result
 
 
-from .weight_store import load_single_weight, persist_single_weight
-
-
-def write_weight_int16(path, weight, header, n_holes=None):
-    """Weight as BITPIX 16 + BSCALE with BZERO=0, so physical zero decodes exactly.
-
-    The unsigned convention (BZERO = 32768*BSCALE) bought one bit and cost exact zero:
-    BZERO is not bit-identically 32768*BSCALE once written to the header, so every zero
-    decoded as ~8e-16 and downstream had to filter it by epsilon."""
-    weight = np.where(np.isfinite(weight) & (weight >= 0), weight, 0.0).astype(np.float32)
-    hdu = fits.PrimaryHDU(weight, header=header)
-    if n_holes is not None:
-        hdu.header["WGTHOLES"] = (bool(n_holes), "zero-weight holes at interpolated pixels")
-        hdu.header["NHOLEPIX"] = (int(n_holes), "number of zero-weight (interpolated) pixels")
-    wmax = float(np.nanmax(weight)) if weight.size else 0.0
-    if wmax > 0:
-        hdu.scale("int16", bscale=wmax / 32767.0, bzero=0.0)
-    hdu.writeto(path, overwrite=True)
+from .weight_store import persist_single_weight
 
 
 def write_weight_float32(path, weight, header, n_holes=None):
@@ -558,8 +541,8 @@ def sky_template(model, shape):
 
 def weight_and_interpolate_cpu(
     images, mask_path, output_paths, calib, window=1, method="median", badpix=1,
-    zero_interp_weight=True, logger=None, post_frame=None, weight_store=None, source_catalogs=None, bpmid=None,
-    saturated_mask=None, flat_file=None, interpolate=True, ivar_out=None, background_model=None, background=None,
+    zero_interp_weight=True, logger=None, post_frame=None, weight_out=None, source_catalogs=None, bpmid=None,
+    saturated_mask=None, interpolate=True, ivar_out=None, background_model=None, background=None,
 ):
     """Fused weight calculation + bad-pixel interpolation, one read and one write per image.
 
@@ -582,8 +565,7 @@ def weight_and_interpolate_cpu(
     n_holes = int(hole.sum())
     flat_surface = None
     if source_catalogs is not None:
-        flat = calib[2] if calib is not None else fits.getdata(flat_file)
-        flat_surface = smooth_flat_surface(flat, exclude=hole)
+        flat_surface = smooth_flat_surface(calib[2], exclude=hole)
 
     def _load(idx):
         with fits.open(images[idx], memmap=False) as hdul:
@@ -612,6 +594,7 @@ def weight_and_interpolate_cpu(
 
     with ThreadPoolExecutor(max_workers=3) as pool:
         pending_write = None
+        persisted = []
         ahead = [pool.submit(_load, i) for i in range(min(2, len(images)))]
         for idx in range(len(images)):
             st_img = _time.time()
@@ -620,23 +603,13 @@ def weight_and_interpolate_cpu(
                 ahead.append(pool.submit(_load, idx + 2))
             t_read = _time.time() - st_img
 
-            # durable store: reuse a provenance-verified map, else compute and persist
-            wgt = n_nonfinite = None
-            if weight_store is not None:
-                store_paths, store_masters = weight_store
-                wgt = load_single_weight(store_paths[idx], store_masters)
-            if wgt is None:
-                if calib is None:
-                    raise RuntimeError(f"single weight map vanished mid-run for {images[idx]}")
-                wgt = optimized_parallel(sci, *calib)
-                # a degenerate noise model (sig_z = dark = pixel = 0) divides to inf/nan;
-                # zero certainty about a pixel is weight 0, not weight infinity
-                nonfinite = ~np.isfinite(wgt)
-                n_nonfinite = int(nonfinite.sum())
-                if n_nonfinite:
-                    wgt[nonfinite] = 0.0
-                if weight_store is not None:
-                    pool.submit(persist_single_weight, store_paths[idx], wgt.copy(), store_masters)
+            wgt = optimized_parallel(sci, *calib)
+            # a degenerate noise model (sig_z = dark = pixel = 0) divides to inf/nan;
+            # zero certainty about a pixel is weight 0, not weight infinity
+            nonfinite = ~np.isfinite(wgt)
+            n_nonfinite = int(nonfinite.sum())
+            if n_nonfinite:
+                wgt[nonfinite] = 0.0
             if ivar_out is not None:
                 pool.submit(write_ivar_map, ivar_out[idx], wgt.copy(), sci_hdr)
             coefficients = None
@@ -649,8 +622,7 @@ def weight_and_interpolate_cpu(
                 # fitted here, before the smoothing, so that the sky model can be the photon term of the fit
                 model, exclude = background_model(idx, sci_hdr, sci, hole, src)
             if source_catalogs is not None:
-                # after the store write: the durable copy is the pristine model, smoothing is a
-                # campaign choice. Sources and bad pixels are excluded from the fit, not filled.
+                # sources and bad pixels are excluded from the fit, not filled
                 sky = sky_template(model, sci.shape)
                 if sky is not None:
                     weight_model = WEIGHT_MODEL_SKY
@@ -661,6 +633,12 @@ def weight_and_interpolate_cpu(
                     qa=fit_qa, image_name=_os.path.basename(images[idx]), sky=sky,
                 )
                 del sky
+                if weight_out is not None:
+                    cards = {"WGTMODEL": weight_model, "WGTB": coefficients[0], "WGTC": coefficients[1]}
+                    cards.update({key: (value, WEIGHT_QA_COMMENTS[key]) for key, value in fit_qa.items()})
+                    persisted.append(
+                        pool.submit(persist_single_weight, weight_out[idx], wgt.copy(), sci_hdr.copy(), cards)
+                    )
             t_weight = _time.time() - st_img - t_read
             if interpolate:
                 interp_img, interp_wt = interpolate_masked_pixels_cpu_numba(
@@ -703,3 +681,5 @@ def weight_and_interpolate_cpu(
                     )
         if pending_write is not None:
             pending_write.result()
+        for future in persisted:
+            future.result()
