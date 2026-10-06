@@ -3,7 +3,9 @@ from ..services.database.query import free_query, TABLES
 
 
 # Build a single UNION ALL query across all frame tables
-_UNION_SQL = " UNION ALL ".join([f'SELECT file_path, unified_filename FROM "{tbl}"' for tbl in TABLES.values()])
+_UNION_SQL = " UNION ALL ".join(
+    [f'SELECT original_filename, file_path, unified_filename FROM "{tbl}"' for tbl in TABLES.values()]
+)
 
 
 def unified_name_from_path(full_path: str) -> str | None:
@@ -18,28 +20,22 @@ def unified_name_from_path(full_path: str) -> str | None:
         FROM (
             {_UNION_SQL}
         ) AS all_frames
-        WHERE file_path = %s
+        WHERE original_filename = %s AND file_path = %s
         LIMIT 1;
         """
-        rows = free_query(sql, (full_path,))
+        rows = free_query(sql, (os.path.basename(full_path), full_path))
 
-    # if basename only, use split_part to compare
+    # if basename only, compare original_filename
     else:
         sql = f"""
         SELECT unified_filename
         FROM (
             {_UNION_SQL}
         ) AS all_frames
-        WHERE (
-            (%s NOT LIKE '%%/%%'
-            AND split_part(
-                file_path, '/', array_length(string_to_array(file_path, '/'), 1)
-                ) = %s
-            )
-        )
+        WHERE original_filename = %s
         LIMIT 1;
         """
-        rows = free_query(sql, (full_path, full_path))
+        rows = free_query(sql, (full_path,))
 
     return rows[0][0] if rows else None
 
@@ -60,9 +56,9 @@ def unified_names_from_paths(paths: list[str]) -> dict[str, str | None]:
         FROM (
             {_UNION_SQL}
         ) AS all_frames
-        WHERE file_path = ANY(%s);
+        WHERE original_filename = ANY(%s);
         """
-        rows = free_query(sql, (paths,))
+        rows = free_query(sql, ([os.path.basename(p) for p in paths],))
         found = {fp: uf for fp, uf in rows}
         # return {p: found.get(p) for p in paths}
         return [found.get(p) for p in paths]
@@ -71,24 +67,17 @@ def unified_names_from_paths(paths: list[str]) -> dict[str, str | None]:
     basenames = [os.path.basename(p) for p in paths]  # return None if not found
 
     sql = f"""
-    SELECT
-        file_path,
-        unified_filename,
-        split_part(
-            file_path, '/', array_length(string_to_array(file_path, '/'), 1)
-        ) AS base
+    SELECT original_filename, unified_filename
     FROM (
         {_UNION_SQL}
     ) AS all_frames
-    WHERE split_part(
-            file_path, '/', array_length(string_to_array(file_path, '/'), 1)
-          ) = ANY(%s);
+    WHERE original_filename = ANY(%s);
     """
     rows = free_query(sql, (basenames,))
 
     # Map basename -> unified_filename (last one wins if duplicates)
     base_map: dict[str, str] = {}
-    for _fp, uf, base in rows:
+    for base, uf in rows:
         base_map[base] = uf
 
     return [base_map.get(p) for p in paths]
