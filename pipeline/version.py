@@ -2,7 +2,7 @@ from __future__ import annotations
 from packaging.version import Version
 
 # increase version with ANY change in scientific config. e.g., prep.sex
-__version__ = "1.11.7"
+__version__ = "1.11.8"
 
 MIN_PREPROC_RUNTIME_VERSION = "1.11.7"
 MIN_SCIPROC_RUNTIME_VERSION = "1.11.6"  # for sciprocess overall
@@ -19,7 +19,7 @@ MIN_SCIPROC_RUNTIME_VERSION = str(
         Version(MIN_SCIPROC_RUNTIME_VERSION),
     )
 )
-MIN_PHOT7DS_VERSION = "0.8.0"  # phot7ds package floor: checked before a crossfilter run, stamped as phot7ds_version
+MIN_PHOT7DS_VERSION = "0.9.1"  # phot7ds package floor: checked before a crossfilter run, stamped as phot7ds_version
 
 
 def is_below_min(recorded, minimum: str) -> bool:
