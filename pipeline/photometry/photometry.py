@@ -985,6 +985,7 @@ class PhotometrySingle:
                 box_size=mesh["box_size"],
                 filter_size=mesh["filter_size"],
                 exclude_percentile=mesh["exclude_percentile"],
+                logger=self.logger,
             )
         except (
             ValueError
@@ -1009,7 +1010,9 @@ class PhotometrySingle:
         if reference is None:
             self.logger.warning("No noise reference (EGAIN; INEGAIN and INSKY on a coadd): BACKOFF not measured")
         else:
-            backoff, kind = modal_offset(residual, excluded | ~coverage, sigmas=sigma_quantiles(header), **reference)
+            backoff, kind = modal_offset(
+                residual, excluded | ~coverage, sigmas=sigma_quantiles(header), logger=self.logger, **reference
+            )
             result = replace(result, backoff=round(float(backoff), 4), backnref=kind)
         for key in RESIDUAL_KEYS:
             setattr(phot_header, key.upper(), getattr(result, key))
@@ -1058,7 +1061,9 @@ class PhotometrySingle:
         diameters = [b.get("value") or 0.0 for b in phot_header.aperture_info.values()]
         maxlag = max(16, int(np.ceil(max(diameters))) if diameters else 0)
         stats = {}
-        acf = noise_autocorrelation(residual, mask=excluded, maxlag=maxlag, stats=stats, coverage=coverage)
+        acf = noise_autocorrelation(
+            residual, mask=excluded, maxlag=maxlag, stats=stats, coverage=coverage, logger=self.logger
+        )
         if acf is None or not np.isfinite(stats.get("variance", 0)) or stats["variance"] <= 0:
             raise RuntimeError("Sky covariance not measured; cannot calculate limiting magnitudes")
         if stats["represented"] <= 0.5:

@@ -510,9 +510,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
 
         device_id = device_id if self._use_gpu else "CPU"
 
-        with acquire_available_gpu(device_id=device_id) as device_id:
+        with acquire_available_gpu(device_id=device_id) as acquired:
             # cpu
-            if device_id is None:
+            if acquired is None:
                 from .calc import combine_images_with_cpu
 
                 calc_function = combine_images_with_cpu
@@ -522,12 +522,12 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 from .calc import combine_images_with_subprocess_gpu
 
                 calc_function = combine_images_with_subprocess_gpu
-                self.logger.info(f"[Group {self._current_group+1}] Generating masterframe {dtype} in GPU device {device_id}")  # fmt: skip
+                self.logger.info(f"[Group {self._current_group+1}] Generating masterframe {dtype} in GPU device {acquired}")  # fmt: skip
 
             if dtype == CALIB_TYPE_BIAS:
                 calc_function(
                     input_files,
-                    device_id=device_id,
+                    device_id=acquired,
                     output=self.bias_output,
                     sig_output=self.biassig_output,
                     dtype=dtype,
@@ -536,7 +536,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             elif dtype == CALIB_TYPE_DARK:
                 calc_function(
                     input_files,
-                    device_id=device_id,
+                    device_id=acquired,
                     subtract=[self.bias_output],
                     scale=[1],
                     output=self.dark_output,
@@ -554,7 +554,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                     subtract=[self.bias_output, self.flatdark_output],
                     scale=[1, dark_scale],
                     norm=True,
-                    device_id=device_id,
+                    device_id=acquired,
                     output=self.flat_output,
                     sig_output=self.flatsig_output,
                     dtype=dtype,
@@ -880,8 +880,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         device_id = device_id if self._use_gpu else "CPU"
         n_head_blocks = get_key(self.config_node.preprocess, "n_head_blocks", 8)
 
-        with acquire_available_gpu(device_id=device_id) as device_id:
-            if device_id is None:
+        with acquire_available_gpu(device_id=device_id) as acquired:
+            if acquired is None:
                 from .calc import process_image_with_cpu
 
                 process_kernel = process_image_with_cpu
@@ -890,7 +890,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 from .calc import process_image_with_subprocess_gpu
 
                 process_kernel = process_image_with_subprocess_gpu
-                self.logger.info(f"[Group {self._current_group+1}] Processing {len(output_files)} images on GPU device(s): {device_id} ")  # fmt: skip
+                self.logger.info(f"[Group {self._current_group+1}] Processing {len(output_files)} images on GPU device(s): {acquired} ")  # fmt: skip
 
             # Determine number of workers for CPU processing
             n_workers = None
@@ -907,7 +907,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 self.dark_output,
                 self.flat_output,
                 output_paths=output_files,
-                device_id=device_id,
+                device_id=acquired,
                 use_gpu=self._use_gpu,
                 n_workers=n_workers,
                 n_head_blocks=n_head_blocks,

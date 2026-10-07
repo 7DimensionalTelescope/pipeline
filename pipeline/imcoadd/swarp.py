@@ -53,7 +53,6 @@ class SwarpMixin:
     images_to_coadd: list[str] | None
     overwrite: bool | None
     center: str | None
-    _use_gpu: bool
     _output_wcs_id: str | None
     _bpm_resampled_masks: list[str]
     _manifest: dict | None

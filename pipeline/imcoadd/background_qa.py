@@ -115,18 +115,26 @@ def density_gap(x, p) -> float:
     return median - mode
 
 
-def modal_offset(residual, exclude, gain: float, levels, sigmas=None, taps=None) -> tuple[float, str]:
+def modal_offset(residual, exclude, gain: float, levels, sigmas=None, taps=None, logger=None) -> tuple[float, str]:
     """BACKOFF: the median of the residual's sky pixels minus the reference noise mixture's median - mode, i.e. the sky's true mode
     minus the model; positive = under-subtracted. ``levels`` are the sky levels the pixels sit at (the model's quantiles for a
     single, the inputs' sky for a coadd) and ``sigmas`` the NOISQ additive-noise quantiles; without them the reference is one
     Gaussian whose width is the residual's own robust width less the Poisson part. Returns (backoff, noise reference kind).
     """
-    sky = np.asarray(residual)[~np.asarray(exclude, bool) & np.isfinite(residual)].astype(np.float64)
+    from ..calc import sky_gpu
+    from ..services.utils import on_gpu
+
+    stats = on_gpu(
+        sky_gpu.median_mad, residual, exclude, need_bytes=sky_gpu.SKY_BYTES, logger=logger, name="sky median"
+    )
+    if stats is None:
+        sky = np.asarray(residual)[~np.asarray(exclude, bool) & np.isfinite(residual)].astype(np.float64)
+        stats = float(np.median(sky)), float(np.median(np.abs(sky - np.median(sky))))
+    median, mad = stats
     taps = np.array([1.0]) if taps is None else np.asarray(taps, dtype=np.float64)
     levels = np.atleast_1d(np.asarray(levels, dtype=np.float64))
-    median = float(np.median(sky))
     if sigmas is None:
-        width = 1.4826 * float(np.median(np.abs(sky - median)))
+        width = 1.4826 * mad
         sigmas = [np.sqrt(max(width**2 / np.sum(taps**2) - np.mean(levels) / gain, 1e-3))]
         kind = "WIDTH"
     else:

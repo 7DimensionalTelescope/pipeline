@@ -400,6 +400,7 @@ def background_mesh(
     exclude_percentile: float = 50.0,
     sigma: float = 3.0,
     maxiters: int = 10,
+    logger=None,
 ) -> Background2D:
     """The fitted photutils Background2D; ``mask`` = source pixels, ``coverage_mask`` = pixels with no data.
 
@@ -409,10 +410,10 @@ def background_mesh(
     nearest surviving mesh nodes, and the mesh is upsampled with the output clipped to its own range."""
     from astropy.stats import SigmaClip
     from photutils.background import Background2D, MMMBackground
+    from ..services.utils import gpu_device, on_gpu
 
-    return Background2D(
-        np.ascontiguousarray(data, dtype=np.float32),
-        int(box_size),
+    frame = np.ascontiguousarray(data, dtype=np.float32)
+    options = dict(
         mask=None if mask is None else np.asarray(mask, bool),
         coverage_mask=None if coverage_mask is None else np.asarray(coverage_mask, bool),
         fill_value=0.0,
@@ -421,6 +422,13 @@ def background_mesh(
         sigma_clip=SigmaClip(sigma=sigma, maxiters=maxiters),
         bkg_estimator=MMMBackground(sigma_clip=None),  # 3 median - 2 mean, the mode estimate with no tuned factor
     )
+    if gpu_device() is not None:
+        from ..calc.sky_gpu import GpuBackground2D, GpuZoomInterpolator
+
+        return GpuBackground2D(
+            frame, int(box_size), on_gpu=on_gpu, logger=logger, interpolator=GpuZoomInterpolator(on_gpu), **options
+        )
+    return Background2D(frame, int(box_size), **options)
 
 
 def mesh_peak(bkg: Background2D, window: int | None = None) -> tuple[float, float]:
@@ -467,11 +475,22 @@ DEQUANT_KERNEL[1, 1] = 1.01943060490470727
 DEQUANT_KERNEL = DEQUANT_KERNEL.astype(np.float32)
 
 
-def dequantize(data):
+def dequantize(data, logger=None):
     """The frame correlated with DEQUANT_KERNEL: a low-sky detector frame's quantization steps leave the mesh."""
     from scipy.ndimage import correlate
+    from ..calc import sky_gpu
+    from ..services.utils import on_gpu
 
-    return correlate(np.ascontiguousarray(data, dtype=np.float32), DEQUANT_KERNEL, mode="nearest")
+    frame = np.ascontiguousarray(data, dtype=np.float32)
+    out = on_gpu(
+        sky_gpu.correlate_nearest,
+        frame,
+        DEQUANT_KERNEL,
+        need_bytes=sky_gpu.FRAME_BYTES,
+        logger=logger,
+        name="dequantize",
+    )
+    return correlate(frame, DEQUANT_KERNEL, mode="nearest") if out is None else out
 
 
 def sky_statistics(data, mask=None, coverage_mask=None, **mesh_options) -> tuple[float, float]:
@@ -484,12 +503,20 @@ def sky_statistics(data, mask=None, coverage_mask=None, **mesh_options) -> tuple
 
 
 def noise_autocorrelation(
-    residual, mask=None, maxlag: int = 8, size: int = 1024, clip: float = 10.0, stats=None, coverage=None
+    residual, mask=None, maxlag: int = 8, size: int = 1024, clip: float = 10.0, stats=None, coverage=None, logger=None
 ):
     """Blank-sky autocorrelation to +-maxlag px across the frame, normalised to C(0); stats gets C(0) and counts."""
     from astropy.stats import mad_std
     from scipy import fft as sfft
+    from ..calc import sky_gpu
+    from ..services.utils import on_gpu
 
+    window = on_gpu(
+        sky_gpu.autocorrelation, residual, mask, maxlag, size, clip, stats, coverage,
+        need_bytes=sky_gpu.FRAME_BYTES, logger=logger, name="autocorrelation",
+    )  # fmt: skip
+    if window is not None:
+        return None if window is False else window
     residual = np.asarray(residual)
     height, width = residual.shape
     ny, nx = (max(1, int(np.ceil(n / size))) for n in residual.shape)

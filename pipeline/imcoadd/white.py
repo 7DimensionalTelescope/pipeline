@@ -232,8 +232,6 @@ class WhiteImage(ImCoadd):
     def calculate_weight_map(
         self,
         input_images: list[str] | None = None,
-        device_id=None,
-        use_gpu: bool = True,
         overwrite: bool = False,
         out_weights: list[str] | None = None,
     ) -> list[str]:

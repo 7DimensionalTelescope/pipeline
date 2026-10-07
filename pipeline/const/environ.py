@@ -120,6 +120,26 @@ REQUISITE_DIRS = {
 
 # Miscellaneous
 SERVICES_TMP_DIR = _storage_paths.get("SERVICES_TMP_DIR") or "/tmp/pipeline"
+
+
+def _parse_gpu_devices(value):
+    """GPU_DEVICES in .env: unset/none -> None (CPU only), auto -> every device, '0,1' -> those indices."""
+    text = "" if value is None else str(value).strip().lower()
+    if text in {"", "none", "off", "no", "false"}:
+        return None
+    if text in {"auto", "all", "any"}:
+        return "auto"
+    try:
+        return tuple(int(v) for v in text.split(","))
+    except ValueError:
+        warnings.warn(
+            f"GPU_DEVICES={value!r} is not none, auto or a list of device indices; running on the CPU", stacklevel=2
+        )
+        return None
+
+
+# the GPU devices this host offers; .env is re-read by every task process
+GPU_DEVICES = _parse_gpu_devices(os.environ.get("GPU_DEVICES"))
 IS_PIPELINE_LOCK = _get_bool_env("IS_PIPELINE", False)
 PIPELINE_LOCK_WAIT_SECONDS = 60
 # One deployment-wide policy controls every automatic writer of the config graph.

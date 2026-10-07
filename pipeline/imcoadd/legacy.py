@@ -18,16 +18,13 @@ class LegacyCoaddMixin:
     plan: CoaddPlan
     input_images: list[str]
     images_to_coadd: list[str] | None
-    _use_gpu: bool
     _coadd_completed: bool
 
-    def legacy_coadd_routine(self, use_gpu: bool = False, device_id=None):
+    def legacy_coadd_routine(self):
         """
         Uses sci/wht double pass for LANCZOS3 sci reprojection & NEAREST weight reprojection (~1px)
         But the interpolated pixel values contribute in SWarp median coadd.
         """
-        self._use_gpu = all([use_gpu, self.config_node.imcoadd.gpu, self._use_gpu])
-
         self.initialize()
         if not self.plan.reject_saturated_pixels:
             self.logger.info(
@@ -47,14 +44,14 @@ class LegacyCoaddMixin:
         )
 
         if self.plan.compute_single_weight_maps:
-            self.calculate_weight_map(images, device_id=device_id)
+            self.calculate_weight_map(images)
             self.update_progress(
                 self._process_registry.milestone_progress(self._process_spec, "calculate_weight_map"),
                 self._progress_status("calculate-weight-map-completed"),
             )
 
         if self.plan.interpolate_badpix:
-            images = self.apply_bpmask(images, device_id=device_id)
+            images = self.apply_bpmask(images)
             self.update_progress(
                 self._process_registry.milestone_progress(self._process_spec, "apply_bpmask"),
                 self._progress_status("apply-bpmask-completed"),
@@ -69,7 +66,7 @@ class LegacyCoaddMixin:
 
         if self.plan.convolve:
             self.prepare_convolution(images)
-            images = self.run_convolution(images, device_id=device_id)
+            images = self.run_convolution(images)
             self.update_progress(
                 self._process_registry.milestone_progress(self._process_spec, "run_convolution"),
                 self._progress_status("run-convolution-completed"),

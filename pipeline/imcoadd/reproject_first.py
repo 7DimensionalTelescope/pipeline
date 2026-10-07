@@ -10,7 +10,7 @@ from ..const import REF_DIR
 from ..path.path import PathHandler
 from ..services.logger import Logger
 from ..utils import add_suffix, atleast_1d, collapse, get_basename, time_diff_in_seconds
-from .calc import clipped_mean_coadd_numpy, mean_coadd_numpy, median_coadd_numpy
+from .calc import clipped_mean_coadd_numpy, mean_coadd_numpy, median_coadd_numpy, wait_deferred_writes
 from .coadd_plan import CoaddPlan, resolve_coadd_plan
 from .storage import IntermediateStorage
 from .header_set import InputHeaderSet
@@ -36,7 +36,6 @@ class ReprojectFirstCoaddMixin:
     images_to_coadd: list[str] | None
     overwrite: bool | None
     delta_peeings: list[float | None]
-    _use_gpu: bool
     _coadd_completed: bool
     _coadd_counts: CoaddCounts
 
@@ -51,10 +50,8 @@ class ReprojectFirstCoaddMixin:
         "reiserfs",
     }
 
-    def reproject_first_coadd_routine(self, use_gpu: bool = False, device_id=None):
+    def reproject_first_coadd_routine(self):
         """Reproject with SWarp unless the inputs already share a grid, then coadd in memory."""
-        self._use_gpu = all([use_gpu, self.config_node.imcoadd.gpu, self._use_gpu])
-
         plan = self.plan
         if plan.reproject_with_swarp:
             total_steps = 6 + int(plan.joint_wcs) + int(bool(plan.convolve)) + int(plan.zpscale)
@@ -93,10 +90,10 @@ class ReprojectFirstCoaddMixin:
             self._prepare_intermediate_storage(images)
             if plan.compute_single_weight_maps:
                 weight_images = self.path.imcoadd.factory.stage_images(images, "weight", self.storage.weight_dir)
-                weight_images = self.calculate_weight_map(images, device_id=device_id, out_weights=weight_images)
+                weight_images = self.calculate_weight_map(images, out_weights=weight_images)
                 advance("calculate-weight-map-completed")
             if plan.interpolate_badpix:
-                images = self.apply_bpmask(images, device_id=device_id, weight_images=weight_images)
+                images = self.apply_bpmask(images, weight_images=weight_images)
                 if weight_images is not None:
                     weight_images = [PathHandler.weight_map(image) for image in images]
                 advance("apply-bpmask-completed")
@@ -111,7 +108,7 @@ class ReprojectFirstCoaddMixin:
             if plan.convolve:
                 self.discard_cached_frames()
                 self.prepare_convolution(images)
-                images = self.run_convolution(images, device_id=device_id)
+                images = self.run_convolution(images)
                 fov_masks = self.shrink_fov_masks(self.delta_peeings)
                 advance("run-convolution-completed")
 
@@ -123,7 +120,7 @@ class ReprojectFirstCoaddMixin:
         if plan.zpscale:
             advance("zpscale-completed")
 
-        self.coadd_in_memory(images, device_id=device_id, weight_images=weight_images)
+        self.coadd_in_memory(images, weight_images=weight_images)
         self._coadd_completed = True
         self.finalize_quality_masks()
         self.fill_coadd_nan()
@@ -131,6 +128,7 @@ class ReprojectFirstCoaddMixin:
 
         self.plot_coadd_image()
         advance("plot-completed")
+        wait_deferred_writes(self._deferred_writes)
         self.register_coadd_qa()
         self.update_progress(
             self._process_registry.completed_progress(self._process_spec),
@@ -246,17 +244,12 @@ class ReprojectFirstCoaddMixin:
     def coadd_in_memory(
         self,
         input_images: list[str] | None = None,
-        device_id=None,
         weight_images: list[str] | None = None,
     ) -> str:
         """Dispatch the selected in-memory coadd backend."""
         if input_images is None:
             input_images = self.images_to_coadd
         self._guard_sky_rms_propagation()
-
-        if device_id is not None:
-            self.coadd_with_cupy(input_images, device_id=device_id)
-            return self.config_node.imcoadd.coadd_image
 
         plan = self.plan
         weighting = plan.coadd_weighting
@@ -560,6 +553,7 @@ class ReprojectFirstCoaddMixin:
             counts=counts,
             frame_cache=self.storage.frame_cache,
             logger=self.logger,
+            deferred_writes=self._deferred_writes,
         )
 
     def coadd_clipped_with_numpy(
@@ -603,6 +597,7 @@ class ReprojectFirstCoaddMixin:
             counts=counts,
             frame_cache=self.storage.frame_cache,
             logger=self.logger,
+            deferred_writes=self._deferred_writes,
         )
 
     def coadd_median_with_numpy(
@@ -642,6 +637,3 @@ class ReprojectFirstCoaddMixin:
             frame_cache=self.storage.frame_cache,
             logger=self.logger,
         )
-
-    def coadd_with_cupy(self, input_images: list[str], device_id) -> str:
-        raise NotImplementedError("GPU coadd_with_cupy is not implemented yet")

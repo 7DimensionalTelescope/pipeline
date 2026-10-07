@@ -594,6 +594,7 @@ class BackgroundMixin:
                 box_size=plan.background_box_size,
                 filter_size=plan.background_filter_size,
                 exclude_percentile=plan.background_exclude_percentile,
+                logger=self.logger,
             )
             bkg_data, bkg_rms_data = bkg.background, (bkg.background_rms if plan.output_sky_rms_map else None)
             _hdr.update(mesh_peak_cards(mesh_peak(bkg)))
@@ -712,6 +713,7 @@ class BackgroundMixin:
                     box_size=plan.background_box_size,
                     filter_size=plan.background_filter_size,
                     exclude_percentile=plan.background_exclude_percentile,
+                    logger=self.logger,
                 )
                 model, peak = bkg.background, mesh_peak(bkg)
             except ValueError as e:
@@ -834,7 +836,9 @@ class BackgroundMixin:
                 if np.ndim(model)
                 else [float(model)]
             )
-            backoff, kind = modal_offset(data, valid, float(header["EGAIN"]), levels, sigmas=sigma_quantiles(header))
+            backoff, kind = modal_offset(
+                data, valid, float(header["EGAIN"]), levels, sigmas=sigma_quantiles(header), logger=self.logger
+            )
             result = replace(result, backoff=round(float(backoff), 4), backnref=kind)
         header.update(result.cards())
         self.logger.debug(f"Residual sky: {result}")

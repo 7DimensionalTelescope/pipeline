@@ -80,15 +80,13 @@ class ImCoadd(
         config=None,
         logger=None,
         queue=None,
-        use_gpu: bool = True,
     ) -> None:
 
         super().__init__(config, logger, queue)
         self.intermediate_storage = None
         self.overwrite = None  # resolved by run(overwrite=...), or by initialize() when used standalone
         self._plan = None  # resolved on first use and by run(): the config is editable until then
-        self._device_id = None
-        self._use_gpu = use_gpu
+        self._deferred_writes = []
         self.logger.process_error = self._process_error
 
         self.qa_id = None
@@ -163,14 +161,14 @@ class ImCoadd(
         settings = self.config_node.settings
         return self.plan.output_single_weight_maps and bool(settings.is_pipeline) and not settings.is_multi_epoch
 
-    def run(self, overwrite=False, use_gpu: bool = False, device_id=None):
+    def run(self, overwrite=False):
         try:
             self.overwrite = self.resolve_overwrite(overwrite)
             self._plan = self._coadd_plan()  # the config is write-through and editable until here
             if self.plan.coadd_routine == "legacy":
-                self.legacy_coadd_routine(use_gpu=use_gpu, device_id=device_id)
+                self.legacy_coadd_routine()
             else:
-                self.reproject_first_coadd_routine(use_gpu=use_gpu, device_id=device_id)
+                self.reproject_first_coadd_routine()
 
             setattr(self.config_node.flag, self._process_spec.name, True)
             self.record_runtime_version()
@@ -180,8 +178,18 @@ class ImCoadd(
 
             raise
         finally:
+            self._drain_deferred_writes()
             self._cleanup_imcoadd_intermediates()
         # self.logger.debug(MemoryMonitor.log_memory_usage)
+
+    def _drain_deferred_writes(self):
+        """Finish product writes still pending after a failure; report, never raise."""
+        for future in self._deferred_writes:
+            try:
+                future.result()
+            except Exception as e:
+                self.logger.error(f"Deferred product write failed: {e}")
+        self._deferred_writes = []
 
     def _reset_run_state(self):
         """Every per-run attribute, in one place: a second run() on the same object must not inherit any of it."""
@@ -198,6 +206,7 @@ class ImCoadd(
         self._manifest = None
         self._joint_wcs_head_of = {}
         self._single_of = {}
+        self._deferred_writes = []
         self._bpmid_of = {}
         self._imageid_of = {}
         self._output_wcs_id = None
@@ -512,8 +521,6 @@ class ImCoadd(
     def calculate_weight_map(
         self,
         input_images: list[str] | None = None,
-        device_id=None,
-        use_gpu: bool = True,
         out_weights: list[str] | None = None,
     ) -> list[str]:
         """Calculate weights from pristine inputs, using input_images only for naming."""
@@ -523,8 +530,8 @@ class ImCoadd(
         value_images = self.input_images  # r_p. input_images for name carrying
 
         st = time.time()
-        self._use_gpu = False  # all([use_gpu, self.config.imcoadd.gpu, self._use_gpu])
-        device_id = device_id if self._use_gpu else "CPU"
+        # self._use_gpu = False  # all([use_gpu, self.config.imcoadd.gpu, self._use_gpu])
+        device_id = "CPU"  # GPU weight path disabled
 
         self.logger.info(f"Start weight-map calculation")
 
@@ -686,16 +693,13 @@ class ImCoadd(
     def apply_bpmask(
         self,
         input_images: list[str] | None = None,
-        device_id=None,
-        use_gpu: bool = True,
         weight_images: list[str] | None = None,
     ) -> list[str]:
         if input_images is None:
             input_images = get_key(self.config_node.imcoadd, "bkgsub_images") or self.input_images
         st = time.time()
 
-        self._use_gpu = all([use_gpu, self.config_node.imcoadd.gpu, self._use_gpu])
-        device_id = device_id if self._use_gpu else "CPU"
+        device_id = "CPU"  # GPU interpolation disabled
 
         self.logger.info("Start the interpolation for bad pixels")
         self._record_bpmids()
@@ -967,16 +971,13 @@ class ImCoadd(
     def run_convolution(
         self,
         input_images: list[str] | None = None,
-        device_id=None,
-        use_gpu: bool = True,
         weight=False,
     ) -> list[str]:
         if input_images is None:
             input_images = self._conv_inputs or self.images_to_coadd
         st = time.time()
         method = self.conv_method
-        self._use_gpu = all([use_gpu, self.config_node.imcoadd.gpu, self._use_gpu])
-        device_id = device_id if self._use_gpu else "CPU"
+        device_id = "CPU"  # GPU convolution disabled
 
         # from .convolve import convolve_fft, get_edge_mask
 
@@ -1162,7 +1163,7 @@ class ImCoadd(
         coadd_img = self.config_node.imcoadd.coadd_image
         basename = os.path.basename(coadd_img)
         path_to_plot = os.path.join(collapse(self.path.figure_dir, force=True), swap_ext(basename, "jpg"))
-        data, header = fits.getdata(coadd_img, header=True)
+        data, header = fits.getdata(coadd_img, header=True, memmap=False)
         # same orientation as the check plots, so this and <coadd>_counts.jpg blink against each other
         save_fits_as_figures(orient_for_raster(data, display_flips(header)), path_to_plot, overwrite=True)
         self.logger.info(f"Coadd image is plotted and saved in {path_to_plot}.")

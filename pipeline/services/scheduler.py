@@ -13,7 +13,6 @@ from astropy.table import Table, vstack
 from ..const import (
     SCRIPTS_DIR,
     MAIN_HOST,
-    NUM_GPUS,
     SCHEDULER_DB_PATH,
     QUEUE_SOCKET_PATH,
     AUTO_RECORD_PROCESS_STATUS_DEPENDENCIES,

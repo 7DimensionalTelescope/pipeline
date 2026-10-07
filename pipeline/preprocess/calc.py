@@ -1,6 +1,7 @@
 import os
 import gc
 import subprocess
+import sys
 from typing import Literal
 import numpy as np
 import time
@@ -24,7 +25,7 @@ from .shifted_score import (
     combined_shifted_score,
 )
 from ..calc.median import nanmedian_std_axis0
-from ..const import SOURCE_DIR, SERVICES_TMP_DIR
+from ..const import ROOT_DIR, SERVICES_TMP_DIR
 
 
 def combine_images_with_subprocess_gpu(
@@ -51,8 +52,9 @@ def combine_images_with_subprocess_gpu(
     """
 
     cmd = [
-        "python",
-        f"{SOURCE_DIR}/cuda/combine_images.py",
+        sys.executable,
+        "-m",
+        "pipeline.cuda.combine_images",
         "-input",
         *images,
         "-device",
@@ -77,7 +79,7 @@ def combine_images_with_subprocess_gpu(
         cmd.extend(["-dtype", dtype])
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT_DIR)
 
         if result.returncode != 0:
             raise RuntimeError(f"Error combining images: {result.stderr}")
@@ -196,8 +198,9 @@ def process_image_with_subprocess_gpu(
 
     try:
         cmd = [
-            "python",
-            f"{SOURCE_DIR}/cuda/process_image.py",
+            sys.executable,
+            "-m",
+            "pipeline.cuda.process_image",
             "-bias",
             bias,
             "-dark",
@@ -218,7 +221,12 @@ def process_image_with_subprocess_gpu(
             # Run subprocess and save output to log file
             with open(log_file_path, "w") as log_file:
                 result = subprocess.run(
-                    cmd, stdout=log_file, stderr=subprocess.STDOUT, text=True, timeout=5 * len(image_paths)
+                    cmd,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    timeout=5 * len(image_paths),
+                    cwd=ROOT_DIR,
                 )
                 log_file.flush()
 

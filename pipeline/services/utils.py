@@ -13,11 +13,12 @@ import fcntl
 from contextlib import contextmanager
 import pynvml
 import os
-import getpass
 from collections import UserDict
 from itertools import chain
 
-from ..const import DISCOVERY_RAW_INVENTORY, SERVICES_TMP_DIR
+import ctypes
+
+from ..const import DISCOVERY_RAW_INVENTORY, GPU_DEVICES, SERVICES_TMP_DIR
 from ..utils import collapse
 
 
@@ -380,46 +381,9 @@ class classmethodproperty:
         return self.func.__get__(instance, owner)()
 
 
-def check_gpu_activity(device_id=None, gpu_threshold=500):
-    """
-    Check GPU activity and return list of available GPUs.
-
-    Determines which GPUs are available for use based on current
-    memory usage and running processes.
-
-    Args:
-        device_id (int, optional): Specific GPU to check (None for all)
-        gpu_threshold (int): Maximum GPU memory usage in MB to consider available
-
-    Returns:
-        list: List of available GPU device IDs
-    """
-    pynvml.nvmlInit()
-    device_count = pynvml.nvmlDeviceGetCount()
-    available = set()
-
-    indices = [device_id] if device_id is not None else range(device_count)
-
-    for i in indices:
-        handle = pynvml.nvmlDeviceGetHandleByIndex(i)
-        try:
-            procs = pynvml.nvmlDeviceGetComputeRunningProcesses(handle)
-            if len(procs) == 0:
-                available.add(i)
-            else:
-                possible = True
-                for p in procs:
-                    used_MB = p.usedGpuMemory / 1024 / 1024
-                    if used_MB > gpu_threshold:
-                        possible = False
-                        break
-                if possible:
-                    available.add(i)
-        except pynvml.NVMLError as e:
-            print(f"Could not get processes: {e}")
-
-    pynvml.nvmlShutdown()
-    return list(available)
+def check_gpu_activity(device_id=None, gpu_threshold=None):
+    """nvml indices of the GPU_DEVICES candidates cupy sees that pass the utilisation and free-memory limits."""
+    return [device["index"] for device in _usable_devices(device_id)]
 
 
 def conservative_worker_count(n_tasks: int, cap: int = 4) -> int:
@@ -438,6 +402,232 @@ def conservative_worker_count(n_tasks: int, cap: int = 4) -> int:
     return max(1, min(cap, int(idle // 2), n_tasks))
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# Host GPU policy: the devices .env GPU_DEVICES offers, one chosen per process, CPU fallback on any failure
+
+GPU_MIN_FREE_BYTES = 8 << 30
+GPU_MAX_UTILIZATION = 90  # per cent
+GPU_RETRY_SECONDS = 30
+CU_CTX_SCHED_BLOCKING_SYNC = 4
+
+_gpu_lock = threading.Lock()
+_gpu_state = {"resolved": False, "device": None, "nvml_index": None, "reason": None, "retry_at": 0.0}
+_nvml_state = {"handles": None, "ordinals": None}
+_warm_kernels = set()
+
+
+def _nvml_handles():
+    """pynvml device handles for this process, initialised once; [] when there is no driver."""
+    if _nvml_state["handles"] is None:
+        _nvml_state["handles"] = []
+        try:
+            pynvml.nvmlInit()
+            _nvml_state["handles"] = [pynvml.nvmlDeviceGetHandleByIndex(i) for i in range(pynvml.nvmlDeviceGetCount())]
+        except Exception:
+            pass
+    return _nvml_state["handles"]
+
+
+def _cupy_ordinals() -> dict:
+    """cupy device ordinal per PCI (domain, bus, device); CUDA_VISIBLE_DEVICES renumbers them, nvml does not."""
+    if _nvml_state["ordinals"] is None:
+        _nvml_state["ordinals"] = {}
+        try:
+            import cupy as cp
+
+            for ordinal in range(cp.cuda.runtime.getDeviceCount()):
+                prop = cp.cuda.runtime.getDeviceProperties(ordinal)
+                _nvml_state["ordinals"][(prop["pciDomainID"], prop["pciBusID"], prop["pciDeviceID"])] = ordinal
+        except Exception:
+            pass
+    return _nvml_state["ordinals"]
+
+
+def nvml_devices() -> list[dict]:
+    """Per device: nvml index, cupy ordinal (None when cupy cannot see it), memory bytes, utilisation (%), processes."""
+    devices = []
+    ordinals = _cupy_ordinals()
+    for index, handle in enumerate(_nvml_handles()):
+        try:
+            memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            utilization = pynvml.nvmlDeviceGetUtilizationRates(handle).gpu
+            processes = len(pynvml.nvmlDeviceGetComputeRunningProcesses(handle))
+            pci = pynvml.nvmlDeviceGetPciInfo(handle)
+        except Exception:
+            continue
+        devices.append(
+            dict(
+                index=index,
+                ordinal=ordinals.get((pci.domain, pci.bus, pci.device)),
+                free=memory.free,
+                used=memory.used,
+                total=memory.total,
+                utilization=utilization,
+                processes=processes,
+            )
+        )
+    return devices
+
+
+def _usable_devices(device_id=None) -> list[dict]:
+    """The GPU_DEVICES candidates cupy can see, below GPU_MAX_UTILIZATION and with GPU_MIN_FREE_BYTES free."""
+    if GPU_DEVICES is None:
+        return []
+    usable = []
+    for device in nvml_devices():
+        if device["ordinal"] is None or (device_id is not None and device["index"] != device_id):
+            continue
+        if GPU_DEVICES != "auto" and device["index"] not in GPU_DEVICES:
+            continue
+        if device["free"] >= GPU_MIN_FREE_BYTES and device["utilization"] <= GPU_MAX_UTILIZATION:
+            usable.append(device)
+    return usable
+
+
+def device_free_bytes(index: int) -> int:
+    """Free memory of one device (nvml index) as the driver reports it; 0 when it cannot be read."""
+    for device in nvml_devices():
+        if device["index"] == index:
+            return device["free"]
+    return 0
+
+
+def _blocking_sync(ordinal: int) -> bool:
+    """Make the primary context block instead of spin on a device wait; must run before cupy creates the context."""
+    try:
+        cuda = ctypes.CDLL("libcuda.so.1")
+        device = ctypes.c_int()
+        return (
+            cuda.cuInit(0) == 0
+            and cuda.cuDeviceGet(ctypes.byref(device), ordinal) == 0
+            and cuda.cuDevicePrimaryCtxSetFlags(device, CU_CTX_SCHED_BLOCKING_SYNC) == 0
+        )
+    except Exception:
+        return False
+
+
+def gpu_disabled_reason() -> str | None:
+    """Why this process is on the CPU, or None."""
+    return _gpu_state["reason"]
+
+
+def disable_gpu(reason: str) -> None:
+    """Keep this process on the CPU from now on (an OOM or a CUDA error)."""
+    with _gpu_lock:
+        _gpu_state.update(resolved=True, device=None, reason=reason)
+
+
+def pause_gpu(reason: str) -> None:
+    """Leave the device for GPU_RETRY_SECONDS (a call over its time budget), then choose again."""
+    with _gpu_lock:
+        _gpu_state.update(resolved=False, device=None, reason=reason, retry_at=time.time() + GPU_RETRY_SECONDS)
+
+
+def gpu_device() -> int | None:
+    """The cupy device this process computes on, chosen from GPU_DEVICES by free memory and utilisation; None = CPU."""
+    with _gpu_lock:
+        if _gpu_state["resolved"]:
+            return _gpu_state["device"]
+        if time.time() < _gpu_state["retry_at"]:
+            return None
+        if GPU_DEVICES is None:
+            _gpu_state.update(resolved=True, reason="GPU_DEVICES unset")
+            return None
+        usable = _usable_devices()
+        if not usable:
+            # a busy or full device is sampled again later; a missing driver or cupy is final
+            final = not nvml_devices() or not _cupy_ordinals()
+            _gpu_state.update(resolved=final, retry_at=time.time() + GPU_RETRY_SECONDS)
+            seen = f"nvml sees {len(nvml_devices())}, cupy {len(_cupy_ordinals())}"
+            _gpu_state["reason"] = f"no usable device (GPU_DEVICES={GPU_DEVICES!r}; {seen})"
+            return None
+        best = min(usable, key=lambda d: (d["utilization"], d["processes"], -d["free"]))
+        _blocking_sync(best["ordinal"])
+        _gpu_state.update(resolved=True, device=best["ordinal"], nvml_index=best["index"], reason=None)
+        return best["ordinal"]
+
+
+@contextmanager
+def _device_slot(index: int, slots: int | None):
+    """One of `slots` advisory flock slots of a device, shared by every user of the host; None when all are taken."""
+    if not slots:
+        yield True
+        return
+    handle = None
+    try:
+        lock_dir = os.path.join(SERVICES_TMP_DIR, "gpu_locks")
+        os.makedirs(lock_dir, exist_ok=True)
+        for k in range(slots):
+            f = os.fdopen(os.open(os.path.join(lock_dir, f"gpu{index}.slot{k}"), os.O_RDONLY | os.O_CREAT, 0o666), "r")
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                handle = f
+                break
+            except BlockingIOError:
+                f.close()
+    except OSError:
+        handle = None
+    try:
+        yield handle
+    finally:
+        if handle is not None:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+            handle.close()
+
+
+@contextmanager
+def gpu_session(need_bytes: int = 0, slots: int | None = None):
+    """cupy bound to this process's device for one operation, or None (no device, memory or free slot)."""
+    ordinal = gpu_device()
+    if ordinal is None or (need_bytes and device_free_bytes(_gpu_state["nvml_index"]) < need_bytes):
+        yield None
+        return
+    with _device_slot(_gpu_state["nvml_index"], slots) as slot:
+        if slot is None:
+            yield None
+            return
+        import cupy as cp
+
+        try:
+            cp.cuda.Device(ordinal).use()  # for this thread; no restore, so no second context on device 0
+        except Exception as e:
+            disable_gpu(f"device {ordinal}: {e!r}")
+            yield None
+            return
+        try:
+            yield cp
+        finally:
+            try:
+                cp.get_default_memory_pool().free_all_blocks()
+            except Exception:
+                pass
+
+
+def on_gpu(func, *args, need_bytes=0, slots=None, budget_s=None, logger=None, name=None, **kwargs):
+    """func(cp, *args, **kwargs) on the device, else None; a failure moves the process to the CPU, a slow call pauses."""
+    name = name or func.__name__
+    with gpu_session(need_bytes, slots) as cp:
+        if cp is None:
+            return None
+        st = time.perf_counter()
+        try:
+            result = func(cp, *args, **kwargs)
+            cp.cuda.Device().synchronize()
+        except Exception as e:
+            disable_gpu(f"{name}: {e!r}")
+            if logger is not None:
+                logger.warning(f"GPU {name} failed ({e!r}); this process continues on the CPU")
+            return None
+    elapsed = time.perf_counter() - st
+    first = name not in _warm_kernels  # the first call compiles the kernels; the budget starts with the second
+    _warm_kernels.add(name)
+    if budget_s is not None and elapsed > budget_s and not first:
+        pause_gpu(f"{name} took {elapsed:.1f} s (budget {budget_s:.1f} s)")
+        if logger is not None:
+            logger.warning(f"GPU {name} took {elapsed:.1f} s (budget {budget_s:.1f} s); CPU for {GPU_RETRY_SECONDS} s")
+    return result
+
+
 @contextmanager
 def acquire_available_gpu(device_id=None, gpu_threshold=400, blocking=True, timeout=1):
     """
@@ -446,13 +636,13 @@ def acquire_available_gpu(device_id=None, gpu_threshold=400, blocking=True, time
 
     Args:
         device_id (int or None): Specific GPU ID to try; if None, try all available GPUs.
-            If -1, force GPU usage (bypasses availability check and tries all GPUs).
-        gpu_threshold (int): Maximum GPU memory usage (in MB) to consider a GPU available.
+            If -1, force GPU usage: wait for a lock on any device GPU_DEVICES offers, busy or not.
+        gpu_threshold: ignored.
         blocking (bool): Whether to block when attempting to acquire the lock.
         timeout (int | float): Total time (in seconds) to spend trying all GPUs.
 
     Yields:
-        int or None: The GPU ID if the lock was acquired; otherwise None.
+        int or None: the cupy device ordinal if the lock was acquired; otherwise None.
     """
     # If CPU mode is requested, yield None immediately
     if device_id == "CPU":
@@ -467,31 +657,29 @@ def acquire_available_gpu(device_id=None, gpu_threshold=400, blocking=True, time
         timeout = max(timeout, 10)
 
     # Get list of GPUs whose memory usage is below the threshold
-    available_gpus = check_gpu_activity(device_id=device_id, gpu_threshold=gpu_threshold)
+    available = _usable_devices(device_id)
 
-    # If forcing GPU and no GPUs available initially, try all GPUs with higher threshold
-    if force_gpu and not available_gpus:
-        # Try with a much higher threshold to find any GPU
-        available_gpus = check_gpu_activity(device_id=None, gpu_threshold=10000)
+    # forcing still stays within the host's GPU_DEVICES; it only skips the load predicate
+    if force_gpu and not available and GPU_DEVICES is not None:
+        available = [
+            d
+            for d in nvml_devices()
+            if d["ordinal"] is not None and (GPU_DEVICES == "auto" or d["index"] in GPU_DEVICES)
+        ]
 
-    # If still no GPUs and forcing, try to get any GPU by checking all devices
-    if force_gpu and not available_gpus:
-        # Get all GPU devices regardless of activity
-        import cupy as cp
-
-        try:
-            available_gpus = list(range(cp.cuda.runtime.getDeviceCount()))
-        except:
-            available_gpus = []
-
-    if not available_gpus:
+    if not available:
         yield None
         return
+    ordinal_of = {d["index"]: d["ordinal"] for d in available}
+    available_gpus = [d["index"] for d in available]
 
-    # Prepare a per-user directory for lock files
-    username = getpass.getuser()
-    lock_dir = os.path.join(SERVICES_TMP_DIR, f"gpu_locks_{username}")
-    os.makedirs(lock_dir, exist_ok=True)
+    # one lock directory for every user of the host, so the two checkouts and ad-hoc runs arbitrate the same devices
+    lock_dir = os.path.join(SERVICES_TMP_DIR, "gpu_locks")
+    try:
+        os.makedirs(lock_dir, exist_ok=True)
+    except OSError:
+        yield None
+        return
 
     start_time = time.time()
 
@@ -513,7 +701,7 @@ def acquire_available_gpu(device_id=None, gpu_threshold=400, blocking=True, time
                 # Use blocking lock - will wait until GPU is available
                 fcntl.flock(lock_file, fcntl.LOCK_EX)
                 # Success: yield the GPU ID
-                yield gpu_id
+                yield ordinal_of[gpu_id]
                 return
             else:
                 # Use non-blocking lock to avoid futex waits
@@ -522,7 +710,7 @@ def acquire_available_gpu(device_id=None, gpu_threshold=400, blocking=True, time
                 try:
                     fcntl.flock(lock_file, flag)
                     # Success: yield the GPU ID
-                    yield gpu_id
+                    yield ordinal_of[gpu_id]
                     return
                 except BlockingIOError:
                     # GPU is busy, try next one immediately

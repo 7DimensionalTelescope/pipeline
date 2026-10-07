@@ -1,6 +1,7 @@
 import numpy as np
 from astropy.io import fits
 import subprocess
+import sys
 
 from ..const import SOURCE_DIR
 
@@ -19,7 +20,7 @@ def convolve_fft_subprocess(
 
     # base command
     cmd = [
-        "python",
+        sys.executable,
         f"{SOURCE_DIR}/cuda/convolve_fft.py",
         "-input",
         *images,

@@ -83,6 +83,8 @@ done
 sed -i '/^DISPATCH_INPUT_TYPE=/d' "$PIPELINE_ROOT/.env" 2>/dev/null || true
 grep -q "^DB_BACKEND=" "$PIPELINE_ROOT/.env" 2>/dev/null \
   || echo "  Postgres runs on the main host: add DB_BACKEND=remote and REMOTE_DBHOST to .env."
+grep -q "^GPU_DEVICES=" "$PIPELINE_ROOT/.env" 2>/dev/null \
+  || echo "  GPUs: add GPU_DEVICES=auto (or 0,1) to .env for the science chain to use this host's devices; unset = CPU."
 
 echo "=== 5. Interactive shell: cli on PATH ==="
 CLI_LINE="export PATH=\"${PIPELINE_ROOT}/pipeline/cli:\$PATH\""

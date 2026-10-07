@@ -7,6 +7,7 @@ no reprojection is performed.
 """
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 import time
 import numpy as np
 from astropy.io import fits
@@ -151,6 +152,24 @@ def coadd_effective_egain(gain_terms, mode: str = "mean", n_eff: float | None = 
     return float(gain)
 
 
+_WRITERS = ThreadPoolExecutor(max_workers=1, thread_name_prefix="coadd-writer")
+
+
+def write_egain_map_deferred(deferred, path, norm_arr, gain_denom, covered, header, logger=None):
+    """_write_egain_map now, or on the writer thread when `deferred` is a list collecting the futures."""
+    if deferred is None:
+        _write_egain_map(path, norm_arr, gain_denom, covered, header, logger)
+    else:
+        deferred.append(_WRITERS.submit(_write_egain_map, path, norm_arr, gain_denom, covered, header, logger))
+
+
+def wait_deferred_writes(deferred):
+    """Join the deferred product writes of one coadd, raising the first failure."""
+    pending, deferred[:] = list(deferred), []
+    for future in pending:
+        future.result()
+
+
 def _write_egain_map(path, norm_arr, gain_denom, covered, header, logger=None):
     """Per-pixel effective gain norm^2 / sum(w^2 FLXSCALE/EGAIN); 0 outside coverage."""
     egain_map = np.zeros(norm_arr.shape, dtype=np.float32)
@@ -194,6 +213,7 @@ def mean_coadd_numpy(
     coverage_policy: str = "union",
     frame_cache: dict | None = None,
     logger: Logger | None = None,
+    deferred_writes: list | None = None,
 ) -> str:
     """Per-pixel flux-scaled mean coadd (simple or inverse-variance weighted).
 
@@ -372,8 +392,14 @@ def mean_coadd_numpy(
         footprint_out = footprint_output or PathHandler.footprint(output_path)
         fits.writeto(footprint_out, count_arr.astype(np.int16), header=out_header, overwrite=True)
     if egain_output is not False:
-        _write_egain_map(
-            egain_output or PathHandler.egain_map(output_path), norm_arr, gain_denom, covered, out_header, logger
+        write_egain_map_deferred(
+            deferred_writes,
+            egain_output or PathHandler.egain_map(output_path),
+            norm_arr,
+            gain_denom,
+            covered,
+            out_header,
+            logger,
         )
     if logger is not None and weight_output is not False:
         logger.debug(f"Wrote coadd weight map ({backend}): {weight_out}")
@@ -408,6 +434,7 @@ def clipped_mean_coadd_numpy(
     outlier_callback=None,
     frame_cache: dict | None = None,
     logger: Logger | None = None,
+    deferred_writes: list | None = None,
 ) -> str:
     """Median-centered Gruen-style clipped weighted mean."""
     coverage_policy = validate_coverage_policy(coverage_policy)
@@ -430,6 +457,14 @@ def clipped_mean_coadd_numpy(
         raise ValueError(f"weights ({len(weights)}) and input_images ({len(input_images)}) length mismatch")
     if isinstance(flxscales, list) and len(flxscales) != len(input_images):
         raise ValueError(f"flxscales ({len(flxscales)}) and input_images ({len(input_images)}) length mismatch")
+
+    on_device = _clipped_mean_coadd_device(
+        input_images, output_path, coadd_header, weights, weight_output, footprint_output, egain_output, masks,
+        flxscales, match_swarp_size, clip_sigma, clip_ampfrac, two_sample_fallback, var_maps, saturated, badpix,
+        counts, coverage_policy, outlier_callback, frame_cache, logger, st, deferred_writes,
+    )  # fmt: skip
+    if on_device is not None:
+        return on_device
 
     center, valid_count = median_coadd_numpy(
         input_images,
@@ -614,11 +649,153 @@ def clipped_mean_coadd_numpy(
         footprint_out = footprint_output or PathHandler.footprint(output_path)
         fits.writeto(footprint_out, count_arr.astype(np.int16), header=out_header, overwrite=True)
     if egain_output is not False:
-        _write_egain_map(
-            egain_output or PathHandler.egain_map(output_path), norm_arr, gain_denom, covered, out_header, logger
+        write_egain_map_deferred(
+            deferred_writes,
+            egain_output or PathHandler.egain_map(output_path),
+            norm_arr,
+            gain_denom,
+            covered,
+            out_header,
+            logger,
         )
     if logger is not None:
         logger.info(f"Numpy clipped-mean coaddition completed in {time_diff_in_seconds(st)} seconds")
+    return output_path
+
+
+def _clipped_mean_coadd_device(
+    input_images,
+    output_path,
+    coadd_header,
+    weights,
+    weight_output,
+    footprint_output,
+    egain_output,
+    masks,
+    flxscales,
+    match_swarp_size,
+    clip_sigma,
+    clip_ampfrac,
+    two_sample_fallback,
+    var_maps,
+    saturated,
+    badpix,
+    counts,
+    coverage_policy,
+    outlier_callback,
+    frame_cache,
+    logger,
+    st,
+    deferred_writes,
+):
+    """clipped_mean_coadd_numpy on the device when every input sits in frame_cache; None leaves it to numpy."""
+    from ..calc import coadd_gpu
+    from ..services.utils import gpu_device, on_gpu
+
+    cached = frame_cache or {}
+    sparse = (badpix or []) + (saturated or [])
+    if (
+        gpu_device() is None
+        or two_sample_fallback != "mean"
+        or masks is None
+        or isinstance(weights[0], str)
+        or any(f not in cached for f in list(input_images) + list(masks) + list(var_maps or []))
+        or any(p is not None and not hasattr(p, "rows") for p in sparse)
+    ):
+        return None
+    n = len(input_images)
+    target_w, target_h, target_cx, target_cy, x0, y0, shapes = determine_size(
+        input_images, match_swarp_size, frame_cache=cached
+    )
+    geoms, frames, mask_arrays, var_arrays, scales, egains, bad_rows, sat_rows = [], [], [], [], [], [], [], []
+    for i, f in enumerate(input_images):
+        hdr = _frame_header(f, cached)
+        h, w = cached[f][0].shape
+        tx0 = max(0, x0[i]); tx1 = min(target_w, x0[i] + w)  # fmt: skip
+        ty0 = max(0, y0[i]); ty1 = min(target_h, y0[i] + h)  # fmt: skip
+        if tx1 <= tx0 or ty1 <= ty0:
+            return None  # no overlap with the output image; only the numpy backend handles it
+        sx0 = tx0 - x0[i]; sx1 = tx1 - x0[i]  # fmt: skip
+        sy0 = ty0 - y0[i]; sy1 = ty1 - y0[i]  # fmt: skip
+        geoms.append((tx0, tx1, ty0, ty1, sx0, sx1, sy0, sy1))
+        frames.append(cached[f][0])
+        mask_arrays.append(cached[masks[i]][0])
+        var_arrays.append(None if var_maps is None or var_maps[i] == masks[i] else cached[var_maps[i]][0])
+        flxscale = 1.0 if flxscales is False else (flxscales[i] if flxscales is not None else hdr.get("FLXSCALE", 1.0))
+        if flxscale is not None and type(flxscale) not in (float, int):
+            return None  # a numpy scalar promotes differently in the numpy backend
+        scales.append(1.0 if flxscale is None else flxscale)
+        egains.append(hdr.get("EGAIN"))
+        bad_rows.append(badpix[i].rows(sy0, sy1) if badpix is not None and badpix[i] is not None else None)
+        sat_rows.append(saturated[i].rows(sy0, sy1) if saturated is not None and saturated[i] is not None else None)
+    result = on_gpu(
+        coadd_gpu.clipped_mean, frames, mask_arrays, None if var_maps is None else var_arrays, weights, scales, egains,
+        geoms, (target_h, target_w), bad_rows, sat_rows, clip_sigma, clip_ampfrac,
+        need_bytes=n * (1200 << 20) + (6 << 30), slots=3, logger=logger, name="clipped-mean coadd",
+    )  # fmt: skip
+    if result is None:
+        return None
+    if logger is not None:
+        logger.info(f"Clipped-mean coaddition of {n} cached frames on GPU device {gpu_device()}")
+    for i, rejected in enumerate(result["rejected"]):
+        if outlier_callback is not None and rejected is not None:
+            outlier_callback(i, geoms[i], rejected)
+    coadd, weight_map_out, count_arr, geometric_count = (
+        result["coadd"],
+        result["weight_map"],
+        result["count"],
+        result["geometric"],
+    )
+    norm_arr, gain_denom = result["norm"], result["gain_denom"]
+    if logger is not None:
+        n_clipped, n_total = result["n_clipped"], result["n_total"]
+        logger.info(f"Clipped {n_clipped} of {n_total} samples ({100 * n_clipped / max(n_total, 1):.3f}%)")
+        if result["n_two"]:
+            logger.info(f"{result['n_two']} two-sample pixels where clipping would reject took the mean")
+    apply_coverage_policy(coadd, weight_map_out, count_arr, geometric_count, n, coverage_policy, logger)
+    if counts is not None:
+        counts.geometric, counts.used = geometric_count, count_arr
+    out_header = build_coadd_wcs_header(input_images[0], target_cx, target_cy, coadd_header, frame_cache=cached)
+    covered = count_arr > 0
+    n_eff = float(count_arr[covered].mean()) if covered.any() else None
+    egain_complete = result["all_egain"] and covered.any() and (gain_denom[covered] > 0).all()
+    if egain_output is not False and not egain_complete:
+        raise ValueError(f"EGAIN map requested but an input lacks EGAIN over the coadd footprint: {output_path}")
+    if egain_complete:
+        effective = float(np.median(norm_arr[covered] ** 2 / gain_denom[covered]))
+    else:
+        effective = coadd_effective_egain(result["gain_terms"], mode="mean", n_eff=n_eff)
+    if effective is not None:
+        out_header["EGAIN"] = effective
+        if not out_header.comments["EGAIN"]:
+            out_header.comments["EGAIN"] = "Effective EGAIN for coadded image (e-/ADU)"
+    fits.writeto(output_path, coadd, header=out_header, overwrite=True)
+    if weight_output is not False:
+        fits.writeto(
+            weight_output or PathHandler.weight_map(output_path),
+            weight_map_out.astype(np.float32),
+            header=out_header,
+            overwrite=True,
+        )
+    if footprint_output is not False:
+        fits.writeto(
+            footprint_output or PathHandler.footprint(output_path),
+            count_arr.astype(np.int16),
+            header=out_header,
+            overwrite=True,
+        )
+    if egain_output is not False:
+        write_egain_map_deferred(
+            deferred_writes,
+            egain_output or PathHandler.egain_map(output_path),
+            norm_arr,
+            gain_denom,
+            covered,
+            out_header,
+            logger,
+        )
+    if logger is not None:
+        logger.info(f"GPU clipped-mean coaddition completed in {time_diff_in_seconds(st)} seconds")
     return output_path
 
 
