@@ -7,6 +7,7 @@ import numpy as np
 from astropy.io import fits
 import copy
 import traceback
+from datetime import datetime
 
 from .plotting import plot_bias, plot_bpmask, plot_dark, plot_flat, plot_sci
 from . import utils as prep_utils
@@ -17,7 +18,7 @@ from ..utils import flatten, time_diff_in_seconds, atleast_1d
 from ..config import PreprocConfiguration
 from ..config.utils import get_key
 from ..services.setup import BaseSetup
-from ..const import HEADER_KEY_MAP, CALIB_TYPE_BIAS, CALIB_TYPE_DARK, CALIB_TYPE_FLAT, CALIB_TYPES
+from ..const import HEADER_KEY_MAP, CALIB_TYPE_BIAS, CALIB_TYPE_DARK, CALIB_TYPE_FLAT, CALIB_TYPES, NAME_TYPE_MASTER
 from ..services.utils import acquire_available_gpu
 from ..services.checker import Checker
 from ..services.database.image_qa import ImageQATable
@@ -143,6 +144,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         else:
             raise PreprocessError.ValueError("No input files or directory specified")
 
+        self._split_designated_frames()
         self._n_groups = len(self.raw_groups)
         self._original_raw_groups = copy.deepcopy(self.raw_groups)
         self._current_group = 0  # Do not manipulate it directly; use proceed_to_next_group and so on
@@ -161,12 +163,32 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         # Create pipeline record in database
         if self.is_connected:
             self.logger.debug(f"is connected: creating pipeline record in database")
+            self._warn_lost_predecessor()
             self.process_status_id = self.create_process_data(self.config_node, overwrite=self.overwrite)
 
             if self.process_status_id is not None:
                 from ..services.database.handler import ExceptionHandler
 
                 self.logger.database = ExceptionHandler(self.process_status_id)
+
+    def _warn_lost_predecessor(self):
+        """A config created without a predecessor for a name the DB has processed before: the earlier run's designations are gone."""
+        info = self.config_node.info
+        if not hasattr(info, "predecessor") or info.predecessor is not None:  # legacy yml, or a rebuild that found one
+            return
+        previous = self.process_status.read_data_by_params(name=self.config_node.name, return_pyTable=True)
+        created = info.creation_datetime
+        created = datetime.fromisoformat(created) if isinstance(created, str) else created
+        if previous is None or previous.created_at is None or previous.created_at >= created:
+            return
+        singles = [NameHandler(f).stem for f in self._expected_outputs if NameHandler(f).type.kind != NAME_TYPE_MASTER]
+        recorded = self.image_qa_dependency.count_recorded(singles)
+        self.logger.warning(
+            f"{self.config_node.name} was processed before (process_status id {previous.id}, version {previous.pipeline_version}, "
+            f"{previous.created_at:%Y-%m-%d}) but no previous config was found when this one was created at {info.file}: "
+            f"designated_masterframes / reuse_recorded_masters of that run are lost; its master choices survive only as "
+            f"image_qa_dependency edges ({recorded} of {len(singles)} science frames)"
+        )
 
     def log_group_manifest(self):
         for i, group in enumerate(self.raw_groups):
@@ -421,7 +443,13 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 # raise MasterFrameNotFoundError(msg)
 
             # settle the flatdark once per group, only when a flat will be built
-            if dtype == CALIB_TYPE_DARK and output_file and self.flat_output and CALIB_TYPE_FLAT in self.calib_types:
+            if (
+                dtype == CALIB_TYPE_DARK
+                and output_file
+                and self.flat_output
+                and CALIB_TYPE_FLAT in self.calib_types
+                and (self._current_group, CALIB_TYPE_FLAT) not in self._designation_dispatch
+            ):
                 try:
                     self._resolve_flatdark(output_file)
                 except MasterFrameNotFoundError:
@@ -923,6 +951,17 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         self._check_group_outputs(self._current_group)
         self.update_progress(self._output_progress)
 
+        # the frame's masters become image_qa_dependency edges now, not only at Astrometry (reuse_recorded_masters reads them)
+        if self.is_connected:
+            for processed_file in output_files:
+                try:
+                    qa_id = self.create_image_qa_data(processed_file, self.process_status_id)
+                    self.create_image_qa_dependencies(processed_file, qa_id)
+                except Exception as e:
+                    self.logger.warning(
+                        f"[Group {self._current_group+1}] image_qa registration of {os.path.basename(processed_file)} failed: {e}"
+                    )
+
         # for raw_file, processed_file in zip(self.sci_input, self.sci_output):
         #     header = fits.getheader(raw_file)
         #     header["SATURATE"] = prep_utils.get_saturation_level(header, bias, dark, flat)
@@ -962,6 +1001,11 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         if not ppflag.bias_shared_with_dark(bias, dark):
             sci_ppflag |= ppflag.PPFLAG_BIAS_NOT_SHARED  # the weight model must charge both bias masters
 
+        from ..services.inspection import INSPCOMM_COMMENT, INSPCOMM_KEY, SANITY_COMMENT
+
+        # the human verdict lives in image_qa and is restored into the rebuilt header; a DB failure fails the group
+        verdicts = self.image_qa.inspection_cards([o for _, o in pairs]) if self.is_connected else {}
+
         for raw_file, processed_file in pairs:
             header = get_header(raw_file)
             header["SATURATE"] = prep_utils.get_saturation_level(header, bias, dark, flat)
@@ -971,6 +1015,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             header = prep_utils.ensure_mjd_in_header(header, logger=self.logger)
             header = prep_utils.sanitize_header(header)
             header = prep_utils.add_image_id(header)  # mint fresh; do not inherit the raw frame's IMAGEID
+            if verdict := verdicts.get(processed_file):
+                header["SANITY"] = (verdict[0], SANITY_COMMENT)
+                header[INSPCOMM_KEY] = (verdict[1], INSPCOMM_COMMENT)
             header = add_padding(header, n_head_blocks, copy_header=True)
             self.logger.debug(
                 f"Header size: {(x := len(header.tostring()))} bytes, {x//2880} blocks + {(x%2880)/80} lines"

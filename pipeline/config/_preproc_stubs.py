@@ -14,6 +14,7 @@ if TYPE_CHECKING:
         runtime_version: Any
         creation_datetime: Any
         last_update_datetime: Any
+        predecessor: Any
 
     class LoggingNode(ConfigNode):
         level: str
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
         ignore_sanity_if_no_match: bool
         ignore_lenient_keys_if_no_match: bool
         reprocess_on_better_match: bool
+        reuse_recorded_masters: bool
         designated_masterframes: Any
 
     class SettingsNode(ConfigNode):

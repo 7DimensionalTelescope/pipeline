@@ -342,3 +342,14 @@ class ImageQADependency(BaseDatabase):
             " ORDER BY 2, 1",
             tuple(params),
         )
+
+    def count_recorded(self, image_names: List[str]) -> int:
+        """How many of `image_names` have an image_qa row with at least one dependency edge."""
+        if not image_names:
+            return 0
+        rows = self.execute_query(
+            "SELECT count(DISTINCT q.image_name) FROM image_qa q "
+            "JOIN image_qa_dependency d ON d.derived_image_id = q.id WHERE q.image_name = ANY(%(names)s)",
+            {"names": list(image_names)},
+        )
+        return rows[0][0] if rows else 0

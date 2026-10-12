@@ -68,6 +68,33 @@ class PreprocConfiguration(BaseConfig):
         self.node.settings.is_pipeline = is_pipeline
         return self
 
+    _CARRIED_KEYS = ("designated_masterframes", "reprocess_on_better_match", "reuse_recorded_masters")
+
+    @classmethod
+    def load_or_create(cls, input: list[str], overwrite=False, is_pipeline=False, is_too=False, **kwargs):
+        """Reuse the existing yml (inputs unioned); rebuild from base only on overwrite, carrying the designation keys and recording the predecessor."""
+        yml = collapse(PathHandler(input, is_pipeline=is_pipeline, is_too=is_too).preproc_output_yml, raise_error=True)
+        if os.path.exists(yml) and not overwrite:
+            self = cls(yml, is_pipeline=is_pipeline, is_too=is_too, **kwargs)
+            self._union_inputs(input)
+            return self
+        if os.path.exists(yml):
+            previous = cls.read_config(yml)
+            kept = {k: v for k, v in (previous.get("preprocess") or {}).items() if k in cls._CARRIED_KEYS and v}
+            if kept:
+                kwargs = {**kwargs, "preprocess": kept}
+            # a fresh yml keeps the base null here, which Preprocess checks against the process_status record
+            kwargs = {**kwargs, "info": {"predecessor": (previous.get("info") or {}).get("creation_datetime") or yml}}
+        return cls(input, overwrite=overwrite, is_pipeline=is_pipeline, is_too=is_too, **kwargs)
+
+    def _union_inputs(self, files):
+        """Add `files` to input.masterframe_images / science_images without dropping what the yml already lists."""
+        masters = {f for f in files if any(calib_type in f for calib_type in CalibType)}
+        for key, new in (("masterframe_images", masters), ("science_images", set(files) - masters)):
+            have = set(flatten(getattr(self.node.input, key, None) or []))
+            if new - have:
+                setattr(self.node.input, key, sorted(have | new))
+
     def initialize(self, is_pipeline: bool = False, is_too: bool = False):
         if is_too:
             self.logger.info(f"Overriding preproc base configuration with {self.path.preproc_too_override_yml}")

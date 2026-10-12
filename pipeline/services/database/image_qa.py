@@ -20,6 +20,7 @@ from ...const import (
     CALIB_TYPE_DARK,
     CALIB_TYPE_FLAT,
     IMAGE_TYPE_WHITE,
+    IMAGE_TYPE_SINGLE,
     SCIENCE_IMAGE_TYPES,
     IMAGE_GROUP_SCIENCE,
     IMAGE_GROUP_MASTERFRAME,
@@ -50,6 +51,9 @@ class ImageQATable:
     filter: Optional[str] = None
     object: Optional[str] = None
     exptime: Optional[float] = None
+    n_binning: Optional[int] = None
+    gain: Optional[int] = None
+    camera: Optional[str] = None
 
     date_obs: Optional[datetime] = None
     altitude: Optional[float] = None
@@ -58,7 +62,7 @@ class ImageQATable:
     dec: Optional[float] = None
 
     sanity: Optional[bool] = None
-    inspectd: Optional[bool] = None
+    inspcomm: Optional[str] = None
     err_msgs: Optional[List[str]] = None
     ppflag: Optional[int] = None
 
@@ -183,13 +187,15 @@ class ImageQATable:
 
     @classmethod
     def from_file(cls, file: str, process_status_id: int = None):
+        from ...path.name import NameHandler  # deferred: path.db imports this package
+
         cls = cls(image_name=os.path.basename(file.replace(".fits", "")), process_status_id=process_status_id)
 
         cls.image_path = file
 
         header = fits.getheader(file)
 
-        keys = list(cls.__annotations__.keys())
+        keys = [key for key in cls.__annotations__ if key != "inspcomm"]  # the seal comes only from set_inspection
 
         for key in keys:
             possible_keys = [key.replace("_", "-").upper(), key.upper()]
@@ -203,8 +209,6 @@ class ImageQATable:
             if str(header.get("FILTER", "")).lower() == WHITE_FILTER:
                 cls.image_type = IMAGE_TYPE_WHITE
             else:
-                from ...path.name import NameHandler  # deferred: path.db imports this package
-
                 # no fallback on purpose: a wrong image_type is silent corruption, and from_file already
                 # fails fast on a missing IMAGEID, so an unresolvable name must stop the registration too
                 cls.image_type = collapse(atleast_1d(NameHandler(file).type), force=True).image_type
@@ -213,6 +217,14 @@ class ImageQATable:
         else:
             cls.image_type = header["IMAGETYP"].lower()
             cls.image_group = IMAGE_GROUP_MASTERFRAME
+
+        if cls.image_type != IMAGE_TYPE_WHITE:  # a white spans units: no one camera
+            name = NameHandler(file)
+            cls.n_binning, cls.camera = name.n_binning, name.camera
+            # GAIN is the gain mode only on singles and masters; an old coadd's is SWarp's effective gain
+            cls.gain = (
+                name.gain if cls.image_type == IMAGE_TYPE_SINGLE or cls.image_group == IMAGE_GROUP_MASTERFRAME else None
+            )
 
         # multi-epoch coadds live in COADD_DIR/{obj}/{filter}/ -- dateless by design
         m = re.search(r"/\d{4}-\d{2}-\d{2}/", file)
@@ -284,6 +296,69 @@ class ImageQA(BaseDatabase):
             f" existing {', '.join(p for _, p in rows)}"
         )
         return None
+
+    @override
+    def update_data(self, target_id: int, **kwargs):
+        """Header-derived refresh: never writes the seal, and `sanity` yields to a sealed row."""
+        kwargs.pop("inspcomm", None)
+        sanity = kwargs.pop("sanity", None)
+        params = {k: (None if v == "None" else v) for k, v in kwargs.items() if v is not None}
+        clauses = [f"{k} = %({k})s" for k in params]
+        if sanity is not None:
+            params["sanity"] = None if sanity == "None" else sanity
+            clauses.append("sanity = CASE WHEN inspcomm IS NULL THEN %(sanity)s ELSE sanity END")
+        if not clauses:
+            return None
+        query = query_update.format(table_name=self.table_name, params=", ".join(clauses))
+        return self.execute_query(query, {**params, "id": target_id})
+
+    def set_inspection(
+        self, image_name: str, sanity: bool, inspcomm: str = None, overwrite: bool = False, image_path: str = None
+    ) -> Dict[int, str]:
+        """The only writer of the seal: {row id: stored INSPCOMM}; the row at `image_path` wins among same-name twins."""
+        from ..inspection import INSPCOMM_COMMENT, INSPCOMM_KEY, resolve_inspcomm
+
+        if not isinstance(sanity, bool):
+            raise ValueError(f"set_inspection({image_name}): sanity must be True or False, not {sanity!r}")
+        rows = self.execute_query(
+            f"SELECT id, image_path, inspcomm FROM {self.table_name} WHERE image_name = %(name)s ORDER BY id",
+            {"name": image_name},
+        )
+        if image_path and any(path == image_path for _, path, _ in rows):
+            rows = [row for row in rows if row[1] == image_path]
+        stored = {}
+        for row_id, _, existing in rows:
+            text = (resolve_inspcomm(existing, inspcomm, overwrite) or "").rstrip()
+            if not text or text == "None":
+                raise ValueError(f"set_inspection({image_name}): an INSPCOMM text is required; it is the seal")
+            fits.Card(INSPCOMM_KEY, text, INSPCOMM_COMMENT)  # astropy refuses what the header could not hold
+            BaseDatabase.update_data(self, row_id, sanity=sanity, inspcomm=text)
+            stored[row_id] = text
+        return stored
+
+    def inspection_cards(self, files) -> Dict[str, tuple]:
+        """{file: (SANITY, INSPCOMM)} for the sealed rows among `files`; the row at the file's own path wins among twins."""
+        by_name = {}
+        for file in atleast_1d(files):
+            by_name.setdefault(os.path.basename(file).replace(".fits", ""), []).append(file)
+        if not by_name:
+            return {}
+        rows = self.execute_query(
+            f"SELECT image_name, image_path, sanity, inspcomm FROM {self.table_name}"
+            " WHERE image_name = ANY(%(names)s) AND inspcomm IS NOT NULL AND sanity IS NOT NULL",
+            {"names": list(by_name)},
+        )
+        sealed = {}
+        for name, path, sanity, inspcomm in rows:
+            sealed.setdefault(name, []).append((path, sanity, inspcomm))
+        result = {}
+        for name, twins in sealed.items():
+            for file in by_name[name]:
+                picked = [t for t in twins if t[0] == file] or (twins if len(twins) == 1 else [])
+                if not picked:
+                    raise ValueError(f"{name}: {len(twins)} sealed rows, none at {file}; the verdict is ambiguous")
+                result[file] = (picked[0][1], picked[0][2])
+        return result
 
     def get_by_process_status_id(self, process_status_id: int) -> List[ImageQATable]:
         """Get all image_qa rows that have the given process_status_id"""

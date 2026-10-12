@@ -84,6 +84,7 @@ class DatabaseHandler:
         # Identity is name (unique index); these two vary per run and must not narrow the match.
         identity = {k: v for k, v in table.to_dict().items() if k not in ("input_type", "dispatch")}
         existing_process_id = self.process_status.read_data_by_params(**identity)
+        inspection = {}
         if existing_process_id:
             self.logger.info(f"Found existing process db record (PID: {existing_process_id})")
             existing_row = self.process_status.read_data_by_id(existing_process_id)
@@ -96,6 +97,12 @@ class DatabaseHandler:
                 f"(PID: {existing_process_id}), previous warnings: {prev_warnings}, previous errors: {prev_errors}"
             )
             if overwrite:
+                # the human verdict outlives the run-scoped row it was written on
+                inspection = {
+                    k: v
+                    for k in ("sanity", "inspcomm", "inspected_by", "inspected_at")
+                    if (v := getattr(existing_row, k)) is not None
+                }
                 # Use cascade delete to properly handle foreign key constraints
                 try:
                     self.process_status.delete_data(existing_process_id)
@@ -110,6 +117,8 @@ class DatabaseHandler:
                 return existing_process_id
 
         self.process_status_id = self.process_status.create_data(table)
+        if inspection:
+            self.process_status.update_data(self.process_status_id, **inspection)
         self._stamp_dispatch(self.process_status_id)
         return self.process_status_id
 

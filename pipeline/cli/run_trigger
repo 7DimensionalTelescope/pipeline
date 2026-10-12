@@ -88,7 +88,7 @@ def run_image_processing(image_paths, is_too=False):
         is_pipeline=True,
         is_too=is_too,
     )
-    br.create_config(is_too=is_too, overwrite=False, is_pipeline=True, overwrite_preprocess=True)
+    br.create_config(is_too=is_too, overwrite=False, is_pipeline=True)
     logger.info(
         "Config generation completed (is_too=%s, input_images=%d, groups=%d)",
         is_too,

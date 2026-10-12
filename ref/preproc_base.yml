@@ -9,6 +9,7 @@ info:
   runtime_version:
   creation_datetime:
   last_update_datetime:
+  predecessor:  # creation_datetime of the config this one replaced on overwrite; null when none was found
 
 logging:
   level: INFO
@@ -28,10 +29,13 @@ preprocess:
   ignore_sanity_if_no_match: true
   ignore_lenient_keys_if_no_match: true
   reprocess_on_better_match: false  # also rebuild when a closer master is now available, not just when one was regenerated
+  reuse_recorded_masters: false  # reuse each frame's recorded masters (image_qa_dependency); designations win
   designated_masterframes:  # manual override instead of generation/search; master/science frames that did not use these are rebuilt
     # - dark: /path/dark_100s_...fits      # sci-dark role ONLY -> flatdark falls back to the normal search
     # - flatdark: /path/dark_3s_...fits    # flatdark ONLY -> sci-dark role stays automatic
     # - /path/dark_100s_...fits            # plain: both roles
+    # - flat: /path/flat_m425_...fits      # with images: only these science frames (processed or raw stems) take it
+    #   images: [T08141_m450_7DT03_20251126_031231_100s]
 
 
 settings:

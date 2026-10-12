@@ -19,9 +19,14 @@ from ..const import (
     NAME_TYPE_FLAT,
     NAME_TYPE_MASTER,
 )
+from ..const.observation import BIAS_GROUP_LENIENT_KEYS, DARK_GROUP_LENIENT_KEYS, FLAT_GROUP_LENIENT_KEYS
 from ..errors import PreprocessError
 from ..path.name import NameHandler
 from .utils import get_image_id
+
+
+def _stem(path) -> str:
+    return os.path.basename(str(path)).removesuffix(".fits")
 
 
 def recorded_ingredient_ids(image) -> dict:
@@ -174,30 +179,41 @@ class ReprocessMixin:
         "flat": CALIB_TYPE_FLAT,
         "flatdark": CALIB_TYPE_DARK,
     }
+    _LENIENT_KEYS = {
+        CALIB_TYPE_BIAS: BIAS_GROUP_LENIENT_KEYS,
+        CALIB_TYPE_DARK: DARK_GROUP_LENIENT_KEYS,
+        CALIB_TYPE_FLAT: FLAT_GROUP_LENIENT_KEYS,
+    }
 
     def _load_designated_masterframes(self):
-        """Validate `preprocess.designated_masterframes` into {dtype: [(path, NameHandler, role)]}.
-
-        An entry is a path (serves every role its identity keys match) or a one-key
-        mapping `role: path` pinning a single role (bias/dark/flat/flatdark).
-        """
+        """Validate `preprocess.designated_masterframes` into {dtype: [(path, NameHandler, role, image stems)]}."""
         self._designated = {}
         self._designated_basenames = frozenset()
         self._designation_dispatch = {}
+        self._image_pins = {}
+        self._reuse_recorded = bool(get_key(self.config_node.preprocess, "reuse_recorded_masters", False))
+        if self._reuse_recorded:
+            self._change_policy += "+recorded"
 
         entries = get_key(self.config_node.preprocess, "designated_masterframes", None) or []
         if isinstance(entries, (str, dict)):
             entries = [entries]
         for entry in entries:
             role = None
+            images = ()
             path = entry
             if isinstance(entry, dict):
-                if len(entry) != 1 or next(iter(entry)) not in self._ROLE_DTYPE:
+                images = entry.get("images") or ()
+                images = tuple(_stem(s) for s in ([images] if isinstance(images, str) else images))
+                keys = [k for k in entry if k != "images"]
+                if len(keys) != 1 or keys[0] not in self._ROLE_DTYPE or (images and keys[0] == "flatdark"):
                     raise PreprocessError.ValueError(
-                        f"designated_masterframes: an entry must be a path or one `role: path` "
-                        f"mapping with role in {sorted(self._ROLE_DTYPE)}: {entry}"
+                        f"designated_masterframes: an entry must be a path or one `role: path` mapping with role in "
+                        f"{sorted(self._ROLE_DTYPE)}, optionally with `images:` (not for flatdark): {entry}"
                     )
-                role, path = next(iter(entry.items()))
+                role, path = keys[0], entry[keys[0]]
+            if not os.path.exists(path):
+                path = resolve_master_path(os.path.basename(str(path)), self._is_pipeline) or path
             if not os.path.exists(path):
                 raise PreprocessError.ValueError(f"designated_masterframes: file not found: {path}")
             try:
@@ -215,12 +231,117 @@ class ReprocessMixin:
             if not get_image_id(path):
                 # an id-less designation could never converge; overwrite=True is the tool there
                 raise PreprocessError.ValueError(f"designated_masterframes: no IMAGEID in {path}")
-            self._designated.setdefault(dtype, []).append((path, name, role))
+            self._designated.setdefault(dtype, []).append((path, name, role, images))
         if self._designated:
             self._designated_basenames = frozenset(
-                os.path.basename(p) for lst in self._designated.values() for p, _, _ in lst
+                os.path.basename(p) for lst in self._designated.values() for p, _, _, _ in lst
             )
             self._change_policy += "+designated"
+
+    def _add_recorded_pins(self, pins_of):
+        """Pin each frame's roles to the masters its own IMCMB cards record where they differ from the group's templates."""
+        frames = pinned = unusable = 0
+        for i, (_, masters, sci_dict) in enumerate(self.raw_groups):
+            # an explicit designation outranks the record: group-level (a designated flatdark shapes the flat), or a pin
+            explicit = {d for d in CALIB_TYPES if self._designated_for(d, masters[self._key_to_index[d]], i)}
+            if any(r in (None, "flatdark") and not imgs for _, _, r, imgs in self._designated.get(CALIB_TYPE_DARK, [])):
+                explicit.add(CALIB_TYPE_FLAT)
+            for raw, processed in (pair for pairs in sci_dict.values() for pair in zip(*pairs)):
+                record = recorded_ingredient_ids(processed)
+                if not record:
+                    continue
+                frames += 1
+                frame = None
+                for basename in record:
+                    kind = NameHandler(basename).type
+                    dtype = kind.exposure_type if kind.kind == NAME_TYPE_MASTER else None
+                    if dtype not in self._key_to_index:
+                        continue
+                    template = masters[self._key_to_index[dtype]]
+                    taken = dtype in explicit or any(
+                        dtype in pins_of.get(s, {}) for s in (_stem(raw), _stem(processed))
+                    )
+                    if taken or (template and os.path.basename(template) == basename):
+                        continue
+                    path = resolve_master_path(basename, self._is_pipeline)
+                    frame = frame or NameHandler(raw)
+                    master = NameHandler(path) if path and os.path.exists(path) else None
+                    if (
+                        master is None
+                        or str(master.n_binning) != str(frame.n_binning)
+                        or (dtype == CALIB_TYPE_DARK and float(master.exptime) != float(frame.exptime))
+                    ):
+                        unusable += 1
+                        self.logger.warning(
+                            f"reuse_recorded_masters: recorded {dtype} {basename} is "
+                            f"{'not on disk' if master is None else 'of another binning/exptime'}; "
+                            f"{_stem(processed)} takes the normal selection for that role"
+                        )
+                        continue
+                    pins_of.setdefault(_stem(processed), {})[dtype] = (path, master, False)
+                    pinned += 1
+        self.logger.info(
+            f"reuse_recorded_masters: {frames} frame(s) carry a record, {pinned} role(s) pinned to a recorded master, "
+            f"{unusable} record(s) unusable"
+        )
+
+    def _split_designated_frames(self):
+        """Move pinned frames (explicit `images:`; a frame's own record under reuse_recorded_masters) into synthetic groups."""
+        self._image_pins = {}
+        pins_of = {}
+        for dtype, lst in self._designated.items():
+            for path, name, _, images in lst:
+                for stem in images:
+                    if dtype in pins_of.setdefault(stem, {}):
+                        raise PreprocessError.ValueError(f"designated_masterframes: two {dtype} pins for {stem}")
+                    pins_of[stem][dtype] = (path, name, True)
+        if self._reuse_recorded:
+            self._add_recorded_pins(pins_of)
+        if not pins_of:
+            return
+
+        matched = set()
+        synthetic = {}
+        for i, (raws, masters, sci_dict) in enumerate(self.raw_groups):
+            for key in list(sci_dict):
+                kept = ([], [])
+                for raw, processed in zip(*sci_dict[key]):
+                    hit = {s for s in (_stem(raw), _stem(processed)) if s in pins_of}
+                    if not hit:
+                        kept[0].append(raw)
+                        kept[1].append(processed)
+                        continue
+                    matched |= hit
+                    pins = {}
+                    for stem in hit:
+                        pins.update(pins_of[stem])
+                    frame = NameHandler(raw)
+                    for dtype, (path, name, explicit) in pins.items():
+                        if explicit and (
+                            str(name.n_binning) != str(frame.n_binning)
+                            or (dtype == CALIB_TYPE_DARK and float(name.exptime) != float(frame.exptime))
+                        ):
+                            raise PreprocessError.ValueError(
+                                f"designated_masterframes: {os.path.basename(path)} does not fit {_stem(raw)} "
+                                "(binning, or exptime for a dark)"
+                            )
+                    pinned = tuple(sorted((dtype, path) for dtype, (path, _, _) in pins.items()))
+                    group = synthetic.setdefault((i, pinned), (list(masters), {}))
+                    group[1].setdefault(key, ([], []))
+                    group[1][key][0].append(raw)
+                    group[1][key][1].append(processed)
+                if kept[0]:
+                    sci_dict[key] = kept
+                else:
+                    del sci_dict[key]
+
+        if missing := {s for s in set(pins_of) - matched if any(e for _, _, e in pins_of[s].values())}:
+            raise PreprocessError.ValueError(f"designated_masterframes: `images:` not in this run: {sorted(missing)}")
+        # a natural group left with no science and no raw calibs has nothing left to do
+        self.raw_groups = [g for g in self.raw_groups if g[2] or any(g[0])]
+        for (_, pinned), (templates, sci_dict) in synthetic.items():
+            self._image_pins.update({(len(self.raw_groups), dtype): path for dtype, path in pinned})
+            self.raw_groups.append([[[], [], []], templates, sci_dict])
 
     def _designated_for(self, dtype, template, group_index):
         """The designated master for one group's `dtype` role, or None."""
@@ -228,8 +349,8 @@ class ReprocessMixin:
             return None
         target = NameHandler(template)
         matches = []
-        for path, name, role in self._designated[dtype]:
-            if role is not None and role != dtype:
+        for path, name, role, images in self._designated[dtype]:
+            if images or (role is not None and role != dtype):
                 continue
             if str(name.n_binning) != str(target.n_binning):
                 continue
@@ -258,7 +379,7 @@ class ReprocessMixin:
     def _dispatch_designated_masterframes(self):
         """Resolve and log {(group index, role): designated path} for every group, up front."""
         self._designation_dispatch = {}
-        if not self._designated:
+        if not self._designated and not self._image_pins:
             return
 
         for i in range(self._n_groups):
@@ -274,8 +395,8 @@ class ReprocessMixin:
                 target = NameHandler(dark_template)
                 candidates = [
                     (name.exptime, path, role)
-                    for path, name, role in self._designated[CALIB_TYPE_DARK]
-                    if role in (None, "flatdark") and str(name.n_binning) == str(target.n_binning)
+                    for path, name, role, images in self._designated[CALIB_TYPE_DARK]
+                    if role in (None, "flatdark") and not images and str(name.n_binning) == str(target.n_binning)
                 ]
                 pinned = [c for c in candidates if c[2] == "flatdark"]
                 if len(pinned) > 1:
@@ -288,6 +409,7 @@ class ReprocessMixin:
                 elif candidates:
                     self._designation_dispatch[(i, "flatdark")] = min(candidates)[1]
 
+        self._designation_dispatch.update(self._image_pins)
         for (i, role), path in sorted(self._designation_dispatch.items()):
             if role in self._key_to_index:
                 template = self.raw_groups[i][1][self._key_to_index[role]]
@@ -296,7 +418,7 @@ class ReprocessMixin:
                 where = ""
             self.logger.info(f"[Group {i+1}] Designated {role}: {os.path.basename(path)}{where}")
 
-        unmatched = {p for lst in self._designated.values() for p, _, _ in lst} - set(
+        unmatched = {p for lst in self._designated.values() for p, _, _, _ in lst} - set(
             self._designation_dispatch.values()
         )
         if unmatched:
@@ -322,4 +444,16 @@ class ReprocessMixin:
             f"at {os.path.basename(designated_file)} in place of {os.path.basename(template)}"
         )
         self._ppflag[dtype] = ppflag.compute_fetch_ppflag(designated_file, template, sanity)
+        name, target = NameHandler(designated_file), NameHandler(template)
+        if any(str(getattr(name, key)) != str(getattr(target, key)) for key in self._LENIENT_KEYS[dtype]):
+            self._ppflag[
+                dtype
+            ] |= ppflag.PPFLAG_LENIENT_KEYS_IGNORED  # the bit a lenient fetch of the same file carries
+        if dtype == CALIB_TYPE_FLAT and name.filter != target.filter:
+            # a pin across the filter key: keep the frame out of this filter's default coadd selection
+            self._ppflag[dtype] |= ppflag.PPFLAG_HARD_KEYS_IGNORED
+            self.logger.warning(
+                f"[Group {self._current_group+1}] Designated flat {os.path.basename(designated_file)} is of another "
+                f"filter than {os.path.basename(template)}; PPFLAG bit {ppflag.PPFLAG_HARD_KEYS_IGNORED} set"
+            )
         self.raw_groups[self._current_group][1][self._key_to_index[dtype]] = designated_file

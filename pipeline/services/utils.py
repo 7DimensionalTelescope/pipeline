@@ -906,12 +906,11 @@ class PreprocessGroup:
     ):
         from ..config import PreprocConfiguration
 
-        overwrite = overwrite or overwrite_preprocess
         # print(
         #     f"PreprocessGroup {self.key} creating config with {len(self.image_files)} images; "
         #     f"{len(os.listdir(f'/proc/{os.getpid()}/fd'))} FDs under limit of {resource.getrlimit(resource.RLIMIT_NOFILE)} FDs"
         # )
-        c = PreprocConfiguration(
+        c = PreprocConfiguration.load_or_create(
             self.image_files,
             overwrite=overwrite,
             is_pipeline=is_pipeline,
