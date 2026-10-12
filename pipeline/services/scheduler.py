@@ -89,6 +89,7 @@ class Scheduler:
     _FOREIGN = object()  # _select_ready_index tier meaning "owned by some other host"
     # Statuses that prove a host ran or is running a row; a Paused or Stashed row may never have been claimed.
     _CLAIMED_STATES = (TASK_STATUS_PROCESSING, TASK_STATUS_COMPLETED, TASK_STATUS_FAILED, TASK_STATUS_REJECTED)
+    _STASHABLE_STATES = (TASK_STATUS_READY, TASK_STATUS_PENDING, TASK_STATUS_FAILED)
 
     # Constants
     DEFAULT_MAX_PREPROCESS = 3
@@ -278,7 +279,9 @@ class Scheduler:
                     kwargs TEXT,
                     process_start TEXT,
                     process_end TEXT,
-                    group_idx INTEGER
+                    group_idx INTEGER,
+                    stash TEXT,
+                    stashed_from TEXT
                 )
             """
             )
@@ -294,6 +297,20 @@ class Scheduler:
                     cursor.execute("ALTER TABLE scheduler ADD COLUMN dispatch TEXT")
             if "group_idx" not in columns:
                 self._add_group_idx(conn)
+            for column in ("stash", "stashed_from"):
+                if column not in columns:
+                    try:
+                        cursor.execute(f"ALTER TABLE scheduler ADD COLUMN {column} TEXT")
+                    except sqlite3.OperationalError as e:
+                        if "duplicate column" not in str(e):  # lost the race to another first caller
+                            raise
+            # whoever takes a row out of Stashed (old code, the web tool, raw SQL) takes it out of its named stash too
+            cursor.execute(
+                "CREATE TRIGGER IF NOT EXISTS tr_scheduler_unstash AFTER UPDATE OF status ON scheduler "
+                f"WHEN NEW.status <> '{TASK_STATUS_STASHED}' "
+                "AND (NEW.stash IS NOT NULL OR NEW.stashed_from IS NOT NULL) "
+                'BEGIN UPDATE scheduler SET stash = NULL, stashed_from = NULL WHERE "index" = NEW."index"; END'
+            )
 
             self._create_indexes(cursor)
 
@@ -1067,8 +1084,9 @@ class Scheduler:
             if cursor.rowcount:
                 for dep_idx in dependent_indices:
                     cursor.execute(
-                        'SELECT readiness, config_type FROM scheduler WHERE "index" = ? AND status = ?',
-                        (dep_idx, TASK_STATUS_PENDING),
+                        'SELECT readiness, config_type, status FROM scheduler WHERE "index" = ? '
+                        "AND (status = ? OR (status = ? AND stashed_from = ?))",
+                        (dep_idx, TASK_STATUS_PENDING, TASK_STATUS_STASHED, TASK_STATUS_PENDING),
                     )
                     dep_row = cursor.fetchone()
                     if dep_row:
@@ -1077,6 +1095,8 @@ class Scheduler:
                             EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE,
                         ):
                             continue
+                        # a named-stashed dependent keeps counting its parents in the status revive_stash restores
+                        state = "status" if dep_row[2] == TASK_STATUS_PENDING else "stashed_from"
                         new_readiness = dep_row[0] + 1
 
                         if new_readiness > 100:
@@ -1084,13 +1104,13 @@ class Scheduler:
 
                         if new_readiness == 100:
                             cursor.execute(
-                                "UPDATE scheduler SET readiness = ?, status = ?, is_ready = ? "
-                                'WHERE "index" = ? AND status = ?',
+                                f"UPDATE scheduler SET readiness = ?, {state} = ?, is_ready = ? "
+                                f'WHERE "index" = ? AND {state} = ?',
                                 (new_readiness, TASK_STATUS_READY, 1, dep_idx, TASK_STATUS_PENDING),
                             )
                         else:
                             cursor.execute(
-                                'UPDATE scheduler SET readiness = ? WHERE "index" = ? AND status = ?',
+                                f'UPDATE scheduler SET readiness = ? WHERE "index" = ? AND {state} = ?',
                                 (new_readiness, dep_idx, TASK_STATUS_PENDING),
                             )
 
@@ -2034,6 +2054,74 @@ class Scheduler:
         else:
             return self._stash_task_from_memory(index)
 
+    def stash_tasks(self, configs: list[str] | None = None, name: str | None = None, root: str | None = None):
+        """Stash by config list (stash_tasks_by_name) or by root (stash_tasks_by_root); name None = default stash."""
+        if (configs is None) == (root is None):
+            raise ValueError("stash_tasks takes configs or root")
+        if root is not None:
+            return self.stash_tasks_by_root(root, name=name)
+        return self.stash_tasks_by_name(configs, name=name)
+
+    def stash_tasks_by_name(self, configs: list[str], name: str | None = None):
+        """Stash Ready/Pending/Failed rows whose config, given as a path or a name, is listed; returns the count."""
+        if not self.use_system_queue:
+            raise RuntimeError("stash_tasks_by_name requires use_system_queue=True")
+        configs = [str(configs)] if isinstance(configs, (str, os.PathLike)) else [str(config) for config in configs]
+        paths = {config for config in configs if os.path.isabs(config)}
+        names = {self._config_stem(config) for config in configs if not os.path.isabs(config)}
+        with self._db_connection() as conn:
+            rows = conn.execute('SELECT "index", config FROM scheduler').fetchall()
+            indices = [index for index, config in rows if config in paths or self._config_stem(config) in names]
+            changed = self._stash_where(
+                conn, '"index" IN (SELECT value FROM json_each(?))', (json.dumps(indices),), name
+            )
+            conn.commit()
+        return changed
+
+    def stash_tasks_by_root(self, root: str, name: str | None = None):
+        """Stash Ready/Pending/Failed rows whose config lies under the absolute `root`; returns the count."""
+        if not self.use_system_queue:
+            raise RuntimeError("stash_tasks_by_root requires use_system_queue=True")
+        if not os.path.isabs(root):
+            raise ValueError(f"root must be an absolute path: {root!r}")
+        prefix = os.path.join(os.path.normpath(root), "")
+        with self._db_connection() as conn:
+            changed = self._stash_where(conn, "substr(config, 1, ?) = ?", (len(prefix), prefix), name)
+            conn.commit()
+        return changed
+
+    def _stash_where(self, conn, where, params, name):
+        """One UPDATE: matching Ready/Pending/Failed rows go Stashed, their status kept in stashed_from."""
+        states = self._STASHABLE_STATES
+        return conn.execute(
+            "UPDATE scheduler SET status = ?, stash = ?, stashed_from = status "
+            f"WHERE status IN ({','.join('?' * len(states))}) AND {where}",
+            (TASK_STATUS_STASHED, str(name) if name else None, *states, *params),
+        ).rowcount
+
+    def revive_stash(self, name):
+        """Return every row of a named stash to its recorded status; returns the count."""
+        if not self.use_system_queue:
+            raise RuntimeError("revive_stash requires use_system_queue=True")
+        with self._db_connection() as conn:
+            changed = conn.execute(
+                "UPDATE scheduler SET status = COALESCE(stashed_from, ?), stash = NULL, stashed_from = NULL "
+                "WHERE status = ? AND stash = ?",
+                (TASK_STATUS_READY, TASK_STATUS_STASHED, str(name)),
+            ).rowcount
+            conn.commit()
+        return changed
+
+    def stashes(self):
+        """Stashed row count per stash name; None is the default stash."""
+        if not self.use_system_queue:
+            raise RuntimeError("stashes requires use_system_queue=True")
+        with self._db_connection() as conn:
+            rows = conn.execute(
+                "SELECT stash, COUNT(*) FROM scheduler WHERE status = ? GROUP BY stash", (TASK_STATUS_STASHED,)
+            ).fetchall()
+        return {name: count for name, count in rows}
+
     def _stash_task_from_db(self, index: int):
         """Stash the schedule in database mode."""
         with self._db_connection() as conn:
@@ -2059,9 +2147,13 @@ class Scheduler:
         """Recover a stashed task from the schedule in database mode."""
         with self._db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('UPDATE scheduler SET status = ? WHERE "index" = ?', (TASK_STATUS_READY, index))
+            cursor.execute(
+                "UPDATE scheduler SET status = COALESCE(stashed_from, ?), stash = NULL, stashed_from = NULL "
+                'WHERE "index" = ? AND status = ?',
+                (TASK_STATUS_READY, index, TASK_STATUS_STASHED),
+            )
             conn.commit()
-            return True
+            return cursor.rowcount == 1
 
     def _recover_stashed_task_from_memory(self, index: int):
         """Recover a stashed task from the schedule in in-memory mode."""
