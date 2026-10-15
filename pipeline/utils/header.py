@@ -189,6 +189,7 @@ def update_padded_header(target_fits, header_new: dict | List[Tuple] | fits.Head
                 spent = n_slot
                 if len(header.cards) - i < n_slot:
                     header.append(card, end=True)
+                    i = len(header.cards)  # no padding left: the next insert must not delete this card
                     continue
                 header.insert(i, card)
                 i += 1

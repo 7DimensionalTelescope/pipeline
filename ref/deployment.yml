@@ -35,7 +35,7 @@ external:
   QUEUE_SOCKET_PATH: "/run/queue/queue.sock"
   SCHEDULER_DB_PATH: "/var/db/scheduler.db"
   TOO_DB_PATH: "/var/db/too_requested.db"
-  INSTRUM_STATUS_DICT: "/home/7dt/7dt_too/backend/data/7dt/sync/multitelescopes.dict"
+  INSTRUM_STATUS_DICT: "/lyman/data1/7dt/sync/multitelescopes.dict"
   RECENT_RAWDATA_TRANSFER_HISTORY: "/home/7dt/7dt_too/backend/data/7dt/sync/transfer/transfer_history.ascii_fixed_width"
 
 commands:
