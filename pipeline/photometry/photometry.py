@@ -1399,12 +1399,6 @@ class PhotometrySingle:
                 )
                 test_dicts.pop(inferred_filter)
             else:
-                others = [
-                    (e - zperr, f)
-                    for f, z, e in zip(narrowed_filters, zps, zperrs)
-                    if f != inferred_filter and not (f in MEDIUM_FILTERS and z > zp_cut)
-                ]
-                self.phot_header.INF_DEZP, self.phot_header.INF_FIL2 = min(others) if others else (None, None)
                 self.logger.debug(
                     f"Found the best-matching filter, '{inferred_filter}', with zp = {zp}+/-{zperr}. Breaking the loop."
                 )
@@ -1422,7 +1416,16 @@ class PhotometrySingle:
 
         if save_plot:
             filters, zps, zperrs = phot_utils.dicts_to_lists(dicts_for_plotting)
-            plot_filter_check(self, alleged_filter, inferred_filter, narrowed_filters, filters_checked, zps, zperrs)
+            plot_filter_check(
+                self,
+                alleged_filter,
+                inferred_filter,
+                narrowed_filters,
+                filters_checked,
+                zps,
+                zperrs,
+                inactive_filters=set(filters_checked) - set(active_filters),
+            )
 
         if alleged_filter != inferred_filter:
             orig_zp, orig_zperr = phot_utils.get_zp_from_dict(dicts, alleged_filter)
@@ -1435,6 +1438,11 @@ class PhotometrySingle:
 
         self.phot_header.INF_FILT = inferred_filter
         self.phot_header.INF_DEZF = orig_zperr - zperr if alleged_filter != inferred_filter else 0.0
+        # INF_FIL2 ranges over the whole pool (ruled-out filters included), so INF_DEZP < 0 when one of them beats INF_FILT
+        others = [(d[0]["EZP_AUTO"][0], f) for f, d in dicts.items() if f != inferred_filter and "EZP_AUTO" in d[0]]
+        if others:
+            ezp2, self.phot_header.INF_FIL2 = min(others)
+            self.phot_header.INF_DEZP = ezp2 - zperr
 
         return inferred_filter
 
@@ -1920,9 +1928,9 @@ class PhotometryHeader:
             "INF_FILT": (self.INF_FILT, "BEST-MATCHING FILTER INFERRED BY PIPELINE"),
             "INF_DEZP": (
                 round(self.INF_DEZP, 6) if self.INF_DEZP is not None else None,
-                "[mag] EZP_AUTO of 2nd-best filter - INF_FILT's",
+                "[mag] EZP_AUTO of INF_FIL2 - INF_FILT's",
             ),
-            "INF_FIL2": (self.INF_FIL2, "Second-best-matching filter after INF_FILT"),
+            "INF_FIL2": (self.INF_FIL2, "Lowest-EZP_AUTO filter in the pool except INF_FILT"),
             "INF_DEZF": (
                 round(self.INF_DEZF, 6) if self.INF_DEZF is not None else None,
                 "[mag] EZP_AUTO of FILTER - INF_FILT's",

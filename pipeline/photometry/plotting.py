@@ -18,7 +18,10 @@ from astropy.stats import sigma_clip
 # separated from the photometry class. sort out self later.
 
 
-def plot_filter_check(self, alleged_filter, inferred_filter, narrowed_filters, filters_checked, zps, zperrs):
+def plot_filter_check(
+    self, alleged_filter, inferred_filter, narrowed_filters, filters_checked, zps, zperrs, inactive_filters=()
+):
+    import os
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
 
@@ -37,11 +40,14 @@ def plot_filter_check(self, alleged_filter, inferred_filter, narrowed_filters, f
     ax1.set_ylabel("Zero Point Error (EZP)", color=c_ezp)
     ax1.tick_params(axis="y", labelcolor=c_ezp)
 
-    # 2) Shade backgrounds for ruled-out filters
+    # 2) Shade backgrounds for ruled-out filters: dark = not in the night's filter budget, light = medium-band ZP cut
     for i, flt in enumerate(filters_checked):
-        if flt not in narrowed_filters:
+        if flt in inactive_filters:
             ax1.axvspan(i - 0.5, i + 0.5, color="gray", alpha=0.3)
+        elif flt not in narrowed_filters:
+            ax1.axvspan(i - 0.5, i + 0.5, color="gray", alpha=0.12)
     gray_patch = mpatches.Patch(color="gray", alpha=0.3)  # patch for legend
+    light_patch = mpatches.Patch(color="gray", alpha=0.12)
 
     inf_idx = filters_checked.index(inferred_filter)
     ax1.axvspan(inf_idx - 0.5, inf_idx + 0.5, color="dodgerblue", alpha=0.3)
@@ -65,18 +71,21 @@ def plot_filter_check(self, alleged_filter, inferred_filter, narrowed_filters, f
     ax2.set_ylabel("Zero Point (ZP)", color=c_zp)
     ax2.tick_params(axis="y", labelcolor=c_zp)
     ax2.invert_yaxis()
-    ax1.margins(x=0)
+    ax1.set_xlim(-0.5, len(filters_checked) - 0.5)
 
     # Combine legends
     h1, l1 = ax1.get_legend_handles_labels()
     h2, l2 = ax2.get_legend_handles_labels()
     ax1.legend(
-        h1 + h2 + [gray_patch, blue_patch],
-        l1 + l2 + ["Ruled Out", f"Inferred Filter ({inferred_filter})"],
+        h1 + h2 + [gray_patch, light_patch, blue_patch],
+        l1
+        + l2
+        + ["Ruled out: not in filter budget", "Ruled out: medium-band ZP cut", f"Inferred Filter ({inferred_filter})"],
         loc="upper left",
     )
 
-    plt.title(f"Filter Sanity Check for {alleged_filter}")
+    stem = os.path.splitext(os.path.basename(self.input_image))[0]
+    plt.title(f"{stem}: Filter Sanity Check for {alleged_filter}")
     plt.tight_layout()
 
     f = self.path.photometry.figures.filter_check
