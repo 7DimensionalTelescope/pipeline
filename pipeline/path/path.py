@@ -1754,9 +1754,9 @@ class PathPhotometry(AutoMkdirMixin, AutoCollapseMixin):
         # # add hoc for diffim inputs to share the same tmp as the other processes
         return os.path.join(self._parent.factory_dir, PHOTOMETRY_DIRNAME)
 
-    @property
-    def figure_dir(self):
-        return os.path.join(self._parent.figure_dir, PHOTOMETRY_DIRNAME)
+    @cached_property
+    def figures(self):
+        return PathPhotometryFigures(self)
 
     @property
     def prep_catalog(self):
@@ -2211,3 +2211,21 @@ class PathImsubtract(AutoMkdirMixin, AutoCollapseMixin):
         processed = atleast_1d(self._parent.processed_images)
         input = [os.path.basename(p) for p in processed]
         return bjoin(self._parent.output_dir, DIFFIM_DIRNAME, add_suffix(input, "diff"))
+
+
+class PathPhotometryFigures(PathFiguresBase):
+    @property
+    def _basenames(self) -> List[str]:
+        return [os.path.basename(p) for p in atleast_1d(self._parent._parent._input_files)]
+
+    @property
+    def dir(self) -> str:
+        return self._regularize(bjoin(self._parent._parent.figure_dir, PHOTOMETRY_DIRNAME))
+
+    @property
+    def filter_check(self) -> str | List[str]:
+        return self._regularize(bjoin(self.dir, swap_ext(add_suffix(self._basenames, "filtercheck"), "jpg")))
+
+    def zp(self, mag_key: str, filt: str | None = None) -> str | List[str]:
+        suffix = mag_key if filt is None else f"{mag_key}_{filt}"
+        return self._regularize(bjoin(self.dir, swap_ext(add_suffix(self._basenames, suffix), "jpg")))

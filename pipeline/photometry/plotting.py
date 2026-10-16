@@ -1,4 +1,3 @@
-import os
 from reprlib import recursive_repr
 from typing import Any, List, Dict, Tuple, Optional, Union
 import numpy as np
@@ -80,8 +79,7 @@ def plot_filter_check(self, alleged_filter, inferred_filter, narrowed_filters, f
     plt.title(f"Filter Sanity Check for {alleged_filter}")
     plt.tight_layout()
 
-    img_stem = os.path.splitext(os.path.basename(self.input_image))[0]
-    f = os.path.join(self.path.photometry.figure_dir, f"{img_stem}_filtercheck.jpg")
+    f = self.path.photometry.figures.filter_check
     plt.savefig(f, dpi=100)
     plt.close()
     return
@@ -158,9 +156,6 @@ def plot_zp(
     plt.legend(loc="upper center", ncol=3)
     plt.tight_layout()
 
-    img_stem = os.path.splitext(os.path.basename(self.input_image))[0]
-    fpath = os.path.join(
-        self.path.photometry.figure_dir, f"{img_stem}_{mag_key}{'' if filt is None else '_' + filt}.jpg"
-    )
+    fpath = self.path.photometry.figures.zp(mag_key, filt)
     plt.savefig(fpath, dpi=100)
     plt.close()
