@@ -170,25 +170,30 @@ def configs_missing_products(nightdate: Optional[str] = None, min_progress: int 
 
 
 def select_configs_by_min_version(include_errors: bool = False, exclude_queued: bool = True) -> List[Tuple[str, str]]:
-    """ONE selection, by the min-version floors: science configs below a floor or short of coadd_photometry, as (config_file, first stage to run); astrometry done, not rejected, not queued. Which selection a run uses is an operational decision."""
+    """ONE selection, by the min-version floors: science configs below a floor or short of coadd_photometry, as (config_file, first stage to run); astrometry done, not human-rejected (a machine rejection, whose error code 387/487 is the rejection itself, is retried once below the photometry floor), not queued. Which selection a run uses is an operational decision."""
     rows = free_query(
         """
         WITH ps AS (
             SELECT config_file, object, nightdate, filter, progress, errors,
-                   string_to_array(pipeline_version, '.')::int[] AS v
+                   string_to_array(pipeline_version, '.')::int[] AS v,
+                   (sanity IS FALSE AND inspected_at IS NULL) AS machine_rejected
             FROM process_status
-            WHERE config_type = 'science' AND progress >= 40 AND sanity IS NOT FALSE AND config_file IS NOT NULL
+            WHERE config_type = 'science' AND progress >= 40 AND config_file IS NOT NULL
+              AND (sanity IS NOT FALSE
+                   OR (inspected_at IS NULL
+                       AND (pipeline_version IS NULL OR string_to_array(pipeline_version, '.')::int[] < string_to_array(%s, '.')::int[])))
         )
         SELECT config_file,
                CASE WHEN v IS NULL OR v < string_to_array(%s, '.')::int[] OR progress < 60 THEN 'single_photometry'
                     WHEN v < string_to_array(%s, '.')::int[] OR progress < 70 THEN 'coadd'
                     ELSE 'coadd_photometry' END AS stage
         FROM ps
-        WHERE (errors IS NULL OR %s)
+        WHERE (errors IS NULL OR %s OR machine_rejected)
           AND NOT (v >= string_to_array(%s, '.')::int[] AND progress >= 80)
         ORDER BY count(*) OVER (PARTITION BY object, nightdate) >= 3 DESC, nightdate DESC NULLS LAST, object, filter
         """,
         (
+            MIN_SCIPROC_RUNTIME_VERSION_MAP["photometry"],
             MIN_SCIPROC_RUNTIME_VERSION_MAP["photometry"],
             MIN_SCIPROC_RUNTIME_VERSION_MAP["imcoadd"],
             include_errors,

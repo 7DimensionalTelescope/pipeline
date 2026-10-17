@@ -1,12 +1,13 @@
 """
 Human inspection verdicts: image_qa, FITS headers, and process_status in one call.
 
-A verdict is `SANITY` plus an `INSPCOMM` comment. `INSPCOMM` seals `SANITY` against
-recomputation (see `Checker._sanity_action`), so this is the one authorized way to write
-it: `image_qa.inspcomm` is the durable copy, which `Preprocess.prepare_header` restores
-into a rebuilt header, the FITS header and its `.header` sidecar carry the same cards, and
-`process_status.sanity` is the config-level decision automation reads
-(`WHERE sanity IS NOT FALSE`).
+A verdict is `SANITY` plus an `INSPCOMM` comment. `INSPCOMM` beside `SANITY=False` is a
+veto: final, never recomputed (see `Checker._sanity_action`). `INSPCOMM` beside
+`SANITY=True` is a soft record: the machine recomputes it like any other frame and, when
+it rejects, `machine_reject` removes the comment. This module is the one authorized way to
+write a verdict: `image_qa.inspcomm` is the durable copy, which `Preprocess.prepare_header`
+restores into a rebuilt header, the FITS header and its `.header` sidecar carry the same
+cards, and `process_status.sanity` is the config-level decision automation reads.
 
 Idempotent: repeating a call writes nothing. INSPCOMM is freeform, so an existing comment
 is left exactly as it is; pass `overwrite=True` to replace it with the new one.
@@ -22,12 +23,21 @@ from typing import List, Optional, Union
 
 from astropy.io import fits
 
-from ..utils.header import update_padded_header_file, update_padded_header_smart
-from ..utils import atleast_1d
+from ..const.sciproc import REJECTION_PROCESS_HEADER_KEY
+from ..utils.header import (
+    read_header_file,
+    remove_padded_header_key,
+    update_padded_header_cards,
+    update_padded_header_file,
+    update_padded_header_smart,
+    write_header_file,
+)
+from ..utils import atleast_1d, swap_ext
 
 INSPCOMM_KEY = "INSPCOMM"
-INSPCOMM_COMMENT = "Human inspection comment; Trust SANITY if exists"
-SANITY_COMMENT = "Pipeline image sanity flag"
+INSPCOMM_COMMENT = "Human inspection; trust SANITY=F"
+SANITY_COMMENT = "Deliverable per machine QA; INSPCOMM+F = veto"
+REJ_PROC_COMMENT = "Sci-process that set SANITY to False"
 
 
 def resolve_inspcomm(existing: Optional[str], new: Optional[str], overwrite: bool = False) -> Optional[str]:
@@ -35,6 +45,30 @@ def resolve_inspcomm(existing: Optional[str], new: Optional[str], overwrite: boo
     if not new or (existing and not overwrite):
         return existing
     return new
+
+
+def machine_reject(image: str, rej_proc: Optional[str], cards: Union[dict, fits.Header, None] = None) -> bool:
+    """One FITS write: the caller's `cards`, then SANITY=F (+REJ_PROC); removes a soft INSPCOMM, never a veto. Returns whether one was removed."""
+    seal = {"SANITY": (False, SANITY_COMMENT)}
+    if rej_proc:
+        seal[REJECTION_PROCESS_HEADER_KEY] = (rej_proc, REJ_PROC_COMMENT)
+    with fits.open(image, mode="update") as hdul:
+        header = hdul[0].header
+        if INSPCOMM_KEY in header and header.get("SANITY") is False:
+            return False  # a veto is final; the chain's inspection filter keeps vetoes away from every caller
+        removed = remove_padded_header_key(header, INSPCOMM_KEY)
+        if cards is not None:
+            update_padded_header_cards(header, cards)
+        update_padded_header_cards(header, seal)
+        hdul.flush()
+
+    if removed:  # the sidecar is the header's twin: no INSPCOMM here means none there
+        header_file = swap_ext(image, "header")
+        if os.path.exists(header_file):
+            sidecar = read_header_file(header_file)
+            if sidecar.get("SANITY") is not False and remove_padded_header_key(sidecar, INSPCOMM_KEY):
+                write_header_file(header_file, sidecar)
+    return removed
 
 
 def inspect_images(

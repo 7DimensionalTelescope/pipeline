@@ -8,11 +8,11 @@ from typing import Optional
 from ..const.sciproc import REJECTION_PROCESS_HEADER_KEY, ProcessSpec, SCIPROCESS_REGISTRY
 from ..config.utils import get_key
 from .. import const
+from .inspection import SANITY_COMMENT, machine_reject
 
 
 class SanityAction(Enum):
-    TRUST_IMAGE_AND_KEEP_IMAGE = auto()  # if INSPCOMM exists
-    TRUST_SANITY_AND_DROP_IMAGE = auto()  # if INSPCOMM exists
+    TRUST_SANITY_AND_DROP_IMAGE = auto()  # INSPCOMM beside SANITY=F: a human veto
     RECOMPUTE_SANITY = auto()  # this means a quick checkup of the header values against science.json; usually pass
     DROP_IMAGE = auto()  # excluded in self.input_images
 
@@ -83,14 +83,13 @@ class Checker:
 
         for img, sanity_value in sanity_updates.items():
             try:
-                with fits.open(img, mode="update") as hdul:
-                    self.update_sanity_header(
-                        hdul[0].header,
-                        sanity_value,
-                        current_process=current_process,
-                    )
-                    hdul.flush()
-                    self.logger.debug(f"Updated SANITY header to {sanity_value} for {os.path.basename(img)}")
+                if sanity_value:
+                    with fits.open(img, mode="update") as hdul:
+                        self.update_sanity_header(hdul[0].header, True, current_process=current_process)
+                        hdul.flush()
+                else:
+                    machine_reject(img, current_process.name if current_process is not None else None)
+                self.logger.debug(f"Updated SANITY header to {sanity_value} for {os.path.basename(img)}")
                 self.sync_sanity_to_image_qa(img, sanity_value)
             except Exception as e:
                 self.logger.warning(f"Failed to update SANITY header for {os.path.basename(img)}: {e}")
@@ -165,9 +164,9 @@ class Checker:
 
         If SANITY is False in the header, only reevaluate it on overwrite reruns
         when the current process is before or matches REJ_PROC.
-        If SANITY is True or missing, recompute the SANITY from criteria.
-        If INSPCOMM is present in the header, trust the SANITY as is and do not
-        recompute from criteria, even when overwrite=True.
+        If SANITY is True or missing, recompute the SANITY from criteria, INSPCOMM or not.
+        If INSPCOMM is present beside SANITY=False, that is a human veto: drop the image
+        and never recompute, even when overwrite=True.
 
         Args:
             images: List of image file paths to filter
@@ -232,11 +231,6 @@ class Checker:
                 )
 
                 match decision:
-                    case SanityAction.TRUST_IMAGE_AND_KEEP_IMAGE:
-                        self.logger.debug(f"Trusting SANITY=True as-is: {os.path.basename(image)}")
-                        filtered_images.append(image)
-                        continue
-
                     case SanityAction.TRUST_SANITY_AND_DROP_IMAGE:
                         self.logger.debug(f"Trusting SANITY=False as-is: {os.path.basename(image)}")
                         continue
@@ -423,7 +417,7 @@ class Checker:
         """
         Update SANITY-related header cards on an existing header object in place.
         """
-        header["SANITY"] = (sanity, "Pipeline image sanity flag")
+        header["SANITY"] = (sanity, SANITY_COMMENT)
 
         # if sanity:
         #     rej_proc = (header.get(REJECTION_PROCESS_HEADER_KEY) or "").strip()
@@ -497,10 +491,8 @@ class Checker:
         has_inspcomm = "INSPCOMM" in header
         existing_sanity = header.get("SANITY")
 
-        if has_inspcomm:
-            if existing_sanity is False:
-                return SanityAction.TRUST_SANITY_AND_DROP_IMAGE
-            return SanityAction.TRUST_IMAGE_AND_KEEP_IMAGE
+        if has_inspcomm and existing_sanity is False:
+            return SanityAction.TRUST_SANITY_AND_DROP_IMAGE
 
         if existing_sanity is False:
             if not overwrite or current_process is None:

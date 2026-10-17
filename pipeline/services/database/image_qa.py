@@ -299,14 +299,19 @@ class ImageQA(BaseDatabase):
 
     @override
     def update_data(self, target_id: int, **kwargs):
-        """Header-derived refresh: never writes the seal, and `sanity` yields to a sealed row."""
+        """Header-derived refresh: never writes a seal; a veto (F + INSPCOMM) is final, a machine F drops a soft seal beside T."""
         kwargs.pop("inspcomm", None)
         sanity = kwargs.pop("sanity", None)
         params = {k: (None if v == "None" else v) for k, v in kwargs.items() if v is not None}
         clauses = [f"{k} = %({k})s" for k in params]
         if sanity is not None:
             params["sanity"] = None if sanity == "None" else sanity
-            clauses.append("sanity = CASE WHEN inspcomm IS NULL THEN %(sanity)s ELSE sanity END")
+            clauses.append(
+                "sanity = CASE WHEN sanity IS FALSE AND inspcomm IS NOT NULL THEN sanity ELSE %(sanity)s END"
+            )
+            clauses.append(
+                "inspcomm = CASE WHEN %(sanity)s IS FALSE AND sanity IS NOT FALSE THEN NULL ELSE inspcomm END"
+            )
         if not clauses:
             return None
         query = query_update.format(table_name=self.table_name, params=", ".join(clauses))

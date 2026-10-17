@@ -141,12 +141,15 @@ class ProcessStatus(BaseDatabase):
         return self._pyTable
 
     def set_config_sanity(self, name: str, sanity) -> Optional[int]:
-        """Machine-set config sanity (the return-code-2 path). Never touches a human verdict. None clears it."""
+        """Machine-set config sanity (the return-code-2 path): None clears a machine False; False also drops a soft human True; a human False (veto) is never touched."""
         row = self.read_data(name)
-        if row is None or row.inspected_at is not None or row.sanity is sanity:
+        if row is None or row.sanity is sanity:
+            return None
+        if row.inspected_at is not None and (row.sanity is False or sanity is None):
             return None
 
-        self.update_data(row.id, sanity="None" if sanity is None else sanity)
+        cleared = {"inspcomm": "None", "inspected_by": "None", "inspected_at": "None"} if row.inspected_at else {}
+        self.update_data(row.id, sanity="None" if sanity is None else sanity, **cleared)
         return row.id
 
     def set_inspection(

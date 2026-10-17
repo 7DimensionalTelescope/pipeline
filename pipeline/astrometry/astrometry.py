@@ -24,6 +24,7 @@ from ..const.sciproc import ASTROMETRY_SPEC, REJECTION_PROCESS_HEADER_KEY, SCIPR
 from ..errors import AstrometryError, ScampError, SolveFieldError
 from ..utils import swap_ext, add_suffix, force_symlink, time_diff_in_seconds, unique_filename, atleast_1d, collapse
 from ..utils.header import update_padded_header, reset_header, fitsrec_to_header
+from ..services.inspection import SANITY_COMMENT, machine_reject
 from ..services.memory import MemoryMonitor
 from ..config import SciProcConfiguration
 from ..config.utils import get_key
@@ -387,7 +388,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     f"Early QA rejected {os.path.basename(image_info.image_path)}! Skipping all subsequent processing, including Astrometry and Photometry.",
                     AstrometryError.EarlyQARejection,
                 )
-                update_padded_header(image_info.image_path, fits.Header(image_info.early_qa_cards))
+                machine_reject(image_info.image_path, ASTROMETRY_SPEC.name, fits.Header(image_info.early_qa_cards))
                 continue
 
         # we check ii.sane. no need to pop
@@ -423,13 +424,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
     def _write_astrometry_sanity_rejection_to_header(self, image_path: str) -> None:
         """Write SANITY=F and REJ_PROC so downstream (e.g. single photometry) can match on re-run."""
-        update_padded_header(
-            image_path,
-            [
-                ("SANITY", False, "Sanity flag for SCIPROCESS"),
-                (REJECTION_PROCESS_HEADER_KEY, ASTROMETRY_SPEC.name, "Sci-process that set SANITY to False"),
-            ],
-        )
+        machine_reject(image_path, ASTROMETRY_SPEC.name)
 
     def _solve_field_suite(
         self,
@@ -1769,7 +1764,7 @@ class ImageInfo:
     @property
     def early_qa_cards(self) -> List[Tuple[str, float]]:
         cards = [
-            ("SANITY", self.SANITY, "Sanity flag for SCIPROCESS"),
+            ("SANITY", self.SANITY, SANITY_COMMENT),
         ]
         if self.SANITY is False:
             cards.append((REJECTION_PROCESS_HEADER_KEY, ASTROMETRY_SPEC.name, "Sci-process that set SANITY to False"))

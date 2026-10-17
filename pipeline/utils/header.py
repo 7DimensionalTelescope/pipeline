@@ -223,70 +223,66 @@ def update_padded_header_smart(target_fits, header_new):
     """
     with fits.open(target_fits, mode="update") as hdul:
         header: fits.Header = hdul[0].header
-
-        # Find the index of the last non-COMMENT card
-        insert_pos = 0
-        for idx in range(len(header.cards) - 1, -1, -1):
-            if header.cards[idx].keyword != "COMMENT":
-                insert_pos = idx + 1
-                break
-
-        # Normalize header_new into a list of (key, value, comment) tuples
-        if isinstance(header_new, fits.Header):
-            new_cards = [(c.keyword, c.value, c.comment) for c in header_new.cards]
-        elif isinstance(header_new, dict):
-            new_cards = []
-            for key, val in header_new.items():
-                if isinstance(val, tuple):
-                    new_cards.append((key, val[0], val[1]))
-                else:
-                    new_cards.append((key, val, None))
-        else:
-            raise ValueError("Unsupported Header format for updating padded Header")
-
-        # Apply each new card: override if exists, otherwise append in padding
-        for key, value, comment in new_cards:
-            if key not in ("", "COMMENT", "HISTORY") and key in header:  # override existing
-                existing_idx = list(header.keys()).index(key)
-                # print(
-                #     f"[update_padded_header_smart] replacing key={key} idx={existing_idx} "
-                #     f"old_value={header[key]!r} new_value={value!r}"
-                # )
-                if comment is None:
-                    comment = header.comments[key]
-                # header.set(key, value, comment)
-                old_slots = sum(len(str(c)) // fits.Card.length for c in header.cards if c.keyword == key)
-                owed = len(str(fits.Card(key, value, comment))) // fits.Card.length - old_slots
-                del header[key]
-                header.insert(existing_idx, (key, value, comment), after=False)
-                # print(
-                #     f"[update_padded_header_smart] replaced key={key} "
-                #     f"stored_value={header[key]!r} comment={header.comments[key]!r}"
-                # )
-            else:
-                owed = len(str(fits.Card(key, value, comment))) // fits.Card.length - 1
-                if insert_pos <= len(header) - 1:
-                    del header[insert_pos]
-                    header.insert(insert_pos, (key, value, comment), after=False)
-                else:
-                    header.append((key, value, comment), end=True)
-                    owed = 0  # no padding left to charge; the header has already grown
-                insert_pos += 1  # shift insertion point forward
-            # a CONTINUE card occupies several 80-byte card images and must pay for each out of the padding
-            for _ in range(owed):
-                del header[insert_pos]
-            for _ in range(-owed):
-                header.insert(insert_pos, fits.Card("COMMENT", " "), after=False)
-
+        update_padded_header_cards(header, header_new)
         hdul.flush()
         # print(f"[header dump]: {header.tostring()}")
 
-    check_header = fits.getheader(target_fits)
-    # print(
-    #     "[update_padded_header_smart] readback "
-    #     f"SANITY={check_header.get('SANITY')!r} "
-    #     f"REJ_PROC={check_header.get('REJ_PROC')!r}"
-    # )
+
+def update_padded_header_cards(header: fits.Header, header_new) -> None:
+    """In-memory core of `update_padded_header_smart`: override existing keys in place, new keys take padding COMMENTs."""
+    # Find the index of the last non-COMMENT card
+    insert_pos = 0
+    for idx in range(len(header.cards) - 1, -1, -1):
+        if header.cards[idx].keyword != "COMMENT":
+            insert_pos = idx + 1
+            break
+
+    # Normalize header_new into a list of (key, value, comment) tuples
+    if isinstance(header_new, fits.Header):
+        new_cards = [(c.keyword, c.value, c.comment) for c in header_new.cards]
+    elif isinstance(header_new, dict):
+        new_cards = []
+        for key, val in header_new.items():
+            if isinstance(val, tuple):
+                new_cards.append((key, val[0], val[1]))
+            else:
+                new_cards.append((key, val, None))
+    else:
+        raise ValueError("Unsupported Header format for updating padded Header")
+
+    # Apply each new card: override if exists, otherwise append in padding
+    for key, value, comment in new_cards:
+        if key not in ("", "COMMENT", "HISTORY") and key in header:  # override existing
+            existing_idx = list(header.keys()).index(key)
+            # print(
+            #     f"[update_padded_header_smart] replacing key={key} idx={existing_idx} "
+            #     f"old_value={header[key]!r} new_value={value!r}"
+            # )
+            if comment is None:
+                comment = header.comments[key]
+            # header.set(key, value, comment)
+            old_slots = sum(len(str(c)) // fits.Card.length for c in header.cards if c.keyword == key)
+            owed = len(str(fits.Card(key, value, comment))) // fits.Card.length - old_slots
+            del header[key]
+            header.insert(existing_idx, (key, value, comment), after=False)
+            # print(
+            #     f"[update_padded_header_smart] replaced key={key} "
+            #     f"stored_value={header[key]!r} comment={header.comments[key]!r}"
+            # )
+        else:
+            owed = len(str(fits.Card(key, value, comment))) // fits.Card.length - 1
+            if insert_pos <= len(header) - 1:
+                del header[insert_pos]
+                header.insert(insert_pos, (key, value, comment), after=False)
+            else:
+                header.append((key, value, comment), end=True)
+                owed = 0  # no padding left to charge; the header has already grown
+            insert_pos += 1  # shift insertion point forward
+        # a CONTINUE card occupies several 80-byte card images and must pay for each out of the padding
+        for _ in range(owed):
+            del header[insert_pos]
+        for _ in range(-owed):
+            header.insert(insert_pos, fits.Card("COMMENT", " "), after=False)
 
 
 def update_padded_header_file(target: str, header_new: dict) -> str:
@@ -344,6 +340,18 @@ def update_padded_header_file(target: str, header_new: dict) -> str:
 
     write_header_file(header_file, header)
     return "written"
+
+
+def remove_padded_header_key(header: fits.Header, key: str) -> bool:
+    """Delete `key` in place, leaving one padding COMMENT per 80-byte image it held, so the block count is unchanged."""
+    if key not in header:
+        return False
+    idx = header.index(key)
+    slots = len(str(header.cards[idx])) // fits.Card.length
+    del header[key]
+    for _ in range(slots):
+        header.insert(idx, fits.Card("COMMENT", " "), after=False)
+    return True
 
 
 def add_padding(header: fits.Header, n: int, copy_header=False) -> fits.Header:

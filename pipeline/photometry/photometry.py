@@ -52,6 +52,7 @@ from ..tools.table import match_two_catalogs, build_condition_mask
 from ..path.path import PathHandler
 from ..io.cfitsldac import write_ldac
 from ..utils.header import get_header_key, update_padded_header_smart
+from ..services.inspection import machine_reject
 from ..utils.tile import is_ris_tile
 from ..errors import (
     # process errors
@@ -1531,8 +1532,9 @@ class PhotometrySingle:
             phot_header.SANITY = False
             phot_header.REJ_PROC = self._sciproc_rejection_process_name
             self.logger.info(f"Setting SANITY=False for {os.path.basename(self.input_image)}")
-
-        update_padded_header_smart(self.input_image, phot_header.dict)  # smart ver. for SANITY
+            machine_reject(self.input_image, self._sciproc_rejection_process_name, phot_header.dict)
+        else:
+            update_padded_header_smart(self.input_image, phot_header.dict)  # smart ver. for SANITY
         self.logger.info(f"Image header has been updated with photometry information (aperture, zero point, ...).")
 
     def write_catalog(self, obs_src_table) -> None:
@@ -1850,6 +1852,9 @@ class PhotometryHeader:
 
                 if "ZP_AUTO" in image_info.phot_header_keys:
                     self._set_aperture_info_from_header(image_info.phot_header_keys)
+
+            if self.SANITY is not False:
+                self.REJ_PROC = None  # a rejection stage recorded before a recompute must not be re-emitted
 
     def _set_aperture_info_from_header(self, phot_header_keys: dict) -> None:
         """
