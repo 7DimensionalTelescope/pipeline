@@ -1327,7 +1327,16 @@ class PhotometrySingle:
         """Updates PhotometryHeader.INF_FILT with the best-matching filter inferred by the pipeline"""
         self.phot_header.INF_DEZP = self.phot_header.INF_FIL2 = self.phot_header.INF_DEZF = None
         zp_cut = 27.2  # 26.8
+        min_stdnumb = 5  # fewer ZP stars make EZP_AUTO meaningless (STDNUMB=1 gives 0 for every filter)
         alleged_filter = self.image_info.filter
+        if (self.phot_header.STDNUMB or 0) < min_stdnumb:
+            self.logger.warning(
+                f"STDNUMB={self.phot_header.STDNUMB} < {min_stdnumb}: filter check skipped, INF_FILT left undefined",
+                FilterCheckError,
+            )
+            self.phot_header.INF_FILT = None
+            self.phot_header._inf_cleared = True
+            return alleged_filter
         filters_checked = [k for k in phot_headers.keys()]
 
         self.logger.debug(f"phot_headers: {phot_headers}")
@@ -2003,7 +2012,11 @@ class PhotometryHeader:
             {k: v for k, v in phot_header_dict.items() if v[0] is not None}
             | (residual.cards(include_missing=True) if self.BACKN is not None else {})
             # undefined INF_* cards replace the values a previous run left beside INF_FILT
-            | ({k: misc_dict[k] for k in ("INF_DEZP", "INF_FIL2", "INF_DEZF")} if self.INF_FILT is not None else {})
+            | (
+                {k: misc_dict[k] for k in ("INF_FILT", "INF_DEZP", "INF_FIL2", "INF_DEZF")}
+                if self.INF_FILT is not None or getattr(self, "_inf_cleared", False)
+                else {}
+            )
         )
 
     def __repr__(self) -> str:
