@@ -543,3 +543,15 @@ class Checker:
         # config_node = self.config_node if hasattr(self, "config_node") else self.config.node
         # is_too = get_key(config_node, "settings.is_too", default=False)  # Get is_too from config settings
         # self.path = PathHandler(self.input_images, working_dir=None, is_too=is_too)
+
+
+_QA_CRITERIA = {}
+
+
+def qa_criterion(key: str, dtype: str = "SCIENCE") -> dict:
+    """One `{value, criteria, description}` entry of ref/qa/<category>.json, read once per process: the stages' own floors."""
+    category = "masterframe" if dtype.upper() in {"BIAS", "DARK", "FLAT", "MASTERFRAME"} else "science"
+    if category not in _QA_CRITERIA:
+        with open(os.path.join(const.REF_DIR, "qa", f"{category}.json"), "r") as f:
+            _QA_CRITERIA[category] = json.load(f)
+    return _QA_CRITERIA[category][dtype.upper()][key]

@@ -46,3 +46,8 @@ database:
   # Covers scheduler mirrors and post-product config dependency recording,
   # including ToO and in-memory scheduler runs.
   AUTO_RECORD_PROCESS_STATUS_DEPENDENCIES: true
+
+observatory:
+  # Flats of every mounted filter are taken nightly from this nightdate on. Before it, a night's
+  # frame list does not say which filters were mounted, so the filter check rules none out.
+  FILTER_INVENTORY_NIGHTDATE: "2024-07-30"  # keep quoted: compared as a string with nightdates

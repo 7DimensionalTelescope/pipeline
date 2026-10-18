@@ -19,6 +19,11 @@
             "value": false,
             "criteria": "eq",
             "description": "Image must NOT have a shifted-overscan band"
+        },
+        "STDNUMB": {
+            "value": 5,
+            "criteria": "gte",
+            "description": "Zero-point stars from Photometry must be >= 5"
         }
     }
 }

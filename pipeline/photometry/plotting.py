@@ -53,6 +53,11 @@ def plot_filter_check(
     ax1.axvspan(inf_idx - 0.5, inf_idx + 0.5, color="dodgerblue", alpha=0.3)
     blue_patch = mpatches.Patch(color="dodgerblue", alpha=0.3, label=f"Inferred Filter")
 
+    if alleged_filter in filters_checked:  # red box edge around the filter recorded in the header
+        rec_idx = filters_checked.index(alleged_filter)
+        ax1.axvspan(rec_idx - 0.5, rec_idx + 0.5, fill=False, edgecolor="red", linewidth=2)
+    red_patch = mpatches.Patch(fill=False, edgecolor="red", linewidth=2)
+
     # x-ticks and tilted labels
     ax1.set_xticks(range(len(filters_checked)))
     ax1.set_xticklabels(filters_checked, rotation=45, ha="right")
@@ -77,10 +82,15 @@ def plot_filter_check(
     h1, l1 = ax1.get_legend_handles_labels()
     h2, l2 = ax2.get_legend_handles_labels()
     ax1.legend(
-        h1 + h2 + [gray_patch, light_patch, blue_patch],
+        h1 + h2 + [gray_patch, light_patch, blue_patch, red_patch],
         l1
         + l2
-        + ["Ruled out: not in filter budget", "Ruled out: medium-band ZP cut", f"Inferred Filter ({inferred_filter})"],
+        + [
+            "Ruled out: not in filter budget",
+            "Ruled out: medium-band ZP cut",
+            f"Inferred Filter ({inferred_filter})",
+            f"Recorded Filter ({alleged_filter})",
+        ],
         loc="upper left",
     )
 

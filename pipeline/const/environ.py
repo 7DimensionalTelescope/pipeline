@@ -176,3 +176,8 @@ DEFAULT_RECIPIENT = os.environ.get("DEFAULT_RECIPIENT")
 SCHEDULER_DB_PATH = _external_paths.get("SCHEDULER_DB_PATH")
 QUEUE_SOCKET_PATH = _external_paths.get("QUEUE_SOCKET_PATH")
 TOO_DB_PATH = _external_paths.get("TOO_DB_PATH")
+
+# observatory history
+_observatory = _deployment_config.get("observatory") or {}
+# nightly flats in every mounted filter since this nightdate; earlier frame lists are no filter inventory
+FILTER_INVENTORY_NIGHTDATE = _observatory.get("FILTER_INVENTORY_NIGHTDATE")

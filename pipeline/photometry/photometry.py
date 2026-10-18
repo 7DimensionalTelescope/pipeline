@@ -23,7 +23,7 @@ from ..services.memory import MemoryMonitor
 from ..services.queue import QueueManager
 from ..services.database.handler import DatabaseHandler
 from ..services.database.image_qa import ImageQATable
-from ..services.checker import Checker
+from ..services.checker import Checker, qa_criterion
 
 from ..config.utils import get_key
 from ..utils import time_diff_in_seconds, force_symlink, collapse, get_basename
@@ -35,6 +35,7 @@ from ..const import (
     MEDIUM_FILTERS,
     BROAD_FILTERS,
     ALL_FILTERS,
+    FILTER_INVENTORY_NIGHTDATE,
     NAME_TYPE_RAW,
     NAME_TYPE_FLAT,
     NAME_TYPE_SCIENCE,
@@ -75,6 +76,8 @@ from ..errors import (
 
 from . import utils as phot_utils
 from .plotting import plot_zp, plot_filter_check
+
+MIN_STDNUMB = qa_criterion("STDNUMB")["value"]  # science.json's `gte` floor: fewer ZP stars make EZP_AUTO meaningless
 
 
 class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
@@ -463,6 +466,8 @@ class PhotometrySingle:
             start_time = time.time()
             self.logger.info(f"Start 'PhotometrySingle' for the image {self.name} [{self._id}]")
             self.logger.debug(f"{'=' * 13} {os.path.basename(self.input_image)} {'=' * 13}")
+            if not self._trust_header_zp:
+                self.phot_header.STDNUMB = None  # this run's zero-point star count, or nothing: never the header's
 
             # use_header_seeing = not overwrite or self._trust_header_seeing
             use_header_seeing = self._trust_header_seeing
@@ -525,16 +530,15 @@ class PhotometrySingle:
                 f"'PhotometrySingle' is completed for the image [{self._id}]"
                 f" in {time_diff_in_seconds(start_time)} seconds"
             )
-        except NotEnoughSourcesError as e:
+        except Exception as e:  # whatever failed, the frame is not deliverable: SANITY=False and the run goes on
+            self.phot_header.clear_calibration()  # null the ZP cards this or a previous run left; SANITY=False below
             self.update_image_header()
-            self.logger.error(
-                f"PhotometrySingle failed for the image [{self._id}]: {str(e)}, but will continue until it depletes all input_images.",
+            self.logger.warning(
+                f"PhotometrySingle rejected the image [{self._id}]: {str(e)}; the run continues with the other input_images.",
                 e,
+                exc_info=not isinstance(e, NotEnoughSourcesError),  # the unexpected ones keep their traceback
             )
             return
-        except Exception as e:
-            self.logger.error(f"PhotometrySingle failed for the image [{self._id}]: {str(e)}", e, exc_info=True)
-            raise
 
     def run_source_catalog(self, overwrite=True) -> None:
         """WhiteCatalog only"""
@@ -1212,13 +1216,13 @@ class PhotometrySingle:
             f"ZP calibration sample: {len(zp_src_table)}/{len(obs_src_table)} detections have a usable "
             f"'{self.image_info.ref_mag_key}' and pass the quality cuts"
         )
-        if len(zp_src_table) == 0:
-            raise self.logger.process_error.exception(NotEnoughSourcesError)(
-                f"No sources remain for ZP calibration after applying quality cuts to matched "
-                f"reference sources for '{self.image_info.ref_mag_key}'."
-            )
         phot_header = phot_header or self.phot_header
         phot_header.STDNUMB = len(zp_src_table)
+        if len(zp_src_table) < MIN_STDNUMB:
+            raise self.logger.process_error.exception(NotEnoughSourcesError)(
+                f"{len(zp_src_table)} source(s) remain for ZP calibration after the quality cuts on matched "
+                f"reference sources for '{self.image_info.ref_mag_key}'; fewer than {MIN_STDNUMB}: not deliverable"
+            )
         return zp_src_table
 
     def calculate_zp(
@@ -1328,16 +1332,7 @@ class PhotometrySingle:
         """Updates PhotometryHeader.INF_FILT with the best-matching filter inferred by the pipeline"""
         self.phot_header.INF_DEZP = self.phot_header.INF_FIL2 = self.phot_header.INF_DEZF = None
         zp_cut = 27.2  # 26.8
-        min_stdnumb = 5  # fewer ZP stars make EZP_AUTO meaningless (STDNUMB=1 gives 0 for every filter)
         alleged_filter = self.image_info.filter
-        if (self.phot_header.STDNUMB or 0) < min_stdnumb:
-            self.logger.warning(
-                f"STDNUMB={self.phot_header.STDNUMB} < {min_stdnumb}: filter check skipped, INF_FILT left undefined",
-                FilterCheckError,
-            )
-            self.phot_header.INF_FILT = None
-            self.phot_header._inf_cleared = True
-            return alleged_filter
         filters_checked = [k for k in phot_headers.keys()]
 
         self.logger.debug(f"phot_headers: {phot_headers}")
@@ -1462,11 +1457,18 @@ class PhotometrySingle:
         from ..path import NameHandler
         from ..services.database.query import RawImageQuery
 
+        name = NameHandler(self.input_image)
+        if FILTER_INVENTORY_NIGHTDATE and name.nightdate and name.nightdate < FILTER_INVENTORY_NIGHTDATE:
+            self.logger.info(
+                f"Nightdate {name.nightdate} precedes {FILTER_INVENTORY_NIGHTDATE} (ref/deployment.yml): the frame list "
+                f"is no filter inventory, so no filter is ruled out"
+            )
+            return ALL_FILTERS
+
         query = RawImageQuery()
         # Django-postresql main image db
         if query.is_connected():
             self.logger.debug(f"get_active_filters: Connected to Django-PostgreSQL raw image DB")
-            name = NameHandler(self.input_image)
             all_filter_files = (
                 query.on_date(name.nightdate).by_units([name.unit]).of_types(["flat", "sci"]).image_files()
             )
@@ -1850,7 +1852,9 @@ class PhotometryHeader:
                     # except Exception:
                     #     pass  # silently ignore any conversion errors
 
-                if "ZP_AUTO" in image_info.phot_header_keys:
+                if (
+                    image_info.phot_header_keys.get("ZP_AUTO") is not None
+                ):  # undefined on a rejected frame: nothing to load
                     self._set_aperture_info_from_header(image_info.phot_header_keys)
 
             if self.SANITY is not False:
@@ -1896,21 +1900,53 @@ class PhotometryHeader:
     def zp_dict(self) -> Dict:
         temp = {}
         for aper, bundle in self.aperture_info.items():
-            mag_key, magerr_key = phot_utils.get_mag_key(aper)
-            suffix = bundle["suffix"]
-            zp = bundle["ZP"]
-            zperr = bundle["ZPERR"]
-            ul_3sig = bundle["UL3"]
-            ul_5sig = bundle["UL5"]
-            temp[f"ZP_{suffix}"] = (zp, f"ZERO POINT for {mag_key}")
-            temp[f"EZP_{suffix}"] = (zperr, f"ZERO POINT ERROR for {mag_key}")
-            cov = bundle.get("COV")
-            if cov is not None and ul_3sig is not None and ul_5sig is not None:
-                temp[f"UL3_{suffix}"] = (ul_3sig, f"3 SIGMA LIMITING MAG FOR {mag_key}")
-                temp[f"UL5_{suffix}"] = (ul_5sig, f"5 SIGMA LIMITING MAG FOR {mag_key}")
-            if cov is not None:
-                temp[f"COV_{suffix}"] = (round(cov, 4), "Aperture noise / (BACKSIG * sqrt(pi R^2))")
+            temp.update(self._zp_cards(aper, bundle))
         return temp
+
+    @staticmethod
+    def _zp_cards(aperture_key: str, bundle: dict, include_missing: bool = False) -> Dict:
+        """ZP/EZP/UL3/UL5/COV cards of one aperture; `include_missing` emits the unset ones as undefined cards."""
+        mag_key, _ = phot_utils.get_mag_key(aperture_key)
+        suffix = bundle["suffix"]
+        cov = bundle.get("COV")
+        cards = {
+            f"ZP_{suffix}": (bundle["ZP"], f"ZERO POINT for {mag_key}"),
+            f"EZP_{suffix}": (bundle["ZPERR"], f"ZERO POINT ERROR for {mag_key}"),
+        }
+        if include_missing or (cov is not None and bundle["UL3"] is not None and bundle["UL5"] is not None):
+            cards[f"UL3_{suffix}"] = (bundle["UL3"], f"3 SIGMA LIMITING MAG FOR {mag_key}")
+            cards[f"UL5_{suffix}"] = (bundle["UL5"], f"5 SIGMA LIMITING MAG FOR {mag_key}")
+        if include_missing or cov is not None:
+            cards[f"COV_{suffix}"] = (
+                round(cov, 4) if cov is not None else None,
+                "Aperture noise / (BACKSIG * sqrt(pi R^2))",
+            )
+        return cards
+
+    def clear_calibration(self) -> None:
+        """Too few ZP stars: forget a zero point loaded from the header and null every calibration card in the next write."""
+        self.aperture_info = {}
+        self.INF_FILT = self.INF_DEZP = self.INF_FIL2 = self.INF_DEZF = None
+        self._calibration_cleared = True
+
+    @property
+    def calibration_null_cards(self) -> Dict:
+        """Undefined cards for every zero-point product a previous run may have left: aperture diameters and the ZP family."""
+        cards = {}
+        for aperture_key, (_, comment) in phot_utils.get_aperture_dict(self.PEEING, self.image_info.pixscale).items():
+            cards[aperture_key] = (None, comment)
+            null = {
+                "suffix": phot_utils.get_aperture_suffix(aperture_key),
+                "ZP": None,
+                "ZPERR": None,
+                "UL3": None,
+                "UL5": None,
+                "COV": None,
+            }
+            cards.update(
+                self._zp_cards(aperture_key, null, include_missing=aperture_key != "AUTO")
+            )  # AUTO has no UL/COV
+        return cards
 
     @property
     def covariance_depth_complete(self) -> bool:
@@ -2012,6 +2048,7 @@ class PhotometryHeader:
         phot_header_dict.update({k: (round(v[0], 6), v[1]) for k, v in self.aperture_dict.items()})
         phot_header_dict.update({k: (round(v[0], 6), v[1]) for k, v in self.zp_dict.items() if v[0] is not None})
 
+        cleared = getattr(self, "_calibration_cleared", False)
         # Filter out entries where the value is None
         return (
             {k: v for k, v in phot_header_dict.items() if v[0] is not None}
@@ -2019,9 +2056,12 @@ class PhotometryHeader:
             # undefined INF_* cards replace the values a previous run left beside INF_FILT
             | (
                 {k: misc_dict[k] for k in ("INF_FILT", "INF_DEZP", "INF_FIL2", "INF_DEZF")}
-                if self.INF_FILT is not None or getattr(self, "_inf_cleared", False)
+                if self.INF_FILT is not None or cleared
                 else {}
             )
+            # no zero point: a previous run's ZP cards must not survive either, nor its STDNUMB when none was counted
+            | (self.calibration_null_cards if cleared else {})
+            | ({"STDNUMB": misc_dict["STDNUMB"]} if cleared and self.STDNUMB is None else {})
         )
 
     def __repr__(self) -> str:
