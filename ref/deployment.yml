@@ -48,6 +48,5 @@ database:
   AUTO_RECORD_PROCESS_STATUS_DEPENDENCIES: true
 
 observatory:
-  # Flats of every mounted filter are taken nightly from this nightdate on. Before it, a night's
-  # frame list does not say which filters were mounted, so the filter check rules none out.
-  FILTER_INVENTORY_NIGHTDATE: "2024-07-30"  # keep quoted: compared as a string with nightdates
+  TRUST_ACTIVE_FILTERS_NIGHTDATE: "2024-07-30"  # including the date
+  SECOND_FILTER_ADDITION_NIGHTDATE: "2026-01-03"

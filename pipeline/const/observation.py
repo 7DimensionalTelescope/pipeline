@@ -20,6 +20,7 @@ available_7dt_units = [f"7DT0{unit}" if unit < 10 else f"7DT{unit}" for unit in 
 WIDE_FILTERS = ["m375w", "m425w", "m466w", "m692w", "m710w", "m769w", "m832w"]
 FIRST_MEDIUM_FILTERS = [f"m{wav}" for wav in range(400, 900, 25)]
 SECOND_MEDIUM_FILTERS = ["m386", "m438", "m483", "m512", "m534", "m561", "m586", "m615", "m640", "m661"]
+SECOND_FILTERS = sorted(set(SECOND_MEDIUM_FILTERS + WIDE_FILTERS) - {"m375w", "m425w"})
 MEDIUM_FILTERS = sorted(FIRST_MEDIUM_FILTERS + SECOND_MEDIUM_FILTERS)
 BROAD_FILTERS = ["u", "g", "r", "i", "z"]
 ALL_FILTERS = sorted(MEDIUM_FILTERS + WIDE_FILTERS) + BROAD_FILTERS

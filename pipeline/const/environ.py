@@ -180,4 +180,6 @@ TOO_DB_PATH = _external_paths.get("TOO_DB_PATH")
 # observatory history
 _observatory = _deployment_config.get("observatory") or {}
 # nightly flats in every mounted filter since this nightdate; earlier frame lists are no filter inventory
-FILTER_INVENTORY_NIGHTDATE = _observatory.get("FILTER_INVENTORY_NIGHTDATE")
+TRUST_ACTIVE_FILTERS_NIGHTDATE = _observatory.get("TRUST_ACTIVE_FILTERS_NIGHTDATE")
+# SECOND_FILTERS (const/observation.py) were not mounted before this nightdate
+SECOND_FILTER_ADDITION_NIGHTDATE = _observatory.get("SECOND_FILTER_ADDITION_NIGHTDATE")

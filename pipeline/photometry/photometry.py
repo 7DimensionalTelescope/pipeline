@@ -35,7 +35,9 @@ from ..const import (
     MEDIUM_FILTERS,
     BROAD_FILTERS,
     ALL_FILTERS,
-    FILTER_INVENTORY_NIGHTDATE,
+    SECOND_FILTERS,
+    TRUST_ACTIVE_FILTERS_NIGHTDATE,
+    SECOND_FILTER_ADDITION_NIGHTDATE,
     NAME_TYPE_RAW,
     NAME_TYPE_FLAT,
     NAME_TYPE_SCIENCE,
@@ -477,6 +479,9 @@ class PhotometrySingle:
             if self._check_filter:
                 self.logger.info("Performing filter check")
                 filters_to_check = get_key(self.config_node.photometry, "filters_to_check") or ALL_FILTERS
+                nightdate = self.path.name.nightdate
+                if SECOND_FILTER_ADDITION_NIGHTDATE and nightdate and nightdate < SECOND_FILTER_ADDITION_NIGHTDATE:
+                    filters_to_check = [f for f in filters_to_check if f not in SECOND_FILTERS]
                 obs_src_table = self.add_matched_reference_catalog(obs_src_table, filters=filters_to_check)
                 zp_src_table = self.get_zp_src_table(obs_src_table)
 
@@ -1458,10 +1463,10 @@ class PhotometrySingle:
         from ..services.database.query import RawImageQuery
 
         name = NameHandler(self.input_image)
-        if FILTER_INVENTORY_NIGHTDATE and name.nightdate and name.nightdate < FILTER_INVENTORY_NIGHTDATE:
+        if TRUST_ACTIVE_FILTERS_NIGHTDATE and name.nightdate and name.nightdate < TRUST_ACTIVE_FILTERS_NIGHTDATE:
             self.logger.info(
-                f"Nightdate {name.nightdate} precedes {FILTER_INVENTORY_NIGHTDATE} (ref/deployment.yml): the frame list "
-                f"is no filter inventory, so no filter is ruled out"
+                f"Nightdate {name.nightdate} precedes {TRUST_ACTIVE_FILTERS_NIGHTDATE} (ref/deployment.yml): "
+                f"the frame list is no filter inventory, so no filter is ruled out"
             )
             return ALL_FILTERS
 
