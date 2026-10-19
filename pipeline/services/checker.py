@@ -111,7 +111,7 @@ class Checker:
 
     def apply_inspection_filter_and_report(self) -> bool:
         """
-        Drops only human-sealed rejections (INSPCOMM with SANITY=False) from `self.input_images`.
+        Drops only SANITY=False with INSPCOMM rejections from `self.input_images`.
 
         For stages that must not run the full sanity filter but must still honor a human verdict.
         """

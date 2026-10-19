@@ -195,7 +195,9 @@ class ImageQATable:
 
         header = fits.getheader(file)
 
-        keys = [key for key in cls.__annotations__ if key != "inspcomm"]  # the seal comes only from set_inspection
+        keys = [
+            key for key in cls.__annotations__ if key != "inspcomm"
+        ]  # a sanity-with-INSPCOMM record comes only from set_inspection
 
         for key in keys:
             possible_keys = [key.replace("_", "-").upper(), key.upper()]
@@ -299,7 +301,7 @@ class ImageQA(BaseDatabase):
 
     @override
     def update_data(self, target_id: int, **kwargs):
-        """Header-derived refresh: never writes a seal; a veto (F + INSPCOMM) is final, a machine F drops a soft seal beside T."""
+        """Header-derived refresh: never writes INSPCOMM; F with INSPCOMM is final, a machine F drops the INSPCOMM beside a T with INSPCOMM."""
         kwargs.pop("inspcomm", None)
         sanity = kwargs.pop("sanity", None)
         params = {k: (None if v == "None" else v) for k, v in kwargs.items() if v is not None}
@@ -320,7 +322,7 @@ class ImageQA(BaseDatabase):
     def set_inspection(
         self, image_name: str, sanity: bool, inspcomm: str = None, overwrite: bool = False, image_path: str = None
     ) -> Dict[int, str]:
-        """The only writer of the seal: {row id: stored INSPCOMM}; the row at `image_path` wins among same-name twins."""
+        """The only writer of a sanity-with-INSPCOMM record: {row id: stored INSPCOMM}; the row at `image_path` wins among same-name twins."""
         from ..inspection import INSPCOMM_COMMENT, INSPCOMM_KEY, resolve_inspcomm
 
         if not isinstance(sanity, bool):
@@ -335,14 +337,16 @@ class ImageQA(BaseDatabase):
         for row_id, _, existing in rows:
             text = (resolve_inspcomm(existing, inspcomm, overwrite) or "").rstrip()
             if not text or text == "None":
-                raise ValueError(f"set_inspection({image_name}): an INSPCOMM text is required; it is the seal")
+                raise ValueError(
+                    f"set_inspection({image_name}): an INSPCOMM text is required; it is what puts INSPCOMM on the row"
+                )
             fits.Card(INSPCOMM_KEY, text, INSPCOMM_COMMENT)  # astropy refuses what the header could not hold
             BaseDatabase.update_data(self, row_id, sanity=sanity, inspcomm=text)
             stored[row_id] = text
         return stored
 
     def inspection_cards(self, files) -> Dict[str, tuple]:
-        """{file: (SANITY, INSPCOMM)} for the sealed rows among `files`; the row at the file's own path wins among twins."""
+        """{file: (SANITY, INSPCOMM)} for the rows with INSPCOMM among `files`; the row at the file's own path wins among twins."""
         by_name = {}
         for file in atleast_1d(files):
             by_name.setdefault(os.path.basename(file).replace(".fits", ""), []).append(file)
@@ -353,15 +357,17 @@ class ImageQA(BaseDatabase):
             " WHERE image_name = ANY(%(names)s) AND inspcomm IS NOT NULL AND sanity IS NOT NULL",
             {"names": list(by_name)},
         )
-        sealed = {}
+        inspected = {}
         for name, path, sanity, inspcomm in rows:
-            sealed.setdefault(name, []).append((path, sanity, inspcomm))
+            inspected.setdefault(name, []).append((path, sanity, inspcomm))
         result = {}
-        for name, twins in sealed.items():
+        for name, twins in inspected.items():
             for file in by_name[name]:
                 picked = [t for t in twins if t[0] == file] or (twins if len(twins) == 1 else [])
                 if not picked:
-                    raise ValueError(f"{name}: {len(twins)} sealed rows, none at {file}; the verdict is ambiguous")
+                    raise ValueError(
+                        f"{name}: {len(twins)} rows with INSPCOMM, none at {file}; the verdict is ambiguous"
+                    )
                 result[file] = (picked[0][1], picked[0][2])
         return result
 

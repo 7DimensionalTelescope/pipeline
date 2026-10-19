@@ -2,8 +2,8 @@
 Human inspection verdicts: image_qa, FITS headers, and process_status in one call.
 
 A verdict is `SANITY` plus an `INSPCOMM` comment. `INSPCOMM` beside `SANITY=False` is a
-veto: final, never recomputed (see `Checker._sanity_action`). `INSPCOMM` beside
-`SANITY=True` is a soft record: the machine recomputes it like any other frame and, when
+sanity F with INSPCOMM (human veto): final, never recomputed (see `Checker._sanity_action`). `INSPCOMM` beside
+`SANITY=True` is recomputed by the machine like any other frame and, when
 it rejects, `machine_reject` removes the comment. This module is the one authorized way to
 write a verdict: `image_qa.inspcomm` is the durable copy, which `Preprocess.prepare_header`
 restores into a rebuilt header, the FITS header and its `.header` sidecar carry the same
@@ -48,18 +48,18 @@ def resolve_inspcomm(existing: Optional[str], new: Optional[str], overwrite: boo
 
 
 def machine_reject(image: str, rej_proc: Optional[str], cards: Union[dict, fits.Header, None] = None) -> bool:
-    """One FITS write: the caller's `cards`, then SANITY=F (+REJ_PROC); removes a soft INSPCOMM, never a veto. Returns whether one was removed."""
-    seal = {"SANITY": (False, SANITY_COMMENT)}
+    """One FITS write: the caller's `cards`, then SANITY=F (+REJ_PROC); removes the INSPCOMM beside a sanity T with INSPCOMM, never one beside a sanity F with INSPCOMM. Returns whether one was removed."""
+    rejection = {"SANITY": (False, SANITY_COMMENT)}
     if rej_proc:
-        seal[REJECTION_PROCESS_HEADER_KEY] = (rej_proc, REJ_PROC_COMMENT)
+        rejection[REJECTION_PROCESS_HEADER_KEY] = (rej_proc, REJ_PROC_COMMENT)
     with fits.open(image, mode="update") as hdul:
         header = hdul[0].header
         if INSPCOMM_KEY in header and header.get("SANITY") is False:
-            return False  # a veto is final; the chain's inspection filter keeps vetoes away from every caller
+            return False  # a sanity F with INSPCOMM is final; the chain's inspection filter keeps such frames away from every caller
         removed = remove_padded_header_key(header, INSPCOMM_KEY)
         if cards is not None:
             update_padded_header_cards(header, cards)
-        update_padded_header_cards(header, seal)
+        update_padded_header_cards(header, rejection)
         hdul.flush()
 
     if removed:  # the sidecar is the header's twin: no INSPCOMM here means none there
@@ -79,7 +79,7 @@ def inspect_images(
     overwrite: bool = False,
     use_database: bool = True,
 ) -> dict:
-    """Seal a human verdict: image_qa first (the durable copy), then the FITS header and its sidecar."""
+    """Record a SANITY verdict with INSPCOMM: image_qa first (the durable copy), then the FITS header and its sidecar."""
     images = [image for image in atleast_1d(images) if image]
     report = {
         "headers_written": [],
@@ -104,7 +104,7 @@ def inspect_images(
         header = fits.getheader(image)
         resolved = resolve_inspcomm(header.get(INSPCOMM_KEY), inspcomm, overwrite)
         if not resolved:
-            raise ValueError(f"{os.path.basename(image)}: an INSPCOMM comment is required; it is what seals SANITY")
+            raise ValueError(f"{os.path.basename(image)}: an INSPCOMM comment is required for a human veto")
 
         if image_qa is not None:
             image_name = os.path.basename(image).replace(".fits", "")
@@ -143,7 +143,7 @@ def inspect_config(
     use_database: bool = True,
 ) -> dict:
     """
-    Seal a human verdict on a whole config: its input images and its process_status row.
+    Record a SANITY verdict with INSPCOMM on a whole config: its input images and its process_status row.
 
     `images=False` records the config-level verdict only.
     """

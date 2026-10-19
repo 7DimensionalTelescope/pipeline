@@ -141,7 +141,7 @@ class ProcessStatus(BaseDatabase):
         return self._pyTable
 
     def set_config_sanity(self, name: str, sanity) -> Optional[int]:
-        """Machine-set config sanity (the return-code-2 path): None clears a machine False; False also drops a soft human True; a human False (veto) is never touched."""
+        """Machine-set config sanity (the return-code-2 path): None clears a machine False; False also drops a True with INSPCOMM; a False with INSPCOMM is never touched."""
         row = self.read_data(name)
         if row is None or row.sanity is sanity:
             return None
