@@ -200,7 +200,7 @@ class NameHandler:
             # fast mode
             return
         # lapse("for nightdate construction")
-        if self.nightdate[0] and (self.nightdate[0] < "2024-02-15"):
+        if self.nightdate[0] and (self.nightdate[0] < "2024-05-28"):
             use_db_unified_names = True
         else:
             use_db_unified_names = False
