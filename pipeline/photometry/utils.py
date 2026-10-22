@@ -445,8 +445,10 @@ def sextractor_zero_weight(
 
     zero, npix = bad_pixels, 0
     if satellite_options is not None:
-        data = fits.getdata(image, memmap=False)
-        trail, lines = detect_satellite_trails(data, skysig=skysig, psf_fwhm=psf_fwhm, **satellite_options)
+        data, header = fits.getdata(image, memmap=False, header=True)
+        trail, lines = detect_satellite_trails(
+            data, skysig=skysig, psf_fwhm=psf_fwhm, saturate=header.get("SATURATE"), **satellite_options
+        )
         del data
         npix = int(trail.sum())
         if logger is not None:

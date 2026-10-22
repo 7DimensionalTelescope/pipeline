@@ -159,18 +159,24 @@ def _measure_trail_width(
         )
         window = np.abs(offsets) <= maximum if target is None else np.abs(offsets - target) <= max(1.0, minimum)
         if not np.isfinite(signal[window]).any():  # the profile has no data here (outside coverage): nothing to measure
-            return None if target is not None else (0.0, minimum, 0.0)
+            return None
         peak = int(np.nanargmax(np.where(window, signal, np.nan)))
         above = signal >= threshold
-        if not above[peak]:
-            if target is not None:
-                return None
-            return (float(offsets[peak]) if signal[peak] > 0 else 0.0), minimum, 0.0
+        if not above[peak]:  # no flux above the aperture cut: a chance alignment of edges, not a trail
+            return None
         left = right = peak
         while left > 0 and above[left - 1]:
             left -= 1
         while right + 1 < len(above) and above[right + 1]:
             right += 1
+        half = signal >= 0.5 * signal[peak]
+        lo = hi = peak
+        while lo > 0 and half[lo - 1]:
+            lo -= 1
+        while hi + 1 < len(half) and half[hi + 1]:
+            hi += 1
+        if float(offsets[hi] - offsets[lo]) + step > maximum:  # a gradient or a halo rim, not a PSF-width ridge
+            return None
         center = 0.5 * float(offsets[left] + offsets[right])
         half_width = 0.5 * float(offsets[right] - offsets[left]) + step / 2
         if half_width > maximum:
@@ -189,7 +195,10 @@ def _measure_trail_width(
         )
         return center, max(half_width, law_half_width), flux_per_length
 
-    found = [(*component(slice(None), None), 0.0, length)]
+    whole = component(slice(None), None)
+    if whole is None:
+        return []
+    found = [(*whole, 0.0, length)]
     for member in np.asarray(members if members is not None else []).reshape(-1, 2, 2):
         # a member is one Hough edge: its own along-track range keeps a shorter trail visible
         relative = member - p0
@@ -224,7 +233,61 @@ def _measure_trail_width(
     ]
 
 
-def detect_satellite_trails(image: np.ndarray, skysig=None, psf_fwhm=None, **options) -> tuple[np.ndarray, np.ndarray]:
+def _saturated_halos(image, valid, flat, flat_sigma, factor, saturate, options):
+    """Blank each saturated source's halo in `flat`; returns (x, y, radius, halo radius) per source, binned px."""
+    from scipy.ndimage import center_of_mass, label
+
+    saturated = valid & (image >= float(options.get("sat_fraction", 0.9)) * float(saturate))
+    h, w = saturated.shape[0] // factor * factor, saturated.shape[1] // factor * factor
+    small = saturated[:h, :w].reshape(h // factor, factor, w // factor, factor).any(axis=(1, 3))
+    labels, count = label(small)
+    if not count:
+        return []
+    areas = np.bincount(labels.ravel())[1:] * factor * factor
+    keep = np.flatnonzero(areas >= float(options.get("sat_min_area", 160.0))) + 1  # hot pixels never qualify
+    if not keep.size:
+        return []
+    margin = float(options.get("halo_margin", 50.0)) / factor
+    span = int(float(options.get("halo_span", 1000.0)) / factor)
+    rings = np.arange(0.0, span, 10.0)
+    sources = []
+    for k, (cy, cx) in zip(keep, center_of_mass(small, labels, keep)):
+        y0, y1 = max(0, int(cy) - span), min(flat.shape[0], int(cy) + span + 1)
+        x0, x1 = max(0, int(cx) - span), min(flat.shape[1], int(cx) + span + 1)
+        window = flat[y0:y1, x0:x1]
+        yy, xx = np.mgrid[y0:y1, x0:x1]
+        r = np.hypot(xx - cx, yy - cy)
+        ring = np.digitize(r, rings)
+        profile = [np.median(window[ring == b]) if (ring == b).sum() > 30 else -np.inf for b in range(1, len(rings))]
+        above = np.flatnonzero(
+            np.asarray(profile) > 2.0 * flat_sigma
+        )  # the halo reaches to where the stretch floor would pass it
+        radius = (rings[above.max() + 1] if above.size else 0.0) + margin
+        window[r <= radius] = 0.0
+        sources.append((float(cx), float(cy), float(np.sqrt(areas[k - 1] / np.pi)) / factor, float(radius)))
+    return sources
+
+
+def _radial(segment, sources, factor, options):
+    """True when the segment runs through a saturated source within its spike reach: a diffraction spike."""
+    p0, p1 = np.asarray(segment[:2]), np.asarray(segment[2:])
+    length = float(np.hypot(*(p1 - p0)))
+    if length == 0:
+        return False
+    direction = (p1 - p0) / length
+    normal = np.array([-direction[1], direction[0]])
+    margin = float(options.get("radial_margin", 50.0)) / factor
+    reach = float(options.get("spike_reach", 4.0))
+    for cx, cy, radius, halo in sources:
+        offset = np.array([cx, cy]) - p0
+        if abs(offset @ normal) - radius <= margin and -reach * halo <= offset @ direction <= length + reach * halo:
+            return True
+    return False
+
+
+def detect_satellite_trails(
+    image: np.ndarray, skysig=None, psf_fwhm=None, saturate=None, **options
+) -> tuple[np.ndarray, np.ndarray]:
     """Trail mask and one (x1, y1, x2, y2, half_width_px, flux_per_length) row per masked component."""
     from PIL import Image, ImageDraw
     from scipy.ndimage import uniform_filter
@@ -244,8 +307,9 @@ def detect_satellite_trails(image: np.ndarray, skysig=None, psf_fwhm=None, **opt
     background = uniform_filter(clipped, size=box, mode="nearest")
     flat = filled - background
     _, flat_sigma = _robust_stats(flat)
+    sources = _saturated_halos(image, valid, flat, flat_sigma, factor, saturate, options) if saturate else []
     low = float(options.get("low_sigma", 2.0)) * flat_sigma
-    high = float(options.get("high_sigma", 8.0)) * flat_sigma
+    high = float(options.get("high_sigma", 4.0)) * flat_sigma
     stretched = np.clip((flat - low) / max(high - low, 1e-6), 0, 1)
     edges = canny(
         stretched,
@@ -292,7 +356,8 @@ def detect_satellite_trails(image: np.ndarray, skysig=None, psf_fwhm=None, **opt
             t1 = projection.max() + padding
             segment = np.r_[point + t0 * direction, point + t1 * direction]
             accepted.extend(
-                _measure_trail_width(
+                component
+                for component in _measure_trail_width(
                     filled - median,  # the box background still holds the trail, by a chord that depends on its angle
                     segment,
                     flat_sigma,
@@ -304,6 +369,7 @@ def detect_satellite_trails(image: np.ndarray, skysig=None, psf_fwhm=None, **opt
                     psf_fwhm=psf_fwhm,
                     threshold_scale=float(options.get("threshold_scale", 1.0)),
                 )
+                if not _radial(component[0], sources, factor, options)
             )
 
     canvas = Image.new("1", (image.shape[1], image.shape[0]))
@@ -751,6 +817,7 @@ class MaskMixin:
         satellite_options = self.config_node.imcoadd.satellite_mask
         skysigs = self.input_headers.values("BACKSIG")
         psf_fwhms = self.input_headers.values("PEEING")
+        saturates = self.input_headers.values("SATURATE")
         quality_masks = []
         trailed_frames = 0
         for index, (image, detector) in enumerate(zip(images, detector_images)):
@@ -766,7 +833,11 @@ class MaskMixin:
                         f"No sky noise or PEEING for {get_basename(image)}; trail width from the profile alone"
                     )
                 trail, lines = detect_satellite_trails(
-                    data, skysig=skysigs[index], psf_fwhm=psf_fwhms[index], **satellite_options
+                    data,
+                    skysig=skysigs[index],
+                    psf_fwhm=psf_fwhms[index],
+                    saturate=saturates[index],
+                    **satellite_options,
                 )
                 mask[trail] |= int(MaskBit.SATELLITE)
                 trailed_frames += int(trail.any())
