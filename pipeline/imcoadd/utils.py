@@ -456,9 +456,10 @@ def mesh_peak(bkg: Background2D, window: int | None = None) -> tuple[float, floa
 
 
 def mesh_peak_cards(peak) -> dict:
+    peak, ratio = (round(float(v), d) if np.isfinite(v) else None for v, d in zip(peak, (4, 2)))
     return {
-        "BACKPEAK": (round(float(peak[0]), 4), "[ADU] Largest mesh node excursion from its neighbours"),
-        "BACKPKSN": (round(float(peak[1]), 2), "BACKPEAK / (1.4826 MAD of node excursions)"),
+        "BACKPEAK": (peak, "[ADU] Largest mesh node excursion from its neighbours"),
+        "BACKPKSN": (ratio, "BACKPEAK / (1.4826 MAD of node excursions)"),
     }
 
 

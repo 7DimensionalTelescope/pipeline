@@ -100,6 +100,7 @@ class Scheduler:
     # Every Nth origin claim looks at other hosts' rows first, so a down worker's rows are not stranded.
     FALLBACK_EVERY = int(os.environ.get("QUEUE_FALLBACK_EVERY") or DEFAULT_FALLBACK_EVERY)
     HIGH_PRIORITY_THRESHOLD = 10
+    AUTOSTASH_INTERVAL = 300  # seconds between autostash runs while nothing is claimable
     # Seconds a statement waits for a competing writer before raising "database is locked".
     # A bulk submission must never make the queue daemon drop a completion.
     DB_BUSY_TIMEOUT = 30.0
@@ -124,6 +125,7 @@ class Scheduler:
 
         self._kwargs = kwargs
         self._claim_tick = 0
+        self._autostash_at = 0.0
 
         if self.use_system_queue:
             self._schedule = None
@@ -810,9 +812,11 @@ class Scheduler:
         if self.use_system_queue:
             row, cmd = self._get_next_task_db()
             if row is None:
-                import subprocess
+                import subprocess, time
 
-                subprocess.run([f"{SCRIPTS_DIR}/autostash"], check=True)
+                if time.monotonic() - self._autostash_at >= self.AUTOSTASH_INTERVAL:
+                    self._autostash_at = time.monotonic()
+                    subprocess.run([f"{SCRIPTS_DIR}/autostash"], check=True)
                 return None, None
             else:
                 return row, cmd

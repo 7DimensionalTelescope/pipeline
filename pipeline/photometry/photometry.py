@@ -1007,7 +1007,9 @@ class PhotometrySingle:
         phot_header.DEQUANT, phot_header.BACKKSQ = dequantized, round(ksq, 5)
         phot_header.BACKFRAC = round(float((~excluded & ~no_data).mean()), 4)
         phot_header.SRCFRAC = round(float(sources.mean()), 4)
-        phot_header.BACKPEAK, phot_header.BACKPKSN = (round(v, 4) for v in mesh_peak(fitted))
+        phot_header.BACKPEAK, phot_header.BACKPKSN = (
+            round(v, 4) if np.isfinite(v) else None for v in mesh_peak(fitted)
+        )
         coverage = ~no_data
         residual = data if is_coadd else data - fitted.background
         result = measure_background_residuals(
