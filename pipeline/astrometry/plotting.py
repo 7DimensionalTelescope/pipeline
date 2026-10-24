@@ -6,6 +6,7 @@ from astropy.table import Table
 from astropy.visualization import ZScaleInterval
 from astropy import units as u
 from astropy.wcs import WCS
+from astropy.time import Time
 
 from matplotlib.legend_handler import HandlerPatch
 from matplotlib.patches import Ellipse
@@ -47,7 +48,7 @@ def wcs_check_plot(
     canvas = FigureCanvas(fig)
 
     # --- Master grid: 4 rows (scatter on top, PSF grid below, spacers between) ---
-    gs_master = fig.add_gridspec(4, 1, height_ratios=[1.4, 0.18, 3.1, 0.06], hspace=0.00)
+    gs_master = fig.add_gridspec(4, 1, height_ratios=[1.4, 0.18, 3.1, 0.09], hspace=0.00)
 
     ax_spacer = fig.add_subplot(gs_master[1])
     ax_spacer.axis("off")
@@ -113,6 +114,16 @@ def wcs_check_plot(
 
         # fig.text(0.5, 0.62, text, ha="center", va="center", fontsize=8)
         ax_spacer.text(0.47, 0.9, text, ha="center", va="center", fontsize=8, transform=ax_spacer.transAxes)
+        ax_spacer.text(
+            0.47,
+            0.55,
+            "Sep: barycenter vs Gaia at the catalogue epoch (the evaluation's value); "
+            "Sep windowed: windowed centroid vs Gaia moved to the frame epoch",
+            ha="center",
+            va="center",
+            fontsize=7,
+            transform=ax_spacer.transAxes,
+        )
 
     if plot_save_path:
         # canvas.print_figure(plot_save_path, bbox_inches="tight", dpi=150)
@@ -278,8 +289,9 @@ def wcs_check_psf_plot(
     Select 9 sources nearest to a 3x3 grid over the image and plot PSF cutouts.
     matched_catalog must be cleaned first to contain no masked rows.
     """
-    data = fits.getdata(image)
+    data, header = fits.getdata(image, header=True)
     H, W = data.shape  # numpy: (y, x)
+    frame_epoch = Time(header["DATE-OBS"]).jyear if "DATE-OBS" in header else None
 
     if matched_ids is None:
         print(f"matched_ids not provided. Selecting sources now.")
@@ -355,22 +367,29 @@ def wcs_check_psf_plot(
         if len(text) > 10:
             ax.text(30, 0.5, text, fontsize=9, ha="right", color="white")
 
-        # science centroid
+        # science centroids: barycenter and windowed
         xc = float(row["X_IMAGE"]) - 1.0
         yc = float(row["Y_IMAGE"]) - 1.0
+        has_win = "XWIN_IMAGE" in row.colnames and "YWIN_IMAGE" in row.colnames
+        xw, yw = (float(row["XWIN_IMAGE"]) - 1.0, float(row["YWIN_IMAGE"]) - 1.0) if has_win else (xc, yc)
 
-        # reference coordinates in pixel coords
-        xr, yr = wcs.all_world2pix(
-            [row["ra"]],
-            [row["dec"]],
-            0,  # origin=0 because we converted to 0-based
-        )
-        xr = float(xr[0])
-        yr = float(yr[0])
+        # reference coordinates at the catalogue epoch and moved to the frame epoch
+        ra_ref, dec_ref = float(row["ra"]), float(row["dec"])
+        ra_ep, dec_ep = ra_ref, dec_ref
+        has_epoch = frame_epoch is not None and "pmra" in row.colnames and "pmdec" in row.colnames
+        if has_epoch and np.isfinite(row["pmra"]) and np.isfinite(row["pmdec"]):
+            dt = frame_epoch - (float(row["ref_epoch"]) if "ref_epoch" in row.colnames else 2016.0)
+            ra_ep = ra_ref + float(row["pmra"]) * dt / 3.6e6 / np.cos(np.radians(dec_ref))
+            dec_ep = dec_ref + float(row["pmdec"]) * dt / 3.6e6
+        else:
+            has_epoch = False
+        xs, ys = wcs.all_world2pix([ra_ref, ra_ep], [dec_ref, dec_ep], 0)  # origin=0 because we converted to 0-based
+        xr, xp = float(xs[0]), float(xs[1])
+        yr, yp = float(ys[0]), float(ys[1])
 
         # cutout around (xc, yc)
-        data_cut, coords_shifted = cutout(data, [(xc, yc), (xr, yr)], xc, yc, size=cutout_size)
-        sci_shifted, ref_shifted = coords_shifted
+        data_cut, coords_shifted = cutout(data, [(xc, yc), (xr, yr), (xw, yw), (xp, yp)], xc, yc, size=cutout_size)
+        sci_shifted, ref_shifted, win_shifted, epoch_shifted = coords_shifted
 
         # np.save(f"data_cut_{idx}.npy", data_cut)
 
@@ -395,7 +414,7 @@ def wcs_check_psf_plot(
             facecolor="none",
             linewidth=2.0,
             zorder=10,
-            label="Source Centroid" if idx == centroid_legend_idx else None,
+            label="Barycenter (X_IMAGE)" if idx == centroid_legend_idx else None,
         )
         ref_rect = Rectangle(
             (ref_shifted[0] - 0.5, ref_shifted[1] - 0.5),  # rectangle is centered at the lower-left corner
@@ -405,10 +424,34 @@ def wcs_check_psf_plot(
             facecolor="none",
             linewidth=1.0,
             zorder=11,
-            label="Reference Coordinates" if idx == centroid_legend_idx else None,
+            label="Gaia DR3 at catalogue epoch" if idx == centroid_legend_idx else None,
         )
         ax.add_patch(sci_rect)
         ax.add_patch(ref_rect)
+        if has_win:
+            ax.plot(
+                win_shifted[0],
+                win_shifted[1],
+                marker="+",
+                color="cyan",
+                markersize=9,
+                markeredgewidth=2.0,
+                linestyle="none",
+                zorder=12,
+                label="Windowed centroid (XWIN_IMAGE)" if idx == centroid_legend_idx else None,
+            )
+        if has_epoch:
+            ax.plot(
+                epoch_shifted[0],
+                epoch_shifted[1],
+                marker="x",
+                color="orangered",
+                markersize=8,
+                markeredgewidth=2.0,
+                linestyle="none",
+                zorder=12,
+                label="Gaia DR3 at frame epoch" if idx == centroid_legend_idx else None,
+            )
 
         # add RMS (flux second moment) ellipses
         if has_a_image:
@@ -472,6 +515,16 @@ def wcs_check_psf_plot(
                 (sci_shifted[0], sci_shifted[1] + 3),
                 fontsize=9,
                 color="magenta",
+                path_effects=[pe.withStroke(linewidth=2, foreground="w")],
+            )
+        if has_win and has_epoch:
+            ra_w, dec_w = wcs.all_pix2world([xw], [yw], 0)
+            sep_w = np.hypot((float(ra_w[0]) - ra_ep) * np.cos(np.radians(dec_ep)), float(dec_w[0]) - dec_ep) * 3600
+            ax.annotate(
+                f'Sep windowed: {sep_w:.2f}"',
+                (sci_shifted[0], sci_shifted[1] + 5.5),
+                fontsize=9,
+                color="teal",
                 path_effects=[pe.withStroke(linewidth=2, foreground="w")],
             )
 
