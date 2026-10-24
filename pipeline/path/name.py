@@ -403,7 +403,7 @@ class NameHandler:
         product_type:  image / weight / catalog / mask
         """
         # raw/master/processed
-        if stem.startswith(("7DT", "BIAS", "DARK", "FLAT", "LIGHT")):
+        if (stem[:3] == "7DT" and stem[3:5].isdigit()) or stem.startswith(("BIAS", "DARK", "FLAT", "LIGHT")):
             kind = const.NAME_TYPE_RAW
         elif stem.startswith(("bias", "dark", "bpmask", "flat")):
             kind = const.NAME_TYPE_MASTER
