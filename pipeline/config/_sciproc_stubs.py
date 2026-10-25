@@ -32,6 +32,7 @@ if TYPE_CHECKING:
         sanity_from_db: bool
         factory_scratch: Any
         factory_scratch_cap_gb: int
+        factory_autoclean: Any
         gpu_enabled: bool
         verbose_gpu: bool
 

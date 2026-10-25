@@ -156,8 +156,10 @@ class BaseConfig(ABC):
 
         # print(f"Writing configuration to file: {self.config_file}")
 
-        with open(self.config_file, "w") as f:
+        tmp = f"{self.config_file}.{os.getpid()}.part"  # a full disk must never leave a truncated yml behind
+        with open(tmp, "w") as f:
             yaml.dump(self._config_in_dict, f, sort_keys=False)  # , default_flow_style=False)
+        os.replace(tmp, self.config_file)
 
     def _make_nodes(self):
         """

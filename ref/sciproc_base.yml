@@ -51,6 +51,7 @@ settings:
   sanity_from_db: True  # SANITY filter from image_qa (one query); False reads every header
   factory_scratch:  # local root for multi-epoch factories (fast disk); empty = FACTORY_DIR on NFS
   factory_scratch_cap_gb: 1200  # rotate oldest idle scratch trees above this total
+  factory_autoclean:  # empty this config's factory after a fully successful run; empty = on when its disk is in FACTORY_AUTOCLEAN_DISKS
   gpu_enabled: True
   verbose_gpu: True  # use logger later
   

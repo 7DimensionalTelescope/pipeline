@@ -27,6 +27,7 @@ if TYPE_CHECKING:
         config_suffix: Any
         factory_scratch: Any
         factory_scratch_cap_gb: int
+        factory_autoclean: Any
 
     class LoggingNode(ConfigNode):
         level: str

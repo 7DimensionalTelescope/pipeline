@@ -214,6 +214,7 @@ def run_scidata_reduction(
                 too_db.send_final_notice_email(too_data.get("id"))
 
         _record_config_sanity(config, None)  # inputs got through: drop a stale automatic rejection
+        _autoclean_factory(config)
         del config
 
     except EmptyInputAfterSanityRejectionError:
@@ -289,6 +290,7 @@ def run_crossfilter_reduction(
             config.node.input.parents_changed = False
 
         _record_config_sanity(config, None)  # inputs got through: drop a stale automatic rejection
+        _autoclean_factory(config)
         del config
 
     except EmptyInputAfterSanityRejectionError:
@@ -322,3 +324,32 @@ def query_observations(input_params: List[str], use_db=True, master_frame_only=F
 
         list_of_images = query_observations_manually(input_params, **kwargs)
     return list_of_images
+
+
+def _autoclean_factory(config) -> None:
+    """Empty the config's factory after a fully successful run: `settings.factory_autoclean`, or the disk policy when unset."""
+    import os
+    import shutil
+
+    from .config.utils import get_key
+    from .const import FACTORY_AUTOCLEAN_DISKS
+
+    try:
+        dirs = (
+            config.path.crossfilter.factory_dir
+            if isinstance(config, CrossFilterConfiguration)
+            else config.path.factory_dir
+        )
+        dirs = [d for d in (dirs if isinstance(dirs, list) else [dirs]) if d]
+        enabled = get_key(config.node.settings, "factory_autoclean")
+        if enabled is None:
+            enabled = any(
+                os.path.abspath(d).startswith(disk.rstrip("/") + "/") for d in dirs for disk in FACTORY_AUTOCLEAN_DISKS
+            )
+        if not enabled:
+            return
+        for d in dirs:
+            shutil.rmtree(d, ignore_errors=True)
+            config.logger.info(f"Factory emptied: {d}")
+    except Exception as e:
+        print(f"[WARNING] Failed to empty the factory: {e}")

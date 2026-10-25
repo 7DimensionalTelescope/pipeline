@@ -25,6 +25,7 @@ settings:
   config_suffix:
   factory_scratch:
   factory_scratch_cap_gb: 1200  # rotate oldest idle scratch trees above this total
+  factory_autoclean:  # empty this config's factory after a fully successful run; empty = on when its disk is in FACTORY_AUTOCLEAN_DISKS
 
 logging:
   level: INFO

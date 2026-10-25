@@ -18,6 +18,7 @@ storage:
   TOO_PROCESSED_DIR_2: "/balmer/data1/too"
   TOO_FACTORY_DIR_2: "/balmer/data1/too_factory"
   DISK_CHANGE_NIGHTDATE_2: "2027-01-10"
+  FACTORY_AUTOCLEAN_DISKS: ["/lyman/data2"]  # a config whose factory lies under one of these is emptied after a fully successful run
 
 references:
   ASTRM_TILE_REF_DIR: "/lyman/data2/py7dt_requisites/ref_scamp/gaia_dr3_7DS"
