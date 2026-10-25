@@ -475,7 +475,10 @@ def sextractor_zero_weight(
             options.update({"-INTERP_TYPE": "ALL", "-INTERP_MAXXLAG": "2", "-INTERP_MAXYLAG": "2"})
         yield npix, options
     finally:
-        os.remove(path)
+        try:
+            os.remove(path)
+        except FileNotFoundError:  # a /dev/shm sweep on the worker took it; the run itself is unaffected
+            pass
 
 
 def dicts_to_lists(dicts):

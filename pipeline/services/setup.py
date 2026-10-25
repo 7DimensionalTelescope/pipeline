@@ -150,7 +150,8 @@ class BaseSetup(ABC):
         if isinstance(logger, Logger) and any(
             isinstance(handler, LockingFileHandler) for handler in logger.logger.handlers
         ):
-            logger.set_output_file(config_node.logging.file, overwrite=False)
+            if logger._log_file != config_node.logging.file:  # rebuilding the handlers on every access raced threads
+                logger.set_output_file(config_node.logging.file, overwrite=False)
             self._logger = logger
             return logger
         else:

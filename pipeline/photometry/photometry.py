@@ -642,6 +642,10 @@ class PhotometrySingle:
                 return
 
             phot_header.SEEING = np.median(post_match_table["FWHM_WORLD"] * 3600)
+            if not phot_header.SEEING > 0:  # a 1-3 star median on a mis-solved frame; SExtractor refuses the apertures
+                raise self.logger.process_error.exception(NotEnoughSourcesError)(
+                    f"Unphysical seeing {phot_header.SEEING:.3f} arcsec from {len(post_match_table)} star-like sources"
+                )
             phot_header.PEEING = phot_header.SEEING / self.image_info.pixscale
             phot_header.ELLIP = round(np.median(post_match_table["ELLIPTICITY"]), 6)
             phot_header.ELONG = round(np.median(post_match_table["ELONGATION"]), 6)

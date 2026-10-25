@@ -1,6 +1,11 @@
 import re
 
 
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape codes from captured output."""
+    return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
+
+
 def ansi_clean(cmd: str) -> str:
     """
     Wrap a shell command so its stdout+stderr are filtered through sed to strip ANSI escape codes.

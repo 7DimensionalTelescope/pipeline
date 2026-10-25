@@ -12,7 +12,7 @@ from .path.path import PathHandler
 from .services.logger import Logger
 from .const.environ import REF_DIR, SEXTRACTOR_COMMAND, SWARP_COMMAND
 from .const.observation import IMAGE_SIZE_X, IMAGE_SIZE_Y
-from .utils import add_suffix, force_symlink, swap_ext, read_text_file, ansi_clean
+from .utils import add_suffix, force_symlink, swap_ext, read_text_file, ansi_clean, strip_ansi
 from .utils.header import fitsrec_to_header
 
 
@@ -110,9 +110,6 @@ def sextractor(
     sexcom = " ".join(sexcom)
     chatter(f"Sextractor Command: {sexcom}")
 
-    if clean_log:
-        sexcom = ansi_clean(sexcom)
-
     # The log is the completion marker: retire the stale one BEFORE the catalog is touched.
     try:
         os.remove(log_file)
@@ -129,8 +126,10 @@ def sextractor(
     )
     stdout, _ = process.communicate()
     sexout = stdout if stdout else ""
+    if clean_log:
+        sexout = strip_ansi(sexout)  # in Python: a sed pipe under /bin/sh replaced SExtractor's exit code with sed's
 
-    if process.returncode != 0:
+    if process.returncode != 0 or not nonempty(outcat):  # SExtractor exits 0 on some refusals and writes no catalog
         raise RuntimeError(f"Sextractor failed with return code {process.returncode}: {sexout}")
 
     tmp_log = f"{log_file}.{os.getpid()}.part"
