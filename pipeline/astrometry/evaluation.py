@@ -6,6 +6,8 @@ from typing import Optional, TypedDict, List, Tuple
 from astropy.table import Table
 from astropy.time import Time
 from astropy.wcs import WCS
+from astropy.coordinates import SkyCoord
+import astropy.units as u
 import astropy.io.fits as fits
 
 from ..const import PIXSCALE
@@ -89,6 +91,21 @@ class EvaluationResult:
     corner_stats: CornerStats
     image_stats: ImageStats
     radial_stats: RadialStats
+
+
+def windowed_separation_stats(matched: Table, wcs: WCS) -> SeparationStats | None:
+    """WSEP_Q2/P95: windowed-centroid separation from the reference, on the barycenter-matched pairs."""
+    if "XWIN_IMAGE" not in matched.colnames or "YWIN_IMAGE" not in matched.colnames:
+        return None
+    ra_win, dec_win = wcs.all_pix2world(np.ma.getdata(matched["XWIN_IMAGE"]), np.ma.getdata(matched["YWIN_IMAGE"]), 1)
+    bary = SkyCoord(np.ma.getdata(matched["ALPHA_J2000"]), np.ma.getdata(matched["DELTA_J2000"]), unit="deg")
+    dlon, dlat = bary.spherical_offsets_to(SkyCoord(ra_win, dec_win, unit="deg"))  # windowed - barycenter
+    sep_x = np.ma.getdata(matched["dra_cosdec"]) + dlon.to_value(u.arcsec)  # (bary - ref) + (win - bary)
+    sep_y = np.ma.getdata(matched["ddec"]) + dlat.to_value(u.arcsec)
+    sep = np.hypot(sep_x, sep_y)
+    return SeparationStats(
+        Q2=np.percentile(sep, 50), P95=np.percentile(sep, 95), prefix="WSEP_", description="windowed centroid [arcsec]"
+    )
 
 
 def _get_column_mask(column) -> np.ndarray | None:
@@ -208,11 +225,13 @@ def evaluate_single_wcs(
             P95=np.percentile(sep_sci, 95),
             P99=np.percentile(sep_sci, 99),
         )
+        windowed_stats = windowed_separation_stats(matched_bidirectional, wcs or WCS(fits.getheader(image)))
 
     else:
         subpixel_fraction = None
         subsecond_fraction = None
         separation_stats = SeparationStats()  # empty
+        windowed_stats = None
 
     rsep_stats = RSEPStats(
         ref_max_mag=REF_MAX_MAG,
@@ -222,6 +241,7 @@ def evaluate_single_wcs(
         subpixel_fraction=subpixel_fraction,
         subsecond_fraction=subsecond_fraction,
         separation_stats=separation_stats,
+        windowed_stats=windowed_stats,
     )
 
     # 2D PSF stats

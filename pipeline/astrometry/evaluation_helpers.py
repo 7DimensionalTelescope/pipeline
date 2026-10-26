@@ -25,6 +25,7 @@ class RSEPStats:
     subpixel_fraction: Optional[float]
     subsecond_fraction: Optional[float]
     separation_stats: SeparationStats
+    windowed_stats: Optional[SeparationStats] = None  # WSEP_*: windowed centroids, the ones SCAMP fits
 
     @property
     def fits_header_cards_for_metadata(self) -> List[Tuple[str, float, str]]:
@@ -458,6 +459,7 @@ def wcs_eval_cards(
 
     cards = part("RSEPStats metadata", rsep_stats, "fits_header_cards_for_metadata")
     cards += part("reference_sep", rsep_stats.separation_stats if rsep_stats is not None else None)
+    cards += part("windowed_sep", rsep_stats.windowed_stats if rsep_stats is not None else None)
     cards += part("image_stats", image_stats) + part("corner_stats", corner_stats) + part("radial_stats", radial_stats)
     if internal_sep_stats is not None:
         for key, field_name, comment in (

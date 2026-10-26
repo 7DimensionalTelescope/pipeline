@@ -595,6 +595,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 f"{image_info.rsep_stats.unmatched_fraction if image_info.rsep_stats.unmatched_fraction is not None else 'None'}, "
                 # f"RSEP_P95: {image_info.rsep_stats.separation_stats.P95 if image_info.rsep_stats.separation_stats.P95 is not None else 'None'} "
                 f"RSEP_Q2: {image_info.rsep_stats.separation_stats.Q2 if image_info.rsep_stats.separation_stats.Q2 is not None else 'None'} "
+                f"WSEP_Q2: {image_info.fit_sep_stats.Q2 if image_info.fit_sep_stats.Q2 is not None else 'None'} "
                 f"after {max_scamp_iter} iterations for {image_info.image_path}",
                 AstrometryError.BadWcsSolution,
             )
@@ -603,7 +604,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 f"{image_info.id} SCAMP stats - "
                 f"UNMATCH: {image_info.rsep_stats.unmatched_fraction if image_info.rsep_stats.unmatched_fraction is not None else 'None'}, "
                 f"SEP_P95: {image_info.rsep_stats.separation_stats.P95 if image_info.rsep_stats.separation_stats.P95 is not None else 'None'}, "
-                f"SEP_Q2: {image_info.rsep_stats.separation_stats.Q2 if image_info.rsep_stats.separation_stats.Q2 is not None else 'None'}"
+                f"SEP_Q2: {image_info.rsep_stats.separation_stats.Q2 if image_info.rsep_stats.separation_stats.Q2 is not None else 'None'}, "
+                f"WSEP_P95: {image_info.fit_sep_stats.P95 if image_info.fit_sep_stats.P95 is not None else 'None'}"
             )
 
         return main_scamp_success or avoid_solvefield
@@ -1928,15 +1930,22 @@ class ImageInfo:
         return np.ma.std(self.matched_catalog["ELLIPTICITY"])
 
     @property
+    def fit_sep_stats(self):
+        """Goodness of fit: WSEP (windowed centroids, what SCAMP fits); RSEP (barycenters) when WSEP is unavailable"""
+        if self.rsep_stats is None:
+            return None
+        return self.rsep_stats.windowed_stats or self.rsep_stats.separation_stats
+
+    @property
     def good(self) -> bool:
         """iteration condition"""
         # not checking unmatched fraction as it's better to exit _iterate_scamp quickly and go to solve-field
-        if self.rsep_stats is None or self.rsep_stats.separation_stats is None:
+        if self.rsep_stats is None or self.fit_sep_stats is None:
             return False
-        if self.rsep_stats.separation_stats.P95 is None:
+        if self.fit_sep_stats.P95 is None:
             return False
         else:
-            return self.rsep_stats.separation_stats.P95 < PIXSCALE and (
+            return self.fit_sep_stats.P95 < PIXSCALE and (
                 self.rsep_stats.unmatched_fraction is None or self.rsep_stats.unmatched_fraction <= 0.9
             )
 
@@ -1945,10 +1954,10 @@ class ImageInfo:
         """iteration condition"""
 
         # return self.rsep_stats.unmatched_fraction > 0.9 or self.rsep_stats.separation_stats.P95 > 2 * PIXSCALE  # too tight
-        if self.rsep_stats is None or self.rsep_stats.separation_stats is None:
+        if self.rsep_stats is None or self.fit_sep_stats is None:
             return False
         return (self.rsep_stats.unmatched_fraction is not None and self.rsep_stats.unmatched_fraction > 0.9) or (
-            self.rsep_stats.separation_stats.Q2 is not None and self.rsep_stats.separation_stats.Q2 > 2 * PIXSCALE
+            self.fit_sep_stats.Q2 is not None and self.fit_sep_stats.Q2 > 2 * PIXSCALE
         )
 
     @property
