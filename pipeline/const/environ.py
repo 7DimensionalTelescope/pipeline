@@ -78,6 +78,10 @@ DISK_CHANGE_NIGHTDATE_2 = _storage_paths.get("DISK_CHANGE_NIGHTDATE_2") or "2027
 FACTORY_AUTOCLEAN_DISKS = tuple(
     _storage_paths.get("FACTORY_AUTOCLEAN_DISKS") or ()
 )  # factories here are emptied after a run
+# per-process epoch-propagated astrometric refcats; the astrometry factory is used when unusable
+ASTREF_TMPFS_DIR = (
+    os.environ.get("ASTREF_TMPFS_DIR") or _storage_paths.get("ASTREF_TMPFS_DIR") or "/dev/shm/pipeline_astref"
+)
 
 # collection of pipeline directories
 PIPELINE_DIRS = {

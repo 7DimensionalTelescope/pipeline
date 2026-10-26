@@ -12,14 +12,15 @@ from astropy.io import fits
 from astropy.coordinates import Angle
 from astropy.wcs import WCS
 from astropy.table import Table
+from astropy.time import Time
 import astropy.units as u
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import ExitStack
 
 from .. import external
 from ..const import IMAGE_GROUP_SCIENCE
-from ..const.environ import REF_DIR
-from ..const.observation import PIXSCALE, DEFAULT_EXPTIME
+from ..const.environ import REF_DIR, ASTREF_TMPFS_DIR
+from ..const.observation import PIXSCALE, DEFAULT_EXPTIME, HEADER_KEY_MAP
 from ..const.sciproc import ASTROMETRY_SPEC, REJECTION_PROCESS_HEADER_KEY, SCIPROCESS_REGISTRY
 from ..errors import AstrometryError, ScampError, SolveFieldError
 from ..utils import swap_ext, add_suffix, force_symlink, time_diff_in_seconds, unique_filename, atleast_1d, collapse
@@ -57,7 +58,7 @@ from .evaluation import (
     RadialStats,
 )
 from .evaluation_helpers import wcs_eval_cards, bad_wcs_cards
-from .generate_refcat_gaia import get_refcat_gaia
+from .generate_refcat_gaia import get_refcat_gaia, propagate_refcat
 
 
 class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
@@ -232,14 +233,71 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
                 local_astref = None
         self.config_node.astrometry.local_astref = local_astref
+
+        self.astref_imhead, self.astref_table, self._joint_astref_epoch = None, None, None
+        if local_astref and os.path.exists(local_astref):
+            self.astref_imhead = fitsrec_to_header(fits.getdata(local_astref, ext=1))
+            self.astref_table = Table.read(local_astref, hdu=2)
         self.logger.debug("Finished Astrometry._handle_input")
+
+    def epoch_astrefcat(self, image_info: ImageInfo) -> Optional[str]:
+        """refcat propagated to the frame epoch for SCAMP"""
+        if self.astref_table is None:
+            return self.config_node.astrometry.local_astref
+        if image_info.epoch_astrefcat is None or not os.path.exists(image_info.epoch_astrefcat):
+            path = collapse(image_info.path.astrometry.factory.epoch_astrefcat, raise_error=True)
+            table = propagate_refcat(self.astref_table, image_info.epoch)
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                write_ldac(self.astref_imhead, table, path)
+            except OSError as e:
+                image_info.astref_table, image_info.epoch_astrefcat = None, None
+                self.logger.warning(f"{image_info.id} cannot write propagated refcat {path} ({e}); using the tile")
+                return self.config_node.astrometry.local_astref
+            image_info.astref_table, image_info.epoch_astrefcat = table, path
+            self.logger.debug(f"{image_info.id} refcat propagated to {image_info.epoch:.3f}: {path}")
+        return image_info.epoch_astrefcat
+
+    def joint_epoch_astrefcat(self, images_info: List[ImageInfo]) -> Optional[str]:
+        """refcat propagated to the median frame epoch for joint SCAMP"""
+        if self.astref_table is None:
+            return self.config_node.astrometry.local_astref
+        epoch = float(np.median([ii.epoch for ii in images_info]))
+        path = self.path.astrometry.factory.joint_epoch_astrefcat
+        if self._joint_astref_epoch != epoch or not os.path.exists(path):
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                write_ldac(self.astref_imhead, propagate_refcat(self.astref_table, epoch), path)
+            except OSError as e:
+                self._joint_astref_epoch = None
+                self.logger.warning(f"Cannot write joint propagated refcat {path} ({e}); using the tile")
+                return self.config_node.astrometry.local_astref
+            self._joint_astref_epoch = epoch
+            self.logger.debug(f"Joint refcat propagated to {epoch:.3f}: {path}")
+        return path
+
+    @staticmethod
+    def _sweep_stale_astref_dirs() -> None:
+        """remove tmpfs refcat dirs of dead processes"""
+        if not os.path.isdir(ASTREF_TMPFS_DIR):
+            return
+        for name in os.listdir(ASTREF_TMPFS_DIR):
+            if name.isdigit() and not os.path.exists(f"/proc/{name}"):
+                shutil.rmtree(os.path.join(ASTREF_TMPFS_DIR, name), ignore_errors=True)
+
+    def _cleanup_epoch_astrefcats(self) -> None:
+        """remove this process's tmpfs refcats"""
+        pid_dir = self.path.astrometry.factory.astref_tmpfs_dir()
+        if pid_dir and os.path.isdir(pid_dir):
+            shutil.rmtree(pid_dir, ignore_errors=True)
+            self.logger.debug(f"Removed {pid_dir}")
 
     def run(
         self,
         se_preset: str = "prep",
         joint_scamp: bool = False,
         evaluate_prep_sol: bool = True,
-        max_scamp_iter: int = 3,
+        max_scamp_iter: int = 1,
         use_threading_for_eval: bool = False,
         # use_gpu: bool = False,
         overwrite=False,
@@ -267,6 +325,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self.logger.debug(f"Starting Astrometry.run")
 
             overwrite = self.resolve_overwrite(overwrite)
+            self._sweep_stale_astref_dirs()
 
             avoid_solvefield = False
             force_solve_field = False
@@ -322,7 +381,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     debug_plot=debug_plot,
                 )
 
-                if not scamp_success:
+                if not scamp_success or (image_info.bad and not avoid_solvefield):
                     self._solve_field_suite(
                         i,
                         image_info,
@@ -367,6 +426,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 exc_info=True,
             )
             raise
+        finally:
+            self._cleanup_epoch_astrefcats()
 
     def perform_early_qa(self):
         """
@@ -411,20 +472,21 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
     def _finalize_astrometry_sanity(self, image_info: ImageInfo) -> None:
         """Mark image insane if no valid main-scamp WCS solution was obtained after scamp/solve-field attempts"""
-        if image_info.invalid:
-            self.logger.info(f"SANITY F for {image_info.id}: no valid WCS solution after scamp/solve-field")
+        failed = "no valid WCS solution" if image_info.invalid else "bad WCS solution" if image_info.bad else None
+        if failed:
+            self.logger.info(f"SANITY F for {image_info.id}: {failed} after scamp/solve-field")
             image_info.SANITY = False
             try:
-                self._write_astrometry_sanity_rejection_to_header(image_info.image_path)
+                self._write_astrometry_sanity_rejection_to_header(image_info.image_path, fits.Header(image_info.cards))
             except Exception as hdr_exc:
                 self.logger.error(
                     f"Failed to write SANITY/REJ_PROC for {os.path.basename(image_info.image_path)}: {hdr_exc}"
                 )
                 raise hdr_exc
 
-    def _write_astrometry_sanity_rejection_to_header(self, image_path: str) -> None:
+    def _write_astrometry_sanity_rejection_to_header(self, image_path: str, cards: fits.Header = None) -> None:
         """Write SANITY=F and REJ_PROC so downstream (e.g. single photometry) can match on re-run."""
-        machine_reject(image_path, ASTROMETRY_SPEC.name)
+        machine_reject(image_path, ASTROMETRY_SPEC.name, cards)
 
     def _solve_field_suite(
         self,
@@ -568,11 +630,6 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 f"ImageInfo {image_info.id} solved_head: {image_info.solved_head}, "
                 f"rsep_stats: {type(image_info.rsep_stats)}"
             )
-            if image_info.good:
-                self.logger.debug(
-                    f"Skipping scamp iteration for {image_info.id} because it already has a good solution"
-                )
-                return True
 
         for _ in range(max_scamp):
             last_scamp_success = self.run_scamp(
@@ -1100,8 +1157,6 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         path_ref_scamp = path_ref_scamp or self.path.astrometry.ref_query_dir
 
         # use local astrefcat if tile obs
-        astrefcat = astrefcat or self.config_node.astrometry.local_astref
-        self.logger.debug(f"Using astrefcat: {astrefcat}")
 
         scamp_success = True
         solved_input_catalogs = []
@@ -1111,11 +1166,13 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         # joint scamp
         if joint:
             try:
+                joint_astrefcat = astrefcat or self.joint_epoch_astrefcat(images_info)
+                self.logger.debug(f"Using astrefcat: {joint_astrefcat}")
                 solved_heads = self.scamp_catalogs(
                     input_catalogs,
                     self.path.astrometry.factory.scamp_input_manifest,
                     path_ref_scamp=path_ref_scamp,
-                    astrefcat=astrefcat,
+                    astrefcat=joint_astrefcat,
                     scampconfig=scampconfig,
                     scamp_args=scamp_args,
                     scamp_preset=scamp_preset,
@@ -1162,10 +1219,12 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             scamp_error = None
             for i, (image_info, precat) in enumerate(zip(images_info, input_catalogs)):
                 try:
+                    local_astref = astrefcat or self.epoch_astrefcat(image_info)
+                    self.logger.debug(f"Using astrefcat: {local_astref}")
                     solved_head = external.scamp(
                         precat,
                         path_ref_scamp=path_ref_scamp,
-                        local_astref=astrefcat,
+                        local_astref=local_astref,
                         scampconfig=scampconfig,
                         scamp_args=scamp_args,
                         scamp_preset=scamp_preset,
@@ -1251,6 +1310,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             elif wcs_type == "solve-field":
                 self.logger.debug(f"Updating catalog {input_catalog} with solve-field WCS from {solved_head}")
                 wcs_header = fits.getheader(solved_head)
+                for key in ("SIMPLE", "BITPIX", "NAXIS", "NAXIS1", "NAXIS2", "EXTEND", "COMMENT", "HISTORY"):
+                    wcs_header.remove(key, ignore_missing=True, remove_all=True)
             else:
                 raise AstrometryError.ValueError(f"Invalid WCS type: {wcs_type}")
             image_header.update(wcs_header)
@@ -1331,7 +1392,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             try:
                 eval_result = evaluate_single_wcs(
                     image=input_image,
-                    ref_cat=refcat,
+                    ref_cat=image_info.astref_table if image_info.astref_table is not None else refcat,
                     source_cat=prep_cat,
                     matched_catalog_path=collapse(image_info.path.astrometry.factory.matched_catalog, raise_error=True),
                     date_obs=image_info.dateobs,
@@ -1462,6 +1523,21 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         for image_info, solved_head, target_fits in zip(sane_images_info, heads, inims):
             solved_header = read_scamp_header(solved_head)
 
+            polygon_header = polygon_info_header(image_info) if add_polygon_info else []
+            pointing_cards = [card for card in polygon_header if card[0] in ("PNTGDEV", "PADEV")]
+            failed = [
+                card[0]
+                for card in pointing_cards
+                if not self.apply_qa_criteria(header=fits.Header([card]), dtype=IMAGE_GROUP_SCIENCE)
+            ]
+            if failed:
+                image_info.SANITY = False
+                self.logger.warning(
+                    f"SANITY F for {image_info.id} by {', '.join(failed)}: "
+                    + ", ".join(f"{k}={v}" for k, v, _ in pointing_cards)
+                    + f" ({os.path.basename(target_fits)})"
+                )
+
             if add_version:
                 from .. import __version__
 
@@ -1481,7 +1557,6 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 self.logger.debug(f"WCS evaluation is missing for {target_fits}")
 
             if add_polygon_info:
-                polygon_header = polygon_info_header(image_info)
                 # solved_header.update(polygon_header)
                 solved_header.extend(polygon_header)
 
@@ -1495,6 +1570,9 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             # reset the image header after preparing the new content
             if reset_image_header:
                 self.reset_headers(target_fits)
+
+            if failed:  # drops an INSPCOMM beside a sanity T, as every machine rejection does
+                machine_reject(target_fits, ASTROMETRY_SPEC.name)
 
             # update the header, consuming the COMMENT padding
             update_padded_header(target_fits, solved_header)
@@ -1613,6 +1691,11 @@ class ImageInfo:
     ntrailpx: Optional[int] = field(default=None)
     skyval: Optional[float] = field(default=None)
     skysig: Optional[float] = field(default=None)
+    # epoch-propagated refcat and target pointing
+    astref_table: Optional[Table] = field(default=None)
+    epoch_astrefcat: Optional[str] = field(default=None)
+    objctra: Optional[str] = field(default=None)
+    objctdec: Optional[str] = field(default=None)
     # late qa
     # UNMATCH, PA_ALIGN, ELLIPMN, ELLIPSTD
 
@@ -1693,7 +1776,13 @@ class ImageInfo:
             pixscale=pixscale,
             filter=hdr["FILTER"],
             exptime=hdr["EXPTIME"],
+            objctra=hdr.get(HEADER_KEY_MAP["ra"]),
+            objctdec=hdr.get(HEADER_KEY_MAP["dec"]),
         )
+
+    @property
+    def epoch(self) -> float:
+        return Time(self.dateobs).jyear
 
     @cached_property
     def coarse_wcs(self):
@@ -1847,7 +1936,9 @@ class ImageInfo:
         if self.rsep_stats.separation_stats.P95 is None:
             return False
         else:
-            return self.rsep_stats.separation_stats.P95 < PIXSCALE
+            return self.rsep_stats.separation_stats.P95 < PIXSCALE and (
+                self.rsep_stats.unmatched_fraction is None or self.rsep_stats.unmatched_fraction <= 0.9
+            )
 
     @property
     def bad(self) -> bool:

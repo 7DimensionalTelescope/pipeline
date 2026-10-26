@@ -382,7 +382,9 @@ def prepare_matched_catalog(
     NUM_REF = len(ref_cat)
 
     # match source tbl with refcat
-    pm_keys = dict(pmra="pmra", pmdec="pmdec", parallax=None, ref_epoch=2016.0)
+    pm_keys = dict(
+        pmra="pmra", pmdec="pmdec", parallax=None, ref_epoch="ref_epoch" if "ref_epoch" in ref_cat.colnames else 2016.0
+    )
     matched = match_two_catalogs(
         tbl,
         ref_cat,

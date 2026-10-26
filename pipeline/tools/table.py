@@ -10,7 +10,8 @@ from astropy.coordinates import SkyCoord, Angle, CartesianRepresentation
 import operator
 
 
-def _correct_pm(coord_ref: SkyCoord, ref_tbl: Table, x1: str, y1: str, obs_time: Time, pm_keys: dict):
+def _correct_pm(coord_ref: SkyCoord, ref_tbl: Table, x1: str, y1: str, obs_time: Time, pm_keys: dict) -> SkyCoord:
+    """New ICRS coords of ref_tbl moved to obs_time; rows without finite pm keep coord_ref"""
     from astropy.coordinates import Distance
 
     # Vectorised columns with units
@@ -25,21 +26,26 @@ def _correct_pm(coord_ref: SkyCoord, ref_tbl: Table, x1: str, y1: str, obs_time:
     else:
         dist = None  # let SkyCoord use its default (no distance)
 
+    ra = np.array(coord_ref.ra.deg, dtype=float)
+    dec = np.array(coord_ref.dec.deg, dtype=float)
     if np.any(good):
+        ref_epoch = pm_keys["ref_epoch"]
+        if isinstance(ref_epoch, str):
+            ref_epoch = np.asarray(ref_tbl[ref_epoch], dtype=float)[good]
         kwargs = dict(
             ra=ref_tbl[x1][good] * u.deg,
             dec=ref_tbl[y1][good] * u.deg,
             pm_ra_cosdec=pm_ra[good],
             pm_dec=pm_dec[good],
-            obstime=Time(pm_keys["ref_epoch"], format="jyear"),
+            obstime=Time(ref_epoch, format="jyear"),
         )
         if dist is not None:
             kwargs["distance"] = dist[good]
         moved = SkyCoord(**kwargs).apply_space_motion(new_obstime=obs_time)
+        ra[good] = moved.ra.deg
+        dec[good] = moved.dec.deg
 
-        coord_ref.ra[good] = moved.ra
-        coord_ref.dec[good] = moved.dec
-        coord_ref._sky_coord_frame.cache.clear()
+    return SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
 
 
 def match_two_catalogs(
@@ -140,7 +146,7 @@ def match_two_catalogs(
     if correct_pm:
         if obs_time is None:
             raise ValueError("obs_time must be provided if correct_pm is True")
-        _correct_pm(coord_ref, ref_tbl, x1, y1, obs_time, pm_keys)  # in-place modification of coord_ref
+        coord_ref = _correct_pm(coord_ref, ref_tbl, x1, y1, obs_time, pm_keys)  # in-place modification of coord_ref
 
     if join == "left":
         coord0, coord1 = coord_sci, coord_ref

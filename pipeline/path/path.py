@@ -1706,6 +1706,30 @@ class PathAstrometryFactory(AutoMkdirMixin, AutoCollapseMixin):
     def scamp_input_manifest(self) -> str:
         return os.path.join(self.dir, "scamp_input.cat")
 
+    @staticmethod
+    def astref_tmpfs_dir() -> str | None:
+        """per-process tmpfs dir; None if unusable"""
+        try:
+            os.makedirs(const.ASTREF_TMPFS_DIR, exist_ok=True)
+        except OSError:
+            return None
+        if os.path.isdir(const.ASTREF_TMPFS_DIR) and os.access(const.ASTREF_TMPFS_DIR, os.W_OK):
+            return os.path.join(const.ASTREF_TMPFS_DIR, str(os.getpid()))
+        return None
+
+    @property
+    def epoch_astrefcat(self) -> str | List[str]:
+        tmpfs_dir = self.astref_tmpfs_dir()
+        if tmpfs_dir is None:
+            return add_suffix(self.catalog, "astref")
+        stems = [os.path.splitext(os.path.basename(s))[0] for s in atleast_1d(self._parent._input_files)]
+        return [os.path.join(tmpfs_dir, f"{stem}_astref.fits") for stem in stems]
+
+    @property
+    def joint_epoch_astrefcat(self) -> str:
+        tmpfs_dir = self.astref_tmpfs_dir()
+        return os.path.join(tmpfs_dir or self.dir, "joint_astref.fits")
+
     def evaluation_cards(self, suffix: str = "wcs") -> str | List[str]:
         return swap_ext(add_suffix(self.catalog, f"{suffix}_eval_cards"), "txt")
 

@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 from astropy.io import fits
-from astropy.table import Table
 from astropy.wcs import WCS
 
 from .. import external
@@ -190,8 +189,10 @@ class SwarpMixin:
 
     def joint_registration(self, swarp_inputs: list[str]) -> list[str]:
         """Joint SCAMP over the inputs' catalogs: one .head per single in the joint_wcs factory dir, evaluated and summarised."""
+        from astropy.time import Time
         from ..astrometry.astrometry import Astrometry
         from ..astrometry.evaluation_helpers import bad_wcs_cards
+        from ..astrometry.generate_refcat_gaia import write_epoch_astrefcat
         from ..astrometry.utils import get_adaptive_scamp_timeout
 
         swarp_inputs = list(atleast_1d(swarp_inputs))
@@ -210,6 +211,9 @@ class SwarpMixin:
         else:
             # SCAMP writes <input>.head beside the catalog path it is given: link each catalog under the single's stem
             links = [swap_ext(head, "cat") for head in heads]
+            single_headers = [fits.getheader(single) for single in singles]
+            epoch_astrefcat = collapse(self.path.astrometry.factory.joint_epoch_astrefcat, raise_error=True)
+            tmpfs_dir = self.path.astrometry.factory.astref_tmpfs_dir()
             try:
                 for catalog, link in zip(catalogs, links):
                     force_symlink(catalog, link)
@@ -218,6 +222,8 @@ class SwarpMixin:
                     self.config_node.astrometry.scamp_timeout, n_det, n_catalogs=len(catalogs)
                 )
                 astrefcat = self._joint_wcs_astrefcat()
+                epoch = float(np.median(Time([header["DATE-OBS"] for header in single_headers]).jyear))
+                refcat = write_epoch_astrefcat(astrefcat, epoch, epoch_astrefcat)
                 self.logger.info(
                     f"Start joint SCAMP over {len(catalogs)} {source} catalogs ({n_det} detections, timeout {timeout} s)"
                 )
@@ -226,7 +232,7 @@ class SwarpMixin:
                     factory.joint_wcs_manifest,
                     timeout=timeout,
                     path_ref_scamp=self.path.astrometry.ref_query_dir,
-                    astrefcat=astrefcat,
+                    astrefcat=epoch_astrefcat,
                     scamp_preset="main",
                     logger=self.logger,
                     overwrite=True,
@@ -237,8 +243,9 @@ class SwarpMixin:
                 for link in links:
                     if os.path.islink(link):
                         os.remove(link)
-            headers = [self._single_wcs_header(single) for single in singles]
-            refcat = Table.read(astrefcat, hdu=2)
+                if os.path.dirname(epoch_astrefcat) == tmpfs_dir and os.path.exists(epoch_astrefcat):
+                    os.remove(epoch_astrefcat)
+            headers = [self._single_wcs_header(single, header) for single, header in zip(singles, single_headers)]
             cards = Astrometry.evaluate_wcs_headers(
                 singles,
                 catalogs,

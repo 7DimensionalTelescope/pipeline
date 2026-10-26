@@ -360,7 +360,13 @@ def solve_field(
             hdu = fits.BinTableHDU.from_columns(cols)
         hdu.writeto(outfile, overwrite=True)
         if center:
-            return outfile, image_header.get("RA", None), image_header.get("DEC", None)
+            return (
+                outfile,
+                image_header.get("RA", None),
+                image_header.get("DEC", None),
+                image_header.get("NAXIS1", IMAGE_SIZE_X),
+                image_header.get("NAXIS2", IMAGE_SIZE_Y),
+            )
         return outfile
 
     # Solve-field using the soft link
@@ -371,17 +377,20 @@ def solve_field(
             chatter(f"Solve-field already run: {swap_ext(soft_link, '.solved')}. Skipping...")
             return swap_ext(soft_link, ".wcs")
 
-        soft_link, ra, dec = convert_ldac_to_xyls(soft_link, center=True, sortcol=sortcol)  # not a soft link anymore
+        soft_link, ra, dec, width, height = convert_ldac_to_xyls(
+            soft_link, center=True, sortcol=sortcol
+        )  # not a soft link anymore
         solvecom = [
             "solve-field", soft_link,  # "sources.xyls",
             "--x-column", xcol,
             "--y-column", ycol,
-            "--width", f"{IMAGE_SIZE_X}",  # we have LDAC_IMHEAD
-            "--height", f"{IMAGE_SIZE_Y}",
+            "--width", f"{width}",  # we have LDAC_IMHEAD
+            "--height", f"{height}",
             "--fields", "1",  # the extension to process. should point to IDAC_OBJECTS
             "--scale-unit", "arcsecperpix",
-            "--scale-low", "0.49",
-            "--scale-high", "0.52",
+            "--scale-low", f"{pixscale*0.98}",
+            "--scale-high", f"{pixscale*1.02}",
+            "--cpulimit", f"{int(timeout)}",
             "--crpix-center",
             "--no-plots",
         ]  # fmt: skip
@@ -460,11 +469,9 @@ def solve_field(
         f.flush()
 
         try:
-            for line in process.stdout:
-                f.write(line)
-                f.flush()
             # wait for process to finish within timeout
-            process.wait(timeout=timeout)
+            out, _ = process.communicate(timeout=timeout)
+            f.write(out)
 
         except subprocess.TimeoutExpired:
             chatter(f"Timeout reached ({timeout}s), terminating solve-field...")

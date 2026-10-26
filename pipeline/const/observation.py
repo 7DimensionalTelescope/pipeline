@@ -25,6 +25,7 @@ MEDIUM_FILTERS = sorted(FIRST_MEDIUM_FILTERS + SECOND_MEDIUM_FILTERS)
 BROAD_FILTERS = ["u", "g", "r", "i", "z"]
 ALL_FILTERS = sorted(MEDIUM_FILTERS + WIDE_FILTERS) + BROAD_FILTERS
 PIXSCALE = 0.505  # arcsec/pixel. Default plate scale assumed prior to astrometric solving
+TARGET_PA = 0.0  # deg; commanded field rotation, the reference for PADEV
 BIAS_LEVEL = 512  # ADU
 DEFAULT_EXPTIME = 100.0  # s
 NUM_MIN_CALIB = 5  # 2

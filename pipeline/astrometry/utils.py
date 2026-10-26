@@ -8,10 +8,11 @@ import astropy.units as u
 from astropy.table import Table
 from astropy.io import fits
 from astropy.wcs import WCS
-from astropy.coordinates import SkyCoord, SkyOffsetFrame
+from astropy.coordinates import SkyCoord, SkyOffsetFrame, Angle
 
 from ..path import NameHandler
 from ..const import REF_DIR
+from ..const.observation import TARGET_PA
 
 
 def read_text_header(file: str, sep="\n"):
@@ -232,7 +233,35 @@ def get_fov_quad(wcs, x, y, edge=True):
 def polygon_info_header(image_info: "ImageInfo") -> fits.Header:
     fov_ra = image_info.get("fov_ra", None)
     fov_dec = image_info.get("fov_dec", None)
-    return make_polygon_header(image_info.wcs, image_info.naxis1, image_info.naxis2, fov_ra=fov_ra, fov_dec=fov_dec)
+    wcs = image_info.wcs
+    cards = make_polygon_header(wcs, image_info.naxis1, image_info.naxis2, fov_ra=fov_ra, fov_dec=fov_dec)
+    if image_info.get("objctra") and image_info.get("objctdec"):
+        try:
+            target_ra, target_dec = target_coordinates(image_info.objctra, image_info.objctdec)
+        except ValueError:
+            return cards
+        cards += pointing_deviation_cards(wcs, image_info.naxis1, image_info.naxis2, target_ra, target_dec)
+    return cards
+
+
+def target_coordinates(objctra: str, objctdec: str) -> tuple[Angle, Angle]:
+    """target RA/Dec from 'HH:MM:SS.s' or 'HH MM SS.s' strings"""
+    ra = Angle(str(objctra).strip().replace(" ", ":"), unit=u.hourangle)
+    dec = Angle(str(objctdec).strip().replace(" ", ":"), unit=u.deg)
+    return ra, dec
+
+
+def pointing_deviation_cards(
+    wcs: WCS, naxis1: int, naxis2: int, target_ra: Angle, target_dec: Angle, target_pa: float = TARGET_PA
+) -> list:
+    """PNTGDEV [arcmin] and PADEV [deg, mod 180] cards against the target"""
+    ra, dec = get_fov_center(wcs, naxis1, naxis2)
+    pntgdev = SkyCoord(ra, dec, unit="deg").separation(SkyCoord(target_ra, target_dec)).arcmin
+    padev = abs(((field_rotation(wcs) - target_pa + 90) % 180) - 90)
+    return [
+        ("PNTGDEV", round(float(pntgdev), 3), "Pointing deviation from target [arcmin]"),
+        ("PADEV", round(float(padev), 3), "Field rotation deviation from target, mod 180 [deg]"),
+    ]
 
 
 def make_polygon_header(

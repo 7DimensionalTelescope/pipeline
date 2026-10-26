@@ -24,6 +24,16 @@
             "value": 5,
             "criteria": "gte",
             "description": "Zero-point stars from Photometry must be >= 5"
+        },
+        "PNTGDEV": {
+            "value": 15,
+            "criteria": "lt",
+            "description": "Pointing deviation from OBJCTRA/OBJCTDEC must be < 15 arcmin"
+        },
+        "PADEV": {
+            "value": 10,
+            "criteria": "lt",
+            "description": "Field rotation deviation from TARGET_PA (mod 180) must be < 10 deg"
         }
     }
 }

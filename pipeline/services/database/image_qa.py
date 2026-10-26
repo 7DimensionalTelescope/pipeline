@@ -127,6 +127,8 @@ class ImageQATable:
     inf_dezp: Optional[float] = None
     inf_fil2: Optional[str] = None
     inf_dezf: Optional[float] = None
+    pntgdev: Optional[float] = None
+    padev: Optional[float] = None
 
     @classmethod
     def from_row(cls, row: tuple, columns: List[str] = None):

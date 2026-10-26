@@ -21,9 +21,13 @@ from astropy.coordinates import Angle
 import healpy as hp
 from spherical_geometry.polygon import SphericalPolygon
 
+from astropy.time import Time
+
 from ..io.cfitsldac import write_ldac
 from .utils import build_wcs
 from ..const import GAIA_ROOT_DIR
+from ..tools.table import _correct_pm
+from ..utils.header import fitsrec_to_header
 
 # import dhutil as dh
 
@@ -245,6 +249,35 @@ def get_refcat_gaia(
                 f"Timeout waiting for reference catalog to be generated: {output_path}. "
                 "Another process may be generating it, or the process may have crashed."
             )
+
+
+def propagate_refcat(table: Table, epoch: float) -> Table:
+    """Copy of a Gaia refcat with ra/dec moved from ref_epoch to epoch [jyear]"""
+    ref_epoch = "ref_epoch" if "ref_epoch" in table.colnames else 2016.0
+    pm_keys = dict(pmra="pmra", pmdec="pmdec", parallax=None, ref_epoch=ref_epoch)
+    coord = SkyCoord(table["ra"], table["dec"], unit="deg")
+    moved = _correct_pm(coord, table, "ra", "dec", Time(epoch, format="jyear"), pm_keys)
+    out = table.copy()
+    out["ra"][:] = moved.ra.deg
+    out["dec"][:] = moved.dec.deg
+    if "ref_epoch" in out.colnames:
+        out["ref_epoch"][:] = epoch
+    else:
+        out["ref_epoch"] = np.full(len(out), float(epoch))
+    return out
+
+
+def write_epoch_astrefcat(astrefcat: str, epoch: float, out_path: str) -> Table:
+    """LDAC refcat propagated to epoch at out_path; reused if present at the same epoch"""
+    if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+        table = Table.read(out_path, hdu=2)
+        if "ref_epoch" in table.colnames and np.all(table["ref_epoch"] == epoch):
+            return table
+    imhead = fitsrec_to_header(fits.getdata(astrefcat, ext=1))
+    table = propagate_refcat(Table.read(astrefcat, hdu=2), epoch)
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    write_ldac(imhead, table, out_path)
+    return table
 
 
 def is_point_in_tile(point, tile_vertices):
