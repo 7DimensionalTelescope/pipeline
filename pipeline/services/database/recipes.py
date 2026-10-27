@@ -14,12 +14,15 @@ than path arithmetic. The contract for anything added here:
    instead of re-asking the database.
 """
 
-from typing import List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 import os
 
 from ...const import (
     ALL_FILTERS,
+    CALIB_TYPE_DARK,
+    CALIB_TYPE_FLAT,
+    MASTER_IMAGE_TYPES,
     SCHEDULER_DB_PATH,
     SINGLE_DEPENDENCY_ROLE,
     TASK_STATUS_PENDING,
@@ -277,6 +280,321 @@ def select_white_target_nights_by_min_version(min_filters: int = 3) -> List[Tupl
             continue
         due.append((obj, night, list(parents), bool(parents_newer)))
     return due
+
+
+# the single's image_qa metrics a brief census carries, in display order
+BRIEF_QA_COLUMNS = (
+    "rotang",
+    "seeing",
+    "ellipmn",
+    "ul5_5",
+    "zp_auto",
+    "ezp_auto",
+    "backval",
+    "backsig",
+    "inf_filt",
+    "inf_dezf",
+    "ppflag",
+    "cov_5",
+    "stdnumb",
+)
+
+
+def _listed(values) -> list:
+    """A bare string is one name, not its characters."""
+    return [values] if isinstance(values, str) else list(values)
+
+
+def census_from_raw(
+    objects: Optional[Iterable[str]] = None,
+    object_regex: Optional[str] = r"^T\d+$",
+    units: Optional[Iterable[str]] = None,
+    nightdates: Optional[Tuple[str, str]] = None,
+    filters: Iterable[str] = ALL_FILTERS,
+    qa: Optional[str] = "brief",
+    mepoch: bool = False,
+    statement_timeout_ms: int = 1800000,
+):
+    """One row per raw science frame, in blocks: paths and identity of the single (with pipe_ver, sanity, inspcomm), the
+    science config, its process flags, has_image_qa and the single's image_qa metrics (`qa`: None | "brief" | "full"),
+    the newest nightly coadd (`mepoch` adds n_coadds and the newest multi-epoch coadd), the white with its crossfilter
+    config and flags. `objects` overrides `object_regex`; `object_regex=None` lifts the object filter. Raw -> single by
+    (unit, obstime UTC); twins resolve to the path-bearing newest row."""
+    import pandas as pd
+
+    from ...const.crossfilter import CROSSFILTERPROCESS_REGISTRY
+    from ...const.run import DEFAULT_CROSSFILTER_PROCESSES
+    from ...const.sciproc import SCIPROCESS_REGISTRY
+    from .image_qa import ImageQATable
+
+    where, params = [], []
+    if objects is not None:
+        objects = [str(o) for o in _listed(objects)]
+        if not objects:
+            raise ValueError("objects is empty; pass None to use object_regex")
+        where.append("COALESCE(tl.name, t.name) = ANY(%s)")
+        params.append(objects)
+    elif object_regex is not None:
+        where.append("COALESCE(tl.name, t.name) ~ %s")
+        params.append(object_regex)
+    if units is not None:
+        where.append("fu.name = ANY(%s)")
+        params.append([str(u) for u in _listed(units)])
+    if nightdates is not None:
+        where.append("n.date BETWEEN %s AND %s")
+        params.extend(nightdates)
+    where.append("f.name = ANY(%s)")
+    params.append(_listed(filters))
+
+    single = [
+        "image_path",
+        "camera",
+        "pipe_ver",
+        "sanity",
+        "inspcomm",
+    ]  # of the single, always on, in the identity block
+    if qa == "full":
+        live = {
+            row[0]
+            for row in free_query(
+                "SELECT column_name FROM information_schema.columns"
+                " WHERE table_schema = 'pipeline' AND table_name = 'image_qa'"
+            )
+        }
+        # never repeated: ids, the type, the raw frame's own keys, the identity block, the master-frame set
+        skip = {"id", "process_status_id", "image_name", "image_type", "image_group", "m_epoch", "nightdate", "unit"}
+        skip |= {"filter", "object", "exptime", *single, *ImageQATable.MASTERFRAME_COLUMNS}
+        qa_cols = [c for c in ImageQATable.__annotations__ if c in live and c not in skip]
+    elif qa == "brief":
+        qa_cols = list(BRIEF_QA_COLUMNS)
+    elif qa is None:
+        qa_cols = []
+    else:
+        raise ValueError(f"qa must be None, 'brief' or 'full', not {qa!r}")
+    s_select = ", ".join(f"q.{c}" for c in single + qa_cols)
+    qa_out = "".join(f", s.{c}" for c in qa_cols)
+    mepoch_select = mepoch_out = ""
+    if mepoch:
+        mepoch_select = """,
+                       (array_agg(c.image_name ORDER BY c.id DESC) FILTER (WHERE c.m_epoch IS TRUE))[1] AS mepoch_coadd_name,
+                       (array_agg(c.image_path ORDER BY c.id DESC) FILTER (WHERE c.m_epoch IS TRUE))[1] AS mepoch_coadd_path"""
+        mepoch_out = ", sc.n_coadds, sc.mepoch_coadd_name, sc.mepoch_coadd_path"
+
+    identity = [
+        "raw_path",
+        "single_path",
+        "object",
+        "nightdate",
+        "filter",
+        "unit",
+        "camera",
+        "obstime",
+        "exptime",
+        "is_too",
+        "pipe_ver",
+        "sanity",
+        "inspcomm",
+    ]
+    config = ["config_file", "config_progress", "config_errors", "config_status", "config_sanity", "config_inspcomm"]
+    image_qa = ["has_image_qa", *qa_cols]
+    coadd = ["coadd_name", "coadd_path", "coadd_sanity", "coadd_inspcomm", "coadd_zp_auto"]
+    coadd += ["n_coadds", "mepoch_coadd_name", "mepoch_coadd_path"] if mepoch else []
+    white = [
+        "white_name",
+        "white_path",
+        "crossfilter_file",
+        "crossfilter_progress",
+        "crossfilter_errors",
+        "crossfilter_status",
+    ]
+    # raw frame + single (one per frame: path-bearing, newest) + config + coadds + white + crossfilter; the coadd and
+    # white lookups are LATERAL so they run as index probes per single, not as a CTE rescanned per row
+    census = pd.DataFrame(
+        free_query(
+            f"""
+            WITH r AS (
+                SELECT sf.id, COALESCE(tl.name, t.name) AS object, n.date::text AS nightdate, f.name AS filter,
+                       fu.name AS unit, sf.obstime, (sf.obstime AT TIME ZONE 'UTC') AS obstime_utc, sf.exptime,
+                       sf.is_too, sf.file_path AS raw_path
+                FROM survey_scienceframe sf
+                JOIN survey_night n ON sf.night_id = n.id JOIN facility_unit fu ON sf.unit_id = fu.id
+                JOIN facility_filter f ON sf.filter_id = f.id
+                LEFT JOIN survey_tile tl ON sf.tile_id = tl.id LEFT JOIN survey_target t ON sf.target_id = t.id
+                WHERE {" AND ".join(where)}),
+            s AS (
+                SELECT DISTINCT ON (r.id) r.id AS rid, q.id AS sid, {s_select}
+                FROM r JOIN image_qa q ON q.image_type = 'single' AND q.unit = r.unit AND q.date_obs = r.obstime_utc
+                ORDER BY r.id, (q.image_path IS NOT NULL) DESC, q.id DESC),
+            cfg AS (
+                SELECT DISTINCT ON (object, nightdate, filter) object, nightdate::text AS nightdate, filter,
+                       config_file, progress, errors, status, sanity, inspcomm
+                FROM process_status WHERE config_type = 'science'
+                ORDER BY object, nightdate, filter, updated_at DESC NULLS LAST, id DESC),
+            cf AS (
+                SELECT DISTINCT ON (object, nightdate) object, nightdate::text AS nightdate,
+                       config_file, progress, errors, status
+                FROM process_status WHERE config_type = 'crossfilter'
+                ORDER BY object, nightdate, updated_at DESC NULLS LAST, id DESC)
+            SELECT r.raw_path, s.image_path, r.object, r.nightdate, r.filter, r.unit, s.camera, r.obstime, r.exptime,
+                   r.is_too, s.pipe_ver, s.sanity, s.inspcomm,
+                   cfg.config_file, cfg.progress, cfg.errors, cfg.status, cfg.sanity, cfg.inspcomm,
+                   s.sid IS NOT NULL{qa_out},
+                   sc.coadd_name, sc.coadd_path, sc.coadd_sanity, sc.coadd_inspcomm, sc.coadd_zp_auto{mepoch_out},
+                   w.image_name, w.image_path, cf.config_file, cf.progress, cf.errors, cf.status
+            FROM r
+            LEFT JOIN s ON s.rid = r.id
+            LEFT JOIN cfg ON cfg.object = r.object AND cfg.nightdate = r.nightdate AND cfg.filter = r.filter
+            LEFT JOIN LATERAL (
+                SELECT count(*) AS n_coadds,
+                       (array_agg(c.image_name ORDER BY c.id DESC) FILTER (WHERE c.m_epoch IS NOT TRUE))[1] AS coadd_name,
+                       (array_agg(c.image_path ORDER BY c.id DESC) FILTER (WHERE c.m_epoch IS NOT TRUE))[1] AS coadd_path,
+                       (array_agg(c.sanity ORDER BY c.id DESC) FILTER (WHERE c.m_epoch IS NOT TRUE))[1] AS coadd_sanity,
+                       (array_agg(c.inspcomm ORDER BY c.id DESC) FILTER (WHERE c.m_epoch IS NOT TRUE))[1] AS coadd_inspcomm,
+                       (array_agg(c.zp_auto ORDER BY c.id DESC) FILTER (WHERE c.m_epoch IS NOT TRUE))[1] AS coadd_zp_auto,
+                       (array_agg(c.id ORDER BY c.id DESC) FILTER (WHERE c.m_epoch IS NOT TRUE))[1] AS coadd_id{mepoch_select}
+                FROM image_qa_dependency d JOIN image_qa c ON c.id = d.derived_image_id AND c.image_type = 'coadd'
+                WHERE d.source_image_id = s.sid AND d.dependency_role = 'single') sc ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT wq.image_name, wq.image_path
+                FROM image_qa_dependency d JOIN image_qa wq ON wq.id = d.derived_image_id AND wq.image_type = 'white'
+                WHERE d.source_image_id = sc.coadd_id AND d.dependency_role = 'coadd'
+                ORDER BY wq.id DESC LIMIT 1) w ON TRUE
+            LEFT JOIN cf ON cf.object = r.object AND cf.nightdate = r.nightdate
+            """,
+            params,
+            statement_timeout_ms=statement_timeout_ms,
+        ),
+        columns=identity + config + image_qa + coadd + white,
+    )
+    census = census.sort_values(["object", "nightdate", "filter", "obstime"], ignore_index=True)
+
+    # a process is done when its config reached the process's progress end with no error recorded
+    crossfilter = [spec for spec in CROSSFILTERPROCESS_REGISTRY.specs if spec.name in DEFAULT_CROSSFILTER_PROCESSES]
+    for spec in SCIPROCESS_REGISTRY.specs:
+        census[spec.name] = census.config_progress.ge(spec.progress_end) & census.config_errors.isna()
+    for spec in crossfilter:
+        census[spec.name] = census.crossfilter_progress.ge(spec.progress_end) & census.crossfilter_errors.isna()
+    science = [spec.name for spec in SCIPROCESS_REGISTRY.specs]
+    return census[identity + config + science + image_qa + coadd + white + [spec.name for spec in crossfilter]]
+
+
+def census_masters(
+    units: Optional[Iterable[str]] = None,
+    nightdates: Optional[Tuple[str, str]] = None,
+    calib_types: Iterable[str] = MASTER_IMAGE_TYPES,
+    statement_timeout_ms: int = 600000,
+):
+    """One row per raw calibration frame, in the same blocks: raw and master paths, the identity of the master's group
+    (type, unit, nightdate, gain, binning, filter | exptime) with the master's pipe_ver, sanity, inspcomm, the night's
+    preprocess config and log with their progress, then has_image_qa and the master-frame metrics."""
+    import pandas as pd
+
+    from .const import TABLES
+    from .image_qa import ImageQATable
+
+    where, params = [], []
+    if units is not None:
+        where.append("fu.name = ANY(%s)")
+        params.append([str(u) for u in _listed(units)])
+    if nightdates is not None:
+        where.append("n.date BETWEEN %s AND %s")
+        params.extend(nightdates)
+    metrics = ["ppflag", "shifted", "shftscr", *ImageQATable.MASTERFRAME_COLUMNS]
+    columns = [
+        "raw_path",
+        "master_path",
+        "calib_type",
+        "nightdate",
+        "unit",
+        "camera",
+        "filter",
+        "exptime",
+        "obstime",
+        "gain",
+        "binning",
+        "pipe_ver",
+        "sanity",
+        "inspcomm",
+        "config_file",
+        "log_file",
+        "config_progress",
+        "config_errors",
+        "config_status",
+        "has_image_qa",
+        *metrics,
+    ]
+    rows = []
+    for calib_type in _listed(calib_types):
+        if calib_type == CALIB_TYPE_FLAT:
+            filter_select, filter_join, key = (
+                "f.name",
+                "LEFT JOIN facility_filter f ON cf.filter_id = f.id",
+                "m.filter = r.filter",
+            )
+        elif calib_type == CALIB_TYPE_DARK:
+            filter_select, filter_join, key = "NULL::text", "", "m.exptime = r.exptime"
+        else:
+            filter_select, filter_join, key = "NULL::text", "", "TRUE"
+        rows += free_query(
+            f"""
+            WITH r AS (
+                SELECT cf.id, n.date::text AS nightdate, fu.name AS unit, {filter_select} AS filter, cf.exptime,
+                       cf.obstime, cf.gain, cf.binning_x AS binning, cf.file_path AS raw_path
+                FROM {TABLES[calib_type]} cf
+                JOIN survey_night n ON cf.night_id = n.id JOIN facility_unit fu ON cf.unit_id = fu.id
+                {filter_join}
+                WHERE {" AND ".join(where) or "TRUE"}),
+            m AS (
+                SELECT id, unit, nightdate::text AS nightdate, filter, exptime, gain, n_binning, image_path, camera,
+                       pipe_ver, sanity, inspcomm, {", ".join(metrics)}
+                FROM image_qa WHERE image_type = %s AND image_group = 'masterframe'),
+            p AS (
+                SELECT DISTINCT ON (nightdate, unit) nightdate::text AS nightdate, unit,
+                       config_file, log_file, progress, errors, status
+                FROM process_status WHERE config_type = 'preprocess'
+                ORDER BY nightdate, unit, updated_at DESC NULLS LAST, id DESC)
+            SELECT DISTINCT ON (r.id) r.raw_path, m.image_path, %s::text, r.nightdate, r.unit, m.camera, r.filter,
+                   r.exptime, r.obstime, r.gain, r.binning, m.pipe_ver, m.sanity, m.inspcomm,
+                   p.config_file, p.log_file, p.progress, p.errors, p.status,
+                   m.id IS NOT NULL, {", ".join("m." + c for c in metrics)}
+            FROM r
+            LEFT JOIN m ON m.unit = r.unit AND m.nightdate = r.nightdate AND m.gain = r.gain
+                       AND m.n_binning = r.binning AND {key}
+            LEFT JOIN p ON p.nightdate = r.nightdate AND p.unit = r.unit
+            ORDER BY r.id, (m.image_path IS NOT NULL) DESC, m.id DESC
+            """,
+            params + [calib_type, calib_type],
+            statement_timeout_ms=statement_timeout_ms,
+        )
+    census = pd.DataFrame(rows, columns=columns)
+    return census.sort_values(["nightdate", "unit", "obstime"], ignore_index=True)
+
+
+def stage_funnel(census):
+    """Per-stage frame counts and losses over a `census_from_raw` table: two cumulative chains, single -> sanity ok ->
+    the science registry in order, and single -> sanity ok -> in a coadd -> the default crossfilter processes."""
+    import pandas as pd
+
+    from ...const.run import DEFAULT_CROSSFILTER_PROCESSES
+    from ...const.sciproc import SCIPROCESS_REGISTRY
+
+    rejected = census.sanity.eq(False)
+    table = census.assign(sanity_ok=census.has_image_qa & ~rejected, in_coadd=census.coadd_name.notna())
+    science = ["has_image_qa", "sanity_ok"] + [spec.name for spec in SCIPROCESS_REGISTRY.specs]
+    white = ["has_image_qa", "sanity_ok", "in_coadd"] + list(DEFAULT_CROSSFILTER_PROCESSES)
+    reached = pd.concat([table[science].cummin(axis=1), table[white].cummin(axis=1).iloc[:, 2:]], axis=1)
+    n, budget = len(table), len(table) - int(rejected.sum())
+    funnel = pd.DataFrame({"frames": reached.sum()})
+    funnel.loc["raw"] = n
+    funnel = funnel.loc[["raw"] + list(reached.columns)]
+    prev = funnel.frames.shift(1)
+    prev.loc["in_coadd"] = funnel.frames["sanity_ok"]  # the white chain branches off after sanity_ok
+    funnel["lost_here"] = (prev - funnel.frames).fillna(0).astype(int)
+    funnel["fraction_of_raw"] = (funnel.frames / n).round(3)
+    funnel["fraction_of_budget"] = (funnel.frames / budget).round(3)
+    funnel["lost_fraction_of_budget"] = (funnel.lost_here / budget).round(3)
+    funnel.loc["sanity_ok", "lost_fraction_of_budget"] = None  # leaves the budget, not a loss
+    return funnel
 
 
 def image_names(images) -> List[str]:

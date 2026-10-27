@@ -132,6 +132,19 @@ class ImageQATable:
     wsep_q2: Optional[float] = None
     wsep_p95: Optional[float] = None
 
+    # preprocess cards only a master frame carries (SHIFTED/SHFTSCR are stamped on singles too); the rest is common or science
+    MASTERFRAME_COLUMNS = (
+        "clipmed",
+        "clipstd",
+        "clipmin",
+        "clipmax",
+        "sigmean",
+        "edgevar",
+        "uniform",
+        "nhotpix",
+        "ntotpix",
+    )
+
     @classmethod
     def from_row(cls, row: tuple, columns: List[str] = None):
 
