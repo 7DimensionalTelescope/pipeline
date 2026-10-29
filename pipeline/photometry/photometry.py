@@ -1423,7 +1423,7 @@ class PhotometrySingle:
             if len(test_dicts) == 0:
                 zp, zperr = phot_utils.get_zp_from_dict(dicts, alleged_filter)
 
-                self.logger.error(
+                self.logger.warning(
                     f"Filter determination process eliminated all candidates. Falling back to header filter '{alleged_filter}' (zp = {zp:.2f}±{zperr:.2f})",
                     FilterCheckError,
                 )

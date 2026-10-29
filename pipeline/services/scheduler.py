@@ -227,6 +227,22 @@ class Scheduler:
 
         return cls(schedule=table, use_system_queue=use_system_queue, overwrite_schedule=overwrite_schedule, **kwargs)
 
+    @classmethod
+    def submit_in_batches(cls, groups, sizes=(10, 100, 1000, 10000), **from_list_kwargs):
+        """Submit `groups` of configs (a target-night's science configs plus its white) in batches that grow by `sizes`, the
+        last size repeating, so the queue starts within minutes of a large campaign; `groups` may be a generator that builds
+        each white only when its batch is formed. `from_list_kwargs` are those of `from_list`. Returns the configs submitted.
+        """
+        import itertools
+
+        groups, sizes = iter(groups), iter(sizes)
+        size, submitted = next(sizes), 0
+        while batch := [config for group in itertools.islice(groups, size) for config in group]:
+            cls.from_list(batch, **from_list_kwargs).start_system_queue()
+            submitted += len(batch)
+            size = next(sizes, size)
+        return submitted
+
     @staticmethod
     def _link_crossfilter_rows(table):
         """Pending at 100 - N behind the N science rows of the same target-night (object, nightdate by name): the key Blueprint groups by, no I/O."""

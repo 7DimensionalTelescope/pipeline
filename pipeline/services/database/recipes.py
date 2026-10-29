@@ -316,10 +316,11 @@ def census_from_raw(
     statement_timeout_ms: int = 1800000,
 ):
     """One row per raw science frame, in blocks: paths and identity of the single (with pipe_ver, sanity, inspcomm), the
-    science config, its process flags, has_image_qa and the single's image_qa metrics (`qa`: None | "brief" | "full"),
-    the newest nightly coadd (`mepoch` adds n_coadds and the newest multi-epoch coadd), the white with its crossfilter
-    config and flags. `objects` overrides `object_regex`; `object_regex=None` lifts the object filter. Raw -> single by
-    (unit, obstime UTC); twins resolve to the path-bearing newest row."""
+    preprocess and science configs, the process flags (science registry, then the default crossfilter processes),
+    has_image_qa and the single's image_qa metrics (`qa`: None | "brief" | "full"), the newest nightly coadd (`mepoch`
+    adds n_coadds and the newest multi-epoch coadd), the white with its crossfilter config. `objects` overrides
+    `object_regex`; `object_regex=None` lifts the object filter. Raw -> single by (unit, obstime UTC); twins resolve to
+    the path-bearing newest row. `object` is the tile, else the target, else the archive's own object_name."""
     import pandas as pd
 
     from ...const.crossfilter import CROSSFILTERPROCESS_REGISTRY
@@ -332,10 +333,10 @@ def census_from_raw(
         objects = [str(o) for o in _listed(objects)]
         if not objects:
             raise ValueError("objects is empty; pass None to use object_regex")
-        where.append("COALESCE(tl.name, t.name) = ANY(%s)")
+        where.append("COALESCE(tl.name, t.name, NULLIF(sf.object_name, '')) = ANY(%s)")
         params.append(objects)
     elif object_regex is not None:
-        where.append("COALESCE(tl.name, t.name) ~ %s")
+        where.append("COALESCE(tl.name, t.name, NULLIF(sf.object_name, '')) ~ %s")
         params.append(object_regex)
     if units is not None:
         where.append("fu.name = ANY(%s)")
@@ -395,7 +396,15 @@ def census_from_raw(
         "sanity",
         "inspcomm",
     ]
-    config = ["config_file", "config_progress", "config_errors", "config_status", "config_sanity", "config_inspcomm"]
+    config = [
+        "preproc_config_file",
+        "config_file",
+        "config_progress",
+        "config_errors",
+        "config_status",
+        "config_sanity",
+    ]
+    config += ["config_inspcomm"]
     image_qa = ["has_image_qa", *qa_cols]
     coadd = ["coadd_name", "coadd_path", "coadd_sanity", "coadd_inspcomm", "coadd_zp_auto"]
     coadd += ["n_coadds", "mepoch_coadd_name", "mepoch_coadd_path"] if mepoch else []
@@ -413,7 +422,7 @@ def census_from_raw(
         free_query(
             f"""
             WITH r AS (
-                SELECT sf.id, COALESCE(tl.name, t.name) AS object, n.date::text AS nightdate, f.name AS filter,
+                SELECT sf.id, COALESCE(tl.name, t.name, NULLIF(sf.object_name, '')) AS object, n.date::text AS nightdate, f.name AS filter,
                        fu.name AS unit, sf.obstime, (sf.obstime AT TIME ZONE 'UTC') AS obstime_utc, sf.exptime,
                        sf.is_too, sf.file_path AS raw_path
                 FROM survey_scienceframe sf
@@ -425,6 +434,10 @@ def census_from_raw(
                 SELECT DISTINCT ON (r.id) r.id AS rid, q.id AS sid, {s_select}
                 FROM r JOIN image_qa q ON q.image_type = 'single' AND q.unit = r.unit AND q.date_obs = r.obstime_utc
                 ORDER BY r.id, (q.image_path IS NOT NULL) DESC, q.id DESC),
+            pre AS (
+                SELECT DISTINCT ON (nightdate, unit) nightdate::text AS nightdate, unit, config_file
+                FROM process_status WHERE config_type = 'preprocess'
+                ORDER BY nightdate, unit, updated_at DESC NULLS LAST, id DESC),
             cfg AS (
                 SELECT DISTINCT ON (object, nightdate, filter) object, nightdate::text AS nightdate, filter,
                        config_file, progress, errors, status, sanity, inspcomm
@@ -437,12 +450,13 @@ def census_from_raw(
                 ORDER BY object, nightdate, updated_at DESC NULLS LAST, id DESC)
             SELECT r.raw_path, s.image_path, r.object, r.nightdate, r.filter, r.unit, s.camera, r.obstime, r.exptime,
                    r.is_too, s.pipe_ver, s.sanity, s.inspcomm,
-                   cfg.config_file, cfg.progress, cfg.errors, cfg.status, cfg.sanity, cfg.inspcomm,
+                   pre.config_file, cfg.config_file, cfg.progress, cfg.errors, cfg.status, cfg.sanity, cfg.inspcomm,
                    s.sid IS NOT NULL{qa_out},
                    sc.coadd_name, sc.coadd_path, sc.coadd_sanity, sc.coadd_inspcomm, sc.coadd_zp_auto{mepoch_out},
                    w.image_name, w.image_path, cf.config_file, cf.progress, cf.errors, cf.status
             FROM r
             LEFT JOIN s ON s.rid = r.id
+            LEFT JOIN pre ON pre.nightdate = r.nightdate AND pre.unit = r.unit
             LEFT JOIN cfg ON cfg.object = r.object AND cfg.nightdate = r.nightdate AND cfg.filter = r.filter
             LEFT JOIN LATERAL (
                 SELECT count(*) AS n_coadds,
@@ -474,8 +488,8 @@ def census_from_raw(
         census[spec.name] = census.config_progress.ge(spec.progress_end) & census.config_errors.isna()
     for spec in crossfilter:
         census[spec.name] = census.crossfilter_progress.ge(spec.progress_end) & census.crossfilter_errors.isna()
-    science = [spec.name for spec in SCIPROCESS_REGISTRY.specs]
-    return census[identity + config + science + image_qa + coadd + white + [spec.name for spec in crossfilter]]
+    flags = [spec.name for spec in SCIPROCESS_REGISTRY.specs] + [spec.name for spec in crossfilter]
+    return census[identity + config + flags + image_qa + coadd + white]
 
 
 def census_masters(
