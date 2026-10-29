@@ -25,6 +25,11 @@
             "criteria": "gte",
             "description": "Zero-point stars from Photometry must be >= 5"
         },
+        "EZP_AUTO": {
+            "value": 0.2,
+            "criteria": "lt",
+            "description": "Zero-point error from Photometry must be < 0.2 mag"
+        },
         "PNTGDEV": {
             "value": 15,
             "criteria": "lt",

@@ -32,8 +32,6 @@ from ..config.base import ConfigNode
 from .. import external
 from ..const import (
     PIXSCALE,
-    MEDIUM_FILTERS,
-    BROAD_FILTERS,
     ALL_FILTERS,
     SECOND_FILTERS,
     TRUST_ACTIVE_FILTERS_NIGHTDATE,
@@ -70,6 +68,7 @@ from ..errors import (
     FilterCheckError,
     FilterInventoryError,
     InferredFilterMismatchError,
+    FilterMismatchError,
     ConnectionError,
     PreviousStageError,
     PrerequisiteNotMetError,
@@ -427,6 +426,7 @@ class PhotometrySingle:
                 DIFFERENCE_PHOTOMETRY_SPEC.name if difference_photometry else SINGLE_PHOTOMETRY_SPEC.name
             )
         self._single_frame = self._sciproc_rejection_process_name == SINGLE_PHOTOMETRY_SPEC.name
+        self._reject_reason = None
 
     def _setup_logger(self, config: Any) -> Any:
         """Initialize logger instance."""
@@ -492,7 +492,8 @@ class PhotometrySingle:
                     temp_phot_header = self.calculate_zp(
                         zp_src_table, filt=filt, phot_header=temp_phot_header, save_plots=False
                     )
-                    if temp_phot_header is not None:
+                    # a candidate without a zero point would shift dicts_to_lists' labels
+                    if temp_phot_header is not None and temp_phot_header.aperture_info:
                         temp_headers[filt] = temp_phot_header
                         self.logger.debug(f"Filter check photometry for {filt} is completed")
 
@@ -507,6 +508,8 @@ class PhotometrySingle:
                     inferred_phot_header = temp_headers[inferred_filter]
                     self.add_calibrated_columns(obs_src_table, filt=inferred_filter, phot_header=inferred_phot_header)
                     # self.update_image_header(inferred_phot_header)  # namespace collision
+                self.measure_color_term(zp_src_table)
+                self.filter_check_verdict()
                 # update header after filter inference so INF_FILT is persisted
                 self.update_image_header()
 
@@ -1342,7 +1345,6 @@ class PhotometrySingle:
     def determine_filter(self, phot_headers: Dict[str, PhotometryHeader], save_plot=True) -> str:
         """Updates PhotometryHeader.INF_FILT with the best-matching filter inferred by the pipeline"""
         self.phot_header.INF_DEZP = self.phot_header.INF_FIL2 = self.phot_header.INF_DEZF = None
-        zp_cut = 27.2  # 26.8
         alleged_filter = self.image_info.filter
         filters_checked = [k for k in phot_headers.keys()]
 
@@ -1389,46 +1391,40 @@ class PhotometrySingle:
         # self.logger.debug(f"Filtered dicts: {test_dicts}")  # too long
 
         # (2) apply prior knowledge of zp for broad and medium band filters
-        while True:
-            narrowed_filters, zps, zperrs = phot_utils.dicts_to_lists(test_dicts)
-            self.logger.debug(f"Narrowed filters: {narrowed_filters}")
-            self.logger.debug(f"ZPs: {zps}")
-            self.logger.debug(f"ZP errors: {zperrs}")
-            if not zperrs:
-                self.logger.warning(
-                    f"No valid zero point sources found. Falling back to header filter '{alleged_filter}'",
-                    FilterCheckError,
+        name = self.path.name
+        zp_limits = {f: phot_utils.zp_max(f, name.exptime, name.gain, self.image_info.egain) for f in dicts}
+        for filt, (zp_dict, _) in dicts.items():
+            zp = zp_dict.get("ZP_AUTO", (None,))[0]
+            if filt in test_dicts and zp is not None and zp_limits[filt] is not None and zp > zp_limits[filt]:
+                test_dicts.pop(filt)
+                self.logger.debug(
+                    f"Filter {filt} has a zero point (zp) of {zp:.2f} beyond its zp_max {zp_limits[filt]:.2f} at this exposure. Removing from checklist."
                 )
-                return alleged_filter
-
+        # if (inferred_filter in BROAD_FILTERS and zp <= zp_cut) or (
+        #     inferred_filter in MEDIUM_FILTERS and zp > zp_cut
+        # ):
+        narrowed_filters, zps, zperrs = phot_utils.dicts_to_lists(test_dicts)
+        self.logger.debug(f"Narrowed filters: {narrowed_filters}")
+        self.logger.debug(f"ZPs: {zps}")
+        self.logger.debug(f"ZP errors: {zperrs}")
+        if zperrs:
             idx = zperrs.index(min(zperrs))
-            inferred_filter = narrowed_filters[idx]
-            zp = zps[idx]
-            zperr = zperrs[idx]
-
-            # if (inferred_filter in BROAD_FILTERS and zp <= zp_cut) or (
-            #     inferred_filter in MEDIUM_FILTERS and zp > zp_cut
-            # ):
-            if inferred_filter in MEDIUM_FILTERS and zp > zp_cut:  # only this is safe. TODO: adhoc
-                self.logger.debug(
-                    f"Filter {inferred_filter} is a {'broadband' if inferred_filter in BROAD_FILTERS else 'mediumband'} filter and has a zero point (zp) of {zp} which is less than the zp cut, {zp_cut}. Removing from potential filters."
-                )
-                test_dicts.pop(inferred_filter)
-            else:
-                self.logger.debug(
-                    f"Found the best-matching filter, '{inferred_filter}', with zp = {zp}+/-{zperr}. Breaking the loop."
-                )
-                break
-
-            if len(test_dicts) == 0:
-                zp, zperr = phot_utils.get_zp_from_dict(dicts, alleged_filter)
-
-                self.logger.warning(
-                    f"Filter determination process eliminated all candidates. Falling back to header filter '{alleged_filter}' (zp = {zp:.2f}±{zperr:.2f})",
-                    FilterCheckError,
-                )
-                inferred_filter = alleged_filter
-                break
+            inferred_filter, zp, zperr = narrowed_filters[idx], zps[idx], zperrs[idx]
+            self.logger.debug(f"Found the best-matching filter, '{inferred_filter}', with zp = {zp}+/-{zperr}.")
+        elif dicts:
+            zp, zperr = phot_utils.get_zp_from_dict(dicts, alleged_filter)
+            self.logger.warning(
+                f"Filter determination process eliminated all candidates. Falling back to header filter '{alleged_filter}' (zp = {zp:.2f}±{zperr:.2f})",
+                FilterCheckError,
+            )
+            inferred_filter = alleged_filter
+        else:
+            self.logger.warning(
+                f"No valid zero point sources found. Falling back to header filter '{alleged_filter}'",
+                FilterCheckError,
+            )
+            self.phot_header.INF_FILT = alleged_filter
+            return alleged_filter
 
         if save_plot:
             filters, zps, zperrs = phot_utils.dicts_to_lists(dicts_for_plotting)
@@ -1441,6 +1437,7 @@ class PhotometrySingle:
                 zps,
                 zperrs,
                 inactive_filters=set(filters_checked) - set(active_filters),
+                zp_limits=zp_limits,
             )
 
         if alleged_filter != inferred_filter:
@@ -1459,8 +1456,56 @@ class PhotometrySingle:
         if others:
             ezp2, self.phot_header.INF_FIL2 = min(others)
             self.phot_header.INF_DEZP = ezp2 - zperr
+            if self.phot_header.INF_DEZP <= 0:
+                self.logger.warning(
+                    f"{self.phot_header.INF_FIL2}, ruled out of the pool, fits at least as well as {inferred_filter} "
+                    f"(INF_DEZP = {self.phot_header.INF_DEZP:.3f}): the filter budget of this night may be wrong",
+                    FilterInventoryError,
+                )
 
         return inferred_filter
+
+    def measure_color_term(self, zp_src_table: Table, phot_header: PhotometryHeader = None) -> None:
+        """CTERM, ECTERM, NCTERM against Gaia BP-RP."""
+        phot_header = phot_header or self.phot_header
+        phot_header.CTERM = phot_header.ECTERM = phot_header.NCTERM = None
+        filter_check = get_key(self.config_node.photometry, "filter_check")
+        if filter_check is None:
+            return
+        min_stars = filter_check.min_stars
+        try:
+            a, a_err, n = phot_utils.color_term_of_table(zp_src_table, self.image_info.ref_mag_key, min_stars)
+        except Exception as e:
+            self.logger.warning(f"Color term not measured: {e!r}", FilterCheckError)
+            return
+        phot_header.NCTERM = n
+        if a is None or not (np.isfinite(a) and np.isfinite(a_err)):
+            self.logger.info(f"Color term undefined (NCTERM={n}, min_stars {min_stars})")
+            return
+        phot_header.CTERM, phot_header.ECTERM = a, a_err
+        self.logger.info(
+            f"Color term vs BP-RP for {self.image_info.filter}: {a:+.4f} +/- {a_err:.4f} mag/mag from {n} stars"
+        )
+
+    def filter_check_verdict(self) -> Optional[str]:
+        """The failed tests of ref/qa/filter_check.yml as the rejection reason (singles only)."""
+        alleged, name = self.image_info.filter, self.path.name
+        filter_check = get_key(self.config_node.photometry, "filter_check")
+        if filter_check is None:
+            self._reject_reason = None
+            return None
+        filter_check = filter_check.to_dict() if hasattr(filter_check, "to_dict") else filter_check
+        limit = phot_utils.zp_max(alleged, name.exptime, name.gain, self.image_info.egain)
+        failed = phot_utils.filter_check_failures(self.phot_header, alleged, limit, name.exptime, filter_check)
+        reason = "; ".join(f"by key {key}={value:g}: {why}" for key, value, why in failed) or None
+        self._reject_reason = reason if self._single_frame else None  # a coadd's SANITY is never re-judged
+        if reason is not None:
+            verdict = f"{os.path.basename(self.input_image)} {reason}"
+            if self._single_frame:
+                self.logger.warning(f"Rejected {verdict}", FilterMismatchError)
+            else:
+                self.logger.warning(f"Filter check flags {verdict}; coadds are not rejected", FilterMismatchError)
+        return self._reject_reason
 
     def get_active_filters(self) -> set:
         """TODO: ad-hoc before DB integration"""
@@ -1545,6 +1590,11 @@ class PhotometrySingle:
             phot_header.SANITY = False
             phot_header.REJ_PROC = self._sciproc_rejection_process_name
             self.logger.info(f"Setting SANITY=False for {os.path.basename(self.input_image)}")
+            machine_reject(self.input_image, self._sciproc_rejection_process_name, phot_header.dict)
+        elif self._reject_reason:
+            phot_header.SANITY = False
+            phot_header.REJ_PROC = self._sciproc_rejection_process_name
+            self.logger.info(f"Setting SANITY=False for {os.path.basename(self.input_image)}: {self._reject_reason}")
             machine_reject(self.input_image, self._sciproc_rejection_process_name, phot_header.dict)
         else:
             update_padded_header_smart(self.input_image, phot_header.dict)  # smart ver. for SANITY
@@ -1787,6 +1837,9 @@ class PhotometryHeader:
     INF_DEZP: float = None
     INF_FIL2: str = None
     INF_DEZF: float = None
+    CTERM: float = None
+    ECTERM: float = None
+    NCTERM: int = None
     JD: float = None
     MJD: float = None
     SEEING: float = None
@@ -1938,6 +1991,7 @@ class PhotometryHeader:
         """Too few ZP stars: forget a zero point loaded from the header and null every calibration card in the next write."""
         self.aperture_info = {}
         self.INF_FILT = self.INF_DEZP = self.INF_FIL2 = self.INF_DEZF = None
+        self.CTERM = self.ECTERM = self.NCTERM = None
         self._calibration_cleared = True
 
     @property
@@ -1996,6 +2050,12 @@ class PhotometryHeader:
                 round(self.INF_DEZF, 6) if self.INF_DEZF is not None else None,
                 "[mag] EZP_AUTO of FILTER - INF_FILT's",
             ),
+            "CTERM": (
+                round(self.CTERM, 5) if self.CTERM is not None else None,
+                "[mag/mag] ZP slope vs Gaia BP-RP, MAG_APER_5",
+            ),
+            "ECTERM": (round(self.ECTERM, 5) if self.ECTERM is not None else None, "[mag/mag] fit error of CTERM"),
+            "NCTERM": (self.NCTERM, "Stars in the CTERM fit"),
             "JD": (self.JD, "Julian Date of the observation"),
             "MJD": (self.MJD, "Modified Julian Date of the observation"),
             "SEEING": (round(self.SEEING, 6) if self.SEEING is not None else 0, "SEEING [arcsec]"),
@@ -2064,9 +2124,9 @@ class PhotometryHeader:
         return (
             {k: v for k, v in phot_header_dict.items() if v[0] is not None}
             | (residual.cards(include_missing=True) if self.BACKN is not None else {})
-            # undefined INF_* cards replace the values a previous run left beside INF_FILT
+            # undefined INF_*/CTERM-family cards replace the values a previous run left beside INF_FILT
             | (
-                {k: misc_dict[k] for k in ("INF_FILT", "INF_DEZP", "INF_FIL2", "INF_DEZF")}
+                {k: misc_dict[k] for k in ("INF_FILT", "INF_DEZP", "INF_FIL2", "INF_DEZF", "CTERM", "ECTERM", "NCTERM")}
                 if self.INF_FILT is not None or cleared
                 else {}
             )

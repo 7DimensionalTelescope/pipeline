@@ -18,8 +18,8 @@ from typing import Iterable, List, Optional, Tuple
 
 import os
 
+from ... import const
 from ...const import (
-    ALL_FILTERS,
     CALIB_TYPE_DARK,
     CALIB_TYPE_FLAT,
     MASTER_IMAGE_TYPES,
@@ -260,7 +260,7 @@ def select_white_target_nights_by_min_version(min_filters: int = 3) -> List[Tupl
                            AND NOT coalesce(coadd.coadd_at > white.white_at, false), false)
         ORDER BY tn.nightdate DESC, tn.object
         """,
-        (floor, list(ALL_FILTERS), floor, min_filters),
+        (floor, list(const.ALL_FILTERS), floor, min_filters),
         statement_timeout_ms=600000,
     )
     # the raw inventory, aggregated by the builder's own SQL: 2M frames are too many to fetch row by row
@@ -272,7 +272,7 @@ def select_white_target_nights_by_min_version(min_filters: int = 3) -> List[Tupl
     for obj, night, filt, is_too in inventory:
         if is_too:
             too.add((obj, night))
-        elif filt in ALL_FILTERS:
+        elif filt in const.ALL_FILTERS:
             observed.setdefault((obj, night), set()).add(filt)
     due = []
     for obj, night, parents, filters, parents_newer in rows:
@@ -300,6 +300,72 @@ BRIEF_QA_COLUMNS = (
 )
 
 
+def select_filter_check_rerun_candidates(versions: Iterable[str], filter_check: Optional[dict] = None):
+    """Singles processed by `versions` whose stored image_qa cards fail the current filter check, with their science configs: the
+    zero-point test (beyond min_separable_wavelength, INF_DEZF > sigma_factor x (EZP_AUTO - INF_DEZF)) or the depth test (ZP_AUTO
+    above the filter's zp_max at the exposure; gain-2750 frames only, image_qa holds no EGAIN); a human-vetoed False is left alone.
+    `filter_check` defaults to photometry.filter_check of ref/sciproc_base.yml. Columns: config_file, image_name, object, nightdate,
+    filter, inf_filt, inf_dezf, ezp_auto, zp_auto, sanity, test (zero_point_error | zp_excursion | both)."""
+    import numpy as np
+    import pandas as pd
+    import yaml
+
+    if filter_check is None:
+        with open(os.path.join(const.REF_DIR, "sciproc_base.yml"), encoding="utf-8") as stream:
+            filter_check = yaml.safe_load(stream)["photometry"]["filter_check"]
+    rows = free_query(
+        """
+        SELECT p.config_file, s.image_name, p.object, p.nightdate::text, s.filter, s.inf_filt, s.inf_dezf, s.ezp_auto, s.zp_auto,
+               s.exptime, s.gain, s.n_binning, s.sanity
+        FROM pipeline.image_qa s JOIN pipeline.process_status p ON p.id = s.process_status_id
+        WHERE s.image_type = 'single' AND s.pipe_ver = ANY(%s) AND s.zp_auto IS NOT NULL AND p.config_file IS NOT NULL
+          AND NOT (s.sanity IS FALSE AND s.inspcomm IS NOT NULL)
+        """,
+        [list(versions)],
+        statement_timeout_ms=600000,
+    )
+    df = pd.DataFrame(
+        rows,
+        columns=[
+            "config_file",
+            "image_name",
+            "object",
+            "nightdate",
+            "filter",
+            "inf_filt",
+            "inf_dezf",
+            "ezp_auto",
+            "zp_auto",
+            "exptime",
+            "gain",
+            "n_binning",
+            "sanity",
+        ],
+    )
+    center = {f: v["center_nm"] for f, v in const.FILTERS.items()}
+    zp_max = {f: v["zp_max"] for f, v in const.FILTERS.items()}
+    sep = np.array(
+        [
+            abs(center[a] - center[b]) if a in center and b in center else np.nan
+            for a, b in zip(df["filter"], df.inf_filt)
+        ]
+    )
+    ezp_inf = df.ezp_auto - df.inf_dezf
+    zero_point = (
+        (sep > filter_check["min_separable_wavelength"])
+        & (df.inf_dezf > 0)
+        & ((ezp_inf <= 0) | (df.inf_dezf > filter_check["sigma_factor"] * ezp_inf))
+    )
+    limit = df["filter"].map(zp_max) + 2.5 * np.log10(df.exptime / const.ZP_MAX_AT["exptime"])
+    excursion = (df.gain == const.ZP_MAX_AT["gain"]) & (df.n_binning == 1) & (df.zp_auto > limit)
+    zero_point &= bool(filter_check["zero_point_error"])
+    excursion &= bool(filter_check["zp_excursion"])
+    df["test"] = np.select(
+        [zero_point & excursion, zero_point, excursion], ["both", "zero_point_error", "zp_excursion"], None
+    )
+    return df[df.test.notna()].drop(columns=["exptime", "gain", "n_binning"]).reset_index(drop=True)
+
+
 def _listed(values) -> list:
     """A bare string is one name, not its characters."""
     return [values] if isinstance(values, str) else list(values)
@@ -310,7 +376,7 @@ def census_from_raw(
     object_regex: Optional[str] = r"^T\d+$",
     units: Optional[Iterable[str]] = None,
     nightdates: Optional[Tuple[str, str]] = None,
-    filters: Iterable[str] = ALL_FILTERS,
+    filters: Optional[Iterable[str]] = None,
     qa: Optional[str] = "brief",
     mepoch: bool = False,
     statement_timeout_ms: int = 1800000,
@@ -321,6 +387,7 @@ def census_from_raw(
     adds n_coadds and the newest multi-epoch coadd), the white with its crossfilter config. `objects` overrides
     `object_regex`; `object_regex=None` lifts the object filter. Raw -> single by (unit, obstime UTC); twins resolve to
     the path-bearing newest row. `object` is the tile, else the target, else the archive's own object_name."""
+    filters = const.ALL_FILTERS if filters is None else filters
     import pandas as pd
 
     from ...const.crossfilter import CROSSFILTERPROCESS_REGISTRY

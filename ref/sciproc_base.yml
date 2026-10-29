@@ -105,6 +105,13 @@ photometry:
   flagcut: 0
   check: False
   filters_to_check:
+  filter_check:  # rejection tests on INF_FILT, ZP_AUTO and CTERM; the limits and windows are in ref/filters.yml
+    zero_point_error: true
+    min_separable_wavelength: 50  # nm
+    sigma_factor: 2
+    zp_excursion: true
+    color_term: false
+    min_stars: 15
   satur_margin: 0.99  # factor multiplied to the propagated hardware upper limit
   sex_vars:  # only non-empty keys are passed to SExtractor; empty inherits ref/srcExt/main.sex
     DETECT_THRESH:

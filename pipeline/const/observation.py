@@ -1,3 +1,9 @@
+import os
+
+import yaml
+
+from .environ import REF_DIR
+
 # Image grouping structure
 INSTRUM_GROUP_KEYS = ["unit", "n_binning", "gain", "camera"]
 ALL_GROUP_KEYS = ["obj", "filter", "nightdate", "exptime"] + INSTRUM_GROUP_KEYS
@@ -17,58 +23,52 @@ FLAT_GROUP_LENIENT_KEYS = ["gain", "camera"]
 # OBS-related
 CalibType = ["BIAS", "DARK", "FLAT"]
 available_7dt_units = [f"7DT0{unit}" if unit < 10 else f"7DT{unit}" for unit in range(1, 21)]
-WIDE_FILTERS = ["m375w", "m425w", "m466w", "m692w", "m710w", "m769w", "m832w"]
-FIRST_MEDIUM_FILTERS = [f"m{wav}" for wav in range(400, 900, 25)]
-SECOND_MEDIUM_FILTERS = ["m386", "m438", "m483", "m512", "m534", "m561", "m586", "m615", "m640", "m661"]
-SECOND_FILTERS = sorted(set(SECOND_MEDIUM_FILTERS + WIDE_FILTERS) - {"m375w", "m425w"})
-MEDIUM_FILTERS = sorted(FIRST_MEDIUM_FILTERS + SECOND_MEDIUM_FILTERS)
-BROAD_FILTERS = ["u", "g", "r", "i", "z"]
-ALL_FILTERS = sorted(MEDIUM_FILTERS + WIDE_FILTERS) + BROAD_FILTERS
 PIXSCALE = 0.505  # arcsec/pixel. Default plate scale assumed prior to astrometric solving
 TARGET_PA = 0.0  # deg; commanded field rotation, the reference for PADEV
-BIAS_LEVEL = 512  # ADU
+BIAS_LEVEL = 513  # ADU
+EGAIN_2750 = 0.2562  # e-/ADU at camera GAIN 2750
 DEFAULT_EXPTIME = 100.0  # s
 NUM_MIN_CALIB = 5  # 2
 
 
-FILTER_WAVELENGTHS = {
-    "m375w": 3750,
-    "m425w": 4250,
-    "u": 3500,
-    "g": 4750,
-    "r": 6250,
-    "i": 7700,
-    "z": 9000,
-}
-for w in range(400, 900, 25):
-    FILTER_WAVELENGTHS[f"m{w}"] = w * 10
+# lazy load variables
+_FILTER_CONSTANTS = (
+    "FILTERS",
+    "WIDE_FILTERS",
+    "FIRST_MEDIUM_FILTERS",
+    "SECOND_MEDIUM_FILTERS",
+    "SECOND_FILTERS",
+    "MEDIUM_FILTERS",
+    "BROAD_FILTERS",
+    "ALL_FILTERS",
+    "FILTER_WAVELENGTHS",
+    "FILTER_WIDTHS",
+    "ZP_MAX_AT",
+)
 
-FILTER_WIDTHS = {
-    "m375w": 450,  # TODO: check accurate number
-    "m386": 270,
-    "m425w": 450,  # TODO: check accurate number
-    "m438": 280,
-    "m466w": 450,
-    "m483": 360,
-    "m512": 300,
-    "m534": 250,
-    "m561": 210,
-    "m586": 260,
-    "m615": 260,
-    "m640": 200,
-    "m661": 260,
-    "m692w": 470,
-    "m710w": 470,
-    "m769w": 480,
-    "m832w": 450,
-    "u": 600,
-    "g": 1150,
-    "r": 1150,
-    "i": 1000,
-    "z": 1000,
-}
-for filt in FIRST_MEDIUM_FILTERS:
-    FILTER_WIDTHS[filt] = 250
+
+def _load_filters() -> None:
+    global FILTERS, WIDE_FILTERS, FIRST_MEDIUM_FILTERS, SECOND_MEDIUM_FILTERS, SECOND_FILTERS, MEDIUM_FILTERS
+    global BROAD_FILTERS, ALL_FILTERS, FILTER_WAVELENGTHS, FILTER_WIDTHS, ZP_MAX_AT
+    with open(os.path.join(REF_DIR, "filters.yml"), encoding="utf-8") as stream:
+        doc = yaml.safe_load(stream)
+    FILTERS, ZP_MAX_AT = doc["filters"], doc["zp_max_at"]
+    WIDE_FILTERS = [f for f, s in FILTERS.items() if s["family"] == "wide"]
+    FIRST_MEDIUM_FILTERS = [f for f, s in FILTERS.items() if s["family"] == "medium" and s["set"] == "first"]
+    SECOND_MEDIUM_FILTERS = [f for f, s in FILTERS.items() if s["family"] == "medium" and s["set"] == "second"]
+    SECOND_FILTERS = sorted(f for f, s in FILTERS.items() if s["set"] == "second")
+    MEDIUM_FILTERS = sorted(FIRST_MEDIUM_FILTERS + SECOND_MEDIUM_FILTERS)
+    BROAD_FILTERS = [f for f, s in FILTERS.items() if s["family"] == "broad"]
+    ALL_FILTERS = sorted(MEDIUM_FILTERS + WIDE_FILTERS) + BROAD_FILTERS
+    FILTER_WAVELENGTHS = {f: s["center_nm"] * 10 for f, s in FILTERS.items()}
+    FILTER_WIDTHS = {f: s["fwhm_nm"] * 10 for f, s in FILTERS.items()}
+
+
+def __getattr__(name: str):
+    if name not in _FILTER_CONSTANTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    _load_filters()
+    return globals()[name]
 
 
 HEADER_KEY_MAP = {

@@ -16,3 +16,12 @@ _PIPELINE_UMASK_SENTINEL_ATTR = "_pipeline_umask_applied"
 if UMASK and not getattr(sys, _PIPELINE_UMASK_SENTINEL_ATTR, False):
     set_umask(UMASK)
     setattr(sys, _PIPELINE_UMASK_SENTINEL_ATTR, True)  # cache to run only once
+
+
+from . import observation as _observation
+
+
+def __getattr__(name: str):
+    if name in _observation._FILTER_CONSTANTS:
+        return getattr(_observation, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

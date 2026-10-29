@@ -103,6 +103,10 @@ class InferredFilterMismatchError(Exception):
     pass
 
 
+class FilterMismatchError(Exception):
+    pass
+
+
 # imcoadd errors
 class BackgroundArtifactError(Exception):
     pass

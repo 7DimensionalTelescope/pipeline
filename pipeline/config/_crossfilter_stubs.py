@@ -128,6 +128,7 @@ if TYPE_CHECKING:
         flagcut: int
         check: bool
         filters_to_check: Any
+        filter_check: dict
         satur_margin: float
         sex_vars: dict
         satellite_mask: dict

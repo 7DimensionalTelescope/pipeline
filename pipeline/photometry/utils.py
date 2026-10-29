@@ -8,8 +8,9 @@ from typing import TYPE_CHECKING
 from numba import njit
 from astropy.table import Table, hstack, vstack, unique
 from astropy.coordinates import SkyCoord
+from astropy.stats import SigmaClip
 
-from ..const import GAIA_REF_DIR, REF_DIR
+from ..const import EGAIN_2750, FILTERS, GAIA_REF_DIR, REF_DIR, ZP_MAX_AT
 from ..path.path import PathHandler
 
 if TYPE_CHECKING:
@@ -508,3 +509,107 @@ def get_zp_from_dict(dicts: dict, filter: str) -> dict:
         Zero point dictionary
     """
     return dicts[filter][0]["ZP_AUTO"][0], dicts[filter][0]["EZP_AUTO"][0]
+
+
+def _weighted_linfit(x, y, sigma, nsig=3.0, maxiter=5):
+    """bprp_colorterm.weighted_linfit: (a, a_err, b, n_used)."""
+    x = np.asarray(x, float)
+    y = np.asarray(y, float)
+    sigma = np.asarray(sigma, float)
+    m = np.isfinite(x) & np.isfinite(y) & np.isfinite(sigma) & (sigma > 0)
+    a = b = a_err = np.nan
+    for _ in range(maxiter):
+        if m.sum() < 5 or np.ptp(x[m]) == 0:
+            return np.nan, np.nan, np.nan, int(m.sum())
+        (a, b), cov = np.polyfit(x[m], y[m], 1, w=1.0 / sigma[m], cov=True)
+        a_err = float(np.sqrt(cov[0, 0]))
+        res = y - (a * x + b)
+        s = max(np.std(res[m]), 1e-4)
+        new = m & (np.abs(res) < nsig * s)
+        if new.sum() == m.sum():
+            break
+        m = new
+    return float(a), a_err, float(b), int(m.sum())
+
+
+def color_term(ref_mag, inst_mag, inst_magerr, bp_rp, min_stars: int = 15) -> tuple[float | None, float | None, int]:
+    """bprp_colorterm.colorterm_bprp: (a, a_err, n_fit); (None, None, 0) under min_stars."""
+    ref_mag, inst_mag, bp_rp, inst_magerr = (np.asarray(v, float) for v in (ref_mag, inst_mag, bp_rp, inst_magerr))
+    zp = ref_mag - inst_mag
+    sig = np.sqrt(inst_magerr**2 + 0.01**2)
+    fin = np.isfinite(zp) & np.isfinite(bp_rp) & np.isfinite(sig)
+    if fin.sum() < min_stars:
+        return None, None, 0
+    clipped = SigmaClip(sigma=3.0, maxiters=5)(zp[fin])
+    keep = np.where(fin)[0][~np.ma.getmaskarray(clipped)]
+    if len(keep) < min_stars:
+        return None, None, 0
+    zk = zp[keep]
+    a, a_err, _, n_fit = _weighted_linfit(bp_rp[keep], zk - np.nanmedian(zk), sig[keep])
+    return a, a_err, n_fit
+
+
+def color_term_of_table(zp_src_table, ref_mag_key: str, min_stars: int) -> tuple[float | None, float | None, int]:
+    """color_term on the zero-point star table: reference magnitude, MAG_APER_5, MAGERR_APER_5, bp_rp."""
+    col = lambda k: np.ma.filled(np.ma.asarray(zp_src_table[k], dtype=float), np.nan)
+    return color_term(col(ref_mag_key), col("MAG_APER_5"), col("MAGERR_APER_5"), col("bp_rp"), min_stars)
+
+
+def zp_max(filt: str, exptime, gain, egain) -> float | None:
+    """ZP_AUTO upper limit of `filt` at this exposure and camera gain; None without a limit, an exposure or a usable gain."""
+    if filt not in FILTERS or not exptime or gain is None:
+        return None
+    limit = FILTERS[filt]["zp_max"] + 2.5 * np.log10(exptime / ZP_MAX_AT["exptime"])
+    if float(gain) == float(ZP_MAX_AT["gain"]):
+        return limit
+    return limit - 2.5 * np.log10(egain / EGAIN_2750) if egain else None
+
+
+def _zp_cards(header) -> dict:
+    return header.zp_dict if header.aperture_info else {}
+
+
+def zero_point_error_test(header, alleged: str, min_separable_wavelength, sigma_factor) -> tuple | None:
+    """(key, value, reason) when INF_FILT beats FILTER beyond min_separable_wavelength by more than sigma_factor times its EZP."""
+    ezp = _zp_cards(header).get("EZP_AUTO", (None,))[0]
+    if not (alleged in FILTERS and header.INF_FILT in FILTERS and header.INF_DEZF and header.INF_DEZF > 0 and ezp):
+        return None
+    separation = abs(FILTERS[alleged]["center_nm"] - FILTERS[header.INF_FILT]["center_nm"])
+    if separation <= min_separable_wavelength:
+        return None
+    ezp_inf = ezp - header.INF_DEZF
+    ratio = header.INF_DEZF / ezp_inf if ezp_inf > 0 else np.inf
+    if ratio > sigma_factor:
+        why = (
+            f"INF_FILT {header.INF_FILT} is {separation:.1f} nm from FILTER {alleged}; INF_DEZF = {ratio:.1f} x EZP_INF"
+        )
+        return "INF_DEZF", header.INF_DEZF, why
+    return None
+
+
+def zp_excursion_test(header, alleged: str, limit, exptime) -> tuple | None:
+    """(key, value, reason) when ZP_AUTO exceeds the zp_max of FILTER at this exposure."""
+    zp = _zp_cards(header).get("ZP_AUTO", (None,))[0]
+    if zp is None or limit is None or zp <= limit:
+        return None
+    return "ZP_AUTO", zp, f"deeper than the zp_max of {alleged}, {limit:.2f} at {exptime:g} s"
+
+
+def color_term_test(header, alleged: str) -> tuple | None:
+    """(key, value, reason) when CTERM lies outside the cterm window of FILTER in ref/filters.yml."""
+    window = FILTERS.get(alleged, {}).get("cterm")
+    if not window or header.CTERM is None or not np.isfinite(header.CTERM) or window[0] <= header.CTERM <= window[1]:
+        return None
+    return "CTERM", header.CTERM, f"outside the {alleged} window [{window[0]:+.3f}, {window[1]:+.3f}]"
+
+
+def filter_check_failures(header, alleged: str, limit, exptime, filter_check: dict) -> list:
+    """The (key, value, reason) of every test switched on in the config's photometry.filter_check that fails."""
+    tests = {
+        "zero_point_error": lambda: zero_point_error_test(
+            header, alleged, filter_check["min_separable_wavelength"], filter_check["sigma_factor"]
+        ),
+        "zp_excursion": lambda: zp_excursion_test(header, alleged, limit, exptime),
+        "color_term": lambda: color_term_test(header, alleged),
+    }
+    return [hit for name, test in tests.items() if filter_check[name] and (hit := test())]
