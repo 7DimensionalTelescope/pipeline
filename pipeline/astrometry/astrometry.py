@@ -353,47 +353,56 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     self.logger.info(f"SANITY F for {image_info.id}. Skipping astrometry run")
                     continue
 
-                if force_solve_field:
-                    # raise AstrometryError.NotImplementedError("force_solve_field")
-                    self._solve_field_suite(
+                try:
+                    if force_solve_field:
+                        # raise AstrometryError.NotImplementedError("force_solve_field")
+                        self._solve_field_suite(
+                            i,
+                            image_info,
+                            overwrite=overwrite,
+                            solvefield_args=solvefield_args,
+                            use_threading_for_eval=use_threading_for_eval,
+                            max_scamp_iter=max_scamp_iter,
+                            evaluate_prep_sol=evaluate_prep_sol,
+                            debug_plot=debug_plot,
+                        )
+                        self._finalize_astrometry_sanity(image_info)
+                        continue
+
+                    # run initial solve: scamp or solve-field
+                    scamp_success = self._scamp_suite(
                         i,
                         image_info,
                         overwrite=overwrite,
-                        solvefield_args=solvefield_args,
                         use_threading_for_eval=use_threading_for_eval,
                         max_scamp_iter=max_scamp_iter,
+                        joint_scamp=joint_scamp,
+                        avoid_solvefield=avoid_solvefield,
                         evaluate_prep_sol=evaluate_prep_sol,
                         debug_plot=debug_plot,
                     )
+
+                    if not scamp_success or (image_info.bad and not avoid_solvefield):
+                        self._solve_field_suite(
+                            i,
+                            image_info,
+                            overwrite=overwrite,
+                            solvefield_args=solvefield_args,
+                            use_threading_for_eval=use_threading_for_eval,
+                            max_scamp_iter=max_scamp_iter,
+                            evaluate_prep_sol=evaluate_prep_sol,
+                            debug_plot=debug_plot,
+                        )
+
                     self._finalize_astrometry_sanity(image_info)
-                    continue
+                except AstrometryError.ImageQualitySuspectedError as e:
+                    self.logger.warning(str(e), AstrometryError.ImageQualitySuspected)
+                    image_info.SANITY = False
+                    self._write_astrometry_sanity_rejection_to_header(image_info.image_path, fits.Header(image_info.cards))
 
-                # run initial solve: scamp or solve-field
-                scamp_success = self._scamp_suite(
-                    i,
-                    image_info,
-                    overwrite=overwrite,
-                    use_threading_for_eval=use_threading_for_eval,
-                    max_scamp_iter=max_scamp_iter,
-                    joint_scamp=joint_scamp,
-                    avoid_solvefield=avoid_solvefield,
-                    evaluate_prep_sol=evaluate_prep_sol,
-                    debug_plot=debug_plot,
-                )
-
-                if not scamp_success or (image_info.bad and not avoid_solvefield):
-                    self._solve_field_suite(
-                        i,
-                        image_info,
-                        overwrite=overwrite,
-                        solvefield_args=solvefield_args,
-                        use_threading_for_eval=use_threading_for_eval,
-                        max_scamp_iter=max_scamp_iter,
-                        evaluate_prep_sol=evaluate_prep_sol,
-                        debug_plot=debug_plot,
-                    )
-
-                self._finalize_astrometry_sanity(image_info)
+            if not any(image_info.sane for image_info in self.images_info):
+                self.logger.error("All images rejected: image quality suspected.", AstrometryError.ImageQualitySuspectedError)
+                raise AstrometryError.ImageQualitySuspectedError("All images rejected: image quality suspected.")
 
             # evaluate main scamp result
             self.evaluate_solution(use_threading=use_threading_for_eval, scamp_preset="main", overwrite=overwrite)
@@ -652,6 +661,12 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     export_eval_cards=True,
                     overwrite=overwrite,
                 )
+                if image_info.rsep_stats is None:
+                    raise AstrometryError.ImageQualitySuspectedError(
+                        f"{image_info.id} Solution evaluation returned no metrics for "
+                        f"{os.path.basename(image_info.image_path)}: blank or trailed frame suspected. "
+                        "Human inspection advised; record the verdict with services.inspection.inspect_images (INSPCOMM)."
+                    )
                 self.logger.debug(
                     f"{image_info.id} UNMATCH: "
                     f"{image_info.rsep_stats.unmatched_fraction if image_info.rsep_stats.unmatched_fraction is not None else 'None'}\n"

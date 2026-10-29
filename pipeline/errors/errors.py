@@ -68,6 +68,12 @@ class SolutionEvaluationFailedError(Exception):
     pass
 
 
+class ImageQualitySuspectedError(Exception):
+    """Solution evaluation returned no metrics: blank or trailed frame suspected"""
+
+    pass
+
+
 # photometry errors
 class NotEnoughSourcesError(Exception):
     pass
