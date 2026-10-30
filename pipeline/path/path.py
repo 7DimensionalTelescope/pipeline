@@ -1001,6 +1001,10 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
           raises if the anchor is unknown.
         - master → raises (no processed-image notion).
         """
+        return self._processed_images
+
+    @property
+    def _processed_images(self):
         paths = []
         for i, input in enumerate(self._input_files):
             typ = self._get_namehandler_property_at_index("type", i)

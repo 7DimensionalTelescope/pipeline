@@ -1,8 +1,9 @@
 """
 Visual inspection in a notebook: one composite of a frame's check plots, one prompt per frame.
+The pool holds processed singles; a raw frame in it is replaced by its single through PathHandler.
 
 Enter passes, text rejects with that text as INSPCOMM (written at once), `?` marks the frame ambiguous
-(`? note` keeps a note in the session only; nothing is written), `u` reverses the previous verdict,
+with the clause after it as the comment (kept in the session only; nothing is written), `u` reverses the previous verdict,
 `f`/`b` move forward or back (`100f`, `3b`; a frame left without a verdict is recorded as seen), `q`
 stops and `run()` continues later. Passes are session knowledge only: the record is the
 session's table, a JSONL file when `log_path` is given, and the Markdown report of `report()`, written
@@ -23,8 +24,10 @@ from typing import List, Optional, Union
 
 from astropy.io import fits
 
+from .. import const
 from ..const.sciproc import REJECTION_PROCESS_HEADER_KEY
 from ..path import PathHandler
+from ..utils import atleast_1d
 from ..utils.filesystem import latest_unique_filename
 from .inspection import INSPCOMM_COMMENT, INSPCOMM_KEY, inspect_images, revoke_inspection
 
@@ -140,6 +143,13 @@ class InspectionSession:
     ):
         images = [images] if isinstance(images, str) else list(images)
         self.images = [image for image in images if isinstance(image, str) and image]
+        if self.images:
+            handler = PathHandler(self.images)
+            kinds, singles = atleast_1d(handler.name.type), atleast_1d(handler._processed_images)
+            self.images = [
+                single if kind.kind == const.NAME_TYPE_RAW else image
+                for image, kind, single in zip(self.images, kinds, singles)
+            ]
         if shuffle is not False:
             random.Random(0 if shuffle is True else shuffle).shuffle(self.images)
         self.log_path = log_path
@@ -264,7 +274,7 @@ class InspectionSession:
                 self.cursor += 1
                 continue
             shown += 1
-            marker = f"[{record['verdict']}] " if record else ""
+            marker = f"[{record['verdict']}{': ' + record['note'] if record.get('note') else ''}] " if record else ""
             verdict = f"SANITY {state['sanity']}  INSPCOMM {state['inspcomm'] or '-'}"
             if state["rej_proc"]:
                 verdict += f"  REJ_PROC {state['rej_proc']}"
@@ -346,11 +356,12 @@ class InspectionSession:
         return pd.DataFrame(self.records)
 
     def stats(self):
-        """Counts per verdict and INSPCOMM."""
+        """Counts per verdict and comment (the INSPCOMM written, or the clause after ? of an ambiguous verdict)."""
         table = self.table()
         if table.empty:
             return table
-        return table.groupby(["verdict", "inspcomm"], dropna=False).size().rename("n").reset_index()
+        table["comment"] = table.inspcomm.where(table.inspcomm.notna(), table.get("note"))
+        return table.groupby(["verdict", "comment"], dropna=False).size().rename("n").reset_index()
 
     def report(self, path: str, images: str = "rejections", max_mb: float = 50) -> str:
         """Self-contained Markdown: counts, a count per INSPCOMM, 1400 px WebP composites for `images` in rejections (rejected and ambiguous) | all | none."""
