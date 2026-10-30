@@ -1478,7 +1478,8 @@ class PhotometrySingle:
         filter_check = get_key(self.config_node.photometry, "filter_check")
         if filter_check is None:
             return
-        min_stars = filter_check.min_stars
+        filter_check = filter_check.to_dict() if hasattr(filter_check, "to_dict") else filter_check
+        min_stars = filter_check.get("min_stars")
         try:
             a, a_err, n = phot_utils.color_term_of_table(zp_src_table, self.image_info.ref_mag_key, min_stars)
         except Exception as e:
