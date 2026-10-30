@@ -2,7 +2,7 @@ from __future__ import annotations
 from packaging.version import Version
 
 # increase version with ANY change in scientific config. e.g., prep.sex
-__version__ = "1.11.10"
+__version__ = "1.11.11"
 
 MIN_PREPROC_RUNTIME_VERSION = "1.11.7"
 MIN_SCIPROC_RUNTIME_VERSION = "1.11.6"  # for sciprocess overall
