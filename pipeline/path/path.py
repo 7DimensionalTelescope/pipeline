@@ -679,6 +679,10 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         put in purely non-ToO images or all ToO images at once for too time
         to be correctly defined.
         """
+        return self._sciproc_output_yml
+
+    @property
+    def _sciproc_output_yml(self):
         # yml_basenames = [
         #     "_".join([obj, filte, unit, date]) + ".yml"
         #     for obj, filte, unit, date in zip(self.name.obj, self.name.filter, self.name.unit, self.name.date)
@@ -723,6 +727,10 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
     @property
     def sciproc_output_log(self):
         return swap_ext(self.sciproc_output_yml, "log")
+
+    @property
+    def _sciproc_output_log(self):
+        return swap_ext(self._sciproc_output_yml, "log")
 
     @property
     def output_name(self) -> str:
