@@ -131,6 +131,9 @@ class ImageQATable:
     padev: Optional[float] = None
     wsep_q2: Optional[float] = None
     wsep_p95: Optional[float] = None
+    nfltraw: Optional[int] = None
+    nfltused: Optional[int] = None
+    nfltuncf: Optional[int] = None
 
     # preprocess cards only a master frame carries (SHIFTED/SHFTSCR are stamped on singles too); the rest is common or science
     MASTERFRAME_COLUMNS = (

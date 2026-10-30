@@ -19,6 +19,7 @@ from ..errors import WhiteImageError
 from ..path.name import NameHandler
 from ..path.path import PathHandler
 from ..services.database.process_status_dependency import ProcessStatusDependency
+from ..services.inspection import INSPCOMM_KEY
 from ..utils import atleast_1d, collapse, force_symlink
 from .imcoadd import ImCoadd
 
@@ -75,6 +76,7 @@ class WhiteImage(ImCoadd):
     def initialize(self):
         self._confirm_input_completeness()
         super().initialize()
+        self._stamp_filter_budget()
 
     def _confirm_input_completeness(
         self, counted_filters=tuple(ALL_FILTERS)
@@ -88,13 +90,18 @@ class WhiteImage(ImCoadd):
         set. The confirmed list is recorded in node.imcoadd.input_images.
 
         Inputs and the raw inventory are both cut to `counted_filters`, so a filter outside it
-        neither holds the run nor contributes pixels.
+        neither holds the run nor contributes pixels. Also keeps the filter budget for the
+        NFLTRAW / NFLTUSED / NFLTUNCF cards (`_stamp_filter_budget`).
         """
         node = self.config_node
         counted = set(counted_filters)
         science_configs = list(node.input.science_configs or [])
 
         confirmed, rejected, held = [], [], []
+        rejecting, rejected_filters = (
+            {},
+            {},
+        )  # rejected parent -> images carrying the verdict; filter -> rejected parents
         if science_configs:
             for config_file in science_configs:
                 try:
@@ -102,7 +109,8 @@ class WhiteImage(ImCoadd):
                 except Exception as e:
                     raise self._process_error.PrerequisiteNotMetError(f"Unreadable science parent {config_file}: {e}")
                 # the parent's own PathHandler, not its config stem: stems mis-parse objects whose name has "_"
-                if str(collapse(atleast_1d(source.path.name.filter), force=True)) not in counted:
+                filter_name = str(collapse(atleast_1d(source.path.name.filter), force=True))
+                if filter_name not in counted:
                     continue
                 coadd_image = collapse(atleast_1d(get_key(source.node.imcoadd, "coadd_image") or []), force=True)
                 complete = bool(getattr(source.node.flag, COADD_SPEC.name)) and bool(
@@ -112,6 +120,12 @@ class WhiteImage(ImCoadd):
                     source, coadd_image or ""
                 ):
                     rejected.append(config_file)
+                    rejecting[config_file] = (
+                        [coadd_image]
+                        if coadd_image and os.path.exists(coadd_image)
+                        else list(get_key(source.node.input, "calibrated_images", []) or [])
+                    )
+                    rejected_filters.setdefault(filter_name, []).append(config_file)
                 elif complete and coadd_image and os.path.exists(coadd_image):
                     confirmed.append(coadd_image)
                 else:
@@ -122,6 +136,10 @@ class WhiteImage(ImCoadd):
                     held.append(image)
                 elif CrossFilterConfiguration._fits_sanity_is_false(image):
                     rejected.append(image)
+                    rejecting[image] = [image]
+                    rejected_filters.setdefault(
+                        str(collapse(atleast_1d(NameHandler(image).filter), force=True)), []
+                    ).append(image)
                 else:
                     confirmed.append(image)
 
@@ -134,7 +152,8 @@ class WhiteImage(ImCoadd):
 
         used_filters = CrossFilterConfiguration._filters(confirmed) if confirmed else []
         if node.settings.is_pipeline:
-            raw_filters = self._raw_filter_inventory() & counted
+            inventory = self._raw_filter_inventory()
+            raw_filters = inventory & counted
             covered = set(used_filters) | {
                 str(collapse(atleast_1d(NameHandler(entry).filter), force=True)) for entry in rejected
             }
@@ -147,6 +166,14 @@ class WhiteImage(ImCoadd):
             if extra:
                 self.logger.warning(f"Inputs carry filters absent from the raw inventory: {extra}")
 
+        # the budget is the observer's intent (raw inventory); without one, the declared parents
+        budget = set(inventory) if node.settings.is_pipeline else set(used_filters) | set(rejected_filters)
+        confirmed_parents = self._human_confirmed_rejections(rejecting)
+        self._filter_budget = (
+            budget,
+            {f: all(p in confirmed_parents for p in ps) for f, ps in rejected_filters.items()},
+        )
+
         node.input.coadd_images = confirmed
         node.input.used_filters = used_filters
         node.imcoadd.input_images = confirmed
@@ -157,6 +184,54 @@ class WhiteImage(ImCoadd):
                 f"Cross-filter stage found {len(used_filters)} usable filter coadd(s); minimum is {minimum}"
             )
         self.logger.info(f"Confirmed {len(used_filters)} filter coadd(s); {len(rejected)} rejected parent(s)")
+
+    def _human_confirmed_rejections(self, rejecting: dict) -> set:
+        """Keys of `rejecting` whose every image carries SANITY=False with INSPCOMM: image_qa first, headers when no DB."""
+        images = sorted({image for files in rejecting.values() for image in files})
+        if not images:
+            return set()
+        verdicts, from_db = {}, False
+        if (
+            self.is_connected
+            and self.image_qa is not None
+            and get_key(self.config_node.settings, "sanity_from_db", True)
+        ):
+            try:
+                verdicts, from_db = self.image_qa.inspection_cards(images), True
+            except Exception as e:
+                self.logger.warning(f"image_qa INSPCOMM lookup failed; reading headers instead: {e}")
+        if not from_db:
+            for image in images:
+                try:
+                    header = fits.getheader(image)
+                except Exception:
+                    continue
+                if INSPCOMM_KEY in header:
+                    verdicts[image] = (header.get("SANITY"), header[INSPCOMM_KEY])
+        return {
+            key
+            for key, files in rejecting.items()
+            if files and all(verdicts.get(image, (None, None))[0] is False for image in files)
+        }
+
+    def _stamp_filter_budget(self) -> None:
+        """NFLTRAW / NFLTUSED / NFLTUNCF: filters observed, filters stacked, filters dropped without a human-confirmed rejection."""
+        budget, confirmed_drop = self._filter_budget
+        used = (
+            {str(value) for value in atleast_1d(NameHandler(self.input_images).filter)} if self.input_images else set()
+        )
+        dropped = budget - used
+        n_unconfirmed = sum(1 for f in dropped if not confirmed_drop.get(f, False))
+        self.input_headers.run_cards.update(
+            {
+                "NFLTRAW": (len(budget), "Filters in the raw inventory of the target"),
+                "NFLTUSED": (len(used), "Filter coadds stacked into the white"),
+                "NFLTUNCF": (n_unconfirmed, "Dropped filters w/o human-confirmed rejection"),
+            }
+        )
+        self.logger.info(
+            f"Filter budget: {len(budget)} observed, {len(used)} stacked, {n_unconfirmed} dropped unconfirmed"
+        )
 
     @staticmethod
     def _counted_entries(entries, counted_filters) -> list:
