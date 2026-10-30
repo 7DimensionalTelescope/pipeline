@@ -120,6 +120,19 @@ def compute_fetch_ppflag(
     return result
 
 
+def is_outside_masterframe_walls(found_path: str, template: str, dtype: str) -> bool:
+    """Whether `found_path`'s nightdate lies outside the masterframe walls of the template's nightdate and unit (bit 16 for a master the search did not pick)."""
+    from datetime import datetime
+
+    from ..const.instrum_log import get_masterframe_walls
+    from ..path.name import NameHandler
+
+    name = NameHandler(template)
+    lower, upper = get_masterframe_walls(name.nightdate, int(name.unit[3:]), dtype=dtype)
+    found = datetime.strptime(get_nightdate(found_path), "%Y-%m-%d").date()
+    return (lower is not None and found < lower) or (upper is not None and found > upper)
+
+
 def bias_shared_with_dark(bias_path: str, dark_path: str) -> bool:
     """Whether the bias master applied to a science frame is the very one inside its dark master (by IMAGEID; by name
     when either side predates the id), so that the master-bias error cancels in r - z_m - (median(D) - z_m)."""

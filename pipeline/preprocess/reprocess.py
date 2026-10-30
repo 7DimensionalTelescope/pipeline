@@ -443,7 +443,12 @@ class ReprocessMixin:
             f"[Group {self._current_group+1}] Using designated (sanity: {sanity}) master {dtype} "
             f"at {os.path.basename(designated_file)} in place of {os.path.basename(template)}"
         )
-        self._ppflag[dtype] = ppflag.compute_fetch_ppflag(designated_file, template, sanity)
+        self._ppflag[dtype] = ppflag.compute_fetch_ppflag(
+            designated_file,
+            template,
+            sanity,
+            ignored_masterframe_wall=ppflag.is_outside_masterframe_walls(designated_file, template, dtype),
+        )
         name, target = NameHandler(designated_file), NameHandler(template)
         if any(str(getattr(name, key)) != str(getattr(target, key)) for key in self._LENIENT_KEYS[dtype]):
             self._ppflag[

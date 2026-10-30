@@ -738,12 +738,13 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             f"[Group {self._current_group+1}] Found pre-existing nominal (sanity: {existing_header_sanity}) master {dtype} at {os.path.basename(existing_mframe_file)}"
         )
 
-        # PPFLAG: fetched frame gets 1 (different date), 4 (sanity F), 8 (lenient keys) as appropriate
+        # PPFLAG: fetched frame gets 1 (different date), 4 (sanity F), 8 (lenient keys), 16 (walls ignored) as appropriate
         ppflag_val = ppflag.compute_fetch_ppflag(
             existing_mframe_file,
             template,
             existing_header_sanity,
             ignored_lenient_keys=relaxation_flags.ignored_lenient_keys,
+            ignored_masterframe_wall=relaxation_flags.ignored_masterframe_walls,
         )
         self._ppflag[dtype] = ppflag_val
 
@@ -763,7 +764,12 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 f"[Group {self._current_group+1}] Using designated (sanity: {flatdark_sanity}) flatdark "
                 f"{os.path.basename(designated_file)} ({self.dark_exptime}s)"
             )
-            self._flatdark_ppflag = ppflag.compute_fetch_ppflag(designated_file, template, flatdark_sanity)
+            self._flatdark_ppflag = ppflag.compute_fetch_ppflag(
+                designated_file,
+                template,
+                flatdark_sanity,
+                ignored_masterframe_wall=ppflag.is_outside_masterframe_walls(designated_file, template, CALIB_TYPE_DARK),
+            )
             return
 
         max_offset = self.config_node.preprocess.max_offset
@@ -802,6 +808,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             flatdark_template,
             flatdark_sanity,
             ignored_lenient_keys=flatdark_relaxation_flags.ignored_lenient_keys,
+            ignored_masterframe_wall=flatdark_relaxation_flags.ignored_masterframe_walls,
         )
 
     def _generated_binned_master_frame(self, existing_mframe_file, template, dtype):
