@@ -362,6 +362,24 @@ class ImageQA(BaseDatabase):
             stored[row_id] = text
         return stored
 
+    def clear_inspection(self, image_name: str, sanity: bool, image_path: str = None) -> Dict[int, str]:
+        """Withdraw a verdict on set_inspection's rows: INSPCOMM NULL, SANITY `sanity`; {row id: previous INSPCOMM}."""
+        if not isinstance(sanity, bool):
+            raise ValueError(f"clear_inspection({image_name}): sanity must be True or False, not {sanity!r}")
+        rows = self.execute_query(
+            f"SELECT id, image_path, inspcomm FROM {self.table_name} WHERE image_name = %(name)s ORDER BY id",
+            {"name": image_name},
+        )
+        if image_path and any(path == image_path for _, path, _ in rows):
+            rows = [row for row in rows if row[1] == image_path]
+        previous = {}
+        for row_id, _, existing in rows:
+            if existing is None:
+                continue
+            BaseDatabase.update_data(self, row_id, sanity=sanity, inspcomm="None")  # "None" writes NULL
+            previous[row_id] = existing
+        return previous
+
     def inspection_cards(self, files) -> Dict[str, tuple]:
         """{file: (SANITY, INSPCOMM)} for the rows with INSPCOMM among `files`; the row at the file's own path wins among twins."""
         by_name = {}

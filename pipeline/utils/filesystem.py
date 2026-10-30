@@ -148,6 +148,16 @@ def unique_filename(fpath: str):
         return fpath_new
 
 
+def latest_unique_filename(fpath: str) -> str | None:
+    """Newest of `fpath`, `_1`, `_2`, ... as `unique_filename` hands them out; None without `fpath`, a gap ends the probe."""
+    if not os.path.exists(fpath):
+        return None
+    latest, idx = fpath, 1
+    while os.path.exists(candidate := add_suffix(fpath, f"{idx}")):
+        latest, idx = candidate, idx + 1
+    return latest
+
+
 def get_basename(file_path):
     return os.path.basename(file_path)
 

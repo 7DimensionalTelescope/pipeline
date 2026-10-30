@@ -1736,12 +1736,20 @@ class PathAstrometryFactory(AutoMkdirMixin, AutoCollapseMixin):
 
 class PathAstrometryFigures(PathFiguresBase):
     @property
+    def _dir(self) -> str:
+        return self._regularize(bjoin(self._parent._parent._figure_dir, ASTRM_DIRNAME))
+
+    @property
     def dir(self) -> str:
-        return self._regularize(bjoin(self._parent._parent.figure_dir, ASTRM_DIRNAME))
+        return self._dir
+
+    def _evaluation_plot(self, suffix: str = "wcs") -> str | List[str]:
+        basenames = [os.path.basename(path) for path in atleast_1d(self._parent._parent._input_files)]
+        return self._regularize(bjoin(self._dir, swap_ext(add_suffix(basenames, suffix), "jpg")))
 
     def evaluation_plot(self, suffix: str = "wcs") -> str | List[str]:
-        basenames = [os.path.basename(path) for path in atleast_1d(self._parent._parent._input_files)]
-        return self._regularize(bjoin(self.dir, swap_ext(add_suffix(basenames, suffix), "jpg")))
+        self.dir  # mkdir
+        return self._evaluation_plot(suffix)
 
 
 class PathPhotometry(AutoMkdirMixin, AutoCollapseMixin):
@@ -2154,19 +2162,27 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
 
     # ---- check plots (JPEG) ----
     @property
+    def _figure_dir(self) -> str:
+        return collapse(self._parent._parent._figure_dir, force=True)
+
+    @property
     def figure_dir(self) -> str:
         """The coadd's own figure sits here, beside the counts check plot it is blinked against."""
-        return collapse(self._parent._parent.figure_dir, force=True)
+        return self._figure_dir
+
+    @property
+    def _check_plot_dir(self) -> str:
+        scope = self._config_scope
+        return (
+            os.path.join(self._figure_dir, IMCOADD_DIRNAME, scope)
+            if scope
+            else os.path.join(self._figure_dir, IMCOADD_DIRNAME)
+        )
 
     @property
     def check_plot_dir(self) -> str:
         """Per-frame check plots, flat under figures/imcoadd unless a config_suffix scopes the run."""
-        scope = self._config_scope
-        return (
-            os.path.join(self.figure_dir, IMCOADD_DIRNAME, scope)
-            if scope
-            else os.path.join(self.figure_dir, IMCOADD_DIRNAME)
-        )
+        return self._check_plot_dir
 
     @property
     def coadd_counts_figure(self) -> str:
@@ -2182,7 +2198,7 @@ class PathImcoaddFactory(AutoMkdirMixin, AutoCollapseMixin):
 
     def _check_plots(self, stage_inputs, suffix: str) -> List[str]:
         return [
-            os.path.join(self.check_plot_dir, swap_ext(add_suffix(os.path.basename(f), suffix), "jpg"))
+            os.path.join(self._check_plot_dir, swap_ext(add_suffix(os.path.basename(f), suffix), "jpg"))
             for f in atleast_1d(stage_inputs)
         ]
 
@@ -2243,13 +2259,25 @@ class PathPhotometryFigures(PathFiguresBase):
         return [os.path.basename(p) for p in atleast_1d(self._parent._parent._input_files)]
 
     @property
+    def _dir(self) -> str:
+        return self._regularize(bjoin(self._parent._parent._figure_dir, PHOTOMETRY_DIRNAME))
+
+    @property
     def dir(self) -> str:
-        return self._regularize(bjoin(self._parent._parent.figure_dir, PHOTOMETRY_DIRNAME))
+        return self._dir
+
+    @property
+    def _filter_check(self) -> str | List[str]:
+        return self._regularize(bjoin(self._dir, swap_ext(add_suffix(self._basenames, "filtercheck"), "jpg")))
 
     @property
     def filter_check(self) -> str | List[str]:
-        return self._regularize(bjoin(self.dir, swap_ext(add_suffix(self._basenames, "filtercheck"), "jpg")))
+        return self._filter_check
+
+    def _zp(self, mag_key: str, filt: str | None = None) -> str | List[str]:
+        suffix = mag_key if filt is None else f"{mag_key}_{filt}"
+        return self._regularize(bjoin(self._dir, swap_ext(add_suffix(self._basenames, suffix), "jpg")))
 
     def zp(self, mag_key: str, filt: str | None = None) -> str | List[str]:
-        suffix = mag_key if filt is None else f"{mag_key}_{filt}"
-        return self._regularize(bjoin(self.dir, swap_ext(add_suffix(self._basenames, suffix), "jpg")))
+        self.dir  # mkdir
+        return self._zp(mag_key, filt)

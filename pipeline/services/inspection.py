@@ -105,6 +105,7 @@ def inspect_images(
         resolved = resolve_inspcomm(header.get(INSPCOMM_KEY), inspcomm, overwrite)
         if not resolved:
             raise ValueError(f"{os.path.basename(image)}: an INSPCOMM comment is required for a human veto")
+        fits.Card(INSPCOMM_KEY, resolved, INSPCOMM_COMMENT)  # refuses non-ASCII before any write
 
         if image_qa is not None:
             image_name = os.path.basename(image).replace(".fits", "")
@@ -129,6 +130,64 @@ def inspect_images(
 
         # the sidecar is judged on its own: the FITS may already carry the verdict from an earlier hand injection
         report[f"sidecars_{update_padded_header_file(image, cards)}"].append(image)
+
+    return report
+
+
+def revoke_inspection(images: Union[str, List[str]], use_database: bool = True, sanity: Optional[bool] = None) -> dict:
+    """Withdraw a verdict: INSPCOMM off the FITS, sidecar and image_qa; SANITY `sanity`, else False under REJ_PROC, else the QA criteria."""
+    from .checker import Checker
+
+    images = [image for image in atleast_1d(images) if image]
+    report = {
+        "headers_written": [],
+        "headers_unchanged": [],
+        "sidecars_written": [],
+        "sidecars_unchanged": [],
+        "sidecars_missing": [],
+        "image_qa_cleared": [],
+        "sanity": {},
+    }
+    checker = Checker()
+    image_qa = None
+    if use_database:
+        from .database.image_qa import ImageQA
+
+        image_qa = ImageQA()
+
+    for image in images:
+        header = fits.getheader(image)
+        if sanity is not None:
+            restored = sanity
+        elif header.get(REJECTION_PROCESS_HEADER_KEY):
+            restored = False
+        else:
+            restored = checker.apply_qa_criteria(header=header, dtype="science")
+        report["sanity"][image] = restored
+        if INSPCOMM_KEY in header:
+            with fits.open(image, mode="update") as hdul:
+                remove_padded_header_key(hdul[0].header, INSPCOMM_KEY)
+                update_padded_header_cards(hdul[0].header, {"SANITY": (restored, SANITY_COMMENT)})
+                hdul.flush()
+            report["headers_written"].append(image)
+        else:
+            report["headers_unchanged"].append(image)
+
+        header_file = swap_ext(image, "header")
+        if not os.path.exists(header_file):
+            report["sidecars_missing"].append(image)
+        else:
+            sidecar = read_header_file(header_file)
+            if remove_padded_header_key(sidecar, INSPCOMM_KEY):
+                remove_padded_header_key(sidecar, "SANITY")
+                write_header_file(header_file, sidecar)
+                report["sidecars_written"].append(image)
+            else:
+                report["sidecars_unchanged"].append(image)
+
+        if image_qa is not None:
+            image_name = os.path.basename(image).replace(".fits", "")
+            report["image_qa_cleared"] += list(image_qa.clear_inspection(image_name, restored, image_path=image))
 
     return report
 
