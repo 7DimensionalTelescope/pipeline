@@ -1,9 +1,10 @@
 """
 Visual inspection in a notebook: one composite of a frame's check plots, one prompt per frame.
 
-Enter passes, text rejects with that text as INSPCOMM (written at once), `u` reverses the previous
-verdict, `f`/`b` move forward or back (`100f`, `3b`; a frame left without a verdict is recorded as
-seen), `q` stops and `run()` continues later. Passes are session knowledge only: the record is the
+Enter passes, text rejects with that text as INSPCOMM (written at once), `?` marks the frame ambiguous
+(`? note` keeps a note in the session only; nothing is written), `u` reverses the previous verdict,
+`f`/`b` move forward or back (`100f`, `3b`; a frame left without a verdict is recorded as seen), `q`
+stops and `run()` continues later. Passes are session knowledge only: the record is the
 session's table, a JSONL file when `log_path` is given, and the Markdown report of `report()`, written
 on every stop when `report_path` is given.
 """
@@ -12,12 +13,13 @@ import base64
 import io
 import json
 import os
+import random
 import re
 import sys
 import tempfile
 import time
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from astropy.io import fits
 
@@ -134,9 +136,12 @@ class InspectionSession:
         use_database: bool = True,
         overwrite: bool = False,
         report_path: Optional[str] = None,
+        shuffle: Union[bool, int] = False,
     ):
         images = [images] if isinstance(images, str) else list(images)
         self.images = [image for image in images if isinstance(image, str) and image]
+        if shuffle is not False:
+            random.Random(0 if shuffle is True else shuffle).shuffle(self.images)
         self.log_path = log_path
         self.report_path = report_path
         self.by = by or os.environ.get("USER")
@@ -189,9 +194,9 @@ class InspectionSession:
     def _record_of(self, image: str) -> Optional[dict]:
         return next((record for record in self.records if record["image"] == image), None)
 
-    def _record(self, image: str, state: dict, answer: Optional[str]) -> dict:
+    def _record(self, image: str, state: dict, answer: Optional[str], note: Optional[str] = None) -> dict:
         existing = self._record_of(image)
-        if existing and existing["verdict"] in ("pass", "reject"):
+        if existing and existing["verdict"] == "reject":
             self.undo(image)
         elif existing:
             self.records.remove(existing)
@@ -211,8 +216,11 @@ class InspectionSession:
             "index": self.cursor,
             "image": image,
             "name": _stem(image),
-            "verdict": "seen" if answer is None else "reject" if answer else "pass",
+            "verdict": (
+                "ambiguous" if note is not None else "seen" if answer is None else "reject" if answer else "pass"
+            ),
             "inspcomm": inspcomm,
+            "note": note or None,
             "prior_sanity": state["sanity"],
             "prior_inspcomm": state["inspcomm"],
             "prior_rej_proc": state["rej_proc"],
@@ -268,7 +276,7 @@ class InspectionSession:
             self._display(im, image, kernel)
             _settle()
             try:
-                answer = input("Enter=pass  text=reject  u=undo  f/b=move  q=quit: ").strip()
+                answer = input("Enter=pass  text=reject  ?=ambiguous  u=undo  f/b=move  q=quit: ").strip()
             except (EOFError, KeyboardInterrupt, NotImplementedError):
                 return
             note = ""
@@ -277,6 +285,10 @@ class InspectionSession:
             if answer.lower() == "u":
                 undone = self.undo()
                 note = f"undone {undone['name']}" if undone else "nothing to undo"
+                continue
+            if answer.startswith("?"):
+                self._record(image, state, None, note=answer[1:].strip())
+                self.cursor += 1
                 continue
             move = re.fullmatch(r"(\d*)([fb])", answer.lower())
             if move:
@@ -341,13 +353,18 @@ class InspectionSession:
         return table.groupby(["verdict", "inspcomm"], dropna=False).size().rename("n").reset_index()
 
     def report(self, path: str, images: str = "rejections", max_mb: float = 50) -> str:
-        """Self-contained Markdown: counts, a count per INSPCOMM, 1400 px WebP composites for `images` in rejections | all | none."""
+        """Self-contained Markdown: counts, a count per INSPCOMM, 1400 px WebP composites for `images` in rejections (rejected and ambiguous) | all | none."""
         if images not in ("rejections", "all", "none"):
             raise ValueError(f"images must be rejections, all or none, not {images!r}")
         rejected = [record for record in self.records if record["verdict"] == "reject"]
+        ambiguous = [record for record in self.records if record["verdict"] == "ambiguous"]
         passed = [record for record in self.records if record["verdict"] == "pass"]
         seen = [record for record in self.records if record["verdict"] == "seen"]
-        n_embedded = {"rejections": len(rejected), "all": len(rejected) + len(passed), "none": 0}[images]
+        n_embedded = {
+            "rejections": len(rejected) + len(ambiguous),
+            "all": len(rejected) + len(ambiguous) + len(passed),
+            "none": 0,
+        }[images]
         estimate = 0.12 * n_embedded + 0.0001 * len(self.records)
         if estimate > max_mb:
             raise ValueError(f"about {estimate:.2f} MB for {n_embedded} composites; images='none' or a smaller pool")
@@ -358,25 +375,26 @@ class InspectionSession:
             f"# Inspection session, {self.started:%Y-%m-%d %H:%M}, inspector {self.by}",
             "",
             f"{len(passed) + len(rejected)} of {len(self.images)} frames judged: {len(passed)} pass, {len(rejected)} reject; "
-            f"{len(self.images) - len(passed) - len(rejected)} without a verdict, {len(seen)} of them seen.",
+            f"{len(ambiguous)} ambiguous; {len(self.images) - len(passed) - len(rejected) - len(ambiguous)} without a verdict, "
+            f"{len(seen)} of them seen.",
             "",
             "| INSPCOMM | n |",
             "|---|---|",
             *[f"| {_cell(comment)} | {n} |" for comment, n in sorted(comments.items(), key=lambda item: -item[1])],
         ]
-        for title, group in (("Rejected", rejected), ("Passed", passed)):
+        for title, group in (("Rejected", rejected), ("Ambiguous", ambiguous), ("Passed", passed)):
             lines += ["", f"## {title}", ""]
-            embed = images == "all" or (images == "rejections" and title == "Rejected")
+            embed = images == "all" or (images == "rejections" and title != "Passed")
             if not embed:
-                lines += ["| frame | name | INSPCOMM | prior SANITY |", "|---|---|---|---|"]
+                lines += ["| frame | name | comment | prior SANITY |", "|---|---|---|---|"]
                 lines += [
-                    f"| {record['index'] + 1}/{len(self.images)} | {record['name']} | {_cell(record['inspcomm'])} | {record['prior_sanity']} |"
+                    f"| {record['index'] + 1}/{len(self.images)} | {record['name']} | {_cell(record['inspcomm'] or record.get('note'))} | {record['prior_sanity']} |"
                     for record in group
                 ]
                 continue
             for record in group:
                 parts = [
-                    _cell(record["inspcomm"]),
+                    _cell(record["inspcomm"] or record.get("note")),
                     f"seeing {_fmt(record['seeing'])}",
                     f"ellipticity {_fmt(record['ellip'])}",
                     f"ppflag {_fmt(record['ppflag'])}",
