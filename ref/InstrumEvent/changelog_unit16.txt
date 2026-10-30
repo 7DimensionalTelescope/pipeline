@@ -11,4 +11,5 @@ date	nightdate	parts	wall	comment
 260104		fw	flat	new_filters
 260104		mirror	flat	optical_alignment
 260514	2026-05-14	cam	flat	PA
+260715		mirror	bias,dark,flat	snowstorm
 261015		fw	flat	filter_config
