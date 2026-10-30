@@ -4,7 +4,7 @@ import tempfile
 import numpy as np
 from contextlib import contextmanager
 from functools import lru_cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 from numba import njit
 from astropy.table import Table, hstack, vstack, unique
 from astropy.coordinates import SkyCoord
@@ -204,6 +204,9 @@ def keyset(mag_key: str, filter: str) -> tuple[str]:
 
 def aggregate_gaia_catalogs(target_coord, path_calibration_field: str = None, query_radius=1.0):
     """
+    DEPRECATED 2026-10-31: reads the first-generation 1x1 deg lattice (47 bands, no second-medium or wide
+    filters); the photometry uses aggregate_tile_refcats. Kept for reference.
+
     Return a merged Gaia DR3 source catalog near the specified coordinates.
 
     Parameters:
@@ -273,6 +276,21 @@ def aggregate_gaia_catalogs(target_coord, path_calibration_field: str = None, qu
     # 	all_reftbl.write(path_save, overwrite=True)
 
     return all_reftbl
+
+
+def aggregate_tile_refcats(target_coord: SkyCoord, ref_cat_for_tile: Callable[[str], str], query_radius: float = 1.0) -> Table:
+    """Stack the RIS tile refcats within the radius, unique on source_id; empty Table without a tile file."""
+    from ..utils.tile import get_ris_tiles_near
+
+    radius = max(query_radius, 1.2)  # 1.2 deg reaches a field corner at the widest tile spacing, 1.29 deg
+    tables = []
+    for tile in get_ris_tiles_near(target_coord.ra.deg, target_coord.dec.deg, radius=radius):
+        f = ref_cat_for_tile(tile)
+        if os.path.exists(f):
+            tables.append(Table.read(f))
+    if not tables:
+        return Table()
+    return unique(vstack(tables), keys="source_id")
 
 
 def filter_table(table: Table, key: str, value: float | int | str, method: str = "equal") -> Table:

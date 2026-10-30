@@ -687,12 +687,18 @@ class PhotometrySingle:
             else:
                 query_radius = 1.0
 
-            self.logger.info(f"Generating Gaia reference catalog on the fly for {self.image_info.obj}")
-            ref_src_table = phot_utils.aggregate_gaia_catalogs(
-                target_coord=SkyCoord(self.image_info.racent, self.image_info.decent, unit="deg"),
+            target_coord = SkyCoord(self.image_info.racent, self.image_info.decent, unit="deg")
+            ref_src_table = phot_utils.aggregate_tile_refcats(
+                target_coord,
+                lambda tile: self.path.photometry.get_ref_cat(tile, ref_cat_type=self.ref_cat_type),
                 query_radius=query_radius,
-                path_calibration_field=self.path.photometry.ref_gaia_dir,
             )
+            if not len(ref_src_table):
+                raise self.logger.process_error.PrerequisiteNotMetError(
+                    f"No RIS tile reference catalog near {self.image_info.obj} "
+                    f"({self.image_info.racent:.3f}, {self.image_info.decent:.3f})."
+                )
+            self.logger.info(f"Reference catalog aggregated from the RIS tile catalogs for {self.image_info.obj}")
             self.logger.debug(f"ref_src_table[:5]:\n{ref_src_table[:5].pprint(max_width=150)}")
 
             # ref_src_table.write(ref_cat, overwrite=True)  # let's not do this.
