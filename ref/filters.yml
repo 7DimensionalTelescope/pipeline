@@ -3,7 +3,7 @@ filters:
   u:     {center_nm: 371.7, fwhm_nm:  22.0, family: broad,  set: first, zp_max: 26.00, cterm: null}  # zp_max scaled from m375w by FWHM, no usable history
   m375w: {center_nm: 382.6, fwhm_nm:  25.0, family: wide,   set: first, zp_max: 26.10, cterm: null}
   m386:  {center_nm: 387.7, fwhm_nm:  24.8, family: medium, set: second, zp_max: 25.30, cterm: null}
-  m400:  {center_nm: 401.4, fwhm_nm:  24.3, family: medium, set: first, zp_max: 26.15, cterm: [-0.087, +0.213]}
+  m400:  {center_nm: 401.4, fwhm_nm:  24.3, family: medium, set: first, zp_max: 26.60, cterm: [-0.087, +0.213]}
   m425:  {center_nm: 425.6, fwhm_nm:  24.2, family: medium, set: first, zp_max: 27.05, cterm: [-0.135, +0.165]}
   m425w: {center_nm: 427.4, fwhm_nm:  47.8, family: wide,   set: first, zp_max: 27.80, cterm: null}  # zp_max scaled from m425 by FWHM, no usable history
   m438:  {center_nm: 438.4, fwhm_nm:  28.6, family: medium, set: second, zp_max: 27.00, cterm: null}
@@ -29,7 +29,7 @@ filters:
   m661:  {center_nm: 660.7, fwhm_nm:  23.0, family: medium, set: second, zp_max: 26.00, cterm: null}
   m675:  {center_nm: 674.5, fwhm_nm:  26.0, family: medium, set: first, zp_max: 26.25, cterm: [-0.151, +0.149]}
   m692w: {center_nm: 690.8, fwhm_nm:  47.4, family: wide,   set: second, zp_max: 27.70, cterm: null}  # zp_max scaled from m700 by FWHM, no usable history
-  m700:  {center_nm: 700.0, fwhm_nm:  24.1, family: medium, set: first, zp_max: 26.95, cterm: [-0.161, +0.139]}
+  m700:  {center_nm: 700.0, fwhm_nm:  24.1, family: medium, set: first, zp_max: 26.00, cterm: [-0.161, +0.139]}
   m710w: {center_nm: 708.5, fwhm_nm:  42.7, family: wide,   set: second, zp_max: 27.60, cterm: null}  # zp_max scaled from m700 by FWHM, no usable history
   m725:  {center_nm: 724.7, fwhm_nm:  24.3, family: medium, set: first, zp_max: 25.75, cterm: [-0.149, +0.151]}
   m750:  {center_nm: 748.9, fwhm_nm:  24.4, family: medium, set: first, zp_max: 25.50, cterm: [-0.156, +0.144]}
