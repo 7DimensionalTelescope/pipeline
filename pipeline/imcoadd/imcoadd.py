@@ -121,14 +121,19 @@ class ImCoadd(
         return f"{self._process_spec.name}-{suffix}"
 
     @classmethod
-    def from_list(cls, input_images, working_dir=None):
+    def from_list(cls, input_images, working_dir=None, image_selection=None, **config_kwargs):
         """use soft link if files are from different directories"""
 
         for image in input_images:
             if not os.path.exists(image):
                 raise FileNotFoundError(f"Input file does not exist: {image}")
 
-        config = SciProcConfiguration.user_config(input_images=input_images, working_dir=working_dir, logger=True)
+        config = SciProcConfiguration.user_config(
+            input_images=input_images, working_dir=working_dir, logger=True, **config_kwargs
+        )
+        if image_selection is not None:
+            # must land before construction: __init__ selects the inputs
+            config.node.imcoadd.image_selection = image_selection
         return cls(config=config)
 
     @property
@@ -304,8 +309,8 @@ class ImCoadd(
         if not (mode and self.config_node.settings.is_multi_epoch):
             return self.input_images
 
-        from ..select.select import (CATEGORICAL_METRICS, metrics_for_paths_from_image_qa, ppflag_mask,
-                                     ppflag_spec, resolve_fixed_cuts, select_from_table, select_images)  # fmt: skip
+        from ..select.select import (cuts_grammar, metrics_for_paths_from_image_qa, ppflag_mask, resolve_fixed_cuts,
+                                     select_from_table, select_images)  # fmt: skip
 
         plot_path = os.path.join(
             # multi-epoch inputs span nightdates, so figure_dir is a list of dirs;
@@ -382,14 +387,7 @@ class ImCoadd(
         self.input_images = [f for f, ok in zip(self.input_images, keep) if ok]
         # written back in the operator grammar, so a rerun pins exactly what this run applied
         directions = table.meta.get("directions", {})
-        self.config_node.imcoadd.image_selection_cuts = {
-            m: (
-                ppflag_spec(v)
-                if m in CATEGORICAL_METRICS
-                else f"{'<=' if directions.get(m) == 'lower' else '>='}{v:.6g}"
-            )
-            for m, v in cuts.items()
-        }
+        self.config_node.imcoadd.image_selection_cuts = cuts_grammar(cuts, directions)
         return self.input_images
 
     def _guard_coadd_identity(self):

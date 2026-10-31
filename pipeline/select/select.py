@@ -410,6 +410,9 @@ def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_p
             packed[-1].append(item)
         return packed
 
+    status = np.asarray(table["status"] if "status" in table.colnames else np.full(len(table), "usable"))
+    usable = status == "usable"
+
     # Colour carries the current bitmask's verdict, not the raw flag value: the question a
     # reader has is "did my mask throw this away", and that changes as the mask is edited.
     flag_metric = next((m for m in CATEGORICAL_METRICS if m in directions), None)
@@ -418,14 +421,23 @@ def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_p
         ~apply_cuts(table, {flag_metric: cuts[flag_metric]})
         if flag_metric and flag_metric in cuts
         else np.zeros(len(table), dtype=bool)
-    )
-    passed = ~flag_rejected
+    ) & usable
+    passed = usable & ~flag_rejected
     quality = apply_cuts(table, {m: v for m, v in cuts.items() if m not in CATEGORICAL_METRICS})
     groups, legend_rows = [], [[("kept", "o", "0.55"), ("rejected", "x", "0.55")]]
     if passed.any():
         survived = f"{int((keep & passed).sum())}/{int(passed.sum())} survived image quality rejection"
         groups.append((survived, passed, "tab:blue"))
         legend_rows.append([(survived, "o", "tab:blue")])
+    beneath = []
+    for name, cause, color, alpha in (
+        ("sanity", "rejected by SANITY", "teal", 0.45),
+        ("unprocessed", "not yet processed", "slategray", 0.6),
+    ):
+        mask = status == name
+        if mask.any():
+            beneath.append((mask, color, alpha))
+            legend_rows.append([(f"{int(mask.sum())} {cause}", "x", color)])
     if flag_rejected.any():
         name, allowed = flag_metric.upper(), int(cuts[flag_metric]) | PPFLAG_INFORMATIONAL
         bits = np.where(np.isfinite(flags), flags, 0).astype(np.int64)
@@ -452,6 +464,8 @@ def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_p
                 ax.set_visible(False)
                 continue
             xk, yk = row[c]
+            for mask, color, alpha in beneath:
+                ax.scatter(table[xk][mask], table[yk][mask], s=12, marker="x", lw=1.1, c=color, alpha=alpha, zorder=1)
             for depth, (_, mask, color) in enumerate(groups):
                 kept, cut = mask & keep, mask & ~keep
                 if cut.any():
@@ -520,7 +534,7 @@ def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_p
 
     # Second line, because a categorical cut has no panel and its cost is otherwise
     # invisible: with PPFLAG the points are coloured but nothing says how many it removed.
-    rejected = rejection_counts(table, cuts)
+    rejected = rejection_counts(table[usable], cuts)
     if rejected:
         sign = {"lower": "≤", "higher": "≥"}
 
@@ -888,6 +902,14 @@ def resolve_fixed_cuts(fixed_cuts, metrics=None, extra=None):
     return numeric, extra
 
 
+def cuts_grammar(cuts: dict[str, float], directions: dict[str, str]) -> dict[str, str]:
+    """Numeric cuts -> config operator grammar; inverse of `resolve_fixed_cuts`."""
+    return {
+        m: ppflag_spec(v) if m in CATEGORICAL_METRICS else f"{'<=' if directions.get(m) == 'lower' else '>='}{v:.6g}"
+        for m, v in cuts.items()
+    }
+
+
 def select_images(
     names: list[str],
     headers: list,
@@ -914,3 +936,114 @@ def select_images(
         fixed_cuts=fixed_cuts,
     )
     return keep, cuts, table
+
+
+def select_ingredients(
+    obj: str,
+    cuts: dict | None = None,
+    filter_cuts: dict[str, dict] | None = None,
+    nsigma: float = 1.0,
+    save: bool = False,
+    logger=None,
+) -> dict[str, tuple[list[str], dict[str, str]]]:
+    """One object against its raw budget: status per frame, cuts per filter, kept images, ImCoadd's figures; one joint figure."""
+    import matplotlib.pyplot as plt
+
+    from ..path import PathHandler
+    from ..services.database.census import budget_status, census_from_raw
+    from ..utils import collapse
+
+    def say(level, msg):
+        print(msg)
+        if logger is not None:
+            getattr(logger, level)(msg)
+
+    census = census_from_raw(objects=[obj], qa=None)
+    status = budget_status(census)
+    budget = census.loc[status.index]
+    if len(census) > len(budget):
+        say("info", f"{obj} {len(census) - len(budget)} duplicate raw rows dropped")
+    filters = sorted(set(budget["filter"]))
+    filter_cuts = filter_cuts or {}
+    unknown = set(filter_cuts) - set(filters)
+    if unknown:
+        raise ValueError(f"filter_cuts names filters without raw frames of {obj}: {sorted(unknown)}")
+    resolved = {filt: resolve_fixed_cuts({**(cuts or {}), **filter_cuts.get(filt, {})}) for filt in filters}
+    extra = {m: spec for _, own in resolved.values() for m, spec in (own or {}).items()}
+    images = budget.single_path.fillna(budget.raw_path).tolist()
+    table, _ = metrics_for_paths_from_image_qa(images, extra=extra)
+    table["status"] = status.tolist()
+    has_single = budget.single_path.notna().to_numpy()
+
+    selection, rendered, ph = {}, [], None
+    for filt in filters:
+        fixed, own = resolved[filt]
+        mask = (budget["filter"] == filt).to_numpy()
+        paths = [p for p, m in zip(images, mask) if m]
+        group = table[mask]
+        group.remove_columns([m for m in extra if m not in (own or {})])
+        group.meta["directions"] = {**table.meta["directions"], **{m: d for m, (_, d) in (own or {}).items()}}
+        state = np.asarray(group["status"])
+        usable = state == "usable"
+        ok = group[usable]
+        chosen = suggest_cuts(ok, nsigma=nsigma, fixed=fixed)
+        keep = np.zeros(len(group), dtype=bool)
+        keep[usable] = apply_cuts(ok, chosen)
+        kept = [p for p, k in zip(paths, keep) if k]
+        selection[filt] = (kept, cuts_grammar(chosen, group.meta["directions"]))
+        singles = [p for p, s in zip(images, has_single & mask) if s]
+        line = f"{obj} {filt:6s} {cuts_summary(ok, chosen, keep[usable])}"
+        for name, cause in (("sanity", "sanity-rejected"), ("unprocessed", "not yet processed")):
+            count = int((state == name).sum())
+            line += f" | {count} {cause}" if count else ""
+        say("info", line + (" | no single, no figure saved" if save and not singles else ""))
+        unmeasured = int(np.all([~np.isfinite(np.asarray(ok[m], float)) for m in directions_of(ok)], axis=0).sum())
+        if unmeasured:
+            say("warning", f"{obj} {filt:6s} without image_qa metrics, passing every cut: {unmeasured}")
+        out_path = None
+        if save and singles:
+            ph = PathHandler(kept or singles, is_pipeline=True, is_multi_epoch=True)
+            stem = os.path.splitext(os.path.basename(collapse(ph.sciproc_output_yml, force=True)))[0]
+            out_path = os.path.join(collapse(ph.figure_dir, force=True), f"{stem}_imcoadd_selection.jpg")
+        fig = plot_selection(group, chosen, keep, out_path=out_path)
+        fig.canvas.draw()
+        rendered.append(np.asarray(fig.canvas.buffer_rgba()))
+        plt.close(fig)
+    joint_path = (
+        os.path.join(os.path.dirname(ph._coadd_dir[0]), f"{obj}_imcoadd_selection.jpg") if ph is not None else None
+    )
+    _joint_figure(rendered, out_path=joint_path)
+    return selection
+
+
+def _joint_figure(images: list[np.ndarray], out_path: str | None = None) -> None:
+    """Pixel arrays stacked in one column, narrower ones right-padded white; saved at 100 dpi, shown in a notebook."""
+    import matplotlib.pyplot as plt
+
+    width = max(r.shape[1] for r in images)
+    stacked = np.vstack([np.pad(r, ((0, 0), (0, width - r.shape[1]), (0, 0)), constant_values=255) for r in images])
+    if out_path:
+        plt.imsave(out_path, stacked, dpi=100)
+    if in_notebook():
+        from IPython.display import display
+
+        # dpi 1 keeps inches equal to pixels; at dpi 100 Agg truncates 290.4 * 100 to 29039 rows.
+        joint = plt.figure(figsize=(width, len(stacked)), dpi=1)
+        ax = joint.add_axes((0, 0, 1, 1))
+        ax.imshow(stacked, interpolation="nearest", aspect="auto")
+        ax.set_axis_off()
+        display(joint)
+        plt.close(joint)
+
+
+def join_selection_figures(files: list[str], out_path: str | None = None) -> None:
+    """Existing selection figures (jpg/png paths) stacked into one joint image; saved when out_path is given, shown in a notebook."""
+    import matplotlib.pyplot as plt
+
+    images = []
+    for f in files:
+        img = plt.imread(f)
+        if img.dtype != np.uint8:  # png comes back as floats in [0, 1]
+            img = np.round(img * 255).astype(np.uint8)
+        images.append(img[..., :3])
+    _joint_figure(images, out_path=out_path)
