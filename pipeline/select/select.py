@@ -68,16 +68,16 @@ CATEGORICAL_METRICS = ("ppflag",)
 # PPFLAG is a bitmask, so it is selected on by an allow-list of bits, not a threshold: a
 # frame is kept when every bit it sets is one you allowed, `PPFLAG & ~allowed == 0`.
 #
-# The allow-list is a string with one digit per bit, in the order the bits are listed
-# below (1, 2, 4, 8, 16, 32); 1 means that bit is tolerated. Write it full width — "11"
-# and the number eleven are easy to confuse at a glance, while "110000" cannot be read
-# as anything but a digit-per-bit string:
+# The allow-list is a string of 0/1 read as a binary number, most significant bit first,
+# so with seven digits bit 64 is leftmost and bit 1 rightmost; 1 means that bit is tolerated.
+# Write it full width — "11" (= 3) and the number eleven are easy to confuse at a glance,
+# while "0000011" cannot be read as anything but a binary string:
 #
-#   "110000"  tolerate a different-date calib and a manual master   (the default)
-#   "110100"  ...and lenient keys, while still rejecting SANITY=False masters
-#   "000000"  only PPFLAG == 0, nothing compromised
+#   "1000011"  tolerate a different-date calib and a manual master   (the default)
+#   "1001011"  ...and lenient keys, while still rejecting SANITY=False masters
+#   "0000000"  only PPFLAG == 0 (bit 64 stays allowed, it never rejects)
 #
-# This is what a numeric threshold could not express: "accept 8 but reject 4" is "110100",
+# This is what a numeric threshold could not express: "accept 8 but reject 4" is "0001011",
 # whereas any `<= n` admitting 8 must also admit 4. Bit values from preprocess/ppflag.py.
 PPFLAG_BITS = (
     (1, "different-date calib"),
@@ -89,26 +89,23 @@ PPFLAG_BITS = (
     (64, "bias master not shared with the dark master (informational, never rejects)"),
 )
 
-CATEGORICAL_DEFAULT_CUTS = {"ppflag": 67.0}  # "1100001"
+CATEGORICAL_DEFAULT_CUTS = {"ppflag": 67.0}  # "1000011"
 
 
 def ppflag_mask(spec) -> int:
-    """``"110100"`` -> 11. One digit per bit in `PPFLAG_BITS` order (1, 2, 4, 8, 16, 32);
-    a digit you do not write counts as 0, so ``"11"`` and ``"110000"`` are the same mask.
-
-    Only a string is accepted. An unquoted ``11`` in YAML is the integer eleven, and
-    ``011`` is worse still, so the two readings are kept apart by refusing the number.
-    """
+    """``"1000011"`` -> 67; binary number, bit 64 leftmost, ``"11"`` -> 3; quoted string only."""
     if spec is None:
         return 0
     if not isinstance(spec, str):
-        raise ValueError(f"ppflag_bitmask must be a quoted string of 0/1 such as '11010', not {spec!r}")
+        raise ValueError(f"ppflag_allowed must be a quoted string of 0/1 such as '1000011', not {spec!r}")
     digits = "".join(spec.split())
     if any(ch not in "01" for ch in digits):
-        raise ValueError(f"ppflag_bitmask must contain only 0 and 1, got {spec!r}")
+        raise ValueError(f"ppflag_allowed must contain only 0 and 1, got {spec!r}")
     if len(digits) > len(PPFLAG_BITS):
-        raise ValueError(f"ppflag_bitmask has {len(digits)} positions, only {len(PPFLAG_BITS)} bits exist")
-    return sum(bit for ch, (bit, _) in zip(digits, PPFLAG_BITS) if ch == "1")
+        raise ValueError(
+            f"ppflag_allowed has {len(digits)} digits, at most {len(PPFLAG_BITS)} (bit 64 leftmost, bit 1 rightmost)"
+        )
+    return int(digits or "0", 2)
 
 
 def ppflag_label(value) -> str:
@@ -118,8 +115,8 @@ def ppflag_label(value) -> str:
 
 
 def ppflag_spec(mask) -> str:
-    """11 -> ``"110100"``; the inverse of `ppflag_mask`, always full width."""
-    return "".join("1" if int(mask) & bit else "0" for bit, _ in PPFLAG_BITS)
+    """67 -> ``"1000011"``; the inverse of `ppflag_mask`, seven binary digits."""
+    return format(int(mask), "07b")
 
 
 # Key families where photometry writes 0 to mean "no value" instead of dropping the card.
@@ -656,7 +653,7 @@ def apply_edits(table: Table, cuts: dict, text: str, headers: list | None = None
     summary prints back at you; it carries the direction as well as the threshold, so
     it both **adds** a metric and cuts on it in one go (``airmass<=1.2``). ``airmass
     lower`` adds one *uncut*, to look before deciding. The JSON object `cuts_json`
-    prints can also be pasted back and edited. ``ppflag=110000`` sets a categorical
+    prints can also be pasted back and edited. ``ppflag=1000011`` sets a categorical
     allow-mask. Input is case-insensitive.
 
     Everything is validated before anything is applied, so a typo anywhere leaves both
@@ -680,7 +677,7 @@ def apply_edits(table: Table, cuts: dict, text: str, headers: list | None = None
         name = raw.lower()
         if op in ("<=", ">="):
             if name in CATEGORICAL_METRICS:
-                raise ValueError(f'{name} takes a bitstring, as in "{name}=110000"')
+                raise ValueError(f'{name} takes a binary string, bit 64 leftmost, as in "{name}=1000011"')
             number = _as_number(value)
             if number is None:
                 raise ValueError(f"{name}: {value!r} is not a number")
@@ -762,7 +759,7 @@ def prompt_cuts(
         print(f"  {summary}")
         print(f"  {cuts_json(chosen)}")
         if any(m in chosen for m in CATEGORICAL_METRICS):
-            print("  PPFLAG digits, in order: " + ", ".join(f"{b}={desc}" for b, desc in PPFLAG_BITS))
+            print("  PPFLAG digits, left to right: " + ", ".join(f"{b}={desc}" for b, desc in reversed(PPFLAG_BITS)))
         if headers is not None:
             print('  a metric is added by its header key: "airmass<=1.2", or "airmass lower" to look first')
 

@@ -313,9 +313,15 @@ class ImCoadd(
             collapse(self.path.figure_dir, force=True),
             f"{os.path.splitext(get_basename(self.config_node.info.file))[0]}_imcoadd_selection.jpg",
         )
+        if get_key(self.config_node.imcoadd, "ppflag_bitmask") is not None:
+            # a pre-rename config: its ppflag strings are in the former digit order and are never reinterpreted
+            raise ValueError(
+                "imcoadd.ppflag_bitmask found: rebuild the imcoadd section (overwrite_config_sections=['imcoadd']) "
+                "to get imcoadd.ppflag_allowed before image selection"
+            )
         # PPFLAG is a bitmask: the "cut" is an allow-list of bits, not a threshold
         fixed_cuts = {
-            "ppflag": ppflag_mask(self.config_node.imcoadd.ppflag_bitmask),
+            "ppflag": ppflag_mask(self.config_node.imcoadd.ppflag_allowed),
             **(get_key(self.config_node.imcoadd, "image_selection_cuts") or {}),
         }
 

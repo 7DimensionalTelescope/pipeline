@@ -64,7 +64,7 @@ if TYPE_CHECKING:
         image_selection: bool
         image_selection_cuts: Any
         image_selection_source: str
-        ppflag_bitmask: str
+        ppflag_allowed: str
         coadd_image: Any
         coadd_mask_image: Any
         coadd_counts_image: Any
