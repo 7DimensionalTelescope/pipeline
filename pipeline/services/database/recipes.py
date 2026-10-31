@@ -385,8 +385,8 @@ def census_from_raw(
     preprocess and science configs, the process flags (science registry, then the default crossfilter processes),
     has_image_qa and the single's image_qa metrics (`qa`: None | "brief" | "full"), the newest nightly coadd (`mepoch`
     adds n_coadds and the newest multi-epoch coadd), the white with its crossfilter config. `objects` overrides
-    `object_regex`; `object_regex=None` lifts the object filter. Raw -> single by (unit, obstime UTC); twins resolve to
-    the path-bearing newest row. `object` is the tile, else the target, else the archive's own object_name."""
+    `object_regex`; `object_regex=None` lifts the object filter. Raw -> single by (unit, header instant UTC: local_obstime for the
+    old raw filename patterns, whose obstime is the filename's wall clock); twins resolve to the path-bearing newest row. `object` is the tile, else the target, else the archive's own object_name."""
     filters = const.ALL_FILTERS if filters is None else filters
     import pandas as pd
 
@@ -490,12 +490,13 @@ def census_from_raw(
             f"""
             WITH r AS (
                 SELECT sf.id, COALESCE(tl.name, t.name, NULLIF(sf.object_name, '')) AS object, n.date::text AS nightdate, f.name AS filter,
-                       fu.name AS unit, sf.obstime, (sf.obstime AT TIME ZONE 'UTC') AS obstime_utc, sf.exptime,
+                       fu.name AS unit, h.obstime, (h.obstime AT TIME ZONE 'UTC') AS obstime_utc, sf.exptime,
                        sf.is_too, sf.file_path AS raw_path
                 FROM survey_scienceframe sf
                 JOIN survey_night n ON sf.night_id = n.id JOIN facility_unit fu ON sf.unit_id = fu.id
                 JOIN facility_filter f ON sf.filter_id = f.id
                 LEFT JOIN survey_tile tl ON sf.tile_id = tl.id LEFT JOIN survey_target t ON sf.target_id = t.id
+                CROSS JOIN LATERAL (SELECT CASE WHEN sf.filename_pattern LIKE 'old%%' THEN sf.local_obstime ELSE sf.obstime END AS obstime) h
                 WHERE {" AND ".join(where)}),
             s AS (
                 SELECT DISTINCT ON (r.id) r.id AS rid, q.id AS sid, {s_select}
