@@ -18,7 +18,6 @@ KillMode=mixed
 MemoryAccounting=yes
 MemoryHigh=50%
 MemoryMax=90%
-NUMAPolicy=interleave
 User=@USER@
 Group=pipeline
 WorkingDirectory=@PIPELINE_ROOT@
