@@ -3,6 +3,7 @@ from enum import IntFlag
 
 ZP_KEY = "ZP_AUTO"
 LANCZOS3_HALFWIDTH = 3.0  # SWarp's LANCZOS3 kernel is nonzero for |offset| < 3 input pixels, per axis
+BACKGROUND_POLYNOMIAL_DEGREES = {"linear": 1, "quadratic": 2, "cubic": 3}  # bkgsub_type -> total degree
 
 
 class MaskBit(IntFlag):

@@ -7,7 +7,7 @@ Bit definitions (combined with bitwise OR):
     2: Manually generated master frames (not set by pipeline; input may have this. e.g., exptime-scaled dark, superflat)
     4: SANITY was F, but used
     8: Strict search failed; match found by ignoring lenient keys (unit for bias/dark, gain/camera for flat)
-    16: Strict search failed; match found by ignoring masterframe walls (ref/InstrumEvent/changelog_unit{unit}.txt)
+    16: Strict search failed; match found by ignoring masterframe walls (ref/InstrumEvent/changelog_unit{unit}.txt); also a designated master outside them
     32: Hard keys had to be ignored (not set by pipeline; exists just for completeness)
     64: The bias master applied to the science frame is not the one inside its dark master, so the
         master-bias error does not cancel between them (INFORMATIONAL: the weight model charges it,
@@ -121,7 +121,7 @@ def compute_fetch_ppflag(
 
 
 def is_outside_masterframe_walls(found_path: str, template: str, dtype: str) -> bool:
-    """Whether `found_path`'s nightdate lies outside the masterframe walls of the template's nightdate and unit (bit 16 for a master the search did not pick)."""
+    """Found master's nightdate outside the template's masterframe walls (PPFLAG bit 16)."""
     from datetime import datetime
 
     from ..const.instrum_log import get_masterframe_walls
@@ -129,7 +129,7 @@ def is_outside_masterframe_walls(found_path: str, template: str, dtype: str) -> 
 
     name = NameHandler(template)
     lower, upper = get_masterframe_walls(name.nightdate, int(name.unit[3:]), dtype=dtype)
-    found = datetime.strptime(get_nightdate(found_path), "%Y-%m-%d").date()
+    found = datetime.strptime(NameHandler(found_path).nightdate, "%Y-%m-%d").date()  # directory date when there is one, else the filename date
     return (lower is not None and found < lower) or (upper is not None and found > upper)
 
 

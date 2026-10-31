@@ -13,7 +13,7 @@ from ..services.utils import conservative_worker_count
 from ..utils import add_suffix, atleast_1d, get_basename, time_diff_in_seconds
 from ..utils.header import update_padded_header
 from .background_qa import RESIDUAL_KEYS
-from .const import MaskBit
+from .const import BACKGROUND_POLYNOMIAL_DEGREES, MaskBit
 from .coadd_plan import CoaddPlan
 from .plotting import plot_background, plot_source_mask
 from .header_set import InputHeaderSet
@@ -114,13 +114,13 @@ class BackgroundMixin:
         for hdr, btype in zip(self.input_headers, types):
             hdr["BACKTYPE"] = (btype.upper(), "Background subtraction type")
 
-        any_dynamic = "dynamic" in types
+        any_mesh = any(map(self._uses_mesh, types))
         source_mask_images = (
             factory.stage_images(input_images, "srcmask", self.storage.source_mask_dir)
             if mask_sources
             else [None] * len(input_images)
         )
-        if mask_sources and not any_dynamic:
+        if mask_sources and not any_mesh:
             self.logger.info("Constant background: source_mask is used for residual QA only")
 
         # the source mask comes from the singles' own catalogs, so the inputs must be their derivatives 1:1
@@ -137,7 +137,7 @@ class BackgroundMixin:
         self.logger.info(f"Start background subtraction (bkgsub_type={requested!r}): {counts}")
         if before:
             pass  # bkg_images names the detector-grid models the pre-reprojection step wrote
-        elif any_dynamic:
+        elif any_mesh:
             self.config_node.imcoadd.bkg_images = bkg_images if self.plan.output_bkg_map else None
             self.config_node.imcoadd.bkg_rms_images = bkg_rms_images if self.plan.output_sky_rms_map else None
         else:
@@ -207,7 +207,7 @@ class BackgroundMixin:
                 if self.plan.satellite_mask_enabled:  # absent card = never evaluated, 0 = evaluated and clear
                     card = (int(trail.sum()), "Pixels masked as satellite trail")
                     header["NTRAILPX"], self.input_headers[i]["NTRAILPX"] = card, card
-            if btype == "dynamic" and exclude is not None and not before:
+            if self._uses_mesh(btype) and exclude is not None and not before:
                 btype = self._crowding_fallback(i, inim, exclude, fov_valid, btype, skyvalue)
             if not before:
                 frac_card = (self._usable_fraction(exclude, fov_valid), "Fraction of pixels used for the sky estimate")
@@ -258,12 +258,16 @@ class BackgroundMixin:
                     kept = cached[1] if cached else fits.getheader(job[1])
                 except OSError:
                     kept = {}
+                if before and self.input_headers.names[i] in self._prereprojection_done:
+                    self.logger.info(f"{get_basename(job[1])} predates this run's detector-grid fit; recomputing")
+                    pending.append((i, job))
+                    continue
                 # a product subtracted the other way cannot stand in, or toggling bkgsub would be a no-op
                 kept_type = str(kept.get("BACKTYPE") or "").upper()
                 if (
                     kept_type
                     and kept_type != types[i].upper()
-                    and not (types[i] == "dynamic" and kept_type == "CONSTANT")
+                    and not (self._uses_mesh(types[i]) and kept_type == "CONSTANT")
                 ):
                     self.logger.info(
                         f"{get_basename(job[1])} was made with BACKTYPE={kept_type}, this run wants "
@@ -311,7 +315,24 @@ class BackgroundMixin:
 
     def bkgsub_methods(self) -> dict:
         """Map configured background names to per-image routines."""
-        return {"none": self._no_bkgsub, "constant": self._const_bkgsub, "dynamic": self._dynamic_bkgsub}
+        methods = {"none": self._no_bkgsub, "constant": self._const_bkgsub, "dynamic": self._dynamic_bkgsub}
+        methods.update(dict.fromkeys(BACKGROUND_POLYNOMIAL_DEGREES, self._dynamic_bkgsub))
+        return methods
+
+    @staticmethod
+    def _uses_mesh(btype: str) -> bool:
+        """Mesh routines: dynamic and the polynomial surfaces."""
+        return btype == "dynamic" or btype in BACKGROUND_POLYNOMIAL_DEGREES
+
+    def _sky_model(self, mesh, btype: str, shape) -> tuple[np.ndarray, str]:
+        """Frame-sized sky model of a mesh routine, and its plot note."""
+        degree = BACKGROUND_POLYNOMIAL_DEGREES.get(btype)
+        if degree is None:
+            return mesh.background, ""
+        from .utils import polynomial_background
+
+        model, used, rms = polynomial_background(mesh, degree, shape)
+        return model, f"; degree-{degree} surface through {used} mesh nodes, node rms {rms:.2f} ADU"
 
     def _no_bkgsub(
         self, inim, outim, data=None, header=None, fov_valid=None, quality_mask=None, btype="none", **kwargs
@@ -571,7 +592,7 @@ class BackgroundMixin:
             # NaN, not 0: the pixel stays inside the geometric footprint for coverage_policy
             trail = (quality_mask & int(MaskBit.SATELLITE)) != 0
             _data[trail if fov_valid is None else (trail & fov_valid)] = np.nan
-        self.logger.debug(f"Using SKYVAL: {skyval:.3f}")
+        self.logger.debug(f"Constant sky {skyval:.3f} subtracted")
         self._record_background_residuals(
             _data, _hdr, kwargs.get("qa_mask"), kwargs.get("qa_coverage", fov_valid), quality_mask
         )
@@ -585,9 +606,10 @@ class BackgroundMixin:
         # from .bkg_step import step_background_check
 
         plan = self.plan
+        btype = kwargs.get("btype", "dynamic")
         _data, _hdr = self._read_frame(inim, data, header)
         try:
-            bkg = background_mesh(
+            mesh = background_mesh(
                 _data,
                 mask=exclude,
                 coverage_mask=None if fov_valid is None else ~fov_valid,
@@ -596,18 +618,21 @@ class BackgroundMixin:
                 exclude_percentile=plan.background_exclude_percentile,
                 logger=self.logger,
             )
-            bkg_data, bkg_rms_data = bkg.background, (bkg.background_rms if plan.output_sky_rms_map else None)
-            _hdr.update(mesh_peak_cards(mesh_peak(bkg)))
+            bkg_data, note = self._sky_model(mesh, btype, _data.shape)
+            bkg_rms_data = mesh.background_rms if plan.output_sky_rms_map else None
+            _hdr.update(mesh_peak_cards(mesh_peak(mesh)))
         except ValueError as e:
             # Background2D raises when every box is below the good-pixel threshold; sep used to return zeros
             if skyval is None:
                 raise
-            self.logger.warning(f"{get_basename(inim)}: no mesh box survived ({e}); constant background instead")
+            self.logger.warning(f"{get_basename(inim)}: no mesh model ({e}); constant background instead")
             if index is not None:
                 self.input_headers[index]["BACKTYPE"] = ("CONSTANT", "Background subtraction type")
             return self._const_bkgsub(inim, outim, skyval=skyval, data=_data, header=_hdr,
                                       fov_valid=fov_valid, quality_mask=quality_mask, qa_mask=kwargs.get("qa_mask"),
                                       qa_coverage=kwargs.get("qa_coverage", fov_valid))  # fmt: skip
+        if fov_valid is not None:
+            bkg_data[~fov_valid] = 0.0  # the model map and its plot stop at the footprint, as the zoomed mesh does
         if self.plan.output_sky_rms_map:
             fits.writeto(bkg_rms, bkg_rms_data, overwrite=True)
         del bkg_rms_data  # do not hold a second full frame past its write
@@ -620,7 +645,7 @@ class BackgroundMixin:
             os.path.splitext(get_basename(inim))[0],
             subtitle=f"box {plan.background_box_size} x filter {plan.background_filter_size}, "
             f"exclude_percentile {plan.background_exclude_percentile:g}%; "
-            f"median {np.median(inside):.2f}, peak to peak {np.ptp(inside):.2f} ADU/pixel",
+            f"median {np.median(inside):.2f}, peak to peak {np.ptp(inside):.2f} ADU/pixel{note}",
             header=_hdr,
             reprojected=self.plan.inputs_are_reprojected,
         )
@@ -638,7 +663,7 @@ class BackgroundMixin:
         #     else:
         #         self.logger.debug(f"Background is not steppy in {get_basename(outim)}: {info}")
 
-        _hdr["BACKTYPE"] = ("DYNAMIC", "Background subtraction type")
+        _hdr["BACKTYPE"] = (btype.upper(), "Background subtraction type")
         # _hdr["BKG_STEP"] = (is_steppy, "Background is step-like; likely quantization artifact")
         _data -= bkg_data
         if fov_valid is not None:
@@ -691,7 +716,7 @@ class BackgroundMixin:
         if skyval is None:
             skyval = header.get("SKYVAL")
         exclude = hole
-        if btype == "dynamic" and plan.source_mask:
+        if self._uses_mesh(btype) and plan.source_mask:
             if sources is None and catalog:
                 sources = source_mask_on_frame(catalog, header, self.logger)
             if sources is None:
@@ -699,8 +724,8 @@ class BackgroundMixin:
             else:
                 exclude = sources if hole is None else (sources | hole)
                 btype = self._crowding_fallback(name, single, exclude, None, btype, skyval)
-        model = None
-        if btype == "dynamic":
+        model, note = None, ""
+        if self._uses_mesh(btype):
             try:
                 # the frame as measured: a bad pixel would leak into its neighbours through the dequantizing kernel
                 source = data if hole is None or skyval is None else np.where(hole, np.float32(skyval), data)
@@ -715,11 +740,12 @@ class BackgroundMixin:
                     exclude_percentile=plan.background_exclude_percentile,
                     logger=self.logger,
                 )
-                model, peak = bkg.background, mesh_peak(bkg)
+                model, note = self._sky_model(bkg, btype, data.shape)
+                peak = mesh_peak(bkg)
             except ValueError as e:
                 if skyval is None:
                     raise
-                self.logger.warning(f"{name}: no mesh box survived ({e}); constant background instead")
+                self.logger.warning(f"{name}: no mesh model ({e}); constant background instead")
                 btype = "constant"
         if btype == "constant":
             model = skyval
@@ -730,7 +756,7 @@ class BackgroundMixin:
             "BKGMESH": (self._prereprojection_fingerprint(single), "Detector-grid sky fit: routine and mesh keys"),
             "BACKFRAC": (self._usable_fraction(exclude, None), "Fraction of pixels used for the sky estimate"),
         }
-        if btype == "dynamic":
+        if self._uses_mesh(btype):
             cards.update(mesh_peak_cards(peak))
         header.update(cards)
         self.input_headers[name].update(cards)
@@ -758,7 +784,7 @@ class BackgroundMixin:
                 subtitle=f"box {plan.background_box_size} x filter {plan.background_filter_size}, "
                 f"exclude_percentile {plan.background_exclude_percentile:g}%; fitted on the {'dequantized copy' if dequantized else 'frame'}; "
                 f"median {np.median(model):.2f}, peak to peak {np.ptp(model):.2f} ADU/pixel, "
-                f"largest node excursion {peak[0]:.2f} ADU ({peak[1]:.1f} sigma)",
+                f"largest node excursion {peak[0]:.2f} ADU ({peak[1]:.1f} sigma){note}",
                 header=header,
                 reprojected=False,
             )

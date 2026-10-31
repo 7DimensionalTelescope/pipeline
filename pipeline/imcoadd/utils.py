@@ -463,6 +463,44 @@ def mesh_peak_cards(peak) -> dict:
     }
 
 
+def polynomial_background(mesh: Background2D, degree: int, shape: tuple[int, int]) -> tuple[np.ndarray, int, float]:
+    """Sigma-clipped least-squares polynomial sky through the surviving mesh nodes."""
+    stats = mesh._bkg_stats  # pre-filter box statistics; released once background_mesh is read
+    if stats is None:
+        raise RuntimeError("Background2D released its box statistics: fit the surface before reading background_mesh")
+    box_y, box_x = (int(b) for b in np.atleast_1d(mesh.box_size))
+    nodes = np.asarray(stats, dtype=np.float64)
+    good = np.isfinite(nodes)
+    terms = [(i, j) for j in range(degree + 1) for i in range(degree + 1 - j)]
+    ny, nx = shape
+    rows, cols = np.nonzero(good)
+    u = (cols * box_x + np.minimum((cols + 1) * box_x, nx) - 1) / (nx - 1) - 1  # node centers on the [-1, 1] axes
+    v = (rows * box_y + np.minimum((rows + 1) * box_y, ny) - 1) / (ny - 1) - 1
+    design = np.column_stack([u**i * v**j for i, j in terms])
+    if np.linalg.matrix_rank(design) < len(terms):
+        raise ValueError(
+            f"{len(rows)} surviving mesh nodes cannot constrain a degree-{degree} surface of {len(terms)} terms"
+        )
+    values = nodes[good]
+    keep = np.ones(values.size, dtype=bool)
+    for _ in range(10):
+        fitted = keep
+        coef = np.linalg.lstsq(design[fitted], values[fitted], rcond=None)[0]
+        residual = values - design @ coef
+        scale = 1.4826 * np.median(np.abs(residual[fitted]))
+        clipped = np.abs(residual) <= 3 * scale
+        if scale == 0 or clipped.sum() < len(terms) or np.array_equal(clipped, fitted):
+            break
+        keep = clipped
+    matrix = np.zeros((degree + 1, degree + 1))
+    for c, (i, j) in zip(coef, terms):
+        matrix[j, i] = c
+    along_y = np.vander(np.linspace(-1, 1, ny), degree + 1, increasing=True).astype(np.float32)
+    along_x = np.vander(np.linspace(-1, 1, nx), degree + 1, increasing=True)
+    model = along_y @ (matrix @ along_x.T).astype(np.float32)
+    return model, int(fitted.sum()), float(np.std(residual[fitted]))
+
+
 def estimate_background(data, mask=None, coverage_mask=None, with_rms: bool = False, **mesh_options):
     """Full-resolution mesh background (+ RMS) for subtraction."""
     bkg = background_mesh(data, mask=mask, coverage_mask=coverage_mask, **mesh_options)
