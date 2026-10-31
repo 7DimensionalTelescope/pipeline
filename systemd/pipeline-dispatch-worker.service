@@ -13,6 +13,12 @@ Type=notify
 # Only the daemon gets SIGTERM; without this systemd kills every reduction in the cgroup at t=0,
 # which pre-empts the shutdown path below and makes a graceful drain impossible.
 KillMode=mixed
+# Page cache is charged to the cgroup that read the file, so MemoryHigh is what keeps a long batch's dead cache
+# from filling the host (reclaimed inside this service first); MemoryMax only ever bites on anonymous memory.
+MemoryAccounting=yes
+MemoryHigh=50%
+MemoryMax=90%
+NUMAPolicy=interleave
 User=@USER@
 Group=pipeline
 WorkingDirectory=@PIPELINE_ROOT@
