@@ -21,12 +21,15 @@ RESPONSE_TAG = "__SCHEDULER_RPC__"
 
 def _dispatch(scheduler, method, args):
     if method == "claim":
-        return scheduler.claim_next_dispatch_task(args["server"], config_types=args.get("config_types"))
+        return scheduler.claim_next_dispatch_task(
+            args["server"], config_types=args.get("config_types"), scratch_free_gb=args.get("scratch_free_gb")
+        )
     if method == "claim_many":
         return scheduler.claim_next_dispatch_tasks(
             args["server"],
             config_types=args.get("config_types"),
             count=args.get("count", 1),
+            scratch_free_gb=args.get("scratch_free_gb"),
         )
     if method == "set_pid":
         return scheduler.set_dispatch_pid(args["index"], args["server"], args["pid"])

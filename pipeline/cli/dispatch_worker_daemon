@@ -14,7 +14,9 @@ Environment:
   PROTON_SSH_PORT         ssh port (default 45204)
   PROTON_SCHEDULER_RPC    path to cli/scheduler_rpc on proton
   DISPATCH_SERVER_NAME    worker name stored in the origin dispatch column (default: hostname)
-  DISPATCH_CONFIG_TYPES   comma-separated config_type whitelist (default "science"; "any" for no limit)
+  DISPATCH_CONFIG_TYPES   comma-separated config_type whitelist (default "science"; "any" for no limit); listing
+                          multi-epoch opts in to multi-epoch coadd rows, and each claim then carries this host's free
+                          local scratch (services.utils.local_scratch_mounts)
   DISPATCH_MAX_WORKERS    parallel jobs (default 5)
   DISPATCH_POLL_INTERVAL  seconds between polls (default 5)
   DISPATCH_PREFETCH       extra tasks to claim ahead of a free slot (default 0 = never claim ahead)
@@ -54,10 +56,12 @@ from pipeline.const import (
     EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE,
     MAIN_HOST_ADDRESS,
     CONFIG_TYPE_CROSSFILTER,
+    CONFIG_TYPE_MULTI_EPOCH,
     CONFIG_TYPE_SCIENCE,
 )
 from pipeline.services.preflight import notify_ready, phot7ds_preflight
 from pipeline.services.scheduler import Scheduler
+from pipeline.services.utils import local_scratch_mounts
 
 DEFAULT_POLL_INTERVAL = 5.0
 DEFAULT_MAX_WORKERS = 5
@@ -100,11 +104,13 @@ class ProtonScheduler:
                 return response["result"]
         raise RuntimeError(f"scheduler_rpc {method}: no response (rc={proc.returncode}) {proc.stderr.strip()[:300]}")
 
-    def claim(self, server, config_types):
-        return self._call("claim", server=server, config_types=config_types)
+    def claim(self, server, config_types, scratch_free_gb=None):
+        return self._call("claim", server=server, config_types=config_types, scratch_free_gb=scratch_free_gb)
 
-    def claim_many(self, server, config_types, count):
-        return self._call("claim_many", server=server, config_types=config_types, count=count)
+    def claim_many(self, server, config_types, count, scratch_free_gb=None):
+        return self._call(
+            "claim_many", server=server, config_types=config_types, count=count, scratch_free_gb=scratch_free_gb
+        )
 
     def set_pid(self, index, server, pid):
         return self._call("set_pid", index=index, server=server, pid=pid)
@@ -188,7 +194,12 @@ class DispatchWorker:
         if len(tasks) < free:
             try:
                 want = free - len(tasks) + self.prefetch
-                tasks += self.scheduler.claim_many(self.server_name, self.config_types, want) or []
+                tasks += (
+                    self.scheduler.claim_many(
+                        self.server_name, self.config_types, want, scratch_free_gb=self._scratch_free_gb()
+                    )
+                    or []
+                )
             except Exception:
                 self._pending = tasks
                 raise
@@ -201,6 +212,12 @@ class DispatchWorker:
         finally:
             self._pending = tasks  # anything unstarted stays claimed; released on drain or shutdown
         return started
+
+    def _scratch_free_gb(self):
+        """Largest local scratch free GB if multi-epoch is whitelisted, else None."""
+        if self.config_types is not None and CONFIG_TYPE_MULTI_EPOCH not in self.config_types:
+            return None
+        return max((free for _root, free in local_scratch_mounts()), default=0) / 1e9
 
     def _release_pending(self):
         """Hand back claims that were prefetched but never started, so they do not sit Processing."""

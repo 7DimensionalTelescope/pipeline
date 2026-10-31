@@ -550,12 +550,12 @@ def census_from_raw(
     )
     census = census.sort_values(["object", "nightdate", "filter", "obstime"], ignore_index=True)
 
-    # a process is done when its config reached the process's progress end with no error recorded
+    # a process is done when its config reached the process's progress end; config_errors stays a column of its own
     crossfilter = [spec for spec in CROSSFILTERPROCESS_REGISTRY.specs if spec.name in DEFAULT_CROSSFILTER_PROCESSES]
     for spec in SCIPROCESS_REGISTRY.specs:
-        census[spec.name] = census.config_progress.ge(spec.progress_end) & census.config_errors.isna()
+        census[spec.name] = census.config_progress.ge(spec.progress_end)
     for spec in crossfilter:
-        census[spec.name] = census.crossfilter_progress.ge(spec.progress_end) & census.crossfilter_errors.isna()
+        census[spec.name] = census.crossfilter_progress.ge(spec.progress_end)
     flags = [spec.name for spec in SCIPROCESS_REGISTRY.specs] + [spec.name for spec in crossfilter]
     return census[identity + config + flags + image_qa + coadd + white]
 

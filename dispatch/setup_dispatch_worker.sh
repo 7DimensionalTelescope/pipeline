@@ -21,6 +21,7 @@ SERVER_NAME="${SERVER_NAME:-$(env_get DISPATCH_SERVER_NAME)}"; SERVER_NAME="${SE
 MAX_WORKERS="${MAX_WORKERS:-$(env_get DISPATCH_MAX_WORKERS)}"; MAX_WORKERS="${MAX_WORKERS:-6}"
 POLL_INTERVAL="${POLL_INTERVAL:-$(env_get DISPATCH_POLL_INTERVAL)}"; POLL_INTERVAL="${POLL_INTERVAL:-5}"
 # Narrow while a worker is new; no stage needs a GPU, so "any" is safe when you want it.
+# Add multi-epoch to take multi-epoch coadd rows; each claim then carries this host's free local scratch.
 CONFIG_TYPES="${CONFIG_TYPES:-$(env_get DISPATCH_CONFIG_TYPES)}"; CONFIG_TYPES="${CONFIG_TYPES:-science}"
 
 NFSOPT="rw,noatime,nodiratime,vers=4.1,rsize=1048576,wsize=1048576,hard,proto=tcp,timeo=600,_netdev 0 0"

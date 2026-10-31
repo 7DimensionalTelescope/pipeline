@@ -1,3 +1,4 @@
+import functools
 import json
 import sqlite3
 import socket
@@ -12,6 +13,7 @@ from astropy.table import Table, vstack
 
 from ..const import (
     SCRIPTS_DIR,
+    REF_DIR,
     MAIN_HOST,
     SCHEDULER_DB_PATH,
     QUEUE_SOCKET_PATH,
@@ -20,6 +22,7 @@ from ..const import (
     CONFIG_TYPE_SCIENCE,
     CONFIG_TYPE_CROSSFILTER,
     CONFIG_TYPE_DEBUG,
+    CONFIG_TYPE_MULTI_EPOCH,
     INPUT_TYPE_TOO,
     INPUT_TYPE_REPROCESS,
     INPUT_TYPE_USER,
@@ -94,9 +97,11 @@ class Scheduler:
     # Constants
     DEFAULT_MAX_PREPROCESS = 3
     DEFAULT_FALLBACK_EVERY = 10
+    DEFAULT_MAX_MULTI_EPOCH = 1
     # Counts Processing preprocess rows across EVERY host, so it is an origin-side gate:
     # set QUEUE_MAX_PREPROCESS in the origin's .env, where the claim actually runs.
     MAX_PREPROCESS = int(os.environ.get("QUEUE_MAX_PREPROCESS") or DEFAULT_MAX_PREPROCESS)
+    MAX_MULTI_EPOCH = int(os.environ.get("QUEUE_MAX_MULTI_EPOCH") or DEFAULT_MAX_MULTI_EPOCH)
     # Every Nth origin claim looks at other hosts' rows first, so a down worker's rows are not stranded.
     FALLBACK_EVERY = int(os.environ.get("QUEUE_FALLBACK_EVERY") or DEFAULT_FALLBACK_EVERY)
     HIGH_PRIORITY_THRESHOLD = 10
@@ -165,9 +170,10 @@ class Scheduler:
         crossfilter_processes=None,
         extra_kwargs=None,
         link_crossfilter=True,
+        dispatch=None,
         **kwargs,
     ):
-        """Create a scheduler from a list of configs. `extra_kwargs`: plain flags appended to every task's command line; never JSON (the kwargs round-trip mangles quotes). `link_crossfilter`: a crossfilter config waits for the science configs of its target-night (same object and nightdate by name) that are in the same list."""
+        """Scheduler from config paths; extra_kwargs plain flags, never JSON; link_crossfilter; dispatch owner host."""
         import copy
         from ..path.name import NameHandler
 
@@ -180,18 +186,25 @@ class Scheduler:
                 print(f"Warning: Config file {config} does not exist")
                 continue
 
-            task_type = NameHandler(config).config_properties["config_type"]
+            properties = NameHandler(config).config_properties
+            task_type = properties["config_type"]
+            if task_type == CONFIG_TYPE_SCIENCE and properties["nightdate"] is None:
+                task_type = CONFIG_TYPE_MULTI_EPOCH
             priority = base_priority + 1 if task_type == CONFIG_TYPE_PREPROCESS else base_priority
 
             if task_type == CONFIG_TYPE_PREPROCESS:
                 scheduler_kwargs = ["-overwrite"] if (overwrite or overwrite_data or overwrite_preprocess) else []
-            elif task_type == CONFIG_TYPE_SCIENCE:
+            elif task_type in (CONFIG_TYPE_SCIENCE, CONFIG_TYPE_MULTI_EPOCH):
                 scheduler_kwargs = ["-processes"] + list(processes) if processes is not None else []
                 if overwrite or overwrite_data or overwrite_science:
                     scheduler_kwargs.append("-overwrite")
                 if overwrite_config_sections:
                     scheduler_kwargs += ["-overwrite_config_sections"] + list(overwrite_config_sections)
             elif task_type == CONFIG_TYPE_CROSSFILTER:
+                if dispatch:
+                    raise ValueError(
+                        f"from_list(dispatch={dispatch!r}) pins ungrouped rows only; {config} is crossfilter"
+                    )
                 scheduler_kwargs = (
                     ["-processes"] + list(crossfilter_processes) if crossfilter_processes is not None else []
                 )
@@ -215,7 +228,7 @@ class Scheduler:
                     TASK_STATUS_READY,
                     [],
                     0,
-                    "",
+                    dispatch or "",
                     scheduler_kwargs,
                     "",
                     "",
@@ -255,7 +268,7 @@ class Scheduler:
         position = {int(row["index"]): i for i, row in enumerate(table)}
         science = {}
         for row, prop in zip(table, props):
-            if str(row["config_type"]) == CONFIG_TYPE_SCIENCE:
+            if str(row["config_type"]) in (CONFIG_TYPE_SCIENCE, CONFIG_TYPE_MULTI_EPOCH):
                 science.setdefault((prop["object"], prop["nightdate"]), []).append(int(row["index"]))
         for i, (row, prop) in enumerate(zip(table, props)):
             if str(row["config_type"]) != CONFIG_TYPE_CROSSFILTER:
@@ -299,7 +312,9 @@ class Scheduler:
                     process_end TEXT,
                     group_idx INTEGER,
                     stash TEXT,
-                    stashed_from TEXT
+                    stashed_from TEXT,
+                    disk TEXT,
+                    stage_gb REAL
                 )
             """
             )
@@ -315,6 +330,8 @@ class Scheduler:
                     cursor.execute("ALTER TABLE scheduler ADD COLUMN dispatch TEXT")
             if "group_idx" not in columns:
                 self._add_group_idx(conn)
+            if "disk" not in columns:
+                self._add_disk_columns(conn)
             for column in ("stash", "stashed_from"):
                 if column not in columns:
                     try:
@@ -402,6 +419,26 @@ class Scheduler:
             if "duplicate column" not in str(e):  # lost the race to another first caller
                 raise
 
+    def _add_disk_columns(self, conn):
+        """One-time migration: config_type, disk, stage_gb for every row."""
+        cursor = conn.cursor()
+        query = 'SELECT "index", config, config_type FROM scheduler'
+        derived = self._derive_rows(cursor.execute(query).fetchall())
+        cursor.execute("BEGIN IMMEDIATE")
+        try:
+            cursor.execute("PRAGMA table_info(scheduler)")
+            if "disk" in [row[1] for row in cursor.fetchall()]:
+                conn.rollback()
+                return
+            cursor.execute("ALTER TABLE scheduler ADD COLUMN disk TEXT")
+            cursor.execute("ALTER TABLE scheduler ADD COLUMN stage_gb REAL")
+            self._write_derived(cursor, cursor.execute(query).fetchall(), derived)
+            conn.commit()
+        except sqlite3.OperationalError as e:
+            conn.rollback()
+            if "duplicate column" not in str(e):  # lost the race to another first caller
+                raise
+
     @staticmethod
     def _group_index(index, config_type, dependent_idx, config_types):
         """Crossfilter row -> its own index; science row -> its crossfilter child's index; anything else -> None."""
@@ -414,13 +451,102 @@ class Scheduler:
                 return int(child)
         return None
 
+    @classmethod
+    def _derive_rows(cls, rows, derived=None):
+        """{("index", config): (config_type, disk, stage_gb)}; rows already in `derived` reused."""
+        derived = dict(derived or {})
+        missing = [row for row in rows if (row[0], row[1]) not in derived]
+        columns = cls._derive_columns([row[1] for row in missing], [row[2] for row in missing])
+        derived.update(zip([(row[0], row[1]) for row in missing], columns))
+        return derived
+
+    def _write_derived(self, cursor, rows, derived):
+        """UPDATE config_type, disk, stage_gb keyed on ("index", config)."""
+        derived = self._derive_rows(rows, derived)
+        cursor.executemany(
+            'UPDATE scheduler SET config_type = ?, disk = ?, stage_gb = ? WHERE "index" = ? AND config = ?',
+            [(*derived[(row[0], row[1])], row[0], row[1]) for row in rows],
+        )
+
+    @classmethod
+    def _derive_columns(cls, configs, config_types):
+        """(config_type, disk, stage_gb) per row; dateless science -> multi-epoch."""
+        from ..path.name import NameHandler
+
+        config_types = [str(config_type) for config_type in config_types]
+        science = [i for i, config_type in enumerate(config_types) if config_type == CONFIG_TYPE_SCIENCE]
+        names = [str(configs[i]) for i in science]
+        try:
+            properties = NameHandler(names).config_properties if names else []
+        except ValueError:  # one unparsable name fails the batch; such a row keeps its type
+            properties = []
+            for name in names:
+                try:
+                    properties.append(NameHandler(name).config_properties)
+                except ValueError:
+                    properties.append({})
+        properties = [properties] if isinstance(properties, dict) else properties
+        for i, prop in zip(science, properties):
+            if prop.get("config_type") == CONFIG_TYPE_SCIENCE and prop.get("nightdate") is None:
+                config_types[i] = CONFIG_TYPE_MULTI_EPOCH
+        derived = []
+        for config, config_type in zip(configs, config_types):
+            if config_type == CONFIG_TYPE_MULTI_EPOCH:
+                derived.append((config_type, *cls._multi_epoch_columns(config)))
+            else:
+                derived.append((config_type, cls._disk(config), None))
+        return derived
+
+    @staticmethod
+    def _disk(path):
+        """Storage root a path lies on: its first two components (/lyman/data2)."""
+        return os.sep.join(os.path.abspath(str(path)).split(os.sep)[:3])
+
+    @classmethod
+    def _multi_epoch_columns(cls, config):
+        """(disk, stage_gb): PathHandler's factory root; inputs x 2 resampled planes x SWarp grid."""
+        from ..config.base import BaseConfig
+        from ..path import PathHandler
+
+        try:
+            node = BaseConfig.read_config(str(config))
+            images = node["input"]["calibrated_images"] or []
+            images = [images] if isinstance(images, str) else list(images)
+            settings = node.get("settings") or {}
+            path = PathHandler(
+                images[:1],
+                is_pipeline=settings.get("is_pipeline", False),
+                is_multi_epoch=settings.get("is_multi_epoch", False),
+                factory_scratch=settings.get("factory_scratch"),
+                config_file=str(config),
+            )
+            factory = path._factory_dir[0]  # the private attribute: reading the public one creates the directory
+        except Exception:
+            return cls._disk(config), None
+        # upper bound: every input on the full SWarp grid; the stage copies only selected frames, each on its footprint
+        return cls._disk(factory), len(images) * 2 * cls._swarp_grid_bytes() / 1e9
+
+    @staticmethod
+    @functools.cache
+    def _swarp_grid_bytes():
+        """NAXIS1 x NAXIS2 x 4 from IMAGE_SIZE of ref/7dt.swarp."""
+        with open(os.path.join(REF_DIR, "7dt.swarp")) as fp:
+            for line in fp:
+                tokens = line.split("#", 1)[0].split()
+                if tokens and tokens[0] == "IMAGE_SIZE":
+                    nx, ny = tokens[1].split(",")
+                    return int(nx) * int(ny) * 4
+        raise ValueError("IMAGE_SIZE not found in ref/7dt.swarp")
+
     def _repair_group_idx(self, conn):
-        """Derive group_idx for rows an older code path inserted without it: everything above the user_version watermark."""
+        """group_idx, config_type, disk, stage_gb for rows older code inserted above the user_version watermark."""
         cursor = conn.cursor()
         watermark = cursor.execute("PRAGMA user_version").fetchone()[0]
         top = cursor.execute('SELECT COALESCE(MAX("index"), 0) FROM scheduler').fetchone()[0]
         if top <= watermark:
             return
+        stale = 'SELECT "index", config, config_type FROM scheduler WHERE "index" > ? AND "index" <= ? AND disk IS NULL'
+        derived = self._derive_rows(cursor.execute(stale, (watermark, top)).fetchall())
         cursor.execute("BEGIN IMMEDIATE")
         cursor.execute(
             'SELECT "index", config_type, dependent_idx, group_idx FROM scheduler WHERE "index" > ?', (watermark,)
@@ -433,6 +559,7 @@ class Scheduler:
             if group is not None:
                 updates.append((group, index))
         cursor.executemany('UPDATE scheduler SET group_idx = ? WHERE "index" = ?', updates)
+        self._write_derived(cursor, cursor.execute(stale, (watermark, top)).fetchall(), derived)
         cursor.execute(f"PRAGMA user_version = {int(top)}")
         conn.commit()
 
@@ -518,14 +645,22 @@ class Scheduler:
         return Table(data, dtype=self._empty_schedule.dtype)
 
     def _append_ready_task_constraints(self, cursor, query, params):
-        """Append concurrency filters shared by local and dispatched Ready-task selection."""
-        cursor.execute(
-            "SELECT COUNT(*) FROM scheduler WHERE status = ? AND config_type = ?",
-            (TASK_STATUS_PROCESSING, CONFIG_TYPE_PREPROCESS),
-        )
-        if cursor.fetchone()[0] >= self.MAX_PREPROCESS:
-            query += " AND config_type != ?"
-            params.append(CONFIG_TYPE_PREPROCESS)
+        """Shared Ready-task filters: per-disk preprocess and multi-epoch caps, the priority and ToO gates."""
+        for config_type, cap in (
+            (CONFIG_TYPE_PREPROCESS, self.MAX_PREPROCESS),
+            (CONFIG_TYPE_MULTI_EPOCH, self.MAX_MULTI_EPOCH),
+        ):
+            if cap <= 0:
+                query += " AND config_type != ?"
+                params.append(config_type)
+                continue
+            cursor.execute(
+                "SELECT disk FROM scheduler WHERE status = ? AND config_type = ? GROUP BY disk HAVING COUNT(*) >= ?",
+                (TASK_STATUS_PROCESSING, config_type, cap),
+            )
+            for (disk,) in cursor.fetchall():
+                query += " AND NOT (config_type = ? AND disk IS ?)"
+                params.extend((config_type, disk))
 
         cursor.execute(
             "SELECT COUNT(*) FROM scheduler WHERE status = ? AND priority > ?",
@@ -590,15 +725,31 @@ class Scheduler:
 
     def reload_settings(self):
         """Re-read the .env-backed claim gates onto this instance (the queue daemon's SIGHUP); returns old -> new."""
-        changes = {}
-        for name, variable, default in (
-            ("MAX_PREPROCESS", "QUEUE_MAX_PREPROCESS", self.DEFAULT_MAX_PREPROCESS),
-            ("FALLBACK_EVERY", "QUEUE_FALLBACK_EVERY", self.DEFAULT_FALLBACK_EVERY),
-        ):
-            value = int(os.environ.get(variable) or default)
-            changes[name] = (getattr(self, name), value)
+        values = {
+            name: int(os.environ.get(variable) or default)
+            for name, variable, default in (
+                ("MAX_PREPROCESS", "QUEUE_MAX_PREPROCESS", self.DEFAULT_MAX_PREPROCESS),
+                ("FALLBACK_EVERY", "QUEUE_FALLBACK_EVERY", self.DEFAULT_FALLBACK_EVERY),
+                ("MAX_MULTI_EPOCH", "QUEUE_MAX_MULTI_EPOCH", self.DEFAULT_MAX_MULTI_EPOCH),
+            )
+        }
+        changes = {name: (getattr(self, name), value) for name, value in values.items()}
+        for name, value in values.items():
             setattr(self, name, value)
         return changes
+
+    def _scratch_bound(self, cursor, host, scratch_free_gb):
+        """Multi-epoch claim bound: stage_gb vs host's free scratch less its running stage_gb."""
+        if scratch_free_gb is None:
+            return "", ()
+        cursor.execute(
+            f"SELECT COALESCE(SUM(stage_gb), 0) FROM scheduler WHERE status = ? AND config_type = ? "
+            f"AND {self._AFFINITY_FILTER}",
+            (TASK_STATUS_PROCESSING, CONFIG_TYPE_MULTI_EPOCH, host),
+        )
+        budget = float(scratch_free_gb) - cursor.fetchone()[0]
+        # 1.1: coadd_scratch auto (ImCoadd._pick_coadd_scratch) stages only when free > 1.1 x the bytes
+        return " AND (stage_gb IS NULL OR stage_gb * 1.1 <= ?)", (budget,)
 
     def _claim_group(self, cursor, index, host):
         """Stamp the claimed row's crossfilter group with `host`: every unclaimed row not running elsewhere; no-op if ungrouped."""
@@ -637,6 +788,8 @@ class Scheduler:
         for row in table:
             source_stem = self._config_stem(row["config"])
             source_type = str(row["config_type"])
+            if source_type == CONFIG_TYPE_MULTI_EPOCH:  # process_status_dependency keeps NameHandler's 'science'
+                source_type = CONFIG_TYPE_SCIENCE
             dependents = row["dependent_idx"] if row["dependent_idx"] is not None else []
             for child_idx in dependents:
                 derived_stem = idx_to_stem.get(int(child_idx))
@@ -820,13 +973,13 @@ class Scheduler:
                 return cursor.fetchone()[0] > 0
         return len(self.schedule[self.schedule["status"] != TASK_STATUS_COMPLETED]) > 0
 
-    def get_next_task(self):
-        """Get the next task to process with priority and concurrency constraints."""
+    def get_next_task(self, scratch_free_gb=None):
+        """Get the next task to process with priority and concurrency constraints; scratch_free_gb bound."""
         if not self.has_schedule:
             return None
 
         if self.use_system_queue:
-            row, cmd = self._get_next_task_db()
+            row, cmd = self._get_next_task_db(scratch_free_gb)
             if row is None:
                 import subprocess, time
 
@@ -839,19 +992,22 @@ class Scheduler:
         else:
             return self._get_next_task_memory()
 
-    def _get_next_task_db(self):
+    def _get_next_task_db(self, scratch_free_gb=None):
         """Get next task from database."""
         with self._db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("BEGIN IMMEDIATE")
             try:
+                extra_sql, extra_params = self._scratch_bound(cursor, self._LOCAL_DISPATCH, scratch_free_gb)
                 # A fallback turn must name other hosts explicitly; the unclaimed pool would just re-pick a local one.
-                tiers = self._claim_tiers(cursor, self._LOCAL_DISPATCH)
+                tiers = self._claim_tiers(cursor, self._LOCAL_DISPATCH, extra_sql, extra_params)
                 if self._take_foreign_turn():
                     tiers = (self._FOREIGN,) + tiers
                 task_index = None
                 for affinity in tiers:
-                    task_index = self._select_ready_index(cursor, affinity, self._LOCAL_DISPATCH)
+                    task_index = self._select_ready_index(
+                        cursor, affinity, self._LOCAL_DISPATCH, extra_sql, extra_params
+                    )
                     if task_index is not None:
                         break
                 if task_index is None:
@@ -1229,7 +1385,7 @@ class Scheduler:
         extra_sql = f" AND config_type IN ({','.join('?' for _ in config_types)})"
         return extra_sql, tuple(config_types), CONFIG_TYPE_CROSSFILTER in config_types
 
-    def claim_next_dispatch_task(self, server_name, config_types=None):
+    def claim_next_dispatch_task(self, server_name, config_types=None, scratch_free_gb=None):
         """
         Claim one Ready task for a worker host.
 
@@ -1254,6 +1410,8 @@ class Scheduler:
             cursor.execute("BEGIN IMMEDIATE")
             try:
                 extra_sql, extra_params, enter_groups = self._worker_claim_filter(config_types)
+                bound_sql, bound_params = self._scratch_bound(cursor, server_name, scratch_free_gb)
+                extra_sql, extra_params = extra_sql + bound_sql, extra_params + bound_params
                 task_index = None
                 for affinity in self._claim_tiers(cursor, server_name, extra_sql, extra_params, enter_groups):
                     task_index = self._select_ready_index(
@@ -1288,7 +1446,7 @@ class Scheduler:
 
         return self._row_to_dict(row) if row else None
 
-    def claim_next_dispatch_tasks(self, server_name, config_types=None, count=1):
+    def claim_next_dispatch_tasks(self, server_name, config_types=None, count=1, scratch_free_gb=None):
         """Claim up to `count` Ready tasks for a worker host in ONE transaction; same gates as the single claim."""
         if not self.use_system_queue:
             raise RuntimeError("claim_next_dispatch_tasks requires use_system_queue=True")
@@ -1305,8 +1463,10 @@ class Scheduler:
             cursor = conn.cursor()
             cursor.execute("BEGIN IMMEDIATE")
             try:
-                extra_sql, extra_params, enter_groups = self._worker_claim_filter(config_types)
+                filter_sql, filter_params, enter_groups = self._worker_claim_filter(config_types)
                 while len(claimed) < count:
+                    bound_sql, bound_params = self._scratch_bound(cursor, server_name, scratch_free_gb)
+                    extra_sql, extra_params = filter_sql + bound_sql, filter_params + bound_params
                     task_index = None
                     for affinity in self._claim_tiers(cursor, server_name, extra_sql, extra_params, enter_groups):
                         task_index = self._select_ready_index(
@@ -1636,7 +1796,7 @@ class Scheduler:
 
         if config_type == CONFIG_TYPE_PREPROCESS:
             cmd = [f"{SCRIPTS_DIR}/preprocess", "-config", config, "-make_plots"]
-        elif config_type == CONFIG_TYPE_SCIENCE:
+        elif config_type in (CONFIG_TYPE_SCIENCE, CONFIG_TYPE_MULTI_EPOCH):
             cmd = [f"{SCRIPTS_DIR}/data_reduction", "-config", config]
         elif config_type == CONFIG_TYPE_CROSSFILTER:
             cmd = [f"{SCRIPTS_DIR}/crossfilter", "-config", config]
@@ -1666,8 +1826,11 @@ class Scheduler:
             print("Warning: Attempted to save empty schedule to database")
             return
 
+        # before the write lock: a multi-epoch row reads its yml
+        derived = dict(zip(map(str, table["config"]), self._derive_columns(table["config"], table["config_type"])))
         with self._db_connection() as conn:
             cursor = conn.cursor()
+            cursor.execute("BEGIN IMMEDIATE")
 
             # Check if there's existing data
             cursor.execute("SELECT COUNT(*) FROM scheduler")
@@ -1675,10 +1838,10 @@ class Scheduler:
 
             if existing_count > 0:
                 # Load existing table to get max index and existing configs
-                existing_table = self._get_table_from_db()
+                existing_table = cursor.execute('SELECT "index", config FROM scheduler').fetchall()
 
                 # Get set of existing configs to filter duplicates
-                existing_configs = set(existing_table["config"])
+                existing_configs = {row["config"] for row in existing_table}
 
                 # Filter out rows with duplicate configs
                 overwrite_schedule = self.overwrite_schedule
@@ -1709,12 +1872,10 @@ class Scheduler:
                             ),
                             duplicate_configs,
                         )
-                        conn.commit()
 
                         # Update existing_table to reflect deleted rows for index calculation
-                        existing_table = existing_table[
-                            [config not in duplicate_configs for config in existing_table["config"]]
-                        ]
+                        dropped = set(duplicate_configs)
+                        existing_table = [row for row in existing_table if row["config"] not in dropped]
 
                         get_high_level_task_logger(__name__).info(
                             "Replaced %d existing schedule(s) with new ones", len(duplicate_configs)
@@ -1735,7 +1896,7 @@ class Scheduler:
 
                 # Adjust indices in filtered table to avoid conflicts
                 if len(existing_table) > 0 and len(filtered_table) > 0:
-                    max_existing_idx = max(existing_table["index"])
+                    max_existing_idx = max(row["index"] for row in existing_table)
                     offset = max_existing_idx + 1
 
                     # Adjust indices
@@ -1768,6 +1929,7 @@ class Scheduler:
 
             config_types = {int(row["index"]): str(row["config_type"]) for row in table_to_insert}
             for row in table_to_insert:
+                config_type, disk, stage_gb = derived[str(row["config"])]
                 try:
                     # Convert dependent_idx to list of Python ints (handle numpy int64)
                     dependent_idx = row["dependent_idx"] if row["dependent_idx"] else []
@@ -1785,12 +1947,13 @@ class Scheduler:
 
                     cursor.execute(
                         """INSERT INTO scheduler 
-                           ("index", config, config_type, input_type, is_ready, priority, readiness, status, dependent_idx, pid, dispatch, kwargs, process_start, process_end, group_idx)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           ("index", config, config_type, input_type, is_ready, priority, readiness, status,
+                            dependent_idx, pid, dispatch, kwargs, process_start, process_end, group_idx, disk, stage_gb)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             int(row["index"]),
                             str(row["config"]),
-                            str(row["config_type"]),
+                            config_type,
                             str(row["input_type"]),
                             1 if row["is_ready"] else 0,
                             int(row["priority"]),
@@ -1803,6 +1966,8 @@ class Scheduler:
                             str(process_start) if process_start is not None else None,
                             str(process_end) if process_end is not None else None,
                             group_idx,
+                            disk,
+                            stage_gb,
                         ),
                     )
                 except Exception as e:

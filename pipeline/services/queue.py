@@ -21,6 +21,7 @@ from ..const.run import (
 from .memory import MemoryMonitor
 from .logger import Logger, log_orchestration_stop
 from .scheduler import Scheduler
+from .utils import local_scratch_mounts
 
 signal.signal(signal.SIGINT, signal.SIG_IGN)
 mp.set_start_method("spawn", force=True)
@@ -375,7 +376,9 @@ class QueueManager:
                     continue
                 else:
                     # Get next task and mark as Processing atomically within lock
-                    task, cmd = self.scheduler.get_next_task()
+                    task, cmd = self.scheduler.get_next_task(
+                        scratch_free_gb=max((free for _root, free in local_scratch_mounts()), default=0) / 1e9
+                    )
                     self.logger.debug(f"Task: {task}")
                     self.logger.debug(f"Command: {cmd}")
 
@@ -824,12 +827,12 @@ class QueueManager:
             max_workers = int(os.environ.get("QUEUE_MAX_WORKERS") or DEFAULT_MAX_WORKERS)
             if max_workers < 0:
                 raise ValueError("QUEUE_MAX_WORKERS must be >= 0")
+            gates = self.scheduler.reload_settings() if self.scheduler is not None else {}
         except (TypeError, ValueError) as e:
             self.logger.error(f"Queue reload rejected; retaining current settings: {e}")
             return
         old = self.total_cpu_worker
         self.total_cpu_worker = max_workers
-        gates = self.scheduler.reload_settings() if self.scheduler is not None else {}
         self.logger.info(
             f"Queue reload applied: max_workers {old} -> {max_workers}"
             + "".join(f", {name} {before} -> {after}" for name, (before, after) in gates.items())

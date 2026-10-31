@@ -6,9 +6,10 @@ import numpy as np
 from typing import TYPE_CHECKING
 
 from ..config.utils import get_key
-from ..const import REF_DIR
+from ..const import LOCAL_FSTYPES, REF_DIR
 from ..path.path import PathHandler
 from ..services.logger import Logger
+from ..services.utils import local_scratch_mounts
 from ..utils import add_suffix, atleast_1d, collapse, get_basename, time_diff_in_seconds
 from .calc import clipped_mean_coadd_numpy, mean_coadd_numpy, median_coadd_numpy, wait_deferred_writes
 from .coadd_plan import CoaddPlan, resolve_coadd_plan
@@ -38,17 +39,6 @@ class ReprojectFirstCoaddMixin:
     delta_peeings: list[float | None]
     _coadd_completed: bool
     _coadd_counts: CoaddCounts
-
-    _LOCAL_FSTYPES = {
-        "ext2",
-        "ext3",
-        "ext4",
-        "xfs",
-        "btrfs",
-        "zfs",
-        "f2fs",
-        "reiserfs",
-    }
 
     def reproject_first_coadd_routine(self):
         """Reproject with SWarp unless the inputs already share a grid, then coadd in memory."""
@@ -156,34 +146,13 @@ class ReprojectFirstCoaddMixin:
         if n_frames < int(self.plan.combine_lock_threshold):
             return None
         src_mnt, src_fstype = self._fstype_of(os.path.dirname(files[0][1]))
-        if src_fstype in self._LOCAL_FSTYPES:
+        if src_fstype in LOCAL_FSTYPES:
             self.logger.debug(f"coadd_scratch auto: inputs already local on {src_mnt} ({src_fstype})")
             return None
 
         need = sum(os.path.getsize(f) for _g, f in files if os.path.exists(f)) * 1.1
         best = None
-        seen_dev = set()
-        try:
-            with open("/proc/mounts") as fp:
-                entries = [ln.split()[:3] for ln in fp if len(ln.split()) >= 3]
-        except OSError:
-            return None
-        for _dev, mnt, fstype in entries:
-            # never the system disk, never a home directory: /home is often the same
-            # physical disk as a scratch mount anyway, and filling either is an outage
-            if fstype not in self._LOCAL_FSTYPES or mnt == "/" or mnt.startswith(("/home", "/root", "/boot")):
-                continue
-            try:
-                dev = os.stat(mnt).st_dev  # one entry per physical filesystem, not per mount
-                if dev in seen_dev:
-                    continue
-                seen_dev.add(dev)
-                root = os.path.join(mnt, "pipeline_coadd_scratch")
-                os.makedirs(root, exist_ok=True)
-                free = shutil.disk_usage(mnt).free
-            except OSError as e:
-                self.logger.debug(f"coadd_scratch auto: {mnt} ({fstype}) unusable -- {e}")
-                continue
+        for root, free in local_scratch_mounts(self.logger):
             if free > need and (best is None or free > best[1]):
                 best = (root, free)
         if best is None:

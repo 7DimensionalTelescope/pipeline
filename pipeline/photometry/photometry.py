@@ -118,7 +118,10 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         if photometry_mode is not None:
             self._process_spec = self._process_registry.get(photometry_mode)
-        elif not self.config_node.flag.single_photometry:
+        elif not self.config_node.flag.single_photometry and not get_key(
+            self.config_node.settings, "is_multi_epoch", False
+        ):
+            # a multi-epoch config's chain starts at coadd: its singles were photometered under their nightly configs
             self._process_spec = SINGLE_PHOTOMETRY_SPEC
         elif not self.config_node.flag.coadd_photometry:
             self._process_spec = COADD_PHOTOMETRY_SPEC

@@ -13,12 +13,13 @@ import fcntl
 from contextlib import contextmanager
 import pynvml
 import os
+import shutil
 from collections import UserDict
 from itertools import chain
 
 import ctypes
 
-from ..const import DISCOVERY_RAW_INVENTORY, GPU_DEVICES, SERVICES_TMP_DIR
+from ..const import DISCOVERY_RAW_INVENTORY, GPU_DEVICES, LOCAL_FSTYPES, SERVICES_TMP_DIR
 from ..utils import collapse
 
 
@@ -400,6 +401,36 @@ def conservative_worker_count(n_tasks: int, cap: int = 4) -> int:
         load = 0.0
     idle = max(1.0, cpu - load)
     return max(1, min(cap, int(idle // 2), n_tasks))
+
+
+def local_scratch_mounts(logger=None) -> list[tuple[str, int]]:
+    """(staging root, free bytes) per local filesystem; _pick_coadd_scratch mount rules."""
+    try:
+        with open("/proc/mounts") as fp:
+            entries = [ln.split()[:3] for ln in fp if len(ln.split()) >= 3]
+    except OSError:
+        return []
+    mounts = []
+    seen_dev = set()
+    for _dev, mnt, fstype in entries:
+        # never the system disk, never a home directory: /home is often the same
+        # physical disk as a scratch mount anyway, and filling either is an outage
+        if fstype not in LOCAL_FSTYPES or mnt == "/" or mnt.startswith(("/home", "/root", "/boot")):
+            continue
+        try:
+            dev = os.stat(mnt).st_dev  # one entry per physical filesystem, not per mount
+            if dev in seen_dev:
+                continue
+            seen_dev.add(dev)
+            root = os.path.join(mnt, "pipeline_coadd_scratch")
+            os.makedirs(root, exist_ok=True)
+            free = shutil.disk_usage(mnt).free
+        except OSError as e:
+            if logger is not None:
+                logger.debug(f"coadd_scratch auto: {mnt} ({fstype}) unusable -- {e}")
+            continue
+        mounts.append((root, free))
+    return mounts
 
 
 # ---------------------------------------------------------------------------------------------------------------------

@@ -29,9 +29,9 @@ which metrics it is looking at.
 """
 
 import json
-import math
 import os
 import sys
+import textwrap
 import time
 from typing import Literal
 
@@ -391,6 +391,9 @@ def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_p
     axis drawn and would otherwise look cut for no reason.
     """
     import matplotlib.pyplot as plt
+    from matplotlib.colors import to_hex, to_rgb
+
+    from ..path import NameHandler
 
     directions = directions_of(table)
     metrics = [m for m in directions if m not in CATEGORICAL_METRICS]
@@ -401,6 +404,15 @@ def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_p
     ncols = max(len(r) for r in rows)
     fig, axes = plt.subplots(len(rows), ncols, figsize=(4.6 * ncols, 4.4 * len(rows)), squeeze=False)
 
+    def wrapped(items):
+        """Greedy legend rows: 60 characters of 10-pt text per panel, 9 per entry's marker and padding."""
+        packed = [[]]
+        for item in items:
+            if packed[-1] and sum(len(t) + 9 for t, _, _ in packed[-1] + [item]) > 60 * ncols:
+                packed.append([])
+            packed[-1].append(item)
+        return packed
+
     # Colour carries the current bitmask's verdict, not the raw flag value: the question a
     # reader has is "did my mask throw this away", and that changes as the mask is edited.
     flag_metric = next((m for m in CATEGORICAL_METRICS if m in directions), None)
@@ -410,17 +422,28 @@ def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_p
         if flag_metric and flag_metric in cuts
         else np.zeros(len(table), dtype=bool)
     )
-    if flags is not None and np.isfinite(flags).any():
+    passed = ~flag_rejected
+    quality = apply_cuts(table, {m: v for m, v in cuts.items() if m not in CATEGORICAL_METRICS})
+    groups, legend_rows = [], [[("kept", "o", "0.55"), ("rejected", "x", "0.55")]]
+    if passed.any():
+        survived = f"{int((keep & passed).sum())}/{int(passed.sum())} survived image quality rejection"
+        groups.append((survived, passed, "tab:blue"))
+        legend_rows.append([(survived, "o", "tab:blue")])
+    if flag_rejected.any():
+        name, allowed = flag_metric.upper(), int(cuts[flag_metric]) | PPFLAG_INFORMATIONAL
         bits = np.where(np.isfinite(flags), flags, 0).astype(np.int64)
-        groups = []
-        for verdict, color, word in ((False, "tab:blue", "allowed"), (True, "tab:orange", "rejected")):
-            mask = flag_rejected == verdict
-            if not mask.any():
-                continue
-            seen = "; ".join(ppflag_label(v) for v in sorted({int(v) for v in bits[mask]}))
-            groups.append((f"{flag_metric.upper()} {word} — {seen}", mask, color))
-    else:
-        groups = [("kept", np.ones(len(table), dtype=bool), "tab:blue")]
+        values, counts = np.unique(bits[flag_rejected], return_counts=True)
+        passing = int((flag_rejected & quality).sum())
+        flag_line = [(f"{int(flag_rejected.sum())} rejected by {name} ({passing} pass quality cuts):", "", "none")]
+        for shade, i in enumerate(np.argsort(-counts, kind="stable")):
+            mask = flag_rejected & (bits == values[i])
+            label = f"{counts[i]} ({int((mask & quality).sum())}) {name} {ppflag_spec(values[i])}"
+            color = to_hex([c * (1 - 0.7 * shade / max(len(values) - 1, 1)) for c in to_rgb("peru")])
+            groups.append((label, mask, color))
+            flag_line.append((label + "," * (shade < len(values) - 1), "x", color))
+        extra = int(np.bitwise_or.reduce(values)) & ~allowed
+        notes = "; ".join(f"{name} {bit}: {desc}" for bit, desc in PPFLAG_BITS if extra & bit)
+        legend_rows += wrapped(flag_line) + [[(note, "", "none")] for note in textwrap.wrap(notes, 60 * ncols - 9)]
 
     # Smallest group last so it is not buried by the larger one.
     groups.sort(key=lambda g: int(g[1].sum()), reverse=True)
@@ -435,11 +458,11 @@ def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_p
             for depth, (_, mask, color) in enumerate(groups):
                 kept, cut = mask & keep, mask & ~keep
                 if cut.any():
-                    ax.scatter(table[xk][cut], table[yk][cut], s=12, marker="x", lw=0.8,
+                    ax.scatter(table[xk][cut], table[yk][cut], s=12, marker="x", lw=1.1,
                                c=color, alpha=0.35, zorder=2 + depth)  # fmt: skip
                 if kept.any():
                     ax.scatter(table[xk][kept], table[yk][kept], s=14, marker="o",
-                               c=color, alpha=0.55, linewidths=0, zorder=2 + depth)  # fmt: skip
+                               c=color, alpha=0.85, linewidths=0, zorder=2 + depth)  # fmt: skip
             if xk in cuts:
                 ax.axvline(cuts[xk], color="tab:red", ls="--", lw=1.2)
                 ax.annotate(f"{cuts[xk]:g}", xy=(cuts[xk], 0.99), xycoords=("data", "axes fraction"),
@@ -464,45 +487,57 @@ def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_p
     # legend covers the data, and the per-flag counts make the title line overflow.
     from matplotlib.lines import Line2D
 
-    proxies = [Line2D([], [], ls="", marker="x", color="0.55", label="cut (x) / kept (o)")]
-    for label, mask, color in groups:
-        counts = f"{int((mask & keep).sum())}/{int(mask.sum())} kept"
-        proxies.append(Line2D([], [], ls="", marker="o", color=color, label=f"{counts}  {label}".strip()))
+    def extent(artist):
+        return artist.get_window_extent().transformed(fig.transFigure.inverted())
+
     legend_title = None
-    widest = max(len(p.get_label()) for p in proxies)
-    ncol = max(1, min(len(proxies), int(20 * ncols / max(widest, 1)) or 1))
-    fig.legend(handles=proxies, loc="lower center", ncol=ncol, fontsize=10,
-               title=legend_title, frameon=False)  # fmt: skip
-    legend_height = 0.35 + 0.28 * math.ceil(len(proxies) / ncol)  # inches; grows when it wraps
+    legends = [
+        fig.legend(
+            handles=[Line2D([], [], ls="", marker=m, color=c, label=t) for t, m, c in row],
+            loc="lower center",
+            ncol=len(row),
+            fontsize=10,
+            title=None if k else legend_title,
+            frameon=False,
+            borderaxespad=0,
+        )
+        for k, row in enumerate(legend_rows)
+    ]
+    bottom = 0.07 / (4.4 * len(rows))
+    for leg, row in zip(legends[::-1], legend_rows[::-1]):
+        blank = 0 if row[0][1] else (leg.handlelength + leg.handletextpad) * 10 / (72 * fig.get_figwidth())
+        leg.set_bbox_to_anchor((0.5 - blank / 2, bottom))
+        bottom = extent(leg).y1
 
     def fitted(text, cap):
         """``cap`` points, or smaller if that would run off the edge of the figure."""
         return min(cap, 72 * (4.6 * ncols) / (0.55 * max(len(text), 1)))
 
-    title = f"ImCoadd input selection: {int(keep.sum())}/{len(table)} kept"
-    if flag_metric and flag_metric in cuts:
-        title += f"    {flag_metric.upper()} allow {ppflag_spec(cuts[flag_metric])}"
-    fig.suptitle(title, fontsize=fitted(title, 17))
+    target = ""
+    if len(table):
+        parsed = NameHandler(list(table["path" if "path" in table.colnames else "name"]))
+        obj, filt = parsed.obj_collapse, parsed.filter_collapse
+        target = f"{obj} {filt} " if isinstance(obj, str) and isinstance(filt, str) else ""
+    title = f"{target}ImCoadd Input:  {int(keep.sum())}/{len(table)} survived"
+    head = fig.text(0.5, 0.98, title, ha="center", va="top", fontsize=fitted(title, 17))
 
     # Second line, because a categorical cut has no panel and its cost is otherwise
     # invisible: with PPFLAG the points are coloured but nothing says how many it removed.
-    top = 0.97
     rejected = rejection_counts(table, cuts)
     if rejected:
-        sign = {"lower": "<=", "higher": ">="}
+        sign = {"lower": "≤", "higher": "≥"}
 
         def cut_label(m):
-            if m in cuts and m not in CATEGORICAL_METRICS:
-                return f"{m.upper()}{sign.get(directions.get(m), '')}{cuts[m]:g}"
-            return m.upper()
+            if m in CATEGORICAL_METRICS:
+                return f"{m.upper()} ({ppflag_spec(cuts[m])})"
+            return f"{m.upper()} {sign.get(directions.get(m), '')} {round(cuts[m], 2):g}"
 
-        line = ("rejected by  " + "   ".join(f"{cut_label(m)} {n} ({alone} alone)"
-                                             for m, (n, alone) in rejected.items())
-                + "   (overlapping; 'alone' = lost to that cut only)")  # fmt: skip
-        fig.text(0.5, 1 - 0.55 / (4.4 * len(rows)), line, ha="center", fontsize=fitted(line, 12))
-        top = 1 - 0.85 / (4.4 * len(rows))
-    legend_room = legend_height / (4.4 * len(rows) + legend_height)
-    fig.tight_layout(rect=(0, legend_room, 1, top))
+        order = sorted(rejected, key=lambda m: m in CATEGORICAL_METRICS)
+        counted = "; ".join(f"{cut_label(m)}: {rejected[m][1]}" for m in order)
+        line = f"Independent rejection counts: {counted}"
+        size = fitted(line, 12)
+        head = fig.text(0.5, extent(head).y0 - 0.11 / (4.4 * len(rows)), line, ha="center", va="top", fontsize=size)
+    fig.tight_layout(rect=(0, bottom, 1, extent(head).y0))
     if out_path:
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
         fig.savefig(out_path, dpi=100)

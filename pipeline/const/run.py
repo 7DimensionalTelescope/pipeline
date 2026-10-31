@@ -17,6 +17,7 @@ CONFIG_TYPE_PREPROCESS = "preprocess"
 CONFIG_TYPE_SCIENCE = "science"
 CONFIG_TYPE_CROSSFILTER = "crossfilter"
 CONFIG_TYPE_DEBUG = "debug"
+CONFIG_TYPE_MULTI_EPOCH = "multi-epoch"  # scheduler rows only: a dateless science config, typed at insert
 
 INPUT_TYPE_DAILY = "Daily"
 INPUT_TYPE_TOO = "ToO"
