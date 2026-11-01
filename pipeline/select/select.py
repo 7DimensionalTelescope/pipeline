@@ -33,6 +33,7 @@ import os
 import sys
 import textwrap
 import time
+import warnings
 from typing import Literal
 
 import numpy as np
@@ -137,7 +138,8 @@ def _robust_sigma(values: np.ndarray) -> float:
 def normalize_metrics(metrics=None, extra=None, default=QUALITY_METRICS) -> tuple:
     """Resolve the caller's metric spec into ``((name, keys, direction), ...)``.
 
-    ``metrics`` replaces the default set, ``extra`` appends to whatever it resolves to.
+    ``metrics`` replaces the default set, ``extra`` appends to whatever it resolves to; an
+    ``extra`` entry naming a metric already there replaces its keys and direction in place.
     Both accept ``{name: (key_or_keys, direction)}`` or an already-normalized sequence of
     triples; a lone string key is fine in place of a tuple of candidates.
     """
@@ -158,7 +160,9 @@ def normalize_metrics(metrics=None, extra=None, default=QUALITY_METRICS) -> tupl
         return tuple(out)
 
     base = as_triples(metrics) if metrics is not None else tuple(default)
-    return base + as_triples(extra)
+    override = {name: (keys, direction) for name, keys, direction in as_triples(extra)}
+    merged = tuple((name, *override.pop(name, (keys, direction))) for name, keys, direction in base)
+    return merged + tuple((name, keys, direction) for name, (keys, direction) in override.items())
 
 
 def _value(raw, key: str) -> float:
@@ -301,8 +305,8 @@ def metrics_from_image_qa(
     return table
 
 
-def suggest_cuts(table: Table, nsigma: float = 1.0, fixed: dict[str, float] | None = None) -> dict[str, float]:
-    """Threshold per metric at median +/- nsigma * robust sigma, on the bad side.
+def suggest_cuts(table: Table, nsigma: float = -1.0, fixed: dict[str, float] | None = None) -> dict[str, float]:
+    """Threshold per metric at nsigma robust sigmas from the median toward the good side: -1 is one sigma lenient.
 
     ``fixed`` pins a metric to a given threshold instead; `CATEGORICAL_DEFAULT_CUTS`
     supplies one for the bitmask metrics, whose distribution has no useful median.
@@ -311,19 +315,19 @@ def suggest_cuts(table: Table, nsigma: float = 1.0, fixed: dict[str, float] | No
     cuts = {}
     for metric, direction in directions_of(table).items():
         if metric in pinned:
-            cuts[metric] = float(pinned[metric])
+            cuts[metric] = pinned[metric] if isinstance(pinned[metric], tuple) else float(pinned[metric])
             continue
         values = np.asarray(table[metric], dtype=float)
         finite = values[np.isfinite(values)]
         if finite.size == 0:
             continue
         center, sigma = float(np.median(finite)), _robust_sigma(values)
-        cuts[metric] = center + nsigma * sigma if direction == "lower" else center - nsigma * sigma
+        cuts[metric] = center - nsigma * sigma if direction == "lower" else center + nsigma * sigma
     return cuts
 
 
-def apply_cuts(table: Table, cuts: dict[str, float]) -> np.ndarray:
-    """Boolean keep-mask. A metric that is absent or NaN never rejects an image."""
+def apply_cuts(table: Table, cuts: dict) -> np.ndarray:
+    """Boolean keep-mask; a cut is a threshold or an inclusive ``(low, high)`` pair. Absent or NaN never rejects."""
     keep = np.ones(len(table), dtype=bool)
     for metric, direction in directions_of(table).items():
         if metric not in cuts:
@@ -336,6 +340,8 @@ def apply_cuts(table: Table, cuts: dict[str, float]) -> np.ndarray:
             bits = np.where(np.isfinite(values), values, 0).astype(np.int64)
             allowed |= PPFLAG_INFORMATIONAL  # a fact about the reduction, not a compromise: no mask can reject on it
             passes = (bits & ~allowed) == 0
+        elif isinstance(cuts[metric], tuple):
+            passes = (values >= cuts[metric][0]) & (values <= cuts[metric][1])
         else:
             passes = values <= cuts[metric] if direction == "lower" else values >= cuts[metric]
         keep &= passes | ~np.isfinite(values)
@@ -378,7 +384,19 @@ def _pair_rows(metrics: list[str]) -> list[list[tuple[str, str]]]:
     return [r for r in rows if r]
 
 
-def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_path: str | None = None):
+def _edges(cut) -> tuple[float, ...]:
+    """The threshold(s) a cut draws: one for a one-sided cut, both bounds for an interval."""
+    return tuple(cut) if isinstance(cut, tuple) else (cut,)
+
+
+def _rejected_spans(cut, direction, limits) -> list[tuple[float, float]]:
+    """Axis ranges a cut rejects, for shading: the bad side, or both tails of an interval."""
+    if isinstance(cut, tuple):
+        return [(limits[0], cut[0]), (cut[1], limits[1])]
+    return [(cut, limits[1]) if direction == "lower" else (limits[0], cut)]
+
+
+def plot_selection(table: Table, cuts: dict, keep: np.ndarray, out_path: str | None = None):
     """One panel per metric pair with the cut lines drawn; kept in colour, rejected in grey.
 
     Pairwise rather than an N-D projection: the cuts are independent 1-D thresholds, and a
@@ -475,20 +493,22 @@ def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_p
                     ax.scatter(table[xk][kept], table[yk][kept], s=14, marker="o",
                                c=color, alpha=0.85, linewidths=0, zorder=2 + depth)  # fmt: skip
             if xk in cuts:
-                ax.axvline(cuts[xk], color="tab:red", ls="--", lw=1.2)
-                ax.annotate(f"{cuts[xk]:g}", xy=(cuts[xk], 0.99), xycoords=("data", "axes fraction"),
-                            color="tab:red", fontsize=10, ha="left", va="top")  # fmt: skip
                 xl = ax.get_xlim()
-                lo, hi = (cuts[xk], xl[1]) if directions.get(xk) == "lower" else (xl[0], cuts[xk])
-                ax.axvspan(lo, hi, color="0.92", zorder=0)
+                for edge in _edges(cuts[xk]):
+                    ax.axvline(edge, color="tab:red", ls="--", lw=1.2)
+                    ax.annotate(f"{edge:g}", xy=(edge, 0.99), xycoords=("data", "axes fraction"),
+                                color="tab:red", fontsize=10, ha="left", va="top")  # fmt: skip
+                for lo, hi in _rejected_spans(cuts[xk], directions.get(xk), xl):
+                    ax.axvspan(lo, hi, color="0.92", zorder=0)
                 ax.set_xlim(xl)
             if yk in cuts:
-                ax.axhline(cuts[yk], color="tab:red", ls="--", lw=1.2)
-                ax.annotate(f"{cuts[yk]:g}", xy=(0.99, cuts[yk]), xycoords=("axes fraction", "data"),
-                            color="tab:red", fontsize=10, ha="right", va="bottom")  # fmt: skip
                 yl = ax.get_ylim()
-                lo, hi = (cuts[yk], yl[1]) if directions.get(yk) == "lower" else (yl[0], cuts[yk])
-                ax.axhspan(lo, hi, color="0.92", zorder=0)
+                for edge in _edges(cuts[yk]):
+                    ax.axhline(edge, color="tab:red", ls="--", lw=1.2)
+                    ax.annotate(f"{edge:g}", xy=(0.99, edge), xycoords=("axes fraction", "data"),
+                                color="tab:red", fontsize=10, ha="right", va="bottom")  # fmt: skip
+                for lo, hi in _rejected_spans(cuts[yk], directions.get(yk), yl):
+                    ax.axhspan(lo, hi, color="0.92", zorder=0)
                 ax.set_ylim(yl)
             ax.set_xlabel(xk.upper(), fontsize=13)
             ax.set_ylabel(yk.upper(), fontsize=13)
@@ -541,6 +561,8 @@ def plot_selection(table: Table, cuts: dict[str, float], keep: np.ndarray, out_p
         def cut_label(m):
             if m in CATEGORICAL_METRICS:
                 return f"{m.upper()} ({ppflag_spec(cuts[m])})"
+            if isinstance(cuts[m], tuple):
+                return f"{round(cuts[m][0], 2):g} ≤ {m.upper()} ≤ {round(cuts[m][1], 2):g}"
             return f"{m.upper()} {sign.get(directions.get(m), '')} {round(cuts[m], 2):g}"
 
         order = sorted(rejected, key=lambda m: m in CATEGORICAL_METRICS)
@@ -567,31 +589,41 @@ def in_notebook() -> bool:
 
 def cuts_json(cuts: dict) -> str:
     """The cuts as a one-line JSON object, ready to be edited and handed back."""
-    shown = {m: ppflag_spec(v) if m in CATEGORICAL_METRICS else float(f"{v:.4g}") for m, v in cuts.items()}
+
+    def short(v):
+        return [float(f"{b:.4g}") for b in v] if isinstance(v, tuple) else float(f"{v:.4g}")
+
+    shown = {m: ppflag_spec(v) if m in CATEGORICAL_METRICS else short(v) for m, v in cuts.items()}
     return json.dumps(shown)
 
 
-def cuts_summary(table: Table, cuts: dict, keep, suggested: dict | None = None) -> str:
-    """The whole state on one short line, so it fits inside an `input()` prompt.
+def cut_parts(table: Table, cuts: dict, suggested: dict | None = None) -> dict[str, str]:
+    """Per metric ``seeing <= 3: -8(4)``: the cut, what it rejects, in parentheses what only it rejects.
 
-    Each cut carries ``(-rejected/alone)``: what it rejects, and what only it rejects.
-    The first overlaps between cuts, the second does not. A metric with no cut yet is
-    listed with the value `suggest_cuts` would give it, so it can be adopted by typing.
+    The first number overlaps between cuts, the second does not. A metric with no cut yet
+    is listed with the value `suggest_cuts` would give it, so it can be adopted by typing.
     """
     rejected = rejection_counts(table, cuts)
-    parts = []
+    parts = {}
     for metric, direction in directions_of(table).items():
         if metric not in cuts:
             hint = (suggested or {}).get(metric)
-            parts.append(f"{metric}(uncut, suggest {hint:.4g})" if hint is not None else f"{metric}(uncut)")
+            parts[metric] = f"{metric}: uncut (suggest {hint:.4g})" if hint is not None else f"{metric}: uncut"
             continue
         if metric in CATEGORICAL_METRICS:
-            shown = f"{metric}={ppflag_spec(cuts[metric])}"
+            shown = f"{metric} = {ppflag_spec(cuts[metric])}"
+        elif isinstance(cuts[metric], tuple):
+            shown = f"{cuts[metric][0]:.4g} <= {metric} <= {cuts[metric][1]:.4g}"
         else:
-            shown = f"{metric}{'<=' if direction == 'lower' else '>='}{cuts[metric]:.4g}"
+            shown = f"{metric} {'<=' if direction == 'lower' else '>='} {cuts[metric]:.4g}"
         n, alone = rejected[metric]
-        parts.append(f"{shown}(-{n}/{alone})")
-    return f"{int(np.asarray(keep).sum())}/{len(table)} kept | " + " ".join(parts)
+        parts[metric] = f"{shown}: -{n}({alone})"
+    return parts
+
+
+def cuts_summary(table: Table, cuts: dict, keep, suggested: dict | None = None) -> str:
+    """The whole state on one short line, so it fits inside an `input()` prompt."""
+    return f"{int(np.asarray(keep).sum())}/{len(table)} kept | " + ", ".join(cut_parts(table, cuts, suggested).values())
 
 
 def _settle(seconds: float = 0.3) -> None:
@@ -634,29 +666,58 @@ def _metric_key(name: str, headers: list | None) -> str:
 _OPERATORS = ("<=", ">=", "=")
 
 
+def _refuse_strict(item: str) -> None:
+    """Every cut is inclusive, so a bare ``<`` or ``>`` is refused rather than read as ``<=`` / ``>=``."""
+    if ("<" in item or ">" in item) and "<=" not in item and ">=" not in item:
+        raise ValueError(f'{item!r}: cuts are inclusive; write "<=" or ">="')
+
+
+def _interval(name: str, specs: list) -> tuple[float, float] | None:
+    """``[(">=", "2"), ("<=", "3")]`` or ``[(None, [2, 3])]`` -> ``(2.0, 3.0)``; None when not a pair of bounds."""
+    if len(specs) == 1 and specs[0][0] is None and isinstance(specs[0][1], (list, tuple)):
+        values = [_as_number(v) for v in specs[0][1]]
+        if len(values) != 2 or None in values:
+            raise ValueError(f"{name}: a pair means [low, high], not {specs[0][1]!r}")
+        lo, hi = values
+    elif len(specs) == 2 and {op for op, _ in specs} == {"<=", ">="}:
+        by_op = {op: _as_number(v) for op, v in specs}
+        if None in by_op.values():
+            raise ValueError(f"{name}: both bounds must be numbers, not {[v for _, v in specs]!r}")
+        lo, hi = by_op[">="], by_op["<="]
+    else:
+        return None
+    if name in CATEGORICAL_METRICS:
+        raise ValueError(f'{name} takes a binary string, bit 64 leftmost, as in "{name}=1000011"')
+    if lo > hi:
+        raise ValueError(f"{name}: low bound {lo:g} is above high bound {hi:g}")
+    return float(lo), float(hi)
+
+
 def _parse_items(text: str) -> dict:
-    """``seeing<=3.6, airmass lower`` -> ``{"seeing": ("<=", "3.6"), "airmass": (None, "lower")}``
+    """``seeing<=3.6, airmass lower`` -> ``{"seeing": [("<=", "3.6")], "airmass": [(None, "lower")]}``
 
     The operator form is exactly what `cuts_summary` prints, so what you are shown can be
     typed straight back with the number changed — one language for reading and writing.
+    A metric named twice, ``seeing>=2, seeing<=3``, collects both bounds.
     """
     edits = {}
     for part in text.split(","):
         item = part.strip()
         if not item:
             continue
+        _refuse_strict(item)
         for op in _OPERATORS:
             name, sep, value = item.partition(op)
             if sep:
                 if not name.strip() or not value.strip():
                     raise ValueError(f'{item!r} needs a name and a value, as in "airmass<=1.2"')
-                edits[name.strip()] = (op, value.strip())
+                edits.setdefault(name.strip(), []).append((op, value.strip()))
                 break
         else:
             tokens = item.split()
             if len(tokens) != 2:
                 raise ValueError(f'{item!r} should read "airmass<=1.2", "seeing 3.6" or "airmass lower"')
-            edits[tokens[0]] = (None, tokens[1])
+            edits.setdefault(tokens[0], []).append((None, tokens[1]))
     return edits
 
 
@@ -681,14 +742,23 @@ def apply_edits(table: Table, cuts: dict, text: str, headers: list | None = None
             raise ValueError(f'not valid JSON ({e.msg}); expected e.g. {{"seeing": 3.1}}')
         if not isinstance(loaded, dict):
             raise ValueError('expected an object such as {"seeing": 3.1, "depth": 16.5}')
-        edits = {k: (None, v) for k, v in loaded.items()}
+        edits = {k: [(None, v)] for k, v in loaded.items()}
     else:
         edits = _parse_items(text)
 
     directions = directions_of(table)
     new_cuts, new_metrics, new_directions = {}, {}, {}
-    for raw, (op, value) in edits.items():
+    for raw, specs in edits.items():
         name = raw.lower()
+        bounds = _interval(name, specs)
+        if bounds is not None:
+            if name not in directions:
+                new_metrics[name] = (_metric_key(name, headers), "lower")
+            new_cuts[name] = bounds
+            continue
+        if len(specs) != 1:
+            raise ValueError(f'{name}: one cut, or a ">=" and a "<=" pair for both bounds')
+        ((op, value),) = specs
         if op in ("<=", ">="):
             if name in CATEGORICAL_METRICS:
                 raise ValueError(f'{name} takes a binary string, bit 64 leftmost, as in "{name}=1000011"')
@@ -737,7 +807,7 @@ def prompt_cuts(
     table: Table,
     cuts: dict[str, float],
     headers: list | None = None,
-    nsigma: float = 1.0,
+    nsigma: float = -1.0,
     fixed: dict[str, float] | None = None,
 ) -> dict:
     """Show the suggestion, take edits, redraw, repeat until nothing changes.
@@ -781,8 +851,8 @@ def prompt_cuts(
         while True:
             _settle()
             answer = input(
-                f"  {note}{summary} | (-N/M): N fail that cut, M return if it is dropped "
-                '| type "seeing<=3.6" to set or add, Enter accepts: '
+                f"  {note}{summary} | -N(M): N fail that cut, M return if it is dropped "
+                '| type "seeing<=3.6" to set or add, "seeing>=2, seeing<=3" for both bounds, Enter accepts: '
             ).strip()
             if not answer:
                 break
@@ -801,7 +871,7 @@ def prompt_cuts(
 def select_from_table(
     table: Table,
     mode: Literal["auto", "interactive"] = "auto",
-    nsigma: float = 1.0,
+    nsigma: float = -1.0,
     plot_path: str | None = None,
     logger=None,
     headers: list | None = None,
@@ -865,56 +935,87 @@ def select_from_table(
     return keep, cuts
 
 
-def resolve_fixed_cuts(fixed_cuts, metrics=None, extra=None):
+def resolve_fixed_cuts(fixed_cuts, metrics=None, extra=None, warn=None):
     """``{"seeing": "<=2.8", "bin2fwhm": "<=5.6"}`` -> numeric cuts plus auto-declared metrics.
 
     The operator string is the same grammar the interactive prompt speaks: it carries the
     direction, so a metric not in the default set is bound to the header key of its own
     name with no separate ``extra`` mapping. Plain numbers are allowed only for metrics
-    that already exist; a categorical takes its bitstring.
+    that already exist; a categorical takes its bitstring. Every cut is inclusive, so ``<``
+    and ``>`` are refused rather than read as ``<=`` / ``>=``. A list of a ``>=`` and a ``<=``
+    string, ``{"seeing": [">=2", "<=3"]}``, keeps both bounds. A single operator against a
+    known metric's direction flips it for this selection, keeping the worse side, and says
+    so through ``warn`` (a callable taking the message; `warnings.warn` by default).
     """
     if not fixed_cuts:
         return {}, extra
-    known = {name for name, _, _ in normalize_metrics(metrics, extra)}
+    known = {name: (keys, direction) for name, keys, direction in normalize_metrics(metrics, extra)}
     numeric, declared = {}, {}
     for raw, value in fixed_cuts.items():
         name = raw.lower()
         if name in CATEGORICAL_METRICS:
+            if isinstance(value, (list, tuple)):
+                raise ValueError(f'{name} takes a binary string, bit 64 leftmost, as in "{name}": "1000011"')
             numeric[name] = ppflag_mask(value) if isinstance(value, str) else float(value)
             continue
-        text = str(value).strip()
-        op = next((o for o in ("<=", ">=") if text.startswith(o)), None)
-        if op:
-            numeric[name] = float(text[2:])
+        specs = []
+        for item in value if isinstance(value, (list, tuple)) else [value]:
+            text = str(item).strip()
+            _refuse_strict(text)
+            op = next((o for o in ("<=", ">=") if text.startswith(o)), None)
+            specs.append((op, text[2:].strip() if op else item))
+        bounds = _interval(name, specs) if len(specs) == 2 else None
+        if bounds is not None:
             if name not in known:
-                declared[name] = (name.upper(), "lower" if op == "<=" else "higher")
-        elif name in known:
-            numeric[name] = float(value)
-        else:
+                declared[name] = (name.upper(), "lower")
+            numeric[name] = bounds
+            continue
+        if len(specs) != 1:
+            raise ValueError(f'{name}: one cut, or a ">=" and a "<=" pair for both bounds, not {value!r}')
+        op, spec = specs[0]
+        number = _as_number(spec)
+        if number is None:
+            raise ValueError(
+                f'{name}: cannot read {value!r}; write "{name}": "<=3.1", ">=3.1", [">=2", "<=3"] or a number'
+            )
+        if op:
+            direction = "lower" if op == "<=" else "higher"
+            if name not in known:
+                declared[name] = (name.upper(), direction)
+            elif known[name][1] != direction:
+                declared[name] = (known[name][0], direction)
+                (warn or warnings.warn)(f"{name}: {value!r} keeps the worse side; {known[name][1]} is better")
+        elif name not in known:
             raise ValueError(f'{name} is not a known metric; give it a direction, e.g. "{name}": "<={value}"')
+        numeric[name] = number
     if declared:
         if extra is None:
             extra = declared
         elif isinstance(extra, dict):
-            extra = {**declared, **extra}
+            extra = {**extra, **declared}
         else:
-            extra = tuple(extra) + tuple((n, (k,), d) for n, (k, d) in declared.items())
+            extra = tuple(extra) + tuple((n, k, d) for n, (k, d) in declared.items())
     return numeric, extra
 
 
-def cuts_grammar(cuts: dict[str, float], directions: dict[str, str]) -> dict[str, str]:
+def cuts_grammar(cuts: dict, directions: dict[str, str]) -> dict[str, str | list[str]]:
     """Numeric cuts -> config operator grammar; inverse of `resolve_fixed_cuts`."""
-    return {
-        m: ppflag_spec(v) if m in CATEGORICAL_METRICS else f"{'<=' if directions.get(m) == 'lower' else '>='}{v:.6g}"
-        for m, v in cuts.items()
-    }
+
+    def spec(m, v):
+        if m in CATEGORICAL_METRICS:
+            return ppflag_spec(v)
+        if isinstance(v, tuple):
+            return [f">={v[0]:.6g}", f"<={v[1]:.6g}"]
+        return f"{'<=' if directions.get(m) == 'lower' else '>='}{v:.6g}"
+
+    return {m: spec(m, v) for m, v in cuts.items()}
 
 
 def select_images(
     names: list[str],
     headers: list,
     mode: Literal["auto", "interactive"] = "auto",
-    nsigma: float = 1.0,
+    nsigma: float = -1.0,
     plot_path: str | None = None,
     logger=None,
     metrics=None,
@@ -922,7 +1023,7 @@ def select_images(
     fixed_cuts: dict[str, float] | None = None,
 ) -> tuple[np.ndarray, dict[str, float], Table]:
     """Keep-mask over ``names``, from already-read headers. Returns (mask, cuts, table)."""
-    fixed_cuts, extra = resolve_fixed_cuts(fixed_cuts, metrics, extra)
+    fixed_cuts, extra = resolve_fixed_cuts(fixed_cuts, metrics, extra, warn=logger.warning if logger else None)
     table, used_keys = collect_metrics(names, headers, metrics=metrics, extra=extra)
     if used_keys and logger is not None:
         logger.info(f"Quality selection on {', '.join(f'{m}={k}' for m, k in used_keys.items())}")
@@ -938,11 +1039,18 @@ def select_images(
     return keep, cuts, table
 
 
+def _tabulate(rows: list[dict], columns: list[str]) -> list[str]:
+    """Rows as lines with the columns vertically aligned; a cell a row lacks is blank."""
+    cells = [[str(row.get(c, "")) for c in columns] for row in rows]
+    widths = [max(len(r[i]) for r in cells) for i in range(len(columns))]
+    return ["  ".join(c.ljust(w) for c, w in zip(r, widths)).rstrip() for r in cells]
+
+
 def select_ingredients(
     obj: str,
     cuts: dict | None = None,
     filter_cuts: dict[str, dict] | None = None,
-    nsigma: float = 1.0,
+    nsigma: float = -1.0,
     save: bool = False,
     logger=None,
 ) -> dict[str, tuple[list[str], dict[str, str]]]:
@@ -965,17 +1073,25 @@ def select_ingredients(
         say("info", f"{obj} {len(census) - len(budget)} duplicate raw rows dropped")
     filters = sorted(set(budget["filter"]))
     filter_cuts = filter_cuts or {}
+    for label, given in [("cuts", cuts), *((f"filter_cuts[{f!r}]", v) for f, v in filter_cuts.items())]:
+        if given is not None and not isinstance(given, dict):
+            raise TypeError(f'{label} should be a dict such as {{"depth": ">=16.1"}}, not {type(given).__name__}')
     unknown = set(filter_cuts) - set(filters)
     if unknown:
         raise ValueError(f"filter_cuts names filters without raw frames of {obj}: {sorted(unknown)}")
-    resolved = {filt: resolve_fixed_cuts({**(cuts or {}), **filter_cuts.get(filt, {})}) for filt in filters}
-    extra = {m: spec for _, own in resolved.values() for m, spec in (own or {}).items()}
+    resolved = {}
+    for filt in filters:
+        merged = {**(cuts or {}), **filter_cuts.get(filt, {})}
+        resolved[filt] = resolve_fixed_cuts(merged, warn=lambda msg: say("warning", f"{obj} {filt} {msg}"))
+    # new metrics join the shared table; a flipped default metric only changes its own filter's directions
+    base = {name for name, _, _ in IMAGE_QA_METRICS}
+    extra = {m: spec for _, own in resolved.values() for m, spec in (own or {}).items() if m not in base}
     images = budget.single_path.fillna(budget.raw_path).tolist()
     table, _ = metrics_for_paths_from_image_qa(images, extra=extra)
     table["status"] = status.tolist()
     has_single = budget.single_path.notna().to_numpy()
 
-    selection, rendered, ph = {}, [], None
+    selection, drawn, rows, notes = {}, [], [], []
     for filt in filters:
         fixed, own = resolved[filt]
         mask = (budget["filter"] == filt).to_numpy()
@@ -992,14 +1108,24 @@ def select_ingredients(
         kept = [p for p, k in zip(paths, keep) if k]
         selection[filt] = (kept, cuts_grammar(chosen, group.meta["directions"]))
         singles = [p for p, s in zip(images, has_single & mask) if s]
-        line = f"{obj} {filt:6s} {cuts_summary(ok, chosen, keep[usable])}"
+        drawn.append((group, chosen, keep, kept, singles))
+        row = {"object": obj, "filter": filt, "kept": f"{len(kept)}/{len(ok)} kept", **cut_parts(ok, chosen)}
         for name, cause in (("sanity", "sanity-rejected"), ("unprocessed", "not yet processed")):
             count = int((state == name).sum())
-            line += f" | {count} {cause}" if count else ""
-        say("info", line + (" | no single, no figure saved" if save and not singles else ""))
+            row[name] = f"{count} {cause}" if count else ""
+        row["note"] = "no single, no figure saved" if save and not singles else ""
+        rows.append(row)
         unmeasured = int(np.all([~np.isfinite(np.asarray(ok[m], float)) for m in directions_of(ok)], axis=0).sum())
         if unmeasured:
-            say("warning", f"{obj} {filt:6s} without image_qa metrics, passing every cut: {unmeasured}")
+            notes.append(f"{obj} {filt} without image_qa metrics, passing every cut: {unmeasured}")
+    columns = ["object", "filter", "kept", *table.meta["directions"], "sanity", "unprocessed", "note"]
+    for line in _tabulate(rows, columns):
+        say("info", line)
+    for note in notes:
+        say("warning", note)
+
+    rendered, ph = [], None
+    for group, chosen, keep, kept, singles in drawn:
         out_path = None
         if save and singles:
             ph = PathHandler(kept or singles, is_pipeline=True, is_multi_epoch=True)

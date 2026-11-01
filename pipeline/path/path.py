@@ -770,6 +770,11 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         self._metadata_dir = []
         self._resolved_files = []  # Single source of truth for the full path
 
+        output_parents, factory_parents, masterframe_parents = (
+            self._output_parent_dir,
+            self._factory_parent_dir,
+            self._masterframe_parent_dir,
+        )
         for i in range(len(self._input_files)):
             # Get properties for this specific file
             nightdate = self._get_namehandler_property_at_index("nightdate", i)
@@ -783,8 +788,8 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             # masterframe_dir: name-derived (nightdate+unit) when a parent disk is known;
             # only fall back to the file's own parent for user-mode master inputs, where
             # select_output_dir intentionally leaves masterframe parent unset.
-            if self._masterframe_parent_dir[i] is not None and nightdate is not None and unit is not None:
-                self._masterframe_dir.append(os.path.join(self._masterframe_parent_dir[i], nightdate, unit))
+            if masterframe_parents[i] is not None and nightdate is not None and unit is not None:
+                self._masterframe_dir.append(os.path.join(masterframe_parents[i], nightdate, unit))
             elif typ.kind == const.NAME_TYPE_MASTER:
                 self._masterframe_dir.append(file_dir)
             else:
@@ -797,16 +802,16 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                 if self.is_pipeline:
                     # Within pipeline processing
                     relative_path = os.path.join(nightdate, obj, filte)
-                    output_dir = os.path.join(self._output_parent_dir[i], relative_path)
+                    output_dir = os.path.join(output_parents[i], relative_path)
 
-                    self._factory_dir.append(os.path.join(self._factory_parent_dir[i], relative_path))
+                    self._factory_dir.append(os.path.join(factory_parents[i], relative_path))
                     self._single_dir.append(os.path.join(output_dir, SINGLES_DIRNAME))
                     self._coadd_dir.append(os.path.join(const.COADD_DIR, obj, filte))
-                    self._metadata_dir.append(os.path.join(self._output_parent_dir[i], nightdate))
+                    self._metadata_dir.append(os.path.join(output_parents[i], nightdate))
                 else:
                     # User mode: anchor at working_dir or cwd (set in select_output_dir)
-                    output_dir = self._output_parent_dir[i]
-                    self._factory_dir.append(self._factory_parent_dir[i])
+                    output_dir = output_parents[i]
+                    self._factory_dir.append(factory_parents[i])
                     self._single_dir.append(output_dir)
                     self._coadd_dir.append(output_dir)
 
@@ -820,18 +825,18 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                 if self.is_pipeline:
                     # Pipeline mode unchanged.
                     relative_path = os.path.join(nightdate, obj, filte)
-                    night_dir = os.path.join(self._output_parent_dir[i], relative_path)
+                    night_dir = os.path.join(output_parents[i], relative_path)
 
                     self._single_dir.append(os.path.join(night_dir, SINGLES_DIRNAME))
                     self._coadd_dir.append(os.path.join(const.COADD_DIR, obj, filte))
-                    self._metadata_dir.append(os.path.join(self._output_parent_dir[i], nightdate))
+                    self._metadata_dir.append(os.path.join(output_parents[i], nightdate))
                     if self.settings.is_multi_epoch:
                         output_dir = self._coadd_dir[-1]
                         factory_root = self.settings.factory_scratch or const.FACTORY_DIR
                         self._factory_dir.append(os.path.join(factory_root, MULTI_EPOCH_DIRNAME, obj, filte))
                     else:
                         output_dir = night_dir
-                        self._factory_dir.append(os.path.join(self._factory_parent_dir[i], relative_path))
+                        self._factory_dir.append(os.path.join(factory_parents[i], relative_path))
                 else:
                     # Anchor priority: config_file's dir → working_dir → cwd.
                     if self.settings.config_file:
@@ -852,9 +857,9 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
 
             elif typ.kind == const.NAME_TYPE_MASTER:
                 if self.is_pipeline:
-                    self._output_dir.append(self._output_parent_dir[i])
-                    self._factory_dir.append(self._factory_parent_dir[i])
-                    self._single_dir.append(self._output_parent_dir[i])
+                    self._output_dir.append(output_parents[i])
+                    self._factory_dir.append(factory_parents[i])
+                    self._single_dir.append(output_parents[i])
                 else:
                     self._output_dir.append(None)
                     self._factory_dir.append(None)

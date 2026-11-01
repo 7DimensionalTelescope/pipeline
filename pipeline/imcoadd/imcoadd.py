@@ -300,7 +300,7 @@ class ImCoadd(
             )
         self.logger.info(f"Validated one shared pixel grid for {len(self.input_images)} inputs")
 
-    def select_input_images(self, nsigma: float = 1.0, metrics=None, extra=None) -> list[str]:
+    def select_input_images(self, nsigma: float = -1.0, metrics=None, extra=None) -> list[str]:
         """Cull multi-epoch inputs by seeing, ellipticity, and depth."""
         # a config predating the key gets the base False at load, never a silent filtering step;
         # multi-epoch configs get 'auto' from the override yml.
@@ -344,7 +344,7 @@ class ImCoadd(
         ).lower()
         if source == "db" and len(self.input_images) >= 20 and self.is_connected:
             try:
-                numeric_cuts, db_extra = resolve_fixed_cuts(fixed_cuts, metrics, extra)
+                numeric_cuts, db_extra = resolve_fixed_cuts(fixed_cuts, metrics, extra, warn=self.logger.warning)
                 table, n_found = metrics_for_paths_from_image_qa(self.input_images, metrics=metrics, extra=db_extra)
                 self.logger.info(
                     f"Selection metrics from image_qa for {n_found}/{len(self.input_images)} images -- "
