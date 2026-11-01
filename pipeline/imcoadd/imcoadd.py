@@ -1,6 +1,5 @@
 import os
 import time
-import shutil
 import warnings
 
 import numpy as np
@@ -13,7 +12,8 @@ from ..errors import CoaddError
 from ..config import SciProcConfiguration
 from ..path.path import PathHandler
 from ..services.setup import BaseSetup
-from ..services.utils import acquire_available_gpu, conservative_worker_count
+from ..services.utils import acquire_available_gpu, conservative_worker_count, factory_bytes, prune_scratch
+from ..const import SCRATCH_RESERVE_GB
 from ..config.utils import get_key, get_or_set_key
 from ..utils import (
     collapse,
@@ -417,46 +417,28 @@ class ImCoadd(
                 "Use config_suffix to keep both products, or overwrite=True to replace it."
             )
 
-    def _prune_factory_scratch(self, min_idle_hours: float = 6.0):
-        """Prune inactive factory trees until scratch fits its configured cap."""
-        scratch = get_key(self.config_node.settings, "factory_scratch")
+    def _prune_factory_scratch(self):
+        """Prune idle factory trees for this run's need; an auto scratch still short falls back to the network factory."""
+        scratch = self.path.settings.factory_scratch
+        wanted = str(get_key(self.config_node.settings, "factory_scratch")).lower() == "auto"
         if not scratch:
+            if wanted:
+                self.logger.warning(
+                    "no local scratch has a budget for this multi-epoch factory; it runs on FACTORY_DIR",
+                    self._process_error.ScratchBudgetShortError,
+                )
             return
+        need = factory_bytes(len(self.input_images)) * 1.1
         cap = float(self.config_node.settings.factory_scratch_cap_gb) * 1e9
-        own = os.path.abspath(collapse(self.path.factory_dir, force=True))
-        trees = []
-        total = 0
-        for root, dirs, files in os.walk(scratch):
-            # stem-level trees: scratch/coadd/<obj>/<filter>/imcoadd/<stem>
-            if os.path.basename(os.path.dirname(root)) == "imcoadd" and root != own:
-                size = newest = 0
-                for r2, _, fs in os.walk(root):
-                    for f in fs:
-                        try:
-                            st_ = os.stat(os.path.join(r2, f))
-                        except FileNotFoundError:
-                            continue
-                        size += st_.st_size
-                        newest = max(newest, st_.st_mtime)
-                trees.append((newest, size, root))
-                total += size
-                dirs[:] = []
-        if total <= cap:
-            return
-        for newest, size, root in sorted(trees):
-            if total <= cap:
-                break
-            if time.time() - newest < min_idle_hours * 3600:
-                continue
-            self.logger.info(
-                f"Scratch rotation: removing {root} ({size/1e9:.0f} GB, idle {(time.time()-newest)/3600:.1f} h)"
-            )
-            shutil.rmtree(root, ignore_errors=True)
-            total -= size
-        if total > cap:
+        own = os.path.dirname(self.path.imcoadd.factory.manifest_file)
+        free = prune_scratch(scratch, need, cap, logger=self.logger, keep=own)
+        if wanted and free < need + SCRATCH_RESERVE_GB * 1e9:
             self.logger.warning(
-                f"Scratch still over cap after rotation ({total/1e9:.0f} GB > {cap/1e9:.0f} GB); all trees active"
+                f"{scratch} has {free/1e9:.0f} GB free after rotation, below the {need/1e9:.0f} GB factory plus reserve; "
+                "it runs on FACTORY_DIR",
+                self._process_error.ScratchBudgetShortError,
             )
+            self.path = self.path.replace(factory_scratch=None)
 
     def _coadd_provenance(self) -> dict[str, tuple]:
         """Config options that change the coadd, as coadd header cards."""

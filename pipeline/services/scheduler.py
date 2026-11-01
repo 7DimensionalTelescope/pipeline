@@ -1,4 +1,3 @@
-import functools
 import json
 import sqlite3
 import socket
@@ -13,7 +12,6 @@ from astropy.table import Table, vstack
 
 from ..const import (
     SCRIPTS_DIR,
-    REF_DIR,
     MAIN_HOST,
     SCHEDULER_DB_PATH,
     QUEUE_SOCKET_PATH,
@@ -23,6 +21,9 @@ from ..const import (
     CONFIG_TYPE_CROSSFILTER,
     CONFIG_TYPE_DEBUG,
     CONFIG_TYPE_MULTI_EPOCH,
+    SCRATCH_DISK,
+    SCRATCH_RESERVE_GB,
+    SCRATCH_SAFETY,
     INPUT_TYPE_TOO,
     INPUT_TYPE_REPROCESS,
     INPUT_TYPE_USER,
@@ -37,6 +38,7 @@ from ..const import (
 )
 from ..const import SUCCESS_RETURN_CODE, FAILURE_RETURN_CODE, EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE
 from .logger import get_high_level_task_logger, log_orchestration_stop
+from .utils import factory_bytes, stage_bytes
 
 
 class Scheduler:
@@ -61,7 +63,13 @@ class Scheduler:
     )
 
     # SQL ordering clause used consistently throughout
-    _ORDER_BY = 'ORDER BY is_ready DESC, priority DESC, readiness DESC, "index" ASC'
+    # multi-epoch rows of equal priority go largest first: a host takes the biggest coadd its scratch budget admits,
+    # leaving the small ones for the hosts with small scratch
+    _ORDER_HEAD = "ORDER BY is_ready DESC, priority DESC"
+    _ORDER_TAIL = (
+        f", CASE WHEN config_type = '{CONFIG_TYPE_MULTI_EPOCH}' THEN stage_gb END DESC, " 'readiness DESC, "index" ASC'
+    )
+    _ORDER_BY = _ORDER_HEAD + _ORDER_TAIL
 
     # Explicit column list — safe regardless of ALTER TABLE column order in existing DBs.
     _DB_COLUMNS = (
@@ -98,10 +106,14 @@ class Scheduler:
     DEFAULT_MAX_PREPROCESS = 3
     DEFAULT_FALLBACK_EVERY = 10
     DEFAULT_MAX_MULTI_EPOCH = 1
+    DEFAULT_MAX_MULTI_EPOCH_PER_HOST = 1
     # Counts Processing preprocess rows across EVERY host, so it is an origin-side gate:
     # set QUEUE_MAX_PREPROCESS in the origin's .env, where the claim actually runs.
     MAX_PREPROCESS = int(os.environ.get("QUEUE_MAX_PREPROCESS") or DEFAULT_MAX_PREPROCESS)
     MAX_MULTI_EPOCH = int(os.environ.get("QUEUE_MAX_MULTI_EPOCH") or DEFAULT_MAX_MULTI_EPOCH)
+    # Per claiming host, on top of the per-disk cap: a host's scratch stages one coadd at a time, and the origin
+    # otherwise refills every freed slot itself before a worker's next poll.
+    MAX_MULTI_EPOCH_PER_HOST = int(os.environ.get("QUEUE_MAX_MULTI_EPOCH_PER_HOST") or DEFAULT_MAX_MULTI_EPOCH_PER_HOST)
     # Every Nth origin claim looks at other hosts' rows first, so a down worker's rows are not stranded.
     FALLBACK_EVERY = int(os.environ.get("QUEUE_FALLBACK_EVERY") or DEFAULT_FALLBACK_EVERY)
     HIGH_PRIORITY_THRESHOLD = 10
@@ -504,7 +516,7 @@ class Scheduler:
 
     @classmethod
     def _multi_epoch_columns(cls, config):
-        """(disk, stage_gb): PathHandler's factory root; inputs x 2 resampled planes x SWarp grid."""
+        """(disk, stage_gb): factory root, or SCRATCH_DISK for auto; factory planes on scratch, else staged planes."""
         from ..config.base import BaseConfig
         from ..path import PathHandler
 
@@ -513,30 +525,21 @@ class Scheduler:
             images = node["input"]["calibrated_images"] or []
             images = [images] if isinstance(images, str) else list(images)
             settings = node.get("settings") or {}
+            scratch = settings.get("factory_scratch")
+            if str(scratch).lower() == "auto":
+                return SCRATCH_DISK, factory_bytes(len(images)) / 1e9
             path = PathHandler(
                 images[:1],
                 is_pipeline=settings.get("is_pipeline", False),
                 is_multi_epoch=settings.get("is_multi_epoch", False),
-                factory_scratch=settings.get("factory_scratch"),
+                factory_scratch=scratch,
                 config_file=str(config),
             )
             factory = path._factory_dir[0]  # the private attribute: reading the public one creates the directory
         except Exception:
             return cls._disk(config), None
         # upper bound: every input on the full SWarp grid; the stage copies only selected frames, each on its footprint
-        return cls._disk(factory), len(images) * 2 * cls._swarp_grid_bytes() / 1e9
-
-    @staticmethod
-    @functools.cache
-    def _swarp_grid_bytes():
-        """NAXIS1 x NAXIS2 x 4 from IMAGE_SIZE of ref/7dt.swarp."""
-        with open(os.path.join(REF_DIR, "7dt.swarp")) as fp:
-            for line in fp:
-                tokens = line.split("#", 1)[0].split()
-                if tokens and tokens[0] == "IMAGE_SIZE":
-                    nx, ny = tokens[1].split(",")
-                    return int(nx) * int(ny) * 4
-        raise ValueError("IMAGE_SIZE not found in ref/7dt.swarp")
+        return cls._disk(factory), (factory_bytes if scratch else stage_bytes)(len(images)) / 1e9
 
     def _repair_group_idx(self, conn):
         """group_idx, config_type, disk, stage_gb for rows older code inserted above the user_version watermark."""
@@ -644,8 +647,8 @@ class Scheduler:
 
         return Table(data, dtype=self._empty_schedule.dtype)
 
-    def _append_ready_task_constraints(self, cursor, query, params):
-        """Shared Ready-task filters: per-disk preprocess and multi-epoch caps, the priority and ToO gates."""
+    def _append_ready_task_constraints(self, cursor, query, params, host=None):
+        """Shared Ready-task filters: per-disk preprocess and multi-epoch caps, the per-host multi-epoch cap, the priority and ToO gates."""
         for config_type, cap in (
             (CONFIG_TYPE_PREPROCESS, self.MAX_PREPROCESS),
             (CONFIG_TYPE_MULTI_EPOCH, self.MAX_MULTI_EPOCH),
@@ -661,6 +664,15 @@ class Scheduler:
             for (disk,) in cursor.fetchall():
                 query += " AND NOT (config_type = ? AND disk IS ?)"
                 params.extend((config_type, disk))
+
+        if host is not None:
+            cursor.execute(
+                "SELECT COUNT(*) FROM scheduler WHERE status = ? AND config_type = ? AND COALESCE(dispatch, '') = ?",
+                (TASK_STATUS_PROCESSING, CONFIG_TYPE_MULTI_EPOCH, host),
+            )
+            if cursor.fetchone()[0] >= self.MAX_MULTI_EPOCH_PER_HOST:
+                query += " AND config_type != ?"
+                params.append(CONFIG_TYPE_MULTI_EPOCH)
 
         cursor.execute(
             "SELECT COUNT(*) FROM scheduler WHERE status = ? AND priority > ?",
@@ -680,7 +692,18 @@ class Scheduler:
 
         return query, params
 
-    def _tier_top(self, cursor, column, affinity, host, extra_sql="", extra_params=(), enter_groups=True):
+    def _tier_top(
+        self,
+        cursor,
+        column,
+        affinity,
+        host,
+        extra_sql="",
+        extra_params=(),
+        enter_groups=True,
+        order_sql="",
+        order_params=(),
+    ):
         """`column` of the row one tier would claim: rows owned by `affinity` ('' = unclaimed), or _FOREIGN for other hosts'."""
         query = f"SELECT {column} FROM scheduler WHERE status = ?"
         params = [TASK_STATUS_READY]
@@ -700,20 +723,31 @@ class Scheduler:
             params.append(host)
         query += extra_sql
         params.extend(extra_params)
-        query, params = self._append_ready_task_constraints(cursor, query, params)
-        query += f" {self._ORDER_BY} LIMIT 1"
+        query, params = self._append_ready_task_constraints(cursor, query, params, host)
+        query += f" {self._ORDER_HEAD}{order_sql}{self._ORDER_TAIL} LIMIT 1"
+        params.extend(order_params)
         cursor.execute(query, tuple(params))
         row = cursor.fetchone()
         return row[0] if row else None
 
-    def _select_ready_index(self, cursor, affinity, host, extra_sql="", extra_params=(), enter_groups=True):
+    def _select_ready_index(
+        self, cursor, affinity, host, extra_sql="", extra_params=(), enter_groups=True, order_sql="", order_params=()
+    ):
         """Index of the row one claim tier would take; see _tier_top."""
-        return self._tier_top(cursor, '"index"', affinity, host, extra_sql, extra_params, enter_groups)
+        return self._tier_top(
+            cursor, '"index"', affinity, host, extra_sql, extra_params, enter_groups, order_sql, order_params
+        )
 
-    def _claim_tiers(self, cursor, host, extra_sql="", extra_params=(), enter_groups=True):
+    def _claim_tiers(
+        self, cursor, host, extra_sql="", extra_params=(), enter_groups=True, order_sql="", order_params=()
+    ):
         """Own rows before the unclaimed pool, unless the pool's best row outranks them: the priority ladder still wins."""
-        own = self._tier_top(cursor, "priority", host, host, extra_sql, extra_params, enter_groups)
-        pool = self._tier_top(cursor, "priority", self._UNCLAIMED, host, extra_sql, extra_params, enter_groups)
+        own = self._tier_top(
+            cursor, "priority", host, host, extra_sql, extra_params, enter_groups, order_sql, order_params
+        )
+        pool = self._tier_top(
+            cursor, "priority", self._UNCLAIMED, host, extra_sql, extra_params, enter_groups, order_sql, order_params
+        )
         if pool is not None and (own is None or pool > own):
             return (self._UNCLAIMED, host)
         return (host, self._UNCLAIMED)
@@ -731,6 +765,7 @@ class Scheduler:
                 ("MAX_PREPROCESS", "QUEUE_MAX_PREPROCESS", self.DEFAULT_MAX_PREPROCESS),
                 ("FALLBACK_EVERY", "QUEUE_FALLBACK_EVERY", self.DEFAULT_FALLBACK_EVERY),
                 ("MAX_MULTI_EPOCH", "QUEUE_MAX_MULTI_EPOCH", self.DEFAULT_MAX_MULTI_EPOCH),
+                ("MAX_MULTI_EPOCH_PER_HOST", "QUEUE_MAX_MULTI_EPOCH_PER_HOST", self.DEFAULT_MAX_MULTI_EPOCH_PER_HOST),
             )
         }
         changes = {name: (getattr(self, name), value) for name, value in values.items()}
@@ -738,18 +773,38 @@ class Scheduler:
             setattr(self, name, value)
         return changes
 
-    def _scratch_bound(self, cursor, host, scratch_free_gb):
-        """Multi-epoch claim bound: stage_gb vs host's free scratch less its running stage_gb."""
+    def _scratch_ceiling(self, scratch_total_gb):
+        """Largest budget a host's scratch can ever offer: safety x total - reserve; None without a total."""
+        return None if scratch_total_gb is None else SCRATCH_SAFETY * float(scratch_total_gb) - SCRATCH_RESERVE_GB
+
+    def _scratch_bound(self, cursor, host, scratch_free_gb, scratch_total_gb=None):
+        """Multi-epoch claim bound: stage_gb vs host's scratch budget less its running stage_gb; rows beyond the ceiling pass, to run on the network factory."""
         if scratch_free_gb is None:
             return "", ()
-        cursor.execute(
+        ceiling = self._scratch_ceiling(scratch_total_gb)
+        running_sql = (
             f"SELECT COALESCE(SUM(stage_gb), 0) FROM scheduler WHERE status = ? AND config_type = ? "
-            f"AND {self._AFFINITY_FILTER}",
-            (TASK_STATUS_PROCESSING, CONFIG_TYPE_MULTI_EPOCH, host),
+            f"AND {self._AFFINITY_FILTER}"
         )
+        running_params = [TASK_STATUS_PROCESSING, CONFIG_TYPE_MULTI_EPOCH, host]
+        if ceiling is not None:  # a coadd beyond the ceiling runs on the network factory and holds no scratch
+            running_sql += " AND stage_gb * 1.1 <= ?"
+            running_params.append(ceiling)
+        cursor.execute(running_sql, running_params)
         budget = float(scratch_free_gb) - cursor.fetchone()[0]
         # 1.1: coadd_scratch auto (ImCoadd._pick_coadd_scratch) stages only when free > 1.1 x the bytes
-        return " AND (stage_gb IS NULL OR stage_gb * 1.1 <= ?)", (budget,)
+        if ceiling is None:
+            return " AND (stage_gb IS NULL OR stage_gb * 1.1 <= ?)", (budget,)
+        return " AND (stage_gb IS NULL OR stage_gb * 1.1 <= ? OR stage_gb * 1.1 > ?)", (budget, ceiling)
+
+    def _scratch_order(self, scratch_total_gb):
+        """Order key placing the multi-epoch rows beyond this host's ceiling after the ones its scratch can hold."""
+        ceiling = self._scratch_ceiling(scratch_total_gb)
+        if ceiling is None:
+            return "", ()
+        return f", CASE WHEN config_type = '{CONFIG_TYPE_MULTI_EPOCH}' AND stage_gb * 1.1 > ? THEN 1 ELSE 0 END ASC", (
+            ceiling,
+        )
 
     def _claim_group(self, cursor, index, host):
         """Stamp the claimed row's crossfilter group with `host`: every unclaimed row not running elsewhere; no-op if ungrouped."""
@@ -973,13 +1028,13 @@ class Scheduler:
                 return cursor.fetchone()[0] > 0
         return len(self.schedule[self.schedule["status"] != TASK_STATUS_COMPLETED]) > 0
 
-    def get_next_task(self, scratch_free_gb=None):
-        """Get the next task to process with priority and concurrency constraints; scratch_free_gb bound."""
+    def get_next_task(self, scratch_free_gb=None, scratch_total_gb=None):
+        """Get the next task to process with priority and concurrency constraints; scratch budget and total bound."""
         if not self.has_schedule:
             return None
 
         if self.use_system_queue:
-            row, cmd = self._get_next_task_db(scratch_free_gb)
+            row, cmd = self._get_next_task_db(scratch_free_gb, scratch_total_gb)
             if row is None:
                 import subprocess, time
 
@@ -992,21 +1047,37 @@ class Scheduler:
         else:
             return self._get_next_task_memory()
 
-    def _get_next_task_db(self, scratch_free_gb=None):
+    def _get_next_task_db(self, scratch_free_gb=None, scratch_total_gb=None):
         """Get next task from database."""
         with self._db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("BEGIN IMMEDIATE")
             try:
-                extra_sql, extra_params = self._scratch_bound(cursor, self._LOCAL_DISPATCH, scratch_free_gb)
+                extra_sql, extra_params = self._scratch_bound(
+                    cursor, self._LOCAL_DISPATCH, scratch_free_gb, scratch_total_gb
+                )
+                order_sql, order_params = self._scratch_order(scratch_total_gb)
                 # A fallback turn must name other hosts explicitly; the unclaimed pool would just re-pick a local one.
-                tiers = self._claim_tiers(cursor, self._LOCAL_DISPATCH, extra_sql, extra_params)
+                tiers = self._claim_tiers(
+                    cursor,
+                    self._LOCAL_DISPATCH,
+                    extra_sql,
+                    extra_params,
+                    order_sql=order_sql,
+                    order_params=order_params,
+                )
                 if self._take_foreign_turn():
                     tiers = (self._FOREIGN,) + tiers
                 task_index = None
                 for affinity in tiers:
                     task_index = self._select_ready_index(
-                        cursor, affinity, self._LOCAL_DISPATCH, extra_sql, extra_params
+                        cursor,
+                        affinity,
+                        self._LOCAL_DISPATCH,
+                        extra_sql,
+                        extra_params,
+                        order_sql=order_sql,
+                        order_params=order_params,
                     )
                     if task_index is not None:
                         break
@@ -1385,7 +1456,7 @@ class Scheduler:
         extra_sql = f" AND config_type IN ({','.join('?' for _ in config_types)})"
         return extra_sql, tuple(config_types), CONFIG_TYPE_CROSSFILTER in config_types
 
-    def claim_next_dispatch_task(self, server_name, config_types=None, scratch_free_gb=None):
+    def claim_next_dispatch_task(self, server_name, config_types=None, scratch_free_gb=None, scratch_total_gb=None):
         """
         Claim one Ready task for a worker host.
 
@@ -1410,12 +1481,15 @@ class Scheduler:
             cursor.execute("BEGIN IMMEDIATE")
             try:
                 extra_sql, extra_params, enter_groups = self._worker_claim_filter(config_types)
-                bound_sql, bound_params = self._scratch_bound(cursor, server_name, scratch_free_gb)
+                bound_sql, bound_params = self._scratch_bound(cursor, server_name, scratch_free_gb, scratch_total_gb)
                 extra_sql, extra_params = extra_sql + bound_sql, extra_params + bound_params
+                order_sql, order_params = self._scratch_order(scratch_total_gb)
                 task_index = None
-                for affinity in self._claim_tiers(cursor, server_name, extra_sql, extra_params, enter_groups):
+                for affinity in self._claim_tiers(
+                    cursor, server_name, extra_sql, extra_params, enter_groups, order_sql, order_params
+                ):
                     task_index = self._select_ready_index(
-                        cursor, affinity, server_name, extra_sql, extra_params, enter_groups
+                        cursor, affinity, server_name, extra_sql, extra_params, enter_groups, order_sql, order_params
                     )
                     if task_index is not None:
                         break
@@ -1446,7 +1520,9 @@ class Scheduler:
 
         return self._row_to_dict(row) if row else None
 
-    def claim_next_dispatch_tasks(self, server_name, config_types=None, count=1, scratch_free_gb=None):
+    def claim_next_dispatch_tasks(
+        self, server_name, config_types=None, count=1, scratch_free_gb=None, scratch_total_gb=None
+    ):
         """Claim up to `count` Ready tasks for a worker host in ONE transaction; same gates as the single claim."""
         if not self.use_system_queue:
             raise RuntimeError("claim_next_dispatch_tasks requires use_system_queue=True")
@@ -1464,13 +1540,25 @@ class Scheduler:
             cursor.execute("BEGIN IMMEDIATE")
             try:
                 filter_sql, filter_params, enter_groups = self._worker_claim_filter(config_types)
+                order_sql, order_params = self._scratch_order(scratch_total_gb)
                 while len(claimed) < count:
-                    bound_sql, bound_params = self._scratch_bound(cursor, server_name, scratch_free_gb)
+                    bound_sql, bound_params = self._scratch_bound(
+                        cursor, server_name, scratch_free_gb, scratch_total_gb
+                    )
                     extra_sql, extra_params = filter_sql + bound_sql, filter_params + bound_params
                     task_index = None
-                    for affinity in self._claim_tiers(cursor, server_name, extra_sql, extra_params, enter_groups):
+                    for affinity in self._claim_tiers(
+                        cursor, server_name, extra_sql, extra_params, enter_groups, order_sql, order_params
+                    ):
                         task_index = self._select_ready_index(
-                            cursor, affinity, server_name, extra_sql, extra_params, enter_groups
+                            cursor,
+                            affinity,
+                            server_name,
+                            extra_sql,
+                            extra_params,
+                            enter_groups,
+                            order_sql,
+                            order_params,
                         )
                         if task_index is not None:
                             break

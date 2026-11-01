@@ -21,7 +21,7 @@ from ..const.run import (
 from .memory import MemoryMonitor
 from .logger import Logger, log_orchestration_stop
 from .scheduler import Scheduler
-from .utils import local_scratch_mounts
+from .utils import local_scratch_claim
 
 signal.signal(signal.SIGINT, signal.SIG_IGN)
 mp.set_start_method("spawn", force=True)
@@ -376,8 +376,9 @@ class QueueManager:
                     continue
                 else:
                     # Get next task and mark as Processing atomically within lock
+                    scratch_free_gb, scratch_total_gb = local_scratch_claim()
                     task, cmd = self.scheduler.get_next_task(
-                        scratch_free_gb=max((free for _root, free in local_scratch_mounts()), default=0) / 1e9
+                        scratch_free_gb=scratch_free_gb, scratch_total_gb=scratch_total_gb
                     )
                     self.logger.debug(f"Task: {task}")
                     self.logger.debug(f"Command: {cmd}")

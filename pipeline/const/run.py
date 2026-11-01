@@ -18,6 +18,7 @@ CONFIG_TYPE_SCIENCE = "science"
 CONFIG_TYPE_CROSSFILTER = "crossfilter"
 CONFIG_TYPE_DEBUG = "debug"
 CONFIG_TYPE_MULTI_EPOCH = "multi-epoch"  # scheduler rows only: a dateless science config, typed at insert
+SCRATCH_DISK = "scratch"  # scheduler disk bucket of multi-epoch rows whose factory_scratch is auto
 
 INPUT_TYPE_DAILY = "Daily"
 INPUT_TYPE_TOO = "ToO"

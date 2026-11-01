@@ -105,6 +105,7 @@ registry.register_kind("FilterMismatchError", 59, FilterMismatchError)
 registry.register_kind("BackgroundArtifactError", 60, BackgroundArtifactError)
 registry.register_kind("SeeingVariationError", 61, SeeingVariationError)
 registry.register_kind("StagedCopyShortError", 64, StagedCopyShortError)
+registry.register_kind("ScratchBudgetShortError", 65, ScratchBudgetShortError)
 # registry.register_kind("SwarpGenericError", 62, SwarpGenericError)
 
 

@@ -13,6 +13,7 @@ from ..utils import clean_up_folder, clean_up_sciproduct, atleast_1d, time_diff_
 from ..utils.header import get_header
 from ..path.path import PathHandler
 from ..services.logger import Logger
+from ..services.utils import factory_bytes, local_scratch_mounts, scratch_budget
 from ..const.sciproc import SCIPROCESS_REGISTRY
 
 from .base import BaseConfig
@@ -20,6 +21,25 @@ from .utils import get_key, merge_dicts
 
 if TYPE_CHECKING:
     from ._sciproc_stubs import SciProcNode
+
+
+def _resolve_factory_scratch(setting, is_pipeline: bool, is_multi_epoch: bool, n_inputs: int) -> str | None:
+    """settings.factory_scratch -> PathHandler root; auto picks the local scratch whose budget covers the factory, else None (FACTORY_DIR)."""
+    if str(setting).lower() != "auto":
+        if not setting or not is_multi_epoch:
+            return setting
+        try:
+            os.makedirs(setting, exist_ok=True)
+        except OSError:
+            pass
+        if os.path.isdir(setting) and os.access(setting, os.W_OK):
+            return setting
+        print(f"[WARNING] factory_scratch {setting} is not a writable directory on this host; resolving as auto")
+    if not (is_multi_epoch and is_pipeline):
+        return None
+    # a pick only: ImCoadd prunes and re-checks before it writes, so loading a config has no side effect
+    budget, root = max(((scratch_budget(root)[3], root) for root, _free in local_scratch_mounts()), default=(0, None))
+    return root if budget >= factory_bytes(n_inputs) * 1.1 else None
 
 
 class SciProcConfiguration(BaseConfig):
@@ -164,7 +184,12 @@ class SciProcConfiguration(BaseConfig):
             "is_too": is_too,
             "is_multi_epoch": is_multi_epoch,
             "config_file": config_file,
-            "factory_scratch": get_key(self.node.settings, "factory_scratch"),
+            "factory_scratch": _resolve_factory_scratch(
+                get_key(self.node.settings, "factory_scratch"),
+                is_pipeline,
+                is_multi_epoch,
+                len(atleast_1d(get_key(self.node, "input.calibrated_images") or [])),
+            ),
         }
         if hasattr(self.node, "input"):
             if hasattr(self.node.input, "calibrated_images") and self.node.input.calibrated_images:
@@ -317,7 +342,7 @@ class SciProcConfiguration(BaseConfig):
             is_multi_epoch=is_multi_epoch,
             config_file=config_file,
             config_suffix=config_suffix,
-            factory_scratch=factory_scratch,
+            factory_scratch=None if str(factory_scratch).lower() == "auto" else factory_scratch,
         )
         self = cls.base_config(write=write)
         self.input_files = input_images
@@ -356,7 +381,13 @@ class SciProcConfiguration(BaseConfig):
             return self
 
         self.initialize(write=write, is_pipeline=is_pipeline, is_too=is_too, is_multi_epoch=is_multi_epoch)
-        self.node.settings.factory_scratch = factory_scratch
+        if factory_scratch is not None:
+            self.node.settings.factory_scratch = factory_scratch
+        root = _resolve_factory_scratch(
+            get_key(self.node.settings, "factory_scratch"), is_pipeline, is_multi_epoch, len(input_images)
+        )
+        if root != self.path.settings.factory_scratch:
+            self.path = self.path.replace(factory_scratch=root)
         if self.write:  # defined in base_config
             self.write_config(force=True)
 

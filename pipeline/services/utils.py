@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import gc
+import functools
+import glob
 import re
 import time
 import psutil
@@ -16,10 +18,23 @@ import os
 import shutil
 from collections import UserDict
 from itertools import chain
+from stat import S_ISDIR
 
 import ctypes
 
-from ..const import DISCOVERY_RAW_INVENTORY, GPU_DEVICES, LOCAL_FSTYPES, SERVICES_TMP_DIR
+from ..const import (
+    DISCOVERY_RAW_INVENTORY,
+    FACTORY_PLANES,
+    GPU_DEVICES,
+    LOCAL_FSTYPES,
+    REF_DIR,
+    SCRATCH_IDLE_HOURS,
+    SCRATCH_PROBE_SECONDS,
+    SCRATCH_RESERVE_GB,
+    SCRATCH_SAFETY,
+    SERVICES_TMP_DIR,
+    STAGE_PLANES,
+)
 from ..utils import collapse
 
 
@@ -431,6 +446,107 @@ def local_scratch_mounts(logger=None) -> list[tuple[str, int]]:
             continue
         mounts.append((root, free))
     return mounts
+
+
+@functools.cache
+def swarp_grid_bytes() -> int:
+    """NAXIS1 x NAXIS2 x 4 from IMAGE_SIZE of ref/7dt.swarp."""
+    with open(os.path.join(REF_DIR, "7dt.swarp")) as fp:
+        for line in fp:
+            tokens = line.split("#", 1)[0].split()
+            if tokens and tokens[0] == "IMAGE_SIZE":
+                nx, ny = tokens[1].split(",")
+                return int(nx) * int(ny) * 4
+    raise ValueError("IMAGE_SIZE not found in ref/7dt.swarp")
+
+
+def factory_bytes(n_inputs: int) -> int:
+    """Multi-epoch factory footprint: inputs x FACTORY_PLANES x SWarp grid."""
+    return n_inputs * FACTORY_PLANES * swarp_grid_bytes()
+
+
+def stage_bytes(n_inputs: int) -> int:
+    """Staged combine inputs: inputs x STAGE_PLANES x SWarp grid."""
+    return n_inputs * STAGE_PLANES * swarp_grid_bytes()
+
+
+def _factory_trees(root: str, now: float | None = None) -> list[tuple[float, int, str, bool]]:
+    """(newest mtime, bytes, path, idle) per factory tree; imcoadd_staged is never one."""
+    from ..path.const import IMCOADD_TMP_DIRNAME, MULTI_EPOCH_DIRNAME
+
+    now = time.time() if now is None else now
+    trees = []
+    # stem-level trees: scratch/coadd/<obj>/<filter>/imcoadd/<stem>
+    for tree in glob.glob(os.path.join(glob.escape(root), MULTI_EPOCH_DIRNAME, "*", "*", IMCOADD_TMP_DIRNAME, "*")):
+        if not os.path.isdir(tree) or os.path.islink(tree):
+            continue
+        try:
+            newest = os.stat(tree).st_mtime
+        except OSError:
+            continue
+        size = 0
+        for r2, dirs, files in os.walk(tree):
+            for name in dirs + files:
+                try:
+                    st_ = os.lstat(os.path.join(r2, name))
+                except OSError:
+                    continue
+                newest = max(newest, st_.st_mtime)
+                if not S_ISDIR(st_.st_mode):
+                    size += st_.st_size
+        trees.append((newest, size, tree, now - newest >= SCRATCH_IDLE_HOURS * 3600))
+    return trees
+
+
+def scratch_budget(root: str, now: float | None = None) -> tuple[int, int, int, int]:
+    """(free, deletable, total, budget) bytes of one scratch root; budget = safety x (free + deletable) - reserve."""
+    usage = shutil.disk_usage(root)
+    deletable = sum(size for _newest, size, _tree, idle in _factory_trees(root, now) if idle)
+    budget = max(0, int(SCRATCH_SAFETY * (usage.free + deletable) - SCRATCH_RESERVE_GB * 1e9))
+    return usage.free, deletable, usage.total, budget
+
+
+def prune_scratch(root: str, need_bytes: float, cap_bytes: float, logger=None, keep: str | None = None) -> int:
+    """Remove oldest idle factory trees until free >= need + reserve and trees <= cap; returns free bytes."""
+    trees = _factory_trees(root)
+    total = sum(size for _newest, size, _tree, _idle in trees)
+    free = shutil.disk_usage(root).free
+    for newest, size, tree, idle in sorted(trees):
+        if free >= need_bytes + SCRATCH_RESERVE_GB * 1e9 and total <= cap_bytes:
+            break
+        if not idle or tree == keep:
+            continue
+        msg = f"Scratch rotation: removing {tree} ({size/1e9:.0f} GB, idle {(time.time()-newest)/3600:.1f} h)"
+        if logger is not None:
+            logger.info(msg)
+        else:
+            print(f"[INFO] {msg}")
+        shutil.rmtree(tree, ignore_errors=True)
+        total -= size
+        free = shutil.disk_usage(root).free
+    if total > cap_bytes:
+        msg = f"Scratch still over cap after rotation ({total/1e9:.0f} GB > {cap_bytes/1e9:.0f} GB); all trees active"
+        if logger is not None:
+            logger.warning(msg)
+        else:
+            print(f"[WARNING] {msg}")
+    return free
+
+
+_scratch_probe = {"at": 0.0, "value": None}
+
+
+def local_scratch_claim(logger=None) -> tuple[float, float | None]:
+    """(budget GB, total GB) of the local scratch root with the largest budget; walked every SCRATCH_PROBE_SECONDS."""
+    now = time.monotonic()
+    if _scratch_probe["value"] is None or now - _scratch_probe["at"] >= SCRATCH_PROBE_SECONDS:
+        budget, total = 0, None
+        for root, _free in local_scratch_mounts(logger):
+            _f, _d, root_total, root_budget = scratch_budget(root)
+            if total is None or root_budget > budget:
+                budget, total = root_budget, root_total
+        _scratch_probe.update(at=now, value=(budget / 1e9, None if total is None else total / 1e9))
+    return _scratch_probe["value"]
 
 
 # ---------------------------------------------------------------------------------------------------------------------

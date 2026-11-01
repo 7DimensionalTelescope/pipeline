@@ -9,4 +9,4 @@ imcoadd:
   output_single_weight_maps: false
 
 settings:
-  factory_scratch:
+  factory_scratch: auto

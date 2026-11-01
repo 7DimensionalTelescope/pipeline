@@ -124,6 +124,10 @@ class StagedCopyShortError(OSError):
     """A coadd input staged to local scratch came back shorter than its source."""
 
 
+class ScratchBudgetShortError(Exception):
+    """No local scratch can hold a multi-epoch factory; it runs on FACTORY_DIR."""
+
+
 # subtraction errors
 class ReferenceImageNotFoundError(Exception):
     pass
