@@ -120,6 +120,10 @@ class SwarpGenericError(Exception):
     pass
 
 
+class StagedCopyShortError(OSError):
+    """A coadd input staged to local scratch came back shorter than its source."""
+
+
 # subtraction errors
 class ReferenceImageNotFoundError(Exception):
     pass

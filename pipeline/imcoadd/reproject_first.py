@@ -168,7 +168,7 @@ class ReprojectFirstCoaddMixin:
         return best[0]
 
     def _stage_for_coadd(self, groups: dict[str, list[str] | None]):
-        """Stage coadd inputs locally and return remapped groups plus cleanup."""
+        """Stage coadd inputs locally, one sequential size-checked stream, and return remapped groups plus cleanup."""
         if self.storage.policy == "memory":
             return groups, lambda: None
         scratch = self.plan.coadd_scratch
@@ -192,23 +192,44 @@ class ReprojectFirstCoaddMixin:
         base = os.path.join(scratch, "imcoadd_staged", stem)
         st = time.time()
         self.logger.info(f"Staging {len(files)} files ({need/1e9:.0f} GB) to {base}")
-        from concurrent.futures import ThreadPoolExecutor
+        from ..services.combine_lock import CombineSlot
 
-        def _copy(item):
-            group, src = item
-            dst = os.path.join(base, group, os.path.basename(src))
-            os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shutil.copyfile(src, dst)
-            return src, dst
-
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            mapping = dict(pool.map(_copy, files))
+        # one sequential stream per source filesystem on this host: an HDD array delivers its
+        # rated rate only when it is not seeking between interleaved readers
+        mapping = {}
+        with CombineSlot(os.path.dirname(files[0][1]), logger=self.logger, kind="stage"):
+            for group, src in files:
+                mapping[src] = self._stage_copy(src, os.path.join(base, group, os.path.basename(src)))
         self.logger.info(
             f"Staged in {time_diff_in_seconds(st)} seconds "
             f"({need/1e9/max(time.time()-st, 1):.2f} GB/s sequential from NFS)"
         )
         remapped = {g: ([mapping[f] for f in lst] if lst else lst) for g, lst in groups.items()}
         return remapped, lambda: shutil.rmtree(base, ignore_errors=True)
+
+    def _stage_copy(self, src: str, dst: str, attempts: int = 3) -> str:
+        """Size-checked copy; an input still short after ``attempts`` is coadded from its network filesystem."""
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        expected = os.path.getsize(src)
+        for attempt in range(1, attempts + 1):
+            shutil.copyfile(src, dst)
+            copied = os.path.getsize(dst)
+            if copied == expected:
+                return dst
+            self.logger.warning(
+                f"Staged copy of {src} is {copied} bytes, source {expected} (attempt {attempt}/{attempts})",
+                self._process_error.StagedCopyShortError,
+            )
+            time.sleep(2 * attempt)
+        try:
+            os.remove(dst)
+        except OSError:
+            pass
+        self.logger.warning(
+            f"{src} is coadded from its network filesystem: {attempts} copies came back short",
+            self._process_error.StagedCopyShortError,
+        )
+        return src
 
     def coadd_in_memory(
         self,

@@ -182,15 +182,16 @@ class CombineSlot:
             ... combine ...
     """
 
-    def __init__(self, anchor_path: str, logger=None):
+    def __init__(self, anchor_path: str, logger=None, kind: str = "combine"):
         self.tag = _fs_tag(anchor_path)
+        self.kind = kind  # slot family: "combine" or "stage", each its own flock per filesystem
         self.logger = logger
         self._fh = None
         self._lease_file = os.path.join(_lease_dir(), f"combine_{os.getpid()}.json")
 
     def __enter__(self):
         os.makedirs(HOST_LOCK_DIR, exist_ok=True)
-        self._fh = open(os.path.join(HOST_LOCK_DIR, f"combine_{self.tag}.lock"), "w")
+        self._fh = open(os.path.join(HOST_LOCK_DIR, f"{self.kind}_{self.tag}.lock"), "w")
         try:
             fcntl.flock(self._fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return self
@@ -200,7 +201,9 @@ class CombineSlot:
         # polling latency. The thread only narrates the wait.
         t0 = time.time()
         if self.logger:
-            self.logger.info(f"Combine slot {self.tag} is held by another process; blocking until released")
+            self.logger.info(
+                f"{self.kind.capitalize()} slot {self.tag} is held by another process; blocking until released"
+            )
         stop = None
         if self.logger:
             import threading
@@ -209,7 +212,9 @@ class CombineSlot:
 
             def narrate():
                 while not stop.wait(300.0):
-                    self.logger.info(f"Combine slot {self.tag} still held; waiting ({time.time() - t0:.0f} s)")
+                    self.logger.info(
+                        f"{self.kind.capitalize()} slot {self.tag} still held; waiting ({time.time() - t0:.0f} s)"
+                    )
 
             threading.Thread(target=narrate, daemon=True).start()
         try:
@@ -218,7 +223,7 @@ class CombineSlot:
             if stop is not None:
                 stop.set()
         if self.logger:
-            self.logger.info(f"Combine slot {self.tag} acquired after {time.time() - t0:.0f} s")
+            self.logger.info(f"{self.kind.capitalize()} slot {self.tag} acquired after {time.time() - t0:.0f} s")
         return self
 
     @property

@@ -104,6 +104,7 @@ registry.register_kind("FilterMismatchError", 59, FilterMismatchError)
 # imcoadd from 60
 registry.register_kind("BackgroundArtifactError", 60, BackgroundArtifactError)
 registry.register_kind("SeeingVariationError", 61, SeeingVariationError)
+registry.register_kind("StagedCopyShortError", 64, StagedCopyShortError)
 # registry.register_kind("SwarpGenericError", 62, SwarpGenericError)
 
 
