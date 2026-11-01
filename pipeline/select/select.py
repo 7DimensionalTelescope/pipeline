@@ -493,20 +493,20 @@ def plot_selection(table: Table, cuts: dict, keep: np.ndarray, out_path: str | N
                     ax.scatter(table[xk][kept], table[yk][kept], s=14, marker="o",
                                c=color, alpha=0.85, linewidths=0, zorder=2 + depth)  # fmt: skip
             if xk in cuts:
-                xl = ax.get_xlim()
                 for edge in _edges(cuts[xk]):
                     ax.axvline(edge, color="tab:red", ls="--", lw=1.2)
                     ax.annotate(f"{edge:g}", xy=(edge, 0.99), xycoords=("data", "axes fraction"),
                                 color="tab:red", fontsize=10, ha="left", va="top")  # fmt: skip
+                xl = ax.get_xlim()
                 for lo, hi in _rejected_spans(cuts[xk], directions.get(xk), xl):
                     ax.axvspan(lo, hi, color="0.92", zorder=0)
                 ax.set_xlim(xl)
             if yk in cuts:
-                yl = ax.get_ylim()
                 for edge in _edges(cuts[yk]):
                     ax.axhline(edge, color="tab:red", ls="--", lw=1.2)
                     ax.annotate(f"{edge:g}", xy=(0.99, edge), xycoords=("axes fraction", "data"),
                                 color="tab:red", fontsize=10, ha="right", va="bottom")  # fmt: skip
+                yl = ax.get_ylim()
                 for lo, hi in _rejected_spans(cuts[yk], directions.get(yk), yl):
                     ax.axhspan(lo, hi, color="0.92", zorder=0)
                 ax.set_ylim(yl)

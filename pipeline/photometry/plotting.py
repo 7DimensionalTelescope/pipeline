@@ -105,13 +105,13 @@ def plot_filter_check(
             steps,
             deep,
             step="post",
-            facecolor="gray",
+            facecolor="darkgoldenrod",
             hatch="xx",
-            edgecolor="gray",
+            edgecolor="darkgoldenrod",
             alpha=0.2,
             linewidth=0,
         )
-    light_patch = mpatches.Patch(facecolor="gray", hatch="xx", edgecolor="gray", alpha=0.2)
+    light_patch = mpatches.Patch(facecolor="darkgoldenrod", hatch="xx", edgecolor="darkgoldenrod", alpha=0.2)
     ax2.set_ylabel("Zero Point (ZP)", color=c_zp)
     ax2.tick_params(axis="y", labelcolor=c_zp)
     ax2.set_ylim(deep, shallow)
