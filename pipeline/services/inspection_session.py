@@ -5,7 +5,9 @@ The pool holds processed singles; a raw frame in it is replaced by its single th
 Enter passes (on a judged frame it only moves to the next waiting one), text rejects with that text as INSPCOMM (written at once), `?` marks the frame ambiguous
 with the clause after it as the comment (kept in the session only; nothing is written), `u` reverses the previous verdict,
 `f`/`b` move forward or back (`100f`, `3b`; a frame left without a verdict is recorded as seen), `q`
-stops and `run()` continues at the frame last left, in the same order (`shuffle` is seeded).
+stops and `run()` continues at the frame last left, in the same order (`shuffle` is seeded). `m` shows the master
+frames the single used below its composite until the next reply; a reply of one or two letters that is no command asks
+for confirmation before it becomes an INSPCOMM.
 `run(verdict=..., comment=...)` revises the recorded frames that match (case-insensitive regex on the
 comment): text or `?` replace the verdict, `u` clears it, Enter keeps it. `stem` names the log and
 report files, `<stem>.jsonl` and `<stem>.md`. The last `log_lines` lines of the frame's science config log are
@@ -91,6 +93,16 @@ def _status_line(image: str) -> Optional[str]:
     if warnings:
         parts.append("warnings " + ", ".join("%d %s.%s" % (code, *names_from_code(code)) for code in warnings))
     return "; ".join(parts)
+
+
+def _confirm_short(answer: str) -> bool:
+    """Confirmation of a 1-2 letter reply that is no command; any other reply passes."""
+    if not re.fullmatch(r"[A-Za-z]{1,2}", answer):
+        return True
+    try:
+        return input(f"reject with INSPCOMM '{answer}'? y to confirm, anything else cancels: ").strip().lower() == "y"
+    except (EOFError, KeyboardInterrupt, NotImplementedError):
+        return False
 
 
 def _cell(text) -> str:
@@ -284,7 +296,7 @@ class InspectionSession:
         return record
 
     def run(self, retain: bool = False, verdict=None, comment: Optional[str] = None) -> "InspectionSession":
-        """Enter pass, text reject, ? ambiguous, u undo, f/b move (100f, 3b), q quit; `verdict` and/or `comment` (regex, case-insensitive) revise the recorded frames that match instead."""
+        """Enter pass, text reject, ? ambiguous, u undo, f/b move (100f, 3b), m masters, q quit; `verdict` and/or `comment` (regex, case-insensitive) revise the recorded frames that match instead."""
         kernel = in_notebook()
         if not kernel and not sys.stdin.isatty():
             raise RuntimeError("run() needs a Jupyter kernel or a terminal")
@@ -331,7 +343,7 @@ class InspectionSession:
         return at
 
     def _loop(self, kernel: bool, retain: bool, active: List[str], revise: bool) -> None:
-        shown, note, browsing = 0, "", False
+        shown, note, browsing, masters_for = 0, "", False, None
         self._active = active
         self.cursor = 0 if revise else self._resume_position()
         while 0 <= self.cursor < len(active):
@@ -364,12 +376,25 @@ class InspectionSession:
             for line in _log_tail(image, self.log_lines):
                 print(f"    {line}")
             self._display(im, image, kernel)
+            if masters_for == image:
+                from .masterframe_session import composite_for_single
+
+                try:
+                    self._display(composite_for_single(image), f"{_stem(image)}_masters", kernel)
+                except (OSError, ValueError) as e:
+                    print(f"masters: {e}")
             _settle()
             try:
-                answer = input("Enter=pass  text=reject  ?=ambiguous  u=undo  f/b=move  q=quit: ").strip()
+                answer = input("Enter=pass  text=reject  ?=ambiguous  u=undo  f/b=move  m=masters  q=quit: ").strip()
             except (EOFError, KeyboardInterrupt, NotImplementedError):
+                if record is None:  # Ctrl-C quits like q: the frame on screen is left as seen
+                    self._record(image, state, None)
                 return
             note = ""
+            if answer.lower() == "m":
+                masters_for, browsing = None if masters_for == image else image, True
+                continue
+            masters_for = None
             if answer.lower() == "q":
                 if record is None:
                     self._record(image, state, None)
@@ -400,6 +425,9 @@ class InspectionSession:
             if not answer and record and record["verdict"] != "seen":
                 self.cursor += 1
                 continue
+            if answer and not _confirm_short(answer):
+                note, browsing = f"not recorded: {answer!r}", True
+                continue
             try:
                 record = self._record(image, state, answer)
             except ValueError as e:
@@ -410,6 +438,17 @@ class InspectionSession:
             self.cursor += 1
         if not shown:
             print("nothing matches" if revise else "nothing left to inspect")
+
+    def masters(self, by: str = "count") -> List[dict]:
+        """Distinct masters of the pool: path, name, role, count of singles using it; sorted by `by` (count descending)."""
+        from .masterframe_session import _masters_of
+
+        used = {}
+        for roles in _masters_of(self.images).values():
+            for role, path in roles.items():
+                entry = used.setdefault(path, {"path": path, "name": _stem(path), "role": role, "count": 0})
+                entry["count"] += 1
+        return sorted(used.values(), key=lambda entry: -entry["count"] if by == "count" else entry[by])
 
     def undo(self, image: Optional[str] = None) -> Optional[dict]:
         """Reverse the last verdict, or the one on `image`; a rejection goes back to the state recorded before it."""

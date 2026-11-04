@@ -14,6 +14,7 @@ SURVEY_SCIENCE_GROUP_KEYS = ["obj", "filter"]  # , "n_binning", "unit"]
 TRANSIENT_SCIENCE_GROUP_KEYS = ["nightdate"] + SURVEY_SCIENCE_GROUP_KEYS  # used for processed image directory structure
 CROSS_FILTER_GROUP_KEYS = ["nightdate", "obj"]
 WHITE_FILTER = "white"
+CLEAR_FILTER = "clear"  # INF_FILT when every filter's ZP is beyond its zp_max: no filter in the beam
 
 # nightdate is the most lenient; separate logic for it
 BIAS_GROUP_LENIENT_KEYS = ["unit"]

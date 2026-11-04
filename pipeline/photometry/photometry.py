@@ -33,6 +33,7 @@ from .. import external
 from ..const import (
     PIXSCALE,
     ALL_FILTERS,
+    CLEAR_FILTER,
     SECOND_FILTERS,
     TRUST_ACTIVE_FILTERS_NIGHTDATE,
     SECOND_FILTER_ADDITION_NIGHTDATE,
@@ -506,7 +507,7 @@ class PhotometrySingle:
 
                 # if inferred filter is different, save it to header and catalog, too
                 inferred_filter = self.determine_filter(temp_headers)
-                if inferred_filter != self.image_info.filter:
+                if inferred_filter not in (self.image_info.filter, CLEAR_FILTER):
                     self.logger.info(f"Saving {inferred_filter} photometry to catalog too")
                     inferred_phot_header = temp_headers[inferred_filter]
                     self.add_calibrated_columns(obs_src_table, filt=inferred_filter, phot_header=inferred_phot_header)
@@ -1423,10 +1424,10 @@ class PhotometrySingle:
         elif dicts:
             zp, zperr = phot_utils.get_zp_from_dict(dicts, alleged_filter)
             self.logger.warning(
-                f"Filter determination process eliminated all candidates. Falling back to header filter '{alleged_filter}' (zp = {zp:.2f}±{zperr:.2f})",
+                f"Filter determination process eliminated all candidates. Inferring '{CLEAR_FILTER}' for header filter '{alleged_filter}' (zp = {zp:.2f}±{zperr:.2f})",
                 FilterCheckError,
             )
-            inferred_filter = alleged_filter
+            inferred_filter = CLEAR_FILTER
         else:
             self.logger.warning(
                 f"No valid zero point sources found. Falling back to header filter '{alleged_filter}'",
@@ -1449,16 +1450,20 @@ class PhotometrySingle:
                 zp_limits=zp_limits,
             )
 
-        if alleged_filter != inferred_filter:
+        if alleged_filter != inferred_filter and inferred_filter != CLEAR_FILTER:
             orig_zp, orig_zperr = phot_utils.get_zp_from_dict(dicts, alleged_filter)
             self.logger.warning(
                 f"The filter in header ({alleged_filter}; zp = {orig_zp:.2f}±{orig_zperr:.2f}) is not the best matching ({inferred_filter}; zp = {zp:.2f}±{zperr:.2f})",
                 InferredFilterMismatchError,
             )
-        else:
+        elif alleged_filter == inferred_filter:
             self.logger.info(f"The inferred filter matches the original filter, '{alleged_filter}'")
 
         self.phot_header.INF_FILT = inferred_filter
+        if inferred_filter == CLEAR_FILTER:  # no EZP_AUTO of its own: INF_FIL2 is the best-fitting filter, no margins
+            pool = [(d[0]["EZP_AUTO"][0], f) for f, d in dicts.items() if "EZP_AUTO" in d[0]]
+            self.phot_header.INF_FIL2 = min(pool)[1] if pool else None
+            return inferred_filter
         self.phot_header.INF_DEZF = orig_zperr - zperr if alleged_filter != inferred_filter else 0.0
         # INF_FIL2 ranges over the whole pool (ruled-out filters included), so INF_DEZP < 0 when one of them beats INF_FILT
         others = [(d[0]["EZP_AUTO"][0], f) for f, d in dicts.items() if f != inferred_filter and "EZP_AUTO" in d[0]]

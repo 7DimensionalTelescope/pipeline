@@ -23,6 +23,7 @@ from typing import List, Optional, Union
 
 from astropy.io import fits
 
+from ..const import CALIB_TYPES, NAME_TYPE_MASTER
 from ..const.sciproc import REJECTION_PROCESS_HEADER_KEY
 from ..utils.header import (
     read_header_file,
@@ -33,6 +34,16 @@ from ..utils.header import (
     write_header_file,
 )
 from ..utils import atleast_1d, swap_ext
+from .ppflag_cascade import (  # noqa: F401 -- the master-verdict cascade, importable from here
+    CascadeReport,
+    Change,
+    Closure,
+    apply_ppflag_changes,
+    cascade_master,
+    master_closure,
+    revoke_master,
+    sanity_f_bit_plan,
+)
 
 INSPCOMM_KEY = "INSPCOMM"
 INSPCOMM_COMMENT = "Human inspection; trust SANITY=F"
@@ -136,6 +147,7 @@ def inspect_images(
 
 def revoke_inspection(images: Union[str, List[str]], use_database: bool = True, sanity: Optional[bool] = None) -> dict:
     """Withdraw a verdict: INSPCOMM off the FITS, sidecar and image_qa; SANITY `sanity`, else False under REJ_PROC, else the QA criteria."""
+    from ..path.name import NameHandler
     from .checker import Checker
 
     images = [image for image in atleast_1d(images) if image]
@@ -162,7 +174,13 @@ def revoke_inspection(images: Union[str, List[str]], use_database: bool = True, 
         elif header.get(REJECTION_PROCESS_HEADER_KEY):
             restored = False
         else:
-            restored = checker.apply_qa_criteria(header=header, dtype="science")
+            kind = NameHandler(image).type
+            restored = checker.apply_qa_criteria(
+                header=header,
+                dtype=(
+                    kind.image_type if kind.kind == NAME_TYPE_MASTER and kind.image_type in CALIB_TYPES else "science"
+                ),
+            )
         report["sanity"][image] = restored
         if INSPCOMM_KEY in header:
             with fits.open(image, mode="update") as hdul:

@@ -79,12 +79,15 @@ from __future__ import annotations
 import os
 from typing import Dict, List, Optional
 
+import pandas as pd
 from astropy.io import fits
 
 from ...const import (
+    CALIB_TYPES,
     COADD_DEPENDENCY_ROLE,
     IMAGE_DEPENDENCY_ROLES,
     IMAGE_TYPE_DIFF,
+    IMAGE_TYPE_SINGLE,
     NAME_TYPE_CALIBRATED,
     NAME_TYPE_MASTER,
     REFERENCE_DEPENDENCY_ROLE,
@@ -353,3 +356,161 @@ class ImageQADependency(BaseDatabase):
             {"names": list(image_names)},
         )
         return rows[0][0] if rows else 0
+
+
+def _qa_rows(execute, images) -> Dict[str, List[tuple]]:
+    """image path or name -> [(id, image_path, image_type, sanity)]: the row at its path wins, else every row of its name."""
+    names = {image: os.path.basename(image).replace(".fits", "") for image in atleast_1d(images) if image}
+    if not names:
+        return {}
+    by_name: Dict[str, List[tuple]] = {}
+    for row in execute(
+        "SELECT id, image_name, image_path, image_type, sanity FROM image_qa WHERE image_name = ANY(%s) ORDER BY id",
+        (sorted(set(names.values())),),
+    ):
+        by_name.setdefault(row[1], []).append((row[0], *row[2:]))
+    return {
+        image: [row for row in by_name.get(name, []) if row[1] == image] or by_name.get(name, [])
+        for image, name in names.items()
+    }
+
+
+def stale_products(
+    seeds: Optional[List[str]] = None,
+    objects: Optional[List[str]] = None,
+    max_depth: int = 10,
+    check_disk: bool = True,
+) -> tuple:
+    """Downstream products of SANITY F seeds, and stale edges: (products, stale) DataFrames; read-only."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    dependency = ImageQADependency()
+    with dependency.get_connection() as conn:
+        conn.read_only = True
+        conn.execute("SET statement_timeout = '120s'")
+
+        def execute(query, params=None):
+            return conn.execute(query, params).fetchall()
+
+        if seeds:
+            seed_ids = sorted({row[0] for rows in _qa_rows(execute, seeds).values() for row in rows})
+        elif objects:
+            seed_ids = [
+                row[0]
+                for row in execute(
+                    "SELECT id FROM image_qa WHERE sanity IS FALSE AND image_type = ANY(%s)"
+                    " AND (image_name LIKE ANY(%s) OR object = ANY(%s))",
+                    (
+                        [IMAGE_TYPE_SINGLE, *CALIB_TYPES],
+                        [obj.replace("_", r"\_") + r"\_%" for obj in atleast_1d(objects)],
+                        list(atleast_1d(objects)),
+                    ),
+                )
+            ]
+        else:
+            seed_ids = [row[0] for row in execute("SELECT id FROM image_qa WHERE sanity IS FALSE")]
+
+        rows = []
+        if seed_ids:
+            rows = execute(
+                "WITH RECURSIVE impact(seed, id, depth) AS ("
+                "  SELECT source_image_id, derived_image_id, 1 FROM image_qa_dependency"
+                "   WHERE source_image_id = ANY(%s)"
+                " UNION"
+                "  SELECT i.seed, d.derived_image_id, i.depth + 1"
+                "    FROM image_qa_dependency d JOIN impact i ON d.source_image_id = i.id"
+                "   WHERE i.depth < %s"
+                ")"
+                " SELECT qa.id, qa.image_type, qa.image_name, qa.image_path, min(i.depth), count(DISTINCT i.seed),"
+                " qa.sanity, ps.name"
+                " FROM impact i JOIN image_qa qa ON qa.id = i.id"
+                " LEFT JOIN process_status ps ON ps.id = qa.process_status_id"
+                " GROUP BY qa.id, ps.name ORDER BY 5, 2, 3",
+                (seed_ids, max_depth),
+            )
+
+    products = pd.DataFrame(
+        [row[1:] for row in rows],
+        columns=["image_type", "image_name", "image_path", "depth", "n_seeds", "sanity", "config_name"],
+    )
+    on_disk = [None] * len(products)
+    if check_disk:
+        with ThreadPoolExecutor(8) as pool:
+            on_disk = list(pool.map(lambda path: bool(path) and os.path.exists(path), products["image_path"]))
+    products.insert(products.columns.get_loc("sanity") + 1, "on_disk", on_disk)
+
+    edges = dependency.find_stale_edges()
+    if seeds or objects:
+        scope = set(seed_ids) | {row[0] for row in rows}
+        edges = [edge for edge in edges if edge[0] in scope]
+    types = dict(
+        dependency.execute_query(
+            "SELECT id, image_type FROM image_qa WHERE id = ANY(%s)",
+            (sorted({edge[0] for edge in edges} | {edge[2] for edge in edges}),),
+        )
+        if edges
+        else []
+    )
+    stale = pd.DataFrame(
+        [(e[1], types.get(e[0]), e[3], types.get(e[2]), e[4], e[5], e[6]) for e in edges],
+        columns=[
+            "derived_name",
+            "derived_type",
+            "source_name",
+            "source_type",
+            "role",
+            "used_imageid",
+            "current_imageid",
+        ],
+    )
+    return products, stale
+
+
+def _markdown_table(frame, limit: int, by: str) -> List[str]:
+    """Markdown table of the first `limit` rows; the rest counted by `by`."""
+    lines = ["| " + " | ".join(frame.columns) + " |", "|" + "---|" * len(frame.columns)]
+    lines += [
+        "| " + " | ".join(str(v).replace("|", "\\|") for v in row) + " |"
+        for row in frame.head(limit).itertuples(index=False)
+    ]
+    if len(frame) > limit:
+        rest = frame.iloc[limit:][by].value_counts()
+        lines += ["", f"... {len(frame) - limit} more rows: " + ", ".join(f"{k} {n}" for k, n in rest.items())]
+    return lines
+
+
+def stale_products_report(products, stale, path: Optional[str] = None) -> str:
+    """Markdown of stale_products: counts by type, top configs, the tables; written to `path` when given."""
+    counts = products.groupby("image_type").agg(
+        n=("image_name", "size"),
+        sanity_false=("sanity", lambda s: int(s.eq(False).sum())),
+        not_on_disk=("on_disk", lambda s: int(s.eq(False).sum())),
+    )
+    configs = products["config_name"].value_counts().head(20).rename_axis("config_name").reset_index(name="n")
+    lines = [
+        "# Stale products",
+        "",
+        f"{len(products)} downstream products, {len(stale)} stale edges.",
+        "",
+        "## Counts by type",
+        "",
+        *_markdown_table(counts.reset_index(), len(counts), "image_type"),
+        "",
+        "## Top configs",
+        "",
+        *_markdown_table(configs, 20, "config_name"),
+        "",
+        "## Downstream products",
+        "",
+        *_markdown_table(products, 200, "image_type"),
+        "",
+        "## Stale edges",
+        "",
+        *_markdown_table(stale, 200, "derived_type"),
+        "",
+    ]
+    text = "\n".join(lines)
+    if path:
+        with open(path, "w") as f:
+            f.write(text)
+    return text

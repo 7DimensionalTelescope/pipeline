@@ -55,8 +55,9 @@ def plot_filter_check(
             ax1.axvspan(i - 0.5, i + 0.5, color="gray", alpha=0.3)
     gray_patch = mpatches.Patch(color="gray", alpha=0.3)  # patch for legend
 
-    inf_idx = filters_checked.index(inferred_filter)
-    ax1.axvspan(inf_idx - 0.5, inf_idx + 0.5, color="dodgerblue", alpha=0.3)
+    if inferred_filter in filters_checked:  # no column for clear
+        inf_idx = filters_checked.index(inferred_filter)
+        ax1.axvspan(inf_idx - 0.5, inf_idx + 0.5, color="dodgerblue", alpha=0.3)
     blue_patch = mpatches.Patch(color="dodgerblue", alpha=0.3, label=f"Inferred Filter")
 
     if alleged_filter in filters_checked:  # red box edge around the filter recorded in the header
