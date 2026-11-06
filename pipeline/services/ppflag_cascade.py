@@ -13,6 +13,7 @@ Undo is `revoke_master`: the verdict withdrawn, then the same recompute.
 
 import os
 import time
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, NamedTuple, Optional, Union
@@ -200,16 +201,23 @@ def apply_ppflag_changes(changes: List[Change], use_database: bool = True, worke
         else:
             report["files_missing"].append(change.path)
 
+    if not use_database:
+        warnings.warn("use_database=False: image_qa.ppflag falls behind the headers")
+    image_qa = None
+    if use_database and present:
+        from .database.image_qa import ImageQA
+
+        image_qa = ImageQA()
+        image_qa.assert_writable()
+
     with ThreadPoolExecutor(workers) as pool:
         for change, sidecar in zip(present, pool.map(_write_ppflag, present)):
             report["headers_written"].append(change.path)
             report[f"sidecars_{sidecar}"].append(change.path)
 
-    if use_database and present:
-        from .database.image_qa import ImageQA
+    if image_qa is not None:
         from .database.image_qa_dependency import _qa_rows
 
-        image_qa = ImageQA()
         rows = _qa_rows(image_qa.execute_query, [change.path for change in present])
         for change in present:
             if not rows.get(change.path):

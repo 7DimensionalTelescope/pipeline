@@ -11,13 +11,13 @@ unless `cache_dir` is given.
 """
 
 import base64
-import contextlib
-import io
 import json
+import logging
 import os
 import random
 import re
 import signal
+import threading
 from datetime import datetime
 from typing import List, Optional, Union
 
@@ -28,8 +28,23 @@ from .. import const
 from ..path import PathHandler
 from ..path.name import NameHandler
 from ..utils import atleast_1d
+from .database.base import DatabaseError
 from .inspection import INSPCOMM_COMMENT, INSPCOMM_KEY, inspect_images
-from .inspection_session import InspectionSession, _cell, _confirm_short, _fmt, _settle, _stem, in_notebook
+from .inspection_session import (
+    InspectionSession,
+    _cell,
+    _comment,
+    _confirm_short,
+    _pending_mark,
+    _fmt,
+    _hl,
+    _inspcomm_table,
+    _judged,
+    _settle,
+    _stem,
+    _write_atomic,
+    in_notebook,
+)
 
 
 def _imcmb(image: str) -> tuple:
@@ -108,6 +123,8 @@ def master_record(master: str) -> dict:
         record = {field: header.get(field.upper()) for field in fields}
         record.update(image_name=_stem(master), image_type=NameHandler(master).type.exposure_type)
     checker = Checker()
+    checker.logger = logging.getLogger(f"{__name__}.quiet")  # a silent logger, not a swapped stdout
+    checker.logger.propagate = False
     criteria = checker.load_qa_criteria(const.IMAGE_GROUP_MASTERFRAME).get(str(record["image_type"]).upper(), {})
     symbols = {"lte": "<=", "lt": "<", "gte": ">=", "gt": ">", "eq": "", "neq": "!="}
     record["qa"] = []
@@ -124,8 +141,7 @@ def master_record(master: str) -> dict:
             record["qa"].append((key, "-", text, None))
             continue
         shown = ("T" if value else "F") if isinstance(value, bool) else f"{value:.4g}"
-        with contextlib.redirect_stdout(io.StringIO()):
-            passed = checker.apply_qa_criteria(header={key: value}, dtype=record["image_type"])
+        passed = checker.apply_qa_criteria(header={key: value}, dtype=record["image_type"])
         record["qa"].append((key, shown, text, passed))
     return record
 
@@ -330,7 +346,7 @@ class MasterframeSession(InspectionSession):
 
     def __init__(
         self,
-        targets,
+        targets=None,
         stem: Optional[str] = None,
         log_path: Optional[str] = None,
         by: Optional[str] = None,
@@ -342,8 +358,13 @@ class MasterframeSession(InspectionSession):
         raws: bool = False,
         cache_dir: Optional[str] = None,
     ):
-        super().__init__([], stem, log_path, by, use_database, overwrite, report_path, False, log_lines)
+        super().__init__(
+            None if targets is None else [], stem, log_path, by, use_database, overwrite, report_path, False, log_lines
+        )
         self.raws, self.cache_dir = raws, cache_dir
+        self.used_by, self._closures = {}, {}
+        if targets is None:  # resumed from the log alone
+            return
         targets = [targets] if isinstance(targets, (str, dict)) else list(targets)
         paths = [t["path"] if isinstance(t, dict) else t for t in targets]
         paths = [p for p in paths if isinstance(p, str) and p]
@@ -354,7 +375,6 @@ class MasterframeSession(InspectionSession):
         raw_masters = (
             dict(zip(raw_masters, atleast_1d(PathHandler(raw_masters).preprocess._masterframe))) if raw_masters else {}
         )
-        self.used_by = {}
         for path, t in zip(paths, types):
             if t.kind == const.NAME_TYPE_MASTER and t.exposure_type in const.CALIB_TYPES:
                 expanded = [path]
@@ -370,7 +390,6 @@ class MasterframeSession(InspectionSession):
             self.images += [master for master in expanded if master not in self.images]
         if shuffle is not False:
             random.Random(0 if shuffle is True else shuffle).shuffle(self.images)
-        self._closures = {}
 
     def _state(self, master: str) -> dict:
         header = fits.getheader(master)
@@ -408,22 +427,15 @@ class MasterframeSession(InspectionSession):
         existing = self._record_of(master)
         if existing and existing["verdict"] == "reject":
             self.undo(master)
-        elif existing:
-            self.records.remove(existing)
-        inspcomm, changed = None, None
+            state = self._state(master)  # the header as restored, not as rejected
+        fields = {}
         if answer:
-            from .inspection import cascade_master
-
-            inspect_images(
-                master,
-                sanity=False,
-                inspcomm=answer,
-                by=self.by,
-                overwrite=self.overwrite,
-                use_database=self.use_database,
-            )
-            changed = len(cascade_master(master, use_database=self.use_database).planned)
-            inspcomm = fits.getheader(master).get(INSPCOMM_KEY)
+            try:
+                fields = self._write_verdict(master, answer)
+            except (PermissionError, DatabaseError) as e:  # the choice is kept here until flush()
+                fields = {"inspcomm": answer, "pending": str(e)}
+        if existing in self.records:  # replaced only once the write went through
+            self.records.remove(existing)
         record = {
             "index": self.images.index(master) if master in self.images else self.cursor,
             "image": master,
@@ -432,27 +444,40 @@ class MasterframeSession(InspectionSession):
             "verdict": (
                 "ambiguous" if note is not None else "seen" if answer is None else "reject" if answer else "pass"
             ),
-            "inspcomm": inspcomm,
+            "inspcomm": None,
+            "pending": None,
             "note": note or None,
             "prior_sanity": state["sanity"],
             "prior_inspcomm": state["inspcomm"],
             "ppflag": state["ppflag"],
             "cascade": cascade if answer else None,
-            "changed": changed,
+            "changed": None,
             "used_by": self.used_by.get(master),
             "time": datetime.now().isoformat(timespec="seconds"),
             "by": self.by,
         }
+        record.update(fields)
         self.records.append(record)
         self._write_log()
         return record
 
+    def _write_verdict(self, master: str, text: str) -> dict:
+        """The rejection's writes and its cascade; the record fields they settle."""
+        from .inspection import cascade_master
+
+        inspect_images(
+            master, sanity=False, inspcomm=text, by=self.by, overwrite=self.overwrite, use_database=self.use_database
+        )
+        changed = len(cascade_master(master, use_database=self.use_database).planned)
+        self._webp_cache.clear()  # the status lines of every master pane may change
+        return {"inspcomm": fits.getheader(master).get(INSPCOMM_KEY), "changed": changed}
+
     def _frame_line(self, master: str, state: dict, record: Optional[dict], total: int) -> str:
-        marker = f"[{record['verdict']}{': ' + record['note'] if record.get('note') else ''}] " if record else ""
         qa = "  ".join(f"{key} {shown}" for key, shown, _, _ in master_record(master)["qa"])
         line = (
-            f"[{self.cursor + 1}/{total}] {marker}{NameHandler(master).type.exposure_type} {_stem(master)}"
-            f"  SANITY {state['sanity']}  INSPCOMM {state['inspcomm'] or '-'}  PPFLAG {_fmt(state['ppflag'])}  {qa}"
+            f"[{self.cursor + 1}/{total}] {_hl(_judged(record))} {NameHandler(master).type.exposure_type} {_stem(master)}"
+            f"  {_hl('SANITY ' + str(state['sanity']))}  {_hl('INSPCOMM ' + (state['inspcomm'] or '-'))}"
+            f"  PPFLAG {_fmt(state['ppflag'])}  {qa}"
         )
         if self.use_database:
             closure = self._closure(master)
@@ -467,6 +492,8 @@ class MasterframeSession(InspectionSession):
         shown, note, browsing, with_raws = 0, "", False, None
         self._active = active
         self.cursor = 0 if revise else self._resume_position()
+        if not revise and active and self.cursor >= len(active):  # everything judged: the last master, open for b
+            self.cursor, browsing = len(active) - 1, True
         while 0 <= self.cursor < len(active):
             master = active[self.cursor]
             record = self._record_of(master)
@@ -504,15 +531,19 @@ class MasterframeSession(InspectionSession):
                     self._record(master, state, None)
                 return
             if answer.lower() == "u":
-                if revise:
-                    undone = self.undo(master)
-                    if undone:
-                        self._record(master, state, None)
-                    note = f"cleared {undone['name']}" if undone else "nothing to clear"
-                    self.cursor += 1
-                    continue
-                undone = self.undo()
-                note = f"undone {undone['name']}" if undone else "nothing to undo"
+                try:
+                    if revise or (record and record["verdict"] != "seen"):  # a judged master reached by f/b: clear it
+                        undone = self.undo(master)
+                        if undone:
+                            self._record(master, self._state(master), None)
+                        note = f"cleared {undone['name']}" if undone else "nothing to clear"
+                        if revise:
+                            self.cursor += 1
+                    else:
+                        undone = self.undo()
+                        note = f"undone {undone['name']}" if undone else "nothing to undo"
+                except (PermissionError, DatabaseError) as e:
+                    note, browsing = f"not undone: {e}", True
                 continue
             if answer.lower() == "r":
                 with_raws, browsing = master, True
@@ -562,8 +593,11 @@ class MasterframeSession(InspectionSession):
                     continue
             try:
                 record = self._record(master, state, answer, cascade=cascade)
-            except ValueError as e:
-                note = f"not recorded: {e}"
+            except (ValueError, PermissionError, DatabaseError) as e:
+                note, browsing = f"not recorded: {e}", True
+                continue
+            if record.get("pending"):  # shown again with the note; Enter moves on
+                note, browsing = f"kept in the session only, not written: {record['pending']}", True
                 continue
             if answer and record["inspcomm"] != answer:
                 note = f"kept the existing INSPCOMM: {record['inspcomm']}"
@@ -578,7 +612,7 @@ class MasterframeSession(InspectionSession):
         if not matches:
             return None
         record = matches[-1]
-        if record["verdict"] == "reject":
+        if record["verdict"] == "reject" and not record.get("pending"):
             from .inspection import cascade_master, revoke_master
 
             if record["prior_inspcomm"]:
@@ -594,6 +628,7 @@ class MasterframeSession(InspectionSession):
             else:
                 revoke_master(record["image"], use_database=self.use_database)
             self._closures.pop(record["image"], None)
+            self._webp_cache.clear()
         self.records.remove(record)
         active = getattr(self, "_active", None) or self.images
         if record["image"] in active:
@@ -615,56 +650,57 @@ class MasterframeSession(InspectionSession):
             raise ValueError("no report path: pass one or construct the session with stem or report_path")
         if images not in ("rejections", "all", "none"):
             raise ValueError(f"images must be rejections, all or none, not {images!r}")
-        groups = {v: [r for r in self.records if r["verdict"] == v] for v in ("reject", "ambiguous", "pass", "seen")}
+        if path == self.report_path:
+            self._report_images = images
+        records = list(self.records)
+        groups = {v: [r for r in records if r["verdict"] == v] for v in ("reject", "ambiguous", "pass", "seen")}
         rejected, ambiguous, passed, seen = groups.values()
-        n_embedded = {"rejections": len(rejected) + len(ambiguous), "all": len(self.records) - len(seen), "none": 0}[
-            images
-        ]
-        estimate = 0.12 * n_embedded + 0.0001 * len(self.records)
+        n_embedded = {"rejections": len(rejected) + len(ambiguous), "all": len(records) - len(seen), "none": 0}[images]
+        estimate = 0.12 * n_embedded + 0.0001 * len(records)
         if estimate > max_mb:
             raise ValueError(f"about {estimate:.2f} MB for {n_embedded} composites; images='none' or a smaller pool")
+        pending = [record for record in rejected if record.get("pending")]
         comments = {}
         for record in rejected:
-            comments[record["inspcomm"]] = comments.get(record["inspcomm"], 0) + 1
+            if not record.get("pending"):
+                comments[record["inspcomm"]] = comments.get(record["inspcomm"], 0) + 1
         n = len(self.images)
         lines = [
             f"# Master-frame inspection session, {self.started:%Y-%m-%d %H:%M}, inspector {self.by}",
             "",
-            f"{len(passed) + len(rejected)} of {n} masters judged: {len(passed)} pass, {len(rejected)} reject; "
+            f"{len(passed) + len(rejected)} of {n} masters judged: {len(passed)} pass, {len(rejected)} reject"
+            f"{f' ({len(pending)} not written)' if pending else ''}; "
             f"{len(ambiguous)} ambiguous; {n - len(passed) - len(rejected) - len(ambiguous)} without a verdict, "
             f"{len(seen)} of them seen.",
             "",
-            "| INSPCOMM | n |",
-            "|---|---|",
-            *[f"| {_cell(comment)} | {k} |" for comment, k in sorted(comments.items(), key=lambda item: -item[1])],
+            *_inspcomm_table(comments, len(pending)),
         ]
         for title, group in (("Rejected", rejected), ("Ambiguous", ambiguous), ("Passed", passed)):
             lines += ["", f"## {title}", ""]
+            if not group:
+                lines.append("none")
+                continue
             embed = images == "all" or (images == "rejections" and title != "Passed")
             if not embed:
                 lines += ["| master | name | comment | prior SANITY |", "|---|---|---|---|"]
                 lines += [
-                    f"| {r['index'] + 1}/{n} | {r['name']} | {_cell(r['inspcomm'] or r.get('note'))} | {r['prior_sanity']} |"
+                    f"| {r['index'] + 1}/{n} | {r['name']} | {_cell(_comment(r))} | {r['prior_sanity']} |"
                     for r in group
                 ]
                 continue
             for record in group:
                 cascade = record.get("cascade")
                 parts = [
-                    _cell(record["inspcomm"] or record.get("note")),
+                    _cell(_comment(record)),
                     f"prior SANITY {record['prior_sanity']}",
                     f"ppflag {_fmt(record['ppflag'])}",
                     f"singles in the pool {record['used_by']}" if record.get("used_by") else None,
                     ("cascade " + ", ".join(f"{v} {k}" for k, v in cascade.items())) if cascade else None,
                     f"{record['changed']} PPFLAGs changed" if record.get("changed") is not None else None,
                 ]
-                im = composite_for_master(record["image"], cache_dir=self.cache_dir)
-                im.thumbnail((1400, 10000))
-                buf = io.BytesIO()
-                im.save(buf, "WEBP", quality=80)
-                data = base64.b64encode(buf.getvalue()).decode()
+                data = self._webp(record["image"], lambda m: composite_for_master(m, cache_dir=self.cache_dir))
                 lines += [
-                    f"### {record['index'] + 1}/{n} {record['name']}: {record['verdict'].upper()}",
+                    f"### {record['index'] + 1}/{n} {record['name']}: {record['verdict'].upper()}{_pending_mark(record)}",
                     "",
                     "; ".join(part for part in parts if part),
                     "",
@@ -674,6 +710,7 @@ class MasterframeSession(InspectionSession):
         if seen:
             lines += ["", "## Seen without a verdict", "", "| master | name | SANITY |", "|---|---|---|"]
             lines += [f"| {r['index'] + 1}/{n} | {r['name']} | {r['prior_sanity']} |" for r in seen]
-        with open(path, "w") as f:
-            f.write("\n".join(lines) + "\n")
-        return path
+        written = _write_atomic(path, lines)
+        if path == self.report_path and in_notebook() and threading.current_thread() is not self._report_thread:
+            self._schedule_report()
+        return written

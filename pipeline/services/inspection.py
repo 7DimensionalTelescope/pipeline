@@ -108,6 +108,7 @@ def inspect_images(
         from .database.image_qa import ImageQA
 
         image_qa = ImageQA()
+        image_qa.assert_writable()
     else:
         warnings.warn("use_database=False: the verdict is not durable across a Preprocess rebuild")
 
@@ -166,6 +167,9 @@ def revoke_inspection(images: Union[str, List[str]], use_database: bool = True, 
         from .database.image_qa import ImageQA
 
         image_qa = ImageQA()
+        image_qa.assert_writable()
+    else:
+        warnings.warn("use_database=False: the withdrawal is not durable across a Preprocess rebuild")
 
     for image in images:
         header = fits.getheader(image)

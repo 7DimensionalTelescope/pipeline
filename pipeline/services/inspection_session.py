@@ -2,18 +2,23 @@
 Visual inspection in a notebook: one composite of a frame's check plots, one prompt per frame.
 The pool holds processed singles; a raw frame in it is replaced by its single through PathHandler.
 
-Enter passes (on a judged frame it only moves to the next waiting one), text rejects with that text as INSPCOMM (written at once), `?` marks the frame ambiguous
-with the clause after it as the comment (kept in the session only; nothing is written), `u` reverses the previous verdict,
+Enter passes (on a judged frame it only moves to the next waiting one), text rejects with that text as INSPCOMM (written at once; without database permission the choice is kept in the
+session as pending until `flush()`), `?` marks the frame ambiguous
+with the clause after it as the comment (kept in the session only; nothing is written), `u` reverses the previous verdict
+(on a judged frame reached by `f`/`b` it clears that frame),
 `f`/`b` move forward or back (`100f`, `3b`; a frame left without a verdict is recorded as seen), `q`
 stops and `run()` continues at the frame last left, in the same order (`shuffle` is seeded). `m` shows the master
 frames the single used below its composite until the next reply; a reply of one or two letters that is no command asks
 for confirmation before it becomes an INSPCOMM.
 `run(verdict=..., comment=...)` revises the recorded frames that match (case-insensitive regex on the
-comment): text or `?` replace the verdict, `u` clears it, Enter keeps it. `stem` names the log and
-report files, `<stem>.jsonl` and `<stem>.md`. The last `log_lines` lines of the frame's science config log are
+comment; `"^$"` is no comment): text or `?` replace the verdict, `u` clears it, Enter keeps it;
+`judge(images, answer)` does the same without the pane. `stem` names the log and
+report files, `<stem>.jsonl` and `<stem>.md` (`log_path` alone implies `<log stem>.md`). The log's first line is
+the pool, so `InspectionSession(stem=...)` without images resumes from the log alone; once every frame is judged,
+`run()` opens the last frame for `b`. The last `log_lines` lines of the frame's science config log are
 printed under the frame line. Passes are session knowledge only: the record is the
-session's table, a JSONL file when `log_path` is given, and the Markdown report of `report()`, written
-on every stop when `report_path` is given.
+session's table, the JSONL log, and the Markdown report of `report()`, rewritten after every verdict and stop: in a
+background thread under a kernel (composites rendered once), so no frame waits for it, in the foreground elsewhere.
 """
 
 import base64
@@ -24,6 +29,7 @@ import random
 import re
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime
 from typing import List, Optional, Union
@@ -35,6 +41,7 @@ from ..const.sciproc import REJECTION_PROCESS_HEADER_KEY
 from ..path import PathHandler
 from ..utils import atleast_1d, collapse
 from ..utils.filesystem import latest_unique_filename
+from .database.base import DatabaseError
 from .inspection import INSPCOMM_COMMENT, INSPCOMM_KEY, inspect_images, revoke_inspection
 
 
@@ -61,6 +68,57 @@ def _fmt(value) -> str:
     if value is None:
         return "-"
     return f"{value:.3g}" if isinstance(value, float) else str(value)
+
+
+def _hl(text) -> str:
+    """Highlight: black on bright white, ANSI SGR 30;107."""
+    return f"\x1b[30;107m {text} \x1b[0m"
+
+
+def _judged(record: Optional[dict]) -> str:
+    """Frame-line label: earlier verdict with time, `seen, no verdict`, or `new`."""
+    if record is None:
+        return "new"
+    label = "seen, no verdict" if record["verdict"] == "seen" else record["verdict"]
+    if record.get("pending"):
+        label += " (pending)"
+    if record.get("note"):
+        label += f": {record['note']}"
+    return f"{label} {record['time'][5:16].replace('T', ' ')}"
+
+
+def _inspcomm_table(comments: dict, pending: int = 0) -> List[str]:
+    """Report lines: INSPCOMM frame counts, or an explicit none; the count kept for flush()."""
+    if not comments:
+        lines = ["INSPCOMM written: none."]
+    else:
+        rows = [f"| {_cell(comment)} | {n} |" for comment, n in sorted(comments.items(), key=lambda item: -item[1])]
+        lines = ["INSPCOMM written, with the number of frames:", "", "| INSPCOMM | frames |", "|---|---|", *rows]
+    if pending:
+        lines += ["", f"INSPCOMM pending, kept in the session until `flush()`: {pending} frame(s)."]
+    return lines
+
+
+def _pending_mark(record: dict) -> str:
+    return " (pending, not written)" if record.get("pending") else ""
+
+
+def _comment(record: dict) -> str:
+    """The record's INSPCOMM or ambiguous note, marked when pending."""
+    return (record["inspcomm"] or record.get("note") or "") + _pending_mark(record)
+
+
+def _write_atomic(path: str, lines: List[str]) -> str:
+    """Atomic whole-file write through a temporary twin."""
+    tmp = f"{path}.{threading.get_ident()}.tmp"
+    try:
+        with open(tmp, "w") as f:
+            f.write("\n".join(lines) + "\n")
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    return path
 
 
 def _log_tail(image: str, n: int) -> List[str]:
@@ -181,8 +239,8 @@ class InspectionSession:
 
     def __init__(
         self,
-        images,
-        stem: Optional[str] = None,
+        images=None,
+        name: Optional[str] = None,
         log_path: Optional[str] = None,
         by: Optional[str] = None,
         use_database: bool = True,
@@ -191,6 +249,34 @@ class InspectionSession:
         shuffle: Union[bool, int] = False,
         log_lines: int = 5,
     ):
+        self.log_path = log_path or (f"{name}.jsonl" if name else None)
+        self.report_path = report_path or (
+            f"{name}.md" if name else os.path.splitext(self.log_path)[0] + ".md" if self.log_path else None
+        )
+        self.log_lines = log_lines
+        self.by = by or os.environ.get("USER")
+        self.use_database = use_database
+        self.overwrite = overwrite
+        self.started = datetime.now()
+        self.records: List[dict] = []
+        self.cursor = 0
+        self._tmpdir = None
+        self._webp_cache: dict = {}
+        self._report_images = "rejections"
+        self._report_lock, self._report_thread, self._report_dirty = threading.Lock(), None, False
+        head = None
+        if self.log_path and os.path.exists(self.log_path):
+            with open(self.log_path) as f:
+                lines = [json.loads(line) for line in f if line.strip()]
+            head = lines.pop(0) if lines and "pool" in lines[0] else None  # no pool line before 2026-11-04
+            self.records = lines
+        if head:
+            self.started = datetime.fromisoformat(head["started"])
+        if images is None:
+            if not head and not self.records:
+                raise ValueError("no images and no log to resume from")
+            self.images = head["pool"] if head else [r["image"] for r in sorted(self.records, key=lambda r: r["index"])]
+            return
         images = [images] if isinstance(images, str) else list(images)
         self.images = [image for image in images if isinstance(image, str) and image]
         if self.images:
@@ -202,19 +288,6 @@ class InspectionSession:
             ]
         if shuffle is not False:
             random.Random(0 if shuffle is True else shuffle).shuffle(self.images)
-        self.log_path = log_path or (f"{stem}.jsonl" if stem else None)
-        self.report_path = report_path or (f"{stem}.md" if stem else None)
-        self.log_lines = log_lines
-        self.by = by or os.environ.get("USER")
-        self.use_database = use_database
-        self.overwrite = overwrite
-        self.started = datetime.now()
-        self.records: List[dict] = []
-        self.cursor = 0
-        self._tmpdir = None
-        if self.log_path and os.path.exists(self.log_path):
-            with open(self.log_path) as f:
-                self.records = [json.loads(line) for line in f if line.strip()]
 
     def _state(self, image: str) -> dict:
         header = fits.getheader(image)
@@ -249,8 +322,51 @@ class InspectionSession:
 
     def _write_log(self) -> None:
         if self.log_path:
+            head = {"pool": self.images, "started": self.started.isoformat(timespec="seconds"), "by": self.by}
             with open(self.log_path, "w") as f:
+                f.write(json.dumps(head) + "\n")
                 f.writelines(json.dumps(record) + "\n" for record in self.records)
+        self._schedule_report()
+
+    def _schedule_report(self) -> None:
+        """Report rewrite: a daemon worker under a kernel, the foreground elsewhere."""
+        if not self.report_path:
+            return
+        if not in_notebook():  # a script may end next, so the file is written now
+            self._report_pass()
+            return
+        with self._report_lock:
+            self._report_dirty = True
+            if self._report_thread is None:
+                self._report_thread = threading.Thread(target=self._report_worker, daemon=True)
+                self._report_thread.start()
+
+    def _report_pass(self) -> None:
+        try:
+            self.report(images=self._report_images)
+        except Exception as e:
+            print(f"report: {e}")
+
+    def _report_worker(self) -> None:
+        while True:
+            with self._report_lock:
+                if not self._report_dirty:
+                    self._report_thread = None
+                    return
+                self._report_dirty = False
+            self._report_pass()
+            if self._report_dirty:  # a burst of verdicts: one rewrite per 5 s
+                time.sleep(5)
+
+    def _webp(self, image: str, render=composite) -> str:
+        """Cached base64 WebP of the 1400 px composite."""
+        if image not in self._webp_cache:
+            im = render(image)
+            im.thumbnail((1400, 10000))
+            buf = io.BytesIO()
+            im.save(buf, "WEBP", quality=80)
+            self._webp_cache[image] = base64.b64encode(buf.getvalue()).decode()
+        return self._webp_cache[image]
 
     def _record_of(self, image: str) -> Optional[dict]:
         return next((record for record in self.records if record["image"] == image), None)
@@ -259,20 +375,16 @@ class InspectionSession:
         existing = self._record_of(image)
         if existing and existing["verdict"] == "reject":
             self.undo(image)
-        elif existing:
-            self.records.remove(existing)
-        inspcomm = None
+            state = self._state(image)  # the header as restored, not as rejected
+        fields = {}
         if answer:
             fits.Card(INSPCOMM_KEY, answer, INSPCOMM_COMMENT)
-            inspect_images(
-                image,
-                sanity=False,
-                inspcomm=answer,
-                by=self.by,
-                overwrite=self.overwrite,
-                use_database=self.use_database,
-            )
-            inspcomm = fits.getheader(image).get(INSPCOMM_KEY)
+            try:
+                fields = self._write_verdict(image, answer)
+            except (PermissionError, DatabaseError) as e:  # the choice is kept here until flush()
+                fields = {"inspcomm": answer, "pending": str(e)}
+        if existing in self.records:  # replaced only once the write went through
+            self.records.remove(existing)
         record = {
             "index": self.images.index(image) if image in self.images else self.cursor,
             "image": image,
@@ -280,7 +392,8 @@ class InspectionSession:
             "verdict": (
                 "ambiguous" if note is not None else "seen" if answer is None else "reject" if answer else "pass"
             ),
-            "inspcomm": inspcomm,
+            "inspcomm": None,
+            "pending": None,
             "note": note or None,
             "prior_sanity": state["sanity"],
             "prior_inspcomm": state["inspcomm"],
@@ -291,9 +404,29 @@ class InspectionSession:
             "time": datetime.now().isoformat(timespec="seconds"),
             "by": self.by,
         }
+        record.update(fields)
         self.records.append(record)
         self._write_log()
         return record
+
+    def _write_verdict(self, image: str, text: str) -> dict:
+        """The rejection's writes; the record fields they settle."""
+        inspect_images(
+            image, sanity=False, inspcomm=text, by=self.by, overwrite=self.overwrite, use_database=self.use_database
+        )
+        return {"inspcomm": fits.getheader(image).get(INSPCOMM_KEY)}
+
+    def flush(self) -> List[dict]:
+        """Write the rejections kept in the session only; those still pending."""
+        still = []
+        for record in [r for r in self.records if r.get("pending")]:
+            try:
+                record.update(self._write_verdict(record["image"], record["inspcomm"]), pending=None)
+            except (PermissionError, DatabaseError) as e:
+                record["pending"] = str(e)
+                still.append(record)
+        self._write_log()
+        return still
 
     def run(self, retain: bool = False, verdict=None, comment: Optional[str] = None) -> "InspectionSession":
         """Enter pass, text reject, ? ambiguous, u undo, f/b move (100f, 3b), m masters, q quit; `verdict` and/or `comment` (regex, case-insensitive) revise the recorded frames that match instead."""
@@ -305,8 +438,7 @@ class InspectionSession:
         try:
             self._loop(kernel, retain, active, revise)
         finally:
-            if self.report_path:
-                self.report(self.report_path)
+            self._schedule_report()
         return self
 
     def matching(self, verdict=None, comment: Optional[str] = None) -> List[str]:
@@ -326,26 +458,25 @@ class InspectionSession:
         return chosen
 
     def _resume_position(self) -> int:
-        """The frame last left: a seen record is shown again, a judged one is passed; past the end, the first seen frame still waiting."""
+        """The frame last left: a seen record is shown again, a judged one is passed; nothing waiting beyond it, the first waiting frame, else the end."""
         at = 0
         for record in reversed(self.records):
             if record["image"] in self.images:
                 at = self.images.index(record["image"])
                 at = at if record["verdict"] == "seen" else at + 1
                 break
-        if at >= len(self.images):
-            waiting = [
-                self.images.index(r["image"])
-                for r in self.records
-                if r["verdict"] == "seen" and r["image"] in self.images
-            ]
-            at = min(waiting) if waiting else at
+        judged = {r["image"]: r["verdict"] for r in self.records}
+        waiting = [i for i, image in enumerate(self.images) if judged.get(image, "seen") == "seen"]
+        if not any(i >= at for i in waiting):
+            at = min(waiting) if waiting else len(self.images)
         return at
 
     def _loop(self, kernel: bool, retain: bool, active: List[str], revise: bool) -> None:
         shown, note, browsing, masters_for = 0, "", False, None
         self._active = active
         self.cursor = 0 if revise else self._resume_position()
+        if not revise and active and self.cursor >= len(active):  # everything judged: the last frame, open for b
+            self.cursor, browsing = len(active) - 1, True
         while 0 <= self.cursor < len(active):
             image = active[self.cursor]
             record = self._record_of(image)
@@ -361,15 +492,14 @@ class InspectionSession:
                 self.cursor += 1
                 continue
             shown += 1
-            marker = f"[{record['verdict']}{': ' + record['note'] if record.get('note') else ''}] " if record else ""
-            verdict = f"SANITY {state['sanity']}  INSPCOMM {state['inspcomm'] or '-'}"
+            verdict = f"{_hl('SANITY ' + str(state['sanity']))}  {_hl('INSPCOMM ' + (state['inspcomm'] or '-'))}"
             if state["rej_proc"]:
                 verdict += f"  REJ_PROC {state['rej_proc']}"
             metrics = f"seeing {_fmt(state['seeing'])}  ellip {_fmt(state['ellip'])}  ppflag {_fmt(state['ppflag'])}"
             self._clear(kernel, retain)
             if note:
                 print(note)
-            print(f"[{self.cursor + 1}/{len(active)}] {marker}{_stem(image)}  {metrics}  {verdict}")
+            print(f"[{self.cursor + 1}/{len(active)}] {_hl(_judged(record))} {_stem(image)}  {metrics}  {verdict}")
             status = _status_line(image) if self.use_database and self.log_lines else None
             if status:
                 print(f"    {status}")
@@ -400,15 +530,19 @@ class InspectionSession:
                     self._record(image, state, None)
                 return
             if answer.lower() == "u":
-                if revise:
-                    undone = self.undo(image)
-                    if undone:
-                        self._record(image, state, None)
-                    note = f"cleared {undone['name']}" if undone else "nothing to clear"
-                    self.cursor += 1
-                    continue
-                undone = self.undo()
-                note = f"undone {undone['name']}" if undone else "nothing to undo"
+                try:
+                    if revise or (record and record["verdict"] != "seen"):  # a judged frame reached by f/b: clear it
+                        undone = self.undo(image)
+                        if undone:
+                            self._record(image, self._state(image), None)
+                        note = f"cleared {undone['name']}" if undone else "nothing to clear"
+                        if revise:
+                            self.cursor += 1
+                    else:
+                        undone = self.undo()
+                        note = f"undone {undone['name']}" if undone else "nothing to undo"
+                except (PermissionError, DatabaseError) as e:
+                    note, browsing = f"not undone: {e}", True
                 continue
             if answer.startswith("?"):
                 self._record(image, state, None, note=answer[1:].strip())
@@ -430,14 +564,31 @@ class InspectionSession:
                 continue
             try:
                 record = self._record(image, state, answer)
-            except ValueError as e:
-                note = f"not recorded: {e}"
+            except (ValueError, PermissionError, DatabaseError) as e:
+                note, browsing = f"not recorded: {e}", True
+                continue
+            if record.get("pending"):  # shown again with the note; Enter moves on
+                note, browsing = f"kept in the session only, not written: {record['pending']}", True
                 continue
             if answer and record["inspcomm"] != answer:
                 note = f"kept the existing INSPCOMM: {record['inspcomm']}"
             self.cursor += 1
         if not shown:
             print("nothing matches" if revise else "nothing left to inspect")
+
+    def judge(self, images, answer: str = "") -> List[dict]:
+        """Verdicts without the pane: "" pass, text reject, ?note ambiguous, u clear."""
+        records = []
+        for image in atleast_1d(images):
+            state = self._state(image)
+            if answer.lower() == "u":
+                if self.undo(image):
+                    records.append(self._record(image, self._state(image), None))
+            elif answer.startswith("?"):
+                records.append(self._record(image, state, None, note=answer[1:].strip()))
+            else:
+                records.append(self._record(image, state, answer))
+        return records
 
     def masters(self, by: str = "count") -> List[dict]:
         """Distinct masters of the pool: path, name, role, count of singles using it; sorted by `by` (count descending)."""
@@ -456,7 +607,7 @@ class InspectionSession:
         if not matches:
             return None
         record = matches[-1]
-        if record["verdict"] == "reject":
+        if record["verdict"] == "reject" and not record.get("pending"):
             if record["prior_inspcomm"]:
                 inspect_images(
                     record["image"],
@@ -502,58 +653,61 @@ class InspectionSession:
             raise ValueError("no report path: pass one or construct the session with stem or report_path")
         if images not in ("rejections", "all", "none"):
             raise ValueError(f"images must be rejections, all or none, not {images!r}")
-        rejected = [record for record in self.records if record["verdict"] == "reject"]
-        ambiguous = [record for record in self.records if record["verdict"] == "ambiguous"]
-        passed = [record for record in self.records if record["verdict"] == "pass"]
-        seen = [record for record in self.records if record["verdict"] == "seen"]
+        if path == self.report_path:
+            self._report_images = images  # the background rewrites keep the last explicit choice
+        records = list(self.records)
+        rejected = [record for record in records if record["verdict"] == "reject"]
+        ambiguous = [record for record in records if record["verdict"] == "ambiguous"]
+        passed = [record for record in records if record["verdict"] == "pass"]
+        seen = [record for record in records if record["verdict"] == "seen"]
         n_embedded = {
             "rejections": len(rejected) + len(ambiguous),
             "all": len(rejected) + len(ambiguous) + len(passed),
             "none": 0,
         }[images]
-        estimate = 0.12 * n_embedded + 0.0001 * len(self.records)
+        estimate = 0.12 * n_embedded + 0.0001 * len(records)
         if estimate > max_mb:
             raise ValueError(f"about {estimate:.2f} MB for {n_embedded} composites; images='none' or a smaller pool")
+        pending = [record for record in rejected if record.get("pending")]
         comments = {}
         for record in rejected:
-            comments[record["inspcomm"]] = comments.get(record["inspcomm"], 0) + 1
+            if not record.get("pending"):
+                comments[record["inspcomm"]] = comments.get(record["inspcomm"], 0) + 1
         lines = [
             f"# Inspection session, {self.started:%Y-%m-%d %H:%M}, inspector {self.by}",
             "",
-            f"{len(passed) + len(rejected)} of {len(self.images)} frames judged: {len(passed)} pass, {len(rejected)} reject; "
+            f"{len(passed) + len(rejected)} of {len(self.images)} frames judged: {len(passed)} pass, {len(rejected)} reject"
+            f"{f' ({len(pending)} not written)' if pending else ''}; "
             f"{len(ambiguous)} ambiguous; {len(self.images) - len(passed) - len(rejected) - len(ambiguous)} without a verdict, "
             f"{len(seen)} of them seen.",
             "",
-            "| INSPCOMM | n |",
-            "|---|---|",
-            *[f"| {_cell(comment)} | {n} |" for comment, n in sorted(comments.items(), key=lambda item: -item[1])],
+            *_inspcomm_table(comments, len(pending)),
         ]
         for title, group in (("Rejected", rejected), ("Ambiguous", ambiguous), ("Passed", passed)):
             lines += ["", f"## {title}", ""]
+            if not group:
+                lines.append("none")
+                continue
             embed = images == "all" or (images == "rejections" and title != "Passed")
             if not embed:
                 lines += ["| frame | name | comment | prior SANITY |", "|---|---|---|---|"]
                 lines += [
-                    f"| {record['index'] + 1}/{len(self.images)} | {record['name']} | {_cell(record['inspcomm'] or record.get('note'))} | {record['prior_sanity']} |"
+                    f"| {record['index'] + 1}/{len(self.images)} | {record['name']} | {_cell(_comment(record))} | {record['prior_sanity']} |"
                     for record in group
                 ]
                 continue
             for record in group:
                 parts = [
-                    _cell(record["inspcomm"] or record.get("note")),
+                    _cell(_comment(record)),
                     f"seeing {_fmt(record['seeing'])}",
                     f"ellipticity {_fmt(record['ellip'])}",
                     f"ppflag {_fmt(record['ppflag'])}",
                     f"prior SANITY {record['prior_sanity']}",
                     f"REJ_PROC {record['prior_rej_proc']}" if record["prior_rej_proc"] else None,
                 ]
-                im = composite(record["image"])
-                im.thumbnail((1400, 10000))
-                buf = io.BytesIO()
-                im.save(buf, "WEBP", quality=80)
-                data = base64.b64encode(buf.getvalue()).decode()
+                data = self._webp(record["image"])
                 lines += [
-                    f"### {record['index'] + 1}/{len(self.images)} {record['name']}: {record['verdict'].upper()}",
+                    f"### {record['index'] + 1}/{len(self.images)} {record['name']}: {record['verdict'].upper()}{_pending_mark(record)}",
                     "",
                     "; ".join(part for part in parts if part),
                     "",
@@ -566,6 +720,7 @@ class InspectionSession:
                 f"| {record['index'] + 1}/{len(self.images)} | {record['name']} | {record['prior_sanity']} |"
                 for record in seen
             ]
-        with open(path, "w") as f:
-            f.write("\n".join(lines) + "\n")
-        return path
+        written = _write_atomic(path, lines)
+        if path == self.report_path and in_notebook() and threading.current_thread() is not self._report_thread:
+            self._schedule_report()  # a worker pass still rendering an older snapshot lands after this one
+        return written

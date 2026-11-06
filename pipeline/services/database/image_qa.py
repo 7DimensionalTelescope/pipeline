@@ -339,6 +339,15 @@ class ImageQA(BaseDatabase):
         query = query_update.format(table_name=self.table_name, params=", ".join(clauses))
         return self.execute_query(query, {**params, "id": target_id})
 
+    def assert_writable(self) -> None:
+        """PermissionError before any disk write when the role lacks UPDATE or INSERT on the table."""
+        granted = self.execute_query(
+            "SELECT has_table_privilege(%(t)s, 'UPDATE') AND has_table_privilege(%(t)s, 'INSERT')",
+            {"t": self.table_name},
+        )
+        if not granted or not granted[0][0]:
+            raise PermissionError(f"{self.table_name}: no UPDATE/INSERT privilege for this role; nothing written")
+
     def set_inspection(
         self, image_name: str, sanity: bool, inspcomm: str = None, overwrite: bool = False, image_path: str = None
     ) -> Dict[int, str]:
