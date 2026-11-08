@@ -11,7 +11,7 @@ def update_too_times(self, input_file):
     """Update ToO database with transfer_time from input file creation time."""
 
     # Try to find and update the ToO record
-    too_db = TooDB()
+    too_db = TooDB(logger=getattr(self, "logger", None))
 
     input_files = atleast_1d(input_file)
 

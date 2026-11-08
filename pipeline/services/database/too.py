@@ -26,10 +26,11 @@ class TooDBError(Exception):
 class TooDB:
     """Database class for managing ToO (Target of Opportunity) requests"""
 
-    def __init__(self):
+    def __init__(self, logger: Optional[logging.Logger] = None):
         """Initialize the ToO database connection"""
         self.too_id = None
         self._mail = None
+        self.logger = logger or logging.getLogger(__name__)
 
     @property
     def mail(self):
@@ -284,6 +285,7 @@ class TooDB:
 
     _TILE_RE = re.compile(r"^T\d+$")
     _UNIT_RE = re.compile(r"^7DT\d+$", re.IGNORECASE)
+    _NIGHT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
     # the longest trigger-to-observation gap seen in the table was 31.5 days (row 149)
     MAX_TRIGGER_AGE = timedelta(days=45)
 
@@ -297,17 +299,24 @@ class TooDB:
         """
         Parse a ToO config name into its target and UTC observation time.
 
-        Format: <night>_<unit>_<target>_ToO_<YYYYMMDD>_<HHMMSS>.yml, e.g.
-        2026-10-29_7DT02_T07397_ToO_20261030_020519.yml. The target may itself contain
-        underscores (3I_ATLAS), so it is everything between the unit and the ToO marker.
-        The timestamp is the earliest input frame's DATE-OBS, which is UTC.
+        Two shapes exist on disk. The preprocess config is
+        <night>_<unit>_<target>_ToO_<YYYYMMDD>_<HHMMSS>.yml, e.g.
+        2026-10-29_7DT02_T07397_ToO_20261030_020519.yml. The per-filter science config is
+        <target>_<filter>_<night>_ToO_<YYYYMMDD>_<HHMMSS>.yml, e.g.
+        T07397_m525_2026-10-29_ToO_20261030_015808.yml. The target may itself contain
+        underscores (3I_ATLAS). The timestamp is the earliest input frame's DATE-OBS, in UTC.
         """
         stem = os.path.splitext(os.path.basename(config_file))[0]
         parts = stem.split("_")
         marker = next((i for i, part in enumerate(parts) if part.lower() == "too"), None)
-        if marker is None or marker < 3 or marker + 2 >= len(parts) or not self._UNIT_RE.match(parts[1]):
+        if marker is None or marker + 2 >= len(parts):
             raise TooDBError(f"Unrecognized ToO config name: {config_file}")
-        target = "_".join(parts[2:marker])
+        if marker >= 3 and self._NIGHT_RE.match(parts[0]) and self._UNIT_RE.match(parts[1]):
+            target = "_".join(parts[2:marker])
+        elif marker >= 3 and self._NIGHT_RE.match(parts[marker - 1]):
+            target = "_".join(parts[: marker - 2])
+        else:
+            raise TooDBError(f"Unrecognized ToO config name: {config_file}")
         try:
             obs_utc = datetime.strptime(parts[marker + 1] + parts[marker + 2][:6], "%Y%m%d%H%M%S")
         except ValueError as e:
@@ -376,13 +385,13 @@ class TooDB:
         ]
         self.too_id = None
         if not candidates:
-            logger.warning(f"No ToO request for {parsed['target']} triggered before {obs_utc.isoformat()} ({config_file})")
+            self.logger.warning(f"No ToO request for {parsed['target']} triggered before {obs_utc.isoformat()} ({config_file})")
             return None
 
         best = max(candidates, key=self._triggered_at)
         age = obs_utc - self._triggered_at(best)
         if age > self.MAX_TRIGGER_AGE:
-            logger.warning(
+            self.logger.warning(
                 f"Nearest ToO request for {parsed['target']} (id={best['id']}) was triggered {age.days} days "
                 f"before {obs_utc.isoformat()}; refusing to attach {config_file}"
             )
@@ -720,15 +729,17 @@ class TooDB:
 
         return self.mail.send_final_notice_email(too_id, sed_data=sed_data, test=test, force_to_send=force_to_send)
 
-    def send_interim_notice_email(self, too_id: int, dtype="difference", test=False) -> bool:
+    def send_interim_notice_email(self, too_id: int, dtype="difference", test=False, finished_filter: Optional[str] = None) -> bool:
 
-        return self.mail.send_interim_notice_email(too_id, dtype=dtype, test=test)
+        return self.mail.send_interim_notice_email(too_id, dtype=dtype, test=test, finished_filter=finished_filter)
 
     def mark_completed(self, too_id: int) -> bool:
         """Mark a ToO request as completed."""
 
-        too_data = self.read_data_by_id(too_id)
-
-        completed = (too_data.get("completed") or 0) + 1
-        self.update_too_data(too_id=too_id, completed=completed)
+        conn = self.get_connection()
+        try:
+            conn.execute("UPDATE too_requests SET completed = COALESCE(completed, 0) + 1 WHERE id = ?", (too_id,))
+            conn.commit()
+        finally:
+            conn.close()
         return True
