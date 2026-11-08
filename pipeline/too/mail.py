@@ -192,8 +192,6 @@ class TooMail:
 
         if too_data.get("init_notice") == 1:
             return True
-        else:
-            self.too_db.update_too_data(too_id=too_id, init_notice=1)
 
         # Extract information from TooDB
         objname = too_data.get("objname", "Unknown")
@@ -215,6 +213,8 @@ class TooMail:
 
         # Send email
         self._send_email(to=requester, subject=subject, contents=contents, cc=cc_recipients)
+
+        self.too_db.update_too_data(too_id=too_id, init_notice=1)
 
         return True
 
@@ -289,9 +289,10 @@ Timing Information:
         """
         from ..const import DEFAULT_RECIPIENT
 
-        self.too_db.update_too_data(too_id=too_id, final_notice=1)
-
         too_data = self.too_db.read_data_by_id(too_id)
+
+        if too_data.get("final_notice") == 1 and not force_to_send:
+            return True
 
         completed = too_data.get("completed")
 
@@ -338,6 +339,8 @@ Timing Information:
             attachments=attachments if attachments else None,
             cc=cc_recipients,
         )
+
+        self.too_db.update_too_data(too_id=too_id, final_notice=1)
 
         return True
 
@@ -405,8 +408,6 @@ The data processing for the ToO observation is complete. The results are as foll
 
         if too_data.get("interim_notice") == 1:
             return True
-        else:
-            self.too_db.update_too_data(too_id=too_id, interim_notice=1)
 
         # Extract information
         objname = too_data.get("objname", "Unknown")

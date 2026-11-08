@@ -2,10 +2,13 @@ import sqlite3
 import json
 import os
 import time
-import pytz
+import re
+import logging
 from typing import Optional, Dict, Any, List, Union
-from datetime import datetime, date
+from datetime import datetime, date, timedelta, timezone
 from ...const import TOO_DB_PATH
+
+logger = logging.getLogger(__name__)
 
 
 # Database connection settings
@@ -279,130 +282,50 @@ class TooDB:
 
         return clean_data
 
-    def _parse_config_filename(self, config_file: str) -> Dict[str, Optional[str]]:
+    _TILE_RE = re.compile(r"^T\d+$")
+    _UNIT_RE = re.compile(r"^7DT\d+$", re.IGNORECASE)
+    # the longest trigger-to-observation gap seen in the table was 31.5 days (row 149)
+    MAX_TRIGGER_AGE = timedelta(days=45)
+
+    @staticmethod
+    def _normalize_name(name: Optional[str]) -> str:
+        """Fold tile and object spellings so 'AT 2025aico', 'AT2025aico' and '2025aico' compare equal."""
+        key = re.sub(r"[^a-z0-9]", "", (name or "").lower())
+        return re.sub(r"^(at|sn)(?=\d)", "", key)
+
+    def _parse_config_filename(self, config_file: str) -> Dict[str, Any]:
         """
-        Parse config filename to extract tile, objname, date, and timestamp.
+        Parse a ToO config name into its target and UTC observation time.
 
-        Format: T19154_m675_2025-11-10_too_022205.yml
-        - Date is before "too"
-        - Timestamp is after "too"
-        - First part can be tile (T followed by numbers) or object name
-
-        Args:
-            config_file: Config file path or filename
-
-        Returns:
-            Dictionary with tile, objname, date, and timestamp
+        Format: <night>_<unit>_<target>_ToO_<YYYYMMDD>_<HHMMSS>.yml, e.g.
+        2026-10-29_7DT02_T07397_ToO_20261030_020519.yml. The target may itself contain
+        underscores (3I_ATLAS), so it is everything between the unit and the ToO marker.
+        The timestamp is the earliest input frame's DATE-OBS, which is UTC.
         """
-        # Extract just the filename if full path is provided
-        filename = os.path.basename(config_file)
-
-        # Remove .yml extension
-        base_name = filename.replace(".yml", "").replace(".yaml", "")
-
-        parts = base_name.split("_")
-        result = {
-            "tile": None,
-            "objname": None,
-            "date": None,
-            "timestamp": None,
+        stem = os.path.splitext(os.path.basename(config_file))[0]
+        parts = stem.split("_")
+        marker = next((i for i, part in enumerate(parts) if part.lower() == "too"), None)
+        if marker is None or marker < 3 or marker + 2 >= len(parts) or not self._UNIT_RE.match(parts[1]):
+            raise TooDBError(f"Unrecognized ToO config name: {config_file}")
+        target = "_".join(parts[2:marker])
+        try:
+            obs_utc = datetime.strptime(parts[marker + 1] + parts[marker + 2][:6], "%Y%m%d%H%M%S")
+        except ValueError as e:
+            raise TooDBError(f"Bad timestamp in ToO config name {config_file}: {e}")
+        return {
+            "target": target,
+            "tile": target if self._TILE_RE.match(target) else None,
+            "objname": None if self._TILE_RE.match(target) else target,
+            "obs_utc": obs_utc.replace(tzinfo=timezone.utc),
         }
 
-        # Find "too" marker to locate the date and timestamp
-        too_index = None
-        for i, part in enumerate(parts):
-            if part.lower() == "too":
-                too_index = i
-                break
+    @staticmethod
+    def _triggered_at(row: Dict[str, Any]) -> datetime:
+        trigger = datetime.fromisoformat(str(row["trigger_time"]))
+        if trigger.tzinfo is None:
+            trigger = trigger.replace(tzinfo=timezone(timedelta(hours=9)))  # the web app stores KST
+        return trigger
 
-        if too_index is not None and too_index >= 1 and too_index + 1 < len(parts):
-            # Date is after "too", timestamp is after "too"
-
-            potential_date = parts[too_index + 1]
-            timestamp = parts[too_index + 2]
-
-            # Validate date format (YYYY-MM-DD)
-            if len(potential_date) == 8:
-                result["date"] = f"{potential_date[0:4]}-{potential_date[4:6]}-{potential_date[6:8]}"
-
-            # Store timestamp as-is (HHMMSS format)
-            if timestamp.isdigit() and len(timestamp) >= 6:
-                result["timestamp"] = timestamp
-
-        # Check if first part is a tile (starts with 'T' followed by numbers)
-        if parts and parts[0].startswith("T") and parts[0][1:].isdigit():
-            result["tile"] = parts[0]
-        elif parts and len(parts[0]) > 0:
-            # Otherwise, first part is object name
-            result["objname"] = parts[0]
-
-        return result
-
-    def _convert_chile_time_to_utc(self, date_str: str, time_str: str) -> str:
-        """
-        Convert Chile time (from config filename) to UTC for database comparison.
-
-        Args:
-            date_str: Date string in YYYY-MM-DD format
-            time_str: Time string in HH:MM:SS format
-
-        Returns:
-            UTC datetime as string in YYYY-MM-DD HH:MM:SS format
-        """
-        chile_tz = pytz.timezone("America/Santiago")  # Chile timezone (handles DST automatically)
-        obs_time_chile_str = f"{date_str} {time_str}"
-
-        # Parse as naive datetime, localize to Chile time, then convert to UTC
-        obs_time_chile = datetime.strptime(obs_time_chile_str, "%Y-%m-%d %H:%M:%S")
-        obs_time_chile = chile_tz.localize(obs_time_chile)
-        obs_time_utc = obs_time_chile.astimezone(pytz.UTC)
-
-        # Convert to string format for database comparison
-        return obs_time_utc.strftime("%Y-%m-%d %H:%M:%S")
-
-    def _query_by_date_and_time(
-        self, cursor, identifier: str, identifier_value: str, observation_date: str, observation_time_str: str
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Query ToO records by identifier (tile or objname) with date and time constraints.
-
-        Args:
-            cursor: Database cursor
-            identifier: Either 'tile' or 'objname'
-            identifier_value: Value of the identifier
-            observation_date: Date string for matching
-            observation_time_str: UTC time string for comparison
-
-        Returns:
-            Dictionary with ToO data if found, None otherwise
-        """
-        # First try: same date as observation_time, return most recent trigger_time on that date
-        cursor.execute(
-            f"""SELECT * FROM too_requests 
-               WHERE {identifier} = ? AND DATE(trigger_time) = ? 
-               ORDER BY trigger_time DESC
-               LIMIT 1""",
-            (identifier_value, observation_date),
-        )
-        row = cursor.fetchone()
-        if row:
-            return self._convert_row_to_dict(row)
-
-        # Fallback: any date, trigger_time <= observation_time
-        cursor.execute(
-            f"""SELECT * FROM too_requests 
-               WHERE {identifier} = ? AND trigger_time <= ? 
-               ORDER BY trigger_time DESC
-               LIMIT 1""",
-            (identifier_value, observation_time_str),
-        )
-        row = cursor.fetchone()
-        if row:
-            return self._convert_row_to_dict(row)
-
-        return None
-
-    # ==================== TOO DATA MANAGEMENT ====================
 
     def read_data_by_id(self, too_id: int) -> Optional[Dict[str, Any]]:
         """
@@ -424,77 +347,50 @@ class TooDB:
         config_file: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
-        Read ToO data record from config file.
+        Find the ToO request a config belongs to: the same target (tile or object name),
+        with the latest trigger at or before the config's observation time.
 
-        Args:
-            config_file: Config file path (e.g., "T02252_i_2025-11-19_too_2025-11-19_123123.yml" or
-                         "AT2024hfx_i_2025-11-19_too_2025-11-19_123123.yml")
-                         Will parse filename to extract tile/objname, date, and timestamp, then query database
-                         for records where trigger_time <= observation_time (from parsed date/timestamp)
-
-        Returns:
-            Dictionary with ToO data if found, None otherwise
+        A config whose target has no such row returns None and leaves too_id unset. It never
+        falls back to a row for a different target; that used to attach observation results
+        to whichever request happened to be triggered most recently.
         """
         if not config_file:
             raise TooDBError("config_file is required")
 
-        # Parse config filename to extract tile, date, and timestamp
         parsed = self._parse_config_filename(config_file)
+        target_key = self._normalize_name(parsed["target"])
+        obs_utc = parsed["obs_utc"]
 
-        if not parsed["date"] or not parsed["timestamp"]:
-            raise TooDBError(f"Could not parse date and timestamp from config file: {config_file}")
-
-        # Convert timestamp from HHMMSS format to HH:MM:SS
-        timestamp = parsed["timestamp"]
-        if len(timestamp) < 6:
-            raise TooDBError(f"Invalid timestamp format: {timestamp}")
-        time_str = f"{timestamp[0:2]}:{timestamp[2:4]}:{timestamp[4:6]}"
-
-        # Convert Chile time (from config filename) to UTC for database comparison
-        observation_time_str = self._convert_chile_time_to_utc(parsed["date"], time_str)
-        observation_date = parsed["date"]
-
-        # Query database: find records where trigger_time <= observation_time
-        # Prioritize records from the same date as observation_time
         conn = self.get_connection()
         try:
-            cursor = conn.cursor()
-
-            # Try most specific match first: tile/objname + same date as observation_time
-            if parsed["tile"]:
-                row_dict = self._query_by_date_and_time(
-                    cursor, "tile", parsed["tile"], observation_date, observation_time_str
-                )
-                if row_dict:
-                    self.too_id = row_dict.get("id")
-                    return row_dict
-
-            if parsed["objname"]:
-                row_dict = self._query_by_date_and_time(
-                    cursor, "objname", parsed["objname"], observation_date, observation_time_str
-                )
-                if row_dict:
-                    self.too_id = row_dict.get("id")
-                    return row_dict
-
-            # If no match with tile/objname, try with trigger_time <= observation_time alone
-            cursor.execute(
-                """SELECT * FROM too_requests 
-                   WHERE trigger_time <= ? 
-                   ORDER BY trigger_time DESC, created_at DESC 
-                   LIMIT 1""",
-                (observation_time_str,),
-            )
-            row = cursor.fetchone()
-            if row:
-                row_dict = self._convert_row_to_dict(row)
-                self.too_id = row_dict.get("id")
-                return row_dict
-
-            self.too_id = None
-            return None
+            rows = [self._convert_row_to_dict(row) for row in conn.execute("SELECT * FROM too_requests").fetchall()]
         finally:
             conn.close()
+
+        candidates = [
+            row
+            for row in rows
+            if row.get("trigger_time")
+            and target_key in (self._normalize_name(row.get("tile")), self._normalize_name(row.get("objname")))
+            and self._triggered_at(row) <= obs_utc
+        ]
+        self.too_id = None
+        if not candidates:
+            logger.warning(f"No ToO request for {parsed['target']} triggered before {obs_utc.isoformat()} ({config_file})")
+            return None
+
+        best = max(candidates, key=self._triggered_at)
+        age = obs_utc - self._triggered_at(best)
+        if age > self.MAX_TRIGGER_AGE:
+            logger.warning(
+                f"Nearest ToO request for {parsed['target']} (id={best['id']}) was triggered {age.days} days "
+                f"before {obs_utc.isoformat()}; refusing to attach {config_file}"
+            )
+            return None
+
+        self.too_id = best["id"]
+        return best
+
 
     def update_too_data(
         self,
@@ -833,8 +729,6 @@ class TooDB:
 
         too_data = self.read_data_by_id(too_id)
 
-        completed = too_data.get("completed")
-
-        completed += 1
+        completed = (too_data.get("completed") or 0) + 1
         self.update_too_data(too_id=too_id, completed=completed)
         return True

@@ -209,7 +209,7 @@ def run_scidata_reduction(
             too_db = TooDB()
             too_data = too_db.read_data(config.name)
 
-            if too_data.get("final_notice") == 0:
+            if too_data and too_data.get("final_notice") == 0:
                 make_too_output(too_data.get("id"))
                 too_db.send_final_notice_email(too_data.get("id"))
 
