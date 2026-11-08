@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 # Database connection settings
-DB_TIMEOUT = 1.0  # Timeout in seconds for database operations
+DB_TIMEOUT = 30.0  # ~30 filter processes write this file at once; at 1 s, 44 ToO updates were dropped as "database is locked"
 DB_RETRY_MAX_ATTEMPTS = 3  # Maximum number of retry attempts
 DB_RETRY_DELAY = 0.1  # Initial retry delay in seconds
 
