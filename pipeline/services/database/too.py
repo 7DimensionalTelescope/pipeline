@@ -733,6 +733,31 @@ class TooDB:
 
         return self.mail.send_interim_notice_email(too_id, dtype=dtype, test=test, finished_filter=finished_filter)
 
+    def claim_final_notice(self, too_id: int) -> bool:
+        """Take the final notice for this process. A claim older than an hour is treated as abandoned."""
+        conn = self.get_connection()
+        try:
+            claimed = conn.execute(
+                "UPDATE too_requests SET final_notice = 2, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND "
+                "(COALESCE(final_notice, 0) = 0 OR (final_notice = 2 AND updated_at < datetime('now', '-1 hour')))",
+                (too_id,),
+            ).rowcount
+            conn.commit()
+        finally:
+            conn.close()
+        return claimed == 1
+
+    def release_final_notice(self, too_id: int, sent: bool) -> None:
+        conn = self.get_connection()
+        try:
+            conn.execute(
+                "UPDATE too_requests SET final_notice = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND final_notice = 2",
+                (1 if sent else 0, too_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def mark_completed(self, too_id: int) -> bool:
         """Mark a ToO request as completed."""
 

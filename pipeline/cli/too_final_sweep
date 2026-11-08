@@ -1,0 +1,65 @@
+#!/home/pipeline-stable/.conda/envs/pipeline/bin/python
+"""
+Send final ToO notices for nights whose processing has settled.
+
+A night's last filter can fail or stall, and then no pipeline run is left to send the final
+notice. This sweep, run by a systemd timer, rechecks every recent observed request.
+
+usage: too_final_sweep [--dry-run] [--days N]
+"""
+
+import argparse
+import logging
+import sqlite3
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from pipeline.const import SCHEDULER_DB_PATH, TOO_DB_PATH
+from pipeline.services.database.too import TooDB
+from pipeline.too.completion import night_status
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dry-run", action="store_true", help="report decisions without sending")
+    parser.add_argument("--days", type=int, default=30, help="only requests observed within this many days")
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    logger = logging.getLogger("too_final_sweep")
+    cutoff = datetime.now().astimezone() - timedelta(days=args.days)
+
+    conn = sqlite3.connect(f"file:{TOO_DB_PATH}?mode=ro", uri=True, timeout=10)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT id, base_path, observation_time FROM too_requests "
+        "WHERE base_path IS NOT NULL AND observation_time IS NOT NULL AND COALESCE(final_notice, 0) != 1"
+    ).fetchall()
+    conn.close()
+
+    too_db = TooDB(logger=logger)
+    failures = 0
+    for row in rows:
+        observed = datetime.fromisoformat(row["observation_time"])
+        if observed.tzinfo is None:
+            observed = observed.astimezone()
+        if observed < cutoff:
+            continue
+        if args.dry_run:
+            status = night_status(row["base_path"], SCHEDULER_DB_PATH)
+            due, reason = status.final_due(datetime.now())
+            logger.info(f"ToO {row['id']}: {'DUE' if due else 'not due'}, {reason}")
+            continue
+        try:
+            too_db.send_final_notice_email(row["id"])
+        except Exception as e:
+            failures += 1
+            logger.error(f"ToO {row['id']}: final notice failed: {e}")
+    sys.exit(1 if failures else 0)
+
+
+if __name__ == "__main__":
+    main()

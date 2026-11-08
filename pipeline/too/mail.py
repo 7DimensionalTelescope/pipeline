@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 import numpy as np
 import pytz
 
@@ -297,24 +298,37 @@ Timing Information:
         """
         from ..const import DEFAULT_RECIPIENT
 
+        from ..const import SCHEDULER_DB_PATH
+        from .completion import night_status
+
         too_data = self.too_db.read_data_by_id(too_id)
 
         if too_data.get("final_notice") == 1 and not force_to_send:
             self.logger.info(f"ToO {too_id}: final notice already sent")
             return True
 
-        completed = too_data.get("completed")
-        num_filters = too_data.get("num_filters")
-
-        if (completed != num_filters) and not (force_to_send):
-            self.logger.info(f"ToO {too_id}: final notice not due, completed={completed} num_filters={num_filters}")
+        base_path = too_data.get("base_path") or ""
+        status = night_status(base_path, SCHEDULER_DB_PATH) if base_path else None
+        due, reason = status.final_due(datetime.now()) if status else (False, "no base_path")
+        if not due and not force_to_send:
+            self.logger.info(f"ToO {too_id}: final notice not due, {reason}")
             return True
 
-        # Validate processing is complete
-        v2_progress = too_data.get("v2_progress") or 0
-        if v2_progress < 100 and not force_to_send:
-            self.logger.info(f"ToO {too_id}: final notice not due, v2_progress={v2_progress}")
+        if not self.too_db.claim_final_notice(too_id) and not force_to_send:
+            self.logger.info(f"ToO {too_id}: final notice already claimed by another process")
             return True
+        self.logger.info(f"ToO {too_id}: sending final notice, {reason}")
+
+        try:
+            self._send_final_notice(too_id, too_data, status, sed_data, test)
+        except Exception:
+            self.too_db.release_final_notice(too_id, sent=False)
+            raise
+        self.too_db.release_final_notice(too_id, sent=True)
+        return True
+
+    def _send_final_notice(self, too_id, too_data, status, sed_data, test) -> None:
+        from ..const import DEFAULT_RECIPIENT
 
         if sed_data is None:
             from .plotting import make_too_output
@@ -334,6 +348,8 @@ Timing Information:
         # sed_data should be passed as parameter (e.g., from make_too_output)
         subject = self._build_subject(objname, tile, "Processing Complete")
         contents = self._build_final_email_contents(too_data, image_path, sed_data, base_path)
+        if status is not None:
+            contents = status.summary() + "\n" + contents
 
         # Prepare attachments
         attachments = []
@@ -355,10 +371,6 @@ Timing Information:
             attachments=attachments if attachments else None,
             cc=cc_recipients,
         )
-
-        self.too_db.update_too_data(too_id=too_id, final_notice=1)
-
-        return True
 
     def _build_final_email_contents(self, too_data, image_path, sed_data, base_path):
         """Build email contents for final notice."""
