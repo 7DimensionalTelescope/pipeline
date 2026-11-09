@@ -43,7 +43,7 @@ class DatabaseHandler:
             self.logger = logger or logging.getLogger(__name__)
 
         if use_database:
-            self.too_db = TooDB() if is_too else None
+            self.too_db = TooDB(logger=self.logger) if is_too else None
             self.too_id = None
             self.process_status = None if is_too else ProcessStatus(db_params)
             self.process_status_id = None if is_too else None
@@ -73,7 +73,10 @@ class DatabaseHandler:
 
     def create_process_data(self, config_node: ConfigNode, overwrite: bool = False):
         if self.is_too and self.too_db is not None:
-            self.too_db.read_data(config_node.name)
+            try:
+                self.too_db.read_data(config_node.name)
+            except Exception as e:
+                self.logger.warning(f"ToO lookup failed for {config_node.name}: {e}")
             self.too_id = self.too_db.too_id
             return None
         elif not self.is_connected:

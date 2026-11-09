@@ -1450,11 +1450,17 @@ class Scheduler:
 
     @staticmethod
     def _worker_claim_filter(config_types):
-        """A worker's config_type whitelist as SQL, and whether it may enter a crossfilter group (it must run the white)."""
+        """
+        A worker's claim restrictions as SQL, and whether it may enter a crossfilter group (it must run the white).
+
+        ToO tasks stay on the origin host: they read and write TOO_DB_PATH, which lives under /var/db there and
+        is not shared with workers, so every ToO task a worker claimed failed while opening it.
+        """
+        too_sql, too_params = " AND LOWER(input_type) != ?", (INPUT_TYPE_TOO.lower(),)
         if not config_types:
-            return "", (), True
-        extra_sql = f" AND config_type IN ({','.join('?' for _ in config_types)})"
-        return extra_sql, tuple(config_types), CONFIG_TYPE_CROSSFILTER in config_types
+            return too_sql, too_params, True
+        extra_sql = f" AND config_type IN ({','.join('?' for _ in config_types)})" + too_sql
+        return extra_sql, tuple(config_types) + too_params, CONFIG_TYPE_CROSSFILTER in config_types
 
     def claim_next_dispatch_task(self, server_name, config_types=None, scratch_free_gb=None, scratch_total_gb=None):
         """

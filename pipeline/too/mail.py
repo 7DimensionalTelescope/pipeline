@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 import numpy as np
 import pytz
 
@@ -16,6 +17,10 @@ class TooMail:
             too_db: TooDB instance for database operations
         """
         self.too_db = too_db
+
+    @property
+    def logger(self):
+        return self.too_db.logger
 
     # ==================== EMAIL NOTIFICATION HELPERS ====================
 
@@ -127,6 +132,7 @@ class TooMail:
         import yagmail
         from ..const import EMAIL_PASSWORD, EMAIL_USER
 
+        self.logger.info(f"Sending ToO email to {to} cc={cc}: {subject}")
         try:
             user = yagmail.SMTP(user=EMAIL_USER, password=EMAIL_PASSWORD)
 
@@ -138,8 +144,10 @@ class TooMail:
                 email_kwargs["cc"] = cc
 
             user.send(**email_kwargs)
+            self.logger.info(f"Sent ToO email: {subject}")
             return True
         except Exception as e:
+            self.logger.error(f"Failed to send ToO email '{subject}': {e}")
             raise TooDBError(f"Failed to send email: {e}")
 
     def _find_output_files(
@@ -191,9 +199,8 @@ class TooMail:
         too_data = self.too_db.read_data_by_id(too_id)
 
         if too_data.get("init_notice") == 1:
+            self.logger.info(f"ToO {too_id}: initial notice already sent")
             return True
-        else:
-            self.too_db.update_too_data(too_id=too_id, init_notice=1)
 
         # Extract information from TooDB
         objname = too_data.get("objname", "Unknown")
@@ -215,6 +222,8 @@ class TooMail:
 
         # Send email
         self._send_email(to=requester, subject=subject, contents=contents, cc=cc_recipients)
+
+        self.too_db.update_too_data(too_id=too_id, init_notice=1)
 
         return True
 
@@ -289,20 +298,42 @@ Timing Information:
         """
         from ..const import DEFAULT_RECIPIENT
 
-        self.too_db.update_too_data(too_id=too_id, final_notice=1)
+        from ..const import SCHEDULER_DB_PATH
+        from .completion import night_status
 
         too_data = self.too_db.read_data_by_id(too_id)
 
-        completed = too_data.get("completed")
-
-        if (completed != too_data.get("num_filters")) and not (force_to_send):
+        if too_data.get("final_notice") == 1 and not force_to_send:
+            self.logger.info(f"ToO {too_id}: final notice already sent")
             return True
 
-        # Validate processing is complete
-        v2 = too_data.get("v2", False)
-        v2_progress = too_data.get("v2_progress", 0)
-        if v2_progress < 100:
+        base_path = too_data.get("base_path") or ""
+        status = night_status(base_path, SCHEDULER_DB_PATH) if base_path else None
+        due, reason = status.final_due(datetime.now()) if status else (False, "no base_path")
+        if not due and not force_to_send:
+            self.logger.info(f"ToO {too_id}: final notice not due, {reason}")
             return True
+
+        if not self.too_db.claim_final_notice(too_id) and not force_to_send:
+            self.logger.info(f"ToO {too_id}: final notice already claimed by another process")
+            return True
+        self.logger.info(f"ToO {too_id}: sending final notice, {reason}")
+
+        try:
+            self._send_final_notice(too_id, too_data, status, sed_data, test)
+        except Exception:
+            self.too_db.release_final_notice(too_id, sent=False)
+            raise
+        self.too_db.release_final_notice(too_id, sent=True)
+        return True
+
+    def _send_final_notice(self, too_id, too_data, status, sed_data, test) -> None:
+        from ..const import DEFAULT_RECIPIENT
+
+        if sed_data is None:
+            from .plotting import make_too_output
+
+            sed_data = make_too_output(too_id)
 
         # Extract information
         objname = too_data.get("objname", "Unknown")
@@ -317,6 +348,8 @@ Timing Information:
         # sed_data should be passed as parameter (e.g., from make_too_output)
         subject = self._build_subject(objname, tile, "Processing Complete")
         contents = self._build_final_email_contents(too_data, image_path, sed_data, base_path)
+        if status is not None:
+            contents = status.summary() + "\n" + contents
 
         # Prepare attachments
         attachments = []
@@ -338,8 +371,6 @@ Timing Information:
             attachments=attachments if attachments else None,
             cc=cc_recipients,
         )
-
-        return True
 
     def _build_final_email_contents(self, too_data, image_path, sed_data, base_path):
         """Build email contents for final notice."""
@@ -374,7 +405,7 @@ The data processing for the ToO observation is complete. The results are as foll
 
         return format_sed_table_string(sed_data, title="Magnitude Measurements")
 
-    def send_interim_notice_email(self, too_id: int, dtype="difference", test=False) -> bool:
+    def send_interim_notice_email(self, too_id: int, dtype="difference", test=False, finished_filter=None) -> bool:
         """
         Send interim email notification when one filterset is completed.
         Shows detection status, filter used, and magnitude if detected.
@@ -398,15 +429,14 @@ The data processing for the ToO observation is complete. The results are as foll
 
         too_data = self.too_db.read_data_by_id(too_id)
 
-        if too_data.get("num_filters") == 0:
+        if not too_data.get("num_filters"):
             num_filters = self._count_num_filters(too_id)
         else:
             num_filters = too_data.get("num_filters")
 
         if too_data.get("interim_notice") == 1:
+            self.logger.info(f"ToO {too_id}: interim notice already sent")
             return True
-        else:
-            self.too_db.update_too_data(too_id=too_id, interim_notice=1)
 
         # Extract information
         objname = too_data.get("objname", "Unknown")
@@ -425,8 +455,8 @@ The data processing for the ToO observation is complete. The results are as foll
         if sed_data:
             # sed_data is a list, get the first item (or find the relevant filter)
             if isinstance(sed_data, list) and len(sed_data) > 0:
-                # Get first item (for single filter completion)
-                item = sed_data[0] if isinstance(sed_data[0], dict) else sed_data[0]
+                # Report the filter that just finished, falling back to the first entry
+                item = next((x for x in sed_data if isinstance(x, dict) and x.get("filter_name") == finished_filter), sed_data[0])
                 filt = item.get("filter_name") if isinstance(item, dict) else getattr(item, "filter_name", None)
                 mag = item.get("magnitude") if isinstance(item, dict) else getattr(item, "magnitude", None)
                 mag_error = item.get("mag_error") if isinstance(item, dict) else getattr(item, "mag_error", None)
@@ -469,6 +499,7 @@ The data processing for the ToO observation is complete. The results are as foll
             mag_error=mag_error,
             is_upper_limit=is_upper_limit,
             num_filters=num_filters,
+            finished_filter=finished_filter,
         )
 
         # Handle test mode
@@ -495,6 +526,7 @@ The data processing for the ToO observation is complete. The results are as foll
         mag_error=None,
         is_upper_limit=False,
         num_filters=None,
+        finished_filter=None,
     ):
         """Build email contents for interim notice."""
         contents = """
@@ -503,14 +535,10 @@ Interim Processing Result:
 """
         contents += "This is an interim notification for a single filter completion.\n\n"
 
-        # Extract filter from sed_data (sed_data is a list of dicts from plot_cutouts_and_sed)
-        filt = None
-        if sed_data:
-            if isinstance(sed_data, list) and len(sed_data) > 0:
-                item = sed_data[0] if isinstance(sed_data[0], dict) else sed_data[0]
-                filt = item.get("filter_name") if isinstance(item, dict) else getattr(item, "filter_name", None)
-            elif isinstance(sed_data, dict):
-                filt = sed_data.get("filter_name")
+        filt = finished_filter
+        if not filt and sed_data:
+            first = sed_data[0] if isinstance(sed_data, list) and sed_data else sed_data
+            filt = first.get("filter_name") if isinstance(first, dict) else getattr(first, "filter_name", None)
 
         stacked_like = dtype in ("stacked", "coadd")
         if is_detected and dtype == "difference":
@@ -525,8 +553,10 @@ Interim Processing Result:
         filter_str = filt if filt else "Unknown Filter"
         contents += f"Filter: {filter_str}\n"
 
-        if mag is None and is_upper_limit:
+        if mag is None and is_upper_limit and mag_error is not None:
             contents += f"Magnitude: >{mag_error:.3f} (5σ upper limit)\n"
+        elif mag is None:
+            contents += "Magnitude: not measured\n"
         else:
             if mag_error is not None and not np.isnan(mag_error) and mag_error > 0:
                 contents += f"Magnitude: {mag:.3f} ± {mag_error:.3f}\n"
@@ -580,9 +610,7 @@ Interim Processing Result:
                     if item in ALL_FILTERS:
                         num_filters += 1
         except (OSError, PermissionError) as e:
-            # Log error but don't raise - return 0 instead
-            # Note: TooDB doesn't have a logger, so we'll just handle silently
-            # or could use print for debugging
+            self.logger.warning(f"ToO {too_id}: cannot count filters under {base_path}: {e}")
             num_filters = 0
 
         self.too_db.update_too_data(too_id=too_id, num_filters=num_filters)
