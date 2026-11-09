@@ -132,6 +132,9 @@ class TooMail:
         import yagmail
         from ..const import EMAIL_PASSWORD, EMAIL_USER
 
+        if os.environ.get("TOO_SUPPRESS_EMAIL") == "1":
+            self.logger.info(f"TOO_SUPPRESS_EMAIL=1, not sending and recording as sent: {subject}")
+            return True
         self.logger.info(f"Sending ToO email to {to} cc={cc}: {subject}")
         try:
             user = yagmail.SMTP(user=EMAIL_USER, password=EMAIL_PASSWORD)
