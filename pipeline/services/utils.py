@@ -13,7 +13,6 @@ from astropy.table import Table
 from typing import Optional, Iterator, overload
 import fcntl
 from contextlib import contextmanager
-import pynvml
 import os
 import shutil
 from collections import UserDict
@@ -21,6 +20,12 @@ from itertools import chain
 from stat import S_ISDIR
 
 import ctypes
+
+try:
+    # the pipeline web does not need it and not have it
+    import pynvml
+except ImportError:
+    pynvml = None
 
 from ..const import (
     DISCOVERY_RAW_INVENTORY,
