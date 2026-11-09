@@ -114,6 +114,8 @@ class Scheduler:
     # Per claiming host, on top of the per-disk cap: a host's scratch stages one coadd at a time, and the origin
     # otherwise refills every freed slot itself before a worker's next poll.
     MAX_MULTI_EPOCH_PER_HOST = int(os.environ.get("QUEUE_MAX_MULTI_EPOCH_PER_HOST") or DEFAULT_MAX_MULTI_EPOCH_PER_HOST)
+    # QUEUE_MAX_PREPROCESS_PER_HOST: the preprocess cap per claiming host on each disk; unset, it is QUEUE_MAX_PREPROCESS.
+    MAX_PREPROCESS_PER_HOST = int(os.environ.get("QUEUE_MAX_PREPROCESS_PER_HOST") or MAX_PREPROCESS)
     # Every Nth origin claim looks at other hosts' rows first, so a down worker's rows are not stranded.
     FALLBACK_EVERY = int(os.environ.get("QUEUE_FALLBACK_EVERY") or DEFAULT_FALLBACK_EVERY)
     HIGH_PRIORITY_THRESHOLD = 10
@@ -648,7 +650,7 @@ class Scheduler:
         return Table(data, dtype=self._empty_schedule.dtype)
 
     def _append_ready_task_constraints(self, cursor, query, params, host=None):
-        """Shared Ready-task filters: per-disk preprocess and multi-epoch caps, the per-host multi-epoch cap, the priority and ToO gates."""
+        """Shared Ready-task filters: per-disk preprocess and multi-epoch caps, the per-host multi-epoch and preprocess caps, the priority and ToO gates."""
         for config_type, cap in (
             (CONFIG_TYPE_PREPROCESS, self.MAX_PREPROCESS),
             (CONFIG_TYPE_MULTI_EPOCH, self.MAX_MULTI_EPOCH),
@@ -673,6 +675,18 @@ class Scheduler:
             if cursor.fetchone()[0] >= self.MAX_MULTI_EPOCH_PER_HOST:
                 query += " AND config_type != ?"
                 params.append(CONFIG_TYPE_MULTI_EPOCH)
+            if self.MAX_PREPROCESS_PER_HOST <= 0:
+                query += " AND config_type != ?"
+                params.append(CONFIG_TYPE_PREPROCESS)
+            else:
+                cursor.execute(
+                    "SELECT disk FROM scheduler WHERE status = ? AND config_type = ? AND COALESCE(dispatch, '') = ? "
+                    "GROUP BY disk HAVING COUNT(*) >= ?",
+                    (TASK_STATUS_PROCESSING, CONFIG_TYPE_PREPROCESS, host, self.MAX_PREPROCESS_PER_HOST),
+                )
+                for (disk,) in cursor.fetchall():
+                    query += " AND NOT (config_type = ? AND disk IS ?)"
+                    params.extend((CONFIG_TYPE_PREPROCESS, disk))
 
         cursor.execute(
             "SELECT COUNT(*) FROM scheduler WHERE status = ? AND priority > ?",
@@ -768,6 +782,9 @@ class Scheduler:
                 ("MAX_MULTI_EPOCH_PER_HOST", "QUEUE_MAX_MULTI_EPOCH_PER_HOST", self.DEFAULT_MAX_MULTI_EPOCH_PER_HOST),
             )
         }
+        values["MAX_PREPROCESS_PER_HOST"] = int(
+            os.environ.get("QUEUE_MAX_PREPROCESS_PER_HOST") or values["MAX_PREPROCESS"]
+        )
         changes = {name: (getattr(self, name), value) for name, value in values.items()}
         for name, value in values.items():
             setattr(self, name, value)
