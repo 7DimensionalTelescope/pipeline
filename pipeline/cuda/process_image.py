@@ -11,7 +11,7 @@ import fitsio
 
 from ..utils.header import add_padding
 from ..preprocess.shifted_score import check_shifted_overscan
-from ..preprocess.utils import prepare_raw_qa_header
+from ..preprocess.utils import prepare_raw_qa_header, sticky_bit_contrast
 
 
 # Reduction kernel
@@ -67,9 +67,11 @@ def process_image_with_cupy(obs, bias, dark, flat, output, device_id, n_head_blo
 
             batch_data = []
             for path, out_path in zip(batch_obs, batch_output):
-                d = fitsio.read(path).astype(np.float32)
+                raw = fitsio.read(path)
+                sbitc = sticky_bit_contrast(raw)
+                d = raw.astype(np.float32)
                 f, s = check_shifted_overscan(d)
-                prepare_raw_qa_header(out_path, f, s)
+                prepare_raw_qa_header(out_path, f, s, sbitc)
                 batch_data.append(d)
 
             print(

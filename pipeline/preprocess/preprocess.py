@@ -596,7 +596,10 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 )
 
         sig_header = header.copy()
-        sig_header[prep_utils.MEDIAN_PENALTY_KEY] = prep_utils.median_penalty_card(header["NFRAMES"])
+        if dtype in (CALIB_TYPE_BIAS, CALIB_TYPE_DARK):
+            sig_header[prep_utils.MEDIAN_PENALTY_KEY] = (1.0, "Var(combined)/Var(mean): mean-combined master")
+        else:
+            sig_header[prep_utils.MEDIAN_PENALTY_KEY] = prep_utils.median_penalty_card(header["NFRAMES"])
         prep_utils.update_header_by_overwriting(getattr(self, f"{dtype}sig_output"), sig_header)
         if dtype == CALIB_TYPE_DARK:  # the BACKOFF noise reference every science frame reduced with this dark carries
             header.update(
@@ -1009,6 +1012,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         )
         if not ppflag.bias_shared_with_dark(bias, dark):
             sci_ppflag |= ppflag.PPFLAG_BIAS_NOT_SHARED  # the weight model must charge both bias masters
+        sci_ppflag |= ppflag.PPFLAG_UNDESTRIPED_SCI  # no science row pass yet
 
         from ..services.inspection import INSPCOMM_COMMENT, INSPCOMM_KEY, SANITY_COMMENT
 

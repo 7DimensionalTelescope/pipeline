@@ -173,7 +173,7 @@ def _two_lines(draw, text: str, x: float, y: float, w: int, font, fill) -> None:
 def _status_lines(record: dict, font, width: int) -> List[str]:
     """`SANITY T   PPFLAG 0000001`, then the QA items wrapped to `width`."""
     sanity = {True: "T", False: "F"}.get(record["sanity"], "-")
-    ppflag = "-" if record["ppflag"] is None else f"{int(record['ppflag']):07b}"
+    ppflag = "-" if record["ppflag"] is None else f"{int(record['ppflag']):09b}"
     lines, line = [f"SANITY {sanity}   PPFLAG {ppflag}"], ""
     for key, shown, rule, _ in record["qa"]:
         item = f"{key} {shown} ({rule})"
@@ -261,7 +261,7 @@ def composite_for_single(image: str, height: int = 320):
     if not columns:
         raise ValueError(f"{os.path.basename(image)}: no master frames found")
     ppflag = fits.getheader(image).get("PPFLAG")
-    title = f"{_stem(image)}   PPFLAG {'-' if ppflag is None else format(int(ppflag), '07b')}"
+    title = f"{_stem(image)}   PPFLAG {'-' if ppflag is None else format(int(ppflag), '09b')}"
     return _panel(title, columns, height)[0]
 
 

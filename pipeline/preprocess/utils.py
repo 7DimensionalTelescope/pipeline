@@ -664,7 +664,7 @@ def update_header_file(fits_path: str, extra: fits.Header) -> None:
     write_header_file(path, hdr)
 
 
-def prepare_raw_qa_header(fits_path: str, flag: bool, score: float) -> None:
+def prepare_raw_qa_header(fits_path: str, flag: bool, score: float, sbitc: list[float] | None = None) -> None:
     """Write SHIFTED/SHFTSCR to the FITS sibling ``.header`` text file (preserves existing keys).
 
     The flag/score pair must come from :func:`check_shifted_overscan` (the single
@@ -676,7 +676,16 @@ def prepare_raw_qa_header(fits_path: str, flag: bool, score: float) -> None:
     extra = fits.Header()
     extra["SHIFTED"] = (bool(flag), f"Shifted overscan band (SHFTSCR>{cut:g})")
     extra["SHFTSCR"] = (float(score), f"Shifted overscan score; shifted if >{cut:g}")
+    for k, v in enumerate(sbitc or []):
+        extra[f"SBITC{k:02d}"] = (round(float(v), 5), f"Bit {k} set fraction, odd minus even columns")
     update_header_file(fits_path, extra)
+
+
+def sticky_bit_contrast(raw: np.ndarray) -> list[float]:
+    """Sticky-bit QA of a uint16 raw frame: odd-minus-even column set fraction of bits 0..15."""
+    bits = (np.arange(65536)[:, None] >> np.arange(16)) & 1
+    odd, even = (np.bincount(raw[:, p::2].ravel(), minlength=65536) @ bits / raw[:, p::2].size for p in (1, 0))
+    return [float(v) for v in odd - even]
 
 
 def ensure_mjd_in_header(header, logger=None):

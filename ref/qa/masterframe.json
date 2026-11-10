@@ -1,5 +1,10 @@
 {
     "BIAS": {
+        "SBITC07": {
+            "value": 0.02,
+            "criteria": "lt",
+            "description": "Odd-minus-even bit-7 set fraction (sticky bit) must be < 0.02"
+        },
         "CLIPMED": {
             "value": [
                 512,
@@ -20,6 +25,11 @@
         }
     },
     "DARK": {
+        "SBITC07": {
+            "value": 0.02,
+            "criteria": "lt",
+            "description": "Odd-minus-even bit-7 set fraction (sticky bit) must be < 0.02"
+        },
         "CLIPSTD": {
             "value": 2.8,
             "criteria": "lte",
@@ -32,6 +42,11 @@
         }
     },
     "FLAT": {
+        "SBITC07": {
+            "value": 0.02,
+            "criteria": "lt",
+            "description": "Odd-minus-even bit-7 set fraction (sticky bit) must be < 0.02"
+        },
         "CLIPMAX": {
             "value": 1.3,
             "criteria": "lt",

@@ -1,5 +1,10 @@
 {
     "SCIENCE": {
+        "SBITC07": {
+            "value": 0.02,
+            "criteria": "lt",
+            "description": "Odd-minus-even bit-7 set fraction (sticky bit) must be < 0.02"
+        },
         "NUMFRAC": {
             "value": 0.05,
             "criteria": "gt",

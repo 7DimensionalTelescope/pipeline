@@ -38,7 +38,8 @@ from typing import Literal
 
 import numpy as np
 from astropy.table import Table
-from ..preprocess.ppflag import PPFLAG_INFORMATIONAL
+from ..preprocess.ppflag import PPFLAG_INFORMATIONAL, PPFLAG_UNDESTRIPED_MASTER, PPFLAG_UNDESTRIPED_SCI
+from ..version import is_below_min
 
 # (metric, candidate keys in priority order, better direction)
 #
@@ -88,13 +89,31 @@ PPFLAG_BITS = (
     (16, "masterframe date wall ignored"),
     (32, "hard keys ignored"),
     (64, "bias master not shared with the dark master (informational, never rejects)"),
+    (128, "bias or dark master not destriped"),
+    (256, "science frame's own row pass not applied"),
 )
 
-CATEGORICAL_DEFAULT_CUTS = {"ppflag": 67.0}  # "1000011"
+CATEGORICAL_DEFAULT_CUTS = {"ppflag": 451.0}  # "1000011"
+
+PPFLAG_UNDESTRIPED = PPFLAG_UNDESTRIPED_MASTER | PPFLAG_UNDESTRIPED_SCI
+
+
+def effective_ppflag(value: float) -> float:
+    """PPFLAG with both UNDESTRIPED bits for a legacy product (no PPFLAG_UNDESTRIPED_SCI, which every 1.11.14 single carries); NaN stays NaN."""
+    # TODO: 1.11.14 stopgap, revisit when a science row pass can clear bit 256; remove after the reordering and backfill
+    if np.isfinite(value) and not int(value) & PPFLAG_UNDESTRIPED_SCI:
+        return float(int(value) | PPFLAG_UNDESTRIPED)
+    return value
+
+
+def _numeric_ppflag_mask(value) -> float:
+    """A numeric mask below 128 predates the UNDESTRIPED bits: same stopgap as the short mask strings."""
+    mask = int(value)
+    return float(mask | PPFLAG_UNDESTRIPED if mask < PPFLAG_UNDESTRIPED_MASTER else mask)
 
 
 def ppflag_mask(spec) -> int:
-    """``"1000011"`` -> 67; binary number, bit 64 leftmost, ``"11"`` -> 3; quoted string only."""
+    """``"111000011"`` -> 451; binary number, bit 256 leftmost, ``"11"`` -> 3; quoted string only; short masks tolerate the UNDESTRIPED bits."""
     if spec is None:
         return 0
     if not isinstance(spec, str):
@@ -104,9 +123,15 @@ def ppflag_mask(spec) -> int:
         raise ValueError(f"ppflag_allowed must contain only 0 and 1, got {spec!r}")
     if len(digits) > len(PPFLAG_BITS):
         raise ValueError(
-            f"ppflag_allowed has {len(digits)} digits, at most {len(PPFLAG_BITS)} (bit 64 leftmost, bit 1 rightmost)"
+            f"ppflag_allowed has {len(digits)} digits, at most {len(PPFLAG_BITS)} (bit 256 leftmost, bit 1 rightmost)"
         )
-    return int(digits or "0", 2)
+    mask = int(digits or "0", 2)
+    # TODO: 1.11.14 stopgap, remove after the PPFLAG bit reordering and backfill: short masks tolerate the UNDESTRIPED bits
+    if len(digits) <= 7:
+        mask |= PPFLAG_UNDESTRIPED
+    elif len(digits) == 8:
+        mask |= PPFLAG_UNDESTRIPED_SCI
+    return mask
 
 
 def ppflag_label(value) -> str:
@@ -116,8 +141,8 @@ def ppflag_label(value) -> str:
 
 
 def ppflag_spec(mask) -> str:
-    """67 -> ``"1000011"``; the inverse of `ppflag_mask`, seven binary digits."""
-    return format(int(mask), "07b")
+    """451 -> ``"111000011"``; the inverse of `ppflag_mask`, nine binary digits."""
+    return format(int(mask), "09b")
 
 
 # Key families where photometry writes 0 to mean "no value" instead of dropping the card.
@@ -201,6 +226,8 @@ def collect_metrics(names: list[str], headers: list, metrics=None, extra=None) -
         used_keys[metric] = key
         directions[metric] = direction
         table[metric] = [_value(h.get(key), key) for h in headers]
+        if metric == "ppflag":
+            table[metric] = [effective_ppflag(v) for v in table[metric]]
     table.meta["directions"] = directions
     table.meta["keys"] = used_keys
     return table, used_keys
@@ -251,6 +278,8 @@ def metrics_for_paths_from_image_qa(paths: list[str], metrics=None, extra=None) 
     directions, used = {}, {}
     for j, (metric, col, direction) in enumerate(resolved):
         table[metric] = [_value(by_path[p][j], col.upper()) if p in by_path else np.nan for p in paths]
+        if metric == "ppflag":
+            table[metric] = [effective_ppflag(v) for v in table[metric]]
         directions[metric] = direction
         used[metric] = col
     table.meta["directions"] = directions
@@ -687,7 +716,7 @@ def _interval(name: str, specs: list) -> tuple[float, float] | None:
     else:
         return None
     if name in CATEGORICAL_METRICS:
-        raise ValueError(f'{name} takes a binary string, bit 64 leftmost, as in "{name}=1000011"')
+        raise ValueError(f'{name} takes a binary string, bit 256 leftmost, as in "{name}=1000011"')
     if lo > hi:
         raise ValueError(f"{name}: low bound {lo:g} is above high bound {hi:g}")
     return float(lo), float(hi)
@@ -761,7 +790,7 @@ def apply_edits(table: Table, cuts: dict, text: str, headers: list | None = None
         ((op, value),) = specs
         if op in ("<=", ">="):
             if name in CATEGORICAL_METRICS:
-                raise ValueError(f'{name} takes a binary string, bit 64 leftmost, as in "{name}=1000011"')
+                raise ValueError(f'{name} takes a binary string, bit 256 leftmost, as in "{name}=1000011"')
             number = _as_number(value)
             if number is None:
                 raise ValueError(f"{name}: {value!r} is not a number")
@@ -955,8 +984,8 @@ def resolve_fixed_cuts(fixed_cuts, metrics=None, extra=None, warn=None):
         name = raw.lower()
         if name in CATEGORICAL_METRICS:
             if isinstance(value, (list, tuple)):
-                raise ValueError(f'{name} takes a binary string, bit 64 leftmost, as in "{name}": "1000011"')
-            numeric[name] = ppflag_mask(value) if isinstance(value, str) else float(value)
+                raise ValueError(f'{name} takes a binary string, bit 256 leftmost, as in "{name}": "1000011"')
+            numeric[name] = ppflag_mask(value) if isinstance(value, str) else _numeric_ppflag_mask(value)
             continue
         specs = []
         for item in value if isinstance(value, (list, tuple)) else [value]:

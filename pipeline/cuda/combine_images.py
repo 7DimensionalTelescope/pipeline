@@ -4,10 +4,10 @@ import cupy as cp
 import numpy as np
 import fitsio
 
-from ..const import CALIB_TYPES
-from ..preprocess.calc import prepare_masterframe_header
+from ..const import CALIB_TYPE_BIAS, CALIB_TYPE_DARK, CALIB_TYPES
+from ..preprocess.calc import MEAN_REJECT_NSIG, destripe_additive_master, prepare_masterframe_header
 from ..preprocess.shifted_score import check_shifted_overscan, combined_shifted_score
-from ..preprocess.utils import prepare_raw_qa_header
+from ..preprocess.utils import prepare_raw_qa_header, sticky_bit_contrast, update_header_file
 
 
 def pinned_empty(shape, dtype=np.float32):
@@ -19,7 +19,15 @@ def pinned_empty(shape, dtype=np.float32):
 
 
 def combine_images_with_cupy(
-    data, device_id=None, subtract=None, norm=False, make_bpmask=False, maxiters=5, sigma=3, bpmask_sigma=5
+    data,
+    device_id=None,
+    subtract=None,
+    norm=False,
+    make_bpmask=False,
+    maxiters=5,
+    sigma=3,
+    bpmask_sigma=5,
+    dtype=None,
 ):
     """median is GPU, std is CPU. Uses pinned memory for better host-GPU transfer performance."""
 
@@ -46,6 +54,21 @@ def combine_images_with_cupy(
 
         cp_median = cp.median(cp_stack, axis=0)  # coadded image. e.g., master dark
         cp_std = cp.std(cp_stack, axis=0, ddof=1)
+        combine_cards = None
+        if dtype in (CALIB_TYPE_BIAS, CALIB_TYPE_DARK):
+            frame_sigma = cp.median(cp_std)
+            dev = cp.abs(cp_stack - cp_median)
+            lim = MEAN_REJECT_NSIG * cp.maximum(frame_sigma, 1.4826 * cp.median(dev, axis=0, overwrite_input=True))
+            del dev
+            keep = cp.abs(cp_stack - cp_median) <= lim
+            n_kept = keep.sum(axis=0, dtype=cp.float32)
+            cp_median = cp.where(keep, cp_stack, 0).sum(axis=0) / n_kept
+            resid = cp.where(keep, cp_stack - cp_median, 0)
+            cp_std = cp.sqrt((resid * resid).sum(axis=0) / cp.maximum(n_kept - 1, 1))
+            nclipfrc = 1.0 - float(n_kept.sum(dtype=cp.float64)) / cp_stack.size
+            del keep, n_kept, resid, lim
+            np_combined, combine_cards = destripe_additive_master(cp.asnumpy(cp_median), nclipfrc)
+            cp_median = cp.asarray(np_combined)
 
         # Copy to pinned host memory
         cp.cuda.runtime.memcpyAsync(
@@ -93,7 +116,7 @@ def combine_images_with_cupy(
         del cp_stack, cp_median, cp_std
         cp.get_default_memory_pool().free_all_blocks()
 
-    return np_median, np_std, np_bpmask
+    return np_median, np_std, np_bpmask, combine_cards
 
 
 if __name__ == "__main__":
@@ -137,8 +160,11 @@ if __name__ == "__main__":
     data = []
     flags = []
     scores = []
+    sbitcs = []
     for img in args.input:
-        d = fitsio.read(img).astype(np.float32)
+        raw = fitsio.read(img)
+        sbitcs.append(sticky_bit_contrast(raw))
+        d = raw.astype(np.float32)
         f, s = check_shifted_overscan(d)
         flags.append(f)
         scores.append(s)
@@ -146,14 +172,16 @@ if __name__ == "__main__":
 
     joint_score = combined_shifted_score(scores)
     joint_flag = any(flags)
+    joint_sbitc = max(sbitcs, key=lambda v: v[7])
 
-    np_median, np_std, np_bpmask = combine_images_with_cupy(
+    np_median, np_std, np_bpmask, combine_cards = combine_images_with_cupy(
         data,
         device_id=args.device,
         subtract=subtract,
         norm=args.norm,
         make_bpmask=make_bpmask,
         bpmask_sigma=args.bpmask_sigma,
+        dtype=args.dtype,
     )
 
     # Write output files using fitsio if available
@@ -162,7 +190,9 @@ if __name__ == "__main__":
     if make_bpmask:
         fitsio.write(args.bpmask, np_bpmask, clobber=True)
 
-    prepare_raw_qa_header(args.median_out, joint_flag, joint_score)
+    prepare_raw_qa_header(args.median_out, joint_flag, joint_score, joint_sbitc)
+    if combine_cards is not None:
+        update_header_file(args.median_out, combine_cards)
     if args.dtype is not None:
         prepare_masterframe_header(
             args.median_out,

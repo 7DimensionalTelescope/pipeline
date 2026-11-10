@@ -6,6 +6,7 @@ from typing import Literal
 import numpy as np
 import time
 import uuid
+import fitsio
 from astropy.io import fits
 from numba import njit, prange
 from scipy.stats import variation
@@ -16,6 +17,7 @@ from .utils import (
     read_fits_image,
     read_fits_images,
     set_pipe_ver_in_header,
+    sticky_bit_contrast,
     update_header_file,
     write_fits_images,
 )
@@ -24,8 +26,8 @@ from .shifted_score import (
     check_shifted_overscan,
     combined_shifted_score,
 )
-from ..calc.median import nanmedian_std_axis0
-from ..const import ROOT_DIR, SERVICES_TMP_DIR
+from ..calc.median import nanmedian_std_axis0, quickselect
+from ..const import CALIB_TYPE_BIAS, CALIB_TYPE_DARK, ROOT_DIR, SERVICES_TMP_DIR
 
 
 def combine_images_with_subprocess_gpu(
@@ -115,9 +117,12 @@ def combine_images_with_cpu(
 
     raw_flags = []
     raw_scores = []
+    raw_sbitcs = []
     np_stack = None
     for i, img in enumerate(images):
-        d = read_fits_image(img)
+        raw = fitsio.read(img)
+        raw_sbitcs.append(sticky_bit_contrast(raw))
+        d = raw.astype(np.float32)
         f, s = check_shifted_overscan(d)
         raw_flags.append(f)
         raw_scores.append(s)
@@ -127,6 +132,7 @@ def combine_images_with_cpu(
         d = None
     joint_score = combined_shifted_score(raw_scores)
     joint_flag = any(raw_flags)
+    joint_sbitc = max(raw_sbitcs, key=lambda v: v[7])
 
     if subtract is not None:
         sub_arr = np.zeros_like(np_stack[0], dtype=np.float32)
@@ -144,7 +150,11 @@ def combine_images_with_cpu(
     if norm:
         np_stack = _normalize_stack(np_stack)
 
-    if combine_method == "mean":
+    combine_cards = None
+    if dtype in (CALIB_TYPE_BIAS, CALIB_TYPE_DARK):
+        np_combined, np_std, nclipfrc = _calc_mean_reject_and_std(np_stack)
+        np_combined, combine_cards = destripe_additive_master(np_combined, nclipfrc)
+    elif combine_method == "mean":
         np_combined = np.mean(np_stack, axis=0).astype(np.float32)
         np_std = np.std(np_stack, axis=0, ddof=1).astype(np.float32)
     else:
@@ -156,7 +166,9 @@ def combine_images_with_cpu(
         hot_mask = sigma_clipped_stats_cpu(np_combined, bpmask_sigma, return_mask=True)
         fits.writeto(make_bpmask, data=hot_mask.astype(np.uint8), overwrite=True)
 
-    prepare_raw_qa_header(output, joint_flag, joint_score)
+    prepare_raw_qa_header(output, joint_flag, joint_score, joint_sbitc)
+    if combine_cards is not None:
+        update_header_file(output, combine_cards)
     if dtype is not None:
         prepare_masterframe_header(
             output,
@@ -308,7 +320,8 @@ def process_image_with_cpu(
         processed_batch = []
         for image_data, out_path in zip(batch_data, out_paths):
             shifted_flag, shifted_score = check_shifted_overscan(image_data)
-            prepare_raw_qa_header(out_path, shifted_flag, shifted_score)
+            sbitc = sticky_bit_contrast(image_data.astype(np.uint16))  # float32 holds uint16 raw values exactly
+            prepare_raw_qa_header(out_path, shifted_flag, shifted_score, sbitc)
             processed_data = reduction_kernel_cpu(image_data, subtractive, multiplicative, h, w)
             processed_batch.append(processed_data)
 
@@ -408,6 +421,90 @@ def _calc_median_and_std(np_stack):
     std_img = np.empty((h, w), dtype=np.float32)
     nanmedian_std_axis0(np_stack, median_img, std_img)
     return median_img, std_img
+
+
+MEAN_REJECT_NSIG = 4.0
+MEAN_REJECT_COMBTYPE = "MEANREJ4"
+
+
+@njit(parallel=True)
+def _mean_reject_axis0(stack, med, frame_sigma, nsig, mean_img, std_img, nrej):
+    """Row-parallel mean and ddof=1 std of the samples within nsig*max(frame_sigma, 1.4826 MAD) of the median."""
+    n, h, w = stack.shape
+    for y in prange(h):
+        buf = np.empty(n, dtype=np.float32)
+        rej = 0
+        for x in range(w):
+            c = med[y, x]
+            for i in range(n):
+                buf[i] = abs(stack[i, y, x] - c)
+            if n % 2:
+                mad = quickselect(buf, n, (n - 1) // 2)
+            else:
+                hi = quickselect(buf, n, n // 2)
+                lo = buf[0]
+                for j in range(1, n // 2):
+                    if buf[j] > lo:
+                        lo = buf[j]
+                mad = 0.5 * (lo + hi)
+            lim = nsig * max(frame_sigma, 1.4826 * mad)
+            m = 0
+            s = 0.0
+            for i in range(n):
+                v = stack[i, y, x]
+                if abs(v - c) <= lim:
+                    m += 1
+                    s += v
+            mean = s / m
+            var = 0.0
+            for i in range(n):
+                v = stack[i, y, x]
+                if abs(v - c) <= lim:
+                    d = v - mean
+                    var += d * d
+            mean_img[y, x] = mean
+            std_img[y, x] = np.sqrt(var / (m - 1)) if m > 1 else 0.0
+            rej += n - m
+        nrej[y] = rej
+
+
+def _calc_mean_reject_and_std(np_stack):
+    """Per-pixel mean and ddof=1 std of the kept samples (MEANREJ4), and the rejected-sample fraction."""
+    n, h, w = np_stack.shape
+    median_img, std_img = _calc_median_and_std(np_stack)
+    frame_sigma = float(np.median(std_img))
+    mean_img = np.empty((h, w), dtype=np.float32)
+    nrej = np.zeros(h, dtype=np.int64)
+    _mean_reject_axis0(np_stack, median_img, frame_sigma, MEAN_REJECT_NSIG, mean_img, std_img, nrej)
+    return mean_img, std_img, float(nrej.sum()) / np_stack.size
+
+
+def destripe_additive_master(master: np.ndarray, nclipfrc: float) -> tuple[np.ndarray, fits.Header]:
+    """Row pass on a mean-rejected bias/dark master; DSTRPRMS/DSTRPMAX/COMBTYPE/NCLIPFRC cards."""
+    from scipy.ndimage import median_filter
+
+    x = master[:, 1000:8575].astype(np.float64)
+    for _ in range(4):
+        med = np.nanmedian(x, axis=1, keepdims=True)
+        sd = np.nanstd(x, axis=1, keepdims=True)
+        x[np.abs(x - med) > 3 * sd] = np.nan
+    r = np.nanmean(x, axis=1)
+    h = np.empty_like(r)
+    for par in (0, 1):
+        h[par::2] = r[par::2] - median_filter(r[par::2], size=33, mode="nearest")
+    h[:16] = 0
+    h[-16:] = 0
+    h = np.nan_to_num(h, nan=0.0).astype(np.float32)
+
+    cards = fits.Header()
+    cards["COMBTYPE"] = (MEAN_REJECT_COMBTYPE, "Mean, rejecting |x-med| > 4 max(frame sig, MAD)")
+    cards["NCLIPFRC"] = (round(float(nclipfrc), 5), "Fraction of rejected input samples")
+    cards["DSTRPRMS"] = (
+        round(float(np.sqrt(np.mean(h[100:6288] ** 2))), 4),
+        "RMS row-pass offset, rows 100-6287 [ADU]",
+    )
+    cards["DSTRPMAX"] = (round(float(np.max(np.abs(h))), 4), "Max abs row-pass offset [ADU]")
+    return master - h[:, None], cards
 
 
 # Sigma Clipped Statistics

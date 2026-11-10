@@ -12,6 +12,8 @@ Bit definitions (combined with bitwise OR):
     64: The bias master applied to the science frame is not the one inside its dark master, so the
         master-bias error does not cancel between them (INFORMATIONAL: the weight model charges it,
         image selection never rejects on it)
+    128: A bias or dark master in the chain was not destriped (row pass not run on it)
+    256: The science frame's own row pass was not applied
 
 Range: 0-127 when all bits set.
 """
@@ -19,6 +21,7 @@ Range: 0-127 when all bits set.
 import os
 from astropy.io import fits
 
+from ..const import CALIB_TYPE_BIAS, CALIB_TYPE_DARK
 from ..path.utils import get_nightdate
 from ..errors import PpflagNotFoundError
 
@@ -32,10 +35,12 @@ PPFLAG_MASTERFRAME_WALL_IGNORED = 16
 PPFLAG_HARD_KEYS_IGNORED = 32
 PPFLAG_BIAS_NOT_SHARED = 64
 PPFLAG_INFORMATIONAL = PPFLAG_BIAS_NOT_SHARED  # bits that record a fact about the reduction, not a compromise
+PPFLAG_UNDESTRIPED_MASTER = 128  # bias or dark master not destriped
+PPFLAG_UNDESTRIPED_SCI = 256  # science frame's own row pass not applied
 
 
 PPFLAG_KEY = "PPFLAG"
-PPFLAG_MAX = 127
+PPFLAG_MAX = 511
 
 
 def get_ppflag_from_header(header_or_path, raise_if_missing: bool = False):
@@ -101,6 +106,8 @@ def compute_fetch_ppflag(
     Returns:
         PPFLAG value (0-63).
     """
+    from ..path.name import NameHandler
+
     result = 0
     # Bit 1: different date
     if not is_same_nightdate(found_path, template):
@@ -116,6 +123,11 @@ def compute_fetch_ppflag(
 
     if ignored_masterframe_wall:
         result |= PPFLAG_MASTERFRAME_WALL_IGNORED
+
+    # Bit 128: a bias or dark master made before the row pass (no DSTRPRMS)
+    if NameHandler(found_path).type.image_type in (CALIB_TYPE_BIAS, CALIB_TYPE_DARK):
+        if "DSTRPRMS" not in fits.getheader(found_path):
+            result |= PPFLAG_UNDESTRIPED_MASTER
 
     return result
 
