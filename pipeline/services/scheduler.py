@@ -37,6 +37,8 @@ from ..const import (
     TASK_STATUS_STASHED,
 )
 from ..const import SUCCESS_RETURN_CODE, FAILURE_RETURN_CODE, EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE
+from ..const import DEFERRED_RETURN_CODE, DEFAULT_SCIDATA_PROCESSES
+from ..const.sciproc import COADD_SPEC
 from .logger import get_high_level_task_logger, log_orchestration_stop
 from .utils import factory_bytes, stage_bytes
 
@@ -650,7 +652,7 @@ class Scheduler:
         return Table(data, dtype=self._empty_schedule.dtype)
 
     def _append_ready_task_constraints(self, cursor, query, params, host=None):
-        """Shared Ready-task filters: per-disk preprocess and multi-epoch caps, the per-host multi-epoch and preprocess caps, the priority and ToO gates."""
+        """Shared Ready-task filters: per-disk preprocess and multi-epoch caps, the per-host multi-epoch and preprocess caps, the priority and ToO gates (origin claims only)."""
         for config_type, cap in (
             (CONFIG_TYPE_PREPROCESS, self.MAX_PREPROCESS),
             (CONFIG_TYPE_MULTI_EPOCH, self.MAX_MULTI_EPOCH),
@@ -688,21 +690,23 @@ class Scheduler:
                     query += " AND NOT (config_type = ? AND disk IS ?)"
                     params.extend((CONFIG_TYPE_PREPROCESS, disk))
 
-        cursor.execute(
-            "SELECT COUNT(*) FROM scheduler WHERE status = ? AND priority > ?",
-            (TASK_STATUS_PROCESSING, self.HIGH_PRIORITY_THRESHOLD),
-        )
-        if cursor.fetchone()[0] > 0:
-            query += " AND priority > ?"
-            params.append(self.HIGH_PRIORITY_THRESHOLD)
-        else:
+        # Origin claims only: a worker never runs a ToO row (_worker_claim_filter), so a ToO episode must not idle it.
+        if host in (None, self._LOCAL_DISPATCH):
             cursor.execute(
-                "SELECT COUNT(*) FROM scheduler WHERE status = ? AND LOWER(input_type) = ?",
-                (TASK_STATUS_PROCESSING, INPUT_TYPE_TOO.lower()),
+                "SELECT COUNT(*) FROM scheduler WHERE status = ? AND priority > ?",
+                (TASK_STATUS_PROCESSING, self.HIGH_PRIORITY_THRESHOLD),
             )
             if cursor.fetchone()[0] > 0:
-                query += " AND LOWER(input_type) = ?"
-                params.append(INPUT_TYPE_TOO.lower())
+                query += " AND priority > ?"
+                params.append(self.HIGH_PRIORITY_THRESHOLD)
+            else:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM scheduler WHERE status = ? AND LOWER(input_type) = ?",
+                    (TASK_STATUS_PROCESSING, INPUT_TYPE_TOO.lower()),
+                )
+                if cursor.fetchone()[0] > 0:
+                    query += " AND LOWER(input_type) = ?"
+                    params.append(INPUT_TYPE_TOO.lower())
 
         return query, params
 
@@ -1284,25 +1288,43 @@ class Scheduler:
 
         return changed
 
-    def mark_done(self, index, return_code=True, timeout=None):
-        if self.use_system_queue:
-            self._mark_done_db(index, return_code, timeout=timeout)
-        else:
-            self._mark_done_memory(index, return_code)
+    @staticmethod
+    def _deferred_kwargs(kwargs) -> list:
+        """Deferred-row kwargs: -processes from the first coadd on, every other flag (including -overwrite) kept."""
+        kwargs = list(kwargs or [])
+        processes, rest, i = None, [], 0
+        while i < len(kwargs):
+            if kwargs[i] == "-processes":
+                j = i + 1
+                while j < len(kwargs) and not str(kwargs[j]).startswith("-"):
+                    j += 1
+                processes, i = kwargs[i + 1 : j], j
+                continue
+            rest.append(kwargs[i])
+            i += 1
+        coadd = COADD_SPEC.name
+        source = processes if processes and coadd in processes else DEFAULT_SCIDATA_PROCESSES
+        return rest + ["-processes", *source[source.index(coadd) :]]
 
-    def _mark_done_db(self, index, return_code=True, timeout=None):
+    def mark_done(self, index, return_code=True, timeout=None, pid=None):
+        if self.use_system_queue:
+            self._mark_done_db(index, return_code, timeout=timeout, pid=pid)
+        else:
+            self._mark_done_memory(index, return_code, pid=pid)
+
+    def _mark_done_db(self, index, return_code=True, timeout=None, pid=None):
         orchestration_note = None
         with self._db_connection(timeout=timeout) as conn:
             cursor = conn.cursor()
             # Check if task is already marked as done to prevent duplicate processing
             cursor.execute(
-                'SELECT status, dependent_idx, config_type, config FROM scheduler WHERE "index" = ?', (index,)
+                'SELECT status, dependent_idx, config_type, config, kwargs FROM scheduler WHERE "index" = ?', (index,)
             )
             row = cursor.fetchone()
             if not row:
                 return
 
-            current_status, dependent_idx_json, config_type, config = row
+            current_status, dependent_idx_json, config_type, config, kwargs_raw = row
             # If already marked as done, skip to prevent duplicate increments
             if current_status in (TASK_STATUS_COMPLETED, TASK_STATUS_FAILED, TASK_STATUS_REJECTED):
                 return
@@ -1332,6 +1354,26 @@ class Scheduler:
                     "UPDATE scheduler SET status = ?, pid = 0, " 'process_end = ? WHERE "index" = ?' + done_guard,
                     (TASK_STATUS_REJECTED, process_end, index, *done_states),
                 )
+            elif return_code == DEFERRED_RETURN_CODE:
+                # not an outcome: Processing only (a repeat no-ops), no dependents, a grouped row keeps its group's host
+                cursor.execute(
+                    "UPDATE scheduler SET status = ?, readiness = MAX(readiness - 1, 1), pid = 0, process_start = ?, "
+                    "process_end = ?, kwargs = ?, dispatch = CASE WHEN group_idx IS NULL THEN ? ELSE dispatch END "
+                    'WHERE "index" = ? AND status = ? AND (? IS NULL OR pid IN (?, 0))',
+                    (
+                        TASK_STATUS_READY,
+                        "",
+                        "",
+                        str(self._deferred_kwargs(self._parse_kwargs(kwargs_raw))),
+                        self._UNCLAIMED,
+                        index,
+                        TASK_STATUS_PROCESSING,
+                        pid,
+                        pid,
+                    ),
+                )
+                conn.commit()
+                return
             else:
                 # The run never reported for itself: killed by a signal (systemd stop, OOM
                 # killer) or an exit code no stage produces. Orchestration, not science —
@@ -1386,7 +1428,7 @@ class Scheduler:
         if orchestration_note:
             log_orchestration_stop(config, orchestration_note)
 
-    def _mark_done_memory(self, task_index, return_code=True):
+    def _mark_done_memory(self, task_index, return_code=True, pid=None):
         mask = self._schedule["index"] == task_index
         if len(self._schedule[mask]) == 0:
             return
@@ -1397,6 +1439,10 @@ class Scheduler:
 
         if current_status in (TASK_STATUS_COMPLETED, TASK_STATUS_FAILED, TASK_STATUS_REJECTED):
             return
+        if return_code == DEFERRED_RETURN_CODE and current_status != TASK_STATUS_PROCESSING:
+            return
+        if return_code == DEFERRED_RETURN_CODE and pid is not None and int(row_dict["pid"] or 0) not in (pid, 0):
+            return  # a stale report: the row was re-claimed since
 
         # Get task info
         config_type = row_dict["config_type"]
@@ -1415,6 +1461,16 @@ class Scheduler:
             self._schedule["status"][mask] = TASK_STATUS_REJECTED
             self._schedule["pid"][mask] = 0
             self._schedule["process_end"][mask] = datetime.now().isoformat()
+        elif return_code == DEFERRED_RETURN_CODE:
+            row = np.flatnonzero(mask)[0]
+            self._schedule["status"][row] = TASK_STATUS_READY
+            self._schedule["readiness"][row] = max(int(row_dict["readiness"]) - 1, 1)
+            self._schedule["pid"][row] = 0
+            self._schedule["process_start"][row] = ""
+            self._schedule["process_end"][row] = ""
+            self._schedule["dispatch"][row] = self._UNCLAIMED
+            self._schedule["kwargs"][row] = self._deferred_kwargs(row_dict["kwargs"])
+            return
         else:
             # Check if this is a retry (priority is already 0)
             self._schedule["pid"][mask] = 0

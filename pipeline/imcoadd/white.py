@@ -36,6 +36,7 @@ class WhiteImage(ImCoadd):
     _max_header_keys = ("SEEING", "PEEING")
     _proper_requires_interpolation = False
     _has_detector_bpm = False  # inputs are per-filter coadds; PathHandler.get_bpmask has no master dark to resolve
+    _combine_slot_max_wait = None  # cli/crossfilter has no deferral return code: its slots keep blocking
 
     @classmethod
     def record_config_dependencies(cls, config_node, logger) -> int:

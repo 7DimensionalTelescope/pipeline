@@ -40,7 +40,7 @@ def _dispatch(scheduler, method, args):
     if method == "release":
         return scheduler.release_dispatch_task(args["index"], args["server"])
     if method == "mark_done":
-        scheduler.mark_done(args["index"], return_code=args["return_code"])
+        scheduler.mark_done(args["index"], return_code=args["return_code"], pid=args.get("pid"))
         return True
     raise ValueError(f"unknown method {method!r}")
 

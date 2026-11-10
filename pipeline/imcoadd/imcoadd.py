@@ -8,7 +8,7 @@ from astropy.wcs import WCS, WCSCOMPARE_ANCILLARY
 
 from ..const import REF_DIR
 from ..const.sciproc import COADD_SPEC, SCIPROCESS_REGISTRY
-from ..errors import CoaddError
+from ..errors import CoaddError, CombineSlotBusyError
 from ..config import SciProcConfiguration
 from ..path.path import PathHandler
 from ..services.setup import BaseSetup
@@ -73,6 +73,7 @@ class ImCoadd(
     _extra_header_keys = ()
     _max_header_keys = ()
     _proper_requires_interpolation = True
+    _combine_slot_max_wait = None  # cli/data_reduction sets COMBINE_SLOT_YIELD_SECONDS; a held slot then defers (rc 3)
     zp_base: float = 23.9  # uJy; flux-scaling reference zero point
 
     def __init__(
@@ -178,6 +179,8 @@ class ImCoadd(
             setattr(self.config_node.flag, self._process_spec.name, True)
             self.record_runtime_version()
             self.logger.info(f"'ImCoadd' is Completed in {time_diff_in_seconds(self._st)} seconds")
+        except CombineSlotBusyError:
+            raise  # not a failure: no error code, the flag stays False, the queue reruns from the coadd
         except Exception as e:
             self.logger.error(f"Error during imcoadd processing: {str(e)}", e, exc_info=True)
 

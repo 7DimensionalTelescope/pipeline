@@ -19,6 +19,7 @@ import os
 import time
 
 from ..const.environ import HOST_LOCK_DIR
+from ..errors.errors import CombineSlotBusyError
 
 
 def _fs_tag(path: str) -> str:
@@ -171,6 +172,18 @@ def active_lease_bytes(exclude_pid: int | None = None) -> int:
     return total
 
 
+def slot_held(anchor_path: str, kind: str = "combine") -> bool:
+    """True when another process holds this slot right now (a LOCK_NB probe, released at once)."""
+    os.makedirs(HOST_LOCK_DIR, exist_ok=True)
+    with open(os.path.join(HOST_LOCK_DIR, f"{kind}_{_fs_tag(anchor_path)}.lock"), "w") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return True
+        fcntl.flock(fh, fcntl.LOCK_UN)
+    return False
+
+
 class CombineSlot:
     """Blocking flock on the input filesystem's combine slot + a memory lease.
 
@@ -182,10 +195,11 @@ class CombineSlot:
             ... combine ...
     """
 
-    def __init__(self, anchor_path: str, logger=None, kind: str = "combine"):
+    def __init__(self, anchor_path: str, logger=None, kind: str = "combine", max_wait: float | None = None):
         self.tag = _fs_tag(anchor_path)
         self.kind = kind  # slot family: "combine" or "stage", each its own flock per filesystem
         self.logger = logger
+        self.max_wait = max_wait  # seconds before CombineSlotBusyError; None blocks until released
         self._fh = None
         self._lease_file = os.path.join(_lease_dir(), f"combine_{os.getpid()}.json")
 
@@ -197,9 +211,11 @@ class CombineSlot:
             return self
         except OSError:
             pass
+        t0 = time.time()
+        if self.max_wait is not None:
+            return self._enter_bounded(t0)
         # blocking flock: the kernel wakes us the moment the holder releases -- no
         # polling latency. The thread only narrates the wait.
-        t0 = time.time()
         if self.logger:
             self.logger.info(
                 f"{self.kind.capitalize()} slot {self.tag} is held by another process; blocking until released"
@@ -225,6 +241,29 @@ class CombineSlot:
         if self.logger:
             self.logger.info(f"{self.kind.capitalize()} slot {self.tag} acquired after {time.time() - t0:.0f} s")
         return self
+
+    def _enter_bounded(self, t0: float):
+        """Poll LOCK_NB until max_wait; raise CombineSlotBusyError with no lock and no lease held."""
+        if self.logger:
+            self.logger.info(
+                f"{self.kind.capitalize()} slot {self.tag} is held by another process; "
+                f"waiting up to {self.max_wait:.0f} s"
+            )
+        while time.time() - t0 < self.max_wait:
+            time.sleep(1.0)
+            try:
+                fcntl.flock(self._fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                continue
+            if self.logger:
+                self.logger.info(f"{self.kind.capitalize()} slot {self.tag} acquired after {time.time() - t0:.0f} s")
+            return self
+        self._fh.close()
+        self._fh = None
+        waited = time.time() - t0
+        if self.logger:
+            self.logger.info(f"{self.kind.capitalize()} slot {self.tag} still held after {waited:.0f} s; yielding")
+        raise CombineSlotBusyError(self.kind, self.tag, waited)
 
     @property
     def reserved_bytes(self) -> int:

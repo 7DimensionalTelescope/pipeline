@@ -11,6 +11,10 @@ DEFAULT_CROSSFILTER_PROCESSES = [WHITE_COADD_SPEC.name, PHOT7DS_SPEC.name]
 SUCCESS_RETURN_CODE = 0
 FAILURE_RETURN_CODE = 1
 EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE = 2
+DEFERRED_RETURN_CODE = 3  # combine slot held past COMBINE_SLOT_YIELD_SECONDS: back to the queue, not an outcome
+
+# seconds a science coadd waits for a held combine/stage slot before yielding its worker slot (rc 3)
+COMBINE_SLOT_YIELD_SECONDS = 60
 
 # scheduler table vocabularies; NameHandler.config_properties["config_type"] shares the config_type values
 CONFIG_TYPE_PREPROCESS = "preprocess"

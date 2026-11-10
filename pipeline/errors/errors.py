@@ -128,6 +128,14 @@ class ScratchBudgetShortError(Exception):
     """No local scratch can hold a multi-epoch factory; it runs on FACTORY_DIR."""
 
 
+class CombineSlotBusyError(Exception):
+    """A combine/stage slot stayed held past max_wait; the run yields its worker slot (rc 3)."""
+
+    def __init__(self, kind: str, tag: str, waited: float):
+        self.kind, self.tag, self.waited = kind, tag, waited
+        super().__init__(f"{kind} slot {tag} still held after {waited:.0f} s")
+
+
 # subtraction errors
 class ReferenceImageNotFoundError(Exception):
     pass

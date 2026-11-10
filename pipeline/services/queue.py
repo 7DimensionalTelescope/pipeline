@@ -16,6 +16,7 @@ from ..const.run import (
     SUCCESS_RETURN_CODE,
     FAILURE_RETURN_CODE,
     EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE,
+    DEFERRED_RETURN_CODE,
     TASK_STATUS_COMPLETED,
 )
 from .memory import MemoryMonitor
@@ -37,6 +38,7 @@ REPORTED_RETURN_CODES = (
     SUCCESS_RETURN_CODE,
     FAILURE_RETURN_CODE,
     EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE,
+    DEFERRED_RETURN_CODE,
 )
 # Total budget for reaping workers on shutdown, well inside systemd's 90 s TimeoutStopSec.
 SHUTDOWN_GRACE_SECONDS = 10.0
@@ -510,7 +512,10 @@ class QueueManager:
             return True
 
         try:
-            self.scheduler.mark_done(task_index, return_code=return_code, timeout=timeout)
+            proc = process[1] if len(process) > 1 else None
+            self.scheduler.mark_done(
+                task_index, return_code=return_code, timeout=timeout, pid=proc.pid if proc is not None else None
+            )
             return True
         except Exception as e:
             attempts = (process[4] if len(process) > 4 else 0) + 1
@@ -583,6 +588,11 @@ class QueueManager:
                                     )
                                     if stdout_str and stdout_str.strip():
                                         self.logger.debug(f"Process {config} stdout: {stdout_str[:500]}...")
+                                elif return_code == DEFERRED_RETURN_CODE:
+                                    self.logger.info(
+                                        f"Process with {os.path.basename(config)} (PID = {pid}) Deferred: "
+                                        f"combine slot busy, returned to the queue."
+                                    )
                                 else:
                                     self.logger.error(
                                         f"Process with {os.path.basename(config)} (PID = {pid}) failed with return code {proc.returncode}."

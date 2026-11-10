@@ -38,6 +38,36 @@ class ReprojectFirstCoaddMixin:
     overwrite: bool | None
     delta_peeings: list[float | None]
     _coadd_completed: bool
+    _combine_slot_max_wait: float | None
+
+    @property
+    def _slot_max_wait(self):
+        """Seconds before a held slot yields the run (rc 3); None blocks: in-process callers and multi-epoch runs."""
+        if self._combine_slot_max_wait is None or bool(self.config_node.settings.is_multi_epoch):
+            return None
+        return self._combine_slot_max_wait
+
+    def _defer_if_slot_held(self, images):
+        """Before any prep: yield now (rc 3) when a slot this coadd will need is held on this host."""
+        from ..errors import CombineSlotBusyError
+        from ..services.combine_lock import _fs_tag, slot_held
+
+        files = list(atleast_1d(images))
+        if self._slot_max_wait is None or len(files) < int(self.plan.combine_lock_threshold):
+            return
+        src = os.path.dirname(collapse(files[0], force=True))
+        anchors = [("stage", src), ("combine", src)]
+        scratch = self.plan.coadd_scratch
+        if scratch == "auto":
+            _mnt, fstype = self._fstype_of(src)
+            mounts = local_scratch_mounts(self.logger) if fstype not in LOCAL_FSTYPES else []
+            scratch = max(mounts, key=lambda m: m[1])[0] if mounts else None
+        if scratch and os.path.isdir(scratch):
+            anchors.append(("combine", scratch))
+        for kind, anchor in anchors:
+            if slot_held(anchor, kind):
+                raise CombineSlotBusyError(kind, _fs_tag(anchor), 0.0)
+
     _coadd_counts: CoaddCounts
 
     def reproject_first_coadd_routine(self):
@@ -59,6 +89,7 @@ class ReprojectFirstCoaddMixin:
 
         self.initialize()
         images = self.input_images
+        self._defer_if_slot_held(images)
         weight_images = None
         fov_masks = None
         if plan.reproject_with_swarp:
@@ -197,7 +228,7 @@ class ReprojectFirstCoaddMixin:
         # one sequential stream per source filesystem on this host: an HDD array delivers its
         # rated rate only when it is not seeking between interleaved readers
         mapping = {}
-        with CombineSlot(os.path.dirname(files[0][1]), logger=self.logger, kind="stage"):
+        with CombineSlot(os.path.dirname(files[0][1]), logger=self.logger, kind="stage", max_wait=self._slot_max_wait):
             for group, src in files:
                 mapping[src] = self._stage_copy(src, os.path.join(base, group, os.path.basename(src)))
         self.logger.info(
@@ -351,7 +382,7 @@ class ReprojectFirstCoaddMixin:
 
         anchor = os.path.dirname(collapse(atleast_1d(input_images)[0], force=True))
         slot_ctx = (
-            CombineSlot(anchor, logger=self.logger)
+            CombineSlot(anchor, logger=self.logger, max_wait=self._slot_max_wait)
             if len(atleast_1d(input_images)) >= plan.combine_lock_threshold
             else NullSlot()
         )
@@ -438,7 +469,7 @@ class ReprojectFirstCoaddMixin:
         coadd_image = self.config_node.imcoadd.coadd_image
         anchor = os.path.dirname(collapse(atleast_1d(input_images)[0], force=True))
         slot_ctx = (
-            CombineSlot(anchor, logger=self.logger)
+            CombineSlot(anchor, logger=self.logger, max_wait=self._slot_max_wait)
             if len(atleast_1d(input_images)) >= plan.combine_lock_threshold
             else NullSlot()
         )

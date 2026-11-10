@@ -11,8 +11,9 @@ from pipeline.const.run import (
     SUCCESS_RETURN_CODE,
     FAILURE_RETURN_CODE,
     EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE,
+    DEFERRED_RETURN_CODE,
 )
-from pipeline.errors.errors import EmptyInputAfterSanityRejectionError
+from pipeline.errors.errors import CombineSlotBusyError, EmptyInputAfterSanityRejectionError
 
 
 def signal_handler(sig, frame):
@@ -63,6 +64,10 @@ if __name__ == "__main__":
         print(f"\nError: {args.config} is not a valid configuration file")
         sys.exit(FAILURE_RETURN_CODE)
 
+    from pipeline.const.run import COMBINE_SLOT_YIELD_SECONDS
+    from pipeline.imcoadd.imcoadd import ImCoadd
+
+    ImCoadd._combine_slot_max_wait = COMBINE_SLOT_YIELD_SECONDS  # queue runs yield a held combine slot (rc 3)
     try:
         run_scidata_reduction(
             args.config,
@@ -78,6 +83,11 @@ if __name__ == "__main__":
     except EmptyInputAfterSanityRejectionError as e:
         print(f"\nError: {e}")
         sys.exit(EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE)
+
+    # The combine slot stayed held: hand the worker slot back; the scheduler reruns it from the coadd
+    except CombineSlotBusyError as e:
+        print(f"\nDeferred: {e}")
+        sys.exit(DEFERRED_RETURN_CODE)
 
     except Exception as e:
         print(f"\nError: {e}")

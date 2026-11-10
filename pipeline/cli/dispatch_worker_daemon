@@ -54,6 +54,7 @@ from pipeline.const import (
     FAILURE_RETURN_CODE,
     SUCCESS_RETURN_CODE,
     EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE,
+    DEFERRED_RETURN_CODE,
     MAIN_HOST_ADDRESS,
     CONFIG_TYPE_CROSSFILTER,
     CONFIG_TYPE_MULTI_EPOCH,
@@ -76,7 +77,12 @@ SHUTDOWN_GRACE_SECONDS = 10.0
 SHUTDOWN_KILL_REAP_SECONDS = 5.0
 RESPONSE_TAG = "__SCHEDULER_RPC__"
 # Outcomes a run reports for itself; anything else means it was stopped from outside.
-REPORTED_RETURN_CODES = (SUCCESS_RETURN_CODE, FAILURE_RETURN_CODE, EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE)
+REPORTED_RETURN_CODES = (
+    SUCCESS_RETURN_CODE,
+    FAILURE_RETURN_CODE,
+    EMPTY_INPUT_AFTER_SANITY_REJECTION_RETURN_CODE,
+    DEFERRED_RETURN_CODE,
+)
 
 logger = logging.getLogger("pipeline.dispatch_worker")
 
@@ -129,8 +135,8 @@ class ProtonScheduler:
     def release(self, index, server):
         return self._call("release", index=index, server=server)
 
-    def mark_done(self, index, return_code):
-        return self._call("mark_done", index=index, return_code=return_code)
+    def mark_done(self, index, return_code, pid=None):
+        return self._call("mark_done", index=index, return_code=return_code, pid=pid)
 
 
 class DispatchWorker:
@@ -159,7 +165,15 @@ class DispatchWorker:
 
     def _finish(self, entry, return_code):
         """Report a finished run with its RAW return code; 2 (Rejected) is a normal outcome."""
-        self.scheduler.mark_done(entry["index"], return_code)
+        proc = entry.get("proc")
+        self.scheduler.mark_done(entry["index"], return_code, pid=proc.pid if proc is not None else None)
+        if return_code == DEFERRED_RETURN_CODE:
+            logger.info(
+                "Deferred index %s (%s): combine slot busy, returned to the queue",
+                entry["index"],
+                os.path.basename(entry["config"]),
+            )
+            return
         logger.info("Finished index %s (%s) rc=%s", entry["index"], os.path.basename(entry["config"]), return_code)
 
     def _reap_finished(self):
