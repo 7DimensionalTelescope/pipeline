@@ -282,13 +282,7 @@ class ImageQA(BaseDatabase):
 
     @override
     def _find_existing_id(self, data: Dict[str, Any]) -> Optional[int]:
-        """One row per name and path: a process reusing the image updates that row, not adds one.
-
-        Keyed on the name rather than IMAGEID, so aliases of one file -- a synth linked under
-        several filter names -- keep a row each, while a regenerated file, carrying a fresh
-        IMAGEID under the same name, takes over the row of the version it overwrote. The path
-        separates those two: same name elsewhere on disk is a different file, so it gets a row.
-        """
+        """One row per image name: a re-registered image takes its row over, path and process included; a second row for one name is erroneous data and stops the registration."""
         name = data.get("image_name")
         if not name:
             return None
@@ -299,45 +293,15 @@ class ImageQA(BaseDatabase):
         )
         if not rows:
             return None
-
+        if len(rows) > 1:
+            raise DatabaseError(
+                f"{name} has {len(rows)} image_qa rows (ids {[i for i, _ in rows]}); one row per image name is the rule, resolve the duplicates first"
+            )
+        ((existing_id, existing_path),) = rows
         path = data.get("image_path")
-        if not path:
-            return rows[0][0]
-
-        same_path = next((i for i, p in rows if p == path), None)
-        if same_path is not None:
-            return same_path
-        # a row registered before its file location was known
-        pathless = next((i for i, p in rows if p is None), None)
-        if pathless is not None:
-            return pathless
-
-        self.logger.warning(
-            f"{name} is already registered elsewhere on disk, so it is being added as a"
-            f" separate row rather than overwriting: incoming {path},"
-            f" existing {', '.join(p for _, p in rows)}"
-        )
-        return None
-
-    @override
-    def update_data(self, target_id: int, **kwargs):
-        """Header-derived refresh: never writes INSPCOMM; F with INSPCOMM is final, a machine F drops the INSPCOMM beside a T with INSPCOMM."""
-        kwargs.pop("inspcomm", None)
-        sanity = kwargs.pop("sanity", None)
-        params = {k: (None if v == "None" else v) for k, v in kwargs.items() if v is not None}
-        clauses = [f"{k} = %({k})s" for k in params]
-        if sanity is not None:
-            params["sanity"] = None if sanity == "None" else sanity
-            clauses.append(
-                "sanity = CASE WHEN sanity IS FALSE AND inspcomm IS NOT NULL THEN sanity ELSE %(sanity)s END"
-            )
-            clauses.append(
-                "inspcomm = CASE WHEN %(sanity)s IS FALSE AND sanity IS NOT FALSE THEN NULL ELSE inspcomm END"
-            )
-        if not clauses:
-            return None
-        query = query_update.format(table_name=self.table_name, params=", ".join(clauses))
-        return self.execute_query(query, {**params, "id": target_id})
+        if path and existing_path and existing_path != path:
+            self.logger.info(f"{name} moved on disk; its row {existing_id} now points to {path} (was {existing_path})")
+        return existing_id
 
     def assert_writable(self) -> None:
         """PermissionError before any disk write when the role lacks UPDATE or INSERT on the table."""

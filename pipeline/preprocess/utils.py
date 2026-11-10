@@ -1,6 +1,7 @@
 from typing import Literal
 import os
 import time
+import logging
 import uuid
 from glob import glob
 from concurrent.futures import ThreadPoolExecutor
@@ -16,6 +17,7 @@ from dataclasses import dataclass, replace
 from ..path.path import PathHandler
 from ..path.name import NameHandler
 from ..services.checker import Checker
+from ..errors import PreprocessError
 from ..utils.header import write_header_file, get_header, add_padding
 from ..const.instrum_log import get_masterframe_walls
 from ..const import (
@@ -124,6 +126,7 @@ def tolerant_search(
     future=False,
     ignore_sanity_if_no_match=False,
     ignore_lenient_keys_if_no_match=False,
+    logger=None,
 ) -> tuple[str | None, RelaxationFlags]:
     """
     Search for a master frame matching the template.
@@ -137,13 +140,16 @@ def tolerant_search(
             - ignored_masterframe_walls: True if the match was found using masterframe-wall offsets.
     """
     found_flags = RelaxationFlags()
+    n_binning = NameHandler(template).n_binning
 
     def _commit_flags(flags: RelaxationFlags):
         nonlocal found_flags
         found_flags = flags
 
     def _search(search_template, **kwargs):
-        return search_with_date_offsets(search_template, max_offset=max_offset, future=future, **kwargs)
+        return search_with_date_offsets(
+            search_template, max_offset=max_offset, future=future, n_binning=n_binning, logger=logger, **kwargs
+        )
 
     def _search_with_binning_tries(search_template, flags: RelaxationFlags, ignore_sanity=False, **kwargs):
         searched = _search(search_template, ignore_sanity=ignore_sanity, **kwargs)
@@ -235,6 +241,8 @@ def search_with_date_offsets(
     upper_offset=None,
     future=False,
     ignore_sanity=False,
+    n_binning=None,
+    logger=None,
 ):
     """
     Search for files based on a template, modifying embedded dates with offsets.
@@ -307,14 +315,21 @@ def search_with_date_offsets(
         #     return modified_path
         if "*" in template:
             matches = glob(modified_path)
+            # a master is binned down by an integer factor, never up
+            unusable = [m for m in matches if n_binning and (nb := NameHandler(m).n_binning) and n_binning % nb]
+            if unusable:
+                (logger or logging.getLogger(__name__)).info(
+                    f"Excluded master candidates not binnable to {n_binning}x{n_binning}: {sorted(unusable)}"
+                )
+                matches = [m for m in matches if m not in unusable]
             if matches:
                 if len(matches) == 1:
                     if ignore_sanity or Checker().sanity_check(matches[0]):
                         return matches[0]
                     continue
-                min_exptime_image = PathHandler(matches).get_minimum("exptime")
-                if ignore_sanity or Checker().sanity_check(min_exptime_image):
-                    return min_exptime_image
+                picked = _pick_master(matches, n_binning)
+                if ignore_sanity or Checker().sanity_check(picked):
+                    return picked
                 continue
         else:
             if os.path.exists(modified_path):
@@ -323,6 +338,24 @@ def search_with_date_offsets(
                 continue
 
     return None
+
+
+def _pick_master(matches: list[str], n_binning: int | None) -> str:
+    """Same-date masters: dark by min exptime; flat/bias by binning closest to target, then name."""
+    names = NameHandler(matches)
+    types = {t.exposure_type for t in names.type}
+    if types == {CALIB_TYPE_DARK}:
+        keys = names.exptime
+    elif types in ({CALIB_TYPE_FLAT}, {CALIB_TYPE_BIAS}) and n_binning is not None:
+        keys = [None if nb is None else abs(nb - n_binning) for nb in names.n_binning]
+    else:
+        raise PreprocessError.ValueError(f"No ranking rule for master types {sorted(types)}: {sorted(matches)}")
+    if None in keys:
+        raise PreprocessError.ValueError(f"Master candidates lack the ranking attribute: {sorted(matches)}")
+    best = sorted(m for m, k in zip(matches, keys) if k == min(keys))
+    if types == {CALIB_TYPE_DARK} and len(best) > 1:
+        raise PreprocessError.ValueError(f"Ambiguous master dark, equal minimum exptime: {best}")
+    return best[0]
 
 
 def get_saturation_level(header, mbias_file, mdark_file, mflat_file):

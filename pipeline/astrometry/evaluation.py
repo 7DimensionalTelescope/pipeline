@@ -11,6 +11,7 @@ import astropy.units as u
 import astropy.io.fits as fits
 
 from ..const import PIXSCALE
+from ..errors import NotEnoughSourcesError
 from ..utils import add_suffix, swap_ext
 from ..tools.table import match_two_catalogs, add_id_column, match_multi_catalogs
 from ..tools.angle import azimuth_deg_from_center
@@ -394,6 +395,9 @@ def prepare_matched_catalog(
         create_ds9_region_file(
             x=tbl["X_IMAGE"], y=tbl["Y_IMAGE"], filename=add_suffix(swap_ext(source_cat, "reg"), f"sci_{num_sci}")
         )
+
+    if len(ref_cat) == 0:
+        raise NotEnoughSourcesError("No reference source inside the FOV")
 
     # REF_MIN_SNR = ref_cat["snr"][-1]
     # SCI_MIN_SNR = tbl["snr"][-1]

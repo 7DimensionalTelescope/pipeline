@@ -711,6 +711,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             future=True,
             ignore_sanity_if_no_match=ignore_sanity,
             ignore_lenient_keys_if_no_match=ignore_lenient,
+            logger=self.logger,
         )
 
         if not existing_mframe_file:
@@ -829,7 +830,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
 
         n_binning = NameHandler(template).n_binning
         data, header = fits.getdata(existing_mframe_file, header=True)
-        binned_mflat = bin_image(data, bin_x=n_binning, bin_y=n_binning, method="mean")
+        factor = n_binning // NameHandler(existing_mframe_file).n_binning  # the source may be binned already
+        binned_mflat = bin_image(data, bin_x=factor, bin_y=factor, method="mean")
 
         name = NameHandler(existing_mframe_file)
         name.n_binning = n_binning

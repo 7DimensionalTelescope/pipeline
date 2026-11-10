@@ -401,8 +401,12 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     self._write_astrometry_sanity_rejection_to_header(image_info.image_path, fits.Header(image_info.cards))
 
             if not any(image_info.sane for image_info in self.images_info):
-                self.logger.error("All images rejected: image quality suspected.", AstrometryError.ImageQualitySuspectedError)
-                raise AstrometryError.ImageQualitySuspectedError("All images rejected: image quality suspected.")
+                self.logger.error(
+                    "All images rejected: image quality suspected.", AstrometryError.EmptyInputAfterSanityRejection
+                )
+                raise AstrometryError.EmptyInputAfterSanityRejectionError(
+                    "All images rejected: image quality suspected."
+                )
 
             # evaluate main scamp result
             self.evaluate_solution(use_threading=use_threading_for_eval, scamp_preset="main", overwrite=overwrite)
@@ -1000,7 +1004,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
-        self.update_catalog(solved_input_catalogs, solvefield_wcs_list, wcs_type="solve-field")
+        if solved_input_catalogs:
+            self.update_catalog(solved_input_catalogs, solvefield_wcs_list, wcs_type="solve-field")
 
         return solvefield_success
 
@@ -1384,6 +1389,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             "threading helper"
             input_image = input_images[idx]
             image_info = images_info[idx]
+            image_info.reset_evaluation()  # the metrics describe the WCS evaluated last, or nothing
             prep_cat = prep_cats[idx]
 
             plot_path = unique_filename(
@@ -1429,12 +1435,14 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 )
 
             except Exception as e:
-                self.logger.warning(
+                self.logger.error(
                     f"{image_info.id} Failed to evaluate solution for {input_image}: {e}",
                     AstrometryError.SolutionEvaluationFailed,
                     exc_info=True,
                 )
-                raise
+                raise AstrometryError.SolutionEvaluationFailedError(
+                    f"{image_info.id} Failed to evaluate solution for {os.path.basename(input_image)}: {e}"
+                ) from e
             return idx, eval_result
 
         def _apply(idx: int, eval_result: EvaluationResult):
@@ -1473,32 +1481,26 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 for fut in as_completed(futures):
                     yield fut.result()
 
-        try:
-            # Single evaluation (external rms)
-            producer = _produce_parallel if use_threading else _produce_sequential
-            for idx, bundle in producer():
-                _apply(idx, bundle)
+        # Single evaluation (external rms)
+        producer = _produce_parallel if use_threading else _produce_sequential
+        for idx, bundle in producer():
+            _apply(idx, bundle)
 
-            # Optional joint evaluation (internal rms)
-            if len(input_images) > 1 and isep:
-                isep_stats_list, match_stat_list = evaluate_joint_wcs([ii.matched_catalog for ii in images_info])
-                for image_info, internal_sep_stats, match_stats in zip(images_info, isep_stats_list, match_stat_list):
-                    image_info.set_internal_sep_stats(internal_sep_stats)
-                    image_info.set_internal_match_stats(match_stats)
+        # Optional joint evaluation (internal rms)
+        if len(input_images) > 1 and isep:
+            isep_stats_list, match_stat_list = evaluate_joint_wcs([ii.matched_catalog for ii in images_info])
+            for image_info, internal_sep_stats, match_stats in zip(images_info, isep_stats_list, match_stat_list):
+                image_info.set_internal_sep_stats(internal_sep_stats)
+                image_info.set_internal_match_stats(match_stats)
 
-            if export_eval_cards:
-                for image_info, prep_cat in zip(images_info, prep_cats):
-                    cards = image_info.wcs_eval_cards
-                    text_path = unique_filename(
-                        collapse(image_info.path.astrometry.factory.evaluation_cards(suffix), raise_error=True)
-                    )
-                    with open(text_path, "w") as f:
-                        f.write(fits.Header(cards).tostring(sep="\n"))
-
-        except Exception as e:
-            self.logger.error(f"Failed to evaluate solution: {e}", e, exc_info=True)
-
-            # don't raise error
+        if export_eval_cards:
+            for image_info, prep_cat in zip(images_info, prep_cats):
+                cards = image_info.wcs_eval_cards
+                text_path = unique_filename(
+                    collapse(image_info.path.astrometry.factory.evaluation_cards(suffix), raise_error=True)
+                )
+                with open(text_path, "w") as f:
+                    f.write(fits.Header(cards).tostring(sep="\n"))
 
         self.logger.debug(f"Completed evaluate_solution")
         self.logger.debug(MemoryMonitor.log_memory_usage)
@@ -1880,6 +1882,10 @@ class ImageInfo:
     @property
     def wcs_evaluated(self) -> bool:
         return self.rsep_stats is not None
+
+    def reset_evaluation(self) -> None:
+        """Drop the previous pass's evaluation: matched catalog and the rsep, corner, image and radial statistics."""
+        self.matched_catalog = self.rsep_stats = self.corner_stats = self.image_stats = self.radial_stats = None
 
     @property
     def wcs_eval_cards(self) -> List[Tuple[str, float]]:
