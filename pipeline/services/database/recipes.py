@@ -442,29 +442,36 @@ def census_masters(
 
 
 def stage_funnel(census):
-    """Per-stage frame counts and losses over a `census_from_raw` table: two cumulative chains, single -> sanity ok ->
-    the science registry in order, and single -> sanity ok -> in a coadd -> the default crossfilter processes."""
+    """Per-stage frame counts as fractions of the raw frames (the budget is 1): raw, then the stated rows "sanity false"
+    (a registered single with SANITY=F) and "inspcomm" (a human verdict on the single), then preprocess (a registered
+    single) -> the science registry over sane frames, and -> in_coadd -> the default crossfilter processes."""
     import pandas as pd
 
     from ...const.run import DEFAULT_CROSSFILTER_PROCESSES
     from ...const.sciproc import SCIPROCESS_REGISTRY
 
-    rejected = census.sanity.eq(False)
-    table = census.assign(sanity_ok=census.has_image_qa & ~rejected, in_coadd=census.coadd_name.notna())
-    science = ["has_image_qa", "sanity_ok"] + [spec.name for spec in SCIPROCESS_REGISTRY.specs]
-    white = ["has_image_qa", "sanity_ok", "in_coadd"] + list(DEFAULT_CROSSFILTER_PROCESSES)
+    registered = census.has_image_qa.fillna(False).astype(bool)
+    rejected = registered & census.sanity.eq(False)
+    table = census.assign(preprocess=registered, sanity_ok=registered & ~rejected, in_coadd=census.coadd_name.notna())
+    science = ["preprocess", "sanity_ok"] + [spec.name for spec in SCIPROCESS_REGISTRY.specs]
+    white = ["preprocess", "sanity_ok", "in_coadd"] + list(DEFAULT_CROSSFILTER_PROCESSES)
     reached = pd.concat([table[science].cummin(axis=1), table[white].cummin(axis=1).iloc[:, 2:]], axis=1)
-    n, budget = len(table), len(table) - int(rejected.sum())
+    n = len(table)
     funnel = pd.DataFrame({"frames": reached.sum()})
     funnel.loc["raw"] = n
-    funnel = funnel.loc[["raw"] + list(reached.columns)]
+    funnel.loc["sanity false"] = int(rejected.sum())
+    funnel.loc["inspcomm"] = int((registered & census.inspcomm.notna()).sum())
+    stages = ["raw", "sanity false", "inspcomm", "preprocess"] + [c for c in reached.columns if c not in ("preprocess", "sanity_ok")]
+    funnel = funnel.loc[stages]
     prev = funnel.frames.shift(1)
-    prev.loc["in_coadd"] = funnel.frames["sanity_ok"]  # the white chain branches off after sanity_ok
+    prev.loc["preprocess"] = n
+    sane = funnel.frames["preprocess"] - funnel.frames["sanity false"]
+    prev.loc[science[2]] = sane  # the science chain continues from the sane frames
+    prev.loc["in_coadd"] = sane  # the white chain branches off there too
     funnel["lost_here"] = (prev - funnel.frames).fillna(0).astype(int)
-    funnel["fraction_of_raw"] = (funnel.frames / n).round(3)
-    funnel["fraction_of_budget"] = (funnel.frames / budget).round(3)
-    funnel["lost_fraction_of_budget"] = (funnel.lost_here / budget).round(3)
-    funnel.loc["sanity_ok", "lost_fraction_of_budget"] = None  # leaves the budget, not a loss
+    funnel.loc[["sanity false", "inspcomm"], "lost_here"] = 0  # verdicts, stated, not losses
+    funnel["fraction_of_raw"] = (funnel.frames / n).round(4)
+    funnel["lost_fraction_of_raw"] = (funnel.lost_here / n).round(4)
     return funnel
 
 
