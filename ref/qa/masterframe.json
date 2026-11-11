@@ -7,11 +7,11 @@
         },
         "CLIPMED": {
             "value": [
-                512,
-                514
+                511.5,
+                514.5
             ],
             "criteria": "within",
-            "description": "Median clipping value must be ≥ 512"
+            "description": "Clipped median must be within 511.5 and 514.5"
         },
         "CLIPSTD": {
             "value": 2.5,
