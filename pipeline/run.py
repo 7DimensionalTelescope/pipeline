@@ -25,6 +25,17 @@ from .py7dt import Phot7DS
 from .subtract import ImSubtract
 
 
+def strip_launcher_args(argv: list[str]) -> list[str]:
+    """Command-line flags without -config, -make_plots, -input_type, -is_too, -device_id."""
+    kwargs, args = [], iter(argv)
+    for arg in args:
+        if arg in ("-config", "-input_type", "-device_id"):
+            next(args, None)
+        elif arg not in ("-make_plots", "-is_too"):
+            kwargs.append(arg)
+    return kwargs
+
+
 def run_preprocess(
     config: str,
     device_id=None,
@@ -36,6 +47,8 @@ def run_preprocess(
     master_frame_only=False,
     calib_types=None,
     dry_run=False,
+    reprocess_on_better_match=None,
+    last_run_kwargs=None,
 ):
     """
     Generate master calibration frames for a specific observation set.
@@ -53,12 +66,15 @@ def run_preprocess(
 
         # dry_run may arrive via preprocess_kwargs (wrapper.py); a sizing pass must not touch the DB
         dry_run = kwargs.pop("dry_run", dry_run)
+        if not dry_run:
+            config.node.settings.last_run_kwargs = last_run_kwargs
         prep = Preprocess(
             config,
             use_gpu=use_gpu,
             overwrite=overwrite,
             master_frame_only=kwargs.pop("master_frame_only", master_frame_only),
             calib_types=kwargs.pop("calib_types", calib_types),
+            reprocess_on_better_match=kwargs.pop("reprocess_on_better_match", reprocess_on_better_match),
             is_too=is_too,
             use_database=kwargs.pop("use_database", not dry_run),
             **kwargs,
@@ -166,6 +182,7 @@ def run_scidata_reduction(
     is_too: bool = False,
     overwrite_config_sections: list[str] = None,
     keep_downstream_flags: bool = False,
+    last_run_kwargs: list[str] = None,
 ):
     try:
         if isinstance(config, SciProcConfiguration):
@@ -182,6 +199,7 @@ def run_scidata_reduction(
         specs = SCIPROCESS_REGISTRY.specs
         # before write_config refreshes info.runtime_version
         stale = {spec.name: stale_reason(config.node, spec.config_section) for spec in specs}
+        config.node.settings.last_run_kwargs = last_run_kwargs
 
         if overwrite_config_sections:
             config.overwrite_config_sections(overwrite_config_sections)
@@ -245,6 +263,7 @@ def run_crossfilter_reduction(
     overwrite: bool = False,
     is_too: bool = False,
     keep_downstream_flags: bool = False,
+    last_run_kwargs: list[str] = None,
 ):
     try:
         if isinstance(config, CrossFilterConfiguration):
@@ -259,6 +278,7 @@ def run_crossfilter_reduction(
 
         specs = CROSSFILTERPROCESS_REGISTRY.specs
         stale = {spec.name: stale_reason(config.node, spec.config_section) for spec in specs}
+        config.node.settings.last_run_kwargs = last_run_kwargs
 
         # Cold-start fallback for configs launched without a scheduler. The
         # same idempotent write runs again after WhiteImage registers its output.

@@ -57,6 +57,12 @@ class Checker:
         else:
             raise ValueError("Either file_path or header must be provided")
 
+    def human_rejected(self, file_path: str) -> bool:
+        """SANITY F with a human INSPCOMM: a veto."""
+        header = fits.getheader(file_path)
+        human = "INSPCOMM" in header and header["INSPCOMM"] != "Auto-generated binned master frame"
+        return header.get("SANITY") is False and human
+
     def apply_sanity_filter_and_report(
         self,
         dtype: Literal["science", "masterframe"] = const.IMAGE_GROUP_SCIENCE,  # Type of images for sanity check

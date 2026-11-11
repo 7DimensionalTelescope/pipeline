@@ -35,6 +35,7 @@ if TYPE_CHECKING:
         factory_autoclean: Any
         gpu_enabled: bool
         verbose_gpu: bool
+        last_run_kwargs: Any
 
     class LoggingNode(ConfigNode):
         level: str

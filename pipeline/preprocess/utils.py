@@ -176,20 +176,20 @@ def tolerant_search(
         return None
 
     def _search_with_sanity_tries(search_template, flags: RelaxationFlags, **kwargs):
-        searched = _search_with_binning_tries(search_template, flags, ignore_sanity=False, **kwargs)
+        searched = _search_with_lenient_key_tries(search_template, flags, ignore_sanity=False, **kwargs)
         if searched:
             return searched
 
         if ignore_sanity_if_no_match:
             sanity_flags = replace(flags, ignored_sanity=True)
-            searched = _search_with_binning_tries(search_template, sanity_flags, ignore_sanity=True, **kwargs)
+            searched = _search_with_lenient_key_tries(search_template, sanity_flags, ignore_sanity=True, **kwargs)
             if searched:
                 return searched
 
         return None
 
-    def _search_with_lenient_key_tries(search_template, flags: RelaxationFlags, **kwargs):
-        searched = _search_with_sanity_tries(search_template, flags, **kwargs)
+    def _search_with_lenient_key_tries(search_template, flags: RelaxationFlags, ignore_sanity=False, **kwargs):
+        searched = _search_with_binning_tries(search_template, flags, ignore_sanity=ignore_sanity, **kwargs)
         if searched:
             return searched
 
@@ -197,7 +197,9 @@ def tolerant_search(
             lenient_template = _build_lenient_template(search_template, dtype)
             lenient_flags = replace(flags, ignored_lenient_keys=True)
 
-            searched = _search_with_sanity_tries(lenient_template, lenient_flags, **kwargs)
+            searched = _search_with_binning_tries(
+                lenient_template, lenient_flags, ignore_sanity=ignore_sanity, **kwargs
+            )
             if searched:
                 return searched
 
@@ -222,13 +224,13 @@ def tolerant_search(
     def _search_with_masterframe_walls_tries(search_template, flags: RelaxationFlags, **kwargs):
         lo, uo = _get_masterframe_wall_offsets(search_template)
         # first with walls
-        searched = _search_with_lenient_key_tries(search_template, flags, lower_offset=lo, upper_offset=uo, **kwargs)
+        searched = _search_with_sanity_tries(search_template, flags, lower_offset=lo, upper_offset=uo, **kwargs)
         if searched:
             return searched
 
         # then without walls
         wall_flags = replace(flags, ignored_masterframe_walls=True)
-        searched = _search_with_lenient_key_tries(search_template, wall_flags, **kwargs)
+        searched = _search_with_sanity_tries(search_template, wall_flags, **kwargs)
         if searched:
             return searched
 
@@ -298,6 +300,7 @@ def search_with_date_offsets(
     if upper_offset is not None:
         offsets = [offset for offset in offsets if offset <= upper_offset]
 
+    checker = Checker() if library is None else library
     # Iterate through offsets - try all combinations of date offsets
     for offset_night in offsets:
         adjusted_date_night_dt = date_night_dt + timedelta(days=offset_night)
@@ -330,18 +333,19 @@ def search_with_date_offsets(
                     f"Excluded master candidates not binnable to {n_binning}x{n_binning}: {sorted(unusable)}"
                 )
                 matches = [m for m in matches if m not in unusable]
+            matches = [m for m in matches if not checker.human_rejected(m)]  # a human veto excludes like a hard key
             if matches:
                 if len(matches) == 1:
-                    if ignore_sanity or (Checker() if library is None else library).sanity_check(matches[0]):
+                    if ignore_sanity or checker.sanity_check(matches[0]):
                         return matches[0]
                     continue
                 picked = _pick_master(matches, n_binning)
-                if ignore_sanity or (Checker() if library is None else library).sanity_check(picked):
+                if ignore_sanity or checker.sanity_check(picked):
                     return picked
                 continue
         else:
             if (os.path if library is None else library).exists(modified_path):
-                if ignore_sanity or (Checker() if library is None else library).sanity_check(modified_path):
+                if (ignore_sanity or checker.sanity_check(modified_path)) and not checker.human_rejected(modified_path):
                     return modified_path
                 continue
 

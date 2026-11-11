@@ -6,7 +6,7 @@ import signal
 
 from pipeline.const import CALIB_TYPES
 from pipeline.services.database.process_status import set_input_type
-from pipeline.run import run_preprocess
+from pipeline.run import run_preprocess, strip_launcher_args
 
 
 def signal_handler(sig, frame):
@@ -46,6 +46,12 @@ if __name__ == "__main__":
         "bias dark flat -- a later type needs the earlier ones loaded for PPFLAG to propagate.",
     )
     parser.add_argument("-dry_run", action="store_true", help="Trace execution and report the work; write nothing")
+    parser.add_argument(
+        "-reprocess_on_better_match",
+        action="store_true",
+        default=None,
+        help="Reduce science frames again whose masters the search no longer selects, whatever the yml says",
+    )
     args = parser.parse_args()
 
     set_input_type(args.input_type)
@@ -69,6 +75,8 @@ if __name__ == "__main__":
             master_frame_only=args.master_frame_only,
             calib_types=args.calib_types,
             dry_run=args.dry_run,
+            reprocess_on_better_match=args.reprocess_on_better_match,
+            last_run_kwargs=strip_launcher_args(sys.argv[1:]),
         )
     except Exception as e:
         print(f"\nError: {e}")

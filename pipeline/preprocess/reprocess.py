@@ -22,6 +22,7 @@ from ..const import (
 from ..const.observation import BIAS_GROUP_LENIENT_KEYS, DARK_GROUP_LENIENT_KEYS, FLAT_GROUP_LENIENT_KEYS
 from ..errors import PreprocessError
 from ..path.name import NameHandler
+from ..version import MIN_PREPROC_RUNTIME_VERSION, is_below_min
 from .utils import get_image_id
 
 
@@ -144,7 +145,7 @@ class ReprocessMixin:
         return ingredient_change(
             product,
             selected,
-            better_match=self._better_match,
+            better_match=True,
             is_pipeline=self._is_pipeline,
             cache=self._ingredient_cache,
             designated=self._designated_basenames.intersection(os.path.basename(p) for p in selected if p),
@@ -157,9 +158,12 @@ class ReprocessMixin:
         elif dtype == CALIB_TYPE_FLAT:
             selected = (self.bias_output, self.flatdark_output)
         else:
-            return None  # a bias is combined from raw frames alone
+            selected = None  # a bias is combined from raw frames alone
 
-        reason = self._ingredient_change(output_file, selected)
+        if is_below_min(fits.getheader(output_file).get("PIPE_VER"), MIN_PREPROC_RUNTIME_VERSION):
+            reason = "version"
+        else:
+            reason = selected and self._ingredient_change(output_file, selected)
         if reason:
             self.logger.info(
                 f"[Group {self._current_group+1}] Master {dtype} is out of date ({reason}); "
@@ -171,7 +175,11 @@ class ReprocessMixin:
         """Why a science output must be (re)produced, or None."""
         if not os.path.exists(output_file):
             return "missing"
-        return self._ingredient_change(output_file, (self.bias_output, self.dark_output, self.flat_output))
+        reason = self._ingredient_change(output_file, (self.bias_output, self.dark_output, self.flat_output))
+        if reason == "better-match" and not self._better_match:
+            self._better_match_skipped.add(output_file)
+            return None
+        return reason
 
     _ROLE_DTYPE = {
         "bias": CALIB_TYPE_BIAS,

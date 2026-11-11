@@ -28,6 +28,7 @@ if TYPE_CHECKING:
         factory_scratch: Any
         factory_scratch_cap_gb: int
         factory_autoclean: Any
+        last_run_kwargs: Any
 
     class LoggingNode(ConfigNode):
         level: str

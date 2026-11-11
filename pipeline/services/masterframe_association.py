@@ -8,6 +8,7 @@ Rationale and measurements: .claude/memory/services.md "masterframe_association.
 from __future__ import annotations
 
 import fnmatch
+import logging
 import os
 import signal
 import traceback
@@ -42,6 +43,7 @@ from ..path.name import NameHandler
 from ..path.path import PathHandler
 from ..path.utils import add_a_day, format_camera, format_exptime, get_nightdate
 from ..utils import atleast_1d
+from ..version import MIN_PREPROC_RUNTIME_VERSION, is_below_min
 from .database.query import free_query
 
 _SCIENCE_FRAMES = """
@@ -91,8 +93,11 @@ WHERE u.name = %(unit)s AND n.date = %(night)s::date
 """
 
 _REGISTRY = """
-SELECT image_name, image_path, sanity, NULLIF(btrim(inspcomm), '') IS NOT NULL, COALESCE(created_at <= %s, TRUE)
-FROM image_qa WHERE image_group = %s AND image_type = ANY(%s) AND image_path IS NOT NULL
+SELECT image_name, image_path, sanity,
+       NULLIF(btrim(inspcomm), '') IS NOT NULL AND inspcomm <> 'Auto-generated binned master frame',
+       COALESCE(created_at <= %s, TRUE), image_type, pipe_ver,
+       (SELECT jsonb_object_agg(upper(k), v) FROM jsonb_each(to_jsonb(q)) e(k, v) WHERE upper(k) = ANY(%s))
+FROM image_qa q WHERE image_group = %s AND image_type = ANY(%s) AND image_path IS NOT NULL
 """
 
 _BINNED_COPIES = """
@@ -103,7 +108,7 @@ GROUP BY m.id, m.image_path HAVING count(*) = 1 AND bool_and(d.dependency_role =
 """
 
 _EDGES = """
-SELECT d.dependency_role, s.image_path
+SELECT d.dependency_role, s.image_path, d.source_imageid, s.imageid
 FROM image_qa m JOIN image_qa_dependency d ON d.derived_image_id = m.id JOIN image_qa s ON s.id = d.source_image_id
 WHERE m.image_name = %s AND d.dependency_role = ANY(%s)
 """
@@ -126,9 +131,14 @@ class _Library:
     """Masters of the modeled state, probed by tolerant_search through glob / exists / sanity_check."""
 
     def __init__(self, trust_machine_rejection: bool, as_of: Optional[datetime], targets: set):
+        from .checker import Checker
+
         self.trust_machine_rejection = trust_machine_rejection
         self.as_of = as_of
         self.targets = targets
+        self.checker = Checker()
+        self.checker.logger = logging.getLogger(__name__)
+        criteria = self.checker.load_qa_criteria(IMAGE_GROUP_MASTERFRAME)
         self.raw = defaultdict(list)
         for typ, unit, night, nbin, gain, exptime, filt, n in free_query(_RAW_BUDGET):
             quality = format_exptime(float(exptime), type="dark") if typ == CALIB_TYPE_DARK else filt
@@ -136,11 +146,12 @@ class _Library:
         self.registry = defaultdict(dict)
         self.registry_dirs = defaultdict(set)
         self.registered_path = {}
-        for name, path, sanity, human, visible in free_query(
-            _REGISTRY, [as_of, IMAGE_GROUP_MASTERFRAME, list(MASTER_IMAGE_TYPES)]
+        statistics = sorted({key for keys in criteria.values() for key in keys})
+        for name, path, sanity, human, visible, *rest in free_query(
+            _REGISTRY, [as_of, statistics, IMAGE_GROUP_MASTERFRAME, list(MASTER_IMAGE_TYPES)]
         ):
             directory = os.path.dirname(path)
-            self.registry[directory][os.path.basename(path)] = (sanity, human, visible)
+            self.registry[directory][os.path.basename(path)] = (sanity, human, visible, *rest)
             self.registry_dirs[(get_nightdate(directory), os.path.basename(directory))].add(directory)
             self.registered_path[name] = path
         copies = free_query(_BINNED_COPIES, [IMAGE_GROUP_MASTERFRAME, CALIB_TYPE_FLAT, FLAT_DEPENDENCY_ROLE])
@@ -150,8 +161,8 @@ class _Library:
         self.configs = None
         self.cameras, self.groups_of, self.dirs, self.ymls = {}, {}, {}, {}
         self.searches, self.ingredients, self.settings, self.designations = {}, {}, {}, {}
-        self.inventories, self.raw_files = {}, {}
-        self.skipped, self.forced_skipped, self.globs, self.sibling_sources, self.blind = [], [], [], {}, {}
+        self.inventories, self.raw_files, self.edges = {}, {}, {}
+        self.skipped, self.globs, self.sibling_sources, self.blind = [], [], {}, {}
 
     def camera(self, unit: str, night: str) -> str:
         """Camera token of a unit-night, memoized."""
@@ -188,11 +199,11 @@ class _Library:
                 for b, row in self.registry[d].items()
             ]
             canonical_paths = _canonical([b for _, b, _ in rows]) if rows else []
-            for (registered, name, (sanity, human, visible)), path in zip(rows, canonical_paths):
+            for (registered, name, (sanity, human, visible, *rest)), path in zip(rows, canonical_paths):
                 canonical = os.path.dirname(path) == directory
                 if registered == directory or canonical:
                     rec = self._record(
-                        night, unit, name, groups.get(name) if canonical else None, (sanity, human), visible
+                        night, unit, name, groups.get(name) if canonical else None, (sanity, human, *rest), visible
                     )
                     (present if visible else hidden)[name] = rec
             self.dirs[directory] = present, hidden
@@ -202,13 +213,20 @@ class _Library:
         self, night: str, unit: str, name: str, group: Optional[dict], row: Optional[tuple] = None, visible: bool = True
     ) -> dict:
         """Library record of a master."""
-        sanity, human = row or (None, False)
+        sanity, human, dtype, pipe_ver, statistics = row or (None, False, None, None, None)
         n_raw = group["n"] if group else 0
         typ = group["keys"][0] if group else None
         rebuilt = n_raw >= NUM_MIN_CALIB and (
             self.as_of is None or ((night, unit) in self.targets and _listed_enough(self, night, unit, name))
         )
         regen = rebuilt and typ in (CALIB_TYPE_DARK, CALIB_TYPE_FLAT)
+        if self.as_of is None and row is not None:
+            rebuilt = rebuilt and is_below_min(pipe_ver, MIN_PREPROC_RUNTIME_VERSION)  # _resolve adds the ingredients
+        failing = [
+            f"{key}={value}"
+            for key, value in sorted((statistics or {}).items())
+            if not self.checker.apply_qa_criteria({key: value}, dtype)
+        ]
         return {
             "nightdate": night,
             "unit": unit,
@@ -219,10 +237,12 @@ class _Library:
             "rebuilt": rebuilt,
             "sanity": sanity,
             "human": human,
+            "vetoed": sanity is False and human,
+            "failing": failing,
             "regen": regen,
             "resolved": not regen,
             "viable": True,
-            "forced": False,
+            "forced": [],
         }
 
     def record(self, path: str) -> Optional[dict]:
@@ -251,16 +271,25 @@ class _Library:
         return rec is not None and (rec["registered"] or rec["viable"])
 
     def sanity_check(self, path: str) -> bool:
-        """False for a sanity F master (forced F included): human always, machine when trusted."""
+        """False for a master the plan takes as SANITY F: a human veto always, a machine F when trusted."""
         rec = self.entries(os.path.dirname(path))[0][os.path.basename(path)]
         if not rec["resolved"]:
             raise _Unresolved(path)
-        rejected = (rec["sanity"] is False or rec["forced"]) and (rec["human"] or self.trust_machine_rejection)
-        if rejected and not rec["human"] and rec["forced"]:
-            self.forced_skipped.append(path)
-        elif rejected and not rec["human"] and rec["rebuilt"] and rec["viable"]:
+        rejected = rec["vetoed"] or (self.trust_machine_rejection and _sanity(rec) is False)
+        if rejected and not rec["vetoed"] and rec["rebuilt"] and rec["viable"]:
             self.skipped.append(path)
         return not rejected
+
+    def human_rejected(self, path: str) -> bool:
+        """SANITY F with a human INSPCOMM in the registry: a veto."""
+        return self.entries(os.path.dirname(path))[0][os.path.basename(path)]["vetoed"]
+
+
+def _sanity(rec: dict) -> Optional[bool]:
+    """SANITY the plan uses: the registry's unless rebuilt, else the own verdict and the ingredients'."""
+    if not (rec["rebuilt"] and rec["viable"]):
+        return rec["sanity"]
+    return not (rec["vetoed"] or rec["failing"] or rec["forced"])
 
 
 def _state(rec: dict) -> str:
@@ -301,9 +330,12 @@ def _yml_of(library: _Library, night: str, unit: str) -> Tuple[Optional[str], Op
         if library.configs is None:
             library.configs = dict(free_query(_PREPROCESS_CONFIGS, [CONFIG_TYPE_PREPROCESS]))
         config, yml = library.configs.get(f"{night}_{unit}"), None
-        if config is not None and os.path.exists(config):
-            with open(config) as f:
-                yml = yaml.safe_load(f) or {}
+        if config is not None:
+            try:
+                with open(config) as f:  # libyaml where available: a yml lists hundreds of frames
+                    yml = yaml.load(f, Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader)) or {}
+            except FileNotFoundError:
+                pass
         library.ymls[(night, unit)] = config, yml
     return library.ymls[(night, unit)]
 
@@ -404,7 +436,7 @@ def _search(library: _Library, template: str, dtype: str, settings: Tuple[int, b
         signal.signal(signal.SIGINT, handler)  # importing preprocess imports services.queue, which ignores SIGINT
         max_offset, ignore_sanity, ignore_lenient = settings
         while key not in library.searches:
-            library.skipped, library.forced_skipped, library.globs = [], [], []
+            library.skipped, library.globs = [], []
             unresolved = None
             try:
                 found, flags = tolerant_search(
@@ -474,10 +506,11 @@ def _blind_search(library: _Library, template: str, dtype: str, settings: tuple)
             glob=lambda pattern: _blind_glob(library, pattern),
             exists=lambda path: _blind_exists(library, path),
             sanity_check=lambda path: library.sanity_check(_blind_path(library, path)),
+            human_rejected=lambda path: library.human_rejected(_blind_path(library, path)),
         )
         max_offset, ignore_sanity, ignore_lenient = settings
         while key not in library.blind:
-            library.skipped, library.forced_skipped, library.globs = [], [], []
+            library.skipped, library.globs = [], []
             unresolved = None
             try:
                 found, _ = tolerant_search(
@@ -546,16 +579,35 @@ def _blind_exists(library: _Library, path: str) -> bool:
 
 
 def _resolve(library: _Library, path: str) -> None:
-    """Viability and forced F of a regenerated dark or flat, from its own searches at its unit-night."""
+    """Viability, rebuild, forced F and ingredients of a dark or flat with raw budget, from its own searches."""
     rec = library.record(path)
-    ingredients = _ingredients(library, path)
+    is_flat = rec["keys"][0] == CALIB_TYPE_FLAT
+    ingredients = _planned(library, path, (rec["nightdate"], rec["unit"]), is_flat)
     answers = list(ingredients.values())
     viable = all(a["path"] for a in answers)
-    if viable and "flatdark" in ingredients:
+    if viable and is_flat:
         viable = _owner_dark_resolves(library, rec)
     rec["viable"] = viable
-    rec["forced"] = viable and any("sanity-ignored" in a["rule"] for a in answers)
+    if library.as_of is None and rec["registered"]:
+        rec["rebuilt"] = viable and (rec["rebuilt"] or _changed(library, path, answers))
+    rec["forced"] = [_stem(a["source"]) for a in answers if viable and "sanity-ignored" in a["rule"]]
     rec["resolved"] = True
+    library.ingredients[path] = ingredients if rec["rebuilt"] else _recorded(library, path, is_flat)
+
+
+def _changed(library: _Library, path: str, answers: List[dict]) -> bool:
+    """Whether a registered master's planned ingredients differ from its recorded edges, moved, or are rebuilt."""
+    edges = _edges(library, path)
+    if not edges:
+        return False  # records no ingredient, as ReprocessMixin._master_change
+    recorded = {_stem(source) for _, source, _, _ in edges}
+    for answer in answers:
+        rec = library.record(answer["source"])
+        if rec and not rec["resolved"]:
+            _resolve(library, answer["source"])
+        if _stem(answer["path"]) not in recorded or (rec and rec["rebuilt"]):
+            return True
+    return any(was and now and was != now for _, _, was, now in edges)
 
 
 def _owner_dark_resolves(library: _Library, rec: dict) -> bool:
@@ -582,13 +634,16 @@ def _none(defects: list) -> dict:
     return {"path": None, "source": None, "rule": "none", "defects": defects}
 
 
-def _skipped(code: str, paths: List[str], template: str) -> list:
-    """machine-verdict or forced-rejection defect for the masters the last search attempt skipped."""
-    skipped = [_stem(p) for p in dict.fromkeys(paths)]
-    if not skipped:
-        return []
-    more = f" (+{len(skipped) - 5} more)" if len(skipped) > 5 else ""
-    return [(code, template, f"{len(skipped)} skipped: {', '.join(skipped[:5])}{more}")]
+def _skipped(library: _Library, template: str) -> list:
+    """own-sanity-f or ingredient-sanity-f defect for each rebuilt master the last search attempt skipped."""
+    defects = []
+    for path in dict.fromkeys(library.skipped):
+        rec = library.record(path)
+        if rec["failing"]:
+            defects.append(("own-sanity-f", template, f"{_stem(path)}: {', '.join(rec['failing'])}"))
+        else:
+            defects.append(("ingredient-sanity-f", template, f"{_stem(path)}: {', '.join(rec['forced'])}"))
+    return defects
 
 
 def _name_order_ties(library: _Library, template: str, dtype: str) -> list:
@@ -610,10 +665,8 @@ def _name_order_ties(library: _Library, template: str, dtype: str) -> list:
 
 
 def _attempt_defects(library: _Library, template: str, dtype: str) -> list:
-    """Defects of the last search attempt as a whole: machine-verdict, forced-rejection and name-order ties."""
-    machine = _skipped("machine-verdict", library.skipped, template)
-    forced = _skipped("forced-rejection", library.forced_skipped, template)
-    return machine + forced + _name_order_ties(library, template, dtype)
+    """Defects of the last search attempt as a whole: own-sanity-f, ingredient-sanity-f and name-order ties."""
+    return _skipped(library, template) + _name_order_ties(library, template, dtype)
 
 
 def _selected(library: _Library, template: str, dtype: str, found: Optional[str], flags) -> dict:
@@ -775,31 +828,44 @@ def _select(library: _Library, template: str, dtype: str, owner: Tuple[str, str]
 
 
 def _ingredients(library: _Library, path: str) -> Dict[str, dict]:
-    """bias (and flatdark for a flat) of a master: searched at its unit-night if regenerated, else recorded."""
+    """bias (and flatdark for a flat) of a master: searched at its unit-night if rebuilt, else recorded."""
     if path not in library.ingredients:
         rec = library.record(path)
         is_flat = NameHandler(path).type.exposure_type == CALIB_TYPE_FLAT
-        owner = rec and (rec["nightdate"], rec["unit"])
         source = is_flat and not (rec and rec["regen"]) and _copy_source(library, path)
         if source:
-            roles = _ingredients(library, source)
+            library.ingredients[path] = _ingredients(library, source)
         elif rec and rec["regen"]:
-            handler = PathHandler(path)
-            roles = {"bias": _select(library, handler.preprocess._mbias[0], CALIB_TYPE_BIAS, owner, CALIB_TYPE_BIAS)}
-            if is_flat:
-                handler.name.exptime = "*"
-                roles["flatdark"] = _select(library, handler.preprocess._mdark[0], CALIB_TYPE_DARK, owner, "flatdark")
+            _resolve(library, path)
         else:
-            roles = _recorded(library, path, is_flat)
-        library.ingredients[path] = roles
+            library.ingredients[path] = _recorded(library, path, is_flat)
     return library.ingredients[path]
+
+
+def _planned(library: _Library, path: str, owner: Tuple[str, str], is_flat: bool) -> Dict[str, dict]:
+    """bias (and flatdark for a flat) the searches at a master's unit-night select."""
+    handler = PathHandler(path)
+    roles = {"bias": _select(library, handler.preprocess._mbias[0], CALIB_TYPE_BIAS, owner, CALIB_TYPE_BIAS)}
+    if is_flat:
+        handler.name.exptime = "*"
+        roles["flatdark"] = _select(library, handler.preprocess._mdark[0], CALIB_TYPE_DARK, owner, "flatdark")
+    return roles
+
+
+def _edges(library: _Library, path: str) -> list:
+    """(dependency_role, source path, recorded source IMAGEID, registry IMAGEID) of a master's edges, memoized."""
+    stem = _stem(path)
+    if stem not in library.edges:
+        roles = [BIAS_DEPENDENCY_ROLE, DARK_DEPENDENCY_ROLE, FLAT_DEPENDENCY_ROLE]
+        library.edges[stem] = free_query(_EDGES, [stem, roles])
+    return library.edges[stem]
 
 
 def _recorded(library: _Library, path: str, is_flat: bool) -> Dict[str, dict]:
     """Ingredients of a master that is not regenerated, from its image_qa_dependency edges."""
     dependency_roles = [BIAS_DEPENDENCY_ROLE, DARK_DEPENDENCY_ROLE, FLAT_DEPENDENCY_ROLE]
     edges = defaultdict(list)
-    for dependency_role, source in free_query(_EDGES, [_stem(path), dependency_roles]):
+    for dependency_role, source, *_ in _edges(library, path):
         edges[dependency_role].append(source)
     bias, dark, flat = (edges[r] for r in dependency_roles)
     if is_flat and not bias and not dark and len(flat) == 1:  # an auto-binned copy records its source flat alone
@@ -822,8 +888,10 @@ def _recorded(library: _Library, path: str, is_flat: bool) -> Dict[str, dict]:
 
 
 def _role_columns(library: _Library, role: str, answer: Optional[dict]) -> dict:
-    """Six columns of one role."""
+    """Eight columns of one role."""
     rec = library.record(answer["source"]) if answer and answer["source"] else None
+    if rec and not rec["resolved"]:
+        _resolve(library, answer["source"])
     return {
         role: _stem(answer["path"]) if answer and answer["path"] else None,
         f"{role}_path": answer and answer["path"],
@@ -831,6 +899,8 @@ def _role_columns(library: _Library, role: str, answer: Optional[dict]) -> dict:
         f"{role}_unit": rec and rec["unit"],
         f"{role}_rule": answer and answer["rule"],
         f"{role}_state": rec and _state(rec),
+        f"{role}_sanity": rec and _sanity(rec),
+        f"{role}_rebuilt": rec and rec["rebuilt"],
     }
 
 
@@ -1029,12 +1099,12 @@ def associate_masters(
         typ = names[item].type.exposure_type
         answers = _ingredients(library, path) if typ != CALIB_TYPE_BIAS else {}
         row = dict(master=_stem(path), master_path=path, type=typ, nightdate=rec["nightdate"], unit=rec["unit"])
-        row.update(state=_state(rec), n_raw=rec["n_raw"])
+        row.update(state=_state(rec), n_raw=rec["n_raw"], sanity=_sanity(rec), rebuilt=rec["rebuilt"])
         for role in ("bias", "flatdark"):
             row.update(_role_columns(library, role, answers.get(role)))
             _count_defects(tally, rec["nightdate"], rec["unit"], role, answers.get(role), 1)
         _count_unmodeled(library, tally, rec["nightdate"], rec["unit"], 1)
         rows.append(row)
-    columns = ["master", "master_path", "type", "nightdate", "unit", "state", "n_raw"]
+    columns = ["master", "master_path", "type", "nightdate", "unit", "state", "n_raw", "sanity", "rebuilt"]
     columns += [c for role in ("bias", "flatdark") for c in _role_columns(library, role, None)]
     return pd.DataFrame(rows, columns=columns), _defect_table(tally)

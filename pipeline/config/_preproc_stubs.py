@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     class SettingsNode(ConfigNode):
         is_too: bool
         is_pipeline: bool
+        last_run_kwargs: Any
 
     class InputNode(ConfigNode):
         masterframe_images: Any

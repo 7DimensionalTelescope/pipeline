@@ -11,7 +11,7 @@ from pipeline.const.run import (
     SUCCESS_RETURN_CODE,
 )
 from pipeline.errors.errors import EmptyInputAfterSanityRejectionError
-from pipeline.run import run_crossfilter_reduction
+from pipeline.run import run_crossfilter_reduction, strip_launcher_args
 from pipeline.services.database.process_status import set_input_type
 
 
@@ -42,6 +42,7 @@ if __name__ == "__main__":
             overwrite=args.overwrite,
             is_too=args.is_too,
             keep_downstream_flags=args.keep_downstream_flags,
+            last_run_kwargs=strip_launcher_args(sys.argv[1:]),
         )
     except EmptyInputAfterSanityRejectionError as error:
         print(f"\nError: {error}")

@@ -62,6 +62,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         calib_types=None,
         use_gpu=False,
         use_database=True,
+        reprocess_on_better_match=None,
         **kwargs,
     ):
         # Load Configuration
@@ -80,7 +81,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 f"calib_types must be a cumulative prefix of ['bias', 'dark', 'flat'], not {self.calib_types}"
             )
 
-        self._better_match = get_key(self.config_node.preprocess, "reprocess_on_better_match", False)
+        self._better_match = reprocess_on_better_match or get_key(
+            self.config_node.preprocess, "reprocess_on_better_match", False
+        )
         self._change_policy = "regenerated+sanity+better-match" if self._better_match else "regenerated+sanity"
         self._is_pipeline = is_pipeline
         self._ingredient_cache = {}  # {master path: (IMAGEID, SANITY)}; reset per group
@@ -406,6 +409,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         self.dark_exptime = None
         self._flatdark_ppflag = 0
         self._ingredient_cache = {}
+        self._better_match_skipped = set()
 
         for dtype in self.calib_types:
 
@@ -903,6 +907,12 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             )
             + f", {len(reasons) - sum(todo)} up to date"
         )
+        if self._better_match_skipped and not self.overwrite:
+            self.logger.info(
+                f"[Group {self._current_group+1}] {len(self._better_match_skipped)} science image(s) not reduced again "
+                "although the search now selects other masters: preprocess.reprocess_on_better_match is off "
+                "(force it with the run option reprocess_on_better_match)"
+            )
 
         if not any(todo) and not (self.overwrite):
             self.logger.info(f"[Group {self._current_group+1}] All images are already processed")

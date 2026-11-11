@@ -5,7 +5,7 @@ import signal
 import argparse
 
 from pipeline.services.database.process_status import set_input_type
-from pipeline.run import run_scidata_reduction
+from pipeline.run import run_scidata_reduction, strip_launcher_args
 from pipeline.const.run import (
     DEFAULT_SCIDATA_PROCESSES,
     SUCCESS_RETURN_CODE,
@@ -76,6 +76,7 @@ if __name__ == "__main__":
             is_too=args.is_too,
             overwrite_config_sections=args.overwrite_config_sections,
             keep_downstream_flags=args.keep_downstream_flags,
+            last_run_kwargs=strip_launcher_args(sys.argv[1:]),
         )
 
     # Empty inputs due to AstrometryError.EarlyQARejectionError is a normal pipeline procedure
