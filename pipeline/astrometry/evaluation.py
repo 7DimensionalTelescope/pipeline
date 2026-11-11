@@ -142,6 +142,7 @@ def evaluate_single_wcs(
     """Ensure num_plot <= num_sci, num_ref"""
 
     def chatter(msg: str, level: str = "debug"):
+        msg = f"{id} {msg}" if id else msg  # per-frame callers tag the logger instead of passing id
         if logger is not None:
             return getattr(logger, level)(msg)
         else:
@@ -188,7 +189,7 @@ def evaluate_single_wcs(
     sep_mask = _get_column_mask(sep)
     if sep_mask is None:
         chatter(
-            f"{id} Matched catalog separation column is not masked; treating UNMATCH as unavailable for this evaluation.",
+            "Matched catalog separation column is not masked; treating UNMATCH as unavailable for this evaluation.",
             "warning",
         )
         n_valid = len(sep)
@@ -253,9 +254,9 @@ def evaluate_single_wcs(
         chatter(f"evaluate_single_wcs: failed to compute corner_stats: {e}")
         corner_stats = None
 
-    chatter(f"{id} evaluate_single_wcs: rsep_stats {rsep_stats}")
-    chatter(f"{id} evaluate_single_wcs: matched_ids {matched_ids}")
-    chatter(f"{id} evaluate_single_wcs: corner_stats {corner_stats}")
+    chatter(f"evaluate_single_wcs: rsep_stats {rsep_stats}")
+    chatter(f"evaluate_single_wcs: matched_ids {matched_ids}")
+    chatter(f"evaluate_single_wcs: corner_stats {corner_stats}")
 
     # overall image stats
     image_stats = ImageStats.from_matched_catalog(matched_bidirectional)

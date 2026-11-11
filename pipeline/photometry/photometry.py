@@ -389,7 +389,10 @@ class PhotometrySingle:
             config_node = config_node.node
 
         self.config_node = config_node
+        self._id = f"{next(type(self)._id_counter)}/{total_image}"
         self.logger = logger or self._setup_logger(config_node)
+        if total_image > 1:  # frame k of N on every line; a lone image (coadd photometry) needs no tag
+            self.logger = self.logger.tagged(f"[{self._id}]")
         self.ref_cat_type = ref_cat_type
         # self.image = os.path.join(self.config.path.path_processed, image)
         # self.input_image = image
@@ -405,7 +408,6 @@ class PhotometrySingle:
         self.phot_header.REFCAT = self.ref_cat_type
         self.logger.debug(f"{self.name}: self.phot_header at PhotometrySingle.__init__(): {self.phot_header}")
 
-        self._id = f"{next(type(self)._id_counter)}/{total_image}"
 
         self.path = (
             parent_path.replace(input=self.input_image)
@@ -470,7 +472,7 @@ class PhotometrySingle:
         """
         try:
             start_time = time.time()
-            self.logger.info(f"Start 'PhotometrySingle' for the image {self.name} [{self._id}]")
+            self.logger.info(f"Start 'PhotometrySingle' for the image {self.name}")
             self.logger.debug(f"{'=' * 13} {os.path.basename(self.input_image)} {'=' * 13}")
             if not self._trust_header_zp:
                 self.phot_header.STDNUMB = None  # this run's zero-point star count, or nothing: never the header's
@@ -539,14 +541,14 @@ class PhotometrySingle:
 
             self.logger.debug(MemoryMonitor.log_memory_usage)
             self.logger.info(
-                f"'PhotometrySingle' is completed for the image [{self._id}]"
+                f"'PhotometrySingle' is completed for the image {self.name}"
                 f" in {time_diff_in_seconds(start_time)} seconds"
             )
         except Exception as e:  # whatever failed, the frame is not deliverable: SANITY=False and the run goes on
             self.phot_header.clear_calibration()  # null the ZP cards this or a previous run left; SANITY=False below
             self.update_image_header()
             self.logger.warning(
-                f"PhotometrySingle rejected the image [{self._id}]: {str(e)}; the run continues with the other input_images.",
+                f"PhotometrySingle rejected the image {self.name}: {str(e)}; the run continues with the other input_images.",
                 e,
                 exc_info=not isinstance(e, NotEnoughSourcesError),  # the unexpected ones keep their traceback
             )
@@ -555,11 +557,11 @@ class PhotometrySingle:
     def run_source_catalog(self, overwrite=True) -> None:
         """WhiteCatalog only"""
         start_time = time.time()
-        self.logger.info(f"Start source catalog for the image {self.name} [{self._id}]")
+        self.logger.info(f"Start source catalog for the image {self.name}")
         obs_src_table = self.photometry_with_sextractor(overwrite=overwrite)
         self.write_catalog(obs_src_table)
         self.logger.info(
-            f"Source catalog is completed for the image [{self._id}] in {time_diff_in_seconds(start_time)} seconds"
+            f"Source catalog is completed for the image {self.name} in {time_diff_in_seconds(start_time)} seconds"
         )
 
     def calculate_seeing(

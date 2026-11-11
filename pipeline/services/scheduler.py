@@ -1328,13 +1328,20 @@ class Scheduler:
             # If already marked as done, skip to prevent duplicate increments
             if current_status in (TASK_STATUS_COMPLETED, TASK_STATUS_FAILED, TASK_STATUS_REJECTED):
                 return
+            # stashed while it ran (stash_tasks include_processing): the end of the run only clears its pid
+            if current_status == TASK_STATUS_STASHED:
+                cursor.execute(
+                    'UPDATE scheduler SET pid = 0 WHERE "index" = ? AND status = ?', (index, TASK_STATUS_STASHED)
+                )
+                conn.commit()
+                return
 
             dependent_indices = json.loads(dependent_idx_json) if dependent_idx_json else []
             process_end = datetime.now().isoformat()
 
             # the WHERE's done-status guard is a compare-and-swap: one of two racing mark_done calls wins and promotes
-            done_guard = " AND status NOT IN (?, ?, ?)"
-            done_states = (TASK_STATUS_COMPLETED, TASK_STATUS_FAILED, TASK_STATUS_REJECTED)
+            done_guard = " AND status NOT IN (?, ?, ?, ?)"
+            done_states = (TASK_STATUS_COMPLETED, TASK_STATUS_FAILED, TASK_STATUS_REJECTED, TASK_STATUS_STASHED)
             if return_code == SUCCESS_RETURN_CODE:
 
                 cursor.execute(
@@ -1452,6 +1459,10 @@ class Scheduler:
             self.processing_preprocess -= 1
             if self.processing_preprocess < 0:
                 self.processing_preprocess = 0
+
+        if current_status == TASK_STATUS_STASHED:
+            self._schedule["pid"][mask] = 0
+            return
 
         if return_code == SUCCESS_RETURN_CODE:
             self._schedule["status"][mask] = TASK_STATUS_COMPLETED
@@ -2406,16 +2417,26 @@ class Scheduler:
         else:
             return self._stash_task_from_memory(index)
 
-    def stash_tasks(self, configs: list[str] | None = None, name: str | None = None, root: str | None = None):
+    def stash_tasks(
+        self,
+        configs: list[str] | None = None,
+        name: str | None = None,
+        root: str | None = None,
+        include_processing: bool = False,
+        kill_local: bool = False,
+    ):
         """Stash by config list (stash_tasks_by_name) or by root (stash_tasks_by_root); name None = default stash."""
         if (configs is None) == (root is None):
             raise ValueError("stash_tasks takes configs or root")
+        options = dict(name=name, include_processing=include_processing, kill_local=kill_local)
         if root is not None:
-            return self.stash_tasks_by_root(root, name=name)
-        return self.stash_tasks_by_name(configs, name=name)
+            return self.stash_tasks_by_root(root, **options)
+        return self.stash_tasks_by_name(configs, **options)
 
-    def stash_tasks_by_name(self, configs: list[str], name: str | None = None):
-        """Stash Ready/Pending/Failed rows whose config, given as a path or a name, is listed; returns the count."""
+    def stash_tasks_by_name(
+        self, configs: list[str], name: str | None = None, include_processing: bool = False, kill_local: bool = False
+    ):
+        """Stash rows whose config, as a path or a name, is listed; count, or (count, pairs) if include_processing."""
         if not self.use_system_queue:
             raise RuntimeError("stash_tasks_by_name requires use_system_queue=True")
         configs = [str(configs)] if isinstance(configs, (str, os.PathLike)) else [str(config) for config in configs]
@@ -2425,31 +2446,55 @@ class Scheduler:
             rows = conn.execute('SELECT "index", config FROM scheduler').fetchall()
             indices = [index for index, config in rows if config in paths or self._config_stem(config) in names]
             changed = self._stash_where(
-                conn, '"index" IN (SELECT value FROM json_each(?))', (json.dumps(indices),), name
+                conn, '"index" IN (SELECT value FROM json_each(?))', (json.dumps(indices),), name, include_processing
             )
             conn.commit()
-        return changed
+        return self._stashed_processing(changed, kill_local) if include_processing else changed
 
-    def stash_tasks_by_root(self, root: str, name: str | None = None):
-        """Stash Ready/Pending/Failed rows whose config lies under the absolute `root`; returns the count."""
+    def stash_tasks_by_root(
+        self, root: str, name: str | None = None, include_processing: bool = False, kill_local: bool = False
+    ):
+        """Stash rows whose config lies under the absolute `root`; count, or (count, pairs) if include_processing."""
         if not self.use_system_queue:
             raise RuntimeError("stash_tasks_by_root requires use_system_queue=True")
         if not os.path.isabs(root):
             raise ValueError(f"root must be an absolute path: {root!r}")
         prefix = os.path.join(os.path.normpath(root), "")
         with self._db_connection() as conn:
-            changed = self._stash_where(conn, "substr(config, 1, ?) = ?", (len(prefix), prefix), name)
+            changed = self._stash_where(
+                conn, "substr(config, 1, ?) = ?", (len(prefix), prefix), name, include_processing
+            )
             conn.commit()
-        return changed
+        return self._stashed_processing(changed, kill_local) if include_processing else changed
 
-    def _stash_where(self, conn, where, params, name):
-        """One UPDATE: matching Ready/Pending/Failed rows go Stashed, their status kept in stashed_from."""
+    def _stash_where(self, conn, where, params, name, include_processing=False):
+        """Matching Ready/Pending/Failed rows go Stashed, their status kept in stashed_from; Processing too if asked."""
         states = self._STASHABLE_STATES
-        return conn.execute(
+        changed = conn.execute(
             "UPDATE scheduler SET status = ?, stash = ?, stashed_from = status "
             f"WHERE status IN ({','.join('?' * len(states))}) AND {where}",
             (TASK_STATUS_STASHED, str(name) if name else None, *states, *params),
         ).rowcount
+        if not include_processing:
+            return changed
+        # revived as Ready, never as Processing: a revive reruns it; pid and dispatch stay for whoever kills it
+        pairs = conn.execute(
+            "UPDATE scheduler SET status = ?, stash = ?, stashed_from = ? "
+            f"WHERE status = ? AND {where} RETURNING COALESCE(dispatch, ''), pid",
+            (TASK_STATUS_STASHED, str(name) if name else None, TASK_STATUS_READY, TASK_STATUS_PROCESSING, *params),
+        ).fetchall()
+        return changed + len(pairs), [tuple(pair) for pair in pairs]
+
+    def _stashed_processing(self, changed, kill_local):
+        """(count, (dispatch, pid) pairs left to kill); kill_local SIGTERMs this host's after the commit."""
+        count, pairs = changed
+        if kill_local:
+            # a local row without a pid yet (claimed, not launched) cannot be signalled: it stays in the list
+            local = [pair for pair in pairs if pair[0] in (self._UNCLAIMED, self._LOCAL_DISPATCH) and pair[1]]
+            for _, pid in local:
+                self._terminate_process(pid)
+            pairs = [pair for pair in pairs if pair not in local]
+        return count, pairs
 
     def revive_stash(self, name):
         """Return every row of a named stash to its recorded status; returns the count."""
@@ -2457,7 +2502,7 @@ class Scheduler:
             raise RuntimeError("revive_stash requires use_system_queue=True")
         with self._db_connection() as conn:
             changed = conn.execute(
-                "UPDATE scheduler SET status = COALESCE(stashed_from, ?), stash = NULL, stashed_from = NULL "
+                "UPDATE scheduler SET status = COALESCE(stashed_from, ?), stash = NULL, stashed_from = NULL, pid = 0 "
                 "WHERE status = ? AND stash = ?",
                 (TASK_STATUS_READY, TASK_STATUS_STASHED, str(name)),
             ).rowcount

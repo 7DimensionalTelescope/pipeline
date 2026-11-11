@@ -167,6 +167,10 @@ class Logger:
     # No __del__: the underlying logging.Logger is shared by name, so a GC'd stale
     # wrapper would close the live run's handlers mid-write (call cleanup() explicitly).
 
+    def tagged(self, tag: str) -> "TaggedLogger":
+        """A view of this logger that prefixes every message with `tag`, e.g. the frame index "[3/36]"."""
+        return TaggedLogger(self, tag)
+
     def cleanup(self, logger=None):
         """Properly close all handlers and release file descriptors."""
         if logger is None:
@@ -632,6 +636,41 @@ class Logger:
         Context manager exit point - restores original streams.
         """
         self.restore_stdout_stderr()
+
+
+class TaggedLogger:
+    """Prefixes messages with a tag and forwards everything else to the wrapped Logger."""
+
+    def __init__(self, logger, tag: str):
+        self._logger, self._tag = logger, tag
+
+    def __getattr__(self, name):
+        return getattr(self._logger, name)
+
+    @property
+    def __class__(self):  # isinstance(view, Logger) holds where a Logger is required
+        return type(self._logger)
+
+    def tagged(self, tag: str) -> "TaggedLogger":
+        return TaggedLogger(self._logger, f"{self._tag} {tag}")
+
+    def log(self, level, msg: str, **kwargs) -> None:
+        self._logger.log(level, f"{self._tag} {msg}", **kwargs)
+
+    def debug(self, msg: str, exception=None, **kwargs) -> None:
+        self._logger.debug(f"{self._tag} {msg}", exception, **kwargs)
+
+    def info(self, msg: str, exception=None, **kwargs) -> None:
+        self._logger.info(f"{self._tag} {msg}", exception, **kwargs)
+
+    def warning(self, msg: str, exception=None, **kwargs) -> None:
+        self._logger.warning(f"{self._tag} {msg}", exception, **kwargs)
+
+    def error(self, msg: str, exception=None, **kwargs) -> None:
+        self._logger.error(f"{self._tag} {msg}", exception, **kwargs)
+
+    def critical(self, msg: str, exception=None, **kwargs) -> None:
+        self._logger.critical(f"{self._tag} {msg}", exception, **kwargs)
 
 
 class StdoutToLogger:

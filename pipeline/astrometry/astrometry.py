@@ -210,8 +210,11 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             )
 
         # set ImageInfo
+        n = len(self.input_images)  # frame k of N tags every per-frame line; a lone image needs no tag
         self.images_info = [
-            ImageInfo.from_fits(image, self.path, self.logger, id=f"[{i+1}/{len(self.input_images)}]")
+            ImageInfo.from_fits(
+                image, self.path, self.logger.tagged(f"[{i+1}/{n}]") if n > 1 else self.logger, id=f"[{i+1}/{n}]"
+            )
             for i, image in enumerate(self.input_images)
         ]
 
@@ -252,10 +255,10 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 write_ldac(self.astref_imhead, table, path)
             except OSError as e:
                 image_info.astref_table, image_info.epoch_astrefcat = None, None
-                self.logger.warning(f"{image_info.id} cannot write propagated refcat {path} ({e}); using the tile")
+                image_info.logger.warning(f"cannot write propagated refcat {path} ({e}); using the tile")
                 return self.config_node.astrometry.local_astref
             image_info.astref_table, image_info.epoch_astrefcat = table, path
-            self.logger.debug(f"{image_info.id} refcat propagated to {image_info.epoch:.3f}: {path}")
+            image_info.logger.debug(f"refcat propagated to {image_info.epoch:.3f}: {path}")
         return image_info.epoch_astrefcat
 
     def joint_epoch_astrefcat(self, images_info: List[ImageInfo]) -> Optional[str]:
@@ -350,7 +353,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             # flexibly iterate to refine
             for i, image_info in enumerate(self.images_info):
                 if not image_info.sane:
-                    self.logger.info(f"SANITY F for {image_info.id}. Skipping astrometry run")
+                    image_info.logger.info("SANITY F. Skipping astrometry run")
                     continue
 
                 try:
@@ -396,7 +399,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
                     self._finalize_astrometry_sanity(image_info)
                 except AstrometryError.ImageQualitySuspectedError as e:
-                    self.logger.warning(str(e), AstrometryError.ImageQualitySuspected)
+                    image_info.logger.warning(str(e), AstrometryError.ImageQualitySuspected)
                     image_info.SANITY = False
                     self._write_astrometry_sanity_rejection_to_header(image_info.image_path, fits.Header(image_info.cards))
 
@@ -454,8 +457,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             image_info.SANITY = flag  # true if nothing to check
             if not image_info.sane:
                 idx_to_exclude.append(i)
-                self.logger.info(
-                    f"Early QA rejected {image_info.id}: {os.path.basename(image_info.image_path)}! "
+                image_info.logger.info(
+                    f"Early QA rejected {os.path.basename(image_info.image_path)}! "
                     f"Skipping all subsequent processing, including Astrometry and Photometry."
                 )
                 self.logger.warning(
@@ -487,7 +490,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         """Mark image insane if no valid main-scamp WCS solution was obtained after scamp/solve-field attempts"""
         failed = "no valid WCS solution" if image_info.invalid else "bad WCS solution" if image_info.bad else None
         if failed:
-            self.logger.info(f"SANITY F for {image_info.id}: {failed} after scamp/solve-field")
+            image_info.logger.info(f"SANITY F: {failed} after scamp/solve-field")
             image_info.SANITY = False
             try:
                 self._write_astrometry_sanity_rejection_to_header(image_info.image_path, fits.Header(image_info.cards))
@@ -512,8 +515,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         evaluate_prep_sol: bool = False,
         debug_plot: bool = False,
     ):
-        self.logger.warning(
-            f"Solve-field triggered, better solution not guaranteed for {image_info.prep_cat} [{i+1}/{len(self.images_info)}]",
+        image_info.logger.warning(
+            f"Solve-field triggered, better solution not guaranteed for {image_info.prep_cat}",
             AstrometryError.AlternativeSolver,
         )
 
@@ -534,7 +537,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 overwrite=overwrite,
             )
 
-        self.logger.info(f"Running main scamp iteration for {image_info.prep_cat} [{i+1}/{len(self.images_info)}]")
+        image_info.logger.info(f"Running main scamp iteration for {image_info.prep_cat}")
         self._iterate_scamp(
             image_info,
             evaluate_prep_sol,
@@ -585,7 +588,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 plot=debug_plot,
             )
 
-        self.logger.info(f"Running main scamp iteration for {image_info.prep_cat} [{i+1}/{len(self.images_info)}]")
+        image_info.logger.info(f"Running main scamp iteration for {image_info.prep_cat}")
 
         # main scamp with iterations
         main_scamp_success = self._iterate_scamp(
@@ -600,11 +603,11 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         self.update_progress(
             SCIPROCESS_REGISTRY.milestone_progress("astrometry", "scamp_main"), "astrometry-scamp-main"
         )
-        self.logger.info(f"Scamp iteration completed for {image_info.prep_cat} [{i+1}/{len(self.images_info)}]")
+        image_info.logger.info(f"Scamp iteration completed for {image_info.prep_cat}")
 
         if image_info.bad:
-            self.logger.warning(
-                f"{image_info.id} Bad solution. UNMATCH: "
+            image_info.logger.warning(
+                f"Bad solution. UNMATCH: "
                 f"{image_info.rsep_stats.unmatched_fraction if image_info.rsep_stats.unmatched_fraction is not None else 'None'}, "
                 # f"RSEP_P95: {image_info.rsep_stats.separation_stats.P95 if image_info.rsep_stats.separation_stats.P95 is not None else 'None'} "
                 f"RSEP_Q2: {image_info.rsep_stats.separation_stats.Q2 if image_info.rsep_stats.separation_stats.Q2 is not None else 'None'} "
@@ -613,8 +616,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 AstrometryError.BadWcsSolution,
             )
         else:
-            self.logger.info(
-                f"{image_info.id} SCAMP stats - "
+            image_info.logger.info(
+                f"SCAMP stats - "
                 f"UNMATCH: {image_info.rsep_stats.unmatched_fraction if image_info.rsep_stats.unmatched_fraction is not None else 'None'}, "
                 f"SEP_P95: {image_info.rsep_stats.separation_stats.P95 if image_info.rsep_stats.separation_stats.P95 is not None else 'None'}, "
                 f"SEP_Q2: {image_info.rsep_stats.separation_stats.Q2 if image_info.rsep_stats.separation_stats.Q2 is not None else 'None'}, "
@@ -641,8 +644,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         if not overwrite:
             # if not image_info.invalid:
-            self.logger.debug(
-                f"ImageInfo {image_info.id} solved_head: {image_info.solved_head}, "
+            image_info.logger.debug(
+                f"ImageInfo solved_head: {image_info.solved_head}, "
                 f"rsep_stats: {type(image_info.rsep_stats)}"
             )
 
@@ -667,16 +670,16 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 )
                 if image_info.rsep_stats is None:
                     raise AstrometryError.ImageQualitySuspectedError(
-                        f"{image_info.id} Solution evaluation returned no metrics for "
+                        f"Solution evaluation returned no metrics for "
                         f"{os.path.basename(image_info.image_path)}: blank or trailed frame suspected. "
                         "Human inspection advised; record the verdict with services.inspection.inspect_images (INSPCOMM)."
                     )
-                self.logger.debug(
-                    f"{image_info.id} UNMATCH: "
+                image_info.logger.debug(
+                    f"UNMATCH: "
                     f"{image_info.rsep_stats.unmatched_fraction if image_info.rsep_stats.unmatched_fraction is not None else 'None'}\n"
-                    f"{image_info.id} SEP_P95: "
+                    f"SEP_P95: "
                     f"{image_info.rsep_stats.separation_stats.P95 if image_info.rsep_stats.separation_stats.P95 is not None else 'None'}\n"
-                    f"{image_info.id} SEP_Q2: "
+                    f"SEP_Q2: "
                     f"{image_info.rsep_stats.separation_stats.Q2 if image_info.rsep_stats.separation_stats.Q2 is not None else 'None'}"
                 )
                 if image_info.good:
@@ -874,7 +877,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     self.logger.warning(f"SExtractor emitted no Background/RMS summary for {solved_image}")
                 elif images_info is not None:
                     images_info[i].skyval, images_info[i].skysig = background
-                self.logger.info(f"Completed sextractor (prep) [{i+1}/{len(input_images)}]")
+                images_info[i].logger.info("Completed sextractor (prep)")
                 self.logger.debug(f"{solved_image}")
             except Exception as e:
                 self.logger.error(f"Sextractor failed for {solved_image}: {e}", AstrometryError.SextractorError)
@@ -967,11 +970,11 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                         solvefield_args=solvefield_args,
                         timeout=timeout,
                     )
-                    self.logger.info(f"Completed solve-field [{i+1}/{len(input_catalogs)}]")
+                    image_info.logger.info("Completed solve-field")
                     self.logger.debug(f"Solve-field input: {slink}, output: {wcs_file}")
                     solved_input_catalogs.append(slink)
                     image_info.sip_wcs = wcs_file
-                    self.logger.debug(f"Updated sip_wcs: {image_info.id}: {wcs_file}")
+                    image_info.logger.debug(f"Updated sip_wcs: {wcs_file}")
                     solvefield_wcs_list.append(wcs_file)
                 except SolveFieldError as solvefield_error:
                     solvefield_success = False
@@ -997,7 +1000,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     solvefield_args=solvefield_args,
                     timeout=timeout,
                 )
-                self.logger.info(f"Completed solve-field [{i+1}/{len(input_images)}]")
+                self.logger.info(f"Completed solve-field for {os.path.basename(slink)}")
                 self.logger.debug(f"Solve-field input: {slink}, output: {sfile}")
         else:
             raise AstrometryError.ValueError("Neither input_catalogs nor input_images provided for run_solve_field")
@@ -1261,8 +1264,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 except ScampError as _e:
                     scamp_error = _e
                     scamp_success_list[i] = False
-                    self.logger.warning(
-                        f"Error during individual scamp for {image_info.id} ({os.path.basename(image_info.image_path)}): {scamp_error}",
+                    image_info.logger.warning(
+                        f"Error during individual scamp for {os.path.basename(image_info.image_path)}: {scamp_error}",
                         AstrometryError.ScampGenericError,
                     )
 
@@ -1398,16 +1401,16 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
             # update FOV polygon to ImageInfo. It will be cached and put into final image header later
             try:
-                self.logger.debug(f"Updating FOV polygon for {image_info.id} ({image_info.image_path})")
+                image_info.logger.debug(f"Updating FOV polygon for {image_info.image_path}")
                 image_info.fov_ra, image_info.fov_dec = get_fov_quad(
                     image_info.wcs, image_info.naxis1, image_info.naxis2
                 )
-                self.logger.debug(
-                    f"Updated FOV polygon. {image_info.id}: RA: {image_info.fov_ra}, Dec: {image_info.fov_dec}"
+                image_info.logger.debug(
+                    f"Updated FOV polygon. RA: {image_info.fov_ra}, Dec: {image_info.fov_dec}"
                 )
             except Exception as e:
-                self.logger.error(
-                    f"Failed to update FOV polygon for {image_info.id} ({image_info.image_path}): {e}",
+                image_info.logger.error(
+                    f"Failed to update FOV polygon for {image_info.image_path}: {e}",
                     AstrometryError.UnknownError,
                     exc_info=True,
                 )
@@ -1429,19 +1432,18 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                     num_ref=num_ref,
                     match_radius=self.config_node.astrometry.eval_match_radius,
                     cutout_size=30,
-                    logger=self.logger,
+                    logger=image_info.logger,
                     overwrite=overwrite,
-                    id=image_info.id,
                 )
 
             except Exception as e:
-                self.logger.error(
-                    f"{image_info.id} Failed to evaluate solution for {input_image}: {e}",
+                image_info.logger.error(
+                    f"Failed to evaluate solution for {input_image}: {e}",
                     AstrometryError.SolutionEvaluationFailed,
                     exc_info=True,
                 )
                 raise AstrometryError.SolutionEvaluationFailedError(
-                    f"{image_info.id} Failed to evaluate solution for {os.path.basename(input_image)}: {e}"
+                    f"Failed to evaluate solution for {os.path.basename(input_image)}: {e}"
                 ) from e
             return idx, eval_result
 
@@ -1551,8 +1553,8 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             ]
             if failed:
                 image_info.SANITY = False
-                self.logger.warning(
-                    f"SANITY F for {image_info.id} by {', '.join(failed)}: "
+                image_info.logger.warning(
+                    f"SANITY F by {', '.join(failed)}: "
                     + ", ".join(f"{k}={v}" for k, v, _ in pointing_cards)
                     + f" ({os.path.basename(target_fits)})"
                 )
@@ -1862,7 +1864,7 @@ class ImageInfo:
         depth = depth - 0.5
 
         self.num_frac, self.n_det = get_source_num_frac(sci_cat, ref_cat, sci_zp=zp, depth=depth)
-        self.logger.info(f"{self.id}: Early QA: NUMFRAC = {self.num_frac}")
+        self.logger.info(f"Early QA: NUMFRAC = {self.num_frac}")
         return
 
     @property
