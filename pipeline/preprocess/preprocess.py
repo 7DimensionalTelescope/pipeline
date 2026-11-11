@@ -428,6 +428,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             ):
                 norminal = self._generate_masterframe(dtype, device_id, dry_run=dry_run)
                 if not norminal:
+                    if not dry_run:  # make the db aware of sanity F masters too
+                        rejected_id = self.create_image_qa_data(output_file, self.process_status_id)
+                        self.create_image_qa_dependencies(output_file, rejected_id)
                     self._fetch_masterframe(output_file, dtype, dry_run=dry_run)
                 else:
                     generated_now = True
@@ -772,7 +775,9 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 designated_file,
                 template,
                 flatdark_sanity,
-                ignored_masterframe_wall=ppflag.is_outside_masterframe_walls(designated_file, template, CALIB_TYPE_DARK),
+                ignored_masterframe_wall=ppflag.is_outside_masterframe_walls(
+                    designated_file, template, CALIB_TYPE_DARK
+                ),
             )
             return
 

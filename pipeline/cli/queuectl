@@ -55,17 +55,22 @@ def daemon_call(socket_path, command):
     return state if isinstance(state, dict) else {}
 
 
-def send_signal(unit, action):
-    """The signal contract for a daemon without the socket channel; "ERROR ..." when it could not be sent."""
+def unit_pid(unit):
+    """MainPID of a systemd unit on this host; 0 when it is not running."""
     try:
-        pid = int(
+        return int(
             subprocess.run(
                 ["systemctl", "show", "-p", "MainPID", "--value", unit], capture_output=True, text=True
             ).stdout.strip()
             or 0
         )
     except (OSError, ValueError):
-        pid = 0
+        return 0
+
+
+def send_signal(unit, action):
+    """The signal contract for a daemon without the socket channel; "ERROR ..." when it could not be sent."""
+    pid = unit_pid(unit)
     if not pid:
         return f"ERROR: no running {unit} here"
     try:
@@ -86,14 +91,21 @@ def db_processing(db_path):
         )
 
 
-def local_running():
-    """Reduction processes on this host — a worker has no scheduler DB."""
+def local_running(parent_pid=0):
+    """Reduction processes on this host — a worker has no scheduler DB. With the daemon's pid, only its own children
+    count: a task's fork pool (phot7ds mask workers) inherits the task's cmdline."""
     n = 0
     for pid in os.listdir("/proc"):
         if pid.isdigit():
             try:
                 with open(f"/proc/{pid}/cmdline", "rb") as f:
-                    n += bool(TASK_CMD.search(f.read().replace(b"\0", b" ").decode(errors="replace")))
+                    if not TASK_CMD.search(f.read().replace(b"\0", b" ").decode(errors="replace")):
+                        continue
+                if parent_pid:
+                    with open(f"/proc/{pid}/stat") as f:
+                        if int(f.read().rsplit(")", 1)[1].split()[1]) != parent_pid:
+                            continue
+                n += 1
             except OSError:
                 pass
     return n
@@ -124,7 +136,7 @@ def main():
     # fmt: on
     host = MAIN_HOST if on_origin else socket.gethostname().split(".")[0]
     have_db = bool(args.db) and os.path.exists(args.db)
-    running = (lambda: db_processing(args.db).get(host, 0)) if have_db else local_running
+    running = (lambda: db_processing(args.db).get(host, 0)) if have_db else (lambda: local_running(unit_pid(WORKER_UNIT)))
 
     if args.action == "status":
         if has_channel:
@@ -139,7 +151,7 @@ def main():
                 + (", ".join(f"{h}={n}" for h, n in sorted(db_processing(args.db).items())) or "nothing")
             )
         else:
-            print(f"{host}: {local_running()} reduction process(es) running")
+            print(f"{host}: {local_running(unit_pid(WORKER_UNIT))} reduction process(es) running")
         return 0
 
     if has_channel:

@@ -127,6 +127,7 @@ def tolerant_search(
     ignore_sanity_if_no_match=False,
     ignore_lenient_keys_if_no_match=False,
     logger=None,
+    library=None,
 ) -> tuple[str | None, RelaxationFlags]:
     """
     Search for a master frame matching the template.
@@ -148,7 +149,13 @@ def tolerant_search(
 
     def _search(search_template, **kwargs):
         return search_with_date_offsets(
-            search_template, max_offset=max_offset, future=future, n_binning=n_binning, logger=logger, **kwargs
+            search_template,
+            max_offset=max_offset,
+            future=future,
+            n_binning=n_binning,
+            logger=logger,
+            library=library,
+            **kwargs,
         )
 
     def _search_with_binning_tries(search_template, flags: RelaxationFlags, ignore_sanity=False, **kwargs):
@@ -243,6 +250,7 @@ def search_with_date_offsets(
     ignore_sanity=False,
     n_binning=None,
     logger=None,
+    library=None,
 ):
     """
     Search for files based on a template, modifying embedded dates with offsets.
@@ -314,7 +322,7 @@ def search_with_date_offsets(
         # if os.path.exists(modified_path):
         #     return modified_path
         if "*" in template:
-            matches = glob(modified_path)
+            matches = glob(modified_path) if library is None else library.glob(modified_path)
             # a master is binned down by an integer factor, never up
             unusable = [m for m in matches if n_binning and (nb := NameHandler(m).n_binning) and n_binning % nb]
             if unusable:
@@ -324,16 +332,16 @@ def search_with_date_offsets(
                 matches = [m for m in matches if m not in unusable]
             if matches:
                 if len(matches) == 1:
-                    if ignore_sanity or Checker().sanity_check(matches[0]):
+                    if ignore_sanity or (Checker() if library is None else library).sanity_check(matches[0]):
                         return matches[0]
                     continue
                 picked = _pick_master(matches, n_binning)
-                if ignore_sanity or Checker().sanity_check(picked):
+                if ignore_sanity or (Checker() if library is None else library).sanity_check(picked):
                     return picked
                 continue
         else:
-            if os.path.exists(modified_path):
-                if ignore_sanity or Checker().sanity_check(modified_path):
+            if (os.path if library is None else library).exists(modified_path):
+                if ignore_sanity or (Checker() if library is None else library).sanity_check(modified_path):
                     return modified_path
                 continue
 

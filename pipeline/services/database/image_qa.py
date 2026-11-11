@@ -24,6 +24,7 @@ from ...const import (
     SCIENCE_IMAGE_TYPES,
     IMAGE_GROUP_SCIENCE,
     IMAGE_GROUP_MASTERFRAME,
+    NAME_TYPE_MASTER,
 )
 
 
@@ -227,7 +228,12 @@ class ImageQATable:
                 if header_key in header:
                     setattr(cls, key, header[header_key])
 
-        if header["IMAGETYP"] == "LIGHT":
+        if "IMAGETYP" not in header and NameHandler(file).type.kind == NAME_TYPE_MASTER:
+            imagetyp = NameHandler(file).type.image_type  # old master darks (1.7.5, 1.10.43) carry no IMAGETYP card
+        else:
+            imagetyp = header["IMAGETYP"]
+
+        if imagetyp == "LIGHT":
             if str(header.get("FILTER", "")).lower() == WHITE_FILTER:
                 cls.image_type = IMAGE_TYPE_WHITE
             else:
@@ -237,7 +243,7 @@ class ImageQATable:
 
             cls.image_group = IMAGE_GROUP_SCIENCE
         else:
-            cls.image_type = header["IMAGETYP"].lower()
+            cls.image_type = imagetyp.lower()
             cls.image_group = IMAGE_GROUP_MASTERFRAME
 
         if cls.image_type != IMAGE_TYPE_WHITE:  # a white spans units: no one camera
