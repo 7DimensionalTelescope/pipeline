@@ -26,6 +26,7 @@ settings:
   factory_scratch:
   factory_scratch_cap_gb: 1200  # rotate oldest idle scratch trees above this total
   factory_autoclean:  # empty this config's factory after a fully successful run; empty = on when its disk is in FACTORY_AUTOCLEAN_DISKS
+  last_run_kwargs:  # flags of the last run as the queue passed them; null when not yet run or run from the Python API
 
 logging:
   level: INFO

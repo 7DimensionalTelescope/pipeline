@@ -41,6 +41,7 @@ preprocess:
 settings:
   is_too: false
   is_pipeline: true  # keep it true. preprocess is assumed to be pipeline
+  last_run_kwargs:  # flags of the last run as the queue passed them; null when not yet run or run from the Python API
 
 input: 
   masterframe_images: 

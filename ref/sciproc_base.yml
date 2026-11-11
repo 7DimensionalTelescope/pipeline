@@ -54,6 +54,7 @@ settings:
   factory_autoclean:  # empty this config's factory after a fully successful run; empty = on when its disk is in FACTORY_AUTOCLEAN_DISKS
   gpu_enabled: True
   verbose_gpu: True  # use logger later
+  last_run_kwargs:  # flags of the last run as the queue passed them; null when not yet run or run from the Python API
   
 logging:
   level: INFO
