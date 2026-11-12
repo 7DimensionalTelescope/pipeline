@@ -72,8 +72,6 @@ class ImageQATable:
     clipmin: Optional[float] = None
     clipmax: Optional[float] = None
     sigmean: Optional[float] = None
-    shifted: Optional[bool] = None
-    shftscr: Optional[float] = None
     edgevar: Optional[float] = None
     uniform: Optional[float] = None
     nhotpix: Optional[int] = None
@@ -135,6 +133,26 @@ class ImageQATable:
     nfltraw: Optional[int] = None
     nfltused: Optional[int] = None
     nfltuncf: Optional[int] = None
+
+    # raw level metrics
+    shifted: Optional[bool] = None
+    shftscr: Optional[float] = None
+    sbitc00: Optional[float] = None
+    sbitc01: Optional[float] = None
+    sbitc02: Optional[float] = None
+    sbitc03: Optional[float] = None
+    sbitc04: Optional[float] = None
+    sbitc05: Optional[float] = None
+    sbitc06: Optional[float] = None
+    sbitc07: Optional[float] = None
+    sbitc08: Optional[float] = None
+    sbitc09: Optional[float] = None
+    sbitc10: Optional[float] = None
+    sbitc11: Optional[float] = None
+    sbitc12: Optional[float] = None
+    sbitc13: Optional[float] = None
+    sbitc14: Optional[float] = None
+    sbitc15: Optional[float] = None
 
     # preprocess cards only a master frame carries (SHIFTED/SHFTSCR are stamped on singles too); the rest is common or science
     MASTERFRAME_COLUMNS = (

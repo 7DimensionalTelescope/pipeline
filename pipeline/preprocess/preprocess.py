@@ -410,6 +410,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         self._flatdark_ppflag = 0
         self._ingredient_cache = {}
         self._better_match_skipped = set()
+        self._human_rejected_skipped = set()
 
         for dtype in self.calib_types:
 
@@ -425,6 +426,12 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             generated_now = False
             if designated_file := self._designation_dispatch.get((self._current_group, dtype)):
                 self._adopt_designated_masterframe(designated_file, dtype, template=output_file)
+            elif input_file and os.path.exists(output_file) and self.human_rejected(output_file):
+                self.logger.info(
+                    f"[Group {self._current_group+1}] Master {dtype} {os.path.basename(output_file)} is human-rejected; "
+                    "left as it is"
+                )
+                self._fetch_masterframe(output_file, dtype, dry_run=dry_run)
             elif (
                 input_file
                 and (output_file not in self._generated_masterframes)
@@ -903,9 +910,10 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             f"[Group {self._current_group+1}] {len(reasons)} science image(s), policy={self._change_policy}: "
             + ", ".join(
                 f"{sum(1 for r in reasons if r == kind)} {kind}"
-                for kind in ("missing", "designated", "regenerated", "sanity", "better-match")
+                for kind in ("missing", "designated", "unidentified", "regenerated", "sanity", "better-match")
             )
             + f", {len(reasons) - sum(todo)} up to date"
+            + (f" ({len(self._human_rejected_skipped)} of them human-rejected)" if self._human_rejected_skipped else "")
         )
         if self._better_match_skipped and not self.overwrite:
             self.logger.info(

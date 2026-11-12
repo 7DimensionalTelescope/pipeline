@@ -30,13 +30,13 @@ def _stem(path) -> str:
     return os.path.basename(str(path)).removesuffix(".fits")
 
 
-def recorded_ingredient_ids(image) -> dict:
+def recorded_ingredient_ids(image) -> dict | None:
     """{ingredient basename: IMAGEID or None} from the IMCMB/IMCID cards; None = unidentified."""
     # from the FITS, never the .header sidecar: the sidecar is staged ahead of the pixels
     try:
         header = fits.getheader(image)
     except Exception:
-        return {}
+        return None
 
     recorded = {}
     for key in header:
@@ -91,10 +91,12 @@ def ingredient_change(
     cache: dict = None,
     designated=frozenset(),
 ):
-    """Why `image` must be rebuilt: "designated" | "regenerated" | "sanity" | "better-match" | None."""
+    """Why `image` must be rebuilt: "designated" | "unidentified" | "regenerated" | "sanity" | "better-match" | None."""
     from .ppflag import PPFLAG_SANITY_F_USED, get_ppflag_from_header
 
     recorded = recorded_ingredient_ids(image)
+    if recorded is None:
+        return None
 
     # explicit user intent outranks the unknown-provenance guard below
     for name in designated:
@@ -102,7 +104,7 @@ def ingredient_change(
             return "designated"
 
     if not recorded:
-        return None
+        return "unidentified"
 
     used_rejected = False
     sanity_known = True
@@ -111,6 +113,8 @@ def ingredient_change(
         if path is None:
             continue
         if was is None:
+            if ingredient_state(path, cache=cache)[0]:
+                return "unidentified"
             # used but unidentified: regeneration is invisible, and the sanity test would churn forever
             sanity_known = False
             continue
@@ -175,6 +179,9 @@ class ReprocessMixin:
         """Why a science output must be (re)produced, or None."""
         if not os.path.exists(output_file):
             return "missing"
+        if self.human_rejected(output_file):
+            self._human_rejected_skipped.add(output_file)
+            return None
         reason = self._ingredient_change(output_file, (self.bias_output, self.dark_output, self.flat_output))
         if reason == "better-match" and not self._better_match:
             self._better_match_skipped.add(output_file)

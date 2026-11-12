@@ -132,7 +132,7 @@ def combine_images_with_cpu(
         d = None
     joint_score = combined_shifted_score(raw_scores)
     joint_flag = any(raw_flags)
-    joint_sbitc = max(raw_sbitcs, key=lambda v: v[7])
+    joint_sbitc = [max(vs, key=abs) for vs in zip(*raw_sbitcs)]
 
     if subtract is not None:
         sub_arr = np.zeros_like(np_stack[0], dtype=np.float32)

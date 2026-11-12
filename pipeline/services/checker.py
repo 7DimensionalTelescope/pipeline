@@ -315,11 +315,17 @@ class Checker:
     def load_qa_criteria(self, category: Literal["masterframe", "science"] = const.IMAGE_GROUP_MASTERFRAME):
         try:
             category = self._dtype_to_category(category)  # in case input isnot category
-            criteria_file = os.path.join(const.REF_DIR, "qa", f"{category.lower()}.json")
+            criteria_file = os.path.join(const.REF_DIR, "qa", "preprocess.json")
             with open(criteria_file, "r") as f:
-                self.criteria = json.load(f)
-                self.loaded_category = category
-                return self.criteria
+                criteria = json.load(f)
+            raw = criteria.pop("RAW")
+            if category == const.IMAGE_GROUP_SCIENCE:
+                criteria_file = os.path.join(const.REF_DIR, "qa", "science.json")
+                with open(criteria_file, "r") as f:
+                    criteria = json.load(f)
+            self.criteria = {dtype: {**raw, **own} for dtype, own in criteria.items()}
+            self.loaded_category = category
+            return self.criteria
         except FileNotFoundError:
             raise RuntimeError(f"Criteria file not found: {criteria_file}")
         except json.JSONDecodeError as e:
@@ -558,6 +564,5 @@ def qa_criterion(key: str, dtype: str = "SCIENCE") -> dict:
     """One `{value, criteria, description}` entry of ref/qa/<category>.json, read once per process: the stages' own floors."""
     category = "masterframe" if dtype.upper() in {"BIAS", "DARK", "FLAT", "MASTERFRAME"} else "science"
     if category not in _QA_CRITERIA:
-        with open(os.path.join(const.REF_DIR, "qa", f"{category}.json"), "r") as f:
-            _QA_CRITERIA[category] = json.load(f)
+        _QA_CRITERIA[category] = Checker().load_qa_criteria(category)
     return _QA_CRITERIA[category][dtype.upper()][key]

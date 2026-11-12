@@ -219,6 +219,7 @@ class _Library:
         rebuilt = n_raw >= NUM_MIN_CALIB and (
             self.as_of is None or ((night, unit) in self.targets and _listed_enough(self, night, unit, name))
         )
+        rebuilt = rebuilt and not (sanity is False and human)
         regen = rebuilt and typ in (CALIB_TYPE_DARK, CALIB_TYPE_FLAT)
         if self.as_of is None and row is not None:
             rebuilt = rebuilt and is_below_min(pipe_ver, MIN_PREPROC_RUNTIME_VERSION)  # _resolve adds the ingredients
@@ -599,7 +600,7 @@ def _changed(library: _Library, path: str, answers: List[dict]) -> bool:
     """Whether a registered master's planned ingredients differ from its recorded edges, moved, or are rebuilt."""
     edges = _edges(library, path)
     if not edges:
-        return False  # records no ingredient, as ReprocessMixin._master_change
+        return True  # records no ingredient: "unidentified", as ReprocessMixin._master_change
     recorded = {_stem(source) for _, source, _, _ in edges}
     for answer in answers:
         rec = library.record(answer["source"])
@@ -607,7 +608,7 @@ def _changed(library: _Library, path: str, answers: List[dict]) -> bool:
             _resolve(library, answer["source"])
         if _stem(answer["path"]) not in recorded or (rec and rec["rebuilt"]):
             return True
-    return any(was and now and was != now for _, _, was, now in edges)
+    return any(now and was != now for _, _, was, now in edges)
 
 
 def _owner_dark_resolves(library: _Library, rec: dict) -> bool:

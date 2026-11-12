@@ -172,7 +172,7 @@ if __name__ == "__main__":
 
     joint_score = combined_shifted_score(scores)
     joint_flag = any(flags)
-    joint_sbitc = max(sbitcs, key=lambda v: v[7])
+    joint_sbitc = [max(vs, key=abs) for vs in zip(*sbitcs)]
 
     np_median, np_std, np_bpmask, combine_cards = combine_images_with_cupy(
         data,

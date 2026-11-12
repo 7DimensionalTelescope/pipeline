@@ -21,7 +21,7 @@ configs_to_check = [
     "7dt.swarp",
     "7ds_sepp.config",
     # "7dt.missfits",
-    "qa/masterframe.json",
+    "qa/preprocess.json",
     "qa/science.json",
     "zeropoints.json",
     "depths.json",
