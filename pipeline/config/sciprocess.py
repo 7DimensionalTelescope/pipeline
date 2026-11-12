@@ -243,9 +243,15 @@ class SciProcConfiguration(BaseConfig):
             return self.path.sciproc_multi_epoch_override_yml
         return None
 
+    @staticmethod
+    def expand_config_sections(sections: list[str] | None) -> list[str]:
+        """Section names; the token 'photometry' stands for the three photometry sections."""
+        photometry = [spec.config_section for spec in SCIPROCESS_REGISTRY.specs if spec.photometry_mode]
+        return [s for section in atleast_1d(sections) for s in (photometry if section == "photometry" else [section])]
+
     def overwrite_config_sections(self, sections: list[str]) -> bool:
         """Rebuild the named science sections from the template, keeping input_images and runtime_version; clear flags from the first affected stage onward."""
-        sections = list(atleast_1d(sections))
+        sections = self.expand_config_sections(sections)
         known = [spec.config_section for spec in SCIPROCESS_REGISTRY.specs]
         if unknown := [s for s in sections if s not in known]:
             raise ConfigurationError.ValueError(f"Unknown config sections {unknown}; choose from {sorted(set(known))}")
@@ -403,7 +409,7 @@ class SciProcConfiguration(BaseConfig):
         - ``input.calibrated_images`` (the seed image list)
 
         Everything else (``flag``, ``info``, ``logging``, ``astrometry``,
-        ``photometry``, ``imcoadd``, ``imsubtract``, ...) is rebuilt by
+        ``*_photometry``, ``imcoadd``, ``imsubtract``, ...) is rebuilt by
         :meth:`user_config`, which runs :meth:`initialize` on the seed images.
 
         Use this to recover from stale per-stage state (e.g. ``imcoadd.input_images: []``

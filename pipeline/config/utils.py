@@ -183,7 +183,7 @@ def get_or_set_key(config, key, default=None):
         return result
 
 
-def crossfilter_template(inherited_sections=("imcoadd", "photometry")) -> dict:
+def crossfilter_template(inherited_sections=(("imcoadd", "imcoadd"), ("photometry", "coadd_photometry"))) -> dict:
     """crossfilter_base.yml with its inherited stage sections composed on top of sciproc_base.yml."""
 
     def _read(name):
@@ -191,8 +191,8 @@ def crossfilter_template(inherited_sections=("imcoadd", "photometry")) -> dict:
             return yaml.load(f, Loader=yaml.FullLoader) or {}
 
     sciproc, template = _read("sciproc_base.yml"), _read("crossfilter_base.yml")
-    for section in inherited_sections:
-        template[section] = merge_dicts(copy.deepcopy(sciproc.get(section) or {}), template.get(section) or {})
+    for section, source in inherited_sections:
+        template[section] = merge_dicts(copy.deepcopy(sciproc.get(source) or {}), template.get(section) or {})
     return template
 
 

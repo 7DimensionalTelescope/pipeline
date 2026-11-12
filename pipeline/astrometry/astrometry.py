@@ -18,7 +18,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import ExitStack
 
 from .. import external
-from ..const import IMAGE_GROUP_SCIENCE
 from ..const.environ import REF_DIR, ASTREF_TMPFS_DIR
 from ..const.observation import PIXSCALE, DEFAULT_EXPTIME, HEADER_KEY_MAP
 from ..const.sciproc import ASTROMETRY_SPEC, REJECTION_PROCESS_HEADER_KEY, SCIPROCESS_REGISTRY
@@ -32,7 +31,7 @@ from ..config.utils import get_key
 from ..services.setup import BaseSetup
 from ..path.path import PathHandler
 from ..io.cfitsldac import write_ldac
-from ..services.database.handler import DatabaseHandler
+from ..services.database.handler import DatabaseHandler, database_failure
 from ..services.database.image_qa import ImageQATable
 from ..services.checker import Checker
 from ..services.logger import Logger
@@ -199,14 +198,14 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             raise AstrometryError.EmptyInputError("No input images remain after SANITY filter.")
 
         # Honor human verdicts only. Filter after the config is set, so the config keeps the full input record.
-        self.apply_inspection_filter_and_report()
+        self.apply_sanity_filter_and_report(current_process=ASTROMETRY_SPEC)
         if not self.input_images:
             self.logger.error(
-                "All input images are human-rejected (INSPCOMM with SANITY=False).",
+                "All input images are rejected: human-rejected or failing the preprocess QA.",
                 AstrometryError.EmptyInputAfterSanityRejection,
             )
             raise AstrometryError.EmptyInputAfterSanityRejectionError(
-                "All input images are human-rejected (INSPCOMM with SANITY=False)."
+                "All input images are rejected: human-rejected or failing the preprocess QA."
             )
 
         # set ImageInfo
@@ -407,6 +406,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 self.logger.error(
                     "All images rejected: image quality suspected.", AstrometryError.EmptyInputAfterSanityRejection
                 )
+                self._mirror_rejections()
                 raise AstrometryError.EmptyInputAfterSanityRejectionError(
                     "All images rejected: image quality suspected."
                 )
@@ -453,7 +453,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         idx_to_exclude = []
         for i, image_info in enumerate(self.images_info):
             image_info.set_early_qa_stats(sci_cat=image_info.prep_cat, ref_cat=self.config_node.astrometry.local_astref)
-            flag = self.apply_qa_criteria(header=fits.Header(image_info.early_qa_cards), dtype=IMAGE_GROUP_SCIENCE)
+            flag = self.apply_qa_criteria(header=fits.Header(image_info.early_qa_cards), dtype=ASTROMETRY_SPEC.name)
             image_info.SANITY = flag  # true if nothing to check
             if not image_info.sane:
                 idx_to_exclude.append(i)
@@ -484,6 +484,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 SCIPROCESS_REGISTRY.milestone_progress("astrometry", "all_rejected_early_qa"),
                 "rejected-all-by-early-qa",
             )
+            self._mirror_rejections()
             raise AstrometryError.EarlyQARejectionError("All images rejected by early QA.")
 
     def _finalize_astrometry_sanity(self, image_info: ImageInfo) -> None:
@@ -503,6 +504,17 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
     def _write_astrometry_sanity_rejection_to_header(self, image_path: str, cards: fits.Header = None) -> None:
         """Write SANITY=F and REJ_PROC so downstream (e.g. single photometry) can match on re-run."""
         machine_reject(image_path, ASTROMETRY_SPEC.name, cards)
+
+    def _mirror_rejections(self) -> None:
+        """Refresh the inputs' image_qa rows from their headers before an all-rejected raise."""
+        if not self.is_connected:
+            return
+        try:
+            for image_info, qa_id in zip(self.images_info, self.qa_ids):
+                qa_data = ImageQATable.from_file(image_info.image_path, process_status_id=self.process_status_id)
+                self.image_qa.update_data(qa_id, **qa_data.to_dict())
+        except Exception as e:
+            database_failure(self.logger, f"Failed to mirror the rejections into image_qa: {e}", e)
 
     def _solve_field_suite(
         self,
@@ -1545,17 +1557,19 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             solved_header = read_scamp_header(solved_head)
 
             polygon_header = polygon_info_header(image_info) if add_polygon_info else []
-            pointing_cards = [card for card in polygon_header if card[0] in ("PNTGDEV", "PADEV")]
+            qa_cards = [card for card in polygon_header if card[0] in ("PNTGDEV", "PADEV")]
+            if image_info.image_stats is not None:
+                qa_cards.append(("ELLIPMN", image_info.image_stats.ELLIPMN, None))
             failed = [
                 card[0]
-                for card in pointing_cards
-                if not self.apply_qa_criteria(header=fits.Header([card]), dtype=IMAGE_GROUP_SCIENCE)
+                for card in qa_cards
+                if not self.apply_qa_criteria(header={card[0]: card[1]}, dtype=ASTROMETRY_SPEC.name)
             ]
             if failed:
                 image_info.SANITY = False
                 image_info.logger.warning(
                     f"SANITY F by {', '.join(failed)}: "
-                    + ", ".join(f"{k}={v}" for k, v, _ in pointing_cards)
+                    + ", ".join(f"{k}={v}" for k, v, _ in qa_cards)
                     + f" ({os.path.basename(target_fits)})"
                 )
 

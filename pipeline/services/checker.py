@@ -1,14 +1,24 @@
 import json
 import os
 from astropy.io import fits
-from typing import List, Literal, Optional
+from typing import List, Literal, NamedTuple, Optional
 from enum import Enum, auto
 from typing import Optional
 
-from ..const.sciproc import REJECTION_PROCESS_HEADER_KEY, ProcessSpec, SCIPROCESS_REGISTRY
+from ..const.sciproc import (
+    ASTROMETRY_SPEC,
+    COADD_PHOTOMETRY_SPEC,
+    REJECTION_PROCESS_HEADER_KEY,
+    SINGLE_PHOTOMETRY_SPEC,
+    ProcessSpec,
+    SCIPROCESS_REGISTRY,
+)
 from ..config.utils import get_key
+from ..path.name import NameHandler
 from .. import const
 from .inspection import SANITY_COMMENT, machine_reject
+from .database.base import DatabaseError
+from .database.handler import database_failure
 
 
 class SanityAction(Enum):
@@ -25,13 +35,21 @@ class CurrentStage(Enum):
     CURRENT_STAGE_UNKNOWN = auto()
 
 
+class StartDecision(NamedTuple):
+    """A stage start's action on one input and the SANITY (with REJ_PROC) to write; None writes nothing."""
+
+    action: SanityAction
+    sanity: Optional[bool] = None
+    rej_proc: Optional[str] = None
+
+
 # TODO: extract out a clean mixin class. There's an instance usage in preprocess.utils.search_with_date_offsets.
 class Checker:
     """
     Mixin class that generates, reads, and filters on the "SANITY" key in image headers.
 
-    Existing SANITY values are normally trusted, but overwrite-enabled reruns can
-    recompute and refresh the header.
+    At a stage's start a human veto or an earlier stage's rejection is trusted; the rest is
+    judged on the criteria of the earlier stages.
     """
 
     def sanity_check(self, file_path: str = None, header: dict = None, dtype: str = None):
@@ -65,8 +83,7 @@ class Checker:
 
     def apply_sanity_filter_and_report(
         self,
-        dtype: Literal["science", "masterframe"] = const.IMAGE_GROUP_SCIENCE,  # Type of images for sanity check
-        current_process: Optional[ProcessSpec] = None,
+        current_process: ProcessSpec,
         overwrite: bool = False,
     ) -> bool:
         """
@@ -81,22 +98,25 @@ class Checker:
         original_count = len(self.input_images)
         original_images = self.input_images.copy()
         self.input_images, sanity_updates = self._filter_by_sanity(
-            self.input_images, dtype=dtype, current_process=current_process, overwrite=overwrite
+            self.input_images, current_process=current_process, overwrite=overwrite
         )
 
         filtered_count = len(self.input_images)
         input_has_changed = filtered_count != original_count
 
-        for img, sanity_value in sanity_updates.items():
+        for img, decision in sanity_updates.items():
             try:
-                if sanity_value:
+                if decision.sanity:
                     with fits.open(img, mode="update") as hdul:
-                        self.update_sanity_header(hdul[0].header, True, current_process=current_process)
+                        hdul[0].header["SANITY"] = (True, SANITY_COMMENT)
+                        hdul[0].header.remove(REJECTION_PROCESS_HEADER_KEY, ignore_missing=True)
                         hdul.flush()
                 else:
-                    machine_reject(img, current_process.name if current_process is not None else None)
-                self.logger.debug(f"Updated SANITY header to {sanity_value} for {os.path.basename(img)}")
-                self.sync_sanity_to_image_qa(img, sanity_value)
+                    machine_reject(img, decision.rej_proc)
+                self.logger.debug(f"Updated SANITY header to {decision.sanity} for {os.path.basename(img)}")
+                self.sync_sanity_to_image_qa(img, decision.sanity, decision.rej_proc)
+            except DatabaseError:
+                raise  # ENSURE_DB: sync_sanity_to_image_qa's failure is no header failure
             except Exception as e:
                 self.logger.warning(f"Failed to update SANITY header for {os.path.basename(img)}: {e}")
 
@@ -115,74 +135,19 @@ class Checker:
 
         return input_has_changed
 
-    def apply_inspection_filter_and_report(self) -> bool:
-        """
-        Drops only SANITY=False with INSPCOMM rejections from `self.input_images`.
-
-        For stages that must not run the full sanity filter but must still honor a human verdict.
-        """
-        if not self.input_images:
-            return False
-
-        filtered_images = []
-        for image in self.input_images:
-            try:
-                header: fits.Header = fits.getheader(image)
-                decision = self._sanity_action(header=header, overwrite=False, current_process=None)
-            except Exception as e:
-                self.logger.warning(
-                    f"Failed to check INSPCOMM for {os.path.basename(image)}: {e}. Including image in processing."
-                )
-                filtered_images.append(image)
-                continue
-
-            if decision == SanityAction.TRUST_SANITY_AND_DROP_IMAGE:
-                self.logger.info(
-                    f"Filtered out human-rejected image (INSPCOMM: {header.get('INSPCOMM')}): "
-                    f"{os.path.basename(image)}"
-                )
-            else:
-                filtered_images.append(image)
-
-        if len(filtered_images) == len(self.input_images):
-            return False
-
-        self.logger.info(
-            f"Filtered {len(self.input_images) - len(filtered_images)} human-rejected images "
-            f"({len(filtered_images)}/{len(self.input_images)} remaining)"
-        )
-        self.input_images = filtered_images
-
-        if self.input_images:
-            self._recreate_pathhandler_instance()
-
-        return True
-
     def _filter_by_sanity(
         self,
         images: List[str],
-        dtype: str = const.IMAGE_GROUP_SCIENCE,
-        current_process: Optional[ProcessSpec] = None,
+        current_process: ProcessSpec,
         overwrite: bool = False,
-    ) -> tuple[List[str], dict[str, bool]]:
+    ) -> tuple[List[str], dict[str, StartDecision]]:
         """
-        Filter images based on SANITY check from Checker.
-
-        If SANITY is False in the header, only reevaluate it on overwrite reruns
-        when the current process is before or matches REJ_PROC.
-        If SANITY is True or missing, recompute the SANITY from criteria, INSPCOMM or not.
-        If INSPCOMM is present beside SANITY=False, that is a human veto: drop the image
-        and never recompute, even when overwrite=True.
-
-        Args:
-            images: List of image file paths to filter
-            dtype: Type of images for sanity check ("science", "masterframe", etc.)
+        Filter images by `start_decision` on the image_qa row, or on the header when no row decides.
 
         Returns:
             Tuple of (filtered_images, sanity_updates) where:
             - filtered_images: List of image paths that pass SANITY check
-            - sanity_updates: Mapping of image path -> recomputed SANITY value that
-              should be written back to the FITS header
+            - sanity_updates: Mapping of image path -> decision whose SANITY should be written back
         """
         if not images:
             return images, {}
@@ -192,25 +157,48 @@ class Checker:
         # DB fast path: one query instead of one header read per image (~120 ms each on
         # NFS). image_qa.sanity is the recorded verdict; skipped on overwrite reruns,
         # which must re-evaluate from the header criteria.
-        db_sanity: dict = {}
+        names = {image: os.path.basename(image).replace(".fits", "") for image in images}
+        db_rows: dict = {}
+        row_rejected: set = set()
         trust_db = bool(get_key(getattr(self.config_node, "settings", None), "sanity_from_db", default=True))
+        # astrometry parses every input header right after its start check
+        trust_db = trust_db and current_process.name != ASTROMETRY_SPEC.name
         # below ~20 images the header reads win: a nightly 3-image stack never depends on
         # the DB at all, so daily reduction keeps zero new failure modes
         if trust_db and not overwrite and len(images) >= 20 and getattr(self, "is_connected", False):
+            order = stage_order()
+            keys = sorted(
+                {
+                    key
+                    for stage, rules in self.load_qa_criteria(const.IMAGE_GROUP_SCIENCE).items()
+                    if order.index(stage) < order.index(current_process.name)
+                    for key in rules
+                }
+            )
+            columns = ["image_name", "image_type", "sanity", "inspcomm", "rej_proc"] + [key.lower() for key in keys]
             try:
                 from .database.query import free_query
 
                 rows = free_query(
-                    "SELECT image_path, sanity FROM image_qa WHERE image_path = ANY(%s)",
-                    (list(images),),
+                    f"SELECT {', '.join(columns)} FROM image_qa WHERE image_name = ANY(%s)",
+                    (list(names.values()),),
                     statement_timeout_ms=15000,
                 )
-                db_sanity = {p: v for p, v in rows if v is not None}
+                # no verdict, or a rejection older than the rej_proc column: the header decides
+                db_rows = {
+                    row[0]: dict(zip(columns, row))
+                    for row in rows
+                    if row[2] is not None and not (row[2] is False and row[4] is None)
+                }
+                row_rejected = {row[0] for row in rows if row[2] is False and row[4] is None}
             except Exception as e:
-                self.logger.warning(f"image_qa SANITY lookup failed; reading headers instead: {e}")
-            if db_sanity:
+                if getattr(self, "is_too", False):
+                    self.logger.warning(f"image_qa SANITY lookup failed; reading headers instead: {e}")
+                else:
+                    database_failure(self.logger, f"image_qa SANITY lookup failed; reading headers instead: {e}", e)
+            if db_rows:
                 self.logger.info(
-                    f"SANITY from image_qa for {len(db_sanity)}/{len(images)} images -- may lag the "
+                    f"SANITY from image_qa for {len(db_rows)}/{len(images)} images -- may lag the "
                     "headers if edited out of band (should not happen in normal operations); "
                     "set settings.sanity_from_db: False to read headers"
                 )
@@ -219,24 +207,33 @@ class Checker:
         sanity_updates = {}
         for image in images:
             try:
-                if image in db_sanity:
-                    if db_sanity[image]:
-                        filtered_images.append(image)
+                if (row := db_rows.get(names[image])) is not None:
+                    values = {key: row[key.lower()] for key in keys} | {"FILENAME": os.path.basename(image)}
+                    decision = self.start_decision(
+                        row["sanity"], row["inspcomm"], row["rej_proc"], current_process, values, row["image_type"]
+                    )
+                else:
+                    # Read header once and check sanity
+                    header: fits.Header = fits.getheader(image)
+                    # has_inspcomm = "INSPCOMM" in header
+                    # existing_sanity: bool | None = header.get("SANITY")
+                    header["FILENAME"] = os.path.basename(image)
+                    if names[image] in row_rejected and "SANITY" not in header:
+                        decision = StartDecision(SanityAction.DROP_IMAGE)  # the row's verdict stands
                     else:
-                        self.logger.debug(f"Filtered out by image_qa SANITY=False: {os.path.basename(image)}")
-                    continue
-                # Read header once and check sanity
-                header: fits.Header = fits.getheader(image)
-                # has_inspcomm = "INSPCOMM" in header
-                # existing_sanity: bool | None = header.get("SANITY")
+                        decision = self.start_decision(
+                            header.get("SANITY"),
+                            header.get("INSPCOMM"),
+                            header.get(REJECTION_PROCESS_HEADER_KEY),
+                            current_process,
+                            header,
+                            NameHandler(image).type.image_type,
+                        )
 
-                decision = self._sanity_action(
-                    header=header,
-                    overwrite=overwrite,
-                    current_process=current_process,
-                )
+                if decision.sanity is not None:
+                    sanity_updates[image] = decision
 
-                match decision:
+                match decision.action:
                     case SanityAction.TRUST_SANITY_AND_DROP_IMAGE:
                         self.logger.debug(f"Trusting SANITY=False as-is: {os.path.basename(image)}")
                         continue
@@ -246,15 +243,7 @@ class Checker:
                         continue
 
                     case SanityAction.RECOMPUTE_SANITY:
-                        header["FILENAME"] = os.path.basename(image)
-                        computed_sanity = self.apply_qa_criteria(header=header, dtype=dtype)
-                        if computed_sanity:
-                            filtered_images.append(image)
-                            if overwrite and header.get("SANITY") is False:
-                                sanity_updates[image] = True
-                        else:
-                            sanity_updates[image] = False
-                            self.logger.debug(f"Filtered out image due to SANITY=False: {os.path.basename(image)}")
+                        filtered_images.append(image)
 
                 ###
 
@@ -322,8 +311,9 @@ class Checker:
             if category == const.IMAGE_GROUP_SCIENCE:
                 criteria_file = os.path.join(const.REF_DIR, "qa", "science.json")
                 with open(criteria_file, "r") as f:
-                    criteria = json.load(f)
-            self.criteria = {dtype: {**raw, **own} for dtype, own in criteria.items()}
+                    self.criteria = {const.CONFIG_TYPE_PREPROCESS: raw, **json.load(f)}
+            else:
+                self.criteria = {dtype: {**raw, **own} for dtype, own in criteria.items()}
             self.loaded_category = category
             return self.criteria
         except FileNotFoundError:
@@ -344,7 +334,7 @@ class Checker:
 
         `dtype` in Preprocess can be directly passed on to this method.
 
-        dtype: BIAS, DARK, FLAT, SCIENCE - top level json keys
+        dtype: BIAS, DARK, FLAT; a stage section, an image type (its judging stages) or SCIENCE (every stage)
         category: masterframe, science - json filenames
         """
         dtype = self._resolve_dtype(dtype=dtype)
@@ -353,7 +343,7 @@ class Checker:
         if not hasattr(self, "criteria") or self.criteria is None or self.loaded_category != category:
             self.load_qa_criteria(category=category)
 
-        criteria = self.criteria[dtype.upper()]
+        criteria = _select_criteria(self.criteria, dtype)
 
         sanity = True
 
@@ -406,7 +396,7 @@ class Checker:
 
         return sanity
 
-    def sync_sanity_to_image_qa(self, image: str, sanity: bool) -> None:
+    def sync_sanity_to_image_qa(self, image: str, sanity: bool, rej_proc: Optional[str] = None) -> None:
         """Mirror a SANITY flip into image_qa; they are not synced otherwise because self.input_images miss the rejected images."""
         if not getattr(self, "is_connected", False) or getattr(self, "image_qa", None) is None:
             return
@@ -416,9 +406,11 @@ class Checker:
             if qa_id is None:
                 self.logger.debug(f"No image_qa row for {name}; SANITY={sanity} recorded in the header only")
                 return
-            self.image_qa.update_data(qa_id, sanity=sanity)
+            self.image_qa.update_data(qa_id, sanity=sanity, rej_proc=rej_proc if sanity is False else "None")
         except Exception as e:
-            self.logger.warning(f"Failed to mirror SANITY={sanity} for {os.path.basename(image)} into image_qa: {e}")
+            database_failure(
+                self.logger, f"Failed to mirror SANITY={sanity} for {os.path.basename(image)} into image_qa: {e}", e
+            )
 
     def update_sanity_header(
         self,
@@ -494,34 +486,34 @@ class Checker:
             return CurrentStage.AT_REJECTION
         return CurrentStage.AFTER_REJECTION
 
-    def _sanity_action(
+    def start_decision(
         self,
-        header: fits.Header,
-        overwrite: bool,
-        current_process: Optional[ProcessSpec],
-    ) -> SanityAction:
-        has_inspcomm = "INSPCOMM" in header
-        existing_sanity = header.get("SANITY")
+        sanity: Optional[bool],
+        inspcomm: Optional[str],
+        rej_proc: Optional[str],
+        stage: ProcessSpec | str,
+        values,
+        image_type: str,
+    ) -> StartDecision:
+        """Veto or earlier REJ_PROC: drop; else the earlier stages' criteria on `values` reject or admit."""
+        order = stage_order()
+        position = order.index(getattr(stage, "name", stage))
+        rej_proc = (rej_proc or "").strip()
 
-        if has_inspcomm and existing_sanity is False:
-            return SanityAction.TRUST_SANITY_AND_DROP_IMAGE
+        if sanity is False and inspcomm is not None:
+            return StartDecision(SanityAction.TRUST_SANITY_AND_DROP_IMAGE)
 
-        if existing_sanity is False:
-            if not overwrite or current_process is None:
-                return SanityAction.DROP_IMAGE
+        # LEAD: a SANITY F with no or an unknown REJ_PROC is judged like a void one
+        if sanity is False and rej_proc in order and order.index(rej_proc) < position:
+            return StartDecision(SanityAction.DROP_IMAGE)
 
-            relation = self._current_stage(header, current_process)
+        for owner in judging_stages(image_type):
+            if order.index(owner) < position and not self.apply_qa_criteria(values, dtype=owner):
+                return StartDecision(SanityAction.DROP_IMAGE, False, owner)
 
-            if relation in {
-                CurrentStage.REJECTION_STAGE_UNKNOWN,
-                CurrentStage.BEFORE_REJECTION,
-                CurrentStage.AT_REJECTION,
-            }:
-                return SanityAction.RECOMPUTE_SANITY
-
-            return SanityAction.DROP_IMAGE
-
-        return SanityAction.RECOMPUTE_SANITY
+        # a stage that judges the image at its end leaves a voided rejection to that judgment
+        cleared = sanity is False and order[position] not in judging_stages(image_type)
+        return StartDecision(SanityAction.RECOMPUTE_SANITY, True if cleared else None)
 
     def _resolve_dtype(
         self, dtype: Literal["bias", "dark", "flat", "masterframe", "science"] = None
@@ -560,9 +552,33 @@ class Checker:
 _QA_CRITERIA = {}
 
 
+def stage_order() -> tuple[str, ...]:
+    """REJ_PROC stage names in chain order."""
+    return (const.CONFIG_TYPE_PREPROCESS, *(spec.name for spec in SCIPROCESS_REGISTRY.specs))
+
+
+def judging_stages(image_type: str) -> tuple[str, ...]:
+    """Stages whose criteria judge an image type, in chain order."""
+    if image_type == const.IMAGE_TYPE_SINGLE:
+        return (const.CONFIG_TYPE_PREPROCESS, ASTROMETRY_SPEC.name, SINGLE_PHOTOMETRY_SPEC.name)
+    if image_type == const.IMAGE_TYPE_COADD:
+        return (COADD_PHOTOMETRY_SPEC.name,)
+    return ()
+
+
+def _select_criteria(criteria: dict, dtype: str) -> dict:
+    """A master type's section, a stage's, an image type's judging stages', or every stage's for SCIENCE."""
+    if dtype.lower() in criteria:
+        return criteria[dtype.lower()]
+    if dtype.upper() in criteria or dtype.upper() == "MASTERFRAME":
+        return criteria[dtype.upper()]
+    stages = criteria if dtype.upper() == "SCIENCE" else judging_stages(dtype.lower())
+    return {key: rule for stage in stages for key, rule in criteria[stage].items()}
+
+
 def qa_criterion(key: str, dtype: str = "SCIENCE") -> dict:
     """One `{value, criteria, description}` entry of ref/qa/<category>.json, read once per process: the stages' own floors."""
     category = "masterframe" if dtype.upper() in {"BIAS", "DARK", "FLAT", "MASTERFRAME"} else "science"
     if category not in _QA_CRITERIA:
         _QA_CRITERIA[category] = Checker().load_qa_criteria(category)
-    return _QA_CRITERIA[category][dtype.upper()][key]
+    return _select_criteria(_QA_CRITERIA[category], dtype)[key]

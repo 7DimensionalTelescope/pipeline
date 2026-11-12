@@ -14,7 +14,7 @@ from ..const import EGAIN_2750, FILTERS, GAIA_REF_DIR, REF_DIR, ZP_MAX_AT
 from ..path.path import PathHandler
 
 if TYPE_CHECKING:
-    from ..config._sciproc_stubs import PhotometryNode
+    from ..config._sciproc_stubs import CoaddPhotometryNode, DifferencePhotometryNode, SinglePhotometryNode
 
 
 @njit
@@ -379,7 +379,7 @@ def get_mag_key(aperture_key: str) -> tuple:
 
 def get_sex_options(
     image: str,
-    phot_conf: PhotometryNode,
+    phot_conf: SinglePhotometryNode | CoaddPhotometryNode | DifferencePhotometryNode,
     egain: float,
     peeing: float,
     pixscale: float,
@@ -622,7 +622,7 @@ def color_term_test(header, alleged: str) -> tuple | None:
 
 
 def filter_check_failures(header, alleged: str, limit, exptime, filter_check: dict) -> list:
-    """The (key, value, reason) of every test switched on in the config's photometry.filter_check that fails."""
+    """The (key, value, reason) of every test switched on in the photometry section's filter_check that fails."""
     tests = {
         "zero_point_error": lambda: zero_point_error_test(
             header, alleged, filter_check["min_separable_wavelength"], filter_check["sigma_factor"]

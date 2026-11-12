@@ -24,6 +24,7 @@ from pipeline.path.path import PathHandler
 from pipeline.run import run_crossfilter_reduction, run_scidata_reduction
 from pipeline.services.database import free_query
 from pipeline.services.pipeline_lock import enforce_pipeline_lock
+from pipeline.services.version_check import recorded_version
 from pipeline.version import MIN_SCIPROC_RUNTIME_VERSION_MAP, is_below_min
 
 # parents come from the same filter set WhiteImage counts, so widening the guard widens the campaign
@@ -134,9 +135,9 @@ def parent_plan(science_configs):
                     get_key(node.imcoadd, "runtime_version"),
                     MIN_SCIPROC_RUNTIME_VERSION_MAP[COADD_SPEC.config_section],
                 ),
-                # the photometry stamp is shared with single_photometry, so it is tested on its own stage
+                # the coadd_photometry stamp, tested on its own stage
                 "photometry_outdated": is_below_min(
-                    get_key(node.photometry, "runtime_version"),
+                    recorded_version(node, COADD_PHOTOMETRY_SPEC.config_section),
                     MIN_SCIPROC_RUNTIME_VERSION_MAP[COADD_PHOTOMETRY_SPEC.config_section],
                 ),
             }

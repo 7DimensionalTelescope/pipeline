@@ -197,8 +197,8 @@ def select_configs_by_min_version(include_errors: bool = False, exclude_queued: 
         ORDER BY count(*) OVER (PARTITION BY object, nightdate) >= 3 DESC, nightdate DESC NULLS LAST, object, filter
         """,
         (
-            MIN_SCIPROC_RUNTIME_VERSION_MAP["photometry"],
-            MIN_SCIPROC_RUNTIME_VERSION_MAP["photometry"],
+            MIN_SCIPROC_RUNTIME_VERSION_MAP["single_photometry"],
+            MIN_SCIPROC_RUNTIME_VERSION_MAP["single_photometry"],
             MIN_SCIPROC_RUNTIME_VERSION_MAP["imcoadd"],
             include_errors,
             MIN_SCIPROC_RUNTIME_VERSION_MAP["imcoadd"],
@@ -287,7 +287,7 @@ def select_filter_check_rerun_candidates(versions: Iterable[str], filter_check: 
     """Singles processed by `versions` whose stored image_qa cards fail the current filter check, with their science configs: the
     zero-point test (beyond min_separable_wavelength, INF_DEZF > sigma_factor x (EZP_AUTO - INF_DEZF)) or the depth test (ZP_AUTO
     above the filter's zp_max at the exposure; gain-2750 frames only, image_qa holds no EGAIN); a human-vetoed False is left alone.
-    `filter_check` defaults to photometry.filter_check of ref/sciproc_base.yml. Columns: config_file, image_name, object, nightdate,
+    `filter_check` defaults to single_photometry.filter_check of ref/sciproc_base.yml. Columns: config_file, image_name, object, nightdate,
     filter, inf_filt, inf_dezf, ezp_auto, zp_auto, sanity, test (zero_point_error | zp_excursion | both)."""
     import numpy as np
     import pandas as pd
@@ -295,7 +295,8 @@ def select_filter_check_rerun_candidates(versions: Iterable[str], filter_check: 
 
     if filter_check is None:
         with open(os.path.join(const.REF_DIR, "sciproc_base.yml"), encoding="utf-8") as stream:
-            filter_check = yaml.safe_load(stream)["photometry"]["filter_check"]
+            base = yaml.safe_load(stream)
+        filter_check = (base.get("single_photometry") or base["photometry"])["filter_check"]
     rows = free_query(
         """
         SELECT p.config_file, s.image_name, p.object, p.nightdate::text, s.filter, s.inf_filt, s.inf_dezf, s.ezp_auto, s.zp_auto,

@@ -71,7 +71,7 @@ def process_image_with_cupy(obs, bias, dark, flat, output, device_id, n_head_blo
                 sbitc = sticky_bit_contrast(raw)
                 d = raw.astype(np.float32)
                 f, s = check_shifted_overscan(d)
-                prepare_raw_qa_header(out_path, f, s, sbitc)
+                prepare_raw_qa_header(out_path, f, s, sbitc, judge=True)
                 batch_data.append(d)
 
             print(

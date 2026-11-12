@@ -19,11 +19,12 @@ from ..config import PreprocConfiguration
 from ..config.utils import get_key
 from ..services.setup import BaseSetup
 from ..const import HEADER_KEY_MAP, CALIB_TYPE_BIAS, CALIB_TYPE_DARK, CALIB_TYPE_FLAT, CALIB_TYPES, NAME_TYPE_MASTER
+from ..const.sciproc import REJECTION_PROCESS_HEADER_KEY
 from ..services.utils import acquire_available_gpu
 from ..services.checker import Checker
 from ..services.database.image_qa import ImageQATable
-from ..services.database.handler import DatabaseHandler
-from ..utils.header import add_padding, get_header
+from ..services.database.handler import DatabaseHandler, database_failure
+from ..utils.header import add_padding, get_header, read_header_file, update_padded_header_smart
 from ..errors import PreprocessError, MasterFrameNotFoundError
 from ..path import PathHandler, NameHandler
 from .reprocess import ReprocessMixin
@@ -242,6 +243,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
 
             threads_for_making_plots = []
             failed_groups = []
+            self._n_remade = 0
+            self._n_carried = 0
             for i in range(self._n_groups):
                 self.logger.debug("\n" + "#" * 100 + f"\n{' '*30}Start processing group {i+1} / {self._n_groups}\n" + "#" * 100)  # fmt: skip
                 self.logger.debug(f"[Group {i+1}] [filter: exptime] {PathHandler.get_group_info(self.raw_groups[i])}")
@@ -285,6 +288,12 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
 
                     if i < self._n_groups - 1:
                         self.proceed_to_next_group()
+
+            if self._n_remade:
+                self.logger.warning(
+                    f"{self._n_remade} existing science image(s) were re-made; {self._n_carried} carry the science "
+                    f"cards of their previous version (PREVID), {self._n_remade - self._n_carried} do not"
+                )
 
             if make_plots:
                 for t in threads_for_making_plots:
@@ -426,7 +435,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             generated_now = False
             if designated_file := self._designation_dispatch.get((self._current_group, dtype)):
                 self._adopt_designated_masterframe(designated_file, dtype, template=output_file)
-            elif input_file and os.path.exists(output_file) and self.human_rejected(output_file):
+            elif input_file and self._frozen(output_file):
                 self.logger.info(
                     f"[Group {self._current_group+1}] Master {dtype} {os.path.basename(output_file)} is human-rejected; "
                     "left as it is"
@@ -913,7 +922,11 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 for kind in ("missing", "designated", "unidentified", "regenerated", "sanity", "better-match")
             )
             + f", {len(reasons) - sum(todo)} up to date"
-            + (f" ({len(self._human_rejected_skipped)} of them human-rejected)" if self._human_rejected_skipped else "")
+            + (
+                f" ({len(self._human_rejected_skipped)} of them human-rejected)"
+                if self._human_rejected_skipped and not self.overwrite
+                else ""
+            )
         )
         if self._better_match_skipped and not self.overwrite:
             self.logger.info(
@@ -975,6 +988,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 n_workers=n_workers,
                 n_head_blocks=n_head_blocks,
             )
+        self._n_remade = (self._n_remade or 0) + sum(1 for r in reasons if r != "missing" and (r or self.overwrite))
+        self._n_carried = (self._n_carried or 0) + self._carry_over_science_cards(output_files)
 
         self.logger.info(
             f"[Group {self._current_group+1}] Completed data reduction for {len(self.sci_input)} "
@@ -993,8 +1008,10 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                     qa_id = self.create_image_qa_data(processed_file, self.process_status_id)
                     self.create_image_qa_dependencies(processed_file, qa_id)
                 except Exception as e:
-                    self.logger.warning(
-                        f"[Group {self._current_group+1}] image_qa registration of {os.path.basename(processed_file)} failed: {e}"
+                    database_failure(
+                        self.logger,
+                        f"[Group {self._current_group+1}] image_qa registration of {os.path.basename(processed_file)} failed: {e}",
+                        e,
                     )
 
         # for raw_file, processed_file in zip(self.sci_input, self.sci_output):
@@ -1006,6 +1023,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
         #     prep_utils.update_header_by_overwriting(processed_file, header)
 
     def prepare_header(self, dry_run: bool = False):
+        self._previous_headers = {}
         if dry_run:
             self.logger.info(
                 f"[Group {self._current_group+1}] Would write updated headers to processed files: {self.sci_output} (DRY RUN)"
@@ -1054,11 +1072,72 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             if verdict := verdicts.get(processed_file):
                 header["SANITY"] = (verdict[0], SANITY_COMMENT)
                 header[INSPCOMM_KEY] = (verdict[1], INSPCOMM_COMMENT)
+            n_content = len(header.cards)
             header = add_padding(header, n_head_blocks, copy_header=True)
             self.logger.debug(
                 f"Header size: {(x := len(header.tostring()))} bytes, {x//2880} blocks + {(x%2880)/80} lines"
             )
+            # the previous science header (solved or rejected) stays as <stem>.header.prev until it is carried over
+            try:
+                previous = fits.getheader(processed_file) if os.path.exists(processed_file) else {}
+            except Exception as e:
+                self.logger.debug(f"Previous header of {os.path.basename(processed_file)} not kept: {e}")
+                previous = {}
+            if "ASTIRMS1" in previous or REJECTION_PROCESS_HEADER_KEY in previous:
+                prep_utils.write_header(PathHandler(processed_file).preprocess.header + ".prev", previous)
+                self._previous_headers[processed_file] = previous
+            elif os.path.exists(processed_file):
+                prev_file = PathHandler(processed_file).preprocess.header + ".prev"
+                if os.path.exists(prev_file):
+                    try:
+                        self._previous_headers[processed_file] = read_header_file(prev_file)
+                    except Exception as e:
+                        self.logger.debug(f"Previous header {os.path.basename(prev_file)} not read: {e}")
+            if processed_file in self._previous_headers:  # room in the padding for the cards carried over
+                try:
+                    written = header.copy()
+                    written.update({key: True for key in ("SHIFTED", "SHFTSCR")})
+                    written.update({f"SBITC{k:02d}": True for k in range(16)})
+                    written = fits.PrimaryHDU(np.zeros((1, 1), np.float32), written).header
+                    cards = self._carried_cards(self._previous_headers[processed_file], written)
+                    n_images = len(cards.tostring(endcard=False, padding=False)) // 80
+                    header = add_padding(header, max(n_head_blocks, -(-(n_content + n_images) // 36) + 1))
+                except Exception as e:
+                    self.logger.debug(f"Header of {os.path.basename(processed_file)} not sized for the carry-over: {e}")
             prep_utils.write_header(processed_file, header)
+
+    def _carry_over_science_cards(self, output_files: list[str]) -> int:
+        """Previous science cards the new FITS lacks, plus PREVID, into the FITS only; count of files done."""
+        n_carried = 0
+        for processed_file in output_files:
+            if (previous := (self._previous_headers or {}).get(processed_file)) is None:
+                continue
+            try:
+                cards = self._carried_cards(previous, fits.getheader(processed_file))
+                update_padded_header_smart(processed_file, cards)
+                n_carried += 1
+                if os.path.exists(prev_file := PathHandler(processed_file).preprocess.header + ".prev"):
+                    os.remove(prev_file)
+            except Exception as e:
+                self.logger.warning(
+                    f"[Group {self._current_group+1}] Carry-over of the science cards of {os.path.basename(processed_file)} not completed: {e}"
+                )
+        return n_carried
+
+    def _carried_cards(self, previous: fits.Header, new: fits.Header) -> fits.Header:
+        """The cards the carry-over adds to `new`: previous science cards it lacks, plus PREVID."""
+        from ..const import CONFIG_TYPE_PREPROCESS
+        from ..services.inspection import INSPCOMM_KEY
+
+        cards = fits.Header(
+            [c for c in previous.cards if c.keyword not in ("", "COMMENT", "HISTORY") and c.keyword not in new]
+        )
+        # this run judged the RAW criteria anew: preprocess's own earlier rejection is not carried
+        if previous.get(REJECTION_PROCESS_HEADER_KEY) == CONFIG_TYPE_PREPROCESS and INSPCOMM_KEY not in previous:
+            for key in ("SANITY", REJECTION_PROCESS_HEADER_KEY):
+                cards.remove(key, ignore_missing=True)
+        cards["PREVID"] = (previous.get("PREVID", previous["IMAGEID"]), "IMAGEID the science cards are for")
+        return cards
 
     def _noise_quantile_cards(self, dark: str, bias: str) -> dict:
         """The master dark's NOISQ cards for its science frames; a dark that predates them gets them from its sigma maps, once."""

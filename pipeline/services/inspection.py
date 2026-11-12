@@ -2,7 +2,7 @@
 Human inspection verdicts: image_qa, FITS headers, and process_status in one call.
 
 A verdict is `SANITY` plus an `INSPCOMM` comment. `INSPCOMM` beside `SANITY=False` is a
-sanity F with INSPCOMM (human veto): final, never recomputed (see `Checker._sanity_action`). `INSPCOMM` beside
+sanity F with INSPCOMM (human veto): final, never recomputed (see `Checker.start_decision`). `INSPCOMM` beside
 `SANITY=True` is recomputed by the machine like any other frame and, when
 it rejects, `machine_reject` removes the comment. This module is the one authorized way to
 write a verdict: `image_qa.inspcomm` is the durable copy, which `Preprocess.prepare_header`
@@ -23,7 +23,7 @@ from typing import List, Optional, Union
 
 from astropy.io import fits
 
-from ..const import CALIB_TYPES, NAME_TYPE_MASTER
+from ..const import CALIB_TYPES, NAME_TYPE_MASTER, SCIENCE_IMAGE_TYPES
 from ..const.sciproc import REJECTION_PROCESS_HEADER_KEY
 from ..utils.header import (
     read_header_file,
@@ -182,7 +182,10 @@ def revoke_inspection(images: Union[str, List[str]], use_database: bool = True, 
             restored = checker.apply_qa_criteria(
                 header=header,
                 dtype=(
-                    kind.image_type if kind.kind == NAME_TYPE_MASTER and kind.image_type in CALIB_TYPES else "science"
+                    kind.image_type
+                    if (kind.kind == NAME_TYPE_MASTER and kind.image_type in CALIB_TYPES)
+                    or kind.image_type in SCIENCE_IMAGE_TYPES
+                    else "science"
                 ),
             )
         report["sanity"][image] = restored

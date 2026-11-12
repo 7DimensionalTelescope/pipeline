@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..logger import Logger
+from .base import DatabaseError
 from .too import TooDB
 from .process_status import ProcessStatus, dispatch_host
 from .image_qa import ImageQA
@@ -20,11 +21,22 @@ from ...const import (
     CALIB_TYPE_BIAS,
     CALIB_TYPE_DARK,
     CALIB_TYPE_FLAT,
+    ENSURE_DB,
     IMAGE_TYPE_SINGLE,
 )
 
 if TYPE_CHECKING:
     from ...config import ConfigNode
+
+
+def database_failure(logger, message: str, error: Exception | None, *log_args) -> None:
+    """ENSURE_DB: raise DatabaseError from error; otherwise the site's warning (print without a logger)."""
+    if ENSURE_DB:
+        raise DatabaseError(message) from error
+    if logger is None:
+        print(f"[WARNING] {message}")
+    else:
+        logger.warning(message, *log_args)
 
 
 class DatabaseHandler:
@@ -157,7 +169,12 @@ class DatabaseHandler:
         """Reads image header to generate image QA data"""
 
         if not self.is_connected:
-            self.logger.warning(f"Skipping QA data creation: process_status_id is not set")
+            from ...config.utils import get_key
+
+            if self.is_too or not get_key(self, "config_node.settings.is_pipeline", False):
+                self.logger.warning(f"Skipping QA data creation: process_status_id is not set")
+            else:
+                database_failure(self.logger, f"Skipping QA data creation: process_status_id is not set", None)
             return None
 
         try:
@@ -183,14 +200,14 @@ class DatabaseHandler:
                 self.logger.debug(f"Synced {n} image_qa_dependency rows for qa_id={qa_id}")
             return n
         except Exception as e:
-            self.logger.warning(f"Failed to sync image_qa_dependency for qa_id={qa_id}: {e}")
+            database_failure(self.logger, f"Failed to sync image_qa_dependency for qa_id={qa_id}: {e}", e)
             return 0
 
     def mirror_config_dependencies(self, edges) -> int:
         """Best-effort mirror of config-level dependency edges into postgres.
 
         ``edges`` is an iterable of ``(derived_config_name, source_config_name,
-        dependency_role)``.  Never raises: the scheduler's own store remains
+        dependency_role)``.  Never raises unless ENSURE_DB: the scheduler's own store remains
         authoritative, so a database outage must not break callers.
         """
         if (
@@ -205,14 +222,14 @@ class DatabaseHandler:
                 self.logger.debug(f"Mirrored {n} process_status_dependency rows")
             return n
         except Exception as e:
-            self.logger.warning(f"Failed to mirror process_status_dependency: {e}")
+            database_failure(self.logger, f"Failed to mirror process_status_dependency: {e}", e)
             return 0
 
     def sync_config_dependencies(self, process_status_id: int = None) -> int:
         """Refresh this config's dependency rows from the products it actually wrote.
 
         Called at the end of every stage that registers images, so the edges follow
-        reprocessing without depending on how the config was launched.  Never raises:
+        reprocessing without depending on how the config was launched.  Never raises unless ENSURE_DB:
         dependency bookkeeping must not fail a run that produced good data.
         """
         if (
@@ -230,7 +247,7 @@ class DatabaseHandler:
                 self.logger.debug(f"Synced {n} process_status_dependency rows from products")
             return n
         except Exception as e:
-            self.logger.warning(f"Failed to sync process_status_dependency: {e}")
+            database_failure(self.logger, f"Failed to sync process_status_dependency: {e}", e)
             return 0
 
     def update_image_qa_data(self, image_qa_id: int, data):

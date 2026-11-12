@@ -321,7 +321,7 @@ def process_image_with_cpu(
         for image_data, out_path in zip(batch_data, out_paths):
             shifted_flag, shifted_score = check_shifted_overscan(image_data)
             sbitc = sticky_bit_contrast(image_data.astype(np.uint16))  # float32 holds uint16 raw values exactly
-            prepare_raw_qa_header(out_path, shifted_flag, shifted_score, sbitc)
+            prepare_raw_qa_header(out_path, shifted_flag, shifted_score, sbitc, judge=True)
             processed_data = reduction_kernel_cpu(image_data, subtractive, multiplicative, h, w)
             processed_batch.append(processed_data)
 

@@ -60,7 +60,7 @@ if TYPE_CHECKING:
         solvefield_timeout: int
         satellite_mask: dict
 
-    class PhotometryNode(ConfigNode):
+    class SinglePhotometryNode(ConfigNode):
         input_images: Any
         runtime_version: Any
         use_weight_map: bool
@@ -136,10 +136,52 @@ if TYPE_CHECKING:
         convolve: Any
         target_seeing: Any
 
+    class CoaddPhotometryNode(ConfigNode):
+        input_images: Any
+        runtime_version: Any
+        use_weight_map: bool
+        ref_cat: Any
+        query_radius: float
+        match_radius: float
+        photfraction: float
+        refcatname: str
+        refqueryradius: float
+        ref_mag_lower: int
+        ref_mag_upper: float
+        ref_mag_err_upper: float
+        flagcut: int
+        check: bool
+        filters_to_check: Any
+        filter_check: dict
+        satur_margin: float
+        sex_vars: dict
+        satellite_mask: dict
+
     class ImsubtractNode(ConfigNode):
         input_image: Any
         runtime_version: Any
         reference_image: Any
+
+    class DifferencePhotometryNode(ConfigNode):
+        input_images: Any
+        runtime_version: Any
+        use_weight_map: bool
+        ref_cat: Any
+        query_radius: float
+        match_radius: float
+        photfraction: float
+        refcatname: str
+        refqueryradius: float
+        ref_mag_lower: int
+        ref_mag_upper: float
+        ref_mag_err_upper: float
+        flagcut: int
+        check: bool
+        filters_to_check: Any
+        filter_check: dict
+        satur_margin: float
+        sex_vars: dict
+        satellite_mask: dict
 
     class SciProcNode(ConfigNode):
         name: Any
@@ -151,6 +193,8 @@ if TYPE_CHECKING:
         logging: LoggingNode
         input: InputNode
         astrometry: AstrometryNode
-        photometry: PhotometryNode
+        single_photometry: SinglePhotometryNode
         imcoadd: ImcoaddNode
+        coadd_photometry: CoaddPhotometryNode
         imsubtract: ImsubtractNode
+        difference_photometry: DifferencePhotometryNode

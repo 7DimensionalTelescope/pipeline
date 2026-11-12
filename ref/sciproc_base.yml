@@ -90,7 +90,7 @@ astrometry:
     enabled: true
     threshold_scale: 1.0
 
-photometry:
+single_photometry:
   input_images:
   runtime_version:
   use_weight_map: False  # attach <image>_weight.fits as MAP_WEIGHT; off = historical weightless photometry
@@ -190,9 +190,71 @@ imcoadd:
   convolve: 
   target_seeing:  # auto if it's empty or smaller than max seeing
 
+coadd_photometry:
+  input_images:
+  runtime_version:
+  use_weight_map: False  # attach <image>_weight.fits as MAP_WEIGHT; off = historical weightless photometry
+  ref_cat:  # for RIS tiles
+  query_radius: 1.0  # deg
+  match_radius: 1.0  # arcsec
+  photfraction: 0.75
+  refcatname: GaiaXP
+  refqueryradius: 0.9
+  ref_mag_lower: 12
+  ref_mag_upper: 17.5
+  ref_mag_err_upper: 0.05
+  flagcut: 0
+  check: False
+  filters_to_check:
+  filter_check:  # rejection tests on INF_FILT, ZP_AUTO and CTERM; the limits and windows are in ref/filters.yml
+    zero_point_error: true
+    min_separable_wavelength: 50  # nm
+    sigma_factor: 2
+    zp_excursion: true
+    color_term: false
+    min_stars: 15
+  satur_margin: 0.99  # factor multiplied to the propagated hardware upper limit
+  sex_vars:  # only non-empty keys are passed to SExtractor; empty inherits ref/srcExt/main.sex
+    DETECT_THRESH:
+    DEBLEND_MINCONT:
+  satellite_mask:  # singles only; skipped when NTRAILPX = 0 is already on the frame
+    enabled: true
+    threshold_scale: 1.0
+
 imsubtract:
   input_image:
   runtime_version:
   reference_image:
   # input_mask:
   # template_mask:
+
+difference_photometry:
+  input_images:
+  runtime_version:
+  use_weight_map: False  # attach <image>_weight.fits as MAP_WEIGHT; off = historical weightless photometry
+  ref_cat:  # for RIS tiles
+  query_radius: 1.0  # deg
+  match_radius: 1.0  # arcsec
+  photfraction: 0.75
+  refcatname: GaiaXP
+  refqueryradius: 0.9
+  ref_mag_lower: 12
+  ref_mag_upper: 17.5
+  ref_mag_err_upper: 0.05
+  flagcut: 0
+  check: False
+  filters_to_check:
+  filter_check:  # rejection tests on INF_FILT, ZP_AUTO and CTERM; the limits and windows are in ref/filters.yml
+    zero_point_error: true
+    min_separable_wavelength: 50  # nm
+    sigma_factor: 2
+    zp_excursion: true
+    color_term: false
+    min_stars: 15
+  satur_margin: 0.99  # factor multiplied to the propagated hardware upper limit
+  sex_vars:  # only non-empty keys are passed to SExtractor; empty inherits ref/srcExt/main.sex
+    DETECT_THRESH:
+    DEBLEND_MINCONT:
+  satellite_mask:  # singles only; skipped when NTRAILPX = 0 is already on the frame
+    enabled: true
+    threshold_scale: 1.0

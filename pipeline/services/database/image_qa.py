@@ -64,6 +64,7 @@ class ImageQATable:
 
     sanity: Optional[bool] = None
     inspcomm: Optional[str] = None
+    rej_proc: Optional[str] = None
     err_msgs: Optional[List[str]] = None
     ppflag: Optional[int] = None
 
@@ -96,11 +97,13 @@ class ImageQATable:
     rsep_p95: Optional[float] = None
     awincrmn: Optional[float] = None
     ellipmn: Optional[float] = None
+    numfrac: Optional[float] = None
 
     zp_5: Optional[float] = None
     ezp_5: Optional[float] = None
     seeing: Optional[float] = None
     peeing: Optional[float] = None
+    ellip: Optional[float] = None
     rotang: Optional[float] = None
     skyval: Optional[float] = None
     skysig: Optional[float] = None
@@ -326,6 +329,30 @@ class ImageQA(BaseDatabase):
         if path and existing_path and existing_path != path:
             self.logger.info(f"{name} moved on disk; its row {existing_id} now points to {path} (was {existing_path})")
         return existing_id
+
+    @override
+    def update_data(self, target_id: int, **kwargs):
+        """New IMAGEID: reset the row to the record, inspcomm kept; otherwise skip-None update."""
+        if kwargs.get("sanity") is True and kwargs.get("rej_proc") is None:
+            kwargs["rej_proc"] = "None"
+        imageid = kwargs.get("imageid")
+        if not imageid:
+            return super().update_data(target_id, **kwargs)
+        rows = self.execute_query(
+            f"SELECT imageid, inspcomm FROM {self.table_name} WHERE id = %(id)s", {"id": target_id}
+        )
+        if not rows or rows[0][0] == imageid:
+            return super().update_data(target_id, **kwargs)
+        ((stored_imageid, inspcomm),) = rows
+        kept = {"id", "image_name", "created_at", "updated_at", "inspcomm"}
+        if inspcomm is not None:
+            kept.add("sanity")
+        reset = {k: kwargs.get(k) for k in self.pyTable.__annotations__ if k not in kept}
+        if reset["m_epoch"] is None:
+            reset["m_epoch"] = False
+        reset = {k: "None" if v is None and k != "process_status_id" else v for k, v in reset.items()}
+        self.logger.debug(f"{kwargs.get('image_name')}: IMAGEID {stored_imageid} -> {imageid}; row {target_id} reset")
+        return super().update_data(target_id, **reset)
 
     def assert_writable(self) -> None:
         """PermissionError before any disk write when the role lacks UPDATE or INSERT on the table."""

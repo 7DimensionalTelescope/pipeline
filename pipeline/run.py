@@ -2,7 +2,8 @@ import json
 from typing import List
 
 from .config import CrossFilterConfiguration, PreprocConfiguration, SciProcConfiguration
-from .const.run import DEFAULT_CROSSFILTER_PROCESSES, DEFAULT_SCIDATA_PROCESSES
+from .const import ENSURE_DB
+from .const.run import CONFIG_TYPE_PREPROCESS, DEFAULT_CROSSFILTER_PROCESSES, DEFAULT_SCIDATA_PROCESSES
 from .const.crossfilter import CROSSFILTERPROCESS_REGISTRY, PHOT7DS_SPEC, WHITE_COADD_SPEC, WHITE_PHOTOMETRY_SPEC
 from .const.sciproc import (
     SCIPROCESS_REGISTRY,
@@ -16,6 +17,8 @@ from .const.sciproc import (
 from .errors import Phot7DSError, WhiteImageError
 from .errors.errors import EmptyInputAfterSanityRejectionError
 from .services.preflight import check_phot7ds_version
+from .services.database.base import DatabaseError
+from .services.database.handler import database_failure
 from .services.version_check import floor_version, recorded_version, stale_reason
 from .preprocess import Preprocess
 from .astrometry import Astrometry
@@ -34,6 +37,22 @@ def strip_launcher_args(argv: list[str]) -> list[str]:
         elif arg not in ("-make_plots", "-is_too"):
             kwargs.append(arg)
     return kwargs
+
+
+def _ensure_db(config, use_database: bool = True) -> None:
+    """ENSURE_DB: a pipeline run that is not ToO starts only with the database on and reachable."""
+    settings = config.node.settings
+    if not ENSURE_DB or not settings.is_pipeline or settings.is_too:
+        return
+
+    from .services.database.query import free_query
+
+    if not use_database:
+        raise DatabaseError(f"ENSURE_DB: {config.config_file} was started with the database off")
+    try:
+        free_query("SELECT 1", statement_timeout_ms=5000)
+    except Exception as e:
+        raise DatabaseError(f"ENSURE_DB: the database cannot be reached for {config.config_file}: {e}") from e
 
 
 def run_preprocess(
@@ -67,6 +86,7 @@ def run_preprocess(
         # dry_run may arrive via preprocess_kwargs (wrapper.py); a sizing pass must not touch the DB
         dry_run = kwargs.pop("dry_run", dry_run)
         if not dry_run:
+            _ensure_db(config, kwargs.get("use_database", True))
             config.node.settings.last_run_kwargs = last_run_kwargs
         prep = Preprocess(
             config,
@@ -88,7 +108,7 @@ def run_preprocess(
 def _record_config_sanity(config, sanity: bool = None) -> None:
     """
     Config-level sanity from the run outcome: False when every input was sanity-rejected
-    (return code 2), None to clear that once a run gets through. Best-effort, never raises,
+    (return code 2), None to clear that once a run gets through. Best-effort, never raises unless ENSURE_DB,
     and never overwrites a human verdict (ProcessStatus.set_config_sanity).
     """
     try:
@@ -101,6 +121,8 @@ def _record_config_sanity(config, sanity: bool = None) -> None:
         from .services.database.process_status import ProcessStatus
 
         ProcessStatus().set_config_sanity(config.node.name, sanity)
+    except DatabaseError as e:
+        database_failure(None, f"Failed to record config sanity: {e}", e)
     except Exception as e:
         print(f"[WARNING] Failed to record config sanity: {e}")
 
@@ -156,6 +178,30 @@ def _plan_stages(config_node, specs, processes, overwrite, stale, rebuilt, keep_
     return to_run, to_clear
 
 
+def _count_remade_inputs(config) -> int:
+    """Daily pipeline config with recorded progress: inputs last registered by Preprocess without SANITY."""
+    settings, flag = config.node.settings, config.node.flag
+    done = any(getattr(flag, spec.name) for spec in SCIPROCESS_REGISTRY.specs)
+    if not settings.is_pipeline or settings.is_too or settings.is_multi_epoch or not done:
+        return 0
+
+    from .path import NameHandler
+    from .services.database.query import free_query
+    from .utils import atleast_1d
+
+    try:
+        names = atleast_1d(NameHandler(config.node.input.calibrated_images).stem)
+        rows = free_query(
+            "SELECT count(*) FROM image_qa q JOIN process_status p ON p.id = q.process_status_id"
+            " WHERE q.image_name = ANY(%s) AND p.config_type = %s AND q.sanity IS NULL",
+            [names, CONFIG_TYPE_PREPROCESS],
+        )
+        return rows[0][0]
+    except Exception as e:
+        database_failure(config.logger, f"Could not check the input singles for a Preprocess re-make; no reset: {e}", e)
+        return 0
+
+
 def _clear_flags(config, specs) -> None:
     # set flag False for the processes this run regenerates and for the trailing ones it invalidates
     for spec in specs:
@@ -195,14 +241,21 @@ def run_scidata_reduction(
         if config.node.settings.is_too != is_too:
             print(f"[ERROR] is_too mismatch: node.settings.is_too={config.node.settings.is_too} != is_too={is_too}")
             raise ValueError("is_too mismatch")
+        _ensure_db(config)
+
+        if n_remade := _count_remade_inputs(config):
+            config = SciProcConfiguration.reset_config(config.config_file)
+            config.logger.warning(
+                f"{n_remade} input single(s) were re-made by Preprocess without their previous science cards; config reset"
+            )
 
         specs = SCIPROCESS_REGISTRY.specs
         # before write_config refreshes info.runtime_version
         stale = {spec.name: stale_reason(config.node, spec.config_section) for spec in specs}
-        config.node.settings.last_run_kwargs = last_run_kwargs
 
         if overwrite_config_sections:
             config.overwrite_config_sections(overwrite_config_sections)
+        config.node.settings.last_run_kwargs = last_run_kwargs
 
         to_run, to_clear = _plan_stages(
             config.node,
@@ -210,7 +263,7 @@ def run_scidata_reduction(
             processes,
             overwrite,
             stale,
-            set(overwrite_config_sections or []),
+            set(SciProcConfiguration.expand_config_sections(overwrite_config_sections)),
             keep_downstream_flags,
             config.logger,
         )
@@ -275,6 +328,7 @@ def run_crossfilter_reduction(
 
         if config.node.settings.is_too != is_too:
             raise ValueError(f"is_too mismatch: node.settings.is_too={config.node.settings.is_too} != is_too={is_too}")
+        _ensure_db(config)
 
         specs = CROSSFILTERPROCESS_REGISTRY.specs
         stale = {spec.name: stale_reason(config.node, spec.config_section) for spec in specs}

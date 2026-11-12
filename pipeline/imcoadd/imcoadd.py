@@ -27,7 +27,7 @@ from ..preprocess.plotting import save_fits_as_figures
 from .plotting import display_flips, orient_for_raster
 from .utils import fill_masked_tiles
 from .. import external
-from ..services.database.handler import DatabaseHandler
+from ..services.database.handler import DatabaseHandler, database_failure
 from ..services.database.image_qa import ImageQATable
 from ..services.checker import Checker
 from ..services.version_check import RuntimeVersionMixin
@@ -354,8 +354,16 @@ class ImCoadd(
                     "may lag the headers if edited out of band; set "
                     "imcoadd.image_selection_source: 'headers' to read headers"
                 )
-            except Exception as e:
+            except ValueError as e:
                 self.logger.warning(f"image_qa selection metrics unavailable; reading headers instead: {e}")
+                table = None
+            except Exception as e:
+                if getattr(self, "is_too", False):
+                    self.logger.warning(f"image_qa selection metrics unavailable; reading headers instead: {e}")
+                else:
+                    database_failure(
+                        self.logger, f"image_qa selection metrics unavailable; reading headers instead: {e}", e
+                    )
                 table = None
 
         if table is not None:

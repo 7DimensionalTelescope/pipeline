@@ -10,7 +10,7 @@ Only the TTYPEn cards of the LDAC_OBJECTS header change. That is an in-place hea
 
 Scope: science configs whose process_status.pipeline_version >= 1.10.47, the version that
 first put FLUX_RADIUS into main.param. The catalogs are the *_cat.fits of the config's
-photometry.input_images, imcoadd.input_images and imcoadd.coadd_image.
+{single,coadd,difference}_photometry.input_images, imcoadd.input_images and imcoadd.coadd_image.
 
 Resumable: a catalog that already carries the new names is skipped, so a killed run continues.
 
@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from pipeline.config import SciProcConfiguration
 from pipeline.const import CONFIG_TYPE_SCIENCE
+from pipeline.const.sciproc import COADD_PHOTOMETRY_SPEC, DIFFERENCE_PHOTOMETRY_SPEC, SINGLE_PHOTOMETRY_SPEC
 from pipeline.photometry.utils import get_flux_fractions
 from pipeline.services.database.process_status import ProcessStatus
 
@@ -144,7 +145,11 @@ def _process_config(config_file: str, old_names: list, new_names: list, dry_run:
         _log(f"[config] {config_file} :: {type(e).__name__}: {e}")
         return {"config_error": 1}
 
-    images = list(node.photometry.input_images or []) + list(node.imcoadd.input_images or [])
+    images = [
+        image
+        for spec in (SINGLE_PHOTOMETRY_SPEC, COADD_PHOTOMETRY_SPEC, DIFFERENCE_PHOTOMETRY_SPEC)
+        for image in getattr(node, spec.config_section).input_images or []
+    ] + list(node.imcoadd.input_images or [])
     if node.imcoadd.coadd_image:
         images.append(node.imcoadd.coadd_image)
 

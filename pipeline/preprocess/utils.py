@@ -17,10 +17,13 @@ from dataclasses import dataclass, replace
 from ..path.path import PathHandler
 from ..path.name import NameHandler
 from ..services.checker import Checker
+from ..services.inspection import INSPCOMM_KEY, REJ_PROC_COMMENT, SANITY_COMMENT
 from ..errors import PreprocessError
 from ..utils.header import write_header_file, get_header, add_padding
 from ..const.instrum_log import get_masterframe_walls
+from ..const.sciproc import REJECTION_PROCESS_HEADER_KEY
 from ..const import (
+    CONFIG_TYPE_PREPROCESS,
     CALIB_TYPE_BIAS,
     CALIB_TYPE_DARK,
     CALIB_TYPE_FLAT,
@@ -676,7 +679,9 @@ def update_header_file(fits_path: str, extra: fits.Header) -> None:
     write_header_file(path, hdr)
 
 
-def prepare_raw_qa_header(fits_path: str, flag: bool, score: float, sbitc: list[float] | None = None) -> None:
+def prepare_raw_qa_header(
+    fits_path: str, flag: bool, score: float, sbitc: list[float] | None = None, judge: bool = False
+) -> None:
     """Write SHIFTED/SHFTSCR to the FITS sibling ``.header`` text file (preserves existing keys).
 
     The flag/score pair must come from :func:`check_shifted_overscan` (the single
@@ -690,6 +695,11 @@ def prepare_raw_qa_header(fits_path: str, flag: bool, score: float, sbitc: list[
     extra["SHFTSCR"] = (float(score), f"Shifted overscan score; shifted if >{cut:g}")
     for k, v in enumerate(sbitc or []):
         extra[f"SBITC{k:02d}"] = (round(float(v), 5), f"Bit {k} set fraction, odd minus even columns")
+    # a restored human verdict is not judged
+    if judge and INSPCOMM_KEY not in (load_header_file(fits_path) or {}):
+        if not Checker().apply_qa_criteria({**extra, "FILENAME": os.path.basename(fits_path)}, CONFIG_TYPE_PREPROCESS):
+            extra["SANITY"] = (False, SANITY_COMMENT)
+            extra[REJECTION_PROCESS_HEADER_KEY] = (CONFIG_TYPE_PREPROCESS, REJ_PROC_COMMENT)
     update_header_file(fits_path, extra)
 
 

@@ -101,7 +101,7 @@ ASTROMETRY_SPEC = ProcessSpec(
 )
 SINGLE_PHOTOMETRY_SPEC = ProcessSpec(
     name="single_photometry",
-    config_section="photometry",
+    config_section="single_photometry",
     error_code=3,
     progress_start=40,
     progress_end=60,
@@ -127,7 +127,7 @@ COADD_SPEC = ProcessSpec(
 )
 COADD_PHOTOMETRY_SPEC = ProcessSpec(
     name="coadd_photometry",
-    config_section="photometry",
+    config_section="coadd_photometry",
     error_code=5,
     progress_start=70,
     progress_end=80,
@@ -149,7 +149,7 @@ SUBTRACTION_SPEC = ProcessSpec(
 )
 DIFFERENCE_PHOTOMETRY_SPEC = ProcessSpec(
     name="difference_photometry",
-    config_section="photometry",
+    config_section="difference_photometry",
     error_code=7,
     progress_start=90,
     progress_end=100,

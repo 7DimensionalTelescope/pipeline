@@ -95,25 +95,25 @@ def ingredient_change(
     from .ppflag import PPFLAG_SANITY_F_USED, get_ppflag_from_header
 
     recorded = recorded_ingredient_ids(image)
-    if recorded is None:
-        return None
 
     # explicit user intent outranks the unknown-provenance guard below
     for name in designated:
-        if name not in recorded:
+        if name not in (recorded or {}):
             return "designated"
 
-    if not recorded:
-        return "unidentified"
+    if recorded is None:
+        return None
 
     used_rejected = False
     sanity_known = True
+    masters = 0
     for name, was in recorded.items():
         path = resolve_master_path(name, is_pipeline)
         if path is None:
             continue
+        masters += 1
         if was is None:
-            if ingredient_state(path, cache=cache)[0]:
+            if not os.path.exists(path) or ingredient_state(path, cache=cache)[0]:
                 return "unidentified"
             # used but unidentified: regeneration is invisible, and the sanity test would churn forever
             sanity_known = False
@@ -125,6 +125,9 @@ def ingredient_change(
             sanity_known = False
         elif sanity is False:
             used_rejected = True
+
+    if not masters:
+        return "unidentified"
 
     if sanity_known:
         try:
@@ -175,11 +178,18 @@ class ReprocessMixin:
             )
         return reason
 
+    def _frozen(self, product) -> bool:
+        """Human-rejected product on disk: neither rebuilt nor re-reduced."""
+        try:
+            return os.path.exists(product) and self.human_rejected(product)
+        except Exception:
+            return False  # an unreadable header is no veto; the paths below decide as before
+
     def _sci_change(self, output_file):
         """Why a science output must be (re)produced, or None."""
         if not os.path.exists(output_file):
             return "missing"
-        if self.human_rejected(output_file):
+        if self._frozen(output_file):
             self._human_rejected_skipped.add(output_file)
             return None
         reason = self._ingredient_change(output_file, (self.bias_output, self.dark_output, self.flat_output))

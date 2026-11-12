@@ -1,15 +1,27 @@
 {
-    "SCIENCE": {
+    "astrometry": {
         "NUMFRAC": {
             "value": 0.05,
             "criteria": "gt",
             "description": "Source number fraction against reference catalog must be > 0.05"
         },
+        "PNTGDEV": {
+            "value": 15,
+            "criteria": "lt",
+            "description": "Pointing deviation from OBJCTRA/OBJCTDEC must be < 15 arcmin"
+        },
+        "PADEV": {
+            "value": 10,
+            "criteria": "lt",
+            "description": "Field rotation deviation from TARGET_PA (mod 180) must be < 10 deg"
+        },
         "ELLIPMN": {
             "value": 0.3,
             "criteria": "lt",
             "description": "Ellipticity from Astrometry must be < 0.3"
-        },
+        }
+    },
+    "single_photometry": {
         "ELLIP": {
             "value": 0.3,
             "criteria": "lt",
@@ -24,16 +36,23 @@
             "value": 0.2,
             "criteria": "lt",
             "description": "Zero-point error from Photometry must be < 0.2 mag"
-        },
-        "PNTGDEV": {
-            "value": 15,
+        }
+    },
+    "coadd_photometry": {
+        "ELLIP": {
+            "value": 0.3,
             "criteria": "lt",
-            "description": "Pointing deviation from OBJCTRA/OBJCTDEC must be < 15 arcmin"
+            "description": "Ellipticity from Photometry must be < 0.3"
         },
-        "PADEV": {
-            "value": 10,
+        "STDNUMB": {
+            "value": 5,
+            "criteria": "gte",
+            "description": "Zero-point stars from Photometry must be >= 5"
+        },
+        "EZP_AUTO": {
+            "value": 0.2,
             "criteria": "lt",
-            "description": "Field rotation deviation from TARGET_PA (mod 180) must be < 10 deg"
+            "description": "Zero-point error from Photometry must be < 0.2 mag"
         }
     }
 }

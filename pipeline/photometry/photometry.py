@@ -4,6 +4,7 @@ import getpass
 from typing import Any, List, Dict, Tuple, Optional, Union, Literal
 import datetime
 import numpy as np
+import psycopg
 import itertools
 import time
 from contextlib import ExitStack
@@ -21,9 +22,10 @@ from astropy.stats import sigma_clip
 from ..services.logger import Logger
 from ..services.memory import MemoryMonitor
 from ..services.queue import QueueManager
-from ..services.database.handler import DatabaseHandler
+from ..services.database.base import DatabaseError
+from ..services.database.handler import DatabaseHandler, database_failure
 from ..services.database.image_qa import ImageQATable
-from ..services.checker import Checker, qa_criterion
+from ..services.checker import Checker, qa_criterion, stage_order
 
 from ..config.utils import get_key
 from ..utils import time_diff_in_seconds, force_symlink, collapse, get_basename
@@ -40,11 +42,13 @@ from ..const import (
     NAME_TYPE_RAW,
     NAME_TYPE_FLAT,
     NAME_TYPE_SCIENCE,
+    ENSURE_DB,
 )
 from ..const.sciproc import (
     COADD_PHOTOMETRY_SPEC,
     DIFFERENCE_PHOTOMETRY_SPEC,
     ProcessSpec,
+    REJECTION_PROCESS_HEADER_KEY,
     SCIPROCESS_REGISTRY,
     SINGLE_PHOTOMETRY_SPEC,
 )
@@ -53,8 +57,8 @@ from ..services.version_check import RuntimeVersionMixin
 from ..tools.table import match_two_catalogs, build_condition_mask
 from ..path.path import PathHandler
 from ..io.cfitsldac import write_ldac
-from ..utils.header import get_header_key, update_padded_header_smart
-from ..services.inspection import machine_reject
+from ..utils.header import get_header_key, remove_padded_header_key, update_padded_header_smart
+from ..services.inspection import INSPCOMM_KEY, machine_reject
 from ..utils.tile import is_ris_tile
 from ..errors import (
     # process errors
@@ -115,7 +119,6 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         where the flags can be out of sync.
         """
         super().__init__(config, logger, queue)
-        self.ref_cat_type = ref_cat_type or self.config_node.photometry.refcatname
 
         if photometry_mode is not None:
             self._process_spec = self._process_registry.get(photometry_mode)
@@ -136,6 +139,8 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
 
         self._photometry_mode = self._process_spec.photometry_mode
         self._process_error = self._process_errors[self._process_spec]
+        phot_conf = getattr(self.config_node, self._process_spec.config_section)
+        self.ref_cat_type = ref_cat_type or phot_conf.refcatname
 
         if self._process_spec is SINGLE_PHOTOMETRY_SPEC:
             self.logger.process_error = self._process_error
@@ -146,10 +151,8 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             input_key = self._process_spec.input_key
             if input_key is None:
                 raise ValueError(f"No input key registered for {self._process_spec.name}")
-            self.config_node.photometry.input_images = (
-                images or [x] if (x := get_key(self.config_node.input, input_key)) else None
-            )
-            self.input_images = self.config_node.photometry.input_images
+            phot_conf.input_images = images or [x] if (x := get_key(self.config_node.input, input_key)) else None
+            self.input_images = phot_conf.input_images
             self.logger.debug(f"Running {self._photometry_mode}")
 
         self.logger.info(f"Photometry mode: {self._photometry_mode}")
@@ -234,7 +237,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 current_process=self._process_spec,
                 overwrite=overwrite,
             )
-            self.config_node.photometry.input_images = self.input_images
+            getattr(self.config_node, self._process_spec.config_section).input_images = self.input_images
         self._collect_qa_ids()
 
         if not self.input_images:  # exception for when input.difference_image is not set.
@@ -396,7 +399,10 @@ class PhotometrySingle:
         self.ref_cat_type = ref_cat_type
         # self.image = os.path.join(self.config.path.path_processed, image)
         # self.input_image = image
-        self.phot_conf = self.config_node.photometry
+        current_process = current_process or (
+            DIFFERENCE_PHOTOMETRY_SPEC if difference_photometry else SINGLE_PHOTOMETRY_SPEC
+        )
+        self.phot_conf = getattr(self.config_node, current_process.config_section)
         self.input_image = collapse(self.phot_conf.input_images, raise_error=True)
         self.logger.debug(f"input_image: {self.input_image}")
         self.logger.debug(f"=" * 100)
@@ -425,12 +431,7 @@ class PhotometrySingle:
         self._trust_header_zp = difference_photometry
         self._difference_photometry = difference_photometry
         self._check_filter = check_filter and not difference_photometry
-        if current_process is not None:
-            self._sciproc_rejection_process_name = current_process.name
-        else:
-            self._sciproc_rejection_process_name = (
-                DIFFERENCE_PHOTOMETRY_SPEC.name if difference_photometry else SINGLE_PHOTOMETRY_SPEC.name
-            )
+        self._sciproc_rejection_process_name = current_process.name
         self._single_frame = self._sciproc_rejection_process_name == SINGLE_PHOTOMETRY_SPEC.name
         self._reject_reason = None
 
@@ -484,7 +485,7 @@ class PhotometrySingle:
 
             if self._check_filter:
                 self.logger.info("Performing filter check")
-                filters_to_check = get_key(self.config_node.photometry, "filters_to_check") or ALL_FILTERS
+                filters_to_check = get_key(self.phot_conf, "filters_to_check") or ALL_FILTERS
                 nightdate = self.path.name.nightdate
                 if SECOND_FILTER_ADDITION_NIGHTDATE and nightdate and nightdate < SECOND_FILTER_ADDITION_NIGHTDATE:
                     filters_to_check = [f for f in filters_to_check if f not in SECOND_FILTERS]
@@ -545,6 +546,13 @@ class PhotometrySingle:
                 f" in {time_diff_in_seconds(start_time)} seconds"
             )
         except Exception as e:  # whatever failed, the frame is not deliverable: SANITY=False and the run goes on
+            if (
+                ENSURE_DB
+                and isinstance(e, (DatabaseError, psycopg.Error))
+                and self.config_node.settings.is_pipeline
+                and not self.config_node.settings.is_too
+            ):
+                raise DatabaseError(f"PhotometrySingle {self.name}: {e}") from e
             self.phot_header.clear_calibration()  # null the ZP cards this or a previous run left; SANITY=False below
             self.update_image_header()
             self.logger.warning(
@@ -676,7 +684,7 @@ class PhotometrySingle:
         """
         # ref_ris_dir = get_key(self.config_node.photometry, "path.ref_ris_dir") or self.path.photometry.get_ref_cat(self.ref_catalog)
 
-        predefined_ref_cat = get_key(self.config_node.photometry, "ref_cat")
+        predefined_ref_cat = get_key(self.phot_conf, "ref_cat")
         if predefined_ref_cat:
             ref_cat = predefined_ref_cat
         else:
@@ -1244,10 +1252,15 @@ class PhotometrySingle:
         )
         phot_header = phot_header or self.phot_header
         phot_header.STDNUMB = len(zp_src_table)
-        if len(zp_src_table) < MIN_STDNUMB:
+        min_stdnumb = (
+            MIN_STDNUMB
+            if self._difference_photometry
+            else qa_criterion("STDNUMB", self._sciproc_rejection_process_name)["value"]
+        )
+        if len(zp_src_table) < min_stdnumb:
             raise self.logger.process_error.exception(NotEnoughSourcesError)(
                 f"{len(zp_src_table)} source(s) remain for ZP calibration after the quality cuts on matched "
-                f"reference sources for '{self.image_info.ref_mag_key}'; fewer than {MIN_STDNUMB}: not deliverable"
+                f"reference sources for '{self.image_info.ref_mag_key}'; fewer than {min_stdnumb}: not deliverable"
             )
         return zp_src_table
 
@@ -1485,7 +1498,7 @@ class PhotometrySingle:
         """CTERM, ECTERM, NCTERM against Gaia BP-RP."""
         phot_header = phot_header or self.phot_header
         phot_header.CTERM = phot_header.ECTERM = phot_header.NCTERM = None
-        filter_check = get_key(self.config_node.photometry, "filter_check")
+        filter_check = get_key(self.phot_conf, "filter_check")
         if filter_check is None:
             return
         filter_check = filter_check.to_dict() if hasattr(filter_check, "to_dict") else filter_check
@@ -1507,7 +1520,7 @@ class PhotometrySingle:
     def filter_check_verdict(self) -> Optional[str]:
         """The failed tests of ref/qa/filter_check.yml as the rejection reason (singles only)."""
         alleged, name = self.image_info.filter, self.path.name
-        filter_check = get_key(self.config_node.photometry, "filter_check")
+        filter_check = get_key(self.phot_conf, "filter_check")
         if filter_check is None:
             self._reject_reason = None
             return None
@@ -1551,6 +1564,13 @@ class PhotometrySingle:
                 return active_filters
             self.logger.warning(
                 f"get_active_filters: empty DB result; falling back to local filesystem", FilterInventoryError
+            )
+        elif self.config_node.settings.is_pipeline and not self.config_node.settings.is_too:
+            database_failure(
+                self.logger,
+                f"get_active_filters: cannot connect to Django-PostgreSQL main raw image DB",
+                None,
+                ConnectionError,
             )
         else:
             self.logger.warning(
@@ -1602,19 +1622,44 @@ class PhotometrySingle:
             phot_header = self.phot_header
             self.logger.debug(f"Using self.phot_header at update_image_header(): {phot_header}")
 
+        checker = Checker()
+        checker.logger = self.logger
+        # the running stage voids its own or a later stage's earlier rejection; a human veto stays and is not judged
+        vetoed = phot_header.SANITY is False and INSPCOMM_KEY in fits.getheader(self.input_image)
+        order = stage_order()
+        voided = (
+            phot_header.SANITY is False
+            and not vetoed
+            and (
+                order.index(phot_header.REJ_PROC) >= order.index(self._sciproc_rejection_process_name)
+                if phot_header.REJ_PROC in order
+                else self._single_frame  # LEAD: no or an unknown REJ_PROC, admitted at the single's start (R1.3)
+            )
+        )
+        if voided:
+            phot_header.SANITY, phot_header.REJ_PROC = True, None
+        cards = {key: card[0] for key, card in phot_header.dict.items()}
+        cards["FILENAME"] = os.path.basename(self.input_image)
         if not phot_header.aperture_info:
             self.logger.warning("No zero point was derived for this image.", NotEnoughSourcesError)
             phot_header.SANITY = False
             phot_header.REJ_PROC = self._sciproc_rejection_process_name
             self.logger.info(f"Setting SANITY=False for {os.path.basename(self.input_image)}")
             machine_reject(self.input_image, self._sciproc_rejection_process_name, phot_header.dict)
-        elif self._reject_reason:
+        elif self._reject_reason or (
+            not vetoed and not checker.apply_qa_criteria(cards, dtype=self._sciproc_rejection_process_name)
+        ):
             phot_header.SANITY = False
             phot_header.REJ_PROC = self._sciproc_rejection_process_name
-            self.logger.info(f"Setting SANITY=False for {os.path.basename(self.input_image)}: {self._reject_reason}")
+            self.logger.info(
+                f"Setting SANITY=False for {os.path.basename(self.input_image)}: {self._reject_reason or 'QA criteria'}"
+            )
             machine_reject(self.input_image, self._sciproc_rejection_process_name, phot_header.dict)
         else:
             update_padded_header_smart(self.input_image, phot_header.dict)  # smart ver. for SANITY
+            if voided:
+                with fits.open(self.input_image, mode="update") as hdul:
+                    remove_padded_header_key(hdul[0].header, REJECTION_PROCESS_HEADER_KEY)
         self.logger.info(f"Image header has been updated with photometry information (aperture, zero point, ...).")
 
     def write_catalog(self, obs_src_table) -> None:

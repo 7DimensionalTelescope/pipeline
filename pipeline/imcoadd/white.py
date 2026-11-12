@@ -18,6 +18,8 @@ from ..config.utils import get_key
 from ..errors import WhiteImageError
 from ..path.name import NameHandler
 from ..path.path import PathHandler
+from ..services.database.base import DatabaseError
+from ..services.database.handler import database_failure
 from ..services.database.process_status_dependency import ProcessStatusDependency
 from ..services.inspection import INSPCOMM_KEY
 from ..utils import atleast_1d, collapse, force_symlink
@@ -61,13 +63,12 @@ class WhiteImage(ImCoadd):
                 edges.append((config_node.name, parent_name.stem, parent_name.config_properties["config_type"]))
             return ProcessStatusDependency().replace_dependencies(edges)
         except Exception as exc:
-            if logger is None:
-                print(f"[WARNING] Failed to record cross-filter config dependencies: {exc}")
-            else:
-                logger.warning(
-                    f"Failed to record cross-filter config dependencies: {exc}",
-                    cls._process_error.DependencyRegistrationError,
-                )
+            database_failure(
+                logger,
+                f"Failed to record cross-filter config dependencies: {exc}",
+                exc,
+                cls._process_error.DependencyRegistrationError,
+            )
             return 0
 
     def sync_config_dependencies(self, process_status_id: int = None) -> int:
@@ -199,6 +200,8 @@ class WhiteImage(ImCoadd):
         ):
             try:
                 verdicts, from_db = self.image_qa.inspection_cards(images), True
+            except DatabaseError as e:
+                database_failure(self.logger, f"image_qa INSPCOMM lookup failed; reading headers instead: {e}", e)
             except Exception as e:
                 self.logger.warning(f"image_qa INSPCOMM lookup failed; reading headers instead: {e}")
         if not from_db:
