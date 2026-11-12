@@ -107,6 +107,7 @@ def get_masterframe_walls(
 
     changelog = get_changelog(unit)
     tbl = normalize_wall(changelog, dtype=dtype)
+    tbl = tbl[tbl[f"wall_{dtype}"]]  # only the changelog dates that are a wall for this type
     tbl.sort("nightdate")
 
     nightdates = np.array(tbl["nightdate"], dtype=object)
@@ -116,5 +117,5 @@ def get_masterframe_walls(
     hi = idx
 
     lower = nightdates[lo] if lo >= 0 else None  # inclusive
-    upper = nightdates[hi] - timedelta(days=1) if hi < len(nightdates) else None  # exclusive
+    upper = nightdates[hi] - timedelta(days=1) if hi < len(nightdates) else None  # inclusive
     return lower, upper

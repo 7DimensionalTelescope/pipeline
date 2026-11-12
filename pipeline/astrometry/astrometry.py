@@ -197,7 +197,7 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             self.logger.error("No input images remain after SANITY filter.", AstrometryError.EmptyInput)
             raise AstrometryError.EmptyInputError("No input images remain after SANITY filter.")
 
-        # Honor human verdicts only. Filter after the config is set, so the config keeps the full input record.
+        # Drop human vetoes and preprocess rejections. Filter after the config is set, so it keeps the full input list.
         self.apply_sanity_filter_and_report(current_process=ASTROMETRY_SPEC)
         if not self.input_images:
             self.logger.error(

@@ -23,7 +23,7 @@ from .database.handler import database_failure
 
 class SanityAction(Enum):
     TRUST_SANITY_AND_DROP_IMAGE = auto()  # INSPCOMM beside SANITY=F: a human veto
-    RECOMPUTE_SANITY = auto()  # this means a quick checkup of the header values against science.json; usually pass
+    RECOMPUTE_SANITY = auto()  # admitted: the criteria of the earlier stages pass on the image's values
     DROP_IMAGE = auto()  # excluded in self.input_images
 
 
@@ -155,8 +155,8 @@ class Checker:
             images = [images]
 
         # DB fast path: one query instead of one header read per image (~120 ms each on
-        # NFS). image_qa.sanity is the recorded verdict; skipped on overwrite reruns,
-        # which must re-evaluate from the header criteria.
+        # NFS). image_qa holds the recorded verdict and the earlier stages' metrics; skipped
+        # on overwrite reruns, which read the headers, and at astrometry.
         names = {image: os.path.basename(image).replace(".fits", "") for image in images}
         db_rows: dict = {}
         row_rejected: set = set()

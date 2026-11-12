@@ -190,9 +190,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         if self.process_status_id is not None and self.image_qa is not None and self.input_images:
             for image in self.input_images:
                 image_name = os.path.basename(image).replace(".fits", "")
-                qa_id = self.image_qa.read_data_by_params(
-                    image_name=image_name, process_status_id=self.process_status_id
-                )
+                qa_id = self.image_qa.read_data_by_params(image_name=image_name)  # the owner may be a preprocess config
                 self.qa_ids.append(qa_id)
 
     @classmethod
@@ -278,10 +276,7 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                             f"No image_qa row for {os.path.basename(image)}; header changes were not mirrored"
                         )
                         continue
-                    qa_data = ImageQATable.from_file(
-                        image,
-                        process_status_id=self.process_status_id,
-                    )
+                    qa_data = ImageQATable.from_file(image)
                     self.image_qa.update_data(qa_id, **qa_data.to_dict())
 
             self.update_progress(
