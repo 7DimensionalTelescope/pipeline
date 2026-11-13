@@ -1,5 +1,6 @@
 import os
 import glob
+import json
 import time
 import pprint
 import threading
@@ -27,7 +28,7 @@ from ..services.database.handler import DatabaseHandler, database_failure
 from ..utils.header import add_padding, get_header, read_header_file, update_padded_header_smart
 from ..errors import PreprocessError, MasterFrameNotFoundError
 from ..path import PathHandler, NameHandler
-from .reprocess import ReprocessMixin
+from .reprocess import ReprocessMixin, master_selection
 
 pp = pprint.PrettyPrinter(indent=2)  # , width=120)
 
@@ -174,6 +175,14 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 from ..services.database.handler import ExceptionHandler
 
                 self.logger.database = ExceptionHandler(self.process_status_id)
+                try:
+                    selection = master_selection(self.config_node.preprocess, self._is_pipeline)
+                    selection = {k: "None" if v is None else v for k, v in selection.items()}
+                    if isinstance(selection["designated_masterframes"], list):
+                        selection["designated_masterframes"] = json.dumps(selection["designated_masterframes"])
+                    self.process_status.update_data(self.process_status_id, **selection)
+                except Exception as e:
+                    database_failure(self.logger, f"Failed to record the master selection in process_status: {e}", e)
 
     def _warn_lost_predecessor(self):
         """A config created without a predecessor for a name the DB has processed before: the earlier run's designations are gone."""

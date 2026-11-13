@@ -118,7 +118,9 @@ SELECT config_file, config_type, nightdate::text, unit, object, filter FROM proc
 """
 
 _PREPROCESS_CONFIGS = """
-SELECT DISTINCT ON (name) name, config_file FROM process_status WHERE config_type = %s
+SELECT DISTINCT ON (name) name, config_file, max_offset, ignore_sanity_if_no_match, ignore_lenient_keys_if_no_match,
+       reuse_recorded_masters, designated_masterframes
+FROM process_status WHERE config_type = %s
 ORDER BY name, updated_at DESC NULLS LAST, id DESC
 """
 
@@ -163,6 +165,7 @@ class _Library:
         self.searches, self.ingredients, self.settings, self.designations = {}, {}, {}, {}
         self.inventories, self.raw_files, self.edges = {}, {}, {}
         self.skipped, self.globs, self.sibling_sources, self.blind = [], [], {}, {}
+        self.unrecorded = set()
 
     def camera(self, unit: str, night: str) -> str:
         """Camera token of a unit-night, memoized."""
@@ -325,12 +328,21 @@ def _read_settings(yml: dict, default_max_offset: Optional[int] = None) -> Tuple
     )
 
 
+def _row_of(library: _Library, night: str, unit: str) -> Optional[SimpleNamespace]:
+    """process_status row of a unit-night's preprocess config: config_file and the master-selection columns."""
+    if library.configs is None:
+        keys = ["config_file", "max_offset", "ignore_sanity_if_no_match", "ignore_lenient_keys_if_no_match"]
+        keys += ["reuse_recorded_masters", "designated_masterframes"]
+        rows = free_query(_PREPROCESS_CONFIGS, [CONFIG_TYPE_PREPROCESS])
+        library.configs = {name: SimpleNamespace(**dict(zip(keys, rest))) for name, *rest in rows}
+    return library.configs.get(f"{night}_{unit}")
+
+
 def _yml_of(library: _Library, night: str, unit: str) -> Tuple[Optional[str], Optional[dict]]:
     """(config path, parsed yml) of a unit-night's preprocess config; None where missing."""
     if (night, unit) not in library.ymls:
-        if library.configs is None:
-            library.configs = dict(free_query(_PREPROCESS_CONFIGS, [CONFIG_TYPE_PREPROCESS]))
-        config, yml = library.configs.get(f"{night}_{unit}"), None
+        row = _row_of(library, night, unit)
+        config, yml = row and row.config_file, None
         if config is not None:
             try:
                 with open(config) as f:  # libyaml where available: a yml lists hundreds of frames
@@ -342,25 +354,26 @@ def _yml_of(library: _Library, night: str, unit: str) -> Tuple[Optional[str], Op
 
 
 def _settings_of(library: _Library, night: str, unit: str) -> Tuple[int, bool, bool]:
-    """Search settings of a unit-night: its own preprocess yml when one exists, else the base."""
+    """Search settings of a unit-night as its process_status row records them; the base without a row or record."""
     if (night, unit) not in library.settings:
-        _, yml = _yml_of(library, night, unit)
-        library.settings[(night, unit)] = library.base if yml is None else _read_settings(yml, library.base[0])
+        row = _row_of(library, night, unit)
+        settings = library.base
+        if row is not None:
+            recorded = (row.max_offset, row.ignore_sanity_if_no_match, row.ignore_lenient_keys_if_no_match)
+            if recorded == (None, None, None):
+                library.unrecorded.add((night, unit))
+            else:
+                settings = (recorded[0] or library.base[0], bool(recorded[1]), bool(recorded[2]))
+        library.settings[(night, unit)] = settings
     return library.settings[(night, unit)]
 
 
-def _designation_entries(yml: Optional[dict]) -> list:
-    """designated_masterframes entries of a yml, as a list."""
-    entries = ((yml or {}).get("preprocess") or {}).get("designated_masterframes") or []
-    return [entries] if isinstance(entries, (str, dict)) else entries
-
-
-def _unmodeled(yml: Optional[dict]) -> List[str]:
-    """What a yml asks for that the service does not model."""
+def _unmodeled(row: Optional[SimpleNamespace]) -> List[str]:
+    """What a preprocess row records that the service does not model."""
     issues = []
-    if any(isinstance(e, dict) and e.get("images") for e in _designation_entries(yml)):
+    if any(e["images"] for e in (row and row.designated_masterframes) or []):
         issues.append("designated_masterframes with images: pins")
-    if ((yml or {}).get("preprocess") or {}).get("reuse_recorded_masters"):
+    if row and row.reuse_recorded_masters:
         issues.append("reuse_recorded_masters: true")
     return issues
 
@@ -369,14 +382,11 @@ def _designations(library: _Library, night: str, unit: str) -> List[tuple]:
     """Plain designations of a unit-night: (path, NameHandler, role)."""
     if (night, unit) not in library.designations:
         found = []
-        for entry in _designation_entries(_yml_of(library, night, unit)[1]):
-            role, path = None, entry
-            if isinstance(entry, dict):
-                if entry.get("images"):
-                    continue
-                role = next(k for k in entry if k != "images")
-                path = entry[role]
-            path = str(path)
+        row = _row_of(library, night, unit)
+        for entry in (row and row.designated_masterframes) or []:
+            if entry["images"]:
+                continue
+            role, path = entry["role"], str(entry["path"])
             if library.record(path) is None:
                 path = _canonical([os.path.basename(path)])[0]
             found.append((path, NameHandler(path), role))
@@ -1014,10 +1024,18 @@ def _count_defects(tally: Counter, night: str, unit: str, role: str, answer: Opt
 
 
 def _count_unmodeled(library: _Library, tally: Counter, night: str, unit: str, n: int) -> None:
-    """Add the unmodeled requests of a unit-night's yml."""
-    config, yml = _yml_of(library, night, unit)
-    for issue in _unmodeled(yml):
-        tally[(night, unit, None, config, "unmodeled", issue)] += n
+    """Add the unmodeled requests of a unit-night's preprocess row."""
+    row = _row_of(library, night, unit)
+    for issue in _unmodeled(row):
+        tally[(night, unit, None, row.config_file, "unmodeled", issue)] += n
+
+
+def _count_unrecorded(library: _Library, tally: Counter, counts: Counter) -> None:
+    """One row per unit-night searched with the base settings because its row records none; n = its target rows."""
+    for night, unit in sorted(library.unrecorded):
+        detail = f"max_offset / ignore_*_if_no_match not recorded in process_status; base {library.base} used"
+        config = _row_of(library, night, unit).config_file
+        tally[(night, unit, None, config, "settings-unrecorded", detail)] += counts.get((night, unit), 0)
 
 
 def associate(
@@ -1061,6 +1079,7 @@ def associate(
             rows[i] = {**frame, "n_binning": nbin, "gain": gain, "camera": key[4], **columns}
     for (night, unit), n in Counter((r[1], r[2]) for r in frames).items():
         _count_unmodeled(library, tally, night, unit, n)
+    _count_unrecorded(library, tally, Counter((r[1], r[2]) for r in frames))
     for night, unit, role, template, code, detail, n in unknown:
         tally[(night, unit, role, template, code, detail)] += n
     frame_columns = ["raw_path", "nightdate", "unit", "obj", "filter", "exptime", "n_binning", "gain", "camera"]
@@ -1106,6 +1125,7 @@ def associate_masters(
             _count_defects(tally, rec["nightdate"], rec["unit"], role, answers.get(role), 1)
         _count_unmodeled(library, tally, rec["nightdate"], rec["unit"], 1)
         rows.append(row)
+    _count_unrecorded(library, tally, Counter((r["nightdate"], r["unit"]) for r in rows))
     columns = ["master", "master_path", "type", "nightdate", "unit", "state", "n_raw", "sanity", "rebuilt"]
     columns += [c for role in ("bias", "flatdark") for c in _role_columns(library, role, None)]
     return pd.DataFrame(rows, columns=columns), _defect_table(tally)

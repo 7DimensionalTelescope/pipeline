@@ -57,6 +57,12 @@ class ProcessStatusTable:
     inspected_at: Optional[datetime] = None
     # Last, to stay aligned with ALTER TABLE ADD COLUMN, which appends at the end of the row.
     dispatch: Optional[str] = None
+    # master selection of a preprocess config, written by Preprocess; None in from_file, so never an identity key.
+    max_offset: Optional[int] = None
+    ignore_sanity_if_no_match: Optional[bool] = None
+    ignore_lenient_keys_if_no_match: Optional[bool] = None
+    reuse_recorded_masters: Optional[bool] = None
+    designated_masterframes: Optional[List[dict]] = None
 
     @classmethod
     def from_row(cls, row: tuple, columns: List[str] = None):
@@ -77,11 +83,14 @@ class ProcessStatusTable:
                 return None
             return value
 
-        row_dict = dict(zip(columns, row))
+        # a column the code does not know yet is ignored, as in ImageQATable
+        row_dict = {k: v for k, v in zip(columns, row) if k in cls.__annotations__}
 
         # Parse JSON fields (only warnings, errors is now integer)
         if "warnings" in row_dict:
             row_dict["warnings"] = parse_json_field(row_dict["warnings"])
+        if "designated_masterframes" in row_dict:
+            row_dict["designated_masterframes"] = parse_json_field(row_dict["designated_masterframes"])
 
         # Create instance using column names (which match field names)
         return cls(**row_dict)
@@ -95,6 +104,8 @@ class ProcessStatusTable:
         # Convert JSON fields (only warnings, errors is now integer)
         if "warnings" in data and isinstance(data["warnings"], (dict, list)):
             data["warnings"] = json.dumps(data["warnings"])
+        if "designated_masterframes" in data and isinstance(data["designated_masterframes"], (dict, list)):
+            data["designated_masterframes"] = json.dumps(data["designated_masterframes"])
 
         return data
 

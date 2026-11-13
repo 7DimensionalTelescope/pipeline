@@ -220,25 +220,8 @@ class ReprocessMixin:
         if self._reuse_recorded:
             self._change_policy += "+recorded"
 
-        entries = get_key(self.config_node.preprocess, "designated_masterframes", None) or []
-        if isinstance(entries, (str, dict)):
-            entries = [entries]
-        for entry in entries:
-            role = None
-            images = ()
-            path = entry
-            if isinstance(entry, dict):
-                images = entry.get("images") or ()
-                images = tuple(_stem(s) for s in ([images] if isinstance(images, str) else images))
-                keys = [k for k in entry if k != "images"]
-                if len(keys) != 1 or keys[0] not in self._ROLE_DTYPE or (images and keys[0] == "flatdark"):
-                    raise PreprocessError.ValueError(
-                        f"designated_masterframes: an entry must be a path or one `role: path` mapping with role in "
-                        f"{sorted(self._ROLE_DTYPE)}, optionally with `images:` (not for flatdark): {entry}"
-                    )
-                role, path = keys[0], entry[keys[0]]
-            if not os.path.exists(path):
-                path = resolve_master_path(os.path.basename(str(path)), self._is_pipeline) or path
+        for entry in _designation_entries(self.config_node.preprocess):
+            role, path, images = _parse_designation(entry, self._is_pipeline)
             if not os.path.exists(path):
                 raise PreprocessError.ValueError(f"designated_masterframes: file not found: {path}")
             try:
@@ -487,3 +470,49 @@ class ReprocessMixin:
                 f"filter than {os.path.basename(template)}; PPFLAG bit {ppflag.PPFLAG_HARD_KEYS_IGNORED} set"
             )
         self.raw_groups[self._current_group][1][self._key_to_index[dtype]] = designated_file
+
+
+def _preprocess_value(section, key):
+    """Value of a key of a preprocess section, ConfigNode or yml dict; None if missing."""
+    return section.get(key) if isinstance(section, dict) else get_key(section, key)
+
+
+def _designation_entries(section) -> list:
+    """designated_masterframes entries of a preprocess section, as a list."""
+    entries = _preprocess_value(section, "designated_masterframes") or []
+    return [entries] if isinstance(entries, (str, dict)) else entries
+
+
+def _parse_designation(entry, is_pipeline: bool) -> tuple:
+    """(role, path, image stems) of one designated_masterframes entry; role None for a bare path."""
+    role = None
+    images = ()
+    path = entry
+    if isinstance(entry, dict):
+        images = entry.get("images") or ()
+        images = tuple(_stem(s) for s in ([images] if isinstance(images, str) else images))
+        keys = [k for k in entry if k != "images"]
+        if len(keys) != 1 or keys[0] not in ReprocessMixin._ROLE_DTYPE or (images and keys[0] == "flatdark"):
+            raise PreprocessError.ValueError(
+                f"designated_masterframes: an entry must be a path or one `role: path` mapping with role in "
+                f"{sorted(ReprocessMixin._ROLE_DTYPE)}, optionally with `images:` (not for flatdark): {entry}"
+            )
+        role, path = keys[0], entry[keys[0]]
+    if not os.path.exists(path):
+        path = resolve_master_path(os.path.basename(str(path)), is_pipeline) or path
+    return role, path, images
+
+
+def master_selection(section, is_pipeline: bool = True) -> dict:
+    """process_status master-selection columns of a preprocess section, ConfigNode or yml dict."""
+    designated = [
+        {"role": role, "master": _stem(path), "path": str(path), "images": list(images) or None}
+        for role, path, images in (_parse_designation(e, is_pipeline) for e in _designation_entries(section))
+    ]
+    return {
+        "max_offset": _preprocess_value(section, "max_offset"),
+        "ignore_sanity_if_no_match": bool(_preprocess_value(section, "ignore_sanity_if_no_match")),
+        "ignore_lenient_keys_if_no_match": bool(_preprocess_value(section, "ignore_lenient_keys_if_no_match")),
+        "reuse_recorded_masters": bool(_preprocess_value(section, "reuse_recorded_masters")),
+        "designated_masterframes": designated or None,
+    }
