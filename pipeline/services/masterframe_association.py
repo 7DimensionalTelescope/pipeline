@@ -13,7 +13,9 @@ import os
 import signal
 import traceback
 from collections import Counter, defaultdict
+from contextlib import contextmanager
 from datetime import date, datetime
+from functools import lru_cache
 from types import SimpleNamespace
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -37,6 +39,7 @@ from ..const import (
     NAME_TYPE_MASTER,
     NUM_MIN_CALIB,
     REF_DIR,
+    instrum_log,
 )
 from ..path.cam_tracker import get_camera_serial
 from ..path.name import NameHandler
@@ -75,21 +78,6 @@ SELECT 'flat', u.name, n.date::text, x.binning_x, x.gain, NULL::float8, f.name, 
 FROM survey_flatframe x JOIN facility_unit u ON u.id = x.unit_id JOIN survey_night n ON n.id = x.night_id
 LEFT JOIN facility_filter f ON f.id = x.filter_id
 GROUP BY 2, 3, 4, 5, 7
-"""
-
-_RAW_FILES = """
-SELECT 'bias', x.file_path, x.binning_x, x.gain, NULL::float8, NULL::text
-FROM survey_biasframe x JOIN facility_unit u ON u.id = x.unit_id JOIN survey_night n ON n.id = x.night_id
-WHERE u.name = %(unit)s AND n.date = %(night)s::date
-UNION ALL
-SELECT 'dark', x.file_path, x.binning_x, x.gain, x.exptime, NULL::text
-FROM survey_darkframe x JOIN facility_unit u ON u.id = x.unit_id JOIN survey_night n ON n.id = x.night_id
-WHERE u.name = %(unit)s AND n.date = %(night)s::date
-UNION ALL
-SELECT 'flat', x.file_path, x.binning_x, x.gain, NULL::float8, f.name
-FROM survey_flatframe x JOIN facility_unit u ON u.id = x.unit_id JOIN survey_night n ON n.id = x.night_id
-LEFT JOIN facility_filter f ON f.id = x.filter_id
-WHERE u.name = %(unit)s AND n.date = %(night)s::date
 """
 
 _REGISTRY = """
@@ -161,9 +149,9 @@ class _Library:
         with open(os.path.join(REF_DIR, "preproc_base.yml")) as f:
             self.base = _read_settings(yaml.safe_load(f))
         self.configs = None
-        self.cameras, self.groups_of, self.dirs, self.ymls = {}, {}, {}, {}
+        self.cameras, self.groups_of, self.dirs = {}, {}, {}
         self.searches, self.ingredients, self.settings, self.designations = {}, {}, {}, {}
-        self.inventories, self.raw_files, self.edges = {}, {}, {}
+        self.inventories, self.edges = {}, {}
         self.skipped, self.globs, self.sibling_sources, self.blind = [], [], {}, {}
         self.unrecorded = set()
 
@@ -193,7 +181,7 @@ class _Library:
             if groups and (self.as_of is None or (night, unit) in self.targets):
                 for name, path in zip(groups, _canonical(list(groups))):
                     if os.path.dirname(path) == directory and groups[name]["n"] >= NUM_MIN_CALIB:
-                        rec = self._record(night, unit, name, groups[name])
+                        rec = self._record(night, unit, groups[name])
                         if rec["rebuilt"]:
                             present[name] = rec
             rows = [
@@ -206,22 +194,20 @@ class _Library:
                 canonical = os.path.dirname(path) == directory
                 if registered == directory or canonical:
                     rec = self._record(
-                        night, unit, name, groups.get(name) if canonical else None, (sanity, human, *rest), visible
+                        night, unit, groups.get(name) if canonical else None, (sanity, human, *rest), visible
                     )
                     (present if visible else hidden)[name] = rec
             self.dirs[directory] = present, hidden
         return self.dirs[directory]
 
     def _record(
-        self, night: str, unit: str, name: str, group: Optional[dict], row: Optional[tuple] = None, visible: bool = True
+        self, night: str, unit: str, group: Optional[dict], row: Optional[tuple] = None, visible: bool = True
     ) -> dict:
         """Library record of a master."""
         sanity, human, dtype, pipe_ver, statistics = row or (None, False, None, None, None)
         n_raw = group["n"] if group else 0
         typ = group["keys"][0] if group else None
-        rebuilt = n_raw >= NUM_MIN_CALIB and (
-            self.as_of is None or ((night, unit) in self.targets and _listed_enough(self, night, unit, name))
-        )
+        rebuilt = n_raw >= NUM_MIN_CALIB and (self.as_of is None or (night, unit) in self.targets)
         rebuilt = rebuilt and not (sanity is False and human)
         regen = rebuilt and typ in (CALIB_TYPE_DARK, CALIB_TYPE_FLAT)
         if self.as_of is None and row is not None:
@@ -336,21 +322,6 @@ def _row_of(library: _Library, night: str, unit: str) -> Optional[SimpleNamespac
         rows = free_query(_PREPROCESS_CONFIGS, [CONFIG_TYPE_PREPROCESS])
         library.configs = {name: SimpleNamespace(**dict(zip(keys, rest))) for name, *rest in rows}
     return library.configs.get(f"{night}_{unit}")
-
-
-def _yml_of(library: _Library, night: str, unit: str) -> Tuple[Optional[str], Optional[dict]]:
-    """(config path, parsed yml) of a unit-night's preprocess config; None where missing."""
-    if (night, unit) not in library.ymls:
-        row = _row_of(library, night, unit)
-        config, yml = row and row.config_file, None
-        if config is not None:
-            try:
-                with open(config) as f:  # libyaml where available: a yml lists hundreds of frames
-                    yml = yaml.load(f, Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader)) or {}
-            except FileNotFoundError:
-                pass
-        library.ymls[(night, unit)] = config, yml
-    return library.ymls[(night, unit)]
 
 
 def _settings_of(library: _Library, night: str, unit: str) -> Tuple[int, bool, bool]:
@@ -705,8 +676,6 @@ def _selected(library: _Library, template: str, dtype: str, found: Optional[str]
     rec = library.record(found)
     if flags.ignored_sanity:
         defects.append(("rejected-used", template, f"{_stem(found)}: {'human' if rec['human'] else 'machine'}"))
-    if rec["rebuilt"] and (missing := _missing_inputs(library, found, rec)):
-        defects.append(("config-missing-inputs", template, missing))
     return {
         "path": path,
         "source": found,
@@ -751,47 +720,6 @@ def _sibling_source(library: _Library, path: str) -> Optional[str]:
         if nbin % finer == 0 and name.mflat_basename in library.registry.get(directory, {}):
             return os.path.join(directory, name.mflat_basename)
     return None
-
-
-def _listed_enough(library: _Library, night: str, unit: str, name: str) -> bool:
-    """Whether the owner yml lists NUM_MIN_CALIB of a master's raw frames."""
-    listing = _listing(library, night, unit, name)
-    return listing is None or listing[0] >= NUM_MIN_CALIB
-
-
-def _listing(library: _Library, night: str, unit: str, name: str) -> Optional[Tuple[int, int]]:
-    """(listed in the owner yml, in the raw DB) raw frames of a master basename; None without a yml to read."""
-    _, yml = _yml_of(library, night, unit)
-    if yml is None:
-        return None
-    if (night, unit) not in library.raw_files:
-        files = defaultdict(set)
-        camera = library.camera(unit, night)
-        for typ, file_path, nbin, gain, exptime, filt in free_query(_RAW_FILES, {"unit": unit, "night": night}):
-            quality = format_exptime(float(exptime), type="dark") if typ == CALIB_TYPE_DARK else filt
-            files[_master_basename(typ, quality, unit, night, nbin, gain, camera)].add(os.path.basename(file_path))
-        listed = {os.path.basename(str(p)) for p in _flatten((yml.get("input") or {}).get("masterframe_images"))}
-        library.raw_files[(night, unit)] = files, listed
-    files, listed = library.raw_files[(night, unit)]
-    return len(files[name] & listed), len(files[name])
-
-
-def _missing_inputs(library: _Library, path: str, rec: dict) -> Optional[str]:
-    """Why a queue run of the owner's existing config would not rebuild a master the modeled state rebuilds."""
-    night, unit = rec["nightdate"], rec["unit"]
-    listing = _listing(library, night, unit, os.path.basename(path))
-    if listing is None:
-        config = _yml_of(library, night, unit)[0]
-        missing = f"config file missing: {config}" if config else "no preprocess config in process_status"
-        return f"{_stem(path)}: {missing}" if library.as_of is None else None
-    return f"{_stem(path)}: {listing[0]} listed / {listing[1]} in raw DB" if listing[0] < NUM_MIN_CALIB else None
-
-
-def _flatten(items) -> list:
-    """Leaves of a nested list."""
-    if isinstance(items, (list, tuple)):
-        return [leaf for item in items for leaf in _flatten(item)]
-    return [] if items is None else [items]
 
 
 def _registry_issues(library: _Library, path: str, rec: dict) -> List[str]:
@@ -1038,6 +966,21 @@ def _count_unrecorded(library: _Library, tally: Counter, counts: Counter) -> Non
         tally[(night, unit, None, config, "settings-unrecorded", detail)] += counts.get((night, unit), 0)
 
 
+@contextmanager
+def _changelog_cached():
+    """Each unit's changelog read once while a run lasts."""
+    read = instrum_log.get_changelog
+    if hasattr(read, "cache_info"):  # a run in progress already caches
+        yield
+        return
+    instrum_log.get_changelog = lru_cache(maxsize=None)(read)
+    try:
+        yield
+    finally:
+        instrum_log.get_changelog = read
+
+
+@_changelog_cached()
 def associate(
     targets, *, trust_machine_rejection: bool = True, as_of: Optional[datetime] = None
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -1088,6 +1031,7 @@ def associate(
     return pd.DataFrame(rows, columns=columns), _defect_table(tally)
 
 
+@_changelog_cached()
 def associate_masters(
     masters: Iterable[str], *, trust_machine_rejection: bool = True, as_of: Optional[datetime] = None
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:

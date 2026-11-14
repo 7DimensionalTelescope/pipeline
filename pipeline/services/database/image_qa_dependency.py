@@ -116,6 +116,72 @@ WITH RECURSIVE impact(id, depth) AS (
 )
 """
 
+# find_stale_products: {scope} narrows the products; with a scope, {edges} and {in_pool} confine the stale edges and
+# the walk down from them to the products and what lies above them (pool), and without one {edges} is the whole
+# table. A walk row names its re-made source from the single's side: each master edge passed prepends its role, and a
+# flat built from flats counts as the flat it copies. The OFFSET 0 laterals keep the lookups and the UNION ALL walks on
+# the indexes: the planner sizes a source's fan-out as a master's and the stale set as ~400k, and the hash, merge join
+# or UNION hash table it then builds over image_qa or the dependency table costs seconds.
+_STALE_PRODUCTS_SQL = """
+WITH RECURSIVE remade AS MATERIALIZED (
+    SELECT q.id
+      FROM process_status ps JOIN image_qa q ON q.process_status_id = ps.id
+     WHERE ps.config_type = %(preprocess)s AND q.image_type = %(single)s{scope}
+       AND (q.skyval IS NOT NULL OR q.unmatch IS NOT NULL OR q.rej_proc <> %(preprocess)s)
+       AND NOT EXISTS (SELECT 1 FROM image_qa_dependency d WHERE d.source_image_id = q.id AND d.source_imageid = q.imageid)
+), product AS MATERIALIZED (
+    SELECT q.id FROM image_qa q WHERE q.image_group = %(science)s{scope}
+), above(id, depth) AS (
+    SELECT DISTINCT d.source_image_id, 1
+      FROM product p CROSS JOIN LATERAL (
+           SELECT source_image_id FROM image_qa_dependency WHERE derived_image_id = p.id OFFSET 0) d
+     WHERE d.source_image_id NOT IN (SELECT id FROM product)
+  UNION ALL
+    SELECT d.source_image_id, a.depth + 1
+      FROM above a CROSS JOIN LATERAL (
+           SELECT source_image_id FROM image_qa_dependency WHERE derived_image_id = a.id OFFSET 0) d
+     WHERE a.depth < %(max_depth)s AND d.source_image_id NOT IN (SELECT id FROM product)
+), pool AS MATERIALIZED (
+    SELECT DISTINCT id FROM (SELECT id FROM product UNION ALL SELECT id FROM above) a
+), stale AS MATERIALIZED (
+    SELECT d.derived_image_id AS id, d.source_image_id AS source,
+           CASE WHEN d.dependency_role = %(reference)s THEN d.dependency_role ELSE s.image_type END AS name
+      FROM {edges}
+     WHERE d.source_imageid IS NOT NULL AND d.source_imageid <> s.imageid
+), walk(source, id, name, depth) AS (
+    SELECT source, id, name, 1 FROM stale WHERE %(max_depth)s >= 1
+  UNION ALL
+    SELECT w.source, d.derived_image_id,
+           CASE WHEN d.dependency_role = ANY(%(calib)s) THEN d.dependency_role || '_' || w.name ELSE w.name END,
+           w.depth + 1
+      FROM walk w CROSS JOIN LATERAL (
+           SELECT derived_image_id, dependency_role FROM image_qa_dependency
+            WHERE source_image_id = w.id{in_pool} OFFSET 0) d
+     WHERE w.depth < %(max_depth)s
+), found AS MATERIALIZED (
+    SELECT id, min(depth) AS depth, count(DISTINCT source) AS n_sources,
+           string_agg(DISTINCT name, ',' ORDER BY name) AS sources
+      FROM (SELECT source, id, depth,
+                   replace(regexp_replace(name, '(flat_)+flat', 'flat'), 'flat_dark', 'flatdark') COLLATE "C" AS name
+              FROM walk) w
+     GROUP BY id
+)
+SELECT q.image_name, q.image_type, q.object, q.filter, q.unit, q.nightdate, r.reason, r.sources, r.depth,
+       r.n_sources, ps.name, ps.config_type,
+       CASE WHEN ps.config_type IN (%(science_type)s, %(crossfilter)s) THEN ps.name ELSE sc.name END
+  FROM (SELECT coalesce(f.id, m.id) AS id, CASE WHEN m.id IS NULL THEN 'source-remade' ELSE 'remade' END AS reason,
+               coalesce(f.sources, '') AS sources, coalesce(f.depth, 0) AS depth, coalesce(f.n_sources, 0) AS n_sources
+          FROM found f FULL JOIN remade m ON m.id = f.id) r
+ CROSS JOIN LATERAL (
+       SELECT image_name, image_type, object, filter, unit, nightdate, image_group, process_status_id
+         FROM image_qa WHERE id = r.id OFFSET 0) q
+  LEFT JOIN process_status ps ON ps.id = q.process_status_id
+  LEFT JOIN process_status sc ON ps.config_type = %(preprocess)s AND sc.config_type = %(science_type)s
+       AND sc.name = q.object || '_' || q.filter || '_' || to_char(q.nightdate, 'YYYY-MM-DD')
+ WHERE q.image_group = %(science)s{scope}
+ ORDER BY q.nightdate, q.object, q.filter, r.depth, q.image_name
+"""
+
 
 def _id_key(name_key: str) -> Optional[str]:
     """IMCMB001 -> IMCID001, IMG00000 -> IID00000."""
@@ -464,6 +530,70 @@ def stale_products(
         ],
     )
     return products, stale
+
+
+def find_stale_products(
+    objects: Optional[List[str]] = None,
+    units: Optional[List[str]] = None,
+    nightdate_from: Optional[str] = None,
+    nightdate_to: Optional[str] = None,
+    filters: Optional[List[str]] = None,
+    max_depth: int = 10,
+) -> pd.DataFrame:
+    """Stale science products in a scope: remade, source-remade, with the re-made sources; read-only, database alone."""
+    from ...const import CONFIG_TYPE_CROSSFILTER, CONFIG_TYPE_PREPROCESS, CONFIG_TYPE_SCIENCE, IMAGE_GROUP_SCIENCE
+
+    params = {
+        "preprocess": CONFIG_TYPE_PREPROCESS,
+        "single": IMAGE_TYPE_SINGLE,
+        "science": IMAGE_GROUP_SCIENCE,
+        "science_type": CONFIG_TYPE_SCIENCE,
+        "crossfilter": CONFIG_TYPE_CROSSFILTER,
+        "reference": REFERENCE_DEPENDENCY_ROLE,
+        "calib": list(CALIB_TYPES),
+        "max_depth": max_depth,
+    }
+    scope = ""
+    for column, values in (("object", objects), ("unit", units), ("filter", filters)):
+        if values is not None:
+            scope += f" AND q.{column} = ANY(%({column})s)"
+            params[column] = list(values) if isinstance(values, (list, tuple, set)) else [values]
+    for key, op, value in (("nightdate_from", ">=", nightdate_from), ("nightdate_to", "<=", nightdate_to)):
+        if value is not None:
+            scope += f" AND q.nightdate {op} %({key})s"
+            params[key] = value
+    edges, in_pool = "image_qa_dependency d JOIN image_qa s ON s.id = d.source_image_id", ""
+    if scope:
+        edges = (
+            "pool p CROSS JOIN LATERAL (SELECT * FROM image_qa_dependency WHERE derived_image_id = p.id OFFSET 0) d"
+            " CROSS JOIN LATERAL (SELECT image_type, imageid FROM image_qa WHERE id = d.source_image_id OFFSET 0) s"
+        )
+        in_pool = " AND derived_image_id IN (SELECT id FROM pool)"
+
+    with ImageQADependency().get_connection() as conn:
+        conn.read_only = True
+        conn.execute("SET statement_timeout = '120s'")
+        conn.execute("SET jit = off")  # the walk's estimated cost is astronomical, and compiling for it takes seconds
+        rows = conn.execute(_STALE_PRODUCTS_SQL.format(scope=scope, edges=edges, in_pool=in_pool), params).fetchall()
+
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "image_name",
+            "image_type",
+            "object",
+            "filter",
+            "unit",
+            "nightdate",
+            "reason",
+            "sources",
+            "depth",
+            "n_sources",
+            "config_name",
+            "config_type",
+            "science_config",
+        ],
+    )
 
 
 def _markdown_table(frame, limit: int, by: str) -> List[str]:
