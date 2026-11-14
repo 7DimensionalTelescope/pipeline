@@ -23,8 +23,8 @@ class BackgroundResiduals:
 
     def cards(self, include_missing: bool = False) -> dict:
         descriptions = (
-            ("backoff", "[ADU] Sky true mode minus model; positive = under-subtracted"),
-            ("backsys", "[ADU] Excess spatial RMS of patch mean residuals"),
+            ("backoff", "[ADU] Sky mode minus model; >0 under-subtracted"),
+            ("backsys", "[ADU] Excess spatial RMS of patch mean residual"),
             ("backscl", "[pixel] Residual measurement square width"),
             ("backn", "Number of valid residual sky patches measured"),
             ("backref", "Residual reference: MODEL, SUBTRACT, or COADD"),

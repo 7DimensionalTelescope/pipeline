@@ -935,15 +935,14 @@ class PhotometrySingle:
 
         Below ``imcoadd.background.dequantize_background_below`` ADU of SKYVAL (the steppy regime, where the box median snaps to the ADC
         lattice and MMM triples the snap) the mesh is fitted on the dequantized copy, exactly as ImCoadd's detector-grid fit
-        gates it on the same key; the copy is convolved once and used only for the mesh. Its noise is the frame's times sqrt(sum k^2) of the kernel (white noise:
-        Var(sum k_i x_i) = sigma^2 sum k_i^2, the measured lag-1 correlation being ~0.006), so BACKSIG is the mesh's rms
-        median divided by sqrt(BACKKSQ); the residual cards are measured on the frame itself against that mesh."""
+        gates it on the same key; the copy is convolved once and used only for the mesh. BACKSIG and the residual
+        cards are measured on the frame itself against that mesh."""
         from ..imcoadd.utils import (
             DEQUANT_KERNEL,
             background_mesh,
             build_source_mask,
             mesh_peak,
-            noise_autocorrelation,
+            noise_autocovariance,
             source_ellipses_on_frame,
             dequantize,
         )
@@ -1034,13 +1033,33 @@ class PhotometrySingle:
             self.logger.warning(f"Off-source sky not measured: {e}")
             return
         background.BACKVAL = float(fitted.background_median)
-        background.BACKSIG = float(fitted.background_rms_median) / np.sqrt(ksq)
         background.DEQUANT, background.BACKKSQ = dequantized, round(ksq, 5)
         background.BACKFRAC = round(float((~excluded & ~no_data).mean()), 4)
         background.SRCFRAC = round(float(sources.mean()), 4)
         background.BACKPEAK, background.BACKPKSN = (round(v, 4) if np.isfinite(v) else None for v in mesh_peak(fitted))
         coverage = ~no_data
         residual = data if is_coadd else data - fitted.background
+        sky_noise = data - fitted.background if is_coadd else residual  # blank sky about BACKSIG's own mesh
+        maxlag = 0
+        if not self._single_frame:
+            # exact-weight apertures overlap out to ceil(diameter) px per axis, so the window spans the largest aperture
+            diameters = [b.get("value") or 0.0 for b in phot_header.flux_calibration.aperture_info.values()]
+            maxlag = max(16, int(np.ceil(max(diameters))) if diameters else 0)
+        stats = {}
+        autocov = noise_autocovariance(
+            sky_noise,
+            mask=excluded | ~coverage,
+            box_size=mesh["box_size"],
+            maxlag=maxlag,
+            exclude_percentile=mesh["exclude_percentile"],
+            stats=stats,
+            logger=self.logger,
+        )
+        del sky_noise
+        if autocov is None:
+            self.logger.warning("Off-source sky not measured: no mesh box keeps enough blank sky for its noise")
+            return
+        background.BACKSIG = float(np.sqrt(autocov[maxlag, maxlag]))
         result = measure_background_residuals(
             residual,
             exclude=excluded,
@@ -1060,11 +1079,8 @@ class PhotometrySingle:
         background.BACKREF = "COADD" if is_coadd else "MODEL"
         background.sky = True
         self.logger.debug(f"Residual sky ({background.BACKREF}): {result}")
-        sky_noise = data - fitted.background if is_coadd else residual  # blank sky about BACKSIG's own mesh
         if not self._single_frame:
-            self._measure_sky_covariance(
-                phot_header, sky_noise, excluded | ~coverage, coverage, header if is_coadd else None
-            )
+            self._measure_sky_covariance(phot_header, autocov, stats, header if is_coadd else None)
         self.logger.info(
             f"Off-source sky: BACKVAL {background.BACKVAL:.3f}, BACKSIG {background.BACKSIG:.3f} on "
             f"{100 * background.BACKFRAC:.1f}% of the frame, {100 * background.SRCFRAC:.1f}% source-masked "
@@ -1093,75 +1109,38 @@ class PhotometrySingle:
             gain=float(gain), levels=[float(sky)], taps=coadd_taps(n_inputs, n_inputs * float(gain) / float(egain))
         )
 
-    def _measure_sky_covariance(
-        self, phot_header: PhotometryHeader, residual, excluded, coverage, coadd_header=None
-    ) -> None:
-        """Field-wide sky covariance, its BACKSIG-relative COV_n and BACKC2; a warning when not measured."""
-        from ..imcoadd.utils import noise_autocorrelation
-
+    def _measure_sky_covariance(self, phot_header: PhotometryHeader, autocov, stats: dict, coadd_header=None) -> None:
+        """COV_n from the autocovariance BACKSIG was read off; a warning when it gives no aperture noise."""
         background, flux_calibration = phot_header.background, phot_header.flux_calibration
-        # exact-weight apertures overlap out to ceil(diameter) px per axis, so the window spans the largest aperture
-        diameters = [b.get("value") or 0.0 for b in flux_calibration.aperture_info.values()]
-        maxlag = max(16, int(np.ceil(max(diameters))) if diameters else 0)
-        stats = {}
-        acf = noise_autocorrelation(
-            residual, mask=excluded, maxlag=maxlag, stats=stats, coverage=coverage, logger=self.logger
-        )
-        if acf is None or not np.isfinite(stats.get("variance", 0)) or stats["variance"] <= 0:
+        half = autocov.shape[0] // 2
+        acf = autocov / autocov[half, half]
+        try:  # a lag-by-lag median over sub-areas need not be a valid covariance
+            factors = {
+                bundle["suffix"]: phot_utils.aperture_noise_factor(acf, bundle["value"])
+                for bundle in flux_calibration.depth_apertures.values()
+            }
+        except ValueError as e:
             self.logger.warning(
-                "Sky covariance not measured: no usable sky autocorrelation; COV_n undefined, UL_n not corrected",
-                SkyCovarianceNotMeasuredError,
+                f"Sky covariance not measured: {e}; COV_n, UL3_5C and UL5_5C undefined", SkyCovarianceNotMeasuredError
             )
             return
-        if background.noise is None:
-            self.logger.warning(
-                f"Sky covariance not measured: BACKSIG {background.BACKSIG} is not positive; COV_n undefined",
-                SkyCovarianceNotMeasuredError,
-            )
-            return
-        relative_acf = acf * (stats["variance"] / background.BACKSIG**2)
-        background.BACKC2 = float(phot_utils.bin_noise_factor(relative_acf, 2))
-        half = acf.shape[0] // 2
-        lag_cards = dict(
-            BACKCR=int(half),
-            BACKCOV=float(np.sum(acf)),
-            BACKR10=float(0.5 * (acf[half, half + 1] + acf[half, half - 1])),
-            BACKR01=float(0.5 * (acf[half + 1, half] + acf[half - 1, half])),
-            BACKR11=float(
-                0.25
-                * (
-                    acf[half + 1, half + 1]
-                    + acf[half + 1, half - 1]
-                    + acf[half - 1, half + 1]
-                    + acf[half - 1, half - 1]
-                )
-            ),
-        )
-        if coadd_header is None:
-            for key, value in lag_cards.items():
-                setattr(background, key, value)
-        else:  # the lag cards would only repeat pixels of the written map
-            self._write_acf(acf * stats["variance"], stats["pixels"], stats["represented"], coadd_header["IMAGEID"])
-        background.BACKCPIX, background.BACKCREP = stats["pixels"], round(stats["represented"], 4)
-
-        for bundle in flux_calibration.depth_apertures.values():
-            background.cov[bundle["suffix"]] = phot_utils.aperture_noise_factor(relative_acf, bundle["value"])
+        if coadd_header is not None:
+            self._write_acf(autocov, stats["pixels"], stats["sub_areas"], coadd_header["IMAGEID"])
+        background.cov.update(factors)
         background.covariance = True
         self.logger.info(
-            f"Sky covariance: BACKCOV {lag_cards['BACKCOV']:.4f} to {half} px, "
-            f"rho(1,0) {lag_cards['BACKR10']:+.4f}, rho(0,1) {lag_cards['BACKR01']:+.4f}, "
-            f"2x2 bin factor {background.BACKC2:.4f}, from {stats['pixels']} sky pixels "
-            f"in {stats['sub_areas']} sub-areas spanning {stats['represented']:.1%} of the covered field"
+            f"Sky covariance: rho(1,0) {acf[half, half + 1]:+.4f}, rho(0,1) {acf[half + 1, half]:+.4f}, "
+            f"from {stats['pixels']} sky pixels in {stats['sub_areas']} sub-areas"
         )
 
-    def _write_acf(self, autocov, npix: int, represented: float, imageid: str) -> None:
+    def _write_acf(self, autocov, npix: int, sub_areas: int, imageid: str) -> None:
         """Coadd's unnormalised sky-noise autocovariance beside it, published atomically."""
         path = PathHandler.acf(self.input_image)
         header = fits.Header()
         header["BUNIT"] = ("adu**2", "Sky-noise autocovariance C(dx,dy)")
         header["IMAGEID"] = (imageid, "Coadd this map was measured on")
         header["ACFNPIX"] = (npix, "Blank-sky pixels the map was measured on")
-        header["ACFREP"] = (round(represented, 4), "Covered fraction spanned by the sky sub-areas")
+        header["ACFNSUB"] = (sub_areas, "Sky sub-areas the median was taken over")
         header["COMMENT"] = "C(dx,dy) at pixel (R+1+dx, R+1+dy), R = (NAXIS1-1)/2, dx along NAXIS1"
         tmp = f"{path}.tmp"
         try:
@@ -1181,7 +1160,7 @@ class PhotometrySingle:
         if not os.path.exists(path):
             return False
         acf_header = fits.getheader(path)
-        return acf_header.get("IMAGEID") == header.get("IMAGEID") and acf_header.get("ACFREP") is not None
+        return acf_header.get("IMAGEID") == header.get("IMAGEID") and acf_header.get("ACFNSUB") is not None
 
     def _run_sextractor(
         self,
@@ -2012,8 +1991,8 @@ class FluxCalibration(HeaderBlock):
             f"EZP_{suffix}": (bundle["ZPERR"], f"ZERO POINT ERROR for {mag_key}"),
         }
         if include_missing or (mag_key != "MAG_AUTO" and bundle["UL3"] is not None and bundle["UL5"] is not None):
-            cards[f"UL3_{suffix}"] = (bundle["UL3"], f"3sig limitmag aper{suffix}, corrected if COV_{suffix} set")
-            cards[f"UL5_{suffix}"] = (bundle["UL5"], f"5sig limitmag aper{suffix}, corrected if COV_{suffix} set")
+            cards[f"UL3_{suffix}"] = (bundle["UL3"], f"3sig limitmag aper{suffix}, covariance uncorrected")
+            cards[f"UL5_{suffix}"] = (bundle["UL5"], f"5sig limitmag aper{suffix}, covariance uncorrected")
         return cards
 
     def clear(self) -> None:
@@ -2034,6 +2013,18 @@ class FluxCalibration(HeaderBlock):
             cards.update(
                 self._zp_cards(aperture_key, null, include_missing=aperture_key != "AUTO")
             )  # AUTO has no UL/COV
+            if suffix == "5":
+                cards.update(self._corrected_cards())
+        return cards
+
+    @staticmethod
+    def _corrected_cards(bundle: dict = None, cov: float = None) -> Dict:
+        """UL3_5C and UL5_5C, the depth with the covariance in it: aperture 5 alone carries them, beside COV_5."""
+        cards = {}
+        for sigma in (3, 5):
+            depth = bundle[f"UL{sigma}"] if bundle is not None and cov is not None else None
+            corrected = None if depth is None else round(depth - 2.5 * np.log10(round(cov, 4)), 6)  # COV_5 as written
+            cards[f"UL{sigma}_5C"] = (corrected, f"{sigma}sig limitmag aper5, corrected by COV_5")
         return cards
 
     @property
@@ -2053,15 +2044,13 @@ class FluxCalibration(HeaderBlock):
         return [bundle["suffix"] for bundle in self.depth_apertures.values()]
 
     def set_depth(self) -> bool:
-        """UL_n from ZP_n and the finalized background's BACKSIG and COV_n; False when BACKSIG gives no depth."""
-        background = self.header.background
-        noise = background.noise
+        """UL_n from ZP_n and the finalized background's BACKSIG, without COV_n; False when BACKSIG gives no depth."""
+        noise = self.header.background.noise
         for bundle in self.depth_apertures.values():
             if noise is None:
                 bundle["UL3"] = bundle["UL5"] = None
                 continue
-            factor = background.cov.get(bundle["suffix"], 1.0)
-            ul_3sig, ul_5sig = phot_utils.limitmag(np.array([3, 5]), bundle["ZP"], bundle["value"], noise, factor)
+            ul_3sig, ul_5sig = phot_utils.limitmag(np.array([3, 5]), bundle["ZP"], bundle["value"], noise, 1.0)
             bundle["UL3"], bundle["UL5"] = float(ul_3sig), float(ul_5sig)
         return noise is not None
 
@@ -2077,7 +2066,7 @@ class FluxCalibration(HeaderBlock):
                 round(self.INF_DEZP, 6) if self.INF_DEZP is not None else None,
                 "[mag] EZP_AUTO of INF_FIL2 - INF_FILT's",
             ),
-            "INF_FIL2": (self.INF_FIL2, "Lowest-EZP_AUTO filter in the pool except INF_FILT"),
+            "INF_FIL2": (self.INF_FIL2, "Lowest-EZP_AUTO pool filter except INF_FILT"),
             "INF_DEZF": (
                 round(self.INF_DEZF, 6) if self.INF_DEZF is not None else None,
                 "[mag] EZP_AUTO of FILTER - INF_FILT's",
@@ -2098,12 +2087,14 @@ class FluxCalibration(HeaderBlock):
         cards.update({k: (round(v[0], 6), v[1]) for k, v in self.aperture_dict.items()})
         cards.update({k: (round(v[0], 6), v[1]) for k, v in self.zp_dict.items() if v[0] is not None})
 
-        finalized = self.header.background.finalized
+        background = self.header.background
         for aperture_key, bundle in self.depth_apertures.items():
-            if not finalized:
+            if not background.finalized:
                 bundle = {**bundle, "UL3": None, "UL5": None}
             depth = self._zp_cards(aperture_key, bundle, include_missing=True)
             cards.update({k: v for k, v in depth.items() if v[0] is None and k.startswith("UL")})
+            if bundle["suffix"] == "5":
+                cards.update(self._corrected_cards(bundle, background.cov.get("5")))
         # no zero point: a previous run's ZP cards must not survive either, nor its STDNUMB when none was counted
         if self.cleared:
             cards.update(self.null_cards)
@@ -2129,30 +2120,15 @@ class Background(HeaderBlock):
     BACKN: int = None
     BACKREF: str = None
     BACKNREF: str = None
-    BACKCPIX: int = None
-    BACKCREP: float = None
-    BACKC2: float = None
-    BACKCOV: float = None
-    BACKCR: int = None
-    BACKR10: float = None
-    BACKR01: float = None
-    BACKR11: float = None
-
-    # the covariance part: its frame-level cards, and the lag cards of a frame without a map
-    COVARIANCE_CARDS = ("BACKCPIX", "BACKCREP", "BACKC2")
-    LAG_CARDS = ("BACKCOV", "BACKCR", "BACKR10", "BACKR01", "BACKR11")
 
     def __init__(self, header: PhotometryHeader):
         super().__init__(header)
-        self.loaded = set()  # cards the image header carried, the undefined ones too
         self.cov = {}  # aperture suffix n -> COV_n
         self.sky = self.covariance = False  # measured in this run, or the header's kept
         self.finalized = False  # the run has decided both; no UL_n or COV_n is written before
-        self.single = None
 
     def load(self, keys: dict) -> None:
         super().load(keys)
-        self.loaded = {key for key in self.keys() if key in keys}
         # COV_n of the apertures the calibration loaded: a factor holds for the diameter it was measured with
         suffixes = [bundle["suffix"] for bundle in self.header.flux_calibration.aperture_info.values()]
         self.cov = {suffix: keys[f"COV_{suffix}"] for suffix in suffixes if keys.get(f"COV_{suffix}") is not None}
@@ -2165,10 +2141,6 @@ class Background(HeaderBlock):
 
     @property
     def covariance_complete(self) -> bool:
-        if not self.BACKCPIX:  # cards measured before the field-wide estimate are not the current definition
-            return False
-        if self.BACKC2 is None or not np.isfinite(self.BACKC2) or self.BACKC2 <= 0:
-            return False
         factors = [self.cov.get(suffix) for suffix in self.header.flux_calibration.depth_suffixes]
         return all(factor is not None and np.isfinite(factor) and factor > 0 for factor in factors)
 
@@ -2177,16 +2149,12 @@ class Background(HeaderBlock):
         # covariance needs sky; a single has none; without a zero point there is no COV_n to keep it for
         if not self.sky or single or self.header.flux_calibration.cleared:
             self.covariance = False
-        # the lag cards only beside a covariance measured without a map: a coadd's map (BACKREF COADD) holds them
-        dropped = () if self.covariance and self.BACKREF != "COADD" else self.LAG_CARDS
         if not self.covariance:
-            dropped += self.COVARIANCE_CARDS
             self.cov = {}
         if not self.sky:
-            dropped += tuple(key for key in self.keys() if key not in self.COVARIANCE_CARDS + self.LAG_CARDS)
-        for key in dropped:
-            setattr(self, key, None)
-        self.single, self.finalized = single, True
+            for key in self.keys():
+                setattr(self, key, None)
+        self.finalized = True
 
     @property
     def cards(self) -> Dict[str, Tuple[Any, str]]:
@@ -2195,37 +2163,14 @@ class Background(HeaderBlock):
         misc_dict = {
             "BACKSIG": (float(f"{self.BACKSIG:.6g}") if self.BACKSIG is not None else None, "SKY SIGMA OFF SOURCE"),
             "BACKVAL": (round(self.BACKVAL, 6) if self.BACKVAL is not None else None, "SKY MEDIAN OFF SOURCE"),
-            "DEQUANT": (self.DEQUANT, "Sky mesh fitted on the dequantized copy (SKYVAL < cut)"),
-            "BACKKSQ": (self.BACKKSQ, "sum k^2 of that kernel; BACKSIG = measured / sqrt"),
+            "DEQUANT": (self.DEQUANT, "Sky mesh fitted on the dequantized copy"),
+            "BACKKSQ": (self.BACKKSQ, "sum k^2 of that kernel"),
             "BACKFRAC": (self.BACKFRAC, "Fraction of pixels used for the sky estimate"),
             "SRCFRAC": (self.SRCFRAC, "Fraction of pixels covered by the source mask"),
-            "BACKPEAK": (self.BACKPEAK, "[ADU] Largest mesh node excursion from its neighbours"),
+            "BACKPEAK": (self.BACKPEAK, "[ADU] Largest mesh node excursion"),
             "BACKPKSN": (
                 round(self.BACKPKSN, 2) if self.BACKPKSN is not None else None,
                 "BACKPEAK / (1.4826 MAD of node excursions)",
-            ),
-            "BACKCPIX": (self.BACKCPIX, "Blank-sky pixels behind the covariance cards"),
-            "BACKCREP": (self.BACKCREP, "Covered fraction spanned by the sky sub-areas"),
-            "BACKCOV": (
-                round(self.BACKCOV, 4) if self.BACKCOV is not None else None,
-                "Sum of C(h)/C(0) over |dx|,|dy| <= BACKCR",
-            ),
-            "BACKCR": (self.BACKCR, "[pixel] Half-width of the measured lag square"),
-            "BACKC2": (
-                round(self.BACKC2, 4) if self.BACKC2 is not None else None,
-                "sigma(2x2 bin sum) / (2 * BACKSIG)",
-            ),
-            "BACKR10": (
-                round(self.BACKR10, 5) if self.BACKR10 is not None else None,
-                "Blank-sky correlation C(1,0)/C(0)",
-            ),
-            "BACKR01": (
-                round(self.BACKR01, 5) if self.BACKR01 is not None else None,
-                "Blank-sky correlation C(0,1)/C(0)",
-            ),
-            "BACKR11": (
-                round(self.BACKR11, 5) if self.BACKR11 is not None else None,
-                "C(+-1,+-1)/C(0) of blank sky, 4-fold mean",
             ),
         }
         residual = BackgroundResiduals(**{key: getattr(self, key.upper()) for key in RESIDUAL_KEYS})
@@ -2233,12 +2178,10 @@ class Background(HeaderBlock):
         if self.BACKN is not None:
             cards |= residual.cards(include_missing=True)
         if self.finalized:
-            # cards a single never has, and the lag cards, go undefined only where the header carried them
-            lingering = self.LAG_CARDS + (self.COVARIANCE_CARDS if self.single else ())
             cards |= {
                 key: (None, comment)
                 for key, (_, comment) in (residual.cards(include_missing=True) | misc_dict).items()
-                if getattr(self, key) is None and (key not in lingering or key in self.loaded)
+                if getattr(self, key) is None
             }
         flux_calibration = self.header.flux_calibration
         for suffix in flux_calibration.depth_suffixes:

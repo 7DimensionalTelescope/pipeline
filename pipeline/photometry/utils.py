@@ -144,22 +144,6 @@ def aperture_noise_factor(acf, aperture: float) -> float:
     return float(np.sqrt(variance / (np.pi * radius**2)))
 
 
-def bin_noise_factor(acf, box: int) -> float:
-    """sqrt(sum_h acf(h) O(h)) / box for a box x box pixel sum, O(h) = (box - |hx|)(box - |hy|)."""
-    if acf is None:
-        return 1.0
-    acf = np.asarray(acf, dtype=float)
-    half = acf.shape[0] // 2
-    box = int(box)
-    lags = np.arange(-(box - 1), box)
-    if lags.max() > half:
-        return float("nan")
-    hy, hx = np.meshgrid(lags, lags, indexing="ij")
-    overlap = (box - np.abs(hx)) * (box - np.abs(hy))
-    window = acf[np.ix_(lags + half, lags + half)]
-    return float(np.sqrt(np.sum(window * overlap) / box**2))
-
-
 @njit
 def apply_zp(mag: np.ndarray, mag_err: np.ndarray, zp: float, zperr: float) -> tuple[np.ndarray]:
     """
