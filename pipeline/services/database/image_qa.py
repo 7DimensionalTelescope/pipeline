@@ -224,6 +224,8 @@ class ImageQATable:
             data["errors"] = json.dumps(data["errors"])
         if "err_msgs" in data and isinstance(data["err_msgs"], (dict, list)):
             data["err_msgs"] = json.dumps(data["err_msgs"])
+        # "None" is update_data's NULL; create_data leaves it out of an INSERT
+        data.update({k: "None" for k in getattr(self, "_undefined", ()) if data[k] is None})
 
         return data
 
@@ -241,6 +243,7 @@ class ImageQATable:
             key for key in cls.__annotations__ if key != "inspcomm"
         ]  # a sanity-with-INSPCOMM record comes only from set_inspection
 
+        cls._undefined = set()
         for key in keys:
             possible_keys = [key.replace("_", "-").upper(), key.upper()]
             for header_key in possible_keys:
@@ -248,6 +251,8 @@ class ImageQATable:
                     header_key = "TELESCOP"
                 if header_key in header:
                     setattr(cls, key, header[header_key])
+                    if header[header_key] is None and key not in ("m_epoch", "sanity", "nightdate"):
+                        cls._undefined.add(key)  # a card without a value: to_dict sends NULL for it
 
         if "IMAGETYP" not in header and NameHandler(file).type.kind == NAME_TYPE_MASTER:
             imagetyp = NameHandler(file).type.image_type  # old master darks (1.7.5, 1.10.43) carry no IMAGETYP card

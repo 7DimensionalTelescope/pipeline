@@ -95,6 +95,10 @@ class FilterInventoryError(Exception):
     pass
 
 
+class SkyCovarianceNotMeasuredError(Exception):
+    pass
+
+
 class PhotometryReferenceGenerationError(Exception):
     pass
 

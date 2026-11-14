@@ -72,6 +72,7 @@ from ..errors import (
     NoReferenceSourceError,
     FilterCheckError,
     FilterInventoryError,
+    SkyCovarianceNotMeasuredError,
     InferredFilterMismatchError,
     FilterMismatchError,
     ConnectionError,
@@ -406,7 +407,7 @@ class PhotometrySingle:
         self.logger.debug(f"{self.name}: ImageInfo: {self.image_info}")
         self.phot_header = PhotometryHeader(self.image_info)  # mind its update structure
         self.phot_header.AUTHOR = getpass.getuser()
-        self.phot_header.REFCAT = self.ref_cat_type
+        self.phot_header.flux_calibration.REFCAT = self.ref_cat_type
         self.logger.debug(f"{self.name}: self.phot_header at PhotometrySingle.__init__(): {self.phot_header}")
 
 
@@ -471,7 +472,8 @@ class PhotometrySingle:
             self.logger.info(f"Start 'PhotometrySingle' for the image {self.name}")
             self.logger.debug(f"{'=' * 13} {os.path.basename(self.input_image)} {'=' * 13}")
             if not self._trust_header_zp:
-                self.phot_header.STDNUMB = None  # this run's zero-point star count, or nothing: never the header's
+                # this run's zero-point star count, or nothing: never the header's
+                self.phot_header.flux_calibration.STDNUMB = None
 
             # use_header_seeing = not overwrite or self._trust_header_seeing
             use_header_seeing = self._trust_header_seeing
@@ -495,7 +497,7 @@ class PhotometrySingle:
                         zp_src_table, filt=filt, phot_header=temp_phot_header, save_plots=False
                     )
                     # a candidate without a zero point would shift dicts_to_lists' labels
-                    if temp_phot_header is not None and temp_phot_header.aperture_info:
+                    if temp_phot_header is not None and temp_phot_header.flux_calibration.aperture_info:
                         temp_headers[filt] = temp_phot_header
                         self.logger.debug(f"Filter check photometry for {filt} is completed")
 
@@ -530,10 +532,14 @@ class PhotometrySingle:
                     self.update_image_header()
 
             self.write_catalog(obs_src_table)
-            if self.measure_sky(overwrite=overwrite):  # off the written catalog, the one ImCoadd will re-read
+            # off the written catalog, the one ImCoadd will re-read
+            self.measure_sky(overwrite=overwrite)
+            if not self._difference_photometry:
+                # a frame without sky keeps its ZP and SANITY, depth undefined; set self._reject_reason here to reject
+                background = self.phot_header.background
+                if not self.phot_header.finalize(self._single_frame) and background.sky:
+                    self.logger.warning(f"No depth: BACKSIG {background.BACKSIG} is not positive; UL_n undefined")
                 self.update_image_header()
-            if not self._difference_photometry and not self.phot_header.covariance_depth_complete:
-                raise RuntimeError("Photometry depth requires measured sky covariance; cannot publish new UL keys")
 
             self.logger.debug(MemoryMonitor.log_memory_usage)
             self.logger.info(
@@ -548,7 +554,10 @@ class PhotometrySingle:
                 and not self.config_node.settings.is_too
             ):
                 raise DatabaseError(f"PhotometrySingle {self.name}: {e}") from e
-            self.phot_header.clear_calibration()  # null the ZP cards this or a previous run left; SANITY=False below
+            # null the ZP cards this or a previous run left; SANITY=False below
+            self.phot_header.flux_calibration.clear()
+            if not self._difference_photometry:
+                self.phot_header.finalize(self._single_frame)
             self.update_image_header()
             self.logger.warning(
                 f"PhotometrySingle rejected the image {self.name}: {str(e)}; the run continues with the other input_images.",
@@ -581,24 +590,25 @@ class PhotometrySingle:
         """
 
         phot_header = phot_header or self.phot_header
+        basic = phot_header.basic_sextractor
 
         if use_header_seeing:
             if self.image_info.has_psf_stats_from_photometry:
-                phot_header.SEEING = self.image_info.SEEING
-                phot_header.PEEING = self.image_info.PEEING
-                phot_header.ELLIP = self.image_info.ELLIP
-                phot_header.ELONG = self.image_info.ELONG
+                basic.SEEING = self.image_info.SEEING
+                basic.PEEING = self.image_info.PEEING
+                basic.ELLIP = self.image_info.ELLIP
+                basic.ELONG = self.image_info.ELONG
                 self.logger.debug(f"Trusting seeing/peeing from the header")
-                self.logger.debug(f"SEEING     : {phot_header.SEEING:.3f} arcsec")
-                self.logger.debug(f"PEEING     : {phot_header.PEEING:.3f} pixel")
+                self.logger.debug(f"SEEING     : {basic.SEEING:.3f} arcsec")
+                self.logger.debug(f"PEEING     : {basic.PEEING:.3f} pixel")
             elif self.image_info.has_psf_stats_from_astrometry:
-                phot_header.SEEING = self.image_info.SEEINGMN
-                phot_header.PEEING = self.image_info.PEEINGMN
-                phot_header.ELLIP = self.image_info.ELLIPMN
-                phot_header.ELONG = self.image_info.ELONGMN
+                basic.SEEING = self.image_info.SEEINGMN
+                basic.PEEING = self.image_info.PEEINGMN
+                basic.ELLIP = self.image_info.ELLIPMN
+                basic.ELONG = self.image_info.ELONGMN
                 self.logger.debug(f"Trusting seeing/peeing from the header")
-                self.logger.debug(f"SEEING     : {phot_header.SEEING:.3f} arcsec")
-                self.logger.debug(f"PEEING     : {phot_header.PEEING:.3f} pixel")
+                self.logger.debug(f"SEEING     : {basic.SEEING:.3f} arcsec")
+                self.logger.debug(f"PEEING     : {basic.PEEING:.3f} pixel")
                 return
             elif not self._trust_header_seeing:
                 self.logger.warning(
@@ -618,7 +628,7 @@ class PhotometrySingle:
         #     phot_header.ellipticity = config_ellipticity  # 1 - b/a
         #     phot_header.elongation = 1 / (1 - config_ellipticity)  # a/b
 
-        if phot_header.SEEING is None:
+        if basic.SEEING is None:
             prep_cat = self.path.photometry.prep_catalog
             self.logger.debug(f"(photometry) prep_cat: {prep_cat}")
 
@@ -653,20 +663,20 @@ class PhotometrySingle:
                 raise self.logger.process_error.exception(NotEnoughSourcesError)
                 return
 
-            phot_header.SEEING = np.median(post_match_table["FWHM_WORLD"] * 3600)
-            if not phot_header.SEEING > 0:  # a 1-3 star median on a mis-solved frame; SExtractor refuses the apertures
+            basic.SEEING = np.median(post_match_table["FWHM_WORLD"] * 3600)
+            if not basic.SEEING > 0:  # a 1-3 star median on a mis-solved frame; SExtractor refuses the apertures
                 raise self.logger.process_error.exception(NotEnoughSourcesError)(
-                    f"Unphysical seeing {phot_header.SEEING:.3f} arcsec from {len(post_match_table)} star-like sources"
+                    f"Unphysical seeing {basic.SEEING:.3f} arcsec from {len(post_match_table)} star-like sources"
                 )
-            phot_header.PEEING = phot_header.SEEING / self.image_info.pixscale
-            phot_header.ELLIP = round(np.median(post_match_table["ELLIPTICITY"]), 6)
-            phot_header.ELONG = round(np.median(post_match_table["ELONGATION"]), 6)
+            basic.PEEING = basic.SEEING / self.image_info.pixscale
+            basic.ELLIP = round(np.median(post_match_table["ELLIPTICITY"]), 6)
+            basic.ELONG = round(np.median(post_match_table["ELONGATION"]), 6)
 
             self.logger.debug(f"{len(post_match_table)} Star-like Sources Found")
 
-        self.logger.debug(f"SEEING     : {phot_header.SEEING:.3f} arcsec")
-        self.logger.debug(f"ELONGATION : {phot_header.ELONG:.3f}")
-        self.logger.debug(f"ELLIPTICITY: {phot_header.ELLIP:.3f}")
+        self.logger.debug(f"SEEING     : {basic.SEEING:.3f} arcsec")
+        self.logger.debug(f"ELONGATION : {basic.ELONG:.3f}")
+        self.logger.debug(f"ELLIPTICITY: {basic.ELLIP:.3f}")
 
         return
 
@@ -798,8 +808,8 @@ class PhotometrySingle:
 
         phot_header = phot_header or self.phot_header
 
-        phot_header.MAGLOW = low_mag_cut
-        phot_header.MAGUP = high_mag_cut
+        phot_header.flux_calibration.MAGLOW = low_mag_cut
+        phot_header.flux_calibration.MAGUP = high_mag_cut
 
         # Copy the original table to avoid mutation
         post_match_table = table.copy()
@@ -864,7 +874,7 @@ class PhotometrySingle:
             self.input_image,
             self.phot_conf,
             egain=self.image_info.egain,
-            peeing=self.phot_header.PEEING,
+            peeing=self.phot_header.basic_sextractor.PEEING,
             pixscale=self.image_info.pixscale,
             satur_level=satur_level,
         )
@@ -897,8 +907,8 @@ class PhotometrySingle:
                         self.input_image,
                         satellite_options if detect_trails else None,
                         bad_pixels=bad_pixels,
-                        skysig=self.phot_header.BACKSIG or self.phot_header.SKYSIG,
-                        psf_fwhm=self.phot_header.PEEING,
+                        skysig=self.phot_header.background.BACKSIG or self.phot_header.basic_sextractor.SKYSIG,
+                        psf_fwhm=self.phot_header.basic_sextractor.PEEING,
                         weight_image=sex_options.get("-WEIGHT_IMAGE"),
                         logger=self.logger,
                     )
@@ -920,7 +930,7 @@ class PhotometrySingle:
 
         return obs_src_table
 
-    def measure_sky(self, overwrite: bool = True, phot_header: PhotometryHeader = None) -> bool:
+    def measure_sky(self, overwrite: bool = True, phot_header: PhotometryHeader = None) -> None:
         """Re-derive the sky level and noise on the pixels the source mask leaves, and record the fraction used.
 
         Below ``imcoadd.background.dequantize_background_below`` ADU of SKYVAL (the steppy regime, where the box median snaps to the ADC
@@ -947,22 +957,23 @@ class PhotometrySingle:
         from dataclasses import replace
 
         phot_header = phot_header or self.phot_header
+        basic, background = phot_header.basic_sextractor, phot_header.background
         if self._difference_photometry:  # a residual image has no sky of its own to publish
-            return False
+            return
         if (
             not overwrite
-            and phot_header.BACKSIG is not None
-            and phot_header.SRCFRAC is not None
-            and phot_header.BACKSCL == RESIDUAL_BOX_SIZE
-            and all(getattr(phot_header, key.upper()) is not None for key in RESIDUAL_KEYS)
-            and phot_header.covariance_depth_complete
-            and self._acf_current()
+            and background.BACKSIG is not None
+            and background.SRCFRAC is not None
+            and background.BACKSCL == RESIDUAL_BOX_SIZE
+            and all(getattr(background, key.upper()) is not None for key in RESIDUAL_KEYS)
+            and (self._single_frame or (background.covariance_complete and self._acf_current()))
         ):
             self.logger.debug("Off-source sky already on the frame; keeping it")
-            return False
-        if not phot_header.SKYSIG:
+            background.sky = background.covariance = True
+            return
+        if not basic.SKYSIG:
             self.logger.warning("No SKYSIG to set the mask threshold with; skipping the off-source sky measurement")
-            return False
+            return
         start_time = time.time()
         catalog = self.path.photometry.final_catalog
         data, header = fits.getdata(self.input_image, header=True, memmap=False)
@@ -971,8 +982,8 @@ class PhotometrySingle:
         ellipses = source_ellipses_on_frame(catalog, header, header, logger=self.logger)
         if ellipses is None:
             self.logger.warning(f"{get_basename(catalog)} lacks the ellipse columns; no off-source sky measured")
-            return False
-        sources = build_source_mask(ellipses, data.shape, skysig=phot_header.SKYSIG, logger=self.logger)
+            return
+        sources = build_source_mask(ellipses, data.shape, skysig=basic.SKYSIG, logger=self.logger)
         # no_data = data == 0  # dead columns and overscan; a single carries no reprojection padding
         no_data = ~np.isfinite(data)  # an exact 0 is sky on a single (k = 0 raw ADU above bias + dark)
         is_coadd = "IMG00000" in header
@@ -993,7 +1004,7 @@ class PhotometrySingle:
                 have_coverage = True
             if not have_coverage and (header.get("NNANFILL", 0) or header.get("NNANEDGE", 0)):
                 self.logger.warning("No coverage product to locate filled coadd pixels; no off-source sky measured")
-                return False
+                return
         if not is_coadd:  # a coadd has no detector bad-pixel mask
             try:
                 bpm, bpm_header = fits.getdata(PathHandler.get_bpmask(header), header=True, memmap=False)
@@ -1004,9 +1015,7 @@ class PhotometrySingle:
         # the same mesh ImCoadd will fit, so the two stages cannot disagree about what the sky is
         mesh = self.config_node.imcoadd.background
         dequantized = (
-            not is_coadd
-            and phot_header.SKYVAL is not None
-            and phot_header.SKYVAL < float(mesh["dequantize_background_below"])
+            not is_coadd and basic.SKYVAL is not None and basic.SKYVAL < float(mesh["dequantize_background_below"])
         )
         ksq = float(np.sum(DEQUANT_KERNEL**2)) if dequantized else 1.0
         try:
@@ -1023,15 +1032,13 @@ class PhotometrySingle:
             ValueError
         ) as e:  # no mesh box survives the source mask: a crowded field has no off-source sky to publish
             self.logger.warning(f"Off-source sky not measured: {e}")
-            return False
-        phot_header.BACKVAL = float(fitted.background_median)
-        phot_header.BACKSIG = float(fitted.background_rms_median) / np.sqrt(ksq)
-        phot_header.DEQUANT, phot_header.BACKKSQ = dequantized, round(ksq, 5)
-        phot_header.BACKFRAC = round(float((~excluded & ~no_data).mean()), 4)
-        phot_header.SRCFRAC = round(float(sources.mean()), 4)
-        phot_header.BACKPEAK, phot_header.BACKPKSN = (
-            round(v, 4) if np.isfinite(v) else None for v in mesh_peak(fitted)
-        )
+            return
+        background.BACKVAL = float(fitted.background_median)
+        background.BACKSIG = float(fitted.background_rms_median) / np.sqrt(ksq)
+        background.DEQUANT, background.BACKKSQ = dequantized, round(ksq, 5)
+        background.BACKFRAC = round(float((~excluded & ~no_data).mean()), 4)
+        background.SRCFRAC = round(float(sources.mean()), 4)
+        background.BACKPEAK, background.BACKPKSN = (round(v, 4) if np.isfinite(v) else None for v in mesh_peak(fitted))
         coverage = ~no_data
         residual = data if is_coadd else data - fitted.background
         result = measure_background_residuals(
@@ -1049,20 +1056,21 @@ class PhotometrySingle:
             )
             result = replace(result, backoff=round(float(backoff), 4), backnref=kind)
         for key in RESIDUAL_KEYS:
-            setattr(phot_header, key.upper(), getattr(result, key))
-        phot_header.BACKREF = "COADD" if is_coadd else "MODEL"
-        self.logger.debug(f"Residual sky ({phot_header.BACKREF}): {result}")
+            setattr(background, key.upper(), getattr(result, key))
+        background.BACKREF = "COADD" if is_coadd else "MODEL"
+        background.sky = True
+        self.logger.debug(f"Residual sky ({background.BACKREF}): {result}")
         sky_noise = data - fitted.background if is_coadd else residual  # blank sky about BACKSIG's own mesh
-        self._measure_sky_covariance(
-            phot_header, sky_noise, excluded | ~coverage, coverage, header if is_coadd else None
-        )
+        if not self._single_frame:
+            self._measure_sky_covariance(
+                phot_header, sky_noise, excluded | ~coverage, coverage, header if is_coadd else None
+            )
         self.logger.info(
-            f"Off-source sky: BACKVAL {phot_header.BACKVAL:.3f}, BACKSIG {phot_header.BACKSIG:.3f} on "
-            f"{100 * phot_header.BACKFRAC:.1f}% of the frame, {100 * phot_header.SRCFRAC:.1f}% source-masked "
-            f"(SExtractor SKYVAL {phot_header.SKYVAL}, "
-            f"SKYSIG {phot_header.SKYSIG}) in {time_diff_in_seconds(start_time)} seconds"
+            f"Off-source sky: BACKVAL {background.BACKVAL:.3f}, BACKSIG {background.BACKSIG:.3f} on "
+            f"{100 * background.BACKFRAC:.1f}% of the frame, {100 * background.SRCFRAC:.1f}% source-masked "
+            f"(SExtractor SKYVAL {basic.SKYVAL}, "
+            f"SKYSIG {basic.SKYSIG}) in {time_diff_in_seconds(start_time)} seconds"
         )
-        return True
 
     @staticmethod
     def _noise_reference(header, fitted, is_coadd: bool) -> dict | None:
@@ -1088,27 +1096,31 @@ class PhotometrySingle:
     def _measure_sky_covariance(
         self, phot_header: PhotometryHeader, residual, excluded, coverage, coadd_header=None
     ) -> None:
-        """Field-wide sky covariance, its BACKSIG-relative COV_n and BACKC2, and the limiting magnitudes they give."""
+        """Field-wide sky covariance, its BACKSIG-relative COV_n and BACKC2; a warning when not measured."""
         from ..imcoadd.utils import noise_autocorrelation
 
+        background, flux_calibration = phot_header.background, phot_header.flux_calibration
         # exact-weight apertures overlap out to ceil(diameter) px per axis, so the window spans the largest aperture
-        diameters = [b.get("value") or 0.0 for b in phot_header.aperture_info.values()]
+        diameters = [b.get("value") or 0.0 for b in flux_calibration.aperture_info.values()]
         maxlag = max(16, int(np.ceil(max(diameters))) if diameters else 0)
         stats = {}
         acf = noise_autocorrelation(
             residual, mask=excluded, maxlag=maxlag, stats=stats, coverage=coverage, logger=self.logger
         )
         if acf is None or not np.isfinite(stats.get("variance", 0)) or stats["variance"] <= 0:
-            raise RuntimeError("Sky covariance not measured; cannot calculate limiting magnitudes")
-        if stats["represented"] <= 0.5:
-            raise RuntimeError(
-                f"Sky covariance sub-areas span {stats['represented']:.1%} of the covered field (needs > 50%); "
-                "cannot calculate limiting magnitudes"
+            self.logger.warning(
+                "Sky covariance not measured: no usable sky autocorrelation; COV_n undefined, UL_n not corrected",
+                SkyCovarianceNotMeasuredError,
             )
-        if phot_header.BACKSIG is None or not np.isfinite(phot_header.BACKSIG) or phot_header.BACKSIG <= 0:
-            raise RuntimeError("BACKSIG is required for covariance correction factors")
-        relative_acf = acf * (stats["variance"] / phot_header.BACKSIG**2)
-        phot_header.BACKC2 = float(phot_utils.bin_noise_factor(relative_acf, 2))
+            return
+        if background.noise is None:
+            self.logger.warning(
+                f"Sky covariance not measured: BACKSIG {background.BACKSIG} is not positive; COV_n undefined",
+                SkyCovarianceNotMeasuredError,
+            )
+            return
+        relative_acf = acf * (stats["variance"] / background.BACKSIG**2)
+        background.BACKC2 = float(phot_utils.bin_noise_factor(relative_acf, 2))
         half = acf.shape[0] // 2
         lag_cards = dict(
             BACKCR=int(half),
@@ -1127,26 +1139,18 @@ class PhotometrySingle:
         )
         if coadd_header is None:
             for key, value in lag_cards.items():
-                setattr(phot_header, key, value)
+                setattr(background, key, value)
         else:  # the lag cards would only repeat pixels of the written map
             self._write_acf(acf * stats["variance"], stats["pixels"], stats["represented"], coadd_header["IMAGEID"])
-        phot_header.BACKCPIX, phot_header.BACKCREP = stats["pixels"], round(stats["represented"], 4)
+        background.BACKCPIX, background.BACKCREP = stats["pixels"], round(stats["represented"], 4)
 
-        for aperture_key, bundle in phot_header.aperture_info.items():
-            diameter = bundle.get("value") or 0.0
-            if diameter <= 0 or bundle.get("ZP") is None:  # MAG_AUTO has no fixed aperture
-                continue
-            factor = phot_utils.aperture_noise_factor(relative_acf, diameter)
-            bundle["COV"] = factor
-            if phot_header.BACKSIG:
-                ul_3sig, ul_5sig = phot_utils.limitmag(
-                    np.array([3, 5]), bundle["ZP"], diameter, phot_header.BACKSIG, factor
-                )
-                bundle["UL3"], bundle["UL5"] = float(ul_3sig), float(ul_5sig)
+        for bundle in flux_calibration.depth_apertures.values():
+            background.cov[bundle["suffix"]] = phot_utils.aperture_noise_factor(relative_acf, bundle["value"])
+        background.covariance = True
         self.logger.info(
             f"Sky covariance: BACKCOV {lag_cards['BACKCOV']:.4f} to {half} px, "
             f"rho(1,0) {lag_cards['BACKR10']:+.4f}, rho(0,1) {lag_cards['BACKR01']:+.4f}, "
-            f"2x2 bin factor {phot_header.BACKC2:.4f}, from {stats['pixels']} sky pixels "
+            f"2x2 bin factor {background.BACKC2:.4f}, from {stats['pixels']} sky pixels "
             f"in {stats['sub_areas']} sub-areas spanning {stats['represented']:.1%} of the covered field"
         )
 
@@ -1229,7 +1233,7 @@ class PhotometrySingle:
             phot_header = phot_header or self.phot_header
             background = phot_utils.parse_sex_background(outcome)
             if background is not None:
-                phot_header.SKYVAL, phot_header.SKYSIG = background
+                phot_header.basic_sextractor.SKYVAL, phot_header.basic_sextractor.SKYSIG = background
             else:
                 self.logger.warning("SExtractor emitted no Background/RMS summary; keeping existing sky headers")
 
@@ -1246,7 +1250,7 @@ class PhotometrySingle:
             f"'{self.image_info.ref_mag_key}' and pass the quality cuts"
         )
         phot_header = phot_header or self.phot_header
-        phot_header.STDNUMB = len(zp_src_table)
+        phot_header.flux_calibration.STDNUMB = len(zp_src_table)
         min_stdnumb = (
             MIN_STDNUMB
             if self._difference_photometry
@@ -1281,7 +1285,7 @@ class PhotometrySingle:
             )
             return None
 
-        aperture_dict = phot_utils.get_aperture_dict(phot_header.PEEING, self.image_info.pixscale)
+        aperture_dict = phot_utils.get_aperture_dict(phot_header.basic_sextractor.PEEING, self.image_info.pixscale)
 
         for aperture_key in aperture_dict.keys():
             mag_key, magerr_key = phot_utils.get_mag_key(aperture_key)
@@ -1302,23 +1306,14 @@ class PhotometrySingle:
                 continue
             zp, zperr = phot_utils.compute_median_nmad(input_arr, normalize=True)
 
-            factor = phot_header.aperture_info.get(aperture_key, {}).get("COV")
-            if factor is not None and (not np.isfinite(factor) or factor <= 0):
-                factor = None
-            ul_3sig, ul_5sig = None, None
-            if mag_key != "MAG_AUTO" and factor is not None:
-                aperture_size, _ = aperture_dict[aperture_key]
-                ul_3sig, ul_5sig = phot_utils.limitmag(np.array([3, 5]), zp, aperture_size, phot_header.BACKSIG, factor)
-
-            phot_header.aperture_info[aperture_key] = {
+            phot_header.flux_calibration.aperture_info[aperture_key] = {
                 "value": aperture_dict[aperture_key][0],
                 "COMMENT": aperture_dict[aperture_key][1],
                 "suffix": phot_utils.get_aperture_suffix(aperture_key),
                 "ZP": zp,
                 "ZPERR": zperr,
-                "UL3": ul_3sig,
-                "UL5": ul_5sig,
-                "COV": factor,
+                "UL3": None,  # set_depth, once the background is finalized
+                "UL5": None,
             }
 
             if save_plots:
@@ -1335,8 +1330,8 @@ class PhotometrySingle:
         """
         keyset_filter = filt or self.image_info.filter
         phot_header = phot_header or self.phot_header
-        aperture_dict = phot_header.aperture_dict
-        aperture_info = phot_header.aperture_info
+        aperture_dict = phot_header.flux_calibration.aperture_dict
+        aperture_info = phot_header.flux_calibration.aperture_info
 
         for aperture_key in aperture_dict.keys():
             mag_key, magerr_key = phot_utils.get_mag_key(aperture_key)
@@ -1364,7 +1359,8 @@ class PhotometrySingle:
 
     def determine_filter(self, phot_headers: Dict[str, PhotometryHeader], save_plot=True) -> str:
         """Updates PhotometryHeader.INF_FILT with the best-matching filter inferred by the pipeline"""
-        self.phot_header.INF_DEZP = self.phot_header.INF_FIL2 = self.phot_header.INF_DEZF = None
+        flux_calibration = self.phot_header.flux_calibration
+        flux_calibration.INF_DEZP = flux_calibration.INF_FIL2 = flux_calibration.INF_DEZF = None
         alleged_filter = self.image_info.filter
         filters_checked = [k for k in phot_headers.keys()]
 
@@ -1386,12 +1382,14 @@ class PhotometrySingle:
             self.logger.warning(f"No phot_headers found. Using alleged filter.", FilterCheckError)
             inferred_filter = alleged_filter
             # Persist inferred filter via PhotometryHeader (written by update_image_header())
-            self.phot_header.INF_FILT = inferred_filter
+            flux_calibration.INF_FILT = inferred_filter
             return alleged_filter
 
         # filter out when phot_headers[filt] is None
         dicts = {
-            filt: (header.zp_dict, header.aperture_dict) for filt, header in phot_headers.items() if header is not None
+            filt: (header.flux_calibration.zp_dict, header.flux_calibration.aperture_dict)
+            for filt, header in phot_headers.items()
+            if header is not None
         }
         dicts_for_plotting = dicts.copy()
         test_dicts = dicts.copy()
@@ -1443,7 +1441,7 @@ class PhotometrySingle:
                 f"No valid zero point sources found. Falling back to header filter '{alleged_filter}'",
                 FilterCheckError,
             )
-            self.phot_header.INF_FILT = alleged_filter
+            flux_calibration.INF_FILT = alleged_filter
             return alleged_filter
 
         if save_plot:
@@ -1469,21 +1467,21 @@ class PhotometrySingle:
         elif alleged_filter == inferred_filter:
             self.logger.info(f"The inferred filter matches the original filter, '{alleged_filter}'")
 
-        self.phot_header.INF_FILT = inferred_filter
+        flux_calibration.INF_FILT = inferred_filter
         if inferred_filter == CLEAR_FILTER:  # no EZP_AUTO of its own: INF_FIL2 is the best-fitting filter, no margins
             pool = [(d[0]["EZP_AUTO"][0], f) for f, d in dicts.items() if "EZP_AUTO" in d[0]]
-            self.phot_header.INF_FIL2 = min(pool)[1] if pool else None
+            flux_calibration.INF_FIL2 = min(pool)[1] if pool else None
             return inferred_filter
-        self.phot_header.INF_DEZF = orig_zperr - zperr if alleged_filter != inferred_filter else 0.0
+        flux_calibration.INF_DEZF = orig_zperr - zperr if alleged_filter != inferred_filter else 0.0
         # INF_FIL2 ranges over the whole pool (ruled-out filters included), so INF_DEZP < 0 when one of them beats INF_FILT
         others = [(d[0]["EZP_AUTO"][0], f) for f, d in dicts.items() if f != inferred_filter and "EZP_AUTO" in d[0]]
         if others:
-            ezp2, self.phot_header.INF_FIL2 = min(others)
-            self.phot_header.INF_DEZP = ezp2 - zperr
-            if self.phot_header.INF_DEZP <= 0:
+            ezp2, flux_calibration.INF_FIL2 = min(others)
+            flux_calibration.INF_DEZP = ezp2 - zperr
+            if flux_calibration.INF_DEZP <= 0:
                 self.logger.warning(
-                    f"{self.phot_header.INF_FIL2}, ruled out of the pool, fits at least as well as {inferred_filter} "
-                    f"(INF_DEZP = {self.phot_header.INF_DEZP:.3f}): the filter budget of this night may be wrong",
+                    f"{flux_calibration.INF_FIL2}, ruled out of the pool, fits at least as well as {inferred_filter} "
+                    f"(INF_DEZP = {flux_calibration.INF_DEZP:.3f}): the filter budget of this night may be wrong",
                     FilterInventoryError,
                 )
 
@@ -1491,8 +1489,8 @@ class PhotometrySingle:
 
     def measure_color_term(self, zp_src_table: Table, phot_header: PhotometryHeader = None) -> None:
         """CTERM, ECTERM, NCTERM against Gaia BP-RP."""
-        phot_header = phot_header or self.phot_header
-        phot_header.CTERM = phot_header.ECTERM = phot_header.NCTERM = None
+        flux_calibration = (phot_header or self.phot_header).flux_calibration
+        flux_calibration.CTERM = flux_calibration.ECTERM = flux_calibration.NCTERM = None
         filter_check = get_key(self.phot_conf, "filter_check")
         if filter_check is None:
             return
@@ -1503,11 +1501,11 @@ class PhotometrySingle:
         except Exception as e:
             self.logger.warning(f"Color term not measured: {e!r}", FilterCheckError)
             return
-        phot_header.NCTERM = n
+        flux_calibration.NCTERM = n
         if a is None or not (np.isfinite(a) and np.isfinite(a_err)):
             self.logger.info(f"Color term undefined (NCTERM={n}, min_stars {min_stars})")
             return
-        phot_header.CTERM, phot_header.ECTERM = a, a_err
+        flux_calibration.CTERM, flux_calibration.ECTERM = a, a_err
         self.logger.info(
             f"Color term vs BP-RP for {self.image_info.filter}: {a:+.4f} +/- {a_err:.4f} mag/mag from {n} stars"
         )
@@ -1521,7 +1519,9 @@ class PhotometrySingle:
             return None
         filter_check = filter_check.to_dict() if hasattr(filter_check, "to_dict") else filter_check
         limit = phot_utils.zp_max(alleged, name.exptime, name.gain, self.image_info.egain)
-        failed = phot_utils.filter_check_failures(self.phot_header, alleged, limit, name.exptime, filter_check)
+        failed = phot_utils.filter_check_failures(
+            self.phot_header.flux_calibration, alleged, limit, name.exptime, filter_check
+        )
         reason = "; ".join(f"by key {key}={value:g}: {why}" for key, value, why in failed) or None
         self._reject_reason = reason if self._single_frame else None  # a coadd's SANITY is never re-judged
         if reason is not None:
@@ -1635,7 +1635,7 @@ class PhotometrySingle:
             phot_header.SANITY, phot_header.REJ_PROC = True, None
         cards = {key: card[0] for key, card in phot_header.dict.items()}
         cards["FILENAME"] = os.path.basename(self.input_image)
-        if not phot_header.aperture_info:
+        if not phot_header.flux_calibration.aperture_info:
             self.logger.warning("No zero point was derived for this image.", NotEnoughSourcesError)
             phot_header.SANITY = False
             phot_header.REJ_PROC = self._sciproc_rejection_process_name
@@ -1864,8 +1864,7 @@ class ImageInfo:
 
         # pick up header keys needed by PhotometryHeader
         phot_header_keys: Dict[str, Any] = {}
-        for f in fields(PhotometryHeader):
-            key = f.name
+        for key in PhotometryHeader.keys():
             if key in hdr:
                 phot_header_keys[key] = hdr[key]
 
@@ -1878,18 +1877,52 @@ class ImageInfo:
         return cls(**kwargs)
 
 
-@dataclass
-class PhotometryHeader:
-    """
-    Builds the fits header about photometry to be written to the image.
-    If the image already has the photometry result, PhotometryHeader reads it.
+class HeaderBlock:
+    """A block of PhotometryHeader: its annotated cards, loaded from the image header."""
 
-    This is dynamic, unlike ImageInfo. Keys like AUTHOR can be overwritten.
-    """
+    def __init__(self, header: PhotometryHeader):
+        self.header = header
 
-    # must match the actual header keys
-    AUTHOR: str = getpass.getuser()  # "pipeline"
-    PHOTIME: str = None
+    @classmethod
+    def keys(cls) -> Tuple[str, ...]:
+        return tuple(cls.__annotations__)
+
+    def load(self, keys: dict) -> None:
+        """from ImageInfo.phot_header_keys"""
+        for key in self.keys():
+            if key in keys:
+                setattr(self, key, keys[key])
+
+
+class BasicSextractor(HeaderBlock):
+    """basic_sextractor: the image as SExtractor characterizes it."""
+
+    SEEING: float = None
+    PEEING: float = None
+    ELLIP: float = None
+    ELONG: float = None
+    SKYSIG: float = None
+    SKYVAL: float = None
+
+    @property
+    def cards(self) -> Dict[str, Tuple[Any, str]]:
+        return {
+            "SEEING": (round(self.SEEING, 6) if self.SEEING is not None else 0, "SEEING [arcsec]"),
+            "PEEING": (round(self.PEEING, 6) if self.PEEING is not None else 0, "SEEING [pixel]"),
+            "ELLIP": (round(self.ELLIP, 6) if self.ELLIP is not None else 0, "ELLIPTICITY 1-B/A [0-1]"),
+            "ELONG": (round(self.ELONG, 6) if self.ELONG is not None else 0, "ELONGATION A/B [1-]"),
+            "SKYSIG": (round(self.SKYSIG, 6) if self.SKYSIG is not None else 0, "SKY SIGMA VALUE"),
+            "SKYVAL": (round(self.SKYVAL, 6) if self.SKYVAL is not None else 0, "SKY MEDIAN VALUE"),
+        }
+
+
+class FluxCalibration(HeaderBlock):
+    """flux_calibration: the apertures and their zero points, the filter and color-term checks, and the depth."""
+
+    REFCAT: str = None  # "GaiaXP"
+    MAGLOW: float = None
+    MAGUP: float = None
+    STDNUMB: int = None
     INF_FILT: str = None
     INF_DEZP: float = None
     INF_FIL2: str = None
@@ -1897,89 +1930,35 @@ class PhotometryHeader:
     CTERM: float = None
     ECTERM: float = None
     NCTERM: int = None
-    JD: float = None
-    MJD: float = None
-    SEEING: float = None
-    PEEING: float = None
-    ELLIP: float = None
-    ELONG: float = None
-    SKYSIG: float = None
-    SKYVAL: float = None
-    BACKSIG: float = None
-    BACKVAL: float = None
-    DEQUANT: bool = None
-    BACKKSQ: float = None
-    BACKFRAC: float = None
-    SRCFRAC: float = None
-    BACKPEAK: float = None
-    BACKPKSN: float = None
-    BACKCOV: float = None
-    BACKC2: float = None
-    BACKCPIX: int = None
-    BACKCREP: float = None
-    BACKCR: int = None
-    BACKR10: float = None
-    BACKR01: float = None
-    BACKR11: float = None
-    BACKOFF: float = None
-    BACKSYS: float = None
-    BACKSCL: int = None
-    BACKN: int = None
-    BACKREF: str = None
-    BACKNREF: str = None
-    NTRAILPX: int = None
-    REFCAT: str = None  # "GaiaXP"
-    MAGLOW: float = None
-    MAGUP: float = None
-    STDNUMB: int = None
-    SANITY: Optional[bool] = None
-    REJ_PROC: Optional[str] = None  # ProcessSpec.name of step that set SANITY False; FITS key REJ_PROC
 
-    # a dict of all information accompanying each aperture
-    aperture_info: Dict = None
-    # e.g.,
-    # {
-    #     "APER_1": {
-    #         "value": ,
-    #         "COMMENT": "...",
-    #         "suffix": "1",
-    #         "ZP": ,
-    #         "ZPERR": ,
-    #         "UL3": ,
-    #         "UL5":
-    #     },
-    #    ....
-    # }
-
-    def __init__(self, image_info: ImageInfo = None):
-        """If photometry result already exists, load it from the image header"""
+    def __init__(self, header: PhotometryHeader):
+        super().__init__(header)
+        # a dict of all information accompanying each aperture
         self.aperture_info = {}  # set here to avoid sharing between instances
+        # e.g.,
+        # {
+        #     "APER_1": {
+        #         "value": ,
+        #         "COMMENT": "...",
+        #         "suffix": "1",
+        #         "ZP": ,
+        #         "ZPERR": ,
+        #         "UL3": ,
+        #         "UL5":
+        #     },
+        #    ....
+        # }
+        self.cleared = False  # this run has no zero point
 
-        if image_info is not None:
-            self.PHOTIME = datetime.date.today().isoformat()
-            self.image_info = image_info
+    def load(self, keys: dict) -> None:
+        super().load(keys)
+        if keys.get("ZP_AUTO") is not None:  # undefined on a rejected frame: nothing to load
+            self._set_aperture_info_from_header(keys)
 
-            for f in fields(self):
-                key = f.name
-
-                # don't skip. overridden anyway.
-                # # skip these fields
-                # if key in ["AUTHOR", "PHOTIME"]:
-                #     continue
-
-                if key in image_info.phot_header_keys:
-                    # try:
-                    setattr(self, f.name, image_info.phot_header_keys[key])
-                    # except Exception:
-                    #     pass  # silently ignore any conversion errors
-
-                if (
-                    image_info.phot_header_keys.get("ZP_AUTO") is not None
-                ):  # undefined on a rejected frame: nothing to load
-                    self._set_aperture_info_from_header(image_info.phot_header_keys)
-
-            if self.SANITY is not False:
-                self.REJ_PROC = None  # a rejection stage recorded before a recompute must not be re-emitted
+    @property
+    def nominal_apertures(self) -> Dict:
+        """Every aperture of this frame, with or without a zero point"""
+        return phot_utils.get_aperture_dict(self.header.basic_sextractor.PEEING, self.header.image_info.pixscale)
 
     def _set_aperture_info_from_header(self, phot_header_keys: dict) -> None:
         """
@@ -1987,7 +1966,7 @@ class PhotometryHeader:
         Relies on ImageInfo.phot_header_keys.
         """
 
-        aperture_dict = phot_utils.get_aperture_dict(self.PEEING, self.image_info.pixscale)
+        aperture_dict = self.nominal_apertures
 
         for aperture_key in aperture_dict.keys():
             mag_key, magerr_key = phot_utils.get_mag_key(aperture_key)
@@ -2009,7 +1988,6 @@ class PhotometryHeader:
                 "ZPERR": zperr,
                 "UL3": ul_3sig,
                 "UL5": ul_5sig,
-                "COV": phot_header_keys.get(f"COV_{suffix}"),
             }
 
     @property
@@ -2026,77 +2004,74 @@ class PhotometryHeader:
 
     @staticmethod
     def _zp_cards(aperture_key: str, bundle: dict, include_missing: bool = False) -> Dict:
-        """ZP/EZP/UL3/UL5/COV cards of one aperture; `include_missing` emits the unset ones as undefined cards."""
+        """ZP/EZP/UL3/UL5 cards of one aperture; `include_missing` emits the unset ones as undefined cards."""
         mag_key, _ = phot_utils.get_mag_key(aperture_key)
         suffix = bundle["suffix"]
-        cov = bundle.get("COV")
         cards = {
             f"ZP_{suffix}": (bundle["ZP"], f"ZERO POINT for {mag_key}"),
             f"EZP_{suffix}": (bundle["ZPERR"], f"ZERO POINT ERROR for {mag_key}"),
         }
-        if include_missing or (cov is not None and bundle["UL3"] is not None and bundle["UL5"] is not None):
-            cards[f"UL3_{suffix}"] = (bundle["UL3"], f"3 SIGMA LIMITING MAG FOR {mag_key}")
-            cards[f"UL5_{suffix}"] = (bundle["UL5"], f"5 SIGMA LIMITING MAG FOR {mag_key}")
-        if include_missing or cov is not None:
-            cards[f"COV_{suffix}"] = (
-                round(cov, 4) if cov is not None else None,
-                "Aperture noise / (BACKSIG * sqrt(pi R^2))",
-            )
+        if include_missing or (mag_key != "MAG_AUTO" and bundle["UL3"] is not None and bundle["UL5"] is not None):
+            cards[f"UL3_{suffix}"] = (bundle["UL3"], f"3sig limitmag aper{suffix}, corrected if COV_{suffix} set")
+            cards[f"UL5_{suffix}"] = (bundle["UL5"], f"5sig limitmag aper{suffix}, corrected if COV_{suffix} set")
         return cards
 
-    def clear_calibration(self) -> None:
-        """Too few ZP stars: forget a zero point loaded from the header and null every calibration card in the next write."""
+    def clear(self) -> None:
+        """No zero point: forget the one loaded from the header and null every calibration card in the next write."""
         self.aperture_info = {}
         self.INF_FILT = self.INF_DEZP = self.INF_FIL2 = self.INF_DEZF = None
         self.CTERM = self.ECTERM = self.NCTERM = None
-        self._calibration_cleared = True
+        self.cleared = True
 
     @property
-    def calibration_null_cards(self) -> Dict:
-        """Undefined cards for every zero-point product a previous run may have left: aperture diameters and the ZP family."""
+    def null_cards(self) -> Dict:
+        """Undefined cards of every zero-point product a previous run may have left: aperture diameters, ZP family."""
         cards = {}
-        for aperture_key, (_, comment) in phot_utils.get_aperture_dict(self.PEEING, self.image_info.pixscale).items():
+        for aperture_key, (_, comment) in self.nominal_apertures.items():
             cards[aperture_key] = (None, comment)
-            null = {
-                "suffix": phot_utils.get_aperture_suffix(aperture_key),
-                "ZP": None,
-                "ZPERR": None,
-                "UL3": None,
-                "UL5": None,
-                "COV": None,
-            }
+            suffix = phot_utils.get_aperture_suffix(aperture_key)
+            null = {"suffix": suffix, "ZP": None, "ZPERR": None, "UL3": None, "UL5": None}
             cards.update(
                 self._zp_cards(aperture_key, null, include_missing=aperture_key != "AUTO")
             )  # AUTO has no UL/COV
         return cards
 
     @property
-    def covariance_depth_complete(self) -> bool:
-        if not self.BACKCPIX:  # cards measured before the field-wide estimate are not the current definition
-            return False
-        if self.BACKC2 is None or not np.isfinite(self.BACKC2) or self.BACKC2 <= 0:
-            return False
-        return all(
-            bundle.get("COV") is not None
-            and np.isfinite(bundle["COV"])
-            and bundle["COV"] > 0
-            and bundle.get("UL3") is not None
-            and bundle.get("UL5") is not None
-            and np.isfinite(bundle["UL3"])
-            and np.isfinite(bundle["UL5"])
-            for bundle in self.aperture_info.values()
-            if bundle.get("value", 0) > 0 and bundle.get("ZP") is not None
-        )
+    def depth_apertures(self) -> Dict[str, dict]:
+        """Bundles of the apertures that take a depth"""
+        return {
+            key: bundle
+            for key, bundle in self.aperture_info.items()
+            if (bundle.get("value") or 0.0) > 0 and bundle.get("ZP") is not None  # MAG_AUTO has no fixed aperture
+        }
 
     @property
-    def dict(self) -> Dict[str, Tuple[Any, str]]:
-        """This is updated to the image header"""
+    def depth_suffixes(self) -> List[str]:
+        """Suffixes n of the UL_n and COV_n cards: the depth apertures, or every fixed aperture once cleared."""
+        if self.cleared:
+            return [phot_utils.get_aperture_suffix(key) for key in self.nominal_apertures if key != "AUTO"]
+        return [bundle["suffix"] for bundle in self.depth_apertures.values()]
 
-        phot_header_dict = {}
+    def set_depth(self) -> bool:
+        """UL_n from ZP_n and the finalized background's BACKSIG and COV_n; False when BACKSIG gives no depth."""
+        background = self.header.background
+        noise = background.noise
+        for bundle in self.depth_apertures.values():
+            if noise is None:
+                bundle["UL3"] = bundle["UL5"] = None
+                continue
+            factor = background.cov.get(bundle["suffix"], 1.0)
+            ul_3sig, ul_5sig = phot_utils.limitmag(np.array([3, 5]), bundle["ZP"], bundle["value"], noise, factor)
+            bundle["UL3"], bundle["UL5"] = float(ul_3sig), float(ul_5sig)
+        return noise is not None
 
+    @property
+    def cards(self) -> Dict[str, Tuple[Any, str]]:
         misc_dict = {
-            "AUTHOR": (self.AUTHOR, "user who last updated photometry header"),
-            "PHOTIME": (self.PHOTIME, "PHOTOMETRY TIME [KST]"),
+            "REFCAT": (self.REFCAT, "REFERENCE CATALOG TYPE"),
+            "MAGLOW": (self.MAGLOW, "REF MAG RANGE, LOWER LIMIT"),
+            "MAGUP": (self.MAGUP, "REF MAG RANGE, UPPER LIMIT"),
+            "STDNUMB": (self.STDNUMB, "# OF STD STARS TO CALIBRATE ZP"),
             "INF_FILT": (self.INF_FILT, "BEST-MATCHING FILTER INFERRED BY PIPELINE"),
             "INF_DEZP": (
                 round(self.INF_DEZP, 6) if self.INF_DEZP is not None else None,
@@ -2113,14 +2088,111 @@ class PhotometryHeader:
             ),
             "ECTERM": (round(self.ECTERM, 5) if self.ECTERM is not None else None, "[mag/mag] fit error of CTERM"),
             "NCTERM": (self.NCTERM, "Stars in the CTERM fit"),
-            "JD": (self.JD, "Julian Date of the observation"),
-            "MJD": (self.MJD, "Modified Julian Date of the observation"),
-            "SEEING": (round(self.SEEING, 6) if self.SEEING is not None else 0, "SEEING [arcsec]"),
-            "PEEING": (round(self.PEEING, 6) if self.PEEING is not None else 0, "SEEING [pixel]"),
-            "ELLIP": (round(self.ELLIP, 6) if self.ELLIP is not None else 0, "ELLIPTICITY 1-B/A [0-1]"),
-            "ELONG": (round(self.ELONG, 6) if self.ELONG is not None else 0, "ELONGATION A/B [1-]"),
-            "SKYSIG": (round(self.SKYSIG, 6) if self.SKYSIG is not None else 0, "SKY SIGMA VALUE"),
-            "SKYVAL": (round(self.SKYVAL, 6) if self.SKYVAL is not None else 0, "SKY MEDIAN VALUE"),
+        }
+        # undefined INF_*/CTERM-family cards replace the values a previous run left beside INF_FILT
+        inferred = ("INF_FILT", "INF_DEZP", "INF_FIL2", "INF_DEZF", "CTERM", "ECTERM", "NCTERM")
+        undefined = inferred if self.INF_FILT is not None or self.cleared else ()
+        cards = {k: v for k, v in misc_dict.items() if v[0] is not None or k in undefined}
+
+        # round float values to .3f
+        cards.update({k: (round(v[0], 6), v[1]) for k, v in self.aperture_dict.items()})
+        cards.update({k: (round(v[0], 6), v[1]) for k, v in self.zp_dict.items() if v[0] is not None})
+
+        finalized = self.header.background.finalized
+        for aperture_key, bundle in self.depth_apertures.items():
+            if not finalized:
+                bundle = {**bundle, "UL3": None, "UL5": None}
+            depth = self._zp_cards(aperture_key, bundle, include_missing=True)
+            cards.update({k: v for k, v in depth.items() if v[0] is None and k.startswith("UL")})
+        # no zero point: a previous run's ZP cards must not survive either, nor its STDNUMB when none was counted
+        if self.cleared:
+            cards.update(self.null_cards)
+            if self.STDNUMB is None:
+                cards["STDNUMB"] = misc_dict["STDNUMB"]
+        return cards
+
+
+class Background(HeaderBlock):
+    """background: the off-source sky and, as a part of it, the sky-noise covariance with its COV_n."""
+
+    BACKSIG: float = None
+    BACKVAL: float = None
+    DEQUANT: bool = None
+    BACKKSQ: float = None
+    BACKFRAC: float = None
+    SRCFRAC: float = None
+    BACKPEAK: float = None
+    BACKPKSN: float = None
+    BACKOFF: float = None
+    BACKSYS: float = None
+    BACKSCL: int = None
+    BACKN: int = None
+    BACKREF: str = None
+    BACKNREF: str = None
+    BACKCPIX: int = None
+    BACKCREP: float = None
+    BACKC2: float = None
+    BACKCOV: float = None
+    BACKCR: int = None
+    BACKR10: float = None
+    BACKR01: float = None
+    BACKR11: float = None
+
+    # the covariance part: its frame-level cards, and the lag cards of a frame without a map
+    COVARIANCE_CARDS = ("BACKCPIX", "BACKCREP", "BACKC2")
+    LAG_CARDS = ("BACKCOV", "BACKCR", "BACKR10", "BACKR01", "BACKR11")
+
+    def __init__(self, header: PhotometryHeader):
+        super().__init__(header)
+        self.loaded = set()  # cards the image header carried, the undefined ones too
+        self.cov = {}  # aperture suffix n -> COV_n
+        self.sky = self.covariance = False  # measured in this run, or the header's kept
+        self.finalized = False  # the run has decided both; no UL_n or COV_n is written before
+        self.single = None
+
+    def load(self, keys: dict) -> None:
+        super().load(keys)
+        self.loaded = {key for key in self.keys() if key in keys}
+        # COV_n of the apertures the calibration loaded: a factor holds for the diameter it was measured with
+        suffixes = [bundle["suffix"] for bundle in self.header.flux_calibration.aperture_info.values()]
+        self.cov = {suffix: keys[f"COV_{suffix}"] for suffix in suffixes if keys.get(f"COV_{suffix}") is not None}
+
+    @property
+    def noise(self) -> Optional[float]:
+        """BACKSIG when it can scale a depth"""
+        usable = self.BACKSIG is not None and np.isfinite(self.BACKSIG) and self.BACKSIG > 0
+        return self.BACKSIG if usable else None
+
+    @property
+    def covariance_complete(self) -> bool:
+        if not self.BACKCPIX:  # cards measured before the field-wide estimate are not the current definition
+            return False
+        if self.BACKC2 is None or not np.isfinite(self.BACKC2) or self.BACKC2 <= 0:
+            return False
+        factors = [self.cov.get(suffix) for suffix in self.header.flux_calibration.depth_suffixes]
+        return all(factor is not None and np.isfinite(factor) and factor > 0 for factor in factors)
+
+    def finalize(self, single: bool) -> None:
+        """Close the run's measurement: drop the sky and the covariance it neither measured nor kept."""
+        # covariance needs sky; a single has none; without a zero point there is no COV_n to keep it for
+        if not self.sky or single or self.header.flux_calibration.cleared:
+            self.covariance = False
+        # the lag cards only beside a covariance measured without a map: a coadd's map (BACKREF COADD) holds them
+        dropped = () if self.covariance and self.BACKREF != "COADD" else self.LAG_CARDS
+        if not self.covariance:
+            dropped += self.COVARIANCE_CARDS
+            self.cov = {}
+        if not self.sky:
+            dropped += tuple(key for key in self.keys() if key not in self.COVARIANCE_CARDS + self.LAG_CARDS)
+        for key in dropped:
+            setattr(self, key, None)
+        self.single, self.finalized = single, True
+
+    @property
+    def cards(self) -> Dict[str, Tuple[Any, str]]:
+        from ..imcoadd.background_qa import BackgroundResiduals, RESIDUAL_KEYS
+
+        misc_dict = {
             "BACKSIG": (float(f"{self.BACKSIG:.6g}") if self.BACKSIG is not None else None, "SKY SIGMA OFF SOURCE"),
             "BACKVAL": (round(self.BACKVAL, 6) if self.BACKVAL is not None else None, "SKY MEDIAN OFF SOURCE"),
             "DEQUANT": (self.DEQUANT, "Sky mesh fitted on the dequantized copy (SKYVAL < cut)"),
@@ -2155,41 +2227,107 @@ class PhotometryHeader:
                 round(self.BACKR11, 5) if self.BACKR11 is not None else None,
                 "C(+-1,+-1)/C(0) of blank sky, 4-fold mean",
             ),
+        }
+        residual = BackgroundResiduals(**{key: getattr(self, key.upper()) for key in RESIDUAL_KEYS})
+        cards = residual.cards() | {k: v for k, v in misc_dict.items() if v[0] is not None}
+        if self.BACKN is not None:
+            cards |= residual.cards(include_missing=True)
+        if self.finalized:
+            # cards a single never has, and the lag cards, go undefined only where the header carried them
+            lingering = self.LAG_CARDS + (self.COVARIANCE_CARDS if self.single else ())
+            cards |= {
+                key: (None, comment)
+                for key, (_, comment) in (residual.cards(include_missing=True) | misc_dict).items()
+                if getattr(self, key) is None and (key not in lingering or key in self.loaded)
+            }
+        flux_calibration = self.header.flux_calibration
+        for suffix in flux_calibration.depth_suffixes:
+            cov = self.cov.get(suffix) if self.finalized and not flux_calibration.cleared else None
+            cards[f"COV_{suffix}"] = (
+                round(cov, 4) if cov is not None else None,
+                "Aperture noise / (BACKSIG * sqrt(pi R^2))",
+            )
+        return cards
+
+
+class PhotometryHeader:
+    """
+    Builds the fits header about photometry to be written to the image.
+    If the image already has the photometry result, PhotometryHeader reads it.
+
+    This is dynamic, unlike ImageInfo. Keys like AUTHOR can be overwritten.
+    """
+
+    # must match the actual header keys
+    AUTHOR: str = getpass.getuser()  # "pipeline"
+    PHOTIME: str = None
+    JD: float = None
+    MJD: float = None
+    NTRAILPX: int = None
+    SANITY: Optional[bool] = None
+    REJ_PROC: Optional[str] = None  # ProcessSpec.name of step that set SANITY False; FITS key REJ_PROC
+
+    def __init__(self, image_info: ImageInfo = None):
+        """If photometry result already exists, load it from the image header"""
+        self.image_info = image_info
+        self.basic_sextractor = BasicSextractor(self)
+        self.flux_calibration = FluxCalibration(self)
+        self.background = Background(self)
+
+        if image_info is not None:
+            self.PHOTIME = datetime.date.today().isoformat()
+
+            for key in type(self).__annotations__:
+
+                # don't skip. overridden anyway.
+                # # skip these fields
+                # if key in ["AUTHOR", "PHOTIME"]:
+                #     continue
+
+                if key in image_info.phot_header_keys:
+                    # try:
+                    setattr(self, key, image_info.phot_header_keys[key])
+                    # except Exception:
+                    #     pass  # silently ignore any conversion errors
+
+            # in this order: the apertures take PEEING from basic_sextractor, the COV_n factors their apertures
+            for block in (self.basic_sextractor, self.flux_calibration, self.background):
+                block.load(image_info.phot_header_keys)
+
+            if self.SANITY is not False:
+                self.REJ_PROC = None  # a rejection stage recorded before a recompute must not be re-emitted
+
+    @classmethod
+    def keys(cls) -> Tuple[str, ...]:
+        """Cards ImageInfo picks up from the image header: the header's own and its blocks'."""
+        return tuple(cls.__annotations__) + BasicSextractor.keys() + FluxCalibration.keys() + Background.keys()
+
+    def finalize(self, single: bool) -> bool:
+        """Close the run: the background, then the depth it scales; False when BACKSIG gives no depth."""
+        if not self.background.finalized:
+            self.background.finalize(single)
+        return self.flux_calibration.set_depth()
+
+    @property
+    def dict(self) -> Dict[str, Tuple[Any, str]]:
+        """This is updated to the image header"""
+
+        phot_header_dict = {
+            "AUTHOR": (self.AUTHOR, "user who last updated photometry header"),
+            "PHOTIME": (self.PHOTIME, "PHOTOMETRY TIME [KST]"),
+            "JD": (self.JD, "Julian Date of the observation"),
+            "MJD": (self.MJD, "Modified Julian Date of the observation"),
             "NTRAILPX": (self.NTRAILPX, "Pixels masked as satellite trail"),
-            "REFCAT": (self.REFCAT, "REFERENCE CATALOG TYPE"),
-            "MAGLOW": (self.MAGLOW, "REF MAG RANGE, LOWER LIMIT"),
-            "MAGUP": (self.MAGUP, "REF MAG RANGE, UPPER LIMIT"),
-            "STDNUMB": (self.STDNUMB, "# OF STD STARS TO CALIBRATE ZP"),
+            "SANITY": (self.SANITY, None),
+            "REJ_PROC": (self.REJ_PROC, "Sci-process that set SANITY to False"),
         }
 
-        from ..imcoadd.background_qa import BackgroundResiduals, RESIDUAL_KEYS
-
-        residual = BackgroundResiduals(**{key: getattr(self, key.upper()) for key in RESIDUAL_KEYS})
-        phot_header_dict.update(residual.cards())
-        phot_header_dict.update(misc_dict)
-        if self.SANITY is not None:
-            phot_header_dict["SANITY"] = (self.SANITY, None)
-        if self.REJ_PROC is not None:
-            phot_header_dict["REJ_PROC"] = (self.REJ_PROC, "Sci-process that set SANITY to False")
-
-        # round float values to .3f
-        phot_header_dict.update({k: (round(v[0], 6), v[1]) for k, v in self.aperture_dict.items()})
-        phot_header_dict.update({k: (round(v[0], 6), v[1]) for k, v in self.zp_dict.items() if v[0] is not None})
-
-        cleared = getattr(self, "_calibration_cleared", False)
         # Filter out entries where the value is None
         return (
             {k: v for k, v in phot_header_dict.items() if v[0] is not None}
-            | (residual.cards(include_missing=True) if self.BACKN is not None else {})
-            # undefined INF_*/CTERM-family cards replace the values a previous run left beside INF_FILT
-            | (
-                {k: misc_dict[k] for k in ("INF_FILT", "INF_DEZP", "INF_FIL2", "INF_DEZF", "CTERM", "ECTERM", "NCTERM")}
-                if self.INF_FILT is not None or cleared
-                else {}
-            )
-            # no zero point: a previous run's ZP cards must not survive either, nor its STDNUMB when none was counted
-            | (self.calibration_null_cards if cleared else {})
-            | ({"STDNUMB": misc_dict["STDNUMB"]} if cleared and self.STDNUMB is None else {})
+            | self.basic_sextractor.cards
+            | self.flux_calibration.cards
+            | self.background.cards
         )
 
     def __repr__(self) -> str:
