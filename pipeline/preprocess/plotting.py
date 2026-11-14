@@ -23,7 +23,7 @@ def save_fits_as_figures(image_data, output_path, stretch=True, log_scale=False,
     if isinstance(image_data, str):
         image_data = fitsio.read(image_data)
 
-    image_data = np.nan_to_num(image_data, nan=0.0, posinf=0.0, neginf=0.0)
+    image_data = np.where(np.isfinite(image_data), image_data, 0)
 
     # Optional logarithmic scaling
     if log_scale:
@@ -32,7 +32,11 @@ def save_fits_as_figures(image_data, output_path, stretch=True, log_scale=False,
     # Optional stretching for better contrast
     if stretch:
         interval = ZScaleInterval()
-        vmin, vmax = interval.get_limits(image_data[np.isfinite(image_data)])
+        finite = np.isfinite(image_data)
+        values = image_data.ravel() if finite.all() else image_data[finite]
+        stride = int(max(1.0, values.size / interval.n_samples))  # ZScaleInterval's own strided sample
+        vmin, vmax = interval.get_limits(values[::stride][: interval.n_samples])
+        del finite, values
 
         image_data = np.clip(image_data, vmin, vmax)
 
@@ -421,7 +425,9 @@ def plot_bpmask(file, ext=1, badpix=1, overwrite=False, dry_run: bool = False):
     canvas.print_figure(figures.bpmask_image)
 
 
-def plot_sci(input_img, output_img, is_too=False, overwrite=False, dry_run: bool = False):
+def plot_sci(
+    input_img, output_img, is_too=False, overwrite=False, dry_run: bool = False, raw_data=None, processed_data=None
+):
     if not (isinstance(input_img, str)):
         print("An image path (input_img) is not properly defined.")
         return
@@ -439,5 +445,8 @@ def plot_sci(input_img, output_img, is_too=False, overwrite=False, dry_run: bool
     if plot_outputs_exist((raw_output_path, processed_output_path)) and not overwrite:
         return
 
-    save_fits_as_figures(input_img, figures.science_raw, overwrite=overwrite)
-    save_fits_as_figures(output_img, figures.science_processed, overwrite=overwrite)
+    save_fits_as_figures(raw_data if raw_data is not None else input_img, figures.science_raw, overwrite=overwrite)
+    save_fits_as_figures(
+        processed_data if processed_data is not None else output_img, figures.science_processed, overwrite=overwrite
+    )
+    return True

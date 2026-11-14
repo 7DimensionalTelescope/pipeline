@@ -1,6 +1,7 @@
 import os
 import gc
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 import sys
 from typing import Literal
 import numpy as np
@@ -279,8 +280,9 @@ def process_image_with_cpu(
     flat: str,
     output_paths: list,
     n_head_blocks=None,
+    plot=None,
     **kwargs,
-):
+) -> list[tuple[int, float, float, float, float, float]]:
     """
     Process images using CPU with batch processing and parallel loading.
 
@@ -301,8 +303,9 @@ def process_image_with_cpu(
     multiplicative, subtractive = preparation_kernel(bias_data, dark_data, flat_data, h, w)
 
     batch_size = 30
-    max_workers = 10  # 3
+    max_workers = 4  # 10  # 3
     total_batches = (len(image_paths) + batch_size - 1) // batch_size
+    batch_seconds = []
 
     for batch_idx, batch_start in enumerate(range(0, len(image_paths), batch_size), 1):
         batch_end = min(batch_start + batch_size, len(image_paths))
@@ -312,27 +315,41 @@ def process_image_with_cpu(
 
         # Load images in parallel using threading
 
+        t0 = time.time()
         batch_data, in_paths, out_paths = read_fits_images(
             batch_image_paths, batch_output_paths, max_workers=max_workers
         )
+        t1 = time.time()
 
         # Process images in batch
         processed_batch = []
+        header_seconds = 0.0
         for image_data, out_path in zip(batch_data, out_paths):
             shifted_flag, shifted_score = check_shifted_overscan(image_data)
             sbitc = sticky_bit_contrast(image_data.astype(np.uint16))  # float32 holds uint16 raw values exactly
+            th = time.time()
             prepare_raw_qa_header(out_path, shifted_flag, shifted_score, sbitc, judge=True)
+            header_seconds += time.time() - th
             processed_data = reduction_kernel_cpu(image_data, subtractive, multiplicative, h, w)
             processed_batch.append(processed_data)
 
         # Write outputs in parallel
-        write_fits_images(out_paths, processed_batch, n_head_blocks=n_head_blocks)
+        t2 = time.time()
+        write_fits_images(out_paths, processed_batch, max_workers=max_workers, n_head_blocks=n_head_blocks)
+        t3 = time.time()
+        if plot is not None:
+            with ThreadPoolExecutor(max_workers=6) as executor:
+                list(executor.map(plot, in_paths, out_paths, batch_data, processed_batch))
+        batch_seconds.append(
+            (batch_num_images, t1 - t0, t2 - t1 - header_seconds, header_seconds, t3 - t2, time.time() - t3)
+        )
+        del batch_data, processed_batch, image_data, processed_data
         gc.collect()
 
     # Clean up
     del bias_data, dark_data, flat_data
     gc.collect()
-    return None
+    return batch_seconds
 
 
 # def _process_single_image(

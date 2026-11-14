@@ -3,6 +3,7 @@ import glob
 import time
 import pprint
 import threading
+import resource
 import numpy as np
 from astropy.io import fits
 import copy
@@ -105,6 +106,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
 
         self.initialize()
         self._generated_masterframes = []  # this is to avoid re-generating masterframes when overwrite=True is given
+        self._plotted_from_memory = set()
+        self._reduced_in_run = set()
 
     @classmethod
     def from_list(cls, images: list, **kwargs):
@@ -245,6 +248,8 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             failed_groups = []
             self._n_remade = 0
             self._n_carried = 0
+            self._plotted_from_memory = set()
+            self._reduced_in_run = set()
             for i in range(self._n_groups):
                 self.logger.debug("\n" + "#" * 100 + f"\n{' '*30}Start processing group {i+1} / {self._n_groups}\n" + "#" * 100)  # fmt: skip
                 self.logger.debug(f"[Group {i+1}] [filter: exptime] {PathHandler.get_group_info(self.raw_groups[i])}")
@@ -255,18 +260,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
 
                     if not self.master_frame_only:
                         self.prepare_header(dry_run=dry_run)
-                        self.data_reduction(device_id=device_id, dry_run=dry_run)
-
-                    if make_plots:
-                        t = threading.Thread(
-                            target=self.make_plots,
-                            kwargs={
-                                "group_index": i,
-                                "dry_run": dry_run,
-                            },
-                        )
-                        t.start()
-                        threads_for_making_plots.append(t)
+                        self.data_reduction(device_id=device_id, dry_run=dry_run, make_plots=make_plots)
 
                 except Exception as e:
                     self.logger.error(
@@ -288,6 +282,18 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
 
                     if i < self._n_groups - 1:
                         self.proceed_to_next_group()
+
+                # also for a group that raised: the science frames it has on disk still need their JPEGs
+                if make_plots:
+                    t = threading.Thread(
+                        target=self.make_plots,
+                        kwargs={
+                            "group_index": i,
+                            "dry_run": dry_run,
+                        },
+                    )
+                    t.start()
+                    threads_for_making_plots.append(t)
 
             if self._n_remade:
                 self.logger.warning(
@@ -902,7 +908,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             qa_id = self.create_image_qa_data(path, self.process_status_id)
             self.create_image_qa_dependencies(path, qa_id)
 
-    def data_reduction(self, device_id=None, use_gpu: bool = True, dry_run: bool = False):
+    def data_reduction(self, device_id=None, use_gpu: bool = True, dry_run: bool = False, make_plots: bool = False):
         self._use_gpu = all([use_gpu, self._use_gpu])
 
         if not self.sci_input:
@@ -952,6 +958,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             self.logger.info(f"[Group {self._current_group+1}] Would create processed files: {output_files} (DRY RUN)")
             return
 
+        self._reduced_in_run.update(output_files)
         st = time.time()
         device_id = device_id if self._use_gpu else "CPU"
         n_head_blocks = get_key(self.config_node.preprocess, "n_head_blocks", 8)
@@ -977,7 +984,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             #         f"[Group {self._current_group+1}] Using {n_workers} parallel workers for CPU processing"
             #     )
 
-            process_kernel(
+            batch_seconds = process_kernel(
                 input_files,
                 self.bias_output,
                 self.dark_output,
@@ -987,6 +994,7 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 use_gpu=self._use_gpu,
                 n_workers=n_workers,
                 n_head_blocks=n_head_blocks,
+                plot=self._plot_sci_from_memory if make_plots else None,
             )
         self._n_remade = (self._n_remade or 0) + sum(1 for r in reasons if r != "missing" and (r or self.overwrite))
         self._n_carried = (self._n_carried or 0) + self._carry_over_science_cards(output_files)
@@ -996,6 +1004,22 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             f"images in {time_diff_in_seconds(st)} seconds "
             f"({time_diff_in_seconds(st, return_float=True)/len(self.sci_input):.1f} s/image)"
         )
+        if batch_seconds is not None:
+            if make_plots:
+                self.logger.info(
+                    f"[Group {self._current_group+1}] Plotted "
+                    f"{sum(f in self._plotted_from_memory for f in output_files)} science images from memory "
+                    f"in {sum(s[-1] for s in batch_seconds):.2f} seconds (included above)"
+                )
+            for b, (n, read_s, compute_s, header_s, write_s, plot_s) in enumerate(batch_seconds, 1):
+                self.logger.debug(
+                    f"[Group {self._current_group+1}] Batch {b}/{len(batch_seconds)}: {n} images, read {read_s:.2f} s, "
+                    f"compute {compute_s:.2f} s, QA header {header_s:.2f} s, write {write_s:.2f} s, plot {plot_s:.2f} s"
+                )
+            self.logger.debug(
+                f"[Group {self._current_group+1}] Peak resident memory so far: "
+                f"{resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024**2:.2f} GiB"
+            )
 
         # Update pipeline progress after data reduction
         self._check_group_outputs(self._current_group)
@@ -1181,6 +1205,22 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
             fmask = mask.ravel()
             plot_flat(file_path, fmask, overwrite=self.overwrite, dry_run=dry_run)
 
+    def _plot_sci_from_memory(self, input_img, output_img, raw_data, processed_data):
+        """science JPEGs from in-memory arrays"""
+        try:
+            if plot_sci(
+                input_img,
+                output_img,
+                is_too=self.is_too,
+                overwrite=True,
+                raw_data=raw_data,
+                processed_data=processed_data,
+            ):
+                self._plotted_from_memory.add(output_img)
+        except Exception as e:
+            self.logger.error(f"[Group {self._current_group+1}] Error making plots: {e}", e)
+            self.logger.debug(traceback.format_exc())
+
     def make_plots(self, group_index: int, dry_run: bool = False):
         try:
             self.logger.info(f"[Group {group_index+1}] Generating plots for master calibration frames")
@@ -1237,18 +1277,37 @@ class Preprocess(BaseSetup, Checker, DatabaseHandler, ReprocessMixin):
                 self.logger.info(f"[Group {group_index+1}] Skipping flat plot")
 
             self.logger.info(f"[Group {group_index+1}] Completed generating plots for master calibration frames")
+        except Exception as e:
+            self.logger.error(f"[Group {group_index+1}] Error making plots: {e}", e)
+            self.logger.debug(traceback.format_exc())
 
+        try:
             # science
             st = time.time()
             sci_pairs = list(
                 zip(self._get_raw_group("sci_input", group_index), self._get_raw_group("sci_output", group_index))
             )
+            sci_pairs = [
+                pair
+                for pair in sci_pairs
+                if pair[1] not in self._plotted_from_memory and (dry_run or os.path.exists(pair[1]))
+            ]
             num_sci = len(sci_pairs)
             if num_sci and not self.master_frame_only:
                 self.logger.info(f"[Group {group_index+1}] Generating plots for science frames ({num_sci} images)")
 
                 for input_img, output_img in sci_pairs:
-                    plot_sci(input_img, output_img, is_too=self.is_too, overwrite=self.overwrite, dry_run=dry_run)
+                    try:
+                        plot_sci(
+                            input_img,
+                            output_img,
+                            is_too=self.is_too,
+                            overwrite=self.overwrite or output_img in self._reduced_in_run,
+                            dry_run=dry_run,
+                        )
+                    except Exception as e:
+                        self.logger.error(f"[Group {group_index+1}] Error making plots: {e}", e)
+                        self.logger.debug(traceback.format_exc())
 
                 self.logger.info(
                     f"[Group {group_index+1}] Completed plot generation for images in {time_diff_in_seconds(st)} seconds "
