@@ -1,4 +1,4 @@
-"""CuPy kernels of the per-frame sky statistics; each takes the cupy module and mirrors numpy/scipy/photutils."""
+"""CuPy kernels of the per-frame sky statistics, mirroring numpy/scipy/photutils; autocovariance also takes numpy."""
 
 from __future__ import annotations
 
@@ -168,72 +168,79 @@ def median_mad(cp, residual, exclude):
     return float(median), float(cp.median(cp.abs(sky - median)))
 
 
-def autocorrelation(cp, residual, mask, maxlag, size, clip, stats, coverage):
-    """imcoadd.utils.noise_autocorrelation with its statistics and FFTs on the device; False where it returns None."""
-    from cupyx.scipy import fft as cfft
+def _row_median(xp, ordered, count):
+    """Median of the first `count` values of each row sorted with its NaN last."""
+    row = xp.arange(ordered.shape[0])
+    k = count // 2
+    upper = ordered[row, xp.minimum(k, ordered.shape[1] - 1)]
+    lower = ordered[row, xp.maximum(k - 1, 0)]
+    return xp.where(count % 2 == 1, upper, 0.5 * (lower + upper))
+
+
+def autocovariance(xp, residual, mask, box, maxlag, clip, exclude_percentile, stats):
+    """imcoadd.utils.noise_autocovariance with xp = numpy or, on the device, cupy; False where it returns None."""
     from scipy.fft import next_fast_len
 
-    residual = cp.asarray(residual)
-    mask = None if mask is None else cp.asarray(mask, dtype=bool)
-    coverage = None if coverage is None else cp.asarray(coverage, dtype=bool)
+    if xp is np:
+        from scipy import fft as xfft
+    else:
+        from cupyx.scipy import fft as xfft
     height, width = residual.shape
-    ny, nx = (max(1, int(np.ceil(n / size))) for n in residual.shape)
-    rows = np.array_split(np.arange(height), ny)
-    cols = np.array_split(np.arange(width), nx)
-    lags = cp.asarray(np.arange(-maxlag, maxlag + 1))
-    total_pairs = cp.zeros((lags.size, lags.size), dtype=cp.float64)
-    total_product = cp.zeros_like(total_pairs)
-    kept, total = [], 0.0
-    pixels = covered_used = covered_total = 0
-    for ys in rows:
-        for xs in cols:
-            cut = (slice(ys[0], ys[-1] + 1), slice(xs[0], xs[-1] + 1))
-            patch = residual[cut].astype(cp.float64)
-            covered = int(cp.count_nonzero(cp.isfinite(patch) if coverage is None else coverage[cut]))
-            covered_total += covered
-            bad = ~cp.isfinite(patch) if mask is None else (mask[cut] | ~cp.isfinite(patch))
-            n_good = int(cp.count_nonzero(~bad))
-            if n_good == 0 or n_good < 16 * covered // 100:
-                continue
-            if clip:
-                good = patch[~bad]
-                center = cp.median(good)
-                scale = 1.482602218505602 * float(cp.median(cp.abs(good - center)))
-                if not np.isfinite(scale) or scale <= 0:
-                    continue
-                bad |= cp.abs(patch - center) > clip * scale
-                n_good = int(cp.count_nonzero(~bad))
-            if n_good < 16 * covered // 100:
-                continue
-            kept.append((cut, bad))
-            total += float(patch[~bad].sum())
-            pixels += n_good
-            covered_used += covered
+    columns = -(-width // box)
+    need = (1.0 - exclude_percentile / 100.0) * box**2  # the mesh drops a box that keeps this many pixels or fewer
+    size = next_fast_len(box + maxlag)
+    lags = xp.asarray(np.arange(-maxlag, maxlag + 1))
+    maps, pixels = [], 0
+    for y0 in range(0, height, box):
+        strip = xp.asarray(residual[y0 : y0 + box], dtype=xp.float64)
+        blank = xp.isfinite(strip)
+        if mask is not None:
+            blank &= ~xp.asarray(mask[y0 : y0 + box], dtype=bool)
+        block = xp.full((box, columns * box), xp.nan)
+        block[: strip.shape[0], :width] = xp.where(blank, strip, xp.nan)
+        flat = xp.ascontiguousarray(block.reshape(box, columns, box).transpose(1, 0, 2)).reshape(columns, box * box)
+        keep = xp.isfinite(flat)
+        if clip:  # one pass about the box median; 0 or None leaves the box unclipped
+            count = keep.sum(axis=1)
+            deviation = xp.abs(flat - _row_median(xp, xp.sort(flat, axis=1), count)[:, None])
+            scale = 1.482602218505602 * _row_median(xp, xp.sort(deviation, axis=1), count)
+            with np.errstate(invalid="ignore"):
+                keep &= (deviation <= clip * scale[:, None]) & (scale > 0)[:, None]
+        use = keep.sum(axis=1) > need
+        if not bool(use.any()):
+            continue
+        keep = keep[use]
+        count = keep.sum(axis=1, keepdims=True).astype(xp.float64)
+        x = xp.where(keep, flat[use], 0.0)
+        x = xp.where(keep, x - x.sum(axis=1, keepdims=True) / count, 0.0)
+        n, s = count[:, :, None], (x * x).sum(axis=1)[:, None, None]
+        if maxlag:
+            ft = xfft.rfft2(x.reshape(-1, box, box), s=(size, size), axes=(1, 2))
+            gt = xfft.rfft2(keep.reshape(-1, box, box).astype(xp.float64), s=(size, size), axes=(1, 2))
+            zero = n, s  # the zero lag stays the direct sums
+            n, s = (
+                xfft.irfft2(spectrum, s=(size, size), axes=(1, 2))[:, lags[:, None], lags[None, :]]
+                for spectrum in (gt * xp.conj(gt), ft * xp.conj(ft))
+            )
+            for lagged, direct in zip((n, s), zero):
+                lagged[:, maxlag, maxlag] = direct[:, 0, 0]
+            use = (xp.rint(n) >= 1).all(axis=(1, 2))
+            if not bool(use.all()):
+                keep, count, n, s = (v[use] for v in (keep, count, n, s))
+        # about its own mean a box reads every lag low by the variance of that mean, sum_h N(h) C(h) / N^2: added back
+        others = (count * count)[:, :, None] - n.sum(axis=(1, 2), keepdims=True)
+        maps.append(s / n + s.sum(axis=(1, 2), keepdims=True) / others)
+        pixels += int(keep.sum())
     if pixels == 0:
         return False
-    mean = total / pixels
-    for cut, bad in kept:
-        patch = residual[cut].astype(cp.float64)
-        good = (~bad).astype(cp.float64)
-        field = cp.where(bad, 0.0, patch - mean)
-        shape = [next_fast_len(n + maxlag) for n in patch.shape]
-        ft, gt = cfft.rfft2(field, s=shape), cfft.rfft2(good, s=shape)
-        pairs = cfft.irfft2(gt * cp.conj(gt), s=shape)
-        product = cfft.irfft2(ft * cp.conj(ft), s=shape)
-        total_pairs += pairs[cp.ix_(lags, lags)]
-        total_product += product[cp.ix_(lags, lags)]
-    total_pairs, total_product = cp.asnumpy(total_pairs), cp.asnumpy(total_product)
-    if np.any(total_pairs <= 0):
-        return False
-    window = total_product / total_pairs
+    window = xp.median(xp.concatenate(maps), axis=0)
+    window = window if xp is np else xp.asnumpy(window)
     if not np.isfinite(window[maxlag, maxlag]) or window[maxlag, maxlag] <= 0:
         return False
     if stats is not None:
-        stats["variance"] = float(window[maxlag, maxlag])
         stats["pixels"] = pixels
-        stats["sub_areas"] = len(kept)
-        stats["represented"] = covered_used / covered_total if covered_total else 0.0
-    return window / window[maxlag, maxlag]
+        stats["sub_areas"] = sum(int(c.shape[0]) for c in maps)
+    return window
 
 
 class GpuZoomInterpolator(BkgZoomInterpolator):

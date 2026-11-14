@@ -458,7 +458,7 @@ def mesh_peak(bkg: Background2D, window: int | None = None) -> tuple[float, floa
 def mesh_peak_cards(peak) -> dict:
     peak, ratio = (round(float(v), d) if np.isfinite(v) else None for v, d in zip(peak, (4, 2)))
     return {
-        "BACKPEAK": (peak, "[ADU] Largest mesh node excursion from its neighbours"),
+        "BACKPEAK": (peak, "[ADU] Largest mesh node excursion"),
         "BACKPKSN": (ratio, "BACKPEAK / (1.4826 MAD of node excursions)"),
     }
 
@@ -541,76 +541,19 @@ def sky_statistics(data, mask=None, coverage_mask=None, **mesh_options) -> tuple
     return float(bkg.background_median), float(bkg.background_rms_median)
 
 
-def noise_autocorrelation(
-    residual, mask=None, maxlag: int = 8, size: int = 1024, clip: float = 10.0, stats=None, coverage=None, logger=None
-):
-    """Blank-sky autocorrelation to +-maxlag px across the frame, normalised to C(0); stats gets C(0) and counts."""
-    from astropy.stats import mad_std
-    from scipy import fft as sfft
+def noise_autocovariance(
+    residual, mask=None, box_size: int = 128, maxlag: int = 0, clip: float = 10.0, exclude_percentile: float = 50.0,
+    stats=None, logger=None,
+):  # fmt: skip
+    """Blank-sky C(h) [ADU^2] to +-maxlag px, C(0) = BACKSIG^2: median of mesh boxes clipped at `clip` x 1.4826 MAD."""
     from ..calc import sky_gpu
     from ..services.utils import on_gpu
 
-    window = on_gpu(
-        sky_gpu.autocorrelation, residual, mask, maxlag, size, clip, stats, coverage,
-        need_bytes=sky_gpu.FRAME_BYTES, logger=logger, name="autocorrelation",
-    )  # fmt: skip
-    if window is not None:
-        return None if window is False else window
-    residual = np.asarray(residual)
-    height, width = residual.shape
-    ny, nx = (max(1, int(np.ceil(n / size))) for n in residual.shape)
-    rows = np.array_split(np.arange(height), ny)
-    cols = np.array_split(np.arange(width), nx)
-    lags = np.arange(-maxlag, maxlag + 1)
-    total_pairs = np.zeros((lags.size, lags.size), dtype=np.float64)
-    total_product = np.zeros_like(total_pairs)
-    kept, total = [], 0.0
-    pixels = covered_used = covered_total = 0
-    for ys in rows:
-        for xs in cols:
-            cut = (slice(ys[0], ys[-1] + 1), slice(xs[0], xs[-1] + 1))
-            patch = np.ascontiguousarray(residual[cut], dtype=np.float64)
-            covered = int(np.count_nonzero(np.isfinite(patch) if coverage is None else coverage[cut]))
-            covered_total += covered
-            bad = np.zeros(patch.shape, dtype=bool) if mask is None else np.asarray(mask[cut], dtype=bool).copy()
-            bad |= ~np.isfinite(patch)
-            if bad.all() or (~bad).sum() < 16 * covered // 100:
-                continue
-            if clip:
-                scale = mad_std(patch[~bad])
-                if not np.isfinite(scale) or scale <= 0:
-                    continue
-                bad |= np.abs(patch - np.median(patch[~bad])) > clip * scale
-            if (~bad).sum() < 16 * covered // 100:
-                continue
-            kept.append((cut, bad))
-            total += float(patch[~bad].sum())
-            pixels += int((~bad).sum())
-            covered_used += covered
-    if pixels == 0:
-        return None
-    mean = total / pixels  # one mean for the field: a per-sub-area mean would drop sky structure that apertures do see
-    for cut, bad in kept:
-        patch = np.ascontiguousarray(residual[cut], dtype=np.float64)
-        good = (~bad).astype(np.float64)
-        field = np.where(bad, 0.0, patch - mean)
-        shape = [sfft.next_fast_len(n + maxlag) for n in patch.shape]
-        ft, gt = sfft.rfft2(field, s=shape), sfft.rfft2(good, s=shape)
-        pairs = sfft.irfft2(gt * np.conj(gt), s=shape)
-        product = sfft.irfft2(ft * np.conj(ft), s=shape)
-        total_pairs += pairs[np.ix_(lags, lags)]  # pooled over sub-areas: C(h) = sum S_a(h) / sum N_a(h)
-        total_product += product[np.ix_(lags, lags)]
-    if np.any(total_pairs <= 0):
-        return None
-    window = total_product / total_pairs
-    if not np.isfinite(window[maxlag, maxlag]) or window[maxlag, maxlag] <= 0:
-        return None
-    if stats is not None:
-        stats["variance"] = float(window[maxlag, maxlag])
-        stats["pixels"] = pixels
-        stats["sub_areas"] = len(kept)
-        stats["represented"] = covered_used / covered_total if covered_total else 0.0
-    return window / window[maxlag, maxlag]
+    args = (residual, mask, int(box_size), int(maxlag), clip, float(exclude_percentile), stats)
+    window = on_gpu(sky_gpu.autocovariance, *args, need_bytes=sky_gpu.FRAME_BYTES, logger=logger, name="autocovariance")
+    if window is None:
+        window = sky_gpu.autocovariance(np, *args)
+    return None if window is False else window
 
 
 def boxes_dropped(excluded, box_size: int, exclude_percentile: float) -> float:
