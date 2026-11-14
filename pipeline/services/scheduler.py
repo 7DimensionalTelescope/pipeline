@@ -282,24 +282,20 @@ class Scheduler:
             size = next(sizes, size)
         return submitted
 
-    @staticmethod
-    def _link_crossfilter_rows(table):
-        """Pending at 100 - N behind the N science rows of the same target-night (object, nightdate by name): the key Blueprint groups by, no I/O."""
-        from ..path.name import NameHandler
-
+    @classmethod
+    def _link_crossfilter_rows(cls, table):
+        """Pending at 100 - N behind the N science rows of the same target-night directory (_night_dir), no I/O."""
         if len(table) == 0:
             return
-        props = NameHandler([str(config) for config in table["config"]]).config_properties
-        props = [props] if isinstance(props, dict) else props
         position = {int(row["index"]): i for i, row in enumerate(table)}
         science = {}
-        for row, prop in zip(table, props):
+        for row in table:
             if str(row["config_type"]) in (CONFIG_TYPE_SCIENCE, CONFIG_TYPE_MULTI_EPOCH):
-                science.setdefault((prop["object"], prop["nightdate"]), []).append(int(row["index"]))
-        for i, (row, prop) in enumerate(zip(table, props)):
+                science.setdefault(cls._night_dir(row["config"]), []).append(int(row["index"]))
+        for i, row in enumerate(table):
             if str(row["config_type"]) != CONFIG_TYPE_CROSSFILTER:
                 continue
-            parents = science.get((prop["object"], prop["nightdate"]), [])
+            parents = science.get(cls._night_dir(row["config"]), [])
             if not parents:
                 continue
             table["is_ready"][i] = False
@@ -940,7 +936,7 @@ class Scheduler:
 
         # Check for overwrite functionality
         overwrite_schedule = self.overwrite_schedule
-        plan = None
+        plan, ignored = None, {}
 
         if len(current_table) > 0:
             # Get set of existing configs to filter duplicates
@@ -987,6 +983,7 @@ class Scheduler:
                     self._report_overwrite(plan)
             else:
                 # Filter out rows with duplicate configs (keep existing, ignore new duplicates)
+                ignored = self._ignored_links(other_table, existing_configs)
                 non_duplicate_mask = [config not in existing_configs for config in other_table["config"]]
                 other_table = other_table[non_duplicate_mask] if any(non_duplicate_mask) else other_table[[]]
 
@@ -994,14 +991,32 @@ class Scheduler:
                     duplicate_count = len(other.schedule if isinstance(other, Scheduler) else other) - len(other_table)
                     print(f"Warning: Ignoring {duplicate_count} duplicate config(s) when adding schedule")
 
-            # without a duplicate to replace, planned only when a target-night directory links it to queued rows
-            if plan is None and hold and len(other_table) > 0:
+            # without a duplicate to replace, planned only when a directory or an ignored row links it to the queue
+            if plan is None and (hold or ignored) and len(other_table) > 0:
                 types = [str(config_type) for config_type in other_table["config_type"]]
                 batch = zip(map(str, other_table["config"]), types, other_table["dispatch"])
-                found = self._night_rows(batch, list(self._memory_rows(current_table).values()))
-                if found:
+                memory = self._memory_rows(current_table)
+                found, held = self._night_rows(batch, list(memory.values())) if hold else ({}, {})
+                if found or ignored:
                     existing = {row["index"]: row for rows in found.values() for row in rows}
-                    plan = self._overwrite_plan(existing, other_table, types, offset + 1, hold)
+                    if ignored:
+                        queued = {row["config"]: row for row in sorted(memory.values(), key=lambda row: row["index"])}
+                        ignored = {b: (queued[config], links) for b, (config, links) in ignored.items()}
+                        # the preprocess parents of a waiting queued science row, for its recount
+                        waiting = {
+                            row["index"]
+                            for row, _ in ignored.values()
+                            if row["status"] in (TASK_STATUS_PENDING, TASK_STATUS_READY)
+                            and row["config_type"] in (CONFIG_TYPE_SCIENCE, CONFIG_TYPE_MULTI_EPOCH)
+                        }
+                        held.update(
+                            (index, row)
+                            for index, row in memory.items()
+                            if row["config_type"] == CONFIG_TYPE_PREPROCESS and not waiting.isdisjoint(row["links"])
+                        )
+                    plan = self._overwrite_plan(
+                        existing, other_table, types, offset + 1, hold, held=held, ignored=ignored
+                    )
                     for k, index in enumerate(current_table["index"]):
                         if int(index) in plan["links"]:
                             current_table["dependent_idx"][k] = plan["links"][int(index)]
@@ -2088,9 +2103,7 @@ class Scheduler:
 
         # before the write lock: a multi-epoch row reads its yml
         derived = dict(zip(map(str, table["config"]), self._derive_columns(table["config"], table["config_type"])))
-        # before the write lock: a pre-2024-05-28 config name is a Postgres lookup
-        names = self._overwrite_names(table) if self.overwrite_schedule else {}
-        plan = None
+        plan, ignored = None, {}
         with self._db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("BEGIN IMMEDIATE")
@@ -2132,7 +2145,7 @@ class Scheduler:
                             [derived[str(config)][0] for config in new_table["config"]],
                             offset,
                             link_crossfilter,
-                            names,
+                            watermark=watermark,
                         )
                         cursor.execute(
                             'DELETE FROM scheduler WHERE "index" IN (SELECT value FROM json_each(?))',
@@ -2163,6 +2176,7 @@ class Scheduler:
                     filtered_table = new_table
 
                 else:
+                    ignored = self._ignored_links(new_table, existing_configs)
                     non_duplicate_mask = [config not in existing_configs for config in new_table["config"]]
                     filtered_table = (
                         new_table[non_duplicate_mask] if any(non_duplicate_mask) else new_table[[]]
@@ -2172,14 +2186,58 @@ class Scheduler:
                         duplicate_count = len(new_table) - len(filtered_table)
                         print(f"Warning: Ignoring {duplicate_count} duplicate config(s) when adding schedule")
 
-                # without a duplicate to replace, planned only when a target-night directory links it to queued rows
-                if plan is None and link_crossfilter and len(filtered_table) > 0:
+                # without a duplicate to replace, planned only when a directory or an ignored row links it to the queue
+                if plan is None and (link_crossfilter or ignored) and len(filtered_table) > 0:
                     types = [derived[str(config)][0] for config in filtered_table["config"]]
                     batch = zip(map(str, filtered_table["config"]), types, filtered_table["dispatch"])
-                    found = self._night_rows(batch, cursor=cursor)
-                    if found:
+                    found, held = self._night_rows(batch, cursor=cursor) if link_crossfilter else ({}, {})
+                    if found or ignored:
                         existing = {row["index"]: row for rows in found.values() for row in rows}
-                        plan = self._overwrite_plan(existing, filtered_table, types, offset, link_crossfilter)
+                        if ignored:
+                            queued = {
+                                row["config"]: dict(row, links=json.loads(row["dependent_idx"] or "[]"))
+                                for row in cursor.execute(
+                                    'SELECT "index", config, config_type, status, stashed_from, readiness, group_idx, '
+                                    "dependent_idx FROM scheduler WHERE config IN (SELECT value FROM json_each(?)) "
+                                    'ORDER BY "index"',
+                                    (json.dumps(sorted({config for config, _ in ignored.values()})),),
+                                )
+                            }
+                            ignored = {b: (queued[config], links) for b, (config, links) in ignored.items()}
+                            # the open preprocess parents of a waiting queued science row, for its recount
+                            waiting = [
+                                row["index"]
+                                for row, _ in ignored.values()
+                                if row["status"] in (TASK_STATUS_PENDING, TASK_STATUS_READY)
+                                and row["config_type"] in (CONFIG_TYPE_SCIENCE, CONFIG_TYPE_MULTI_EPOCH)
+                            ]
+                            if waiting:
+                                held.update(
+                                    (row["index"], dict(row, links=json.loads(row["dependent_idx"])))
+                                    for row in cursor.execute(
+                                        'SELECT "index", config, config_type, status, stashed_from, dependent_idx '
+                                        "FROM scheduler WHERE config_type = ? AND status NOT IN (?, ?, ?) AND EXISTS "
+                                        "(SELECT 1 FROM json_each(dependent_idx) WHERE value IN "
+                                        "(SELECT value FROM json_each(?)))",
+                                        (
+                                            CONFIG_TYPE_PREPROCESS,
+                                            TASK_STATUS_COMPLETED,
+                                            TASK_STATUS_REJECTED,
+                                            TASK_STATUS_FAILED,
+                                            json.dumps(waiting),
+                                        ),
+                                    )
+                                )
+                        plan = self._overwrite_plan(
+                            existing,
+                            filtered_table,
+                            types,
+                            offset,
+                            link_crossfilter,
+                            held=held,
+                            watermark=watermark,
+                            ignored=ignored,
+                        )
                         cursor.executemany(
                             'UPDATE scheduler SET dependent_idx = ? WHERE "index" = ?',
                             [(json.dumps(links) if links else None, index) for index, links in plan["links"].items()],
@@ -2281,41 +2339,21 @@ class Scheduler:
         # Mirror config-level dependencies to postgres (best-effort; never fatal).
         self.mirror_dependencies()
 
-    def _overwrite_names(self, table):
-        """(object, nightdate) by name for the batch and its crossfilter groups; read before the write lock."""
-        from ..path.name import NameHandler
+    @staticmethod
+    def _ignored_links(table, queued):
+        """{batch index: (config, links)} of the rows ignored as queued duplicates that a kept row links to or from."""
+        kept = [row for row in table if str(row["config"]) not in queued]
+        named = {int(child) for row in kept for child in (row["dependent_idx"] or [])}
+        kept = {int(row["index"]) for row in kept}
+        return {
+            int(row["index"]): (str(row["config"]), [int(child) for child in (row["dependent_idx"] or [])])
+            for row in table
+            if str(row["config"]) in queued
+            and (int(row["index"]) in named or not kept.isdisjoint(map(int, row["dependent_idx"] or [])))
+        }
 
-        configs = list(dict.fromkeys(map(str, table["config"])))
-        with self._db_connection() as conn:
-            grouped = conn.execute(
-                "SELECT DISTINCT config FROM scheduler WHERE group_idx IN (SELECT group_idx FROM scheduler "
-                "WHERE config IN (SELECT value FROM json_each(?)))",
-                (json.dumps(configs),),
-            ).fetchall()
-        if not grouped:
-            return {}
-        configs = list(dict.fromkeys(configs + [row[0] for row in grouped]))
-        try:
-            props = NameHandler(configs).config_properties
-        except ValueError:
-            return {}
-        props = [props] if isinstance(props, dict) else props
-        return {config: (prop.get("object"), prop.get("nightdate")) for config, prop in zip(configs, props)}
-
-    def _overwrite_plan(self, existing, table, config_types, base, hold, names=None):
+    def _overwrite_plan(self, existing, table, config_types, base, hold, held=None, watermark=None, ignored=None):
         """overwrite_schedule: keep, or kill and replace at a fresh index; links carried and re-pointed; recount."""
-        from ..path.name import NameHandler
-
-        keys = dict(names or {})
-
-        def key(config):
-            if config not in keys:
-                try:
-                    prop = NameHandler(config).config_properties
-                    keys[config] = (prop.get("object"), prop.get("nightdate"))
-                except ValueError:
-                    keys[config] = None
-            return keys[config]
 
         def legit(parent, child):
             if parent["config_type"] == CONFIG_TYPE_PREPROCESS:
@@ -2324,11 +2362,7 @@ class Scheduler:
             return (
                 parent["config_type"] in (CONFIG_TYPE_SCIENCE, CONFIG_TYPE_MULTI_EPOCH)
                 and child["config_type"] == CONFIG_TYPE_CROSSFILTER
-                and (
-                    self._night_dir(parent["config"]) == self._night_dir(child["config"])
-                    or key(parent["config"]) is not None
-                    and key(parent["config"]) == key(child["config"])
-                )
+                and self._night_dir(parent["config"]) == self._night_dir(child["config"])
             )
 
         def grouped(row):
@@ -2339,7 +2373,7 @@ class Scheduler:
                 for child in row["links"]
             )
 
-        rows_of, first, final, remap, kept, ended, stale = {}, {}, {}, {}, [], [], []
+        rows_of, first, final, remap, kept, ended, stale, dropped = {}, {}, {}, {}, [], [], [], set()
         for row in existing.values():
             rows_of.setdefault(row["config"], []).append(row)
         for row, config_type in zip(table, config_types):
@@ -2382,6 +2416,16 @@ class Scheduler:
                 readiness=int(row["readiness"]),
                 status=str(row["status"]),
             )
+        # a batch row ignored as a queued duplicate stands for that queued row, a child of the batch while it waits
+        ignored = ignored or {}
+        final.update(
+            {
+                b: row["index"]
+                for b, (row, _) in ignored.items()
+                if row["status"] in (TASK_STATUS_PENDING, TASK_STATUS_READY)
+                and row["config_type"] != CONFIG_TYPE_CROSSFILTER
+            }
+        )
 
         new = {final[row["b"]]: row for row in first.values() if final[row["b"]] not in existing}
         info = {**{index: row for index, row in existing.items() if index not in remap}, **new}
@@ -2400,6 +2444,8 @@ class Scheduler:
                         carried.append(remap.get(child, child))
                     else:
                         stale.append((old["config"], existing[child]["config"]))
+                        if child not in remap and existing[child]["config_type"] == CONFIG_TYPE_CROSSFILTER:
+                            dropped.add(child)
             merged = carried + [final[child] for child in row["batch_links"] if child in final]
             links[target] = list(dict.fromkeys(child for child in merged if child != target))
         for index, row in info.items():
@@ -2418,28 +2464,30 @@ class Scheduler:
             links[index] = list(dict.fromkeys(repointed))
 
         # an inserted white gains its target-night's open science rows, an inserted science row its waiting white
-        gained, science = {}, (CONFIG_TYPE_SCIENCE, CONFIG_TYPE_MULTI_EPOCH)
+        joined, science = set(), (CONFIG_TYPE_SCIENCE, CONFIG_TYPE_MULTI_EPOCH)
         if hold:
             inserted = [row for row in first.values() if final[row["b"]] in new]
-            found = self._night_rows(
+            found, _ = self._night_rows(
                 [(row["config"], row["config_type"], row["dispatch"]) for row in inserted],
                 [row for index, row in existing.items() if index not in remap and row["config"] not in first],
             )
-            linked = set().union(*(links[final[row["b"]]] for row in first.values())) if found else set()
             for row in inserted:
                 target = final[row["b"]]
                 for other in found.get(self._night_dir(row["config"]), []):
                     index = other["index"]
                     if row["config_type"] == CONFIG_TYPE_CROSSFILTER and other["config_type"] in science:
+                        # an ungrouped row above the watermark owes _repair_group_idx, which would group it by this link
+                        if watermark is not None and index > watermark and other["group_idx"] is None:
+                            continue
                         links[index] = list(dict.fromkeys(links.get(index, other["links"]) + [target]))
+                        joined.add(target)
                     elif (
                         other["config_type"] == CONFIG_TYPE_CROSSFILTER
                         and row["config_type"] in science
                         and not row["dispatch"]
                     ):
                         links[target] = list(dict.fromkeys(links[target] + [index]))
-                        if index not in linked:
-                            gained.setdefault(index, set()).add(target)
+                        joined.add(index)
 
         types = {index: row["config_type"] for index, row in info.items()}
         owners = {}
@@ -2464,19 +2512,49 @@ class Scheduler:
             else:
                 mixed.append((row["config"], group, sorted(owner)))
 
+        # a kept row whose in-batch parent was ignored gains that queued row as parent while it holds the row
+        gained = set()
+        for row, children in ignored.values():
+            state = row["stashed_from"] if row["status"] == TASK_STATUS_STASHED else row["status"]
+            for target in [final[child] for child in children if final.get(child) in new]:
+                gained.add(target)
+                if new[target]["config_type"] == CONFIG_TYPE_CROSSFILTER:
+                    # an unrepaired row is not linked to a white, as above
+                    unrepaired = watermark is not None and row["index"] > watermark and row["group_idx"] is None
+                    holds = hold and not unrepaired and state not in (TASK_STATUS_COMPLETED, TASK_STATUS_REJECTED)
+                else:
+                    holds = row["status"] in (
+                        TASK_STATUS_READY,
+                        TASK_STATUS_PENDING,
+                        TASK_STATUS_PROCESSING,
+                        TASK_STATUS_PAUSED,
+                    )
+                if holds and legit(row, new[target]):
+                    links[row["index"]] = list(dict.fromkeys(links.get(row["index"], row["links"]) + [target]))
+
         trusted = {final[row["b"]] for row in first.values()}
-        parents = {child: set() for child in set(new).union(*(links[index] for index in trusted)) - set(gained)}
-        for index, row in info.items():
+        # a batch without a duplicate recounts the whites a directory joined and the rows that lost an ignored parent
+        fresh = not any(row["config"] in rows_of for row in first.values())
+        pool = {**(held or {}), **{row["index"]: row for row, _ in ignored.values()}, **info}
+        parents = {
+            child: set()
+            for child in (joined | gained if fresh else set(new).union(dropped, *(links[index] for index in trusted)))
+        }
+        # a stored link the recount does not count (a white of another target-night directory) is dropped
+        for index, row in pool.items():
             for child in links.get(index, row.get("links", [])):
                 if child in parents and child in info and (index in trusted or legit(row, info[child])):
                     parents[child].add(index)
+                elif child in parents and child in info:
+                    links[index] = [other for other in links.get(index, row["links"]) if other != child]
+                    stale.append((row["config"], info[child]["config"]))
 
         def unfinished(parent, child):
             if parent in new:
                 return True
-            row = existing[parent]
+            row = pool[parent]
             state = row["stashed_from"] if row["status"] == TASK_STATUS_STASHED else row["status"]
-            if info[child]["config_type"] == CONFIG_TYPE_CROSSFILTER:
+            if pool[child]["config_type"] == CONFIG_TYPE_CROSSFILTER:
                 return state not in (TASK_STATUS_COMPLETED, TASK_STATUS_REJECTED)
             return state not in (TASK_STATUS_COMPLETED, TASK_STATUS_REJECTED, TASK_STATUS_FAILED)
 
@@ -2501,9 +2579,18 @@ class Scheduler:
                 continue
             if (row["readiness"], row[field]) != (readiness, state):
                 recount[child] = (field, state, readiness)
-        # a waiting white linked by directory alone: its stored count less one per new parent, its other parents unread
-        for child, of in gained.items():
-            recount[child] = ("status", TASK_STATUS_PENDING, info[child]["readiness"] - len(of))
+        for index, row in new.items():
+            if row["b"] not in insert:
+                insert[row["b"]] = dict(index=index, links=links[index], dispatch=row["dispatch"])
+        # a waiting queued row a kept row now links to is recounted whole: 100 minus its open parents, queued and new
+        waits = {final[b]: set() for b in ignored if b in final}
+        for index, row in pool.items():
+            for child in links.get(index, row.get("links", [])):
+                if child in waits and (index in new or legit(row, pool[child])):
+                    waits[child].add(index)
+        for child, of in waits.items():
+            if not of.isdisjoint(new):
+                recount[child] = ("status", TASK_STATUS_PENDING, 100 - sum(unfinished(parent, child) for parent in of))
 
         return dict(
             insert=insert,
@@ -2531,8 +2618,9 @@ class Scheduler:
                 row["links"],
                 row["dispatch"],
             )
-            table["readiness"][k], table["status"][k] = row["readiness"], row["status"]
-            table["is_ready"][k] = row["readiness"] == 100
+            if "readiness" in row:
+                table["readiness"][k], table["status"][k] = row["readiness"], row["status"]
+                table["is_ready"][k] = row["readiness"] == 100
         return table
 
     @staticmethod
@@ -2541,22 +2629,28 @@ class Scheduler:
         return os.path.dirname(os.path.dirname(str(config)))
 
     def _night_rows(self, batch, rows=None, cursor=None):
-        """{target-night dir: open science rows and waiting whites} for the batch's whites and unpinned science rows."""
+        """{target-night dir: open science rows and waiting whites} for the batch; {index: waiting whites' parents}."""
         science = (CONFIG_TYPE_SCIENCE, CONFIG_TYPE_MULTI_EPOCH)
+        opened = (TASK_STATUS_READY, TASK_STATUS_PENDING, TASK_STATUS_PROCESSING, TASK_STATUS_PAUSED)
         whites, sciences = set(), set()
         for config, config_type, pin in batch:
             if config_type == CONFIG_TYPE_CROSSFILTER:
                 whites.add(self._night_dir(config))
             elif config_type in science and not pin:
                 sciences.add(self._night_dir(config))
-        found = {}
-        for types, states, dirs in (
-            (science, (TASK_STATUS_READY, TASK_STATUS_PENDING, TASK_STATUS_PROCESSING, TASK_STATUS_PAUSED), whites),
-            ((CONFIG_TYPE_CROSSFILTER,), (TASK_STATUS_PENDING, TASK_STATUS_READY), sciences),
+        found, held = {}, {}
+        for types, states in (
+            ((CONFIG_TYPE_CROSSFILTER,), (TASK_STATUS_PENDING, TASK_STATUS_READY)),
+            (science, opened),
         ):
-            if not dirs:
+            # a waiting white is recounted whole: its Failed or Stashed parents are read with the open science rows
+            late, nights = set(found), whites if types == science else sciences
+            waiting = {white["index"] for night in late for white in found[night]}
+            ended = (TASK_STATUS_FAILED, TASK_STATUS_STASHED) if waiting else ()
+            if not nights and not waiting:
                 continue
             if cursor is not None:
+                linked = "SELECT 1 FROM json_each(dependent_idx) WHERE value IN (SELECT value FROM json_each(?))"
                 rows = [
                     dict(row, links=json.loads(row["dependent_idx"] or "[]"))
                     for row in cursor.execute(
@@ -2564,16 +2658,19 @@ class Scheduler:
                         "COALESCE(dispatch, '') AS dispatch, COALESCE(process_start, '') AS process_start, "
                         "COALESCE(process_end, '') AS process_end, dependent_idx, group_idx FROM scheduler "
                         f"WHERE config_type IN ({', '.join('?' * len(types))}) "
-                        f"AND status IN ({', '.join('?' * len(states))})",
-                        (*types, *states),
+                        f"AND (status IN ({', '.join('?' * len(states))})"
+                        f"{f' OR status IN (?, ?) AND EXISTS ({linked})' if ended else ''})",
+                        (*types, *states, *ended, *([json.dumps(sorted(waiting))] if ended else [])),
                     )
                 ]
             for row in rows:
-                if row["config_type"] in types and row["status"] in states:
+                if row["config_type"] in types and row["status"] in states + ended:
                     night = self._night_dir(row["config"])
-                    if night in dirs:
+                    if not waiting.isdisjoint(row["links"]):
+                        held[row["index"]] = row
+                    if night in nights and row["status"] in states:
                         found.setdefault(night, []).append(row)
-        return found
+        return found, held
 
     def _report_overwrite(self, plan):
         """skipped_duplicates, a warning and a print per kept duplicate; ended runs noted; stale links at debug."""
