@@ -13,6 +13,7 @@ from watchdog.events import FileSystemEventHandler
 from datetime import datetime
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from types import SimpleNamespace
 
 from ..path.path import PathHandler
 from ..path.name import NameHandler
@@ -777,12 +778,17 @@ def read_fits_image(path, use_memmap=False):
 
 
 def read_fits_image(path):
-    data = fitsio.read(path)
-    data = data.astype(np.float32)
+    try:
+        with fits.open(path, memmap=False, uint=False, ignore_blank=True) as hdul:
+            # np.fromfile releases the GIL; section avoids the .data lazyproperty lock that serializes threads
+            data = next(hdu for hdu in hdul if hdu.size).section[...]
+    except Exception as e:
+        raise OSError(f"{path}: {e!r}") from e  # the type fitsio raised, with the path it named
+    data = data.astype(np.float32, copy=False)
     return data
 
 
-def read_fits_images(input_paths, output_paths, max_workers=10):
+def read_fits_images(input_paths, output_paths, max_workers=4):
     pairs = list(zip(input_paths, output_paths))
     pairs = sorted(pairs, key=lambda x: x[0])  # safe
 
@@ -806,11 +812,17 @@ def write_fits_image(output_path, processed_data, n_head_blocks=None):
         if n_head_blocks is not None:
             header = add_padding(header, n_head_blocks, copy_header=True)
 
-    fits.writeto(output_path, processed_data, header=header, overwrite=True)
+    hdul = fits.HDUList([fits.PrimaryHDU(processed_data, header=header)])
+    hdul.verify("exception")  # fail before the existing file is removed, as fits.writeto does
+    if os.path.exists(output_path) and os.path.getsize(output_path) != 0:
+        os.remove(output_path)
+    with open(output_path, "wb") as f:
+        # a non-file sink makes astropy call write() instead of ndarray.tofile, whose fclose holds the GIL
+        hdul.writeto(SimpleNamespace(name=output_path, write=f.write, tell=f.tell))
     # fitsio.write(output_path, processed_data, header=list(header.cards), clobber=True)
 
 
-def write_fits_images(paths, data, max_workers=10, n_head_blocks=None):
+def write_fits_images(paths, data, max_workers=4, n_head_blocks=None):
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # list(executor.map(write_fits_image, paths, data))
         list(executor.map(lambda p_d: write_fits_image(p_d[0], p_d[1], n_head_blocks=n_head_blocks), zip(paths, data)))

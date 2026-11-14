@@ -301,7 +301,7 @@ def process_image_with_cpu(
     multiplicative, subtractive = preparation_kernel(bias_data, dark_data, flat_data, h, w)
 
     batch_size = 30
-    max_workers = 10  # 3
+    max_workers = 4  # 10  # 3
     total_batches = (len(image_paths) + batch_size - 1) // batch_size
 
     for batch_idx, batch_start in enumerate(range(0, len(image_paths), batch_size), 1):
