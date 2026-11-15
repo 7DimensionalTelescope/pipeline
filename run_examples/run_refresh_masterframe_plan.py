@@ -26,8 +26,9 @@ def main():
     if len(args.units) == 1:
         from pipeline.services.masterframe_association import refresh_plan
 
-        print(refresh_plan(args.units, dry_run=args.dry_run).to_string(index=False), flush=True)
-        return 0
+        report = refresh_plan(args.units, dry_run=args.dry_run)
+        print(report.to_string(index=False), flush=True)
+        return 0 if report.message.isin(["refreshed", "dry run: nothing written"]).all() else 1
     units = args.units
     if not units:
         from pipeline.services.database.masterframe_plan import plan_status

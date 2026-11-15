@@ -21,6 +21,7 @@ from ...const import (
     DISK_CHANGE_NIGHTDATE_2,
     FLAT_DEPENDENCY_ROLE,
     IMAGE_GROUP_MASTERFRAME,
+    IMAGE_TYPE_SINGLE,
     MASTER_FRAME_DIR,
     MASTER_FRAME_DIR_2,
     MASTER_IMAGE_TYPES,
@@ -28,6 +29,7 @@ from ...const import (
     REF_DIR,
 )
 from ...path.cam_tracker import get_current_camera_serial
+from ...path.name import NameHandler
 from ...version import MIN_PREPROC_RUNTIME_VERSION, __version__
 from .const import DB_PARAMS
 from .query import free_query
@@ -106,6 +108,30 @@ WHERE unit = ANY(%s) AND (%s::text[] IS NULL OR bias = ANY(%s::text[]) OR flatda
 ORDER BY unit, nightdate, master
 """
 
+_OFF_PLAN = """
+WITH s AS (
+    SELECT q.id, q.image_name, q.object, q.filter, q.exptime, q.gain, q.n_binning,
+           substring(q.image_name from '_(7DT[0-9]{2})_') AS unit,
+           substring(q.image_path from '/([0-9]{4}-[0-9]{2}-[0-9]{2})/')::date AS nightdate
+    FROM image_qa q
+    WHERE q.image_type = %s AND (%s::text[] IS NULL OR q.object = ANY(%s::text[]))
+)
+SELECT s.image_name, s.object, s.filter, s.unit, s.nightdate, r.role, m.image_name AS recorded, p.master AS planned,
+       CASE WHEN p.unit IS NULL THEN 'no-plan'
+            WHEN d.derived_image_id IS NULL OR d.source_imageid IS NULL THEN 'unidentified'
+            WHEN m.image_name IS DISTINCT FROM p.master THEN 'better-match'
+            WHEN d.source_imageid <> m.imageid THEN 'regenerated'
+            WHEN p.rebuilt THEN 'to-rebuild'
+            ELSE 'ok' END AS status
+FROM s CROSS JOIN unnest(%s::text[]) AS r(role)
+LEFT JOIN pipeline.masterframe_plan p ON p.unit = s.unit AND p.nightdate = s.nightdate AND p.n_binning = s.n_binning
+     AND p.gain = s.gain AND p.exptime = s.exptime AND p.filter IS NOT DISTINCT FROM s.filter AND p.role = r.role
+LEFT JOIN image_qa_dependency d ON d.derived_image_id = s.id AND d.dependency_role = r.role
+LEFT JOIN image_qa m ON m.id = d.source_image_id
+WHERE s.unit = ANY(%s)
+ORDER BY s.unit, s.nightdate, s.image_name, r.role
+"""
+
 
 def _file_sha(path: str) -> str:
     """sha256 of a file."""
@@ -155,6 +181,11 @@ def _units(units: Optional[Iterable[str]]) -> list:
     return [units] if isinstance(units, str) else list(units)
 
 
+def _units_of(masters: list) -> list:
+    """Units of master names, by NameHandler."""
+    return sorted({NameHandler(f"{master}.fits").unit for master in masters})
+
+
 def _read(units: list, query: str, params: list, allow_stale: bool) -> pd.DataFrame:
     """Plan rows and the units' stored fingerprints in one snapshot; raises for a unit never refreshed or stale."""
     with psycopg.connect(**DB_PARAMS) as conn:
@@ -190,9 +221,9 @@ def plan_groups(
     allow_stale: bool = False,
 ) -> pd.DataFrame:
     """Stored group x role rows; uses: a master in any role, or the source of a binned copy."""
-    units = _units(units)
+    uses = None if uses is None else [uses] if isinstance(uses, str) else list(uses)
+    units = _units(_units_of(uses) if units is None and uses else units)
     nights = None if nightdates is None else [str(n) for n in nightdates]
-    uses = None if uses is None else _units(uses)
     return _read(units, _GROUPS, [units, nights, nights, uses, uses, uses], allow_stale)
 
 
@@ -200,9 +231,19 @@ def plan_masters(
     units: Optional[Iterable[str]] = None, uses: Optional[Iterable[str]] = None, allow_stale: bool = False
 ) -> pd.DataFrame:
     """Stored master rows; uses: a master as bias or flatdark."""
-    units = _units(units)
-    uses = None if uses is None else _units(uses)
+    uses = None if uses is None else [uses] if isinstance(uses, str) else list(uses)
+    units = _units(_units_of(uses) if units is None and uses else units)
     return _read(units, _MASTER_ROWS, [units, uses, uses, uses], allow_stale)
+
+
+def off_plan(
+    objects: Optional[Iterable[str]] = None, units: Optional[Iterable[str]] = None, allow_stale: bool = False
+) -> pd.DataFrame:
+    """Each single's recorded bias, dark and flat against the plan, with a status per role."""
+    units = _units(units)
+    objects = None if objects is None else _units(objects)
+    roles = [BIAS_DEPENDENCY_ROLE, DARK_DEPENDENCY_ROLE, FLAT_DEPENDENCY_ROLE]
+    return _read(units, _OFF_PLAN, [IMAGE_TYPE_SINGLE, objects, objects, roles, units], allow_stale)
 
 
 def replace_plan(conn: psycopg.Connection, unit: str, groups: pd.DataFrame, masters: pd.DataFrame) -> None:

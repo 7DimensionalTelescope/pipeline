@@ -62,7 +62,7 @@ def get_cam_events(unit: int, swap_only: bool = False):
     mask = is_cam  # & (is_install | is_uninstall | is_swap)
     filtered_tbl = tbl[mask]
     cam_event_tbl = Table()
-    cam_event_tbl["nightdate"] = [log_date_to_nightdate(s) for s in filtered_tbl["date"]]
+    cam_event_tbl["nightdate"] = filtered_tbl["nightdate"]
     # camswap_tbl["serial"] = [s.split(":")[-1].split(">")[-1] for s in filtered_tbl["comment"]]
     cam_event_tbl["serial"] = filtered_tbl["comment"]
     if swap_only:

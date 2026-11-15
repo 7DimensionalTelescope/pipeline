@@ -6,8 +6,8 @@
 # nightdate and date should indicate the START of the affected date range!
 #
 date	nightdate	parts	wall	comment
-241115		cam	bias,dark,flat	31164
-241115		fw	flat	22344940
+241115	2024-11-14	cam	bias,dark,flat	31164
+241115	2024-11-14	fw	flat	22344940
 241201		cam	bias,dark,flat	31145
 260104		fw	flat	new_filters
 260104		mirror	flat	optical_alignment

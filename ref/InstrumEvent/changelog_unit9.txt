@@ -6,8 +6,8 @@
 # nightdate and date should indicate the START of the affected date range!
 #
 date	nightdate	parts	wall	comment
-231127		cam	bias,dark,flat	31165
-231127		fw	flat	22344943
+231127	2023-11-26	cam	bias,dark,flat	31165
+231127	2023-11-26	fw	flat	22344943
 231205		cam	flat	PA
 231214		mount		vibration_start
 231219		mount		vibration_end

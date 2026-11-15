@@ -123,6 +123,16 @@ FROM survey_scienceframe x JOIN facility_unit u ON u.id = x.unit_id JOIN survey_
 WHERE u.name = %s
 """
 
+_SCIENCE_NIGHT_RANGE = """
+SELECT min(n.date), max(n.date)
+FROM survey_scienceframe x JOIN facility_unit u ON u.id = x.unit_id JOIN survey_night n ON n.id = x.night_id
+WHERE u.name = ANY(%s)
+"""
+
+_UNIT_MASTERS = """
+SELECT image_name FROM image_qa WHERE image_group = %s AND image_type = ANY(%s) AND image_path LIKE ANY(%s)
+"""
+
 _FOREIGN_EDGES = """
 SELECT count(*)
 FROM image_qa m JOIN image_qa_dependency d ON d.derived_image_id = m.id JOIN image_qa s ON s.id = d.source_image_id
@@ -132,6 +142,15 @@ WHERE m.image_group = %s AND m.image_path LIKE %s AND s.image_path NOT LIKE %s A
 _FOREIGN_MASTERS = """
 SELECT count(*) FROM image_qa
 WHERE image_group = %s AND image_type = ANY(%s) AND (image_path LIKE %s) <> (image_name LIKE %s)
+"""
+
+_FOREIGN_DESIGNATIONS = """
+SELECT count(*) FROM process_status p
+WHERE p.config_type = %s AND p.name LIKE %s AND jsonb_typeof(p.designated_masterframes) = 'array'
+  AND EXISTS (
+      SELECT 1 FROM jsonb_array_elements(p.designated_masterframes) e
+      WHERE regexp_replace(e->>'path', '^.*/', '') NOT LIKE %s
+  )
 """
 
 
@@ -870,7 +889,7 @@ def _recorded(library: _Library, path: str, is_flat: bool) -> Dict[str, dict]:
 
 
 def _role_columns(library: _Library, role: str, answer: Optional[dict]) -> dict:
-    """Nine columns of one role."""
+    """Nine columns of one role; the offset is filled by _offsets."""
     rec = library.record(answer["source"]) if answer and answer["source"] else None
     if rec and not rec["resolved"]:
         _resolve(library, answer["source"])
@@ -888,7 +907,7 @@ def _role_columns(library: _Library, role: str, answer: Optional[dict]) -> dict:
 
 
 def _offsets(columns: dict, night: str, consumers: Dict[str, Optional[str]]) -> dict:
-    """Nights from each role's consumer to its selected master."""
+    """Nights from each role's consumer (the frame's night, or the master role named) to its selected master."""
     offsets = {}
     for role, consumer in consumers.items():
         base, own = columns.get(f"{consumer}_nightdate") if consumer else night, columns.get(f"{role}_nightdate")
@@ -1043,7 +1062,7 @@ def associate(
     veto: Iterable[str] = (),
     units: Optional[Iterable[str]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Masters each raw science frame will be reduced with, and the cases the rules cannot settle: (table, defects)."""
+    """Masters each raw science frame will be reduced with, and the cases the rules cannot settle: (table, defects); `veto` plans as if those masters were human-rejected."""
     roles = ["bias", "dark", "flat", "flatdark", "dark_bias", "flat_bias", "flatdark_bias"]
     consumers = dict(zip(roles, [None, None, None, "flat", "dark", "flat", "flatdark"]))
     frames, unknown = _resolve_targets(targets)
@@ -1152,16 +1171,12 @@ def veto_impact(masters: Iterable[str], full: bool = False) -> pd.DataFrame:
     masters = [masters] if isinstance(masters, (str, os.PathLike)) else list(masters)
     vetoed = {_stem(str(m)) for m in masters}
     units = sorted({NameHandler(f"{stem}.fits").unit for stem in vetoed})
-    groups, stored = plan_groups(units), plan_masters(units)
+    groups, stored = plan_groups(units), plan_masters(units, allow_stale=True)
     copies = groups[groups.master.isin(vetoed - set(stored.master)) & groups.flat_source.notna()]
     vetoed = (vetoed - set(copies.master)) | set(copies.flat_source)
     masters = sorted(vetoed)
     if full:
-        first, last = free_query(
-            "SELECT min(n.date), max(n.date) FROM survey_scienceframe x JOIN facility_unit u ON u.id = x.unit_id"
-            " JOIN survey_night n ON n.id = x.night_id WHERE u.name = ANY(%s)",
-            [units],
-        )[0]
+        first, last = free_query(_SCIENCE_NIGHT_RANGE, [units])[0]
         targets = sorted(
             {(str(first + timedelta(days=k)), unit) for unit in units for k in range((last - first).days + 1)}
         )
@@ -1169,7 +1184,7 @@ def veto_impact(masters: Iterable[str], full: bool = False) -> pd.DataFrame:
     else:
         in_use = groups[groups.master.isin(vetoed) | groups.flat_source.isin(vetoed)]
         targets = sorted({(str(night), unit) for night, unit in zip(in_use.nightdate, in_use.unit)})
-        before = planned(targets)
+        before = planned(targets, allow_stale=True)
     after, _ = associate(targets, veto=masters, units=None if full else units)
     shown = ["master", "offset", "sanity", "rule"]
     parts = []
@@ -1195,15 +1210,21 @@ def veto_impact(masters: Iterable[str], full: bool = False) -> pd.DataFrame:
     table = table.groupby(keys, dropna=False, sort=True).size().reset_index(name="n_frames")
     if full:
         owned = free_query(
-            "SELECT image_name FROM image_qa WHERE image_group = %s AND image_type = ANY(%s) AND image_path LIKE ANY(%s)",
+            _UNIT_MASTERS,
             [IMAGE_GROUP_MASTERFRAME, [CALIB_TYPE_DARK, CALIB_TYPE_FLAT], [f"%/{unit}/%" for unit in units]],
         )
         used, _ = associate_masters([name for name, in owned])
     else:
+        key = ["unit", "nightdate", "filter", "gain"]
+        flats = stored[stored.master.isin(vetoed) & (stored.image_type == CALIB_TYPE_FLAT)]
+        flat_keys = set(flats[key].itertuples(index=False, name=None))
+        same_key = pd.Series(
+            [k in flat_keys for k in stored[key].itertuples(index=False, name=None)], index=stored.index
+        )
         users = stored[
             stored.image_type.isin([CALIB_TYPE_DARK, CALIB_TYPE_FLAT])
             & (stored.state != "budget-only")
-            & (stored.master.isin(vetoed) | stored.bias.isin(vetoed) | stored.flatdark.isin(vetoed))
+            & (stored.master.isin(vetoed) | stored.bias.isin(vetoed) | stored.flatdark.isin(vetoed) | same_key)
         ]
         offsets = {"image_type": "type", "bias_night_offset": "bias_offset", "flatdark_night_offset": "flatdark_offset"}
         used = users.rename(columns=offsets).assign(nightdate=users.nightdate.astype(str))
@@ -1232,7 +1253,7 @@ def veto_impact(masters: Iterable[str], full: bool = False) -> pd.DataFrame:
 
 
 def neighbor_masters(master: str, days: int = 30) -> pd.DataFrame:
-    """Same-key masters on the nights around `master`: raw frames in the raw DB, registered verdict."""
+    """Masters with the keys of `master` on the nights around it: raw frames in the raw DB, and the registered master's verdict."""
     name = NameHandler(f"{_stem(str(master))}.fits")
     typ, unit = name.type.exposure_type, name.unit
     quality = name.filter if typ == CALIB_TYPE_FLAT else None
@@ -1288,14 +1309,15 @@ def library_masters(unit: str) -> pd.DataFrame:
     return pd.DataFrame(list(rows.values()))
 
 
-def planned(unit_nights) -> pd.DataFrame:
+def planned(unit_nights, allow_stale: bool = False) -> pd.DataFrame:
     """associate's table from the stored plan: frames expanded from their groups."""
     roles = ["bias", "dark", "flat", "flatdark", "dark_bias", "flat_bias", "flatdark_bias"]
     stored_columns = ["master", "master_path", "master_nightdate", "master_unit", "night_offset", "rule", "state"]
     stored_columns += ["sanity", "rebuilt"]
     frames, _ = _resolve_targets(unit_nights)
     groups = defaultdict(dict)
-    for row in plan_groups(sorted({f[2] for f in frames}), sorted({f[1] for f in frames})).itertuples(index=False):
+    stored = plan_groups(sorted({f[2] for f in frames}), sorted({f[1] for f in frames}), allow_stale=allow_stale)
+    for row in stored.itertuples(index=False):
         groups[(str(row.nightdate), row.unit, row.n_binning, row.gain, row.exptime, row.filter)][row.role] = row
     rows = []
     for raw_path, night, unit, obj, filt, exptime, nbin, gain in frames:
@@ -1337,8 +1359,9 @@ def refresh_plan(units: Optional[Iterable[str]] = None, dry_run: bool = False) -
             foreign = free_query(_FOREIGN_EDGES, [IMAGE_GROUP_MASTERFRAME, unit_dir, unit_dir, edges])
             masterframe = [IMAGE_GROUP_MASTERFRAME, list(MASTER_IMAGE_TYPES)]
             foreign += free_query(_FOREIGN_MASTERS, [*masterframe, unit_dir, f"%{unit}%"])
+            foreign += free_query(_FOREIGN_DESIGNATIONS, [CONFIG_TYPE_PREPROCESS, f"%\\_{unit}", f"%\\_{unit}\\_%"])
             if any(n for n, in foreign):
-                message = f"cross-unit edges / registry rows {[n for n, in foreign]}: nothing done"
+                message = f"cross-unit edges / registry rows / designations {[n for n, in foreign]}: nothing done"
                 report.append((unit, message, 0, 0, time.time() - start))
                 continue
             fingerprint, refreshed_at = fingerprints([unit])[unit], datetime.now(timezone.utc)

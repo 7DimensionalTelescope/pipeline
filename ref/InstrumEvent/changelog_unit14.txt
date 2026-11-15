@@ -6,8 +6,8 @@
 # nightdate and date should indicate the START of the affected date range!
 #
 date	nightdate	parts	wall	comment
-241027		cam	bias,dark,flat	31243
-241027		fw	flat	22446146
+241027	2024-10-26	cam	bias,dark,flat	31243
+241027	2024-10-26	fw	flat	22446146
 241109		fw	flat	filt_config g, r, I, m600, m625, m500, m775
 241115		mirror	flat	collimation
 241206		cam	flat	PA
