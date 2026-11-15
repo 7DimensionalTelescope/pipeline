@@ -97,6 +97,15 @@ def normalize_wall(
     return out
 
 
+def get_wall_nightdates(unit: int, *, dtype: Literal["bias", "dark", "flat"]) -> np.ndarray:
+    changelog = get_changelog(unit)
+    tbl = normalize_wall(changelog, dtype=dtype)
+    tbl = tbl[tbl[f"wall_{dtype}"]]  # only the changelog dates that are a wall for this type
+    tbl.sort("nightdate")
+
+    return np.array(tbl["nightdate"], dtype=object)
+
+
 def get_masterframe_walls(
     nightdate: str | date,
     unit: int,
@@ -105,12 +114,7 @@ def get_masterframe_walls(
 ) -> tuple[date | None, date | None]:
     nightdate = datetime.strptime(nightdate, "%Y-%m-%d").date()
 
-    changelog = get_changelog(unit)
-    tbl = normalize_wall(changelog, dtype=dtype)
-    tbl = tbl[tbl[f"wall_{dtype}"]]  # only the changelog dates that are a wall for this type
-    tbl.sort("nightdate")
-
-    nightdates = np.array(tbl["nightdate"], dtype=object)
+    nightdates = get_wall_nightdates(unit, dtype=dtype)
 
     idx = np.searchsorted(nightdates, nightdate, side="right")
     lo = idx - 1

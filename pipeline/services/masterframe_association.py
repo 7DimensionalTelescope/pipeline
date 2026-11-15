@@ -11,10 +11,11 @@ import fnmatch
 import logging
 import os
 import signal
+import time
 import traceback
 from collections import Counter, defaultdict
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from types import SimpleNamespace
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -47,6 +48,8 @@ from ..path.path import PathHandler
 from ..path.utils import add_a_day, format_camera, format_exptime, get_nightdate
 from ..utils import atleast_1d
 from ..version import MIN_PREPROC_RUNTIME_VERSION, is_below_min
+from .database.const import DB_PARAMS
+from .database.masterframe_plan import fingerprints, plan_groups, plan_masters, plan_status, replace_plan
 from .database.query import free_query
 
 _SCIENCE_FRAMES = """
@@ -68,24 +71,26 @@ WHERE u.name = %s AND n.date = %s::date
 _RAW_BUDGET = """
 SELECT 'bias', u.name, n.date::text, x.binning_x, x.gain, NULL::float8, NULL::text, count(*)
 FROM survey_biasframe x JOIN facility_unit u ON u.id = x.unit_id JOIN survey_night n ON n.id = x.night_id
+WHERE u.name LIKE ANY(%s)
 GROUP BY 2, 3, 4, 5
 UNION ALL
 SELECT 'dark', u.name, n.date::text, x.binning_x, x.gain, x.exptime, NULL::text, count(*)
 FROM survey_darkframe x JOIN facility_unit u ON u.id = x.unit_id JOIN survey_night n ON n.id = x.night_id
+WHERE u.name LIKE ANY(%s)
 GROUP BY 2, 3, 4, 5, 6
 UNION ALL
 SELECT 'flat', u.name, n.date::text, x.binning_x, x.gain, NULL::float8, f.name, count(*)
 FROM survey_flatframe x JOIN facility_unit u ON u.id = x.unit_id JOIN survey_night n ON n.id = x.night_id
 LEFT JOIN facility_filter f ON f.id = x.filter_id
+WHERE u.name LIKE ANY(%s)
 GROUP BY 2, 3, 4, 5, 7
 """
 
 _REGISTRY = """
 SELECT image_name, image_path, sanity,
        NULLIF(btrim(inspcomm), '') IS NOT NULL AND inspcomm <> 'Auto-generated binned master frame',
-       COALESCE(created_at <= %s, TRUE), image_type, pipe_ver,
-       (SELECT jsonb_object_agg(upper(k), v) FROM jsonb_each(to_jsonb(q)) e(k, v) WHERE upper(k) = ANY(%s))
-FROM image_qa q WHERE image_group = %s AND image_type = ANY(%s) AND image_path IS NOT NULL
+       COALESCE(created_at <= %s, TRUE), image_type, pipe_ver, {}
+FROM image_qa WHERE image_group = %s AND image_type = ANY(%s) AND image_path IS NOT NULL AND image_path LIKE ANY(%s)
 """
 
 _BINNED_COPIES = """
@@ -112,6 +117,23 @@ FROM process_status WHERE config_type = %s
 ORDER BY name, updated_at DESC NULLS LAST, id DESC
 """
 
+_SCIENCE_NIGHTS = """
+SELECT DISTINCT n.date::text
+FROM survey_scienceframe x JOIN facility_unit u ON u.id = x.unit_id JOIN survey_night n ON n.id = x.night_id
+WHERE u.name = %s
+"""
+
+_FOREIGN_EDGES = """
+SELECT count(*)
+FROM image_qa m JOIN image_qa_dependency d ON d.derived_image_id = m.id JOIN image_qa s ON s.id = d.source_image_id
+WHERE m.image_group = %s AND m.image_path LIKE %s AND s.image_path NOT LIKE %s AND d.dependency_role = ANY(%s)
+"""
+
+_FOREIGN_MASTERS = """
+SELECT count(*) FROM image_qa
+WHERE image_group = %s AND image_type = ANY(%s) AND (image_path LIKE %s) <> (image_name LIKE %s)
+"""
+
 
 class _Unresolved(Exception):
     """A probe met a regenerated master whose modeled state is not resolved yet."""
@@ -120,29 +142,39 @@ class _Unresolved(Exception):
 class _Library:
     """Masters of the modeled state, probed by tolerant_search through glob / exists / sanity_check."""
 
-    def __init__(self, trust_machine_rejection: bool, as_of: Optional[datetime], targets: set, veto: Iterable[str] = ()):
+    def __init__(
+        self,
+        trust_machine_rejection: bool,
+        as_of: Optional[datetime],
+        targets: set,
+        veto: Iterable[str] = (),
+        units: Optional[Iterable[str]] = None,
+    ):
         from .checker import Checker
 
         self.trust_machine_rejection = trust_machine_rejection
         self.as_of = as_of
         self.targets = targets
-        self.veto = {_stem(str(master)) for master in veto}
+        self.veto = {_stem(str(master)) for master in ([veto] if isinstance(veto, (str, os.PathLike)) else veto)}
         self.checker = Checker()
         self.checker.logger = logging.getLogger(__name__)
         criteria = self.checker.load_qa_criteria(IMAGE_GROUP_MASTERFRAME)
         self.raw = defaultdict(list)
-        for typ, unit, night, nbin, gain, exptime, filt, n in free_query(_RAW_BUDGET):
+        names = ["%"] if units is None else list(units)
+        for typ, unit, night, nbin, gain, exptime, filt, n in free_query(_RAW_BUDGET, [names] * 3):
             quality = format_exptime(float(exptime), type="dark") if typ == CALIB_TYPE_DARK else filt
             self.raw[(night, unit)].append((typ, quality, nbin, gain, n))
         self.registry = defaultdict(dict)
         self.registry_dirs = defaultdict(set)
         self.registered_path = {}
         statistics = sorted({key for keys in criteria.values() for key in keys})
-        for name, path, sanity, human, visible, *rest in free_query(
-            _REGISTRY, [as_of, statistics, IMAGE_GROUP_MASTERFRAME, list(MASTER_IMAGE_TYPES)]
+        dirs = ["%"] if units is None else [f"%/{unit}/%" for unit in units]
+        for name, path, sanity, human, visible, dtype, pipe_ver, *values in free_query(
+            _REGISTRY.format(", ".join(statistics)), [as_of, IMAGE_GROUP_MASTERFRAME, list(MASTER_IMAGE_TYPES), dirs]
         ):
             directory = os.path.dirname(path)
-            self.registry[directory][os.path.basename(path)] = (sanity, human, visible, *rest)
+            row = (sanity, human, visible, dtype, pipe_ver, dict(zip(statistics, values)))
+            self.registry[directory][os.path.basename(path)] = row
             self.registry_dirs[(get_nightdate(directory), os.path.basename(directory))].add(directory)
             self.registered_path[name] = path
         copies = free_query(_BINNED_COPIES, [IMAGE_GROUP_MASTERFRAME, CALIB_TYPE_FLAT, FLAT_DEPENDENCY_ROLE])
@@ -155,6 +187,14 @@ class _Library:
         self.inventories, self.edges = {}, {}
         self.skipped, self.globs, self.sibling_sources, self.blind = [], [], {}, {}
         self.unrecorded = set()
+        for stem in sorted(self.veto - set(self.registered_path)):
+            try:
+                name = NameHandler(f"{stem}.fits")
+                known = f"{stem}.fits" in self.groups(str(name.nightdate), name.unit)
+            except ValueError:
+                known = False
+            if not known:
+                raise ValueError(f"veto {stem}: not a registered master or a raw calibration group")
 
     def camera(self, unit: str, night: str) -> str:
         """Camera token of a unit-night, memoized."""
@@ -304,7 +344,7 @@ def _canonical(basenames: List[str]) -> List[str]:
 
 def _stem(path: str) -> str:
     """File stem, as image_qa.image_name."""
-    return os.path.splitext(os.path.basename(path))[0]
+    return os.path.basename(path).removesuffix(".fits")
 
 
 def _read_settings(yml: dict, default_max_offset: Optional[int] = None) -> Tuple[int, bool, bool]:
@@ -750,20 +790,20 @@ def _registry_issues(library: _Library, path: str, rec: dict) -> List[str]:
 
 
 def _answer(library: _Library, template: str, dtype: str, owner: Tuple[str, str], role: str) -> dict:
-    """The owner yml's designation for the role, else the search under the owner's settings."""
+    """The owner yml's designation for the role, else the search under the base settings."""
     designated = _designated(library, owner, role, template)
-    return designated or _search(library, template, dtype, _settings_of(library, *owner))
+    return designated or _search(library, template, dtype, library.base)
 
 
 def _select(library: _Library, template: str, dtype: str, owner: Tuple[str, str], role: str) -> dict:
-    """Answer for one role; stale-config when the base settings would answer a search otherwise."""
+    """Answer for one role; stale-config when the recorded settings would answer a search otherwise."""
     answer = _answer(library, template, dtype, owner, role)
     settings = _settings_of(library, *owner)
     if settings != library.base and answer["rule"] != "designated":
-        base = _search(library, template, dtype, library.base)
-        if (base["path"], base["rule"]) != (answer["path"], answer["rule"]):
-            yml_answer = f"{answer['path'] and _stem(answer['path'])} ({answer['rule']})"
-            base_answer = f"{base['path'] and _stem(base['path'])} ({base['rule']})"
+        yml = _search(library, template, dtype, settings)
+        if (yml["path"], yml["rule"]) != (answer["path"], answer["rule"]):
+            yml_answer = f"{yml['path'] and _stem(yml['path'])} ({yml['rule']})"
+            base_answer = f"{answer['path'] and _stem(answer['path'])} ({answer['rule']})"
             detail = f"yml {settings}: {yml_answer}; base {library.base}: {base_answer}"
             answer = dict(answer, defects=answer["defects"] + [("stale-config", template, detail)])
     return answer
@@ -830,7 +870,7 @@ def _recorded(library: _Library, path: str, is_flat: bool) -> Dict[str, dict]:
 
 
 def _role_columns(library: _Library, role: str, answer: Optional[dict]) -> dict:
-    """Nine columns of one role; the offset is filled by _offsets."""
+    """Nine columns of one role."""
     rec = library.record(answer["source"]) if answer and answer["source"] else None
     if rec and not rec["resolved"]:
         _resolve(library, answer["source"])
@@ -848,7 +888,7 @@ def _role_columns(library: _Library, role: str, answer: Optional[dict]) -> dict:
 
 
 def _offsets(columns: dict, night: str, consumers: Dict[str, Optional[str]]) -> dict:
-    """Nights from each role's consumer (the frame's night, or the master role named) to its selected master."""
+    """Nights from each role's consumer to its selected master."""
     offsets = {}
     for role, consumer in consumers.items():
         base, own = columns.get(f"{consumer}_nightdate") if consumer else night, columns.get(f"{role}_nightdate")
@@ -981,27 +1021,33 @@ def _count_unrecorded(library: _Library, tally: Counter, counts: Counter) -> Non
 
 @contextmanager
 def _changelog_cached():
-    """Each unit's changelog read once while a run lasts."""
-    read = instrum_log.get_changelog
+    """Each unit's changelog and wall nightdates read once while a run lasts."""
+    read, walls = instrum_log.get_changelog, instrum_log.get_wall_nightdates
     if hasattr(read, "cache_info"):  # a run in progress already caches
         yield
         return
     instrum_log.get_changelog = lru_cache(maxsize=None)(read)
+    instrum_log.get_wall_nightdates = lru_cache(maxsize=None)(walls)
     try:
         yield
     finally:
-        instrum_log.get_changelog = read
+        instrum_log.get_changelog, instrum_log.get_wall_nightdates = read, walls
 
 
 @_changelog_cached()
 def associate(
-    targets, *, trust_machine_rejection: bool = True, as_of: Optional[datetime] = None, veto: Iterable[str] = ()
+    targets,
+    *,
+    trust_machine_rejection: bool = True,
+    as_of: Optional[datetime] = None,
+    veto: Iterable[str] = (),
+    units: Optional[Iterable[str]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Masters each raw science frame will be reduced with, and the cases the rules cannot settle: (table, defects); `veto` plans as if those masters were human-rejected."""
+    """Masters each raw science frame will be reduced with, and the cases the rules cannot settle: (table, defects)."""
     roles = ["bias", "dark", "flat", "flatdark", "dark_bias", "flat_bias", "flatdark_bias"]
     consumers = dict(zip(roles, [None, None, None, "flat", "dark", "flat", "flatdark"]))
     frames, unknown = _resolve_targets(targets)
-    library = _Library(trust_machine_rejection, as_of, {(r[1], r[2]) for r in frames}, veto)
+    library = _Library(trust_machine_rejection, as_of, {(r[1], r[2]) for r in frames}, veto, units)
     groups, failures = defaultdict(list), {}
     for i, (_, night, unit, _, filt, exptime, nbin, gain) in enumerate(frames):
         try:
@@ -1053,6 +1099,7 @@ def associate_masters(
     trust_machine_rejection: bool = True,
     as_of: Optional[datetime] = None,
     veto: Iterable[str] = (),
+    units: Optional[Iterable[str]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Masters each master dark or flat will be built with (bias; flatdark for a flat), and the unsettled cases."""
     items = [str(m) for m in ([masters] if isinstance(masters, (str, os.PathLike)) else masters)]
@@ -1064,7 +1111,9 @@ def associate_masters(
             name = None
         is_master = name is not None and name.type.kind == NAME_TYPE_MASTER
         names[item] = name if is_master and name.type.exposure_type in MASTER_IMAGE_TYPES else None
-    library = _Library(trust_machine_rejection, as_of, {(n.nightdate, n.unit) for n in names.values() if n}, veto)
+    library = _Library(
+        trust_machine_rejection, as_of, {(n.nightdate, n.unit) for n in names.values() if n}, veto, units
+    )
     rows, tally = [], Counter()
     for item in items:
         path, detail = (item if os.path.dirname(item) else None), "not a master in the library or registry"
@@ -1096,59 +1145,226 @@ def associate_masters(
 
 
 @_changelog_cached()
-def veto_impact(masters: Iterable[str], days: Optional[int] = None) -> pd.DataFrame:
-    """Selections that change if `masters` were human-rejected: the master in use and its alternative, with the nights to each."""
+def veto_impact(masters: Iterable[str], full: bool = False) -> pd.DataFrame:
+    """Selections a human rejection of `masters` changes: master in use, alternative, offsets."""
     roles = ["bias", "dark", "flat", "flatdark", "dark_bias", "flat_bias", "flatdark_bias"]
+    consumers = dict(zip(roles, [None, None, None, "flat", "dark", "flat", "flatdark"]))
     masters = [masters] if isinstance(masters, (str, os.PathLike)) else list(masters)
-    if days is None:
-        with open(os.path.join(REF_DIR, "preproc_base.yml")) as f:
-            days = _read_settings(yaml.safe_load(f))[0]
-    targets = set()
-    for name in (NameHandler(f"{_stem(str(m))}.fits") for m in masters):
-        night = date.fromisoformat(str(name.nightdate))
-        targets |= {(str(night + timedelta(days=k)), name.unit) for k in range(-days, days + 1)}
-    before, _ = associate(sorted(targets))
-    after, _ = associate(sorted(targets), veto=masters)
+    vetoed = {_stem(str(m)) for m in masters}
+    units = sorted({NameHandler(f"{stem}.fits").unit for stem in vetoed})
+    groups, stored = plan_groups(units), plan_masters(units)
+    copies = groups[groups.master.isin(vetoed - set(stored.master)) & groups.flat_source.notna()]
+    vetoed = (vetoed - set(copies.master)) | set(copies.flat_source)
+    masters = sorted(vetoed)
+    if full:
+        first, last = free_query(
+            "SELECT min(n.date), max(n.date) FROM survey_scienceframe x JOIN facility_unit u ON u.id = x.unit_id"
+            " JOIN survey_night n ON n.id = x.night_id WHERE u.name = ANY(%s)",
+            [units],
+        )[0]
+        targets = sorted(
+            {(str(first + timedelta(days=k)), unit) for unit in units for k in range((last - first).days + 1)}
+        )
+        before, _ = associate(targets)
+    else:
+        in_use = groups[groups.master.isin(vetoed) | groups.flat_source.isin(vetoed)]
+        targets = sorted({(str(night), unit) for night, unit in zip(in_use.nightdate, in_use.unit)})
+        before = planned(targets)
+    after, _ = associate(targets, veto=masters, units=None if full else units)
+    shown = ["master", "offset", "sanity", "rule"]
     parts = []
     for role in roles:
-        changed = before[role].fillna("") != after[role].fillna("")
+        changed = (before[role].fillna("") != after[role].fillna("")) | after[role].isin(vetoed)
         columns = [role, f"{role}_offset", f"{role}_sanity", f"{role}_rule"]
-        used = before.loc[changed, ["nightdate", "unit"] + columns]
-        used = used.set_axis(["nightdate", "unit", "master", "offset", "sanity", "rule"], axis=1)
-        other = after.loc[changed, columns].set_axis(
-            ["alternative", "alternative_offset", "alternative_sanity", "alternative_rule"], axis=1
+        used = before.loc[changed, ["nightdate", "unit"] + columns].set_axis(["nightdate", "unit"] + shown, axis=1)
+        other = after.loc[changed, columns].set_axis([f"alternative_{c}" for c in shown], axis=1)
+        consumer = consumers[role]
+        part = pd.concat([used, other], axis=1).assign(
+            role=role,
+            consumer=before.loc[changed, consumer] if consumer else None,
+            alternative_consumer=after.loc[changed, consumer] if consumer else None,
         )
-        parts.append(pd.concat([used, other], axis=1).assign(role=role))
+        parts.append(part)
     table = pd.concat(parts)
-    keys = ["nightdate", "unit", "role"] + [c for c in table.columns if c not in ("nightdate", "unit", "role")]
-    return table.groupby(keys, dropna=False, sort=True).size().reset_index(name="n_frames")
+    keys = (
+        ["nightdate", "unit", "role", "consumer"]
+        + shown
+        + ["alternative_consumer"]
+        + [f"alternative_{c}" for c in shown]
+    )
+    table = table.groupby(keys, dropna=False, sort=True).size().reset_index(name="n_frames")
+    if full:
+        owned = free_query(
+            "SELECT image_name FROM image_qa WHERE image_group = %s AND image_type = ANY(%s) AND image_path LIKE ANY(%s)",
+            [IMAGE_GROUP_MASTERFRAME, [CALIB_TYPE_DARK, CALIB_TYPE_FLAT], [f"%/{unit}/%" for unit in units]],
+        )
+        used, _ = associate_masters([name for name, in owned])
+    else:
+        users = stored[
+            stored.image_type.isin([CALIB_TYPE_DARK, CALIB_TYPE_FLAT])
+            & (stored.state != "budget-only")
+            & (stored.master.isin(vetoed) | stored.bias.isin(vetoed) | stored.flatdark.isin(vetoed))
+        ]
+        offsets = {"image_type": "type", "bias_night_offset": "bias_offset", "flatdark_night_offset": "flatdark_offset"}
+        used = users.rename(columns=offsets).assign(nightdate=users.nightdate.astype(str))
+    other, _ = associate_masters(list(used.master), veto=masters, units=None if full else units)
+    both = used.merge(other, on="master", suffixes=("", "_alternative"))
+    seen = {
+        "bias": set(table.consumer[table.role.isin(["dark_bias", "flat_bias", "flatdark_bias"])]),
+        "flatdark": set(table.consumer[table.role == "flatdark"]),
+    }
+    rows = []
+    for role in ("bias", "flatdark"):
+        now, then = both[role].fillna(""), both[f"{role}_alternative"].fillna("")
+        for r in both[((now != then) | then.isin(vetoed)) & ~both.master.isin(seen[role])].itertuples(index=False):
+            r = r._asdict()
+            row = dict(nightdate=r["nightdate"], unit=r["unit"], consumer=r["master"], alternative_consumer=r["master"])
+            row.update(role=f"{r['type']}_bias" if role == "bias" else role, n_frames=0)
+            row.update({c: r[role if c == "master" else f"{role}_{c}"] for c in shown})
+            row.update(
+                {
+                    f"alternative_{c}": r[f"{role}_alternative" if c == "master" else f"{role}_{c}_alternative"]
+                    for c in shown
+                }
+            )
+            rows.append(row)
+    return pd.concat([table, pd.DataFrame(rows, columns=table.columns)], ignore_index=True)
 
 
 def neighbor_masters(master: str, days: int = 30) -> pd.DataFrame:
-    """Masters with the keys of `master` on the nights around it: raw frames in the raw DB, and the registered master's verdict."""
+    """Same-key masters on the nights around `master`: raw frames in the raw DB, registered verdict."""
     name = NameHandler(f"{_stem(str(master))}.fits")
     typ, unit = name.type.exposure_type, name.unit
-    quality = {CALIB_TYPE_DARK: name.exptime and format_exptime(float(name.exptime), type="dark"), CALIB_TYPE_FLAT: name.filter}.get(typ)
-    library = _Library(True, None, set())
+    quality = name.filter if typ == CALIB_TYPE_FLAT else None
+    if typ == CALIB_TYPE_DARK:
+        quality = format_exptime(float(name.exptime), type="dark")
+    keys = (typ, quality, name.n_binning, name.gain)
+    raw = Counter()
+    for t, _, night, nbin, gain, exptime, filt, n in free_query(_RAW_BUDGET, [[unit]] * 3):
+        if (t, format_exptime(float(exptime), type="dark") if t == CALIB_TYPE_DARK else filt, nbin, gain) == keys:
+            raw[night] += n
+    stored = plan_masters([unit])
+    registry = {row.master: row for row in stored.itertuples(index=False) if row.state != "budget-only"}
     first = date.fromisoformat(str(name.nightdate))
+    columns = ["master", "nightdate", "offset", "n_raw", "state", "pipe_ver", "sanity", "inspcomm"]
     rows = []
     for offset in range(-days, days + 1):
         night = str(first + timedelta(days=offset))
-        try:
-            groups = library.groups(night, unit)
-        except ValueError:
+        basename = _master_basename(*keys[:2], unit, night, *keys[2:], name.camera)
+        row, n_raw = registry.get(_stem(basename)), raw[night]
+        if row is None and n_raw:
+            camera = format_camera(get_camera_serial(unit=int(unit[3:]), query_date=night))
+            n_raw = n_raw if basename == _master_basename(*keys[:2], unit, night, *keys[2:], camera) else 0
+        if not n_raw and row is None:
             continue
-        basename = _master_basename(typ, quality, unit, night, name.n_binning, name.gain, name.camera)
-        n_raw = groups[basename]["n"] if basename in groups else 0
-        path = library.registered_path.get(_stem(basename))
-        if not n_raw and path is None:
-            continue
-        sanity, human, _, _, pipe_ver, _ = library.registry[os.path.dirname(path)][os.path.basename(path)] if path else (None,) * 6
-        if path:
+        if row is not None:
             state = "registered" if n_raw >= NUM_MIN_CALIB else "registry-only"
         else:
             state = "budget-only" if n_raw >= NUM_MIN_CALIB else "too few raw frames"
-        rows.append(
-            dict(master=_stem(basename), nightdate=night, offset=offset, n_raw=n_raw, state=state, pipe_ver=pipe_ver, sanity=sanity, inspcomm=human)
-        )
-    return pd.DataFrame(rows, columns=["master", "nightdate", "offset", "n_raw", "state", "pipe_ver", "sanity", "inspcomm"])
+        verdict = [row.pipe_ver, row.registry_sanity, row.human] if row is not None else [None] * 3
+        rows.append(dict(zip(columns, [_stem(basename), night, offset, n_raw, state, *verdict])))
+    return pd.DataFrame(rows, columns=columns)
+
+
+def library_masters(unit: str) -> pd.DataFrame:
+    """Every master of a unit's library, biases included: keys, raw budget, registry verdict."""
+    library = _Library(True, None, set(), units=[unit])
+    rows = {}
+    for night in sorted({n for n, _ in library.raw} | {n for n, _ in library.registry_dirs}):
+        groups = library.groups(night, unit)
+        directories = [os.path.dirname(_canonical([next(iter(groups))])[0])] if groups else []
+        for directory in directories + sorted(library.registry_dirs.get((night, unit), ())):
+            for basename, rec in library.entries(directory)[0].items():
+                stem, name = _stem(basename), NameHandler(basename)
+                if stem in rows:
+                    continue
+                registered = rec["registered"] and library.registered_path[stem]
+                pipe_ver = library.registry[os.path.dirname(registered)][basename][4] if registered else None
+                row = dict(master=stem, unit=unit, master_path=os.path.join(directory, basename), nightdate=night)
+                row.update(image_type=name.type.exposure_type, n_binning=name.n_binning, gain=name.gain)
+                row.update(camera=name.camera, exptime=name.exptime, filter=name.filter, n_raw=rec["n_raw"])
+                row.update(state=_state(rec), registry_sanity=rec["sanity"], human=rec["human"], pipe_ver=pipe_ver)
+                rows[stem] = row
+    return pd.DataFrame(list(rows.values()))
+
+
+def planned(unit_nights) -> pd.DataFrame:
+    """associate's table from the stored plan: frames expanded from their groups."""
+    roles = ["bias", "dark", "flat", "flatdark", "dark_bias", "flat_bias", "flatdark_bias"]
+    stored_columns = ["master", "master_path", "master_nightdate", "master_unit", "night_offset", "rule", "state"]
+    stored_columns += ["sanity", "rebuilt"]
+    frames, _ = _resolve_targets(unit_nights)
+    groups = defaultdict(dict)
+    for row in plan_groups(sorted({f[2] for f in frames}), sorted({f[1] for f in frames})).itertuples(index=False):
+        groups[(str(row.nightdate), row.unit, row.n_binning, row.gain, row.exptime, row.filter)][row.role] = row
+    rows = []
+    for raw_path, night, unit, obj, filt, exptime, nbin, gain in frames:
+        group = groups[(night, unit, nbin, gain, exptime, filt)]
+        frame = dict(raw_path=raw_path, nightdate=night, unit=unit, obj=obj, filter=filt, exptime=exptime)
+        row = {**frame, "n_binning": nbin, "gain": gain, "camera": group["bias"].camera}
+        for role in roles:
+            values = [getattr(group[role], c) for c in stored_columns]
+            values[2] = values[2] and str(values[2])
+            row.update(zip(_role_columns(None, role, None), values))
+        row["flat_source"] = group["flat"].flat_source
+        rows.append(row)
+    frame_columns = ["raw_path", "nightdate", "unit", "obj", "filter", "exptime", "n_binning", "gain", "camera"]
+    columns = frame_columns + [c for role in roles for c in _role_columns(None, role, None)]
+    columns.insert(columns.index("flat_state") + 1, "flat_source")
+    return pd.DataFrame(rows, columns=columns)
+
+
+def refresh_plan(units: Optional[Iterable[str]] = None, dry_run: bool = False) -> pd.DataFrame:
+    """Store each unit's plan, whole units; None: units never refreshed or stale."""
+    roles = ["bias", "dark", "flat", "flatdark", "dark_bias", "flat_bias", "flatdark_bias"]
+    stored_columns = ["master", "master_path", "master_nightdate", "master_unit", "night_offset", "rule", "state"]
+    stored_columns += ["sanity", "rebuilt"]
+    master_columns = ["sanity", "rebuilt"] + [f"{r}{c}" for r in ("bias", "flatdark") for c in ("", "_offset")]
+    master_columns += [f"{r}_{c}" for r in ("bias", "flatdark") for c in ("rule", "sanity", "rebuilt")]
+    if units is None:
+        status = plan_status()
+        units = list(status.unit[status.stale])
+    report = []
+    for unit in [units] if isinstance(units, str) else units:
+        start = time.time()
+        with psycopg.connect(**DB_PARAMS, autocommit=True) as conn:
+            lock = conn.execute("SELECT pg_try_advisory_lock(hashtext(%s))", [f"masterframe_plan {unit}"])
+            if not lock.fetchone()[0]:
+                report.append((unit, "another refresh of this unit is running: nothing done", 0, 0, 0.0))
+                continue
+            edges = [BIAS_DEPENDENCY_ROLE, DARK_DEPENDENCY_ROLE, FLAT_DEPENDENCY_ROLE]
+            unit_dir = f"%/{unit}/%"
+            foreign = free_query(_FOREIGN_EDGES, [IMAGE_GROUP_MASTERFRAME, unit_dir, unit_dir, edges])
+            masterframe = [IMAGE_GROUP_MASTERFRAME, list(MASTER_IMAGE_TYPES)]
+            foreign += free_query(_FOREIGN_MASTERS, [*masterframe, unit_dir, f"%{unit}%"])
+            if any(n for n, in foreign):
+                message = f"cross-unit edges / registry rows {[n for n, in foreign]}: nothing done"
+                report.append((unit, message, 0, 0, time.time() - start))
+                continue
+            fingerprint, refreshed_at = fingerprints([unit])[unit], datetime.now(timezone.utc)
+            table, _ = associate([(night, unit) for night, in free_query(_SCIENCE_NIGHTS, [unit])], units=[unit])
+            key = ["unit", "nightdate", "n_binning", "gain", "exptime", "filter"]
+            answers = table.drop(columns=["raw_path", "obj"]).drop_duplicates()
+            if answers.duplicated(key).any():
+                raise ValueError(f"{unit}: a group of science frames with more than one answer")
+            answers = answers.merge(table.groupby(key, dropna=False).size().rename("n_frames").reset_index(), on=key)
+            parts = []
+            for role in roles:
+                names = dict(zip(_role_columns(None, role, None), stored_columns))
+                part = answers[key + ["camera", "n_frames", *names]].rename(columns=names)
+                parts.append(part.assign(role=role, flat_source=answers.flat_source if role == "flat" else None))
+            groups = pd.concat(parts, ignore_index=True).astype({"night_offset": "Int64"})
+            library = library_masters(unit)
+            plan, _ = associate_masters(list(library.master_path), units=[unit])
+            offsets = {"bias_offset": "bias_night_offset", "flatdark_offset": "flatdark_night_offset"}
+            masters = library.merge(plan[["master"] + master_columns], on="master", how="left").rename(columns=offsets)
+            masters = masters.astype({c: "Int64" for c in offsets.values()})
+            masters = masters.assign(refreshed_at=refreshed_at, fingerprint=fingerprint)
+            if fingerprints([unit])[unit] != fingerprint:
+                report.append((unit, "inputs moved during the computation: nothing written", 0, 0, time.time() - start))
+                continue
+            if not dry_run:
+                replace_plan(conn, unit, groups, masters)
+            message = "dry run: nothing written" if dry_run else "refreshed"
+            report.append((unit, message, len(groups), len(masters), time.time() - start))
+    return pd.DataFrame(report, columns=["unit", "message", "group_rows", "master_rows", "seconds"])
