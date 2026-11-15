@@ -247,7 +247,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             self._is_too_vectorized = [is_too] * len(input) if isinstance(input, list) else [is_too]
             for i, (input_file, typ) in enumerate(zip(self._input_files, atleast_1d(self.name.type))):
                 if typ.kind == const.NAME_TYPE_RAW:
-                    if "_ToO_" in input_file:
+                    if "ToO" in input_file:
                         self._is_too_vectorized[i] = True
 
                 if typ.kind == const.NAME_TYPE_CALIBRATED:
@@ -645,11 +645,12 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
         sciproc configs use the stem of sciproc_output_yml
         """
 
+        # a survey run (is_too False) gives its ToO-directory frames the survey name
         too_time = (
             NameHandler.calculate_too_time(
                 [f for f, is_too in zip(self._input_files, self._is_too_vectorized) if is_too]
             )
-            if any(self._is_too_vectorized)
+            if self.settings.is_too
             else None
         )
 
@@ -659,7 +660,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             else "preproc_config"
         )
         suffixes = [
-            f"{obj}_ToO_{too_time}" if is_too else None
+            f"{obj}_ToO_{too_time}" if is_too and self.settings.is_too else None
             for obj, is_too in zip(atleast_1d(self.name.obj), self._is_too_vectorized)
         ]
         return add_suffix(preproc_config_stems, suffixes)
@@ -696,11 +697,12 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             return os.path.join(anchor, "sciproc_config.yml")
 
         # assumes is_too images are all from the same group
+        # a survey run (is_too False) gives its ToO-directory frames the survey name
         too_time = (
             NameHandler.calculate_too_time(
                 [f for f, is_too in zip(self._input_files, self._is_too_vectorized) if is_too]
             )
-            if any(self._is_too_vectorized)
+            if self.settings.is_too
             else None
         )
 
@@ -716,7 +718,7 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             if self.settings.config_suffix:
                 stem_keys = stem_keys + [str(self.settings.config_suffix)]
             yml_stem = "_".join(stem_keys)
-            if self._is_too_vectorized[i]:
+            if self._is_too_vectorized[i] and self.settings.is_too:
                 yml_basename = f"{yml_stem}_ToO_{too_time}.yml"
             else:
                 yml_basename = yml_stem + ".yml"
