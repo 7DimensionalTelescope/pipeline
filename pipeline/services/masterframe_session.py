@@ -170,18 +170,18 @@ def _two_lines(draw, text: str, x: float, y: float, w: int, font, fill) -> None:
             draw.text((x + (w - draw.textlength(line, font=font)) / 2, y + 18 * k), line, fill=fill, font=font)
 
 
-def _status_lines(record: dict, font, width: int) -> List[str]:
-    """`SANITY T   PPFLAG 0000001`, then the QA items wrapped to `width`."""
+def _status_lines(record: dict, font, width: int) -> List[list]:
+    """`SANITY T   PPFLAG 0000001`, then the QA items wrapped to `width`; each line is [(text, fill)]: failed red, no value silver."""
     sanity = {True: "T", False: "F"}.get(record["sanity"], "-")
     ppflag = "-" if record["ppflag"] is None else f"{int(record['ppflag']):09b}"
-    lines, line = [f"SANITY {sanity}   PPFLAG {ppflag}"], ""
-    for key, shown, rule, _ in record["qa"]:
-        item = f"{key} {shown} ({rule})"
-        if line and font.getlength(f"{line}  {item}") > width:
+    lines, line = [[(f"SANITY {sanity}   PPFLAG {ppflag}", "red" if record["sanity"] is False else "black")]], []
+    for key, shown, rule, passed in record["qa"]:
+        item = (f"{key} {shown} ({rule})", "red" if passed is False else "silver" if passed is None else "dimgray")
+        if line and font.getlength("  ".join(text for text, _ in line + [item])) > width:
             lines.append(line)
-            line = item
+            line = [item]
         else:
-            line = f"{line}  {item}" if line else item
+            line.append(item)
     return lines + ([line] if line else [])
 
 
@@ -222,14 +222,11 @@ def _panel(title: str, columns: List[dict], height: int, min_width: int = 0, bot
             draw.text((centered(column["label"], x, col_w, font), y), column["label"], fill="black", font=font)
         if column["stem"]:
             _two_lines(draw, column["stem"], x, y + 26, col_w, small, "dimgray")
-        failed = column["record"] and any(passed is False for *_, passed in column["record"]["qa"])
         for k, line in enumerate(lines):
-            fill = (
-                ("red" if column["record"]["sanity"] is False else "black")
-                if k == 0
-                else "red" if failed else "dimgray"
-            )
-            draw.text((centered(line, x, col_w, small), y + 68 + 17 * k), line, fill=fill, font=small)
+            at = centered("  ".join(text for text, _ in line), x, col_w, small)
+            for text, fill in line:
+                draw.text((at, y + 68 + 17 * k), text, fill=fill, font=small)
+                at += draw.textlength(text + "  ", font=small)
         y += head_h
         for (caption, path), h in zip(column["cells"], row_h):
             if caption:
