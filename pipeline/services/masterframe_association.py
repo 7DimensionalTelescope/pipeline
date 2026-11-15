@@ -14,7 +14,7 @@ import signal
 import traceback
 from collections import Counter, defaultdict
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 from types import SimpleNamespace
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -120,12 +120,13 @@ class _Unresolved(Exception):
 class _Library:
     """Masters of the modeled state, probed by tolerant_search through glob / exists / sanity_check."""
 
-    def __init__(self, trust_machine_rejection: bool, as_of: Optional[datetime], targets: set):
+    def __init__(self, trust_machine_rejection: bool, as_of: Optional[datetime], targets: set, veto: Iterable[str] = ()):
         from .checker import Checker
 
         self.trust_machine_rejection = trust_machine_rejection
         self.as_of = as_of
         self.targets = targets
+        self.veto = {_stem(str(master)) for master in veto}
         self.checker = Checker()
         self.checker.logger = logging.getLogger(__name__)
         criteria = self.checker.load_qa_criteria(IMAGE_GROUP_MASTERFRAME)
@@ -182,7 +183,7 @@ class _Library:
                 for name, path in zip(groups, _canonical(list(groups))):
                     if os.path.dirname(path) == directory and groups[name]["n"] >= NUM_MIN_CALIB:
                         rec = self._record(night, unit, groups[name])
-                        if rec["rebuilt"]:
+                        if rec["rebuilt"] and _stem(name) not in self.veto:
                             present[name] = rec
             rows = [
                 (d, b, row)
@@ -193,6 +194,8 @@ class _Library:
             for (registered, name, (sanity, human, visible, *rest)), path in zip(rows, canonical_paths):
                 canonical = os.path.dirname(path) == directory
                 if registered == directory or canonical:
+                    if _stem(name) in self.veto:
+                        sanity, human = False, True
                     rec = self._record(
                         night, unit, groups.get(name) if canonical else None, (sanity, human, *rest), visible
                     )
@@ -827,7 +830,7 @@ def _recorded(library: _Library, path: str, is_flat: bool) -> Dict[str, dict]:
 
 
 def _role_columns(library: _Library, role: str, answer: Optional[dict]) -> dict:
-    """Eight columns of one role."""
+    """Nine columns of one role; the offset is filled by _offsets."""
     rec = library.record(answer["source"]) if answer and answer["source"] else None
     if rec and not rec["resolved"]:
         _resolve(library, answer["source"])
@@ -836,11 +839,21 @@ def _role_columns(library: _Library, role: str, answer: Optional[dict]) -> dict:
         f"{role}_path": answer and answer["path"],
         f"{role}_nightdate": rec and rec["nightdate"],
         f"{role}_unit": rec and rec["unit"],
+        f"{role}_offset": None,
         f"{role}_rule": answer and answer["rule"],
         f"{role}_state": rec and _state(rec),
         f"{role}_sanity": rec and _sanity(rec),
         f"{role}_rebuilt": rec and rec["rebuilt"],
     }
+
+
+def _offsets(columns: dict, night: str, consumers: Dict[str, Optional[str]]) -> dict:
+    """Nights from each role's consumer (the frame's night, or the master role named) to its selected master."""
+    offsets = {}
+    for role, consumer in consumers.items():
+        base, own = columns.get(f"{consumer}_nightdate") if consumer else night, columns.get(f"{role}_nightdate")
+        offsets[f"{role}_offset"] = (date.fromisoformat(own) - date.fromisoformat(base)).days if own and base else None
+    return offsets
 
 
 def _templates(night: str, unit: str, nbin, gain, camera: str, exptime, filt) -> List[str]:
@@ -982,12 +995,13 @@ def _changelog_cached():
 
 @_changelog_cached()
 def associate(
-    targets, *, trust_machine_rejection: bool = True, as_of: Optional[datetime] = None
+    targets, *, trust_machine_rejection: bool = True, as_of: Optional[datetime] = None, veto: Iterable[str] = ()
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Masters each raw science frame will be reduced with, and the cases the rules cannot settle: (table, defects)."""
+    """Masters each raw science frame will be reduced with, and the cases the rules cannot settle: (table, defects); `veto` plans as if those masters were human-rejected."""
     roles = ["bias", "dark", "flat", "flatdark", "dark_bias", "flat_bias", "flatdark_bias"]
+    consumers = dict(zip(roles, [None, None, None, "flat", "dark", "flat", "flatdark"]))
     frames, unknown = _resolve_targets(targets)
-    library = _Library(trust_machine_rejection, as_of, {(r[1], r[2]) for r in frames})
+    library = _Library(trust_machine_rejection, as_of, {(r[1], r[2]) for r in frames}, veto)
     groups, failures = defaultdict(list), {}
     for i, (_, night, unit, _, filt, exptime, nbin, gain) in enumerate(frames):
         try:
@@ -1016,6 +1030,7 @@ def associate(
             if role == CALIB_TYPE_FLAT:
                 columns["flat_source"] = _flat_source(library, answers[role])
             _count_defects(tally, key[0], key[1], role, answers[role], len(members))
+        columns.update(_offsets(columns, key[0], consumers))
         for i in members:
             raw_path, night, unit, obj, filt, exptime, nbin, gain = frames[i]
             frame = dict(raw_path=raw_path, nightdate=night, unit=unit, obj=obj, filter=filt, exptime=exptime)
@@ -1033,7 +1048,11 @@ def associate(
 
 @_changelog_cached()
 def associate_masters(
-    masters: Iterable[str], *, trust_machine_rejection: bool = True, as_of: Optional[datetime] = None
+    masters: Iterable[str],
+    *,
+    trust_machine_rejection: bool = True,
+    as_of: Optional[datetime] = None,
+    veto: Iterable[str] = (),
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Masters each master dark or flat will be built with (bias; flatdark for a flat), and the unsettled cases."""
     items = [str(m) for m in ([masters] if isinstance(masters, (str, os.PathLike)) else masters)]
@@ -1045,7 +1064,7 @@ def associate_masters(
             name = None
         is_master = name is not None and name.type.kind == NAME_TYPE_MASTER
         names[item] = name if is_master and name.type.exposure_type in MASTER_IMAGE_TYPES else None
-    library = _Library(trust_machine_rejection, as_of, {(n.nightdate, n.unit) for n in names.values() if n})
+    library = _Library(trust_machine_rejection, as_of, {(n.nightdate, n.unit) for n in names.values() if n}, veto)
     rows, tally = [], Counter()
     for item in items:
         path, detail = (item if os.path.dirname(item) else None), "not a master in the library or registry"
@@ -1067,9 +1086,69 @@ def associate_masters(
         for role in ("bias", "flatdark"):
             row.update(_role_columns(library, role, answers.get(role)))
             _count_defects(tally, rec["nightdate"], rec["unit"], role, answers.get(role), 1)
+        row.update(_offsets(row, rec["nightdate"], {"bias": None, "flatdark": None}))
         _count_unmodeled(library, tally, rec["nightdate"], rec["unit"], 1)
         rows.append(row)
     _count_unrecorded(library, tally, Counter((r["nightdate"], r["unit"]) for r in rows))
     columns = ["master", "master_path", "type", "nightdate", "unit", "state", "n_raw", "sanity", "rebuilt"]
     columns += [c for role in ("bias", "flatdark") for c in _role_columns(library, role, None)]
     return pd.DataFrame(rows, columns=columns), _defect_table(tally)
+
+
+@_changelog_cached()
+def veto_impact(masters: Iterable[str], days: Optional[int] = None) -> pd.DataFrame:
+    """Selections that change if `masters` were human-rejected: the master in use and its alternative, with the nights to each."""
+    roles = ["bias", "dark", "flat", "flatdark", "dark_bias", "flat_bias", "flatdark_bias"]
+    masters = [masters] if isinstance(masters, (str, os.PathLike)) else list(masters)
+    if days is None:
+        with open(os.path.join(REF_DIR, "preproc_base.yml")) as f:
+            days = _read_settings(yaml.safe_load(f))[0]
+    targets = set()
+    for name in (NameHandler(f"{_stem(str(m))}.fits") for m in masters):
+        night = date.fromisoformat(str(name.nightdate))
+        targets |= {(str(night + timedelta(days=k)), name.unit) for k in range(-days, days + 1)}
+    before, _ = associate(sorted(targets))
+    after, _ = associate(sorted(targets), veto=masters)
+    parts = []
+    for role in roles:
+        changed = before[role].fillna("") != after[role].fillna("")
+        columns = [role, f"{role}_offset", f"{role}_sanity", f"{role}_rule"]
+        used = before.loc[changed, ["nightdate", "unit"] + columns]
+        used = used.set_axis(["nightdate", "unit", "master", "offset", "sanity", "rule"], axis=1)
+        other = after.loc[changed, columns].set_axis(
+            ["alternative", "alternative_offset", "alternative_sanity", "alternative_rule"], axis=1
+        )
+        parts.append(pd.concat([used, other], axis=1).assign(role=role))
+    table = pd.concat(parts)
+    keys = ["nightdate", "unit", "role"] + [c for c in table.columns if c not in ("nightdate", "unit", "role")]
+    return table.groupby(keys, dropna=False, sort=True).size().reset_index(name="n_frames")
+
+
+def neighbor_masters(master: str, days: int = 30) -> pd.DataFrame:
+    """Masters with the keys of `master` on the nights around it: raw frames in the raw DB, and the registered master's verdict."""
+    name = NameHandler(f"{_stem(str(master))}.fits")
+    typ, unit = name.type.exposure_type, name.unit
+    quality = {CALIB_TYPE_DARK: name.exptime and format_exptime(float(name.exptime), type="dark"), CALIB_TYPE_FLAT: name.filter}.get(typ)
+    library = _Library(True, None, set())
+    first = date.fromisoformat(str(name.nightdate))
+    rows = []
+    for offset in range(-days, days + 1):
+        night = str(first + timedelta(days=offset))
+        try:
+            groups = library.groups(night, unit)
+        except ValueError:
+            continue
+        basename = _master_basename(typ, quality, unit, night, name.n_binning, name.gain, name.camera)
+        n_raw = groups[basename]["n"] if basename in groups else 0
+        path = library.registered_path.get(_stem(basename))
+        if not n_raw and path is None:
+            continue
+        sanity, human, _, _, pipe_ver, _ = library.registry[os.path.dirname(path)][os.path.basename(path)] if path else (None,) * 6
+        if path:
+            state = "registered" if n_raw >= NUM_MIN_CALIB else "registry-only"
+        else:
+            state = "budget-only" if n_raw >= NUM_MIN_CALIB else "too few raw frames"
+        rows.append(
+            dict(master=_stem(basename), nightdate=night, offset=offset, n_raw=n_raw, state=state, pipe_ver=pipe_ver, sanity=sanity, inspcomm=human)
+        )
+    return pd.DataFrame(rows, columns=["master", "nightdate", "offset", "n_raw", "state", "pipe_ver", "sanity", "inspcomm"])

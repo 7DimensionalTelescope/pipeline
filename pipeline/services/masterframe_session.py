@@ -171,10 +171,14 @@ def _two_lines(draw, text: str, x: float, y: float, w: int, font, fill) -> None:
 
 
 def _status_lines(record: dict, font, width: int) -> List[list]:
-    """`SANITY T   PPFLAG 0000001`, then the QA items wrapped to `width`; each line is [(text, fill)]: failed red, no value silver."""
+    """`SANITY T  PPFLAG 0000001`, INSPCOMM, then the QA items wrapped to `width`; each line is [(text, fill)]: what makes SANITY F and a human INSPCOMM red, no value silver."""
     sanity = {True: "T", False: "F"}.get(record["sanity"], "-")
     ppflag = "-" if record["ppflag"] is None else f"{int(record['ppflag']):09b}"
-    lines, line = [[(f"SANITY {sanity}   PPFLAG {ppflag}", "red" if record["sanity"] is False else "black")]], []
+    forced = record["ppflag"] is not None and int(record["ppflag"]) & 4  # an F ingredient forces SANITY F
+    lines, line = [[(f"SANITY {sanity}", "red" if record["sanity"] is False else "black"), (f"PPFLAG {ppflag}", "red" if forced else "black")]], []
+    if record["inspcomm"]:
+        human = record["inspcomm"] != "Auto-generated binned master frame"
+        lines.append([(f"INSPCOMM {record['inspcomm']}", "red" if human else "dimgray")])
     for key, shown, rule, passed in record["qa"]:
         item = (f"{key} {shown} ({rule})", "red" if passed is False else "silver" if passed is None else "dimgray")
         if line and font.getlength("  ".join(text for text, _ in line + [item])) > width:
