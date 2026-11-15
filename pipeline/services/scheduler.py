@@ -745,6 +745,22 @@ class Scheduler:
                 " AND COALESCE(g.dispatch, '') NOT IN ('', ?)))"
             )
             params.append(host)
+            # a host that runs a group's science rows and holds Pending ones opens no other group that has Pending ones
+            states = (TASK_STATUS_PROCESSING, TASK_STATUS_PENDING)
+            cursor.execute(
+                "SELECT MAX(CASE WHEN status = ? THEN priority END), MAX(CASE WHEN status = ? THEN priority END) "
+                f"FROM scheduler WHERE status IN (?, ?) AND {self._AFFINITY_FILTER} "
+                "AND group_idx IS NOT NULL AND config_type != ?",
+                (*states, *states, host, CONFIG_TYPE_CROSSFILTER),
+            )
+            running, waiting = cursor.fetchone()
+            if running is not None and waiting is not None:
+                query += (
+                    " AND (group_idx IS NULL OR priority > ? OR NOT EXISTS (SELECT 1 FROM scheduler w "
+                    "WHERE w.group_idx = scheduler.group_idx AND w.status = ? AND w.config_type != ? "
+                    "AND COALESCE(w.dispatch, '') != ?))"
+                )
+                params.extend((min(running, waiting), TASK_STATUS_PENDING, CONFIG_TYPE_CROSSFILTER, host))
         query += extra_sql
         params.extend(extra_params)
         query, params = self._append_ready_task_constraints(cursor, query, params, host)
