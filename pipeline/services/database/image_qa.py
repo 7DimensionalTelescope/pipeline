@@ -275,6 +275,7 @@ class ImageQATable:
         if cls.image_type != IMAGE_TYPE_WHITE:  # a white spans units: no one camera
             name = NameHandler(file)
             cls.n_binning, cls.camera = name.n_binning, name.camera
+            cls.unit = name.unit or cls.unit  # path precedence in case of disagreement
             # GAIN is the gain mode only on singles and masters; an old coadd's is SWarp's effective gain
             cls.gain = (
                 name.gain if cls.image_type == IMAGE_TYPE_SINGLE or cls.image_group == IMAGE_GROUP_MASTERFRAME else None
