@@ -35,7 +35,7 @@ from .const import DB_PARAMS
 from .query import free_query
 
 _UNITS = """
-SELECT u.name FROM facility_unit u WHERE EXISTS (SELECT 1 FROM survey_scienceframe x WHERE x.unit_id = u.id) ORDER BY 1
+SELECT u.name FROM facility_unit u WHERE EXISTS (SELECT 1 FROM survey_scienceframe x WHERE x.unit_id = u.id AND strpos(x.file_path, 'tmp') = 0) ORDER BY 1
 """
 
 _DIGEST = """
@@ -45,18 +45,18 @@ SELECT unit, md5(string_agg(line, E'\\n' ORDER BY line)) FROM ({}) part(unit, li
 _RAW_CALIBRATION = """
 SELECT u.name, ROW('bias', n.date, x.binning_x, x.gain, NULL::float8, NULL::text, count(*))::text
 FROM survey_biasframe x JOIN facility_unit u ON u.id = x.unit_id JOIN survey_night n ON n.id = x.night_id
-WHERE u.name = ANY(%s)
+WHERE u.name = ANY(%s) AND strpos(x.file_path, 'tmp') = 0
 GROUP BY u.name, n.date, x.binning_x, x.gain
 UNION ALL
 SELECT u.name, ROW('dark', n.date, x.binning_x, x.gain, x.exptime, NULL::text, count(*))::text
 FROM survey_darkframe x JOIN facility_unit u ON u.id = x.unit_id JOIN survey_night n ON n.id = x.night_id
-WHERE u.name = ANY(%s)
+WHERE u.name = ANY(%s) AND strpos(x.file_path, 'tmp') = 0
 GROUP BY u.name, n.date, x.binning_x, x.gain, x.exptime
 UNION ALL
 SELECT u.name, ROW('flat', n.date, x.binning_x, x.gain, NULL::float8, f.name, count(*))::text
 FROM survey_flatframe x JOIN facility_unit u ON u.id = x.unit_id JOIN survey_night n ON n.id = x.night_id
 LEFT JOIN facility_filter f ON f.id = x.filter_id
-WHERE u.name = ANY(%s)
+WHERE u.name = ANY(%s) AND strpos(x.file_path, 'tmp') = 0
 GROUP BY u.name, n.date, x.binning_x, x.gain, f.name
 """
 
@@ -64,7 +64,7 @@ _RAW_SCIENCE = """
 SELECT u.name, ROW(n.date, x.binning_x, x.gain, x.exptime, f.name, count(*))::text
 FROM survey_scienceframe x JOIN facility_unit u ON u.id = x.unit_id JOIN survey_night n ON n.id = x.night_id
 LEFT JOIN facility_filter f ON f.id = x.filter_id
-WHERE u.name = ANY(%s)
+WHERE u.name = ANY(%s) AND strpos(x.file_path, 'tmp') = 0
 GROUP BY u.name, n.date, x.binning_x, x.gain, x.exptime, f.name
 """
 

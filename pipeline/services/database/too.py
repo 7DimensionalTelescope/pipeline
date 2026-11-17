@@ -699,7 +699,7 @@ class TooDB:
                                 SELECT 1 
                                 FROM survey_scienceframe sf
                                 JOIN survey_night n ON sf.night_id = n.id
-                                WHERE n.date = %s
+                                WHERE n.date = %s AND strpos(sf.file_path, 'tmp') = 0
                                 LIMIT 1
                             )
                         """

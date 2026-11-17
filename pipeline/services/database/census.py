@@ -52,7 +52,7 @@ def census_from_raw(
     from ...const.sciproc import SCIPROCESS_REGISTRY
     from .image_qa import ImageQATable
 
-    where, params = [], []
+    where, params = ["strpos(sf.file_path, 'tmp') = 0"], []
     if objects is not None:
         objects = [str(o) for o in _listed(objects)]
         if not objects:

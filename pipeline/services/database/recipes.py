@@ -364,7 +364,7 @@ def census_masters(
     from .const import TABLES
     from .image_qa import ImageQATable
 
-    where, params = [], []
+    where, params = ["strpos(cf.file_path, 'tmp') = 0"], []
     if units is not None:
         where.append("fu.name = ANY(%s)")
         params.append([str(u) for u in _listed(units)])

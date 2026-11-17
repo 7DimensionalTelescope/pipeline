@@ -208,7 +208,7 @@ def get_image_files(
                     query += " LEFT JOIN survey_target t ON NULL"
 
                 # accumulate WHERE clauses
-                clauses: List[str] = []
+                clauses: List[str] = ["strpos(sf.file_path, 'tmp') = 0"]
                 params: List[Union[str, date]] = []
 
                 if target_date:
@@ -563,4 +563,4 @@ def query_observations_manually(include_keywords, exclude_keywords=None, DATA_DI
         for future in as_completed(futures):
             output.extend(future.result())
 
-    return output
+    return [p for p in output if "tmp" not in p]

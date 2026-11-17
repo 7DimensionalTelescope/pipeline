@@ -58,31 +58,31 @@ SELECT x.file_path, n.date::text, u.name, COALESCE(tl.name, t.name, NULLIF(x.obj
 FROM survey_scienceframe x JOIN facility_unit u ON u.id = x.unit_id JOIN survey_night n ON n.id = x.night_id
 LEFT JOIN facility_filter f ON f.id = x.filter_id LEFT JOIN survey_tile tl ON tl.id = x.tile_id
 LEFT JOIN survey_target t ON t.id = x.target_id
-WHERE {}
+WHERE strpos(x.file_path, 'tmp') = 0 AND {}
 """
 
 _SCIENCE_INVENTORY = """
 SELECT DISTINCT x.binning_x, x.gain, f.name, x.exptime
 FROM survey_scienceframe x JOIN facility_unit u ON u.id = x.unit_id JOIN survey_night n ON n.id = x.night_id
 LEFT JOIN facility_filter f ON f.id = x.filter_id
-WHERE u.name = %s AND n.date = %s::date
+WHERE u.name = %s AND n.date = %s::date AND strpos(x.file_path, 'tmp') = 0
 """
 
 _RAW_BUDGET = """
 SELECT 'bias', u.name, n.date::text, x.binning_x, x.gain, NULL::float8, NULL::text, count(*)
 FROM survey_biasframe x JOIN facility_unit u ON u.id = x.unit_id JOIN survey_night n ON n.id = x.night_id
-WHERE u.name LIKE ANY(%s)
+WHERE u.name LIKE ANY(%s) AND strpos(x.file_path, 'tmp') = 0
 GROUP BY 2, 3, 4, 5
 UNION ALL
 SELECT 'dark', u.name, n.date::text, x.binning_x, x.gain, x.exptime, NULL::text, count(*)
 FROM survey_darkframe x JOIN facility_unit u ON u.id = x.unit_id JOIN survey_night n ON n.id = x.night_id
-WHERE u.name LIKE ANY(%s)
+WHERE u.name LIKE ANY(%s) AND strpos(x.file_path, 'tmp') = 0
 GROUP BY 2, 3, 4, 5, 6
 UNION ALL
 SELECT 'flat', u.name, n.date::text, x.binning_x, x.gain, NULL::float8, f.name, count(*)
 FROM survey_flatframe x JOIN facility_unit u ON u.id = x.unit_id JOIN survey_night n ON n.id = x.night_id
 LEFT JOIN facility_filter f ON f.id = x.filter_id
-WHERE u.name LIKE ANY(%s)
+WHERE u.name LIKE ANY(%s) AND strpos(x.file_path, 'tmp') = 0
 GROUP BY 2, 3, 4, 5, 7
 """
 
@@ -120,13 +120,13 @@ ORDER BY name, updated_at DESC NULLS LAST, id DESC
 _SCIENCE_NIGHTS = """
 SELECT DISTINCT n.date::text
 FROM survey_scienceframe x JOIN facility_unit u ON u.id = x.unit_id JOIN survey_night n ON n.id = x.night_id
-WHERE u.name = %s
+WHERE u.name = %s AND strpos(x.file_path, 'tmp') = 0
 """
 
 _SCIENCE_NIGHT_RANGE = """
 SELECT min(n.date), max(n.date)
 FROM survey_scienceframe x JOIN facility_unit u ON u.id = x.unit_id JOIN survey_night n ON n.id = x.night_id
-WHERE u.name = ANY(%s)
+WHERE u.name = ANY(%s) AND strpos(x.file_path, 'tmp') = 0
 """
 
 _UNIT_MASTERS = """

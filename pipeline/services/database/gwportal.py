@@ -685,7 +685,7 @@ class _SqlBackend:
         full_table: bool = False,
         **_ignored: Any,
     ) -> List[Dict[str, Any]]:
-        clauses: List[str] = []
+        clauses: List[str] = ["strpos(sf.file_path, 'tmp') = 0"]
         params: List[Any] = []
 
         self._apply_date_filters(
@@ -798,7 +798,7 @@ class _SqlBackend:
         one raw science frame, honoring the same filter vocabulary as
         :meth:`_q_raw`. Each row carries a ``n_frames`` count.
         """
-        clauses: List[str] = []
+        clauses: List[str] = ["strpos(sf.file_path, 'tmp') = 0"]
         params: List[Any] = []
 
         self._apply_date_filters(
@@ -1116,7 +1116,7 @@ class _SqlBackend:
             "flat": "survey_flatframe",
         }[kind]
 
-        clauses: List[str] = []
+        clauses: List[str] = ["strpos(cf.file_path, 'tmp') = 0"]
         params: List[Any] = []
 
         self._apply_date_filters(
@@ -1423,7 +1423,10 @@ class _HttpBackend:
             self.last_url = None
         if self.dry_run:
             return []
-        return self.client.fetch_all(entity, **params)
+        rows = self.client.fetch_all(entity, **params)
+        if entity == "raw":
+            rows = [r for r in rows if "tmp" not in (r.get("filepath") or "")]
+        return rows
 
     def request_str(self) -> str:
         """Human-readable summary of the last HTTP request."""
