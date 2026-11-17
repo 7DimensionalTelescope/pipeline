@@ -51,7 +51,7 @@ def get_camera_serial(unit: int, query_date: str):
     else:
         raise ValueError(
             f"Current serial ({current_serial}) of unit{unit} does not match the last "
-            f"reported serial ({serials[-1]}) on {last_date.date()}\n"
+            f"reported serial ({serials[-1]}) on {last_date}\n"
             f"Update ref/InstrumEvent/changelog_unit{int(unit)}.txt or check {INSTRUM_STATUS_DICT}"
         )
 

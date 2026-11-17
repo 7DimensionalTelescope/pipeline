@@ -25,3 +25,4 @@ date	nightdate	parts	wall	comment
 260715		mirror	bias,dark,flat	snowstorm
 261025		cam	flat	PA
 261025		mirror	flat	optical_alignment
+261117	2026-11-16	cam	bias,dark,flat	31232

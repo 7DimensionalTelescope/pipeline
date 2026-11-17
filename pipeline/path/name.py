@@ -460,6 +460,11 @@ class NameHandler:
     #         return ["_".join([t for t in types if t]) for types in self.types]
 
     def __getattr__(self, name):
+        prop = getattr(type(self), name, None)
+        if isinstance(prop, property):
+            # prevent AttributeError hiding camserial mismatch error message
+            return prop.fget(self)
+
         # syntactic sugar
         if name.endswith("_to_string"):
             base = name[:-10]

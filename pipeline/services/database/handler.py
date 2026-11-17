@@ -179,8 +179,8 @@ class DatabaseHandler:
 
         try:
             table = self.image_qa.pyTable.from_file(file, process_status_id)
-        except ValueError as e:
-            self.logger.error(f"image_qa registration refused: {e}")
+        except Exception as e:
+            self.logger.error(f"image_qa registration refused: {type(e).__name__}: {e}")
             raise
 
         if overwrite:
