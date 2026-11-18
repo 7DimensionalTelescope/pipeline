@@ -706,7 +706,6 @@ def uniformity_statistical(
     d = fits.getdata(fits_path).astype(np.float32)
     n = bin_x * bin_y
     d = d / n  # convert sum-binned image to mean-equivalent units
-    print("sum-bin")
 
     if bpmask_path is None:
         bpmask_path = fits_path.replace("dark", "bpmask")
@@ -825,7 +824,10 @@ def compute_masterframe_stats(
         header["EDGEVAR"] = (edge_var, "Edge variation of the image")
 
     elif dtype.upper() == "DARK":
-        uniformity_score = uniformity_statistical(filename, bpmask_path=bpmask_path)
+        from ..path.name import NameHandler
+
+        n_binning = int(NameHandler(filename).n_binning)
+        uniformity_score = uniformity_statistical(filename, bpmask_path=bpmask_path, bin_x=n_binning, bin_y=n_binning)
         header["UNIFORM"] = (uniformity_score, "Uniformity score")
         header["NTOTPIX"] = (data.shape[0] * data.shape[1], "Total number of pixels")
 
