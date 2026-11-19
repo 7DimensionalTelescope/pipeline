@@ -378,23 +378,33 @@ def inside_quad_spherical(points_ra, points_dec, quad_ra, quad_dec):
     quad_*:   4 vertices (deg), ordered around the boundary (CW or CCW)
     returns:  boolean array of shape broadcast(points_ra, points_dec)
     """
-    from spherical_geometry.polygon import SphericalPolygon
+    from matplotlib.path import Path
 
-    # build polygon in degrees
-    poly = SphericalPolygon.from_radec(quad_ra, quad_dec, degrees=True)
+    def unit(lon, lat):
+        lon, lat = np.deg2rad(lon), np.deg2rad(lat)
+        return np.stack([np.cos(lat) * np.cos(lon), np.cos(lat) * np.sin(lon), np.sin(lat)], axis=-1)
 
     # ensure arrays and broadcast to a common shape
-    ra = np.atleast_1d(points_ra)
-    dec = np.atleast_1d(points_dec)
-    ra_b, dec_b = np.broadcast_arrays(ra, dec)
+    ra_b, dec_b = np.broadcast_arrays(np.asarray(points_ra, dtype=float), np.asarray(points_dec, dtype=float))
 
-    # evaluate point-by-point (contains_lonlat expects scalars)
-    out = np.empty(ra_b.shape, dtype=bool)
-    it = np.nditer(
-        [ra_b, dec_b, out], flags=["multi_index", "refs_ok"], op_flags=[["readonly"], ["readonly"], ["writeonly"]]
-    )
-    for lon, lat, o in it:
-        o[...] = bool(poly.contains_lonlat(float(lon), float(lat), degrees=True))
+    # tangent point: normalised mean of vertex unit vectors (safe across RA = 0/360 and the poles)
+    V = unit(np.asarray(quad_ra, dtype=float), np.asarray(quad_dec, dtype=float))
+    t = V.sum(axis=0)
+    t /= np.linalg.norm(t)
+    e1 = np.cross(t, np.eye(3)[np.argmin(np.abs(t))])
+    e1 /= np.linalg.norm(e1)
+    e2 = np.cross(t, e1)
+
+    # gnomonic projection maps great-circle edges to straight lines; far hemisphere and NaN -> False
+    P = unit(ra_b.ravel(), dec_b.ravel())
+    cos_c = P @ t
+    front = cos_c > 0
+    quad_xy = np.column_stack([V @ e1, V @ e2]) / (V @ t)[:, None]
+    pts_xy = np.column_stack([P[front] @ e1, P[front] @ e2]) / cos_c[front][:, None]
+
+    out = np.zeros(ra_b.size, dtype=bool)
+    out[front] = Path(quad_xy).contains_points(pts_xy)
+    out = out.reshape(ra_b.shape)
 
     # return a scalar bool if inputs were scalars
     return out if out.shape else bool(out)
