@@ -53,6 +53,18 @@ def _block_mean(image: np.ndarray, factor: int) -> np.ndarray:
     )
 
 
+def _row_percentile(values: np.ndarray, q) -> np.ndarray:
+    """np.nanpercentile(values, q, axis=1) without its per-row loop: one np.percentile per valid count."""
+    valid = ~np.isnan(values)
+    counts = valid.sum(axis=1)
+    out = np.full(values.shape[0], np.nan, dtype=values.dtype)
+    for n in np.unique(counts[counts > 0]):
+        rows = counts == n
+        block = values[rows] if n == values.shape[1] else values[rows][valid[rows]].reshape(-1, n)
+        out[rows] = np.percentile(block, q, axis=1)
+    return out
+
+
 def _line_polar(segment) -> tuple[float, float]:
     x1, y1, x2, y2 = segment
     theta = np.arctan2(y2 - y1, x2 - x1) % np.pi
@@ -151,7 +163,7 @@ def _measure_trail_width(
 
     def component(columns, target):
         """Above-threshold component around target offset (None: the strongest within the cluster)."""
-        profile = np.nanpercentile(values[:, columns], profile_percentile, axis=1)
+        profile = _row_percentile(values[:, columns], profile_percentile)
         profile = gaussian_filter1d(profile, 0.75, mode="nearest")
         # the lower side is the baseline: a parallel trail can sit on the other side's annulus
         signal = profile - min(

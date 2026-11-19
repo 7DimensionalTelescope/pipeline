@@ -16,6 +16,15 @@ from .utils import add_suffix, force_symlink, swap_ext, read_text_file, ansi_cle
 from .utils.header import fitsrec_to_header
 
 
+def sextractor_output_reusable(outcat: str, log_file: str = None, overwrite: bool = False) -> bool:
+    """sextractor() skips: catalog and clean-run log non-empty, no overwrite."""
+    log_file = log_file or swap_ext(add_suffix(outcat, "sextractor"), "log")
+    try:
+        return not overwrite and os.path.getsize(outcat) > 0 and os.path.getsize(log_file) > 0
+    except OSError:
+        return False
+
+
 def sextractor(
     inim: str,
     outcat: str = None,
@@ -71,7 +80,7 @@ def sextractor(
             return False
 
     # The log is renamed into place only after a clean run, so a catalog without one is from an interrupted run.
-    if nonempty(outcat) and nonempty(log_file) and not overwrite:
+    if sextractor_output_reusable(outcat, log_file, overwrite):
         chatter(f"Sextractor output catalog already exists: {outcat}, skipping...", "info")
         if return_sex_output:
             # take sexout from .log

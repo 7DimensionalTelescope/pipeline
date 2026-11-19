@@ -900,7 +900,12 @@ class PhotometrySingle:
         # run sextractor with 'main' preset
         with ExitStack() as stack:
             satellite_options = self.phot_conf.satellite_mask
-            detect_trails = self._single_frame and satellite_options["enabled"] and self.phot_header.NTRAILPX != 0
+            detect_trails = (
+                self._single_frame
+                and satellite_options["enabled"]
+                and self.phot_header.NTRAILPX != 0
+                and not external.sextractor_output_reusable(self.path.photometry.main_catalog, overwrite=overwrite)
+            )
             if detect_trails or bad_pixels is not None:
                 ntrailpx, weight_options = stack.enter_context(
                     phot_utils.sextractor_zero_weight(

@@ -867,7 +867,10 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
             try:
                 with ExitStack() as stack:
                     options = dict(sex_options or {})
-                    if satellite_options["enabled"]:
+                    # a reused catalog takes no weight map: no trail search, NTRAILPX stays absent (not evaluated)
+                    if satellite_options["enabled"] and not external.sextractor_output_reusable(
+                        prep_cat, overwrite=overwrite
+                    ):
                         ntrailpx, weight_options = stack.enter_context(
                             sextractor_zero_weight(solved_image, satellite_options, logger=self.logger)
                         )
