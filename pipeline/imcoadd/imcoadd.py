@@ -1131,6 +1131,11 @@ class ImCoadd(
         keep = topology(~holes) if keep is None else keep
         interior, outside = holes & keep, holes & ~keep
         n_interior, n_outside = int(interior.sum()), int(outside.sum())
+        if not (keep & ~holes).any():
+            raise self._process_error.ValueError(
+                f"Coadd has no finite pixel inside its intended coverage ({n_interior} hole pixels, nothing to fill "
+                f"from): {coadd_image}"
+            )
         method = False
         if n_interior:
             try:

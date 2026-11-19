@@ -279,6 +279,11 @@ def proper_coadd_numpy(
     coadd = proper.astype(np.float32)
     del proper
     coadd[count_arr == 0] = np.nan
+    if not np.isfinite(coadd).any():
+        raise ValueError(
+            f"proper coadd has no finite pixel inside its coverage ({int(np.count_nonzero(count_arr))} covered "
+            f"pixels; fwhm {min(peeings):.2f}-{max(peeings):.2f} px, w {w.min():.4g}-{w.max():.4g})"
+        )
     coverage = apply_coverage_policy(
         coadd,
         None,

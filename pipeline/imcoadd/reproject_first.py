@@ -514,6 +514,15 @@ class ReprojectFirstCoaddMixin:
             raise self._process_error.KeyError(
                 f"No PEEING for {len(missing)} input(s); proper coadd needs a per-frame PSF"
             )
+        bad = [name for name, p in zip(self.input_headers.names, peeings) if not (np.isfinite(p) and p > 0)]
+        if bad:
+            self.logger.error(
+                f"Unusable PEEING (non-finite or <= 0) for {bad[:3]}; proper coadd needs a per-frame PSF",
+                self._process_error.ValueError,
+            )
+            raise self._process_error.ValueError(
+                f"Unusable PEEING for {len(bad)} input(s) {bad[:3]}; proper coadd needs a per-frame PSF"
+            )
         return [float(p) for p in peeings]
 
     def _validate_proper_mode(self):
