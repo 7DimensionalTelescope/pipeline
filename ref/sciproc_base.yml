@@ -184,8 +184,7 @@ imcoadd:
   memory_image_limit: 6
   dump_bkgsub: false
   lean_factory: False  # delete sci resamps + bkg/bkgrms once bkgsub products exist; resumes recompute
-  combine_lock_threshold: 20  # combines with >= this many inputs take the per-filesystem flock
-  coadd_scratch: auto  # local dir to stage coadd inputs off NFS; 'auto' picks one only when the inputs are on a network fs and the coadd is >= combine_lock_threshold frames; empty = off (moot when factory_scratch set)
+  coadd_scratch: auto  # local dir to stage coadd inputs off NFS; 'auto' picks one only when the inputs are on a network fs and the coadd is >= COMBINE_LOCK_THRESHOLD frames (host .env, default 37); empty = off (moot when factory_scratch set)
   swarp_options_override:  # extra SWarp arguments for the legacy routine, e.g. ['-BACK_SIZE', '128']
   convolve: 
   target_seeing:  # auto if it's empty or smaller than max seeing

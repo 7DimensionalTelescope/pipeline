@@ -147,6 +147,8 @@ def _parse_gpu_devices(value):
 
 # the GPU devices this host offers; .env is re-read by every task process
 GPU_DEVICES = _parse_gpu_devices(os.environ.get("GPU_DEVICES"))
+# coadds with >= this many inputs take the per-filesystem combine slot and may stage to local scratch
+COMBINE_LOCK_THRESHOLD = int(os.environ.get("COMBINE_LOCK_THRESHOLD") or 37)
 IS_PIPELINE_LOCK = _get_bool_env("IS_PIPELINE", False)
 # a pipeline run raises instead of going on without the database (production .env)
 ENSURE_DB = _get_bool_env("ENSURE_DB", False)

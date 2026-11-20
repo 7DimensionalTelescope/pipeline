@@ -3,6 +3,7 @@ import math
 from dataclasses import dataclass
 
 from ..config.utils import get_key
+from ..const import COMBINE_LOCK_THRESHOLD
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,7 +305,7 @@ def resolve_coadd_plan(node, errors=builtins) -> CoaddPlan:
         coadd_weighting=weighting,
         output_weight_map=bool(node.output_weight_map),
         output_footprint=bool(node.output_footprint),
-        combine_lock_threshold=int(node.combine_lock_threshold),
+        combine_lock_threshold=COMBINE_LOCK_THRESHOLD,
         coverage_policy=coverage_policy,
         clip_sigma=clip_sigma,
         clip_ampfrac=clip_ampfrac,

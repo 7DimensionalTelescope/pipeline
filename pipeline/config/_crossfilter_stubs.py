@@ -102,7 +102,6 @@ if TYPE_CHECKING:
         memory_image_limit: int
         dump_bkgsub: bool
         lean_factory: bool
-        combine_lock_threshold: int
         coadd_scratch: str
         swarp_options_override: Any
         convolve: bool
