@@ -7,7 +7,9 @@ import numpy as np
 import psycopg
 import itertools
 import time
-from contextlib import ExitStack
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, fields
 
 # astropy
@@ -43,6 +45,8 @@ from ..const import (
     NAME_TYPE_FLAT,
     NAME_TYPE_SCIENCE,
     ENSURE_DB,
+    FRAME_THREAD_THRESHOLD,
+    FRAME_THREADS,
 )
 from ..const.sciproc import (
     COADD_PHOTOMETRY_SPEC,
@@ -267,6 +271,8 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         try:
             if self.queue:
                 self._run_parallel(overwrite=overwrite)
+            elif len(self.input_images) > FRAME_THREAD_THRESHOLD:
+                self._run_threaded(overwrite=overwrite)
             else:
                 self._run_sequential(overwrite=overwrite)
 
@@ -350,6 +356,41 @@ class Photometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
                 f"{self._photometry_mode}-{i}/{len(self.input_images)}",
             )
 
+    def _run_threaded(self, overwrite=True) -> None:
+        """Frames on FRAME_THREADS threads; one lock serializes all but trail search and SExtractor."""
+        lock = threading.Lock()
+
+        def _run(single):
+            with lock:
+                single.run(overwrite=overwrite)
+
+        pool = ThreadPoolExecutor(max_workers=FRAME_THREADS)
+        try:
+            futures = []
+            for i in range(len(self.input_images)):
+                with lock:
+                    single = PhotometrySingle(
+                        self.config_node.extract_single_image_config(i),
+                        logger=self.logger,
+                        ref_cat_type=self.ref_cat_type,
+                        total_image=len(self.input_images),
+                        difference_photometry=self._process_spec is DIFFERENCE_PHOTOMETRY_SPEC,
+                        reset_count=i == 0,
+                        current_process=self._process_spec,
+                        parent_path=self.path,
+                        frame_lock=lock,
+                    )
+                futures.append(pool.submit(_run, single))
+            for i, future in enumerate(futures):
+                future.result()
+                with lock:
+                    self.update_progress(
+                        self._process_registry.step_progress(self._process_spec, i + 1, len(self.input_images)),
+                        f"{self._photometry_mode}-{i}/{len(self.input_images)}",
+                    )
+        finally:
+            pool.shutdown(cancel_futures=True)
+
 
 class PhotometrySingle:
     """
@@ -377,6 +418,7 @@ class PhotometrySingle:
         reset_count=False,
         current_process: Optional[ProcessSpec] = None,
         parent_path=None,
+        frame_lock: Optional[threading.Lock] = None,
     ) -> None:
         """Initialize PhotometrySingle instance."""
 
@@ -430,6 +472,19 @@ class PhotometrySingle:
         self._sciproc_rejection_process_name = current_process.name
         self._single_frame = self._sciproc_rejection_process_name == SINGLE_PHOTOMETRY_SPEC.name
         self._reject_reason = None
+        self._frame_lock = frame_lock
+
+    @contextmanager
+    def _frame_lock_released(self):
+        """Frame lock released around external work."""
+        if self._frame_lock is None:
+            yield
+            return
+        self._frame_lock.release()
+        try:
+            yield
+        finally:
+            self._frame_lock.acquire()
 
     def _setup_logger(self, config: Any) -> Any:
         """Initialize logger instance."""
@@ -907,17 +962,18 @@ class PhotometrySingle:
                 and not external.sextractor_output_reusable(self.path.photometry.main_catalog, overwrite=overwrite)
             )
             if detect_trails or bad_pixels is not None:
-                ntrailpx, weight_options = stack.enter_context(
-                    phot_utils.sextractor_zero_weight(
-                        self.input_image,
-                        satellite_options if detect_trails else None,
-                        bad_pixels=bad_pixels,
-                        skysig=self.phot_header.background.BACKSIG or self.phot_header.basic_sextractor.SKYSIG,
-                        psf_fwhm=self.phot_header.basic_sextractor.PEEING,
-                        weight_image=sex_options.get("-WEIGHT_IMAGE"),
-                        logger=self.logger,
+                with self._frame_lock_released():
+                    ntrailpx, weight_options = stack.enter_context(
+                        phot_utils.sextractor_zero_weight(
+                            self.input_image,
+                            satellite_options if detect_trails else None,
+                            bad_pixels=bad_pixels,
+                            skysig=self.phot_header.background.BACKSIG or self.phot_header.basic_sextractor.SKYSIG,
+                            psf_fwhm=self.phot_header.basic_sextractor.PEEING,
+                            weight_image=sex_options.get("-WEIGHT_IMAGE"),
+                            logger=self.logger,
+                        )
                     )
-                )
                 if detect_trails:
                     self.phot_header.NTRAILPX = ntrailpx
                 sex_options.update(weight_options)
@@ -1199,17 +1255,18 @@ class PhotometrySingle:
         self.logger.debug(f"PhotometrySingle _run_sextractor sex_options: {sex_options}")
         self.logger.debug(f"PhotometrySingle _run_sextractor **kwargs: {kwargs}")
 
-        _, outcome = external.sextractor(
-            self.input_image,
-            outcat=output,
-            sex_preset=sex_preset,
-            logger=self.logger,
-            sex_options=sex_options,
-            return_sex_output=True,
-            fits_ldac=fits_ldac,
-            overwrite=overwrite,
-            **kwargs,
-        )
+        with self._frame_lock_released():
+            _, outcome = external.sextractor(
+                self.input_image,
+                outcat=output,
+                sex_preset=sex_preset,
+                logger=self.logger,
+                sex_options=sex_options,
+                return_sex_output=True,
+                fits_ldac=fits_ldac,
+                overwrite=overwrite,
+                **kwargs,
+            )
 
         # self.logger.debug(f"sextractor outcome: {outcome}")  # too long
 

@@ -149,6 +149,9 @@ def _parse_gpu_devices(value):
 GPU_DEVICES = _parse_gpu_devices(os.environ.get("GPU_DEVICES"))
 # coadds with >= this many inputs take the per-filesystem combine slot and may stage to local scratch
 COMBINE_LOCK_THRESHOLD = int(os.environ.get("COMBINE_LOCK_THRESHOLD") or 37)
+# astrometry and single photometry with more than this many frames run their SExtractor work on FRAME_THREADS threads
+FRAME_THREAD_THRESHOLD = int(os.environ.get("FRAME_THREAD_THRESHOLD") or 12)
+FRAME_THREADS = int(os.environ.get("FRAME_THREADS") or 4)
 IS_PIPELINE_LOCK = _get_bool_env("IS_PIPELINE", False)
 # a pipeline run raises instead of going on without the database (production .env)
 ENSURE_DB = _get_bool_env("ENSURE_DB", False)

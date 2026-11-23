@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import ExitStack
 
 from .. import external
-from ..const.environ import REF_DIR, ASTREF_TMPFS_DIR
+from ..const.environ import REF_DIR, ASTREF_TMPFS_DIR, FRAME_THREAD_THRESHOLD, FRAME_THREADS
 from ..const.observation import PIXSCALE, DEFAULT_EXPTIME, HEADER_KEY_MAP
 from ..const.sciproc import ASTROMETRY_SPEC, REJECTION_PROCESS_HEADER_KEY, SCIPROCESS_REGISTRY
 from ..errors import AstrometryError, ScampError, SolveFieldError
@@ -850,6 +850,32 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         input_images = input_images or [ii.soft_link_to_input_image for ii in self.images_info if ii.sane]
         output_catalogs = output_catalogs or [ii.prep_cat for ii in self.images_info if ii.sane]
 
+        def _extract(i, solved_image, prep_cat):
+            """Trail search and SExtractor of one frame; no DB, config or progress writes."""
+            with ExitStack() as stack:
+                options = dict(sex_options or {})
+                # a reused catalog takes no weight map: no trail search, NTRAILPX stays absent (not evaluated)
+                if satellite_options["enabled"] and not external.sextractor_output_reusable(
+                    prep_cat, overwrite=overwrite
+                ):
+                    ntrailpx, weight_options = stack.enter_context(
+                        sextractor_zero_weight(solved_image, satellite_options, logger=self.logger)
+                    )
+                    options.update(weight_options)
+                    if images_info is not None:
+                        images_info[i].ntrailpx = ntrailpx
+                _, sexout = external.sextractor(
+                    solved_image,
+                    outcat=prep_cat,
+                    sex_preset=sex_preset,
+                    logger=self.logger,
+                    sex_options=options,
+                    fits_ldac=True,
+                    overwrite=overwrite,
+                    return_sex_output=True,
+                )
+            return sexout
+
         # if self.queue:
         #     self._submit_task(
         #         external.sextractor,
@@ -863,40 +889,26 @@ class Astrometry(BaseSetup, DatabaseHandler, Checker, RuntimeVersionMixin):
         #     )
         # else:
         # Run sextractor sequentially
-        for i, (solved_image, prep_cat) in enumerate(zip(input_images, output_catalogs)):
-            try:
-                with ExitStack() as stack:
-                    options = dict(sex_options or {})
-                    # a reused catalog takes no weight map: no trail search, NTRAILPX stays absent (not evaluated)
-                    if satellite_options["enabled"] and not external.sextractor_output_reusable(
-                        prep_cat, overwrite=overwrite
-                    ):
-                        ntrailpx, weight_options = stack.enter_context(
-                            sextractor_zero_weight(solved_image, satellite_options, logger=self.logger)
-                        )
-                        options.update(weight_options)
-                        if images_info is not None:
-                            images_info[i].ntrailpx = ntrailpx
-                    _, sexout = external.sextractor(
-                        solved_image,
-                        outcat=prep_cat,
-                        sex_preset=sex_preset,
-                        logger=self.logger,
-                        sex_options=options,
-                        fits_ldac=True,
-                        overwrite=overwrite,
-                        return_sex_output=True,
-                    )
-                background = parse_sex_background(sexout)
-                if background is None:
-                    self.logger.warning(f"SExtractor emitted no Background/RMS summary for {solved_image}")
-                elif images_info is not None:
-                    images_info[i].skyval, images_info[i].skysig = background
-                images_info[i].logger.info("Completed sextractor (prep)")
-                self.logger.debug(f"{solved_image}")
-            except Exception as e:
-                self.logger.error(f"Sextractor failed for {solved_image}: {e}", AstrometryError.SextractorError)
-                raise AstrometryError.SextractorError(f"Sextractor failed for {solved_image}: {e}") from e
+        jobs = list(zip(input_images, output_catalogs))
+        pool = ThreadPoolExecutor(max_workers=FRAME_THREADS) if len(jobs) > FRAME_THREAD_THRESHOLD else None
+        futures = [pool.submit(_extract, i, *job) for i, job in enumerate(jobs)] if pool else None
+        try:
+            for i, (solved_image, prep_cat) in enumerate(jobs):
+                try:
+                    sexout = futures[i].result() if pool else _extract(i, solved_image, prep_cat)
+                    background = parse_sex_background(sexout)
+                    if background is None:
+                        self.logger.warning(f"SExtractor emitted no Background/RMS summary for {solved_image}")
+                    elif images_info is not None:
+                        images_info[i].skyval, images_info[i].skysig = background
+                    images_info[i].logger.info("Completed sextractor (prep)")
+                    self.logger.debug(f"{solved_image}")
+                except Exception as e:
+                    self.logger.error(f"Sextractor failed for {solved_image}: {e}", AstrometryError.SextractorError)
+                    raise AstrometryError.SextractorError(f"Sextractor failed for {solved_image}: {e}") from e
+        finally:
+            if pool:
+                pool.shutdown(cancel_futures=True)
 
         self.logger.debug(MemoryMonitor.log_memory_usage)
 
