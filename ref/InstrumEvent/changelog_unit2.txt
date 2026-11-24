@@ -6,7 +6,7 @@
 # nightdate and date should indicate the START of the affected date range!
 #
 date	nightdate	parts	wall	comment
-231016		cam	bias,dark,flat	30002
+231016		cam	bias,dark,flat	31091
 231016		fw	flat	99999999
 231025		cam	flat	PA
 231208		mirror	flat	collimation
@@ -16,8 +16,9 @@ date	nightdate	parts	wall	comment
 250310		mirror	flat	cleaning
 250506		fw		rubber_change
 250525		mount		fans_replace
-250914		mirror	flat	optical_alignment
-250914		cam	bias,dark,flat	31166
+250608	2025-06-08	cam	bias,dark,flat	0
+250914	2025-09-13	cam	bias,dark,flat	31166
+250914	2025-09-13	mirror	flat	optical_alignment
 260104		fw	flat	new_filters
 260104		mirror	flat	optical_alignment
 260513	2026-05-13	cam	flat	PA

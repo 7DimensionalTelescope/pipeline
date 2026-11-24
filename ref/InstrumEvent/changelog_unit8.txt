@@ -14,7 +14,7 @@ date	nightdate	parts	wall	comment
 241207		cam	flat	PA
 241207		mount		modeling
 250311		mirror	flat	cleaning
-250914		cam	bias,dark,flat	0
+250914	2025-09-11	cam	bias,dark,flat	0
 251109		cam	bias,dark,flat	31232
 260104		fw	flat	new_filters
 260104		mirror	flat	optical_alignment

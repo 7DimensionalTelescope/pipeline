@@ -6,7 +6,7 @@
 # nightdate and date should indicate the START of the affected date range!
 #
 date	nightdate	parts	wall	comment
-231009		cam	bias,dark,flat	31093
+231009	2023-10-08	cam	bias,dark,flat	31093
 231010		fw	flat	22345626
 231014		cam	flat	PA
 231014		mount		modeling

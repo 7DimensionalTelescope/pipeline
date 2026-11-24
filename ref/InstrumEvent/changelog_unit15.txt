@@ -12,8 +12,9 @@ date	nightdate 	parts	wall	comment
 241119		mount		modeling
 241206		cam	flat	PA
 241219		mirror	flat	collimation
-250313		cam	bias,dark,flat	31090
-250313		fw	flat	22243956
+250313	2025-03-12	cam	bias,dark,flat	31090
+250313	2025-03-12	fw	flat	22243956
+251110	2025-11-10	cam	bias,dark,flat	0
 260104		fw	flat	new_filters
 260104		mirror	flat	optical_alignment
 260128		cam	bias,dark,flat	31116

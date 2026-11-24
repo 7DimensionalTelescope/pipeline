@@ -16,6 +16,7 @@ date	nightdate	parts	wall	comment
 250213		cam		badcolumn_start
 250304		cam		badcolumn_end
 250311		mirror	flat	cleaning
+251109	2025-11-09	cam	bias,dark,flat	0
 260104		fw	flat	new_filters
 260104		mirror	flat	optical_alignment
 260128		cam	bias,dark,flat	31164

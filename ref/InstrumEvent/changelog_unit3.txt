@@ -12,8 +12,8 @@ date	nightdate	parts	wall	comment
 231208		mirror	flat	collimation
 240618		cam	flat	PA
 250310		mirror	flat	cleaning
-250313		cam	bias,dark,flat	0
-250313		fw	flat	0
+250313	2025-03-12	cam	bias,dark,flat	0
+250313	2025-03-12	fw	flat	0
 250608		cam	bias,dark,flat	31091
 250608		fw	flat	22243957
 250608		mirror	flat	collimation

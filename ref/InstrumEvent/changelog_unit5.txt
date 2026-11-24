@@ -18,9 +18,10 @@ date	nightdate	parts	wall	comment
 240815		focuser	flat	adjustment
 250117		mount		modeling
 250310		mirror	flat	cleaning
-250430		cam	bias,dark,flat	30193
+250430	2025-04-29	cam	bias,dark,flat	31093
 250607		focuser	flat	repair
 250607		focuser	flat	010
+250608	2025-06-08	cam	bias,dark,flat	0
 250911		cam	bias,dark,flat	31165
 250911		fw	flat	22344943
 250914		mirror	flat	optical_alignment
