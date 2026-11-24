@@ -238,7 +238,7 @@ def resolve_coadd_plan(node, errors=builtins) -> CoaddPlan:
     background_min_usable = float(background["min_usable"])
     background_max_dropped_boxes = float(background["max_dropped_boxes"])
     background_estimator = str(background["estimator"]).strip().lower()
-    crowded_sources = background["crowded_sources"]
+    crowded_backfrac = background["crowded_backfrac"]
     dequantize_background_below = float(background["dequantize_background_below"])  # SKYVAL gate shared with Photometry's measure_sky  # fmt: skip
     if background_box_size < 8:
         raise errors.ValueError("imcoadd.background.box_size must be at least 8 pixels")
@@ -254,9 +254,9 @@ def resolve_coadd_plan(node, errors=builtins) -> CoaddPlan:
         raise errors.ValueError(
             f"Invalid imcoadd.background.estimator: {background_estimator!r} (expected 'mean' or 'mmm')"
         )
-    if not (crowded_sources is None or (type(crowded_sources) is int and crowded_sources > 0)):
+    if not (crowded_backfrac is None or (type(crowded_backfrac) in (int, float) and 0 < crowded_backfrac <= 1)):
         raise errors.ValueError(
-            f"Invalid imcoadd.background.crowded_sources: {crowded_sources!r} (expected empty or a positive integer)"
+            f"Invalid imcoadd.background.crowded_backfrac: {crowded_backfrac!r} (expected empty or a number in (0, 1])"
         )
 
     intermediate_policy = str(node.intermediate_policy).strip().lower()

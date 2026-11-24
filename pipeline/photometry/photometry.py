@@ -1022,11 +1022,11 @@ class PhotometrySingle:
         estimator = str(mesh["estimator"]).strip().lower()
         if estimator not in ("mean", "mmm"):
             raise ValueError(f"Invalid imcoadd.background.estimator: {estimator!r} (expected 'mean' or 'mmm')")
-        n_sources, crowded = len(ellipses), mesh["crowded_sources"]
+        backfrac, crowded = float((~excluded & ~no_data).mean()), mesh["crowded_backfrac"]
         if is_coadd and header.get("BACKEST") in ("MEAN", "MMM"):
             estimator = header["BACKEST"].lower()
-        elif not is_coadd and estimator == "mean" and crowded is not None and n_sources > crowded:
-            self.logger.info(f"Crowded field: {n_sources} sources > crowded_sources {crowded}; 'mmm' mesh")
+        elif not is_coadd and estimator == "mean" and crowded is not None and backfrac < crowded:
+            self.logger.info(f"Crowded field: BACKFRAC {backfrac:.4f} < crowded_backfrac {crowded}; 'mmm' mesh")
             estimator = "mmm"
         dequantized = (
             estimator == "mmm"
@@ -1056,7 +1056,7 @@ class PhotometrySingle:
         background.BACKVAL = float(fitted.background_median)
         background.BACKEST = header.get("BACKEST") if is_coadd else estimator.upper()
         background.DEQUANT, background.BACKKSQ = dequantized, round(ksq, 5)
-        background.BACKFRAC = round(float((~excluded & ~no_data).mean()), 4)
+        background.BACKFRAC = round(backfrac, 4)
         background.SRCFRAC = round(float(sources.mean()), 4)
         background.BACKPEAK, background.BACKPKSN = (round(v, 4) if np.isfinite(v) else None for v in mesh_peak(fitted))
         coverage = ~no_data
