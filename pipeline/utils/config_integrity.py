@@ -34,6 +34,7 @@ configs_to_check = [
     "sciproc_override_ToO.yml",
     "sciproc_override_multiEpoch.yml",
     "filters.yml",
+    "detector.yml",
 ]
 
 configs_to_check = [Path(REF_DIR, f) for f in configs_to_check]

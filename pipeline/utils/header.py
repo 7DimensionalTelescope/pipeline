@@ -271,11 +271,12 @@ def update_padded_header_cards(header: fits.Header, header_new) -> None:
             # )
         else:
             owed = len(str(fits.Card(key, value, comment))) // fits.Card.length - 1
+            at = header.index("BACKVAL") + 1 if key == "BACKEST" and "BACKVAL" in header else insert_pos
             if insert_pos <= len(header) - 1:
                 del header[insert_pos]
-                header.insert(insert_pos, (key, value, comment), after=False)
+                header.insert(at, (key, value, comment), after=False)
             else:
-                header.append((key, value, comment), end=True)
+                header.insert(at, (key, value, comment), after=False)
                 owed = 0  # no padding left to charge; the header has already grown
             insert_pos += 1  # shift insertion point forward
         # a CONTINUE card occupies several 80-byte card images and must pay for each out of the padding

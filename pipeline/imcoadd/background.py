@@ -113,6 +113,8 @@ class BackgroundMixin:
         # The header snapshot aggregates a mixed group to BACKTYPE=MIXED.
         for hdr, btype in zip(self.input_headers, types):
             hdr["BACKTYPE"] = (btype.upper(), "Background subtraction type")
+            if btype != "none":
+                hdr["BACKEST"] = (self._frame_estimator(hdr).upper(), "Sky mesh box estimator")
 
         any_mesh = any(map(self._uses_mesh, types))
         source_mask_images = (
@@ -180,6 +182,7 @@ class BackgroundMixin:
                 fov_valid = self._fov_valid(data, get_basename(inim))
             exclude = None
             qa_mask = None
+            scalar = False
             if src_mask is not None and not before:  # the detector-grid step painted the mask and measured the residual
                 sources, valid, usable = self._source_mask(
                     inim, header, fov_valid, src_mask, skysig=skysigma,
@@ -188,6 +191,7 @@ class BackgroundMixin:
                 if sources is None:
                     if not before:
                         btype = self._fall_back_to_constant(i, inim, btype, skyvalue, "no source mask")
+                        scalar = btype == "constant"
                 else:
                     exclude = sources
                     qa_mask = sources
@@ -214,7 +218,7 @@ class BackgroundMixin:
                 header["BACKFRAC"], self.input_headers[i]["BACKFRAC"] = frac_card, frac_card
             elif self.input_headers[i].get("BACKFRAC") is not None:  # the detector-grid fit's card
                 header["BACKFRAC"] = (self.input_headers[i]["BACKFRAC"], "Fraction of pixels used for the sky estimate")
-            routine = self._no_bkgsub if before else methods[btype]
+            routine = self._no_bkgsub if before else self._const_bkgsub if scalar else methods[btype]
             is_steppy = routine(
                 inim,
                 outim,
@@ -324,7 +328,11 @@ class BackgroundMixin:
         """Mesh routines: dynamic and the polynomial surfaces."""
         return btype == "dynamic" or btype in BACKGROUND_POLYNOMIAL_DEGREES
 
-    def _sky_model(self, mesh, btype: str, shape) -> tuple[np.ndarray, str]:
+    def _frame_estimator(self, header) -> str:
+        """The frame's mesh estimator: its BACKEST, else the plan's."""
+        return {"MEAN": "mean", "MMM": "mmm"}.get(header.get("BACKEST"), self.plan.background_estimator)
+
+    def _sky_model(self, mesh, btype: str, shape) -> tuple[np.ndarray | float, str]:
         """Frame-sized sky model of a mesh routine, and its plot note."""
         degree = BACKGROUND_POLYNOMIAL_DEGREES.get(btype)
         if degree is None:
@@ -413,6 +421,8 @@ class BackgroundMixin:
         """Constant sky when the mesh would be mostly interpolated: too little frame left, or too many boxes dropped."""
         from .utils import boxes_dropped
 
+        if btype == "constant":
+            return btype
         plan = self.plan
         usable = 100 * self._usable_fraction(exclude, fov_valid)
         excluded = exclude if fov_valid is None else (exclude | ~fov_valid)
@@ -601,13 +611,14 @@ class BackgroundMixin:
         return False  # is_steppy is False by definition for constant background subtraction
 
     def _dynamic_bkgsub(self, inim, outim, bkg, bkg_rms, skyval=None, data=None, header=None, ignore_steppy_flag=False, exclude=None, fov_valid=None, quality_mask=None, index=None, **kwargs):  # fmt: skip
-        from .utils import background_mesh, mesh_peak, mesh_peak_cards
+        from .utils import background_mesh, mesh_peak, mesh_peak_cards, rts_clip_floor
 
         # from .bkg_step import step_background_check
 
         plan = self.plan
         btype = kwargs.get("btype", "dynamic")
         _data, _hdr = self._read_frame(inim, data, header)
+        frame_header = _hdr if index is None else self.input_headers[index]
         try:
             mesh = background_mesh(
                 _data,
@@ -616,6 +627,8 @@ class BackgroundMixin:
                 box_size=plan.background_box_size,
                 filter_size=plan.background_filter_size,
                 exclude_percentile=plan.background_exclude_percentile,
+                estimator=self._frame_estimator(frame_header),
+                clip_floor=rts_clip_floor(frame_header, self.logger),
                 logger=self.logger,
             )
             bkg_data, note = self._sky_model(mesh, btype, _data.shape)
@@ -629,6 +642,10 @@ class BackgroundMixin:
             if index is not None:
                 self.input_headers[index]["BACKTYPE"] = ("CONSTANT", "Background subtraction type")
             return self._const_bkgsub(inim, outim, skyval=skyval, data=_data, header=_hdr,
+                                      fov_valid=fov_valid, quality_mask=quality_mask, qa_mask=kwargs.get("qa_mask"),
+                                      qa_coverage=kwargs.get("qa_coverage", fov_valid))  # fmt: skip
+        if np.ndim(bkg_data) == 0:  # degree 0: a scalar sky, subtracted as the constant routine does
+            return self._const_bkgsub(inim, outim, skyval=bkg_data, data=_data, header=_hdr,
                                       fov_valid=fov_valid, quality_mask=quality_mask, qa_mask=kwargs.get("qa_mask"),
                                       qa_coverage=kwargs.get("qa_coverage", fov_valid))  # fmt: skip
         if fov_valid is not None:
@@ -698,14 +715,15 @@ class BackgroundMixin:
         return (
             f"{routine}/{plan.background_box_size}/{plan.background_filter_size}/{plan.background_exclude_percentile:g}/"
             f"{plan.background_min_usable:g}/{plan.background_max_dropped_boxes:g}/{plan.dequantize_background_below:g}"
+            f"/{self._frame_estimator(self.input_headers[get_basename(single)])}"
         )
 
     def fit_background_before_reprojection(self, single, header, data, hole=None, sources=None, catalog=None):
-        """The frame's detector-grid sky model, fitted with the bad pixels held at the sky level — on a dequantized copy below
+        """The frame's detector-grid sky model, fitted with the bad pixels held at the sky level — 'mmm' on a dequantized copy below
         imcoadd.background.dequantize_background_below ADU of SKYVAL, the gate Photometry's measure_sky shares — and its
         cards on the header; returns (model, mask): an array, a constant, or None for no subtraction, and the exclusion the
         residual cards are measured through (None without a source mask)."""
-        from .utils import background_mesh, mesh_peak, mesh_peak_cards, dequantize
+        from .utils import background_mesh, mesh_peak, mesh_peak_cards, dequantize, rts_clip_floor
         from .weight import source_mask_on_frame
 
         plan = self.plan
@@ -715,22 +733,24 @@ class BackgroundMixin:
         skyval = header.get("BACKVAL")
         if skyval is None:
             skyval = header.get("SKYVAL")
-        exclude = hole
+        exclude, scalar = hole, False
         if self._uses_mesh(btype) and plan.source_mask:
             if sources is None and catalog:
                 sources = source_mask_on_frame(catalog, header, self.logger)
             if sources is None:
                 btype = self._fall_back_to_constant(name, single, btype, skyval, "no source mask")
+                scalar = btype == "constant"
             else:
                 exclude = sources if hole is None else (sources | hole)
                 btype = self._crowding_fallback(name, single, exclude, None, btype, skyval)
-        model, note = None, ""
-        if self._uses_mesh(btype):
+        model, note, peak = None, "", None
+        estimator = self._frame_estimator(header)
+        if self._uses_mesh(btype) and not scalar:
             try:
                 # the frame as measured: a bad pixel would leak into its neighbours through the dequantizing kernel
                 source = data if hole is None or skyval is None else np.where(hole, np.float32(skyval), data)
                 gate = header.get("SKYVAL", skyval)  # the same SKYVAL gate as Photometry's measure_sky
-                dequantized = gate is not None and gate < plan.dequantize_background_below
+                dequantized = estimator == "mmm" and gate is not None and gate < plan.dequantize_background_below
                 bkg = background_mesh(
                     dequantize(source) if dequantized else source,
                     mask=exclude,
@@ -738,6 +758,8 @@ class BackgroundMixin:
                     box_size=plan.background_box_size,
                     filter_size=plan.background_filter_size,
                     exclude_percentile=plan.background_exclude_percentile,
+                    estimator=estimator,
+                    clip_floor=rts_clip_floor(header, self.logger),
                     logger=self.logger,
                 )
                 model, note = self._sky_model(bkg, btype, data.shape)
@@ -747,7 +769,7 @@ class BackgroundMixin:
                     raise
                 self.logger.warning(f"{name}: no mesh model ({e}); constant background instead")
                 btype = "constant"
-        if btype == "constant":
+        if btype == "constant" and peak is None:
             model = skyval
         self._prereprojection_done[name] = btype  # bkgsub routes and stamps from what this frame actually got
         cards = {
@@ -756,7 +778,7 @@ class BackgroundMixin:
             "BKGMESH": (self._prereprojection_fingerprint(single), "Detector-grid sky fit: routine and mesh keys"),
             "BACKFRAC": (self._usable_fraction(exclude, None), "Fraction of pixels used for the sky estimate"),
         }
-        if self._uses_mesh(btype):
+        if peak is not None:
             cards.update(mesh_peak_cards(peak))
         header.update(cards)
         self.input_headers[name].update(cards)

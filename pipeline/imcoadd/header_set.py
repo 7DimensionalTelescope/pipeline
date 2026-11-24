@@ -358,6 +358,7 @@ class InputHeaderSet:
             "EGAIN":    (self.coadd_egain, "Effective EGAIN for coadded image (e-/ADU)"),  # swarp calculates it as GAIN, but irreproducible.
             "SATURATE": (self.coadd_satur_level, "Conservative saturation level for coadded image"),  # let swarp handle this
             "BACKTYPE": (self.coadd_backtype, "Background subtraction type for coadded image"),
+            "BACKEST":  (self.aggregate("BACKEST"), "Sky mesh box estimator for coadded image"),
             "PPFLAG":   (self.coadd_ppflag, "Preprocessing quality flag (OR of coadded inputs)"),
             "M_EPOCH":  (self.multi_epoch, "Multi-epoch (deep) coadd"),
             "INEGAIN":  (self.aggregate("EGAIN"), "[e-/ADU] EGAIN of the inputs (mean)"),  # the BACKOFF noise reference of the coadd

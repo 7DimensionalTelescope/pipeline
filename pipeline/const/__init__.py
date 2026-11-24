@@ -22,6 +22,6 @@ from . import observation as _observation
 
 
 def __getattr__(name: str):
-    if name in _observation._FILTER_CONSTANTS:
+    if name in _observation._FILTER_CONSTANTS or name == "RTS_TAIL":
         return getattr(_observation, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -79,6 +79,7 @@ class CoaddPlan:
     background_exclude_percentile: float
     background_min_usable: float
     background_max_dropped_boxes: float
+    background_estimator: str
     dequantize_background_below: float
 
     # ---------------------------------------------------------------- routine
@@ -236,6 +237,8 @@ def resolve_coadd_plan(node, errors=builtins) -> CoaddPlan:
     background_exclude_percentile = float(background["exclude_percentile"])
     background_min_usable = float(background["min_usable"])
     background_max_dropped_boxes = float(background["max_dropped_boxes"])
+    background_estimator = str(background["estimator"]).strip().lower()
+    crowded_sources = background["crowded_sources"]
     dequantize_background_below = float(background["dequantize_background_below"])  # SKYVAL gate shared with Photometry's measure_sky  # fmt: skip
     if background_box_size < 8:
         raise errors.ValueError("imcoadd.background.box_size must be at least 8 pixels")
@@ -247,6 +250,14 @@ def resolve_coadd_plan(node, errors=builtins) -> CoaddPlan:
         raise errors.ValueError("imcoadd.background.min_usable must be between 0 and 100")
     if not 0 <= background_max_dropped_boxes <= 100:
         raise errors.ValueError("imcoadd.background.max_dropped_boxes must be between 0 and 100")
+    if background_estimator not in ("mean", "mmm"):
+        raise errors.ValueError(
+            f"Invalid imcoadd.background.estimator: {background_estimator!r} (expected 'mean' or 'mmm')"
+        )
+    if not (crowded_sources is None or (type(crowded_sources) is int and crowded_sources > 0)):
+        raise errors.ValueError(
+            f"Invalid imcoadd.background.crowded_sources: {crowded_sources!r} (expected empty or a positive integer)"
+        )
 
     intermediate_policy = str(node.intermediate_policy).strip().lower()
     if intermediate_policy not in ("auto", "memory", "disk"):
@@ -340,6 +351,7 @@ def resolve_coadd_plan(node, errors=builtins) -> CoaddPlan:
         background_exclude_percentile=background_exclude_percentile,
         background_min_usable=background_min_usable,
         background_max_dropped_boxes=background_max_dropped_boxes,
+        background_estimator=background_estimator,
         dequantize_background_below=dequantize_background_below,
     )
     if plan.zero_saturated_in_weight_before_reprojection and not plan.resample_weight_in_sci_pass:

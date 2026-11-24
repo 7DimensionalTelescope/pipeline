@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
-from photutils.background import Background2D, MMMBackground, StdBackgroundRMS
+from astropy.stats import SigmaClip
+from photutils.background import Background2D, MeanBackground, MMMBackground, StdBackgroundRMS
 from photutils.background.interpolators import BkgZoomInterpolator
 
 MESH_BYTES = 4 << 30  # peak cupy pool use of the box statistics on one frame
@@ -45,14 +48,16 @@ __global__ void rowsum(const float* a, long nb, long n, float* out) {
 
 def _rowsum_f32(cp, z):
     z = cp.ascontiguousarray(z, dtype=cp.float32)
+    if cp is np:
+        return z.sum(axis=-1)
     rows, n = z.shape
     out = cp.empty(rows, dtype=cp.float32)
     _pairwise_rowsum(cp)(((rows + 127) // 128,), (128,), (z, np.int64(rows), np.int64(n), out))
     return out
 
 
-def _group_statistics(cp, block, sigma, maxiters, npix_threshold):
-    """astropy's compiled sigma clip (float64 bounds), then numpy's float32 MMM and std per NaN-masked row."""
+def _group_statistics(cp, block, sigma, maxiters, npix_threshold, stdfunc, box_mean, floor):
+    """astropy's compiled sigma clip (float64 bounds, half-width >= floor), then numpy's float32 MMM or mean and std per NaN-masked row."""
     rows, n = block.shape
     xs = cp.sort(block, axis=-1)
     xs64 = xs.astype(cp.float64)
@@ -68,9 +73,14 @@ def _group_statistics(cp, block, sigma, maxiters, npix_threshold):
         b = cp.take_along_axis(xs64, cp.minimum(k, n - 1)[:, None], axis=-1)[:, 0]
         median = cp.where(count % 2 == 1, b, 0.5 * (a + b))
         kept = (idx >= lo_i[:, None]) & (idx < hi_i[:, None])
-        mean = cp.where(kept, xs64, 0.0).sum(axis=-1) / count
-        std = cp.sqrt(cp.where(kept, (xs64 - mean[:, None]) ** 2, 0.0).sum(axis=-1) / count)
-        lo, hi = median - sigma * std, median + sigma * std
+        if stdfunc == "mad_std":
+            spread = cp.sort(cp.where(kept, cp.abs(xs64 - median[:, None]), cp.nan), axis=-1)
+            std = _row_median(cp, spread, count) * 1.482602218505602
+        else:
+            mean = cp.where(kept, xs64, 0.0).sum(axis=-1) / count
+            std = cp.sqrt(cp.where(kept, (xs64 - mean[:, None]) ** 2, 0.0).sum(axis=-1) / count)
+        half = cp.maximum(sigma * std, floor)
+        lo, hi = median - half, median + half
         new_lo = cp.maximum(lo_i, (xs64 < lo[:, None]).sum(axis=-1))
         new_hi = cp.minimum(hi_i, (xs64 <= hi[:, None]).sum(axis=-1))
         changed = bool(((new_lo != lo_i) | (new_hi != hi_i)).any())
@@ -88,18 +98,33 @@ def _group_statistics(cp, block, sigma, maxiters, npix_threshold):
     mean32 = (_rowsum_f32(cp, zeroed).astype(cp.float64) / ngood).astype(cp.float32)
     deviation = cp.where(clipped, block - mean32[:, None], cp.float32(0))
     std32 = cp.sqrt((_rowsum_f32(cp, deviation * deviation).astype(cp.float64) / ngood).astype(cp.float32))
-    mmm = cp.float32(3.0) * median32 - cp.float32(2.0) * mean32
+    bkg = mean32 if box_mean else cp.float32(3.0) * median32 - cp.float32(2.0) * mean32
     drop = ngood <= npix_threshold
     nan = cp.float32(cp.nan)
-    return cp.where(drop, nan, mmm), cp.where(drop, nan, std32), ngood
+    return cp.where(drop, nan, bkg), cp.where(drop, nan, std32), ngood
 
 
-def _corner_statistics(corner, sigma, maxiters, npix_threshold):
+class FlooredSigmaClip(SigmaClip):
+    """SigmaClip with its half-width at least `floor`; axis=None path."""
+
+    def __init__(self, floor, **kwargs):
+        super().__init__(**kwargs)
+        self.floor = floor
+
+    def _compute_bounds(self, data, axis=None):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            cen = self._cenfunc_parsed(data, axis=axis)
+            half = np.maximum(self._stdfunc_parsed(data, axis=axis) * self.sigma, self.floor)
+        self._min_value, self._max_value = cen - half, cen + half
+
+
+def _corner_statistics(corner, sigma, maxiters, npix_threshold, stdfunc, box_mean, floor):
     """photutils' corner box: the axis=None clip compresses the survivors, so numpy sums them in that order."""
-    from astropy.stats import SigmaClip
-
-    clipped = SigmaClip(sigma=sigma, maxiters=maxiters)(corner, axis=None, masked=False, copy=True)
-    bkg = MMMBackground(sigma_clip=None)(clipped, axis=None)
+    options = dict(sigma=sigma, maxiters=maxiters, stdfunc=stdfunc)
+    clip = FlooredSigmaClip(floor, **options) if floor else SigmaClip(**options)
+    clipped = clip(corner, axis=None, masked=False, copy=True)
+    bkg = (MeanBackground if box_mean else MMMBackground)(sigma_clip=None)(clipped, axis=None)
     rms = StdBackgroundRMS(sigma_clip=None)(clipped, axis=None)
     ngood = int(np.count_nonzero(~np.isnan(clipped)))
     if ngood <= npix_threshold:
@@ -107,7 +132,7 @@ def _corner_statistics(corner, sigma, maxiters, npix_threshold):
     return np.float32(bkg), np.float32(rms), ngood
 
 
-def box_statistics(cp, data, mask, box_size, npix_threshold, sigma, maxiters):
+def box_statistics(cp, data, mask, box_size, npix_threshold, sigma, maxiters, stdfunc, box_mean, floor):
     """Background2D._calculate_stats with edge_method pad: core boxes, extra row, extra column, corner."""
     height, width = data.shape
     by, bx = int(box_size[0]), int(box_size[1])
@@ -115,24 +140,30 @@ def box_statistics(cp, data, mask, box_size, npix_threshold, sigma, maxiters):
     y1, x1 = ny * by, nx * bx
     d = cp.where(cp.asarray(mask), cp.float32(cp.nan), cp.asarray(data, dtype=cp.float32))
     core = d[:y1, :x1].reshape(ny, by, nx, bx).transpose(0, 2, 1, 3).reshape(ny * nx, by * bx)
-    bkg, rms, ngood = (v.reshape(ny, nx) for v in _group_statistics(cp, core, sigma, maxiters, npix_threshold))
+    step = 8 * nx if cp is np else len(core)  # numpy: eight box rows at a time bound the float64 copies
+    parts = [
+        _group_statistics(cp, core[i : i + step], sigma, maxiters, npix_threshold, stdfunc, box_mean, floor)
+        for i in range(0, len(core), step)
+    ]
+    bkg, rms, ngood = (cp.concatenate(v).reshape(ny, nx) for v in zip(*parts))
     if y1 < height:
         row = d[y1:, :x1].reshape(height - y1, 1, nx, bx).transpose(0, 2, 1, 3)
         row = cp.ascontiguousarray(cp.moveaxis(row, 0, -1).reshape(nx, -1))
-        rb, rr, rn = _group_statistics(cp, row, sigma, maxiters, npix_threshold)
+        rb, rr, rn = _group_statistics(cp, row, sigma, maxiters, npix_threshold, stdfunc, box_mean, floor)
         bkg, rms, ngood = cp.vstack([bkg, rb[None]]), cp.vstack([rms, rr[None]]), cp.vstack([ngood, rn[None]])
     if x1 < width:
         col = d[:y1, x1:].reshape(ny, by, width - x1, 1).transpose(0, 2, 1, 3).transpose(0, 3, 1, 2)
         col = cp.ascontiguousarray(col.reshape(ny, -1))
-        cb, cr, cn = _group_statistics(cp, col, sigma, maxiters, npix_threshold)
+        cb, cr, cn = _group_statistics(cp, col, sigma, maxiters, npix_threshold, stdfunc, box_mean, floor)
         if y1 < height:
             corner = np.where(
                 np.asarray(mask)[y1:, x1:], np.float32(np.nan), np.asarray(data, dtype=np.float32)[y1:, x1:]
             )
-            kb, kr, kn = (cp.asarray([v]) for v in _corner_statistics(corner, sigma, maxiters, npix_threshold))
+            stats = _corner_statistics(corner, sigma, maxiters, npix_threshold, stdfunc, box_mean, floor)
+            kb, kr, kn = (cp.asarray([v]) for v in stats)
             cb, cr, cn = cp.concatenate([cb, kb]), cp.concatenate([cr, kr]), cp.concatenate([cn, kn])
         bkg, rms, ngood = cp.hstack([bkg, cb[:, None]]), cp.hstack([rms, cr[:, None]]), cp.hstack([ngood, cn[:, None]])
-    return cp.asnumpy(bkg), cp.asnumpy(rms), cp.asnumpy(ngood)
+    return (bkg, rms, ngood) if cp is np else (cp.asnumpy(bkg), cp.asnumpy(rms), cp.asnumpy(ngood))
 
 
 def zoom_mesh(cp, mesh, box_size, shape, order, mode, cval):
@@ -177,7 +208,7 @@ def _row_median(xp, ordered, count):
     return xp.where(count % 2 == 1, upper, 0.5 * (lower + upper))
 
 
-def autocovariance(xp, residual, mask, box, maxlag, clip, exclude_percentile, stats):
+def autocovariance(xp, residual, mask, box, maxlag, clip, floor, exclude_percentile, stats):
     """imcoadd.utils.noise_autocovariance with xp = numpy or, on the device, cupy; False where it returns None."""
     from scipy.fft import next_fast_len
 
@@ -205,7 +236,7 @@ def autocovariance(xp, residual, mask, box, maxlag, clip, exclude_percentile, st
             deviation = xp.abs(flat - _row_median(xp, xp.sort(flat, axis=1), count)[:, None])
             scale = 1.482602218505602 * _row_median(xp, xp.sort(deviation, axis=1), count)
             with np.errstate(invalid="ignore"):
-                keep &= (deviation <= clip * scale[:, None]) & (scale > 0)[:, None]
+                keep &= (deviation <= xp.maximum(clip * scale, floor)[:, None]) & (scale > 0)[:, None]
         use = keep.sum(axis=1) > need
         if not bool(use.any()):
             continue
@@ -265,11 +296,12 @@ class GpuZoomInterpolator(BkgZoomInterpolator):
 
 
 class GpuBackground2D(Background2D):
-    """Background2D with the box statistics on the device through the injected on_gpu; mesh steps are the parent's."""
+    """Background2D with the box statistics through the injected on_gpu, or on numpy for a clip floor; mesh steps are the parent's."""
 
-    def __init__(self, data, box_size, *, on_gpu, logger=None, **kwargs):
+    def __init__(self, data, box_size, *, on_gpu, logger=None, clip_floor=0.0, **kwargs):
         self.on_gpu = on_gpu
         self.logger = logger
+        self.clip_floor = clip_floor
         super().__init__(data, box_size, **kwargs)
 
     def _calculate_stats(self):
@@ -277,13 +309,13 @@ class GpuBackground2D(Background2D):
         exact = (
             clip is not None
             and clip.cenfunc == "median"
-            and clip.stdfunc == "std"
+            and clip.stdfunc in ("std", "mad_std")
             and clip.sigma_lower == clip.sigma_upper == clip.sigma
             and np.isfinite(clip.maxiters)
             and not clip.grow
             and self.edge_method == "pad"
             and self._data.dtype == np.float32
-            and type(self.bkg_estimator) is MMMBackground
+            and type(self.bkg_estimator) in (MMMBackground, MeanBackground)
             and type(self.bkgrms_estimator) is StdBackgroundRMS
         )
         if not exact:
@@ -291,10 +323,16 @@ class GpuBackground2D(Background2D):
         input_mask = self._mask
         mask = self._combine_all_masks(~np.isfinite(self._data))
         self._box_npixels = np.prod(self.box_size)
-        stats = self.on_gpu(
-            box_statistics, self._data, mask, self.box_size, self._good_npixels_threshold, float(clip.sigma),
-            int(clip.maxiters), need_bytes=MESH_BYTES, budget_s=MESH_BUDGET_S, logger=self.logger, name="mesh",
+        args = (
+            self._data, mask, self.box_size, self._good_npixels_threshold, float(clip.sigma), int(clip.maxiters),
+            clip.stdfunc, type(self.bkg_estimator) is MeanBackground, self.clip_floor,
         )  # fmt: skip
+        stats = self.on_gpu(
+            box_statistics, *args, need_bytes=MESH_BYTES, budget_s=MESH_BUDGET_S, logger=self.logger, name="mesh"
+        )
+        if stats is None and self.clip_floor:  # astropy's clip takes no per-box floor: the same kernel on numpy
+            with np.errstate(divide="ignore", invalid="ignore"):
+                stats = box_statistics(np, *args)
         if stats is None:
             self._mask = input_mask
             return super()._calculate_stats()
