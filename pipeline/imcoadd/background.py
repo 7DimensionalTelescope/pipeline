@@ -861,8 +861,8 @@ class BackgroundMixin:
         from .background_qa import (
             SIGMA_QUANTILES,
             clear_residual_cards,
+            mean_offset,
             measure_background_residuals,
-            modal_offset,
             sigma_quantiles,
         )
 
@@ -884,7 +884,7 @@ class BackgroundMixin:
                 if np.ndim(model)
                 else [float(model)]
             )
-            backoff, kind = modal_offset(
+            backoff, kind = mean_offset(
                 data, valid, float(header["EGAIN"]), levels, sigmas=sigma_quantiles(header), logger=self.logger
             )
             result = replace(result, backoff=round(float(backoff), 4), backnref=kind)

@@ -458,19 +458,18 @@ def rts_clip_floor(header, logger=None) -> float:
     except (TypeError, ValueError):
         pass
     if logger is not None:
-        logger.warning(f"No positive EGAIN ({gain!r}): the sky clips stay at 10 MAD, with no RTS floor")
+        logger.warning(f"No positive EGAIN ({gain!r}): the sky clips stay at 10 NMAD, with no RTS floor")
     return 0.0
 
 
 def mesh_peak(bkg: Background2D, window: int | None = None) -> tuple[float, float]:
-    """(ADU, and the same over 1.4826 x MAD of all node excursions) largest excursion of a filtered mesh node from the median of its window x window neighbours.
+    """(ADU, and the same over 1.4826 x MAD of all node excursions) largest excursion of a filtered mesh node from the mean of its window x window neighbours.
 
     One node = one box (128 px at the base settings). The mesh's filter_size x filter_size median (3 x 3 = 384 px) has
-    already removed blobs of fewer than half its nodes (<= 4), so the window is filter_size + 2 (5 x 5 = 640 px): its
-    median stays on the sky for blobs of up to 12 nodes (3 x 4 boxes = 384 x 512 px); wider structure counts as sky.
-    Past the frame edge the mesh is extrapolated linearly (odd reflection), so a smooth vignetting fall-off reads ~0 at
-    the border nodes and only a genuine edge or corner deviation counts."""
-    from scipy.ndimage import median_filter
+    already removed blobs of fewer than half its nodes (<= 4); the window is filter_size + 2 (5 x 5 = 640 px), and a blob
+    of k nodes inside it reads (1 - k / window**2) of its height. Past the frame edge the mesh is extrapolated linearly
+    (odd reflection), so a smooth vignetting fall-off reads ~0 at the border nodes and a corner node reads exactly 0."""
+    from scipy.ndimage import uniform_filter
 
     if window is None:
         window = int(max(np.atleast_1d(bkg.filter_size))) + 2
@@ -480,7 +479,7 @@ def mesh_peak(bkg: Background2D, window: int | None = None) -> tuple[float, floa
         return float("nan"), float("nan")
     pad = window // 2
     filled = np.pad(np.where(finite, mesh, np.nanmedian(mesh)), pad, mode="reflect", reflect_type="odd")
-    excursion = (mesh - median_filter(filled, size=window)[pad:-pad, pad:-pad])[finite]
+    excursion = (mesh - uniform_filter(filled, size=window)[pad:-pad, pad:-pad])[finite]
     peak = float(np.max(np.abs(excursion)))
     scatter = 1.4826 * float(np.median(np.abs(excursion - np.median(excursion))))
     return peak, (peak / scatter if scatter > 0 else float("nan"))

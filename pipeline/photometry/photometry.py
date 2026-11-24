@@ -954,7 +954,7 @@ class PhotometrySingle:
         )
         from ..imcoadd.background_qa import (
             measure_background_residuals,
-            modal_offset,
+            mean_offset,
             sigma_quantiles,
             RESIDUAL_KEYS,
             RESIDUAL_BOX_SIZE,
@@ -1093,7 +1093,7 @@ class PhotometrySingle:
         if reference is None:
             self.logger.warning("No noise reference (EGAIN; INEGAIN and INSKY on a coadd): BACKOFF not measured")
         else:
-            backoff, kind = modal_offset(
+            backoff, kind = mean_offset(
                 residual, excluded | ~coverage, sigmas=sigma_quantiles(header), logger=self.logger, **reference
             )
             result = replace(result, backoff=round(float(backoff), 4), backnref=kind)
