@@ -26,6 +26,7 @@ from ..utils import (
     time_diff_in_seconds,
 )
 from .coadd_plan import CoaddPlan
+from .empirical_egain import EgainStash, plan_pairs
 from .header_set import InputHeaderSet
 from .storage import IntermediateStorage
 from .flat_weight import WEIGHT_MODEL, WEIGHT_MODEL_SKY, copy_weight_fit_header
@@ -508,6 +509,7 @@ class SwarpMixin:
 
         from collections import deque
         from concurrent.futures import ThreadPoolExecutor
+        from functools import partial
 
         n_tail = conservative_worker_count(len(input_images))
         self._manifest_load()  # before the tail threads: two first misses would both start from {}
@@ -559,6 +561,9 @@ class SwarpMixin:
             self.logger.info(
                 f"{len(input_images) - len(todo_in)} existing fused products skipped, {len(todo_in)} to compute"
             )
+        stash = None
+        if self._measure_empirical_egain and len(todo_in) == len(input_images):
+            stash = EgainStash(*plan_pairs(input_images, self.input_headers.headers))
         if todo_in:
             from .interpolate import weight_and_interpolate_cpu
             from .weight import _load_calibration_data
@@ -570,6 +575,12 @@ class SwarpMixin:
                 mask_file, badpix, bpmid = self._bpmask_info(group_in[0])
                 d_m_file, f_m_file, sig_z_file, sig_f_file = PathHandler.resolve_weight_map_input_abspath([z, d, f])
                 calib = _load_calibration_data(d_m_file, f_m_file, sig_z_file, sig_f_file)
+                if stash is not None:
+                    dark_sigma_file = PathHandler.master_sigma(d_m_file)
+                    if os.path.exists(dark_sigma_file):
+                        stash.add_masters(group_in, calib, dark_sigma_file)
+                    else:
+                        self.logger.warning(f"EGAINEMP is not measured without the dark sigma file {dark_sigma_file}")
 
                 def post_frame(sci_out, sci=None, header=None):
                     if sci is not None:
@@ -612,6 +623,7 @@ class SwarpMixin:
                     ivar_out=PathHandler.ivar_map(group_in) if self.plan.dump_unsmoothed_single_weight_map else None,
                     background_model=background_model,
                     background=background,
+                    stash_frame=None if stash is None else partial(stash.add_frame, group_in),
                 )
                 self.logger.info(
                     f"Weight+interp completed for group {group_id + 1}/{len(groups)} in "
@@ -622,6 +634,8 @@ class SwarpMixin:
             self.logger.info("All fused weight+interp products already exist. Skipping")
 
         try:
+            if stash is not None:
+                self._record_empirical_egain(stash.estimate(self.plan.empirical_egain_max_read_noise_fraction))
             _drain_tail()
         finally:
             tail_pool.shutdown()

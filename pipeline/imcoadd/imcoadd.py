@@ -22,6 +22,7 @@ from ..utils import (
     atleast_1d,
     swap_ext,
 )
+from ..utils.header import update_padded_header_smart
 from ..preprocess.utils import get_zdf_from_header_IMCMB
 from ..preprocess.plotting import save_fits_as_figures
 from .plotting import display_flips, orient_for_raster
@@ -166,6 +167,31 @@ class ImCoadd(
         """Only a daily pipeline run writes the persistent weight beside its singles."""
         settings = self.config_node.settings
         return self.plan.output_single_weight_maps and bool(settings.is_pipeline) and not settings.is_multi_epoch
+
+    @property
+    def _measure_empirical_egain(self) -> bool:
+        """A daily config measures EGAINEMP; a multi-epoch one reads its singles' cards."""
+        return self.plan.empirical_egain_enabled and not self.config_node.settings.is_multi_epoch
+
+    def _record_empirical_egain(self, result: dict) -> None:
+        """EGAINEMP and EGAINSD on the snapshot, on the singles of a pipeline run, and one log line."""
+        gain, sd = (
+            float(f"{v:.6g}") if v is not None and np.isfinite(v) else None for v in (result["gain"], result["sd"])
+        )
+        cards = {
+            "EGAINEMP": (gain, "[e-/ADU] EGAIN from consecutive frame pairs"),
+            "EGAINSD": (sd, "[e-/ADU] Std of the pair gains of EGAINEMP"),
+        }
+        for header in self.input_headers:
+            header.update(cards)
+        if self.config_node.settings.is_pipeline:
+            for single in self.input_images:
+                update_padded_header_smart(single, cards)
+        self.logger.info(
+            f"EGAINEMP {gain} +- {sd} e-/ADU from {result['pairs']} pairs x {result['boxes']} boxes, "
+            f"{result['frames']} frames stashed (read-noise fraction {result['read_noise']:.3f}, "
+            f"mean raw level {result['level']:.1f} ADU)"
+        )
 
     def run(self, overwrite=False):
         try:
@@ -1099,6 +1125,21 @@ class ImCoadd(
                 process_status_id=self.process_status_id,
             )
             self.image_qa.update_data(self.qa_id, **qa_data.to_dict())
+
+        if self._measure_empirical_egain and self.image_qa is not None:
+            for single, header in zip(self.input_images, self.input_headers.headers):
+                name = os.path.basename(single).replace(".fits", "")
+                try:
+                    single_qa_id = self.image_qa.read_data_by_params(image_name=name)
+                    if single_qa_id is not None:
+                        gain, sd = header.get("EGAINEMP"), header.get("EGAINSD")
+                        self.image_qa.update_data(
+                            single_qa_id,
+                            egainemp="None" if gain is None else gain,
+                            egainsd="None" if sd is None else sd,
+                        )
+                except Exception as e:
+                    database_failure(self.logger, f"Failed to mirror EGAINEMP of {name} into image_qa: {e}", e)
 
         self.sync_config_dependencies()
 

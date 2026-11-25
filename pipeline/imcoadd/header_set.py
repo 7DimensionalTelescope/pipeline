@@ -244,6 +244,13 @@ class InputHeaderSet:
             return None
         return float(np.sum([e / f for e, f in zip(egain, self._flxscales)]))
 
+    def coadd_measured_egain(self, key: str) -> float | None:
+        """Naive sum(key/FLXSCALE) of EGAINEMP or EGAINSD; None when an input lacks it."""
+        values = self.values(key)
+        if any(v is None for v in values):
+            return None
+        return float(np.sum([v / f for v, f in zip(values, self._flxscales)]))
+
     @property
     def coadd_backtype(self) -> str | None:
         """BACKTYPE for the coadd; "MIXED" if inputs disagree; None before bkgsub stamps it."""
@@ -375,6 +382,8 @@ class InputHeaderSet:
         for key, (value, comment) in keywords_to_update.items():
             if value is not None:
                 header[key] = (value, comment)
+        header["EGAINEMP"] = (self.coadd_measured_egain("EGAINEMP"), "[e-/ADU] Inputs' EGAINEMP carried to the coadd")
+        header["EGAINSD"] = (self.coadd_measured_egain("EGAINSD"), "[e-/ADU] Inputs' EGAINSD carried to the coadd")
 
         # 	Names of coadded single images
         for nn, (name, input_header) in enumerate(zip(self.names, self.headers)):

@@ -7,6 +7,8 @@ imcoadd:
   convolve: False
   target_seeing:  # auto if it's empty or smaller than max seeing
   output_single_weight_maps: false
+  empirical_egain:
+    enabled: false
 
 settings:
   factory_scratch: auto

@@ -569,6 +569,7 @@ def weight_and_interpolate_cpu(
     ivar_out=None,
     background_model=None,
     background=None,
+    stash_frame=None,
 ):
     """Fused weight calculation + bad-pixel interpolation, one read and one write per image.
 
@@ -697,7 +698,7 @@ def weight_and_interpolate_cpu(
                 # the fitted surface is the variance model at a bad pixel too; the kernel's neighbour rule (0 with no
                 # valid neighbour) is for the per-pixel model, and a zero here would ride the sidecar into SWarp
                 interp_wt[hole] = wgt[hole]
-            n_saturated = None
+            n_saturated = saturated = None
             if saturated_mask is not None:
                 # zero before SWarp reads it: the resampling kernel then spreads the hole over its own support
                 saturated = saturated_mask(images[idx], sci, sci_hdr)
@@ -705,6 +706,8 @@ def weight_and_interpolate_cpu(
                 if saturated is not None:
                     interp_wt[saturated] = 0.0
             t_interp = _time.time() - st_img - t_read - t_weight
+            if stash_frame is not None:
+                stash_frame(idx, sci, hole, src, saturated)
 
             if pending_write is not None:
                 pending_write.result()

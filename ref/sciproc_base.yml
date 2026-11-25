@@ -165,6 +165,9 @@ imcoadd:
   output_mask_map: false  # write the legacy OR bitmask; derivable from the count planes
   output_counts_map: true  # write the coadd coverage/provenance count planes (canonical)
   output_egain_map: true  # write <coadd>_egain.fits, the per-pixel effective gain (e-/ADU) behind the EGAIN card; mean and clipped modes only
+  empirical_egain:
+    enabled: true  # EGAINEMP / EGAINSD: gain from the differences of consecutive frames of this config on the detector grid, on the singles and the coadd
+    max_read_noise_fraction: 0.25  # EGAINEMP is left blank if read noise higher than this
   fill_nan: true  # fill holes inside the coverage of the final coadd (maskfill, van Dokkum & Pasha 2024)
   dump_reprojected_masks: false
   satellite_mask:

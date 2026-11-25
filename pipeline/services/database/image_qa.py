@@ -114,6 +114,8 @@ class ImageQATable:
     backsys: Optional[float] = None
     backpeak: Optional[float] = None
     backpksn: Optional[float] = None
+    egainemp: Optional[float] = None
+    egainsd: Optional[float] = None
     backscl: Optional[int] = None
     backn: Optional[int] = None
     backref: Optional[str] = None
