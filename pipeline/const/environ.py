@@ -64,6 +64,7 @@ PROCESSED_DIR = _storage_paths.get("PROCESSED_DIR") or "/lyman/data2/processed"
 TOO_PROCESSED_DIR = _storage_paths.get("TOO_PROCESSED_DIR") or "/lyman/data2/too"
 TOO_FACTORY_DIR = _storage_paths.get("TOO_FACTORY_DIR") or "/lyman/data2/too_factory"
 COADD_DIR = _storage_paths.get("COADD_DIR") or "/lyman/data2/coadd"
+STABLE_FRAME_DIR = _storage_paths.get("STABLE_FRAME_DIR") or "/balmer/data1/master_frame/stable"
 
 # Next disk
 DISK_CHANGE_NIGHTDATE = _storage_paths.get("DISK_CHANGE_NIGHTDATE") or "2026-04-08"

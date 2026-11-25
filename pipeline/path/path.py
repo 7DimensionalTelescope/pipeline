@@ -14,7 +14,7 @@ from ..utils.tile import find_ris_tile
 from ..utils import add_suffix, swap_ext, collapse, atleast_1d
 
 from .name import NameHandler
-from .utils import find_raw_path, format_exptime, mean_datetime
+from .utils import find_raw_path, format_exptime, mean_datetime, add_a_day, format_camera
 from .utils import broadcast_join_pure as bjoin
 from .mixin import AutoMkdirMixin, AutoCollapseMixin
 from .const import (
@@ -29,6 +29,8 @@ from .const import (
     TMP_DIRNAME,
     SINGLES_DIRNAME,
     DAILY_COADD_DIRNAME,
+    RTNMAP_DIRNAME,
+    STABLE_FLAT_DIRNAME,
 )
 
 if TYPE_CHECKING:
@@ -493,6 +495,10 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                 self._top_dirs.append(self._user_top_dirs)
                 continue
 
+            if self._get_namehandler_property_at_index("type", i).kind == const.NAME_TYPE_STABLE:
+                self._top_dirs.append(TopDirs(processed=None, factory=None, masterframe=None))
+                continue
+
             nightdate = self._get_namehandler_property_at_index("nightdate", i)
             if isinstance(nightdate, list):
                 current_nightdate = nightdate[i] if i < len(nightdate) else nightdate[0]
@@ -872,6 +878,16 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
                 self._daily_coadd_dir.append(None)
                 self._subtracted_dir.append(None)
                 self._resolved_files.append(os.path.join(self._masterframe_dir[i], basename))
+            elif typ.kind == const.NAME_TYPE_STABLE:
+                self._output_dir.append(None)
+                self._factory_dir.append(None)
+                self._single_dir.append(None)
+                self._coadd_dir.append(None)
+                self._metadata_dir.append(None)
+                self._figure_dir.append(None)
+                self._daily_coadd_dir.append(None)
+                self._subtracted_dir.append(None)
+                self._resolved_files.append(self._stable_frame(typ.image_type, unit, basename))
             else:
                 raise ValueError(f"Unrecognized input type for {self._input_files[i]}: {typ}")
 
@@ -1313,6 +1329,41 @@ class PathHandler(AutoMkdirMixin, AutoCollapseMixin):
             raise ValueError(f"Not a master bias/dark/flat sigma frame: {sigma_file}")
         base = os.path.basename(sigma_file)
         return os.path.join(os.path.dirname(sigma_file), calib + base[len(typ.exposure_type) :])
+
+    @staticmethod
+    def _stable_frame(image_type: str, unit: str | None, basename: str) -> str:
+        """Stable product path under STABLE_FRAME_DIR."""
+        if image_type == const.STABLE_TYPE_RTNMAP:
+            return os.path.join(const.STABLE_FRAME_DIR, RTNMAP_DIRNAME, basename)
+        return os.path.join(const.STABLE_FRAME_DIR, STABLE_FLAT_DIRNAME, unit, basename)
+
+    @staticmethod
+    def rtnmap(camera_serial: str | int, gain: int, n_binning: int, nightdate: str) -> str:
+        """RTN map path; nightdate: first night of validity."""
+        basename = NameHandler._format_masterframe(
+            const.STABLE_TYPE_RTNMAP,
+            None,
+            None,
+            add_a_day(nightdate),
+            n_binning,
+            gain,
+            format_camera(str(camera_serial).removeprefix("C")),
+        )
+        return PathHandler._stable_frame(const.STABLE_TYPE_RTNMAP, None, basename)
+
+    @staticmethod
+    def stableflat(unit: str, filte: str, nightdate: str, n_binning: int, gain: int, camera_serial: str | int) -> str:
+        """Stable flat path; nightdate: first night of validity."""
+        basename = NameHandler._format_masterframe(
+            const.STABLE_TYPE_STABLEFLAT,
+            filte,
+            unit,
+            add_a_day(nightdate),
+            n_binning,
+            gain,
+            format_camera(str(camera_serial).removeprefix("C")),
+        )
+        return PathHandler._stable_frame(const.STABLE_TYPE_STABLEFLAT, unit, basename)
 
     @classmethod
     def get_bpmask(cls, input: Union[str, Path, Header]) -> str | list[str]:

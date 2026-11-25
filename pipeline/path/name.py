@@ -257,6 +257,8 @@ class NameHandler:
                 parsing_func = self._parse_raw
             elif typ.kind == const.NAME_TYPE_MASTER:
                 parsing_func = self._parse_master
+            elif typ.kind == const.NAME_TYPE_STABLE:
+                parsing_func = self._parse_stable
             elif typ.kind == const.NAME_TYPE_CALIBRATED:
                 parsing_func = self._parse_processed
             # configs
@@ -292,7 +294,7 @@ class NameHandler:
             if nightdate:
                 pass
                 # date = add_half_day(nightdate)  # this can mutate the true date crossing midnight
-            elif date is not None:
+            elif date is not None and typ.kind != const.NAME_TYPE_STABLE:
                 nightdate = subtract_half_day(date + "_" + hms if hms is not None else date)  # hms None for masters
                 self.nightdate[i] = nightdate
             dates.append(date)
@@ -402,6 +404,10 @@ class NameHandler:
         image_type:    single / coadd / diff / white, or the exposure_type of a master
         product_type:  image / weight / catalog / mask
         """
+        token = stem.partition("_")[0]
+        if token in const.STABLE_TYPES:
+            return NameType(const.NAME_TYPE_STABLE, token, token, const.NAME_TYPE_IMAGE)
+
         # raw/master/processed
         if (stem[:3] == "7DT" and stem[3:5].isdigit()) or stem.startswith(("BIAS", "DARK", "FLAT", "LIGHT")):
             kind = const.NAME_TYPE_RAW
@@ -1057,6 +1063,22 @@ class NameHandler:
         camera = parts[6 - offset]
         hms = None
         return unit, date, hms, obj, filt, nb, exptime, gain, camera
+
+    @staticmethod
+    def _parse_stable(parts):
+        """rtnmap (5 parts, camera product) or stableflat (7 parts, with filter and unit)."""
+        obj = parts[0]
+        if obj == const.STABLE_TYPE_RTNMAP and len(parts) == 5:
+            filt, unit = None, None
+        elif obj == const.STABLE_TYPE_STABLEFLAT and len(parts) == 7:
+            filt, unit = parts[1], parts[2]
+        else:
+            raise ValueError(f"Unidentified stable product name: {'_'.join(parts)}")
+        date = parts[-4]
+        nb = strip_binning(parts[-3])
+        gain = strip_gain(parts[-2])
+        camera = parts[-1]
+        return unit, date, None, obj, filt, nb, None, gain, camera
 
     @property
     def conjugate_basename(self):

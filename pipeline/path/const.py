@@ -51,3 +51,5 @@ DIFFIM_DIRNAME = "difference"
 TMP_DIRNAME = "tmp"
 IMCOADD_TMP_DIRNAME = "imcoadd"
 IMSUBTRACT_TMP_DIRNAME = "imsubtract"
+RTNMAP_DIRNAME = "rtnmap"  # under STABLE_FRAME_DIR
+STABLE_FLAT_DIRNAME = "flat"  # under STABLE_FRAME_DIR, then <unit>

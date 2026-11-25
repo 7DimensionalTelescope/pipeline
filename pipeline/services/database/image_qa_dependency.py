@@ -90,6 +90,7 @@ from ...const import (
     IMAGE_TYPE_SINGLE,
     NAME_TYPE_CALIBRATED,
     NAME_TYPE_MASTER,
+    NAME_TYPE_STABLE,
     REFERENCE_DEPENDENCY_ROLE,
     SCIENCE_DEPENDENCY_ROLE,
 )
@@ -237,7 +238,7 @@ def parse_ingredients(fits_file: str) -> List[Dict[str, str]]:
     out: List[Dict[str, str]] = []
     seen = set()
     for (_, imageid), typ in zip(pairs, types):
-        if typ.kind in (NAME_TYPE_MASTER, NAME_TYPE_CALIBRATED):
+        if typ.kind in (NAME_TYPE_MASTER, NAME_TYPE_CALIBRATED, NAME_TYPE_STABLE):
             role = typ.image_type  # a master carries its exposure_type; a science product its image_type
         else:
             continue  # raw frame: no image_qa row
