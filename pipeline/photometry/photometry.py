@@ -995,7 +995,7 @@ class PhotometrySingle:
         """Re-derive the sky level and noise on the pixels the source mask leaves, and record the fraction used.
 
         Below ``imcoadd.background.dequantize_background_below`` ADU of SKYVAL (the steppy regime, where the box median snaps to the ADC
-        lattice and MMM triples the snap) the mesh is fitted on the dequantized copy, exactly as ImCoadd's detector-grid fit
+        lattice and MMM triples the snap) an 'mmm' mesh is fitted on the dequantized copy, exactly as ImCoadd's detector-grid fit
         gates it on the same key; the copy is convolved once and used only for the mesh. BACKSIG and the residual
         cards are measured on the frame itself against that mesh."""
         from ..imcoadd.utils import (
@@ -1004,12 +1004,13 @@ class PhotometrySingle:
             build_source_mask,
             mesh_peak,
             noise_autocovariance,
+            rts_clip_floor,
             source_ellipses_on_frame,
             dequantize,
         )
         from ..imcoadd.background_qa import (
             measure_background_residuals,
-            modal_offset,
+            mean_offset,
             sigma_quantiles,
             RESIDUAL_KEYS,
             RESIDUAL_BOX_SIZE,
@@ -1074,10 +1075,23 @@ class PhotometrySingle:
                 self.logger.warning(f"No bad-pixel mask for {self.name} ({e}); sky statistics include bad pixels")
         # the same mesh ImCoadd will fit, so the two stages cannot disagree about what the sky is
         mesh = self.config_node.imcoadd.background
+        estimator = str(mesh["estimator"]).strip().lower()
+        if estimator not in ("mean", "mmm"):
+            raise ValueError(f"Invalid imcoadd.background.estimator: {estimator!r} (expected 'mean' or 'mmm')")
+        backfrac, crowded = float((~excluded & ~no_data).mean()), mesh["crowded_backfrac"]
+        if is_coadd and header.get("BACKEST") in ("MEAN", "MMM"):
+            estimator = header["BACKEST"].lower()
+        elif not is_coadd and estimator == "mean" and crowded is not None and backfrac < crowded:
+            self.logger.info(f"Crowded field: BACKFRAC {backfrac:.4f} < crowded_backfrac {crowded}; 'mmm' mesh")
+            estimator = "mmm"
         dequantized = (
-            not is_coadd and basic.SKYVAL is not None and basic.SKYVAL < float(mesh["dequantize_background_below"])
+            estimator == "mmm"
+            and not is_coadd
+            and basic.SKYVAL is not None
+            and basic.SKYVAL < float(mesh["dequantize_background_below"])
         )
         ksq = float(np.sum(DEQUANT_KERNEL**2)) if dequantized else 1.0
+        clip_floor = rts_clip_floor(header, self.logger)
         try:
             fitted = background_mesh(
                 dequantize(data) if dequantized else data,
@@ -1086,6 +1100,8 @@ class PhotometrySingle:
                 box_size=mesh["box_size"],
                 filter_size=mesh["filter_size"],
                 exclude_percentile=mesh["exclude_percentile"],
+                estimator=estimator,
+                clip_floor=clip_floor,
                 logger=self.logger,
             )
         except (
@@ -1094,8 +1110,9 @@ class PhotometrySingle:
             self.logger.warning(f"Off-source sky not measured: {e}")
             return
         background.BACKVAL = float(fitted.background_median)
+        background.BACKEST = header.get("BACKEST") if is_coadd else estimator.upper()
         background.DEQUANT, background.BACKKSQ = dequantized, round(ksq, 5)
-        background.BACKFRAC = round(float((~excluded & ~no_data).mean()), 4)
+        background.BACKFRAC = round(backfrac, 4)
         background.SRCFRAC = round(float(sources.mean()), 4)
         background.BACKPEAK, background.BACKPKSN = (round(v, 4) if np.isfinite(v) else None for v in mesh_peak(fitted))
         coverage = ~no_data
@@ -1115,6 +1132,7 @@ class PhotometrySingle:
             exclude_percentile=mesh["exclude_percentile"],
             stats=stats,
             logger=self.logger,
+            clip_floor=clip_floor,
         )
         del sky_noise
         if autocov is None:
@@ -1131,7 +1149,7 @@ class PhotometrySingle:
         if reference is None:
             self.logger.warning("No noise reference (EGAIN; INEGAIN and INSKY on a coadd): BACKOFF not measured")
         else:
-            backoff, kind = modal_offset(
+            backoff, kind = mean_offset(
                 residual, excluded | ~coverage, sigmas=sigma_quantiles(header), logger=self.logger, **reference
             )
             result = replace(result, backoff=round(float(backoff), 4), backnref=kind)
@@ -2170,6 +2188,7 @@ class Background(HeaderBlock):
 
     BACKSIG: float = None
     BACKVAL: float = None
+    BACKEST: str = None
     DEQUANT: bool = None
     BACKKSQ: float = None
     BACKFRAC: float = None
@@ -2215,7 +2234,8 @@ class Background(HeaderBlock):
             self.cov = {}
         if not self.sky:
             for key in self.keys():
-                setattr(self, key, None)
+                if single or key != "BACKEST":  # a coadd's BACKEST is ImCoadd's
+                    setattr(self, key, None)
         self.finalized = True
 
     @property
@@ -2225,6 +2245,7 @@ class Background(HeaderBlock):
         misc_dict = {
             "BACKSIG": (float(f"{self.BACKSIG:.6g}") if self.BACKSIG is not None else None, "SKY SIGMA OFF SOURCE"),
             "BACKVAL": (round(self.BACKVAL, 6) if self.BACKVAL is not None else None, "SKY MEDIAN OFF SOURCE"),
+            "BACKEST": (self.BACKEST, "Sky mesh box estimator"),
             "DEQUANT": (self.DEQUANT, "Sky mesh fitted on the dequantized copy"),
             "BACKKSQ": (self.BACKKSQ, "sum k^2 of that kernel"),
             "BACKFRAC": (self.BACKFRAC, "Fraction of pixels used for the sky estimate"),

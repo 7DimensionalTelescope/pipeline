@@ -53,6 +53,8 @@ class CoaddPlan:
     output_mask_map: bool
     output_counts_map: bool
     output_egain_map: bool
+    empirical_egain_enabled: bool
+    empirical_egain_max_read_noise_fraction: float
     fill_nan: bool
     dump_reprojected_masks: bool
     satellite_mask_enabled: bool
@@ -79,6 +81,7 @@ class CoaddPlan:
     background_exclude_percentile: float
     background_min_usable: float
     background_max_dropped_boxes: float
+    background_estimator: str
     dequantize_background_below: float
 
     # ---------------------------------------------------------------- routine
@@ -236,6 +239,8 @@ def resolve_coadd_plan(node, errors=builtins) -> CoaddPlan:
     background_exclude_percentile = float(background["exclude_percentile"])
     background_min_usable = float(background["min_usable"])
     background_max_dropped_boxes = float(background["max_dropped_boxes"])
+    background_estimator = str(background["estimator"]).strip().lower()
+    crowded_backfrac = background["crowded_backfrac"]
     dequantize_background_below = float(background["dequantize_background_below"])  # SKYVAL gate shared with Photometry's measure_sky  # fmt: skip
     if background_box_size < 8:
         raise errors.ValueError("imcoadd.background.box_size must be at least 8 pixels")
@@ -247,6 +252,19 @@ def resolve_coadd_plan(node, errors=builtins) -> CoaddPlan:
         raise errors.ValueError("imcoadd.background.min_usable must be between 0 and 100")
     if not 0 <= background_max_dropped_boxes <= 100:
         raise errors.ValueError("imcoadd.background.max_dropped_boxes must be between 0 and 100")
+    if background_estimator not in ("mean", "mmm"):
+        raise errors.ValueError(
+            f"Invalid imcoadd.background.estimator: {background_estimator!r} (expected 'mean' or 'mmm')"
+        )
+    if not (crowded_backfrac is None or (type(crowded_backfrac) in (int, float) and 0 < crowded_backfrac <= 1)):
+        raise errors.ValueError(
+            f"Invalid imcoadd.background.crowded_backfrac: {crowded_backfrac!r} (expected empty or a number in (0, 1])"
+        )
+
+    empirical_egain = node.empirical_egain
+    empirical_egain_max_read_noise_fraction = float(empirical_egain["max_read_noise_fraction"])
+    if not 0 < empirical_egain_max_read_noise_fraction <= 1:
+        raise errors.ValueError("imcoadd.empirical_egain.max_read_noise_fraction must be in (0, 1]")
 
     intermediate_policy = str(node.intermediate_policy).strip().lower()
     if intermediate_policy not in ("auto", "memory", "disk"):
@@ -314,6 +332,8 @@ def resolve_coadd_plan(node, errors=builtins) -> CoaddPlan:
         output_mask_map=bool(node.output_mask_map),
         output_counts_map=bool(node.output_counts_map),
         output_egain_map=bool(node.output_egain_map),
+        empirical_egain_enabled=bool(empirical_egain["enabled"]),
+        empirical_egain_max_read_noise_fraction=empirical_egain_max_read_noise_fraction,
         fill_nan=bool(node.fill_nan),
         dump_reprojected_masks=bool(node.dump_reprojected_masks),
         satellite_mask_enabled=satellite_mask_enabled,
@@ -340,6 +360,7 @@ def resolve_coadd_plan(node, errors=builtins) -> CoaddPlan:
         background_exclude_percentile=background_exclude_percentile,
         background_min_usable=background_min_usable,
         background_max_dropped_boxes=background_max_dropped_boxes,
+        background_estimator=background_estimator,
         dequantize_background_below=dequantize_background_below,
     )
     if plan.zero_saturated_in_weight_before_reprojection and not plan.resample_weight_in_sci_pass:
@@ -377,6 +398,12 @@ def resolve_coadd_plan(node, errors=builtins) -> CoaddPlan:
             "imcoadd.output_single_weight_maps saves the smooth single weight, which this plan does not compute; "
             "enable output_weight_map, pixel-wise weighting or saturation_reprojection_policy: conservative outside "
             "legacy, or set output_single_weight_maps: False"
+        )
+    if plan.empirical_egain_enabled and not plan.zero_saturated_in_weight_before_reprojection:
+        raise errors.ValueError(
+            "imcoadd.empirical_egain measures frame pairs on the detector grid with their source and saturation masks, "
+            "which only reproject-first with saturation_reprojection_policy: conservative provides; use such a plan "
+            "or set empirical_egain.enabled: False"
         )
     if plan.output_egain_map and mode not in ("mean", "clipped"):
         raise errors.ValueError(

@@ -400,6 +400,8 @@ def background_mesh(
     exclude_percentile: float = 50.0,
     sigma: float = 3.0,
     maxiters: int = 10,
+    estimator: str = "mean",
+    clip_floor: float = 0.0,
     logger=None,
 ) -> Background2D:
     """The fitted photutils Background2D; ``mask`` = source pixels, ``coverage_mask`` = pixels with no data.
@@ -409,9 +411,17 @@ def background_mesh(
     A box that loses ``exclude_percentile`` per cent of its pixels is dropped and refilled from the ten
     nearest surviving mesh nodes, and the mesh is upsampled with the output clipped to its own range."""
     from astropy.stats import SigmaClip
-    from photutils.background import Background2D, MMMBackground
+    from photutils.background import Background2D, MeanBackground, MMMBackground
     from ..services.utils import gpu_device, on_gpu
 
+    if estimator == "mean":
+        sigma_clip = SigmaClip(sigma=10.0, maxiters=1, cenfunc="median", stdfunc="mad_std")
+        bkg_estimator = MeanBackground(sigma_clip=None)
+    elif estimator == "mmm":
+        sigma_clip = SigmaClip(sigma=sigma, maxiters=maxiters)
+        bkg_estimator = MMMBackground(sigma_clip=None)  # 3 median - 2 mean, the mode estimate with no tuned factor
+    else:
+        raise ValueError(f"Invalid background estimator: {estimator!r} (expected 'mean' or 'mmm')")
     frame = np.ascontiguousarray(data, dtype=np.float32)
     options = dict(
         mask=None if mask is None else np.asarray(mask, bool),
@@ -419,27 +429,47 @@ def background_mesh(
         fill_value=0.0,
         exclude_percentile=float(exclude_percentile),
         filter_size=int(filter_size),
-        sigma_clip=SigmaClip(sigma=sigma, maxiters=maxiters),
-        bkg_estimator=MMMBackground(sigma_clip=None),  # 3 median - 2 mean, the mode estimate with no tuned factor
+        sigma_clip=sigma_clip,
+        bkg_estimator=bkg_estimator,
     )
+    floor = float(clip_floor) if estimator == "mean" else 0.0
     if gpu_device() is not None:
         from ..calc.sky_gpu import GpuBackground2D, GpuZoomInterpolator
 
         return GpuBackground2D(
-            frame, int(box_size), on_gpu=on_gpu, logger=logger, interpolator=GpuZoomInterpolator(on_gpu), **options
-        )
+            frame, int(box_size), on_gpu=on_gpu, logger=logger, interpolator=GpuZoomInterpolator(on_gpu),
+            clip_floor=floor, **options,
+        )  # fmt: skip
+    if floor:
+        from ..calc.sky_gpu import GpuBackground2D
+
+        return GpuBackground2D(frame, int(box_size), on_gpu=on_gpu, logger=logger, clip_floor=floor, **options)
     return Background2D(frame, int(box_size), **options)
 
 
+def rts_clip_floor(header, logger=None) -> float:
+    """RTS_TAIL in the frame's ADU (EGAIN); 0 without a positive EGAIN."""
+    from ..const import RTS_TAIL
+
+    gain = header.get("EGAIN")
+    try:
+        if float(gain) > 0:
+            return RTS_TAIL / float(gain)
+    except (TypeError, ValueError):
+        pass
+    if logger is not None:
+        logger.warning(f"No positive EGAIN ({gain!r}): the sky clips stay at 10 NMAD, with no RTS floor")
+    return 0.0
+
+
 def mesh_peak(bkg: Background2D, window: int | None = None) -> tuple[float, float]:
-    """(ADU, and the same over 1.4826 x MAD of all node excursions) largest excursion of a filtered mesh node from the median of its window x window neighbours.
+    """(ADU, and the same over 1.4826 x MAD of all node excursions) largest excursion of a filtered mesh node from the mean of its window x window neighbours.
 
     One node = one box (128 px at the base settings). The mesh's filter_size x filter_size median (3 x 3 = 384 px) has
-    already removed blobs of fewer than half its nodes (<= 4), so the window is filter_size + 2 (5 x 5 = 640 px): its
-    median stays on the sky for blobs of up to 12 nodes (3 x 4 boxes = 384 x 512 px); wider structure counts as sky.
-    Past the frame edge the mesh is extrapolated linearly (odd reflection), so a smooth vignetting fall-off reads ~0 at
-    the border nodes and only a genuine edge or corner deviation counts."""
-    from scipy.ndimage import median_filter
+    already removed blobs of fewer than half its nodes (<= 4); the window is filter_size + 2 (5 x 5 = 640 px), and a blob
+    of k nodes inside it reads (1 - k / window**2) of its height. Past the frame edge the mesh is extrapolated linearly
+    (odd reflection), so a smooth vignetting fall-off reads ~0 at the border nodes and a corner node reads exactly 0."""
+    from scipy.ndimage import uniform_filter
 
     if window is None:
         window = int(max(np.atleast_1d(bkg.filter_size))) + 2
@@ -449,7 +479,7 @@ def mesh_peak(bkg: Background2D, window: int | None = None) -> tuple[float, floa
         return float("nan"), float("nan")
     pad = window // 2
     filled = np.pad(np.where(finite, mesh, np.nanmedian(mesh)), pad, mode="reflect", reflect_type="odd")
-    excursion = (mesh - median_filter(filled, size=window)[pad:-pad, pad:-pad])[finite]
+    excursion = (mesh - uniform_filter(filled, size=window)[pad:-pad, pad:-pad])[finite]
     peak = float(np.max(np.abs(excursion)))
     scatter = 1.4826 * float(np.median(np.abs(excursion - np.median(excursion))))
     return peak, (peak / scatter if scatter > 0 else float("nan"))
@@ -463,7 +493,9 @@ def mesh_peak_cards(peak) -> dict:
     }
 
 
-def polynomial_background(mesh: Background2D, degree: int, shape: tuple[int, int]) -> tuple[np.ndarray, int, float]:
+def polynomial_background(
+    mesh: Background2D, degree: int, shape: tuple[int, int]
+) -> tuple[np.ndarray | float, int, float]:
     """Sigma-clipped least-squares polynomial sky through the surviving mesh nodes."""
     stats = mesh._bkg_stats  # pre-filter box statistics; released once background_mesh is read
     if stats is None:
@@ -492,6 +524,8 @@ def polynomial_background(mesh: Background2D, degree: int, shape: tuple[int, int
         if scale == 0 or clipped.sum() < len(terms) or np.array_equal(clipped, fitted):
             break
         keep = clipped
+    if degree == 0:
+        return float(coef[0]), int(fitted.sum()), float(np.std(residual[fitted]))
     matrix = np.zeros((degree + 1, degree + 1))
     for c, (i, j) in zip(coef, terms):
         matrix[j, i] = c
@@ -543,13 +577,13 @@ def sky_statistics(data, mask=None, coverage_mask=None, **mesh_options) -> tuple
 
 def noise_autocovariance(
     residual, mask=None, box_size: int = 128, maxlag: int = 0, clip: float = 10.0, exclude_percentile: float = 50.0,
-    stats=None, logger=None,
+    stats=None, logger=None, clip_floor: float = 0.0,
 ):  # fmt: skip
-    """Blank-sky C(h) [ADU^2] to +-maxlag px, C(0) = BACKSIG^2: median of mesh boxes clipped at `clip` x 1.4826 MAD."""
+    """Blank-sky C(h) [ADU^2] to +-maxlag px, C(0) = BACKSIG^2: median of mesh boxes clipped at max(`clip` x 1.4826 MAD, `clip_floor`)."""
     from ..calc import sky_gpu
     from ..services.utils import on_gpu
 
-    args = (residual, mask, int(box_size), int(maxlag), clip, float(exclude_percentile), stats)
+    args = (residual, mask, int(box_size), int(maxlag), clip, float(clip_floor), float(exclude_percentile), stats)
     window = on_gpu(sky_gpu.autocovariance, *args, need_bytes=sky_gpu.FRAME_BYTES, logger=logger, name="autocovariance")
     if window is None:
         window = sky_gpu.autocovariance(np, *args)

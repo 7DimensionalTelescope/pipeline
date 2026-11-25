@@ -65,7 +65,16 @@ def _load_filters() -> None:
     FILTER_WIDTHS = {f: s["fwhm_nm"] * 10 for f, s in FILTERS.items()}
 
 
+def _load_detector() -> None:
+    global RTS_TAIL
+    with open(os.path.join(REF_DIR, "detector.yml"), encoding="utf-8") as stream:
+        RTS_TAIL = yaml.safe_load(stream)["rts_tail"]
+
+
 def __getattr__(name: str):
+    if name == "RTS_TAIL":
+        _load_detector()
+        return RTS_TAIL
     if name not in _FILTER_CONSTANTS:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     _load_filters()

@@ -23,7 +23,7 @@ class BackgroundResiduals:
 
     def cards(self, include_missing: bool = False) -> dict:
         descriptions = (
-            ("backoff", "[ADU] Sky mode minus model; >0 under-subtracted"),
+            ("backoff", "[ADU] Model minus sky mean; >0 over-subtracted"),
             ("backsys", "[ADU] Excess spatial RMS of patch mean residual"),
             ("backscl", "[pixel] Residual measurement square width"),
             ("backn", "Number of valid residual sky patches measured"),
@@ -103,24 +103,14 @@ def mixture_density(taps, gain: float, sigmas, levels, dx: float = 0.01, span: f
 
 
 def density_gap(x, p) -> float:
-    """Median minus mode of a density on a grid; the mode from the parabola through the peak and its neighbours."""
+    """Median minus mean of a density on a grid."""
     w = p / p.sum()
     median = float(np.interp(0.5, np.cumsum(w) - 0.5 * w, x))
-    i = int(np.argmax(p))
-    if 0 < i < p.size - 1 and p[i - 1] > 0 and p[i + 1] > 0:
-        y0, y1, y2 = np.log(p[i - 1 : i + 2])
-        mode = float(x[i] + 0.5 * (x[1] - x[0]) * (y0 - y2) / (y0 - 2 * y1 + y2))
-    else:
-        mode = float(x[i])
-    return median - mode
+    return median - float(np.sum(w * x))
 
 
-def modal_offset(residual, exclude, gain: float, levels, sigmas=None, taps=None, logger=None) -> tuple[float, str]:
-    """BACKOFF: the median of the residual's sky pixels minus the reference noise mixture's median - mode, i.e. the sky's true mode
-    minus the model; positive = under-subtracted. ``levels`` are the sky levels the pixels sit at (the model's quantiles for a
-    single, the inputs' sky for a coadd) and ``sigmas`` the NOISQ additive-noise quantiles; without them the reference is one
-    Gaussian whose width is the residual's own robust width less the Poisson part. Returns (backoff, noise reference kind).
-    """
+def mean_offset(residual, exclude, gain: float, levels, sigmas=None, taps=None, logger=None) -> tuple[float, str]:
+    """BACKOFF, model minus sky mean: noise reference's median - mean, minus the sky pixels' median; (backoff, reference kind)."""
     from ..calc import sky_gpu
     from ..services.utils import on_gpu
 
@@ -139,7 +129,7 @@ def modal_offset(residual, exclude, gain: float, levels, sigmas=None, taps=None,
         kind = "WIDTH"
     else:
         kind = "SIGMAQ"
-    return median - density_gap(*mixture_density(taps, gain, sigmas, levels)), kind
+    return density_gap(*mixture_density(taps, gain, sigmas, levels)) - median, kind
 
 
 def _autocorrelation(values):
@@ -231,5 +221,5 @@ def measure_background_residuals(
         return BackgroundResiduals(backscl=size, backn=n)
     variance = float(np.var(means, ddof=1))
     noise = max(0.0, float(np.mean(noises)))
-    # backoff is the caller's: modal_offset against the frame's noise reference, not the patch means' mean
+    # backoff is the caller's: mean_offset against the frame's noise reference, not the patch means' mean
     return BackgroundResiduals(backsys=float(np.sqrt(max(0.0, variance - noise))), backscl=size, backn=n)

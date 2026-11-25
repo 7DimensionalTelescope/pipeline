@@ -152,6 +152,14 @@ def coadd_effective_egain(gain_terms, mode: str = "mean", n_eff: float | None = 
     return float(gain)
 
 
+def scale_measured_egain(header: fits.Header, effective: float) -> None:
+    """EGAINEMP and EGAINSD times the footprint-exact over the naive EGAIN still in header."""
+    naive = header.get("EGAIN")
+    for key in ("EGAINEMP", "EGAINSD"):
+        if naive and header.get(key) is not None:
+            header[key] = header[key] * effective / naive
+
+
 _WRITERS = ThreadPoolExecutor(max_workers=1, thread_name_prefix="coadd-writer")
 
 
@@ -375,6 +383,7 @@ def mean_coadd_numpy(
     else:
         effective = coadd_effective_egain(gain_terms, mode="mean", n_eff=n_eff)
     if effective is not None:
+        scale_measured_egain(out_header, effective)
         # value-only: InputHeaderSet.coadd_header owns the card's comment
         out_header["EGAIN"] = effective
         if not out_header.comments["EGAIN"]:
@@ -638,6 +647,7 @@ def clipped_mean_coadd_numpy(
     else:
         effective = coadd_effective_egain(gain_terms, mode="mean", n_eff=n_eff)
     if effective is not None:
+        scale_measured_egain(out_header, effective)
         out_header["EGAIN"] = effective
         if not out_header.comments["EGAIN"]:
             out_header.comments["EGAIN"] = "Effective EGAIN for coadded image (e-/ADU)"
@@ -766,6 +776,7 @@ def _clipped_mean_coadd_device(
     else:
         effective = coadd_effective_egain(result["gain_terms"], mode="mean", n_eff=n_eff)
     if effective is not None:
+        scale_measured_egain(out_header, effective)
         out_header["EGAIN"] = effective
         if not out_header.comments["EGAIN"]:
             out_header.comments["EGAIN"] = "Effective EGAIN for coadded image (e-/ADU)"
@@ -1029,6 +1040,7 @@ def median_coadd_numpy(
     else:
         effective = coadd_effective_egain(gain_terms, mode="median", n_eff=n_eff)
     if effective is not None:
+        scale_measured_egain(out_header, effective)
         # value-only: InputHeaderSet.coadd_header owns the card's comment
         out_header["EGAIN"] = effective
         if not out_header.comments["EGAIN"]:

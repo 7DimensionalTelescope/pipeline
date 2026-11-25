@@ -154,7 +154,9 @@ imcoadd:
     exclude_percentile: 50  # a box losing this % of its pixels is dropped and refilled from its 10 nearest nodes
     min_usable: 20  # below this % of the frame left unmasked, the frame takes a constant sky instead
     max_dropped_boxes: 50  # above this % of dropped mesh boxes, the frame takes a constant sky instead
-    dequantize_background_below: 60  # [ADU] SKYVAL below which the mesh is fitted on the dequantized copy (ADC-lattice snapping of the box median, tripled by MMM; measured gone by ~50 ADU): Photometry's BACKVAL/BACKSIG and ImCoadd's detector-grid model both gate on it
+    estimator: 'mean'  # 'mean' (box mean after one 10 NMAD cut about its median) | 'mmm' (3 median - 2 mean after a 3-sigma clip)
+    crowded_backfrac: 0.2  # a single whose BACKFRAC (frame fraction left for the sky by the masks) is below this keeps 'mmm' under 'mean'
+    dequantize_background_below: 60  # [ADU] 'mmm' only: SKYVAL below which the mesh is fitted on the dequantized copy (ADC-lattice snapping of the box median, tripled by MMM; measured gone by ~50 ADU): Photometry's BACKVAL/BACKSIG and ImCoadd's detector-grid model both gate on it
   source_mask: True  # False, True or 'iterative'; only affects dynamic bkgsub
   dump_source_masks: false  # retain source masks beside config under source_masks/config_stem
   output_weight_map: true  # write the coadd weight product
@@ -163,6 +165,9 @@ imcoadd:
   output_mask_map: false  # write the legacy OR bitmask; derivable from the count planes
   output_counts_map: true  # write the coadd coverage/provenance count planes (canonical)
   output_egain_map: true  # write <coadd>_egain.fits, the per-pixel effective gain (e-/ADU) behind the EGAIN card; mean and clipped modes only
+  empirical_egain:
+    enabled: true  # EGAINEMP / EGAINSD: gain from the differences of consecutive frames of this config on the detector grid, on the singles and the coadd
+    max_read_noise_fraction: 0.25  # EGAINEMP is left blank if read noise higher than this
   fill_nan: true  # fill holes inside the coverage of the final coadd (maskfill, van Dokkum & Pasha 2024)
   dump_reprojected_masks: false
   satellite_mask:
